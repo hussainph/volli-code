@@ -4,8 +4,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { DecisionModelCatalogEntry, DecisionModelSetting } from "@volli/shared";
 
-import type { DecisionModelSettingsView } from "../../../../ipc/contract";
+import type { DecisionModelResult, DecisionModelSettingsView } from "../../../../ipc/contract";
 import type { Project } from "@volli/shared";
+
+import { cloudSetting } from "./decision-model-model";
 
 import {
   CloudOptInDialog,
@@ -15,6 +17,15 @@ import {
 
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), info: vi.fn(), success: vi.fn() }),
+}));
+
+const receipts = vi.hoisted(() => new Map<string, string>());
+vi.mock("@renderer/lib/app-state-storage", () => ({
+  appStateStorage: {
+    getItem: vi.fn((key: string) => receipts.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => receipts.set(key, value)),
+  },
+  flushPendingAppStateKey: vi.fn(async () => true),
 }));
 
 const ZEN: DecisionModelCatalogEntry = {
@@ -31,6 +42,8 @@ let root: Root | null = null;
 let container: HTMLElement | null = null;
 
 beforeEach(() => {
+  receipts.clear();
+  vi.clearAllMocks();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",
@@ -56,18 +69,37 @@ function stubApi(global: DecisionModelSetting, project?: DecisionModelSetting) {
     ...(project === undefined ? {} : { project }),
     catalog: [ZEN],
   };
-  const set = vi.fn(async (_scope: unknown, setting: DecisionModelSetting | null) => {
-    view = { ...view, global: setting ?? view.global };
-    return { ok: true as const, settings: view };
-  });
+  const set = vi.fn(
+    async (
+      scope: { scope: string },
+      setting: DecisionModelSetting | null,
+    ): Promise<DecisionModelResult> => {
+      view =
+        scope.scope === "global"
+          ? { ...view, global: setting ?? view.global }
+          : { ...view, project: setting };
+      return { ok: true as const, settings: view };
+    },
+  );
   const test = vi.fn(async () => ({
     ok: true as const,
     test: { ok: true as const, elapsedMs: 42.4, probability: 0.97 },
   }));
+  const appState = new Map<string, string>();
+  const bootstrap = vi.fn(async () => ({
+    ok: true as const,
+    data: { appState: Object.fromEntries(appState) },
+  }));
+  const setAppState = vi.fn(async (key: string, value: string) => {
+    appState.set(key, value);
+    return { ok: true } as { ok: true } | { ok: false; error: string };
+  });
   vi.stubGlobal("api", {
     decisionModel: { get: async () => ({ ok: true as const, settings: view }), set, test },
+    data: { bootstrap },
+    appState: { set: setAppState },
   });
-  return { set, test };
+  return { set, test, appState, bootstrap, setAppState };
 }
 
 async function render(node: React.ReactNode): Promise<void> {
@@ -139,10 +171,8 @@ describe("Settings → Models → Decision model", () => {
     expect(onSignIn).toHaveBeenCalledWith("opencode");
   });
 
-  // This build has one purpose, so an opt-in that covers it is indistinguishable
-  // from "every purpose". An opt-in that covers none of this build's purposes
-  // (the shape a purpose added later leaves a stored one in) tells the two
-  // apart: the line must say what was agreed to, not what the build could send.
+  // A deliberately narrow opt-in proves the disclosure uses only what the
+  // person agreed to, not every purpose this build supports.
   const NARROW_OPT_IN = { acceptedAt: 1, purposes: [] } as never;
 
   it("names only the purposes the person opted into on the app-wide page", async () => {
@@ -197,6 +227,30 @@ describe("Settings → Models → Decision model", () => {
   });
 });
 
+function disclosure(): string | null | undefined {
+  return document.querySelector('[data-testid="decision-model-sends"]')?.textContent;
+}
+
+function extensionDialog(): Element | null {
+  return document.querySelector('[role="alertdialog"]');
+}
+
+describe("the cloud opt-in", () => {
+  it("says what leaves the Mac, and only Allow writes", async () => {
+    const onAllow = vi.fn();
+    const onCancel = vi.fn();
+    await render(<CloudOptInDialog entry={ZEN} onAllow={onAllow} onCancel={onCancel} />);
+    expect(document.body.textContent).toContain("Send decisions to Jev 1.13 Free · OpenCode Zen?");
+    expect(document.body.textContent).toMatch(/Session text, tool results and page content/);
+    expect(document.body.textContent).not.toContain("bare tool call");
+    await act(async () => button("Cancel").click());
+    expect(onCancel).toHaveBeenCalled();
+    expect(onAllow).not.toHaveBeenCalled();
+    await act(async () => button("Allow").click());
+    expect(onAllow).toHaveBeenCalledWith(ZEN);
+  });
+});
+
 const switchEl = (): HTMLButtonElement =>
   document.querySelector<HTMLButtonElement>('[data-testid="decision-model-auto-pick"] button')!;
 
@@ -228,6 +282,39 @@ describe("Pick models automatically (VC-432)", () => {
         optIn: expect.objectContaining({ purposes: ["agent.classify", "model.select"] }),
       }),
     );
+  });
+
+  it("extends and withdraws model selection while preserving classify consent", async () => {
+    const { set } = stubApi(cloudSetting(ZEN, 1));
+    await render(<DecisionModelSettings onSignIn={() => undefined} />);
+    expect(disclosure()).toContain("classify tool");
+    expect(disclosure()).not.toContain("bare tool call");
+    expect(disclosure()).not.toContain("first message of a new chat");
+    await act(async () => switchEl().click());
+    expect(extensionDialog()?.textContent).toContain("first message of a new chat");
+    expect(extensionDialog()?.textContent).not.toContain("bare tool call");
+    expect(set).not.toHaveBeenCalled();
+    await act(async () => button("Allow").click());
+    expect(set).toHaveBeenLastCalledWith(
+      { scope: "global" },
+      expect.objectContaining({
+        optIn: {
+          acceptedAt: expect.any(Number),
+          purposes: ["agent.classify", "model.select"],
+        },
+      }),
+    );
+    expect(disclosure()).toContain("first message of a new chat");
+    await act(async () => switchEl().click());
+    expect(set).toHaveBeenLastCalledWith(
+      { scope: "global" },
+      expect.objectContaining({
+        optIn: expect.objectContaining({ purposes: ["agent.classify"] }),
+      }),
+    );
+    expect(disclosure()).toContain("classify tool");
+    expect(disclosure()).not.toContain("bare tool call");
+    expect(disclosure()).not.toContain("first message of a new chat");
   });
 
   it("turns off at once, keeping the rest of the opt-in", async () => {
@@ -272,20 +359,5 @@ describe("Pick models automatically (VC-432)", () => {
     stubApi({ ...cloud, optIn: { acceptedAt: 1, purposes: ["agent.classify", "model.select"] } });
     await render(<ProjectDecisionModelRow project={project} onSaved={() => undefined} />);
     expect(document.querySelector('[data-testid="project-decision-model-auto-pick"]')).toBeNull();
-  });
-});
-
-describe("the cloud opt-in", () => {
-  it("says what leaves the Mac, and only Allow writes", async () => {
-    const onAllow = vi.fn();
-    const onCancel = vi.fn();
-    await render(<CloudOptInDialog entry={ZEN} onAllow={onAllow} onCancel={onCancel} />);
-    expect(document.body.textContent).toContain("Send decisions to Jev 1.13 Free · OpenCode Zen?");
-    expect(document.body.textContent).toMatch(/Session text, tool results and page content/);
-    await act(async () => button("Cancel").click());
-    expect(onCancel).toHaveBeenCalled();
-    expect(onAllow).not.toHaveBeenCalled();
-    await act(async () => button("Allow").click());
-    expect(onAllow).toHaveBeenCalledWith(ZEN);
   });
 });

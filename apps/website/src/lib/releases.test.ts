@@ -4,7 +4,7 @@ import {
   formatPublishedDate,
   isMacPlatform,
   primaryArtifact,
-  resolveAlphaBuild,
+  resolveStableBuild,
   type Release,
   type ReleaseAsset,
 } from "./releases";
@@ -19,7 +19,7 @@ function asset(name: string, size = 122_097_864): ReleaseAsset {
 
 // The exact asset set the release pipeline publishes today (VC-24/VC-25),
 // including the dot-named zip blockmap oddity.
-function canaryAssets(version: string): ReleaseAsset[] {
+function releaseAssets(version: string): ReleaseAsset[] {
   return [
     asset("latest-mac.yml", 550),
     asset(`Volli-Code-${version}-arm64-mac.zip`, 121_929_170),
@@ -33,93 +33,104 @@ function release(overrides: Partial<Release> & { tag_name: string }): Release {
   return {
     html_url: `https://github.com/hussainph/volli-code/releases/tag/${overrides.tag_name}`,
     draft: false,
-    prerelease: true,
+    prerelease: false,
     published_at: "2026-08-16T23:08:03Z",
-    assets: canaryAssets(overrides.tag_name.replace(/^v/, "")),
+    assets: releaseAssets(overrides.tag_name.replace(/^v/, "")),
     ...overrides,
   };
 }
 
-describe("resolveAlphaBuild", () => {
-  it("resolves the newest published build when only prereleases exist", () => {
-    const build = resolveAlphaBuild([
-      release({ tag_name: "v0.1.0-canary.5", published_at: "2026-08-16T23:08:03Z" }),
-      release({ tag_name: "v0.1.0-canary.4", published_at: "2026-08-16T13:12:50Z" }),
-      release({ tag_name: "v0.1.0-canary.2", published_at: "2026-08-16T03:39:16Z" }),
-    ]);
-    expect(build?.version).toBe("0.1.0-canary.5");
-    expect(build?.prerelease).toBe(true);
-    expect(build?.releaseUrl).toBe(
-      "https://github.com/hussainph/volli-code/releases/tag/v0.1.0-canary.5",
-    );
+describe("resolveStableBuild", () => {
+  it("returns null when only prereleases exist", () => {
+    expect(
+      resolveStableBuild([
+        release({ tag_name: "v0.1.0-canary.5", prerelease: true }),
+        release({ tag_name: "v0.1.0-beta.1", prerelease: true }),
+      ]),
+    ).toBeNull();
   });
 
-  it("orders by published date, not array order", () => {
-    const build = resolveAlphaBuild([
-      release({ tag_name: "v0.1.0-canary.4", published_at: "2026-08-16T13:12:50Z" }),
-      release({ tag_name: "v0.1.0-canary.5", published_at: "2026-08-16T23:08:03Z" }),
+  it("orders stable builds by published date, not array order", () => {
+    const build = resolveStableBuild([
+      release({ tag_name: "v0.1.0", published_at: "2026-08-16T13:12:50Z" }),
+      release({ tag_name: "v0.1.1", published_at: "2026-08-16T23:08:03Z" }),
     ]);
-    expect(build?.version).toBe("0.1.0-canary.5");
+    expect(build?.version).toBe("0.1.1");
+    expect(build?.releaseUrl).toBe("https://github.com/hussainph/volli-code/releases/tag/v0.1.1");
   });
 
-  it("offers the newest build whether or not it is flagged prerelease", () => {
-    const newerPrerelease = resolveAlphaBuild([
-      release({ tag_name: "v0.2.0-canary.1", published_at: "2026-09-02T00:00:00Z" }),
-      release({ tag_name: "v0.1.0", prerelease: false, published_at: "2026-09-01T00:00:00Z" }),
+  it("offers stable even when a newer canary has installable artifacts", () => {
+    const build = resolveStableBuild([
+      release({
+        tag_name: "v0.2.0-canary.1",
+        prerelease: true,
+        published_at: "2026-09-02T00:00:00Z",
+      }),
+      release({ tag_name: "v0.1.0", published_at: "2026-09-01T00:00:00Z" }),
     ]);
-    expect(newerPrerelease?.version).toBe("0.2.0-canary.1");
-    expect(newerPrerelease?.prerelease).toBe(true);
+    expect(build?.version).toBe("0.1.0");
+    expect(build?.artifacts.every((artifact) => !artifact.name.includes("canary"))).toBe(true);
+  });
 
-    const newerStable = resolveAlphaBuild([
-      release({ tag_name: "v0.1.0-canary.5", published_at: "2026-09-01T00:00:00Z" }),
-      release({ tag_name: "v0.1.0", prerelease: false, published_at: "2026-09-05T00:00:00Z" }),
+  it("skips a prerelease even when its tag looks stable", () => {
+    const build = resolveStableBuild([
+      release({ tag_name: "v0.2.0", prerelease: true, published_at: "2026-09-02T00:00:00Z" }),
+      release({ tag_name: "v0.1.0", published_at: "2026-09-01T00:00:00Z" }),
     ]);
-    expect(newerStable?.version).toBe("0.1.0");
-    expect(newerStable?.prerelease).toBe(false);
+    expect(build?.version).toBe("0.1.0");
+  });
+
+  it("does not fall back to a canary when stable has no installable artifacts", () => {
+    expect(
+      resolveStableBuild([
+        release({ tag_name: "v0.2.0", assets: [asset("latest-mac.yml")] }),
+        release({ tag_name: "v0.2.1-canary.1", prerelease: true }),
+      ]),
+    ).toBeNull();
   });
 
   it("ignores drafts", () => {
-    const build = resolveAlphaBuild([
-      release({ tag_name: "v0.1.0-canary.6", draft: true, published_at: "2026-08-17T00:00:00Z" }),
-      release({ tag_name: "v0.1.0-canary.5" }),
+    const build = resolveStableBuild([
+      release({ tag_name: "v0.1.1", draft: true, published_at: "2026-08-17T00:00:00Z" }),
+      release({ tag_name: "v0.1.0" }),
     ]);
-    expect(build?.version).toBe("0.1.0-canary.5");
+    expect(build?.version).toBe("0.1.0");
   });
 
   it("skips releases without installable artifacts instead of offering an empty download", () => {
-    const build = resolveAlphaBuild([
+    const build = resolveStableBuild([
       release({
-        tag_name: "v0.1.0-canary.6",
+        tag_name: "v0.1.1",
         published_at: "2026-08-17T00:00:00Z",
         assets: [asset("latest-mac.yml", 550)],
       }),
-      release({ tag_name: "v0.1.0-canary.5" }),
+      release({ tag_name: "v0.1.0" }),
     ]);
-    expect(build?.version).toBe("0.1.0-canary.5");
+    expect(build?.version).toBe("0.1.0");
   });
 
   it("keeps only dmg/zip assets, dmg first, and labels the published arch", () => {
-    const build = resolveAlphaBuild([release({ tag_name: "v0.1.0-canary.5" })]);
+    const build = resolveStableBuild([release({ tag_name: "v0.1.0" })]);
     expect(build?.artifacts).toEqual([
       {
         kind: "dmg",
         arch: "Apple Silicon",
-        name: "Volli-Code-0.1.0-canary.5-arm64.dmg",
-        url: "https://github.com/hussainph/volli-code/releases/download/tag/Volli-Code-0.1.0-canary.5-arm64.dmg",
+        name: "Volli-Code-0.1.0-arm64.dmg",
+        url: "https://github.com/hussainph/volli-code/releases/download/tag/Volli-Code-0.1.0-arm64.dmg",
         sizeBytes: 122_097_864,
       },
       {
         kind: "zip",
         arch: "Apple Silicon",
-        name: "Volli-Code-0.1.0-canary.5-arm64-mac.zip",
-        url: "https://github.com/hussainph/volli-code/releases/download/tag/Volli-Code-0.1.0-canary.5-arm64-mac.zip",
+        name: "Volli-Code-0.1.0-arm64-mac.zip",
+        url: "https://github.com/hussainph/volli-code/releases/download/tag/Volli-Code-0.1.0-arm64-mac.zip",
         sizeBytes: 121_929_170,
       },
     ]);
   });
 
   it("sorts multi-arch artifacts Apple Silicon, Universal, Intel, then unknown", () => {
-    const build = resolveAlphaBuild([
+    const build = resolveStableBuild([
       release({
         tag_name: "v0.2.0",
         prerelease: false,
@@ -140,7 +151,7 @@ describe("resolveAlphaBuild", () => {
   });
 
   it("keeps only the newest release", () => {
-    const build = resolveAlphaBuild([
+    const build = resolveStableBuild([
       release({ tag_name: "v0.2.0", prerelease: false, published_at: "2026-10-01T00:00:00Z" }),
       release({ tag_name: "v0.1.0", prerelease: false, published_at: "2026-09-01T00:00:00Z" }),
     ]);
@@ -148,35 +159,35 @@ describe("resolveAlphaBuild", () => {
   });
 
   it("treats a missing published_at as oldest", () => {
-    const build = resolveAlphaBuild([
-      release({ tag_name: "v0.1.0-canary.3", published_at: null }),
-      release({ tag_name: "v0.1.0-canary.5" }),
+    const build = resolveStableBuild([
+      release({ tag_name: "v0.0.9", published_at: null }),
+      release({ tag_name: "v0.1.0" }),
     ]);
-    expect(build?.version).toBe("0.1.0-canary.5");
+    expect(build?.version).toBe("0.1.0");
   });
 
   it("returns null for an empty list", () => {
-    expect(resolveAlphaBuild([])).toBeNull();
+    expect(resolveStableBuild([])).toBeNull();
   });
 });
 
 describe("primaryArtifact", () => {
   it("prefers the dmg over the zip", () => {
-    const build = resolveAlphaBuild([release({ tag_name: "v0.1.0-canary.5" })]);
+    const build = resolveStableBuild([release({ tag_name: "v0.1.0" })]);
     expect(build && primaryArtifact(build)?.kind).toBe("dmg");
   });
 
   it("falls back to the first artifact when no dmg was published", () => {
-    const build = resolveAlphaBuild([
+    const build = resolveStableBuild([
       release({
-        tag_name: "v0.1.0-canary.5",
-        assets: [asset("Volli-Code-0.1.0-canary.5-arm64-mac.zip")],
+        tag_name: "v0.1.0",
+        assets: [asset("Volli-Code-0.1.0-arm64-mac.zip")],
       }),
     ]);
     expect(build && primaryArtifact(build)?.kind).toBe("zip");
   });
 
-  // resolveAlphaBuild never hands back an artifact-less build, so this build is
+  // resolveStableBuild never hands back an artifact-less build, so this build is
   // constructed by hand. The case still has to answer: the signature promises
   // `| null`, and download.astro marks its primary row by identity
   // (`artifact === primary`). Returning undefined there would quietly make the
@@ -184,10 +195,9 @@ describe("primaryArtifact", () => {
   it("returns null when the build has no artifacts", () => {
     expect(
       primaryArtifact({
-        version: "0.1.0-alpha.1",
-        releaseUrl: "https://github.com/hussainph/volli-code/releases/tag/v0.1.0-alpha.1",
+        version: "0.1.0",
+        releaseUrl: "https://github.com/hussainph/volli-code/releases/tag/v0.1.0",
         publishedAt: null,
-        prerelease: true,
         artifacts: [],
       }),
     ).toBeNull();

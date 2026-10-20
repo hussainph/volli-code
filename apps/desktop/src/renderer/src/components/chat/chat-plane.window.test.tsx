@@ -23,22 +23,50 @@ import {
   DEFAULT_CODE_MODE_POLICY,
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
+  QueueRevisionConflictError,
+  blobUrl,
+  type BlobLinkView,
   type ModelAccessSnapshot,
   type ModelSelection,
+  type SessionEvent,
 } from "@volli/shared";
-import { EMPTY_TRANSCRIPT, type ChatSessionTransport } from "@volli/session-presentation";
+import {
+  appendFrames,
+  disposeChatClient,
+  EMPTY_TRANSCRIPT,
+  getOrCreateChatClient,
+  messageDeliveryLabels,
+  type ChatCommandRequest,
+  type ChatSessionFrame,
+  type ChatSessionProjection,
+  type ChatSessionRpc,
+  type ChatSessionTransport,
+} from "@volli/session-presentation";
+import {
+  createSessionEngine,
+  type SessionRuntime,
+  type SessionRuntimeCommandResult,
+  type SessionStreamCompactionProgress,
+  type SessionStreamOverlay,
+} from "@volli/session-engine";
+import { openLegacySession } from "@renderer/chat/legacy-session.test-support";
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
-import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { createChatSessionsStore, type ChatSessionsState } from "@renderer/stores/chat-sessions";
 import {
   EMPTY_PROJECT_SESSION_ROWS,
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
-import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
+import { CHAT_DRAFTS_APP_STATE_KEY, useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useUiStore } from "@renderer/stores/ui";
+import { useExperimentsStore } from "@renderer/stores/experiments";
+import { useHostConnectionStore } from "@renderer/stores/host-connection";
+import { remoteHost } from "@renderer/stores/host-sources";
 import { ChatPlane } from "./chat-plane";
+import { runtimeTransport } from "../../../../../../../packages/session-rpc/test-fixtures/runtime-transport";
+import { gatedProvider } from "../../../../../../../packages/agent-runtime/test-fixtures/gated-provider";
 import {
   forgetTranscriptViews,
   readTranscriptView,
@@ -93,6 +121,8 @@ function transcript(count: number): UIMessage[] {
 let root: Root | null = null;
 let container: HTMLElement | null = null;
 const nativeScrollTo = HTMLElement.prototype.scrollTo;
+const originalExperiments = useExperimentsStore.getState();
+const originalHosts = useHostConnectionStore.getState();
 
 beforeEach(() => {
   forgetTranscriptViews();
@@ -130,10 +160,14 @@ afterEach(async () => {
     root?.unmount();
   });
   root = null;
+  for (const store of hostStores.splice(0)) store.getState().closeChatSession(SESSION);
   container?.remove();
   container = null;
   MotionGlobalConfig.skipAnimations = false;
   HTMLElement.prototype.scrollTo = nativeScrollTo;
+  useExperimentsStore.setState(originalExperiments, true);
+  useHostConnectionStore.setState(originalHosts, true);
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -142,7 +176,7 @@ function provisionalChatStore(promote: () => Promise<boolean> = async () => true
     () => ({ connect: async () => {}, dispose: () => {} }) as unknown as ChatSessionTransport,
   );
   const promoteChatSession = vi.fn(promote);
-  const enqueue = vi.fn();
+  const enqueue = vi.fn<ChatSessionsState["enqueue"]>().mockResolvedValue("delivered");
   store.setState({ promoteChatSession, enqueue } as never);
   useChatDraftsStore.getState().openProvisional(SESSION, {
     projectId: PROJECT,
@@ -180,7 +214,6 @@ function chatStore(
           attention: { active: [], primary: null },
           interactions: { active: [], resolved: [] },
           liveExecutor: null,
-          authority: null,
         },
         transcript: {
           ...EMPTY_TRANSCRIPT,
@@ -197,11 +230,129 @@ function chatStore(
   return store;
 }
 
-async function mountPlane(store: ReturnType<typeof chatStore>, modelAccess?: ModelAccessClient) {
+const hostStores: ReturnType<typeof createChatSessionsStore>[] = [];
+
+interface CancelInput {
+  commandId: string;
+  sessionId: string;
+  messageId: string;
+  expectedRevision?: number;
+}
+
+type HostQueueRow = NonNullable<ChatSessionProjection["queue"]>[number];
+
+function hostRow(
+  text: string,
+  options: { state?: HostQueueRow["state"]; attachments?: readonly BlobLinkView[] } = {},
+): HostQueueRow {
+  const attachments = options.attachments ?? [];
+  return {
+    id: "q1",
+    commandId: "q1",
+    state: options.state ?? "queued",
+    message: {
+      id: "q1",
+      role: "user",
+      ...(attachments.length === 0 ? {} : { metadata: { attachments } }),
+      parts: [
+        { type: "text", text },
+        ...attachments.map((attachment) => ({
+          type: "file" as const,
+          url: blobUrl(attachment.blobHash),
+          mediaType: attachment.mime,
+          filename: attachment.originalName,
+        })),
+      ],
+    },
+  };
+}
+
+function hostChatStore(
+  options: { state?: HostQueueRow["state"]; attachments?: readonly BlobLinkView[] } = {},
+) {
+  const commands: ChatCommandRequest[] = [];
+  let projection: ChatSessionProjection = {
+    session: {
+      id: SESSION,
+      projectId: PROJECT,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Chat",
+      createdAt: 0,
+    },
+    status: "open",
+    signal: null,
+    modelSelection: DEFAULT_SELECTION,
+    modelTier: null,
+    turnActive: true,
+    lastActivityAt: 0,
+    bornTicketless: true,
+    scheduledResume: null,
+    attention: { active: [], primary: null },
+    interactions: { active: [], resolved: [] },
+    liveExecutor: { id: "running-executor" },
+    queue: [hostRow("host follow-up", options)],
+    queueRevision: 1,
+  };
+  const cancel = vi.fn(async (_input: CancelInput): Promise<boolean> => true);
+  const store = createChatSessionsStore(() => ({
+    rpc: {
+      session: {
+        snapshot: { query: async () => ({ projection, frames: [], throughSequence: 0 }) },
+        history: { query: async () => ({ frames: [], before: null }) },
+        projection: { query: async () => ({ projection }) },
+        subscribe: { subscribe: () => ({ unsubscribe: () => {} }) },
+        command: {
+          mutate: async (input) => {
+            commands.push(input);
+            return { sessionId: SESSION };
+          },
+        },
+        cancelQueued: {
+          mutate: async (input: CancelInput) => {
+            const accepted = await cancel(input);
+            if (accepted) projection = { ...projection, queue: [], queueRevision: 2 };
+            return {
+              sessionId: SESSION,
+              receipt: { status: accepted ? "accepted" : "rejected", detail: "already releasing" },
+            };
+          },
+        },
+        editQueued: { mutate: async () => ({ sessionId: SESSION }) },
+        cancelInteraction: { mutate: async () => ({ sessionId: SESSION }) },
+        reconcile: { mutate: async () => ({ sessionId: SESSION }) },
+      },
+    },
+    scheduler: { schedule: () => () => {} },
+    newCommandId: () => crypto.randomUUID(),
+    createSession: async () => ({ sessionId: SESSION }),
+    attachSession: async () => {
+      throw new Error("renderer must not attach for the queue");
+    },
+  }));
+  store.getState().adoptChatSession(SESSION);
+  hostStores.push(store);
+  /** Another Client edits the row: the host's revision moves and the stream says so. */
+  const editElsewhere = (text: string) => {
+    const revision = (projection.queueRevision ?? 0) + 1;
+    projection = { ...projection, queue: [hostRow(text, options)], queueRevision: revision };
+    store.getState().setQueue(SESSION, projection.queue ?? [], revision);
+  };
+  /** A cancel the host judges by its own revision, as the ledger does. */
+  const hostRevision = () => projection.queueRevision ?? 0;
+  return { store, cancel, commands, editElsewhere, hostRevision };
+}
+
+async function mountPlane(
+  store: ReturnType<typeof chatStore>,
+  modelAccess?: ModelAccessClient,
+  sessionId = SESSION,
+) {
   const plane = (
     <TooltipProvider delayDuration={0}>
       <ChatPlane
-        sessionId={SESSION}
+        sessionId={sessionId}
         projectId={PROJECT}
         ticketId={null}
         onOpenFile={() => {}}
@@ -344,6 +495,34 @@ describe("a provisional chat plane", () => {
       SESSION,
       expect.objectContaining({ text: "first durable words" }),
     );
+  });
+
+  it("retains the persisted first message until the host accepts its queued command", async () => {
+    const { enqueue, store } = provisionalChatStore();
+    let accept!: (outcome: "delivered" | "refused") => void;
+    enqueue.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          accept = resolve;
+        }),
+    );
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    const box = composer();
+    if (box === null) throw new Error("expected composer");
+    await act(async () => {
+      type(box, "keep these words");
+    });
+    await act(async () => {
+      container?.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+    });
+    await vi.waitFor(() => expect(enqueue).toHaveBeenCalledOnce());
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toMatchObject([
+      { text: "keep these words", state: "sending" },
+    ]);
+    await act(async () => accept("refused"));
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toMatchObject([
+      { text: "keep these words", state: "unsent" },
+    ]);
   });
 
   it("keeps an import already in flight with the first held message", async () => {
@@ -495,6 +674,33 @@ describe("a provisional chat plane", () => {
     await act(async () => finishPromotion());
   });
 
+  it("promotes a remote Draft on first Send without consulting or freezing this Mac's default", async () => {
+    useExperimentsStore.setState({ snapshot: { cloud: { enabled: true, source: "storage" } } });
+    useHostConnectionStore.setState({
+      hosts: [remoteHost("box", "chat-box")],
+      projects: { [PROJECT]: { hostId: "box", link: { status: "open" }, granted: ["sessions"] } },
+    });
+    const client = modelClient(DEFAULT_SELECTION);
+    const defaults = vi.spyOn(client, "defaults").mockResolvedValue(EMPTY_MODEL_ACCESS_DEFAULTS);
+    const { promoteChatSession, enqueue, store } = provisionalChatStore();
+    await mountPlane(store, client);
+    const box = composer();
+    if (box === null) throw new Error("expected remote composer");
+    await act(async () => type(box, "remote first Send"));
+    const submit = container?.querySelector<HTMLButtonElement>('[aria-label="Send"]');
+    if (submit === null || submit === undefined) throw new Error("expected Send");
+    await vi.waitFor(() => expect(submit.disabled).toBe(false));
+    await act(async () => submit.click());
+    await vi.waitFor(() => expect(promoteChatSession).toHaveBeenCalledWith(SESSION));
+    expect(enqueue).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ text: "remote first Send" }),
+    );
+    expect(defaults).not.toHaveBeenCalled();
+    expect(useUiStore.getState().settingsOpen).toBe(false);
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.provisional?.model).toBeUndefined();
+  });
+
   it("opens Model Access instead of promoting when no default resolves", async () => {
     const selection: ModelSelection = {
       providerId: "acme",
@@ -625,7 +831,405 @@ describe("a provisional chat plane", () => {
   });
 });
 
+describe("host-owned rows with cloud off", () => {
+  it("waits for cancellation before Backspace restores text and preserves typing during the wait", async () => {
+    const { store, cancel } = hostChatStore();
+    let accept!: (accepted: boolean) => void;
+    cancel.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          accept = resolve;
+        }),
+    );
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await vi.waitFor(() => expect(store.getState().sessions[SESSION]?.queue).toHaveLength(1));
+    const box = composer();
+    if (box === null) throw new Error("expected composer");
+    await act(async () =>
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true })),
+    );
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(box.value).toBe("");
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toMatchObject([
+      { id: "q1", state: "sending" },
+    ]);
+    await act(async () => type(box, "new typing"));
+    await act(async () => accept(true));
+    expect(box.value).toBe("host follow-up\nnew typing");
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toEqual([]);
+    expect(store.getState().sessions[SESSION]?.queue).toEqual([]);
+  });
+
+  it("leaves the draft unchanged when host release beats Backspace", async () => {
+    const { store, cancel } = hostChatStore();
+    cancel.mockResolvedValue(false);
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await vi.waitFor(() => expect(store.getState().sessions[SESSION]?.queue).toHaveLength(1));
+    const box = composer();
+    if (box === null) throw new Error("expected composer");
+    await act(async () =>
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true })),
+    );
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(box.value).toBe("");
+    expect(store.getState().sessions[SESSION]?.queue).toHaveLength(1);
+  });
+
+  // An unproven release at the head of the FIFO would otherwise be stuck: the
+  // host now cancels it, and refuses one in flight. Remove is offered; the row
+  // leaves only once the host accepts — never optimistically.
+  it("offers Remove on a releasing row and keeps it until the host accepts", async () => {
+    const { store, cancel } = hostChatStore({ state: "releasing" });
+    cancel.mockResolvedValue(false);
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await vi.waitFor(() =>
+      expect(store.getState().sessions[SESSION]?.queue).toMatchObject([
+        { id: "q1", queueState: "releasing" },
+      ]),
+    );
+    const remove = () =>
+      container?.querySelector<HTMLButtonElement>(
+        '[aria-label="Remove queued message: host follow-up"]',
+      ) ?? null;
+    const actions = container?.querySelector<HTMLButtonElement>(
+      '[aria-label="Queued message actions: host follow-up"]',
+    );
+    expect(remove()?.disabled).toBe(false);
+    expect(actions?.disabled).toBe(false);
+
+    // Refused: an in-flight (or proven) release. Nothing moves.
+    await act(async () => remove()?.click());
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(cancel).toHaveBeenLastCalledWith(
+      expect.objectContaining({ messageId: "q1", expectedRevision: 1 }),
+    );
+    expect(remove()).not.toBeNull();
+    expect(store.getState().sessions[SESSION]?.queue).toHaveLength(1);
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held ?? []).toEqual([]);
+    expect(composer()?.value).toBe("");
+
+    // Accepted: an unproven release the host withdrew.
+    cancel.mockResolvedValue(true);
+    await act(async () => remove()?.click());
+    await vi.waitFor(() => expect(store.getState().sessions[SESSION]?.queue).toEqual([]));
+    expect(cancel).toHaveBeenCalledTimes(2);
+    expect(remove()).toBeNull();
+  });
+
+  it.each(["remove", "edit"] as const)(
+    "retires an accepted idle-send shadow after recovery %s",
+    async (action) => {
+      const { store, cancel } = hostChatStore();
+      await mountPlane(store, modelClient(DEFAULT_SELECTION));
+      await act(async () => {
+        store.getState().rememberIdleSend(SESSION, { id: "q1", text: "host follow-up" }, true);
+        store.getState().settle(SESSION, "Attachment failed");
+      });
+      if (action === "remove") {
+        await act(async () =>
+          container!
+            .querySelector<HTMLButtonElement>(
+              '[aria-label="Remove queued message: host follow-up"]',
+            )!
+            .click(),
+        );
+      } else {
+        const trigger = container!.querySelector<HTMLButtonElement>(
+          '[aria-label="Queued message actions: host follow-up"]',
+        )!;
+        await act(async () =>
+          trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+        );
+        const item = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+          (node) => node.textContent?.includes("Edit message"),
+        )!;
+        await act(async () => item.click());
+      }
+      await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(store.getState().idleSends[SESSION]).toBeUndefined());
+      await act(async () => store.getState().settle(SESSION, null));
+      expect(container!.querySelector(".is-user")).toBeNull();
+      expect(
+        [...container!.querySelectorAll('[role="status"]')].some((node) =>
+          node.textContent?.includes("Working"),
+        ),
+      ).toBe(false);
+      expect(composer()?.value).toBe(action === "edit" ? "host follow-up" : "");
+    },
+  );
+
+  // Cross-Client edit safety: cancel-to-composer persists its recovery copy
+  // before asking the host, and that wait is long enough for another Client to
+  // edit the row. The cancel must carry the revision of the strip the person
+  // acted on — not the one observed after the wait — so the host answers with a
+  // typed conflict instead of cancelling words this composer never showed.
+  it("cancels with the rendered revision across the durability wait and keeps everything on conflict", async () => {
+    const attachment: BlobLinkView = {
+      linkId: "link-1",
+      blobHash: "ab".repeat(32),
+      label: "shot.png",
+      originalName: "shot.png",
+      mime: "image/png",
+      sizeBytes: 12,
+    };
+    let gating = false;
+    let persist!: () => void;
+    const persisted = new Promise<void>((resolve) => {
+      persist = resolve;
+    });
+    let gatedWrites = 0;
+    vi.stubGlobal(
+      "api",
+      refusingBridge({
+        "appState.set": async (...args: unknown[]) => {
+          if (gating && args[0] === CHAT_DRAFTS_APP_STATE_KEY) {
+            gatedWrites += 1;
+            await persisted;
+          }
+          return { ok: true };
+        },
+      }),
+    );
+    const { store, cancel, editElsewhere, hostRevision } = hostChatStore({
+      attachments: [attachment],
+    });
+    cancel.mockImplementation(async (input) => {
+      if (input.expectedRevision !== undefined && input.expectedRevision !== hostRevision())
+        throw new QueueRevisionConflictError(input.expectedRevision, hostRevision());
+      return true;
+    });
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await vi.waitFor(() => expect(store.getState().sessions[SESSION]?.queueRevision).toBe(1));
+    const box = composer();
+    if (box === null) throw new Error("expected composer");
+
+    gating = true;
+    await act(async () =>
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true })),
+    );
+    await vi.waitFor(() => expect(gatedWrites).toBeGreaterThan(0));
+    expect(cancel).not.toHaveBeenCalled();
+
+    // Mid-wait: another Client rewrites the row, and this plane re-renders it.
+    await act(async () => editElsewhere("edited elsewhere"));
+    expect(store.getState().sessions[SESSION]?.queueRevision).toBe(2);
+    expect(container?.textContent).toContain("edited elsewhere");
+    await act(async () => type(box, "new typing"));
+
+    await act(async () => persist());
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    expect(cancel).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "q1", expectedRevision: 1 }),
+    );
+    // The conflict refuses like any refusal: no words or files come back, and
+    // the host's (edited) row is still the one on screen. The recovery copy is
+    // retired only by that positive host ownership, once the mutation is over.
+    await vi.waitFor(() => expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toEqual([]));
+    expect(box.value).toBe("new typing");
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.attachments ?? []).toEqual([]);
+    expect(store.getState().sessions[SESSION]?.queue).toMatchObject([
+      { id: "q1", text: "edited elsewhere", attachments: [attachment] },
+    ]);
+    expect(
+      container?.querySelectorAll('[aria-label="Queued message: edited elsewhere"]'),
+    ).toHaveLength(1);
+    expect(container?.textContent).not.toContain("host follow-up");
+  });
+
+  // Edit's recovery copy is a hold, and a hold empties the box — right for Send,
+  // wrong here: the box holds words typed BEFORE Edit, and neither the wait for
+  // the host nor its refusal may take them.
+  describe("Edit with words already typed", () => {
+    const staged: BlobLinkView = {
+      linkId: "link-staged",
+      blobHash: "cd".repeat(32),
+      label: "staged.png",
+      originalName: "staged.png",
+      mime: "image/png",
+      sizeBytes: 7,
+    };
+    const rowFile: BlobLinkView = {
+      linkId: "link-row",
+      blobHash: "ef".repeat(32),
+      label: "row.png",
+      originalName: "row.png",
+      mime: "image/png",
+      sizeBytes: 9,
+    };
+
+    /** Opens the row's actions menu the way a keyboard does, and picks Edit. */
+    async function editFromMenu(text: string): Promise<void> {
+      const trigger = container?.querySelector<HTMLButtonElement>(
+        `[aria-label="Queued message actions: ${text}"]`,
+      );
+      if (trigger === null || trigger === undefined) throw new Error("expected row actions");
+      await act(async () =>
+        trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+      );
+      const item = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+        (node) => node.textContent?.includes("Edit message"),
+      );
+      if (item === undefined) throw new Error("expected Edit message");
+      await act(async () => item.click());
+    }
+
+    async function mountWithTyping(state: HostQueueRow["state"]) {
+      useChatDraftsStore.getState().setDraftAttachments(SESSION, [staged]);
+      const host = hostChatStore({ state, attachments: [rowFile] });
+      let answer!: (accepted: boolean) => void;
+      host.cancel.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+      await mountPlane(host.store, modelClient(DEFAULT_SELECTION));
+      await vi.waitFor(() =>
+        expect(host.store.getState().sessions[SESSION]?.queue).toMatchObject([
+          { id: "q1", queueState: state },
+        ]),
+      );
+      const box = composer();
+      if (box === null) throw new Error("expected composer");
+      await act(async () => type(box, "already typed"));
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.text).toBe("already typed");
+      return { ...host, box, answer: (accepted: boolean) => answer(accepted) };
+    }
+
+    it("keeps the typed words and files, and the host row, when the host refuses a releasing row", async () => {
+      const { store, cancel, box, answer } = await mountWithTyping("releasing");
+
+      await editFromMenu("host follow-up");
+      await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+      // Mid-wait: the recovery copy is held, and the box still says what it said.
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toMatchObject([
+        { id: "q1", state: "sending" },
+      ]);
+      expect(box.value).toBe("already typed");
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.text).toBe("already typed");
+
+      await act(async () => answer(false));
+      await vi.waitFor(() =>
+        expect(useChatDraftsStore.getState().drafts[SESSION]?.held ?? []).toEqual([]),
+      );
+      expect(box.value).toBe("already typed");
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.text).toBe("already typed");
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.attachments).toEqual([staged]);
+      expect(store.getState().sessions[SESSION]?.queue).toMatchObject([
+        { id: "q1", text: "host follow-up", queueState: "releasing", attachments: [rowFile] },
+      ]);
+      expect(
+        container?.querySelectorAll('[aria-label="Queued message: host follow-up"]'),
+      ).toHaveLength(1);
+    });
+
+    it("puts the recovered words ahead of the typed ones when the host accepts", async () => {
+      const { store, cancel, box, answer } = await mountWithTyping("queued");
+
+      await editFromMenu("host follow-up");
+      await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+      expect(box.value).toBe("already typed");
+
+      await act(async () => answer(true));
+      await vi.waitFor(() => expect(store.getState().sessions[SESSION]?.queue).toEqual([]));
+      expect(box.value).toBe("host follow-up\nalready typed");
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.text).toBe(
+        "host follow-up\nalready typed",
+      );
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toEqual([]);
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.attachments).toEqual([staged, rowFile]);
+    });
+  });
+});
+
 describe("a chat plane holding a long transcript", () => {
+  it("retires Working and live markdown after the runtime writes fatal Attention then closes", async () => {
+    const provider = gatedProvider("```ts\nexport const answer = 42;\n```");
+    // Keep Node/SQLite composition outside the browser type graph. Host-core
+    // typechecks this test-only helper; the real module is loaded at test time.
+    const path = decodeURIComponent(
+      new URL("../../../../../../../packages/host-core/src/testing/silent-ends.ts", import.meta.url)
+        .pathname,
+    );
+    const module: {
+      silentEndsFixture(options: { provider: typeof provider }): Promise<{
+        runtime: SessionRuntime;
+        sessionId: string;
+        attach(): Promise<SessionRuntimeCommandResult>;
+        submit(
+          id: string,
+          delivery: "steer",
+          opened: boolean,
+        ): Promise<SessionRuntimeCommandResult>;
+        events(): Promise<SessionEvent[]>;
+        crash(): Promise<void>;
+        close(): Promise<void>;
+      }>;
+    } = await import(path);
+    const fixture = await module.silentEndsFixture({ provider });
+    const store = createChatSessionsStore(() => runtimeTransport(fixture.runtime));
+    try {
+      await fixture.attach();
+      store.getState().adoptChatSession(fixture.sessionId);
+      await vi.waitFor(() =>
+        expect(store.getState().sessions[fixture.sessionId]?.lifecycle).toBe("ready"),
+      );
+      await mountPlane(store, undefined, fixture.sessionId);
+      await act(async () => {
+        await fixture.submit("send", "steer", true);
+        await provider.entered;
+      });
+      await vi.waitFor(() => {
+        expect(store.getState().sessions[fixture.sessionId]?.transcript.turnActive).toBe(true);
+        expect(container?.textContent).toContain("export const answer = 42;");
+        expect(
+          [...container!.querySelectorAll('[role="status"]')].some((element) =>
+            element.textContent?.includes("Working"),
+          ),
+        ).toBe(true);
+      });
+      expect(container?.querySelector(TOKEN_SELECTOR)).toBeNull();
+      const epoch = store.getState().sessions[fixture.sessionId]!.transcript.turnEpoch;
+      await act(async () => {
+        await fixture.crash();
+      });
+      const events = await fixture.events();
+      const fatal = events.filter(
+        (event) =>
+          event.payload.kind === "attention.raised" ||
+          event.payload.kind === "attachment.closed" ||
+          event.payload.kind === "turn.interrupted",
+      );
+      expect(fatal.map((event) => event.payload.kind)).toEqual([
+        "attention.raised",
+        "attachment.closed",
+      ]);
+      await vi.waitFor(() => {
+        const slice = store.getState().sessions[fixture.sessionId]!;
+        expect(slice.transcript.turnActive).toBe(false);
+        expect(slice.transcript.turnEpoch).toBe(epoch + 1);
+        expect(slice.lifecycle).not.toBe("working");
+        expect(
+          [...container!.querySelectorAll('[role="status"]')].some((element) =>
+            element.textContent?.includes("Working"),
+          ),
+        ).toBe(false);
+        expect(container?.textContent).toContain("The runtime stopped unexpectedly");
+        expect(
+          [...container!.querySelectorAll("button")].filter(
+            (element) => element.textContent?.trim() === "Retry",
+          ),
+        ).toHaveLength(1);
+        expect(container?.querySelector(TOKEN_SELECTOR)).not.toBeNull();
+      });
+    } finally {
+      provider.release();
+      await unmountPlane();
+      store.getState().closeChatSession(fixture.sessionId);
+      await fixture.close();
+    }
+  }, 20_000);
+
   it("uses the stream Turn boundary when Session lifecycle fails and recovers", async () => {
     const source = "```ts\nexport const answer = 42;\n```";
     const message: UIMessage = {
@@ -788,5 +1392,1292 @@ describe("a chat plane holding a long transcript", () => {
     await mountPlane(store);
     expect(shows(revealedTop)).toBe(true);
     expect(turnRows()).toBe(TRANSCRIPT_TAIL_ROWS + TRANSCRIPT_PAGE_ROWS);
+  });
+});
+
+describe("a chat plane holding only the host's newest window (VC-315)", () => {
+  /** Turn `index` as a durable frame at sequence `index + 1`. */
+  const turnFrame = (index: number): ChatSessionFrame =>
+    ({
+      sessionId: SESSION,
+      sequence: index + 1,
+      event: {
+        id: `event-${index + 1}`,
+        sessionId: SESSION,
+        sequence: index + 1,
+        occurredAt: index,
+        recordedAt: index,
+        provenance: {
+          source: { kind: "system", id: "session-runtime", detail: null },
+          venue: null,
+        },
+        payload: {
+          kind: "transcript.referenced",
+          attachmentId: null,
+          turnId: null,
+          reference: { id: `sha256:${index}`, mediaType: null, digest: null },
+        },
+      },
+      transcript: { message: transcript(index + 1)[index]! },
+    }) as never;
+  const frames = (from: number, to: number) =>
+    Array.from({ length: to - from }, (_value, offset) => turnFrame(from + offset));
+
+  /**
+   * A store holding turns [`from`, TOTAL) with the host's cursor above them,
+   * and a resident client whose host answers pages of `PAGE` turns.
+   */
+  function windowedStore(from: number, total: number, page: number) {
+    const store = chatStore([]);
+    const held = appendFrames({ ...EMPTY_TRANSCRIPT, before: from + 1 }, frames(from, total));
+    store.setState((state) => ({
+      sessions: { [SESSION]: { ...state.sessions[SESSION]!, transcript: held } },
+    }));
+    const requests: number[] = [];
+    const rpc = {
+      session: {
+        history: {
+          query: async ({ before }: { before: number }) => {
+            requests.push(before);
+            const start = Math.max(0, before - 1 - page);
+            return { frames: frames(start, before - 1), before: start > 0 ? start + 1 : null };
+          },
+        },
+      },
+    } as unknown as ChatSessionRpc;
+    getOrCreateChatClient(SESSION, {
+      rpc,
+      store,
+      scheduler: { schedule: () => () => undefined },
+      newCommandId: () => "command",
+      createSession: async () => {
+        throw new Error("not under test");
+      },
+      attachSession: async () => {
+        throw new Error("not under test");
+      },
+      notify: () => undefined,
+      renameSession: () => undefined,
+    });
+    return { store, requests };
+  }
+
+  afterEach(() => {
+    disposeChatClient(SESSION);
+  });
+
+  it("offers the host's history above a short window, and reveals each page as it lands", async () => {
+    const { store, requests } = windowedStore(30, 40, 20);
+    await mountPlane(store);
+
+    expect(turnRows()).toBe(10);
+    const button = earlierButton();
+    if (button === null) throw new Error("expected an earlier affordance");
+    expect(button.getAttribute("data-transcript-earlier")).toBe("0");
+
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    expect(requests).toEqual([31]);
+    expect(shows(10)).toBe(true);
+    expect(shows(9)).toBe(false);
+    expect(turnRows()).toBe(30);
+
+    // Pressed until the host has nothing more; bounded so a stuck window fails.
+    for (let press = 0; press < 10 && earlierButton() !== null; press += 1) {
+      await act(async () => {
+        earlierButton()!.dispatchEvent(
+          new MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+      });
+    }
+    expect(shows(0)).toBe(true);
+    expect(turnRows()).toBe(40);
+    expect(requests).toEqual([31, 11]);
+    expect(store.getState().sessions[SESSION]?.transcript.before).toBeNull();
+  });
+
+  /** Frames [`from`, `to`) as assistant messages: one grouped turn, split by the window. */
+  const assistantFrames = (from: number, to: number) =>
+    frames(from, to).map((frame) =>
+      Object.assign({}, frame, {
+        transcript: {
+          message: Object.assign({}, frame.transcript!.message, { role: "assistant" as const }),
+        },
+      }),
+    );
+
+  /**
+   * The plane over one assistant turn the window began partway through
+   * (sequences 11..20), whose host answers the rest of it (1..10) in one page.
+   */
+  async function splitTurn(onPage?: () => void) {
+    const store = chatStore([]);
+    store.setState((state) => ({
+      sessions: {
+        [SESSION]: {
+          ...state.sessions[SESSION]!,
+          transcript: appendFrames({ ...EMPTY_TRANSCRIPT, before: 11 }, assistantFrames(10, 20)),
+        },
+      },
+    }));
+    const rpc = {
+      session: {
+        history: {
+          query: async () => {
+            onPage?.();
+            return { frames: assistantFrames(0, 10), before: null };
+          },
+        },
+      },
+    } as unknown as ChatSessionRpc;
+    getOrCreateChatClient(SESSION, {
+      rpc,
+      store,
+      scheduler: { schedule: () => () => undefined },
+      newCommandId: () => "command",
+      createSession: async () => {
+        throw new Error("not under test");
+      },
+      attachSession: async () => {
+        throw new Error("not under test");
+      },
+      notify: () => undefined,
+      renameSession: () => undefined,
+    });
+    await mountPlane(store);
+    const scroller = container!.querySelector<HTMLElement>('[style*="scrollbar-gutter"]')!;
+    expect(scroller).not.toBeNull();
+    return { store, scroller };
+  }
+
+  const messageCount = (store: ReturnType<typeof chatStore>) =>
+    store.getState().sessions[SESSION]!.transcript.messages.length;
+
+  // A height model alone (100 px a message) and no anchor positions: the
+  // fallback the plane takes when it can see no anchor.
+  it("holds the reader's place when a page completes the first turn instead of adding a row", async () => {
+    const { store, scroller } = await splitTurn();
+    Object.defineProperty(scroller, "scrollHeight", {
+      configurable: true,
+      get: () => messageCount(store) * 100,
+    });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
+    scroller.scrollTop = 100;
+    expect(turnRows()).toBe(1);
+
+    await act(async () => {
+      earlierButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    expect(turnRows()).toBe(1); // no new row: the turn got its older prefix
+    expect(messageCount(store)).toBe(20);
+    expect(scroller.scrollTop).toBe(1100);
+  });
+
+  /**
+   * A layout model with anchors in it: message `i` of the transcript is 100 px
+   * tall at `i * 100`, and an anchor's box is its message's, moved by the
+   * scroll. `drawnBelow` is height the live tail grew by at the bottom.
+   */
+  function layout(store: ReturnType<typeof chatStore>, scroller: HTMLElement) {
+    const state = { drawnBelow: 0 };
+    const index = (key: string) =>
+      store
+        .getState()
+        .sessions[SESSION]!.transcript.messages.findIndex(({ id }) => key.startsWith(`${id}:`));
+    Object.defineProperty(scroller, "scrollHeight", {
+      configurable: true,
+      get: () => messageCount(store) * 100 + state.drawnBelow,
+    });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
+    scroller.getBoundingClientRect = () => ({ top: 0, bottom: 300 }) as DOMRect;
+    for (const node of container!.querySelectorAll<HTMLElement>("[data-transcript-anchor]")) {
+      node.getBoundingClientRect = () => {
+        const top = index(node.dataset["transcriptAnchor"]!) * 100 - scroller.scrollTop;
+        return { top, bottom: top + 100 } as DOMRect;
+      };
+    }
+    return state;
+  }
+
+  it("puts the anchor the reader saw back where it was, even with the tail growing below", async () => {
+    let state: { drawnBelow: number } | null = null;
+    // The live tail grows while the page is in flight: a height delta would
+    // overshoot by exactly that much; the anchor does not.
+    const { store, scroller } = await splitTurn(() => {
+      state!.drawnBelow = 250;
+    });
+    state = layout(store, scroller);
+    scroller.scrollTop = 150;
+
+    await act(async () => {
+      earlierButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    // The anchors are the same nodes, kept through the page: the turn's
+    // identity held while its prefix completed.
+    layout(store, scroller);
+    expect(turnRows()).toBe(1);
+    // "turn number 11" was 50 px into view at the top; 10 messages arrived above.
+    expect(scroller.scrollTop).toBe(1150);
+  });
+
+  it("leaves an offset the browser's own scroll anchoring already corrected", async () => {
+    let native: (() => void) | null = null;
+    const { store, scroller } = await splitTurn(() => native?.());
+    layout(store, scroller);
+    scroller.scrollTop = 150;
+    let writes = 0;
+    let value = 150;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => value,
+      set: (next: number) => {
+        writes += 1;
+        value = next;
+      },
+    });
+    // Chromium moves the offset by the height that arrived above, itself.
+    native = () => queueMicrotask(() => (value = 1150));
+
+    await act(async () => {
+      earlierButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    expect(value).toBe(1150);
+    expect(writes).toBe(0);
+  });
+
+  it("keeps the first turn mounted, not remounted, while a page completes it", async () => {
+    await splitTurn();
+    const turn = container!.querySelector(".is-assistant");
+    const segment = container!.querySelector('[data-transcript-anchor="u14:0"]');
+    expect(segment).not.toBeNull();
+
+    await act(async () => {
+      earlierButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    expect(shows(0)).toBe(true);
+    expect(container!.querySelector(".is-assistant")).toBe(turn);
+    expect(container!.querySelector('[data-transcript-anchor="u14:0"]')).toBe(segment);
+  });
+
+  it("reads back on its own past a window with nothing to draw", async () => {
+    const { store, requests } = windowedStore(40, 40, 20);
+    store.setState((state) => ({
+      sessions: {
+        [SESSION]: {
+          ...state.sessions[SESSION]!,
+          transcript: { ...EMPTY_TRANSCRIPT, throughSequence: 40, before: 41 },
+        },
+      },
+    }));
+    await mountPlane(store);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(requests).toEqual([41]);
+    expect(shows(39)).toBe(true);
+    expect(shows(19)).toBe(false);
+  });
+});
+
+/**
+ * `/copy` on a bounded open (VC-315): the current turn's reply sits above 256
+ * tool-only messages the window holds, so the messages alone cannot say what
+ * it was.
+ */
+describe("/copy on a Session holding only its newest window (VC-315)", () => {
+  const tools: UIMessage[] = Array.from({ length: 256 }, (_value, index) => ({
+    id: `tool-${index}`,
+    role: "assistant" as const,
+    parts: [
+      {
+        type: "dynamic-tool" as const,
+        toolName: "read",
+        toolCallId: `call-${index}`,
+        state: "output-available" as const,
+        input: {},
+        output: "result",
+      },
+    ],
+  }));
+
+  async function pressCopy(latestReply: { sequence: number; text: string } | null) {
+    const writeText = vi.fn(async (_text: string) => undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const store = chatStore(tools);
+    store.setState((state) => ({
+      sessions: {
+        [SESSION]: {
+          ...state.sessions[SESSION]!,
+          // A composable box: the Session has a model.
+          projection: {
+            ...state.sessions[SESSION]!.projection!,
+            modelSelection: DEFAULT_SELECTION,
+          },
+          transcript: { ...state.sessions[SESSION]!.transcript, before: 300, latestReply },
+        },
+      },
+    }));
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    const box = composer();
+    if (box === null) throw new Error("expected a composer");
+    await act(async () => type(box, "/copy"));
+    const submit = container?.querySelector<HTMLButtonElement>('[aria-label="Send"]');
+    if (submit === null || submit === undefined) throw new Error("expected Send");
+    await act(async () => submit.click());
+    return writeText;
+  }
+
+  it("copies the host's baseline when the reply sits above the window", async () => {
+    const writeText = await pressCopy({ sequence: 3, text: "Current-turn reply" });
+    expect(writeText).toHaveBeenCalledWith("Current-turn reply");
+  });
+
+  it("copies nothing when the host says the current turn has not spoken", async () => {
+    const writeText = await pressCopy(null);
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  // A legacy Session's reply was recorded before transcript digests, so no
+  // event says where it is. The host recovers it from history above the window
+  // (VC-315's legacy baseline), and `/copy` copies what that real snapshot
+  // answers.
+  it("VC-315: copies a legacy Session reply preceding a tool-only bounded tail", async () => {
+    const snapshot = await openLegacySession(createSessionEngine, [
+      { say: "Current-turn reply" },
+      ...tools.map(() => ({ say: "   " })),
+      { say: "   " },
+    ]);
+    expect(snapshot.before).not.toBeNull();
+    expect(JSON.stringify(snapshot.frames)).not.toContain("Current-turn reply");
+    const writeText = await pressCopy(snapshot.latestReply);
+    expect(writeText).toHaveBeenCalledWith("Current-turn reply");
+  });
+});
+
+describe("VC-758 visible timeline regressions", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => disposeChatClient(SESSION));
+  it("shows the first message as sent with Working while promotion is pending", async () => {
+    const { store } = provisionalChatStore(() => new Promise<boolean>(() => {}));
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await act(async () => {
+      const box = composer();
+      if (box === null) throw new Error("expected composer");
+      type(box, "waiting on promotion");
+      container?.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+    });
+    await vi.waitFor(() =>
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toHaveLength(1),
+    );
+    expect(container?.textContent).toContain("waiting on promotion");
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    await advanceProgressTime(600);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    expect(container?.querySelector('[role="status"]')?.textContent).toContain("Working");
+  });
+
+  it("keeps the opening bubble and Working in place through host queue and turn ownership", async () => {
+    const store = chatStore([]);
+    store.setState(({ sessions }) => ({
+      sessions: {
+        ...sessions,
+        [SESSION]: {
+          ...sessions[SESSION]!,
+          projection: {
+            ...sessions[SESSION]!.projection!,
+            status: "open",
+            modelSelection: DEFAULT_SELECTION,
+          },
+        },
+      },
+    }));
+    const drafts = useChatDraftsStore.getState();
+    drafts.holdMessage(SESSION, { id: "opening", text: "First words", delivery: "send" });
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    const bubble = container!.querySelector(".is-user");
+    const workingMark = () =>
+      [...container!.querySelectorAll('[role="status"]')].find((node) =>
+        node.textContent?.includes("Working"),
+      );
+    const working = workingMark();
+    const assertOpening = () => {
+      expect(container!.querySelectorAll(".is-user")).toHaveLength(1);
+      expect(container!.querySelector(".is-user")).toBe(bubble);
+      expect(workingMark()).toBe(working);
+      expect(working?.textContent).toContain("Working");
+      expect(container!.querySelector('[data-slot="message-delivery"]')).toBeNull();
+      expect(
+        container!.querySelector('[aria-label="Remove queued message: First words"]'),
+      ).toBeNull();
+      expect(
+        bubble!.compareDocumentPosition(working!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    };
+    assertOpening();
+    await advanceProgressTime(1000);
+    assertOpening();
+    await act(async () => {
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: {
+            ...sessions[SESSION]!,
+            queue: [{ id: "opening", text: "First words", queueState: "queued" }],
+          },
+        },
+      }));
+      drafts.dropHeld(SESSION, "opening");
+    });
+    assertOpening();
+    // Durable intent can precede the actual turn and delivery receipt too.
+    const pendingFrame: ChatSessionFrame = {
+      sessionId: SESSION,
+      sequence: 1,
+      event: {
+        id: "opening-command-event",
+        sessionId: SESSION,
+        sequence: 1,
+        occurredAt: 1,
+        recordedAt: 1,
+        attachmentId: null,
+        commandId: "opening-command",
+        provenance: { source: { kind: "system", id: "runtime", detail: null }, venue: null },
+        payload: {
+          kind: "command.recorded",
+          command: {
+            id: "opening-command",
+            sessionId: SESSION,
+            createdAt: 1,
+            route: null,
+            intent: {
+              kind: "message.submit",
+              reference: { id: "artifact", mediaType: null, digest: null },
+            },
+          },
+        },
+      },
+      transcript: {
+        message: { id: "opening", role: "user", parts: [{ type: "text", text: "First words" }] },
+      },
+    };
+    await act(async () => {
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: {
+            ...sessions[SESSION]!,
+            queue: [],
+            transcript: appendFrames(sessions[SESSION]!.transcript, [pendingFrame]),
+          },
+        },
+      }));
+    });
+    await advanceProgressTime(1000);
+    expect(
+      messageDeliveryLabels(store.getState().sessions[SESSION]!.transcript.frames).get("opening"),
+    ).toBe("Pending");
+    assertOpening();
+    await act(async () => {
+      const message: UIMessage = {
+        id: "opening",
+        role: "user",
+        parts: [{ type: "text", text: "First words" }],
+      };
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: {
+            ...sessions[SESSION]!,
+            queue: [],
+            lifecycle: "working",
+            transcript: {
+              ...EMPTY_TRANSCRIPT,
+              turnActive: true,
+              turnEpoch: 1,
+              messages: [message],
+              durableMessages: [message],
+            },
+          },
+        },
+      }));
+    });
+    assertOpening();
+  });
+
+  it("keeps an idle Enter send after history in the transcript while a closed binding reattaches", async () => {
+    const history: UIMessage[] = [
+      { id: "old-user", role: "user", parts: [{ type: "text", text: "Earlier request" }] },
+      { id: "old-reply", role: "assistant", parts: [{ type: "text", text: "Earlier reply" }] },
+    ];
+    const store = chatStore(history);
+    store.setState(({ sessions }) => ({
+      sessions: {
+        ...sessions,
+        [SESSION]: {
+          ...sessions[SESSION]!,
+          projection: {
+            ...sessions[SESSION]!.projection!,
+            status: "open",
+            modelSelection: DEFAULT_SELECTION,
+          },
+          transcript: { ...sessions[SESSION]!.transcript, turnEpoch: 2, before: 10 },
+        },
+      },
+    }));
+    const result = Promise.withResolvers<unknown>();
+    const submit = vi.fn<(input: ChatCommandRequest) => Promise<unknown>>(() => result.promise);
+    getOrCreateChatClient(SESSION, {
+      rpc: {
+        session: {
+          command: { mutate: submit },
+          projection: {
+            query: async () => {
+              const slice = store.getState().sessions[SESSION]!;
+              return {
+                projection: {
+                  ...slice.projection!,
+                  queueRevision: 1,
+                  queue: slice.queue.map((entry) => ({
+                    id: entry.id,
+                    commandId: entry.id,
+                    state: "queued",
+                    message: {
+                      id: entry.id,
+                      role: "user",
+                      parts: [{ type: "text", text: entry.text }],
+                    },
+                  })),
+                },
+              };
+            },
+          },
+        },
+      } as unknown as ChatSessionRpc,
+      store,
+      scheduler: { schedule: () => () => undefined },
+      newCommandId: () => "reattach-command",
+      createSession: async () => {
+        throw new Error("not under test");
+      },
+      attachSession: async () => {
+        throw new Error("the host owns reattachment");
+      },
+      notify: () => undefined,
+      renameSession: () => undefined,
+    });
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await act(async () => {
+      const box = composer()!;
+      type(box, "Continue after relaunch");
+    });
+    await act(async () =>
+      composer()!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      ),
+    );
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    expect(submit.mock.calls[0]?.[0]).toMatchObject({
+      command: { kind: "message.submit", delivery: "queue" },
+    });
+    const message = useChatDraftsStore.getState().drafts[SESSION]!.held[0]!;
+    expect(message.delivery).toBe("send");
+    const currentBubble = () =>
+      [...container!.querySelectorAll(".is-user")].find((node) =>
+        node.textContent?.includes(message.text),
+      );
+    const workingMark = () =>
+      [...container!.querySelectorAll('[role="status"]')].find((node) =>
+        node.textContent?.includes("Working"),
+      );
+    let bubble = currentBubble();
+    let working = workingMark();
+    expect(bubble).toBeDefined();
+    expect(working).toBeDefined();
+    const assertSent = () => {
+      expect(currentBubble()).toBe(bubble);
+      expect(workingMark()).toBe(working);
+      expect(container!.querySelectorAll(".is-user")).toHaveLength(2);
+      expect(container!.textContent).toContain("Earlier reply");
+      expect(container!.querySelector('[data-slot="message-delivery"]')).toBeNull();
+      expect(
+        container!.querySelector('[aria-label="Remove queued message: Continue after relaunch"]'),
+      ).toBeNull();
+      expect(
+        bubble!.compareDocumentPosition(working!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    };
+    await advanceProgressTime(1000);
+    assertSent();
+    await act(async () => {
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: {
+            ...sessions[SESSION]!,
+            queue: [{ id: message.id, text: message.text, queueState: "queued" }],
+          },
+        },
+      }));
+      result.resolve({ sessionId: SESSION, receipt: { status: "accepted" } });
+    });
+    await vi.waitFor(() =>
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held ?? []).toEqual([]),
+    );
+    assertSent();
+    // Queue updates are synchronous; durable transcript frames may still be
+    // buffered by the stream scheduler. Neither the words nor Working leave.
+    await act(async () =>
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: { ...sessions[SESSION]!, queue: [] },
+        },
+      })),
+    );
+    await advanceProgressTime(1000);
+    assertSent();
+    const markup = bubble!.outerHTML;
+    await act(async () => root?.render(null));
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    bubble = currentBubble();
+    working = workingMark();
+    expect(bubble?.outerHTML).toBe(markup);
+    expect(working).toBeDefined();
+    assertSent();
+    await act(async () =>
+      store.setState(({ sessions }) => {
+        const durable: UIMessage = {
+          id: message.id,
+          role: "user",
+          parts: [{ type: "text", text: message.text }],
+        };
+        return {
+          sessions: {
+            ...sessions,
+            [SESSION]: {
+              ...sessions[SESSION]!,
+              queue: [],
+              lifecycle: "working",
+              projection: {
+                ...sessions[SESSION]!.projection!,
+                turnActive: true,
+                liveExecutor: { id: "reattached" },
+              },
+              transcript: {
+                ...sessions[SESSION]!.transcript,
+                messages: [...history, durable],
+                durableMessages: [...history, durable],
+                turnActive: true,
+                turnEpoch: 3,
+              },
+            },
+          },
+        };
+      }),
+    );
+    assertSent();
+    expect(store.getState().idleSends[SESSION]).toBeUndefined();
+  });
+
+  it("returns an opening queue to recovery when a real blocker arrives", async () => {
+    const store = chatStore([]);
+    store.setState(({ sessions }) => ({
+      sessions: {
+        ...sessions,
+        [SESSION]: {
+          ...sessions[SESSION]!,
+          projection: { ...sessions[SESSION]!.projection!, modelSelection: DEFAULT_SELECTION },
+          queue: [{ id: "blocked", text: "Blocked words", queueState: "queued" }],
+        },
+      },
+    }));
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    expect(container!.querySelector(".is-user")?.textContent).toContain("Blocked words");
+    expect(container!.textContent).toContain("Working");
+    await act(async () =>
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: {
+            ...sessions[SESSION]!,
+            lifecycle: "error",
+            sessionError: "Attachment failed",
+          },
+        },
+      })),
+    );
+    expect(container!.querySelector('[data-slot="session-blocker"]')?.textContent).toContain(
+      "Attachment failed",
+    );
+    expect(
+      container!.querySelector('[aria-label="Remove queued message: Blocked words"]'),
+    ).not.toBeNull();
+    expect(container!.querySelector(".is-user")).toBeNull();
+    expect(
+      [...container!.querySelectorAll('[role="status"]')].some((node) =>
+        node.textContent?.includes("Working"),
+      ),
+    ).toBe(false);
+  });
+
+  it("removes delayed sending state on acceptance and keeps the same quiet bubble through durable handoff", async () => {
+    const store = chatStore([], { lifecycle: "working", turnActive: true });
+    const message: UIMessage = {
+      id: "handoff",
+      role: "user",
+      parts: [{ type: "text", text: "keep these words" }],
+    };
+    const drafts = useChatDraftsStore.getState();
+    drafts.holdMessage(SESSION, { id: message.id, text: "keep these words", delivery: "send" });
+    await mountPlane(store);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    await advanceProgressTime(600);
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
+      "Sending…",
+    );
+    const working = () =>
+      [...(container?.querySelectorAll('[role="status"]') ?? [])].find((node) =>
+        node.textContent?.includes("Working"),
+      )!;
+    expect(
+      working().compareDocumentPosition(container!.querySelector(".is-user")!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    await act(async () =>
+      drafts.amendHeldMessage(SESSION, message.id, (held) => ({ ...held, deliveryAccepted: true })),
+    );
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    const accepted = container?.querySelector(".is-user");
+    const bubble = accepted?.firstElementChild?.outerHTML;
+    const rowClass = accepted?.className;
+    expect(
+      accepted!.compareDocumentPosition(working()) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    const frame: ChatSessionFrame = {
+      sessionId: SESSION,
+      sequence: 1,
+      event: {
+        id: "accepted-observation",
+        sessionId: SESSION,
+        sequence: 1,
+        occurredAt: 1,
+        recordedAt: 1,
+        attachmentId: null,
+        commandId: null,
+        provenance: { source: { kind: "system", id: "runtime", detail: null }, venue: null },
+        payload: {
+          kind: "transcript.referenced",
+          attachmentId: null,
+          turnId: null,
+          reference: { id: "artifact", mediaType: null, digest: null },
+        },
+      },
+      transcript: { message },
+    };
+    await act(async () =>
+      store.setState((state) => ({
+        sessions: {
+          ...state.sessions,
+          [SESSION]: {
+            ...state.sessions[SESSION]!,
+            transcript: appendFrames(state.sessions[SESSION]!.transcript, [frame]),
+          },
+        },
+      })),
+    );
+    await vi.waitFor(() =>
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held ?? []).toEqual([]),
+    );
+    expect(container?.querySelectorAll(".is-user")).toHaveLength(1);
+    expect(container?.querySelector(".is-user")?.firstElementChild?.outerHTML).toBe(bubble);
+    expect(container?.querySelector(".is-user")?.className).toBe(rowClass);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    expect(
+      container!.querySelector(".is-user")!.compareDocumentPosition(working()) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      messageDeliveryLabels(store.getState().sessions[SESSION]!.transcript.frames).get(message.id),
+    ).toBe("Delivered");
+    expect(container?.textContent).toContain("keep these words");
+  });
+
+  it("retains accepted steering from the recovery strip until host ownership is visible", async () => {
+    const store = chatStore(transcript(1), { lifecycle: "working", turnActive: true });
+    const slice = store.getState().sessions[SESSION]!;
+    store.setState({
+      sessions: {
+        [SESSION]: {
+          ...slice,
+          projection: {
+            ...slice.projection!,
+            modelSelection: DEFAULT_SELECTION,
+            liveExecutor: { id: "executor" },
+          },
+        },
+      },
+    } as never);
+    const result = Promise.withResolvers<unknown>();
+    const submit = vi.fn(() => result.promise);
+    getOrCreateChatClient(SESSION, {
+      rpc: { session: { command: { mutate: submit } } } as unknown as ChatSessionRpc,
+      store,
+      scheduler: { schedule: () => () => undefined },
+      newCommandId: () => "steer-command",
+      createSession: async () => {
+        throw new Error("not under test");
+      },
+      attachSession: async () => {
+        throw new Error("not under test");
+      },
+      notify: () => undefined,
+      renameSession: () => undefined,
+    });
+    const drafts = useChatDraftsStore.getState();
+    drafts.holdMessage(SESSION, { id: "steer-recovery", text: "steer these words" });
+    drafts.markHeld(SESSION, "steer-recovery", "unsent");
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await act(async () =>
+      container
+        ?.querySelector<HTMLButtonElement>('[aria-label="Steer queued message: steer these words"]')
+        ?.click(),
+    );
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    await advanceProgressTime(600);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    await act(async () => result.resolve({ sessionId: SESSION, receipt: { status: "accepted" } }));
+    await vi.waitFor(() =>
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held[0]).toMatchObject({
+        id: "steer-recovery",
+        deliveryAccepted: true,
+      }),
+    );
+    expect(container?.textContent).toContain("steer these words");
+    expect(
+      container?.querySelector('[aria-label="Steer queued message: steer these words"]'),
+    ).toBeNull();
+  });
+
+  it("keeps Working when a turn starts before any transcript message", async () => {
+    const store = chatStore([], { lifecycle: "working", turnActive: true });
+    await mountPlane(store);
+    expect(container?.querySelector('[role="status"]')?.textContent).toContain("Working");
+  });
+
+  it("shows the failure in the timeline with one recovery", async () => {
+    const store = chatStore(transcript(1), {
+      lifecycle: "error",
+      sessionError: "Context assembly failed",
+    });
+    await mountPlane(store);
+    const row = container?.querySelector('[data-slot="session-blocker"]');
+    expect(row).not.toBeNull();
+    expect(row?.closest('[data-slot="chat-composer-dock"]')).toBeNull();
+    expect(row?.textContent).toContain("Retry");
+  });
+});
+
+it("VC-758 keeps Working above undelivered steering even while the stream reports an error", async () => {
+  vi.useFakeTimers();
+  const store = chatStore(transcript(1), {
+    lifecycle: "error",
+    turnActive: true,
+    sessionError: "Lost the Session stream",
+  });
+  useChatDraftsStore
+    .getState()
+    .holdMessage(SESSION, { id: "steer", text: "focus here", delivery: "steer" });
+  await mountPlane(store);
+  const status = container?.querySelector('[role="status"]');
+  expect(status?.textContent).toContain("Working");
+  expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+  await advanceProgressTime(600);
+  expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+  // Steering still follows Working; only its redundant delivery tab is gone.
+  const pending = [...(container?.querySelectorAll(".is-user") ?? [])].find((node) =>
+    node.textContent?.includes("focus here"),
+  );
+  expect(pending).toBeDefined();
+  expect(status!.compareDocumentPosition(pending!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+});
+
+async function advanceProgressTime(ms: number) {
+  await act(async () => vi.advanceTimersByTime(ms));
+}
+function liveAssistantMessage(parts: UIMessage["parts"]): UIMessage {
+  return { id: "assistant", role: "assistant", parts };
+}
+
+/** Real stream folds, rather than a mocked progress flag on the mark. */
+describe("VC-769 one progress indicator through the live ChatPlane projection", () => {
+  function frame(
+    sequence: number,
+    payload: NonNullable<ChatSessionFrame["event"]>["payload"],
+    message: UIMessage | null = null,
+  ): ChatSessionFrame {
+    return {
+      sessionId: SESSION,
+      sequence,
+      event: {
+        id: `progress-${sequence}`,
+        sessionId: SESSION,
+        sequence,
+        occurredAt: sequence,
+        recordedAt: sequence,
+        attachmentId: "attachment",
+        commandId: null,
+        provenance: { source: { kind: "system", id: "runtime", detail: null }, venue: null },
+        payload,
+      },
+      transcript: message === null ? null : { message },
+    };
+  }
+  const boundary = (sequence: number, kind: "turn.started" | "turn.completed") =>
+    frame(sequence, { kind, attachmentId: "attachment", turnId: "turn" });
+  const committed = (sequence: number, message: UIMessage) =>
+    frame(
+      sequence,
+      {
+        kind: "transcript.referenced",
+        attachmentId: "attachment",
+        turnId: "turn",
+        reference: { id: `artifact-${sequence}`, mediaType: null, digest: null },
+      },
+      message,
+    );
+  const overlay = (throughSequence: number, message: UIMessage): SessionStreamOverlay => ({
+    kind: "overlay",
+    sessionId: SESSION,
+    throughSequence,
+    messageId: message.id,
+    delta: {
+      op: "reset",
+      message: {
+        id: message.id,
+        role: message.role,
+        parts: message.parts.map((part, index) => ({ key: `part-${index}`, part })),
+      },
+    },
+  });
+  async function ingest(
+    store: ReturnType<typeof chatStore>,
+    frames: ChatSessionFrame[] = [],
+    overlays: SessionStreamOverlay[] = [],
+    compactions: SessionStreamCompactionProgress[] = [],
+  ) {
+    await act(async () =>
+      store.setState((state) => {
+        const slice = state.sessions[SESSION]!;
+        const folded = appendFrames(slice.transcript, frames, overlays, compactions);
+        return {
+          sessions: {
+            ...state.sessions,
+            [SESSION]: {
+              ...slice,
+              transcript: folded,
+              lifecycle: folded.turnActive ? "working" : "ready",
+            },
+          },
+        };
+      }),
+    );
+  }
+  const mark = () =>
+    [...container!.querySelectorAll('[role="status"]')].find(
+      (node) => node.querySelector(".sr-only")?.textContent === "Working",
+    );
+  function expectMark(status: Element, invisible: boolean) {
+    expect(mark()).toBe(status);
+    expect(status.querySelector(".sr-only")?.textContent).toBe("Working");
+    expect(status.querySelector(":scope > [aria-hidden]")?.classList.contains("invisible")).toBe(
+      invisible,
+    );
+  }
+
+  it("walks thinking → tool → gap → text → end without losing the accessible turn or doubling progress", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = chatStore([]);
+      await mountPlane(store);
+      expect(mark()).toBeUndefined();
+      await ingest(store, [boundary(1, "turn.started")]);
+      const status = mark()!;
+      expect(status).toBeDefined();
+      expectMark(status, false); // Before the first token is never a 300ms wait.
+
+      const thought: UIMessage["parts"][number] = {
+        type: "reasoning",
+        text: "Inspecting the code",
+        state: "streaming",
+      };
+      const running: UIMessage["parts"][number] = {
+        type: "dynamic-tool",
+        toolName: "bash",
+        toolCallId: "shell",
+        state: "input-available",
+        input: { command: "pnpm check" },
+      };
+      await ingest(store, [], [overlay(1, liveAssistantMessage([thought]))]);
+      expect(store.getState().sessions[SESSION]!.transcript.overlay.size).toBe(1);
+      expect(container?.querySelector(".is-assistant")).not.toBeNull();
+      expectMark(status, true);
+      await ingest(store, [], [overlay(1, liveAssistantMessage([thought, running]))]);
+      // The bundle is collapsed: its summary, not a hidden command payload,
+      // is the progress the reader actually sees.
+      const summary = container?.querySelector(".is-assistant button[aria-expanded]");
+      expect(summary).not.toBeNull();
+      expect(summary?.textContent).toContain("…");
+      expectMark(status, true);
+
+      // The provider leaves the old thought marked streaming. Segmentation,
+      // not that stale bit, decides whether the reader sees current progress.
+      const settledTool = liveAssistantMessage([
+        thought,
+        { ...running, state: "output-available", output: "done" },
+      ]);
+      await ingest(store, [committed(2, settledTool)]);
+      expect(store.getState().sessions[SESSION]!.transcript.overlay.size).toBe(0);
+      expectMark(status, true);
+      await advanceProgressTime(299);
+      expectMark(status, true);
+      await advanceProgressTime(1);
+      expectMark(status, false); // Still-open turn cannot look finished past the gap.
+
+      const text = liveAssistantMessage([
+        ...settledTool.parts,
+        { type: "text", text: "The checks passed", state: "streaming" },
+      ]);
+      await ingest(store, [], [overlay(2, text)]);
+      expect(container?.textContent).toContain("The checks passed");
+      expectMark(status, true); // Hide in the same update, not on a hide timer.
+      await ingest(store, [
+        committed(
+          3,
+          liveAssistantMessage([
+            ...settledTool.parts,
+            { type: "text", text: "The checks passed", state: "done" },
+          ]),
+        ),
+        boundary(4, "turn.completed"),
+      ]);
+      expect(mark()).toBeUndefined();
+      expect(container?.textContent).toContain("The checks passed");
+      await advanceProgressTime(1_000);
+      expect(mark()).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an already-visible wait through held to durable-pending ownership", async () => {
+    vi.useFakeTimers();
+    const store = chatStore([]);
+    const message: UIMessage = {
+      id: "handoff-wait",
+      role: "user",
+      parts: [{ type: "text", text: "Still waiting" }],
+    };
+    useChatDraftsStore
+      .getState()
+      .holdMessage(SESSION, { id: message.id, text: "Still waiting", delivery: "send" });
+    await mountPlane(store);
+    await advanceProgressTime(600);
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
+      "Sending…",
+    );
+    await ingest(store, [
+      frame(
+        1,
+        {
+          kind: "command.recorded",
+          command: {
+            id: "held-command",
+            sessionId: SESSION,
+            createdAt: 0,
+            route: null,
+            intent: {
+              kind: "message.submit",
+              reference: { id: "artifact", mediaType: null, digest: null },
+            },
+          },
+        },
+        message,
+      ),
+    ]);
+    expect(container?.querySelectorAll(".is-user")).toHaveLength(1);
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
+      "Sending…",
+    );
+    await advanceProgressTime(1);
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
+      "Sending…",
+    );
+  });
+
+  const submitted = (sequence: number, commandId: string, message: UIMessage) =>
+    frame(
+      sequence,
+      {
+        kind: "command.recorded",
+        command: {
+          id: commandId,
+          sessionId: SESSION,
+          createdAt: 0,
+          route: null,
+          intent: {
+            kind: "message.submit",
+            reference: { id: `artifact-${sequence}`, mediaType: null, digest: null },
+          },
+        },
+      },
+      message,
+    );
+
+  it("keeps the wait's clock from the hold when ownership hands off part-way through it", async () => {
+    vi.useFakeTimers();
+    const store = chatStore([]);
+    const message: UIMessage = {
+      id: "handoff-mid-wait",
+      role: "user",
+      parts: [{ type: "text", text: "Halfway there" }],
+    };
+    useChatDraftsStore
+      .getState()
+      .holdMessage(SESSION, { id: message.id, text: "Halfway there", delivery: "send" });
+    await mountPlane(store);
+    await advanceProgressTime(300);
+    await ingest(store, [submitted(1, "held-command", message)]);
+    expect(container?.querySelectorAll(".is-user")).toHaveLength(1);
+    await advanceProgressTime(299);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    await advanceProgressTime(1);
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
+      "Sending…",
+    );
+  });
+
+  it("never holds a wait longer than 600ms after the tab mounted when its stamp arrives late", async () => {
+    vi.useFakeTimers();
+    const store = chatStore([]);
+    const drafts = useChatDraftsStore.getState();
+    drafts.holdMessage(SESSION, { id: "late-stamp", text: "Line up", delivery: "queue" });
+    // Accepted before the tab mounts: "Queued", with no pending stamp yet.
+    drafts.amendHeldMessage(SESSION, "late-stamp", (held) => ({ ...held, deliveryAccepted: true }));
+    await mountPlane(store);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    await advanceProgressTime(300);
+    // Pending again, so the message is stamped now — 300ms after the tab mounted.
+    await act(async () =>
+      drafts.amendHeldMessage(SESSION, "late-stamp", (held) => {
+        const next = { ...held };
+        delete next.deliveryAccepted;
+        return next;
+      }),
+    );
+    await advanceProgressTime(299);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    await advanceProgressTime(1);
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
+      "Queuing…",
+    );
+  });
+
+  it.each(["reasoning", "text", "tool"] as const)(
+    "restores Working during a transport retry with stale %s output",
+    async (kind) => {
+      vi.useFakeTimers();
+      const store = chatStore([]);
+      await mountPlane(store);
+      await ingest(store, [boundary(1, "turn.started")]);
+      const part: UIMessage["parts"][number] =
+        kind === "tool"
+          ? {
+              type: "dynamic-tool",
+              toolName: "read",
+              toolCallId: "read",
+              state: "input-available",
+              input: {},
+            }
+          : { type: kind, text: "Partial output", state: "streaming" };
+      await ingest(store, [], [overlay(1, liveAssistantMessage([part]))]);
+      const status = mark()!;
+      expectMark(status, true);
+      const setRetry = async (retrying: boolean) => {
+        await act(async () =>
+          store.setState((state) => {
+            const slice = state.sessions[SESSION]!;
+            const notice = {
+              id: "retry",
+              attachmentId: null,
+              kind: "transport_retrying" as const,
+              detail: "Waiting for the network",
+              diagnostic: null,
+            };
+            return {
+              sessions: {
+                ...state.sessions,
+                [SESSION]: {
+                  ...slice,
+                  projection: {
+                    ...slice.projection!,
+                    attention: {
+                      active: retrying ? [notice] : [],
+                      primary: retrying ? notice : null,
+                    },
+                  },
+                },
+              },
+            };
+          }),
+        );
+      };
+      await setRetry(true);
+      expect(container?.textContent).toContain("Reconnecting");
+      await advanceProgressTime(299);
+      expectMark(status, true);
+      await advanceProgressTime(1);
+      expectMark(status, false);
+      expect(container?.querySelectorAll(".is-assistant .animate-spin")).toHaveLength(0);
+      await setRetry(false);
+      expectMark(status, true);
+    },
+  );
+
+  it("treats compaction as the visible progress and restores Working only after its continuous gap", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = chatStore([]);
+      await mountPlane(store);
+      await ingest(store, [boundary(1, "turn.started")]);
+      const status = mark()!;
+      const progress: SessionStreamCompactionProgress = {
+        kind: "compaction",
+        sessionId: SESSION,
+        throughSequence: 1,
+        state: "started",
+        reason: "manual",
+      };
+      await ingest(store, [], [], [progress]);
+      expect(container?.textContent).toContain("Compacting");
+      expectMark(status, true);
+      await ingest(store, [], [], [{ ...progress, state: "finished" }]);
+      expectMark(status, true);
+      await advanceProgressTime(299);
+      expectMark(status, true);
+      await advanceProgressTime(1);
+      expectMark(status, false);
+      await ingest(store, [boundary(2, "turn.completed")]);
+      expect(mark()).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

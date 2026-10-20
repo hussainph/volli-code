@@ -34,18 +34,18 @@ vi.mock("electron", () => ({
 }));
 
 import { registerAutomationIpcHandlers } from "./ipc";
-import { createAutomationEngine } from "./engine";
-import { enabledAutomationIds } from "./enablement";
-import type { PendingArmedRunCoordinator } from "./pending-armed-runs";
-import type { AutomationRunner } from "./run";
-import { createAutomationScheduler } from "./scheduler";
 import {
+  createAutomationEngine,
+  enabledAutomationIds,
+  type PendingArmedRunCoordinator,
+  type AutomationRunner,
+  createAutomationScheduler,
   advanceScheduleCursor,
   readScheduleCursors,
   rebaseScheduleCursor,
-} from "./schedule-cursor";
-import { createAutomationService } from "./service";
-import { SqliteAutomationLedger } from "./sqlite-ledger";
+  createAutomationService,
+  SqliteAutomationLedger,
+} from "@volli/host-core/automations";
 import {
   createAutomation,
   deleteAutomation,
@@ -57,12 +57,17 @@ import {
   listSkippedOccurrencesForAutomation,
   listSkippedOccurrencesForProject,
   recordAutomationRun,
-} from "../db/automations-repo";
-import { insertProject } from "../db/projects-repo";
-import { insertSession } from "../session-control/test-support";
-import { openTestDb, testProject, testSession, testTicket } from "../db/test-helpers";
-import type { TestDb } from "../db/test-helpers";
-import { insertTicket } from "../db/tickets-repo";
+  insertProject,
+  insertTicket,
+} from "@volli/host-core/db";
+import {
+  insertSession,
+  openTestDb,
+  testProject,
+  testSession,
+  testTicket,
+  type TestDb,
+} from "@volli/host-core/testing";
 
 let ctx: TestDb;
 
@@ -1357,6 +1362,7 @@ describe("automation IPC", () => {
         const outcome = await relaunchedEngine.recordSkip(input);
         if (!outcome.ok) throw new Error(outcome.error);
       },
+      runAccepted: async (commandId) => (await relaunchedEngine.replayRun(commandId))?.ok === true,
       startRun: (input) => {
         runs.push(input.commandId);
         return Promise.resolve({ ok: true });

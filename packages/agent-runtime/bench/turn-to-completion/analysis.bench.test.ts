@@ -48,12 +48,6 @@ const tool = (toolId: "read" | "bash", durationMs?: number): ObservabilityEvent 
   ...(durationMs === undefined ? {} : { durationMs }),
   runId: RUN,
 });
-const authority = (waitDurationMs?: number): ObservabilityEvent => ({
-  kind: "authority",
-  outcome: "allowed",
-  ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
-  runId: RUN,
-});
 const queue = (queuedMs: number): ObservabilityEvent => ({
   kind: "turn-queue",
   queuedMs,
@@ -92,7 +86,6 @@ function analyze(events: readonly RecordedFixtureEvent[]) {
     expected: {
       modelAttempts: 2,
       toolsByName: { read: 1, bash: 1 },
-      authorityWaits: 1,
       compactions: 0,
       retries: 0,
       turnQueues: 1,
@@ -113,7 +106,6 @@ function analyzeWithCompaction(events: readonly RecordedFixtureEvent[]) {
     expected: {
       modelAttempts: 2,
       toolsByName: { read: 1, bash: 1 },
-      authorityWaits: 1,
       compactions: 1,
       retries: 0,
       turnQueues: 1,
@@ -126,7 +118,6 @@ function vc455Turn(options: { queue?: boolean; compactionMs?: number } = {}) {
   return [
     ...(options.queue === false ? [] : [recorded(queue(10), 100, 0)]),
     recorded(attempt("toolUse", 30), 130, 1),
-    recorded(authority(5), 135, 2),
     recorded(tool("read", 4), 139, 3),
     recorded(tool("bash", 6), 145, 4),
     recorded(compaction(options.compactionMs), 170, 5),
@@ -136,7 +127,7 @@ function vc455Turn(options: { queue?: boolean; compactionMs?: number } = {}) {
 }
 
 describe("VC-441 fixture turn analysis", () => {
-  it("keeps missing provider, tool, and authority spans unknown and flags out-of-order events", () => {
+  it("keeps missing provider and tool spans unknown and flags out-of-order events", () => {
     const events = [
       recorded({ kind: "turn", outcome: "completed", durationMs: 100, runId: RUN }, 200, 0),
       recorded(attempt("stop"), 160, 1),
@@ -159,7 +150,6 @@ describe("VC-441 fixture turn analysis", () => {
     expect(sample.providerDurationMs).toBeNull();
     expect(sample.ttftMs).toBeNull();
     expect(sample.toolsByName.read).toEqual({ count: 0, durationMs: null });
-    expect(sample.authorityWaitMs).toBeNull();
     expect(sample.retryCount).toBeNull();
     expect(sample.unaccountedGapMs).toBe(70);
     expect(sample.gapIncludesMissingSpans).toBe(true);
@@ -170,7 +160,6 @@ describe("VC-441 fixture turn analysis", () => {
       sequence([
         queue(5),
         attempt("toolUse"),
-        authority(5),
         tool("read", 4),
         tool("bash", 6),
         attempt("stop"),
@@ -180,7 +169,6 @@ describe("VC-441 fixture turn analysis", () => {
     expect(sample.eventOrderViolations).toBe(0);
     expect(sample.toolRoundCount).toBe(1);
     expect(sample.toolsByName.read).toEqual({ count: 1, durationMs: 4 });
-    expect(sample.authorityWaitMs).toBe(5);
     expect(sample.submissionToTurnStartMs).toBe(5);
     expect(sample.gapIncludesMissingSpans).toBe(false);
   });
@@ -190,10 +178,10 @@ describe("VC-441 fixture turn analysis", () => {
     expect(sample.eventOrderViolations).toBe(0);
     expect(sample.compactionDurationMs).toBe(20);
     expect(sample.submissionToTurnStartMs).toBe(10);
-    // Runtime turn 100 ms; known: 30 + 5 + 4 + 6 + 20 (compaction) + 20 = 85.
-    expect(sample.unaccountedGapMs).toBe(15);
-    // First message → completion 110 ms; the same 85 plus the 10 ms queue.
-    expect(sample.firstMessageUnaccountedGapMs).toBe(15);
+    // Runtime turn 100 ms; known: 30 + 4 + 6 + 20 (compaction) + 20 = 80.
+    expect(sample.unaccountedGapMs).toBe(20);
+    // First message → completion 110 ms; the same 80 plus the 10 ms queue.
+    expect(sample.firstMessageUnaccountedGapMs).toBe(20);
     expect(sample.gapIncludesMissingSpans).toBe(false);
     expect(sample.rawEvents[0]).toMatchObject({ kind: "turn-queue", durationMs: 10 });
     expect(sample.rawEvents.find(({ kind }) => kind === "compaction")).toMatchObject({
@@ -205,7 +193,7 @@ describe("VC-441 fixture turn analysis", () => {
     const sample = analyzeWithCompaction(vc455Turn());
     expect(sample.compactionCount).toBe(1);
     expect(sample.compactionDurationMs).toBeNull();
-    expect(sample.unaccountedGapMs).toBe(35);
+    expect(sample.unaccountedGapMs).toBe(40);
     expect(sample.gapIncludesMissingSpans).toBe(true);
     expect(sample.rawEvents.find(({ kind }) => kind === "compaction")).toMatchObject({
       durationMs: null,
@@ -216,52 +204,23 @@ describe("VC-441 fixture turn analysis", () => {
     const sample = analyzeWithCompaction(vc455Turn({ queue: false, compactionMs: 20 }));
     expect(sample.submissionToTurnStartMs).toBeNull();
     // The in-turn gap does not depend on the queue; the first-message gap keeps it.
-    expect(sample.unaccountedGapMs).toBe(15);
-    expect(sample.firstMessageUnaccountedGapMs).toBe(25);
+    expect(sample.unaccountedGapMs).toBe(20);
+    expect(sample.firstMessageUnaccountedGapMs).toBe(30);
     expect(sample.gapIncludesMissingSpans).toBe(true);
   });
 
   it("keeps a tool span with no duration unknown instead of zero", () => {
     const sample = analyze(
-      sequence([
-        attempt("toolUse"),
-        authority(5),
-        tool("read"),
-        tool("bash", 6),
-        attempt("stop"),
-        turnEnd(),
-      ]),
+      sequence([attempt("toolUse"), tool("read"), tool("bash", 6), attempt("stop"), turnEnd()]),
     );
     expect(sample.toolsByName.read).toEqual({ count: 1, durationMs: null });
     expect(sample.toolsByName.bash).toEqual({ count: 1, durationMs: 6 });
     expect(sample.gapIncludesMissingSpans).toBe(true);
   });
 
-  it("does not count an authority envelope without a wait duration", () => {
-    const sample = analyze(
-      sequence([
-        attempt("toolUse"),
-        authority(),
-        tool("read", 4),
-        tool("bash", 6),
-        attempt("stop"),
-        turnEnd(),
-      ]),
-    );
-    expect(sample.authorityWaitCount).toBe(0);
-    expect(sample.authorityWaitMs).toBeNull();
-    expect(sample.gapIncludesMissingSpans).toBe(true);
-  });
-
   it("reports a turn with no terminal envelope as having no completion or gap", () => {
     const sample = analyze(
-      sequence([
-        attempt("toolUse"),
-        authority(5),
-        tool("read", 4),
-        tool("bash", 6),
-        attempt("stop"),
-      ]),
+      sequence([attempt("toolUse"), tool("read", 4), tool("bash", 6), attempt("stop")]),
     );
     expect(sample.firstMessageToCompletionMs).toBeNull();
     expect(sample.runtimeTurnMs).toBeNull();
@@ -312,8 +271,6 @@ describe("VC-441 fixture turn analysis", () => {
     expect(sample.toolsByName.bash?.count).toBe(1);
     expect(sample.toolsByName["fetch-url"]?.count).toBe(1);
     expect(sample.toolsByName["fetch-url"]?.durationMs).toBeGreaterThanOrEqual(25);
-    expect(sample.authorityWaitCount).toBe(1);
-    expect(sample.authorityWaitMs).toBeGreaterThan(0);
     expect(sample.compactionCount).toBe(1);
     // VC-455: both are read from VC-119 envelopes. Compaction is timed by the
     // real reducer; the queue envelope still wraps the fixture's dispatch timer.
@@ -322,12 +279,11 @@ describe("VC-441 fixture turn analysis", () => {
     expect(sample.firstMessageUnaccountedGapMs).not.toBeNull();
     expect(sample.retryCount).toBe(1);
     expect(sample.eventOrderValid).toBe(true);
-    expect(sample.localTimerLateness.map(({ kind }) => kind)).toContain("authority");
 
     // The raw envelopes VC-119's own reducer and stream instrument emitted —
     // not the bench's field allow-list — carry none of the request context,
     // stream deltas, error message, tool subject, input, output, or native name.
-    expect(sinkEvents.length).toBeGreaterThanOrEqual(10);
+    expect(sinkEvents.length).toBeGreaterThanOrEqual(9);
     expect(sinkEvents.map(({ event }) => event)).toContainEqual({
       kind: "turn-queue",
       queuedMs: expect.any(Number),

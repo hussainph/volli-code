@@ -1,7 +1,7 @@
 /**
  * VC-462: Pi's JSONL sidecar re-open, as patched, against the state it wrote.
  *
- * `patches/@earendil-works__pi-agent-core@0.87.1.patch` replaces the one
+ * Vendored `session/jsonl/storage.ts` folds the 0.99.2 package patch that replaced the one
  * synchronous whole-file pass in `JsonlStorage.openV4` (UTF-8 decode, split,
  * parse and replay of every line) with the same work in time-bounded slices
  * that yield to the event loop between them. These tests pin the two halves of
@@ -23,12 +23,13 @@
  * well, so the patch is held to the contract upstream holds it to.
  */
 import { closeSync, fstatSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { BACKGROUND_CONTEXT, NodeExecutionEnv } from "./harness-env";
 import {
   appendList,
-  BACKGROUND_CONTEXT,
+  buildSessionContext,
   branchTip,
   branchTipInventoryPrefix,
   deleteList,
@@ -38,11 +39,12 @@ import {
   list,
   setValue,
   value,
-  type AgentMessage,
   type Session,
   type SessionCreateOptions,
   type SessionRepo,
-} from "@earendil-works/pi-agent-core";
+  JsonlSessionRepo,
+  type JsonlSessionMetadata,
+} from "./harness-session";
 import {
   createSessionRepoForkBehaviorConformance,
   createSessionRepoForkDestinationReservationConformance,
@@ -51,12 +53,7 @@ import {
   createSessionRepoMessageConformance,
   createSessionRepoOwnershipConformance,
   createSessionRepoStreamingForkConformance,
-} from "@earendil-works/pi-agent-core/harness/session/testing";
-import {
-  JsonlSessionRepo,
-  NodeExecutionEnv,
-  type JsonlSessionMetadata,
-} from "@earendil-works/pi-agent-core/node";
+} from "../../test-fixtures/pi-0.99.2-session-conformance";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 const context = BACKGROUND_CONTEXT;
@@ -69,7 +66,8 @@ const dropped = list<number>("vc462.dropped");
 let root: string;
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "vc462-sidecar-load-"));
+  // Synthetic profiles stay inside the execution workspace, never app data.
+  root = await mkdtemp(join(process.cwd(), ".vc462-sidecar-load-"));
 });
 
 afterEach(async () => {
@@ -252,6 +250,141 @@ async function onlyMetadata(repo: JsonlSessionRepo): Promise<JsonlSessionMetadat
   expect(listed).toHaveLength(1);
   return listed[0]!;
 }
+
+describe("Pi 0.99.2 disk compatibility through the vendored session facade (VC-496)", () => {
+  it("round-trips unknown compaction details in a real 0.99.2 sidecar without rewriting its history", async () => {
+    const fixtureUrl = new URL("./fixtures/pi-0.99.2-sidecar.jsonl", import.meta.url);
+    const bytes = readFileSync(fixtureUrl);
+    const header = JSON.parse(bytes.toString("utf8").split("\n")[0]!) as {
+      id: string;
+      cwd: string;
+    };
+    expect(header).toMatchObject({ v: 4, storageVersion: 1 });
+    const directory = join(root, `--${header.cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`);
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, `compatibility_${header.id}.jsonl`);
+    await copyFile(fixtureUrl, path);
+    const before = readWithInode(path);
+    const repo = repoFor();
+    const [metadata] = await repo.list({ cwd: header.cwd }, context);
+    const reopened = await repo.open(metadata!, context);
+    const written = await snapshot(reopened);
+    expect(written.identity?.value).toEqual({
+      volliSessionId: "compat-session",
+      volliThreadId: "compat-thread",
+      volliAttachmentId: "compat-attachment",
+    });
+    expect(written.name).toBe("Pi 0.99.2 compatibility fixture");
+    expect(written.notes).toEqual([]);
+    expect(await reopened.readList(list("volli.compat.notes"), undefined, context)).toMatchObject([
+      { value: { version: "0.99.2" } },
+    ]);
+    const main = (await reopened.branch("main", context))!;
+    const mainEntries = await main.findEntries({ order: "oldestFirst" }, context);
+    expect(mainEntries.map((entry) => entry.type)).toEqual([
+      "message",
+      "message",
+      "custom",
+      "compaction",
+    ]);
+    expect(mainEntries[1]).toMatchObject({
+      message: {
+        content: [
+          { type: "thinking", thinking: "", thinkingSignature: "pi-0.99.2-signed-thinking" },
+          { type: "text", text: "Saved by 0.99.2" },
+        ],
+      },
+    });
+    expect(mainEntries[3]).toMatchObject({
+      summary: "Before the upgrade",
+      details: { providerCompaction: { opaque: "compat-opaque" } },
+    });
+    expect((await reopened.getStats(context)).usage.totalTokens).toBe(20);
+    // The storage facade preserves unknown details; it does not validate product-native
+    // checkpoints. pi-0.99.2-reattach.test.ts separately checks this malformed shape's
+    // explicit recovery receipt and the VALID compacted fixtures' runtime context.
+    const modelContext = await buildSessionContext(mainEntries, undefined, context);
+    expect(modelContext).toHaveLength(2);
+    expect(modelContext[1]).toMatchObject({ role: "user", content: "Retained tail" });
+    expect(readWithInode(path)).toEqual(before);
+
+    const oldTip = await main.getTipId(context);
+    const id = await main.appendMessage(
+      userMessage("Continue after Pi 1.0", 1800000000003),
+      context,
+    );
+    expect(await reopened.getEntry(id, context)).toMatchObject({ seq: 17, parentId: oldTip });
+    // Every pre-upgrade byte remains a prefix; continuation adds a transaction.
+    expect(readFileSync(path).subarray(0, bytes.length).equals(bytes)).toBe(true);
+    const continued = await snapshot(reopened);
+    await reopened.close(context);
+    const again = await repo.open(metadata!, context);
+    expect(await snapshot(again)).toEqual(continued);
+    expect(
+      await (await again.branch("side", context))!.findEntries(undefined, context),
+    ).toHaveLength(4);
+    await again.close(context);
+  });
+
+  it("keeps legacy v3 reads non-mutating and atomically upgrades on continuation", async () => {
+    const directory = join(root, "--workspace-vc462--");
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, "legacy_v3.jsonl");
+    const timestamp = "2026-01-01T00:00:00.000Z";
+    const legacy =
+      [
+        { type: "session", version: 3, id: "legacy-v3", timestamp, cwd },
+        {
+          type: "message",
+          id: "old-user",
+          parentId: null,
+          timestamp,
+          message: userMessage("Legacy v3 héllo", 1),
+        },
+        {
+          type: "message",
+          id: "old-assistant",
+          parentId: "old-user",
+          timestamp,
+          message: assistantMessage("Legacy v3 answer", 2),
+        },
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n") + "\n";
+    writeFileSync(path, legacy);
+    const repo = repoFor();
+    const metadata = await onlyMetadata(repo);
+    const reopened = await repo.open(metadata, context);
+    const main = (await reopened.branch("main", context))!;
+    const entries = await main.findEntries({ order: "oldestFirst" }, context);
+    expect(entries.map((entry) => entry.type)).toEqual(["message", "message"]);
+    expect(entries[1]).toMatchObject({
+      message: {
+        content: [
+          { type: "thinking", thinking: "", thinkingSignature: "sig-2" },
+          { type: "text", text: "Legacy v3 answer" },
+        ],
+      },
+    });
+    expect(readFileSync(path, "utf8")).toBe(legacy);
+    const importedUsage = (await reopened.getStats(context)).usage;
+    await main.appendMessage(userMessage("Continue v3 under Pi 1.0", 3), context);
+    expect(JSON.parse(readFileSync(path, "utf8").split("\n")[0]!)).toMatchObject({
+      v: 4,
+      storageVersion: 1,
+      id: "legacy-v3",
+    });
+    expect((await reopened.getStats(context)).usage).toEqual(importedUsage);
+    const continued = await snapshot(reopened);
+    await reopened.close(context);
+    const again = await repo.open(metadata, context);
+    expect(await snapshot(again)).toEqual(continued);
+    expect(
+      await (await again.branch("main", context))!.findEntries(undefined, context),
+    ).toHaveLength(3);
+    await again.close(context);
+  });
+});
 
 describe("patched JSONL sidecar re-open (VC-462)", () => {
   it("re-opens a large sidecar to exactly the state its writer held", async () => {

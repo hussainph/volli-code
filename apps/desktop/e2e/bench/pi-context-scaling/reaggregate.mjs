@@ -6,7 +6,7 @@
  * the published aggregate is what the raw samples say, and how an aggregation
  * fix is applied to a run without retaking it.
  *
- *   node apps/desktop/e2e/bench/pi-context-scaling/reaggregate.mjs docs/research/perf/pi-context-scaling-vc445
+ *   node apps/desktop/e2e/bench/pi-context-scaling/reaggregate.mjs .tmp/pi-context-scaling
  */
 import { promises as fs } from "node:fs";
 import { join, resolve } from "node:path";

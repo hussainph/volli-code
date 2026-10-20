@@ -82,6 +82,7 @@ import {
 import { SessionPeekCard } from "./session-peek-card";
 import { TicketPeekCard, type TicketPeekSession } from "./ticket-peek-card";
 import { usePeekContent } from "./use-peek-content";
+import { observePeekContent, PeekContentCache, type PeekContentRead } from "./peek-content-cache";
 
 /** Everything the peek needs about one row, from whichever sidebar drew it. */
 export interface SessionPeekRow {
@@ -103,8 +104,8 @@ export interface SessionPeekRow {
 }
 
 export interface SessionPeekPorts {
-  /** One pull per shown Session; the hook caches and refreshes on activity. */
-  readContent(sessionId: string): Promise<SessionPeekContent | null>;
+  /** Local fold by default; utility work only for explicit unpinned summary demand. */
+  readContent(sessionId: string, refine?: boolean): Promise<SessionPeekContent | null>;
   /** Adopts the Session and resolves its question. `false` = not delivered (§3.3). */
   answer(
     sessionId: string,
@@ -219,39 +220,47 @@ function peekScrollerOf(list: HTMLElement | null, row: HTMLElement): HTMLElement
  *
  * A folder card is the one surface that needs several folds at once, and it is
  * also the one where a row's own title says least ("Chat", three times). Each is
- * one pull, cached for the life of the mount, and started only once a folder's
- * card is actually on screen.
+ * a local fold first, then utility prose while the folder remains on screen.
+ * Session cards join the same cache/pending promises. A later glance may retry,
+ * never a timer. Like an unpinned Session card, each line stays a snapshot
+ * throughout the glance; new activity is folded when the folder is reopened.
  */
 function useFolderSummaries(
   rowIds: readonly string[],
-  read: (sessionId: string) => Promise<SessionPeekContent | null>,
-  summarise: (content: SessionPeekContent) => string | null,
+  rowOf: SessionPeekOptions["rowOf"],
+  cache: PeekContentCache,
 ): ReadonlyMap<string, string | null> {
   const [summaries, setSummaries] = React.useState<ReadonlyMap<string, string | null>>(new Map());
-  const asked = React.useRef(new Set<string>());
-  const key = rowIds.join("|");
+  const active = React.useRef<{
+    cache: PeekContentCache;
+    entries: Map<string, PeekContentRead>;
+  } | null>(null);
+  const latestRowOf = React.useRef(rowOf);
+  latestRowOf.current = rowOf;
+  const key = JSON.stringify(rowIds);
   React.useEffect(() => {
-    let live = true;
-    for (const rowId of key === "" ? [] : key.split("|")) {
+    const rows: string[] = JSON.parse(key);
+    const previousGlance = active.current;
+    const entries = new Map<string, PeekContentRead>();
+    active.current = { cache, entries };
+    setSummaries(new Map());
+    const disposers = rows.flatMap((rowId) => {
       const sessionId = peekSessionId(rowId);
-      if (sessionId === null || asked.current.has(rowId)) continue;
-      asked.current.add(rowId);
-      void read(sessionId).then(
-        (content) => {
-          if (!live) return;
-          const line = content === null ? null : summarise(content);
+      if (sessionId === null) return [];
+      const token = latestRowOf.current(rowId)?.at ?? 0;
+      const held = previousGlance?.cache === cache ? previousGlance.entries.get(rowId) : undefined;
+      // Membership changes are not a new glance at the remaining lines.
+      const read = held ?? cache.get(sessionId, token);
+      entries.set(rowId, read);
+      return [
+        observePeekContent(read, true, (entry) => {
+          const line = entry.content == null ? null : peekSummaryLine(entry.content);
           setSummaries((previous) => new Map(previous).set(rowId, line));
-        },
-        () => {
-          if (!live) return;
-          setSummaries((previous) => new Map(previous).set(rowId, null));
-        },
-      );
-    }
-    return () => {
-      live = false;
-    };
-  }, [key, read, summarise]);
+        }),
+      ];
+    });
+    return () => disposers.forEach((dispose) => dispose());
+  }, [cache, key]);
   return summaries;
 }
 
@@ -341,7 +350,15 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
   const subjectRowId = subject?.kind === "session" ? subject.rowId : null;
   const subjectRow = subjectRowId === null ? undefined : rowOf(subjectRowId);
   const sessionId = subjectRow?.sessionId ?? null;
-  const content = usePeekContent(sessionId, ports.readContent, subjectRow?.at ?? 0);
+  const contentCache = React.useMemo(
+    () => new PeekContentCache(ports.readContent),
+    [ports.readContent],
+  );
+  const content = usePeekContent(sessionId, ports.readContent, subjectRow?.at ?? 0, {
+    refine: state.pinned === null && subjectRow?.kind === "chat",
+    sharedCache: contentCache,
+    refreshOnActivity: state.pinned !== null,
+  });
 
   /**
    * A peek's subject can leave the listing under it: the Session ends and moves
@@ -667,7 +684,7 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
   /* ----------------------------------------------------------- the folder card */
 
   const folderRowIds = subject?.kind === "ticket" ? subject.sessionRowIds : EMPTY_ROWS;
-  const summaries = useFolderSummaries(folderRowIds, ports.readContent, peekSummaryLine);
+  const summaries = useFolderSummaries(folderRowIds, rowOf, contentCache);
 
   /* ------------------------------------------------------------------ card */
 
@@ -856,5 +873,5 @@ const EMPTY_ROWS: readonly string[] = [];
 
 /** The folder card's one line per Session — the same fold the big card leads with. */
 function peekSummaryLine(content: SessionPeekContent): string | null {
-  return peekSummaryOf(content.entries);
+  return content.summary ?? peekSummaryOf(content.entries);
 }

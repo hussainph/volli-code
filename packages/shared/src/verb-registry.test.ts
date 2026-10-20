@@ -1,12 +1,21 @@
 import Ajv2020 from "ajv/dist/2020.js";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
 import {
   AGENT_COMMAND_BINDINGS,
   AGENT_COMMANDS,
   agentCommandBindingsFrom,
   agentCommandsFrom,
+  BOARD_ENTRIES,
+  CATALOG_ENTRIES,
+  catalogActorOf,
+  catalogEntriesFrom,
+  catalogLookup,
+  catalogEntry,
+  SESSION_READ_VERBS,
   cliVerbName,
+  VERB_IDEMPOTENCIES,
+  VERB_SCOPES,
   DISCOVERABLE_VERBS,
   REFERENCE_VERBS,
   referenceVerbsFrom,
@@ -16,7 +25,17 @@ import {
   verbTier,
   verbToolWireName,
 } from "./verb-registry";
-import type { VerbEntry, VerbKey, VerbResultDetailsSchema, VerbTier } from "./verb-registry";
+import type {
+  CatalogKey,
+  CatalogKeyOf,
+  CatalogKeyScopedTo,
+  HostApiCatalogCoverage,
+  HostApiKey,
+  VerbEntry,
+  VerbKey,
+  VerbResultDetailsSchema,
+  VerbTier,
+} from "./verb-registry";
 import { AGENT_MODEL_TIERS, modelTierRow } from "./model-access-policy";
 
 /**
@@ -43,13 +62,18 @@ const SOCKET_SURFACE = [
   "worktree.sync",
   "conflicts",
   "project.list",
+  // VC-623: the operator's bootstrap write. A `user` verb, so no Session
+  // reaches it whatever a policy grants.
+  "project.add",
   "label.list",
   "label.merge",
   "model.list",
   "cost",
   "session.list",
+  "session.show",
   "session.peek",
   "session.answer",
+  "session.start",
   "session.done",
   "session.blocked",
   "session.link",
@@ -83,6 +107,7 @@ const REFERENCE_SURFACE = [
   "worktree.sync",
   "label.merge",
   "session.list",
+  "session.show",
   "session.peek",
   "session.answer",
   "session.done",
@@ -131,6 +156,9 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // enough to run in a bash pipeline.
   conflicts: "read",
   "project.list": "read",
+  // The person's write (VC-623): coordination tier, but judged by the door's
+  // actor alone — an operator token — and never by a policy list.
+  "project.add": "coordination",
   "label.list": "read",
   // A coordination write despite sitting beside a read: it retires a Label
   // and rewrites associations, so it is attributable or it does not happen.
@@ -141,6 +169,7 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // app-owned policy, and a cap the capped Session could write is decoration.
   cost: "read",
   "session.list": "read",
+  "session.show": "read",
   "session.peek": "read",
   // The whole of a chat's last message (VC-9): a read, like the peek beside it.
   "session.answer": "read",
@@ -212,7 +241,102 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // Local verbs, outside the audit.
   "app.launch": "read",
   help: "read",
+  // The Session router's catalog entries (VC-564): `hostApi`-only, tiered by
+  // the CLI's actor rule. Every one requires the person, so every one reads
+  // coordination, the same answer VC-623 gave `project.add`; the bootstrap
+  // `protocol.welcome` is any caller's, so it reads (VC-663).
+  "protocol.welcome": "read",
+  "protocol.hostWelcome": "coordination",
+  "workspaces.list": "coordination",
+  "workspaces.create": "coordination",
+  "sessions.create": "coordination",
+  "sessions.attach": "coordination",
+  "settings.experiments": "coordination",
+  "settings.setExperiment": "coordination",
+  "logs.tail": "coordination",
+  "logs.follow": "coordination",
+  "modelAccess.inspect": "coordination",
+  "hostModels.inspect": "coordination",
+  "modelAccess.defaults": "coordination",
+  "hostModels.defaults": "coordination",
+  "modelAccess.setDefault": "coordination",
+  "hostModels.setDefault": "coordination",
+  "modelAccess.hiddenModels": "coordination",
+  "hostModels.hiddenModels": "coordination",
+  "modelAccess.setHiddenModels": "coordination",
+  "hostModels.setHiddenModels": "coordination",
+  "modelAccess.compactionPolicy": "coordination",
+  "hostModels.compactionPolicy": "coordination",
+  "modelAccess.setCompactionPolicy": "coordination",
+  "hostModels.setCompactionPolicy": "coordination",
+  "modelAccess.codeModePolicy": "coordination",
+  "hostModels.codeModePolicy": "coordination",
+  "modelAccess.setCodeModePolicy": "coordination",
+  "hostModels.setCodeModePolicy": "coordination",
+  "modelAccess.pickerView": "coordination",
+  "hostModels.pickerView": "coordination",
+  "modelAccess.setPickerView": "coordination",
+  "hostModels.setPickerView": "coordination",
+  "session.snapshot": "coordination",
+  "session.history": "coordination",
+  "session.picture": "coordination",
+  "session.projection": "coordination",
+  "session.subscribe": "coordination",
+  "session.subscribeQueue": "coordination",
+  "session.command": "coordination",
+  "session.cancelQueued": "coordination",
+  "session.editQueued": "coordination",
+  "session.cancelInteraction": "coordination",
+  "session.reconcile": "coordination",
+  "session.listing": "coordination",
+  "session.listingForTicket": "coordination",
+  // Sign-ins on a host (VC-702): the person's, on the WebSocket only.
+  "signIns.status": "coordination",
+  "signIns.setApiKey": "coordination",
+  "signIns.signOut": "coordination",
+  "signIns.start": "coordination",
+  "signIns.subscribe": "coordination",
+  "signIns.answer": "coordination",
+  "signIns.cancel": "coordination",
+  "signIns.setGitCredential": "coordination",
+  "signIns.clearGitCredential": "coordination",
+  "auth.callback.deliver": "coordination",
+  // The board router's own operations (VC-565): the person's, on no agent
+  // surface, so coordination by the same rule.
+  "board.snapshot": "coordination",
+  "board.roster": "coordination",
+  "board.changes": "coordination",
+  "board.projectFolder": "coordination",
+  "board.ticketBody": "coordination",
+  "board.archivedTickets": "coordination",
+  "board.ticketEvents": "coordination",
+  "board.latestSignals": "coordination",
+  "board.statusEntries": "coordination",
+  "board.comments": "coordination",
+  "board.updateProject": "coordination",
+  "board.setSkillModes": "coordination",
+  "board.setSessionDefaults": "coordination",
+  "board.createTicket": "coordination",
+  "board.moveTickets": "coordination",
+  "board.setPriority": "coordination",
+  "board.updateTicket": "coordination",
+  "board.setLabels": "coordination",
+  "board.archiveTicket": "coordination",
+  "board.unarchiveTicket": "coordination",
+  "board.deleteTicket": "coordination",
+  "board.createComment": "coordination",
+  "board.updateComment": "coordination",
+  "board.removeComment": "coordination",
+  "board.setLabelColor": "coordination",
+  // Declared and policed, projected by no door: no tier, like ticket.archive.
+  "labDiagnostics.list": null,
+  "labDiagnostics.subscribe": null,
 };
+
+/** A router-only catalog entry: on the WebSocket projection at most, on no agent surface. */
+function routerOnly(entry: VerbEntry): boolean {
+  return entry.catalog !== undefined && entry.accessModes.every((mode) => mode === "hostApi");
+}
 
 /** A registry that is not the real one, for projections nothing declares yet. */
 const SYNTHETIC: readonly VerbEntry[] = [
@@ -266,20 +390,20 @@ describe("AGENT_COMMANDS projection", () => {
     expect([...AGENT_COMMANDS]).toEqual(SOCKET_SURFACE);
   });
 
-  // The acceptance line, as an assertion rather than as prose: "No agent-control
-  // verb exists on the socket." Absence is the enforcement — a tool call is
-  // bound to the attachment that made it, and a socket call can only ever be
-  // attributed, so the control tier is not gated on the socket, it is missing
-  // from it (VC-92 §6.1).
-  it("carries no control-tier verb at all", () => {
+  // Agent control stays tool-only. The socket's one exception is verified
+  // by hostd's operator credential, never by a Session environment.
+  it("carries only the person-only exception to the control tier", () => {
     const onSocket = VERB_REGISTRY.filter((entry) =>
       (AGENT_COMMANDS as readonly string[]).includes(entry.key),
     );
-    expect(onSocket.filter((entry) => verbTier(entry) === "control")).toEqual([]);
+    expect(
+      onSocket.filter((entry) => verbTier(entry) === "control").map((entry) => entry.key),
+    ).toEqual(["session.start"]);
+    expect(verbEntry("session.start")).toMatchObject({ accessModes: ["tool"], operatorCli: true });
   });
 
-  it("no longer answers session.start or ticket.archive", () => {
-    expect(AGENT_COMMANDS).not.toContain("session.start");
+  it("answers the operator start but never ticket.archive", () => {
+    expect(AGENT_COMMANDS).toContain("session.start");
     expect(AGENT_COMMANDS).not.toContain("ticket.archive");
   });
 
@@ -383,12 +507,13 @@ describe("verbTier", () => {
     // in the same breath, on the grounds that spend has to be cheap to sample —
     // plus VC-185's `conflicts`, staged read tier by the same amendment.
     // VC-9 adds `session.answer`, a read beside the peek.
-    expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(18);
+    expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(19);
     // VC-163 removes archive/start from the socket; VC-85 adds ticket.signal
     // and VC-185 adds worktree.sync to the remaining coordination surface.
-    // VC-310 adds label.merge, the label cleanup write.
-    expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(13);
-    expect(socketTiers.filter((tier) => tier === "control")).toHaveLength(0);
+    // VC-310 adds label.merge, the label cleanup write. VC-623 adds
+    // project.add, the one write only the person may make.
+    expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(14);
+    expect(socketTiers.filter((tier) => tier === "control")).toHaveLength(1);
   });
 
   it("gives an app-only verb no tier at all", () => {
@@ -405,7 +530,6 @@ describe("verbTier", () => {
   it("rejects non-Role and non-tool attempts to declare control tier", () => {
     for (const entry of [
       { accessModes: ["tool"], actor: "session" },
-      { accessModes: ["hostApi"], actor: "any" },
       { accessModes: ["tool", "hostApi"], actor: "role" },
     ] as const) {
       expect(() => verbTier(entry)).toThrow(
@@ -414,9 +538,45 @@ describe("verbTier", () => {
     }
   });
 
+  // VC-564: `hostApi` is the WebSocket projection, a door like the socket.
+  it("tiers a hostApi-only verb by the socket's actor rule, and never as control", () => {
+    expect(verbTier({ accessModes: ["hostApi"], actor: "any" })).toBe("read");
+    expect(verbTier({ accessModes: ["hostApi"], actor: "user" })).toBe("coordination");
+    expect(verbTier({ accessModes: ["hostApi"], actor: "session" })).toBe("coordination");
+    expect(verbTier({ accessModes: ["cli", "hostApi"], actor: "any" })).toBe("read");
+    expect(() => verbTier({ accessModes: ["hostApi"], actor: "role" })).toThrow(
+      "A control-tier verb cannot carry a hostApi access mode",
+    );
+  });
+
   it("splits the socket by actor: any caller reads, a session actor coordinates", () => {
     expect(verbTier({ accessModes: ["cli"], actor: "any" })).toBe("read");
     expect(verbTier({ accessModes: ["cli", "tool"], actor: "session" })).toBe("coordination");
+    expect(verbTier({ accessModes: ["cli"], actor: "user" })).toBe("coordination");
+  });
+
+  it("keeps the person's verbs off every Session surface (VC-623)", () => {
+    const personVerbs = (VERB_REGISTRY as readonly VerbEntry[]).filter(
+      (entry) => entry.actor === "user",
+    );
+    // The router's catalog entries (VC-564) are the person's too, and reach no
+    // agent surface at all: no `cli`, no `tool`, unlisted.
+    for (const entry of personVerbs.filter(routerOnly)) {
+      expect(entry.listed, entry.key).toBe(false);
+    }
+    const userVerbs = personVerbs.filter((entry) => !routerOnly(entry));
+    expect(userVerbs.map((entry) => entry.key)).toEqual(["project.add"]);
+    for (const entry of userVerbs) {
+      // Never a tool, so no Role bundle can carry it; never listed, so neither
+      // help nor the managed skill an agent reads offers it.
+      expect(entry.accessModes, entry.key).toEqual(["cli"]);
+      expect(entry.listed, entry.key).toBe(false);
+      expect(
+        entry.options.some((option) => option.name === "--dry-run"),
+        entry.key,
+      ).toBe(true);
+      expect(entry.effects?.nonEffects.length, entry.key).toBeGreaterThan(0);
+    }
   });
 
   it("is the only way to get a tier — no entry stores one", () => {
@@ -477,7 +637,13 @@ describe("the registry table", () => {
   // restoring a surface is putting a string back rather than rebuilding a verb.
   it("lets a verb be on no agent surface, and keeps its binding when it is", () => {
     const appOnly = VERB_REGISTRY.filter((entry) => entry.accessModes.length === 0);
-    expect(appOnly.map((entry) => entry.key)).toEqual(["ticket.archive"]);
+    expect(appOnly.map((entry) => entry.key)).toEqual([
+      "ticket.archive",
+      // The lab's diagnostics (VC-564): declared so the router can police
+      // them, served by no door.
+      "labDiagnostics.list",
+      "labDiagnostics.subscribe",
+    ]);
     for (const entry of appOnly) {
       expect(entry.handler.id).toBe(entry.key);
       expect(verbTier(entry)).toBeNull();
@@ -509,14 +675,24 @@ describe("the registry table", () => {
   });
 
   it("keys are dot-names that spell their own CLI form", () => {
-    for (const entry of VERB_REGISTRY) {
+    for (const entry of VERB_REGISTRY.filter((candidate) => !routerOnly(candidate))) {
       expect(entry.key).toMatch(/^[a-z]+(\.[a-z]+)?$/);
       expect(cliVerbName(entry.key)).toBe(entry.key.replace(".", " "));
     }
   });
 
+  // A router-only entry is keyed by its tRPC path (VC-564), which no CLI spells.
+  it("keys a router-only catalog entry by its procedure path", () => {
+    // A path may nest (`auth.callback.deliver`, HP § Auth-callback relay).
+    for (const entry of VERB_REGISTRY.filter(routerOnly)) {
+      expect(entry.key).toMatch(/^[a-z][A-Za-z]*(?:\.[a-z][A-Za-z]*)+$/);
+    }
+  });
+
   it("hides the two involuntary verbs and the tool-only await from the reference", () => {
-    const unlisted = VERB_REGISTRY.filter((entry) => !entry.listed).map((entry) => entry.key);
+    const unlisted = VERB_REGISTRY.filter((entry) => !entry.listed && !routerOnly(entry)).map(
+      (entry) => entry.key,
+    );
     // `ticket.await` is unlisted for a different reason than the involuntary
     // pair: it has no cli access mode at all, so a reference line would teach
     // an invocation the socket refuses. Its discovery surface is the tool
@@ -526,7 +702,16 @@ describe("the registry table", () => {
     // person's saved Automation. `session.await` stays unlisted beside it;
     // both are retired (VC-457). `watch`, which replaced them, is discovered
     // through its tool schema the same way.
-    expect(unlisted).toEqual(["session.harness", "hook", "ticket.await", "session.await", "watch"]);
+    // `project.add` (VC-623) is unlisted because no agent can run it: it is the
+    // person's verb, and the reference is what agents read.
+    expect(unlisted).toEqual([
+      "project.add",
+      "session.harness",
+      "hook",
+      "ticket.await",
+      "session.await",
+      "watch",
+    ]);
   });
 
   it("stores each listed verb's reference position on that entry", () => {
@@ -717,9 +902,8 @@ describe("the registry table", () => {
     ]);
   });
 
-  // VC-431: the delegate door offers the SAME rungs, for the reason the owner
-  // gave — "it gives a working session an anchor to the user's preferences for
-  // models and effort". A delegation that names neither a tier nor a model is
+  // VC-431: the delegate door offers the same model and effort preferences.
+  // A delegation that names neither a tier nor a model is
   // anchored to its parent's own, which is why `model` no longer speaks of a
   // utility default: nothing on a chat path resolves that row.
   it("lets session_delegate name the same model tiers, and never the Utility row", () => {
@@ -864,10 +1048,15 @@ describe("REFERENCE_VERBS", () => {
     ]);
   });
 
-  it("is a different surface from the socket, by two verbs each way", () => {
+  it("is a different surface from the socket: the involuntary pair and the person's verb", () => {
     const reference = new Set(REFERENCE_VERBS.map((entry) => entry.key));
     const socket = new Set<string>(AGENT_COMMANDS);
-    expect([...socket].filter((key) => !reference.has(key))).toEqual(["session.harness", "hook"]);
+    expect([...socket].filter((key) => !reference.has(key))).toEqual([
+      "project.add",
+      "session.start",
+      "session.harness",
+      "hook",
+    ]);
     expect([...reference].filter((key) => !socket.has(key))).toEqual(["app.launch", "help"]);
   });
 });
@@ -1101,11 +1290,321 @@ describe("verb result details (VC-471)", () => {
 
   it("gives watch the targets it resolved, as lists a program can compare", () => {
     const validate = ajv.compile(schemaOf("watch"));
+    const none = { stopped: [], detached: [] };
     expect(
-      validate({ action: "watch", sessions: ["abcdef12"], tickets: ["VC-1", "VC-2"], ended: 0 }),
+      validate({
+        action: "watch",
+        sessions: ["abcdef12", "12345678", "9abcdef0"],
+        tickets: ["VC-1", "VC-2"],
+        ended: 0,
+        stopped: ["12345678"],
+        detached: ["9abcdef0"],
+      }),
     ).toBe(true);
-    expect(validate({ action: "unwatch", sessions: [], tickets: ["VC-1"], ended: 1 })).toBe(true);
-    expect(validate({ action: "watch", sessions: "abcdef12", tickets: [], ended: 0 })).toBe(false);
-    expect(validate({ action: "rewatch", sessions: [], tickets: [], ended: 0 })).toBe(false);
+    expect(
+      validate({ action: "unwatch", sessions: [], tickets: ["VC-1"], ended: 1, ...none }),
+    ).toBe(true);
+    expect(
+      validate({ action: "watch", sessions: "abcdef12", tickets: [], ended: 0, ...none }),
+    ).toBe(false);
+    expect(validate({ action: "rewatch", sessions: [], tickets: [], ended: 0, ...none })).toBe(
+      false,
+    );
+    // A target's standing (VC-825) is always said, even when it is "none".
+    expect(validate({ action: "watch", sessions: [], tickets: [], ended: 0 })).toBe(false);
+  });
+});
+
+/** The socket's Session reads, projected onto the WebSocket by VC-663 (D4). */
+const SESSION_READS: readonly string[] = SESSION_READ_VERBS;
+
+describe("the host-protocol command catalog (VC-564)", () => {
+  // VC-564 A2: one entry serves both doors, each with its own actor policy.
+  it("lets a socket verb's agent actor and its router actor differ", () => {
+    const socketVerb: VerbEntry = {
+      key: "area.write",
+      accessModes: ["cli", "hostApi"],
+      actor: "session",
+      handler: { site: "main", id: "area.write" },
+      listed: true,
+      group: "App",
+      summary: "A synthetic both-doors write.",
+      options: [],
+      catalog: { actor: "session-own", scope: "workspace", idempotency: "command-id" },
+    };
+    const [declared] = catalogEntriesFrom([socketVerb]);
+    // The router reads its own; the socket, tools and CLI still read `actor`.
+    expect(catalogActorOf(declared!)).toBe("session-own");
+    expect(declared!.actor).toBe("session");
+    expect(verbTier(socketVerb)).toBe("coordination");
+    // Every Session-router row judges its own `actor`, but for two kinds of
+    // both-door row: `ticket.move` keeps `session` for the socket and admits
+    // only the person on a router, and the socket's Session reads (VC-663)
+    // keep `any` for the socket and require the person on the WebSocket.
+    for (const entry of CATALOG_ENTRIES) {
+      expect(catalogActorOf(entry), entry.key).toBe(
+        entry.key === "ticket.move" || SESSION_READS.includes(entry.key) ? "user" : entry.actor,
+      );
+    }
+  });
+
+  it("looks a key up in any checked catalog", () => {
+    const lookup = catalogLookup(CATALOG_ENTRIES);
+    expect(lookup("session.snapshot")).toBe(catalogEntry("session.snapshot"));
+    expect(() => lookup("rogue.verb")).toThrow("No catalog entry declares rogue.verb");
+  });
+
+  /** The Session router, procedure by procedure: the catalog's first area. */
+  const SESSION_ROUTER = {
+    "session.list": ["workspace", "read"],
+    "session.show": ["workspace", "read"],
+    "session.peek": ["workspace", "read"],
+    "session.answer": ["workspace", "read"],
+    "protocol.welcome": ["host", "read"],
+    "protocol.hostWelcome": ["host", "read"],
+    "sessions.create": ["workspace", "command-id"],
+    "sessions.attach": ["workspace", "command-id"],
+    "settings.experiments": ["host", "read"],
+    "settings.setExperiment": ["host", "natural"],
+    "modelAccess.inspect": ["host", "read"],
+    "modelAccess.defaults": ["host", "read"],
+    "modelAccess.setDefault": ["host", "natural"],
+    "modelAccess.hiddenModels": ["host", "read"],
+    "modelAccess.setHiddenModels": ["host", "natural"],
+    "modelAccess.compactionPolicy": ["host", "read"],
+    "modelAccess.setCompactionPolicy": ["host", "natural"],
+    "modelAccess.codeModePolicy": ["host", "read"],
+    "modelAccess.setCodeModePolicy": ["host", "natural"],
+    "modelAccess.pickerView": ["host", "read"],
+    "modelAccess.setPickerView": ["host", "natural"],
+    "hostModels.inspect": ["host", "read"],
+    "hostModels.defaults": ["host", "read"],
+    "hostModels.setDefault": ["host", "natural"],
+    "hostModels.hiddenModels": ["host", "read"],
+    "hostModels.setHiddenModels": ["host", "natural"],
+    "hostModels.compactionPolicy": ["host", "read"],
+    "hostModels.setCompactionPolicy": ["host", "natural"],
+    "hostModels.codeModePolicy": ["host", "read"],
+    "hostModels.setCodeModePolicy": ["host", "natural"],
+    "hostModels.pickerView": ["host", "read"],
+    "hostModels.setPickerView": ["host", "natural"],
+    "session.snapshot": ["workspace", "read"],
+    "session.history": ["workspace", "read"],
+    "session.picture": ["workspace", "read"],
+    "session.projection": ["workspace", "read"],
+    "session.subscribe": ["workspace", "read"],
+    "session.subscribeQueue": ["workspace", "read"],
+    "session.command": ["workspace", "command-id"],
+    "session.cancelQueued": ["workspace", "command-id"],
+    "session.editQueued": ["workspace", "command-id"],
+    "session.cancelInteraction": ["workspace", "natural"],
+    "session.reconcile": ["workspace", "natural"],
+    "session.listing": ["workspace", "read"],
+    "session.listingForTicket": ["workspace", "read"],
+    "logs.tail": ["host", "read"],
+    "logs.follow": ["host", "read"],
+    "labDiagnostics.list": ["host", "read"],
+    "labDiagnostics.subscribe": ["host", "read"],
+    "signIns.status": ["host", "read"],
+    "signIns.setApiKey": ["host", "natural"],
+    "signIns.signOut": ["host", "natural"],
+    "signIns.start": ["host", "natural"],
+    "signIns.subscribe": ["host", "read"],
+    "signIns.answer": ["host", "natural"],
+    "signIns.cancel": ["host", "natural"],
+    "signIns.setGitCredential": ["host", "natural"],
+    "signIns.clearGitCredential": ["host", "natural"],
+    "auth.callback.deliver": ["host", "natural"],
+    "workspaces.list": ["host", "read"],
+    "workspaces.create": ["host", "command-id"],
+  } as const satisfies Record<
+    Exclude<CatalogKey, CatalogKeyOf<(typeof BOARD_ENTRIES)[number]>>,
+    readonly [string, string]
+  >;
+
+  /** The board router: `ticket.move`, both doors' (VC-668), and the board's own (VC-565). */
+  const BOARD_ROUTER = {
+    "ticket.move": ["workspace", "natural"],
+    "board.snapshot": ["workspace", "read"],
+    "board.roster": ["workspace", "read"],
+    "board.changes": ["workspace", "read"],
+    "board.projectFolder": ["workspace", "read"],
+    "board.ticketBody": ["workspace", "read"],
+    "board.archivedTickets": ["workspace", "read"],
+    "board.ticketEvents": ["workspace", "read"],
+    "board.latestSignals": ["workspace", "read"],
+    "board.statusEntries": ["workspace", "read"],
+    "board.comments": ["workspace", "read"],
+    "board.updateProject": ["workspace", "command-id"],
+    "board.setSkillModes": ["workspace", "command-id"],
+    "board.setSessionDefaults": ["workspace", "command-id"],
+    "board.createTicket": ["workspace", "command-id"],
+    "board.moveTickets": ["workspace", "command-id"],
+    "board.setPriority": ["workspace", "command-id"],
+    "board.updateTicket": ["workspace", "command-id"],
+    "board.setLabels": ["workspace", "command-id"],
+    "board.archiveTicket": ["workspace", "command-id"],
+    "board.unarchiveTicket": ["workspace", "command-id"],
+    "board.deleteTicket": ["workspace", "command-id"],
+    "board.createComment": ["workspace", "command-id"],
+    "board.updateComment": ["workspace", "command-id"],
+    "board.removeComment": ["workspace", "command-id"],
+    "board.setLabelColor": ["workspace", "command-id"],
+  } as const satisfies Record<
+    CatalogKeyOf<(typeof BOARD_ENTRIES)[number]>,
+    readonly [string, string]
+  >;
+
+  it("declares every router procedure, with its scope and idempotency", () => {
+    expect(
+      Object.fromEntries(
+        CATALOG_ENTRIES.map((entry) => [
+          entry.key,
+          [entry.catalog.scope, entry.catalog.idempotency],
+        ]),
+      ),
+    ).toEqual({ ...BOARD_ROUTER, ...SESSION_ROUTER });
+    expectTypeOf<
+      Exclude<
+        CatalogKey,
+        CatalogKeyOf<(typeof BOARD_ENTRIES)[number]> | keyof typeof SESSION_ROUTER
+      >
+    >().toEqualTypeOf<never>();
+    for (const entry of CATALOG_ENTRIES.filter(({ key }) => key in SESSION_ROUTER)) {
+      expect(VERB_SCOPES).toContain(entry.catalog.scope);
+      expect(VERB_IDEMPOTENCIES).toContain(entry.catalog.idempotency);
+      if (SESSION_READS.includes(entry.key)) {
+        // Socket verbs first (D4): listed for agents there, the person's here.
+        expect(entry.accessModes, entry.key).toEqual(["cli", "hostApi"]);
+        continue;
+      }
+      // The person's, on no agent surface (D3, D8); the bootstrap read is anyone's.
+      expect(entry.actor, entry.key).toBe(entry.key === "protocol.welcome" ? "any" : "user");
+      expect(entry.listed, entry.key).toBe(false);
+    }
+  });
+
+  it("projects onto the WebSocket every entry but the lab's", () => {
+    const projected = CATALOG_ENTRIES.filter((entry) => entry.accessModes.includes("hostApi"));
+    expect(projected.map((entry) => entry.key)).toEqual([
+      ...Object.keys(BOARD_ROUTER),
+      ...Object.keys(SESSION_ROUTER).filter((key) => !key.startsWith("labDiagnostics.")),
+    ]);
+    expectTypeOf<HostApiCatalogCoverage>().toEqualTypeOf<never>();
+    expectTypeOf<Exclude<HostApiKey, CatalogKey>>().toEqualTypeOf<never>();
+    expectTypeOf<CatalogKeyScopedTo<"workspace">>().toEqualTypeOf<
+      | "ticket.move"
+      | "board.snapshot"
+      | "board.roster"
+      | "board.changes"
+      | "board.projectFolder"
+      | "board.ticketBody"
+      | "board.archivedTickets"
+      | "board.ticketEvents"
+      | "board.latestSignals"
+      | "board.statusEntries"
+      | "board.comments"
+      | "board.updateProject"
+      | "board.setSkillModes"
+      | "board.setSessionDefaults"
+      | "board.createTicket"
+      | "board.moveTickets"
+      | "board.setPriority"
+      | "board.updateTicket"
+      | "board.setLabels"
+      | "board.archiveTicket"
+      | "board.unarchiveTicket"
+      | "board.deleteTicket"
+      | "board.createComment"
+      | "board.updateComment"
+      | "board.removeComment"
+      | "board.setLabelColor"
+      | "session.list"
+      | "session.show"
+      | "session.peek"
+      | "session.answer"
+      | "sessions.create"
+      | "sessions.attach"
+      | "session.snapshot"
+      | "session.history"
+      | "session.picture"
+      | "session.projection"
+      | "session.subscribe"
+      | "session.subscribeQueue"
+      | "session.command"
+      | "session.cancelQueued"
+      | "session.editQueued"
+      | "session.cancelInteraction"
+      | "session.reconcile"
+      | "session.listing"
+      | "session.listingForTicket"
+    >();
+  });
+
+  it("withholds the start kinds from session.command, whoever asks", () => {
+    expect(catalogEntry("session.command").catalog.refusedIntents).toEqual([
+      "session.create",
+      "adapter.attach",
+      "message.cancel",
+      "message.edit",
+    ]);
+  });
+
+  it("answers by key, and refuses a key it does not declare", () => {
+    expect(catalogEntry("session.snapshot").key).toBe("session.snapshot");
+    expect(() => catalogEntry("ticket.list" as CatalogKey)).toThrow(
+      "No catalog entry declares ticket.list",
+    );
+  });
+
+  const base: VerbEntry = {
+    key: "area.verb",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "area.verb" },
+    listed: false,
+    group: "App",
+    summary: "A synthetic entry.",
+    options: [],
+    catalog: { scope: "workspace", idempotency: "command-id" },
+  };
+
+  it("refuses an entry no router could police", () => {
+    expect(
+      catalogEntriesFrom([
+        base,
+        { ...base, key: "other.verb", catalog: undefined, accessModes: ["cli"] },
+      ]),
+    ).toEqual([base]);
+    expect(() => catalogEntriesFrom([{ ...base, catalog: undefined }])).toThrow(
+      "Verb area.verb declares a hostApi access mode with no catalog entry",
+    );
+    for (const actor of ["session", "role"] as const) {
+      const refusal = `Catalog entry area.verb requires a ${actor} actor; a router judges only any, user and session-own (declare catalog.actor)`;
+      expect(() => catalogEntriesFrom([{ ...base, actor }])).toThrow(refusal);
+      expect(() =>
+        catalogEntriesFrom([
+          {
+            ...base,
+            actor: "user",
+            catalog: { scope: "workspace", idempotency: "natural", actor },
+          },
+        ]),
+      ).toThrow(refusal);
+    }
+    expect(catalogEntriesFrom([{ ...base, actor: "any" }])).toHaveLength(1);
+    expect(() =>
+      catalogEntriesFrom([
+        { ...base, catalog: { actor: "session-own", scope: "host", idempotency: "natural" } },
+      ]),
+    ).toThrow("Catalog entry area.verb is session-own but names no subject to act on");
+    for (const catalog of [
+      { scope: "workspace", idempotency: "natural", refusedIntents: ["x"] },
+      { scope: "host", idempotency: "command-id", refusedIntents: ["x"] },
+    ] as const) {
+      expect(() => catalogEntriesFrom([{ ...base, catalog }])).toThrow(
+        "Catalog entry area.verb refuses intents but is no workspace command",
+      );
+    }
   });
 });

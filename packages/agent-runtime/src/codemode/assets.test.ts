@@ -15,7 +15,6 @@ describe("codeModeSandboxAssetsFrom", () => {
     const tool = createCodeModeTool({
       surface: { routes: {}, limits: DEFAULT_CODE_MODE_LIMITS },
       tools: [],
-      gate: () => undefined,
       observe: async () => undefined,
       journal: new CodeModeJournal(),
       sandbox: assets,

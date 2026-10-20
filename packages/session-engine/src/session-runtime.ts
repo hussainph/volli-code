@@ -1,8 +1,25 @@
+import { COMMAND_INTENT_CONFLICT, type CommandIntentConflict } from "@volli/shared";
+import { canonicalJson } from "./transcript-artifacts";
+import {
+  projectSessionFollowUps,
+  sessionFollowUpDeliveryCommandId,
+  sessionFollowUpDeliveryEvidence,
+  type SessionFollowUpCommand,
+  type SessionFollowUpItem,
+  type SessionFollowUpLedger,
+  type StoredSessionFollowUp,
+} from "./session-follow-ups";
+import type { SessionOrigin } from "@volli/shared";
 import {
   advanceSessionProjection,
   createSessionProjectionCheckpoint,
   nativeObservationEventId,
   nextInFlightTools,
+  QueueRevisionConflictError,
+  shortSessionId,
+  sanitizeSessionInteraction,
+  redactPayloadSecrets,
+  SESSION_FAILURE_ATTENTION_KINDS,
   turnQueueEvent,
 } from "@volli/shared";
 import type {
@@ -36,6 +53,7 @@ import type {
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 import type { SessionEngine, SubmitSessionCommandResult } from "./session-engine";
+import { stopSessionById, type StopSessionOutcome } from "./session-stop";
 import type {
   BindingHandle,
   DeliveryReceipt,
@@ -55,6 +73,8 @@ import {
   sessionRootThreadId,
 } from "./observation-translation";
 import type { SessionTranscriptArtifact, TranscriptArtifactStore } from "./transcript-artifacts";
+import { recoverTranscriptBaseline } from "./transcript-baseline";
+import { replyText, transcriptDigest } from "./transcript-digest";
 import { transcriptReferenceFor } from "./transcript-tail";
 import {
   applyTranscriptDelta,
@@ -108,6 +128,23 @@ export interface SessionRuntimeIds {
 
 export interface SessionRuntimePorts {
   engine: SessionEngine;
+  /** Durable host queue. Explicit queue commands fail closed when not composed. */
+  followUps?: SessionFollowUpLedger;
+  /** Diagnostics for an automatic release failure; the item remains durable. */
+  onFollowUpFailure?: (error: unknown) => void | Promise<void>;
+  /**
+   * Backoff for retrying a release that failed before any delivery intent was
+   * recorded (nothing was sent, so a retry cannot duplicate it). One entry per
+   * attempt; once spent, the row waits, visibly, for the next ordinary wake.
+   */
+  followUpRetryDelaysMs?: readonly number[];
+  /** Bounds queue attach/admission, not model execution or a person's answer. */
+  followUpAdmissionTimeoutMs?: number;
+  /**
+   * The ceiling on a Session's first attach's workspace preparation, which is
+   * not admission-bounded (VC-799). Ten minutes unless a test says otherwise.
+   */
+  firstAttachPreparationTimeoutMs?: number;
   /** The one structured executor this runtime attaches. */
   executor: NativeHarnessAdapter;
   artifacts: TranscriptArtifactStore;
@@ -172,9 +209,16 @@ export type SessionClientCommand =
       agent?: string | null;
       variant?: string | null;
     }
+  /**
+   * `expectedRevision`: the queue revision the caller acted on. A mismatch is
+   * a typed conflict ({@link QueueRevisionConflictError}), never a mutation.
+   */
+  | { kind: "message.cancel"; messageId: string; expectedRevision?: number }
+  | { kind: "message.edit"; messageId: string; message: UIMessage; expectedRevision?: number }
   /** `tier`: the named tier this selection resolved from, when a start named one (VC-259). */
   /** `auto`: the decision model's pick and why, when it chose this selection at birth (VC-432). */
   | { kind: "model.select"; selection: ModelSelection; tier?: ModelTier; auto?: ModelAutoPick }
+  | { kind: "session.stop"; reason?: string }
   | { kind: "executor.interrupt"; attachmentId?: string }
   | { kind: "executor.retry"; attachmentId?: string }
   | { kind: "context.compact"; attachmentId?: string; instructions?: string | null }
@@ -193,13 +237,14 @@ export type SessionClientCommand =
    */
   | { kind: "resume.settle"; scheduleId: string; outcome: ScheduledResumeOutcome };
 
-export type SessionRuntimeCommandRequest =
+export type SessionRuntimeCommandRequest = { origin?: SessionOrigin } & (
   | { commandId: string; command: Extract<SessionClientCommand, { kind: "session.create" }> }
   | {
       commandId: string;
       sessionId: string;
       command: Exclude<SessionClientCommand, { kind: "session.create" }>;
-    };
+    }
+);
 
 type ExistingSessionCommandRequest = Extract<SessionRuntimeCommandRequest, { sessionId: string }>;
 type AttachCommandRequest = ExistingSessionCommandRequest & {
@@ -208,8 +253,17 @@ type AttachCommandRequest = ExistingSessionCommandRequest & {
 type MessageCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "message.submit" }>;
 };
+type FollowUpCommandRequest = ExistingSessionCommandRequest & {
+  command: Extract<
+    SessionClientCommand,
+    { kind: "message.submit" | "message.edit" | "message.cancel" }
+  >;
+};
 type SelectModelCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "model.select" }>;
+};
+type StopCommandRequest = ExistingSessionCommandRequest & {
+  command: Extract<SessionClientCommand, { kind: "session.stop" }>;
 };
 type InterruptCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "executor.interrupt" }>;
@@ -299,7 +353,7 @@ type ReleaseCommandRequest = ExistingSessionCommandRequest & {
 
 export interface SessionRuntimeCommandResult {
   sessionId: string;
-  command: SessionCommand;
+  command: SessionCommand | SessionFollowUpCommand;
   receipt: CommandReceipt | null;
   throughSequence: number;
   /**
@@ -328,12 +382,15 @@ export interface SessionRuntimeCommandResult {
    * command, a rejection, any command that is not a submit.
    */
   turnOpened?: boolean;
+  /** Runtime acts following the durable stop, including any best-effort failures. */
+  stop?: StopSessionOutcome;
 }
 type DeliveredSessionRuntimeCommandResult = SessionRuntimeCommandResult & {
   receipt: CommandReceipt;
 };
 
 export interface CancelInteractionRequest {
+  origin?: SessionOrigin;
   sessionId: string;
   interactionId: string;
   /** Required: an interaction that stops waiting always states why it stopped. */
@@ -376,7 +433,25 @@ export interface SessionStreamCompactionProgress {
   reason: CompactionWorkReason;
 }
 
-export type SessionStreamTransient = SessionStreamOverlay | SessionStreamCompactionProgress;
+export interface SessionStreamQueue {
+  kind: "queue";
+  sessionId: string;
+  throughSequence: number;
+  /** Queue changes do not advance the event cursor. Order them by this revision. */
+  revision: number;
+  queue: readonly SessionFollowUpItem[];
+}
+
+export type SessionStreamTransient =
+  | SessionStreamOverlay
+  | SessionStreamCompactionProgress
+  | SessionStreamQueue;
+
+export function isSessionStreamQueue(
+  emission: SessionStreamEmission,
+): emission is SessionStreamQueue {
+  return "kind" in emission && emission.kind === "queue";
+}
 
 /**
  * What a subscriber receives.
@@ -411,20 +486,79 @@ export function isSessionStreamFrame(
 /**
  * A Session's durable state on its own.
  *
- * The frames beside it in {@link SessionRuntimeSnapshot} are a transcript
- * replay: one per event since the Session began, each transcript event costing
- * an artifact read. A surface that is already subscribed to the stream has
- * every one of those frames and needs only this, so it is a separate answer
- * rather than a field a caller is trusted to ignore.
+ * The frames beside it in {@link SessionRuntimeSnapshot} are the newest window
+ * of the transcript, each transcript event costing an artifact read. A surface
+ * that is already subscribed to the stream has those frames and needs only
+ * this, so it is a separate answer rather than a field a caller is trusted to
+ * ignore.
  */
 export interface SessionRuntimeProjectionSnapshot {
-  projection: SessionProjection;
+  projection: SessionProjection & {
+    queue?: readonly SessionFollowUpItem[];
+    queueRevision?: number;
+  };
   throughSequence: number;
 }
 
-export interface SessionRuntimeSnapshot extends SessionRuntimeProjectionSnapshot {
+/**
+ * How much transcript one answer may carry (VC-315): a snapshot's tail, or one
+ * page of older history.
+ *
+ * A window ends at whichever bound it meets first, counting frames from the
+ * newest backwards. Bytes are the UTF-8 JSON of the window's frames as one
+ * array, transcript artifacts inlined, which is what crosses the wire; they are
+ * the bound that matters: a frame's size runs from a few hundred bytes to tens
+ * of kilobytes, so a count alone cannot bound a payload. The count stops a run of
+ * tiny frames from making a page arbitrarily long to fold.
+ *
+ * One frame larger than the byte bound is still returned, alone: a window that
+ * could not hold the frame in front of it would never advance, and dropping
+ * the frame would be the silent gap the stream contract forbids.
+ *
+ * Sized against a real profile: a median frame is about 1.1 KB and the 99th
+ * percentile about 30 KB, so 512 KiB is the last few turns of a busy Session,
+ * more than a screen, and opening a Session costs the same at any age. Exported
+ * as the observable limit it is, not a caller option: the engine enforces it,
+ * so no door can ask for the whole log again.
+ */
+export const SESSION_HISTORY_WINDOW = { events: 256, bytes: 512 * 1024 } as const;
+
+/**
+ * One window of a Session's transcript, oldest frame first.
+ *
+ * `before` is the cursor for the window older than this one — pass it to
+ * {@link SessionRuntime.history} — and `null` once the window reaches the
+ * Session's first event. It is an event sequence: the next page holds frames
+ * strictly below it.
+ */
+export interface SessionHistoryPage {
   frames: readonly SessionStreamFrame[];
+  before: number | null;
+}
+
+/**
+ * The projection checkpoint plus the newest {@link SESSION_HISTORY_WINDOW} of
+ * frames, ending at `throughSequence`. Older transcript is paged with
+ * {@link SessionRuntime.history}; resuming the stream after `throughSequence`
+ * is `subscribe`'s job.
+ */
+export interface SessionRuntimeSnapshot
+  extends SessionRuntimeProjectionSnapshot, SessionHistoryPage {
+  /** The window's own transcript artifacts, in frame order. */
   transcript: readonly SessionTranscriptArtifact[];
+  /**
+   * The current turn's latest reply as text, wherever it sits — the
+   * projection's {@link SessionProjection.latestReply}, read (VC-315). `null`
+   * when the current turn has said nothing, or the projection cannot say.
+   * Inside the window it costs nothing; above it, one artifact read.
+   */
+  latestReply: SessionLatestReply | null;
+}
+
+/** What `/copy` copies, and the transcript event it came from. */
+export interface SessionLatestReply {
+  sequence: number;
+  text: string;
 }
 
 /**
@@ -444,10 +578,20 @@ export interface SessionMessageDeliveryFailure {
 export interface SessionRuntime {
   command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult>;
   snapshot(input: { sessionId: string }): Promise<SessionRuntimeSnapshot>;
+  /** The window of transcript strictly before `before`, bounded like a snapshot's tail. */
+  history(input: { sessionId: string; before: number }): Promise<SessionHistoryPage>;
   /** Durable Session state without the transcript replay a fresh surface needs. */
   projection(input: { sessionId: string }): Promise<SessionRuntimeProjectionSnapshot>;
+  /**
+   * Replays the durable history after `afterSequence`, then delivers live.
+   * Aborting `signal` ends the subscription exactly as the returned disposer
+   * does, and may come while the replay is still being read or delivered: the
+   * replay stops at the next frame and nothing more reaches `listener`. That
+   * is how a bounded door (the WebSocket's replay bounds, VC-663) cancels a
+   * replay it has already refused, before the subscribe call returns.
+   */
   subscribe(
-    input: { sessionId: string; afterSequence: number },
+    input: { sessionId: string; afterSequence: number; signal?: AbortSignal },
     listener: (emission: SessionStreamEmission) => void | Promise<void>,
     onFailure?: (error: unknown) => void,
   ): Promise<() => void>;
@@ -485,6 +629,8 @@ export interface OpenNativeBinding {
 
 /** The host-owned runtime plus the live local bindings only its process can know about. */
 export interface HostedSessionRuntime extends SessionRuntime {
+  /** Host startup/recovery sweep, independent of attached Clients. */
+  recoverFollowUps(): Promise<void>;
   /**
    * Make a message refusal that happened after attach durable and visible.
    *
@@ -514,6 +660,26 @@ export interface HostedSessionRuntime extends SessionRuntime {
    * attachment here is what lets the host release it before the directory goes.
    */
   openNativeBindings(): readonly OpenNativeBinding[];
+  /**
+   * The Sessions holding work this process has ACCEPTED but whose turn has not
+   * opened yet (VC-577): a message admitted and on its way to the executor, a
+   * retry or a compaction in flight, and a host-owned follow-up release from
+   * the moment its drain is scheduled. Synchronous, because a quit decision
+   * reads it inside `before-quit`; together with the committed `turn.started`
+   * facts it is the whole of "a turn is running or about to".
+   */
+  pendingTurnStarts(): ReadonlySet<string>;
+  /**
+   * The idle-exit latch's runtime half (VC-577): from now on every NEW turn
+   * start is refused before it has any effect — a message, a retry, a
+   * compaction, an attach — with {@link SessionRuntimeExitingError}, and a
+   * follow-up drain is not scheduled, so its row stays queued and durable for
+   * the next launch. Synchronous so a caller can check "nothing is live" and
+   * take the latch in one turn of the event loop. Idempotent.
+   */
+  holdTurnStarts(): void;
+  /** Lifts {@link holdTurnStarts}, and wakes every follow-up drain it held back. */
+  releaseTurnStarts(): void;
 }
 
 export class SessionRuntimeNotFoundError extends Error {
@@ -530,6 +696,49 @@ export class SessionRuntimeConflictError extends Error {
   }
 }
 
+/**
+ * A command id already in flight, sent again with a different intent: the
+ * runtime's half of `SessionEngineCommandConflictError`, answered
+ * `CONFLICT` / `command-conflict` on the wire.
+ */
+export class SessionRuntimeCommandConflictError
+  extends SessionRuntimeConflictError
+  implements CommandIntentConflict
+{
+  readonly [COMMAND_INTENT_CONFLICT] = true as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionRuntimeCommandConflictError";
+  }
+}
+
+/**
+ * A turn start refused because this host is exiting (VC-577): the idle-exit
+ * latch is up. Nothing was recorded or sent; the work is simply not started in
+ * a process that is about to end. A queued follow-up stays queued instead.
+ */
+export class SessionRuntimeExitingError extends SessionRuntimeConflictError {
+  constructor() {
+    super("Volli is quitting, so no new turn can start. Queued messages are kept for next launch.");
+    this.name = "SessionRuntimeExitingError";
+  }
+}
+
+/**
+ * The commands that start (or restart) model work. Counted from admission
+ * until their turn opens or they settle, and refused outright while the
+ * idle-exit latch is up — together with `adapter.attach`, which starts an
+ * executor process.
+ */
+function startsTurnWork(command: SessionRuntimeCommandRequest["command"]): boolean {
+  return (
+    (command.kind === "message.submit" && command.delivery !== "queue") ||
+    command.kind === "executor.retry" ||
+    command.kind === "context.compact"
+  );
+}
+
 interface BindingRecord {
   adapter: NativeHarnessAdapter;
   handle: BindingHandle;
@@ -541,6 +750,14 @@ interface BindingRecord {
   lastProgressAt: number;
   /** Tool calls seen starting live and not yet finished; folded by `nextInFlightTools`. */
   inFlightTools: readonly SessionInFlightTool[];
+  /**
+   * True from this binding's `turn.started` until that turn completes or is
+   * interrupted; absent before its first turn. While it holds, the Session's
+   * overlay and fold are exempt from their caches' bounds (the runtime's
+   * `#streamingSessions`), and it lives on the record so that a binding which
+   * goes away mid-turn takes the exemption with it.
+   */
+  turnOpen?: boolean;
   reconcileInFlight: Promise<void> | null;
   /**
    * The same translator the attachment's sink holds, for the replay path.
@@ -685,30 +902,40 @@ class BufferedObservationSink implements ObservationSink {
 /**
  * One Session's folded history and the resumable state behind it.
  *
- * A cold cache hit retains only the tail after its durable checkpoint. The
- * legacy full-snapshot route re-reads prefix events when it needs frames; a
- * projection read never materializes them merely to recover current state.
+ * A cold cache hit retains only the tail after its durable checkpoint. Frames
+ * are never read from here: a snapshot reads its bounded window from the
+ * ledger, and a projection read never materializes prefix events merely to
+ * recover current state.
  */
 interface ProjectedHistory {
   projection: SessionProjection;
-  /** Tail consumed in this runtime; the whole log only when `completeEvents` is true. */
+  /** Tail consumed in this runtime; the whole log only when no checkpoint seeded it. */
   events: readonly SessionEvent[];
   throughSequence: number;
   checkpoint: SessionProjectionCheckpoint;
-  completeEvents: boolean;
 }
 
 const EVENT_PAGE_SIZE = 500;
 /**
+ * How many events a history window asks the ledger for at a time, newest
+ * first. Twice the artifact pool, so one chunk keeps the pool full; and small,
+ * because the byte bound is only known after a chunk's artifacts are read, so
+ * a chunk is also the most a window can read and then not use.
+ */
+const HISTORY_READ_CHUNK = 32;
+const utf8 = new TextEncoder();
+/**
  * How many transcript artifacts a snapshot reads at once (VC-383).
  *
- * A snapshot materializes one frame per event, and a frame with a transcript
- * reference is one artifact read — an lstat, a file read, a gunzip and a
- * digest, on disk. Awaited one at a time, a Session with a thousand turns paid
- * a thousand serial round trips to the filesystem before its chat could paint
- * a single message; the disk was idle for most of that wall time. A bounded
- * window keeps the reads overlapped without turning a chat open into a burst
- * of every file at once on a machine that is already running a dozen agents.
+ * A snapshot materializes one frame per event in its window, and a frame with
+ * a transcript reference is one artifact read — an lstat, a file read, a
+ * gunzip and a digest, on disk. Awaited one at a time, a Session with a
+ * thousand turns paid a thousand serial round trips to the filesystem before
+ * its chat could paint a single message; the disk was idle for most of that
+ * wall time. VC-315 bounds how many frames a snapshot reads at all
+ * ({@link SESSION_HISTORY_WINDOW}); this pool still keeps the reads inside one
+ * window overlapped without turning a chat open into a burst of files on a
+ * machine that is already running a dozen agents.
  * Order is preserved: the frame list is positional, so the window only
  * changes WHEN each artifact is read, never where it lands.
  *
@@ -737,18 +964,54 @@ export const SNAPSHOT_ARTIFACT_READ_CONCURRENCY = 16;
  *
  * So it stays at eight, and eight is now a bound on background reads: the
  * Sessions nobody is looking at, each of which costs exactly one re-read when
- * it is dropped.
+ * it is dropped. A Session with a turn running or about to is exempt as well
+ * (VC-466): nobody need be watching a background turn, but the turn itself
+ * reads its fold at every step, and a ninth turn running at once would
+ * otherwise make each of those reads a re-fold.
  */
 export const PROJECTION_CACHE_LIMIT = 8;
 /**
- * How many Sessions keep a transient overlay, bounded the same way and for the
- * same reason as the fold cache above: the explicit drop points (attachment
- * closure, release, close) cover every orderly end, and this covers the rest,
- * so no single rule's absence leaves the map growing. An evicted overlay costs
- * the tail of one in-flight message — the emitter's next reset or settle
- * rebuilds it.
+ * How many Sessions with no turn running keep a transient overlay. The explicit
+ * drop points (attachment closure, release, close) cover every orderly end, and
+ * this covers the rest, so no single rule's absence leaves the map growing.
+ *
+ * A Session whose turn is running is exempt (VC-466), so this bounds only
+ * overlays with nothing left to stream into them, and the exempt ones are
+ * bounded by the turns running at once. A streaming Session's overlay is read
+ * on every delta and holds the only baseline its message in flight has: the
+ * fold acts on no delta for a message it holds no entry for, so dropping the
+ * overlay mid-message would cost a ledger read to re-seed it and, for a chat
+ * opened before the message settles, the rest of that message.
  */
 const OVERLAY_CACHE_LIMIT = 8;
+
+/**
+ * Evicts the least recently kept unexempt entries of an insertion-ordered cache
+ * until at most `limit` of them remain. An exempt entry keeps its place and
+ * counts against nothing.
+ *
+ * `exemption` is asked for its predicate only when the cache is over its limit:
+ * a cache under it evicts nothing, and the overlay cache is kept on every
+ * delta.
+ */
+function trimCache(
+  cache: Map<string, unknown>,
+  limit: number,
+  exemption: () => (key: string) => boolean,
+): void {
+  if (cache.size <= limit) return;
+  const exempt = exemption();
+  let evictable = 0;
+  for (const key of cache.keys()) {
+    if (!exempt(key)) evictable += 1;
+  }
+  for (const oldest of cache.keys()) {
+    if (evictable <= limit) break;
+    if (exempt(oldest)) continue;
+    cache.delete(oldest);
+    evictable -= 1;
+  }
+}
 
 /**
  * The message a Session's admission is currently held for.
@@ -772,6 +1035,8 @@ interface MessageAdmission {
   /** Null when no observability sink is attached: nothing to measure for. */
   readonly receivedAt: number | null;
   readonly release: () => void;
+  /** Ends this message's place in {@link DefaultSessionRuntime.pendingTurnStarts}. Idempotent. */
+  readonly started: () => void;
   dispatched: boolean;
 }
 
@@ -790,7 +1055,63 @@ class DefaultSessionRuntime implements SessionRuntime {
   readonly #compactionProgress = new Map<string, SessionStreamCompactionProgress>();
   #closed = false;
 
+  #followUpDrains = new Map<string, Promise<void>>();
+  #followUpDrainAgain = new Set<string>();
+  #followUpDeliveryBoundaries = new Map<string, string>();
+  /**
+   * Delivery command ids a drain in this process holds from claim to outcome.
+   * Taken inside the claim transaction, so a cancel can never remove a row a
+   * drain is about to send. A `releasing` row held by nobody (and not in
+   * `#inFlight`) is a claim whose sender is gone.
+   */
+  readonly #followUpOwned = new Set<string>();
+  readonly #followUpRetries = new Map<
+    string,
+    { attempt: number; timer: ReturnType<typeof setTimeout> | undefined }
+  >();
+
+  /** Accepted, not yet opened turn starts per Session (VC-577); see {@link pendingTurnStarts}. */
+  readonly #acceptedStarts = new Map<string, number>();
+  /** The idle-exit latch (VC-577): new turn starts are refused while it is up. */
+  #turnStartsHeld = false;
+  /** Follow-up drains the latch held back, woken when it lifts. */
+  readonly #heldFollowUpDrains = new Set<string>();
+
   constructor(private readonly ports: SessionRuntimePorts) {}
+
+  pendingTurnStarts(): ReadonlySet<string> {
+    const pending = new Set(this.#acceptedStarts.keys());
+    // A drain decides whether to release a row only after an async read, so
+    // it counts from the moment it is scheduled: "maybe about to start" is
+    // live until it has decided, which a settle window could never promise.
+    for (const sessionId of this.#followUpDrains.keys()) pending.add(sessionId);
+    return pending;
+  }
+
+  holdTurnStarts(): void {
+    this.#turnStartsHeld = true;
+  }
+
+  releaseTurnStarts(): void {
+    if (!this.#turnStartsHeld) return;
+    this.#turnStartsHeld = false;
+    const held = [...this.#heldFollowUpDrains];
+    this.#heldFollowUpDrains.clear();
+    for (const sessionId of held) this.#scheduleFollowUps(sessionId);
+  }
+
+  /** Counts one accepted start for `sessionId`; the returned call ends it, once. */
+  #acceptStart(sessionId: string): () => void {
+    this.#acceptedStarts.set(sessionId, (this.#acceptedStarts.get(sessionId) ?? 0) + 1);
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      const left = this.#acceptedStarts.get(sessionId)! - 1;
+      if (left === 0) this.#acceptedStarts.delete(sessionId);
+      else this.#acceptedStarts.set(sessionId, left);
+    };
+  }
 
   openNativeBindings(): readonly OpenNativeBinding[] {
     return [...this.#bindings.values()].map(({ spec, lastProgressAt, inFlightTools }) => ({
@@ -847,19 +1168,47 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 
   command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult> {
+    // This namespace is host-owned, including attach child commands. Otherwise
+    // a caller could preseed an unrelated receipt and falsely settle a queue row.
+    if (request.commandId.startsWith("follow-up:"))
+      return Promise.reject(
+        new SessionRuntimeCommandConflictError(
+          "The follow-up command namespace is reserved for the host",
+        ),
+      );
+    return this.#admitCommand(request);
+  }
+
+  #admitCommand(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult> {
     this.#assertOpen();
-    const signature = stableJson(request);
+    const { origin: _origin, ...intentRequest } = request;
+    const signature = stableJson(intentRequest);
     const existing = this.#inFlight.get(request.commandId);
     if (existing) {
       if (existing.signature !== signature) {
         return Promise.reject(
-          new SessionRuntimeConflictError(
+          new SessionRuntimeCommandConflictError(
             `Command ${request.commandId} is already in flight with different intent`,
           ),
         );
       }
       return existing.promise;
     }
+    // The idle-exit latch (VC-577): refused here, before the intent is
+    // recorded, so a refused start leaves no trace to reconcile later.
+    if (
+      this.#turnStartsHeld &&
+      "sessionId" in request &&
+      (startsTurnWork(request.command) || request.command.kind === "adapter.attach")
+    ) {
+      return Promise.reject(new SessionRuntimeExitingError());
+    }
+    // Counted from admission — before it waits behind anything — so a quit
+    // decision sees it for its whole way to the executor.
+    const endStart =
+      "sessionId" in request && startsTurnWork(request.command)
+        ? this.#acceptStart(request.sessionId)
+        : null;
 
     // Every command that touches what the executor will next be sent, so none
     // of them can be deciding it at the same time. `context.compact` is here
@@ -870,15 +1219,22 @@ class DefaultSessionRuntime implements SessionRuntime {
     // while both remain in the ledger and on screen. Unlike a message, a
     // compaction holds this tail for its whole run, because it is not finished
     // when it starts and there is no earlier moment that is safe.
+    const isFollowUp =
+      request.command.kind === "message.cancel" ||
+      request.command.kind === "message.edit" ||
+      (request.command.kind === "message.submit" && request.command.delivery === "queue");
     const serializesAdmission =
+      !isFollowUp &&
       "sessionId" in request &&
       (request.command.kind === "message.submit" ||
         request.command.kind === "model.select" ||
         request.command.kind === "context.compact");
     const previous =
-      "sessionId" in request ? this.#sessionAdmissionTails.get(request.sessionId) : null;
+      !isFollowUp && "sessionId" in request
+        ? this.#sessionAdmissionTails.get(request.sessionId)
+        : null;
     const admission =
-      "sessionId" in request && request.command.kind === "message.submit"
+      !isFollowUp && "sessionId" in request && request.command.kind === "message.submit"
         ? Promise.withResolvers<void>()
         : null;
     // The message's arrival, for the queue measurement: read here, before it
@@ -891,6 +1247,8 @@ class DefaultSessionRuntime implements SessionRuntime {
             // Only a runtime with somewhere to send it reads the clock for it.
             receivedAt: this.ports.observability === undefined ? null : this.ports.clock.now(),
             release: admission.resolve,
+            // Non-null: a held message is always a counted start.
+            started: endStart!,
             dispatched: false,
           };
     const run = () => {
@@ -903,20 +1261,44 @@ class DefaultSessionRuntime implements SessionRuntime {
         }
       });
     };
-    const operation = previous ? previous.then(run) : run();
+    // Bound a queued command's wait BEFORE it starts admission. Waiting on
+    // previous.then(run) would both hide a stalled predecessor and execute
+    // the supposedly timed-out command later. Only run after the bounded
+    // predecessor wait succeeds, so timeout here is definitely unsent.
+    const operation = previous
+      ? this.#queueAdmissionWait(request.commandId, previous, "previous command admission").then(
+          run,
+        )
+      : run();
     const promise = operation.finally(async () => {
+      // A predecessor timeout never reached run's release path.
+      admission?.resolve();
+      endStart?.();
       this.#inFlight.delete(request.commandId);
+      // A queue held behind this start (VC-675) is released once the start is
+      // over, whichever way it went: the claim refused while it was pending.
+      // A drain's own attach is excluded: the drain handles that outcome, and
+      // waking itself on a failed attach would retry with no backoff.
+      if (
+        "sessionId" in request &&
+        request.command.kind === "adapter.attach" &&
+        !request.commandId.startsWith("follow-up:")
+      )
+        this.#scheduleFollowUps(request.sessionId);
       await this.#releaseBindingsAfterClose();
     });
     this.#inFlight.set(request.commandId, { signature, promise });
     if (serializesAdmission && "sessionId" in request) {
       const sessionId = request.sessionId;
-      const tail =
+      const ownTail =
         admission?.promise ??
         promise.then(
           () => undefined,
           () => undefined,
         );
+      // A timed-out queued wait must not unlock a still-running predecessor
+      // for later commands. Keep that predecessor in the serialization chain.
+      const tail = previous ? previous.then(() => ownTail) : ownTail;
       this.#sessionAdmissionTails.set(sessionId, tail);
       void tail.finally(() => {
         if (this.#sessionAdmissionTails.get(sessionId) === tail) {
@@ -930,6 +1312,9 @@ class DefaultSessionRuntime implements SessionRuntime {
   #releaseMessageAdmission(sessionId: string, admission: MessageAdmission): void {
     if (this.#messageAdmissions.get(sessionId) !== admission) return;
     this.#messageAdmissions.delete(sessionId);
+    // Its `turn.started` is committed by now (or the command settled): the
+    // turn itself is what counts from here.
+    admission.started();
     admission.release();
   }
 
@@ -965,7 +1350,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         parentSessionId: request.command.parentSessionId,
         title: request.command.title,
         requestedSessionId: request.command.requestedSessionId ?? null,
-        provenance: userProvenance(null),
+        provenance: userProvenance(null, request.origin),
       });
       await this.#publish([result.commandEvent, result.event, result.receiptEvent]);
       return {
@@ -978,8 +1363,71 @@ class DefaultSessionRuntime implements SessionRuntime {
       };
     }
 
-    const projection = await this.#requireSession(request.sessionId);
-    const location = await this.ports.locations.resolve(projection.session);
+    if (
+      request.command.kind === "message.cancel" ||
+      request.command.kind === "message.edit" ||
+      (request.command.kind === "message.submit" && request.command.delivery === "queue")
+    ) {
+      return this.#followUpCommand(request as FollowUpCommandRequest);
+    }
+
+    if (request.command.kind === "message.submit" && request.command.delivery === "steer") {
+      const queued = await this.#steerFollowUp(request as MessageCommandRequest);
+      if (queued) return queued;
+    }
+
+    if (
+      this.ports.followUps &&
+      (await this.ports.followUps.transaction(request.sessionId, (state) =>
+        Object.hasOwn(state.commands, request.commandId),
+      ))
+    ) {
+      throw new SessionRuntimeCommandConflictError(
+        `Command ${request.commandId} already belongs to the follow-up ledger`,
+      );
+    }
+    // A stop owns its own named refusals and must not depend on workspace resolution.
+    if (request.command.kind === "session.stop") {
+      return this.#stop(request as StopCommandRequest);
+    }
+    let projection = await this.#requireSession(request.sessionId);
+    if (request.command.kind === "message.submit") {
+      projection = await this.#acknowledgeBootInterruption(projection);
+    }
+    const boundary = this.#followUpDeliveryBoundaries.get(request.commandId);
+    if (
+      boundary !== undefined &&
+      (projection.turnActive ||
+        projection.stopped !== null ||
+        projection.status !== "open" ||
+        boundary !== `idle:${projection.latestTurnId ?? "birth"}`)
+    ) {
+      throw new FollowUpBoundaryMovedError();
+    }
+    let location: SessionLocation;
+    try {
+      location = await this.#queueAdmissionWait(
+        request.command.kind === "adapter.attach"
+          ? `follow-up:${request.commandId}`
+          : request.commandId,
+        this.ports.locations.resolve(projection.session),
+        "workspace resolution",
+      );
+    } catch (error) {
+      if (
+        request.command.kind === "adapter.attach" &&
+        !request.commandId.startsWith("follow-up:") &&
+        error instanceof NativeAttachmentError &&
+        error.code === "queue_admission_timeout"
+      ) {
+        await this.reportMessageDeliveryFailure({
+          sessionId: request.sessionId,
+          commandId: request.commandId,
+          detail: error.message,
+        });
+      }
+      throw error;
+    }
     const existed = this.#commandExists(projection, request.commandId);
 
     switch (request.command.kind) {
@@ -1016,6 +1464,95 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
   }
 
+  async #stop(request: StopCommandRequest): Promise<SessionRuntimeCommandResult> {
+    const prior = await this.ports.engine.getSession({ sessionId: request.sessionId });
+    if (prior?.commands.some((candidate) => candidate.id === request.commandId)) {
+      // Validate the idempotency key against durable intent even when the stop
+      // already closed its own attachment. A lost reply must not turn acceptance
+      // into a not-live refusal, nor let a changed reason reuse the same key.
+      const replay = await this.ports.engine.submit({
+        commandId: request.commandId,
+        sessionId: request.sessionId,
+        intent: {
+          kind: "session.stop",
+          reason: request.command.reason ?? null,
+          by: { kind: "user" },
+        },
+        provenance: {
+          source: { kind: "user", id: "renderer", detail: { sessionOrigin: { kind: "user" } } },
+          venue: { id: "local", kind: "local" },
+        },
+      });
+      if (replay.receipt?.status !== "completed") {
+        throw new SessionRuntimeConflictError("Stop command has no completed receipt");
+      }
+      const released = prior.receipts.some(
+        (receipt) =>
+          receipt.commandId === `${request.commandId}:release` && receipt.status === "completed",
+      );
+      if (
+        released ||
+        prior.attachments.findLast((attachment) => attachment.adapterId !== "terminal")?.status !==
+          "open"
+      ) {
+        // No executor work is attempted on a closed replay. Report only the
+        // successful child acts evidenced by durable receipts, not guessed
+        // transient outcomes from the response that was lost.
+        const accepted = (commandId: string) =>
+          prior.receipts.some(
+            (receipt) =>
+              receipt.commandId === commandId &&
+              (receipt.status === "accepted" || receipt.status === "completed"),
+          );
+        return {
+          ...(await this.#result(request.sessionId, replay.command, replay.receipt)),
+          stop: {
+            sessionId: request.sessionId,
+            handle: shortSessionId(request.sessionId),
+            title: prior.session.title,
+            previouslyStopped: true,
+            interrupted: accepted(`${request.commandId}:interrupt`),
+            released: accepted(`${request.commandId}:release`),
+            failures: [],
+          },
+        };
+      }
+    }
+    const stop = await stopSessionById(
+      {
+        sessionEngine: {
+          getSession: (query) => this.ports.engine.getSession(query),
+          submit: async (input) => {
+            const projection = await this.#requireSession(request.sessionId);
+            const submitted = await this.ports.engine.submit(input);
+            await this.#publishSubmit(submitted, this.#commandExists(projection, input.commandId));
+            return submitted;
+          },
+        },
+        runtime: this,
+      },
+      {
+        operationId: request.commandId,
+        sessionId: request.sessionId,
+        ...(request.command.reason === undefined ? {} : { reason: request.command.reason }),
+      },
+    );
+    // A previously-stopped, still-live target retries only the runtime acts.
+    // Return its durable stop acceptance, not a fabricated new stop receipt.
+    const projection = await this.#requireSession(request.sessionId);
+    const command =
+      projection.commands.find((candidate) => candidate.id === request.commandId) ??
+      projection.commands.findLast((candidate) => candidate.intent.kind === "session.stop");
+    /* v8 ignore next 2 -- SessionEngine commits the stop command, fact and completed receipt atomically. */
+    if (command === undefined)
+      throw new SessionRuntimeConflictError("Stopped Session has no stop command");
+    const receipt = projection.receipts.findLast((candidate) => candidate.commandId === command.id);
+    /* v8 ignore next 2 -- a durable stopped projection always includes its atomic completed receipt. */
+    if (receipt === undefined)
+      throw new SessionRuntimeConflictError("Stopped Session has no stop receipt");
+    return { ...(await this.#result(request.sessionId, command, receipt)), stop };
+  }
+
   /**
    * A scheduled resume's three commands: accepted or refused in the engine,
    * with nothing to deliver. Through the runtime rather than straight to the
@@ -1034,10 +1571,14 @@ class DefaultSessionRuntime implements SessionRuntime {
       provenance:
         request.command.kind === "resume.settle"
           ? {
-              source: { kind: "system", id: SCHEDULED_RESUME_SOURCE_ID, detail: null },
+              source: {
+                kind: "system",
+                id: SCHEDULED_RESUME_SOURCE_ID,
+                detail: request.origin === undefined ? null : { sessionOrigin: request.origin },
+              },
               venue: location.venue,
             }
-          : userProvenance(location.venue),
+          : userProvenance(location.venue, request.origin),
     });
     await this.#publishSubmit(submitted, existed);
     return this.#result(request.sessionId, submitted.command, submitted.receipt);
@@ -1058,7 +1599,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         ...(request.command.tier === undefined ? {} : { tier: request.command.tier }),
         ...(request.command.auto === undefined ? {} : { auto: request.command.auto }),
       },
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
     });
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled") {
@@ -1138,7 +1679,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         adapterId: adapter.id,
         continuity: request.command.continuity,
       },
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
     });
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled")
@@ -1149,9 +1690,27 @@ class DefaultSessionRuntime implements SessionRuntime {
     // The directory has to be real before it is bound: an adapter handed one
     // that is not there fails per prompt, deep inside the harness, wearing
     // whatever name that harness gives a missing path.
+    //
+    // A Session's FIRST attach, from any door but the queue's own, is where
+    // its worktree is made, and under load that outlasts the admission bound —
+    // which never stopped the preparation, only failed the attach while the
+    // preparation went on to finish. So it waits under a generous ceiling of
+    // its own instead (VC-799), and outlasting that is a configuration
+    // failure for a person to look at, like any preparation that fails. Every
+    // later attach, and every attach a queue drain makes, keeps the bound.
+    const firstAttach =
+      !request.commandId.startsWith("follow-up:") &&
+      projection.attachments.every(({ openedAt }) => openedAt === null);
     let site: SessionLocation;
     try {
-      site = await this.ports.locations.prepare(projection.session);
+      const preparing = this.ports.locations.prepare(projection.session);
+      site = firstAttach
+        ? await this.#firstAttachPreparation(preparing)
+        : await this.#queueAdmissionWait(
+            `follow-up:${request.commandId}`,
+            preparing,
+            "workspace preparation",
+          );
     } catch (error) {
       return this.#failAttach({
         request,
@@ -1164,7 +1723,10 @@ class DefaultSessionRuntime implements SessionRuntime {
         // that cannot be prepared is that configuration failing — the same
         // Attention an unavailable pinned model raises, and cleared by the same
         // successful attach once the directory can be made.
-        attentionKind: "configuration_invalid",
+        attentionKind:
+          error instanceof NativeAttachmentError && error.code === "queue_admission_timeout"
+            ? "adapter_unrecoverable"
+            : "configuration_invalid",
       });
     }
 
@@ -1194,7 +1756,21 @@ class DefaultSessionRuntime implements SessionRuntime {
     const { translator, sink } = this.#pipeline(adapter, spec, location.venue);
     let handle: BindingHandle;
     try {
-      handle = await adapter.attach(spec, sink);
+      const attaching = adapter.attach(spec, sink);
+      handle = await this.#queueAdmissionWait(
+        `follow-up:${request.commandId}`,
+        attaching,
+        "executor attach",
+        () => {
+          sink.discard();
+          // A timed-out attach must never publish or become a second binding.
+          void attaching.then(
+            (late) =>
+              late.release("adapter_failure").catch((error) => this.#followUpFailure(error)),
+            () => undefined,
+          );
+        },
+      );
     } catch (error) {
       sink.discard();
       const nativeFailure =
@@ -1230,13 +1806,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         // the fallback this attach exists to refuse (#38), because
         // `#rehydrateBinding` trusts the persisted directory over a fresh read.
         native: wrapNativeBinding(site.directory, adapter.runtime, handle.native),
-        // The policy this attachment opened under, read off the handle exactly
-        // as `native` is and written down once, here (VC-44). This is the only
-        // place an Authority Snapshot becomes durable, which is what lets a
-        // later `authority.denied` — which carries this `attachmentId` — name
-        // the rule pack that produced it. An adapter that does not answer runs
-        // no policy, and records none.
-        authority: handle.authority ?? null,
+        authority: null,
       };
       const opened = await this.ports.engine.observe({
         id: this.#id("event"),
@@ -1277,6 +1847,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         sink,
       });
       await this.#publish([opened, ...clearedAttachFailures]);
+      await this.#acknowledgeBootInterruption(projection);
       await sink.activate();
       const receipt = await this.#recordDelivery(
         request.sessionId,
@@ -1325,6 +1896,9 @@ class DefaultSessionRuntime implements SessionRuntime {
         );
         await this.#reconcileBinding(binding);
       } catch (error) {
+        // Shutdown is not a recovery failure: leave the replay unreceipted for
+        // the next launch, as the retry path does.
+        if (this.#closed) throw error;
         const receipt = await this.#recordDelivery(
           request.sessionId,
           outcome.payload.attachment.id,
@@ -1349,7 +1923,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         SessionCommand["intent"],
         { kind: "executor.start" }
       >,
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
     });
     if (replayed.receipt)
       return this.#result(request.sessionId, replayed.command, replayed.receipt);
@@ -1396,28 +1970,40 @@ class DefaultSessionRuntime implements SessionRuntime {
       },
       failure: { code: input.code, detail: input.detail, diagnostic: null },
     });
-    const attention = await this.ports.engine.observe({
-      id: this.#id("event"),
-      sessionId: input.request.sessionId,
-      occurredAt: this.ports.clock.now(),
-      provenance: adapterProvenance(input.adapter, input.location.venue),
-      kind: "attention.raised",
-      attention: {
-        id: freshAttachAttentionId(input.request.sessionId, input.adapter.id, input.attentionKind),
-        // The attachment attempt is already a closed fact. This Attention
-        // belongs to the Session until a fresh attach succeeds, rather
-        // than pretending a failed binding can receive recovery work.
-        attachmentId: null,
-        detail: input.detail,
-        diagnostic: null,
-        // An attach that failed never reached a provider, so no allowance is
-        // spent and there is no reset to resume at.
-        ...(input.attentionKind === "adapter_unrecoverable"
-          ? { kind: input.attentionKind, resetsAt: null }
-          : { kind: input.attentionKind }),
-      },
-    });
-    await this.#publish([failed, attention]);
+    // A queue-owned attach that ran nothing reports through the queue's own
+    // retryable Attention. A second, fresh-attach Attention would block its
+    // backoff forever. Configuration failures still require the person.
+    const retryableQueueAttach =
+      input.request.commandId.startsWith("follow-up:") &&
+      input.attentionKind === "adapter_unrecoverable";
+    const attention = retryableQueueAttach
+      ? null
+      : await this.ports.engine.observe({
+          id: this.#id("event"),
+          sessionId: input.request.sessionId,
+          occurredAt: this.ports.clock.now(),
+          provenance: adapterProvenance(input.adapter, input.location.venue),
+          kind: "attention.raised",
+          attention: {
+            id: freshAttachAttentionId(
+              input.request.sessionId,
+              input.adapter.id,
+              input.attentionKind,
+            ),
+            // The attachment attempt is already a closed fact. This Attention
+            // belongs to the Session until a fresh attach succeeds, rather
+            // than pretending a failed binding can receive recovery work.
+            attachmentId: null,
+            detail: input.detail,
+            diagnostic: null,
+            // An attach that failed never reached a provider, so no allowance is
+            // spent and there is no reset to resume at.
+            ...(input.attentionKind === "adapter_unrecoverable"
+              ? { kind: input.attentionKind, resetsAt: null }
+              : { kind: input.attentionKind }),
+          },
+        });
+    await this.#publish(attention === null ? [failed] : [failed, attention]);
     const receipt = await this.#recordDelivery(
       input.request.sessionId,
       null,
@@ -1435,11 +2021,947 @@ class DefaultSessionRuntime implements SessionRuntime {
     return this.#result(input.request.sessionId, input.submitted.command, receipt);
   }
 
+  async #followUpCommand(request: FollowUpCommandRequest): Promise<SessionRuntimeCommandResult> {
+    const ledger = this.ports.followUps;
+    if (!ledger) throw new SessionRuntimeConflictError("Host follow-up storage is unavailable");
+    const projection = await this.#requireSession(request.sessionId);
+    if (projection.commands.some(({ id }) => id === request.commandId)) {
+      throw new SessionRuntimeCommandConflictError(
+        `Command ${request.commandId} already belongs to the event ledger`,
+      );
+    }
+    const { origin: _origin, ...intentRequest } = request;
+    const signature = canonicalJson(intentRequest);
+    const command = request.command;
+    const throughSequence = await this.#latestSequence(request.sessionId);
+    const now = this.ports.clock.now();
+    let withdrewClaim = false;
+    const result = await ledger.transaction(request.sessionId, (state, deliveryProof) => {
+      const prior = Object.hasOwn(state.commands, request.commandId)
+        ? state.commands[request.commandId]
+        : undefined;
+      if (prior) {
+        if (prior.signature !== signature)
+          throw new SessionRuntimeCommandConflictError(
+            `Command ${request.commandId} has different intent`,
+          );
+        return prior.result;
+      }
+      // After the replay check: an accepted command answers the same forever,
+      // even once the revision it acted on has moved.
+      if (
+        command.kind !== "message.submit" &&
+        command.expectedRevision !== undefined &&
+        command.expectedRevision !== state.revision
+      )
+        throw new QueueRevisionConflictError(command.expectedRevision, state.revision);
+      const queuedCommand: SessionFollowUpCommand = {
+        id: request.commandId,
+        sessionId: request.sessionId,
+        createdAt: now,
+        route: null,
+        intent:
+          command.kind === "message.submit"
+            ? { kind: "message.queue", message: command.message }
+            : command,
+      };
+      let rejection: { code: string; detail: string } | null = null;
+      if (command.kind === "message.submit") {
+        if (projection.status !== "open")
+          rejection = {
+            code: "session_archived",
+            detail: "An archived Session cannot queue messages",
+          };
+        else if (command.message.role !== "user")
+          rejection = { code: "invalid_message", detail: "Only user messages can be queued" };
+        else if (state.entries.some(({ id }) => id === command.message.id))
+          rejection = { code: "message_exists", detail: "This message is already queued" };
+        else
+          state.entries.push({
+            id: command.message.id,
+            message: command.message,
+            commandId: request.commandId,
+            state: "queued",
+            deliveryCommandId: sessionFollowUpDeliveryCommandId(
+              request.sessionId,
+              request.commandId,
+            ),
+            ...(request.origin === undefined ? {} : { origin: request.origin }),
+            ...(command.model === undefined ? {} : { model: command.model }),
+            ...(command.agent === undefined ? {} : { agent: command.agent }),
+            ...(command.variant === undefined ? {} : { variant: command.variant }),
+          });
+      } else {
+        const index = state.entries.findIndex(({ id }) => id === command.messageId);
+        const entry = state.entries[index];
+        if (!entry)
+          rejection = { code: "message_not_queued", detail: "This message is no longer queued" };
+        else if (entry.state !== "queued") {
+          // Both the claim and its proof are read in the queue transaction.
+          // An async projection read before it can miss a late receipt/turn.
+          const delivered =
+            command.kind === "message.cancel"
+              ? deliveryProof?.(entry.deliveryCommandId)
+              : undefined;
+          if (
+            command.kind === "message.cancel" &&
+            delivered === false &&
+            !this.#followUpBusy(entry.deliveryCommandId)
+          ) {
+            // Nothing proves it ran: hand it back. It may still have run, which
+            // the Attention says; a resend is the person's call, never ours.
+            state.entries.splice(index, 1);
+            state.releasedBoundary = null;
+            withdrewClaim = true;
+          } else
+            rejection = {
+              code: "message_releasing",
+              detail: delivered
+                ? "This message was already delivered"
+                : "This message is already being delivered",
+            };
+        } else if (command.kind === "message.cancel") {
+          state.entries.splice(index, 1);
+          if (entry.refusedDetail) withdrewClaim = true;
+          if (entry.refused) state.releasedBoundary = null;
+        } else if (command.message.id !== command.messageId || command.message.role !== "user")
+          rejection = {
+            code: "invalid_message",
+            detail: "An edit must retain the user message identity",
+          };
+        else {
+          entry.message = command.message;
+          entry.deliveryCommandId = sessionFollowUpDeliveryCommandId(
+            request.sessionId,
+            request.commandId,
+          );
+          if (entry.refused) state.releasedBoundary = null;
+          delete entry.refused;
+          delete entry.refusedDetail;
+          delete entry.steer;
+        }
+      }
+      const receipt: CommandReceipt = {
+        id: `${sessionFollowUpDeliveryCommandId(request.sessionId, request.commandId)}:receipt`,
+        commandId: request.commandId,
+        recordedAt: now,
+        sequence: throughSequence,
+        ...(rejection
+          ? { status: "rejected" as const, ...rejection }
+          : {
+              status: "accepted" as const,
+              acceptedAt: now,
+              result: { kind: "message.submitted" as const, sessionId: request.sessionId },
+            }),
+      };
+      const reply: SessionRuntimeCommandResult = {
+        sessionId: request.sessionId,
+        command: queuedCommand,
+        receipt,
+        throughSequence,
+        refusal: null,
+      };
+      Object.defineProperty(state.commands, request.commandId, {
+        value: { signature, result: reply },
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+      state.revision += 1;
+      return reply;
+    });
+    if (withdrewClaim) await this.#clearFollowUpFailure(request.sessionId);
+    // Acceptance depends on storage alone, never a running turn or Client.
+    this.#notifyFollowUps(request.sessionId);
+    // A person acting on the queue earns it a fresh retry budget.
+    this.#resetFollowUpRetry(request.sessionId);
+    this.#scheduleFollowUps(request.sessionId);
+    return result;
+  }
+
+  #followUpBusy(deliveryCommandId: string): boolean {
+    return this.#inFlight.has(deliveryCommandId) || this.#followUpOwned.has(deliveryCommandId);
+  }
+
+  async #withFollowUps(
+    projection: SessionProjection,
+  ): Promise<SessionRuntimeProjectionSnapshot["projection"]> {
+    if (!this.ports.followUps) return projection;
+    const queued = await this.ports.followUps.transaction(projection.session.id, (state) => ({
+      queue: projectSessionFollowUps(state),
+      queueRevision: state.revision,
+    }));
+    return { ...projection, ...queued };
+  }
+
+  async #queueEmission(sessionId: string): Promise<SessionStreamQueue> {
+    const queued = await this.ports.followUps!.transaction(sessionId, (state) => ({
+      queue: projectSessionFollowUps(state),
+      revision: state.revision,
+    }));
+    return {
+      kind: "queue",
+      sessionId,
+      throughSequence: await this.#latestSequence(sessionId),
+      ...queued,
+    };
+  }
+
+  async #publishFollowUps(sessionId: string): Promise<void> {
+    const emission = await this.#queueEmission(sessionId);
+    await Promise.all(
+      [...(this.#subscribers.get(sessionId) ?? [])].map((subscriber) =>
+        this.#appendTransient(subscriber, emission),
+      ),
+    );
+  }
+
+  #notifyFollowUps(sessionId: string): void {
+    void this.#publishFollowUps(sessionId).catch((error: unknown) => this.#followUpFailure(error));
+  }
+
+  async #followUpFailure(error: unknown): Promise<void> {
+    try {
+      await this.ports.onFollowUpFailure?.(error);
+    } catch {
+      /* Diagnostics cannot erase durable queue state. */
+    }
+  }
+
+  #scheduleFollowUps(sessionId: string): void {
+    if (this.#closed || !this.ports.followUps) return;
+    // The idle-exit latch (VC-577): the row stays queued and durable; the
+    // next launch's recovery sweep (or the latch lifting) releases it.
+    if (this.#turnStartsHeld) {
+      this.#heldFollowUpDrains.add(sessionId);
+      return;
+    }
+    if (this.#followUpDrains.has(sessionId)) {
+      this.#followUpDrainAgain.add(sessionId);
+      return;
+    }
+    const operation = Promise.resolve()
+      .then(() => this.#drainFollowUp(sessionId))
+      .catch(async (error: unknown) => {
+        try {
+          await this.reportMessageDeliveryFailure({
+            sessionId,
+            commandId: `follow-up:${sessionId}`,
+            detail: followUpFailureDetail(error),
+          });
+        } catch (attentionError) {
+          await this.#followUpFailure(attentionError);
+        }
+        await this.#followUpFailure(error);
+      })
+      .finally(() => {
+        this.#followUpDrains.delete(sessionId);
+        if (this.#followUpDrainAgain.delete(sessionId)) this.#scheduleFollowUps(sessionId);
+      });
+    this.#followUpDrains.set(sessionId, operation);
+  }
+
+  /**
+   * Bounded backoff for a release that failed before its intent was recorded.
+   * Only that failure is retried: nothing reached the executor, so a retry
+   * cannot run the prompt twice. One timer per Session; a spent budget waits
+   * for the next ordinary wake (turn end, Attention cleared, queue command).
+   */
+  #scheduleFollowUpRetry(sessionId: string): void {
+    const retry = this.#followUpRetries.get(sessionId) ?? { attempt: 0, timer: undefined };
+    const delay = (this.ports.followUpRetryDelaysMs ?? FOLLOW_UP_RETRY_DELAYS_MS)[retry.attempt];
+    if (this.#closed || retry.timer !== undefined || delay === undefined) return;
+    retry.attempt += 1;
+    retry.timer = setTimeout(() => {
+      retry.timer = undefined;
+      this.#scheduleFollowUps(sessionId);
+    }, delay);
+    this.#followUpRetries.set(sessionId, retry);
+  }
+
+  #resetFollowUpRetry(sessionId: string): void {
+    clearTimeout(this.#followUpRetries.get(sessionId)?.timer);
+    this.#followUpRetries.delete(sessionId);
+  }
+
+  async recoverFollowUps(): Promise<void> {
+    this.#assertOpen();
+    for (const sessionId of (await this.ports.followUps?.pendingSessionIds()) ?? []) {
+      this.#scheduleFollowUps(sessionId);
+    }
+    // Drains can request one more pass when reconciliation observes a turn end.
+    while (this.#followUpDrains.size > 0) await Promise.all(this.#followUpDrains.values());
+  }
+
+  #followUpFailureAttentionId(sessionId: string): string {
+    return messageDeliveryFailureAttentionId(
+      sessionId,
+      this.ports.executor.id,
+      `follow-up:${sessionId}`,
+    );
+  }
+
+  /**
+   * An executor start that has not finished, durably pending or still being
+   * admitted in this process. The engine refuses a second start meanwhile.
+   * Only a start still in flight has a completion that wakes the queue.
+   */
+  #executorStartPending(projection: SessionProjection): boolean {
+    return projection.pendingExecutorStart !== null || this.#executorStartInFlight(projection);
+  }
+
+  #executorStartInFlight(projection: SessionProjection): boolean {
+    return projection.commands.some(
+      ({ id, intent }) => intent.kind === "executor.start" && this.#inFlight.has(id),
+    );
+  }
+
+  async #acknowledgeBootInterruption(projection: SessionProjection): Promise<SessionProjection> {
+    if (projection.turnActive || projection.status !== "open") return projection;
+    const warnings = projection.attention.active.filter(
+      ({ id, kind, attachmentId, detail }) =>
+        kind === "partial_turn_interrupted" &&
+        projection.attachments.some(
+          (attachment) =>
+            attachment.id === attachmentId &&
+            // Host recovery closes a binding it could not reconstruct.
+            ((id === `${attachmentId}:boot-recovery` && attachment.status === "closed") ||
+              // Successful Pi recovery keeps the binding and interrupts the old
+              // turn. Match its frozen id AND legacy recovery sentence, never a
+              // genuine partial-turn failure (e.g. conflicting sidecar history).
+              (attachment.adapterId === this.ports.executor.id &&
+                id ===
+                  `${this.ports.executor.durableIdNamespace}:attention:${attachmentId}:partial-turn` &&
+                detail ===
+                  "A recovered Pi turn ended before its completion marker was committed.")),
+        ),
+    );
+    if (warnings.length === 0) return projection;
+    const cleared = [];
+    for (const warning of warnings) {
+      cleared.push(
+        await this.ports.engine.observe({
+          id: this.#id("event"),
+          sessionId: projection.session.id,
+          occurredAt: this.ports.clock.now(),
+          provenance: adapterProvenance(this.ports.executor, null),
+          kind: "attention.cleared",
+          attentionId: warning.id,
+        }),
+      );
+    }
+    await this.#publish(cleared);
+    return this.#requireSession(projection.session.id);
+  }
+
+  /**
+   * A first attach's workspace preparation, under its own ceiling rather than
+   * the admission bound. The ceiling rejects with a plain error, which the
+   * attach records as `configuration_invalid`; the preparation itself is not
+   * stopped, so a worktree it finishes later is there for the Retry.
+   */
+  async #firstAttachPreparation(preparing: Promise<SessionLocation>): Promise<SessionLocation> {
+    const ceilingMs =
+      this.ports.firstAttachPreparationTimeoutMs ?? FIRST_ATTACH_PREPARATION_TIMEOUT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ceiling = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(new Error(`Workspace preparation did not finish within ${ceilingMs / 1000} s.`)),
+        ceilingMs,
+      );
+    });
+    try {
+      return await Promise.race([preparing, ceiling]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async #queueAdmissionWait<T>(
+    commandId: string,
+    operation: Promise<T>,
+    stage: string,
+    onTimeout?: () => void,
+  ): Promise<T> {
+    if (!commandId.startsWith("follow-up:")) return operation;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        onTimeout?.();
+        reject(
+          new NativeAttachmentError(
+            `queue_admission_timeout: ${stage} did not finish. Check the transcript before retrying.`,
+            "queue_admission_timeout",
+            "adapter_unrecoverable",
+          ),
+        );
+      }, this.ports.followUpAdmissionTimeoutMs ?? 30_000);
+    });
+    try {
+      return await Promise.race([operation, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async #drainFollowUp(sessionId: string): Promise<void> {
+    const ledger = this.ports.followUps!;
+    let projection = await this.#requireSession(sessionId);
+    const pending = await ledger.transaction(sessionId, (state) => state.entries.length > 0);
+    if (!pending) return;
+    projection = await this.#acknowledgeBootInterruption(projection);
+    const startPending = this.#executorStartPending(projection);
+    const ownFailureId = this.#followUpFailureAttentionId(sessionId);
+    const blockers = projection.attention.active.filter(({ id }) => id !== ownFailureId);
+    // Only an in-flight start is normal progress: its completion wakes the
+    // queue. A durable orphan has no wake and still needs actionable Attention.
+    const blockedDetail =
+      projection.status !== "open"
+        ? "Queued message is waiting: session_archived. Reopen the Session to retry."
+        : projection.stopped !== null
+          ? "Queued message is waiting: session_stopped. Reattach the Session to retry."
+          : blockers.length > 0
+            ? `Queued message is waiting: ${blockers.map(({ kind, detail }) => `${kind}: ${detail}`).join("; ")}`
+            : startPending && !this.#executorStartInFlight(projection)
+              ? "Queued message is waiting: executor_start_pending. Finish or retry the attachment."
+              : undefined;
+    // Set inside the claim transaction, so no cancel can interleave.
+    const hold: { deliveryCommandId: string | null } = { deliveryCommandId: null };
+    let heldDetail: string | undefined;
+    try {
+      const entry = await ledger.transaction(sessionId, (state) => {
+        heldDetail = state.entries.find((candidate) => candidate.refused)?.refusedDetail;
+        const releasing = state.entries.filter((candidate) => candidate.state === "releasing");
+        // Recovery assumes one delivery per Session. Two claims is a corrupt
+        // ledger, and guessing which one is real could send a prompt twice.
+        if (releasing.length > 1)
+          throw new SessionRuntimeConflictError(
+            "More than one queued message is being delivered; refusing to guess",
+          );
+        const recovering = releasing[0];
+        if (recovering) {
+          // An explicit steer owns its claim through dispatch and settlement.
+          if (this.#followUpBusy(recovering.deliveryCommandId)) return null;
+          // A claim whose intent is recorded is only ever reconciled and
+          // settled here, never sent again, so a person may withdraw it
+          // meanwhile; only a claim this drain may still send is held.
+          if (!projection.commands.some(({ id }) => id === recovering.deliveryCommandId)) {
+            hold.deliveryCommandId = recovering.deliveryCommandId;
+            this.#followUpOwned.add(recovering.deliveryCommandId);
+          }
+          return recovering;
+        }
+        if (
+          projection.turnActive ||
+          projection.status !== "open" ||
+          projection.stopped !== null ||
+          // A Client's start in flight would refuse this drain's own attach.
+          startPending ||
+          projection.attention.active.some(({ id }) => id !== ownFailureId)
+        )
+          return null;
+        const boundary = `idle:${projection.latestTurnId ?? "birth"}`;
+        if (state.releasedBoundary === boundary) return null;
+        const head = state.entries[0];
+        if (!head || head.refused) return null;
+        head.state = "releasing";
+        state.releasedBoundary = boundary;
+        state.revision += 1;
+        hold.deliveryCommandId = head.deliveryCommandId;
+        this.#followUpOwned.add(head.deliveryCommandId);
+        return head;
+      });
+      if (this.#closed) return;
+      if (!entry) {
+        if (heldDetail ?? blockedDetail)
+          await this.reportMessageDeliveryFailure({
+            sessionId,
+            commandId: `follow-up:${sessionId}`,
+            detail: (heldDetail ?? blockedDetail)!,
+          });
+        return;
+      }
+      // Publish on a separate chain: an unresponsive Client cannot delay release.
+      this.#notifyFollowUps(sessionId);
+      await this.#releaseFollowUp(sessionId, entry, projection);
+    } finally {
+      if (hold.deliveryCommandId !== null) this.#followUpOwned.delete(hold.deliveryCommandId);
+    }
+  }
+
+  async #releaseFollowUp(
+    sessionId: string,
+    entry: StoredSessionFollowUp,
+    projection: SessionProjection,
+  ): Promise<void> {
+    const ledger = this.ports.followUps!;
+    let current = projection;
+    const prior = current.commands.find(({ id }) => id === entry.deliveryCommandId);
+    if (prior) {
+      await this.#recoverFollowUpDelivery(sessionId, entry, prior, current);
+      return;
+    }
+    if (entry.steer) {
+      // A crash before recording intent cannot turn a steer into a fresh prompt.
+      // Recover through the same targeted-turn preflight; never auto-convert it.
+      await this.#deliverQueuedSteer(sessionId, entry, current);
+      return;
+    }
+    if (current.turnActive || current.status !== "open" || current.stopped !== null) return;
+    let result: SessionRuntimeCommandResult;
+    try {
+      if (!current.liveExecutor) {
+        if (this.#executorStartPending(current)) {
+          // Someone else's start: give the row back; that start wakes the queue.
+          await this.#returnFollowUp(sessionId, entry);
+          return;
+        }
+        // One id per attempt. A crash after an accepted attach must not replay
+        // that attach under a different continuity — the engine refuses the
+        // reused id, which used to strand the row for good.
+        const attachPrefix = `${entry.deliveryCommandId}:attach`;
+        const attempt = current.commands.filter(
+          ({ id }) => id === attachPrefix || id.startsWith(`${attachPrefix}:`),
+        ).length;
+        const attached = await this.#admitCommand({
+          commandId: `${attachPrefix}:${attempt}`,
+          sessionId,
+          origin: entry.origin,
+          command: {
+            kind: "adapter.attach",
+            continuity: current.attachments.length === 0 ? "fresh" : "context_replay",
+          },
+        });
+        if (attached.receipt?.status !== "accepted" && attached.receipt?.status !== "completed") {
+          // A fresh attempt id always answers terminally, so this is a refusal.
+          const { code, detail } = attached.receipt as Extract<
+            CommandReceipt,
+            { status: "rejected" }
+          >;
+          const failure = new SessionRuntimeConflictError(
+            `Could not attach an executor for the queued message (${code}): ${detail}`,
+          );
+          if (code === "executor_start_pending") {
+            // Nothing was sent, and the other start's completion is the wake.
+            await this.#returnFollowUp(sessionId, entry);
+            await this.#followUpFailure(failure);
+            return;
+          }
+          // The pre-intent catch returns the claim and schedules backoff. The
+          // queue's own Attention cannot block that retry, unlike configuration
+          // Attention raised by the attach itself.
+          throw failure;
+        }
+      }
+      current = await this.#requireSession(sessionId);
+      const boundary = `idle:${current.latestTurnId ?? "birth"}`;
+      this.#followUpDeliveryBoundaries.set(entry.deliveryCommandId, boundary);
+      await ledger.transaction(sessionId, (state) => {
+        state.releasedBoundary = boundary;
+      });
+      result = await this.#admitCommand({
+        commandId: entry.deliveryCommandId,
+        sessionId,
+        origin: entry.origin,
+        command: {
+          kind: "message.submit",
+          message: entry.message,
+          settle: "opened",
+          model: entry.model,
+          agent: entry.agent,
+          variant: entry.variant,
+        },
+      });
+    } catch (error) {
+      if (error instanceof FollowUpBoundaryMovedError) {
+        await this.#returnFollowUp(sessionId, entry);
+        return;
+      }
+      // Nothing was sent unless this delivery's intent reached the event
+      // ledger. Then a retry is safe; otherwise only evidence may settle it.
+      const after = await this.#requireSession(sessionId);
+      const intent = after.commands.find(({ id }) => id === entry.deliveryCommandId);
+      if (!intent) {
+        await this.#returnFollowUp(sessionId, entry);
+        this.#scheduleFollowUpRetry(sessionId);
+        throw error;
+      }
+      await this.#followUpFailure(error);
+      await this.#settleFromEvidence(sessionId, entry, intent, after);
+      return;
+    } finally {
+      this.#followUpDeliveryBoundaries.delete(entry.deliveryCommandId);
+    }
+    if (!result.receipt || result.receipt.status === "unreconciled") {
+      await this.#settleFromEvidence(
+        sessionId,
+        entry,
+        result.command as SessionCommand,
+        await this.#requireSession(sessionId),
+      );
+      return;
+    }
+    await this.#settleFollowUp(
+      sessionId,
+      entry.commandId,
+      result.command as SessionCommand,
+      result.receipt,
+    );
+  }
+
+  /** A claim whose intent is already in the event ledger: settle it, never resend it. */
+  async #recoverFollowUpDelivery(
+    sessionId: string,
+    entry: StoredSessionFollowUp,
+    prior: SessionCommand,
+    projection: SessionProjection,
+  ): Promise<void> {
+    // Recovery must prove the receipt belongs to this exact payload, not
+    // merely to a matching id in an older or corrupt event ledger.
+    if (
+      prior.intent.kind !== "message.submit" ||
+      canonicalJson((await this.ports.artifacts.read(prior.intent.reference)).message) !==
+        canonicalJson(entry.message)
+    )
+      throw new SessionRuntimeCommandConflictError(
+        "Queued delivery intent does not match its retained payload",
+      );
+    let current = projection;
+    let receipt = current.receipts.findLast(({ commandId }) => commandId === prior.id);
+    if (!receipt || receipt.status === "unreconciled") {
+      /* v8 ignore next 2 -- an unrouted message is atomically saved with a terminal rejection by the engine. */
+      if (!prior.route?.attachmentId)
+        throw new SessionRuntimeConflictError("Queued delivery has no recoverable route");
+      const recovery = this.reconcile({ sessionId, attachmentId: prior.route.attachmentId });
+      try {
+        await this.#queueAdmissionWait(
+          entry.deliveryCommandId,
+          recovery,
+          "delivery reconciliation",
+          () => {
+            void recovery.then(
+              () => this.#scheduleFollowUps(sessionId),
+              (error) => this.#followUpFailure(error),
+            );
+          },
+        );
+      } catch (error) {
+        // An executor that cannot answer is no evidence either way.
+        await this.#followUpFailure(error);
+        if (error instanceof NativeAttachmentError && error.code === "queue_admission_timeout") {
+          current = await this.#requireSession(sessionId);
+          await this.#settleFromEvidence(sessionId, entry, prior, current, error.message);
+          return;
+        }
+      }
+      current = await this.#requireSession(sessionId);
+      receipt = current.receipts.findLast(({ commandId }) => commandId === prior.id);
+    }
+    if (!receipt || receipt.status === "unreconciled") {
+      await this.#settleFromEvidence(sessionId, entry, prior, current);
+      return;
+    }
+    await this.#settleFollowUp(sessionId, entry.commandId, prior, receipt);
+  }
+
+  /**
+   * Settle as delivered on proof, or retain it: no evidence is NOT evidence of
+   * no delivery, and redispatch here could run the same prompt twice. The row
+   * stays visible and cancellable, with Attention saying so.
+   */
+  async #settleFromEvidence(
+    sessionId: string,
+    entry: StoredSessionFollowUp,
+    command: SessionCommand,
+    projection: SessionProjection,
+    timeoutDetail?: string,
+  ): Promise<void> {
+    const evidence = await this.#deliveryEvidence(sessionId, command, projection);
+    if (evidence === null) {
+      const receipt = projection.receipts.findLast(({ commandId }) => commandId === command.id);
+      const detail =
+        timeoutDetail ??
+        (receipt?.status === "unreconciled" && receipt.detail?.includes("queue_admission_timeout")
+          ? receipt.detail
+          : undefined);
+      throw new FollowUpAmbiguousError(
+        detail ? `${detail} ${FOLLOW_UP_AMBIGUOUS_DETAIL}` : undefined,
+      );
+    }
+    await this.#settleFollowUp(sessionId, entry.commandId, command, evidence);
+  }
+
+  /**
+   * Proof that a recorded delivery reached the executor: its own accepted
+   * receipt, or the turn it opened. The turn must match the delivery command
+   * explicitly, or carry the derived turn id written with its message intent.
+   * Ordering alone cannot prove acceptance: a previously ambiguous command
+   * may open a late turn on that same attachment. A turn ENDING first means
+   * the message joined running work (a steer), so it proves nothing.
+   * The synthetic receipt is release evidence only; the event ledger
+   * keeps its own (unreconciled) account.
+   */
+  async #deliveryEvidence(
+    sessionId: string,
+    command: SessionCommand,
+    projection: SessionProjection,
+  ): Promise<CommandReceipt | null> {
+    return sessionFollowUpDeliveryEvidence(
+      sessionId,
+      command,
+      projection.receipts,
+      await this.#listEventsPaged({ sessionId }),
+    );
+  }
+
+  /** Give an owned claim back, unsent; it releases again at the next idle boundary. */
+  async #returnFollowUp(sessionId: string, entry: StoredSessionFollowUp): Promise<void> {
+    await this.ports.followUps!.transaction(sessionId, (state) => {
+      // Held by this drain since the claim, so nothing else can have moved it.
+      const pending = state.entries.find(({ commandId }) => commandId === entry.commandId)!;
+      pending.state = "queued";
+      state.releasedBoundary = null;
+      state.revision += 1;
+    });
+    this.#notifyFollowUps(sessionId);
+  }
+
+  async #clearFollowUpFailure(sessionId: string): Promise<void> {
+    const heldDetail = await this.ports.followUps!.transaction(
+      sessionId,
+      (state) => state.entries.find((entry) => entry.refused)?.refusedDetail,
+    );
+    if (heldDetail) {
+      await this.reportMessageDeliveryFailure({
+        sessionId,
+        commandId: `follow-up:${sessionId}`,
+        detail: heldDetail,
+      });
+      return;
+    }
+    const projection = await this.#requireSession(sessionId);
+    const failureId = this.#followUpFailureAttentionId(sessionId);
+    if (!projection.attention.active.some(({ id }) => id === failureId)) return;
+    const cleared = await this.ports.engine.observe({
+      id: this.#id("event"),
+      sessionId,
+      occurredAt: this.ports.clock.now(),
+      provenance: adapterProvenance(this.ports.executor, projection.liveExecutor?.venue ?? null),
+      kind: "attention.cleared",
+      attentionId: failureId,
+    });
+    await this.#publish([cleared]);
+  }
+
+  /** Matching a queued identity is an atomic claim, not cancel-then-send. */
+  async #steerFollowUp(
+    request: MessageCommandRequest,
+  ): Promise<SessionRuntimeCommandResult | null> {
+    const ledger = this.ports.followUps;
+    if (!ledger) return null;
+    const projection = await this.#requireSession(request.sessionId);
+    const { origin: _origin, ...intentRequest } = request;
+    const signature = canonicalJson(intentRequest);
+    const claim = await ledger.transaction<
+      { result: SessionRuntimeCommandResult } | { entry: StoredSessionFollowUp } | null
+    >(request.sessionId, (state) => {
+      const prior = Object.hasOwn(state.commands, request.commandId)
+        ? state.commands[request.commandId]
+        : undefined;
+      if (prior) {
+        if (prior.signature !== signature)
+          throw new SessionRuntimeCommandConflictError(
+            `Command ${request.commandId} has different intent`,
+          );
+        return { result: prior.result };
+      }
+      const entry = state.entries.find(({ id }) => id === request.command.message.id);
+      if (!entry) {
+        // A turn-end release that already won must not be followed by a second send.
+        if (
+          Object.values(state.commands).some(
+            ({ result }) =>
+              result.command.intent.kind === "message.queue" &&
+              result.command.intent.message.id === request.command.message.id,
+          )
+        )
+          throw new SessionRuntimeConflictError(
+            "This queued message has already been delivered or removed",
+          );
+        return null;
+      }
+      if (entry.state !== "queued")
+        throw new SessionRuntimeConflictError("This queued message is already being delivered");
+      if (entry.refused)
+        throw new SessionRuntimeConflictError("Edit the refused queued message before retrying");
+      // Identity selects the host's canonical payload, including parts/metadata
+      // a Client cannot faithfully reconstruct. Steering is never an edit.
+      if (
+        !projection.turnActive ||
+        !projection.latestTurnId ||
+        projection.stopped !== null ||
+        projection.status !== "open"
+      )
+        throw new SessionRuntimeConflictError("The targeted turn has ended");
+      if (projection.commands.some(({ id }) => id === request.commandId))
+        throw new SessionRuntimeCommandConflictError(
+          `Command ${request.commandId} already belongs to the event ledger`,
+        );
+      entry.state = "releasing";
+      entry.deliveryCommandId = request.commandId;
+      entry.steer = { signature, targetTurnId: projection.latestTurnId };
+      state.revision += 1;
+      return { entry };
+    });
+    if (!claim) return null;
+    if ("result" in claim) return claim.result;
+    this.#notifyFollowUps(request.sessionId);
+    return this.#deliverQueuedSteer(request.sessionId, claim.entry, projection);
+  }
+
+  async #deliverQueuedSteer(
+    sessionId: string,
+    entry: StoredSessionFollowUp,
+    projection: SessionProjection,
+  ): Promise<SessionRuntimeCommandResult> {
+    try {
+      const location = await this.ports.locations.resolve(projection.session);
+      const result = await this.#submitMessage(
+        {
+          commandId: entry.deliveryCommandId,
+          sessionId,
+          origin: entry.origin,
+          command: {
+            kind: "message.submit",
+            delivery: "steer",
+            message: entry.message,
+            settle: "opened",
+            model: entry.model,
+            agent: entry.agent,
+            variant: entry.variant,
+          },
+        },
+        projection,
+        location,
+        false,
+        entry.steer!.targetTurnId,
+      );
+      // A steer joins running work, so no turn it opened can prove it arrived.
+      if (!result.receipt || result.receipt.status === "unreconciled")
+        throw new FollowUpAmbiguousError();
+      await this.#settleFollowUp(
+        sessionId,
+        entry.commandId,
+        result.command as SessionCommand,
+        result.receipt,
+        true,
+      );
+      return result;
+    } catch (error) {
+      // Once its intent is recorded the steer may have arrived; never invite a
+      // resend by calling that a plain failure.
+      const maybeDelivered =
+        error instanceof FollowUpAmbiguousError ||
+        (await this.#requireSession(sessionId)).commands.some(
+          ({ id }) => id === entry.deliveryCommandId,
+        );
+      await this.reportMessageDeliveryFailure({
+        sessionId,
+        commandId: `follow-up:${sessionId}`,
+        detail: maybeDelivered ? FOLLOW_UP_AMBIGUOUS_DETAIL : followUpFailureDetail(error),
+      });
+      throw error;
+    }
+  }
+
+  async #settleFollowUp(
+    sessionId: string,
+    commandId: string,
+    command: SessionCommand,
+    receipt: CommandReceipt,
+    returnRefusal = false,
+  ): Promise<void> {
+    if (receipt.status === "rejected") {
+      // Definitive non-acceptance is safe to edit/cancel. Keep the payload, but
+      // never retry a terminally refused command id with different content.
+      const retained = await this.ports.followUps!.transaction(sessionId, (state) => {
+        // A person may have withdrawn an unproven claim while this was read.
+        const entry = state.entries.find((candidate) => candidate.commandId === commandId);
+        if (!entry) return false;
+        entry.state = "queued";
+        entry.refused = true;
+        entry.refusedDetail = `Queued delivery refused: ${receipt.code}${receipt.detail ? `: ${receipt.detail}` : ""}`;
+        if (entry.steer)
+          Object.defineProperty(state.commands, command.id, {
+            value: {
+              signature: entry.steer.signature,
+              result: {
+                sessionId,
+                command,
+                receipt,
+                throughSequence: receipt.sequence,
+                refusal: null,
+              },
+            },
+            enumerable: true,
+            configurable: true,
+            writable: true,
+          });
+        state.revision += 1;
+        return true;
+      });
+      if (!retained) return;
+      this.#notifyFollowUps(sessionId);
+      if (!returnRefusal)
+        throw new SessionRuntimeConflictError(
+          `Queued delivery refused: ${receipt.code}${receipt.detail ? `: ${receipt.detail}` : ""}`,
+        );
+      return;
+    }
+    await this.ports.followUps!.transaction(sessionId, (state) => {
+      // Absent when a person withdrew the unproven claim meanwhile; the
+      // evidence is still recorded, and nothing is left to remove.
+      const entry = state.entries.find((candidate) => candidate.commandId === commandId);
+      if (entry?.steer)
+        Object.defineProperty(state.commands, command.id, {
+          value: {
+            signature: entry.steer.signature,
+            result: {
+              sessionId,
+              command,
+              receipt,
+              throughSequence: receipt.sequence,
+              refusal: null,
+            },
+          },
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
+      state.entries = state.entries.filter((candidate) => candidate.commandId !== commandId);
+      Object.defineProperty(state.releases, commandId, {
+        value: { command, receipt },
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+      state.revision += 1;
+    });
+    this.#resetFollowUpRetry(sessionId);
+    await this.#clearFollowUpFailure(sessionId);
+    this.#notifyFollowUps(sessionId);
+    // Recovery may settle a completed prior turn with no live observation left
+    // to wake the next row. The durable boundary still admits only one release.
+    this.#scheduleFollowUps(sessionId);
+  }
+
   async #submitMessage(
     request: MessageCommandRequest,
     projection: SessionProjection,
     location: SessionLocation,
     existed: boolean,
+    targetTurnId?: string,
   ): Promise<SessionRuntimeCommandResult> {
     const artifact = await this.ports.artifacts.write({
       version: 1,
@@ -1453,7 +2975,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       commandId: request.commandId,
       sessionId: request.sessionId,
       intent: { kind: "message.submit", reference: artifact },
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
     });
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled")
@@ -1463,49 +2985,145 @@ class DefaultSessionRuntime implements SessionRuntime {
     // immutable binding directory before binding/reconciliation can throw past
     // the durable intent, and turn a local preflight failure into the terminal
     // receipt that intent is owed.
-    if (!existed) {
-      const unavailable = await this.#rejectUnavailableLocation(
+    let binding: BindingRecord;
+    try {
+      if (!existed) {
+        const unavailable = await this.#rejectUnavailableLocation(
+          request.sessionId,
+          submitted.command,
+          projection,
+          location,
+        );
+        if (unavailable) return this.#result(request.sessionId, submitted.command, unavailable);
+      }
+
+      binding = await this.#bindingForCommand(submitted.command, projection, location, !existed);
+      const recovered = await this.#recoverAdapterDelivery({
+        request,
+        submitted,
+        binding,
+        existed,
+      });
+      if (recovered) return recovered;
+
+      // A replay reconciles before it attempts delivery: the earlier invocation
+      // may already have reached the adapter. Fresh commands took the preflight
+      // above; `resolve` stays the cheap read it is documented to be.
+      if (existed)
+        await this.#queueAdmissionWait(
+          request.commandId,
+          this.ports.locations.reaffirm(projection.session, binding.spec.directory),
+          "workspace validation",
+        );
+    } catch (error) {
+      if (!(error instanceof NativeAttachmentError) || error.code !== "queue_admission_timeout")
+        throw error;
+      const attachment = projection.liveExecutor!;
+      const receipt = await this.#recordDelivery(
         request.sessionId,
-        submitted.command,
-        projection,
-        location,
+        attachment.id,
+        this.ports.executor,
+        attachment.venue,
+        !existed
+          ? {
+              commandId: request.commandId,
+              status: "rejected",
+              code: "queue_admission_timeout",
+              detail: error.message,
+              native: null,
+            }
+          : {
+              commandId: request.commandId,
+              status: "unknown",
+              detail: error.message,
+              native: null,
+            },
+        "message.submitted",
       );
-      if (unavailable) return this.#result(request.sessionId, submitted.command, unavailable);
+      return this.#result(request.sessionId, submitted.command, receipt);
     }
 
-    const binding = await this.#bindingForCommand(
-      submitted.command,
-      projection,
-      location,
-      !existed,
-    );
-    const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
-    if (recovered) return recovered;
-
-    // A replay reconciles before it attempts delivery: the earlier invocation
-    // may already have reached the adapter. Only when reconciliation finds no
-    // terminal receipt do we re-ask before dispatching. Fresh commands took the
-    // rejection-producing preflight above; `resolve` stays the cheap read it is
-    // documented to be.
-    if (existed) await this.ports.locations.reaffirm(projection.session, binding.spec.directory);
+    if (targetTurnId !== undefined) {
+      const current = await this.#requireSession(request.sessionId);
+      if (
+        !current.turnActive ||
+        current.latestTurnId !== targetTurnId ||
+        current.stopped !== null ||
+        current.status !== "open"
+      ) {
+        const receipt = await this.#recordDelivery(
+          request.sessionId,
+          binding.spec.attachmentId,
+          binding.adapter,
+          binding.venue,
+          {
+            commandId: request.commandId,
+            status: "rejected",
+            code: "steer_turn_ended",
+            detail: "The targeted turn has ended",
+            native: null,
+          },
+          "message.submitted",
+        );
+        return this.#result(request.sessionId, submitted.command, receipt);
+      }
+    }
 
     // From here a turn that opens can be this message's (VC-455). Matched by
     // command id, because an admission released early by some other turn's
     // start may already belong to the next message.
     const admission = this.#messageAdmissions.get(request.sessionId);
     if (admission?.commandId === request.commandId) admission.dispatched = true;
-    const receipt = await binding.handle.dispatch({
+    const dispatch = binding.handle.dispatch({
       kind: "message.submit",
       commandId: request.commandId,
       sessionId: request.sessionId,
       attachmentId: binding.spec.attachmentId,
       message: request.command.message,
       delivery: request.command.delivery ?? "queue",
+      ...(targetTurnId === undefined ? {} : { targetTurnId }),
       ...(request.command.settle === undefined ? {} : { settle: request.command.settle }),
       model: request.command.model ?? null,
       agent: request.command.agent ?? null,
       variant: request.command.variant ?? null,
     });
+    let receipt: DeliveryReceipt;
+    try {
+      receipt = await this.#queueAdmissionWait(
+        request.commandId,
+        dispatch,
+        "message admission",
+        () => {
+          // Dispatch may already have reached the executor. Never resend it.
+          // Preserve late evidence and wake reconciliation of the retained row.
+          void dispatch
+            .then(
+              async (late) => {
+                await this.#recordDelivery(
+                  request.sessionId,
+                  binding.spec.attachmentId,
+                  binding.adapter,
+                  binding.venue,
+                  late,
+                  "message.submitted",
+                );
+                this.#scheduleFollowUps(request.sessionId);
+              },
+              (error) => this.#followUpFailure(error),
+            )
+            .catch((error) => this.#followUpFailure(error));
+        },
+      );
+    } catch (error) {
+      if (!(error instanceof NativeAttachmentError) || error.code !== "queue_admission_timeout")
+        throw error;
+      receipt = {
+        commandId: request.commandId,
+        status: "unknown",
+        detail: error.message,
+        native: null,
+      };
+    }
     const durable = await this.#recordDelivery(
       request.sessionId,
       binding.spec.attachmentId,
@@ -1626,7 +3244,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       commandId: request.commandId,
       sessionId: request.sessionId,
       intent: input.intent,
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
     });
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled")
@@ -1685,7 +3303,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       commandId: request.commandId,
       sessionId: request.sessionId,
       intent: { kind: "executor.retry", attachmentId },
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
     });
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled") {
@@ -1821,12 +3439,25 @@ class DefaultSessionRuntime implements SessionRuntime {
     location: SessionLocation,
     existed: boolean,
   ): Promise<SessionRuntimeCommandResult> {
-    const interaction = projection.interactions.active.find(
-      ({ id }) => id === request.command.interactionId,
-    );
+    // A repeat must replay its durable outcome even after the card has settled.
+    // Still submit the full intent below: a reused ID with changed consent is a conflict.
+    const interaction =
+      projection.interactions.active.find(({ id }) => id === request.command.interactionId) ??
+      (existed
+        ? projection.interactions.resolved.find(
+            ({ interaction: settled }) => settled.id === request.command.interactionId,
+          )?.interaction
+        : undefined);
     if (!interaction) {
       throw new SessionRuntimeNotFoundError(
         `Interaction ${request.command.interactionId} is not open`,
+      );
+    }
+    // Reject before writing either a transcript artifact or command intent.
+    // A generic answer may contain secret bytes in any resolution field.
+    if (interaction.credential !== undefined) {
+      throw new SessionRuntimeConflictError(
+        "Credential requests must use person-only credential controls",
       );
     }
     const resolutionArtifact = await this.ports.artifacts.write({
@@ -1857,7 +3488,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         resolution: request.command.resolution,
         reference: resolutionArtifact,
       },
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
     });
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled")
@@ -1948,7 +3579,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       sessionId: request.sessionId,
       attachmentId: interaction.attachmentId,
       occurredAt: this.ports.clock.now(),
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
       kind: "interaction.cancelled",
       interactionId: interaction.id,
       reason: request.reason,
@@ -1979,7 +3610,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       commandId: request.commandId,
       sessionId: request.sessionId,
       intent: { kind: "executor.stop", attachmentId: request.command.attachmentId },
-      provenance: userProvenance(location.venue),
+      provenance: userProvenance(location.venue, request.origin),
     });
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled")
@@ -2061,7 +3692,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         SessionCommand["intent"],
         { kind: "session.create" }
       >,
-      provenance: userProvenance(input.binding.venue),
+      provenance: userProvenance(input.binding.venue, input.request.origin),
     });
     const receipt = replayed.receipt ?? priorReceipt;
     if (!receipt) return null;
@@ -2074,34 +3705,156 @@ class DefaultSessionRuntime implements SessionRuntime {
   async snapshot(input: { sessionId: string }): Promise<SessionRuntimeSnapshot> {
     this.#assertOpen();
     const history = await this.#history(input.sessionId);
-    // A persisted projection intentionally retains no prefix event rows. The
-    // legacy full snapshot still promises every frame, so only that procedure
-    // pays the full-log read; projection-first opens and routine state reads do
-    // not. A future paginated snapshot can remove this compatibility cost.
-    const events = history.completeEvents
-      ? history.events
-      : await this.#listEventsPaged({ sessionId: input.sessionId });
-    const frames = await this.#frames(events);
+    // The checkpoint plus a tail, never the log (VC-315): the window ends at
+    // the projection's own cursor, so the frames and the state beside them
+    // describe one moment, and a subscriber resumes strictly after it.
+    const page = await this.#window(input.sessionId, history.throughSequence + 1);
     const transcript: SessionTranscriptArtifact[] = [];
-    for (const frame of frames) {
+    for (const frame of page.frames) {
       if (frame.transcript) transcript.push(frame.transcript);
     }
+    // A Session with history from before transcript digests has a projection
+    // that cannot say its plan or its reply. Recovered here, once, and kept.
+    const recovered =
+      history.checkpoint.baselineComplete === true
+        ? null
+        : await this.#recoverBaseline(input.sessionId, history, page.frames);
+    const projection = recovered?.projection ?? history.projection;
     return {
-      projection: history.projection,
+      projection: await this.#withFollowUps(projection),
       throughSequence: history.throughSequence,
-      frames,
+      frames: page.frames,
+      before: page.before,
       transcript,
+      latestReply: await this.#latestReply(projection.latestReply, page.frames, recovered?.read),
     };
+  }
+
+  /**
+   * The plan and reply baseline of a Session whose transcript predates
+   * digests, recovered from its history and written into the projection
+   * checkpoint with `baselineComplete`, so the next open is the bounded one
+   * (VC-315; {@link recoverTranscriptBaseline} has the scan).
+   *
+   * Host side and best effort. The scan's bodies come from the window first,
+   * and an unreadable one is skipped and reported. Anything else that fails is
+   * reported and answers `null`: the open goes on with the projection as it
+   * was, and the next open tries again. Nothing here can fail an open.
+   */
+  async #recoverBaseline(
+    sessionId: string,
+    history: ProjectedHistory,
+    frames: readonly SessionStreamFrame[],
+  ): Promise<{
+    projection: SessionProjection;
+    read: ReadonlyMap<number, SessionTranscriptArtifact>;
+  } | null> {
+    let checkpoint: SessionProjectionCheckpoint;
+    let read: ReadonlyMap<number, SessionTranscriptArtifact>;
+    try {
+      const held = new Map<number, SessionTranscriptArtifact>();
+      for (const frame of frames) if (frame.transcript) held.set(frame.sequence, frame.transcript);
+      const baseline = await recoverTranscriptBaseline(
+        history.projection,
+        history.throughSequence,
+        {
+          range: async (afterSequence, before) =>
+            await this.ports.engine.listEvents({
+              sessionId,
+              afterSequence,
+              limit: before - afterSequence - 1,
+            }),
+          read: (reference) => this.ports.artifacts.read(reference),
+          held,
+          concurrency: SNAPSHOT_ARTIFACT_READ_CONCURRENCY,
+          onSkipped: (sequence, error) =>
+            this.#reportCheckpointFailure(
+              new Error(
+                `Session ${sessionId}: plan and reply recovery skipped the transcript at sequence ${sequence}: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+                { cause: error },
+              ),
+            ),
+        },
+      );
+      read = baseline.read;
+      const { todoList: _todoList, latestReply: _latestReply, ...rest } = history.projection;
+      checkpoint = {
+        ...history.checkpoint,
+        projection: {
+          ...rest,
+          ...(baseline.todoList === undefined ? {} : { todoList: baseline.todoList }),
+          ...(baseline.latestReply === undefined ? {} : { latestReply: baseline.latestReply }),
+        },
+        baselineComplete: true,
+      };
+    } catch (error) {
+      await this.#reportCheckpointFailure(error);
+      return null;
+    }
+    try {
+      // Kept for the next open: whatever was recorded while the scan ran is
+      // folded on top, as any later fact would be, then the checkpoint is
+      // persisted. A save that loses to a newer one is only a later recovery.
+      const tail = await this.#listEventsPaged({
+        sessionId,
+        afterSequence: checkpoint.throughSequence,
+      });
+      const adopted = foldHistory(history.projection.session, tail, checkpoint, history);
+      this.#keepHistory(sessionId, adopted);
+      await this.#persistProjectionCheckpoint(adopted.checkpoint);
+    } catch (error) {
+      await this.#reportCheckpointFailure(error);
+    }
+    return { projection: checkpoint.projection, read };
+  }
+
+  /**
+   * The current turn's latest reply, read where the projection says it is.
+   * An unreadable body is no reply rather than a failed open: the window is
+   * what the Session needs to draw, and `/copy` is only not offered.
+   */
+  async #latestReply(
+    location: SessionProjection["latestReply"],
+    frames: readonly SessionStreamFrame[],
+    read?: ReadonlyMap<number, SessionTranscriptArtifact>,
+  ): Promise<SessionLatestReply | null> {
+    if (location === undefined) return null;
+    let artifact =
+      frames.find(({ sequence }) => sequence === location.sequence)?.transcript ??
+      read?.get(location.sequence);
+    if (artifact === undefined || artifact === null) {
+      try {
+        artifact = await this.ports.artifacts.read(location.reference);
+      } catch {
+        return null;
+      }
+    }
+    const text = replyText(artifact.message);
+    return text === null ? null : { sequence: location.sequence, text };
+  }
+
+  async history(input: { sessionId: string; before: number }): Promise<SessionHistoryPage> {
+    this.#assertOpen();
+    if (!Number.isInteger(input.before) || input.before < 1) {
+      throw new Error("Session history cursor must be a positive integer");
+    }
+    await this.#requireSession(input.sessionId);
+    return this.#window(input.sessionId, input.before);
   }
 
   async projection(input: { sessionId: string }): Promise<SessionRuntimeProjectionSnapshot> {
     this.#assertOpen();
     const history = await this.#history(input.sessionId);
-    return { projection: history.projection, throughSequence: history.throughSequence };
+    return {
+      projection: await this.#withFollowUps(history.projection),
+      throughSequence: history.throughSequence,
+    };
   }
 
   async subscribe(
-    input: { sessionId: string; afterSequence: number },
+    input: { sessionId: string; afterSequence: number; signal?: AbortSignal },
     listener: (emission: SessionStreamEmission) => void | Promise<void>,
     onFailure?: (error: unknown) => void,
   ): Promise<() => void> {
@@ -2109,6 +3862,9 @@ class DefaultSessionRuntime implements SessionRuntime {
     if (!Number.isInteger(input.afterSequence) || input.afterSequence < 0) {
       throw new Error("Session subscription cursor must be a non-negative integer");
     }
+    const { signal } = input;
+    // Cancelled before it began: nothing is registered, nothing is read.
+    if (signal?.aborted === true) return () => {};
     const subscriber: Subscriber = {
       sessionId: input.sessionId,
       cursor: input.afterSequence,
@@ -2124,15 +3880,23 @@ class DefaultSessionRuntime implements SessionRuntime {
       this.#subscribers.set(input.sessionId, subscribers);
     }
     subscribers.add(subscriber);
+    // The drain checks `active` before every frame, so an abort mid-replay
+    // stops delivery at the next one, and the paging below stops too.
+    const cancel = (): void => this.#removeSubscriber(subscriber);
+    signal?.addEventListener("abort", cancel, { once: true });
     try {
       const replay = await this.#listEventsPaged({
         sessionId: input.sessionId,
         afterSequence: input.afterSequence,
+        signal,
       });
       await this.#enqueue(subscriber, replay);
       await this.#enqueueOverlayBaselines(subscriber);
       await this.#enqueueCompactionProgressBaseline(subscriber);
+      if (this.ports.followUps)
+        await this.#appendTransient(subscriber, await this.#queueEmission(input.sessionId));
     } catch (error) {
+      signal?.removeEventListener("abort", cancel);
       subscribers.delete(subscriber);
       // The empty Set has to go too: {@link #keepHistory} reads membership of
       // this map as "a surface is watching", so a subscription that never
@@ -2141,9 +3905,8 @@ class DefaultSessionRuntime implements SessionRuntime {
       throw error;
     }
     return () => {
-      subscriber.active = false;
-      subscribers?.delete(subscriber);
-      if (subscribers?.size === 0) this.#subscribers.delete(input.sessionId);
+      signal?.removeEventListener("abort", cancel);
+      this.#removeSubscriber(subscriber);
     };
   }
 
@@ -2224,11 +3987,30 @@ class DefaultSessionRuntime implements SessionRuntime {
       });
       await this.#publish([cleared]);
     }
+    if (this.ports.followUps) {
+      const current = await this.#requireSession(input.sessionId);
+      const accepted = new Set(
+        current.receipts
+          .filter((receipt) => receipt.status === "accepted" || receipt.status === "completed")
+          .map(({ commandId }) => commandId),
+      );
+      const canSettle = await this.ports.followUps.transaction(input.sessionId, (state) =>
+        state.entries.some(
+          (entry) => entry.state === "releasing" && accepted.has(entry.deliveryCommandId),
+        ),
+      );
+      // Reconciliation can supply the missing acceptance long after a failed
+      // release. Only positive evidence schedules a drain, avoiding a retry
+      // loop when a reconciliation still cannot answer the question.
+      if (canSettle) this.#scheduleFollowUps(input.sessionId);
+    }
   }
 
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    for (const { timer } of this.#followUpRetries.values()) clearTimeout(timer);
+    this.#followUpRetries.clear();
     // The cache is derived and best-effort: a failed shutdown write only makes
     // the next launch refold. Capture before clearing so even an attachment
     // that has not emitted its close yet leaves a reusable prefix. The results
@@ -2366,6 +4148,40 @@ class DefaultSessionRuntime implements SessionRuntime {
     switch (observation.kind) {
       case "attachment.closed":
       case "attachment.failed":
+        if (observation.kind === "attachment.failed") {
+          // A native failure closes the binding, but a close has no prose.
+          // Keep its explanation on the Session before retiring the binding;
+          // otherwise a cold timeline/peek sees only an executor disappearing.
+          // Session-scoped recovery survives the close and is retired by the
+          // existing successful fresh-attach path (VC-220), not a new state.
+          const projection = await this.#requireSession(spec.sessionId);
+          if (sink.stopped) return;
+          const explained = projection.attention.active.some(
+            (attention) =>
+              attention.attachmentId === spec.attachmentId &&
+              SESSION_FAILURE_ATTENTION_KINDS.some((kind) => kind === attention.kind),
+          );
+          // A failure the runtime already explained keeps its one recovery.
+          if (!explained) {
+            const attention = await this.ports.engine.observe({
+              ...base,
+              id: `${base.id}:attention`,
+              kind: "attention.raised",
+              attention: {
+                id: `${spec.attachmentId}:failure`,
+                attachmentId: null,
+                kind: "adapter_unrecoverable",
+                detail: redactPayloadSecrets(
+                  observation.detail?.trim() || "The runtime stopped unexpectedly.",
+                ).slice(0, 400),
+                diagnostic: null,
+                resetsAt: null,
+              },
+            });
+            await this.#publish([attention]);
+          }
+          if (sink.stopped) return;
+        }
         event = await this.ports.engine.observe({
           ...base,
           kind: "attachment.closed",
@@ -2381,8 +4197,8 @@ class DefaultSessionRuntime implements SessionRuntime {
           turnId: observation.turnId,
           message: observation.message,
         });
-        // The one await in this method between accepting a fact and recording
-        // it, so the one place a release can land mid-fact. Artifacts are
+        // Like the fatal explanation above, this await can race a release
+        // between accepting a fact and recording it. Artifacts are
         // content-addressed and nothing yet points at these bytes, so
         // abandoning them costs an inert file, where recording the event would
         // be a fact about an attachment the ledger has already closed.
@@ -2392,6 +4208,9 @@ class DefaultSessionRuntime implements SessionRuntime {
           kind: "transcript.referenced",
           turnId: observation.turnId,
           reference,
+          // What this message means for the plan and the current reply, so
+          // the projection knows without reading the body back (VC-315).
+          digest: transcriptDigest(observation.message),
         });
         // The settled snapshot is durable, so the transient tail it supersedes
         // goes now — the durable message's own id is what a delta addresses, so
@@ -2416,6 +4235,9 @@ class DefaultSessionRuntime implements SessionRuntime {
           ...base,
           kind: observation.kind,
           turnId: observation.turnId,
+          ...(observation.kind === "turn.interrupted" && observation.stopDetail !== undefined
+            ? { stopDetail: observation.stopDetail }
+            : {}),
         });
         if (observation.kind === "turn.started") {
           const admission = this.#messageAdmissions.get(spec.sessionId);
@@ -2454,16 +4276,6 @@ class DefaultSessionRuntime implements SessionRuntime {
           paths: observation.paths,
         });
         break;
-      case "authority.denied":
-        event = await this.ports.engine.observe({
-          ...base,
-          kind: observation.kind,
-          turnId: observation.turnId,
-          tool: observation.tool,
-          cause: observation.cause,
-          reason: observation.reason,
-        });
-        break;
       case "usage.recorded":
         event = await this.ports.engine.observe({
           ...base,
@@ -2476,7 +4288,10 @@ class DefaultSessionRuntime implements SessionRuntime {
         event = await this.ports.engine.observe({
           ...base,
           kind: observation.kind,
-          interaction: { ...observation.interaction, attachmentId: spec.attachmentId },
+          interaction: sanitizeSessionInteraction({
+            ...observation.interaction,
+            attachmentId: spec.attachmentId,
+          }),
         });
         break;
       case "interaction.resolved":
@@ -2528,7 +4343,24 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
     const binding = this.#bindings.get(spec.attachmentId);
     if (binding && observation.cursor !== undefined) binding.cursor = observation.cursor;
+    // A start lands here in the same tick that released its accepted start
+    // above, so the Session's exemption never lapses between the two.
+    if (
+      binding &&
+      (observation.kind === "turn.started" ||
+        observation.kind === "turn.completed" ||
+        observation.kind === "turn.interrupted")
+    ) {
+      binding.turnOpen = observation.kind === "turn.started";
+    }
     await this.#publish([event]);
+    if (
+      source === "live" &&
+      (observation.kind === "turn.completed" || observation.kind === "turn.interrupted")
+    ) {
+      // Never await dispatch from the sink that dispatch itself may emit into.
+      this.#scheduleFollowUps(spec.sessionId);
+    }
     if (observation.kind === "attachment.closed" || observation.kind === "attachment.failed") {
       await this.#saveProjectionCheckpoint(spec.sessionId);
       // The executor closed itself, so the stop is the same one `#release`
@@ -2640,14 +4472,38 @@ class DefaultSessionRuntime implements SessionRuntime {
     return this.#keepOverlay(sessionId, created);
   }
 
+  /** Keeps one Session's overlay, evicting by recency among the Sessions with no turn running. */
   #keepOverlay(sessionId: string, overlay: SessionOverlayState): SessionOverlayState {
     this.#overlays.delete(sessionId);
     this.#overlays.set(sessionId, overlay);
-    for (const oldest of this.#overlays.keys()) {
-      if (this.#overlays.size <= OVERLAY_CACHE_LIMIT) break;
-      this.#overlays.delete(oldest);
-    }
+    trimCache(this.#overlays, OVERLAY_CACHE_LIMIT, () => {
+      const streaming = this.#streamingSessions();
+      return (key) => streaming.has(key);
+    });
     return overlay;
+  }
+
+  /**
+   * The Sessions with a turn running or about to: a start this process has
+   * accepted and not yet seen open, or a turn one of its live bindings has open
+   * — the same two halves {@link pendingTurnStarts} and the committed
+   * `turn.started` facts make up, read here from process-local state alone.
+   *
+   * Both caches exempt these from their bounds. Each such Session will read its
+   * overlay or its fold again within milliseconds — every delta, every step of
+   * the turn — and recency cannot tell that from a Session some other read
+   * touched once; with more of them than the bound, each evicts the next.
+   *
+   * Exempt, not pinned: an accepted start ends when its turn opens (which sets
+   * the binding's flag in the same tick) or its command settles, and an open
+   * turn when it completes, is interrupted, or its binding goes away.
+   */
+  #streamingSessions(): ReadonlySet<string> {
+    const streaming = new Set(this.#acceptedStarts.keys());
+    for (const { spec, turnOpen } of this.#bindings.values()) {
+      if (turnOpen === true) streaming.add(spec.sessionId);
+    }
+    return streaming;
   }
 
   #clearOverlayMessage(sessionId: string, messageId: string): void {
@@ -2726,7 +4582,12 @@ class DefaultSessionRuntime implements SessionRuntime {
     // persisting intent. Do not repeat that check here: a second failure would
     // escape after persistence and recreate the receipt-less command hole. All
     // other cold-binding callers still receive the rehydration guarantee here.
-    if (!locationReaffirmed) await this.ports.locations.reaffirm(projection.session, directory);
+    if (!locationReaffirmed)
+      await this.#queueAdmissionWait(
+        `follow-up:${attachmentId}:recovery`,
+        this.ports.locations.reaffirm(projection.session, directory),
+        "binding workspace validation",
+      );
     const spec: NativeAttachmentSpec = {
       sessionId: projection.session.id,
       attachmentId,
@@ -2735,19 +4596,24 @@ class DefaultSessionRuntime implements SessionRuntime {
       // provider id fails honestly in the adapter; it must never create fresh.
       continuity: "native_resume",
       native: binding.native,
-      // The Snapshot this attachment opened under, replayed rather than
-      // re-resolved (VC-44). `#openAttachment` reads the handle's Snapshot and
-      // writes it onto `attachment.opened`; this is the same fact travelling the
-      // other way, so an attachment rebuilt after a relaunch is governed by the
-      // policy history says governed it. Without this the durable record and the
-      // live gate drift apart the first time anyone edits policy, and the record
-      // is the half that would be wrong.
-      pinnedAuthority: attachment.authority,
     };
     const { translator, sink } = this.#pipeline(adapter, spec, attachment.venue);
     let handle: BindingHandle;
     try {
-      handle = await adapter.attach(spec, sink);
+      const attaching = adapter.attach(spec, sink);
+      handle = await this.#queueAdmissionWait(
+        `follow-up:${attachmentId}:recovery`,
+        attaching,
+        "binding recovery",
+        () => {
+          sink.discard();
+          void attaching.then(
+            (late) =>
+              late.release("adapter_failure").catch((error) => this.#followUpFailure(error)),
+            () => undefined,
+          );
+        },
+      );
     } catch (error) {
       sink.discard();
       throw error;
@@ -2766,6 +4632,12 @@ class DefaultSessionRuntime implements SessionRuntime {
       sink,
     };
     this.#bindings.set(attachmentId, record);
+    // The attach can outlive `close()`: shutdown's release has already run and
+    // will not come back for this handle. Hand it to that same release at once,
+    // before its sink activates, and refuse like every other closed path. The
+    // registration is synchronous with the release, so no caller observes it;
+    // the open path stays synchronous from registration to activation.
+    if (this.#closed) await this.#assertBindingOperationOpen();
     await sink.activate();
     return record;
   }
@@ -2922,9 +4794,10 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
     const binding = unwrapNativeBinding(attachment.native);
     try {
-      await this.ports.locations.reaffirm(
-        projection.session,
-        binding.directory ?? location.directory,
+      await this.#queueAdmissionWait(
+        command.id,
+        this.ports.locations.reaffirm(projection.session, binding.directory ?? location.directory),
+        "workspace validation",
       );
       return null;
     } catch (error) {
@@ -2937,7 +4810,10 @@ class DefaultSessionRuntime implements SessionRuntime {
         {
           commandId: command.id,
           status: "rejected",
-          code: "location_unavailable",
+          code:
+            error instanceof NativeAttachmentError && error.code === "queue_admission_timeout"
+              ? "queue_admission_timeout"
+              : "location_unavailable",
           detail: errorMessage(error),
           native: null,
         },
@@ -2965,6 +4841,15 @@ class DefaultSessionRuntime implements SessionRuntime {
       bySession.set(event.sessionId, items);
     }
     for (const [sessionId, sessionEvents] of bySession) {
+      // Release pauses on Attention and a Stop; nothing else would wake a held
+      // queue when they lift (a new attachment is what lifts a Stop).
+      if (
+        sessionEvents.some(
+          ({ payload }) =>
+            payload.kind === "attention.cleared" || payload.kind === "attachment.opened",
+        )
+      )
+        this.#scheduleFollowUps(sessionId);
       const subscribers = this.#subscribers.get(sessionId);
       if (!subscribers) continue;
       await Promise.all(
@@ -3170,43 +5055,148 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 
   /**
-   * Every event's frame, in event order, with at most
-   * {@link SNAPSHOT_ARTIFACT_READ_CONCURRENCY} artifact reads in flight.
+   * `read` over every item, in item order, with at most
+   * {@link SNAPSHOT_ARTIFACT_READ_CONCURRENCY} reads in flight: a window's
+   * artifact sizes, then its frames.
    *
    * A worker pool over a shared cursor rather than `Promise.all` over the whole
-   * list: the list is the Session's entire history, and one read per event all
-   * at once is the wrong shape for a long Session on a loaded machine. Each
-   * worker takes the next index, reads it, and writes the frame into that
-   * index's slot, so the result is positional regardless of which read
-   * finished first. VC-383 also stops workers before they claim another index
-   * after a read fails. The peer worker promises remain enrolled in
-   * `Promise.all`, so concurrent read failures are observed rather than
-   * becoming unhandled; its first rejection remains the snapshot's error, just
+   * list: one read per item all at once is the wrong shape for a long Session
+   * on a loaded machine. Each worker takes the next index, reads it, and writes
+   * the result into that index's slot, so the result is positional regardless
+   * of which read finished first. VC-383 also stops workers before they claim
+   * another index after a read fails. The peer worker promises remain enrolled
+   * in `Promise.all`, so concurrent read failures are observed rather than
+   * becoming unhandled; its first rejection remains the window's error, just
    * as the serial loop did — a transcript the store cannot verify is not a
    * frame to silently skip.
    */
-  async #frames(events: readonly SessionEvent[]): Promise<SessionStreamFrame[]> {
-    const frames: SessionStreamFrame[] = [];
-    frames.length = events.length;
+  async #pooled<Item, Result>(
+    items: readonly Item[],
+    read: (item: Item) => Promise<Result>,
+  ): Promise<Result[]> {
+    const results: Result[] = [];
+    results.length = items.length;
     let next = 0;
     let stopped = false;
     const worker = async (): Promise<void> => {
       for (;;) {
         if (stopped) return;
         const index = next++;
-        const event = events[index];
-        if (event === undefined) return;
+        if (index >= items.length) return;
         try {
-          frames[index] = await this.#frame(event);
+          results[index] = await read(items[index]!);
         } catch (error) {
           stopped = true;
           throw error;
         }
       }
     };
-    const workers = Math.min(SNAPSHOT_ARTIFACT_READ_CONCURRENCY, events.length);
+    const workers = Math.min(SNAPSHOT_ARTIFACT_READ_CONCURRENCY, items.length);
     await Promise.all(Array.from({ length: workers }, worker));
-    return frames;
+    return results;
+  }
+
+  /**
+   * The newest frames strictly below `before`, inside {@link SESSION_HISTORY_WINDOW}.
+   *
+   * Selected first, hydrated second (VC-315). Each candidate's size is its
+   * event envelope plus its artifact's persisted size
+   * ({@link TranscriptArtifactStore.byteLength}), so choosing the window reads
+   * no body at all, and then exactly the chosen frames are hydrated: a body
+   * outside the window is never read, and an unreadable one cannot fail it.
+   * A frame whose size the store cannot say is taken only on a page of its
+   * own, where it would have to be read anyway.
+   *
+   * Events are read backwards a chunk at a time. Each chunk is an indexed range
+   * read — event sequences are dense per Session, so "the `n` before `cursor`"
+   * is the range after `cursor - 1 - n` — and anything outside that range is
+   * dropped rather than trusted, which keeps a sparse ledger (one that skipped
+   * a retired kind) from returning a frame twice.
+   */
+  async #window(sessionId: string, before: number): Promise<SessionHistoryPage> {
+    const newestFirst: SessionEvent[] = [];
+    // A store without a size port is measured by reading: those frames are
+    // kept here so the hydration below does not read them twice.
+    const measured = new Map<number, SessionStreamFrame>();
+    // The frames as one JSON array: its brackets, and a separator per frame.
+    let bytes = 1;
+    // Every event strictly below the cursor is still unselected.
+    let cursor = before;
+    let older: number | null = null;
+    select: while (cursor > 1 && newestFirst.length < SESSION_HISTORY_WINDOW.events) {
+      const want = Math.min(HISTORY_READ_CHUNK, SESSION_HISTORY_WINDOW.events - newestFirst.length);
+      const afterSequence = Math.max(0, cursor - 1 - want);
+      const upTo = cursor;
+      const events = (
+        await this.ports.engine.listEvents({ sessionId, afterSequence, limit: want })
+      ).filter((event) => event.sequence > afterSequence && event.sequence < upTo);
+      const sizes = await this.#pooled(events, (event) => this.#frameSize(event, measured));
+      for (let index = events.length - 1; index >= 0; index -= 1) {
+        const event = events[index]!;
+        const size = sizes[index]!;
+        if (
+          newestFirst.length > 0 &&
+          (size === null || bytes + size + 1 > SESSION_HISTORY_WINDOW.bytes)
+        ) {
+          older = event.sequence + 1;
+          break select;
+        }
+        newestFirst.push(event);
+        bytes += (size ?? 0) + 1;
+      }
+      cursor = afterSequence + 1;
+    }
+    if (older === null && cursor > 1) older = cursor;
+    const selected = newestFirst.toReversed();
+    const frames = await this.#pooled(
+      selected,
+      async (event) => measured.get(event.sequence) ?? this.#frame(event),
+    );
+    // Persisted sizes choose the window; the bound is still checked on what
+    // was hydrated, so a size that lied cannot carry an oversized page. Trimmed
+    // from the oldest end, keeping one frame, the way the selection would have.
+    let total = 1;
+    for (const frame of frames) total += utf8.encode(JSON.stringify(frame)).length + 1;
+    while (frames.length > 1 && total > SESSION_HISTORY_WINDOW.bytes) {
+      total -= utf8.encode(JSON.stringify(frames.shift()!)).length + 1;
+      older = frames[0]!.sequence;
+    }
+    return { frames, before: older };
+  }
+
+  /**
+   * One candidate frame's size in the window's accounting: UTF-8 JSON of the
+   * frame, its artifact inlined, read from metadata. `null` when the store
+   * cannot say. A frame with no transcript is just its envelope.
+   */
+  async #frameSize(
+    event: SessionEvent,
+    measured: Map<number, SessionStreamFrame>,
+  ): Promise<number | null> {
+    const reference = transcriptReferenceFor(event);
+    const envelope = {
+      sessionId: event.sessionId,
+      sequence: event.sequence,
+      event,
+      transcript: null,
+    };
+    const bare = utf8.encode(JSON.stringify(envelope)).length;
+    if (reference === null) return bare;
+    const byteLength = this.ports.artifacts.byteLength;
+    if (byteLength === undefined) {
+      const frame = await this.#frame(event);
+      measured.set(event.sequence, frame);
+      return utf8.encode(JSON.stringify(frame)).length;
+    }
+    let artifact: number | null;
+    try {
+      artifact = await byteLength.call(this.ports.artifacts, reference);
+    } catch {
+      artifact = null;
+    }
+    if (artifact === null || !Number.isSafeInteger(artifact) || artifact < 0) return null;
+    // `null` in the envelope is the four bytes the inlined artifact replaces.
+    return bare - 4 + artifact;
   }
 
   /**
@@ -3245,6 +5235,8 @@ class DefaultSessionRuntime implements SessionRuntime {
   async #listEventsPaged(input: {
     sessionId: string;
     afterSequence?: number;
+    /** A subscriber's: once aborted, no further page is read. */
+    signal?: AbortSignal | undefined;
   }): Promise<readonly SessionEvent[]> {
     let afterSequence = input.afterSequence ?? 0;
     const events: SessionEvent[] = [];
@@ -3254,6 +5246,8 @@ class DefaultSessionRuntime implements SessionRuntime {
         afterSequence,
         limit: EVENT_PAGE_SIZE,
       });
+      // Cancelled while this page was read: what it held is never delivered.
+      if (input.signal?.aborted === true) return [];
       events.push(...page);
       const latest = page.at(-1);
       if (!latest || page.length < EVENT_PAGE_SIZE) return events;
@@ -3272,8 +5266,8 @@ class DefaultSessionRuntime implements SessionRuntime {
    * which is linear in Session length per read and quadratic across a streaming
    * turn. A live entry and a persisted checkpoint now both retain the reducer's
    * complete resumable state and ask only for events after `throughSequence`.
-   * The legacy full snapshot remains the one route that explicitly asks for
-   * every frame.
+   * No route asks for every frame any more: a snapshot reads a bounded window
+   * (VC-315).
    *
    * That makes the invalidation rule the ledger's own contract, and the fold
    * has exactly two durable inputs, each covered by one clause of it:
@@ -3400,20 +5394,19 @@ class DefaultSessionRuntime implements SessionRuntime {
    * bounded by how many Sessions the user can have open at once — which is
    * their choice to make, and which they are already paying for in the
    * renderer.
+   *
+   * A Session with a turn running or about to is exempt on the same terms
+   * (VC-466; {@link #streamingSessions}): a background turn has nobody watching
+   * it, but it reads its own fold at every step, and the exemption ends when
+   * the turn settles.
    */
   #keepHistory(sessionId: string, history: ProjectedHistory): ProjectedHistory {
     this.#histories.delete(sessionId);
     this.#histories.set(sessionId, history);
-    let evictable = 0;
-    for (const key of this.#histories.keys()) {
-      if (!this.#subscribers.has(key)) evictable += 1;
-    }
-    for (const oldest of this.#histories.keys()) {
-      if (evictable <= PROJECTION_CACHE_LIMIT) break;
-      if (this.#subscribers.has(oldest)) continue;
-      this.#histories.delete(oldest);
-      evictable -= 1;
-    }
+    trimCache(this.#histories, PROJECTION_CACHE_LIMIT, () => {
+      const streaming = this.#streamingSessions();
+      return (key) => this.#subscribers.has(key) || streaming.has(key);
+    });
     return history;
   }
 
@@ -3451,6 +5444,37 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 }
 
+class FollowUpBoundaryMovedError extends Error {
+  constructor() {
+    super("The queued message's idle boundary moved before admission");
+  }
+}
+
+/**
+ * What a person reads when a release has no proof either way (VC-675). It must
+ * not say "failed": the prompt may have run, and a resend would run it twice.
+ */
+const FOLLOW_UP_AMBIGUOUS_DETAIL =
+  "This follow-up may have been delivered. Check the transcript before resending.";
+
+/** Delivery may have happened; the row is retained, cancellable, never resent. */
+class FollowUpAmbiguousError extends SessionRuntimeConflictError {
+  constructor(detail = FOLLOW_UP_AMBIGUOUS_DETAIL) {
+    super(detail);
+  }
+}
+
+function followUpFailureDetail(error: unknown): string {
+  return error instanceof FollowUpAmbiguousError
+    ? error.message
+    : `Queued message delivery failed: ${errorMessage(error)}`;
+}
+
+/** Pre-intent release retries: quick for a blip, then sparse, then visible and waiting. */
+const FOLLOW_UP_RETRY_DELAYS_MS: readonly number[] = [1_000, 5_000, 30_000, 120_000, 600_000];
+/** A first attach's preparation ceiling: generous, for a loaded machine making a worktree. */
+const FIRST_ATTACH_PREPARATION_TIMEOUT_MS = 10 * 60_000;
+
 export function createSessionRuntime(ports: SessionRuntimePorts): HostedSessionRuntime {
   return new DefaultSessionRuntime(ports);
 }
@@ -3469,12 +5493,21 @@ function foldHistory(
     events: prior ? [...prior.events, ...events] : events,
     throughSequence: folded.throughSequence,
     checkpoint: folded,
-    completeEvents: prior?.completeEvents ?? checkpoint === null,
   };
 }
 
-function userProvenance(venue: SessionExecutionVenue | null): SessionEventProvenance {
-  return { source: { kind: "user", id: "session-client", detail: null }, venue };
+function userProvenance(
+  venue: SessionExecutionVenue | null,
+  origin?: SessionOrigin,
+): SessionEventProvenance {
+  return {
+    source: {
+      kind: "user",
+      id: "session-client",
+      detail: origin === undefined ? null : { sessionOrigin: origin },
+    },
+    venue,
+  };
 }
 
 function adapterProvenance(

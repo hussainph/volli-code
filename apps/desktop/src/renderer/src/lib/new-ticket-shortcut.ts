@@ -12,7 +12,7 @@ export interface NewTicketKeyEvent {
 }
 
 /**
- * True for a bare, unmodified "c" press: Linear-style single-letter shortcuts
+ * True for a bare, unmodified "c" press: single-letter shortcuts
  * fire on key "c" (or "C" — CapsLock produces an uppercase key with
  * `shiftKey` false, so it must be accepted too) with no meta/ctrl/alt/shift
  * held, not an OS key-repeat, and not mid IME composition (composing keydowns

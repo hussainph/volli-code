@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:net";
+import { basename, join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -9,8 +12,9 @@ import {
 } from "@volli/shared";
 import type { AgentRequest, AgentResponse, VerbEntry } from "@volli/shared";
 
+import { renderCliSuccess } from "./render";
 import { renderParseRefusal, runCli, teachingErrorForParseResult } from "./run";
-import { AgentClientError } from "./client";
+import { AgentClientError, requestAgent } from "./client";
 
 /** One `volli help` against an app whose optional read answers as scripted. */
 const helpWith = async (
@@ -87,7 +91,12 @@ describe("runCli", () => {
       parsed,
       {
         appVersion: "0.1.1",
-        surface: { sessionId: "s1", role: "project", tools: ["session.start"] },
+        surface: {
+          sessionId: "s1",
+          role: "project",
+          tools: ["session.start"],
+          routes: { "session.start": "direct" },
+        },
         surfaceUnknownReason: null,
       },
       lookup,
@@ -586,7 +595,9 @@ describe("runCli", () => {
     expect(requests).toHaveLength(2);
     expect(requests.every((request) => request.cmd === "identify")).toBe(true);
     expect(output[0]).toContain("Resolved Session Role: ticket");
-    expect(output[0]).toContain("Frozen Agent Tool Surface: read, edit, ask_user");
+    expect(output[0]).toContain("read — route unknown");
+    expect(output[0]).toContain("edit — route unknown");
+    expect(output[0]).toContain("ask_user — route unknown");
     expect(output[1]).toContain("Running app: 0.1.1");
   });
 
@@ -1389,5 +1400,276 @@ describe("runCli — doctor", () => {
     });
 
     expect(requests[0]?.args["pathEntries"]).toBeUndefined();
+  });
+});
+
+describe("route metadata at the CLI boundary", () => {
+  it("reads additive identify route metadata over the real newline-delimited socket transport", async () => {
+    const dir = await mkdtemp(join(process.cwd(), ".route-help-"));
+    // Relative spelling stays below Unix socket path limits in long Ticket worktrees.
+    const socketPath = join(basename(dir), "host.sock");
+    const received: AgentRequest[] = [];
+    const server = createServer({ allowHalfOpen: true }, (socket) => {
+      let input = "";
+      socket.setEncoding("utf8");
+      socket.on("data", (chunk: string) => {
+        input += chunk;
+      });
+      socket.on("end", () => {
+        received.push(JSON.parse(input.trim()) as AgentRequest);
+        socket.end(
+          `${JSON.stringify({
+            v: 1,
+            ok: true,
+            data: {
+              agentSurface: {
+                role: "project",
+                tools: ["session.start", "mcp__paper__shot", "mcp__files__read"],
+                routes: {
+                  "session.start": "code",
+                  mcp__paper__shot: "deferred",
+                  mcp__files__read: "hidden",
+                },
+                mcpServerIds: { mcp__paper__shot: "paper", mcp__files__read: "files" },
+              },
+            },
+          })}\n`,
+        );
+      });
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(socketPath, resolve);
+      });
+      const output: string[] = [];
+      const errors: string[] = [];
+      const dependencies = {
+        env: { VOLLI_SOCKET: socketPath, VOLLI_SESSION: "s" },
+        cwd: "/work",
+        stdout: (text: string) => output.push(text),
+        stderr: (text: string) => errors.push(text),
+        readText: async () => "",
+        observe: async () => ({}),
+        request: (path: string, request: AgentRequest) =>
+          requestAgent(path, request, { timeoutMs: 1000 }),
+        helpRequest: (path: string, request: AgentRequest) =>
+          requestAgent(path, request, { timeoutMs: 1000 }),
+        launch: async () => ({ alreadyRunning: true }),
+      };
+      expect(await runCli(["help"], dependencies)).toBe(0);
+      expect(output[0]).toContain("mcp:paper — through codemode only");
+      expect(output[0]).toContain("mcp__files__read — hidden (unavailable)");
+      expect(await runCli(["help", "session", "start"], dependencies)).toBe(0);
+      expect(output[1]).toContain("Tool: session_start — code (through codemode only)");
+      expect(await runCli(["session", "start", "VC-1", "--json"], dependencies)).toBe(2);
+      expect(JSON.parse(errors[0]!).error.next).toContain("Use codemode to call session_start");
+      expect(received).toHaveLength(3);
+      expect(
+        received.every(
+          (request) => request.cmd === "identify" && request.args["agentSurface"] === true,
+        ),
+      ).toBe(true);
+    } finally {
+      if (server.listening) {
+        await new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        );
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("carries optional maps through identify into help without treating future routes as direct", async () => {
+    const text = await helpWith(async () => ({
+      v: 1,
+      ok: true,
+      data: {
+        agentSurface: {
+          role: "project",
+          tools: ["read", "mcp__paper__shot", "future"],
+          routes: { read: "both", mcp__paper__shot: "deferred", future: "future-route" },
+          mcpServerIds: { mcp__paper__shot: "paper" },
+        },
+      },
+    }));
+    expect(text).toContain("read — both (named tool or codemode)");
+    expect(text).toContain("mcp:paper — through codemode only");
+    expect(text).toContain("future — route unknown");
+  });
+
+  it.each([undefined, null, [], "bad", { read: 1 }].map((map) => [map]))(
+    "degrades absent or malformed optional maps (%j) to route unknown",
+    async (map) => {
+      const text = await helpWith(async () => ({
+        v: 1,
+        ok: true,
+        data: {
+          agentSurface: { role: "ticket", tools: ["read"], routes: map, mcpServerIds: map },
+        },
+      }));
+      expect(text).toContain("read — route unknown");
+      expect(text).not.toContain("read — direct");
+    },
+  );
+
+  it.each(["direct", "both", "code", "deferred", "hidden", "future", undefined])(
+    "recovers from the wrong door according to frozen route %s",
+    (route) => {
+      const error = teachingErrorForParseResult(
+        {
+          ok: false,
+          code: "WRONG_DOOR",
+          verb: "session.start",
+          message: "The CLI does not execute this verb.",
+        },
+        {
+          appVersion: "0.2.2",
+          surfaceUnknownReason: null,
+          surface: {
+            sessionId: "s",
+            role: "project",
+            tools: ["session.start"],
+            ...(route === undefined ? {} : { routes: { "session.start": route } }),
+          },
+        },
+      );
+      if (route === "direct" || route === "both") {
+        expect(error.next).toContain("Call the named session_start tool");
+      } else {
+        expect(error.next).not.toContain("Call the named");
+        if (route === "code" || route === "deferred") expect(error.next).toContain("Use codemode");
+        if (route === "deferred") expect(error.next).toContain("searchTools() and describeTool()");
+        if (route === "hidden") expect(error.reason).toContain("hidden (unavailable)");
+        if (route === undefined || route === "future")
+          expect(error.reason).toContain("route unknown");
+      }
+    },
+  );
+});
+
+/** Runs argv against a real socket that answers `ticket.list` with `answer`. */
+const runAgainstBoard = async (
+  argv: string[],
+  answer: (request: AgentRequest) => readonly object[],
+) => {
+  const dir = await mkdtemp(join(process.cwd(), ".ticket-list-"));
+  const socketPath = join(basename(dir), "host.sock");
+  const received: AgentRequest[] = [];
+  const server = createServer({ allowHalfOpen: true }, (socket) => {
+    let input = "";
+    socket.setEncoding("utf8");
+    // The CLI hangs up mid-answer once it passes its limit.
+    socket.on("error", () => undefined);
+    socket.on("data", (chunk: string) => {
+      input += chunk;
+    });
+    socket.on("end", () => {
+      const request = JSON.parse(input.trim()) as AgentRequest;
+      received.push(request);
+      const tickets = answer(request);
+      socket.end(`${JSON.stringify({ v: 1, ok: true, data: { tickets } })}\n`);
+    });
+  });
+  const output: string[] = [];
+  const errors: string[] = [];
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+    const code = await runCli(argv, {
+      env: { VOLLI_SOCKET: socketPath, VOLLI_SESSION: "s" },
+      cwd: "/work",
+      stdout: (text: string) => output.push(text),
+      stderr: (text: string) => errors.push(text),
+      readText: async () => "",
+      observe: async () => ({}),
+      request: (path: string, request: AgentRequest) =>
+        requestAgent(path, request, { timeoutMs: 10_000 }),
+      helpRequest: (path: string, request: AgentRequest) =>
+        requestAgent(path, request, { timeoutMs: 1_000 }),
+      launch: async () => ({ alreadyRunning: true }),
+    });
+    return { code, output: output.join(""), errors: errors.join(""), received };
+  } finally {
+    if (server.listening) {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+    await rm(dir, { recursive: true, force: true });
+  }
+};
+
+describe("ticket list on a board past the response limit (VC-824)", () => {
+  /** 2,000 tickets with 3 KB bodies: about 7 MB with bodies, under 1 MB without. */
+  const rows = Array.from({ length: 2_000 }, (_, index) => ({
+    id: `VC-${index + 1}`,
+    project: "Volli",
+    title: `Ticket number ${index + 1}`,
+    body: `## Evidence\n\n${"x".repeat(3_000)}`,
+    status: index % 3 === 0 ? "done" : "backlog",
+    priority: "medium",
+    labels: index % 2 === 0 ? ["bug"] : [],
+    usesWorktree: true,
+    harness: null,
+    worktreePath: null,
+    branch: null,
+    baseBranch: null,
+    badge: null,
+    createdAt: index,
+    updatedAt: index,
+  }));
+  const withoutBody = rows.map(({ body: _body, ...row }) => row);
+
+  /** host-core's answer: `body: false` drops each row's body. */
+  const currentApp = (request: AgentRequest) =>
+    request.args["body"] === false ? withoutBody : rows;
+
+  it("prints the unchanged human table without asking for the bodies it never shows", async () => {
+    const result = await runAgainstBoard(["ticket", "list"], currentApp);
+
+    expect(result.errors).toBe("");
+    expect(result.code).toBe(0);
+    expect(result.received[0]?.args["body"]).toBe(false);
+    // The table the full rows would have printed, had they fit.
+    expect(result.output).toBe(renderCliSuccess("ticket.list", { tickets: rows }, { json: false }));
+    expect(result.output.split("\n")[0]).toBe("VC-1  Done  Ticket number 1  [bug]");
+  });
+
+  it("prints the same table from an older app that ignores body: false", async () => {
+    // An app build before this one ignores the selector and sends full rows.
+    // On a board that fits, the table cannot tell the difference.
+    const small = rows.slice(0, 20);
+    const older = await runAgainstBoard(["ticket", "list"], () => small);
+
+    expect(older.code).toBe(0);
+    expect(older.received[0]?.args["body"]).toBe(false);
+    expect(older.output).toBe(renderCliSuccess("ticket.list", { tickets: small }, { json: false }));
+    expect(older.output).toBe(
+      renderCliSuccess("ticket.list", { tickets: withoutBody.slice(0, 20) }, { json: false }),
+    );
+  });
+
+  it("keeps bodies in --json and opts out of them with --no-body", async () => {
+    const summary = await runAgainstBoard(["ticket", "list", "--json", "--no-body"], currentApp);
+    expect(summary.code).toBe(0);
+    expect(summary.received[0]?.args["body"]).toBe(false);
+    expect(JSON.parse(summary.output)).toEqual({ tickets: withoutBody });
+
+    const full = await runAgainstBoard(["ticket", "list", "--json"], currentApp);
+    expect(full.received[0]?.args).not.toHaveProperty("body");
+    expect(full.code).toBe(1);
+    const error = (JSON.parse(full.errors) as { error: Record<string, unknown> }).error;
+    expect(error).toMatchObject({
+      code: "RESPONSE_TOO_LARGE",
+      message: "The app's answer to `volli ticket list` exceeded the CLI's 4 MiB response limit.",
+    });
+    // Filters first: they work against any app build, --no-body only a matching one.
+    expect(error["next"]).toMatch(
+      /^Narrow it with `--status.*--limit.*matching app build.*--no-body/s,
+    );
+    expect(full.errors).not.toMatch(/compatible build|SOCKET_PROTOCOL/);
   });
 });

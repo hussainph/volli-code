@@ -96,18 +96,24 @@ returns only tickets matching both.
 ### volli ticket show
 
 ```sh
-volli ticket show <id> [--events <n>] [--comments <n>] [--comments-only]
+volli ticket show <id> [--events <n>] [--comments <n>] [--comments-only] [--full]
 ```
 
-The full ticket, optionally with recent history and comments.
+The full ticket, optionally with recent history and comments. Comment bodies
+print in full. Other log prose is capped at 1,000 characters; `--full` or `--json`
+returns the rest. Prose stays quoted as untrusted data.
 
 ### volli ticket events
 
 ```sh
-volli ticket events <id> [--limit <n>]
+volli ticket events <id> [--limit <n>] [--full]
 ```
 
-The append-only history of a ticket.
+The append-only history of a ticket. `--full` lifts text caps; `--json` is always
+uncapped. `session_started` and `session_resumed` print the Session's short
+handle inline, and `by=` names who asked: a person, an Automation with its run
+id, a Session, or Volli itself. A resume with no recorded origin is
+`by=unknown`.
 
 ### volli ticket brief
 
@@ -140,14 +146,16 @@ skips creating a worktree for the ticket.
 ```sh
 volli ticket update <id> [--title <text>]
                          [--body <text> | --body-file <path>
-                          | --append <text> | --edit <old> <new>]
+                          | --append <text> | --append-file <path> | --edit <old> <new>]
                          [--priority low|medium|high]
                          [--add-label <name>]... [--remove-label <name>]...
                          [--harness <harness>] [--base <branch>] [--dry-run]
 ```
 
-Pass exactly one body mutation. `--append` adds to the end; `--edit` replaces
-the first occurrence of `<old>` with `<new>`.
+Pass exactly one body mutation. `--append` adds to the end; `--append-file` reads
+that text locally from a file. `--edit` replaces the first occurrence of `<old>`
+with `<new>`. Value options accept `--opt=value`, including values starting with
+`--`: use `--append="--- x"` for a Markdown separator.
 
 ### volli ticket move
 
@@ -155,7 +163,9 @@ the first occurrence of `<old>` with `<new>`.
 volli ticket move <id> --to <column> [--dry-run]
 ```
 
-Columns are `backlog`, `todo`, `doing`, `needs-review`, and `done`. Moving a
+Columns are `backlog`, `todo`, `doing`, `needs-review` (or `review`), and `done`.
+Case is ignored, and board labels such as `"Needs Review"` and `needs_review`
+work here and in `ticket list --status` and `ticket create --status`. Moving a
 ticket updates the board and picks no model by itself. The move counts as a
 **Deliberate move**, so it starts a Session only when the destination column
 has an armed, enabled Automation.
@@ -247,10 +257,38 @@ parts of one file may still merge cleanly. This command is read-only.
 
 ```sh
 volli session list [--project <name>] [--ticket <id>]
+                   [--all] [--state <s>[,<s>...]] [--since <when>]
 ```
 
-Active terminal and chat Sessions, each with its title and short handle.
-`session peek` takes the short handle.
+Active and recent terminal and chat Sessions, each with its title and short
+handle. By default: `working`, `waiting`, `interrupted`, terminal `running`,
+or an idle Session with pending subagents at any age, plus activity in the last 24 hours. `--since` replaces that activity
+window with a look-back (`7d`, `24h`, `90m`) or RFC 3339 instant. `--all` removes
+the window. `--state` intersects those filters using the exact printed words:
+`working`, `waiting`, `idle`, `stopped`, `interrupted`, `running`, `exited`.
+Project and ticket filters still apply.
+
+Rows sort by most recent activity. Text ends with an older-row count when the
+activity window omitted rows; JSON keeps `sessions` and adds `hidden` for that
+count, after the explicit project, ticket and state filters. This default filter also
+applies to `--json`. Pending delegated subagents appear on chat rows and in
+`session peek`, even when a child is filtered out. Terminal and chat rows say who
+started them unless a person did, and who last reattached them. Reattachment is
+visible before any new message or turn.
+
+### volli session show
+
+```sh
+volli session show <handle>
+```
+
+Session metadata without a transcript: title, role, ticket, project, state,
+who started it (a person, an Automation with its run id, or a parent Session),
+who last reattached it and its last few successful reattachments. Chat details
+also name the latest turn's sender, parent and children with states, pending
+subagents, model and reasoning/tier. Both include usage/cost and creation/last-activity
+ages. The reattacher and the next message's sender are separate facts. `session show`, `peek`, and `answer` take the same
+short handles.
 
 <Aside type="note" title="Starting a Session is not a shell command">
   There is no `volli session start` at a terminal. A person starts a Session in
@@ -279,9 +317,9 @@ volli session peek <handle> [--lines <n>]
 Shows what a Session is doing, from its short handle, so one agent can see
 another's work without attaching to it.
 
-A terminal returns its recent output. A chat returns its activity state and a
-compact transcript tail, with one line per message and truncated tool calls and
-text.
+A terminal returns its recent output. A chat returns its activity state, who
+started it and, after a stop, who resumed it, then a compact transcript tail,
+with one line per message and truncated tool calls and text.
 
 `--lines` sets trailing terminal lines (60 by default) or chat messages (12).
 Keep it narrow: a peek is spent out of the asking agent's own context.

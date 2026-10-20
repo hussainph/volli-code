@@ -4,23 +4,27 @@
  * compaction entry. History stays on disk and only provider context is elided.
  */
 
+import { safeStopMessage, type DiagnosticRedactionPort } from "./safe-diagnostic";
+
 import {
   compact,
   createBranchSummaryMessage,
   createCompactionSummaryMessage,
+  shouldCompact,
+  type CompactionSettings,
+} from "./harness-compaction";
+import {
   insertEntry,
   setValue,
-  shouldCompact,
-  type AgentMessage,
   type CompactionEntry,
-  type CompactionSettings,
   type CustomEntry,
   type Entry,
   type MessageEntry,
-  type JsonValue,
   type NewEntry,
   type Session,
-} from "@earendil-works/pi-agent-core";
+} from "./harness-session";
+import { type AgentMessage } from "@earendil-works/pi-agent-core";
+import { type JsonValue } from "@earendil-works/chord";
 import type { Api, Model, Models, Tool, Usage } from "@earendil-works/pi-ai";
 import type { SessionUsage } from "@volli/shared";
 import { prepareModelCompaction } from "./compaction-preparation";
@@ -37,7 +41,7 @@ import { estimateContextTokens, projectedContextTokens } from "./token-counting"
 import { piContext, type Context } from "./pi-context";
 import { withoutReasoning } from "./reasoning";
 import { MAIN_BRANCH_TIP } from "./sidecar-storage";
-import { sanitizeDiagnostic, sessionUsageFrom } from "./transcript";
+import { sessionUsageFrom } from "./transcript";
 import { systemHead, withSystemHead } from "./transcript-context";
 
 /**
@@ -145,7 +149,7 @@ export function estimatedContextTokens(
  * prices the live array: the prompt once, each declared tool once however
  * many system messages declare it. There is no second spelling to hand the
  * estimator, so `tokensBefore` cannot count the prompt or a declaration
- * twice (VC-421 review, findings A and B). A caller with neither prompt nor
+ * twice (VC-421). A caller with neither prompt nor
  * tools prices the bare conversation, which is what Pi would send for it.
  */
 function requestTranscript(input: CompactionInput, path: readonly Entry[]): AgentMessage[] {
@@ -412,6 +416,7 @@ export type CompactionOutcome =
   | { kind: "failed"; message: string; usage?: SessionUsage | null };
 
 export interface CompactionInput {
+  credentialRedaction?: DiagnosticRedactionPort;
   /** The Pi session this attachment owns; the entry is appended to its main lane. */
   sidecar: Session;
   /** The durable branch, already read through {@link conversationPath}. */
@@ -553,6 +558,7 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
     prefix.length === 0
       ? { kind: "unsupported" as const }
       : await compactProviderNative({
+          credentialRedaction: input.credentialRedaction,
           model: input.model,
           models: sessionModels,
           messages: prefix,
@@ -616,7 +622,7 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
   if (!result.ok)
     return {
       kind: "failed",
-      message: sanitizeDiagnostic(result.error.message),
+      message: safeStopMessage(result.error.message, input.credentialRedaction),
       ...(nativeUsage
         ? {
             usage: sessionUsageFrom(
@@ -633,7 +639,10 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
   // summary that replaced it. Sanitized, and additive to whatever Pi put in
   // `details` — Pi reads its own file lists out of that object and ignores
   // keys it did not write.
-  const nativeFailure = native.kind === "failed" ? native.message : undefined;
+  const nativeFailure =
+    native.kind === "failed"
+      ? safeStopMessage(native.message, input.credentialRedaction)
+      : undefined;
   const provisioned: NewEntry<CompactionEntry> = {
     type: "compaction",
     id: input.sidecar.idGenerator.next(),

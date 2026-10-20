@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import {
   APPEARANCE_APP_STATE_KEY,
   DEFAULT_CANVAS,
+  deriveCanvasTokens,
   THEME_APP_STATE_KEY,
   windowBackground,
   type Appearance,
@@ -22,6 +23,7 @@ import {
   type ThemeGateway,
   type ThemeProjectScope,
 } from "./theme";
+import { remoteProject } from "./remote-project.test-support";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
@@ -986,7 +988,22 @@ describe("the first-paint hint", () => {
     expect(gateway.setFirstPaint).toHaveBeenCalledWith({
       appearance: "light",
       background: windowBackground(TEAL, "light"),
+      planeBackground: deriveCanvasTokens(TEAL, "light")["--background"],
     });
+  });
+
+  // Browser Tab planes are drawn in the `--background` rung, a different color
+  // from the window edge: painting the edge color there leaves a slab of base
+  // fill inside the pane (VC-302).
+  it("reports the plane color apart from the window edge", async () => {
+    const { store, gateway } = freshStore();
+
+    store.getState().hydrateGlobal(appState(TEAL, "dark"));
+    await settle();
+
+    const [report] = vi.mocked(gateway.setFirstPaint).mock.calls.at(-1)!;
+    expect(report.planeBackground).toBe(deriveCanvasTokens(TEAL, "dark")["--background"]);
+    expect(report.planeBackground).not.toBe(report.background);
   });
 
   it("surfaces a failed hint write rather than letting it stop silently", async () => {
@@ -1272,6 +1289,24 @@ describe("the default gateway", () => {
       ]),
     );
     expect(calls.find(([name]) => name === "setProjectCanvas")?.[1]).toEqual(["p1", TEAL]);
+  });
+
+  // VC-711: a remote project's own canvas is its host's; this Mac reads the
+  // global scope for it and writes no project row it does not hold.
+  it("asks nothing of this Mac about a remote project's own canvas", async () => {
+    const calls = stubBridge();
+    const undo = remoteProject("r1");
+    try {
+      const store = createThemeStore();
+      await store.getState().hydrate({ projectId: "r1", canvas: null, appearance: null });
+      await store.getState().setProjectCanvas("r1", TEAL);
+      await store.getState().setProjectAppearance("r1", "dark");
+      await settle();
+      expect(calls.filter(([name]) => name.startsWith("setProject"))).toEqual([]);
+      expect(calls.find(([name]) => name === "state")?.[1]).toEqual([{}]);
+    } finally {
+      undo();
+    }
   });
 });
 

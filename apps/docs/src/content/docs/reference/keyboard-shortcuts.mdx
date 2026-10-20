@@ -116,6 +116,14 @@ See [Peek at a Session](/guides/sessions/#peek-at-a-session-without-opening-it).
 Queued messages also have **Steer** and **Remove** controls. See
 [Use a chat](/guides/sessions/#send-messages-while-the-agent-works).
 
+## Running commands
+
+| Shortcut | Action | When |
+| --- | --- | --- |
+| `⌃⇧B` (Control+Shift+B) | Move the newest running bash command to the background | Its Session's transcript or composer has focus, and a shell slot is available |
+
+The command keeps running. Its transcript row also has **Move to background**.
+
 ## File editor
 
 | Shortcut | Action |
@@ -149,6 +157,22 @@ announcements.
 
 Font-size shortcuts change the focused terminal only. To scale the whole app,
 move focus out of the terminal first.
+
+## Browser Tab
+
+These work while a Browser Tab's page has focus, including inside a text field
+on the page.
+
+| Shortcut | Action |
+| --- | --- |
+| `⌘K` | Open the command palette |
+| `⌘1` to `⌘9` | Switch to the first through ninth project in the rail |
+| `⌃⌘` + `←` / `→` / `↑` / `↓` | Move focus between panes |
+| `⌘W` | Close this Browser Tab |
+| `⌘L` | Leave the page and select this tab's Address field |
+
+Every other key goes to the page, including `Esc`, `Tab`, `⌘[` and `⌘]`, so
+the page's own dialogs, forms and editors keep working.
 
 ## Canvas editor
 

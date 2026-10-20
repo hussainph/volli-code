@@ -42,6 +42,14 @@ cannot ask you a question through `ask_user`.
 Run `volli help` inside the Session to see the tools it holds. Prompt
 instructions cannot grant a missing tool.
 
+## Deterministic boundaries
+
+Host requests are checked against per-actor coordination, transcript disclosure,
+and awaitable policy. Unauthenticated socket callers are read-only by default.
+Workspace path checks and secret redaction remain independent of that policy.
+Ordinary tool calls do not go through a model permission judge. Delegation
+budgets and existing confirmations still use their normal question cards.
+
 ## Commands and signals
 
 | Action | Effect |

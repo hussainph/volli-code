@@ -9,7 +9,7 @@ this document drifts.
 **The principle:** cohesion is structural, not disciplinary. Surfaces compose shared tokens and
 primitives instead of hand-rolling containers and px values — a new surface is consistent by
 default. Whitespace is deliberate: content draws the eye by sitting on a bounded measure, not by
-filling every pixel (the Linear lesson — maximal width reads as noise, not as density).
+filling every pixel. An unbounded reading surface increases visual noise rather than useful density.
 
 ## The two-tier surface model
 
@@ -32,7 +32,7 @@ Every surface declares which tier it is; the tiers may not be mixed ad hoc.
 
 | Token | Value | Utility | Meaning |
 |---|---|---|---|
-| `--container-content` | `45rem` (720px) | `max-w-content` | The canonical reading measure. Chosen over Linear's ~660px for code-heavy ticket markdown. |
+| `--container-content` | `45rem` (720px) | `max-w-content` | The canonical reading measure for code-heavy ticket markdown. |
 | `--container-workbench` | `80rem` (1280px) | `max-w-workbench` | The Tier B ceiling, for surfaces that are columns but carry tables (Settings, Configure). |
 | `--spacing-gutter` | `1.5rem` (24px) | `px-gutter` etc. | The unified page-edge padding every surface aligns to. |
 
@@ -96,9 +96,8 @@ narrows they compress to the 24px gutter floor before text ever reflows.
 The main content area is a **floating card**: `rounded-xl`, hairline `border-border`, `m-2`
 (8px) on the theme-derived rail backdrop (`--rail`), applied once on `SidebarInset` in
 `app-shell.tsx`. Every page — the always-mounted sessions layer included — renders inside it, so
-the workspace reads as an object with edges instead of an edge-to-edge slab. This amends the
-earlier flat chrome-band treatment (decision #31); the chrome bar and workspace rail still form
-the surrounding "L", whose color and contrast come from the active theme.
+the workspace reads as an object with edges instead of an edge-to-edge slab. The chrome bar
+and workspace rail form the surrounding "L", whose color and contrast come from the active theme.
 
 ## Composer stack
 
@@ -124,6 +123,10 @@ or any of the project's Automations), and selection never submits.
 badge is printed against a single menu row. Model and effort appear only for chat
 kickoff; an Automation uses its saved Runtime. Launch mode is per-open and resets
 when retargeting projects; the ticket draft itself still survives closing.
+
+Create & start leaves the current workspace in place while the Session starts.
+Create more only controls whether the composer resets for another ticket or
+closes; opening the new ticket or Session is a separate, explicit action.
 
 **Those three commits are why this tray folds early.** They take ~215px of the
 settings' own line where a chat footer spends ~100px on one send key, so at the
@@ -151,8 +154,7 @@ thumbnails never touch the tray they sit on.
 
 ### Prompt chrome — writing sheet and control tray (VC-335)
 
-The first pass unified controls but still looked like the old flat box. The follow-up makes
-prompt writing a distinct object: an opaque writing sheet, a tinted lower tray, and a fine
+Prompt writing is a distinct object: an opaque writing sheet, a tinted lower tray, and a fine
 accent edge that catches at opposing corners. `PROMPT_SURFACE` in `chat/composer-chrome.ts`
 owns the shell; `globals.css` owns its material. Every color comes from generated theme tokens.
 There is no backdrop blur, animated glow, or focus-triggered shell change.
@@ -433,11 +435,9 @@ Labels are the one place a pill run survives, because a label *is* removable and
 project labels, additive left to right, each with its own remove target, and a compact **+** door
 (`Add label` for assistive technology) offering unapplied labels or creation of a new name.
 
-**Now is ordered by where attention goes, most often first.** The first pass ordered it by kind —
-what the Ticket *is*, what can be *run* on it, what is *happening* on it — and that put a
-rarely-pressed list of Automations above the roster of live Sessions, which is the one block on the
-page a person consults every few minutes and the most direct way to the right chat. Taxonomy beat
-frequency; the comparison scratch drew the cost, and the order is by frequency now.
+**Now is ordered by attention frequency.** Properties identifies the Ticket,
+Sessions provides the frequent route to live work, and Automations follows.
+The usage and worktree facts remain pinned rather than competing in the scroller.
 
 | # | Block | What it is | Object kind |
 |---|---|---|---|
@@ -494,9 +494,8 @@ the movement entirely — body and caret both — and a closing body is `inert` 
 close, handing focus back to the trigger if it held any. A body that opens under an eyebrow grows
 down into the scroller; a body that opens under a pinned row grows **up** into the room the
 scroller gives back. Either way the thing the pointer is on stays under the pointer, and a second
-press lands where the first did. The alternative for a footer — header above body, the row rising
-by the body's height — reads conventionally and moves the target out from under the hand; it was
-drawn and rejected. A fold is a **global preference** (`railFolds`), not a per-Ticket state: it is
+press lands where the first did. Putting a footer header above its body moves the target as it unfolds, so the
+footer keeps the trigger fixed instead. A fold is a **global preference** (`railFolds`), not a per-Ticket state: it is
 how a person reads the rail. Every fold rests closed. *This is not the retired drawer*: nothing
 bleeds past the section's inset, the closed state still shows the rows that matter, and only the
 record folds.
@@ -544,8 +543,7 @@ not a second `Ticket files` / `Project files` title beneath an already-labelled 
 root or current path leads a compact row with New File and filter icons alongside; the path is
 the way Up when inside a folder. The filter field appears below only while open, and read/retry
 feedback occupies space only when needed. Below is one flat current-folder listing of one-line
-36px rows: the second line each row used to carry was its parent path, which the header already
-names.
+36px rows. Do not repeat the parent path on every row: the header already names it.
 
 The Ticket adds one **paperclip menu**, not a permanent Attachments heading or pill strip. The
 menu lists attached files and carries attachment/removal actions where this host may mutate them;
@@ -562,9 +560,8 @@ semantic glyphs and accessible status names, not a repeated status word beside e
 Counts, rename provenance and the independent Updated marker remain: they say something the
 status glyph does not.
 
-**A navigator remembers where it was, per checkout.** The rail draws one page at a time, so a
-glance at Now used to walk the listing back to the repository root and delete the words typed into
-Search — and the words were the work. The folder, the filter and its query, and the search query
+**A navigator remembers where it was, per checkout.** Switching rail pages must not reset the
+folder or discard a query. The folder, filter and its query, and search query
 are remembered per scope for this run of the app (`files/navigator-scope-state.ts`), keyed by
 project and ticket. It is plain data, bounded and ephemeral: nothing about the memory keeps a read,
 a watch or a search alive behind an unmounted page.
@@ -581,35 +578,37 @@ true a second ago are worth more than a skeleton over them. What an unconfirmed 
 *Run*, not the reading: the block never presses what it has not confirmed at the current planning
 version.
 
-**A row's right edge says one thing.** An automation row used to trail `Manual only · Doing`, and
-at 300px the phrase cost the name half its width (`Review every b…`). The name is what a reader
-presses, the qualifier is what they check: the right edge now says only the column (or `Armed`),
-the switched-off fact moved into the bolt — `LightningSlash`; fill-vs-outline already said
-armed-or-not, so one glyph says all three states — and the words moved into the row's title and
-accessible name. The name keeps a `min-w-24` floor: a qualifier must not outlive the thing it
-qualifies.
+**A row's right edge says one thing.** The Automation name is what a reader presses;
+the qualifier is what they check. The right edge says only the column or `Armed`.
+`LightningSlash` marks switched-off state; fill versus outline marks armed versus
+unarmed. Put the full state in the row's title and accessible name. Keep a
+`min-w-24` floor for the name: a qualifier must not outlive the thing it qualifies.
 
 **Every act wears one costume, and a row is not an act.** `RAIL_CONTROL` (`outline`, the sidebar's
 border, a `/30` wash, `shadow-raised`) is the recipe for every button a rail page presses — the
 worktree footer's publish split, its `⋯`, its PR link. A control is sized to its label and parked
 at the left, never stretched across the column. Everything else that is pressable is a `ListRow`,
-and a row **opens the thing it names — it does not spend anything**. The Automation row is the case
-that fixed the rule: its press used to *be* the launch, which made it the one place in the app
-where a single click spent a Session on saved instructions that were not on screen. A press now
-opens an anchored inspection beside the row (a non-modal popover: no scrim, light-dismiss, Escape)
-carrying the three things a launch is decided from — the saved instructions, the model this
-invocation runs on, and one explicit, labelled Run. Right-click opens the same inspection rather
-than a second, differently-shaped menu; neither route starts anything by itself. Now itself has no
-button any more: **Run once is gone** from the rail. Stripped to what it did, it minted a chat Session with a typed first
-message, in the background, wearing the bolt — `+ Chat ▾` with a worse text box and a
-Runs-history row named "Run once" — and the rail was its only host. Only saved records are run
-from the rail; a one-off is a chat and typing. (This reverses VC-112's "One-time work" for this
-surface; main still starts an Unbound Run for the CLI.)
+and a row **opens the thing it names — it does not spend anything**. An Automation row
+opens an anchored inspection beside it (non-modal popover: no scrim,
+light-dismiss, Escape), showing the saved instructions, the invocation's model,
+and one explicit labelled Run. Right-click opens the same inspection, not a
+second differently-shaped menu; neither route starts a Session by itself.
+Only saved records are run from the rail; a one-off is a chat and typing.
+The CLI can still start an Unbound Run.
 
 **What a block does not draw.** Runs are Sessions, so they are listed once, in the roster, wearing
 the bolt (`SessionProvenanceMark`) — never a second time under Automations. The usage footer's
 face is the figure, the token count and a caret; the rest is one fold behind it, not lines on the
 page.
+
+**Session origin is a mark, never a second title (VC-517).** Every Session provenance mark is a
+fixed, non-shrinking 12px bold-outline bolt in `text-primary`, without a pill, border or animation.
+It prints no Automation name, even when a Session is renamed: the title owns the width, and the
+full origin stays in the accessible label and the surface's peek or hover line. Existing slots
+stay put — Active and palette rows trail the title, Previous and Ticket roster rows lead it,
+tabs use their badge slot, and Home's roster trails the title. User-started and Session-started
+work gains no glyph. This is provenance, not current state: armed/fill and switched-off/slash
+remain the vocabulary of saved Automation records, whose names stay visible.
 
 **Cost notation.** A hedged figure carries a small word *after* the money, a step down and muted
 (`UsageCostFigure`): `$8.42 est.` for a catalogue estimate or a mixed basis, `$8.42 unverified`
@@ -644,17 +643,13 @@ drift).
 checkout** (`home-rail-footer.tsx`) is under all three: one 42px row, edge-to-edge targets from the
 rail's own gutters, the branch opening the identity and the fact opening the reading, folding
 **upward** into the room the scroller gives back, on the Ticket rail's own `railFolds.worktree`
-preference. It was the bottom half of a card on Now, which put "which tree am I about to change"
-only on the page a reader was not on. It draws two read states rather than the grammar's four,
+preference. Checkout identity remains visible on every rail page. It draws two read states rather than the grammar's four,
 because the venue store keeps no pending flag beside its last-good reading: a first read, and a
 read that failed.
 
-**The Session-identity card is retired from the rail.** The model, tier, effort and activity of
-whatever chat is in front were a second answer to what the tab and the composer's own pill already
-say, and the block stood between the page's title and the roster the page exists for; the tree it
-named is the footer above. `home-session-card.tsx` survives as a component with its own tests and
-the `home-rail-now` scratch, mounted by no app surface — and it left two rules behind that every
-rail still keeps.
+**Do not duplicate Session identity in the rail.** The tab and composer's pill
+already name the current chat's model, tier, effort and activity. Checkout
+identity belongs in the footer; the roster belongs beneath the page title.
 
 **A model is drawn, never spelled.** The vendor's mark (`models/model-identity.tsx`, the one the
 composer pill, the picker and Settings wear) leads the catalogue's name for it — "Claude Opus 4.1",
@@ -690,7 +685,7 @@ governs every 4px, because sixteen distinct steps is what governing only the pag
 ## Alignment details worth keeping
 
 - The body editor bleeds its hover block into the gutter (`-mx-4` + `px-4`) so body **text**
-  left-aligns exactly with the title on the column edge (Notion-style). Boxed elements (comment
+  left-aligns exactly with the title on the column edge. Boxed elements (comment
   cards, the composer) align their **borders** to the column edge instead.
 - Terminals, file editors, and diffs are Tier B planes inside the ticket surface: full-bleed to
   the card edge (terminals) or gutter-aligned where the workbench benefits from it.

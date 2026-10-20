@@ -19,7 +19,7 @@ The short version:
 ```sh
 "/Applications/Volli Code.app/Contents/Resources/licensing/relink-libvips.sh" \
   --app "$HOME/Volli Code.app" \
-  --dylib "$HOME/build/libvips-cpp.8.18.6.dylib"
+  --dylib "$HOME/build/libvips-cpp.8.18.7.dylib"
 ```
 
 Everything below is why that script does what it does, and what to do when it does not fit.
@@ -54,7 +54,7 @@ You cannot sign anything with our Team ID — that is the point of a Team ID. So
 built is normally refused by the operating system, with this error:
 
 ```
-Library not loaded: @rpath/libvips-cpp.8.18.6.dylib
+Library not loaded: @rpath/libvips-cpp.8.18.7.dylib
   Reason: ... (code signature in ... not valid for use in process:
   mapping process and mapped file (non-platform) have different Team IDs)
 ```
@@ -79,7 +79,7 @@ the one entitlement that admits a differently-signed library, then re-signs the 
 an ad-hoc signature.
 
 ```sh
-./relink-libvips.sh --app "$HOME/Volli Code.app" --dylib ~/build/libvips-cpp.8.18.6.dylib
+./relink-libvips.sh --app "$HOME/Volli Code.app" --dylib ~/build/libvips-cpp.8.18.7.dylib
 ```
 
 Work on a **copy** of the app, not on the one in `/Applications`, unless you mean to modify
@@ -110,7 +110,7 @@ ID, and no entitlement change is needed:
 
 ```sh
 ./relink-libvips.sh --app "$HOME/Volli Code.app" \
-  --dylib ~/build/libvips-cpp.8.18.6.dylib \
+  --dylib ~/build/libvips-cpp.8.18.7.dylib \
   --mode team --identity "Developer ID Application: Your Name (TEAMID)"
 ```
 

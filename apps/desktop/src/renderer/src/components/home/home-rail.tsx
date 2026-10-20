@@ -59,7 +59,7 @@ import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import type { Project } from "@volli/shared";
+import { sessionProvenanceHoverLine, type Project } from "@volli/shared";
 
 import { FileSearchPanel } from "@renderer/components/files/search-panel";
 import { HomeFilesPanel } from "@renderer/components/home/home-files-panel";
@@ -88,6 +88,8 @@ import type { SplitDragPayload } from "@renderer/components/split/split-drop";
 import { ListRow, ListRowSkeleton } from "@renderer/components/ui/list-row";
 import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { StatusDot } from "@renderer/components/ui/status-dot";
+import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
+import { useSessionProvenance } from "@renderer/hooks/use-session-provenance";
 import {
   HOME_RAIL_MODES,
   HOME_RAIL_MODE_LABELS,
@@ -110,9 +112,11 @@ import {
   projectSessionListingPending,
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
+import { useRemoteSessionsUnavailable } from "@renderer/stores/remote-session-availability";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { RAIL_NARROW_MAX_WIDTH, useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { LocalOnly } from "@renderer/components/hosts/local-only";
 
 /**
  * Every rail block is the same shape at the same inset — one seam, spelled
@@ -195,29 +199,38 @@ export function HomeRail({
                 turned off or nothing was metered. Now's alone: the other pages
                 are navigators, and a spend figure under a folder listing is a
                 fact about neither the folder nor the file. */}
-            <HomeUsageRailFooter projectId={project.id} sessionId={parseHomeChatTab(activeTabId)} />
+            <LocalOnly projectId={project.id} fallback={null}>
+              <HomeUsageRailFooter
+                projectId={project.id}
+                sessionId={parseHomeChatTab(activeTabId)}
+              />
+            </LocalOnly>
           </>
         ) : null}
         {mode === "files" ? (
-          <HomeFilesPanel
-            project={project}
-            onPreviewFile={(relPath) =>
-              useWorkspaceStore.getState().previewHomeFile(project.id, relPath)
-            }
-            onPinFile={(relPath) => useWorkspaceStore.getState().pinHomeFile(project.id, relPath)}
-          />
+          <LocalOnly projectId={project.id}>
+            <HomeFilesPanel
+              project={project}
+              onPreviewFile={(relPath) =>
+                useWorkspaceStore.getState().previewHomeFile(project.id, relPath)
+              }
+              onPinFile={(relPath) => useWorkspaceStore.getState().pinHomeFile(project.id, relPath)}
+            />
+          </LocalOnly>
         ) : null}
         {mode === "search" ? (
           // A match opens in the same replaceable preview slot a navigator row
           // does (decision #56) — the line it lands on is the search panel's
           // own business, through `editor/reveal-line.ts`.
-          <FileSearchPanel
-            scope={{ kind: "home", projectId: project.id }}
-            root={project.name}
-            onOpenMatch={(relPath) =>
-              useWorkspaceStore.getState().previewHomeFile(project.id, relPath)
-            }
-          />
+          <LocalOnly projectId={project.id}>
+            <FileSearchPanel
+              scope={{ kind: "home", projectId: project.id }}
+              root={project.name}
+              onOpenMatch={(relPath) =>
+                useWorkspaceStore.getState().previewHomeFile(project.id, relPath)
+              }
+            />
+          </LocalOnly>
         ) : null}
       </section>
       {/* The Main checkout, under EVERY page (VC-406): the branch, and the one
@@ -225,7 +238,9 @@ export function HomeRail({
           folded above it. Outside the tabpanel because it is not a page's
           content — it is true of the project whichever page is up, and Files
           and Search are the pages where "which tree is this" is asked most. */}
-      <HomeCheckoutFooter projectId={project.id} />
+      <LocalOnly projectId={project.id} fallback={null}>
+        <HomeCheckoutFooter projectId={project.id} />
+      </LocalOnly>
     </div>
   );
 }
@@ -293,6 +308,7 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
   // sentence for the length of the read. The store already keeps this bit;
   // this block is one of the surfaces that used to leave it unread.
   const listingState = useProjectSessionsStore((state) => state.listingState[projectId]);
+  const sessionsUnavailable = useRemoteSessionsUnavailable(projectId);
   // Rows survive a failed refresh in the store, so "has this ever landed" is a
   // question about the CACHE, not about the state word: a refresh that failed
   // leaves last-good rows, and those rows keep their place with the heading
@@ -432,8 +448,19 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
           Sessions. The toast has the bridge detail; this line keeps the rail
           from claiming that a failed read proved the list empty, and carries
           the one action that can change it. */}
-      <RailReadFaultBody feedback={feedback} onRetry={retry} testId="home-sessions-error" />
-      {live.length === 0 && earlier.length === 0 && canClaimEmpty ? (
+      {/* A host that grants this window no Session features (VC-713): said in
+          its name, never as a failure with a Retry that cannot change it. */}
+      {sessionsUnavailable !== null ? (
+        <p className={EMPTY_INLINE} data-testid="home-sessions-unavailable">
+          {sessionsUnavailable}
+        </p>
+      ) : (
+        <RailReadFaultBody feedback={feedback} onRetry={retry} testId="home-sessions-error" />
+      )}
+      {sessionsUnavailable === null &&
+      live.length === 0 &&
+      earlier.length === 0 &&
+      canClaimEmpty ? (
         <p className={EMPTY_INLINE}>{searching ? "No matching sessions" : "No sessions yet"}</p>
       ) : null}
       {live.length > 0 ? (
@@ -499,6 +526,8 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
  * no room for the state.
  */
 function BoardSessionRow({ projectId, row }: { projectId: string; row: HomeSessionRow }) {
+  const provenance = useSessionProvenance(projectId, row.id);
+  const provenanceLine = sessionProvenanceHoverLine(provenance);
   const Glyph = row.kind === "chat" ? ChatCircleIcon : TerminalWindowIcon;
   return (
     <li>
@@ -513,6 +542,8 @@ function BoardSessionRow({ projectId, row }: { projectId: string; row: HomeSessi
           />
         }
         primary={row.title}
+        primaryTrailing={<SessionProvenanceMark provenance={provenance} />}
+        title={provenanceLine === null ? undefined : `${row.title}\n${provenanceLine}`}
         secondary={
           <span className="flex min-w-0 items-center gap-1 text-label text-muted-foreground">
             <StatusDot state={row.state} />

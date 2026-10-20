@@ -4,9 +4,14 @@ import { liveWorkLines } from "./live-work-copy";
 
 describe("liveWorkLines", () => {
   it("says nothing when nothing is at stake", () => {
-    expect(liveWorkLines({ busyCommands: [], openAgentSessions: 0, unsavedDrafts: [] })).toEqual(
-      [],
-    );
+    expect(
+      liveWorkLines({
+        busyCommands: [],
+        openAgentSessions: 0,
+        backgroundShells: 0,
+        unsavedDrafts: [],
+      }),
+    ).toEqual([]);
   });
 
   it("names each surface separately, with counts — never one blended 'live sessions' number", () => {
@@ -14,6 +19,7 @@ describe("liveWorkLines", () => {
       liveWorkLines({
         busyCommands: ["claude", "pnpm"],
         openAgentSessions: 1,
+        backgroundShells: 0,
         unsavedDrafts: ["notes.md"],
       }),
     ).toEqual([
@@ -25,7 +31,12 @@ describe("liveWorkLines", () => {
 
   it("singular terminal names its one process", () => {
     expect(
-      liveWorkLines({ busyCommands: ["claude"], openAgentSessions: 0, unsavedDrafts: [] }),
+      liveWorkLines({
+        busyCommands: ["claude"],
+        openAgentSessions: 0,
+        backgroundShells: 0,
+        unsavedDrafts: [],
+      }),
     ).toEqual(["1 terminal is running “claude” — restarting will end it."]);
   });
 
@@ -34,6 +45,7 @@ describe("liveWorkLines", () => {
       liveWorkLines({
         busyCommands: [],
         openAgentSessions: 3,
+        backgroundShells: 0,
         unsavedDrafts: ["a.md", "b.md", "c.md", "d.md", "e.md", "f.md"],
       }),
     ).toEqual([
@@ -44,7 +56,12 @@ describe("liveWorkLines", () => {
 
   it("a handful of drafts is named in full — no truncation below the cap", () => {
     expect(
-      liveWorkLines({ busyCommands: [], openAgentSessions: 0, unsavedDrafts: ["a.md", "b.md"] }),
+      liveWorkLines({
+        busyCommands: [],
+        openAgentSessions: 0,
+        backgroundShells: 0,
+        unsavedDrafts: ["a.md", "b.md"],
+      }),
     ).toEqual(["2 files have unsaved changes (a.md, b.md) — restarting will discard them."]);
   });
 
@@ -53,8 +70,31 @@ describe("liveWorkLines", () => {
       liveWorkLines({
         busyCommands: ["claude", "claude"],
         openAgentSessions: 0,
+        backgroundShells: 0,
         unsavedDrafts: [],
       }),
     ).toEqual(["2 terminals are running foreground work (claude) — restarting will end them."]);
+  });
+
+  it("names running background shells too (VC-577): a restart stops them", () => {
+    expect(
+      liveWorkLines({
+        busyCommands: [],
+        openAgentSessions: 0,
+        backgroundShells: 1,
+        unsavedDrafts: [],
+      }),
+    ).toEqual(["1 background shell is running — restarting will stop it."]);
+    expect(
+      liveWorkLines({
+        busyCommands: [],
+        openAgentSessions: 1,
+        backgroundShells: 2,
+        unsavedDrafts: [],
+      }),
+    ).toEqual([
+      "1 agent Session has a turn open — restarting will interrupt it.",
+      "2 background shells are running — restarting will stop them.",
+    ]);
   });
 });

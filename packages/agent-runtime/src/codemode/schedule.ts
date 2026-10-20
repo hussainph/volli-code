@@ -5,12 +5,6 @@
  * what actually happens, and each is enforced here rather than trusted to the
  * script:
  *
- * - **One judgement at a time.** Every nested call is judged — schema, then the
- *   Session's authority gate — before it may run, and only one is judged at a
- *   time, in the order the script issued them. The gate is where a call can
- *   park on a person, so this is what makes "never several approval prompts at
- *   once" structural: there is no second judgement in progress to raise one.
- *   Pi's own parallel mode makes the same choice for the same reason.
  * - **Only reads overlap.** A call to a tool the host marked as able to
  *   overlap (`read`, the web tools, Browser reads, MCP reads the host audited
  *   for VC-454) shares the run with others like it, up to the frozen
@@ -24,8 +18,7 @@
  *   them.
  *
  * The clock is the run's own deadline. It counts only active time: while a
- * call is being judged, the clock is stopped, because judgement is where a
- * person may be answering a question and a script that pauses on a person
+ * person is answering a question, the clock is stopped. A script waiting on a person
  * must not time out because the person took a minute.
  */
 

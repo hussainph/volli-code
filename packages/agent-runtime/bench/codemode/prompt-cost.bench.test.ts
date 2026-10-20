@@ -144,7 +144,6 @@ function arrayFor(mcp: readonly McpToolDefinition[], routing: Routing): AgentToo
       createCodeModeTool({
         surface: codeMode,
         tools,
-        gate: () => undefined,
         observe: async () => undefined,
         journal: new CodeModeJournal(),
       }),

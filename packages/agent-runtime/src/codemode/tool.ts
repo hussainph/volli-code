@@ -10,10 +10,8 @@
  *
  * - **Same door as a direct call.** A nested call goes through Pi's own
  *   `runToolCall` — the argument preparation and schema validation a
- *   model-issued call gets — then through the Session's own `beforeToolCall`
- *   gate, the same function instance the `Agent` holds, so authority rules,
- *   the escalation counters and approvals are shared rather than copied. The
- *   tool it reaches is the Session's own `AgentTool`, bound to the same
+ *   model-issued call gets. The tool is the Session's own `AgentTool`, bound
+ *   to the same
  *   environment, ports, Session identity and host handlers. A program can name
  *   a tool and its arguments; who is calling is never something it states.
  * - **Checked before it runs** (`./script.ts`), **scheduled** (`./schedule.ts`),
@@ -25,12 +23,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type {
-  AgentContext,
-  AgentLoopConfig,
-  AgentTool,
-  AgentToolResult,
-} from "@earendil-works/pi-agent-core";
+import type { AgentContext, AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { runToolCall } from "@earendil-works/pi-agent-core";
 import {
   CodemodeSandbox,
@@ -77,14 +70,20 @@ import {
   type CodeModeJournal,
   type RunJournal,
 } from "./journal";
+import { RunImages } from "./images";
 import { checkScript } from "./script";
 import { ExecutionSlots, Mutex, RunClock } from "./schedule";
-import { outputSchemaFor, shapeResult, toolKind, type ShapedOutcome, type ToolKind } from "./shape";
+import {
+  LEGACY_IMAGE_OMISSION,
+  outputSchemaFor,
+  shapeResult,
+  toolKind,
+  type ShapedOutcome,
+  type ToolKind,
+} from "./shape";
 import { isUntrustedSource, untrustedEnvelope } from "./trust";
 import { withCallScope } from "../pi/call-scope";
 import { SAVED_TOOL_OUTPUT_WARNING } from "../pi/tools";
-
-type BeforeToolCall = NonNullable<AgentLoopConfig["beforeToolCall"]>;
 
 /** A nested call's lifecycle, in the shape of Pi's own tool events. */
 export type NestedToolEvent =
@@ -124,12 +123,6 @@ export interface CodeModeHost {
   surface: CodeModeSurface;
   /** Every other tool of the Session's frozen surface, in surface order. */
   tools: readonly SurfaceTool[];
-  /**
-   * The gate every direct call passes, read when a nested call is judged.
-   * Absent when the Session runs without an Authority Snapshot — exactly when
-   * the `Agent` has no gate either.
-   */
-  gate: () => BeforeToolCall | undefined;
   /** The activity path a direct call's tool events take. */
   observe: (event: NestedToolEvent) => Promise<void>;
   journal: CodeModeJournal;
@@ -140,7 +133,7 @@ export interface CodeModeHost {
    */
   honourParallelReads?: boolean;
   /**
-   * How long a run may spend paused — on approvals and Volli verbs — before
+   * How long a run may spend paused — on questions and Volli verbs — before
    * it is stopped anyway, in milliseconds. Pausing stops the run's own clock,
    * but not the VM: a program that spins instead of awaiting keeps a core busy
    * for as long as a person takes, so the pause is bounded too.
@@ -160,7 +153,7 @@ export interface CodeModeDetails {
   error?: "check" | "script" | "timeout" | "aborted" | "sandbox" | "replay" | "limit";
   /** Active running time, in milliseconds. */
   activeMs: number;
-  /** Time the run spent paused on judgement — a person answering, at the most. */
+  /** Time the run spent paused on a person answering. */
   pausedMs: number;
   nestedCalls: NestedToolCalls;
   /** Nested calls answered from the replay journal rather than run. */
@@ -170,6 +163,8 @@ export interface CodeModeDetails {
   /** Untrusted tools the run called, by name; present when the output was enveloped. */
   untrusted?: string[];
   output?: ToolOutputCut;
+  /** Host-authored framing, aligned with the emitted images; never program output. */
+  imageCaptions?: string[];
 }
 
 /**
@@ -178,8 +173,11 @@ export interface CodeModeDetails {
  */
 const NODE_API =
   /\b(?:require|process|fs|__dirname|fetch|setTimeout|setInterval|Buffer|module) is not defined/u;
-const NODE_API_HINT =
-  "A program has no Node APIs, network or timers: read files with `await tools.read({ path })`, list and search them with `await tools.bash({ command })`, and reach everything else through `tools`.";
+function nodeApiHint(bashCallable: boolean): string {
+  return bashCallable
+    ? "A program has no Node APIs, network or timers: read files with `await tools.read({ path })`, list and search them with `await tools.bash({ command })`, and reach everything else through `tools`."
+    : "A program has no Node APIs, network or timers: reach the Session's callable tools through `tools`, and find and describe them with `searchTools()` and `describeTool()`.";
+}
 
 /**
  * The most program output the host is sent, in characters — printed output,
@@ -199,7 +197,7 @@ export const MAX_HELD_OUTPUT_CHARS = 4 * 1_024 * 1_024;
  */
 const CALLS_PAST_LIMIT = 10;
 
-/** How long a run may stay paused on approvals and verbs before it is stopped anyway. */
+/** How long a run may stay paused on questions and verbs before it is stopped anyway. */
 export const DEFAULT_PAUSE_ALLOWANCE_MS = 15 * 60_000;
 
 /**
@@ -258,7 +256,7 @@ const codemodeSchema = Type.Object({
   }),
 });
 
-/** A stand-in for the message a nested call came from. Volli's gate reads only the call. */
+/** A stand-in for the message a nested call came from. */
 function syntheticMessage(): AssistantMessage {
   return {
     role: "assistant",
@@ -311,6 +309,7 @@ export function createCodeModeTool(
       outputSchema: outputSchemaFor(
         kinds.get(entry.tool.name)!,
         entry.mcp?.outputSchema ?? entry.detailsSchema ?? entry.tool.outputSchema,
+        host.surface.descriptionVersion === undefined,
       ),
       ...(kinds.get(entry.tool.name) === "structured" ? { nativeStructuredOutput: true } : {}),
       namespace: namespaceOf(entry),
@@ -337,12 +336,15 @@ export function createCodeModeTool(
   const untrustedSources = new Set(
     callable
       .filter((entry) =>
-        entry.verb ? UNTRUSTED_VERBS.has(entry.id) : isUntrustedSource(entry.tool.name),
+        entry.verb
+          ? UNTRUSTED_VERBS.has(entry.id) || entry.id.startsWith("mcp.")
+          : isUntrustedSource(entry.tool.name),
       )
       .map((entry) => entry.tool.name),
   );
   const search = new ToolSearch(listing);
   const description = describeCodeMode({
+    legacy: host.surface.descriptionVersion === undefined,
     tools: listing,
     directOnly: host.tools
       .filter(
@@ -463,7 +465,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     ),
   );
   // The pause is bounded too: the VM keeps running while the clock is
-  // stopped, so a program that spins instead of awaiting an approval would
+  // stopped, so a program that spins instead of awaiting an answer would
   // otherwise hold a core for as long as nobody answers.
   const pauseAllowanceMs = host.pauseAllowanceMs ?? DEFAULT_PAUSE_ALLOWANCE_MS;
   const ceiling = setTimeout(
@@ -476,10 +478,11 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       ),
     check.timeoutMs + pauseAllowanceMs,
   );
-  const judging = new Mutex();
   const slots = new ExecutionSlots(limits.maxConcurrency);
   const records: CallRecord[] = [];
   const untrusted = new Map<string, number>();
+  const images = new RunImages();
+  let omittedImages = 0;
   const inflight = new Set<Promise<unknown>>();
   let issued = 0;
   let replayed = 0;
@@ -488,32 +491,8 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     untrusted.set(name, (untrusted.get(name) ?? 0) + 1);
   };
 
-  // The Session's own gate, with the clock stopped while it decides:
-  // judgement is where a call may wait on a person.
-  const gate = host.gate();
-  const judge: BeforeToolCall | undefined =
-    gate === undefined
-      ? undefined
-      : async (context, callSignal) => {
-          if (callSignal?.aborted) return { block: true, reason: "The program was cancelled." };
-          clock.pause();
-          try {
-            return await gate(context, callSignal);
-          } finally {
-            clock.resume();
-          }
-        };
-  // Every call is judged under the lock, one at a time and in the order the
-  // program issued them, and then runs as its kind allows: reads beside each
-  // other, anything else alone. Running holds no lock — a long `bash` or a
-  // `session.start` does not stop another call being judged, and a question
-  // it asks waits its turn below.
-  const lockedJudge: BeforeToolCall | undefined =
-    judge === undefined
-      ? undefined
-      : (context, callSignal) => judging.run(() => judge(context, callSignal));
   // One question at a time, structurally: every question any nested call puts
-  // to a person — the gate's escalation, a verb's budget, an MCP server's
+  // to a person — a verb's budget, an MCP server's
   // sign-in — goes through this lock, and the clock stops from the moment a
   // question waits for its turn until it is answered. Calls run beside each
   // other as their kind allows until one of them actually asks.
@@ -576,6 +555,8 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       }
       // A remembered answer from an untrusted source is still one.
       if (remembered.untrusted === true) markUntrusted(tool.name);
+      images.restore(remembered.images ?? []);
+      omittedImages += remembered.omittedImages ?? 0;
       replayed += 1;
       return deliver(remembered.outcome);
     }
@@ -595,31 +576,39 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     if (input.untrustedSources.has(tool.name)) markUntrusted(tool.name);
     const signal = AbortSignal.any([callSignal, run.signal]);
     const shared = input.overlapping.has(tool.name);
-    const slotted: AgentTool = {
-      ...tool,
-      execute: (callId, params, executeSignal, onUpdate) =>
-        slots.run(shared, executeSignal, () =>
-          tool.execute(callId, params, executeSignal, onUpdate),
-        ),
-    };
     await host.observe({ type: "tool_execution_start", toolCallId: id, toolName: tool.name, args });
-    const call = (beforeToolCall: BeforeToolCall | undefined) =>
+    // Volli configures no Pi beforeToolCall/afterToolCall hooks today. If any
+    // are added, they must be mirrored here so nested calls use the same door.
+    const call = () =>
       runToolCall(
         { type: "toolCall", id, name: tool.name, arguments: (args ?? {}) as JsonObject },
         {
-          tools: [slotted],
+          tools: [tool],
           assistantMessage: syntheticMessage(),
-          context: { messages: [], tools: [slotted] } satisfies AgentContext,
-          ...(beforeToolCall === undefined ? {} : { beforeToolCall }),
+          context: { messages: [], tools: [tool] } satisfies AgentContext,
           signal,
         },
       );
-    // Judged one at a time under the judgement lock, run under the slots, and
-    // with the program's scope, so any question the call puts to a person
-    // takes the question lock.
-    const outcome = await withCallScope(scope, () => call(lockedJudge)).finally(() => {
-      record.durationMs = now() - record.startedAt;
-    });
+    // Admit before validation and execution. The tool's own host guards see
+    // the effects of earlier exclusive calls. Questions take the shared lock.
+    const outcome = await slots
+      .run(shared, signal, () => withCallScope(scope, call))
+      .catch((error: unknown) => {
+        if (!signal.aborted) throw error;
+        // Slot admission can now abort before Pi runs. Still pair the start
+        // event with an error end, leaving the call unfinished and unjournaled
+        // below, just like a cancellation caught by Pi during execution.
+        return {
+          result: {
+            content: [{ type: "text" as const, text: "Operation aborted" }],
+            details: undefined,
+          },
+          isError: true,
+        };
+      })
+      .finally(() => {
+        record.durationMs = now() - record.startedAt;
+      });
     await host.observe({
       type: "tool_execution_end",
       toolCallId: id,
@@ -627,7 +616,32 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       result: outcome.result,
       isError: outcome.isError,
     });
-    const shaped = shapeResult(input.kinds.get(tool.name)!, outcome.result, outcome.isError);
+    const captured: string[] = [];
+    const legacy = host.surface.descriptionVersion === undefined;
+    // Legacy shaping never invokes capture. Count its omissions here too, so
+    // the outer result explains them even when the program returns nothing.
+    let captureOmissions = legacy
+      ? outcome.result.content.filter((block) => block.type === "image").length
+      : 0;
+    omittedImages += captureOmissions;
+    const shaped = shapeResult(
+      input.kinds.get(tool.name)!,
+      outcome.result,
+      outcome.isError,
+      (image) => {
+        const handle = images.capture(
+          image,
+          `${tool.name} (call ${position})`,
+          input.untrustedSources.has(tool.name),
+        );
+        if (handle === undefined) {
+          captureOmissions += 1;
+          omittedImages += 1;
+        } else captured.push(handle.handle);
+        return handle;
+      },
+      legacy,
+    );
     if (outcome.isError && signal.aborted) {
       // Cancelled under it: nothing says the call completed, so it is neither
       // journaled nor reported as an answer. A call that SUCCEEDED after its
@@ -648,6 +662,8 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       name: tool.name,
       argumentsDigest,
       outcome: shaped,
+      images: captured.map((handle) => images.held.get(handle)!),
+      ...(captureOmissions > 0 ? { omittedImages: captureOmissions } : {}),
       ...(savedOutput || input.untrustedSources.has(tool.name) ? { untrusted: true } : {}),
     });
     return deliver(shaped);
@@ -752,6 +768,10 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
   }
   return assemble({
     result,
+    images,
+    omittedImages,
+    bashCallable: input.names.has("bash"),
+    legacy: host.surface.descriptionVersion === undefined,
     stopped,
     records,
     untrusted,
@@ -819,14 +839,21 @@ function callSummary(records: readonly CallRecord[], replayed: number): string {
   return `${parts[0]}: ${detail.join(", ")}`;
 }
 
-function outputText(items: readonly CodemodeOutputItem[]): { text: string; images: number } {
+function outputText(items: readonly CodemodeOutputItem[]): {
+  text: string;
+  handles: unknown[];
+  images: number;
+} {
+  const handles: unknown[] = [];
   let images = 0;
   const texts: string[] = [];
   for (const item of items) {
     if (item.type === "text") texts.push(item.text);
+    else if (item.mimeType === "application/x-volli-image-handle")
+      handles.push({ type: "image", handle: item.data });
     else images += 1;
   }
-  return { text: texts.join("\n"), images };
+  return { text: texts.join("\n"), handles, images };
 }
 
 function returned(value: unknown): string | undefined {
@@ -836,6 +863,10 @@ function returned(value: unknown): string | undefined {
 
 async function assemble(input: {
   result: CodemodeResult;
+  images: RunImages;
+  omittedImages: number;
+  bashCallable: boolean;
+  legacy: boolean;
   stopped: RunStop | undefined;
   records: readonly CallRecord[];
   untrusted: ReadonlyMap<string, number>;
@@ -850,6 +881,8 @@ async function assemble(input: {
   const { result, stopped } = input;
   const ok = result.ok && stopped === undefined;
   const printed = outputText(result.output);
+  const emitted = input.images.output([...printed.handles, ...(result.ok ? [result.value] : [])]);
+  const omitted = input.omittedImages + printed.images + emitted.omitted;
   const body: string[] = [];
   if (printed.text.length > 0) body.push(printed.text);
   if (result.ok) {
@@ -867,7 +900,7 @@ async function assemble(input: {
         ? `Program error: ${result.error.stack ?? result.error.message}`
         : `Program stopped: ${result.error.message}`,
     );
-    if (NODE_API.test(result.error.message)) body.push(NODE_API_HINT);
+    if (NODE_API.test(result.error.message)) body.push(nodeApiHint(input.bashCallable));
   }
   let text = body.join("\n");
   const details: CodeModeDetails = {
@@ -878,6 +911,7 @@ async function assemble(input: {
     nestedCalls: nestedCalls(input.records),
     replayedCalls: input.replayed,
     peakConcurrency: input.peak,
+    ...(emitted.captions.length > 0 ? { imageCaptions: emitted.captions } : {}),
   };
   const cut = cutMiddle(text, input.maxOutputBytes);
   if (cut !== null) {
@@ -903,15 +937,21 @@ async function assemble(input: {
   const header = [
     `Program ${ok ? "completed" : "failed"} in ${seconds(input.activeMs)}`,
     input.pausedMs >= 1_000
-      ? ` (plus ${seconds(input.pausedMs)} paused on approvals and Volli verbs)`
+      ? ` (plus ${seconds(input.pausedMs)} paused on questions and Volli verbs)`
       : "",
     ` · ${callSummary(input.records, input.replayed)}.`,
-    printed.images > 0
-      ? ` ${printed.images} image${printed.images === 1 ? " was" : "s were"} left out: Code Mode returns no images.`
+    emitted.content.length > 0
+      ? ` ${emitted.content.length / 2} image(s) attached (display requires Volli 0.2.2 or newer).`
+      : "",
+    omitted > 0
+      ? ` ${omitted} image${omitted === 1 ? " was" : "s were"} left out: ${input.legacy ? LEGACY_IMAGE_OMISSION : "image bound exceeded, unavailable handle, or non-handle image output."}`
       : "",
   ].join("");
   return {
-    content: [{ type: "text", text: text.length === 0 ? header : `${header}\n${text}` }],
+    content: [
+      { type: "text", text: text.length === 0 ? header : `${header}\n${text}` },
+      ...emitted.content,
+    ],
     details,
     ...(ok ? {} : { isError: true }),
   };

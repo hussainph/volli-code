@@ -1,13 +1,21 @@
 import type { UIMessage } from "ai";
 import { readHostNotice, type TranscriptHostNotice } from "./host-notice";
-import type { TranscriptCompaction, TranscriptReasoningDrop } from "./transcript";
+import type {
+  TranscriptCompaction,
+  TranscriptReasoningDrop,
+  TranscriptToolRefresh,
+} from "./transcript";
 
 /** What every Session client draws from the portable transcript projection. */
 export type TranscriptRow =
-  | { kind: "turn"; messages: readonly UIMessage[] }
+  | {
+      kind: "turn";
+      messages: readonly UIMessage[];
+    }
   | { kind: "host-notice"; messageId: string; notice: TranscriptHostNotice }
   | { kind: "compaction"; compaction: TranscriptCompaction }
-  | { kind: "reasoning-drop"; drop: TranscriptReasoningDrop };
+  | { kind: "reasoning-drop"; drop: TranscriptReasoningDrop }
+  | { kind: "tool-refresh"; refresh: TranscriptToolRefresh };
 
 function rowFor(messages: readonly UIMessage[]): TranscriptRow {
   const message = messages.length === 1 ? messages[0] : undefined;
@@ -20,6 +28,12 @@ function rowFor(messages: readonly UIMessage[]): TranscriptRow {
 
 type AnchoredContextNotice =
   | {
+      kind: "tool-refresh";
+      sequence: number;
+      afterMessageId: string | null;
+      value: TranscriptToolRefresh;
+    }
+  | {
       kind: "compaction";
       sequence: number;
       afterMessageId: string | null;
@@ -31,6 +45,17 @@ type AnchoredContextNotice =
       afterMessageId: string | null;
       value: TranscriptReasoningDrop;
     };
+
+function noticeRow(notice: AnchoredContextNotice): TranscriptRow {
+  switch (notice.kind) {
+    case "compaction":
+      return { kind: "compaction", compaction: notice.value };
+    case "reasoning-drop":
+      return { kind: "reasoning-drop", drop: notice.value };
+    case "tool-refresh":
+      return { kind: "tool-refresh", refresh: notice.value };
+  }
+}
 
 /**
  * Projects Turns and host-authored messages into rows, then lays durable
@@ -45,8 +70,16 @@ export function projectTranscriptRows(
   turns: readonly (readonly UIMessage[])[],
   compactions: readonly TranscriptCompaction[],
   reasoningDrops: readonly TranscriptReasoningDrop[],
+  toolRefreshes: readonly TranscriptToolRefresh[] = [],
 ): readonly TranscriptRow[] {
+  const turnRows = turns.map(rowFor);
   const pending: AnchoredContextNotice[] = [
+    ...toolRefreshes.map((value) => ({
+      kind: "tool-refresh" as const,
+      sequence: value.sequence,
+      afterMessageId: value.afterMessageId,
+      value,
+    })),
     ...compactions.map((value) => ({
       kind: "compaction" as const,
       sequence: value.sequence,
@@ -60,32 +93,24 @@ export function projectTranscriptRows(
       value,
     })),
   ].toSorted((left, right) => left.sequence - right.sequence);
-  if (pending.length === 0) return turns.map(rowFor);
+  if (pending.length === 0) return turnRows;
 
   const rows: TranscriptRow[] = [];
   const takeAnchored = (claims: (notice: AnchoredContextNotice) => boolean) => {
     while (pending.length > 0 && claims(pending[0]!)) {
       const notice = pending.shift()!;
-      rows.push(
-        notice.kind === "compaction"
-          ? { kind: "compaction", compaction: notice.value }
-          : { kind: "reasoning-drop", drop: notice.value },
-      );
+      rows.push(noticeRow(notice));
     }
   };
 
   takeAnchored((notice) => notice.afterMessageId === null);
-  for (const messages of turns) {
-    rows.push(rowFor(messages));
+  for (const [index, messages] of turns.entries()) {
+    rows.push(turnRows[index]!);
     const spoken = new Set(messages.map((message) => message.id));
     takeAnchored((notice) => notice.afterMessageId !== null && spoken.has(notice.afterMessageId));
   }
   for (const notice of pending) {
-    rows.push(
-      notice.kind === "compaction"
-        ? { kind: "compaction", compaction: notice.value }
-        : { kind: "reasoning-drop", drop: notice.value },
-    );
+    rows.push(noticeRow(notice));
   }
   return rows;
 }

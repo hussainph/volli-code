@@ -18,9 +18,6 @@ import type { SendOutcome } from "./session-peek-wireframe-model";
 const CONTEXT: TurnContext = {
   onOpenFile: () => {},
   interactions: new Map(),
-  open: [],
-  resolving: new Set(),
-  onResolve: () => Promise.resolve(false),
 };
 const NO_QUEUE: readonly QueuedMessage[] = [];
 interface Draft {

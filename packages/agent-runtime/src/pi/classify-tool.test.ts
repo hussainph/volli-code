@@ -216,7 +216,6 @@ function surface(port: RuntimeClassifyPort, route: "both" | "code") {
       createCodeModeTool({
         surface: codeMode,
         tools,
-        gate: () => undefined,
         observe: async () => {},
         journal: new CodeModeJournal(),
       }),

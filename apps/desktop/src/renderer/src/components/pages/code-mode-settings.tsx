@@ -2,9 +2,8 @@
  * Code Mode in the Models pane (VC-471): one switch, and behind an Advanced
  * disclosure a mode pinned per model.
  *
- * ONE SWITCH, ON BY DEFAULT. The owner's brief was that this pane is getting
- * too complicated, so the setting a person is asked about is the one they can
- * answer: whether the agent may write programs at all. Which models use Code
+ * ONE SWITCH, ON BY DEFAULT. The setting a person is asked about is the one
+ * they can answer: whether the agent may write programs at all. Which models use Code
  * Mode, and how far, is the benchmark's call (`CODE_MODE_MODEL_DEFAULTS` in
  * `@volli/shared`), not a ladder of choices on screen.
  *
@@ -117,6 +116,15 @@ export function CodeModeSettings({
   // answer knows to stay out.
   const readGeneration = React.useRef(0);
   const writeGeneration = React.useRef(0);
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      readGeneration.current += 1;
+      writeGeneration.current += 1;
+    };
+  }, []);
 
   // Re-read whenever the shared client turns over — a Refresh, a sign-in —
   // which is also how a failed first read gets its retry.
@@ -134,6 +142,9 @@ export function CodeModeSettings({
         toastError(`Couldn't load Code Mode settings: ${errorMessage(error)}`);
       },
     );
+    return () => {
+      readGeneration.current += 1;
+    };
   }, [client]);
 
   if (!client) return null;
@@ -150,10 +161,12 @@ export function CodeModeSettings({
     setPolicy(next);
     try {
       const answer = await client!.setCodeModePolicy(next);
+      if (!mounted.current) return;
       stored.current = answer;
       // A later save is already showing its own guess; this answer is older.
       if (write === writeGeneration.current) setPolicy(answer);
     } catch (error) {
+      if (!mounted.current) return;
       if (write === writeGeneration.current) setPolicy(stored.current);
       toastError(`Couldn't save Code Mode settings: ${errorMessage(error)}`);
     }

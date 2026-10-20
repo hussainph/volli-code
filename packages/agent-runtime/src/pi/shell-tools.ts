@@ -17,19 +17,20 @@
  *
  * The model knows what it has because every result here restates the
  * Session's live shells — id, state, age, command. The tool calls are the
- * durable record, and re-reading them is free (the owner ruled out a per-turn
- * prompt channel for this). What survives compaction is a named follow-up.
+ * durable record, and re-reading them is free; there is no per-turn prompt
+ * channel for shell state. What survives compaction is a named follow-up.
  *
  * Deliberately absent, as the port is deliberately narrow: no stdin, no PTY,
  * no restart verb, no filter on reads. A shell a person types into is the
  * terminal, not this.
  */
 
-import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core/node";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import {
   shellCommandLine,
   shellStanding,
+  SHELL_MAX_PER_SESSION,
   type NonCodingToolId,
   type RuntimeShellOutputOutcome,
   type RuntimeShellPort,
@@ -74,7 +75,7 @@ function detailsOf(shell: RuntimeShellRecord): ShellToolDetails {
  * number: the desktop's host imports this constant and enforces it against
  * the Session's running shells, so there is no second copy to drift.
  */
-export const SHELL_MAX_PER_SESSION = 4;
+export { SHELL_MAX_PER_SESSION } from "@volli/shared";
 
 /** How long a command's first line is allowed to be in a listing. */
 const COMMAND_LINE_LIMIT = 80;
@@ -236,6 +237,19 @@ const startSchema = Type.Object({
   title: Type.Optional(
     Type.String({ description: "A short name for the shell, shown wherever it is listed." }),
   ),
+  notifyOn: Type.Optional(
+    Type.String({
+      maxLength: 200,
+      description:
+        "Also notice me the first time this text appears in a line of the shell's output, once. A plain string unless notifyOnRegex is true.",
+    }),
+  ),
+  notifyOnRegex: Type.Optional(
+    Type.Boolean({
+      description:
+        "Treat notifyOn as a bounded-state regex against the first 1,000 UTF-16 units of each line, including an unfinished line. Supports classes, groups, alternatives, anchors and repeats; no lookaround, backreferences or word boundaries. Patterns over 200 units or 512 expanded states are refused.",
+    }),
+  ),
 });
 
 const outputSchema = Type.Object({
@@ -258,7 +272,9 @@ const DESCRIPTIONS: Record<ShellToolId, string> = {
   shell_start: [
     "Start a command that runs beside the turn instead of holding it: a dev server, a watch build, a long test run, a log tail.",
     "Returns the shell's id and whatever it printed in its first second, so a server's listening line comes back in the same call.",
-    "Volli caps how many a Session may hold and kills every one when the Session's attachment ends. Use execute for a command you want to wait on.",
+    "When it exits, Volli sends you a notice with how it ended and the end of its output, by itself: do not poll or sleep for it. Optional notifyOn adds one notice the first time output matches, even before a newline.",
+    "Volli caps how many a Session may hold and kills every one when the Session's attachment ends. A Subagent Session's shells end silently when its turn completes, so a subagent reads what it needs or waits inside the turn.",
+    "Use execute for a command you want to wait on.",
   ].join(" "),
   shell_output: [
     "Read a background shell's output. By default this returns only what is new since the last read of that shell, so polling costs the same each time;",
@@ -266,7 +282,7 @@ const DESCRIPTIONS: Record<ShellToolId, string> = {
   ].join(" "),
   shell_kill: [
     "End a background shell: SIGTERM, then SIGKILL if it lingers.",
-    "Its output stays readable with shell_output until the Session's attachment ends.",
+    "Its output stays readable with shell_output until the Session's attachment ends, or for a Subagent Session until its turn completes.",
   ].join(" "),
 };
 
@@ -304,6 +320,9 @@ export function createShellTool(
               command: params.command,
               ...(params.cwd === undefined ? {} : { cwd: params.cwd }),
               ...(params.title === undefined ? {} : { title: params.title }),
+              ...(params.notifyOn === undefined
+                ? {}
+                : { notifyOn: { pattern: params.notifyOn, regex: params.notifyOnRegex === true } }),
               signal: withdrawn,
             });
             const at = now();

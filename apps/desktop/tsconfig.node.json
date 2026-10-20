@@ -8,7 +8,15 @@
     "allowJs": true,
     // The read-only storage tools load their source modules directly under
     // Node's type stripper, where explicit `.ts` is required by ESM.
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    // The real-link Sessions test (src/main/remote-sessions.real-link.test.ts)
+    // drives the renderer's remote-Session binding and stores, which import
+    // through the renderer's alias.
+    "paths": {
+      "@renderer/*": ["./src/renderer/src/*"]
+    },
+    // ...and some of what those import is a renderer .tsx module.
+    "jsx": "react-jsx"
   },
   // src/ipc is the shared type-only IPC contract — all three processes read it.
   "include": [

@@ -25,7 +25,7 @@ function header(props: Partial<React.ComponentProps<typeof FilesNavigatorHeader>
   );
 }
 
-describe("FilesNavigatorHeader (VC-406, revision 06)", () => {
+describe("FilesNavigatorHeader (VC-406)", () => {
   it("opens with the directory, not with a second name for the page", () => {
     const html = header({
       actions: <button type="button">New file</button>,

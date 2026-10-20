@@ -2,7 +2,14 @@
 
 export interface DirEntry {
   name: string;
+  /** A symlink is typed `file` whatever it points at, so a walk never descends through one. */
   kind: "dir" | "file";
+  /**
+   * Set only when the entry is itself a symlink. File reads refuse a symlink
+   * outright (`Path is a symlink`), so a surface that offers to open an entry
+   * needs to know before it offers.
+   */
+  link?: true;
 }
 
 /**

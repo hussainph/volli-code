@@ -4,7 +4,7 @@
  *
  * The card exists for a reason a screenshot states badly: a folder of three
  * Sessions all titled `Chat` expands into three rows that say nothing, so the
- * card owes each of them ONE line about what it did. That is asserted here per
+ * card owes each of them a readable summary of what it did. That is asserted here per
  * Session, together with the two properties that make the card read-only by
  * construction — pressing a Session drills rather than opens, and there is no
  * field, no form and no Send or Answer anywhere in it (plan §3.5, D3).
@@ -148,7 +148,36 @@ describe("the ticket it stands for", () => {
   });
 });
 
-describe("one line per Session", () => {
+describe("one summary per Session", () => {
+  it("keeps every full summary in non-shrinking rows inside the card scroller", () => {
+    const summaries = Array.from({ length: 8 }, (_, index) =>
+      Array.from(
+        { length: 12 },
+        (_stepValue, step) =>
+          `Session ${index + 1}, step ${step + 1}: checked the viewport and fixed lag.`,
+      ).join("\n"),
+    );
+    render({
+      sessions: summaries.map((summary, index) => ({
+        ...SESSIONS[0]!,
+        rowId: `chat:chat-${index}`,
+        summary,
+      })),
+      position: { left: 288, top: 120, maxHeight: 240 },
+    });
+    expect(rows()).toHaveLength(summaries.length);
+    for (const [index, row] of rows().entries()) {
+      const prose = row.querySelector("[data-peek-summary]");
+      expect(prose?.textContent).toBe(summaries[index]);
+      expect(prose?.className).not.toMatch(/line-clamp|truncate|overflow-hidden/);
+      expect(prose?.classList.contains("whitespace-pre-wrap")).toBe(true);
+      expect(row.closest("li")?.classList.contains("shrink-0")).toBe(true);
+      expect(row.closest("ul")?.classList.contains("shrink-0")).toBe(true);
+      expect(row.closest(".overflow-y-auto")).not.toBeNull();
+    }
+    expect(container.querySelector<HTMLElement>("[data-peek-card]")?.style.maxHeight).toBe("240px");
+  });
+
   it("gives each Session its mark, its title, its age and its own summary", () => {
     render();
     const lines = rows();

@@ -99,6 +99,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       // The decision model (VC-478), appended after the Browser search.
       "classify",
       "codemode",
+      "request_secret",
       "session.start",
       "automation.run",
       "session.stop",
@@ -153,6 +154,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "browser_find",
       "classify",
       "codemode",
+      "request_secret",
       "session.delegate",
       "watch",
     ]);

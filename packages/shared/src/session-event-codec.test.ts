@@ -3,25 +3,25 @@ import {
   assertSession,
   assertSessionEvent,
   parseRendererSessionEvent,
-  scrubSessionAuthority,
   scrubSessionCommand,
   scrubSessionEvent,
   scrubSessionEventPayload,
   scrubSessionEventProvenance,
   scrubSessionInteraction,
+  sanitizeSessionInteraction,
   decodeCommandReceipt,
   decodeSessionCommand,
   decodeSessionCommandIntent,
   decodeSessionCommandRoute,
   decodeSessionEventPayload,
+  decodeRendererSessionEventPayload,
   decodeSessionEventProvenance,
   encodeSessionJson,
   UnknownSessionEventKindError,
 } from "./session-event-codec";
-import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "./authority";
+import type { RendererSessionEventPayload } from "./session-event-codec";
 import { DEFAULT_CODE_MODE_LIMITS } from "./code-mode";
-import { SESSION_PROJECTION_EVENT_KINDS } from "./session-ledger";
-import type { AuthoritySnapshot } from "./authority";
+import { readInteractionPrompts, SESSION_PROJECTION_EVENT_KINDS } from "./session-ledger";
 import type {
   CommandReceipt,
   Session,
@@ -58,21 +58,8 @@ const attachment: SessionAttachment = {
   authority: null,
 };
 
-/** A Snapshot as it sits in history, for the decode cases below. */
-const recordedAuthority: AuthoritySnapshot = {
-  mode: "auto",
-  location: "worktree",
-  enforcement: "enforce",
-  judgmentMode: "ask",
-  tools: ["read"],
-  rulePackId: BUILTIN_RULE_PACK_ID,
-  rulePackHash: BUILTIN_RULE_PACK_HASH,
-  classifierModel: null,
-  fallback: { consecutiveDenials: 3, sessionDenials: 20 },
-};
-
 const interaction: SessionInteraction = {
-  id: "ask:tool-1",
+  id: "budget-ask:tool-1",
   attachmentId: "attachment-1",
   kind: "permission",
   title: "Allow write?",
@@ -126,6 +113,13 @@ function samples<const T extends readonly SessionEventPayload[]>(...items: T): T
  * and one shared roster is what makes both questions ask about the same kinds.
  */
 const payloads = samples(
+  {
+    kind: "session.tools.refreshed",
+    trigger: "cold-turn",
+    delta: {},
+    added: ["write"],
+    changed: [],
+  },
   { kind: "command.recorded", command },
   {
     kind: "command.recorded",
@@ -181,6 +175,11 @@ const payloads = samples(
       kind: "tool-surface",
       tools: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
     },
+  },
+  // New births opt into the multi-question declaration without changing names.
+  {
+    kind: "session.input.recorded",
+    input: { kind: "tool-surface", tools: ["read", "ask_user"], askUserQuestions: true },
   },
   // Old surfaces keep the historical mcp_* wire projection; the new marker is
   // durable so reattachment and a model switch never change the tool names.
@@ -352,13 +351,13 @@ const payloads = samples(
   {
     kind: "interaction.resolved",
     attachmentId: "attachment-1",
-    interactionId: "ask:tool-1",
+    interactionId: "budget-ask:tool-1",
     resolution: { optionIds: ["once"], response: null },
   },
   {
     kind: "interaction.resolved",
     attachmentId: "attachment-1",
-    interactionId: "ask:tool-1",
+    interactionId: "budget-ask:tool-1",
     resolution: {
       optionIds: ["src", "no"],
       response: "text",
@@ -371,7 +370,7 @@ const payloads = samples(
   {
     kind: "interaction.cancelled",
     attachmentId: "attachment-1",
-    interactionId: "ask:tool-1",
+    interactionId: "budget-ask:tool-1",
     reason: "abandoned",
   },
   { kind: "command.receipt.recorded", receipt },
@@ -408,14 +407,6 @@ const payloads = samples(
       recordedAt: 105,
       sequence: 5,
     },
-  },
-  {
-    kind: "authority.denied",
-    attachmentId: "attachment-1",
-    turnId: null,
-    tool: "bash",
-    cause: "command.destructive-removal",
-    reason: "rm -rf ~ discards more than this Session's workspace.",
   },
   {
     kind: "context.compacted",
@@ -503,7 +494,123 @@ type MissingPayloadSample = Exclude<SessionEventPayload["kind"], (typeof payload
 type AssertEveryKindSampled<Missing extends never> = Missing;
 export type CompletePayloadSampleCoverage = AssertEveryKindSampled<MissingPayloadSample>;
 
+type RendererReasoningDroppedPayload = Extract<
+  RendererSessionEventPayload,
+  { kind: "context.reasoning_dropped" }
+>;
+
+// The decoder's per-kind type check and this published contract proof guard
+// against putting the scrubbed structural paths back on the renderer edge.
+const safeReasoningDroppedPayload: RendererReasoningDroppedPayload = {
+  kind: "context.reasoning_dropped",
+  attachmentId: "attachment-1",
+  turnId: "turn-1",
+  count: 1,
+  causes: ["prefix-mismatch"],
+};
+const leakedReasoningDroppedPayload: RendererReasoningDroppedPayload = {
+  ...safeReasoningDroppedPayload,
+  // @ts-expect-error context.reasoning_dropped scrub removes structural paths.
+  paths: ["messages.1.content.0"],
+};
+
+void leakedReasoningDroppedPayload;
+
 describe("decodeSessionEventPayload round-trips every durable kind", () => {
+  it("round-trips credential presentation metadata but never extra fields or values", () => {
+    const credential = {
+      id: "credential-1",
+      name: "DEPLOY_TOKEN",
+      sessionId: "session-1",
+      sessionLabel: "Deploy session",
+      projectId: "project-1",
+      projectLabel: "Website",
+      agentSays: "Access for deployment",
+    };
+    const opened = {
+      kind: "interaction.opened" as const,
+      interaction: {
+        ...interaction,
+        kind: "question" as const,
+        title: "Credential requested",
+        options: [],
+        credential,
+      },
+    };
+    expect(roundTrip(opened)).toEqual(opened);
+    expect(sanitizeSessionInteraction(opened.interaction)).toEqual(opened.interaction);
+    expect(readInteractionPrompts(opened.interaction)).toMatchObject([
+      { options: [], custom: false },
+    ]);
+    expect(
+      roundTrip({
+        ...opened,
+        interaction: { ...opened.interaction, credential: { ...credential, agentSays: null } },
+      }),
+    ).toEqual({
+      ...opened,
+      interaction: { ...opened.interaction, credential: { ...credential, agentSays: null } },
+    });
+    expect(scrubSessionEventPayload(opened)).toEqual({
+      ...opened,
+      interaction: { ...opened.interaction, native: { id: null, detail: null } },
+    });
+    const contaminated = {
+      ...opened,
+      interaction: {
+        ...opened.interaction,
+        value: "outside-secret",
+        unknown: "outside-extra",
+        credential: { ...credential, value: "inside-secret", unknown: "inside-extra" },
+      },
+    };
+    const encoded = encodeSessionJson(contaminated);
+    expect(encoded).not.toMatch(/inside-secret|outside-secret|inside-extra|outside-extra/);
+    expect(roundTrip(contaminated)).toEqual(opened);
+    expect(decodeSessionEventPayload(contaminated, "payload")).toEqual(opened);
+    expect(sanitizeSessionInteraction(contaminated.interaction)).toEqual(opened.interaction);
+    // Checkpoints also serialize interactions, without an event envelope.
+    expect(JSON.parse(encodeSessionJson({ active: [contaminated.interaction] }))).toEqual({
+      active: [opened.interaction],
+    });
+    expect(
+      JSON.parse(encodeSessionJson({ ...contaminated.interaction, kind: "permission" })),
+    ).toEqual({
+      ...opened.interaction,
+      kind: "permission",
+    });
+    expect(encodeSessionJson({ credential: "not-an-interaction" })).toBe(
+      '{"credential":"not-an-interaction"}',
+    );
+    expect(encodeSessionJson({ credential: "not-an-interaction", kind: "diagnostic" })).toBe(
+      '{"credential":"not-an-interaction","kind":"diagnostic"}',
+    );
+    for (const key of Object.keys(credential)) {
+      expect(() =>
+        decodeSessionEventPayload(
+          {
+            ...opened,
+            interaction: { ...opened.interaction, credential: { ...credential, [key]: 123 } },
+          },
+          "payload",
+        ),
+      ).toThrow(`payload.interaction.credential.${key}`);
+    }
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          ...opened,
+          interaction: { ...opened.interaction, credential: null },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.interaction.credential must be an object");
+    expect(scrubSessionInteraction(contaminated.interaction)).toEqual({
+      ...opened.interaction,
+      native: { id: null, detail: null },
+    });
+  });
+
   for (const payload of payloads) {
     it(`round-trips ${payload.kind}${"attention" in payload ? ` (${payload.attention.kind})` : ""}${"receipt" in payload ? ` (${payload.receipt.status})` : ""}`, () => {
       expect(roundTrip(payload)).toEqual(payload);
@@ -578,7 +685,7 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       {
         kind: "interaction.resolve",
         attachmentId: "attachment-1",
-        interactionId: "ask:tool-1",
+        interactionId: "budget-ask:tool-1",
         resolution: { optionIds: ["once"], response: null },
         reference: { id: "sha256:r", mediaType: null, digest: null },
       },
@@ -646,7 +753,7 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
     const resolved = roundTrip({
       kind: "interaction.resolved",
       attachmentId: "attachment-1",
-      interactionId: "ask:tool-1",
+      interactionId: "budget-ask:tool-1",
       resolution: { optionIds: [], response: null },
     });
     expect(resolved.kind === "interaction.resolved" && "answers" in resolved.resolution).toBe(
@@ -679,7 +786,7 @@ const resolved = (resolution: unknown) =>
     {
       kind: "interaction.resolved",
       attachmentId: "attachment-1",
-      interactionId: "ask:tool-1",
+      interactionId: "budget-ask:tool-1",
       resolution,
     },
     "payload",
@@ -973,6 +1080,17 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.input.mcpManagementNames has an unsupported value");
+    for (const askUserQuestions of [false, null, "true", 1]) {
+      expect(() =>
+        decodeSessionEventPayload(
+          {
+            kind: "session.input.recorded",
+            input: { kind: "tool-surface", tools: ["ask_user"], askUserQuestions },
+          },
+          "payload",
+        ),
+      ).toThrow("payload.input.askUserQuestions must be true when present");
+    }
     // Code Mode's name and its record travel together, and the record routes
     // exactly the surface it was frozen with (VC-471).
     expect(() =>
@@ -1025,19 +1143,6 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.selection.reasoningLevel has an unsupported value");
-    expect(() =>
-      decodeSessionEventPayload(
-        {
-          kind: "authority.denied",
-          attachmentId: "attachment-1",
-          turnId: null,
-          tool: 7,
-          cause: "cause",
-          reason: "reason",
-        },
-        "payload",
-      ),
-    ).toThrow("payload.tool must be a string");
     expect(() =>
       decodeSessionEventPayload(
         {
@@ -1123,7 +1228,7 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         {
           kind: "interaction.cancelled",
           attachmentId: "attachment-1",
-          interactionId: "ask:tool-1",
+          interactionId: "budget-ask:tool-1",
           reason: "resolved",
         },
         "payload",
@@ -1253,24 +1358,6 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
     );
   });
 
-  it("round-trips a recorded Authority Snapshot, so a denial can name the pack that ruled", () => {
-    const authority: AuthoritySnapshot = {
-      mode: "auto",
-      location: "worktree",
-      enforcement: "enforce",
-      judgmentMode: "ask",
-      tools: ["read", "edit", "write", "execute", "ask_user"],
-      rulePackId: BUILTIN_RULE_PACK_ID,
-      rulePackHash: BUILTIN_RULE_PACK_HASH,
-      classifierModel: null,
-      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
-    };
-
-    const decoded = openedAttachment({ ...attachment, authority });
-
-    expect(decoded.kind === "attachment.opened" && decoded.attachment.authority).toEqual(authority);
-  });
-
   it("reads an attachment written before authority was recorded as governed by nothing", () => {
     // Every attachment in history predates VC-44 and carries no `authority` key.
     // Refusing to decode without one would make those Sessions unopenable rather
@@ -1281,71 +1368,6 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
       kind: "attachment.opened",
       attachment: { ...legacy, authority: null },
     });
-  });
-
-  it("keeps a tool name this build no longer offers, because history outlives a vocabulary", () => {
-    // The record is most valuable precisely here: it is how a reader learns that
-    // the Session which made a call held a tool that has since been retired.
-    const decoded = openedAttachment({
-      ...attachment,
-      authority: { ...recordedAuthority, tools: ["read", "a_tool_that_was_retired"] },
-    });
-
-    expect(decoded.kind === "attachment.opened" && decoded.attachment.authority?.tools).toEqual([
-      "read",
-      "a_tool_that_was_retired",
-    ]);
-  });
-
-  it("rejects a corrupt Authority Snapshot rather than guessing what governed a Session", () => {
-    expect(() => openedAttachment({ ...attachment, authority: "enforce" })).toThrow(
-      "payload.attachment.authority must be an object",
-    );
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, enforcement: "off" } }),
-    ).toThrow("payload.attachment.authority.enforcement has an unsupported value");
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, mode: "manual" } }),
-    ).toThrow("payload.attachment.authority.mode has an unsupported value");
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, location: "orbit" } }),
-    ).toThrow("payload.attachment.authority.location has an unsupported value");
-    expect(() =>
-      openedAttachment({
-        ...attachment,
-        authority: { ...recordedAuthority, judgmentMode: "vibes" },
-      }),
-    ).toThrow("payload.attachment.authority.judgmentMode has an unsupported value");
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, tools: "read" } }),
-    ).toThrow("payload.attachment.authority.tools must be an array");
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, tools: [7] } }),
-    ).toThrow("payload.attachment.authority.tools[0] must be a string");
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, rulePackId: 1 } }),
-    ).toThrow("payload.attachment.authority.rulePackId must be a string");
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, rulePackHash: 1 } }),
-    ).toThrow("payload.attachment.authority.rulePackHash must be a string");
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, classifierModel: 1 } }),
-    ).toThrow("payload.attachment.authority.classifierModel must be a string");
-    expect(() =>
-      openedAttachment({ ...attachment, authority: { ...recordedAuthority, fallback: null } }),
-    ).toThrow("payload.attachment.authority.fallback must be an object");
-    expect(() =>
-      openedAttachment({
-        ...attachment,
-        authority: { ...recordedAuthority, fallback: { consecutiveDenials: "three" } },
-      }),
-    ).toThrow("payload.attachment.authority.fallback.consecutiveDenials must be an integer");
-    expect(() =>
-      openedAttachment({
-        ...attachment,
-        authority: { ...recordedAuthority, fallback: { consecutiveDenials: 3 } },
-      }),
-    ).toThrow("payload.attachment.authority.fallback.sessionDenials must be an integer");
   });
 
   it("rejects malformed attention, prompts, and answers", () => {
@@ -1651,57 +1673,6 @@ describe("the renderer-safe scrub", () => {
     expect(scrubbed.kind === "attachment.opened" && "native" in scrubbed.attachment).toBe(false);
   });
 
-  /*
-   * The Authority summary (VC-285) is the ONE thing the attachment scrub keeps
-   * withholding and a surface now needs: a chip that says what the live
-   * attachment was pinned to. It is derived beside the scrub rather than added
-   * back to `RendererSessionAttachment`, so the durable Snapshot's recovery-
-   * adjacent remainder — the tool surface, the classifier model, the location,
-   * the thresholds — stays behind the product edge.
-   */
-  it("summarizes the live attachment's saved policy without shipping the Snapshot", () => {
-    const summary = scrubSessionAuthority({ ...attachment, authority: recordedAuthority });
-
-    expect(summary).toEqual({
-      attachmentId: "attachment-1",
-      snapshot: {
-        enforcement: "enforce",
-        rulePackId: BUILTIN_RULE_PACK_ID,
-        rulePackHash: BUILTIN_RULE_PACK_HASH,
-      },
-    });
-    // Everything else the Snapshot carries stays host-side.
-    for (const withheld of ["tools", "classifierModel", "fallback", "location", "judgmentMode"]) {
-      expect(withheld in (summary?.snapshot ?? {})).toBe(false);
-    }
-  });
-
-  it("keeps observe distinguishable from enforce, because they are different outcomes", () => {
-    expect(
-      scrubSessionAuthority({
-        ...attachment,
-        authority: { ...recordedAuthority, enforcement: "observe" },
-      })?.snapshot?.enforcement,
-    ).toBe("observe");
-  });
-
-  /*
-   * A `null` Snapshot is a permanent answer, not a gap: `enforcement: "off"`
-   * hands the attachment none, and so does every attachment written before
-   * VC-44. The summary says so rather than letting a reader infer today's
-   * project setting.
-   */
-  it("reports an attachment that saved no Snapshot as exactly that", () => {
-    expect(scrubSessionAuthority(attachment)).toEqual({
-      attachmentId: "attachment-1",
-      snapshot: null,
-    });
-  });
-
-  it("has nothing to say when no attachment is live", () => {
-    expect(scrubSessionAuthority(null)).toBeNull();
-  });
-
   it("nulls a failure's diagnostic beside its scrubbed attachment", () => {
     const scrubbed = scrubSessionEventPayload({
       kind: "attachment.failed",
@@ -1712,6 +1683,64 @@ describe("the renderer-safe scrub", () => {
       kind: "attachment.failed",
       failure: { code: "spawn", detail: "no binary", diagnostic: null },
     });
+  });
+
+  it("keeps the ask_user declaration revision durable and behind the renderer edge", () => {
+    const payload: SessionEventPayload = {
+      kind: "session.input.recorded",
+      input: {
+        kind: "tool-surface",
+        tools: ["ask_user"],
+        askUserQuestions: true,
+      },
+    };
+    expect(roundTrip(payload)).toEqual(payload);
+    const scrubbed = {
+      kind: "session.input.recorded",
+      input: { kind: "tool-surface", tools: ["ask_user"] },
+    };
+    expect(scrubSessionEventPayload(payload)).toEqual(scrubbed);
+    expect(decodeRendererSessionEventPayload(payload, "payload")).toEqual(scrubbed);
+    expect(parseRendererSessionEvent(rendererEvent({ payload }), "event")).toMatchObject({
+      ok: true,
+      event: { payload: scrubbed },
+    });
+  });
+
+  it("scrubs both ask_user and Code Mode birth markers from the same renderer record", () => {
+    const payload = {
+      kind: "session.input.recorded",
+      input: {
+        kind: "tool-surface",
+        tools: ["read", "ask_user", "codemode"],
+        askUserQuestions: true,
+        codeMode: {
+          routes: { read: "both", ask_user: "direct" },
+          limits: { ...DEFAULT_CODE_MODE_LIMITS },
+          descriptionVersion: 2,
+        },
+      },
+    } satisfies SessionEventPayload;
+    const safe = {
+      kind: "session.input.recorded",
+      input: {
+        kind: "tool-surface",
+        tools: ["read", "ask_user", "codemode"],
+        codeMode: {
+          routes: { read: "both", ask_user: "direct" },
+          limits: DEFAULT_CODE_MODE_LIMITS,
+        },
+      },
+    };
+    expect(roundTrip(payload)).toEqual(payload);
+    expect(scrubSessionEventPayload(payload)).toEqual(safe);
+    expect(decodeRendererSessionEventPayload(payload, "payload")).toEqual(safe);
+    expect(parseRendererSessionEvent(rendererEvent({ payload }), "event")).toMatchObject({
+      ok: true,
+      event: { payload: safe },
+    });
+    expect(payload.input.askUserQuestions).toBe(true);
+    expect(payload.input.codeMode.descriptionVersion).toBe(2);
   });
 
   // Usage is metadata about a request, never any of its content. There is no
@@ -1885,25 +1914,16 @@ describe("the renderer-safe scrub", () => {
       {
         kind: "interaction.resolved",
         attachmentId: "attachment-1",
-        interactionId: "ask:tool-1",
+        interactionId: "budget-ask:tool-1",
         resolution: { optionIds: ["once"], response: null },
       },
       {
         kind: "interaction.cancelled",
         attachmentId: "attachment-1",
-        interactionId: "ask:tool-1",
+        interactionId: "budget-ask:tool-1",
         reason: "abandoned",
       },
       { kind: "command.receipt.recorded", receipt },
-      // Volli's own vocabulary already, not a harness's.
-      {
-        kind: "authority.denied",
-        attachmentId: "attachment-1",
-        turnId: null,
-        tool: "bash",
-        cause: "command.destructive-removal",
-        reason: "refused",
-      },
       // An executor's entry id, which addresses its history and locates
       // nothing on disk, and a diagnostic sanitized before it was recorded.
       {
@@ -2163,4 +2183,211 @@ describe("the renderer-side parse", () => {
       message: "event.payload.attachment is not a valid Session attachment",
     });
   });
+});
+
+it("keeps Code Mode's birth description version durable but host-only", () => {
+  for (const descriptionVersion of [undefined, 2] as const) {
+    const payload = {
+      kind: "session.input.recorded",
+      input: {
+        kind: "tool-surface",
+        tools: ["read", "codemode"],
+        codeMode: {
+          routes: { read: "both" },
+          limits: { ...DEFAULT_CODE_MODE_LIMITS },
+          ...(descriptionVersion === undefined ? {} : { descriptionVersion }),
+        },
+      },
+    } satisfies SessionEventPayload;
+    expect(decodeSessionEventPayload(JSON.parse(encodeSessionJson(payload)), "payload")).toEqual(
+      payload,
+    );
+    const safe = scrubSessionEventPayload(payload);
+    expect(safe).toEqual({
+      kind: "session.input.recorded",
+      input: {
+        ...payload.input,
+        codeMode: { routes: { read: "both" }, limits: DEFAULT_CODE_MODE_LIMITS },
+      },
+    });
+    expect(payload.input.codeMode?.descriptionVersion).toBe(descriptionVersion);
+    const event: SessionEvent = {
+      id: "surface-event",
+      sessionId: "session-1",
+      sequence: 1,
+      occurredAt: 1,
+      recordedAt: 1,
+      provenance,
+      payload,
+    };
+    // Even raw host JSON is scrubbed on renderer decoding; no mutation of
+    // the durable record or attach-time declaration generation is needed.
+    expect(parseRendererSessionEvent(JSON.parse(encodeSessionJson(event)), "event")).toEqual({
+      ok: true,
+      event: scrubSessionEvent(event),
+    });
+    expect(JSON.stringify(scrubSessionEvent(event))).not.toContain("descriptionVersion");
+  }
+});
+
+it("round-trips refreshes with future tool names without corrupting birth or dropping their notice", () => {
+  const future = "write";
+  const raw = {
+    kind: "session.tools.refreshed",
+    trigger: "cold-turn",
+    delta: {
+      askUserQuestions: true,
+      refreshDescriptions: true,
+      routes: { read: "both", ask_user: "direct", [future]: "both", mcp__paper__read: "deferred" },
+      codeMode: {
+        limits: DEFAULT_CODE_MODE_LIMITS,
+        descriptionVersion: 2,
+      },
+      mcpTools: [
+        {
+          serverId: "paper",
+          toolName: "read",
+          providerName: "mcp__paper__read",
+          description: "Private declaration",
+          inputSchema: { type: "object", properties: { secret: { type: "string" } } },
+        },
+      ],
+    },
+    added: ["ask_user", "codemode", future, "mcp__paper__read"],
+    changed: [],
+  };
+  const decoded = decodeSessionEventPayload(JSON.parse(JSON.stringify(raw)), "payload");
+  expect(decoded).toEqual(raw);
+  const safe = { kind: raw.kind, trigger: raw.trigger, added: raw.added, changed: raw.changed };
+  expect(scrubSessionEventPayload(decoded)).toEqual(safe);
+  expect(decodeRendererSessionEventPayload(JSON.parse(JSON.stringify(raw)), "payload")).toEqual(
+    safe,
+  );
+  expect(decodeRendererSessionEventPayload(JSON.parse(JSON.stringify(safe)), "payload")).toEqual(
+    safe,
+  );
+  expect(
+    decodeRendererSessionEventPayload({ ...safe, trigger: "future-trigger" }, "payload"),
+  ).toMatchObject({ trigger: "future-trigger" });
+  expect(JSON.stringify(safe)).not.toContain("surface");
+  const unknown = "future_builtin_from_next_release";
+  const unbindable = {
+    ...raw,
+    added: [...raw.added, unknown],
+    delta: {
+      ...raw.delta,
+      routes: { ...raw.delta.routes, [unknown]: "both" },
+    },
+  };
+  expect(decodeSessionEventPayload(unbindable, "payload")).toMatchObject({
+    added: expect.arrayContaining([unknown]),
+  });
+  expect(() =>
+    decodeSessionEventPayload(
+      { ...raw, delta: { ...raw.delta, refreshDescriptions: false } },
+      "payload",
+    ),
+  ).toThrow("refreshDescriptions must be true");
+  expect(() =>
+    decodeSessionEventPayload(
+      {
+        kind: "session.input.recorded",
+        input: {
+          kind: "tool-surface",
+          tools: [unknown],
+        },
+      },
+      "payload",
+    ),
+  ).toThrow("unsupported");
+  expect(decodeRendererSessionEventPayload(unbindable, "payload")).toEqual({
+    ...safe,
+    added: unbindable.added,
+  });
+  for (const field of ["added", "changed"] as const) {
+    expect(() => decodeSessionEventPayload({ ...raw, [field]: {} }, "payload")).toThrow(
+      "must be an array",
+    );
+    expect(() => decodeRendererSessionEventPayload({ ...safe, [field]: [7] }, "payload")).toThrow(
+      "must be a string",
+    );
+  }
+  expect(() => decodeSessionEventPayload({ ...raw, delta: null }, "payload")).toThrow(
+    "must be an object",
+  );
+});
+
+it("validates refresh deltas independently of the renderer notice", () => {
+  const base = {
+    kind: "session.tools.refreshed",
+    trigger: "future-trigger",
+    added: [] as string[],
+    changed: [],
+    delta: {},
+  };
+  expect(decodeSessionEventPayload(base, "payload")).toEqual(base);
+  expect(
+    decodeSessionEventPayload(
+      {
+        ...base,
+        delta: { routes: {}, mcpTools: [], descriptionVersion: 2, refreshDescriptions: true },
+      },
+      "payload",
+    ),
+  ).toEqual({
+    ...base,
+    delta: { routes: {}, mcpTools: [], descriptionVersion: 2, refreshDescriptions: true },
+  });
+  const acquired = {
+    ...base,
+    added: ["codemode"],
+    delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS }, routes: {} },
+  };
+  expect(decodeSessionEventPayload(acquired, "payload")).toEqual(acquired);
+  const malformed = [
+    { delta: undefined },
+    { delta: [] },
+    { delta: { mcpTools: {} } },
+    { added: ["read", "read"] },
+    { changed: ["read", "read"] },
+    { delta: { askUserQuestions: false } },
+    { delta: { refreshDescriptions: false } },
+    { delta: { askUserQuestions: true } },
+    { delta: { descriptionVersion: 1 } },
+    { delta: { routes: [] } },
+    { delta: { routes: { codemode: "direct" } } },
+    { added: ["write"], delta: { routes: { write: "invalid" } } },
+    { delta: { routes: { write: "code" } } },
+    { added: ["mcp__paper__read"] },
+    { added: ["codemode"] },
+    { delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS } } },
+    { added: ["codemode"], delta: { codeMode: null } },
+    {
+      added: ["codemode"],
+      delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS }, descriptionVersion: 2 },
+    },
+    { added: ["codemode"], delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS, routes: {} } } },
+    { added: ["codemode"], delta: { codeMode: { limits: {} } } },
+    { added: ["codemode", "write"], delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS } } },
+  ];
+  for (const patch of malformed) {
+    expect(() => decodeSessionEventPayload({ ...base, ...patch }, "payload")).toThrow();
+  }
+  // The renderer cannot compile or leak a delta, even a malformed one.
+  expect(
+    decodeRendererSessionEventPayload({ ...base, delta: { mcpTools: "private" } }, "payload"),
+  ).toEqual({ kind: base.kind, trigger: base.trigger, added: [], changed: [] });
+});
+
+it("retains birth refresh wording markers without defaulting historical records", () => {
+  const old = { kind: "session.input.recorded", input: { kind: "tool-surface", tools: ["read"] } };
+  expect(decodeSessionEventPayload(old, "payload")).toEqual(old);
+  const modern = { ...old, input: { ...old.input, refreshDescriptions: true } };
+  expect(decodeSessionEventPayload(modern, "payload")).toEqual(modern);
+  expect(() =>
+    decodeSessionEventPayload(
+      { ...old, input: { ...old.input, refreshDescriptions: false } },
+      "payload",
+    ),
+  ).toThrow("must be true");
 });

@@ -30,6 +30,7 @@ export * from "./host-notice";
 export * from "./interaction";
 export * from "./markdown-source";
 export * from "./message-projection";
+export * from "./message-delivery";
 export * from "./registry";
 export * from "./reasoning-drop-notice";
 export * from "./session-model";

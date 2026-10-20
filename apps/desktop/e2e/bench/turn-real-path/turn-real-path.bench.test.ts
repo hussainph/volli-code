@@ -46,7 +46,7 @@ function envelope(event: ObservabilityEvent, order: number, recordedAt: number):
 }
 
 const RUN = { runId: "run-1" };
-/** One turn's six paired facts in causal order on both sides. */
+/** One turn's five paired facts in causal order on both sides. */
 function consistentTurn(): {
   envelopes: RecordedEnvelope[];
   commits: LedgerCommit[];
@@ -68,10 +68,9 @@ function consistentTurn(): {
       1,
       40,
     ),
-    envelope({ kind: "authority", outcome: "allowed", waitDurationMs: 20, ...RUN }, 2, 80),
     envelope(
       { kind: "compaction", outcome: "compacted", reason: "overflow", durationMs: 9, ...RUN },
-      3,
+      2,
       120,
     ),
     envelope(
@@ -84,18 +83,15 @@ function consistentTurn(): {
         durationMs: 30,
         ...RUN,
       } as ObservabilityEvent,
-      4,
+      3,
       160,
     ),
-    envelope({ kind: "turn", outcome: "completed", durationMs: 160, ...RUN }, 5, 170),
+    envelope({ kind: "turn", outcome: "completed", durationMs: 160, ...RUN }, 4, 170),
   ];
   const kinds: Array<[string, number]> = [
     ["command.recorded", 5],
     ["turn.started", 11],
     ["usage.recorded", 41],
-    ["interaction.opened", 62],
-    ["command.recorded", 75],
-    ["interaction.resolved", 79],
     ["usage.recorded", 100],
     ["context.compacted", 121],
     ["usage.recorded", 161],
@@ -105,7 +101,7 @@ function consistentTurn(): {
   const ledger = kinds.map(([kind], index) => ({
     sequence: 10 + index,
     kind,
-    commandId: index === 0 || index === kinds.length - 1 ? COMMAND : index === 4 ? "answer" : null,
+    commandId: index === 0 || index === kinds.length - 1 ? COMMAND : null,
   }));
   const frames = kinds.map(([kind, arrivedAt], index) => ({
     sequence: 10 + index,
@@ -122,10 +118,10 @@ function consistentTurn(): {
 }
 
 describe("VC-456 ledger cross-check", () => {
-  it("pairs all six facts and finds nothing wrong in a consistent turn", () => {
+  it("pairs all five facts and finds nothing wrong in a consistent turn", () => {
     const check = crossCheckLedger({ commandId: COMMAND, ...consistentTurn() });
     expect(check.missing).toEqual([]);
-    expect(check.paired).toHaveLength(6);
+    expect(check.paired).toHaveLength(5);
     expect(check.orderInversions).toBe(0);
     expect(check.causalityViolations).toEqual([]);
     expect(check.commitsMatchLedger).toBe(true);
@@ -134,15 +130,13 @@ describe("VC-456 ledger cross-check", () => {
 
   it("counts an envelope/ledger inversion even when every timestamp still increases", () => {
     const turn = consistentTurn();
-    // The ledger records the compaction before the authority answer.
-    const resolved = turn.ledger.findIndex((entry) => entry.kind === "interaction.resolved");
+    // The ledger records the final attempt before the compaction.
     const compacted = turn.ledger.findIndex((entry) => entry.kind === "context.compacted");
-    turn.ledger[resolved]!.kind = "context.compacted";
-    turn.ledger[compacted]!.kind = "interaction.resolved";
-    turn.frames[resolved]!.kind = "context.compacted";
-    turn.frames[compacted]!.kind = "interaction.resolved";
-    turn.commits[resolved]!.kind = "context.compacted";
-    turn.commits[compacted]!.kind = "interaction.resolved";
+    const final = turn.ledger.findLastIndex((entry) => entry.kind === "usage.recorded");
+    for (const entries of [turn.ledger, turn.frames, turn.commits]) {
+      entries[compacted]!.kind = "usage.recorded";
+      entries[final]!.kind = "context.compacted";
+    }
     expect(crossCheckLedger({ commandId: COMMAND, ...turn }).orderInversions).toBe(1);
   });
 
@@ -151,14 +145,6 @@ describe("VC-456 ledger cross-check", () => {
     turn.envelopes[0] = { ...turn.envelopes[0]!, recordedAt: 12 };
     expect(crossCheckLedger({ commandId: COMMAND, ...turn }).causalityViolations).toEqual([
       "turn-start: envelope after its durable fact",
-    ]);
-  });
-
-  it("names an authority wait that ended before the question reached the answerer", () => {
-    const turn = consistentTurn();
-    turn.envelopes[2] = { ...turn.envelopes[2]!, recordedAt: 61 };
-    expect(crossCheckLedger({ commandId: COMMAND, ...turn }).causalityViolations).toEqual([
-      "authority-answer: wait ended before the question arrived",
     ]);
   });
 
@@ -173,7 +159,7 @@ describe("VC-456 ledger cross-check", () => {
   it("finds no turn for a command the ledger never recorded", () => {
     const check = crossCheckLedger({ commandId: "never-recorded", ...consistentTurn() });
     expect(check.paired).toEqual([]);
-    expect(check.missing).toHaveLength(6);
+    expect(check.missing).toHaveLength(5);
   });
 
   it("flags a durable fact no engine call was seen committing", () => {
@@ -230,9 +216,8 @@ describe("VC-456 real-path smoke", () => {
         expect(sample.eventOrderValid).toBe(true);
         expect(sample.modelAttemptCount).toBe(3);
         expect(sample.toolRoundCount).toBe(1);
-        expect(sample.toolsByName["read"]?.count).toBe(2);
+        expect(sample.toolsByName["read"]?.count).toBe(1);
         expect(sample.toolsByName["bash"]?.count).toBe(1);
-        expect(sample.authorityWaitCount).toBe(1);
         expect(sample.compactionCount).toBe(1);
         expect(sample.retryCount).toBe(1);
         // The Session runtime's own queue measurement, not a fixture timer.
@@ -248,7 +233,7 @@ describe("VC-456 real-path smoke", () => {
       // One ledger shape: the same script produced the same durable history.
       expect(new Set(samples.map(({ ledgerShape }) => ledgerShape)).size).toBe(1);
 
-      // Privacy: the canary sat in the prompt, the replies and both tool files.
+      // Privacy: the canary sat in the prompt, the replies and the tool file.
       const outputs = [
         JSON.stringify(turns.flatMap((turn) => turn.envelopes.map(({ event }) => event))),
         JSON.stringify(turns.map((turn) => [turn.frames, turn.ledger])),
@@ -262,7 +247,7 @@ describe("VC-456 real-path smoke", () => {
     },
   );
 
-  it("marks a turn incomplete when its message or its answer did not land", async () => {
+  it("marks a turn incomplete when its message or its durable facts did not land", async () => {
     const composition = await createRealPathComposition();
     let turn: RawTurn;
     try {
@@ -274,10 +259,6 @@ describe("VC-456 real-path smoke", () => {
     expect(analyzeRealTurn({ ...turn, receiptStatus: "rejected" }, "rejected").complete).toBe(
       false,
     );
-    expect(analyzeRealTurn({ ...turn, answers: [] }, "unanswered").complete).toBe(false);
-    expect(
-      analyzeRealTurn({ ...turn, answers: [turn.answers[0]!, turn.answers[0]!] }, "twice").complete,
-    ).toBe(false);
     expect(
       analyzeRealTurn({ ...turn, commits: turn.commits.slice(0, -2) }, "commit lost").complete,
     ).toBe(false);
@@ -365,6 +346,8 @@ describe("VC-456 real-path smoke", () => {
       arms: [arm],
     });
     expect(markdown).not.toContain(PRIVATE_CONTENT_CANARY);
+    expect(markdown).not.toContain("Authority wait");
+    expect(markdown).not.toContain("interaction.resolve");
   });
 });
 

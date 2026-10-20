@@ -13,12 +13,15 @@
  * possible to drop a caller's cancellation by omission.
  */
 
+import { addAbortListener } from "node:events";
+import type { ForegroundShellExecutor } from "./vendor/pi-harness/types";
+
 import {
   NodeExecutionEnv,
   type Context,
   type ExecutionEnv,
   type ShellExecOptions,
-} from "@earendil-works/pi-agent-core/node";
+} from "./harness-env";
 import { VOLLI_SESSION_ENV, VOLLI_SESSION_TOKEN_ENV, VOLLI_TICKET_ENV } from "@volli/shared";
 
 /**
@@ -47,6 +50,8 @@ export interface PiSessionEnvIdentity {
 }
 
 export interface PiExecutionEnvOptions {
+  /** Host-owned bash processes which a person can move beside the turn. */
+  foregroundExecutor?: ForegroundShellExecutor;
   /**
    * Directories prepended onto the sanitized environment's `PATH`, in order,
    * before every `exec`. See {@link piExecutionEnv} for why this exists.
@@ -79,6 +84,10 @@ export interface PiExecutionEnvOptions {
    * therefore cannot be shadowed from here.
    */
   environment?: Readonly<Record<string, string>>;
+  /** Awaited at each exec, so credentials supplied after attach reach later commands. */
+  secretEnvironment?: (
+    signal?: AbortSignal,
+  ) => Readonly<Record<string, string>> | Promise<Readonly<Record<string, string>>>;
   /**
    * Runs exactly once when the attachment cleans this environment up. Main
    * uses it to revoke the per-attachment Session token exported above; keeping
@@ -207,6 +216,8 @@ export interface SessionCommandEnvironmentOptions {
   identity?: PiSessionEnvIdentity;
   /** See {@link PiExecutionEnvOptions.environment}. */
   environment?: Readonly<Record<string, string>>;
+  /** Synchronous record-builder hook; async callers resolve credentials before building. */
+  secretEnvironment?: () => Readonly<Record<string, string>>;
   /**
    * The caller's own variables, believed over the sanitized set and the
    * identity alike: a tool call that names `VOLLI_SESSION` explicitly is
@@ -241,30 +252,39 @@ export function sessionCommandEnvironment(
   const merged = {
     ...unsandboxedEnvironment(source),
     ...options.environment,
+    ...options.secretEnvironment?.(),
     ...identityVariables(options.identity),
     ...options.overrides,
   };
   return { ...merged, PATH: prefixedPath(merged.PATH ?? "", options.pathPrefixes ?? []) };
 }
 
+/** Withdraw even when a host hook ignores cancellation; release the listener on every outcome. */
+async function untilAborted<T>(pending: T | Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (signal === undefined) return pending;
+  const aborted = Promise.withResolvers<never>();
+  const listener = addAbortListener(signal, () => aborted.reject(signal.reason));
+  try {
+    return await Promise.race([pending, aborted.promise]);
+  } finally {
+    listener[Symbol.dispose]();
+  }
+}
+
 class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
   readonly #pathPrefixes: readonly string[];
   readonly #identity: PiSessionEnvIdentity | undefined;
   readonly #environment: Readonly<Record<string, string>> | undefined;
+  readonly #secretEnvironment: PiExecutionEnvOptions["secretEnvironment"];
   readonly #onCleanup: (() => void | Promise<void>) | undefined;
   #cleaned = false;
 
-  constructor(options: {
-    cwd: string;
-    pathPrefixes?: readonly string[];
-    identity?: PiSessionEnvIdentity;
-    environment?: Readonly<Record<string, string>>;
-    onCleanup?: () => void | Promise<void>;
-  }) {
-    super({ cwd: options.cwd });
+  constructor(options: PiExecutionEnvOptions & { cwd: string }) {
+    super({ cwd: options.cwd, foregroundExecutor: options.foregroundExecutor });
     this.#pathPrefixes = options.pathPrefixes ?? [];
     this.#identity = options.identity;
     this.#environment = options.environment;
+    this.#secretEnvironment = options.secretEnvironment;
     this.#onCleanup = options.onCleanup;
   }
 
@@ -279,12 +299,21 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
    * implementation untouched.
    */
   override async exec(command: string, options: ShellExecOptions | undefined, context: Context) {
+    // Resolve credentials before building the record or starting a child;
+    // a failed read must never run a command with missing credentials.
+    context.abortSignal?.throwIfAborted();
+    const secrets = await untilAborted(
+      this.#secretEnvironment?.(context.abortSignal),
+      context.abortSignal,
+    );
+    context.abortSignal?.throwIfAborted();
     // The one record builder, so what `execute` hands a command and what a
     // background shell is spawned with cannot differ (VC-270).
     const env = sessionCommandEnvironment(process.env, {
       pathPrefixes: this.#pathPrefixes,
       identity: this.#identity,
       environment: this.#environment,
+      secretEnvironment: () => secrets ?? {},
       overrides: options?.env,
     });
     return super.exec(command, { ...options, env, inheritEnv: false }, context);
@@ -323,15 +352,14 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
  * not assumed. Only Seatbelt's `denyRead` ever answered that, and nothing
  * installs it today.
  *
- * `ScopedExecutionEnv` is the boundary that used to be installed here and the
- * one the two-axis authority rearchitecture rebuilds on. It is kept
- * whole, with the stricter {@link scopedEnvironment} it was written against;
- * nothing wires it up.
+ * `ScopedExecutionEnv` remains available to hosts injecting a scoped boundary,
+ * with the stricter {@link scopedEnvironment}; this default path does not use it.
  *
- * NO SPAWN LEDGER ROW ON THIS PATH, and the omission is a measurement rather
- * than an oversight (VC-341). Pi's `NodeExecutionEnv` owns the spawn here and
- * exposes no child, no pid and no spawn hook — `exec` resolves only once the
- * command has finished — so there is no honest moment at which this class could
+ * With `foregroundExecutor` (VC-757), the host owns the spawn and writes the
+ * normal shell ledger row before returning its handoff control. The standalone
+ * fallback has NO SPAWN LEDGER ROW (VC-341): `NodeExecutionEnv` owns its spawn and
+ * exposes no child or pid to this class — `exec` resolves only once the
+ * command has finished — so there is no honest moment at which this fallback could
  * write `(pid, pgid, startTime)`. Inventing one from a process-table scan would
  * be a guess written into a ledger whose whole value is that it is not a guess.
  * `ScopedExecutionEnv`, which does own its spawn, takes the ledger port; what
@@ -362,9 +390,11 @@ export async function piExecutionEnv(
 ): Promise<ExecutionEnv> {
   return new SanitizedEnvExecutionEnv({
     cwd: workspacePath,
+    foregroundExecutor: options?.foregroundExecutor,
     pathPrefixes: options?.pathPrefixes,
     identity: options?.identity,
     environment: options?.environment,
+    secretEnvironment: options?.secretEnvironment,
     onCleanup: options?.onCleanup,
   });
 }

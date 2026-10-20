@@ -206,7 +206,7 @@ describe("createNotificationActivation", () => {
   });
 });
 
-describe("a window whose renderer has not subscribed yet (round 2)", () => {
+describe("a window whose renderer has not subscribed yet", () => {
   /**
    * The listener installs after `await boot()`, so a window can exist for
    * hundreds of milliseconds with nothing listening. A push into that gap is
@@ -262,7 +262,7 @@ describe("a window whose renderer has not subscribed yet (round 2)", () => {
     expect(booting.sent).toEqual([]);
   });
 
-  it("brings forward the window it routes to, not a different one (round 5)", () => {
+  it("brings forward the window it routes to, not a different one", () => {
     // The focused window is still booting; the subscribed one is minimized.
     // Restoring the first and routing into the second would leave the person
     // looking at a blank window while a hidden one navigated.

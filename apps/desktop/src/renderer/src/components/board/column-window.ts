@@ -4,7 +4,7 @@
  * `board-column.tsx` used to render one `TicketCard` per ticket with no bound
  * at all, and a card is not a cheap thing: each one is a dnd-kit `useSortable`
  * registration, a Radix context-menu root with its whole item tree built as
- * elements on every render, and two store subscriptions. At the owner's 391
+ * elements on every render, and two store subscriptions. At 391
  * tickets that is the board's whole mount cost, and the board is re-mounted
  * from scratch on every return from a Ticket.
  *

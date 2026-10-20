@@ -3,6 +3,8 @@
  * and Agent Runtime. MCP SDK values never cross into this module.
  */
 
+import Ajv from "ajv";
+import Ajv2019 from "ajv/dist/2019.js";
 import Ajv2020 from "ajv/dist/2020.js";
 
 import {
@@ -330,11 +332,37 @@ export type McpToolSanitization =
 
 const PROVIDER_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 const SERVER_ID = /^[A-Za-z0-9_-]+$/;
-const JSON_SCHEMA_VALIDATOR = new Ajv2020({
+const JSON_SCHEMA_OPTIONS = {
   addUsedSchema: false,
   strict: false,
   validateFormats: false,
-});
+} as const;
+const JSON_SCHEMA_2020 = new Ajv2020(JSON_SCHEMA_OPTIONS);
+/**
+ * Only bundled, recognized meta-schemas: never fetch a server's $schema URI.
+ * Each draft gets its own validator, not merely an alias of the 2020-12
+ * meta-schema (draft-07/2019-09 allow tuple `items`, for example).
+ * Undeclared schemas keep the existing 2020-12 default. This is meta-schema
+ * validation only; compiling a server's schema here would resolve its $refs
+ * and retain untrusted schemas in Ajv's cache across catalog refreshes.
+ */
+const JSON_SCHEMA_VALIDATORS = new Map([
+  ["http://json-schema.org/draft-07/schema", new Ajv(JSON_SCHEMA_OPTIONS)],
+  ["https://json-schema.org/draft/2019-09/schema", new Ajv2019(JSON_SCHEMA_OPTIONS)],
+  ["https://json-schema.org/draft/2020-12/schema", JSON_SCHEMA_2020],
+]);
+// Recognize the HTTP/HTTPS spellings in use without rewriting a declaration
+// or aliasing one draft to another. Each fixed alias resolves only locally to
+// its bundled meta-schema. Snapshot the entries before adding their aliases.
+// eslint-disable-next-line unicorn/no-useless-spread -- live Map iteration would also visit the newly added aliases.
+for (const [uri, validator] of [...JSON_SCHEMA_VALIDATORS]) {
+  const alias = uri.replace(/^https?:/, uri.startsWith("https:") ? "http:" : "https:");
+  // This fixed host-authored wrapper needs no meta-validation at registration.
+  // Ajv would compile it eagerly and violate renderer CSP on module import.
+  // Server schemas still undergo validateSchema below, on the host at discovery.
+  validator.addMetaSchema({ $ref: uri }, alias, false);
+  JSON_SCHEMA_VALIDATORS.set(alias, validator);
+}
 
 /** Small deterministic identity suffix. Final collision detection remains mandatory. */
 function identityHash(input: string): string {
@@ -530,9 +558,17 @@ function schemaFailure(value: unknown, label: "input schema" | "output schema"):
   const encoded = JSON.stringify(value);
   if (encoded.length > MCP_SCHEMA_MAX_CHARS) return `${label} is too large`;
   try {
-    return JSON_SCHEMA_VALIDATOR.validateSchema(value)
-      ? null
-      : `${label} must be valid JSON Schema`;
+    const dialect = root["$schema"];
+    // An empty fragment identifies the same meta-schema. Normalize only the
+    // lookup key: keep the declaration and the entire advertised schema intact.
+    const validator =
+      dialect === undefined
+        ? JSON_SCHEMA_2020
+        : typeof dialect === "string"
+          ? JSON_SCHEMA_VALIDATORS.get(dialect.replace(/#$/, ""))
+          : undefined;
+    if (validator === undefined) throw new Error("Unsupported JSON Schema dialect");
+    return validator.validateSchema(value) ? null : `${label} must be valid JSON Schema`;
   } catch {
     return `${label} must be valid JSON Schema`;
   }
@@ -823,18 +859,15 @@ export function mcpEndpointSecretRefusal(): string {
  * The sentence a caller must read before a server is removed (VC-380).
  *
  * Removal is worse than it looks, and the warning says the part a caller could
- * not guess: a Session's MCP tools are frozen at its birth, and
- * `serversForFrozenMcpTools` THROWS when a frozen tool's server is gone — so
- * deleting a row breaks reattachment for older Sessions that were using it.
- * Disabling leaves the row in place and only changes what NEW Sessions get,
- * which is what most callers actually mean, so it is named here rather than
- * left to be discovered.
+ * not guess: Sessions retain their tools, but removal deletes the transport
+ * and makes calls unavailable. Disabling keeps configuration and credentials,
+ * so it is the reversible alternative.
  */
 export function mcpRemovalWarning(serverName: string): string {
   return [
     `Removing ${serverName} deletes its configuration.`,
-    `Any older Session that was born holding one of ${serverName}'s tools will fail to reattach afterwards, because the transport its frozen tool needs no longer exists.`,
-    "That is not reversible by re-adding the server under a new id. If the intent is only to keep the tools out of NEW Sessions, call server_disable instead: it leaves every existing Session able to reattach.",
+    `Sessions keep ${serverName}'s tool names and can reattach, but calls return a named unavailable error because its transport was removed.`,
+    "That is not reversible by re-adding the server under a new id. If the intent is only to stop offering additions, call server_disable instead: it keeps the configuration for existing Sessions.",
     "A server holding credentials a person set up \u2014 a header, an environment value, a stored secret or a sign-in \u2014 cannot be removed by an agent at all: removing it deletes them, so only a person can, in Settings \u2192 Configure \u2192 MCP Servers.",
   ].join(" ");
 }

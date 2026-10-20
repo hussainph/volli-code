@@ -1,6 +1,7 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import type { Project, SessionHarnessState, SessionRecord } from "@volli/shared";
+import type { ChatSessionRecord, Project, SessionHarnessState, SessionRecord } from "@volli/shared";
 
 import { seedSlice } from "@volli/session-presentation";
 import { HomeRail } from "./home-rail";
@@ -8,6 +9,7 @@ import { HOME_BOARD_TAB_ID } from "./home-tabs";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
+import { useRemoteSessionAvailabilityStore } from "@renderer/stores/remote-session-availability";
 import { useSessionsStore, type SessionLayout, type SessionTab } from "@renderer/stores/sessions";
 import {
   DEFAULT_RAIL_FOLDS,
@@ -231,12 +233,9 @@ describe("HomeRail", () => {
   });
 
   it("draws ONE block on Now — the roster — and no Session-identity card", () => {
-    // VC-406, revision 05. Now carried a Session-identity card (model, tier,
-    // effort) over a venue card over the usage card, and the roster arrived as
-    // a fourth thing between them. The approved page is the roster: the
-    // identity was a second answer to what the front tab and the composer's
-    // own pill already say, and it stood between the page's title and the block
-    // the page exists for.
+    // VC-406. Now presents the roster, not a second Session-identity card:
+    // the active tab and composer's pill already identify the Session, model,
+    // and effort. Duplicating them would separate the title from the roster.
     seedVenue();
     const slice = seedSlice("ready");
     slice.projection = {
@@ -251,7 +250,6 @@ describe("HomeRail", () => {
       },
       status: "open",
       liveExecutor: null,
-      authority: null,
       attention: { active: [], primary: null },
       interactions: { active: [], resolved: [] },
       signal: null,
@@ -273,6 +271,60 @@ describe("HomeRail", () => {
     expect(markup).not.toContain("haiku-4.5");
     expect(markup).not.toContain("Low effort");
     expect(markup).not.toContain("No session in front");
+  });
+
+  it("marks Home Run Sessions without printing another title at normal or narrow widths", () => {
+    const chat: ChatSessionRecord = {
+      sessionId: "chat-run",
+      title: "Review the runtime migration",
+      projectId: "p1",
+      ticketId: null,
+      createdAt: 1,
+      adapterId: "pi",
+      live: true,
+      activity: "working",
+      waitingOn: null,
+      outcome: null,
+      lastActivityAt: 2,
+      bornTicketless: true,
+      role: "project",
+      parentSessionId: null,
+      model: null,
+    };
+    useProjectSessionsStore.getInitialState().listingState = { p1: "loaded" };
+    useProjectSessionsStore.getInitialState().byProject = {
+      p1: {
+        terminal: [
+          terminal("terminal-run", "Review the shell migration"),
+          terminal("manual", "My shell"),
+        ],
+        chat: [chat],
+        provenance: {
+          "chat-run": {
+            kind: "automation",
+            automationRunId: null,
+            automationName: "BE Code Review",
+          },
+          "terminal-run": { kind: "automation", automationRunId: null, automationName: null },
+        },
+      },
+    };
+    // The live chat and the recorded terminal both keep their origin mark.
+    useUiStore.getInitialState().railFolds = { ...DEFAULT_RAIL_FOLDS, sessionsRecord: true };
+
+    for (const width of [RAIL_DEFAULT_WIDTH, RAIL_MIN_WIDTH]) {
+      useUiStore.getInitialState().railWidth = width;
+      const markup = draw(HOME_BOARD_TAB_ID);
+      expect(markup).toContain('aria-label="Started by the Automation BE Code Review"');
+      expect(markup).toContain('aria-label="Started by an Automation"');
+      expect(markup.match(/aria-label="Started by/g)).toHaveLength(2);
+      expect(markup).toContain("Review the runtime migration\nAutomation · BE Code Review");
+      expect(new DOMParser().parseFromString(markup, "text/html").body.textContent).not.toContain(
+        "BE Code Review",
+      );
+      expect(markup).not.toContain('title="My shell"');
+      expect(markup).toContain("My shell");
+    }
   });
 
   it("pins the Main checkout under EVERY page, and cost under Now alone", () => {
@@ -388,7 +440,7 @@ describe("HomeRail", () => {
     expect(markup).toContain("No sessions yet");
   });
 
-  // VC-406, the spec review's finding 6. Home mapped every open, non-ended
+  // VC-406: Home mapped every open, non-ended
   // terminal to `ready`/"Open": a pane blocked at a permission prompt read the
   // same as one printing a build log, and sorted wherever its record's age put
   // it. The rail reads the sessions store's own facts now — the same ones the
@@ -462,5 +514,25 @@ describe("HomeRail", () => {
     expect(markup).toContain('data-testid="home-sessions-error"');
     expect(markup).toContain("Sessions failed to read");
     expect(markup).toContain("Retry");
+  });
+
+  it("names a host that grants no Sessions instead of a failure with a Retry (VC-713, B3)", () => {
+    useProjectSessionsStore.getInitialState().byProject = {
+      p1: { terminal: [], chat: [], provenance: {}, read: {} },
+    };
+    useProjectSessionsStore.getInitialState().listingState = { p1: "loaded" };
+    // Server rendering reads the initial state; its field is read-only to callers.
+    Object.assign(useRemoteSessionAvailabilityStore.getInitialState(), {
+      unavailable: { p1: "Sessions aren’t available on box — update it to use them here" },
+    });
+    try {
+      const markup = draw(HOME_BOARD_TAB_ID);
+      expect(markup).toContain('data-testid="home-sessions-unavailable"');
+      expect(markup).toContain("Sessions aren’t available on box — update it to use them here");
+      expect(markup).not.toContain("No sessions yet");
+      expect(markup).not.toContain("Retry");
+    } finally {
+      Object.assign(useRemoteSessionAvailabilityStore.getInitialState(), { unavailable: {} });
+    }
   });
 });

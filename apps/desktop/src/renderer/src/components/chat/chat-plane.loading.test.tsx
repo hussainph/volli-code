@@ -105,7 +105,6 @@ const READY_PROJECTION = {
   attention: { active: [], primary: null },
   interactions: { active: [], resolved: [] },
   liveExecutor: null,
-  authority: null,
 };
 
 /** A store whose transport never answers, so the slice stays exactly as seeded. */

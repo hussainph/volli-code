@@ -5,7 +5,7 @@ Generated file. Do not edit by hand.
   verify:      pnpm run check:notices
 
 Scope: the macOS arm64 Volli Code application bundle (app id app.volli.desktop).
-It covers 589 third-party packages: the production dependency closure
+It covers 587 third-party packages: the production dependency closure
 of the desktop app and of the bundled `volli` CLI, the native platform packages
 electron-builder ships as binaries, the build-time sources whose output is part of
 the bundle, and the vendored material recorded in apps/desktop/notices/sources.json.
@@ -44,13 +44,16 @@ they are listed so the index accounts for every module in the bundle.
   @volli/agent-runtime
   @volli/cli
   @volli/desktop
+  @volli/host-core
+  @volli/host-install
+  @volli/host-protocol
   @volli/session-engine
   @volli/session-presentation
   @volli/session-rpc
   @volli/shared
 
 =========================================================================================================
-2. PACKAGE INDEX (589 packages)
+2. PACKAGE INDEX (587 packages)
 =========================================================================================================
 
   <package>@<version>  <licence declared by the package>  [how it reaches the .app]
@@ -98,12 +101,12 @@ they are listed so the index accounts for every module in the bundle.
   @dnd-kit/modifiers@9.0.0  MIT  [bundled into a chunk]
   @dnd-kit/sortable@10.0.0  MIT  [bundled into a chunk]
   @dnd-kit/utilities@3.2.2  MIT  [bundled into a chunk]
-  @earendil-works/chord@0.99.2  MIT  [bundled into a chunk]
-  @earendil-works/pi-agent-core@0.99.2  MIT  [bundled into a chunk]
-  @earendil-works/pi-ai@0.99.2  MIT  [bundled into a chunk]
-  @earendil-works/pi-codemode@0.99.2  MIT  [bundled into a chunk and node_modules tree, unpacked from the asar]
+  @earendil-works/chord@1.0.0  MIT  [bundled into a chunk]
+  @earendil-works/pi-agent-core@1.0.0  MIT  [bundled into a chunk]
+  @earendil-works/pi-ai@1.0.0  MIT  [bundled into a chunk]
+  @earendil-works/pi-codemode@1.0.0  MIT  [bundled into a chunk and node_modules tree, unpacked from the asar]
   @earendil-works/pi-mcp@0.99.2  MIT  [bundled into a chunk]
-  @earendil-works/pi-telemetry@0.99.2  MIT  [bundled into a chunk]
+  @earendil-works/pi-telemetry@1.0.0  MIT  [bundled into a chunk]
   @exodus/bytes@1.15.1  MIT  [node_modules tree]
   @floating-ui/core@1.8.0  MIT  [bundled into a chunk]
   @floating-ui/dom@1.8.0  MIT  [bundled into a chunk]
@@ -115,8 +118,8 @@ they are listed so the index accounts for every module in the bundle.
   @iconify/types@2.0.0  MIT  [bundled into a chunk]
   @iconify/utils@3.1.4  MIT  [bundled into a chunk]
   @img/colour@1.1.0  MIT  [node_modules tree, unpacked from the asar]
-  @img/sharp-darwin-arm64@0.35.4  Apache-2.0  [native binary, unpacked]
-  @img/sharp-libvips-darwin-arm64@1.3.3  LGPL-3.0-or-later  [native binary, unpacked]
+  @img/sharp-darwin-arm64@0.35.5  Apache-2.0  [native binary, unpacked]
+  @img/sharp-libvips-darwin-arm64@1.3.4  LGPL-3.0-or-later  [native binary, unpacked]
   @lezer/common@1.5.2  MIT  [bundled into a chunk]
   @lezer/highlight@1.2.3  MIT  [bundled into a chunk]
   @lezer/markdown@1.7.2  MIT  [bundled into a chunk]
@@ -247,7 +250,7 @@ they are listed so the index accounts for every module in the bundle.
   @streamdown/cjk@1.0.3  Apache-2.0  [bundled into a chunk]
   @streamdown/code@1.1.1  Apache-2.0  [bundled into a chunk]
   @streamdown/mermaid@1.0.2  Apache-2.0  [bundled into a chunk]
-  @trpc/client@11.18.0  MIT  [bundled into a chunk]
+  @trpc/client@11.18.0  MIT  [node_modules tree]
   @trpc/server@11.18.0  MIT  [node_modules tree]
   @types/d3@7.4.3  MIT  [bundled into a chunk]
   @types/d3-array@3.2.2  MIT  [bundled into a chunk]
@@ -383,7 +386,6 @@ they are listed so the index accounts for every module in the bundle.
   detect-node-es@1.1.0  MIT  [bundled into a chunk]
   devlop@1.1.0  MIT  [bundled into a chunk]
   diff@8.0.4  BSD-3-Clause  [bundled into a chunk]
-  dompurify@3.4.15  (MPL-2.0 OR Apache-2.0)  [bundled into a chunk]
   dompurify@3.4.16  (MPL-2.0 OR Apache-2.0)  [bundled into a chunk]
   ecdsa-sig-formatter@1.0.11  Apache-2.0  [bundled into a chunk]
   electron@44.0.0  MIT  [build-time source]
@@ -428,7 +430,6 @@ they are listed so the index accounts for every module in the bundle.
   https-proxy-agent@7.0.6  MIT  [bundled into a chunk]
   https-proxy-agent@9.1.0  MIT  [bundled into a chunk]
   iconv-lite@0.6.3  MIT  [bundled into a chunk]
-  ignore@7.0.8  MIT  [bundled into a chunk]
   import-meta-resolve@4.2.0  MIT  [bundled into a chunk]
   inline-style-parser@0.2.7  MIT  [bundled into a chunk]
   internmap@1.0.1  ISC  [bundled into a chunk]
@@ -578,14 +579,14 @@ they are listed so the index accounts for every module in the bundle.
   scheduler@0.27.0  MIT  [bundled into a chunk]
   semver@7.7.4  ISC  [node_modules tree]
   semver@7.8.5  ISC  [node_modules tree]
-  sharp@0.35.4  Apache-2.0  [node_modules tree, unpacked from the asar]
+  sharp@0.35.5  Apache-2.0  [node_modules tree, unpacked from the asar]
   shebang-command@2.0.0  MIT  [bundled into a chunk]
   shebang-regex@3.0.0  MIT  [bundled into a chunk]
   shiki@3.23.0  MIT  [bundled into a chunk]
   shiki@4.4.3  MIT  [bundled into a chunk]
   signal-exit@3.0.7  ISC  [bundled into a chunk]
   sonner@2.0.8  MIT  [bundled into a chunk]
-  source-map-js@1.2.1  BSD-3-Clause  [node_modules tree]
+  source-map-js@1.2.2  BSD-3-Clause  [node_modules tree]
   space-separated-tokens@2.0.2  MIT  [bundled into a chunk]
   standardwebhooks@1.1.1  MIT  [bundled into a chunk]
   streamdown@2.6.0  Apache-2.0  [bundled into a chunk]
@@ -646,7 +647,7 @@ they are listed so the index accounts for every module in the bundle.
   zwitch@2.0.4  MIT  [bundled into a chunk]
 
 =========================================================================================================
-3. PACKAGE LICENCES (229 distinct licence texts)
+3. PACKAGE LICENCES (228 distinct licence texts)
 =========================================================================================================
 
 Packages carrying byte-identical terms share one block; the package line names
@@ -6451,7 +6452,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 =========================================================================================================
-Packages: dompurify@3.4.15, dompurify@3.4.16
+Packages: dompurify@3.4.16
 SPDX: (MPL-2.0 OR Apache-2.0)
 File: LICENSE
 File: LICENSE-MPL
@@ -7810,33 +7811,6 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
-
-=========================================================================================================
-Packages: ignore@7.0.8
-SPDX: MIT
-File: LICENSE-MIT
----------------------------------------------------------------------------------------------------------
-Copyright (c) 2013 Kael Zhang <i@kael.me>, contributors
-http://kael.me/
-
-Permission is hereby granted, free of charge, to any person obtaining
-a copy of this software and associated documentation files (the
-"Software"), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to
-permit persons to whom the Software is furnished to do so, subject to
-the following conditions:
-
-The above copyright notice and this permission notice shall be
-included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 =========================================================================================================
 Packages: import-meta-resolve@4.2.0
@@ -10586,7 +10560,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: sharp@0.35.4
+Packages: sharp@0.35.5
 SPDX: Apache-2.0
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -10851,7 +10825,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: source-map-js@1.2.1
+Packages: source-map-js@1.2.2
 SPDX: BSD-3-Clause
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -12376,19 +12350,19 @@ no licence text is substituted for them here.
   @aws-sdk/nested-clients@3.997.46
     declared: Apache-2.0
     source:   https://github.com/aws/aws-sdk-js-v3
-  @earendil-works/chord@0.99.2
+  @earendil-works/chord@1.0.0
     declared: MIT
     source:   https://github.com/earendil-works/pi
-  @earendil-works/pi-agent-core@0.99.2
+  @earendil-works/pi-agent-core@1.0.0
     declared: MIT
     source:   https://github.com/earendil-works/pi
-  @earendil-works/pi-ai@0.99.2
+  @earendil-works/pi-ai@1.0.0
     declared: MIT
     source:   https://github.com/earendil-works/pi
-  @earendil-works/pi-codemode@0.99.2
+  @earendil-works/pi-codemode@1.0.0
     declared: MIT
     source:   https://github.com/earendil-works/pi
-  @earendil-works/pi-telemetry@0.99.2
+  @earendil-works/pi-telemetry@1.0.0
     declared: MIT
     source:   https://github.com/earendil-works/pi
   data-uri-to-buffer@4.0.1
@@ -12419,7 +12393,7 @@ the target platform, so their notices are pinned in apps/desktop/notices/sources
 and verified against the installed package whenever this runs on that platform.
 
 =========================================================================================================
-Package: @img/sharp-darwin-arm64@0.35.4
+Package: @img/sharp-darwin-arm64@0.35.5
 SPDX: Apache-2.0
 Note: sharp's native addon for macOS arm64. electron-builder ships and unpacks the whole
       @img tree (asarUnpack) because the addon cannot load from inside an asar. Pinned
@@ -12620,14 +12594,20 @@ third-party archives.
 
 
 =========================================================================================================
-Package: @img/sharp-libvips-darwin-arm64@1.3.3
+Package: @img/sharp-libvips-darwin-arm64@1.3.4
 SPDX: LGPL-3.0-or-later
 Note: The prebuilt libvips-cpp dylib sharp's addon loads, shipped and unpacked with it.
       The package publishes no licence file; the text below is its README's own
       licensing notice, reproduced verbatim, listing every library inside the binary and
       the terms each is used under. Bundled library versions are in the package's
       versions.json. The LGPL entries in that table are declarations, not a compliance
-      conclusion — see section 10 and notices/README.md.
+      conclusion — see section 10 and notices/README.md. Cairo 1.18.6 is LGPL-2.1 or
+      MPL-1.1, used under LGPL-2.1 (owner election 2026-10-13). Upstream COPYING:
+      https://gitlab.freedesktop.org/cairo/cairo/-/raw/1.18.6/COPYING Its README row
+      below reproduces upstream's MPL-1.1 declaration, not our election. Cairo is part
+      of the replaceable shared library. Cairo source, the build recipe and the source
+      offer are in licensing/LGPL-LIBVIPS.md; LGPL-2.1.txt and the relink instructions
+      ship beside it. Cairo was not permissive in the prior version either.
 ---------------------------------------------------------------------------------------------------------
 ## Licensing
 
@@ -12637,7 +12617,7 @@ used under the terms of the following licenses:
 | Library       | Used under the terms of                                                                                   |
 |---------------|-----------------------------------------------------------------------------------------------------------|
 | aom           | BSD 2-Clause + [Alliance for Open Media Patent License 1.0](https://aomedia.org/license/patent-license/)  |
-| cairo         | Mozilla Public License 2.0                                                                                |
+| cairo         | Mozilla Public License 1.1                                                                                |
 | cgif          | MIT License                                                                                               |
 | expat         | MIT License                                                                                               |
 | fontconfig    | [fontconfig License](https://gitlab.freedesktop.org/fontconfig/fontconfig/blob/main/COPYING) (BSD-like)   |
@@ -12795,7 +12775,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-7. VENDORED SOURCES (4)
+7. VENDORED SOURCES (5)
 =========================================================================================================
 
 Third-party source copied into this repository rather than installed. Each entry
@@ -12857,15 +12837,49 @@ licence is asserted for it. What is known and what is missing:
   review.
 
 =========================================================================================================
-Source: pi-automode path canonicalization and shell lexer
-Paths: packages/agent-runtime/src/authority/vendor/paths.ts, packages/agent-runtime/src/authority/vendor/shell.ts
+Source: Pi 0.99.2 harness compatibility sources
+Paths: packages/agent-runtime/src/pi/vendor/pi-harness/compaction/branch-summarization.ts, packages/agent-runtime/src/pi/vendor/pi-harness/compaction/compaction.ts, packages/agent-runtime/src/pi/vendor/pi-harness/compaction/utils.ts, packages/agent-runtime/src/pi/vendor/pi-harness/context.ts, packages/agent-runtime/src/pi/vendor/pi-harness/env/nodejs.ts, packages/agent-runtime/src/pi/vendor/pi-harness/execution/adaptive-publisher.ts, packages/agent-runtime/src/pi/vendor/pi-harness/execution/output-capture.ts, packages/agent-runtime/src/pi/vendor/pi-harness/execution/shell-output.ts, packages/agent-runtime/src/pi/vendor/pi-harness/messages.ts, packages/agent-runtime/src/pi/vendor/pi-harness/session/commit.ts, packages/agent-runtime/src/pi/vendor/pi-harness/session/context.ts, packages/agent-runtime/src/pi/vendor/pi-harness/session/fork-policy.ts, packages/agent-runtime/src/pi/vendor/pi-harness/session/in-memory-storage-state.ts, packages/agent-runtime/src/pi/vendor/pi-harness/session/jsonl/codec.ts, packages/agent-runtime/src/pi/vendor/pi-harness/session/jsonl/fork.ts, packages/agent-runtime/src/pi/vendor/pi-harness/session/jsonl/io.ts, packages/agent-runtime/src/pi/vendor/pi-harness/session/jsonl/legacy-v3.ts, packages/agent-runtime/src/pi/vendor/pi-harness/session/jsonl/repo.ts, packages/agent-runtime/src/pi/vendor/pi-harness/session/jsonl/storage.ts, packages/agent-runtime/src/pi/vendor/pi-harness/session/jsonl/types.ts, packages/agent-runtime/src/pi/vendor/pi-harness/session/mutation-line.ts, packages/agent-runtime/src/pi/vendor/pi-harness/session/session.ts, packages/agent-runtime/src/pi/vendor/pi-harness/session/types.ts, packages/agent-runtime/src/pi/vendor/pi-harness/session/usage.ts, packages/agent-runtime/src/pi/vendor/pi-harness/session/values.ts, packages/agent-runtime/src/pi/vendor/pi-harness/tools/bash.ts, packages/agent-runtime/src/pi/vendor/pi-harness/tools/edit-diff.ts, packages/agent-runtime/src/pi/vendor/pi-harness/tools/edit.ts, packages/agent-runtime/src/pi/vendor/pi-harness/tools/file-mutation-queue.ts, packages/agent-runtime/src/pi/vendor/pi-harness/tools/image.ts, packages/agent-runtime/src/pi/vendor/pi-harness/tools/index.ts, packages/agent-runtime/src/pi/vendor/pi-harness/tools/path-utils.ts, packages/agent-runtime/src/pi/vendor/pi-harness/tools/read.ts, packages/agent-runtime/src/pi/vendor/pi-harness/tools/tool-context.ts, packages/agent-runtime/src/pi/vendor/pi-harness/tools/write.ts, packages/agent-runtime/src/pi/vendor/pi-harness/types.ts, packages/agent-runtime/src/pi/vendor/pi-harness/utils/truncate.ts, packages/agent-runtime/test-fixtures/pi-0.99.2-prompt-templates.ts, packages/agent-runtime/test-fixtures/pi-0.99.2-memory.ts, packages/agent-runtime/test-fixtures/pi-0.99.2-session-conformance.ts
+Declared by: @volli/agent-runtime
+Upstream: https://github.com/earendil-works/pi at revision 005af57d88ee23b33778f343a9595b32e67ff788 (tag v0.99.2), packages/agent/src/harness
+SPDX: MIT
+Evidence:
+  src/pi/vendor/pi-harness/README.md records published source-map provenance,
+  module-by-module retention, local patches and divergences. License is upstream LICENSE
+  at v0.99.2.
+---------------------------------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2025 Mario Zechner
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+=========================================================================================================
+Source: pi-automode shell lexer
+Paths: packages/agent-runtime/src/shell/lexer.ts
 Declared by: @volli/agent-runtime
 Upstream: https://github.com/czottmann/pi-automode at revision bd82e29 (tag v1.11.0)
 SPDX: MIT
 Evidence:
-  src/authority/vendor/README.md pins the upstream repository, revision and tag, and
-  lists file-by-file what was taken and what diverges. The licence text is upstream's
-  LICENSE.md at that revision.
+  src/shell/UPSTREAM.md pins the upstream repository, revision and tag, and documents
+  the retained lexer and its divergences. The licence text is upstream's LICENSE.md at
+  that revision.
 ---------------------------------------------------------------------------------------------------------
 # MIT License
 
@@ -12924,18 +12938,17 @@ SOFTWARE.
 
 
 =========================================================================================================
-8. MODIFIED PACKAGES (3)
+8. MODIFIED PACKAGES (2)
 =========================================================================================================
 
 These packages are modified before they are bundled, by the pnpm patches recorded
 in pnpm-workspace.yaml. The patch files are in the repository and state the change.
 
   @dnd-kit/core@6.3.1 — patches/@dnd-kit__core@6.3.1.patch
-  @earendil-works/pi-agent-core@0.99.2 — patches/@earendil-works__pi-agent-core@0.99.2.patch
-  @earendil-works/pi-codemode@0.99.2 — patches/@earendil-works__pi-codemode@0.99.2.patch
+  @earendil-works/pi-codemode@1.0.0 — patches/@earendil-works__pi-codemode@1.0.0.patch
 
 =========================================================================================================
-9. ADDITIONAL NOTICES (1)
+9. ADDITIONAL NOTICES (2)
 =========================================================================================================
 
 Notices for material no package manifest describes: data bundled inside a package,
@@ -12995,7 +13008,32 @@ SOFTWARE.
 
 
 =========================================================================================================
-10. DECLARATIONS FLAGGED FOR REVIEW (4)
+Notice: DOMPurify embedded in Monaco Editor
+Source:
+  monaco-editor@0.57.0 esm/vs/base/browser/dompurify/dompurify.js license header and
+  domSanitize.js import; separate from the overridden npm dependency (VC-598, VC-600).
+---------------------------------------------------------------------------------------------------------
+Monaco Editor 0.57.0 embeds DOMPurify 3.4.15 in
+esm/vs/base/browser/dompurify/dompurify.js, imported by domSanitize.js.
+This source is part of Volli Code's bundled Monaco renderer. It is separate
+from Monaco's npm DOMPurify dependency, which resolves to 3.4.16.
+
+The embedded source carries this notice:
+
+/*! @license DOMPurify 3.4.15 | (c) Cure53 and other contributors | Released under the Apache license 2.0 and Mozilla Public License 2.0 | github.com/cure53/DOMPurify/blob/3.4.15/LICENSE */
+
+Volli elects Apache-2.0 for this dual-licensed source, as for the npm
+DOMPurify dependency. The full Apache-2.0 and MPL-2.0 license texts are
+reproduced in the DOMPurify license group of THIRD-PARTY-NOTICES; those
+texts are identical in DOMPurify 3.4.15 and 3.4.16.
+
+Upstream: https://github.com/cure53/DOMPurify/tree/3.4.15
+Security follow-up: VC-600. The npm version override does not patch this
+embedded source. Refresh this notice when Monaco's embedded source changes.
+
+
+=========================================================================================================
+10. DECLARATIONS FLAGGED FOR REVIEW (3)
 =========================================================================================================
 
 Declarations above that are not a plain permissive grant, listed so a reviewer can
@@ -13003,7 +13041,6 @@ find them without reading the whole file. Their presence here is a fact about th
 manifest, not a conclusion about obligations — that review is tracked separately,
 and apps/desktop/notices/README.md records what is open.
 
-  @img/sharp-libvips-darwin-arm64@1.3.3 — LGPL-3.0-or-later
-  dompurify@3.4.15 — (MPL-2.0 OR Apache-2.0)
+  @img/sharp-libvips-darwin-arm64@1.3.4 — LGPL-3.0-or-later
   dompurify@3.4.16 — (MPL-2.0 OR Apache-2.0)
   node-forge@1.4.0 — (BSD-3-Clause OR GPL-2.0)

@@ -16,13 +16,13 @@
  * here, once.
  *
  * ONE FAILURE CONVENTION FOR THE PULL. `readContent` REJECTS when the door
- * refuses, rather than answering `null`. `use-peek-content.ts` caches an
- * answer and does not cache a rejection, so a Session that genuinely has
- * nothing to show is remembered while a bridge that failed is retried the next
- * time the pointer rests on it — and the error text stays attached to the
- * failure instead of being dropped at the boundary.
+ * refuses, rather than answering `null`. A failed local fold is retried on
+ * the next glance; an empty fold is remembered. Utility refusal/failure keeps
+ * the readable local fold and may retry after the summary cooldown, never on
+ * a background timer.
  *
- * ACTING ADOPTS, READING DOES NOT. A peek costs one fold (plan §1.1); an
+ * ACTING ADOPTS, READING DOES NOT. A peek first pulls a local fold; only an
+ * explicit unpinned glance may ask for utility refinement. An
  * answer, a send or viewing the conversation is an explicit intent, and only
  * then is the Session adopted so the SHIPPED delivery path — `answerInteraction`
  * and the resident client's `submit` — does the work. Neither is re-implemented
@@ -40,6 +40,8 @@ import {
   type MessageDelivery,
 } from "@volli/session-presentation";
 
+import { notAvailableOn } from "@renderer/components/hosts/use-remote-project";
+import { remoteHostOfSession } from "@renderer/lib/session-project";
 import { answerInteraction } from "@renderer/components/chat/chat-plane-model";
 import { SESSION_ACTIVITY_LABEL } from "@renderer/components/ui/session-activity-status";
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
@@ -68,19 +70,25 @@ export interface SidebarPeekSurface {
   setRead(sessionId: string, unread: boolean): void;
 }
 
+/** Independent of the surface: rebuilding its action ports must not invalidate peek reads. */
+const readContent: SessionPeekPorts["readContent"] = async (sessionId, refine = false) => {
+  // A remote Session's transcript is its host's (VC-713); this Mac's peek
+  // reads only its own ledger.
+  const host = remoteHostOfSession(sessionId);
+  if (host !== null) throw new Error(notAvailableOn(host));
+  const result = await window.api.sessions.peekContent({ sessionId, refine });
+  // A refusal is a failed read, not an empty Session or a read receipt.
+  if (!result.ok) throw new Error(result.error);
+  return result.content;
+};
+
 /** The peek ports both sidebars share; only activation, conversation and the read store differ. */
 export function createSidebarPeekPorts(surface: SidebarPeekSurface): SessionPeekPorts {
   const read = (sessionId: string): void => {
     surface.setRead(sessionId, false);
   };
   return {
-    async readContent(sessionId) {
-      const result = await window.api.sessions.peekContent({ sessionId });
-      // A refusal is a FAILED card, never a card claiming the Session said
-      // nothing — and never a read: a peek has no read side effect at all.
-      if (!result.ok) throw new Error(result.error);
-      return result.content;
-    },
+    readContent,
 
     async answer(sessionId, interactionId, submission: InteractionSubmission) {
       const client = adopt(sessionId);

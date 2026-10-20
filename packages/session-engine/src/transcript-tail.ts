@@ -25,8 +25,8 @@ export interface SessionTranscriptTailEntry {
   role: UIMessage["role"];
   /**
    * The message's own words: whitespace collapsed to single spaces and cut at
-   * {@link TRANSCRIPT_TAIL_TEXT_LIMIT} with a trailing ellipsis. Empty when the
-   * message was nothing but tool calls.
+   * the requested text limit (default {@link TRANSCRIPT_TAIL_TEXT_LIMIT}) with
+   * a trailing ellipsis. Empty when the message was nothing but tool calls.
    *
    * Reasoning is deliberately left out. It is the longest part of a message and
    * the least useful for "what is it doing right now" — the words it said and
@@ -36,6 +36,8 @@ export interface SessionTranscriptTailEntry {
   text: string;
   /** The harness's own names for the tool calls in this message, in order. */
   tools: readonly string[];
+  /** Display-only delivery evidence for a submitted user message, never an interaction answer. */
+  delivery?: string;
 }
 
 export interface SessionTranscriptTail {
@@ -82,11 +84,28 @@ export const TRANSCRIPT_TAIL_TEXT_LIMIT = 120;
  */
 export async function readSessionTranscriptTail(
   ports: SessionTranscriptTailPorts,
-  input: { sessionId: string; limit: number },
+  input: {
+    sessionId: string;
+    limit: number;
+    /**
+     * Maximum text characters per message, excluding a trailing ellipsis.
+     * UI summaries may request longer bounded excerpts; the CLI keeps the
+     * default 120-character line. Fractions truncate, negatives clamp to zero,
+     * and non-finite values fall back to the default.
+     */
+    textLimit?: number;
+  },
 ): Promise<SessionTranscriptTail> {
   const limit = Math.max(0, Math.trunc(input.limit));
+  const requestedTextLimit = input.textLimit ?? TRANSCRIPT_TAIL_TEXT_LIMIT;
+  const textLimit = Number.isFinite(requestedTextLimit)
+    ? Math.max(0, Math.trunc(requestedTextLimit))
+    : TRANSCRIPT_TAIL_TEXT_LIMIT;
   const events = await ports.listEvents({ sessionId: input.sessionId });
-  const tail: { at: number; reference: TranscriptReference }[] = [];
+  const tail: { event: SessionEvent; reference: TranscriptReference }[] = [];
+  const receipts = new Map<string, string>();
+  const deliveredCommands = new Set<string>();
+  const observedReferences = new Set<string>();
   let messages = 0;
   let turns = 0;
   let turnDepth = 0;
@@ -94,28 +113,77 @@ export async function readSessionTranscriptTail(
     if (event.payload.kind === "turn.started") {
       turns += 1;
       turnDepth = 0;
+      if (event.commandId != null) deliveredCommands.add(event.commandId);
     }
+    if (event.payload.kind === "command.receipt.recorded") {
+      const receipt = event.payload.receipt;
+      receipts.set(receipt.commandId, receipt.status);
+      if (receipt.status === "accepted" || receipt.status === "completed")
+        deliveredCommands.add(receipt.commandId);
+    }
+    if (event.payload.kind === "transcript.referenced")
+      observedReferences.add(event.payload.reference.id);
     const reference = transcriptReferenceFor(event);
     if (reference === null) continue;
     messages += 1;
     turnDepth += 1;
-    tail.push({ at: event.occurredAt, reference });
+    tail.push({ event, reference });
     if (tail.length > limit) tail.shift();
   }
   const readArtifact = ports.readArtifact;
   if (readArtifact === undefined) return { entries: [], messages, unreadable: 0, turns, turnDepth };
-  const entries: SessionTranscriptTailEntry[] = [];
+  const hydrated: {
+    event: SessionEvent;
+    reference: TranscriptReference;
+    message: UIMessage;
+    entry: SessionTranscriptTailEntry;
+  }[] = [];
+  const reads = new Map<string, Promise<SessionTranscriptArtifact>>();
+  const observedMessages = new Set<string>();
   let unreadable = 0;
-  for (const { at, reference } of tail) {
+  for (const { event, reference } of tail) {
     // A store that cannot answer for one artifact must not cost the caller the
     // whole peek: the reason to run this command at all is that something is
     // wrong, and the activity counts beside it are still true.
     try {
-      entries.push(tailEntry(at, (await readArtifact(reference)).message));
+      let read = reads.get(reference.id);
+      if (read === undefined) {
+        read = readArtifact(reference);
+        reads.set(reference.id, read);
+      }
+      const { message } = await read;
+      const entry = tailEntry(event.occurredAt, message, textLimit);
+      hydrated.push({ event, reference, message, entry });
+      if (event.payload.kind === "transcript.referenced" && message.role === "user")
+        observedMessages.add(message.id);
     } catch {
       unreadable += 1;
     }
   }
+  const entries = hydrated.map(({ event, reference, message, entry }) => {
+    if (
+      event.payload.kind === "command.recorded" &&
+      event.payload.command.intent.kind === "message.submit" &&
+      message.role === "user"
+    ) {
+      const commandId = event.payload.command.id;
+      // Once the prompt reached the runtime, a later failure can make its
+      // receipt unreconciled, but cannot undo delivery. Observation identity
+      // comes from bodies already in this tail, or an identical reference in
+      // the ledger: never read historical artifacts just to seek more proof.
+      entry.delivery =
+        deliveredCommands.has(commandId) ||
+        observedReferences.has(reference.id) ||
+        observedMessages.has(message.id)
+          ? "Delivered"
+          : receipts.get(commandId) === "rejected"
+            ? "Not delivered"
+            : receipts.get(commandId) === "unreconciled"
+              ? "Delivery unconfirmed"
+              : "Pending";
+    }
+    return entry;
+  });
   return { entries, messages, unreadable, turns, turnDepth };
 }
 
@@ -137,7 +205,7 @@ export function transcriptReferenceFor(event: SessionEvent): TranscriptReference
   return null;
 }
 
-function tailEntry(at: number, message: UIMessage): SessionTranscriptTailEntry {
+function tailEntry(at: number, message: UIMessage, textLimit: number): SessionTranscriptTailEntry {
   const words: string[] = [];
   const tools: string[] = [];
   for (const part of message.parts) {
@@ -149,12 +217,10 @@ function tailEntry(at: number, message: UIMessage): SessionTranscriptTailEntry {
       tools.push(readActivityDescriptor(part.toolMetadata)?.nativeToolName ?? part.toolName);
     }
   }
-  return { at, role: message.role, text: compactText(words.join(" ")), tools };
+  return { at, role: message.role, text: compactText(words.join(" "), textLimit), tools };
 }
 
-function compactText(text: string): string {
+function compactText(text: string, textLimit: number): string {
   const collapsed = text.replaceAll(/\s+/gu, " ").trim();
-  return collapsed.length > TRANSCRIPT_TAIL_TEXT_LIMIT
-    ? `${collapsed.slice(0, TRANSCRIPT_TAIL_TEXT_LIMIT)}…`
-    : collapsed;
+  return collapsed.length > textLimit ? `${collapsed.slice(0, textLimit)}…` : collapsed;
 }

@@ -191,7 +191,7 @@ describe("CanvasEditor", () => {
   });
 
   it("reports vibrancy and grain to the reader, and paints them for the eye", () => {
-    // No visible percentages (the Arc arrangement): each fader's wave stand
+    // No visible percentages (the pad arrangement): each fader's wave stand
     // IS its readout. The values still reach assistive tech through the
     // native inputs' own attributes.
     const html = render(DEFAULT_CANVAS, "dark");
@@ -205,9 +205,8 @@ describe("CanvasEditor", () => {
   });
 
   it("stands vibrancy and grain as two matching faders, and the dial is gone", () => {
-    // The owner traded the rotary grain dial for the symmetry of two vertical
-    // wave faders flanking the pad. Two native ranges: click-to-jump, the
-    // keyboard and the focus ring come with the platform's own control.
+    // Two matching vertical wave faders flank the pad. Native ranges supply
+    // click-to-jump, keyboard input, and the focus ring.
     const html = render(DEFAULT_CANVAS, "dark");
 
     expect(html.match(/type="range"/g)).toHaveLength(2);
@@ -226,7 +225,7 @@ describe("CanvasEditor", () => {
   });
 
   it("carries no visible copy — the controls are the explanation", () => {
-    // The Arc arrangement: no row labels, no percentages, no hex chips. What
+    // The pad arrangement: no row labels, no percentages, no hex chips. What
     // each control is lives in its aria-label; what it is SET TO lives in
     // its own drawing (orb colours, wave stand, knob face).
     const html = render(DEFAULT_CANVAS, "dark");
@@ -255,9 +254,8 @@ describe("CanvasEditor", () => {
   });
 
   it("never lectures about contrast — the canvas is the user's own call", () => {
-    // The stranded-floor alert came out at the owner's call: it was a
-    // persistent warning about an outcome the user chose. Even the canvas
-    // that used to trip it renders controls only.
+    // A chosen canvas is not an error state and carries no persistent warning.
+    // Even the canvas that used to trip it renders controls only.
     const stranding = {
       ...DEFAULT_CANVAS,
       stops: [{ hex: "#e068d8", x: 0.5, y: 0.5 }],

@@ -1,0 +1,506 @@
+/** VC-718's CI-only fixture configuration; never a replacement for app wiring. */
+import { execFile } from "node:child_process";
+import { promises as fs } from "node:fs";
+import { userInfo } from "node:os";
+import { join, isAbsolute } from "node:path";
+import { promisify } from "node:util";
+import { processIdentity, killExactly } from "./core.mjs";
+import { startSshdFixture, scratchSshEnv } from "./sshd-fixture.mjs";
+
+const exec = promisify(execFile);
+export const REMOTE_HOST = "volli-acceptance";
+export const REMOTE_PROJECT = "Remote acceptance";
+export const ANSWER_QUESTION = "Continue the remote acceptance run?";
+export const REOPEN_QUESTION = "Did this question survive reopening Volli?";
+export const ANSWER_REPLY = "REMOTE: answer received on the host";
+export const REOPEN_REPLY = "REMOTE: reopened question answered on the host";
+export const STREAM_REPLY = "REMOTE: scripted turn streamed from the host";
+
+export function assertAcceptanceRunner(env = process.env, platform = process.platform) {
+  if (platform !== "darwin" || env.GITHUB_ACTIONS !== "true" || env.RUNNER_OS !== "macOS") {
+    throw new Error(
+      "Remote acceptance installs a managed host: disposable macOS GitHub runner only",
+    );
+  }
+}
+
+/** Playwright AI snapshots quote YAML keys containing ':'; disabled nodes
+ * intentionally have no ref, but remain visible assertions.
+ */
+export function controlLabel(line) {
+  const match = line.match(/^\s*- '?\S+ "((?:\\.|[^"\\])*)"/u);
+  return match ? JSON.parse(`"${match[1]}"`) : null;
+}
+export function visibleControls(tree, role, name, { contains = false } = {}) {
+  return tree.split("\n").filter((line) => {
+    const actualRole = line.match(/^\s*- '?(\S+) /u)?.[1];
+    const label = controlLabel(line);
+    return actualRole === role && (contains ? label?.includes(name) : label === name);
+  });
+}
+/** Read the production registry's Workspace state, not host health or the UI's
+ * five-second writable reconnect grace. This journey opens exactly one remote
+ * project; absent/ambiguous claims must not supply readiness.
+ */
+export function acceptanceWorkspaceReady(snapshot) {
+  const hosts = snapshot.hosts.filter((host) => host.name === REMOTE_HOST);
+  if (hosts.length !== 1 || snapshot.readOnly !== null) return false;
+  const projects = Object.values(snapshot.projects).filter(
+    (project) => project.hostId === hosts[0].id,
+  );
+  return projects.length === 1 && projects[0].link.status === "ready";
+}
+
+/** An exiting dialog can leave background text visible before its names/refs return. */
+export function hasActionableControl(tree, role, name) {
+  const hits = visibleControls(tree, role, name);
+  return hits.length === 1 && hits[0].includes("[ref=") && !hits[0].includes("[disabled]");
+}
+/** A durable answer quotes this exact question and selected label in one row.
+ * The trailer span has a title, so its snapshot uses an accessible name rather
+ * than a text suffix. Pending radios and receipts for other questions cannot
+ * supply the proof.
+ */
+export function visibleAnswerReceipt(tree, question, answer) {
+  const lines = tree.split("\n");
+  return lines.some((line, index) => {
+    const subject = lines[index + 1] ?? "";
+    const trailer = lines[index + 2] ?? "";
+    const indent = line.search(/\S/u);
+    return (
+      line.endsWith(": You answered") &&
+      /^\s*- code(?: \[ref=[^\]]+\])?: /u.test(subject) &&
+      subject.endsWith(`: ${question}`) &&
+      visibleControls(trailer, "generic", answer).length === 1 &&
+      subject.search(/\S/u) === indent &&
+      trailer.search(/\S/u) === indent
+    );
+  });
+}
+
+/** The visible subtree of one named surface, not matching background controls. */
+export function snapshotSubtree(tree, role, name) {
+  const hits = visibleControls(tree, role, name);
+  if (hits.length !== 1) throw new Error(`Expected one ${role} ${name}; found ${hits.length}`);
+  const lines = tree.split("\n");
+  const start = lines.indexOf(hits[0]);
+  const indent = lines[start].search(/\S/u);
+  let end = start + 1;
+  while (end < lines.length && lines[end].search(/\S/u) > indent) end++;
+  return lines.slice(start, end).join("\n");
+}
+
+/** Native snapshots expose the model sheet's title as a heading and Select's
+ * value as child text, not accessible names on the dialog/combobox themselves.
+ * Bind only the Board row inside that host's sheet; ambiguity fails closed.
+ */
+export function boardDefaultControl(tree, hostName, displayedValue) {
+  const lines = tree.split("\n");
+  const subtree = (start) => {
+    const indent = lines[start].search(/\S/u);
+    let end = start + 1;
+    while (end < lines.length && lines[end].search(/\S/u) > indent) end++;
+    return lines.slice(start, end);
+  };
+  const sheets = lines.flatMap((line, index) => {
+    if (!/^\s*- '?dialog(?: |:|$)/u.test(line)) return [];
+    const surface = subtree(index).join("\n");
+    return visibleControls(surface, "heading", `Models on ${hostName}`).length === 1
+      ? [subtree(index)]
+      : [];
+  });
+  if (sheets.length !== 1) return null;
+  const sheet = sheets[0];
+  const labels = sheet.filter((line) =>
+    /^\s*- generic(?: \[ref=[^\]]+\])?: Board chats$/u.test(line),
+  );
+  if (labels.length !== 1) return null;
+  const label = lines.indexOf(labels[0]);
+  const indent = lines[label].search(/\S/u);
+  let row = label - 1;
+  while (row >= 0 && lines[row].search(/\S/u) >= indent) row--;
+  if (row < 0 || !sheet.includes(lines[row])) return null;
+  const matches = subtree(row).filter((line) => {
+    if (!/^\s*- '?combobox(?: |:|$)/u.test(line)) return false;
+    const content = subtree(lines.indexOf(line)).slice(1);
+    return (
+      controlLabel(line) === displayedValue ||
+      content.some(
+        (child) =>
+          /^\s*- generic(?: |:|$)/u.test(child) &&
+          (controlLabel(child) === displayedValue || child.endsWith(`: ${displayedValue}`)),
+      )
+    );
+  });
+  return matches.length === 1 && matches[0].includes("[ref=") && !matches[0].includes("[disabled]")
+    ? matches[0]
+    : null;
+}
+
+/** VC-724 is optional until it lands; a visible self-add question is never skipped. */
+export function acceptanceHostAddState(tree, hostName) {
+  const answers = visibleControls(tree, "button", "Add anyway");
+  if (answers.length || tree.includes("This is the Mac you’re using")) {
+    const question =
+      "This is the Mac you’re using. Its projects already run here. Add it anyway (for testing)?";
+    if (!tree.includes(question))
+      throw new Error("Self-add confirmation text is missing or changed");
+    if (answers.length !== 1 || answers[0].includes("[disabled]") || !answers[0].includes("[ref="))
+      throw new Error("Expected one enabled Add anyway button");
+    const cancel = visibleControls(tree, "button", "Cancel");
+    if (cancel.length !== 1 || cancel[0].includes("[disabled]"))
+      throw new Error("Expected one enabled Cancel button for self-add");
+    return "self-add";
+  }
+  return tree.includes(`${hostName} is ready`) ? "ready" : "pending";
+}
+
+/** Require source, component and message within one visible log list row. */
+export function visibleServingRow(tree, host) {
+  const lines = tree.split("\n");
+  return lines.some((line, i) => {
+    if (!/^\s*- listitem(?:[ :]|$)/u.test(line)) return false;
+    const indent = line.search(/\S/u);
+    let end = i + 1;
+    while (end < lines.length && lines[end].search(/\S/u) > indent) end++;
+    const row = lines.slice(i, end).join("\n");
+    return (
+      row.includes(host) &&
+      visibleControls(row, "button", "hostd").length === 1 &&
+      visibleControls(row, "button", "serving", { contains: true }).length === 1
+    );
+  });
+}
+
+/** Strip only displayed age tokens, never a Session's title/identity/state. */
+export function stableWaitingLabel(line) {
+  return controlLabel(line)
+    ?.replace(/\s*·\s*(?:now|just now|\d+(?:s|m|h|d|w|mo|y)(?: ago)?)$/u, "")
+    .trim();
+}
+
+export function acceptanceScript(turn) {
+  // Auto-titling has no tools and must not consume the scripted conversation.
+  if (!turn.body.tools?.length) return undefined;
+  if (turn.text.includes("remote-stream-turn")) return { text: STREAM_REPLY, delayMs: 1500 };
+  // Never manufacture a tool the production host did not offer.
+  if (!turn.body.tools.some((tool) => tool.name === "ask_user")) return undefined;
+  const input = turn.body.input ?? [];
+  const last = input.at(-1);
+  if (last?.type === "function_call_output") {
+    const question = turn.text.includes("remote-reopen-question")
+      ? REOPEN_QUESTION
+      : ANSWER_QUESTION;
+    let answers;
+    try {
+      answers = JSON.parse(String(last.output));
+    } catch {
+      return "REMOTE: expected Proceed answer was not delivered";
+    }
+    if (
+      !Array.isArray(answers) ||
+      answers.length !== 1 ||
+      answers[0]?.question !== question ||
+      answers[0]?.answer !== "Proceed"
+    )
+      return "REMOTE: expected Proceed answer was not delivered";
+    return turn.text.includes("remote-reopen-question") ? REOPEN_REPLY : ANSWER_REPLY;
+  }
+  if (
+    turn.text.includes("remote-answer-question") ||
+    turn.text.includes("remote-reopen-question")
+  ) {
+    return {
+      toolCalls: [
+        {
+          name: "ask_user",
+          arguments: {
+            questions: [
+              {
+                question: turn.text.includes("remote-reopen-question")
+                  ? REOPEN_QUESTION
+                  : ANSWER_QUESTION,
+                choices: ["Proceed", "Stop"],
+              },
+            ],
+          },
+        },
+      ],
+    };
+  }
+  return undefined;
+}
+
+/** Creation must really open the project; even the old user-install refusal fails. */
+export function projectCreationOutcome(tree, { hostName, projectName }) {
+  if (tree.includes(`Opened ${projectName} on ${hostName}`)) return { status: "PASS" };
+  const refusal = `${hostName} runs Volli as your login, so this Mac can't add projects to it.`;
+  if (tree.includes(refusal)) throw new Error(`Unexpected project refusal: ${refusal}`);
+  return null;
+}
+
+/** Validate the supervisor's actual stop manifest, not merely CLI exit zero. */
+export function assertAcceptanceCleanup(manifest) {
+  if (!manifest || typeof manifest !== "object")
+    throw new Error("Stop returned without a guard/cleanup manifest");
+  if (manifest.scratchRemoved !== true)
+    throw new Error("Cleanup manifest must confirm scratchRemoved:true");
+  const close = manifest.electron?.close;
+  if (
+    close?.kind !== "graceful" ||
+    close.exit?.code !== 0 ||
+    close.exit?.signal !== null ||
+    !Array.isArray(close.closeFailures) ||
+    close.closeFailures.length
+  )
+    throw new Error(`Electron did not close gracefully: ${JSON.stringify(close ?? null)}`);
+  if (
+    !Array.isArray(manifest.keychainViolations) ||
+    manifest.keychainViolations.length ||
+    manifest.keychainViolationExit !== false ||
+    !Array.isArray(manifest.leftovers) ||
+    manifest.leftovers.length ||
+    manifest.remoteCleanupError !== null
+  )
+    throw new Error(`Guard/cleanup manifest failed: ${JSON.stringify(manifest)}`);
+}
+
+/** Stopped status files retain the old pid; never adopt that possibly reused pid. */
+export function acceptanceDaemonPid(status, home) {
+  if (status.v !== 1 || status.dataDir !== join(home, "Library/Application Support/volli-hostd"))
+    throw new Error("Status did not name this fixture install");
+  if (
+    !["serving", "refusing"].includes(status.verdict) ||
+    !["serving", "refusing"].includes(status.running?.state)
+  )
+    return null;
+  const pid = status.running.pid;
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("Invalid fixture hostd pid");
+  return pid;
+}
+
+const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+const quote = (s) => `"${String(s).replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+
+/** Escape only a fixture-created absolute path, never a person's SSH config. */
+export function sshConfig(fixture) {
+  return [
+    `Host ${REMOTE_HOST}`,
+    "  HostName 127.0.0.1",
+    `  Port ${fixture.port}`,
+    `  User ${fixture.user}`,
+    `  IdentityFile ${quote(fixture.identityFile)}`,
+    "  IdentitiesOnly yes",
+    "  IdentityAgent none",
+    "  UseKeychain no",
+    "  AddKeysToAgent no",
+    `  UserKnownHostsFile ${quote(fixture.knownHostsFile)}`,
+    "  GlobalKnownHostsFile /dev/null",
+    "  ForwardAgent no",
+    "  ForwardX11 no",
+    "",
+  ].join("\n");
+}
+
+export async function prepareRemoteAcceptance(layout, provider) {
+  assertAcceptanceRunner();
+  const home = userInfo().homedir;
+  // macOS managed installation uses the passwd home, not $HOME. Refuse an
+  // existing install/profile BEFORE SSH or Electron can adopt or overwrite it.
+  for (const path of [
+    join(home, ".local/share/volli-hostd"),
+    join(home, "Library/Application Support/volli-hostd"),
+    join(home, "Library/LaunchAgents/com.volli.hostd.plist"),
+    join(home, ".pi/agent"),
+  ]) {
+    if (
+      await fs.lstat(path).then(
+        () => true,
+        (e) => {
+          if (e.code === "ENOENT") return false;
+          throw e;
+        },
+      )
+    ) {
+      throw new Error(`Acceptance requires a fresh runner; already exists: ${path}`);
+    }
+  }
+  // sshd StrictModes checks EVERY ancestor of authorized_keys, including
+  // macOS's world-writable /private/tmp. Keep the disposable fixture below
+  // the fresh CI account's home, never ~/.ssh and never relax StrictModes.
+  const dir = await fs.mkdtemp(join(home, ".volli-acceptance-sshd-"));
+  const fixture = await startSshdFixture({ dir, runnerAccountHome: true }).catch(async (error) => {
+    await fs.rm(dir, { recursive: true, force: true });
+    throw error;
+  });
+  try {
+    const config = join(dir, "ssh_config");
+    await fs.writeFile(config, sshConfig(fixture), { flag: "wx", mode: 0o600 });
+    // Every production ssh spawn still calls the real system SSH. -F is
+    // required: OpenSSH's ~ expansion ignores HOME and uses the passwd home.
+    await fs.writeFile(
+      join(layout.binDir, "ssh"),
+      `#!/bin/sh\nexec /usr/bin/ssh -F '${config.replaceAll("'", "'\\''")}' "$@"\n`,
+      { mode: 0o755 },
+    );
+    const projectPath = await fs.mkdtemp(join(layout.projectsDir, "remote-acceptance-"));
+    const originPath = `${projectPath}.origin.git`;
+    const hostd = `${home}/.local/share/volli-hostd/current/bin/volli-hostd`;
+    const runHostd = (args, timeout = 90_000) =>
+      exec("/usr/bin/ssh", [...fixture.sshArgs, `'${hostd}' ${args}`], {
+        env: scratchSshEnv(),
+        timeout,
+      });
+    let daemonIdentity = null;
+    const captureDaemon = async () => {
+      const { stdout } = await runHostd("status --json --user", 10_000).catch((error) => {
+        // Managed status prints valid JSON with documented non-serving exits.
+        if ([1, 3].includes(error.code) && error.stdout) return { stdout: error.stdout };
+        throw error;
+      });
+      const status = JSON.parse(stdout.trim().split("\n").at(-1));
+      const pid = acceptanceDaemonPid(status, home);
+      if (pid) daemonIdentity = await processIdentity(pid);
+    };
+    const stopHostd = async () => {
+      // Only a live serving/refusing status can establish ownership. If SSH
+      // fails later, still reap the previously recorded pid + start identity.
+      let statusError;
+      await captureDaemon().catch((error) => {
+        statusError = error;
+      });
+      const signalled = await killExactly([daemonIdentity].filter(Boolean), {
+        signal: "SIGTERM",
+        graceMs: 10_000,
+      });
+      if (statusError) throw statusError;
+      if (signalled.some((entry) => entry.signal === "SIGKILL"))
+        throw new Error("Fixture hostd did not stop cleanly after SIGTERM");
+    };
+    return {
+      ...fixture,
+      home,
+      projectPath,
+      originPath,
+      async arrangeBox() {
+        assertAcceptanceRunner();
+        // Arrange benign box state over fixture SSH: git repo + bare remote.
+        // No Volli project registration, operator token, DB seed or fake link.
+        // The production UI must create/register the project (VC-722).
+        const command = [
+          "set -eu",
+          `git init --initial-branch=main ${shellQuote(projectPath)}`,
+          `printf '%s\\n' 'Remote acceptance fixture' > ${shellQuote(join(projectPath, "README.md"))}`,
+          `git -C ${shellQuote(projectPath)} add README.md`,
+          `git -c user.name=Acceptance -c user.email=acceptance@volli.test -c commit.gpgsign=false -C ${shellQuote(projectPath)} commit -m fixture`,
+          `git init --bare --initial-branch=main ${shellQuote(originPath)}`,
+          `git -C ${shellQuote(projectPath)} remote add origin ${shellQuote(originPath)}`,
+          `git -c credential.helper= -C ${shellQuote(projectPath)} push --set-upstream origin main`,
+        ].join("\n");
+        try {
+          const result = await exec("/usr/bin/ssh", [...fixture.sshArgs, command], {
+            env: scratchSshEnv(),
+            timeout: 30_000,
+          });
+          await fs.writeFile(
+            join(layout.logsDir, "arrange-box.log"),
+            `Arrange benign Git state over fixture SSH\n${result.stdout}\n${result.stderr}`,
+          );
+        } catch (error) {
+          await fs.writeFile(
+            join(layout.logsDir, "arrange-box.log"),
+            `Arrange benign Git state over fixture SSH\nexit: ${error.code}\n${error.stdout ?? ""}\n${error.stderr ?? ""}`,
+          );
+          throw new Error(
+            `Benign box Git arrange failed: ${error.stderr || error.stdout || error.message}`,
+            { cause: error },
+          );
+        }
+      },
+      async stop() {
+        try {
+          await fs.writeFile(join(layout.logsDir, "sshd.log"), fixture.diagnostics());
+          // Save only the daemon's log, never auth/device/key/config files.
+          await fs
+            .copyFile(join(home, "Library/Logs/volli-hostd.log"), join(layout.logsDir, "hostd.log"))
+            .catch((error) => {
+              if (error.code !== "ENOENT") throw error;
+            });
+          // No install until the app's Add flow; a launch/setup failure has none.
+          if (
+            await fs.lstat(hostd).then(
+              () => true,
+              (e) => {
+                if (e.code === "ENOENT") return false;
+                throw e;
+              },
+            )
+          )
+            await stopHostd();
+        } finally {
+          try {
+            await fixture.stop();
+          } finally {
+            await fs.rm(dir, { recursive: true, force: true });
+          }
+        }
+      },
+      // Deployment precondition only: route Azure to the fake provider.
+      // Step 4 stores the key and chooses the default through production UI.
+      async configureModel() {
+        assertAcceptanceRunner();
+        const plist = join(home, "Library/LaunchAgents/com.volli.hostd.plist");
+        const gitConfig = join(dir, "gitconfig");
+        await fs.writeFile(
+          gitConfig,
+          "[user]\n name = Acceptance\n email = acceptance@volli.test\n[commit]\n gpgsign = false\n[credential]\n helper =\n",
+        );
+        // Real launchd deployment config; no model-access/HostLink injected.
+        // No key is placed in the daemon environment: step 4 must store it.
+        const env = {
+          AZURE_OPENAI_BASE_URL: provider.baseUrl,
+          AZURE_OPENAI_API_VERSION: "v1",
+          HOME: home,
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: gitConfig,
+          GIT_TERMINAL_PROMPT: "0",
+          NO_PROXY: "127.0.0.1,localhost",
+        };
+        await exec(
+          "python3",
+          [
+            "-c",
+            "import plistlib,json,sys; p=sys.argv[1]; d=plistlib.load(open(p,'rb')); d['EnvironmentVariables'].update(json.loads(sys.argv[2])); plistlib.dump(d,open(p,'wb'))",
+            plist,
+            JSON.stringify(env),
+          ],
+          { timeout: 10_000 },
+        );
+        // `start` is idempotent. Cleanly stop the freshly installed daemon so
+        // its next production start re-reads the operator's environment.
+        await stopHostd();
+        daemonIdentity = null;
+        await runHostd("start --user");
+        await captureDaemon();
+        if (!daemonIdentity) throw new Error("Started fixture hostd has no verified identity");
+      },
+    };
+  } catch (error) {
+    await fs.writeFile(join(layout.logsDir, "sshd.log"), fixture.diagnostics());
+    try {
+      await fixture.stop();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+    throw error;
+  }
+}
+
+export function acceptanceTarballs(value) {
+  if (!value || value.split(":").some((path) => !isAbsolute(path) || !path.endsWith(".tar.gz"))) {
+    throw new Error(
+      "Acceptance needs absolute VOLLI_HOSTD_DEV_TARBALLS paths and adjacent checksums",
+    );
+  }
+  return value;
+}

@@ -3,8 +3,8 @@
  *
  * Each task builds what its tools answer from — a worktree on disk, Browser
  * pages, a verb host — and grades the model's final answer against a key it
- * computed itself. The shapes are VC-245's: a `bash`/`read` loop-and-filter
- * task (the 95% of the measured gain), a multi-tab Browser task, a
+ * computed itself. The fixtures (VC-245) cover a `bash`/`read` loop-and-filter
+ * task, a multi-tab Browser task, a
  * multi-Session start-and-watch task, and a single direct call as the control.
  */
 
@@ -243,6 +243,7 @@ function browserTabs(): TaskRun {
       snapshotText: pageSnapshot(slug, pages.get(url) === true),
       generation: 1,
       truncated: false,
+      empty: false,
       picture: null,
     };
   };
@@ -274,7 +275,11 @@ function browserTabs(): TaskRun {
     },
     act: async (input) => {
       count("act");
-      return { ...snapshot(input.tabId), target: null };
+      return {
+        ...snapshot(input.tabId),
+        target: null,
+        changed: { url: false, generation: false, tree: false },
+      };
     },
     screenshot: async ({ tabId }) => {
       count("screenshot");
@@ -357,7 +362,14 @@ function sessionFanout(): TaskRun {
       }
       return {
         text: `Watching ${[...watched].join(", ")}. Notices arrive as new turns.`,
-        details: { action: "watch", sessions, tickets: ticketsWatched, ended: 0 },
+        details: {
+          action: "watch",
+          sessions,
+          tickets: ticketsWatched,
+          ended: 0,
+          stopped: [],
+          detached: [],
+        },
       };
     }
     return { text: `${request.verb} is not part of this fixture.` };
@@ -444,8 +456,8 @@ function statusPage(service: string, status: "Operational" | "Degraded", load: n
 }
 
 /**
- * (e) A long multi-page Browser task with repeated checks — the shape the owner's
- * Sessions run: eight status pages, each loaded and then reloaded, because a
+ * (e) A long multi-page Browser task with repeated checks: eight status pages,
+ * each loaded and then reloaded, because a
  * status can flap between loads. A service counts only when it shows
  * "Degraded" on BOTH loads; every page's incident history also says
  * "Degraded", so reading the current status line is the only way to tell.
@@ -496,6 +508,7 @@ function browserCrawl(): TaskRun {
           : statusPage(service, known[page.load <= 1 ? 0 : 1], page.load),
       generation: page.load,
       truncated: false,
+      empty: false,
       picture: null,
     };
   };
@@ -533,7 +546,11 @@ function browserCrawl(): TaskRun {
     },
     act: async (input) => {
       count("act");
-      return { ...snapshot(input.tabId), target: null };
+      return {
+        ...snapshot(input.tabId),
+        target: null,
+        changed: { url: false, generation: false, tree: false },
+      };
     },
     screenshot: async ({ tabId }) => {
       count("screenshot");

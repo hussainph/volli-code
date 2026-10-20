@@ -27,7 +27,7 @@ describe("peekSummaryOf", () => {
     ).toBe("Newer answer");
   });
 
-  it("never speaks for the person or the system", () => {
+  it("prefers the agent's progress over user or system text", () => {
     expect(
       peekSummaryOf([
         entry({ text: "What the agent said" }),
@@ -35,6 +35,18 @@ describe("peekSummaryOf", () => {
         entry({ role: "system", text: "What the harness said" }),
       ]),
     ).toBe("What the agent said");
+  });
+
+  it("falls back to the newest user request before tool names, never system text", () => {
+    expect(
+      peekSummaryOf([
+        entry({ role: "user", text: "Older request" }),
+        entry({ role: "user", text: "Fix the hover peek" }),
+        entry({ role: "system", text: "System instructions" }),
+        entry({ tools: ["read_file"] }),
+      ]),
+    ).toBe("Fix the hover peek");
+    expect(peekSummaryOf([entry({ role: "system", text: "System instructions" })])).toBeNull();
   });
 
   it("falls back to the newest tool names when the agent has only acted", () => {

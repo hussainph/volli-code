@@ -227,7 +227,7 @@ describe("homeSessionRows", () => {
     ).toBe(false);
   });
 
-  // VC-406, the spec review's finding 6: Home mapped EVERY open, non-ended
+  // VC-406: Home mapped EVERY open, non-ended
   // terminal to `ready`/"Open" — so a pane blocked at a permission prompt, a
   // parked pane and a pane printing a build log read identically, while the
   // Ticket rail derived all three from `sessionActivityState`. One Session,

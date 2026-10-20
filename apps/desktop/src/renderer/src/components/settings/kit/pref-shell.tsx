@@ -207,12 +207,11 @@ export function PrefShell({
               `PrefRow` justifies label and control to its two edges, so on a
               wide window the Mode switch sat ~2,000px from the word "Mode"
               with a card of dead space between them. 56rem is the widest the
-              row grammar stays a row — label and control in one glance — and
-              it is generous next to the settings surfaces this one is judged
-              against (Linear and macOS System Settings both cap near 42rem).
+              row grammar stays a row — label and control in one glance. This
+              keeps related controls within one readable measure.
 
-              CENTRED, like both of those, and the page title rides INSIDE the
-              measure so it starts where the cards start. Left-anchored, the
+              CENTRED, and the page title rides INSIDE the measure so it starts
+              where the cards start. Left-anchored, the
               cap piled all the leftover width into one strip on the right,
               which read as a mistake rather than a margin; split into two
               margins it reads as a page. */}

@@ -50,12 +50,20 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { registerDataIpcHandlers } from "./data-ipc";
-import { insertProject } from "./db/projects-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "./db/test-helpers";
-import { getTicketRow, insertTicket, updateTicketFields } from "./db/tickets-repo";
-import { resetOrphanScanForTest } from "./orphan-scan";
-import { resetRetentionWatcherForTest } from "./retention-runtime";
+import {
+  createTestSessionEngine,
+  openTestDb,
+  testProject,
+  testTicket,
+  type TestDb,
+  resetOrphanScanForTest,
+  resetRetentionWatcherForTest,
+} from "@volli/host-core/testing";
+import { registerDataIpcHandlers } from "./data-ipc.test-support";
+import { insertProject, getTicketRow, insertTicket, updateTicketFields } from "@volli/host-core/db";
+import { createHostMaintenance } from "@volli/host-core/maintenance";
+import { worktreeDeps } from "@volli/host-core/worktree";
+import { HEADLESS_ATTENTION } from "@volli/host-core/ports";
 
 const fakeEvent = { sender: {} };
 
@@ -75,6 +83,7 @@ async function expectDataChangeCount(count: number): Promise<void> {
 }
 
 let ctx: TestDb;
+let fixtureSessionEngine: ReturnType<typeof createTestSessionEngine>;
 
 beforeEach(() => {
   handlers.clear();
@@ -82,7 +91,8 @@ beforeEach(() => {
   resetOrphanScanForTest();
   resetRetentionWatcherForTest();
   ctx = openTestDb();
-  registerDataIpcHandlers({ ok: true, db: ctx.db });
+  fixtureSessionEngine = createTestSessionEngine(ctx.db);
+  registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine: fixtureSessionEngine });
   insertProject(ctx.db, testProject({ id: "p1", path: "/repo" }));
 });
 
@@ -96,6 +106,33 @@ afterEach(() => {
 function seedTicket(over: Parameters<typeof testTicket>[1] = {}): void {
   insertTicket(ctx.db, testTicket("p1", { id: "t1", status: "done", ...over }));
 }
+
+it("routes renderer polls through the host's final maintenance stop", async () => {
+  seedTicket();
+  const events = { publish: vi.fn() };
+  const maintenance = createHostMaintenance({
+    db: ctx.db,
+    ports: { events, attention: HEADLESS_ATTENTION },
+    worktrees: {
+      deps: () => worktreeDeps(ctx.db, { events }, { dataDir: "/volli-test-userdata" }),
+    },
+    processReaders: { liveSessionIds: () => [], openTerminalCwds: () => [] },
+  });
+  registerDataIpcHandlers(
+    { ok: true, db: ctx.db },
+    { sessionEngine: fixtureSessionEngine, maintenance },
+  );
+  const poll = vi.spyOn(maintenance.retention, "triggerNow");
+  invoke("volli:retention-poll");
+  await maintenance.settled();
+  expect(poll).toHaveBeenCalledOnce();
+  maintenance.stop();
+  invoke("volli:retention-poll");
+  await maintenance.settled();
+  expect(poll).toHaveBeenCalledOnce();
+  const state = invoke<RetentionStateResult>("volli:retention-state", { ticketId: "t1" });
+  expect(state.ok && state.state.ticketId).toBe("t1");
+});
 
 describe("volli:retention-state", () => {
   it("returns the composed state for a never-polled ticket (keep=false, prState null)", () => {
@@ -194,6 +231,7 @@ describe("volli:retention-archive-clean", () => {
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
       {
+        sessionEngine: fixtureSessionEngine,
         busyWorktreeSites: async () => [
           { directory: `${worktreePath}/packages/app`, surface: "agent" },
         ],
@@ -228,6 +266,7 @@ describe("volli:retention-archive-clean", () => {
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
       {
+        sessionEngine: fixtureSessionEngine,
         busyWorktreeSites: async (target) => {
           asked.push(target);
           return [];

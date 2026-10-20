@@ -193,6 +193,7 @@ export function HomeTabStrip({
               back into the window rather than off its edge. */}
           <div className="flex items-center gap-1">
             <NewSessionControl
+              projectId={list.projectId}
               disabled={creating}
               placement="strip"
               align="end"
@@ -218,7 +219,7 @@ export function HomeTabStrip({
               title={`${railCollapsed ? "Show" : "Hide"} details (⌥⌘B)`}
             >
               {/* scale-x-[-1] mirrors the left-sidebar glyph so it reads as the
-                  RIGHT panel (VS Code's secondary-sidebar convention). */}
+                  RIGHT panel; each caret points toward the rail it toggles. */}
               <SidebarSimpleIcon className="size-3.5 scale-x-[-1]" />
             </Button>
           ) : null}
@@ -562,7 +563,7 @@ function TerminalTab({ projectId, tab, onSelect, ...shell }: KindTabProps & { ta
           status={dot ?? undefined}
           // Between the liveness dot and the label, exactly where the ticket
           // strip and the sidebar put it: one Session, one place to look.
-          badge={<SessionProvenanceMark provenance={provenance} rowTitle={tab.title} />}
+          badge={<SessionProvenanceMark provenance={provenance} />}
           leading={
             // size-3, the same as the chat bubble that shares this slot and the
             // same as the ticket strip's moon — one leading glyph size now that
@@ -662,7 +663,7 @@ function ChatTab({
           )}
           onActivate={onSelect}
           status={status}
-          badge={<SessionProvenanceMark provenance={provenance} rowTitle={title} />}
+          badge={<SessionProvenanceMark provenance={provenance} />}
           // A landing auto-title reveals here word by word (VC-81); terminal
           // and board tabs stay static.
           revealLabel

@@ -301,8 +301,8 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
     setModelId(storedModel === DEFAULT_LOCAL_DECISION_MODEL_ID ? "" : storedModel);
   }, [storedUrl, storedModel]);
 
-  async function save(setting: DecisionModelSetting): Promise<void> {
-    if (busy) return;
+  async function save(setting: DecisionModelSetting): Promise<boolean> {
+    if (busy) return false;
     setBusy(true);
     setFieldError(null);
     setTest(null);
@@ -310,12 +310,14 @@ export function DecisionModelSettings({ onSignIn }: { onSignIn(providerId: strin
       const result = await window.api.decisionModel.set({ scope: "global" }, setting);
       if (!result.ok) {
         setFieldError(result.error);
-        return;
+        return false;
       }
       adopt(result);
       setDraftMode(null);
+      return true;
     } catch (error) {
       toastError(`Couldn't save the decision model: ${errorMessage(error)}`);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -574,8 +576,8 @@ export function ProjectDecisionModelRow({
   const override = view.project ?? null;
   const effective = override ?? view.global;
 
-  async function save(setting: DecisionModelSetting | null): Promise<void> {
-    if (busy) return;
+  async function save(setting: DecisionModelSetting | null): Promise<boolean> {
+    if (busy) return false;
     setBusy(true);
     try {
       const result = await window.api.decisionModel.set(
@@ -584,12 +586,14 @@ export function ProjectDecisionModelRow({
       );
       if (!result.ok) {
         toastError(`Couldn't save this project's decision model: ${result.error}`);
-        return;
+        return false;
       }
       adopt(result);
       if (result.project !== undefined) onSaved(result.project);
+      return true;
     } catch (error) {
       toastError(`Couldn't save this project's decision model: ${errorMessage(error)}`);
+      return false;
     } finally {
       setBusy(false);
     }

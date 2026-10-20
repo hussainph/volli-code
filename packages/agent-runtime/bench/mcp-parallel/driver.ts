@@ -3,7 +3,7 @@
  * through the real Session path (VC-454; VC-444 measured a bare `Agent`).
  *
  * Every turn runs on {@link createPiAgentRuntime}: `startSession`, the
- * Authority gate (`beforeToolCall`), the Agent Tool Surface, the MCP tool
+ * Agent Tool Surface, the MCP tool
  * wrapper and durable activity observations all run for real. Only the
  * provider is scripted, so no credentials or paid requests are involved. The
  * caller hands in a Session's MCP definitions as they were born — stamped, or
@@ -23,10 +23,6 @@ import { join } from "node:path";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { createModels, fauxProvider, type Context, type Model } from "@earendil-works/pi-ai";
 import {
-  BUILTIN_RULE_PACK_HASH,
-  BUILTIN_RULE_PACK_ID,
-  sessionToolIds,
-  type AuthoritySnapshot,
   type McpToolDefinition,
   type ObservabilityEvent,
   type RuntimeMcpPort,
@@ -89,10 +85,6 @@ export interface RuntimeMcpTurnResult {
   completionOrder: string[];
   /** `started`/`completed`/`failed` activity lifecycle, as observed. */
   activityLog: string[];
-  /** Summed time the Authority gate held calls waiting on a person. */
-  approvalWaitMs: number;
-  /** Calls the Authority gate judged before dispatch. */
-  gatedCalls: number;
   /** How the turn ended, from the runtime's own observation. */
   turnState: string;
   /** From `interrupt()` to the turn and the interrupt both settling, before close. */
@@ -109,20 +101,6 @@ function resultVolume(content: unknown): { bytes: number; tokens: number } {
   return {
     bytes: Buffer.byteLength(JSON.stringify(blocks)),
     tokens: countTokens(texts.join("\n")),
-  };
-}
-
-function authority(tools: AuthoritySnapshot["tools"]): AuthoritySnapshot {
-  return {
-    mode: "auto",
-    location: "worktree",
-    enforcement: "enforce",
-    judgmentMode: "ask",
-    tools,
-    rulePackId: BUILTIN_RULE_PACK_ID,
-    rulePackHash: BUILTIN_RULE_PACK_HASH,
-    classifierModel: null,
-    fallback: { consecutiveDenials: 3, sessionDenials: 20 },
   };
 }
 
@@ -204,10 +182,7 @@ export async function runRuntimeMcpTurn(spec: RuntimeMcpTurnSpec): Promise<Runti
         observations.push(observation);
       },
     };
-    const sessionSpec: SessionRuntimeSpec = {
-      ...base,
-      authority: authority(sessionToolIds(base)),
-    };
+    const sessionSpec = base;
 
     const handle = await runtime.startSession(sessionSpec);
     let elapsedMs = 0;
@@ -242,9 +217,6 @@ export async function runRuntimeMcpTurn(spec: RuntimeMcpTurnSpec): Promise<Runti
     const activities = observations.flatMap((observation) =>
       observation.kind === "activity" ? [observation] : [],
     );
-    const authorityEvents = observability.flatMap((event) =>
-      event.kind === "authority" ? [event] : [],
-    );
     const turns = observations.flatMap((observation) =>
       observation.kind === "turn" ? [observation.state] : [],
     );
@@ -263,8 +235,6 @@ export async function runRuntimeMcpTurn(spec: RuntimeMcpTurnSpec): Promise<Runti
       activityLog: activities.flatMap((activity) =>
         activity.state === "progress" ? [] : [`${activity.state}:${activity.activityId}`],
       ),
-      approvalWaitMs: authorityEvents.reduce((sum, event) => sum + (event.waitDurationMs ?? 0), 0),
-      gatedCalls: authorityEvents.length,
       turnState: turns.at(-1) ?? "none",
       ...(interruptSettleMs === undefined ? {} : { interruptSettleMs }),
       toolExecution:

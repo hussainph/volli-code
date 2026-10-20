@@ -3,11 +3,18 @@ import * as React from "react";
 import { toastError } from "@renderer/lib/toast";
 import { errorMessage } from "@volli/shared";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { remoteHostNow } from "@renderer/stores/remote-project";
 
-/** Push the current set of project paths at main's fs-root allowlist. */
+/**
+ * Push the current set of project paths at main's fs-root allowlist. A remote
+ * project's path is a folder on its host (VC-711), never one this Mac browses.
+ */
 async function pushRoots(): Promise<void> {
   await window.api.projects.syncRoots(
-    useProjectsStore.getState().projects.map((project) => project.path),
+    useProjectsStore
+      .getState()
+      .projects.filter((project) => remoteHostNow(project.id) === null)
+      .map((project) => project.path),
   );
 }
 

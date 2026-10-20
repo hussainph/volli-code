@@ -1,22 +1,35 @@
+// @vitest-environment jsdom
 /**
  * The chat arm of the boot pipeline. What is under test is the GUARD, not the
  * store: `createChatSession` is stubbed on the singleton so each case can hold
  * the create open, refuse it, or answer it, and the assertions are about what
  * the pipeline does around that answer.
  */
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import type { Project, Ticket } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 
 import { useBoardStore } from "@renderer/stores/board";
+import { useExperimentsStore } from "@renderer/stores/experiments";
+import { useHostConnectionStore } from "@renderer/stores/host-connection";
+import { remoteHost } from "@renderer/stores/host-sources";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { projectScope, ticketScope } from "@renderer/stores/sessions";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import {
+  createWorkspaceStore,
+  DEFAULT_WORKSPACE_UI,
+  useWorkspaceStore,
+  type WorkspaceUiState,
+} from "@renderer/stores/workspace";
+import { useNavHistory } from "@renderer/hooks/use-nav-history";
+import { runKickoff } from "@renderer/components/board/new-ticket/submit";
 import { bootChatSession, startTicketChat, terminalCreateRequest } from "./session-create";
 
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 // The engine registry pulls in xterm.js and its stylesheet on import and no
 // chat boot touches it; the terminal arm is exercised in the live smokes.
 vi.mock("@renderer/terminal/registry", () => ({
@@ -61,15 +74,43 @@ function stubChatStore(createChatSession: () => Promise<string | null>) {
   return { closeChatSession };
 }
 
+const originalChatState = useChatSessionsStore.getState();
+const originalBoardState = useBoardStore.getState();
+const originalProjectsState = useProjectsStore.getState();
+const originalHostsState = useHostConnectionStore.getState();
+const originalExperimentsState = useExperimentsStore.getState();
+
+function HistoryRecorder() {
+  useNavHistory();
+  return null;
+}
+
 beforeEach(() => {
-  useProjectsStore.setState({ projects: [PROJECT] });
-  useBoardStore.setState({ ticketsByProject: { p1: [TICKET] } });
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.clearAllMocks();
+  // setState-installed doubles are not restored by restoreAllMocks. Restore
+  // the singleton's real actions as well as its data before every case.
+  useChatSessionsStore.setState(originalChatState, true);
+  useProjectsStore.setState({ ...originalProjectsState, projects: [PROJECT] }, true);
+  useBoardStore.setState({ ...originalBoardState, ticketsByProject: { p1: [TICKET] } }, true);
   useChatDraftsStore.setState({ drafts: {} });
-  useChatSessionsStore.setState({ starting: {}, openTabs: {}, provisionalActive: {} });
+  const workspace = createWorkspaceStore({
+    getItem: () => null,
+    setItem: () => {},
+    removeItem: () => {},
+  });
+  vi.spyOn(useWorkspaceStore, "getState").mockImplementation(workspace.getState);
+  vi.spyOn(useWorkspaceStore, "subscribe").mockImplementation(workspace.subscribe);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  useChatSessionsStore.setState(originalChatState, true);
+  useBoardStore.setState(originalBoardState, true);
+  useProjectsStore.setState(originalProjectsState, true);
+  useHostConnectionStore.setState(originalHostsState, true);
+  useExperimentsStore.setState(originalExperimentsState, true);
+  vi.unstubAllGlobals();
 });
 
 /**
@@ -82,7 +123,74 @@ afterEach(() => {
  */
 const UUID_V4 = /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/;
 
+function remoteProject(granted: readonly string[] | undefined, cloud = true) {
+  useExperimentsStore.setState({ snapshot: { cloud: { enabled: cloud, source: "storage" } } });
+  useHostConnectionStore.setState({
+    hosts: [
+      remoteHost("box", "box", { hostScope: { status: "ready", granted: ["host.workspaces"] } }),
+    ],
+    projects: {
+      p1: {
+        hostId: "box",
+        link: { status: "open" },
+        ...(granted === undefined ? {} : { granted }),
+      },
+    },
+  });
+}
+
 describe("bootChatSession", () => {
+  it.each([ticketScope("p1", "t1"), projectScope("p1")])(
+    "opens a remote chat Draft only with this project's sessions grant (%j)",
+    async (scope) => {
+      remoteProject(["sessions"]);
+      const create = vi.fn(async () => "durable-remote");
+      stubChatStore(create);
+      const id = await bootChatSession(scope, { land: () => true });
+      expect(id).toMatch(UUID_V4);
+      expect(useChatDraftsStore.getState().drafts[id!]?.provisional).toMatchObject({
+        projectId: "p1",
+        ticketId: scope.kind === "ticket" ? "t1" : null,
+      });
+      expect(create).not.toHaveBeenCalled();
+      expect(toast).not.toHaveBeenCalled();
+      await expect(
+        bootChatSession(scope, { createsSessionNow: true, land: () => true }),
+      ).resolves.toBe("durable-remote");
+      expect(create).toHaveBeenCalledWith({
+        projectId: "p1",
+        ticketId: scope.kind === "ticket" ? "t1" : null,
+        title: null,
+      });
+    },
+  );
+
+  it.each([undefined, [], ["board", "host.logs"]])(
+    "keeps older/unknown remote Sessions named and unavailable (%j)",
+    async (granted) => {
+      remoteProject(granted);
+      const create = vi.fn(async () => "must-not-create");
+      stubChatStore(create);
+      const land = vi.fn(() => true);
+      for (const scope of [SCOPE, projectScope("p1")]) {
+        await expect(bootChatSession(scope, { land })).resolves.toBeNull();
+        await expect(bootChatSession(scope, { createsSessionNow: true, land })).resolves.toBeNull();
+      }
+      expect(create).not.toHaveBeenCalled();
+      expect(land).not.toHaveBeenCalled();
+      expect(useChatDraftsStore.getState().drafts).toEqual({});
+      expect(toast).toHaveBeenCalledWith("Not available on box yet", { id: "host-local-only" });
+    },
+  );
+
+  it("leaves cloud-off chat doors unchanged despite a remote-looking source", async () => {
+    remoteProject([], false);
+    stubChatStore(vi.fn(async () => "local-session"));
+    await expect(
+      bootChatSession(SCOPE, { createsSessionNow: true, land: () => true }),
+    ).resolves.toBe("local-session");
+    expect(toast).not.toHaveBeenCalled();
+  });
   it("opens a ticket Draft immediately without creating a Session", async () => {
     const create = vi.fn(async () => "durable-1");
     stubChatStore(create);
@@ -239,8 +347,7 @@ describe("startTicketChat", () => {
   function startHarness() {
     stubChatStore(async () => "durable-1");
     const enqueue = vi.fn();
-    useChatSessionsStore.setState({ enqueue, openChatTab: vi.fn() });
-    useWorkspaceStore.setState({ setTicketActiveTab: vi.fn() });
+    useChatSessionsStore.setState({ enqueue });
     return { enqueue };
   }
 
@@ -274,6 +381,175 @@ describe("startTicketChat", () => {
       text: "Begin the review",
     });
   });
+});
+
+describe("Create & start keeps the current workspace (VC-491)", () => {
+  it.each([
+    ["board", "home", "board", null, "p1"],
+    ["project file", "home", "file:README.md", null, "p1"],
+    ["project chat", "home", "chat:existing", null, "p1"],
+    ["another ticket", "home", "board", "existing-ticket", "p1"],
+    ["Configure", "configure", "board", null, "p1"],
+    ["another project", "home", "board", null, "p2"],
+  ] as const)(
+    "starts from %s without changing selection",
+    async (_name, nav, homeActiveTab, openTicketId, selectedProjectId) => {
+      const workspace = createWorkspaceStore({
+        getItem: () => null,
+        setItem: () => {},
+        removeItem: () => {},
+      });
+      const current: WorkspaceUiState = {
+        ...DEFAULT_WORKSPACE_UI,
+        nav,
+        homeActiveTab,
+        openTicketId,
+        projectFiles: {
+          tabs: [{ relPath: "README.md", pinned: true }],
+          activeRelPath: "README.md",
+        },
+        projectFileViewStates: { "README.md": { cursor: 12 } },
+        homeTabOrder: ["chat:existing", "file:README.md"],
+        homeTabHistory: ["board", "file:README.md", "chat:existing"],
+        ticketTabs: {
+          "existing-ticket": {
+            files: [{ relPath: "src/index.ts", pinned: true }],
+            diffs: ["src/index.ts"],
+            diffMeta: { "src/index.ts": { status: "modified" } },
+            tabOrder: ["chat:existing-ticket-chat", "diff:src/index.ts", "file:src/index.ts"],
+            active: "chat:existing-ticket-chat",
+          },
+        },
+      };
+      const otherProject: WorkspaceUiState = {
+        ...DEFAULT_WORKSPACE_UI,
+        homeActiveTab: "chat:other-project-chat",
+        homeTabOrder: ["chat:other-project-chat", "file:CONTRIBUTING.md"],
+        homeTabHistory: ["board", "file:CONTRIBUTING.md", "chat:other-project-chat"],
+        projectFiles: {
+          tabs: [{ relPath: "CONTRIBUTING.md", pinned: true }],
+          activeRelPath: "CONTRIBUTING.md",
+        },
+      };
+      workspace.setState({ byProject: { p1: current, p2: otherProject } });
+      vi.spyOn(useWorkspaceStore, "getState").mockImplementation(workspace.getState);
+      vi.spyOn(useWorkspaceStore, "subscribe").mockImplementation(workspace.subscribe);
+      useProjectsStore.setState({
+        projects: [PROJECT, { ...PROJECT, id: "p2" }],
+        selectedProjectId,
+      });
+      const selectedByProject = {
+        p1: ["existing-ticket", "selected-sibling"],
+        p2: ["other-project-ticket"],
+      };
+      useBoardStore.setState({
+        ticketsByProject: {
+          p1: [TICKET, { ...TICKET, id: "existing-ticket" }, { ...TICKET, id: "selected-sibling" }],
+          p2: [{ ...TICKET, projectId: "p2", id: "other-project-ticket" }],
+        },
+        selectedByProject,
+      });
+      const create = vi.fn(async () => "durable-1");
+      stubChatStore(create);
+      const enqueue = vi.fn();
+      useChatSessionsStore.setState({ enqueue });
+      const chatStore = useChatSessionsStore.getState();
+      chatStore.openChatTab("p1", "existing");
+      chatStore.openChatTab("existing-ticket", "existing-ticket-chat");
+      chatStore.openChatTab("p2", "other-project-chat");
+      const openTabs = useChatSessionsStore.getState().openTabs;
+      const toastSuccess = vi.fn();
+
+      // Mount the actual recorder so a navigation regression would record a
+      // new location and discard Forward, rather than merely comparing an
+      // inert empty history that no subscriber can ever change.
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      await act(async () => root.render(createElement(HistoryRecorder)));
+      const location = {
+        projectId: selectedProjectId,
+        nav: selectedProjectId === "p1" ? nav : "home",
+        openTicketId: selectedProjectId === "p1" ? openTicketId : null,
+      } as const;
+      workspace.getState().recordNav({ projectId: "p2", nav: "configure", openTicketId: null });
+      workspace.getState().recordNav(location);
+      const forward = { projectId: "p1", nav: "automations", openTicketId: null } as const;
+      workspace.getState().recordNav(forward);
+      expect(workspace.getState().stepNavBack()).toEqual(location);
+      const history = workspace.getState().navHistory;
+      expect(history.back.length).toBeGreaterThan(0);
+      expect(history.forward).toEqual([forward]);
+
+      try {
+        await act(async () => {
+          await expect(
+            runKickoff(
+              {
+                projectId: "p1",
+                ticketPrefix: "VC",
+                status: "backlog",
+                priority: "medium",
+                title: TICKET.title,
+                body: TICKET.body,
+                labels: [],
+                usesWorktree: true,
+                baseBranch: "main",
+              },
+              {
+                addTicket: vi.fn(async () => TICKET),
+                startChat: startTicketChat,
+                toastSuccess,
+                runAutomation: vi.fn(async () => {}),
+              },
+              {},
+            ),
+          ).resolves.toEqual({ created: true });
+        });
+
+        const after = workspace.getState();
+        // Only the NEW ticket's dormant tab is prepared. Every visible selection
+        // and the navigation history stay exactly where the person left them.
+        expect(after.byProject.p1).toEqual({
+          ...current,
+          ticketTabs: {
+            ...current.ticketTabs,
+            t1: expect.objectContaining({ active: "chat:durable-1" }),
+          },
+        });
+        expect(after.byProject.p2).toBe(otherProject);
+        expect(after.navHistory).toBe(history);
+        expect(useProjectsStore.getState().selectedProjectId).toBe(selectedProjectId);
+        expect(useBoardStore.getState().selectedByProject).toBe(selectedByProject);
+        expect(useBoardStore.getState().selectedByProject).toEqual({
+          p1: ["existing-ticket", "selected-sibling"],
+          p2: ["other-project-ticket"],
+        });
+        expect(create).toHaveBeenCalledWith(expect.objectContaining({ ticketId: "t1" }));
+        expect(useChatSessionsStore.getState().openTabs).toEqual({
+          ...openTabs,
+          t1: ["durable-1"],
+        });
+        expect(enqueue).toHaveBeenCalledWith(
+          "durable-1",
+          expect.objectContaining({
+            text: "Begin work on this ticket. Your assignment is the Ticket Brief above.",
+          }),
+        );
+        expect(toastSuccess).toHaveBeenCalledWith("VC-1 created");
+
+        // Positive control: the same mounted recorder DOES observe an actual
+        // navigation and invalidate Forward. Dormant-tab preparation must not.
+        const nextNav = location.nav === "home" ? "configure" : "home";
+        workspace.getState().setNav(selectedProjectId, nextNav);
+        expect(workspace.getState().navHistory.current).toEqual({ ...location, nav: nextNav });
+        expect(workspace.getState().navHistory.forward).toEqual([]);
+      } finally {
+        await act(async () => root.unmount());
+        host.remove();
+      }
+    },
+  );
 });
 
 describe("terminalCreateRequest", () => {

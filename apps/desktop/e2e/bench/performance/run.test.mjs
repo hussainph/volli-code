@@ -12,6 +12,7 @@ import {
   INTERACTION_IDS,
   markdown,
   parseArgs,
+  runBandMarginMs,
   summarize,
   summaryReport,
   validateBenchmarkReport,
@@ -179,6 +180,14 @@ describe("performance benchmark argument parsing", () => {
     [["--seed"], "requires a value"],
   ])("rejects invalid CLI input %#", (argv, message) => {
     expect(() => parseArgs(argv)).toThrow(message);
+  });
+});
+
+describe("fixture band margin", () => {
+  it("covers both arms at the configured exposure plus an hour", () => {
+    // Defaults: a one-hour loaded arm, an idle arm about as long, an hour slack.
+    expect(runBandMarginMs(parseArgs([]))).toBe(3 * 60 * 60_000);
+    expect(runBandMarginMs(parseArgs(["--load-duration-seconds", "60"]))).toBe(62 * 60_000);
   });
 });
 

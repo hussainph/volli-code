@@ -445,7 +445,7 @@ describe("a re-search over results already on screen", () => {
 });
 
 /**
- * VC-406 review: the mislabelled window was the DEBOUNCE, not the request. A
+ * VC-406: the mislabelled window was the DEBOUNCE, not the request. A
  * query typed over a retained answer is a different question from the moment it
  * is typed, and the 200ms before any IPC leaves is where a rapidly edited query
  * spends most of its visible life.
@@ -508,7 +508,7 @@ describe("a query typed over an answer, before the debounce elapses", () => {
 });
 
 /**
- * VC-406 review: the rail mounts this page ONCE and hands it another scope, so
+ * VC-406: the rail mounts this page ONCE and hands it another scope, so
  * the old answer has to be gone in the same frame the new scope's name arrives —
  * a click on a retained row opens a path in a checkout the reader is no longer
  * looking at.

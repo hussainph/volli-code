@@ -462,6 +462,7 @@ const ATTACHMENTS: readonly BlobLinkView[] = [
 const WORKTREE_STATUS = {
   uncommitted: true,
   sequencerActive: false,
+  unmergedPaths: 0,
   aheadOfBase: 3,
   behindBase: 0,
   unpushed: 3,
@@ -579,7 +580,6 @@ const HOME_SLICE: ChatSessionSlice = {
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
     liveExecutor: { id: "exec-1" },
-    authority: null,
     scheduledResume: null,
   },
   transcript: EMPTY_TRANSCRIPT,

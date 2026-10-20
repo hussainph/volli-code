@@ -597,7 +597,11 @@ describe("ticketOutputStamps", () => {
 });
 
 describe("ticketSessionProvenance", () => {
-  const run = { kind: "automation", automationName: "Nightly sweep" } as const;
+  const run = {
+    kind: "automation",
+    automationRunId: null,
+    automationName: "Nightly sweep",
+  } as const;
   const child = {
     kind: "session",
     parentSessionId: "session-parent",

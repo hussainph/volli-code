@@ -36,6 +36,8 @@ import {
 } from "@volli/shared";
 
 import { SWITCHED_OFF_NOTE } from "./automations-page-model";
+import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
+import { ModelName } from "@renderer/components/models/model-identity";
 import { runAutomationOnTicket } from "./run-automation";
 import {
   modelOverrideRows,
@@ -279,11 +281,14 @@ export function AutomationRunMenuItems({
   rail,
   enabledIds,
   models,
+  canWrite = true,
   onRun,
 }: {
   rail: TicketRailAutomations;
   enabledIds: readonly string[];
   models: readonly ComposerModel[];
+  /** Read-only (VC-576): a Run is a write to the project's host; every row stands down. */
+  canWrite?: boolean;
   onRun(action: RailRunAction, modelOverride: ModelSelection | null): void;
 }) {
   const overrides = modelOverrideRows(models);
@@ -309,6 +314,7 @@ export function AutomationRunMenuItems({
             <ContextMenuItem
               key={automation.id}
               icon={LightningIcon}
+              disabled={!canWrite}
               onSelect={() => onRun({ kind: "automation", automation }, null)}
             >
               <span className="min-w-0 flex-1 truncate">{automation.name}</span>
@@ -332,7 +338,9 @@ export function AutomationRunMenuItems({
           worse than one that is not there. */}
       {overrides.length === 0 || !overridePressable(rail.primary) ? null : (
         <ContextMenuSub>
-          <ContextMenuSubTrigger icon={CpuIcon}>Run on model</ContextMenuSubTrigger>
+          <ContextMenuSubTrigger icon={CpuIcon} disabled={!canWrite}>
+            Run on model
+          </ContextMenuSubTrigger>
           <ContextMenuSubContent>
             {overrides.map(({ model, selections }) =>
               selections.length === 1 ? (
@@ -341,11 +349,13 @@ export function AutomationRunMenuItems({
                   icon={CpuIcon}
                   onSelect={() => onRun(rail.primary, selections[0] ?? null)}
                 >
-                  {model.label}
+                  <ModelName model={model} models={models} providerLabel={model.providerLabel} />
                 </ContextMenuItem>
               ) : (
                 <ContextMenuSub key={model.id}>
-                  <ContextMenuSubTrigger icon={CpuIcon}>{model.label}</ContextMenuSubTrigger>
+                  <ContextMenuSubTrigger icon={CpuIcon}>
+                    <ModelName model={model} models={models} providerLabel={model.providerLabel} />
+                  </ContextMenuSubTrigger>
                   <ContextMenuSubContent>
                     {selections.map((selection) => (
                       <ContextMenuItem
@@ -412,10 +422,14 @@ export function TicketAutomationMenuItems({
     (state) => state.projects.find((project) => project.id === projectId)?.ticketPrefix,
   );
 
+  const canWrite = useCanWrite(projectId);
+
   const run = (action: RailRunAction, modelOverride: ModelSelection | null): void => {
     // Only a record can be run from here. `run-once` and `unread` are states
     // this menu never offers a press for, so they cannot arrive.
     if (action.kind !== "automation") return;
+    // A menu opened before the host went away cannot run through it.
+    if (!guardWrite(projectId)) return;
     void runAutomationOnTicket({
       target: { kind: "automation", automationId: action.automation.id },
       automationName: action.automation.name,
@@ -426,5 +440,13 @@ export function TicketAutomationMenuItems({
     });
   };
 
-  return <AutomationRunMenuItems rail={rail} enabledIds={enabledIds} models={models} onRun={run} />;
+  return (
+    <AutomationRunMenuItems
+      rail={rail}
+      enabledIds={enabledIds}
+      models={models}
+      canWrite={canWrite}
+      onRun={run}
+    />
+  );
 }

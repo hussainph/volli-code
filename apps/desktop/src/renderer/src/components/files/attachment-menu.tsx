@@ -1,6 +1,5 @@
 /**
- * The Ticket's attachments, behind the Files header's paperclip (VC-406,
- * revision 06).
+ * The Ticket's attachments, behind the Files header's paperclip (VC-406).
  *
  * THE DEFECT THIS REPLACES was a PERMANENT LIST. The rail drew an `Attachments`
  * eyebrow and a strip of chips above the listing, on screen in every state

@@ -4,7 +4,7 @@
  * gates stand down behind it — so what it says must carry everything they
  * would have said: counts, not "the app will close".
  *
- * Three surfaces, named separately and never blended, because "live sessions"
+ * Each surface is named separately and never blended, because "live sessions"
  * as a single number would mean something different here than in the confirms
  * this dialog replaces: a busy PTY (a foreground process beyond the shell) and
  * an open structured agent Session (a turn open on a plane that outlives any
@@ -20,6 +20,8 @@ export interface LiveWork {
   busyCommands: string[];
   /** Structured agent Sessions with a turn open right now. */
   openAgentSessions: number;
+  /** Background shells still running (VC-577; counted with the `cloud` flag on). */
+  backgroundShells: number;
   /** Display names of editor tabs holding unsaved drafts. */
   unsavedDrafts: string[];
 }
@@ -42,6 +44,14 @@ export function liveWorkLines(work: LiveWork): string[] {
       work.openAgentSessions === 1
         ? "1 agent Session has a turn open — restarting will interrupt it."
         : `${work.openAgentSessions} agent Sessions have turns open — restarting will interrupt them.`,
+    );
+  }
+
+  if (work.backgroundShells > 0) {
+    lines.push(
+      work.backgroundShells === 1
+        ? "1 background shell is running — restarting will stop it."
+        : `${work.backgroundShells} background shells are running — restarting will stop them.`,
     );
   }
 

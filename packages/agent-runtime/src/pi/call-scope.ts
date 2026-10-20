@@ -21,12 +21,3 @@ export function withCallScope<T>(scope: RuntimeCallScope, work: () => Promise<T>
 export function currentCallScope(): RuntimeCallScope | undefined {
   return current.getStore();
 }
-
-/**
- * One ask, through the running call's scope when it has one: a program's
- * questions are held to one at a time and stop its clock.
- */
-export function scopedAsk<T>(ask: () => Promise<T>): Promise<T> {
-  const scope = current.getStore();
-  return scope === undefined ? ask() : scope.question(ask);
-}

@@ -1,9 +1,9 @@
 /**
  * MCP results through the real loop on Pi 0.99 (VC-469): an error that keeps
  * its structured data, and a result too long for the model that is cut, saved
- * beside the sidecar, and read back under an enforcing authority gate.
+ * beside the sidecar, and read back with its untrusted-data notice.
  *
- * Everything runs for real — Pi's `Agent`, the tools, the gate, the sidecar —
+ * Everything runs for real — Pi's `Agent`, the tools, the sidecar —
  * except the provider, which is scripted one request at a time.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -21,12 +21,9 @@ import {
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import {
-  BUILTIN_RULE_PACK_HASH,
-  BUILTIN_RULE_PACK_ID,
   MCP_RESULT_INLINE_MAX_BYTES,
+  type RuntimeWebDocument,
   mcpProviderToolName,
-  sessionToolIds,
-  type AuthoritySnapshot,
   type McpToolDefinition,
   type RuntimeMcpCallResult,
   type RuntimeObservation,
@@ -125,7 +122,7 @@ const MCP_TOOL: McpToolDefinition = {
   },
 };
 
-/** An enforcing Session, so a read of saved output has to pass the real gate. */
+/** A Session that can read back saved tool output. */
 function attachment(answer: () => RuntimeMcpCallResult): {
   spec: SessionRuntimeSpec;
   observations: RuntimeObservation[];
@@ -157,18 +154,7 @@ function attachment(answer: () => RuntimeMcpCallResult): {
       observations.push(observation);
     },
   };
-  const authority: AuthoritySnapshot = {
-    mode: "auto",
-    location: "worktree",
-    enforcement: "enforce",
-    judgmentMode: "ask",
-    tools: sessionToolIds(spec),
-    rulePackId: BUILTIN_RULE_PACK_ID,
-    rulePackHash: BUILTIN_RULE_PACK_HASH,
-    classifierModel: null,
-    fallback: { consecutiveDenials: 3, sessionDenials: 20 },
-  };
-  return { spec: { ...spec, authority }, observations, sessionDataDir };
+  return { spec, observations, sessionDataDir };
 }
 
 describe("MCP results on Pi 0.99 (VC-469)", () => {
@@ -238,7 +224,7 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
       (_, index) => `row ${String(index).padStart(5, "0")} ${"·".repeat(28)}`,
     ).join("\n");
     expect(Buffer.byteLength(whole)).toBeGreaterThan(1_000_000);
-    const { spec, observations, sessionDataDir } = attachment(() => ({
+    const { spec, sessionDataDir } = attachment(() => ({
       content: [{ type: "text", text: whole }],
       structuredContent: { url: "https://fixture/7", number: 7 },
       isError: false,
@@ -292,8 +278,7 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
     // The sidecar holds the cut, never the megabyte.
     expect(statSync(sidecar).size).toBeLessThan(200_000);
 
-    // The read was allowed by the enforcing gate and came back marked.
-    expect(observations.some((observation) => observation.kind === "authority")).toBe(false);
+    // Reading saved output preserves its untrusted-data notice.
     const read = toolResultsIn(sent[1]!).find((message) => message.toolCallId === "tc-read");
     expect(read?.isError).toBe(false);
     expect(read?.content[0]).toEqual({ type: "text", text: SAVED_TOOL_OUTPUT_WARNING });
@@ -307,7 +292,7 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
       { length: 4_096 },
       (_, index) => `entry ${index} ${"-".repeat(40)}`,
     ).join("\n");
-    const { spec, observations, sessionDataDir } = attachment(() => ({
+    const { spec, sessionDataDir } = attachment(() => ({
       content: [{ type: "text", text: whole }],
       isError: false,
     }));
@@ -375,12 +360,79 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
     );
 
     expect(dirname(savedPath)).not.toBe(toolOutputDirectoryFor(b.recovery.sessionFilePath));
-    // Every read passed the enforcing gate and came back marked as untrusted.
-    expect(observations.some((observation) => observation.kind === "authority")).toBe(false);
+    // Every read came back marked as untrusted.
     for (const { read } of [b, bAgain, c]) {
       expect(read?.isError).toBe(false);
       expect(read?.content[0]).toEqual({ type: "text", text: SAVED_TOOL_OUTPUT_WARNING });
       expect(JSON.stringify(read?.content)).toContain("entry 1997 ");
     }
+  });
+});
+
+describe("web reads Volli bounded (VC-237)", () => {
+  it("saves a dense page whole beside the sidecar, sends the model only the bounded copy, and marks a later read", async () => {
+    const whole = Array.from(
+      { length: 8_000 },
+      (_, index) => `paragraph ${String(index).padStart(4, "0")} ${"·".repeat(24)}`,
+    ).join("\n");
+    const page: RuntimeWebDocument = {
+      requestedUrl: "https://docs.example/dense",
+      finalUrl: "https://docs.example/dense",
+      origin: "https://docs.example",
+      contentType: "text",
+      text: whole.slice(0, 25_000),
+      truncated: true,
+      whole: { text: whole, bounded: false },
+    };
+    const { spec, sessionDataDir } = attachment(() => {
+      throw new Error("no MCP call in this test");
+    });
+    const sent: (readonly Message[])[] = [];
+    let savedPath = "";
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: scriptedModels([
+        callTool("web_fetch", { url: "https://docs.example/dense" }, "tc-web"),
+        (reply, messages) => {
+          sent.push(messages);
+          const shown = (toolResultsIn(messages)[0]!.content[0] as { text: string }).text;
+          savedPath = /Volli saved the whole page text \(.+?\) to (\S+), read at /u.exec(
+            shown,
+          )![1]!;
+          callTool(
+            "read",
+            { path: savedPath, offset: 7_000, limit: 2 },
+            "tc-read",
+          )(reply, messages);
+        },
+        (reply, messages) => {
+          sent.push(messages);
+          say("Read the rest.")(reply, messages);
+        },
+      ]),
+    });
+    const handle = await runtime.startSession({
+      ...spec,
+      tools: { tools: ["read"] },
+      webFetch: async () => page,
+    });
+    await handle.submitUserMessage("Read the dense page.");
+
+    // What the provider was sent: the bounded copy and the file's name, never the rest.
+    expect(JSON.stringify(sent[0])).not.toContain("paragraph 7999");
+    expect(JSON.stringify(sent[0])).toContain("paragraph 0000");
+    // The whole sits in this attachment's own directory, exactly as read.
+    const sidecar = handle.recovery!.sessionFilePath;
+    expect(dirname(savedPath)).toBe(toolOutputDirectoryFor(sidecar));
+    const file = readFileSync(savedPath, "utf8");
+    expect(file.slice(file.indexOf("\n\n") + 2)).toBe(whole);
+    expect(file.split("\n")[0]).toContain("Tool: web_fetch. Source: https://docs.example/dense.");
+    // The sidecar keeps the bounded result, not the page.
+    expect(readFileSync(sidecar, "utf8")).not.toContain("paragraph 7999");
+    // A read of the rest arrives marked untrusted.
+    const read = toolResultsIn(sent[1]!).find((message) => message.toolCallId === "tc-read");
+    expect(read?.content[0]).toEqual({ type: "text", text: SAVED_TOOL_OUTPUT_WARNING });
+    expect(JSON.stringify(read?.content)).toContain("paragraph 6998");
+    await handle.close();
   });
 });

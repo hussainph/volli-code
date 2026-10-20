@@ -91,23 +91,78 @@ and its AGPL dependency outright, which is why that section now reads as history
 
 `sharp` reaches its image codecs through two optional packages: `@img/sharp-darwin-arm64`
 (Apache-2.0, the `.node` addon) and `@img/sharp-libvips-darwin-arm64` (**LGPL-3.0-or-later**, the
-prebuilt `libvips-cpp.8.18.6.dylib`). Both are listed in `apps/desktop/package.json`'s
+prebuilt `libvips-cpp.8.18.7.dylib`). Both are listed in `apps/desktop/package.json`'s
 `optionalDependencies` and both ship in the `.dmg`.
 
 Verified by reading the installed package:
 
-- Its entire file list is `package.json`, `README.md`, `versions.json`, one glib header, and the
-  dylib. **It carries no license text at all** — only a markdown table in the README naming each
+- Its entire file list is `package.json`, `README.md`, `versions.json`, `lib/index.js`, one glib
+  header, and the dylib. **It carries no license text at all** — only a markdown table in the README naming each
   bundled component's license.
 - Eight of the twenty-nine components are under an LGPL: `fribidi`, `glib`, `libexif`, `libheif`,
   `librsvg`, `pango`, `proxy-libintl`, and `libvips` itself. The README adds that LGPLv3 is reached
   "via the 'any later version' clause of the LGPLv2 or LGPLv2.1".
-- The addon reaches the library through the Mach-O load command `@rpath/libvips-cpp.8.18.6.dylib`.
+- The addon reaches the library through the Mach-O load command `@rpath/libvips-cpp.8.18.7.dylib`.
   It is **dynamically linked**, not statically bound.
 
 Where it is used: `packages/agent-runtime/src/pi/read-image-processor.ts`, which resizes and
 transcodes images before they go to a model. It is loaded through a dynamic `import("sharp")`, and a
 load failure already degrades to `[Image omitted]` rather than failing the runtime.
+
+### 1.3.4 security update review (VC-755, 2026-10-13)
+
+Compared the installed `@img/sharp-libvips-darwin-arm64@1.3.4` with the published 1.3.3
+package (`npm pack @img/sharp-libvips-darwin-arm64@1.3.3 --ignore-scripts`): read both
+`package.json`, `README.md`, `versions.json`, and the full file lists. Neither includes a
+license text. The package identifier stays `LGPL-3.0-or-later`; the manifest changes only
+version and binary export. Both README tables name the same 29 components, and both
+version maps have the same 28 keys (no newly bundled component keys). The eight README
+LGPL rows and the “any later version” paragraph are unchanged.
+
+**Cairo was never permissive.** Its README row changes from “Mozilla Public License 2.0”
+to “Mozilla Public License 1.1”, and cairo changes from 1.18.4 to 1.18.6. We stopped before
+recording the new version. The owner then elected **LGPL-2.1** on 2026-10-13: cairo 1.18.6
+is **LGPL-2.1 or MPL-1.1, used under LGPL-2.1**. Read upstream
+[COPYING](https://gitlab.freedesktop.org/cairo/cairo/-/raw/master/COPYING) and the
+[1.18.6 copy](https://gitlab.freedesktop.org/cairo/cairo/-/raw/1.18.6/COPYING): every file
+in the implementation may use either license; auxiliary test/util/perf code does not
+contribute to the library. The old MPL-2.0 row appears to have been a packaging error,
+not evidence that cairo was permissive. The earlier policy claim that every non-LGPL
+entry was permissive was incorrect and is withdrawn.
+
+README SHA-256 evidence: 1.3.3 `47083f1ae7e990f74a56f576bcb8434051cb84ed1982fa57932720869e5147fe`;
+1.3.4 `5dd6d3c034f925604681d49b7bedc71bd08dcf3d0cfc6d16b9f0569497d700dc`.
+The regenerated notice retains upstream's table verbatim and separately names our election.
+The policy kept the prior 1.3.3 review while miniflare under wrangler in the docs/website
+**devDependencies** still installed sharp 0.35.4 (never a shipped desktop/hostd/runtime copy).
+VC-793 overrode that copy to 0.35.5 (GHSA-wq5f-xc86-pv6w), so 1.3.3 is no longer installed
+and its review was dropped from the policy. The desktop's explicit native optional pins now match sharp 0.35.5 / libvips 1.3.4.
+The generators validate cairo's reviewed version and README terms before applying it.
+
+Read `build/posix.sh` at [v1.3.3](https://github.com/lovell/sharp-libvips/blob/v1.3.3/build/posix.sh)
+and [v1.3.4](https://github.com/lovell/sharp-libvips/blob/v1.3.4/build/posix.sh).
+The LGPL source URL templates and glib/libvips patches remain unchanged. The new recipe
+adds [librsvg's embedded-image memory-limit patch](https://github.com/GNOME/librsvg/commit/9106011db93d701728ac2c9da50c9ab2c1bb5dc6.patch),
+now included in our source directions. Cairo's release URL comes from that recipe;
+its build stanza has no source patch. Components are built into the shared libvips-cpp
+payload; the addon still dynamically loads that replaceable dylib. “Unmodified” means
+Volli ships upstream's binary unchanged, not that upstream compiled untouched sources.
+
+Cairo's LGPL-2.1 election adds its source directions, prominent notice, and a verbatim
+`LGPL-2.1.txt` beside the existing GPLv3/LGPLv3 texts. The copy matches upstream 1.18.6's
+SHA-256 `9e9e8608c4cdda51a78cc3a385f4ec9a2e4c96d5ecad74ac8bca5fca3e563b7d`
+and Git blob `f1ed6182c52833b498109b1a9403ea83fc8bf465` (26,533 bytes), checked against
+GitLab's file metadata. LGPL-2.1 §6's notice/source/relink requirements are addressed
+by the same shipped source offer and replaceable shared-library mechanism as below,
+with cairo included; it is not silently described as LGPLv3.
+
+Re-read `RELINK-LIBVIPS.md` and `relink-libvips.sh`: discovery uses
+`libvips-cpp.*.dylib` and rewrites the replacement install name to the installed filename,
+so 8.18.7 needs no algorithm change. The packaging allowlist, asar unpacking, license
+copies and forbidden entitlement remain asserted by `check:licenses`. Updated the
+relink examples to 8.18.7. The actual signed-app swap is prior evidence (§B2), not a
+new local Electron run; the library-validation probe and Electron packaging/smokes
+remain CI evidence. No hardening is relaxed.
 
 ### What LGPLv3 section 4 asks for, and where each part stands
 
@@ -286,11 +341,13 @@ Team `Y54F649NH4`), driving the real `sharp` addon through the packaged Electron
 #### What that turned into
 
 - `apps/desktop/licensing/LGPL-LIBVIPS.md` — **generated** from the installed package: the 4(a)
-  notice, the eight LGPL components, and a source address per component. Every URL template is
+  notice, the eight README LGPL components plus cairo elected under LGPL-2.1, and a source address per component. Every URL template is
   read out of `lovell/sharp-libvips`'s own `build/posix.sh` at the tag we ship, not reconstructed
-  from project homepages, and the document also names the build recipe and the two external
-  patches applied to glib and libvips — without which the tarballs are not the whole Corresponding
-  Source. All 11 addresses were fetched and returned 200; `licenses:verify-sources` re-checks them.
+  from project homepages, and the document also names the build recipe and the external
+  patches applied to glib, libvips and (since 1.3.4) librsvg — without which the tarballs are not the whole Corresponding
+  Source. The original 11 addresses were fetched and returned 200 in VC-409;
+  `licenses:verify-sources` can re-check the current addresses. VC-755 reviewed the 1.3.4
+  recipe and patch text, not the availability of every source archive.
 - `apps/desktop/licensing/RELINK-LIBVIPS.md` and `relink-libvips.sh` — the 4(e) Installation
   Information, and a script that performs it. Verified end to end: the script was run against a
   pristine signed app with a user-supplied ad-hoc dylib, and the result loads.

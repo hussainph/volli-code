@@ -3,7 +3,7 @@
  *
  * VC-441's fixture (`measurement.ts`) ran scripted turns straight against
  * VC-119's instrumentation, so no Session runtime, input queue, agent loop,
- * authority gate or ledger was ever on the path. VC-456 composes the real ones
+ * or ledger was ever on the path. VC-456 composes the real ones
  * in the desktop app (`apps/desktop/e2e/bench/turn-real-path/`), where the
  * Session runtime, the Pi adapter and the SQLite ledger live. This module is
  * the only part of that composition that has to speak pi-ai, so it lives here

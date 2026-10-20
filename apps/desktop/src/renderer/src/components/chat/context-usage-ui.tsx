@@ -81,12 +81,12 @@ export const ContextUsagePill = React.memo(function ContextUsagePill({
 
               AND IT IS THE FIRST THING THE ROW GIVES UP (VC-335). Below 24rem
               of composer — a narrow split, the app's own 265px default — the
-              ring stands alone, which is T3 Code's meter at every width: the
-              ring already says the share, and the four characters it frees
-              are the model name's, the one value in the row with something to
-              lose. Measured against the composer, not the window
-              (`@container/composer`), and the accessible name still carries
-              the number. */}
+              model identity takes that room, and the ring stands alone: the
+              ring already says the share, and the four characters it frees are
+              the model name's, the one value in the row with something to lose.
+              Measured against the composer, not the window
+              (`@container/composer`), and the accessible name still carries the
+              number. */}
           <span className="hidden @min-[24rem]/composer:inline">
             {percent ?? formatTokens(usage.usedTokens)}
           </span>

@@ -177,8 +177,8 @@ export function normalizeLicenseText(text) {
  *     placeholder → `{ holder: null }`, and the document says so plainly;
  *   - the appendix names a holder → `{ holder: "<that line, verbatim>" }`.
  *
- * The consequence is that VC-414's edit to one line of LICENSE flows into the
- * shipped notice by regenerating it, with no second copy of the owner's name
+ * Regenerating the notice reads the copyright holder from LICENSE (VC-414),
+ * with no second copy of that name
  * anywhere in this pipeline to drift. A hardcoded holder here would be a
  * second source of truth for the one fact the LICENSE exists to state.
  *
@@ -652,19 +652,10 @@ function isNameShipped(name, shippedNames) {
  * Decide what a workspace package's OWN declared notices contribute, and what
  * about them is broken.
  *
- * THIS REPLACES A MAGIC-STRING GREP (VC-407 review). The first design had the
- * desktop registry name a file owned by another package plus a marker word,
- * and decided by reading every shipped source file looking for that word. The
- * real case walked straight through the hole: a generated catalog of 463
- * third-party terminal themes, whose entries named individual themes and never
- * once carried the marker the grep was looking for. Marker not found, so the
- * rule concluded the material had not shipped, stayed green, and would have
- * packaged the whole catalog with no attribution. A grep for a word is a guess
- * about how someone else will spell something.
- *
- * (That catalog was later removed outright — VC-413 — because nobody had
- * verified the individual themes' licences. The hole it exposed is still the
- * reason this rule keys on files.)
+ * Coverage keys on shipped files, not marker words in their contents (VC-407).
+ * Generated or renamed material can omit a marker while still requiring
+ * attribution. Unverified third-party terminal themes must not ship (VC-413);
+ * file-based coverage keeps that material visible to the packaging gate.
  *
  * WHAT REPLACES IT IS THE FILE ITSELF. A package declares, in its own
  * `package.json`, which of its files are vendored third-party material and
@@ -676,15 +667,13 @@ function isNameShipped(name, shippedNames) {
  * only if its file is in the tree, which is the same question the packaging
  * asks. There is no string to get wrong and no tree to scan.
  *
- * WHY IT LIVES IN THE OWNING PACKAGE. Before, the desktop registry named paths
- * inside @volli/shared and @volli/agent-runtime, so an ordinary rename in
- * either package broke the DESKTOP gate, with the declaration to fix three
- * directories away. Declared here, the path and the file it names move
- * together in one package, under one review.
+ * Declarations live in the owning package so the path and file move together.
+ * An ordinary package-local rename must not require a separate desktop-owned
+ * registry edit to preserve attribution.
  *
  * Both directions are failures, and deliberately:
  *   - material present, notice file absent  → the artifact would ship
- *     unattributed material. This is the case the grep missed.
+ *     unattributed material.
  *   - notice declared, material absent      → the declaration has rotted (a
  *     typo, or material deleted without its entry). Silence here would let a
  *     mistyped path masquerade as coverage.

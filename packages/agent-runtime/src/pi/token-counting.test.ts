@@ -187,7 +187,7 @@ describe("estimateMessageTokens", () => {
   // Pi 0.86 carries the prompt and the tool declarations as system messages
   // inside the transcript. The estimator prices them there, and only there:
   // the transcript is the one spelling of a request it accepts, so the same
-  // tokens cannot be handed over beside it a second time (VC-421 review, B).
+  // tokens cannot be handed over beside it a second time (VC-421).
   it("prices the head as the prompt plus each declaration, once, on top of the conversation", () => {
     const systemPrompt = "You are concise.";
     const head = systemHead(systemPrompt, [tool]);
@@ -252,7 +252,7 @@ describe("estimateMessageTokens", () => {
 
   // What a transcript's declarations cost is what a provider is sent: Pi's
   // `getCurrentTools`, one declaration per name, later ones winning, removed
-  // ones gone — however many system messages carry them (VC-421 review, A).
+  // ones gone — however many system messages carry them (VC-421).
   describe("declarations over a whole transcript", () => {
     const head: SystemMessage = {
       role: "system",

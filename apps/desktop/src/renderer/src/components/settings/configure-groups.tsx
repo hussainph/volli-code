@@ -7,24 +7,37 @@
  * appeared on both pages with no way to tell which one won.
  *
  * Project is the rest: how this repo's sessions, theming and worktrees behave.
+ *
  */
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CommandIcon } from "@phosphor-icons/react/dist/csr/Command";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
+import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlugsConnectedIcon } from "@phosphor-icons/react/dist/csr/PlugsConnected";
-import { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
 import type { Project } from "@volli/shared";
+import type * as React from "react";
+
+import { LocalOnly } from "@renderer/components/hosts/local-only";
 
 import { ProjectAppearanceSettings } from "@renderer/components/pages/project-appearance-settings";
 import type { PrefGroup } from "@renderer/components/settings/kit";
-import { AuthorityPane } from "./configure/authority-pane";
 import { CommandsPane } from "./configure/commands-pane";
 import { McpPane } from "./configure/mcp-pane";
 import { SessionsPane } from "./configure/sessions-pane";
+import { SecretsPane } from "./configure/secrets-pane";
 import { SkillsPane } from "./configure/skills-pane";
 import { WorktreesPane } from "./configure/worktrees-pane";
+
+/**
+ * Every Configure pane reads or writes this Mac's own config for the project
+ * (its files, MCP servers, secrets, worktrees): for a remote project's, each
+ * says "Not available on <host> yet" until its host serves them (VC-711).
+ */
+function local(project: Project, content: React.ReactNode): React.ReactNode {
+  return <LocalOnly projectId={project.id}>{content}</LocalOnly>;
+}
 
 export function configureGroups(project: Project): readonly PrefGroup[] {
   return [
@@ -50,7 +63,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             "description",
             "mode",
           ],
-          content: <SkillsPane project={project} />,
+          content: local(project, <SkillsPane project={project} />),
         },
         {
           key: "commands",
@@ -68,7 +81,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             "this project",
             "personal",
           ],
-          content: <CommandsPane project={project} />,
+          content: local(project, <CommandsPane project={project} />),
         },
         {
           key: "mcp",
@@ -95,50 +108,23 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             "add server",
             "edit server",
           ],
-          content: <McpPane project={project} />,
+          content: local(project, <McpPane project={project} />),
         },
         {
-          // Agent, not Project: this is what this repo's agents are ALLOWED to
-          // do, which is the same question Skills and Commands answer about
-          // what they can reach. It is also the only surface in the product
-          // that writes authority policy — no agent verb projects it, by
-          // design (VC-172).
-          key: "authority",
-          label: "Authority",
-          icon: ShieldCheckIcon,
+          key: "secrets",
+          label: "Secrets",
+          icon: KeyIcon,
           keywords: [
-            "authority",
-            "permission",
-            "permissions",
-            "policy",
-            "enforce",
-            "observe",
-            "sandbox",
-            "guardrail",
-            "approval",
-            "escalation",
-            "denial",
-            "transcript",
-            "peek",
-            "auto mode",
-            // The row labels, so rail search finds the page from what is on
-            // it — `settings-search-smoke.mjs` walks every visible label and
-            // holds this list to that contract.
-            "rule enforcement",
-            // The whole label, em dash included, because the rail matches a
-            // lowercased SUBSTRING of a stored term: "decision mode" alone
-            // could not be found by someone typing what the row says. VC-285
-            // renamed this row from "Who judges the rest" and the old term
-            // went with it — a keyword for a label nobody can see finds
-            // nothing and hides the one that is missing.
-            "decision mode \u2014 not active yet",
-            "ask me after",
-            "or after, in total",
-            "you can read",
-            "an authenticated session can read",
-            "an unauthenticated caller can read",
+            "secret",
+            "credential",
+            "scope",
+            "last used",
+            "replacement credential",
+            "replace",
+            "revoke",
+            "refresh",
           ],
-          content: <AuthorityPane project={project} />,
+          content: local(project, <SecretsPane project={project} />),
         },
       ],
     },
@@ -162,7 +148,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             "decision model",
             "classifier",
           ],
-          content: <SessionsPane project={project} />,
+          content: local(project, <SessionsPane project={project} />),
         },
         {
           key: "appearance",
@@ -179,7 +165,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             "mode",
             "config file",
           ],
-          content: <ProjectAppearanceSettings project={project} />,
+          content: local(project, <ProjectAppearanceSettings project={project} />),
         },
         {
           key: "worktrees",
@@ -198,7 +184,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             "branch from",
             "new worktrees",
           ],
-          content: <WorktreesPane project={project} />,
+          content: local(project, <WorktreesPane project={project} />),
         },
       ],
     },

@@ -16,9 +16,13 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { openTestDb, type TestDb } from "../db/test-helpers";
-import { BRAVE_SEARCH_KEY_SECRET, EXA_SEARCH_KEY_SECRET, WebCredentialStore } from "./credential";
-import { WebAccessSettings } from "./settings";
+import { openTestDb, type TestDb } from "@volli/host-core/testing";
+import {
+  BRAVE_SEARCH_KEY_SECRET,
+  EXA_SEARCH_KEY_SECRET,
+  WebCredentialStore,
+  WebAccessSettings,
+} from "@volli/host-core/integrations";
 import { registerWebAccessIpcHandlers } from "./ipc";
 
 const KEY = "BSA-super-secret-brave-key-42";
@@ -58,6 +62,7 @@ describe("the Web Access door", () => {
         provider: "off",
         searxngUrl: null,
         keys: { brave: "absent", exa: "absent" },
+        sealing: "none",
       },
     });
   });

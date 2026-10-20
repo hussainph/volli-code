@@ -21,7 +21,9 @@ import {
   useProjectSessionsStore,
   type ProjectSessionRows,
 } from "./project-sessions";
-import type { SessionActivityNotice } from "../../../ipc/contract";
+import type { SessionActivityNotice, SessionsResult } from "../../../ipc/contract";
+import { rememberRemoteProject, resetRemoteOwnersForTest } from "@renderer/lib/remote-owners";
+import { setRemoteSessionListing } from "@renderer/lib/session-listing-reader";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
@@ -81,6 +83,124 @@ function stubList(sessions: SessionListingRow[]) {
   return list;
 }
 
+const chatRow = (overrides: Partial<ChatSessionRecord> = {}): SessionListingRow => ({
+  kind: "chat",
+  record: chatRecord(overrides),
+  usage: EMPTY_SESSION_USAGE_SUMMARY,
+  provenance: PERSON_STARTED,
+});
+
+describe("a remote project's listing (VC-713)", () => {
+  let unregister: (() => void) | null = null;
+  afterEach(() => {
+    unregister?.();
+    unregister = null;
+    resetRemoteOwnersForTest();
+    Reflect.deleteProperty(globalThis, "window");
+    vi.clearAllMocks();
+  });
+
+  function remote(list: (input: { projectId: string }) => Promise<SessionsResult>) {
+    rememberRemoteProject("remote", { hostId: "box", hostName: "hetzner-1" });
+    unregister = setRemoteSessionListing({
+      forProject: (projectId) =>
+        projectId === "remote"
+          ? { list, listForTicket: () => Promise.reject(new Error("unused")) }
+          : null,
+    });
+  }
+
+  it("reads a remote project through its own reader, and This Mac's through window.api", async () => {
+    const local = stubList([chatRow({ sessionId: "local" })]);
+    const list = vi.fn(async () => ({
+      ok: true as const,
+      sessions: [chatRow({ sessionId: "boxed", activity: "waiting", waitingOn: "question" })],
+    }));
+    remote(list);
+    const store = createProjectSessionsStore();
+    await store.getState().refresh("remote");
+    await store.getState().refresh("p1");
+    expect(list).toHaveBeenCalledWith({ projectId: "remote" });
+    expect(local).toHaveBeenCalledWith({ projectId: "p1" });
+    expect(local).not.toHaveBeenCalledWith({ projectId: "remote" });
+    expect(store.getState().byProject.remote?.chat).toMatchObject([
+      { sessionId: "boxed", activity: "waiting", waitingOn: "question" },
+    ]);
+  });
+
+  it("applies only the newest read when an older one lands after it", async () => {
+    const answers: ((result: SessionsResult) => void)[] = [];
+    remote(() => new Promise((resolve) => answers.push(resolve)));
+    const store = createProjectSessionsStore();
+    const older = store.getState().refresh("remote", { quiet: true });
+    const newer = store.getState().refresh("remote", { quiet: true });
+    answers[1]!({ ok: true, sessions: [chatRow({ sessionId: "new" })] });
+    await newer;
+    answers[0]!({ ok: true, sessions: [chatRow({ sessionId: "old" })] });
+    await older;
+    expect(store.getState().byProject.remote?.chat.map((row) => row.sessionId)).toEqual(["new"]);
+    // An older read's failure says nothing either.
+    const stale = store.getState().refresh("remote");
+    void store.getState().refresh("remote", { quiet: true });
+    answers[2]!({ ok: false, error: "late" });
+    await stale;
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("keeps the rows on screen through a quiet read, and says nothing when it fails", async () => {
+    let next: SessionsResult | Error = { ok: true, sessions: [chatRow({ sessionId: "kept" })] };
+    remote(async () => {
+      if (next instanceof Error) throw next;
+      return next;
+    });
+    const store = createProjectSessionsStore();
+    await store.getState().refresh("remote");
+    const states: (string | undefined)[] = [];
+    const stop = store.subscribe((state) => states.push(state.listingState.remote));
+    next = { ok: false, error: "link dropped" };
+    await store.getState().refresh("remote", { quiet: true });
+    next = new Error("link dropped");
+    await store.getState().refresh("remote", { quiet: true });
+    stop();
+    expect(states).not.toContain("loading");
+    expect(store.getState().listingState.remote).toBe("loaded");
+    expect(store.getState().byProject.remote?.chat.map((row) => row.sessionId)).toEqual(["kept"]);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("stands a superseded read's skeleton down when the quiet read after it fails", async () => {
+    const answers: ((result: SessionsResult) => void)[] = [];
+    remote(() => new Promise((resolve) => answers.push(resolve)));
+    const store = createProjectSessionsStore();
+    const first = store.getState().refresh("remote");
+    const quiet = store.getState().refresh("remote", { quiet: true });
+    answers[1]!({ ok: false, error: "link dropped" });
+    await quiet;
+    answers[0]!({ ok: true, sessions: [] });
+    await first;
+    expect(store.getState().listingState.remote).toBe("failed");
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("never falls to This Mac's IPC for a project known remote, registered or not (B1)", async () => {
+    const list = vi.fn(async () => ({ ok: true as const, sessions: [] }));
+    remote(list);
+    const stale = setRemoteSessionListing({ forProject: () => null });
+    unregister!();
+    unregister = stale;
+    const local = stubList([]);
+    const store = createProjectSessionsStore();
+    await store.getState().refresh("remote");
+    expect(local).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
+    expect(store.getState().listingState.remote).toBe("failed");
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't load sessions: hetzner-1 isn’t connected",
+      expect.anything(),
+    );
+  });
+});
+
 describe("project-sessions store", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -127,7 +247,11 @@ describe("project-sessions store", () => {
   // `record.sessionId`, and getting that backwards would file a mark under an id
   // no surface ever asks for — a bolt that silently never draws.
   it("keeps who started each Session, keyed by the id its own shape answers to", async () => {
-    const run = { kind: "automation", automationName: "Nightly sweep" } as const;
+    const run = {
+      kind: "automation",
+      automationRunId: null,
+      automationName: "Nightly sweep",
+    } as const;
     const child = {
       kind: "session",
       parentSessionId: "session-parent",
@@ -158,7 +282,11 @@ describe("project-sessions store", () => {
   // any baseline fetch has seen it, so the fold has to carry the mark — a push
   // that dropped it would leave the newest Run as the one row with no bolt.
   it("folds a pushed row's provenance in, and leaves the resting case absent", async () => {
-    const run = { kind: "automation", automationName: "Nightly sweep" } as const;
+    const run = {
+      kind: "automation",
+      automationRunId: null,
+      automationName: "Nightly sweep",
+    } as const;
     stubList([]);
     const store = createProjectSessionsStore();
     await store.getState().refresh("p1");
@@ -532,7 +660,7 @@ describe("childSessionIds", () => {
         "child-a": { kind: "session", parentSessionId: "parent", parentTitle: "Parent" },
         "child-b": { kind: "session", parentSessionId: "parent", parentTitle: "Parent" },
         cousin: { kind: "session", parentSessionId: "other", parentTitle: null },
-        parent: { kind: "automation", automationName: "Nightly" },
+        parent: { kind: "automation", automationRunId: null, automationName: "Nightly" },
       },
     };
 
@@ -559,7 +687,9 @@ describe("mergedProjectSessionRows", () => {
       p1: {
         terminal: [record({ id: "t-one", projectId: "p1" })],
         chat: [chatRecord({ sessionId: "c-one", projectId: "p1" })],
-        provenance: { "c-one": { kind: "automation", automationName: "Nightly" } },
+        provenance: {
+          "c-one": { kind: "automation", automationRunId: null, automationName: "Nightly" },
+        },
       },
       p2: {
         terminal: [record({ id: "t-two", projectId: "p2" })],
@@ -580,7 +710,7 @@ describe("mergedProjectSessionRows", () => {
     expect(merged.terminal.map((row) => row.id)).toEqual(["t-one", "t-two"]);
     expect(merged.chat.map((row) => row.sessionId)).toEqual(["c-one", "c-two"]);
     expect(merged.provenance).toEqual({
-      "c-one": { kind: "automation", automationName: "Nightly" },
+      "c-one": { kind: "automation", automationRunId: null, automationName: "Nightly" },
       "t-two": { kind: "session", parentSessionId: "c-one", parentTitle: null },
     });
   });

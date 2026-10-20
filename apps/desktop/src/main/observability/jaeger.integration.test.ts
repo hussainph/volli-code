@@ -22,8 +22,11 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vite-plus/test";
 import type { ObservabilityEvent } from "@volli/shared";
 
-import { OtlpObservabilityExporter, traceIdForRun } from "./otlp";
-import { QueuedObservabilitySink } from "./sink";
+import {
+  OtlpObservabilityExporter,
+  traceIdForRun,
+  QueuedObservabilitySink,
+} from "@volli/host-core/integrations";
 
 const enabled = process.env.VOLLI_JAEGER_INTEGRATION === "1";
 
@@ -88,7 +91,6 @@ function syntheticRun(runId: string): ObservabilityEvent[] {
       durationMs: 2100,
       runId,
     },
-    { kind: "authority", outcome: "denied", cause: "call.unreadable", runId },
     {
       kind: "compaction",
       outcome: "compacted",
@@ -150,7 +152,6 @@ describe.skipIf(!enabled)("Jaeger OTLP smoke (VOLLI_JAEGER_INTEGRATION=1)", () =
         "volli.agent.attachment",
         "volli.agent.attachment",
         "volli.agent.attention",
-        "volli.agent.authority",
         "volli.agent.compaction",
         "volli.agent.turn",
         "volli.observability.dropped",
@@ -172,15 +173,9 @@ describe.skipIf(!enabled)("Jaeger OTLP smoke (VOLLI_JAEGER_INTEGRATION=1)", () =
     // 1420ms, so a zero here means timing did not survive the wire.
     expect(attempt?.duration).toBe(1_420_000);
 
-    // A failed tool is red in the UI; a refusal and a drop report are not.
+    // A failed tool is red in the UI; a drop report is not.
     const failedTool = spans.find((span) => span.operationName === "execute_tool bash");
     expect(tag(failedTool, "error")).toBe(true);
-    expect(
-      tag(
-        spans.find((span) => span.operationName === "volli.agent.authority"),
-        "error",
-      ),
-    ).toBe(undefined);
     const dropped = spans.find((span) => span.operationName === "volli.observability.dropped");
     expect(tag(dropped, "volli.dropped.count")).toBe(7);
     expect(tag(dropped, "error")).toBe(undefined);

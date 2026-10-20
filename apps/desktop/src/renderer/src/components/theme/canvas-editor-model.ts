@@ -18,12 +18,9 @@
  *    directly — the same rule `project-appearance-model.ts` states for the
  *    terminal surface.)
  *
- * A contrast report used to be the third group — a standing alert whenever the
- * authored canvas stranded a copy floor. It was removed at the owner's call:
- * a canvas is an aesthetic choice, and a persistent warning about an outcome
- * the user chose is the surface arguing with them (see CLAUDE.md's error rule).
- * The solver still clamps to the best each surface allows; git history has the
- * report if a one-time, at-the-moment-of-choice nudge is ever wanted.
+ * The editor carries no persistent contrast warning: a canvas is an aesthetic
+ * choice, not an error state (see CLAUDE.md's error rule). The solver still
+ * clamps to the best each surface allows.
  *
  * Pure: no DOM, no store, no IPC. The editor decides what to paint; this decides
  * what is true.
@@ -32,7 +29,7 @@
 import { isHexColor, type Appearance, type Canvas, type ResolvedAppearance } from "@volli/shared";
 
 /**
- * Arc's two swatch pages: a pastel row, then the deeper row Volli's own seeds
+ * Two swatch pages: a pastel row, then the deeper row Volli's own seeds
  * live in. Ported verbatim from the lab's editor — these are the colors the
  * canvas was tuned against, and a fresh set would be a fresh tuning.
  */

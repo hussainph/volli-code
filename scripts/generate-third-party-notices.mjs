@@ -16,7 +16,7 @@
  * derives the list instead, checks the derivation in CI, and fails when the
  * packaging config stops shipping what it produced.
  *
- * WHY IT IS A ROOT SCRIPT and not `apps/desktop/scripts/` (VC-407 review). It
+ * WHY IT IS A ROOT SCRIPT and not `apps/desktop/scripts/` (VC-407). It
  * reads pnpm-workspace.yaml, walks @volli/cli, and collects notices that
  * @volli/shared and @volli/agent-runtime declare about their own material — a
  * workspace-wide job that happened to have one consumer. `ARTIFACTS` below is
@@ -653,14 +653,10 @@ function main({ check }) {
     process.exit(1);
   }
 
-  // WRITE FIRST, THEN REPORT (VC-407 review). Refusing to write while a
-  // coverage failure stands made the one command that fixes a stale notice
-  // unavailable exactly when something else was also wrong — and the two
-  // faults are independent: a package with no notice does not make the
-  // regenerated document less correct than the committed one. The exit code
-  // still fails, so nothing becomes green by regenerating; the difference is
-  // that the author can now fix both in one pass instead of being blocked on
-  // the order they happened to appear.
+  // Write before reporting coverage failures (VC-407). A missing notice and
+  // stale generated output are independent faults: regeneration can fix the
+  // latter without resolving the former. The nonzero exit code still exposes
+  // uncovered material, while the updated document remains available to commit.
   writeFileSync(artifact.outputPath, document);
   console.log(
     `Wrote ${repoRelative(OUTPUT_PATH)}: ${packageCount} packages ` +
@@ -1402,7 +1398,7 @@ function selfTestLiveDeclarations() {
   );
   assert.ok(
     owned.documents.length + owned.vendored.length >= 2,
-    "shared declares APCA; agent-runtime declares the vendored pi-automode helpers",
+    "shared declares APCA; agent-runtime declares the retained shell lexer",
   );
   assert.ok(
     owned.vendored.some((entry) => /APCA/i.test(entry.title ?? "")),

@@ -37,19 +37,13 @@
  *
  * ## When it resolves, which is the invariant everything else rests on
  *
- * Once, at Session creation, and never again. Not once per attachment — VC-164
- * froze the `tool-surface` record before the first attachment exists, and
- * `CONTEXT.md`'s Cache Prefix entry states the consequence: *"reattachment
- * rebinds that exact surface or fails without sending a different one."*
- *
- * So a grant recorded after a Session exists is inert for that Session, at
- * every later attachment, forever. It reaches the next Session created. This
- * amends VC-92's "takes effect at the next attachment", which was written
- * before the record moved to birth, and it is deliberate on two independent
- * grounds: availability is enforcement, so it must settle once; and the
- * provider computes its Cache Prefix over the serialized tool array, so a
- * Session that gained a tool mid-life would throw away its whole prefix —
- * including the system prompt, where the provider orders tools first.
+ * Birth records remain immutable (VC-164). VC-756 also uses this same pure
+ * resolver to compute today's candidate surface, then retains existing names,
+ * schemas and routes and records only compatible additions. Provider-visible
+ * changes wait for a cold turn, compaction or model switch; Code-Mode-only
+ * additions may arrive warm behind an unchanged declaration epoch. Reattachment
+ * replays both epochs instead of silently rebuilding a warm prefix. Grants
+ * still come from birth policy, never a hot authority edit.
  */
 
 import { CAPABILITY_TOOL_IDS, CODING_TOOL_IDS, NON_CODING_TOOL_IDS } from "./authority";
@@ -209,7 +203,12 @@ const ROLE_CAPABILITY_POLICY: Readonly<
   project: Object.freeze({ withheld: Object.freeze([]) as readonly NonCodingToolId[] }),
   ticket: Object.freeze({ withheld: Object.freeze([]) as readonly NonCodingToolId[] }),
   subagent: Object.freeze({
-    withheld: Object.freeze(["ask_user", "todo_write"]) as readonly NonCodingToolId[],
+    // A child has nobody in front of it to answer a secure credential request either (VC-481).
+    withheld: Object.freeze([
+      "ask_user",
+      "todo_write",
+      "request_secret",
+    ]) as readonly NonCodingToolId[],
   }),
 });
 

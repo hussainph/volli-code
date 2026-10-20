@@ -56,7 +56,7 @@ export function registerNotificationIpcHandlers(ports: {
   const unavailable = ports.unavailableReason ?? "Notification settings are unavailable.";
   const settings = ports.settings;
   // The parked click is registered FIRST and unconditionally, and the two
-  // preference channels are degraded around it (round 2). Alerts keep working
+  // preference channels are degraded around it. Alerts keep working
   // without a database — `readNotificationPreferences` answers all-on — so a
   // click on one has to keep working too; refusing this channel would strand a
   // deep link on precisely the launch where the app is already degraded.

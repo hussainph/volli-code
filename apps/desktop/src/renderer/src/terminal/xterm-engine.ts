@@ -111,6 +111,12 @@ export class XtermEngine implements TerminalEngine {
   /** PTY output that arrived before the terminal existed; see the cap above. */
   private preAttachOutput: string[] = [];
   private preAttachChars = 0;
+  /**
+   * Credit releases for chunks xterm has queued but not parsed yet. xterm drops
+   * its queued callbacks on dispose without calling them, so dispose releases
+   * these itself rather than strand the host's flow-control accounting.
+   */
+  private readonly unparsed = new Set<() => void>();
   /** Pane-local zoom layered over the live Ghostty-config base size. */
   private fontSizeOffset = 0;
   private disposed = false;
@@ -225,13 +231,45 @@ export class XtermEngine implements TerminalEngine {
     this.fit();
   }
 
-  write(data: string): void {
-    if (this.disposed) return;
-    if (this.term === null) {
-      this.rememberPreAttach(data);
+  write(data: string, onParsed?: () => void): void {
+    if (this.disposed) {
+      onParsed?.();
       return;
     }
-    this.term.write(data);
+    if (this.term === null) {
+      // Credited on receipt, not on the later flush: the buffer is capped, so
+      // it cannot grow the way xterm's queue can, and holding credit for a
+      // view that has not mounted yet would pause a PTY nobody is looking at.
+      this.rememberPreAttach(data);
+      onParsed?.();
+      return;
+    }
+    if (onParsed === undefined) {
+      this.term.write(data);
+      return;
+    }
+    // xterm parses asynchronously, in time slices; its write callback is the
+    // moment the chunk has actually been consumed (VC-821).
+    const release = (): void => {
+      if (!this.unparsed.delete(release)) return;
+      // This runs inside xterm's parse loop, before it advances past the
+      // chunk: a throw here would abort the loop and wedge its write queue,
+      // and with it the PTY.
+      try {
+        onParsed();
+      } catch (error) {
+        console.warn("terminal output credit release failed:", error);
+      }
+    };
+    this.unparsed.add(release);
+    try {
+      this.term.write(data, release);
+    } catch (error) {
+      // xterm refuses a write past its discard watermark BEFORE queueing it,
+      // so its callback will never run. Hand the credit back to the caller.
+      this.unparsed.delete(release);
+      throw error;
+    }
   }
 
   /** Append to the pre-attach buffer, trimming whole chunks past the cap. */
@@ -464,5 +502,8 @@ export class XtermEngine implements TerminalEngine {
     this.preAttachOutput = [];
     this.preAttachChars = 0;
     this.hostEl.remove();
+    // Each release deletes itself (a Set tolerates that mid-iteration) and
+    // isolates its own failure.
+    for (const release of this.unparsed) release();
   }
 }

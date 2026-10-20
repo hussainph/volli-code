@@ -1,54 +1,53 @@
 ---
-title: Project authority
-description: Understand how a project’s Authority policy gates Session actions and when Volli asks you to decide.
+title: Agent authority
+description: Session execution, secret handling, and actor permissions in Volli.
 sidebar:
-  label: Authority
+  label: Agent authority
 ---
 
-**Configure → Authority** sets the policy for a project’s Sessions. An
-**attachment** is the live connection a Session runs on, and it pins the policy
-when it opens. A change in Configure applies when a new attachment is created,
-not to one already running. Relaunching the app replays an existing
-attachment’s recorded policy. Volli stores the policy with its project data,
-not in a repository configuration file.
+Volli checks deterministic boundaries around a Session's tools and the host API.
+It does not review each tool call with a model or ask you to approve ordinary
+file and command calls.
 
-## Choose a rule-enforcement posture
+## Workspace and execution
 
-The **Rule enforcement** setting has three postures:
+A Session starts in its recorded worktree or main checkout. Ordinary desktop
+Sessions use host-native file and command tools: the working directory is not
+a filesystem sandbox.
 
-| Posture | Effect |
-| --- | --- |
-| **Off** | Creates no Authority Snapshot and runs no rule checks. |
-| **Observe** | The default. Saves the policy for the attachment and allows calls; it does not record individual allowed or refused calls. |
-| **Enforce** | Checks calls against Volli’s built-in rules and blocks calls those rules deny. |
+The runtime also retains an injectable `ScopedExecutionEnv`, whose file checks
+resolve paths and symlink targets against the workspace. Hosts can select that
+environment; desktop Sessions do not use it by default. Neither environment
+isolates arbitrary processes running as your macOS user.
 
-In **Enforce**, the default fallback asks you once a Session reaches **3 denials
-in a row** or **20 denials total**. You can change either threshold. Only denials
-from rules that allow an override can be allowed; other rule violations stay
-blocked.
+## Secrets
 
-## Understand the other controls
+Credentials use a dedicated, person-only field rather than the chat composer.
+Secret values are kept out of prompts, transcripts, and Session events; tool
+output is redacted before it reaches the model or the transcript. Generic
+question answers cannot submit credentials.
 
-**Decision mode — not active yet** stores whether the policy names **Ask me** or
-**Classifier** as the judge for calls the rules cannot settle. Volli does not
-use this setting yet to decide calls, and **Classifier** is unavailable until a
-classifier is configured.
+See [Local data and network access](/reference/data-and-privacy/) for storage
+and network boundaries.
 
-The **can read** rows control how much of a Session’s transcript each kind of
-caller can read. The inherited choices are:
+## Actor permissions
 
-| Caller | Default access |
-| --- | --- |
-| **You** | Any transcript in the project |
-| **An authenticated session** | Its own transcript |
-| **An unauthenticated caller** | No transcripts |
+The host derives who made a request from its authenticated connection, not an
+actor name supplied by a caller. Per-actor policy controls coordination verbs,
+which Sessions can be awaited, and how much another Session's transcript may
+be disclosed. Unauthenticated socket callers are read-only by default.
 
-## Know the enforcement boundary
+A Session's frozen tool list is a separate boundary: instructions cannot grant
+a tool it does not hold. See the [agent operating
+model](/reference/agent-operating-model/).
 
-**Enforce** is a rule gate, not a sandbox. A Session’s tools still run with the
-authority of the account running Volli, and the built-in rules do not isolate
-commands from every possible side effect. Do not treat Authority as
-operating-system containment.
+## Questions and limits
 
-See [Settings and configuration](/guides/settings/) for the difference between
-app-wide Settings and project Configure options.
+Agents can still ask ordinary questions and existing confirmations. The
+subagent allowance also remains: reaching its cap can refuse further
+delegation or ask through the existing permission card. An unattended Run
+never invents an answer.
+
+[Decision models](/guides/models/#decision-model) and the `classify` tool are
+independent helpers, not permission judges. Older Session history remains
+readable, but old review records and saved grants do not authorize new calls.

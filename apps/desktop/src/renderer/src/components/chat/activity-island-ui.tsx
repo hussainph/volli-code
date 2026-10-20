@@ -40,10 +40,10 @@
  * working-state tier), a shimmer rim (every element already signs its own
  * status). ONE LIFE-SIGN PER TIER.
  *
- * FIVE LAWS, each paid for with a live-round bug:
+ * FIVE LAWS, each learned from a bug seen in the running app:
  *  1. One life-sign per tier.
  *  2. Load-bearing geometry is INLINE STYLE, never a first-use utility — a
- *     stale Tailwind scan dropped one and served a silent lie for two rounds.
+ *     stale Tailwind scan dropped one and served a silent lie.
  *  3. The now-drop's travel never crosses the pill's rim; stacking is never
  *     load-bearing.
  *  4. Only entering/leaving elements change pill width; drawings may change

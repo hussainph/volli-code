@@ -18,21 +18,19 @@ import {
 } from "@volli/agent-runtime/bench/turn-to-completion";
 import type { ObservabilityEvent } from "@volli/shared";
 
-import { AUTHORITY_THINK_MS } from "./constants";
 import type { LedgerCommit, LedgerFrame, RawTurn, RecordedEnvelope } from "./harness";
 
 /**
  * What one scripted turn must produce in VC-119 terms: VC-441's shape on the
  * real path. Three provider attempts (tool round, overflow error, final); one
- * tool round of two reads and a bash; one authority wait (the escalated read);
+ * tool round of a workspace read and a bash;
  * one overflow compaction, whose summary request goes through Pi's
  * `completeSimple` and so is not a provider attempt; one retry (the attempt
  * after the error); one `turn-queue` from the Session runtime.
  */
 export const REAL_PATH_EXPECTED: TurnExpectations = {
   modelAttempts: 3,
-  toolsByName: { read: 2, bash: 1 },
-  authorityWaits: 1,
+  toolsByName: { read: 1, bash: 1 },
   compactions: 1,
   retries: 1,
   turnQueues: 1,
@@ -42,7 +40,6 @@ export const REAL_PATH_EXPECTED: TurnExpectations = {
 export const CROSS_CHECK_FACTS = [
   "turn-start",
   "first-attempt",
-  "authority-answer",
   "compaction",
   "final-attempt",
   "turn-end",
@@ -66,8 +63,6 @@ export interface LedgerCrossCheck {
    * - `turn-queue`, `compaction` and the terminal `turn` envelope are recorded
    *   before the durable fact they describe is written, so each must be
    *   recorded no later than the engine call that wrote that fact resolved.
-   * - An authority wait cannot end before the question was durably opened, nor
-   *   (when a subscriber watches) before its `interaction.opened` frame arrived.
    */
   causalityViolations: string[];
   /**
@@ -96,10 +91,6 @@ function envelopeOf(
   return which === "first"
     ? sorted.find((entry) => predicate(entry.event))
     : sorted.findLast((entry) => predicate(entry.event));
-}
-
-function hasWait(event: ObservabilityEvent): boolean {
-  return event.kind === "authority" && event.waitDurationMs !== undefined;
 }
 
 /** The turn's window in the ledger: from its own `command.recorded` to its `turn.completed`. */
@@ -139,7 +130,6 @@ export function crossCheckLedger(input: {
   ledger: RawTurn["ledger"];
 }): LedgerCrossCheck {
   const committed = new Map(input.commits.map((commit) => [commit.sequence, commit.committedAt]));
-  const arrival = new Map(input.frames.map((frame) => [frame.sequence, frame.arrivedAt]));
   const side = (sequence: number | undefined): LedgerSide | undefined =>
     sequence === undefined ? undefined : { sequence, committedAt: committed.get(sequence) ?? null };
   const { accepted, started, completed } = ledgerWindow(input.commandId, input.ledger);
@@ -151,13 +141,9 @@ export function crossCheckLedger(input: {
       entry.sequence < completed,
   );
   const usage = inTurn.filter((entry) => entry.kind === "usage.recorded");
-  const opened = inTurn.find((entry) => entry.kind === "interaction.opened");
   const ledgerFacts: Record<CrossCheckFact, LedgerSide | undefined> = {
     "turn-start": side(started),
     "first-attempt": side(usage[0]?.sequence),
-    "authority-answer": side(
-      inTurn.find((entry) => entry.kind === "interaction.resolved")?.sequence,
-    ),
     compaction: side(inTurn.find((entry) => entry.kind === "context.compacted")?.sequence),
     "final-attempt": side(usage.at(-1)?.sequence),
     "turn-end": side(completed),
@@ -165,7 +151,6 @@ export function crossCheckLedger(input: {
   const envelopeFacts: Record<CrossCheckFact, RecordedEnvelope | undefined> = {
     "turn-start": envelopeOf(input.envelopes, (event) => event.kind === "turn-queue"),
     "first-attempt": envelopeOf(input.envelopes, (event) => event.kind === "provider-attempt"),
-    "authority-answer": envelopeOf(input.envelopes, hasWait),
     compaction: envelopeOf(input.envelopes, (event) => event.kind === "compaction"),
     "final-attempt": envelopeOf(
       input.envelopes,
@@ -199,18 +184,6 @@ export function crossCheckLedger(input: {
     if (envelope.recordedAt > committedAt)
       causalityViolations.push(`${fact}: envelope after its durable fact`);
   }
-  const authority = envelopeFacts["authority-answer"];
-  if (authority !== undefined && opened !== undefined) {
-    const openedAt = committed.get(opened.sequence);
-    const seenAt = arrival.get(opened.sequence);
-    if (
-      (openedAt !== undefined && authority.recordedAt < openedAt) ||
-      (seenAt !== undefined && authority.recordedAt < seenAt)
-    ) {
-      causalityViolations.push("authority-answer: wait ended before the question arrived");
-    }
-  }
-
   const window = inWindow(input.ledger, accepted, completed);
   const commitsInWindow = inWindow(input.commits, accepted, completed).toSorted(
     (left, right) => left.sequence - right.sequence,
@@ -269,12 +242,6 @@ export interface RealTurnSample extends TurnSample {
   turnStartDurableLagMs: number | null;
   /** `turn.completed` committed → its frame reaching the subscriber. Null when unwatched. */
   subscriberLagMs: number | null;
-  /** Authority wait beyond the stand-in's fixed think time. */
-  authorityBeyondThinkMs: number | null;
-  /** Wait start → the question reaching the stand-in person. */
-  questionDeliveryMs: number | null;
-  /** The stand-in's `interaction.resolve` command, sent → resolved. */
-  answerCommandMs: number | null;
   artifactWriteCount: number;
   artifactWriteTotalMs: number;
   artifactWriteDurationsMs: number[];
@@ -326,12 +293,6 @@ export function analyzeRealTurn(raw: RawTurn, sampleId: string): RealTurnSample 
       ? undefined
       : raw.frames.find((frame) => frame.sequence === completed)?.arrivedAt;
 
-  const authority = envelopeOf(raw.envelopes, hasWait);
-  const answer = raw.answers.length === 1 ? raw.answers[0] : undefined;
-  const waitMs = base.authorityWaitMs;
-  const waitStartedAt =
-    authority === undefined || waitMs === null ? undefined : authority.recordedAt - waitMs;
-
   const writes = raw.artifactCalls.filter((call) => call.op === "write");
   const reads = raw.artifactCalls.filter((call) => call.op === "read");
   const crossCheck = crossCheckLedger(raw);
@@ -344,7 +305,6 @@ export function analyzeRealTurn(raw: RawTurn, sampleId: string): RealTurnSample 
     crossCheck.missing.length === 0 &&
     crossCheck.commitsMatchLedger &&
     raw.receiptStatus === "accepted" &&
-    answer?.status === "accepted" &&
     acceptedAt !== undefined &&
     startedAt !== undefined &&
     completedAt !== undefined;
@@ -358,9 +318,6 @@ export function analyzeRealTurn(raw: RawTurn, sampleId: string): RealTurnSample 
     submitToResolvedMs: gap(raw.submittedAt, raw.resolvedAt),
     turnStartDurableLagMs: gap(turnQueue?.recordedAt, startedAt),
     subscriberLagMs: gap(completedAt, completedSeenAt),
-    authorityBeyondThinkMs: waitMs === null ? null : round(waitMs - AUTHORITY_THINK_MS),
-    questionDeliveryMs: gap(waitStartedAt, answer?.seenAt),
-    answerCommandMs: gap(answer?.sentAt, answer?.resolvedAt),
     artifactWriteCount: writes.length,
     artifactWriteTotalMs: round(writes.reduce((sum, call) => sum + call.durationMs, 0)),
     artifactWriteDurationsMs: writes.map((call) => round(call.durationMs)),
@@ -418,10 +375,6 @@ export function summarizeTurns(samples: readonly RealTurnSample[]) {
         summarize(samples.map((sample) => sample.toolsByName[toolId]?.durationMs ?? null)),
       ]),
     ),
-    authorityWaitMs: pick((sample) => sample.authorityWaitMs),
-    authorityBeyondThinkMs: pick((sample) => sample.authorityBeyondThinkMs),
-    questionDeliveryMs: pick((sample) => sample.questionDeliveryMs),
-    answerCommandMs: pick((sample) => sample.answerCommandMs),
     compactionDurationMs: pick((sample) => sample.compactionDurationMs),
     unaccountedGapMs: pick((sample) => sample.unaccountedGapMs),
     firstMessageUnaccountedGapMs: pick((sample) => sample.firstMessageUnaccountedGapMs),
@@ -437,7 +390,6 @@ export function summarizeTurns(samples: readonly RealTurnSample[]) {
     timerLatenessMs: {
       ttft: timers("ttft"),
       completion: timers("completion"),
-      authority: timers("authority"),
     },
     vc119OrderViolations: samples.reduce((sum, sample) => sum + sample.eventOrderViolations, 0),
     crossCheck: {

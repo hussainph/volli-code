@@ -217,7 +217,32 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-describe("the server list", () => {
+describe("the server table", () => {
+  it("gives identity, tools, status and controls their own columns", async () => {
+    await render({ list: listing([record(), remote()]) });
+    const table = document.body.querySelector("table")!;
+    expect(table.querySelector("caption")?.textContent).toBe("MCP servers");
+    expect([...table.querySelectorAll("th")].map((cell) => cell.textContent)).toEqual([
+      "Server",
+      "Tools",
+      "Status",
+      "Enabled",
+      "Actions",
+    ]);
+    expect(table.querySelectorAll('th[scope="col"]')).toHaveLength(5);
+    const rows = [...table.querySelectorAll("tbody tr")];
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.querySelectorAll("td")).toHaveLength(5);
+      expect(row.children[0]?.querySelector('button[aria-label^="Open"]')).not.toBeNull();
+      expect(row.children[1]?.querySelector('button[aria-label^="Choose"]')).not.toBeNull();
+      expect(row.children[3]?.querySelector('[role="switch"]')).not.toBeNull();
+      expect(row.children[4]?.querySelector('button[aria-label^="More"]')).not.toBeNull();
+    }
+    await click(labelled("Choose Fixture tools"));
+    expect(dialog().querySelector('[role="checkbox"]')).not.toBeNull();
+  });
+
   it("keeps the scan to identity and tool counts, with freshness in the server dialog", async () => {
     await render({
       list: listing([
@@ -229,7 +254,7 @@ describe("the server list", () => {
     expect(text()).toContain("A local MCP command runs as you");
     expect(text()).toContain("a remote server receives the arguments sent to its tools");
     expect(text()).toContain("node fixture.mjs");
-    expect(text()).toContain("3 of 34 tools on");
+    expect(text()).toContain("3 of 34");
     expect(text()).toContain("mcp.sentry.dev/mcp");
     expect(text()).not.toContain("Refreshed");
     expect(text()).not.toContain("Never refreshed");
@@ -268,11 +293,13 @@ describe("the server list", () => {
     });
 
     expect(text()).toContain("Refresh failed");
-    expect(text()).toContain("Could not refresh Fixture.");
+    expect(text()).not.toContain("Could not refresh Fixture.");
+    expect(document.body.querySelector('[title="Could not refresh Fixture."]')).not.toBeNull();
     expect(text()).not.toContain("sha256:2f0c1d");
     await click(labelled("Open Fixture"));
     expect(dialog().textContent).toContain("registry.modelcontextprotocol.io/io.github.acme/files");
     expect(dialog().textContent).toContain("sha256:2f0c1d");
+    expect(dialog().textContent).toContain("Could not refresh Fixture.");
     // A version and a digest shown without this read as a guarantee Volli
     // never made: nothing is downloaded, so nothing is checked against them.
     expect(dialog().textContent).toMatch(/not verified/i);
@@ -389,7 +416,7 @@ describe("opening a server", () => {
       enabledTools: ["list_items", "get_item"],
     });
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
-    expect(text()).toContain("2 of 3 tools on");
+    expect(text()).toContain("2 of 3");
   });
 
   it("says why a tools save failed, and stays open on the choice", async () => {
@@ -751,6 +778,39 @@ describe("adding a server", () => {
     expect(discardDraft).toHaveBeenCalledWith({ projectId: project.id, serverId: draftId });
   });
 
+  it("clears a rejected draft sign-in, shows the failure and allows another attempt", async () => {
+    const pending = Promise.withResolvers<unknown>();
+    const signIn = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValueOnce({ ok: true });
+    const test = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "needs sign-in",
+        blocked: { kind: "sign-in", insufficientScope: false },
+      })
+      .mockResolvedValueOnce({ ok: true, catalog });
+    await render({ list: listing([]), test, signIn });
+    await click(button("Add server"));
+    await setValue("#mcp-url", "https://mcp.sentry.dev/mcp");
+    await click(button("Connect", dialog()));
+    await click(button("Sign in", dialog()));
+    expect(dialog().textContent).toContain("Waiting for the browser");
+    expect(dialog().querySelector("#mcp-url")?.matches(":disabled")).toBe(true);
+
+    await act(async () => pending.reject(new Error("IPC unavailable")));
+
+    expect(dialog().textContent).not.toContain("Waiting for the browser");
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toBe(
+      "Could not sign in. Try again.",
+    );
+    expect(button("Sign in", dialog()).disabled).toBe(false);
+    expect(dialog().querySelector("#mcp-url")?.matches(":disabled")).toBe(false);
+    await click(button("Sign in", dialog()));
+    expect(signIn).toHaveBeenCalledTimes(2);
+    expect(dialog().querySelector('[role="alert"]')).toBeNull();
+    expect(dialog().textContent).toContain("Connected · 1 tool");
+  });
+
   it("cancels a sign-in still waiting on the browser", async () => {
     const test = vi.fn(async () => ({
       ok: false as const,
@@ -889,6 +949,39 @@ describe("sign-in and credentials (VC-470)", () => {
     expect(signOut).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["row", "saved dialog"] as const)(
+    "recovers from a rejected sign-in in the %s",
+    async (surface) => {
+      const pending = Promise.withResolvers<unknown>();
+      const signIn = vi
+        .fn()
+        .mockReturnValueOnce(pending.promise)
+        .mockResolvedValueOnce({ ok: true });
+      await render({
+        list: listing([remote()], {
+          access: { "remote-1": { signIn: "needs-sign-in", missingSecrets: [] } },
+        }),
+        signIn,
+      });
+      if (surface === "saved dialog") await click(labelled("Open Sentry"));
+      const scope = surface === "row" ? document.body : dialog();
+      await click(button("Sign in", scope));
+      expect(text()).toContain(surface === "row" ? "Signing in…" : "Waiting for the browser");
+
+      await act(async () => pending.reject(new Error("IPC unavailable")));
+
+      expect(text()).not.toContain("Signing in…");
+      expect(text()).not.toContain("Waiting for the browser");
+      expect(scope.querySelector('[role="alert"]')?.textContent).toBe(
+        "Could not sign in. Try again.",
+      );
+      expect(button("Sign in", scope).disabled).toBe(false);
+      await click(button("Sign in", scope));
+      expect(signIn).toHaveBeenCalledTimes(2);
+      expect(scope.querySelector('[role="alert"]')).toBeNull();
+    },
+  );
+
   it("shows a sign-in waiting on the browser on its row, with Cancel", async () => {
     let finish: ((value: unknown) => void) | undefined;
     const signIn = vi.fn(
@@ -940,7 +1033,7 @@ describe("sign-in and credentials (VC-470)", () => {
 
     expect(() => button("Sign in")).toThrow();
     expect(text()).toContain("Missing credential");
-    expect(text()).toContain("Missing header Authorization");
+    expect(document.body.querySelector('[title="Missing header Authorization"]')).not.toBeNull();
   });
 
   it("opens a missing credential straight on its field, sends a typed secret once, and never shows a stored one back", async () => {

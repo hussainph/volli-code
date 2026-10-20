@@ -4,16 +4,15 @@
  * A peek is a READ: one fold of a Session's durable tail, pulled on demand, with
  * no subscription and no adoption. What it shows is exactly what the Session
  * recorded — the last few messages, the tool names in them, and the question it
- * is asking if it is asking one. Nothing here summarises with prose it invented:
- * a card that paraphrased an agent would be a second, quieter transcript nobody
- * could check.
+ * is asking if it is asking one. Main may add a cached utility-model summary
+ * on a hover read; the entries remain the durable evidence behind it.
  *
  * The entry shape is the engine's transcript tail (`readSessionTranscriptTail`)
  * as it crosses to the renderer, declared here rather than imported because
  * `@volli/shared` sits UNDER `@volli/session-engine` in the dependency graph —
  * the engine reads this package, never the reverse. Keep the two aligned by
- * shape: `at`, `role`, whitespace-collapsed `text` cut at the engine's
- * `TRANSCRIPT_TAIL_TEXT_LIMIT`, and the harness's own tool names.
+ * shape: `at`, `role`, bounded whitespace-collapsed `text`, and the harness's
+ * own tool names. The peek requests longer excerpts than the CLI's default.
  */
 import type { RendererSessionInteraction } from "./session-event-codec";
 
@@ -23,11 +22,14 @@ import type { RendererSessionInteraction } from "./session-event-codec";
  */
 export const SESSION_PEEK_ENTRIES = 6;
 
+/** A later glance may refresh a throttled/refused summary; never a background timer. */
+export const SESSION_PEEK_REFRESH_MS = 60_000;
+
 export interface SessionPeekEntry {
   /** When the message was recorded, in epoch milliseconds. */
   readonly at: number;
   readonly role: "user" | "assistant" | "system";
-  /** Whitespace-collapsed, cut at TRANSCRIPT_TAIL_TEXT_LIMIT. Empty for a tools-only message. */
+  /** Bounded, whitespace-collapsed excerpt. Empty for a tools-only message. */
   readonly text: string;
   readonly tools: readonly string[];
 }
@@ -36,6 +38,8 @@ export interface SessionPeekContent {
   readonly sessionId: string;
   /** Oldest first. */
   readonly entries: readonly SessionPeekEntry[];
+  /** Hover-only utility refinement; absent/null leaves the transcript fallback standing. */
+  readonly summary?: string | null;
   /** The open question, scrubbed; `null` when nothing is being asked. */
   readonly question: RendererSessionInteraction | null;
   readonly turns: number;
@@ -46,8 +50,8 @@ export interface SessionPeekContent {
 }
 
 /**
- * The card's summary line: the newest assistant text in the tail, else the
- * newest tool names as "Ran read_file, edit_file", else null. Never invents
+ * The card's fallback: the newest assistant text, else the newest user text,
+ * else the newest tool names as "Ran read_file, edit_file", else null. Never invents
  * prose.
  *
  * Assistant words come first because they are the Session's own answer to "what
@@ -60,6 +64,8 @@ export interface SessionPeekContent {
 export function peekSummaryOf(entries: readonly SessionPeekEntry[]): string | null {
   const spoken = entries.findLast((entry) => entry.role === "assistant" && entry.text !== "");
   if (spoken !== undefined) return spoken.text;
+  const requested = entries.findLast((entry) => entry.role === "user" && entry.text !== "");
+  if (requested !== undefined) return requested.text;
   const ran = entries.findLast((entry) => entry.tools.length > 0);
   return ran === undefined ? null : `Ran ${ran.tools.join(", ")}`;
 }

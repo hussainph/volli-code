@@ -17,11 +17,9 @@ import {
   describeInteractionResolution,
   emptyInteractionDraft,
   firstUnansweredPrompt,
-  footInteraction,
   interactionAdvance,
   interactionAnswers,
   interactionCarousel,
-  interactionForApproval,
   interactionQuestions,
   interactionRedirected,
   interactionResolution,
@@ -959,7 +957,7 @@ describe("receipt", () => {
     ).toEqual({
       verdict: "answered",
       lead: "You answered",
-      subject: "Before I continue",
+      subject: "2 questions",
       trailer: "main, origin",
     });
   });
@@ -1337,9 +1335,8 @@ describe("the receipt a question leaves the moment it is answered", () => {
     ).toBe("Sent: cut a patch instead");
   });
 
-  it("gives a decline and a withdrawal receipts of their own", () => {
-    // Three different ends to one question, and a reader has to be able to tell
-    // which one happened from the card alone.
+  it("gives decline and stopped-turn receipts of their own", () => {
+    // Stopping the turn is not an answer or a withdrawal of the question.
     const asked = question([prompt()]);
     expect(describeInteractionSent(asked, "declined", refusalSubmission(asked, {}))).toEqual({
       kind: "declined",
@@ -1349,9 +1346,9 @@ describe("the receipt a question leaves the moment it is answered", () => {
     });
     expect(describeInteractionSent(asked, "withdrawn", null)).toEqual({
       kind: "withdrawn",
-      lead: "Withdrew question",
+      lead: "Stopped turn",
       value: null,
-      line: "Withdrew question",
+      line: "Stopped turn",
     });
   });
 
@@ -1495,18 +1492,18 @@ describe("the stepped question flow", () => {
     // One name for the act that ends the question, whatever it is answered
     // with — a chosen row, several of them, or a paragraph. "Choose", "Answer",
     // "Submit" and "Send" were four words for one press.
-    expect(interactionStep(walk(), {}, 2)?.advanceLabel).toBe("Send answer");
-    expect(interactionStep(question([prompt()]), {}, 0)?.advanceLabel).toBe("Send answer");
+    expect(interactionStep(walk(), {}, 2)?.advanceLabel).toBe("Answer");
+    expect(interactionStep(question([prompt()]), {}, 0)?.advanceLabel).toBe("Answer");
     expect(
       interactionStep(question([prompt({ options: [], custom: true })]), {}, 0)?.advanceLabel,
-    ).toBe("Send answer");
+    ).toBe("Answer");
   });
 
   it("sends from any step once words have refused the whole request", () => {
     // A redirection outranks the walk it was going to finish, so the control
     // stops offering to step past questions its words have already answered.
     const draft = setPromptResponse({}, "prompt:0", "the release branch, actually");
-    expect(interactionStep(walk(), draft, 0)?.advanceLabel).toBe("Send answer");
+    expect(interactionStep(walk(), draft, 0)?.advanceLabel).toBe("Answer");
     const written = question([
       prompt({ id: "prompt:0", custom: true }),
       prompt({ id: "prompt:1" }),
@@ -1591,41 +1588,11 @@ describe("one press of the control that moves the flow on", () => {
   });
 });
 
-describe("where a card draws", () => {
-  it("pairs a gated call with its question on the durable ask:<toolCallId> id", () => {
-    // The identity that survives the product edge: the runtime mints the
-    // interaction as `ask:<toolCallId>`, and the gated part carries the same
-    // tool call id. `native` is nulled on everything the edge ships, so it
-    // correlates nothing.
-    const gated = permission({ id: "ask:call-1" });
-    const other = permission({ id: "ask:call-2" });
-    expect(interactionForApproval([other, gated], "call-1")).toBe(gated);
-    expect(interactionForApproval([other, gated], "call-9")).toBe(null);
-    // A row with no gate names no interaction — never the only open one by
-    // adjacency, which would put a subagent's question on a parent's call.
-    expect(interactionForApproval([gated], null)).toBe(null);
-  });
-
-  it("leaves the foot the oldest interaction no row is showing", () => {
-    const gated = permission({ id: "ask:call-1" });
-    const asked = question([prompt()]);
-    expect(footInteraction([gated, asked], new Set(["call-1"]))).toBe(asked);
-    expect(footInteraction([gated, asked], new Set())).toBe(gated);
-    expect(footInteraction([gated], new Set(["call-1"]))).toBe(null);
-  });
-
-  it("keeps a model's own question at the foot even while calls are gated", () => {
-    // An `ask-user:` id is never the `ask:` derivation of any gated call, so
-    // it belongs there by construction rather than by having survived a filter.
-    const loose = permission({ id: "ask-user:call-1", native: { id: null, detail: null } });
-    expect(footInteraction([loose], new Set(["call-1"]))).toBe(loose);
-  });
-});
-
 describe("the durable answer in scrollback", () => {
   it("indexes every interaction the log recorded opening", () => {
     const interaction = permission();
     const index = indexOpenedInteractions([
+      { event: null },
       { event: { payload: { kind: "turn.started", attachmentId: "a", turnId: "t" } } },
       { event: { payload: { kind: "interaction.opened", interaction } } },
     ]);

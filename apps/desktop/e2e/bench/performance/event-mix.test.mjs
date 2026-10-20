@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   assertSessionEvent,
   decodeRendererSessionEventPayload,
+  decodeSessionEventPayload,
   scrubSessionEventPayload,
 } from "@volli/shared";
 
 import {
   EVENT_FAMILIES,
   FAMILY_WEIGHT_TOTAL,
+  attachmentOpenedPayload,
   allocateFamilyUnits,
   eventsInUnits,
   orderFamilyUnits,
@@ -38,6 +40,24 @@ const buildContext = {
 };
 
 describe("performance fixture event mix", () => {
+  it("decodes new attachments without an active authority snapshot", () => {
+    const attachment = {
+      id: buildContext.attachmentId,
+      sessionId: buildContext.sessionId,
+      adapterId: buildContext.adapterId,
+      venue: { id: "local:perf", kind: "local" },
+      continuity: "fresh",
+      native: null,
+      authority: null,
+    };
+    const payload = attachmentOpenedPayload({ attachment });
+    const decoded = decodeSessionEventPayload(payload, "fixture attachment");
+    expect(decoded.attachment.authority).toBeNull();
+    expect(() =>
+      decodeRendererSessionEventPayload(scrubSessionEventPayload(payload), "fixture attachment"),
+    ).not.toThrow();
+  });
+
   it("keeps the published weights and exact unit allocation", () => {
     expect(EVENT_FAMILIES.reduce((sum, family) => sum + family.weight, 0)).toBe(
       FAMILY_WEIGHT_TOTAL,
@@ -65,7 +85,10 @@ describe("performance fixture event mix", () => {
     for (const family of EVENT_FAMILIES) {
       for (const item of family.build(buildContext)) {
         kinds.add(item.payload.kind);
-        const shipped = JSON.parse(JSON.stringify(scrubSessionEventPayload(item.payload)));
+        // The ledger read decodes legacy facts before the renderer scrub. Old
+        // authority records may become inert payloads rather than active kinds.
+        const durable = decodeSessionEventPayload(item.payload, `${family.id}.durable`);
+        const shipped = JSON.parse(JSON.stringify(scrubSessionEventPayload(durable)));
         expect(() =>
           decodeRendererSessionEventPayload(shipped, `${family.id}.payload`),
         ).not.toThrow();

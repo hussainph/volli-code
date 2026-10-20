@@ -106,12 +106,21 @@ export const DISCOVERY_SIGNATURES: readonly CodemodeTool[] = [
   },
 ];
 
-/**
- * One worked program, shown when the Session can call `bash` and `read` from
- * code — the loop VC-245 measured. Measured live: without it, a small model
- * reached for Node's `require("fs")` on its first program.
- */
+/** A read-only example: no shell, modules or tools the Session may not hold. */
 const EXAMPLE = [
+  "Example — count TODOs in two files:",
+  "```js",
+  'const paths = ["src/index.ts", "src/config.ts"];',
+  "const counts = {};",
+  "for (const path of paths) {",
+  '  const n = (await tools.read({ path })).split("\\n").filter((line) => line.includes("TODO")).length;',
+  "  if (n > 0) counts[path] = n;",
+  "}",
+  "return counts;",
+  "```",
+];
+
+const LEGACY_EXAMPLE = [
   "Example — count TODOs per file:",
   "```js",
   'const files = (await tools.bash({ command: "git ls-files src" })).output.split("\\n").filter(Boolean);',
@@ -144,7 +153,9 @@ function isTypedSchema(schema: unknown): boolean {
  * `details` are typed, or an MCP tool whose structured content is.
  */
 function specificOutput(tool: CallableTool): string | undefined {
-  if (tool.nativeStructuredOutput === true) return schemaToType(tool.outputSchema);
+  if (tool.nativeStructuredOutput === true || tool.name === "browser_screenshot") {
+    return schemaToType(tool.outputSchema);
+  }
   const properties = tool.outputSchema["properties"];
   if (typeof properties !== "object" || properties === null) return undefined;
   const { details, structuredContent } = properties as Record<string, unknown>;
@@ -178,6 +189,8 @@ function alsoCallable(
  */
 export function describeCodeMode(input: {
   tools: readonly CallableTool[];
+  /** A pre-0.2.2 record keeps its original provider-visible wording. */
+  legacy?: boolean;
   /**
    * Wire names of the tools declared to the model that a program may NOT
    * call. When they are fewer than the ones it may, the description names
@@ -207,17 +220,34 @@ export function describeCodeMode(input: {
   const seconds = Math.round(input.limits.timeoutMs / 1_000);
   const has = (name: string): boolean => input.tools.some((tool) => tool.name === name);
   const text = [
-    `Run a short JavaScript program that calls this Session's tools, and get back only what it prints or returns. Worth it when a step needs many calls whose results you would filter or combine — a loop of commands or file reads, several pages or Sessions handled alike. ${
+    `Run a short JavaScript program that calls this Session's tools, and get back only what it prints or returns. Worth it when a step needs many calls whose results you would filter or combine — a loop of ${input.legacy ? "commands or " : ""}file reads, several pages or Sessions handled alike. ${
       alsoDeclared.length > 0 || chosen.length + left.length === 0
         ? "For one call, call the tool directly."
         : "The tools below are reachable only this way, so one call is a one-line program."
     }`,
     "`code` is an async function body: `await tools.<name>(args)`; run independent calls together with `Promise.all` or `Promise.allSettled` (reads overlap, other calls run one at a time in order); print with `text(value)` or `console.log`; `return` a value. There is no `require`, `fs`, `process`, network or timers — only the tools.",
-    "Each call is checked exactly as a direct call. One that needs a person's approval pauses the program; a refused or failed call throws its reason.",
-    "Results: `bash` → { output, exitCode, truncated, fullOutputPath? } for any exit code; MCP tools → { text, structuredContent?, isError, omittedImages }; Volli verbs → { text, details? }; schema-bearing Session tools → their structured answers; other tools → their text. No images.",
+    ...(input.legacy
+      ? [
+          "Each call is checked exactly as a direct call. One that asks a person pauses the program; a refused or failed call throws its reason.",
+          "Results: `bash` → { output, exitCode, truncated, fullOutputPath? } for any exit code; MCP tools → { text, structuredContent?, isError, omittedImages }; Volli verbs → { text, details? }; schema-bearing Session tools → their structured answers; other tools → their text. No images.",
+        ]
+      : [
+          "A program cannot call codemode itself. Each call is checked exactly as a direct call. One that asks a person pauses the program; a refused or failed call throws its reason.",
+          has("bash")
+            ? "This legacy Session also permits bash in programs; new Sessions do not."
+            : "Bash is not callable here. Call it directly; questions, secrets, todo_write and the background shells are also direct-only.",
+          `Results: ${has("bash") ? "`bash` → { output, exitCode, truncated, fullOutputPath? } for any exit code; " : ""}MCP tools → { text, structuredContent?, isError, images, omittedImages }; Volli verbs → { text, details? }; schema-bearing Session tools → their structured answers; Browser screenshots and other image-bearing text tools → { text, images, omittedImages }; other tools → their text.`,
+          "Nested images are opaque handles (bytes stay outside the program); image(handle) or handles inside a returned value send bounded images after the text, with source framing; the header names any left out.",
+        ]),
     `Per run: ${input.limits.maxNestedCalls} calls, ${seconds} s of running time (waiting on a person is free), ${formatBytes(input.limits.maxOutputBytes)} of output (the rest is saved). A first line \`// @options: {"timeout_ms": 30000, "max_output_tokens": 2000}\` lowers them. The program is checked whole before anything runs.`,
     "A run that called a web, Browser or MCP tool, or read another agent's words, returns its output inside untrusted-content markers.",
-    ...(has("bash") && has("read") ? EXAMPLE : []),
+    ...(input.legacy
+      ? has("bash") && has("read")
+        ? LEGACY_EXAMPLE
+        : []
+      : has("read")
+        ? EXAMPLE
+        : []),
     ...(alsoDeclared.length === 0 ? [] : [alsoCallable(alsoDeclared, input.directOnly), ...typed]),
     ...(leftBy.size === 0
       ? []

@@ -1,6 +1,6 @@
 /**
  * "Open that Session AT that question" — the seam between a clicked
- * notification and the chat plane that eventually shows it (VC-295 round 2).
+ * notification and the chat plane that eventually shows it (VC-295).
  *
  * ── WHY IT IS NOT A PROP, AND NOT STORE STATE ─────────────────────────────
  * Clicking an alert asks for two things at once: put this Session in front, and
@@ -35,14 +35,13 @@ let pending: { sessionId: string; item: SessionNotificationItem } | null = null;
 const listeners = new Map<string, Set<() => void>>();
 
 /**
- * What each mounted plane was asked to show, and still is (VC-295 round 4).
+ * What each mounted plane was asked to show, and still is (VC-295).
  *
  * The pending slot above is a one-shot instruction; this is its CONSEQUENCE,
- * and it has a second reader: the window telling main what it is showing. Round
- * 3 left that reader deriving the item from the projection alone, so after a
- * click revealed an older Attention the row drew one problem while the window
- * reported another as visible — and the alert for the problem NOT on screen was
- * suppressed. One record, two readers, no disagreement.
+ * and it has a second reader: the window telling main what it is showing. If
+ * that reader derived the item from the projection alone, revealing an older
+ * Attention would make the row draw one problem while the window reported
+ * another as visible, suppressing the alert for a problem not on screen. One record, two readers, no disagreement.
  *
  * Cleared by the plane that claimed it ({@link releaseSessionItemReveal}) when
  * it unmounts or changes Session: an override nobody is drawing must not go on

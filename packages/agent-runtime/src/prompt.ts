@@ -16,14 +16,14 @@
  * and resource set — a Cache Prefix two Sessions can share (VC-164). The
  * product version is the version of these literals and composers, not request
  * data. Nothing that varies per session or per turn reaches them: not Session
- * identity, an Authority Snapshot, the workspace path, a measured fact about
+ * identity, the workspace path, a measured fact about
  * that workspace, or a date. Volatile facts are Turn Reminders beside the
  * Brief. The split is structural rather than remembered — {@link
  * SystemPromptInput} carries exactly the other three data terms, so a prompt
  * layer that reaches for a Session field does not compile.
  */
 
-import { promptResourceBlock, verbToolWireName } from "@volli/shared";
+import { promptResourceBlock, routeOf, verbToolWireName } from "@volli/shared";
 import type {
   PromptResource,
   RuntimeBrief,
@@ -200,7 +200,13 @@ const CODE_MODE_PARAGRAPH = [
 ].join("\n");
 
 function executionLayer(role: RuntimeSessionRole, tools: RuntimeToolBundle): string {
-  const codeMode = tools.codeMode?.nudge === true ? `\n\n${CODE_MODE_PARAGRAPH}` : "";
+  // The birth marker protects old Cache Prefixes while new Sessions no longer
+  // invite bash calls their programs cannot make (VC-748).
+  const paragraph =
+    tools.codeMode?.descriptionVersion === 2
+      ? CODE_MODE_PARAGRAPH.replace("a loop of bash or read calls", "a loop of read calls")
+      : CODE_MODE_PARAGRAPH;
+  const codeMode = tools.codeMode?.nudge === true ? `\n\n${paragraph}` : "";
   if (role === "subagent" || !(tools.verbs ?? []).includes("session.delegate")) {
     return `${EXECUTION_CORE}${codeMode}`;
   }
@@ -331,29 +337,10 @@ const AUTHORITY_SOURCES: Record<RuntimeSessionRole, string> = {
  * its first command reads as negotiable; a norm it can hold is the better
  * footing against injected instructions.
  *
- * The asymmetry is deliberate and load-bearing. Reads open up because the
- * legitimate need is real — sibling worktrees, app data, the reference-only
- * main checkout — and the allowance is anchored to the task and the user:
- * file content never creates the need, which is what lets a Session refuse a
- * poisoned README without a hard rule. Writes and destructive commands stay
- * instructed against because this instruction is still effectively the only
- * layer: containment is off, and the authority gate defaults to `observe`, which
- * pins a Snapshot and refuses nothing
- * (the two-axis authority rearchitecture). Loosening the write side
- * waits for that plan's slices 1–2, so instruction-loosening and enforcement
- * land as a pair. The credentials sentence previews slice 1's secrets
- * denylist, so instruction and future enforcement converge on one shape.
- *
- * The read sentence is also the sharpest reason `enforce` is not yet the
- * default. It names the reference-only main checkout and sibling worktrees as
- * legitimate reads, and `path.outside-workspace` refuses exactly those — so a
- * project that turns enforcement on today has a system prompt and a rule pack
- * that contradict each other. Slice 1 resolves it by giving both layers one read
- * policy; until then the contradiction is confined to a posture nobody is on by
- * default.
- *
- * Every line below the first is byte-identical to the prose that shipped: this
- * layer lost a path, not a norm.
+ * Reads outside the workspace are task-anchored; writes and destructive
+ * commands stay inside. This is prompt guidance, not a per-call approval
+ * policy. ScopedExecutionEnv supplies deterministic path checks when a host
+ * injects that environment; ordinary Sessions run host-native tools.
  */
 function workspaceLayer(role: RuntimeSessionRole): string {
   return [
@@ -421,23 +408,9 @@ function shellLayer(): readonly string[] {
 }
 
 /**
- * This layer states only the Role and tool bundle. An Authority Snapshot is
- * Session policy enforced at the tool boundary; turning it into prompt prose
- * would create a fifth, session-varying Cache Prefix term without adding
- * enforcement. The prompt therefore names the stable grant and no policy mode.
- *
- * "Bounded to" states a grant, and the grant is real: these tools and no others,
- * this workspace and no other. What *holds* a Session to that grant is a
- * separate question, and this prompt no longer answers it in either direction.
- * It used to answer wrongly — it described a sandbox that has since been
- * removed — and the fix is to drop the claim, not to invert it. Saying "a path
- * outside resolves and succeeds" would be true and would still be a mistake: it
- * reads to a model as a capability on offer, and the workspace norm below it —
- * work lands in the workspace, reads elsewhere only where the task calls for
- * them — is the behaviour we actually want. Nothing here is false; the
- * absence of enforcement is simply not advertised. `shellLayer` carries the
- * one fact that does change how a careful agent should behave — that commands
- * land on a real machine.
+ * Names only the stable Role and tool bundle. Workspace and credential
+ * guidance is stated separately, without claiming host-native tools are a
+ * sandbox or advertising paths as capabilities.
  */
 function authorityLayer(role: RuntimeSessionRole, tools: RuntimeToolBundle): string {
   const toolNames = tools.tools.length > 0 ? tools.tools.join(", ") : "none";
@@ -479,7 +452,7 @@ const RESOURCES_LAYER = [
  *
  * These are the three data terms allowed to vary its bytes: Role, bundle and
  * resource set. Product version is embodied by this code. Full Session
- * identity, Authority Snapshot, workspace path and workspace environment are
+ * identity, workspace path and workspace environment are
  * deliberately absent rather than merely unused — see {@link
  * composeTurnReminderBlock}, which is where a volatile fact goes instead.
  */
@@ -604,22 +577,44 @@ export function composeToolSurfaceBlock(
   tools: RuntimeToolBundle,
 ): string {
   const verbs = tools.verbs ?? [];
+  const hasRoutedVerbs = verbs.some((verb) => routeOf(tools.codeMode, verb) !== "direct");
   const named = verbs.map((verb) => {
     const wire = verbToolWireName(verb, tools.mcpManagementNames);
     // A key with no projection cannot reach a tool array, so it cannot reach
     // here either — `sessionToolBindings` would already have refused to build
     // the surface. Printing the bare key is the honest fallback rather than a
     // second throw on a path the first one owns.
+    const route = routeOf(tools.codeMode, verb);
+    const name = wire ?? verb;
+    if (route === "hidden") return `  ${verb} — hidden (unavailable)`;
+    if (route === "code" || route === "deferred") {
+      return `  ${verb} — ${name} through codemode only${route === "deferred" ? "; find it with searchTools() and describeTool()" : ""}`;
+    }
+    if (route === "both") return `  ${verb} — call it as ${name}, or through codemode`;
     return wire === undefined ? `  ${verb}` : `  ${verb} — call it as ${wire}`;
   });
   return [
     `--- BEGIN ${TOOL_SURFACE_DELIMITER} ---`,
     ...(named.length === 0
       ? [`${TOOL_SURFACE_SUBJECT[role]} holds no Volli verbs as named tools.`]
-      : [`${TOOL_SURFACE_SUBJECT[role]} holds these Volli verbs as named tools:`, ...named]),
-    ...(named.length === 0 ? [] : ["Use any of them whenever the work calls for it."]),
+      : [
+          `${TOOL_SURFACE_SUBJECT[role]} holds these Volli verbs${hasRoutedVerbs ? " (routes below)" : " as named tools"}:`,
+          ...named,
+        ]),
+    ...(verbs.some((verb) => routeOf(tools.codeMode, verb) !== "hidden")
+      ? [
+          hasRoutedVerbs
+            ? "Use the available verbs through their listed routes whenever the work calls for it."
+            : "Use any of them whenever the work calls for it.",
+        ]
+      : []),
     "Membership was fixed when this Session was created and does not change while",
-    "it runs; a Volli verb not named here is not in this Session's tool array, so",
+    ...(!hasRoutedVerbs
+      ? ["it runs; a Volli verb not named here is not in this Session's tool array, so"]
+      : [
+          "it runs. Code-only verbs are not direct named tools; hidden verbs are unavailable.",
+          "A Volli verb not listed here is not available to this Session, so",
+        ]),
     "do not reach for an equivalent another way. Where the `volli` CLI still offers",
     "a verb, the shell remains its door.",
     `--- END ${TOOL_SURFACE_DELIMITER} ---`,

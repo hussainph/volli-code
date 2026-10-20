@@ -64,6 +64,19 @@ export const CURSOR_TAKE_OVER_CHANNEL = "volli:cursor-take-over";
 /** Page → main: the person pressed Ask to leave on the label. */
 export const CURSOR_ASK_TO_LEAVE_CHANNEL = "volli:cursor-ask-to-leave";
 
+/**
+ * Every channel on this wire. These sit outside `VolliIpcChannel` (they are
+ * not the app renderer's), so this union is what lets `ipc/placement.ts`
+ * place them beside the catalog's channels: a sixth constant left out of it
+ * is caught by `placement.test.ts`, which reads this file's source.
+ */
+export type CursorOverlayChannel =
+  | typeof CURSOR_STATE_CHANNEL
+  | typeof CURSOR_SETTLED_CHANNEL
+  | typeof CURSOR_SIZE_CHANNEL
+  | typeof CURSOR_TAKE_OVER_CHANNEL
+  | typeof CURSOR_ASK_TO_LEAVE_CHANNEL;
+
 /** What the cursor preload exposes to the overlay page as `window.volliCursor`. */
 export interface CursorOverlayBridge {
   onState(listener: (state: CursorOverlayState) => void): () => void;

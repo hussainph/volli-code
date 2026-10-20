@@ -17,6 +17,7 @@
  */
 import { app, BrowserWindow, Notification } from "electron";
 import type Database from "better-sqlite3";
+import type { AttentionDeliveryPort } from "@volli/host-core/ports";
 import {
   DEFAULT_NOTIFICATION_PREFERENCES,
   parseNotificationTarget,
@@ -33,8 +34,16 @@ import {
   type NotificationRequest,
 } from "./dispatch";
 import { createNotificationSettings, type NotificationSettings } from "./settings";
+import { hostLogger } from "@volli/host-core/log";
 
-export interface NotificationRuntime {
+const log = hostLogger("notifications");
+
+/**
+ * Desktop's attention delivery (VC-554): host-core's `AttentionDeliveryPort`
+ * is answered by `deliver` and `focusedSessionIds` here, which raise a native
+ * notification and read the focused windows' targets.
+ */
+export interface NotificationRuntime extends AttentionDeliveryPort {
   /** The Settings service, or null when the database never opened. */
   settings: NotificationSettings | null;
   /**
@@ -42,7 +51,7 @@ export interface NotificationRuntime {
    *
    * The outcome is RETURNED rather than swallowed because one caller is a
    * person's own request (`volli notify`), and a verb that reported success
-   * over a refused delivery would be lying to the agent that asked (round 2).
+   * over a refused delivery would be lying to the agent that asked.
    * Every other caller is a background observer and ignores it.
    */
   deliver(request: NotificationRequest): NotificationOutcome;
@@ -139,7 +148,7 @@ let activeRuntime: NotificationRuntime | null = null;
  */
 export function deliverNotification(request: NotificationRequest): NotificationOutcome {
   if (activeRuntime === null) {
-    console.warn(`[volli] notification before boot (${request.producer}): ${request.title}`);
+    log.warn("notification before boot", { producer: request.producer, title: request.title });
     return { delivered: false, reason: "failed" };
   }
   return activeRuntime.deliver(request);
@@ -203,7 +212,10 @@ export function createNotificationRuntime(options: {
     create: nativeAlert,
     activate: (target) => activation.activate(target),
     onDeliveryFailure: (failure) => {
-      console.warn(`[volli] notification not delivered (${failure.producer}): ${failure.message}`);
+      log.warn("notification not delivered", {
+        producer: failure.producer,
+        error: failure.message,
+      });
       settings?.noteDeliveryFailure(failure);
     },
     onDeliveryShown: () => settings?.noteDeliveryShown(),

@@ -8,8 +8,8 @@
  * Session is born with.
  *
  * THEY ARE THE CHAT COMPOSER'S OWN PILLS, imported rather than re-drawn. Press
- * Create & start and you land in a chat pane whose footer carries these exact
- * two controls, showing these exact two values; a second pair shaped slightly
+ * Create & start and the new Session's footer carries these exact two controls
+ * when you open it, showing these exact two values; a second pair shaped slightly
  * differently would be the same control drawn twice and would read as two
  * different settings. The automations lab (`lab/automation/runtime-picker.tsx`)
  * sketched effort INSIDE the model popover, and the shipped chat composer has

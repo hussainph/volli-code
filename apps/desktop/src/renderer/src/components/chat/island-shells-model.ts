@@ -36,6 +36,7 @@ export function projectIslandShells(
       command: shellName(shell),
       state: shell.state,
       code: shell.code,
+      signal: shell.signal,
     }));
 }
 

@@ -23,7 +23,18 @@ terminal for writes. Write access comes from the environment Volli supplies.
 
 Every public command accepts `--json`. Full command syntax is in
 [CLI commands](/reference/cli-commands/); recovery codes are in
-[CLI errors](/reference/cli-errors/).
+[CLI errors](/reference/cli-errors/). Value options also accept `--opt=value`;
+the value after the first `=` is taken verbatim, even if it starts with `--`.
+Column options ignore case and accept `"Needs Review"` or `needs_review`.
+
+`session list` defaults to active Sessions plus activity in the last 24 hours,
+including in JSON. Use `--all`, `--since <when>`, or `--state <s>[,<s>...]` to
+adjust the fleet view. JSON adds `hidden` beside `sessions`. `session show`
+reads metadata and ancestry; list and peek name pending delegated subagents.
+
+`ticket show` prints comment bodies in full. Other log prose remains capped;
+`ticket show --full` and `ticket events --full` lift those caps without changing
+the untrusted-prose framing. JSON is always uncapped.
 
 ## Addressing
 
@@ -51,7 +62,7 @@ plan that a registry-projected tool returns through its `dryRun` argument.
 
 A preview creates no durable ID, row, event, Session, model turn, notification,
 process, worktree, or file write. It still performs the reads the real call
-would, including `--body-file` and `--file`, so it validates the same input.
+would, including `--body-file`, `--append-file`, and `--file`, so it validates the same input.
 A later real call validates again and can lose a race.
 
 A verb whose help does not list `--dry-run` refuses a preview instead of
@@ -110,6 +121,7 @@ These links retain the anchors used by earlier documentation.
 | <span id="volli-worktree-sync"></span>[`volli worktree sync`](/reference/cli-commands/#volli-worktree-sync) |
 | <span id="volli-conflicts"></span>[`volli conflicts`](/reference/cli-commands/#volli-conflicts) |
 | <span id="volli-session-list"></span>[`volli session list`](/reference/cli-commands/#volli-session-list) |
+| <span id="volli-session-show"></span>[`volli session show`](/reference/cli-commands/#volli-session-show) |
 | <span id="volli-session-answer"></span>[`volli session answer`](/reference/cli-commands/#volli-session-answer) |
 | <span id="volli-session-peek"></span>[`volli session peek`](/reference/cli-commands/#volli-session-peek) |
 | <span id="volli-session-done"></span>[`volli session done`](/reference/cli-commands/#volli-session-done) |

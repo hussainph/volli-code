@@ -366,7 +366,7 @@ const LOCKFILE_PACKAGE_MANAGERS: ReadonlyArray<
  * This is the one place a project's package manager is decided: the install
  * command a user is told to run and the tool a session is required to have
  * are the same answer, so they cannot drift into telling a yarn workspace to
- * `pnpm install` (VC-94 review) or faulting it for a missing `pnpm`
+ * `pnpm install` (VC-94) or faulting it for a missing `pnpm`
  * (VC-157).
  */
 export function workspacePackageManager(

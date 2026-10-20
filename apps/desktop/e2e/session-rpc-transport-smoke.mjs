@@ -51,7 +51,11 @@ async function main() {
     // that some channel answered.
     await attempt(2, "a routed procedure reaches the router and answers", async () => {
       const reply = await page.evaluate(() =>
-        window.api.sessionRpc.request({ procedure: "session.snapshot", input: { sessionId: "" } }),
+        window.api.sessionRpc.request({
+          path: "session.snapshot",
+          type: "query",
+          input: { sessionId: "" },
+        }),
       );
       return {
         ok: reply.ok === false && reply.error.code === "BAD_REQUEST",
@@ -61,10 +65,15 @@ async function main() {
 
     await attempt(3, "a lab-only procedure is refused", async () => {
       const reply = await page.evaluate(() =>
-        window.api.sessionRpc.request({ procedure: "labDiagnostics.list", input: {} }),
+        window.api.sessionRpc.request({ path: "labDiagnostics.list", type: "query", input: {} }),
       );
       return {
-        ok: reply.ok === false && reply.error.message === "Invalid Session RPC request",
+        // Withheld by `DESKTOP_IPC_EXPOSURE`: answered as tRPC answers a path
+        // it has no procedure for, never served.
+        ok:
+          reply.ok === false &&
+          reply.error.code === "NOT_FOUND" &&
+          reply.error.message === 'No "query"-procedure on path "labDiagnostics.list"',
         detail: JSON.stringify(reply).slice(0, 200),
       };
     });

@@ -1,9 +1,8 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { BACKGROUND_CONTEXT } from "@earendil-works/pi-agent-core";
-import { JsonlSessionRepo, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { describe, expect, it } from "vite-plus/test";
+import { BACKGROUND_CONTEXT, NodeExecutionEnv } from "./harness-env";
+import { JsonlSessionRepo } from "./harness-session";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { migrateLegacySidecar } from "./sidecar-migration";
 import { SIDECAR_IDENTITY } from "./sidecar-storage";
 
@@ -111,8 +110,15 @@ interface Fixture {
   id: string;
 }
 
+const fixtureRoots: string[] = [];
+afterEach(() => {
+  for (const root of fixtureRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
 function fixture(prefix = "volli-sidecar-migration-"): Fixture {
-  const root = mkdtempSync(join(tmpdir(), prefix));
+  // Keep synthesized profiles in the execution workspace and remove only our own files.
+  const root = mkdtempSync(join(process.cwd(), `.${prefix}`));
+  fixtureRoots.push(root);
   const cwd = join(root, "worktree");
   const sessionsRoot = join(root, "sessions");
   const id = "01a073a0-5102-7f36-8090-562632afb0c7";

@@ -95,8 +95,8 @@ export type MessageResponseProps = Omit<
  * still being written. For as long as the Turn is open, EVERY fence in the live
  * assistant Turn draws unhighlighted, including fences that closed minutes ago
  * and any that precede a tool call in the same Turn. They gain their colour when
- * the Turn settles, in one pass. The product owner was shown this trade and
- * accepted it. On the `real` fixture, 20 samples per arm, live Shiki cost 351
+ * the Turn settles, in one pass. On the `real` fixture, 20 samples per arm,
+ * live Shiki cost 351
  * dropped frames and 94 long tasks totalling 7.9s on an idle machine and 367 /
  * 96 / 8.1s under two busy cores; after, both arms report zero long tasks and
  * zero dropped frames but for one. Settled transcripts — every Turn a reader

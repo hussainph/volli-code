@@ -60,6 +60,7 @@ import {
   railReadCanClaimEmpty,
   railReadFeedback,
 } from "@renderer/components/ticket/rail-read-feedback";
+import { useRemoteSessionsUnavailable } from "@renderer/stores/remote-session-availability";
 import { SESSION_ROSTER_FILTER_THRESHOLD as SESSION_FILTER_THRESHOLD } from "@renderer/components/ticket/session-history";
 import {
   buildTicketChatSessionRows,
@@ -354,7 +355,7 @@ function SessionRow({
                 the status column, and a mark that drifted between the title and
                 that column depending on title length would stop being scannable
                 down the list. */}
-            <SessionProvenanceMark provenance={provenance} rowTitle={title} />
+            <SessionProvenanceMark provenance={provenance} />
             <span
               // Unread outranks read by WEIGHT alone; the colour stays the
               // row's own, so the dot is the only new ink on the line.
@@ -739,6 +740,9 @@ export function TicketSessionsPanel({
   // sentence, and `failed` replaces either lie with the brief failure line.
   // A component must not infer that lifecycle from whether its row array exists.
   const listing = useTicketSessionRecordsStore((state) => state.byTicket[ticketId]);
+  // A host that grants this window no Session features (VC-713): said in its
+  // name, in place of the roster's reads, and never as a failure to retry.
+  const sessionsUnavailable = useRemoteSessionsUnavailable(projectId);
   const listingState = useTicketSessionRecordsStore((state) =>
     ticketSessionListingStateOf(state, ticketId),
   );
@@ -1117,6 +1121,7 @@ export function TicketSessionsPanel({
           }
         >
           <NewSessionControl
+            projectId={projectId}
             disabled={effectiveCreating}
             placement="rail"
             align="end"
@@ -1157,13 +1162,22 @@ export function TicketSessionsPanel({
             toast carries the bridge detail; this keeps the block from claiming
             the roster is empty when it has never been read, and carries the one
             action that can change that. */}
-        <RailReadFaultBody
-          feedback={feedback}
-          detail={listingError}
-          onRetry={retry}
-          testId="ticket-sessions-error"
-        />
-        {current.length === 0 && (!searching || filteredHistory.length === 0) && canClaimEmpty ? (
+        {sessionsUnavailable !== null ? (
+          <p className={SESSION_SECTION_EMPTY} data-testid="ticket-sessions-unavailable">
+            {sessionsUnavailable}
+          </p>
+        ) : (
+          <RailReadFaultBody
+            feedback={feedback}
+            detail={listingError}
+            onRetry={retry}
+            testId="ticket-sessions-error"
+          />
+        )}
+        {sessionsUnavailable === null &&
+        current.length === 0 &&
+        (!searching || filteredHistory.length === 0) &&
+        canClaimEmpty ? (
           // Nothing to read, so the block is the sentence alone: the header's
           // own control is 20px above it, and a second copy of the same act
           // inside the empty frame would be the same offer twice in one glance.

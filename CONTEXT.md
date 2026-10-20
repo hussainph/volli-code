@@ -1,8 +1,61 @@
 # Volli
 
-Local-first planner and execution workspace. This glossary is the canonical project language. Some Session and Automation terms below describe planned architecture; code and tests remain authoritative for current behavior.
+Local-first planner and execution workspace. This glossary is the canonical project language. Definitions describe domain contracts; code and tests remain authoritative for implemented behavior.
 
 ## Language
+
+**Host**:
+The process that is the single authority for one or more Workspaces and serves
+the Host protocol. `hostd` is the headless Node host and imports no Electron APIs.
+_Avoid_: Electron main (one current host, not the product API), relay
+
+**Worker**:
+A process that executes Sessions for a Host and owns the checkouts it holds
+leases on. Connects outbound to its Host.
+_Avoid_: Host, Client, agent (the Worker hosts the agent loop)
+
+**Client**:
+Anything that reads projections and sends commands over the Host protocol:
+desktop, web/phone client, CLI. Owns no durable workspace state and never talks
+to databases.
+_Avoid_: renderer (only one client), Worker
+
+**Host link**:
+A Client's one connection to one Workspace's Host: it handshakes before
+anything else, never queues a command while the Host is away, resumes
+subscriptions after the next welcome, and is observable as one connection
+state (`@volli/host-protocol/client-link`, VC-670).
+_Avoid_: socket, sync connection, offline queue
+
+**Workspace**:
+The portable unit a Host is authoritative for: one database file, its artifacts
+and git refs. Today: one project's board. Not the **Ticket workspace**, which
+names the ticket's UI surface.
+_Avoid_: Ticket workspace, worktree, device-local state
+
+**Host protocol**:
+The versioned, capability-negotiated API every Client and Worker speaks.
+_Avoid_: Electron IPC, database sync
+
+**Execution venue**:
+The Worker a ticket's checkout currently lives on. Not `VenueKind` in
+`packages/shared/src/session-venue.ts`, which describes the checkout type.
+_Avoid_: checkout type, `VenueKind`, client device
+
+**Checkout lease / epoch**:
+The Host's grant naming the one Worker allowed to write a ticket's checkout.
+The epoch increments on every transfer and fences older holders.
+_Avoid_: tab hold, unfenced lock
+
+**Workspace epoch**:
+The same fence one level up: which Host is the authority for a Workspace.
+_Avoid_: Checkout epoch, database version
+
+**Checkpoint ref**:
+`refs/volli/checkpoints/<ticket>`, a commit holding a checkout's uncommitted
+work, pushed to the Host's git store, never the user's origin. Live processes
+and browser sockets do not migrate.
+_Avoid_: user branch, process snapshot
 
 **Ticket**:
 A board card whose Ticket Body can scope a Ticket Session. Opening it shows the Ticket workspace; moving it to Doing records work state but does not start a Session.
@@ -75,11 +128,13 @@ processes, the Agent Runtime, UI surfaces, and execution venues. It remains
 openable after an attachment, turn, or Run completes; only explicit archival
 changes its availability. A Session may belong to one Ticket or be
 project-scoped.
-Each Session has a Role and model policy, and each of its attachments is
-governed by an Authority Snapshot frozen when that attachment opens. Reconnect,
-restart, and recovery may replace its live executor attachment without changing
-that identity. A model change is an explicit recorded action, never a silent
-fallback. A Session begins at its first message, not at the gesture that opened
+Each Session has a Role, model policy, frozen tools, credential safeguards, and
+host-API actor boundaries. It starts in its recorded workspace, but ordinary
+desktop execution is host-native, not a filesystem sandbox. Deterministic
+workspace scoping remains available through an injected execution environment.
+Reconnect, restart, and recovery may replace its live executor attachment
+without changing that identity. A model change is an explicit recorded action,
+never a silent fallback. A Session begins at its first message, not at the gesture that opened
 the composer — see **Chat Draft**.
 _Avoid_: pane session, split session, harness process, terminal pane, UI tab,
 chat draft, provisional session, empty session
@@ -137,7 +192,9 @@ with `volli session answer <handle>` naming the rest), so the child's prose
 never reads as the parent's user (VC-457). The parent is never parked on it,
 nothing bounds the child's time, and stopping the parent stops its children. A
 child a person resumes after that notice reports to its parent again when the
-resumed turn ends. The Session
+resumed turn ends; a turn a host notice opens in it (its own shell exiting, a
+Browser Tab event) does not, unless a person or another Session steers a
+message into that turn (VC-809). The Session
 Presentation Contract projects that notice into the parent's transcript as a
 quiet host-authored receipt row, not as a Turn in the person's voice. This row
 records the delegation outcome; it is not a listing of the child. While work is
@@ -166,37 +223,18 @@ cluster and is announced there, which is the only surface that can hand that
 wait to anyone. What a child SPENT is folded the same way — the Ticket's usage
 breakdown adds a child's cost to the Session that delegated it rather than
 naming it in a row of its own, while the per-model breakdown counts every call
-as made. Write-capable children in a shared tree are VC-266's question.
+as made. Concurrent children sharing a tree require explicit file ownership.
 _Avoid_: harness mode, agent mode, plan mode, scratch session, hidden thread,
 Project Session, project chat
 
-**Authority Snapshot**:
-The durable policy one attachment runs under: which actions are
-automatic, which require a decision, which are forbidden, and the classifier
-model allowed to help within deterministic boundaries. Built at every
-attachment from the project's Authority Policy and recorded on the attachment,
-so a refusal can name the rule pack that produced it. A Settings change does
-not silently change a running Session's authority: the Snapshot is pinned for
-the life of the attachment, and a policy change applies at the next one. An
-attachment rebuilt after a relaunch replays its recorded Snapshot rather than
-re-resolving policy, so "the life of the attachment" outlives the process.
-_Avoid_: permission preset (when meaning live authority), auto-approve flag
-
 **Authority Policy**:
-The per-project document an Authority Snapshot is built from: the enforcement
-posture, the judgment mode, the fallback thresholds, and what each actor kind
-may do. It is app-owned state, never a file in the worktree and never
-repo-committed — a policy store the agent can write would let the thing being
-governed author its own permissions. Built-in defaults with per-project
-departures; a project list that names `$defaults` extends rather than replaces.
-_Avoid_: rule pack (that is the compiled rules the policy runs), settings
-
-**Enforcement posture**:
-What a project's Authority Policy does with the rule pack. `off` builds no
-Snapshot, so no gate is installed and the Session runs at the runtime's own
-defaults. `observe` pins and records the Snapshot and installs no gate. `enforce`
-hands the Snapshot to the runtime and the pack binds. `observe` is the default.
-_Avoid_: auto mode (that is the judgment mode), permission mode
+The app-owned per-project policy for host-API access and delegation budgets.
+It defines which coordination verbs each actor may use, transcript disclosure,
+and awaitable Ticket and Session facts. Built-in defaults have per-project
+departures; a project list naming `$defaults` extends rather than replaces.
+It is not a per-call file/command gate or a model judgment mode. Legacy gate
+fields in stored overrides are ignored.
+_Avoid_: tool permissions, model judgment, repo instruction file
 
 **Session Event**:
 An immutable fact in a Session's locally ordered ledger: an attachment outcome,
@@ -253,11 +291,13 @@ _Avoid_: truncation, trimming history, pruning the transcript, per-model reserve
 
 **Agent Runtime**:
 The product-aware execution package that hosts Volli's agent loop. It receives a
-Session Role, work location, model policy, prompt resources, scoped tools, and
-an Authority Snapshot when the host supplies one; it emits runtime observations
-and tool requests without owning
-durable Session or Ticket state. Pi is its initial acknowledged substrate, but
-Pi types and events never become renderer or Session contracts. The package may
+Session Role, work location, model policy, prompt resources, and frozen tools;
+it enforces credential safeguards and its supplied execution environment's
+checks, and emits runtime observations and tool requests without owning durable
+Session or Ticket state. Ordinary desktop Sessions use host-native execution;
+`ScopedExecutionEnv` is retained for hosts that explicitly inject workspace
+scoping. Pi is its initial acknowledged substrate, but Pi types and events never
+become renderer or Session contracts. The package may
 depend on Node but never Electron or DOM APIs, so Electron main can host it
 locally and a future worker can host the same package elsewhere.
 _Avoid_: harness adapter, provider runtime, Electron service, renderer client
@@ -288,8 +328,7 @@ only in Sessions created while one was configured.
 its own switch, pick a new Session's model and reasoning level from the
 person's approved pairs — once, at birth, falling back to the configured default
 on any miss — and the Session records and shows the pick (`Auto-picked`).
-_Avoid_: classifier model (when meaning the setting), router, judge (that is a
-purpose)
+_Avoid_: classifier model (when meaning the setting), router, permission judge
 
 **Web Access**:
 The app-wide decision about whether Volli may reach the Internet on a
@@ -438,11 +477,37 @@ SIGKILL. The three names ride one port, appended last to the vocabulary. A
 shell belongs to the Session that started it — a subagent never sees its
 parent's — is capped per Session, runs inside the workspace, is spawned
 through the same environment record and the same attachment identity the
-`execute` tool gets, and is killed when the attachment ends. Every shell
+`execute` tool gets, and is killed when the attachment ends — a subagent's
+already when a turn of it completes, silently, so a shell it left running
+cannot reopen it after its parent has the answer (VC-809); its exited shells'
+output is forgotten at that point too. Every shell
 result restates the Session's live shells, because the tool calls are the
 durable record; shells are live resources, not ledger facts, and do not
 survive a relaunch. The Activity Island's shells cluster reads them through
 one push and one store, and opens a shell's tail in a plain read-only pane.
+A shell also speaks for itself (VC-495), so nothing polls or sleeps for it:
+when one exits on its own, a notice from Volli is steered into the Session that
+started it — the delivery a **Watch** and a subagent's completion already use,
+read mid-turn, opening a turn on an idle Session, or parked until the next
+attachment — naming the shell, how it ended, how long it ran, and the end of
+its output. That output is another author's prose: redacted by the credential
+store and the shared redactor BEFORE it is cut, and quoted inside an untrusted
+envelope. Each pipe is decoded and redacted independently, including multiline
+credentials, overlapping shared/exact values, and incomplete PEM/URL/token
+structures. Raw redaction context is bounded (256 KB per pipe): if it
+cannot be retained safely, the notice withholds that pipe's output instead of
+quoting a credential fragment. Notices never consume the incremental output
+cursor, so failed delivery leaves the next `shell_output` useful.
+`shell_start`'s optional `notifyOn` (a literal, or a bounded-state regex)
+adds ONE notice the first time output matches, even before a newline, so a
+chatty process cannot flood the chat. Matching examines the first 1,000 UTF-16
+units of each line; unsupported regex syntax or expansion is refused rather
+than run in a backtracking engine. Pending shell notices are stored by the
+host before delivery and replayed after restart with the same payload and id.
+A notice is never sent for the Session's own `shell_kill` (its tool
+result is the news), for an exit the model already read, for output `shell_start`
+already returned, or once the Session's attachment has ended; a person's kill
+from the Island is sent, because nothing else would tell the Session.
 _Avoid_: background job, `&` (which loses the handle), terminal (a shell a
 person types into), daemon
 
@@ -502,11 +567,13 @@ _Avoid_: dangerous tier, middle tier
 The byte-identical leading portion of a model request that a provider reuses
 between requests. One changed byte invalidates everything after it; where the
 provider orders the tool array before the system prompt, a tool change
-invalidates the prompt too. Within a Session, the Agent Tool Surface and system
-prompt therefore never change after start — a state change is modeled as a tool
-call or a message, never as a re-composed prompt. The sanitized tool names and order are durable
-Session input; reattachment rebinds that exact surface or fails without sending
-a different one. Credentials are never part of the durable shape.
+invalidates the prompt too. Within a warm-cache epoch, the Agent Tool Surface declarations and system
+prompt stay byte-identical. Additions can enter the provider surface only at a
+cold turn, compaction or model switch. Code-Mode-only additions can arrive while
+warm, announced in an appended message without changing the prefix. Birth and
+additive refresh facts are durable; reattachment restores both the effective
+callable surface and its last-cold declarations. Existing names are never removed
+or renamed. Credentials are never part of the durable shape.
 _Avoid_: cache hit (one outcome of a stable prefix), prompt cache (the provider feature)
 
 **Context Assembly**:
@@ -616,8 +683,8 @@ metadata until the product deliberately promotes it into this vocabulary.
 _Avoid_: UI state, provider payload, component props
 
 **Session Presentation Contract**:
-The portable consumer boundary that projects Session Semantic Facts, Role, and
-Authority Snapshot into a surface model for a Volli client. It determines which
+The portable consumer boundary that projects Session Semantic Facts and Role
+into a surface model for a Volli client. It determines which
 shared affordances are meaningful and progressively discloses active product
 state, but does not parse Pi or provider protocols or require Electron or React.
 Presentation dispatch follows Volli semantic kind and state, never runtime tool
@@ -657,6 +724,16 @@ The durable runtime-boundary record of a Command's observed outcome: accepted,
 rejected, completed, or unreconciled. A Receipt makes delivery observable
 without claiming an unsupported native guarantee.
 _Avoid_: event, acknowledgement (when no durable outcome exists)
+
+**Door**:
+One entrance through which a caller reaches host behavior: an IPC handler
+(the renderer's door), a socket verb (the CLI's), an agent tool (the tool
+door), the Run door an Automation fires through. A door resolves its caller
+and maps inputs and replies; the behavior it reaches lives once, behind it, so
+two doors to one action must not diverge. "The one door" names the single
+entrance a rule is enforced at, such as notification delivery.
+_Avoid_: endpoint, route (both name a transport), adapter (a Port's
+implementation), service (what a door calls)
 
 **Session Engine**:
 The UI- and runtime-implementation-agnostic interface that owns Session
@@ -791,8 +868,8 @@ _Avoid_: verdict comment, `VERDICT:` first line, status (that is a column)
 
 **Ticket Wake**:
 One committed Ticket Event, fanned out in-process after its transaction
-commits (`ticket-wake.ts`). The wake bus is main's canonical post-commit
-stream: every mutation door feeds it, and the Watch registry listens on it. A
+commits (`packages/host-core/src/ticket-wake.ts`). The wake bus is the host's
+canonical post-commit stream: every mutation door feeds it, and the Watch registry listens on it. A
 wake is never a source of truth — the durable event it reports already is.
 _Avoid_: notification, broadcast (that is the window fan-out)
 
@@ -851,12 +928,12 @@ end.
 _Avoid_: idle (for a failed interruption), error, crashed
 
 **Project**:
-A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk. **The one user-facing word for a rail entry** (VC-57 ruling): every surface says "project" — "project switcher", "Project override", "Set by this project" — and it anchors the session language too (project-level vs ticket-level sessions). The design lineage is Arc's Spaces, but the word is not borrowed with it. Internal identifiers (`useWorkspaceStore`, `workspaceRailHidden`) are wire format, not copy.
-_Avoid_: workspace (claimed by Ticket workspace — the ticket surface), space
+A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk. **The one user-facing word for a rail entry** (VC-57 ruling): every surface says "project" — "project switcher", "Project override", "Set by this project" — and it anchors the session language too (project-level vs ticket-level sessions). Internal identifiers (`useWorkspaceStore`, `workspaceRailHidden`) are wire format, not copy.
+_Avoid_: Workspace (the portable host-owned unit), Ticket workspace (the ticket surface), space
 
 **Ticket worktree**:
-The isolated git checkout a ticket works in: branch `volli/<DISPLAY-ID>-<slug>`, directory `~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`. App-owned (outside both the repo and Electron's `userData`), named once at creation — neither branch nor directory is renamed when the ticket title changes. The recorded branch follows the checkout only when the ticket's own directory is found on another `volli/<DISPLAY-ID>-…` branch of the same ticket (an agent cut a narrower one): the next Session start adopts it as an automation `worktree_changed`. Another ticket's branch, a non-`volli/` branch or a detached HEAD there is refused, never switched away from.
-_Avoid_: workspace (that's the whole ticket surface), checkout (ambiguous with the main checkout)
+The isolated git checkout a ticket works in: branch `volli/<DISPLAY-ID>-<slug>`, directory `~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`. App-owned (outside both the repo and Electron's `userData`), named once at creation — neither branch nor directory is renamed when the ticket title changes. The recorded branch follows the checkout only when the ticket's own directory is found on another branch of the same ticket — `volli/<DISPLAY-ID>` or `volli/<DISPLAY-ID>-…` (an agent cut a narrower one, or a stacked-PR slice `volli/VC-627-b-…`), or the same with a one-lowercase-letter slice suffix (`volli/VC-627c` or `volli/VC-627c-…`): the next Session start adopts it as an automation `worktree_changed`. Anything else after the number (`volli/VC-6270`, `volli/VC-627.bak`), another ticket's branch, a non-`volli/` branch or a detached HEAD there is refused, never switched away from, and the refusal names the branch checked out, whether it has uncommitted changes and the branch the ticket expects.
+_Avoid_: Workspace (the portable host-owned unit), Ticket workspace (the ticket surface), checkout (ambiguous with the main checkout)
 
 **Artifact**:
 A durable, project-scoped output or reference, stored as a file or bundle and reusable across tickets. Its format determines how Volli presents it.
@@ -908,7 +985,9 @@ ticket is a pure status change. Arming is a property of the column, not of the
 Automation, so one Automation may be armed in one column and merely offered in
 another. It is local to the machine that set it and never travels with the
 project. Arming a column is not retroactive: it governs tickets that arrive
-afterward, never those already sitting there. The column-header bolt is always
+afterward, never those already sitting there. A countdown whose window elapsed
+while the app was closed starts nothing at the next launch; it waits for a
+person's Retry, because nobody was shown its Cancel. The column-header bolt is always
 visible: outline when unarmed, filled when armed. A filled, muted bolt with
 “automatic triggers off” keeps the arming distinct from permission to fire.
 _Avoid_: default automation (collides with project defaults and the default base branch)
@@ -920,18 +999,22 @@ each Automation's Trigger; the order is the column's own **rank**, arranged by
 dragging the lanes on the Automations page and stored per column, like the
 arming and on the same machine. A column's Armed automation is pinned to digit
 `1` while it is switched on here, so `1` reproduces a plain drop. Digits run
-`1`–`9` and `0` is `Move only`; a row ranked past the ninth keeps its place and
-simply has no digit. Offering is not arming: a column offers many and fires at
-most one on its own.
+`1`–`9` and `0` is `Move only`; a row ranked past the ninth keeps its place in
+the lanes, drawn without a digit and still draggable, and is not a landing
+target mid-drag. Offering is not arming: a column offers many and fires at most
+one on its own.
 _Avoid_: column automations, automation menu
 
 **Option-drag picker**:
 What holding ⌥ during a drag does: the hovered column grows its Offered list
-into large landing targets — every offered row plus `Move only` — and the picker,
-not the pointer, is what a release obeys, so every release under ⌥ lands on a
-named target. Landing on a named Automation opens the same delay window a plain
-drop into an armed column opens, with the same single Cancel; `Move only` moves
-the ticket and starts nothing. ⌥ is a state rather than an edge: the column is
+into large landing targets — every row with a digit plus `Move only` — and the
+picker, not the pointer, is what a release obeys, so every release under ⌥ lands
+on a named target. Landing on a named Automation opens the same delay window a
+plain drop into an armed column opens, with the same single Cancel; `Move only`
+moves the ticket and starts nothing. Over the column every lifted card already
+stands in, the Offered list is drawn inert at both sizes — the compact list
+and the ⌥ picker — with `Move only` lit: a release there is not an arrival, so
+it starts nothing whichever row is named. ⌥ is a state rather than an edge: the column is
 expanded whenever ⌥ is held over it, however the two became true. Escape ends
 the drag; ⌥-up only closes the picker.
 _Avoid_: palette, radial menu, drag menu
@@ -947,7 +1030,7 @@ _Avoid_: prompt template, Ticket Body, Runtime Brief
 
 **Runtime**:
 An Automation's execution setting: its model policy, reasoning policy, Session
-Role, and Authority Snapshot defaults. Model and reasoning travel together as
+Role, and frozen tool defaults. Model and reasoning travel together as
 one selection, and are inherited or pinned together rather than separately — the
 reasoning levels a model offers are its own, so a pinned level against an
 inherited model can name a pair that does not exist. An Automation that pins
@@ -959,9 +1042,8 @@ _Avoid_: agent, harness, model (alone)
 **Run**:
 One invocation of an Automation, and the record of which Automation and which
 _resolved_ model and reasoning produced a given Session. A Run owns exactly one
-Session and always starts a fresh one: it never wakes an existing Session, whose
-Authority Snapshot was granted while a person was present and whose context is
-stale by the time a schedule fires. A ticket has at most one Run in flight at a
+Session and always starts a fresh one: it never wakes an existing Session whose
+context is stale by the time a schedule fires. A ticket has at most one Run in flight at a
 time. A Board Session can start one too, through the `automation.run` tool its
 Role bundle holds; the Run it starts carries the automation Actor and is
 indistinguishable in its record from one a person started by hand. Runs outlive the app — one whose Session died is interrupted, never lost,

@@ -820,7 +820,7 @@ function MoveSummary({
 
 /**
  * The dragged card's own label. Always names the ticket by REF first — never
- * truncated, per the owner's note that the ref is the identity and the title is
+ * truncated: the ref is the identity and the title is
  * the only part allowed to give way — and the move it is about to make, via
  * {@link MoveSummary}, so the summary reads as a real statement even when
  * nothing will run.
@@ -847,9 +847,8 @@ function MoveSummary({
  * over a column it becomes one line — ref, the move, what will run — hung off
  * the cursor like a drag badge. It still tracks the pointer exactly, so nothing
  * is taken away; it just stops being the biggest thing on screen at the exact
- * moment it stops being the thing you are reading. This is what every drag that
- * has ever had to cross a menu does: Figma drops to a line, Trello to a
- * placeholder, Finder to a badge. The payload goes quiet over the target.
+ * moment it stops being the thing you are reading. The compact payload keeps
+ * the target readable while preserving the drag's identity.
  *
  * The title is what the compact form drops, because the ref is the identity —
  * the one thing that may never be elided — and the title is the only part

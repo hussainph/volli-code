@@ -54,7 +54,7 @@ const execFileAsync = promisify(execFile);
 
 const OUT_DIR = process.argv[2] ?? join(REPO, "apps", "docs", "src", "assets", "screenshots");
 
-/** Linear-ish window the docs images are composed for. */
+/** Window dimensions used to compose the docs images. */
 const WINDOW = { width: 1440, height: 900 };
 
 /** The repo's established demo project (docs/DESIGN.md). */

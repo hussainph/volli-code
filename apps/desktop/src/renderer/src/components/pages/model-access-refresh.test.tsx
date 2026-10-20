@@ -109,6 +109,20 @@ function refreshButton(): HTMLButtonElement {
 }
 
 describe("Model Access catalog refresh", () => {
+  it("renders catalogue names with the shared model mark", async () => {
+    await renderSettings(
+      vi
+        .fn<ModelAccessClient["inspect"]>()
+        .mockResolvedValue(snapshot([model("claude-opus-4-1", "Claude Opus 4.1")])),
+    );
+    const name = [...document.querySelectorAll('[data-slot="model-name"]')].find(
+      (node) => node.textContent === "Claude Opus 4.1",
+    );
+    expect(name).toBeDefined();
+    expect(name?.parentElement?.querySelector("svg[aria-hidden] path")).not.toBeNull();
+    expect(document.body.textContent).not.toContain("claude-opus-4-1");
+  });
+
   it("renders newly admitted rows immediately and reports the catalog change", async () => {
     const inspect = vi
       .fn<ModelAccessClient["inspect"]>()

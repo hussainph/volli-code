@@ -1,0 +1,27 @@
+# AppArmor profile for the Chromium a Volli host drives (VC-619).
+#
+# Ubuntu 23.10 and later (24.04 included) let a program create unprivileged
+# user namespaces only when an AppArmor profile grants it
+# (kernel.apparmor_restrict_unprivileged_userns=1). Chromium's Linux sandbox
+# is built on them, so without this profile Chrome for Testing refuses to start
+# sandboxed ("No usable sandbox!"). This grants exactly that, to exactly one
+# binary, and nothing else: the same shape as Ubuntu's own profile for Google
+# Chrome (/etc/apparmor.d/chrome). It is not a reason to pass --no-sandbox.
+#
+# Replace @CHROMIUM@ with the binary's absolute path, then load it:
+#
+#   sed 's|@CHROMIUM@|/opt/volli-chromium/chrome|' volli-chromium.apparmor \
+#     | sudo tee /etc/apparmor.d/volli-chromium >/dev/null
+#   sudo apparmor_parser -r /etc/apparmor.d/volli-chromium
+#
+# docs/runbooks/hostd-box.md ("The agent browser") installs it on a box; CI's
+# "Test (packages)" lane loads it before the Chromium suite.
+
+abi <abi/4.0>,
+include <tunables/global>
+
+profile volli-chromium @CHROMIUM@ flags=(unconfined) {
+  userns,
+
+  include if exists <local/volli-chromium>
+}

@@ -47,25 +47,6 @@ function cloud(ref: { providerId: string; modelId: string }) {
   return cloudSetting(ref, 1) as Extract<DecisionModelSetting, { kind: "cloud" }>;
 }
 
-describe("automatic model choice (VC-432)", () => {
-  it("is off after the first opt-in and on once the switch extends it", () => {
-    const first = cloudSetting(JEV, 1);
-    expect(autoPickOn(first)).toBe(false);
-    const on = autoPickSetting(first, true, 9)!;
-    expect(autoPickOn(on)).toBe(true);
-    expect(on).toMatchObject({
-      optIn: { acceptedAt: 9, purposes: ["agent.classify", "model.select"] },
-    });
-    expect(autoPickOn(autoPickSetting(on, false, 10)!)).toBe(false);
-  });
-
-  it("is nothing for a model that is not in the cloud", () => {
-    expect(autoPickOn({ kind: "none" })).toBe(false);
-    expect(autoPickOn(localSetting("", ""))).toBe(false);
-    expect(autoPickSetting(localSetting("", ""), true, 1)).toBeNull();
-  });
-});
-
 describe("the decision model control's model", () => {
   it("reads a setting's mode", () => {
     expect(decisionMode({ kind: "none" })).toBe("none");
@@ -101,7 +82,7 @@ describe("the decision model control's model", () => {
     ).toEqual(["Alpha", "OpenCode Zen"]);
   });
 
-  it("writes a cloud choice with an opt-in for every purpose this build has", () => {
+  it("writes a cloud choice with the purposes the first opt-in dialog names", () => {
     expect(cloudSetting(ZEN, 42)).toEqual({
       kind: "cloud",
       providerId: "opencode",
@@ -144,5 +125,24 @@ describe("the decision model control's model", () => {
   it("prices a model as a person reads it", () => {
     expect(priceLabel(JEV)).toBe("Free");
     expect(priceLabel(ZEN)).toBe("$0.042/M input");
+  });
+});
+
+describe("automatic model choice (VC-432)", () => {
+  it("is off after the first opt-in and on once the switch extends it", () => {
+    const first = cloudSetting(JEV, 1);
+    expect(autoPickOn(first)).toBe(false);
+    const on = autoPickSetting(first, true, 9)!;
+    expect(autoPickOn(on)).toBe(true);
+    expect(on).toMatchObject({
+      optIn: { acceptedAt: 9, purposes: ["agent.classify", "model.select"] },
+    });
+    expect(autoPickOn(autoPickSetting(on, false, 10)!)).toBe(false);
+  });
+
+  it("is nothing for a model that is not in the cloud", () => {
+    expect(autoPickOn({ kind: "none" })).toBe(false);
+    expect(autoPickOn(localSetting("", ""))).toBe(false);
+    expect(autoPickSetting(localSetting("", ""), true, 1)).toBeNull();
   });
 });

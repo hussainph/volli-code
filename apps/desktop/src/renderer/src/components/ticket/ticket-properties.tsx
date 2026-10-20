@@ -6,13 +6,11 @@
  * It was a wrapping run of 24px pills with no eyebrow, and that run was the
  * one block on the page that was neither of its two object kinds: unmarked,
  * bordered at rest where every row is borderless until hovered, and two facts
- * to a line where the page sets one thing per line. Alone it read as Linear's
- * property strip; under the sections it was the odd block out.
+ * to a line where the page sets one thing per line. Under the sections it was
+ * the odd block out.
  *
- * **THE VALUE IS THE CONTROL** (revision 05's first correction). The second
- * pass made the whole row the target and hung a picker off it, which is the
- * shape the user rejected: a row that opens a side overlay is a row pretending
- * to be a field, and it puts the act one hop further away than the fact it is
+ * **THE VALUE IS THE CONTROL**. Making the whole row a target for a side
+ * overlay puts the act one hop further away than the fact it is
  * editing. A row here is NOT a target. It keeps the roster's grammar — a
  * glyph, then the value — and the value itself is the app's own 28px dropdown
  * trigger (`RAIL_CONTROL`, the recipe every button a rail page presses wears,
@@ -32,7 +30,7 @@
  *
  * The rows are 38px (28px trigger + 4px above and below + the row's 1px
  * transparent border) rather than the 36px of the page's other one-line rows —
- * the retained difference revision 05 records so it is not mistaken for drift.
+ * enough space for the trigger, padding, and border without compressing the control.
  *
  * **LABELS ARE ADDITIVE, LEFT TO RIGHT.** Each applied label is its own pill
  * carrying its own Remove, in the order it was added, wrapping when the run
@@ -90,6 +88,7 @@ import {
   labelPickerOptions,
   newLabelFromQuery,
 } from "@renderer/components/ticket/label-picker-model";
+import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { useLabelVocabulary } from "@renderer/components/ticket/label-picker";
 import {
   RAIL_CONTROL,
@@ -166,17 +165,21 @@ function ValueTrigger({
   label,
   field,
   value,
+  canWrite,
   children,
 }: {
   label: string;
   field: string;
   value: string;
+  /** Read-only (VC-576): the value still reads; the menu does not open. */
+  canWrite: boolean;
   children?: React.ReactNode;
 }) {
   return (
     <DropdownMenuTrigger asChild>
       <Button
         variant="outline"
+        disabled={!canWrite}
         className={cn(RAIL_CONTROL, "max-w-full justify-start gap-1.5 pr-2 pl-2.5 font-normal")}
         // The field is in the accessible name because nothing beside the
         // control says it any more: "Doing" alone names no field.
@@ -196,11 +199,14 @@ function ValueTrigger({
 function LabelPill({
   name,
   color,
+  canWrite,
   removeRef,
   onRemove,
 }: {
   name: string;
   color: string;
+  /** Read-only (VC-576): the pill reads; its Remove stands down. */
+  canWrite: boolean;
   removeRef: (node: HTMLButtonElement | null) => void;
   onRemove: () => void;
 }) {
@@ -222,7 +228,8 @@ function LabelPill({
         aria-label={`Remove ${name}`}
         title={`Remove ${name}`}
         data-testid="ticket-rail-label-remove"
-        className="flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        disabled={!canWrite}
+        className="flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
         onClick={onRemove}
       >
         <XIcon weight="bold" className="size-2.5" />
@@ -265,11 +272,14 @@ function LabelPill({
 function AddLabelControl({
   projectId,
   applied,
+  canWrite,
   addRef,
   onAdd,
 }: {
   projectId: string;
   applied: readonly string[];
+  /** Read-only (VC-576): Add stands down, like Status and Priority. */
+  canWrite: boolean;
   addRef: (node: HTMLButtonElement | null) => void;
   onAdd: (name: string) => void;
 }) {
@@ -300,7 +310,8 @@ function AddLabelControl({
           aria-label="Add label"
           title="Add label"
           data-testid="ticket-rail-label-add"
-          className="flex size-6 shrink-0 items-center justify-center rounded-full border border-sidebar-border text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          disabled={!canWrite}
+          className="flex size-6 shrink-0 items-center justify-center rounded-full border border-sidebar-border text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
         >
           {/* `bold` at 12px: the size tier where regular draws lighter than the
               text it sits among (CLAUDE.md), and this glyph now has no word
@@ -374,10 +385,12 @@ function AddLabelControl({
 function LabelRun({
   projectId,
   labels,
+  canWrite,
   onChange,
 }: {
   projectId: string;
   labels: readonly string[];
+  canWrite: boolean;
   onChange: (next: string[]) => void;
 }) {
   const projectLabels = useBoardStore((state) => state.labelsByProject[projectId]);
@@ -417,6 +430,7 @@ function LabelRun({
           key={name}
           name={name}
           color={resolveLabelColor(projectLabels, name)}
+          canWrite={canWrite}
           removeRef={(node) => {
             if (node === null) removeRefs.current.delete(name);
             else removeRefs.current.set(name, node);
@@ -427,6 +441,7 @@ function LabelRun({
       <AddLabelControl
         projectId={projectId}
         applied={labels}
+        canWrite={canWrite}
         addRef={(node) => {
           addRef.current = node;
         }}
@@ -443,6 +458,7 @@ function LabelRun({
 export function TicketProperties({ projectId, ticket }: { projectId: string; ticket: Ticket }) {
   const statusLabel = TICKET_STATUS_LABELS[ticket.status];
   const priorityLabel = TICKET_PRIORITY_LABELS[ticket.priority];
+  const canWrite = useCanWrite(projectId);
   return (
     <section
       aria-label="Properties"
@@ -456,11 +472,17 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
           glyph={<CircleIcon className="size-4" />}
           control={
             <DropdownMenu>
-              <ValueTrigger label={statusLabel} field="Status" value={ticket.status} />
+              <ValueTrigger
+                label={statusLabel}
+                field="Status"
+                value={ticket.status}
+                canWrite={canWrite}
+              />
               <DropdownMenuContent align="start">
                 <DropdownMenuRadioGroup
                   value={ticket.status}
-                  onValueChange={(value) =>
+                  onValueChange={(value) => {
+                    if (!guardWrite(projectId)) return;
                     // The board's own move, so the column change keeps every
                     // side effect it has anywhere else — including whichever
                     // Automation the new column arms.
@@ -471,8 +493,8 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
                         ticket.id,
                         value as TicketStatus,
                         Number.MAX_SAFE_INTEGER,
-                      )
-                  }
+                      );
+                  }}
                 >
                   {TICKET_STATUSES.map((status) => (
                     <DropdownMenuRadioItem key={status} value={status}>
@@ -489,15 +511,21 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
           glyph={<PriorityIndicator priority={ticket.priority} />}
           control={
             <DropdownMenu>
-              <ValueTrigger label={priorityLabel} field="Priority" value={ticket.priority} />
+              <ValueTrigger
+                label={priorityLabel}
+                field="Priority"
+                value={ticket.priority}
+                canWrite={canWrite}
+              />
               <DropdownMenuContent align="start">
                 <DropdownMenuRadioGroup
                   value={ticket.priority}
-                  onValueChange={(value) =>
+                  onValueChange={(value) => {
+                    if (!guardWrite(projectId)) return;
                     void useBoardStore
                       .getState()
-                      .setTicketPriority(projectId, ticket.id, value as TicketPriority)
-                  }
+                      .setTicketPriority(projectId, ticket.id, value as TicketPriority);
+                  }}
                 >
                   {TICKET_PRIORITIES.map((priority) => (
                     <DropdownMenuRadioItem key={priority} value={priority}>
@@ -518,7 +546,11 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
             <LabelRun
               projectId={projectId}
               labels={ticket.labels}
-              onChange={(next) => void useBoardStore.getState().setLabels(ticket.id, next)}
+              canWrite={canWrite}
+              onChange={(next) => {
+                if (!guardWrite(projectId)) return;
+                void useBoardStore.getState().setLabels(ticket.id, next);
+              }}
             />
           }
         />

@@ -7,17 +7,31 @@ import {
   type VerbEffects,
   type VerbEntry,
 } from "@volli/shared";
+import { NO_COMMAND, NOT_PINNED, SESSION_ID_SOURCE_NOTES, resumeRows } from "./harness-resume";
 
 type EffectVerb = VerbEntry & { effects: VerbEffects };
 const effectVerbs = (VERB_REGISTRY as readonly VerbEntry[]).filter(
   (verb): verb is EffectVerb => verb.listed && verb.effects !== undefined,
 );
 
+/** A command in code font, or {@link NO_COMMAND} where the builder has none. */
+const commandCell = (text: string | null): string => (text === null ? NO_COMMAND : `\`${text}\``);
+
 const bullets = (items: readonly string[]): string => items.map((item) => `- ${item}`).join("\n");
 
 /** Expand data-backed components so copied pages contain the same facts as HTML. */
 export function expandGeneratedMarkdown(body: string): string {
   return body
+    .replace(/<HarnessResume\s*\/>/g, () =>
+      [
+        "| TUI | Resume a known session | Resume the latest | Fresh launch | Minimum version |",
+        "| --- | --- | --- | --- | --- |",
+        ...resumeRows.map(
+          (row) =>
+            `| ${row.label} (\`${row.harnessId}\`) | ${commandCell(row.byId)} | ${commandCell(row.latest)} | ${commandCell(row.freshLaunch)} ${SESSION_ID_SOURCE_NOTES[row.sessionIdSource]} | ${row.minimumVersion ?? NOT_PINNED} |`,
+        ),
+      ].join("\n"),
+    )
     .replace(/<AgentVerbEffects\s*\/>/g, () =>
       effectVerbs
         .map((verb) => {

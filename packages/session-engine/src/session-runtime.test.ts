@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vite-plus/test";
+import { isCommandIntentConflict } from "@volli/shared";
 import type {
-  AuthoritySnapshot,
   ObservabilityEvent,
   ObservabilitySink,
   RuntimeObservation,
   SessionEvent,
   SessionLedgerIds,
 } from "@volli/shared";
-import { nativeObservationEventId, sessionPersonNeed } from "@volli/shared";
+import {
+  decodeSessionEventPayload,
+  nativeObservationEventId,
+  sessionPersonNeed,
+} from "@volli/shared";
+import legacyLedger from "../../shared/src/fixtures/legacy-authority-ledger.json";
 import type { UIMessage } from "ai";
 import {
   createInMemorySessionLedger,
@@ -18,8 +23,11 @@ import {
   isSessionStreamFrame,
   isSessionStreamOverlay,
   NativeAttachmentError,
+  SessionRuntimeCommandConflictError,
   SessionRuntimeConflictError,
+  SessionEngineCommandConflictError,
   SessionRuntimeNotFoundError,
+  SESSION_HISTORY_WINDOW,
   SNAPSHOT_ARTIFACT_READ_CONCURRENCY,
   type BindingHandle,
   type HarnessCommand,
@@ -112,8 +120,6 @@ class FakeAdapter implements NativeHarnessAdapter {
   specs: Parameters<NativeHarnessAdapter["attach"]>[0][] = [];
   attachObservation: RuntimeObservation | null = null;
   releaseReasons: string[] = [];
-  /** The policy this fake binding reports running under (VC-44). */
-  authority: AuthoritySnapshot | null = null;
 
   async attach(
     spec: Parameters<NativeHarnessAdapter["attach"]>[0],
@@ -128,7 +134,6 @@ class FakeAdapter implements NativeHarnessAdapter {
     if (this.attachFailure) throw this.attachFailure;
     return {
       native: { id: "native-session-1", detail: { provider: "fake" } },
-      authority: this.authority,
       dispatch: async (command) => {
         this.dispatches += 1;
         this.commands.push(command);
@@ -249,6 +254,58 @@ async function createAndAttach(runtime: SessionRuntime) {
 }
 
 describe("SessionRuntime native adapter contract", () => {
+  it("rehydrates a recorded enforce attachment without passing authority to its executor", async () => {
+    const ledger = createInMemorySessionLedger();
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const reference = await artifacts.write({
+      ...legacyLedger.artifact,
+      version: 1,
+      message: legacyLedger.artifact.message as UIMessage,
+    });
+    const born = decodeSessionEventPayload(legacyLedger.events[0].payload, "recorded");
+    if (born.kind !== "session.created") throw new Error("invalid fixture");
+    await ledger.transaction((transaction) => {
+      transaction.insertSession(born.session);
+      for (const row of legacyLedger.events) {
+        const payload = decodeSessionEventPayload(row.payload, "recorded");
+        if (payload.kind === "attachment.opened") {
+          payload.attachment.adapterId = "fake";
+          payload.attachment.native = {
+            id: "native-session-1",
+            detail: {
+              kind: "volli.native-binding.v1",
+              directory: "/projects/fake",
+              locator: { provider: "fake" },
+            },
+          };
+        }
+        if (payload.kind === "transcript.referenced") payload.reference = reference;
+        transaction.appendEvent({
+          ...row,
+          payload,
+          provenance: { source: { kind: "system", id: "desktop", detail: null }, venue },
+        });
+      }
+    });
+    const engine = createSessionEngine({ ledger, clock: { now: () => 500 }, ids: ids() });
+    const { runtime, adapter } = composition({ engine, artifacts });
+    await expect(
+      runtime.reconcile({ sessionId: born.session.id, attachmentId: "attachment-1" }),
+    ).resolves.toBeUndefined();
+    expect(adapter.specs.at(-1)).toMatchObject({
+      continuity: "native_resume",
+      attachmentId: "attachment-1",
+    });
+    expect(adapter.specs.at(-1)).not.toHaveProperty("pinnedAuthority");
+    expect(adapter.specs.at(-1)).not.toHaveProperty("authority");
+    const { projection } = await runtime.projection({ sessionId: born.session.id });
+    expect(projection.liveExecutor?.authority).toBeNull();
+    expect(projection.interactions.active).toEqual([]);
+    expect(projection).not.toHaveProperty("authorityDenials");
+    const snapshot = await runtime.snapshot({ sessionId: born.session.id });
+    expect(snapshot.transcript).toMatchObject([{ message: legacyLedger.artifact.message }]);
+    await runtime.close();
+  });
   it("honors a client-requested Session id on create, and the ledger derivation absent one (VC-358)", async () => {
     const { runtime } = composition();
     const requested = "0f1a2b3c-4d5e-4f6a-8b7c-9d0e1f2a3b4c";
@@ -816,77 +873,6 @@ describe("SessionRuntime native adapter contract", () => {
     await expect(Promise.all([message, steering])).resolves.toHaveLength(2);
   });
 
-  it("records the binding's Authority Snapshot on the attachment, so a denial can name its pack", async () => {
-    // VC-44's third acceptance criterion, end to end. An `authority.denied`
-    // event carries an `attachmentId` and nothing else about the policy that
-    // refused; the pack it cites is resolved through the attachment recorded
-    // here, which is what makes a denial interpretable long after the pack has
-    // moved on — and comparable between two attachments of the same Session.
-    const adapter = new FakeAdapter();
-    const authority: AuthoritySnapshot = {
-      mode: "auto",
-      location: "worktree",
-      enforcement: "enforce",
-      judgmentMode: "ask",
-      tools: ["read", "edit", "write", "execute", "ask_user"],
-      rulePackId: "volli.builtin",
-      rulePackHash: "dca89a93",
-      classifierModel: null,
-      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
-    };
-    adapter.authority = authority;
-    const { runtime } = composition({ adapter });
-
-    const sessionId = await createAndAttach(runtime);
-    const snapshot = await runtime.snapshot({ sessionId });
-    const opened = snapshot.frames.find(
-      ({ event }) => event.payload.kind === "attachment.opened",
-    )!.event;
-
-    expect(
-      opened.payload.kind === "attachment.opened" && opened.payload.attachment.authority,
-    ).toEqual(authority);
-  });
-
-  it("hands a rehydrated binding the Snapshot the attachment opened under", async () => {
-    // The other half of pinning, and the half a relaunch breaks if nobody
-    // carries it: `#rehydrateBinding` rebuilds an attachment from history, and
-    // the adapter would otherwise resolve whatever policy says NOW. One
-    // `attachmentId` would then run under one policy while the `attachment.opened`
-    // record cited another — and a denial resolves through that id, so the
-    // durable answer would be the wrong one.
-    const first = composition();
-    const authority: AuthoritySnapshot = {
-      mode: "auto",
-      location: "worktree",
-      enforcement: "enforce",
-      judgmentMode: "ask",
-      tools: ["read", "edit", "write", "execute", "ask_user"],
-      rulePackId: "volli.builtin",
-      rulePackHash: "dca89a93",
-      classifierModel: null,
-      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
-    };
-    first.adapter.authority = authority;
-    const sessionId = await createAndAttach(first.runtime);
-    const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
-    await first.runtime.close();
-
-    // The project edits policy while nothing is running. A fresh attach would
-    // pick the new one up; this attachment must not.
-    first.adapter.authority = { ...authority, enforcement: "observe", judgmentMode: "auto" };
-    const recovered = composition({
-      engine: first.engine,
-      adapter: first.adapter,
-      runtimeIdPrefix: "cold-authority-",
-    });
-    await recovered.runtime.reconcile({ sessionId, attachmentId });
-
-    const rehydrated = first.adapter.specs.at(-1)!;
-    expect(rehydrated.continuity).toBe("native_resume");
-    expect(rehydrated.pinnedAuthority).toEqual(authority);
-  });
-
   it("records no Snapshot for a binding that runs no gate", async () => {
     // An adapter that answers nothing — a terminal companion — and a project
     // that turned the gate off both land here, because both mean the same thing
@@ -950,35 +936,6 @@ describe("SessionRuntime native adapter contract", () => {
     const snapshot = await runtime.snapshot({ sessionId });
     expect(snapshot.projection.turnActive).toBe(false);
     expect(snapshot.frames.map(({ event }) => event.payload.kind)).toContain("turn.interrupted");
-  });
-
-  it("records a durable authority.denied event with the attachment id filled in from the spec", async () => {
-    const { runtime, adapter } = composition();
-    const sessionId = await createAndAttach(runtime);
-    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
-
-    await adapter.emit({
-      kind: "authority",
-      state: "denied",
-      occurredAt: 160,
-      turnId: "turn-1",
-      tool: "execute",
-      cause: "command.destructive-removal",
-      reason: "rm -rf resolves under a home directory",
-    });
-
-    const snapshot = await runtime.snapshot({ sessionId });
-    const denial = snapshot.frames.find(({ event }) => event.payload.kind === "authority.denied");
-    expect(denial?.event.attachmentId).toBe(attachmentId);
-    expect(denial?.event.payload).toEqual({
-      kind: "authority.denied",
-      attachmentId,
-      turnId: "turn-1",
-      tool: "execute",
-      cause: "command.destructive-removal",
-      reason: "rm -rf resolves under a home directory",
-    });
-    expect(snapshot.projection.authorityDenials).toBe(1);
   });
 
   it("records a provider reasoning drop as a durable Session Event", async () => {
@@ -1455,44 +1412,36 @@ describe("SessionRuntime native adapter contract", () => {
   });
 
   it("stops a snapshot's artifact pool after a mid-pool read rejects", async () => {
-    // VC-383: Feed the pool only transcript events, so every first-window
-    // cursor index is a read. The successful peers wait until the failure is
-    // visible; an old worker would then keep consuming later indices, while a
-    // stopped pool has only this first window in its attempt log.
+    // VC-383: Feed the pool only transcript events, so every claimed cursor
+    // index is a read. The read issued halfway through the first pool fails;
+    // its peers wait until that failure is visible. An old worker would then
+    // keep consuming later indices, while a stopped pool has only its first
+    // window in its attempt log. Which indices the first window covers is the
+    // window's business (VC-315 reads newest first), so the failure is chosen
+    // by issue order rather than by position.
     const memory = createInMemoryTranscriptArtifactStore();
     const artifactCount = SNAPSHOT_ARTIFACT_READ_CONCURRENCY * 2 + 1;
-    const failedArtifact = Math.floor(SNAPSHOT_ARTIFACT_READ_CONCURRENCY / 2);
+    const failedRead = Math.floor(SNAPSHOT_ARTIFACT_READ_CONCURRENCY / 2);
     const failure = new Error("transcript artifact cannot be verified");
-    const artifactIndexes = new Map<string, number>();
-    const reads: number[] = [];
-    const failedRead = new Gate();
+    let reads = 0;
+    let settledPeers = 0;
     const releasePeers = new Gate();
     const firstWindowSettled = new Gate();
-    let settledPeers = 0;
     const artifacts: TranscriptArtifactStore = {
-      write: async (record) => {
-        const reference = await memory.write(record);
-        artifactIndexes.set(reference.id, artifactIndexes.size);
-        return reference;
-      },
+      write: (record) => memory.write(record),
       read: async (reference) => {
-        const index = artifactIndexes.get(reference.id)!;
-        reads.push(index);
-        if (index === failedArtifact) {
-          failedRead.resolve();
-          throw failure;
-        }
-        if (index < SNAPSHOT_ARTIFACT_READ_CONCURRENCY) {
-          await releasePeers.promise;
-          settledPeers += 1;
-          if (settledPeers === SNAPSHOT_ARTIFACT_READ_CONCURRENCY - 1) {
-            firstWindowSettled.resolve();
-          }
+        const issued = reads;
+        reads += 1;
+        if (issued === failedRead) throw failure;
+        await releasePeers.promise;
+        settledPeers += 1;
+        if (settledPeers === SNAPSHOT_ARTIFACT_READ_CONCURRENCY - 1) {
+          firstWindowSettled.resolve();
         }
         return memory.read(reference);
       },
     };
-    const seeded = composition({ artifacts });
+    const seeded = composition({ artifacts: memory });
     const sessionId = await createAndAttach(seeded.runtime);
     for (let index = 0; index < artifactCount; index += 1) {
       await seeded.adapter.emit({
@@ -1522,15 +1471,13 @@ describe("SessionRuntime native adapter contract", () => {
     }).runtime;
 
     const snapshot = runtime.snapshot({ sessionId });
-    await failedRead.promise;
     await expect(snapshot).rejects.toBe(failure);
     releasePeers.resolve();
     await firstWindowSettled.promise;
     await settleMicrotasks();
 
-    expect(reads).toHaveLength(SNAPSHOT_ARTIFACT_READ_CONCURRENCY);
-    expect(reads).toContain(failedArtifact);
-    expect(reads.length).toBeLessThan(transcriptEvents.length);
+    expect(reads).toBe(SNAPSHOT_ARTIFACT_READ_CONCURRENCY);
+    expect(reads).toBeLessThan(transcriptEvents.length);
   });
 
   it("reads every artifact when a snapshot has fewer events than its window", async () => {
@@ -2050,8 +1997,134 @@ describe("SessionRuntime native adapter contract", () => {
     });
   });
 
+  it("publishes credential waiting from runtime observations with metadata only", async () => {
+    const { runtime, engine, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const credential = {
+      id: "credential-wait",
+      name: "DEPLOY_TOKEN",
+      sessionId,
+      sessionLabel: "Deploy session",
+      projectId: "project-1",
+      projectLabel: "Website",
+      agentSays: "Access for deployment",
+    };
+    const observed = {
+      id: "credential-wait",
+      kind: "question" as const,
+      title: "Credential requested",
+      detail: null,
+      options: [],
+      multiple: false,
+      native: { id: null, detail: null },
+      value: "unexpected-value",
+      credential: { ...credential, value: "unexpected-value", futureProperty: "unexpected-extra" },
+    };
+    await adapter.emit({
+      kind: "interaction",
+      state: "opened",
+      occurredAt: 300,
+      interaction: observed,
+    });
+    const { projection, frames } = await runtime.snapshot({ sessionId });
+    expect(sessionPersonNeed(projection)).toBe("waiting");
+    expect(projection.interactions.active).toMatchObject([
+      {
+        kind: "question",
+        title: "Credential requested",
+        options: [],
+        credential,
+      },
+    ]);
+    expect(frames.at(-1)?.event.payload).toMatchObject({
+      kind: "interaction.opened",
+      interaction: { credential },
+    });
+    expect(JSON.stringify(await engine.listEvents({ sessionId }))).not.toMatch(
+      /unexpected-value|unexpected-extra/,
+    );
+    expect(JSON.stringify(projection)).not.toMatch(/unexpected-value|unexpected-extra/);
+  });
+
+  it("refuses generic credential answers before persisting intent, facts, or artifacts", async () => {
+    const memory = createInMemoryTranscriptArtifactStore();
+    let writes = 0;
+    const { runtime, engine, adapter } = composition({
+      artifacts: {
+        read: (reference) => memory.read(reference),
+        write: async (artifact) => {
+          writes += 1;
+          return memory.write(artifact);
+        },
+      },
+    });
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await engine.observe({
+      id: "credential-opened",
+      sessionId,
+      attachmentId,
+      occurredAt: 300,
+      provenance: { source: { kind: "adapter", id: "fake", detail: null }, venue },
+      kind: "interaction.opened",
+      interaction: {
+        id: "credential-1",
+        attachmentId,
+        kind: "question",
+        title: "Credential requested",
+        detail: null,
+        options: [],
+        multiple: false,
+        native: { id: null, detail: null },
+        credential: {
+          id: "credential-1",
+          name: "DEPLOY_TOKEN",
+          sessionId,
+          sessionLabel: "Deploy session",
+          projectId: "project-1",
+          projectLabel: "Website",
+          agentSays: null,
+        },
+      },
+    });
+    const before = await engine.listEvents({ sessionId });
+    const dispatchesBefore = adapter.dispatches;
+    await expect(
+      runtime.command({
+        commandId: "generic-credential-answer",
+        sessionId,
+        command: {
+          kind: "interaction.resolve",
+          interactionId: "credential-1",
+          resolution: {
+            optionIds: ["supplied-secret-option"],
+            response: "supplied-secret-response",
+            answers: [{ promptId: "prompt:0", optionIds: [], response: "supplied-secret-answer" }],
+          },
+        },
+      }),
+    ).rejects.toThrow("Credential requests must use person-only credential controls");
+    expect(await engine.listEvents({ sessionId })).toEqual(before);
+    expect(writes).toBe(0);
+    expect(adapter.dispatches).toBe(dispatchesBefore);
+    const snapshot = await runtime.snapshot({ sessionId });
+    expect(JSON.stringify(snapshot)).not.toContain("supplied-secret");
+    expect(snapshot.projection.interactions.active).toHaveLength(1);
+
+    // Withdrawal is still a metadata-only fact, not an answer.
+    await runtime.cancelInteraction({
+      sessionId,
+      interactionId: "credential-1",
+      reason: "abandoned",
+    });
+    expect((await runtime.snapshot({ sessionId })).projection.interactions.active).toEqual([]);
+    expect(adapter.withdrawals).toEqual(["credential-1"]);
+    expect(writes).toBe(0);
+  });
+
   it("dispatches interrupts and resolves durable interactions against their owning attachment", async () => {
-    const { runtime, adapter } = composition();
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const { runtime, adapter, engine } = composition({ artifacts });
     const sessionId = await createAndAttach(runtime);
     const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
     await adapter.emit({
@@ -2115,8 +2188,40 @@ describe("SessionRuntime native adapter contract", () => {
       active: [],
       resolved: [{ interaction: { id: "permission-1", attachmentId } }],
     });
+    const request = {
+      commandId: "resolve-1",
+      sessionId,
+      command: {
+        kind: "interaction.resolve" as const,
+        interactionId: "permission-1",
+        resolution: { optionIds: ["allow"], response: null },
+      },
+    };
+    const repeats = await Promise.all([runtime.command(request), runtime.command(request)]);
+    expect(repeats[0].receipt).toEqual(resolved.receipt);
+    expect(repeats[1]).toEqual(repeats[0]);
+    await runtime.close();
+    const cold = composition({ engine, artifacts });
+    expect((await cold.runtime.command(request)).receipt).toEqual(resolved.receipt);
+    expect(cold.adapter.dispatches).toBe(0);
     await expect(
-      runtime.command({
+      cold.runtime.command({
+        ...request,
+        command: { ...request.command, resolution: { optionIds: ["reject"], response: null } },
+      }),
+    ).rejects.toThrow(/different intent/u);
+    await expect(
+      cold.runtime.command({
+        ...request,
+        commandId: "interrupt-1",
+        command: {
+          ...request.command,
+          interactionId: "missing",
+        },
+      }),
+    ).rejects.toBeInstanceOf(SessionRuntimeNotFoundError);
+    await expect(
+      cold.runtime.command({
         commandId: "resolve-missing",
         sessionId,
         command: {
@@ -2210,6 +2315,7 @@ describe("SessionRuntime native adapter contract", () => {
     const settled = await runtime.command({
       commandId: "schedule-1:settle",
       sessionId,
+      origin: { kind: "volli", reason: "scheduled-resume" },
       command: {
         kind: "resume.settle",
         scheduleId: "schedule-1",
@@ -2227,7 +2333,23 @@ describe("SessionRuntime native adapter contract", () => {
     expect(provenanceOf("schedule-1:settle")).toMatchObject({
       kind: "system",
       id: "scheduled-resume",
+      detail: { sessionOrigin: { kind: "volli", reason: "scheduled-resume" } },
     });
+    // A settle that names no origin records none rather than inventing one.
+    await runtime.command({
+      commandId: "schedule-1:settle-again",
+      sessionId,
+      command: {
+        kind: "resume.settle",
+        scheduleId: "schedule-1",
+        outcome: { kind: "resumed", retryCommandId: "schedule-1:resume" },
+      },
+    });
+    const again = (await engine.listEvents({ sessionId })).find(
+      ({ payload }) =>
+        payload.kind === "command.recorded" && payload.command.id === "schedule-1:settle-again",
+    );
+    expect(again?.provenance.source).toMatchObject({ id: "scheduled-resume", detail: null });
 
     const cancelled = await runtime.command({
       commandId: "cancel-1",
@@ -3317,6 +3439,46 @@ describe("SessionRuntime native adapter contract", () => {
     expect(first.adapter.releaseReasons).toEqual(["shutdown", "shutdown"]);
   });
 
+  it("releases a delivery's re-bind that finishes attaching after close instead of binding it", async () => {
+    const first = composition();
+    const sessionId = await createAndAttach(first.runtime);
+    await first.runtime.close();
+    const latestTurnId = (await first.engine.getSession({ sessionId }))?.latestTurnId;
+    const attachStarted = new Gate();
+    const releaseAttach = new Gate();
+    first.adapter.attachStarted = () => attachStarted.resolve();
+    first.adapter.attachGate = releaseAttach.promise;
+    // Buffered during the attach: only an activated sink would record it.
+    first.adapter.attachObservation = {
+      kind: "turn",
+      state: "started",
+      turnId: "turn-after-close",
+      occurredAt: 150,
+    };
+    const recovered = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      runtimeIdPrefix: "closed-delivery-",
+    });
+
+    const sending = recovered.runtime.command({
+      commandId: "closed-delivery",
+      sessionId,
+      command: { kind: "message.submit", message: userMessage("late-bind") },
+    });
+    await attachStarted.promise;
+    await recovered.runtime.close();
+    releaseAttach.resolve();
+
+    await expect(sending).rejects.toThrow("Session runtime is closed");
+    expect(first.adapter.attaches).toBe(2);
+    expect(first.adapter.dispatches).toBe(0);
+    expect(first.adapter.releaseReasons).toEqual(["shutdown", "shutdown"]);
+    const projection = await first.engine.getSession({ sessionId });
+    expect(projection?.turnActive).toBe(false);
+    expect(projection?.latestTurnId).toBe(latestTurnId);
+  });
+
   it("validates subscriptions, stops delivery after unsubscribe, and makes close idempotent", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
@@ -3342,6 +3504,71 @@ describe("SessionRuntime native adapter contract", () => {
     await runtime.close();
     expect(adapter.releases).toBe(1);
     await expect(runtime.snapshot({ sessionId })).rejects.toThrow("Session runtime is closed");
+  });
+
+  it("stops a replay at the next frame when its signal aborts, and reads nothing once aborted", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const history = (await runtime.projection({ sessionId })).throughSequence;
+    expect(history).toBeGreaterThan(2);
+
+    // Aborted before it began: no listener, no read, a disposer that does nothing.
+    const early = new AbortController();
+    early.abort();
+    const never: unknown[] = [];
+    const none = await runtime.subscribe(
+      { sessionId, afterSequence: 0, signal: early.signal },
+      (emission) => void never.push(emission),
+    );
+    none();
+    expect(never).toEqual([]);
+
+    // Aborted while the history is still being read: not one frame arrives.
+    const reading = new AbortController();
+    const unread: unknown[] = [];
+    const pending = runtime.subscribe(
+      { sessionId, afterSequence: 0, signal: reading.signal },
+      (emission) => void unread.push(emission),
+    );
+    reading.abort();
+    (await pending)();
+    expect(unread).toEqual([]);
+
+    // Aborted by the listener after the first replayed frame: nothing more arrives.
+    const midway = new AbortController();
+    const seen: number[] = [];
+    const stop = await runtime.subscribe(
+      { sessionId, afterSequence: 0, signal: midway.signal },
+      (emission) => {
+        if (!isSessionStreamFrame(emission)) return;
+        seen.push(emission.sequence);
+        midway.abort();
+      },
+    );
+    expect(seen).toEqual([1]);
+    await adapter.emit({ kind: "turn", state: "started", turnId: "after-abort", occurredAt: 500 });
+    expect(seen).toEqual([1]);
+    stop();
+
+    // Aborting a live subscription ends it as its disposer would.
+    const live = new AbortController();
+    const delivered: number[] = [];
+    const head = (await runtime.projection({ sessionId })).throughSequence;
+    const dispose = await runtime.subscribe(
+      { sessionId, afterSequence: head, signal: live.signal },
+      (emission) => {
+        if (isSessionStreamFrame(emission)) delivered.push(emission.sequence);
+      },
+    );
+    live.abort();
+    await adapter.emit({
+      kind: "turn",
+      state: "completed",
+      turnId: "after-abort",
+      occurredAt: 600,
+    });
+    expect(delivered).toEqual([]);
+    dispose();
   });
 
   it("reports missing sessions, bindings, and invalid persisted binding metadata explicitly", async () => {
@@ -3863,9 +4090,12 @@ describe("SessionRuntime native adapter contract", () => {
     await readStarted;
     await runtime.close();
     releaseRead();
-    await pending;
+    // Close emptied the binding map, so the send re-binds after close: that
+    // late handle is released rather than dispatched to (VC-467).
+    await expect(pending).rejects.toThrow("Session runtime is closed");
     stop();
-    expect(adapter.releaseReasons).toContain("shutdown");
+    expect(adapter.releaseReasons).toEqual(["shutdown", "shutdown"]);
+    expect(adapter.dispatches).toBe(0);
 
     const emptyEvents: SessionEngine = {
       ...engine,
@@ -4644,6 +4874,91 @@ async function settleMicrotasks(): Promise<void> {
   for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
 }
 
+/**
+ * A runtime whose ledger reads are recorded per Session, for the cache bounds:
+ * `seeds` are folds built from nothing (`getBaseSession`), `reads` every ledger
+ * read at all. The fake adapter keeps only its newest sink, so `open` captures
+ * each Session's as it attaches.
+ */
+function countingComposition() {
+  const base = composition();
+  const seeds: string[] = [];
+  const reads: string[] = [];
+  const engine: SessionEngine = {
+    ...base.engine,
+    getBaseSession: async (query) => {
+      seeds.push(query.sessionId);
+      reads.push(query.sessionId);
+      return base.engine.getBaseSession(query);
+    },
+    listEvents: async (query) => {
+      reads.push(query.sessionId);
+      return base.engine.listEvents(query);
+    },
+  };
+  const { runtime, adapter } = composition({ engine, adapter: base.adapter });
+  let created = 0;
+  const create = async (): Promise<string> => {
+    created += 1;
+    const result = await runtime.command({
+      commandId: `counted-create-${created}`,
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: null,
+      },
+    });
+    return result.sessionId;
+  };
+  return {
+    runtime,
+    adapter,
+    seeds,
+    reads,
+    /** A Session on its own attachment, and the message id its turn-1 deltas address. */
+    async open(): Promise<{
+      sessionId: string;
+      attachmentId: string;
+      sink: ObservationSink;
+      messageId: string;
+    }> {
+      const sessionId = await create();
+      await runtime.command({
+        commandId: `counted-attach-${sessionId}`,
+        sessionId,
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      });
+      const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+      return {
+        sessionId,
+        attachmentId,
+        sink: adapter.sink!,
+        messageId: `fake:${attachmentId}:turn-1:0`,
+      };
+    },
+    /** Folds Sessions nobody watches or streams, enough to evict every unexempt fold twice. */
+    async crowd(): Promise<void> {
+      for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) {
+        await runtime.projection({ sessionId: await create() });
+      }
+    },
+    /** What a chat opened now is handed for the Session's messages in flight. */
+    async baselines(sessionId: string): Promise<TranscriptDelta[]> {
+      const emissions: SessionStreamEmission[] = [];
+      const afterSequence = (await runtime.snapshot({ sessionId })).throughSequence;
+      (
+        await runtime.subscribe({ sessionId, afterSequence }, (emission) => {
+          emissions.push(emission);
+        })
+      )();
+      return overlaysIn(emissions).map(({ delta }) => delta);
+    },
+  };
+}
+
 describe("SessionRuntime transient transcript overlay", () => {
   it("publishes compaction progress without writing it to history", async () => {
     const { runtime, adapter } = composition();
@@ -5049,6 +5364,7 @@ describe("SessionRuntime transient transcript overlay", () => {
     const sessions: string[] = [];
     // One past the limit, so the first Session's in-flight message is the one
     // evicted — and an evicted overlay is a message the next reset rebuilds.
+    // None of them has a turn open: a turn holds its overlay (below).
     for (let index = 0; index <= 8; index += 1) {
       const created = await runtime.command({
         commandId: `overlay-create-${index}`,
@@ -5086,6 +5402,135 @@ describe("SessionRuntime transient transcript overlay", () => {
 
     expect(seen.get(sessions[0]!)).toEqual([]);
     expect(seen.get(sessions[8]!)).toMatchObject([{ delta: { op: "reset" } }]);
+  });
+
+  /**
+   * The bounds are on Sessions with no turn running (VC-466). A streaming
+   * Session reads its overlay on every delta and its fold at every step, and
+   * the overlay holds the only baseline its message in flight has, so neither
+   * is evicted while the turn runs, however many other Sessions stream between
+   * its deltas.
+   */
+  it("keeps every streaming Session's overlay and fold, however many stream at once", async () => {
+    const { runtime, seeds, reads, open, crowd, baselines } = countingComposition();
+    // Both bounds are eight: twice that stream at once, and nobody watches.
+    const streams: Awaited<ReturnType<typeof open>>[] = [];
+    for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) streams.push(await open());
+    for (const { sink } of streams) await sink.emit(startedTurn("turn-1"));
+    // A Session's first delta seeds its overlay: the one read its turn owes.
+    for (const [index, { sink }] of streams.entries()) {
+      await sink.emit(textDelta(`Session ${index}`));
+    }
+
+    reads.length = 0;
+    // Round-robin, so each Session's next delta lands after fifteen others'.
+    for (let round = 0; round < 3; round += 1) {
+      for (const { sink } of streams) await sink.emit(textDelta(` ${round}`));
+    }
+    expect(reads).toEqual([]);
+
+    // Nor do background reads of other Sessions evict a turn's fold.
+    await crowd();
+    seeds.length = 0;
+    for (const { sessionId } of streams) await runtime.projection({ sessionId });
+    expect(seeds).toEqual([]);
+
+    // A chat opened mid-stream on the least recently streamed Session is handed
+    // the whole message in flight.
+    const first = streams[0]!;
+    expect(await baselines(first.sessionId)).toEqual([
+      foldedMessage("Session 0 0 1 2", first.messageId),
+    ]);
+
+    await runtime.close();
+  });
+
+  it.each(["completed", "interrupted"] as const)(
+    "returns a Session's overlay and fold to the bounds once its turn is %s",
+    async (state) => {
+      const { runtime, seeds, open, crowd, baselines } = countingComposition();
+      const settling = await open();
+      await settling.sink.emit(startedTurn("turn-1"));
+      await settling.sink.emit(textDelta("Hel"));
+      // Its message never settled, so the overlay still holds it: from here only
+      // the bound can drop it.
+      await settling.sink.emit({ kind: "turn", state, turnId: "turn-1", occurredAt: 600 });
+
+      // Eight more overlays with no turn open take it past the overlay bound,
+      // and the crowd takes its fold past the other.
+      for (let index = 0; index < 8; index += 1) {
+        await (await open()).sink.emit(textDelta(`Other ${index}`));
+      }
+      await crowd();
+
+      seeds.length = 0;
+      await runtime.projection({ sessionId: settling.sessionId });
+      expect(seeds).toEqual([settling.sessionId]);
+      expect(await baselines(settling.sessionId)).toEqual([]);
+
+      await runtime.close();
+    },
+  );
+
+  /**
+   * A turn whose binding goes away never reports its own end, so the exemption
+   * has to go with the binding: otherwise the fold of a Session nothing is
+   * running would stay exempt from the bound for the rest of the process.
+   */
+  it.each(["released", "closed", "failed"] as const)(
+    "returns a Session's fold to the bound once its binding is %s mid-turn",
+    async (end) => {
+      const { runtime, seeds, open, crowd } = countingComposition();
+      const ending = await open();
+      await ending.sink.emit(startedTurn("turn-1"));
+      await ending.sink.emit(textDelta("Hel"));
+      if (end === "released") {
+        await runtime.command({
+          commandId: "mid-turn-release",
+          sessionId: ending.sessionId,
+          command: { kind: "adapter.release", attachmentId: ending.attachmentId },
+        });
+      } else {
+        await ending.sink.emit({ kind: "attachment", state: end });
+      }
+
+      await crowd();
+      seeds.length = 0;
+      await runtime.projection({ sessionId: ending.sessionId });
+      expect(seeds).toEqual([ending.sessionId]);
+
+      await runtime.close();
+    },
+  );
+
+  it("keeps the fold of a Session whose accepted message has not opened its turn yet", async () => {
+    const { runtime, adapter, seeds, open, crowd } = countingComposition();
+    const { sessionId } = await open();
+    const dispatchStarted = new Gate();
+    const releaseDispatch = new Gate();
+    adapter.dispatchStarted = () => dispatchStarted.resolve();
+    adapter.dispatchGate = releaseDispatch.promise;
+    const sending = runtime.command({
+      commandId: "accepted-start",
+      sessionId,
+      command: { kind: "message.submit", message: userMessage("accepted-start") },
+    });
+    await dispatchStarted.promise;
+
+    await crowd();
+    seeds.length = 0;
+    await runtime.projection({ sessionId });
+    expect(seeds).toEqual([]);
+
+    // A command that settles without opening a turn takes the exemption with it.
+    releaseDispatch.resolve();
+    await sending;
+    await crowd();
+    seeds.length = 0;
+    await runtime.projection({ sessionId });
+    expect(seeds).toEqual([sessionId]);
+
+    await runtime.close();
   });
 
   it("re-seeds the overlay after a failed read rather than reporting sequence zero", async () => {
@@ -5565,5 +6010,490 @@ describe("SessionRuntime turn queue time (VC-455)", () => {
           event.payload.kind === "turn.started" && event.payload.turnId === "turn-sink-throws",
       ),
     ).toBe(true);
+  });
+});
+
+describe("trusted command origins", () => {
+  it("attributes a no-turn reattachment to its trusted opener and preserves it after durable replay", async () => {
+    const first = composition();
+    const sessionId = await createAndAttach(first.runtime);
+    const oldAttachmentId = (await first.engine.getSession({ sessionId }))!.liveExecutor!.id;
+    await first.runtime.command({
+      commandId: "release-for-reattach",
+      sessionId,
+      command: { kind: "adapter.release", attachmentId: oldAttachmentId },
+    });
+    const origin = { kind: "session", sessionId: "parent" } as const;
+    const request = {
+      commandId: "origin-reattach",
+      sessionId,
+      origin,
+      command: { kind: "adapter.attach", continuity: "context_replay" } as const,
+    };
+    await first.runtime.command(request);
+    const attached = (await first.engine.getSession({ sessionId }))!;
+    expect(attached.liveExecutor).toMatchObject({
+      origin,
+      reattached: true,
+      continuity: "context_replay",
+    });
+    expect(attached.latestTurnOrigin).toBeNull();
+    expect(attached.resumptions).toEqual([
+      {
+        attachmentId: attached.liveExecutor!.id,
+        origin,
+        startedAt: attached.liveExecutor!.openedAt,
+      },
+    ]);
+    await first.runtime.close();
+    const replay = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      runtimeIdPrefix: "replay-",
+    });
+    await replay.runtime.command({ ...request, origin: { kind: "user" } });
+    expect((await replay.engine.getSession({ sessionId }))!.resumptions).toEqual(
+      attached.resumptions,
+    );
+    expect(
+      (await replay.runtime.projection({ sessionId })).projection.liveExecutor?.origin,
+    ).toEqual(origin);
+    expect((await replay.engine.getSession({ sessionId }))!.liveExecutor?.origin).toEqual(origin);
+    await replay.runtime.close();
+  });
+
+  it("persists origin separately from intent and projects it through the slim ledger and checkpoint", async () => {
+    const { runtime, engine, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const request = {
+      commandId: "origin-message",
+      sessionId,
+      origin: { kind: "session", sessionId: "parent" } as const,
+      command: { kind: "message.submit", message: userMessage(), settle: "opened" } as const,
+    };
+    const pending = runtime.command(request);
+    await settleMicrotasks();
+    const retry = runtime.command({ ...request, origin: { kind: "user" } });
+    expect(retry).toBe(pending);
+    await adapter.emit({ kind: "turn", state: "started", occurredAt: 500, turnId: "turn-origin" });
+    await adapter.emit({
+      kind: "turn",
+      state: "completed",
+      occurredAt: 510,
+      turnId: "turn-origin",
+    });
+    await pending;
+    const events = await engine.listEvents({ sessionId });
+    const command = events.find(
+      (event) => event.payload.kind === "command.recorded" && event.commandId === request.commandId,
+    );
+    expect(command?.provenance.source).toEqual({
+      kind: "user",
+      id: "session-client",
+      detail: { sessionOrigin: request.origin },
+    });
+    expect((await engine.getSession({ sessionId }))?.latestTurnOrigin).toEqual(request.origin);
+    expect((await runtime.projection({ sessionId })).projection.latestTurnOrigin).toEqual(
+      request.origin,
+    );
+    await runtime.command({ ...request, origin: { kind: "user" } });
+    // Durable replay must retain the first writer's attribution, not the retrying door's.
+    expect((await engine.getSession({ sessionId }))?.latestTurnOrigin).toEqual(request.origin);
+    expect((await runtime.projection({ sessionId })).projection.latestTurnOrigin).toEqual(
+      request.origin,
+    );
+    expect(
+      (await engine.listEvents({ sessionId })).filter(
+        (event) =>
+          event.payload.kind === "command.recorded" && event.commandId === request.commandId,
+      ),
+    ).toHaveLength(1);
+    await runtime.close();
+  });
+});
+
+it("commits stop facts from the executor through the observation codec into the Session projection", async () => {
+  const { runtime, adapter } = composition();
+  const sessionId = await createAndAttach(runtime);
+  const stopDetail = {
+    category: "provider-refused" as const,
+    providerType: "refusal",
+    message: "Declined",
+    httpStatus: null,
+    retry: "not-retried" as const,
+    resetsAt: null,
+  };
+  await adapter.emit({ kind: "turn", state: "started", turnId: "t", occurredAt: 160 });
+  await adapter.emit({
+    kind: "attention",
+    state: "raised",
+    reason: "runtime-failure",
+    message: "Declined",
+    stopDetail,
+  });
+  await adapter.emit({
+    kind: "turn",
+    state: "interrupted",
+    turnId: "t",
+    occurredAt: 161,
+    stopDetail,
+  });
+  const snapshot = await runtime.snapshot({ sessionId });
+  expect(snapshot.projection.attention.primary?.stopDetail).toEqual(stopDetail);
+  expect(snapshot.projection.lastTurnStopDetail).toEqual(stopDetail);
+  expect(
+    snapshot.frames.find(({ event }) => event.payload.kind === "turn.interrupted")?.event.payload,
+  ).toMatchObject({ stopDetail });
+});
+
+describe("SessionRuntime person's stop command", () => {
+  it("commits the user stop before runtime release and returns its durable receipt", async () => {
+    const { runtime, engine, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const result = await runtime.command({
+      commandId: "stop",
+      sessionId,
+      command: { kind: "session.stop", reason: "Runaway" },
+    });
+    expect(result.stop).toMatchObject({ released: true, interrupted: false, failures: [] });
+    expect(result.receipt?.status).toBe("completed");
+    expect((await engine.getSession({ sessionId }))?.stopped).toMatchObject({
+      by: { kind: "user" },
+      reason: "Runaway",
+    });
+    expect(adapter.releases).toBe(1);
+    await runtime.close();
+  });
+
+  it("keeps the first receipt when a still-live stopped executor needs another release", async () => {
+    const { runtime, engine, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    adapter.releaseFailure = new Error("release failed");
+    const first = await runtime.command({
+      commandId: "stop",
+      sessionId,
+      command: { kind: "session.stop" },
+    });
+    expect(first.stop?.failures).toEqual(["The executor did not release: release failed."]);
+    adapter.releaseFailure = null;
+    const retry = await runtime.command({
+      commandId: "retry-stop",
+      sessionId,
+      command: { kind: "session.stop" },
+    });
+    expect(retry.stop).toMatchObject({ previouslyStopped: true, released: true });
+    expect(retry.receipt).toEqual(first.receipt);
+    expect(
+      (await engine.getSession({ sessionId }))?.commands.filter(
+        (command) => command.intent.kind === "session.stop",
+      ),
+    ).toHaveLength(1);
+    await runtime.close();
+  });
+});
+
+// VC-564: the host protocol answers these two, and only these, `command-conflict`.
+it("names a command id reused for a different intent, in flight or durable, as a command conflict", async () => {
+  const { runtime } = composition();
+  const sessionId = await createAndAttach(runtime);
+  const request = {
+    commandId: "stop",
+    sessionId,
+    command: { kind: "session.stop" as const, reason: "Runaway" },
+  };
+  const first = runtime.command(request);
+  const inFlight = runtime
+    .command({ ...request, command: { ...request.command, reason: "Changed" } })
+    .catch((error: unknown) => error);
+  await first;
+  const durable = await runtime
+    .command({ ...request, command: { ...request.command, reason: "Changed again" } })
+    .catch((error: unknown) => error);
+
+  expect(await inFlight).toBeInstanceOf(SessionRuntimeCommandConflictError);
+  expect(await inFlight).toBeInstanceOf(SessionRuntimeConflictError);
+  expect(durable).toBeInstanceOf(SessionEngineCommandConflictError);
+  expect(isCommandIntentConflict(await inFlight)).toBe(true);
+  expect(isCommandIntentConflict(durable)).toBe(true);
+  expect(isCommandIntentConflict(new SessionRuntimeConflictError("ledger fact"))).toBe(false);
+  expect(isCommandIntentConflict(new Error("different intent"))).toBe(false);
+});
+
+it("replays a completed stop after release and across a runtime restart without touching an executor", async () => {
+  const { runtime, engine, adapter } = composition();
+  const sessionId = await createAndAttach(runtime);
+  const request = {
+    commandId: "stop",
+    sessionId,
+    command: { kind: "session.stop" as const, reason: "Runaway" },
+  };
+  const first = await runtime.command(request);
+  const replay = await runtime.command(request);
+  expect(replay.receipt).toEqual(first.receipt);
+  expect(replay.stop).toMatchObject({
+    previouslyStopped: true,
+    interrupted: false,
+    released: true,
+    failures: [],
+  });
+  expect(adapter.releases).toBe(1);
+  await expect(
+    runtime.command({ ...request, command: { ...request.command, reason: "Changed" } }),
+  ).rejects.toThrow("different intent");
+  await expect(runtime.command({ ...request, commandId: "new-stop" })).rejects.toThrow(
+    "is not live",
+  );
+  await runtime.command({
+    commandId: "reattach",
+    sessionId,
+    command: { kind: "adapter.attach", continuity: "fresh" },
+  });
+  expect((await runtime.command(request)).receipt).toEqual(first.receipt);
+  expect(adapter.releases).toBe(1);
+  await runtime.close();
+  const cold = composition({ engine });
+  expect((await cold.runtime.command(request)).receipt).toEqual(first.receipt);
+  expect(cold.adapter.attaches).toBe(0);
+  expect(cold.adapter.releases).toBe(0);
+  await cold.runtime.close();
+});
+
+it("replays durable stop intent but retries the still-open runtime acts", async () => {
+  const { runtime, adapter } = composition();
+  const sessionId = await createAndAttach(runtime);
+  adapter.releaseFailure = new Error("failed once");
+  const request = { commandId: "stop", sessionId, command: { kind: "session.stop" as const } };
+  const first = await runtime.command(request);
+  adapter.releaseFailure = null;
+  const retry = await runtime.command(request);
+  expect(retry.receipt).toEqual(first.receipt);
+  expect(retry.stop).toMatchObject({ previouslyStopped: true, released: true });
+  expect(adapter.releases).toBe(2);
+  await runtime.close();
+});
+
+it("replays the accepted interrupt and completed release receipts without dispatching again", async () => {
+  const { runtime, adapter } = composition();
+  const sessionId = await createAndAttach(runtime);
+  await adapter.emit({ kind: "turn", state: "started", turnId: "active-stop", occurredAt: 150 });
+  const request = {
+    commandId: "active-stop",
+    sessionId,
+    command: { kind: "session.stop" as const },
+  };
+  const first = await runtime.command(request);
+  const replay = await runtime.command(request);
+  expect(replay.receipt).toEqual(first.receipt);
+  expect(replay.stop).toMatchObject({ interrupted: true, released: true, failures: [] });
+  expect(adapter.commands.filter((command) => command.kind === "executor.interrupt")).toHaveLength(
+    1,
+  );
+  await runtime.close();
+});
+
+it("does not replay an unconfirmed stop receipt as success", async () => {
+  const { runtime, engine } = composition();
+  const sessionId = await createAndAttach(runtime);
+  const request = { commandId: "stop", sessionId, command: { kind: "session.stop" as const } };
+  await runtime.command(request);
+  const durableSubmit = engine.submit.bind(engine);
+  engine.submit = async (input) => ({ ...(await durableSubmit(input)), receipt: null });
+  await expect(runtime.command(request)).rejects.toThrow("no completed receipt");
+  await runtime.close();
+});
+
+it("does not label a rejected child act successful when replaying a closed stop", async () => {
+  const { runtime, adapter } = composition();
+  const sessionId = await createAndAttach(runtime);
+  await adapter.emit({ kind: "turn", state: "started", turnId: "stop", occurredAt: 150 });
+  adapter.dispatchReceipt = {
+    commandId: "stop:interrupt",
+    status: "rejected",
+    code: "refused",
+    detail: "interrupt refused",
+    native: null,
+  };
+  const request = { commandId: "stop", sessionId, command: { kind: "session.stop" as const } };
+  const first = await runtime.command(request);
+  expect(first.stop?.failures).toHaveLength(1);
+  expect((await runtime.command(request)).stop).toMatchObject({
+    interrupted: false,
+    released: true,
+  });
+  expect(adapter.releases).toBe(1);
+  await runtime.close();
+});
+
+it("replays a stop if its failed release was subsequently closed by another actor", async () => {
+  const { runtime, engine, adapter } = composition();
+  const sessionId = await createAndAttach(runtime);
+  adapter.releaseFailure = new Error("release failed");
+  const request = { commandId: "stop", sessionId, command: { kind: "session.stop" as const } };
+  const first = await runtime.command(request);
+  const attachmentId = (await engine.getSession({ sessionId }))!.attachments.at(-1)!.id;
+  await engine.observe({
+    id: "closed-elsewhere",
+    sessionId,
+    attachmentId,
+    commandId: null,
+    occurredAt: 300,
+    provenance: { source: { kind: "system", id: "test", detail: null }, venue },
+    kind: "attachment.closed",
+    outcome: "completed",
+  });
+  const replay = await runtime.command(request);
+  expect(replay.receipt).toEqual(first.receipt);
+  expect(replay.stop).toMatchObject({ released: false, failures: [] });
+  expect(adapter.releases).toBe(1);
+  adapter.releaseFailure = null;
+  await runtime.close();
+});
+
+const historyFrameBytes = (frame: SessionStreamFrame) =>
+  new TextEncoder().encode(JSON.stringify(frame)).length;
+
+/** Every page from `before` back to the first event, oldest page first. */
+async function pageBackThrough(
+  runtime: SessionRuntime,
+  sessionId: string,
+  before: number | null,
+): Promise<SessionStreamFrame[][]> {
+  const pages: SessionStreamFrame[][] = [];
+  for (let cursor = before; cursor !== null;) {
+    const page = await runtime.history({ sessionId, before: cursor });
+    pages.unshift([...page.frames]);
+    expect(page.before === null || page.before <= cursor).toBe(true);
+    cursor = page.before;
+  }
+  return pages;
+}
+
+function historyReply(index: number, chars: number): RuntimeObservation {
+  return {
+    kind: "message-settled",
+    turnId: `turn-${index}`,
+    occurredAt: 600 + index,
+    message: { entryId: `reply-${index}`, role: "assistant", text: "x".repeat(chars) },
+  };
+}
+
+describe("SessionRuntime bounded history window (VC-315)", () => {
+  it("snapshots only the newest events, and pages back through every one exactly once", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    for (let index = 0; index < SESSION_HISTORY_WINDOW.events + 40; index += 1) {
+      await adapter.emit({ kind: "turn", state: "started", turnId: `turn-${index}` });
+    }
+
+    const snapshot = await runtime.snapshot({ sessionId });
+
+    expect(snapshot.frames).toHaveLength(SESSION_HISTORY_WINDOW.events);
+    expect(snapshot.frames.at(-1)!.sequence).toBe(snapshot.throughSequence);
+    expect(snapshot.before).toBe(snapshot.frames[0]!.sequence);
+    const older = await pageBackThrough(runtime, sessionId, snapshot.before);
+    const sequences = [...older.flat(), ...snapshot.frames].map(({ sequence }) => sequence);
+    expect(sequences).toEqual(Array.from({ length: snapshot.throughSequence }, (_, i) => i + 1));
+  });
+
+  it("ends a window at its byte bound, reading no artifact the window does not return", async () => {
+    const memory = createInMemoryTranscriptArtifactStore();
+    let reads = 0;
+    const artifacts: TranscriptArtifactStore = {
+      write: (record) => memory.write(record),
+      read: (reference) => {
+        reads += 1;
+        return memory.read(reference);
+      },
+    };
+    const { runtime, adapter } = composition({ artifacts });
+    const sessionId = await createAndAttach(runtime);
+    const replies = 80;
+    for (let index = 0; index < replies; index += 1)
+      await adapter.emit(historyReply(index, 40_000));
+    reads = 0;
+
+    const snapshot = await runtime.snapshot({ sessionId });
+
+    const bytes = snapshot.frames.reduce((sum, frame) => sum + historyFrameBytes(frame), 0);
+    expect(bytes).toBeLessThanOrEqual(SESSION_HISTORY_WINDOW.bytes);
+    expect(snapshot.frames.length).toBeLessThan(SESSION_HISTORY_WINDOW.events);
+    // The frame just older than the window is the one that did not fit.
+    const [refused] = (await runtime.history({ sessionId, before: snapshot.before! })).frames.slice(
+      -1,
+    );
+    expect(bytes + historyFrameBytes(refused!)).toBeGreaterThan(SESSION_HISTORY_WINDOW.bytes);
+    // Lazy: what the snapshot read is bounded by its window, not by the history.
+    expect(snapshot.transcript.length).toBeLessThan(replies);
+    reads = 0;
+    await runtime.snapshot({ sessionId });
+    expect(reads).toBeLessThan(snapshot.transcript.length + 32);
+    const older = await pageBackThrough(runtime, sessionId, snapshot.before);
+    const replayed = [...older.flat(), ...snapshot.frames].filter(
+      ({ event }) => event.payload.kind === "transcript.referenced",
+    );
+    expect(replayed).toHaveLength(replies);
+  });
+
+  it("returns one frame larger than the byte bound alone, rather than never advancing", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    await adapter.emit(historyReply(0, 1_000));
+    await adapter.emit(historyReply(1, SESSION_HISTORY_WINDOW.bytes + 1_000));
+
+    const snapshot = await runtime.snapshot({ sessionId });
+
+    expect(snapshot.frames).toHaveLength(1);
+    expect(historyFrameBytes(snapshot.frames[0]!)).toBeGreaterThan(SESSION_HISTORY_WINDOW.bytes);
+    expect(snapshot.before).toBe(snapshot.throughSequence);
+    const older = await runtime.history({ sessionId, before: snapshot.before! });
+    expect(older.before).toBeNull();
+    expect(older.frames.at(-1)!.sequence).toBe(snapshot.throughSequence - 1);
+  });
+
+  it("reads a sparse ledger without repeating a frame", async () => {
+    // A ledger that skipped a retired kind has holes in its sequences, and a
+    // double that ignores the range read entirely answers with every event.
+    const seeded = composition();
+    const sessionId = await createAndAttach(seeded.runtime);
+    for (let index = 0; index < 70; index += 1) {
+      await seeded.adapter.emit({ kind: "turn", state: "started", turnId: `turn-${index}` });
+    }
+    const sparse = (await seeded.engine.listEvents({ sessionId })).filter(
+      ({ sequence }) => sequence % 3 !== 0,
+    );
+    const runtime = composition({
+      engine: { ...seeded.engine, listEvents: async () => sparse },
+      adapter: new FakeAdapter(),
+    }).runtime;
+
+    const page = await runtime.history({ sessionId, before: sparse.at(-1)!.sequence + 1 });
+
+    expect(page.before).toBeNull();
+    expect(page.frames.map(({ sequence }) => sequence)).toEqual(
+      sparse.map(({ sequence }) => sequence),
+    );
+  });
+
+  it("refuses a malformed cursor, an unknown Session and a closed runtime", async () => {
+    const { runtime } = composition();
+    const sessionId = await createAndAttach(runtime);
+
+    await expect(runtime.history({ sessionId, before: 1 })).resolves.toEqual({
+      frames: [],
+      before: null,
+    });
+    await expect(runtime.history({ sessionId, before: 0 })).rejects.toThrow(
+      "Session history cursor must be a positive integer",
+    );
+    await expect(runtime.history({ sessionId, before: 1.5 })).rejects.toThrow(
+      "Session history cursor must be a positive integer",
+    );
+    await expect(runtime.history({ sessionId: "missing", before: 2 })).rejects.toBeInstanceOf(
+      SessionRuntimeNotFoundError,
+    );
+    await runtime.close();
+    await expect(runtime.history({ sessionId, before: 2 })).rejects.toThrow(
+      "Session runtime is closed",
+    );
   });
 });
