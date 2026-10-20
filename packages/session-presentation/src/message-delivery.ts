@@ -6,13 +6,14 @@ export type MessageDeliveryLabel =
   | "Not delivered"
   | "Delivery unconfirmed";
 
-/** Durable intent is not acceptance. A turn start, accepted receipt or runtime
- * transcript observation is proof; a rejected receipt never says Delivered. */
+/** Durable intent is not acceptance. Only a receipt or runtime transcript
+ * observation proves delivery. A refusal after work started is ambiguous. */
 export function messageDeliveryLabels(
   frames: readonly ChatSessionFrame[],
 ): ReadonlyMap<string, MessageDeliveryLabel> {
   const labels = new Map<string, MessageDeliveryLabel>();
-  const commands = new Map<string, string>();
+  const commands = new Map<string, { messageId: string; sequence: number }>();
+  let lastTurnStarted = -1;
   for (const frame of frames) {
     const payload = frame.event?.payload;
     const message = frame.transcript?.message;
@@ -21,28 +22,28 @@ export function messageDeliveryLabels(
       payload.command.intent.kind === "message.submit" &&
       message?.role === "user"
     ) {
-      commands.set(payload.command.id, message.id);
+      commands.set(payload.command.id, { messageId: message.id, sequence: frame.sequence });
       labels.set(message.id, "Pending");
     } else if (payload?.kind === "transcript.referenced" && message?.role === "user") {
       labels.set(message.id, "Delivered");
     }
     if (payload?.kind === "command.receipt.recorded") {
-      const id = commands.get(payload.receipt.commandId);
-      if (id !== undefined) {
+      const command = commands.get(payload.receipt.commandId);
+      if (command !== undefined) {
+        const id = command.messageId;
         labels.set(
           id,
           labels.get(id) === "Delivered" ||
             payload.receipt.status === "accepted" ||
             payload.receipt.status === "completed"
             ? "Delivered"
-            : payload.receipt.status === "rejected"
+            : payload.receipt.status === "rejected" && lastTurnStarted < command.sequence
               ? "Not delivered"
               : "Delivery unconfirmed",
         );
       }
     } else if (payload?.kind === "turn.started") {
-      const id = commands.get(frame.event!.commandId ?? "");
-      if (id !== undefined) labels.set(id, "Delivered");
+      lastTurnStarted = frame.sequence;
     }
   }
   return labels;
