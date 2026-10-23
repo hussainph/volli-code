@@ -187,6 +187,10 @@ describe("the feed's age clock", () => {
     await act(async () =>
       container?.querySelector<HTMLButtonElement>("button[aria-expanded]")?.click(),
     );
+    // Opening exposes an overdue event boundary; the state clock catches up
+    // on the next tick rather than reading the wall clock during render.
+    expect(container?.textContent).toContain("1m ago");
+    await act(async () => vi.advanceTimersByTime(1));
     expect(container?.textContent).toContain("2m ago");
     expect(vi.getTimerCount()).toBe(1);
     renders.mockClear();

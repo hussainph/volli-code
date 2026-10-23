@@ -6,11 +6,17 @@ import type { ChatSessionRecord, Project, SessionRecord } from "@volli/shared";
 
 import { HomeRail } from "./home-rail";
 import { HOME_BOARD_TAB_ID } from "./home-tabs";
-import { useAgeNow } from "@renderer/lib/use-age-now";
+import { homeSessionRows } from "./home-rail-model";
+
+vi.mock("./home-rail-model", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./home-rail-model")>();
+  return { ...original, homeSessionRows: vi.fn(original.homeSessionRows) };
+});
+import { useBoundaryClock } from "@renderer/lib/use-age-now";
 
 vi.mock("@renderer/lib/use-age-now", async (importOriginal) => {
   const original = await importOriginal<typeof import("@renderer/lib/use-age-now")>();
-  return { useAgeNow: vi.fn(original.useAgeNow) };
+  return { ...original, useBoundaryClock: vi.fn(original.useBoundaryClock) };
 });
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
@@ -57,7 +63,7 @@ function chat(
 }
 let root: Root;
 let container: HTMLDivElement;
-const renders = vi.mocked(useAgeNow);
+const renders = vi.mocked(useBoundaryClock);
 
 async function mount(rows: ChatSessionRecord[], terminals: SessionRecord[] = []) {
   useProjectSessionsStore.setState({
@@ -172,9 +178,16 @@ describe("Home roster age boundaries", () => {
     await mount([chat("Earlier", NOW - 30_000, "stopped")]);
     await advance(31_000);
     expect(renders).not.toHaveBeenCalled();
+    const derivations = vi.mocked(homeSessionRows).mock.calls.length;
     await act(async () => {
       container.querySelector<HTMLButtonElement>('[data-testid="home-sessions-fold"]')?.click();
     });
+    expect(container.querySelector('[data-testid="home-sessions-earlier"]')?.textContent).toContain(
+      "· now",
+    );
+    expect(homeSessionRows).toHaveBeenCalledTimes(derivations);
+    await advance(1);
+    expect(homeSessionRows).toHaveBeenCalledTimes(derivations + 1);
     expect(container.querySelector('[data-testid="home-sessions-earlier"]')?.textContent).toContain(
       "· 1m",
     );

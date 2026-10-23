@@ -103,7 +103,7 @@ import {
   type HomeRailMode,
   type HomeSessionRow,
 } from "@renderer/components/home/home-rail-model";
-import { useAgeNow } from "@renderer/lib/use-age-now";
+import { useAgeBoundaryTimer, useBoundaryClock } from "@renderer/lib/use-age-now";
 import { compactAge } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
@@ -375,11 +375,14 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
   const harness = useSessionsStore(
     useShallow((state) => homeTerminalIndex(state.harness, terminals)),
   );
+  // Status and age share one clock. Between visible boundaries it stays
+  // behind the wall clock, so unrelated renders do not re-derive the roster.
+  const clock = useBoundaryClock();
+  const [now] = clock;
   const panes = React.useMemo(() => homeLivePanes(liveTabs ?? EMPTY_TABS), [liveTabs]);
-  const activityNow = Date.now();
   const pulse = React.useMemo(
-    () => ({ panes, lastOutputAt, parkState, harness, now: activityNow }),
-    [panes, lastOutputAt, parkState, harness, activityNow],
+    () => ({ panes, lastOutputAt, parkState, harness, now }),
+    [panes, lastOutputAt, parkState, harness, now],
   );
   const rows = React.useMemo(
     () => homeSessionRows(chats, terminals, openChatIds, pulse),
@@ -397,8 +400,9 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
   const foldOpen = useUiStore((state) => state.railFolds.sessionsRecord);
   const filterable = rows.length > HOME_SESSION_FILTER_THRESHOLD || searching;
   const visibleRows = searching || foldOpen ? [...live, ...earlier] : live;
-  const now = useAgeNow(
+  useAgeBoundaryTimer(
     visibleRows.map((row) => row.at),
+    clock,
     // A status transition can make a filtered-out row match (e.g. "idle").
     // Only ages are visibility-scoped; keep the roster's full status boundary.
     nextHomeSessionStatusChangeAt(terminals, pulse),

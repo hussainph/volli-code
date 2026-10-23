@@ -607,7 +607,9 @@ describe("run history", () => {
     expect(skipRow().textContent).toContain("just now");
     await act(async () => vi.advanceTimersByTime(1_001));
     expect(skipRow().textContent).toContain("1m ago");
-    await act(async () => vi.advanceTimersByTime(3_600_000));
+    // Model a suspended page: the next callback sees the jumped wall clock.
+    vi.setSystemTime(now + 3_600_000);
+    await act(async () => vi.advanceTimersToNextTimer());
     expect(historyRun("run-1").textContent).toContain("1h ago");
     expect(skipRow().textContent).toContain("1h ago");
     expect(doors.runsForProject).toHaveBeenCalledTimes(1);

@@ -278,7 +278,9 @@ describe("the server table", () => {
     expect(dialog().textContent).toContain("Refreshed just now");
     await act(async () => vi.advanceTimersByTime(1_001));
     expect(dialog().textContent).toContain("Refreshed 1m ago");
-    await act(async () => vi.advanceTimersByTime(3_600_000));
+    // Model a suspended page: the next callback sees the jumped wall clock.
+    vi.setSystemTime(now + 3_600_000);
+    await act(async () => vi.advanceTimersToNextTimer());
     expect(dialog().textContent).toContain("Refreshed 1h ago");
     await click(button("Cancel", dialog()));
     await act(async () => vi.runOnlyPendingTimers());
@@ -1207,7 +1209,9 @@ describe("recent activity (VC-380)", () => {
     expect(text()).toContain("just now");
     await act(async () => vi.advanceTimersByTime(1_001));
     expect(text().match(/1m ago/g)).toHaveLength(2);
-    await act(async () => vi.advanceTimersByTime(3_600_000));
+    // Model a suspended page: the next callback sees the jumped wall clock.
+    vi.setSystemTime(now + 3_600_000);
+    await act(async () => vi.advanceTimersToNextTimer());
     expect(text().match(/1h ago/g)).toHaveLength(2);
     expect(list).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(1);
