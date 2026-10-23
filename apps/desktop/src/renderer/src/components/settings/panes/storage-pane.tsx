@@ -90,6 +90,7 @@ import { toast } from "sonner";
 
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
 import { RunningProcessesSection } from "./processes-section";
+import { parseRetentionDays } from "./retention-days";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { toastError } from "@renderer/lib/toast";
@@ -97,6 +98,7 @@ import { useRetentionTtlStore } from "@renderer/stores/retention-ttl";
 
 /** Below a week, an automatic deletion is close enough to ask about. */
 const CONFIRM_BELOW_DAYS = 7;
+const RETENTION_DAYS_ERROR = "Enter a whole number of days, at least 1.";
 
 export function StoragePane() {
   // The retention window is what every eligibility date in the orphan list was
@@ -137,6 +139,9 @@ export function StoragePane() {
 function RetentionSection({ onDays }: { onDays: (days: number) => void }) {
   const [days, setDays] = React.useState("");
   const [loaded, setLoaded] = React.useState(false);
+  // CommitField validates before confirming and committing. Parse once for
+  // that transaction so the confirmed number is exactly the one we write.
+  const parsedDays = React.useRef<number | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -183,19 +188,19 @@ function RetentionSection({ onDays }: { onDays: (days: number) => void }) {
           value={days}
           disabled={!loaded}
           validate={(next) => {
-            const parsed = Number.parseInt(next.trim(), 10);
-            return Number.isFinite(parsed) && parsed >= 1
-              ? null
-              : "Enter a whole number of days, at least 1.";
+            parsedDays.current = parseRetentionDays(next);
+            return parsedDays.current === null ? RETENTION_DAYS_ERROR : null;
           }}
-          confirm={(next) =>
-            Number.parseInt(next, 10) >= CONFIRM_BELOW_DAYS ||
-            window.confirm(
-              `Keep Done worktrees for only ${next} day(s)? Folders will be removed sooner.`,
-            )
+          confirm={() =>
+            parsedDays.current !== null &&
+            (parsedDays.current >= CONFIRM_BELOW_DAYS ||
+              window.confirm(
+                `Keep Done worktrees for only ${parsedDays.current} day(s)? Folders will be removed sooner.`,
+              ))
           }
-          onCommit={async (next): Promise<CommitResult> => {
-            const parsed = Number.parseInt(next.trim(), 10);
+          onCommit={async (): Promise<CommitResult> => {
+            const parsed = parsedDays.current;
+            if (parsed === null) return { ok: false, error: RETENTION_DAYS_ERROR };
             try {
               const result = await window.api.retention.setTtlDays(parsed);
               if (!result.ok) return { ok: false, error: result.error };
