@@ -16,7 +16,7 @@
  * icon rendered from a guess would have to lie about at least one state.
  */
 import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
-import { errorMessage } from "@volli/shared";
+import { errorMessage, summarizeUpdateFailure, UPDATE_FAILURE_FALLBACK } from "@volli/shared";
 
 import { Spinner } from "@renderer/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
@@ -53,7 +53,7 @@ export function UpdateButton() {
             ? "Update ready. Select to install."
             : `Volli Code ${state.targetVersion} is ready. Select to install.`
           : state.phase === "error"
-            ? `Update check failed: ${state.error ?? "unknown error"}. Select to retry.`
+            ? `Update check failed: ${summarizeUpdateFailure(state.error ?? UPDATE_FAILURE_FALLBACK)}. Select to retry.`
             : "Check for updates";
 
   return (
