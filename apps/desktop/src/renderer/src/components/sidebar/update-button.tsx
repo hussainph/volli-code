@@ -36,6 +36,11 @@ function requestCheck(): void {
     });
 }
 
+function failureLabel(error: string | null): string {
+  const summary = summarizeUpdateFailure(error ?? UPDATE_FAILURE_FALLBACK).replace(/\.$/u, "");
+  return `Update check failed: ${summary}${summary.endsWith("…") ? "" : "."} Select to retry.`;
+}
+
 export function UpdateButton() {
   const state = useUpdateStore((store) => store.state);
   const openDialog = useUpdateStore((store) => store.openDialog);
@@ -53,7 +58,7 @@ export function UpdateButton() {
             ? "Update ready. Select to install."
             : `Volli Code ${state.targetVersion} is ready. Select to install.`
           : state.phase === "error"
-            ? `Update check failed: ${summarizeUpdateFailure(state.error ?? UPDATE_FAILURE_FALLBACK)}. Select to retry.`
+            ? failureLabel(state.error)
             : "Check for updates";
 
   return (

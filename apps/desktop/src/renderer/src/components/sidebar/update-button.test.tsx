@@ -52,6 +52,7 @@ describe("UpdateButton failure copy", () => {
       name: "a long failure with a URL and header dump",
       raw: `The release could not be checked ${"while the service is unavailable ".repeat(10)}https://updates.example.com/latest-mac.yml Headers: {"x-request-id":"private-request"}`,
     },
+    { name: "a sentence ending in a period", raw: "Network is offline." },
     { name: "a missing error", raw: null },
     { name: "an error with only diagnostics", raw: "https://updates.example.com/latest-mac.yml" },
   ])("summarizes $name in both the tooltip and aria-label", async ({ raw }) => {
@@ -67,14 +68,16 @@ describe("UpdateButton failure copy", () => {
     expect(button).not.toBeNull();
     await act(async () => button!.focus());
 
-    const summary = summarizeUpdateFailure(raw ?? UPDATE_FAILURE_FALLBACK);
+    const summary = summarizeUpdateFailure(raw ?? UPDATE_FAILURE_FALLBACK).replace(/\.$/u, "");
     const prefix = "Update check failed: ";
-    const suffix = ". Select to retry.";
+    const suffix = summary.endsWith("…") ? " Select to retry." : ". Select to retry.";
     const label = button!.getAttribute("aria-label");
     const tooltip = document.querySelector('[role="tooltip"]')?.textContent;
     expect(label).toBe(`${prefix}${summary}${suffix}`);
     expect(tooltip).toBe(label);
     for (const text of [label!, tooltip!]) {
+      expect(text).not.toContain("..");
+      expect(text).not.toContain("….");
       expect(text).not.toMatch(
         /https?:\/\/|github\.com|updates\.example\.com|Headers:|x-request-id|private-request|method:|url:/iu,
       );
