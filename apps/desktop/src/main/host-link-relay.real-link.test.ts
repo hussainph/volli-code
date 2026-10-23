@@ -36,7 +36,7 @@ import {
 } from "@volli/host-core/handlers";
 import { openTestDb, testProject, testTicket } from "@volli/host-core/testing";
 import { createLogRing } from "@volli/host-core/log";
-import { runGitCapturing, runGitCapturingAsync } from "@volli/host-core/worktree";
+import { runGitCapturingAsync } from "@volli/host-core/worktree";
 import { readHostError } from "@volli/host-protocol";
 import {
   createHostLink,
@@ -175,7 +175,7 @@ async function box(features: readonly string[] = EVERY_FEATURE): Promise<Box> {
       boardFeed: feed,
       logs: createLogRing(),
       now: () => (clock += 1),
-      worktree: { db: ctx.db, git: runGitCapturing, gitAsync: runGitCapturingAsync, blobsRoot: "" },
+      worktree: { db: ctx.db, gitAsync: runGitCapturingAsync, blobsRoot: "" },
     },
   );
   // The box's Sessions are scripted: a stream stays open and quiet until it

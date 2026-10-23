@@ -23,7 +23,7 @@ import {
   readScheduleCursors,
   rebaseScheduleCursor,
 } from "./automations/schedule-cursor";
-import { getProjectById } from "./db/projects-repo";
+import { getProjectById, isProjectAttached, isProjectRemoved } from "./db/projects-repo";
 import { getTicket, getTicketRow } from "./db/tickets-repo";
 import {
   getAutomation,
@@ -31,6 +31,7 @@ import {
   listAllAutomations,
   listAutomationsForProject,
   listColumnArmings,
+  listPossiblyLiveProjectRunsForAutomation,
   listProjectRunsForAutomation,
   listRunsForProject,
   listRunsForTicket,
@@ -76,6 +77,7 @@ function fixture(over: Partial<HostAutomationsInput> = {}) {
   const engine = {
     enabledAutomationIds: vi.fn(async () => ["a1"]),
     recordSkip: vi.fn(async (_input: unknown): Promise<unknown> => ({ ok: true })),
+    replayRun: vi.fn(async (_commandId: string): Promise<unknown> => null),
   };
   const service = { kind: "service" };
   const runner = {
@@ -181,10 +183,12 @@ describe("construction", () => {
 
   it("reads the service's projections from the same database", () => {
     const deps = fixture().serviceDeps();
-    vi.mocked(getProjectById).mockReturnValueOnce({ id: "p1" } as never);
+    // A removed project is detached, not deleted (VC-822): it is no project
+    // an Automation can be written in.
+    vi.mocked(isProjectAttached).mockReturnValueOnce(true).mockReturnValueOnce(false);
     expect(deps.findProject("p1")).toBe(true);
     expect(deps.findProject("p2")).toBe(false);
-    expect(getProjectById).toHaveBeenCalledWith(db, "p2");
+    expect(isProjectAttached).toHaveBeenCalledWith(db, "p2");
     deps.findAutomation("a1");
     expect(getAutomation).toHaveBeenCalledWith(db, "a1");
     deps.listAutomationsForProject("p1");
@@ -357,14 +361,20 @@ describe("runner wiring", () => {
     expect(getAutomationRun).toHaveBeenCalledWith(db, "r1");
     deps.findTicket("t1");
     expect(getTicket).toHaveBeenCalledWith(db, "t1");
-    vi.mocked(getProjectById).mockReturnValueOnce({ id: "p1" } as never);
+    // Nor one a Run starts in (VC-822).
+    vi.mocked(isProjectAttached).mockReturnValueOnce(true).mockReturnValueOnce(false);
     expect(deps.findProject("p1")).toBe(true);
     expect(deps.findProject("p2")).toBe(false);
+    expect(isProjectAttached).toHaveBeenLastCalledWith(db, "p2");
+    // And a removed one is told apart, so its schedule's skip says so.
+    vi.mocked(isProjectRemoved).mockReturnValueOnce(true);
+    expect(deps.projectRemoved!("p2")).toBe(true);
+    expect(isProjectRemoved).toHaveBeenLastCalledWith(db, "p2");
     deps.listRunsForTicket("t1");
     expect(listRunsForTicket).toHaveBeenCalledWith(db, "t1");
     const query = { automationId: "a1", projectId: "p1" };
-    deps.listProjectRunsForAutomation(query);
-    expect(listProjectRunsForAutomation).toHaveBeenCalledWith(db, query);
+    deps.listPossiblyLiveProjectRunsForAutomation(query);
+    expect(listPossiblyLiveProjectRunsForAutomation).toHaveBeenCalledWith(db, query);
 
     deps.onRunStarted!({ projectId: "p1", run: { ticketId: null } as never });
     expect(f.publish).toHaveBeenLastCalledWith("data-changed", { projectId: "p1" });
@@ -424,6 +434,7 @@ describe("pending armed Run wiring", () => {
     const row = { archived_at: null, project_id: "p1" } as never;
     const ticket = { projectId: "p1", status: "doing", ticketNumber: 7 } as never;
     const project = { ticketPrefix: "VC" } as never;
+    vi.mocked(isProjectAttached).mockReturnValue(true);
     expect(readTicket("t1")).toBeUndefined();
     vi.mocked(getTicketRow).mockReturnValueOnce({ archived_at: 1, project_id: "p1" } as never);
     expect(readTicket("t1")).toBeUndefined();
@@ -434,6 +445,12 @@ describe("pending armed Run wiring", () => {
     vi.mocked(getTicket).mockReturnValueOnce(ticket);
     expect(readTicket("t1")).toBeUndefined();
     expect(getProjectById).toHaveBeenLastCalledWith(db, "p1");
+    // A removed project's armed column starts nothing (VC-822): its ticket
+    // reads as gone, so the countdown is dropped rather than run.
+    vi.mocked(isProjectAttached).mockReturnValueOnce(false);
+    vi.mocked(getTicketRow).mockReturnValueOnce(row);
+    expect(readTicket("t1")).toBeUndefined();
+    expect(isProjectAttached).toHaveBeenLastCalledWith(db, "p1");
     vi.mocked(getTicketRow).mockReturnValueOnce(row);
     vi.mocked(getTicket).mockReturnValueOnce(ticket);
     vi.mocked(getProjectById).mockReturnValueOnce(project);
@@ -518,6 +535,19 @@ describe("scheduler wiring", () => {
     f.engine.recordSkip.mockResolvedValueOnce({ ok: false, error: "ledger refused" });
     await expect(recordSkip(input)).rejects.toThrow("ledger refused");
     expect(f.publish).toHaveBeenCalledOnce();
+  });
+
+  it("answers a Run as accepted only when its command was accepted or completed", async () => {
+    const f = fixture();
+    f.automations.start(() => f.sessionPorts);
+    const { runAccepted } = f.schedulerPorts();
+    await expect(runAccepted("c1")).resolves.toBe(false);
+    expect(f.engine.replayRun).toHaveBeenCalledWith("c1");
+    f.engine.replayRun.mockResolvedValueOnce({ ok: true, value: { run: null } });
+    await expect(runAccepted("c1")).resolves.toBe(true);
+    // A rejected Run still owes its occurrence a skip.
+    f.engine.replayRun.mockResolvedValueOnce({ ok: false, code: "RUN_FAILED", error: "No" });
+    await expect(runAccepted("c1")).resolves.toBe(false);
   });
 
   it("starts a schedule's Run unattended and narrows its outcome", async () => {

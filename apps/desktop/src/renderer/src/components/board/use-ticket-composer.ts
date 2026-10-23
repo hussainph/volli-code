@@ -57,6 +57,9 @@ export function useTicketComposer({
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    // Never mid-word: an IME's Enter accepts a candidate and its Escape closes
+    // the candidate window. Taking them filed the half-converted title.
+    if (event.nativeEvent.isComposing) return;
     if (event.key === "Enter") {
       event.preventDefault();
       if (submit()) setTitle("");

@@ -6,7 +6,7 @@ volli — self-documenting planning CLI for coding agents.
 Read
   identify [--project <p>]
   board [--project <p>]
-  ticket list [--status <column>] [--priority low|medium|high] [--label <name>] [--project <p>] [--limit <n>]
+  ticket list [--status <column>] [--priority low|medium|high] [--label <name>] [--project <p>] [--limit <n>] [--no-body]
   ticket show <id> [--events <n>] [--comments <n>] [--comments-only] [--full]
   ticket events <id> [--limit <n>] [--full]
   ticket brief <id>
@@ -118,6 +118,7 @@ Options:
   --label <name>              Filter by label.
   --project <p>               Target project.
   --limit <n>                 Cap the number of rows.
+  --no-body                   Omit ticket bodies from --json rows; `ticket show` reads one.
 
 Example: volli ticket list --status doing --priority high
 
@@ -609,11 +610,12 @@ Input:
 Effects:
 - Durable write: Append a message.submit command carrying the marked steering message to the target Session's ledger.
 - Human sees: The steering message appears in the target Session's transcript, marked with the sending Session.
-- Does not: It does not wait for the target's turn to finish; the calling Session watches the target and is told when that turn ends, through a later notice.
+- Does not: It does not wait for the target's turn to finish; an active delegate reports through its delegation answer, and other targets through a later watch notice.
 - Does not: No Ticket moves, no Session stops, and no new Session starts.
 
 Notes:
-- Runs through the Agent Tool Surface in the Board Session's tool bundle; the shell never executes it.
+- Runs through the Agent Tool Surface in Board and new Ticket Session tool bundles; the shell never executes it.
+- A Board Session may steer any Session in its project; a Ticket Session only the subagents it delegated. A refusal names the rule.
 - Delivers into the target's live executor — mid-turn it steers the model now, between turns it opens one.
 - The message arrives marked as supervisor steering from this Session, never as the target's own user.
 
@@ -648,6 +650,7 @@ Notes:
 - Runs through the Agent Tool Surface in the project and ticket Role bundles; the shell never executes it.
 - Returns as soon as the subagent starts. When its first turn completes, a notice from Volli arrives in this Session carrying its final message; `volli session answer <handle>` prints it again in full.
 - The subagent shares this Session's working directory, holds every coding tool, and cannot ask a person or start, stop, steer or delegate to other Sessions.
+- If it drifts while it is still working and you hold session_send, steer it with session_send; it reads the message mid-turn and the delegation still answers exactly once.
 
 ============================================================================
 volli help session list
@@ -1303,6 +1306,17 @@ Bundle identity
   Running app: not reached (static help remains available)
   Capability baseline: 8e8a17c0
 
+VC-824 (after VC-478)
+Added
+- volli ticket list --no-body omits each ticket's body from the --json rows; every other field stays. volli ticket show <id> reads one body. Without the flag, --json rows keep their body. An app build older than this one ignores the flag and still sends bodies.
+- RESPONSE_TOO_LARGE — the app answered, but the answer exceeded the CLI's 4 MiB response limit. The refusal names the verb; narrow the request with its filters and retry.
+Changed
+- The volli ticket list table no longer asks the app for ticket bodies, which it never printed. The table itself is unchanged.
+Fixed
+- An answer past the CLI's response limit no longer fails as SOCKET_PROTOCOL with a build-compatibility hint.
+Removed
+- None in this record.
+
 VC-478 (after VC-457)
 Added
 - classify — ask the configured decision model typed questions about a JSON state: choice (one option key of several), score (a level on a scale, lowest first) or bool (yes or no). It answers with probabilities and a confidence from 0 to 1, never text, as structured content beside a short text line, so a script can read answers.<name>. Use it for decisions that repeat — labelling or triaging many items, checking which state a page or element is in, filtering inside a loop — and not for anything needing open-ended reasoning or written output. A Session has it only when a person configured a decision model before the Session was created, and a cloud one only with their opt-in. When it reports no decision (the model was turned off, is slow, or failed), decide yourself.
@@ -1529,6 +1543,9 @@ Error codes:
   MUTATION_FAILED      1 failure
     Why: The operation failed without enough durable outcome evidence for an automatic retry.
     Next: No safe retry is known; inspect current durable state first.
+  RESPONSE_TOO_LARGE   1 failure
+    Why: The app answered, but the answer exceeded the CLI's 4 MiB response limit, so the CLI stopped reading it.
+    Next: Narrow the request with the verb's own filters (see `volli help <verb>`) and retry.
   SOCKET_PROTOCOL      1 failure
     Why: The CLI connected to the app but the versioned request or response exchange was invalid.
     Next: Run `volli help changes` and confirm the CLI bundle and running app come from a compatible build before retrying.
@@ -1557,7 +1574,7 @@ volli conflicts before you schedule: it names the active worktrees that touch th
 volli worktree sync when a branch is behind its base. It merges, reports conflicts per path, and returns — staleness is a note to act on, not a verdict, and this is the act.
 Nothing waits, and nothing needs to. Sleeping in a shell to poll is how sessions wedge, and a tool call that parks holds the person's chat hostage, so work you are not doing yourself reports to you as a notice from Volli: read mid-turn if you are working, or opening a new turn if you have ended yours. session_delegate's notice carries the subagent's answer. session_start, automation_run and session_send watch the Session they open or steer — its next turn ending, its done/blocked signal, its stop. The watch tool covers the rest: other Sessions, and tickets' moves, comments and signals. Changes that land together arrive as one notice.
 session list defaults to active plus activity in the last 24h; --all, --since and --state narrow or expand it. session show reads metadata, who started it and its latest done/blocked signal (age and quoted reason); session answer appends that signal when present. Both include signal: {kind, reason, at, ageMs} or null in --json. An idle parent with pendingSubagents is waiting on its helpers, not done. Triage a fleet from session list — working, waiting (with what on), interrupted (with why), idle, or stopped, plus the age of the last durable fact — and spend session peek only where that age looks wrong. A wedged turn also self-reports: the watchdog records a blocked signal after ten silent minutes, or — while a tool runs — past that tool's own timeout (an hour if it set none).
-Supervision is tool-tier: starting, stopping, and steering another Session are named tools in the Board Session's tool bundle (session_start, session_stop, session_send), never shell commands — typing them here answers WRONG_DOOR by design.
+Supervision is tool-tier: starting, stopping, and steering another Session are named tools in the Board Session's tool bundle (session_start, session_stop, session_send), never shell commands — typing them here answers WRONG_DOOR by design. New Ticket Sessions also hold session_send, but may steer only the subagents they delegated.
 
 ============================================================================
 volli help session harness
@@ -1679,7 +1696,7 @@ USAGE Unknown option --not-an-option (options: --project) — see volli help boa
 ============================================================================
 volli ticket list --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: --status, --priority, --label, --project, --limit) — see volli help ticket list
+USAGE Unknown option --not-an-option (options: --status, --priority, --label, --project, --limit, --no-body) — see volli help ticket list
 
 ============================================================================
 volli ticket show ORACLE-1 --not-an-option

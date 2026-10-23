@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { BrowserTabBounds, BrowserTabState, SessionToolId } from "@volli/shared";
+import {
+  shortSessionId,
+  DEFAULT_AUTHORITY_POLICY,
+  type BrowserTabBounds,
+  type BrowserTabState,
+  type SessionToolId,
+} from "@volli/shared";
 import {
   createSessionEngine,
   createSessionRuntime,
@@ -21,15 +27,23 @@ import {
   type BrowserTabChrome,
   type BrowserTabRecord,
 } from "../browser/tab-registry";
-import { insertProject } from "../db/projects-repo";
+import { insertProject, listProjects } from "../db/projects-repo";
+import { createAgentToolDoor } from "../agent-tool-door";
+import { createDetachedWorkTracker } from "../detached-work";
+import { createWatches, type Watches } from "../watches";
+import { createSessionWakeBus } from "../session-control/session-wake";
+import { createTicketSessionDelegationStore } from "./delegation-store";
 import { insertTicket } from "../db/tickets-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
+import { createAgentShellPort } from "../shell/agent-port";
+import { BackgroundShellHost, type BackgroundShellNotice } from "../shell/background-shell-host";
 import { installHostLog } from "../log/root";
 import { createDelegations, DELEGATION_ID_SUFFIXES } from "./delegate-session";
 import type { DelegateSessionPorts } from "./delegate-session";
 import { createPiNativeAdapter } from "./pi-adapter";
 import type { SessionStartInput } from "./sessions";
+import { supervisionMarker } from "./supervise-session";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 
 function deferred() {
@@ -142,11 +156,17 @@ class MemoryBrowser extends BrowserTabRegistry<BrowserTabRecord> {
 let db: TestDb | undefined;
 let runtime: ReturnType<typeof createSessionRuntime> | undefined;
 let unblockLoad: (() => void) | undefined;
+let shellHost: BackgroundShellHost | undefined;
+let watchHost: Watches | undefined;
 afterEach(async () => {
+  watchHost?.dispose();
+  watchHost = undefined;
   unblockLoad?.();
   unblockLoad = undefined;
   await runtime?.close();
   runtime = undefined;
+  await shellHost?.close();
+  shellHost = undefined;
   db?.cleanup();
   db = undefined;
 });
@@ -171,7 +191,14 @@ const openPage = (path: string): ScriptedReply => ({
   tool: { name: "browser_navigate", args: { url: `https://example.com/${path}` } },
 });
 
-function fixture(role: "project" | "ticket") {
+const SHELL_SURFACE: readonly SessionToolId[] = ["shell_start", "shell_output", "shell_kill"];
+
+/** `shells`: wire a real background shell host, and offer its tools (VC-809). */
+function fixture(role: "project" | "ticket", options: { shells?: BackgroundShellHost } = {}) {
+  const { shells } = options;
+  // In the canonical order: the shell tools sit before `browser_find`.
+  const surfaceTools: readonly SessionToolId[] =
+    shells === undefined ? SURFACE : [...SURFACE.slice(0, -1), ...SHELL_SURFACE, "browser_find"];
   const database = (db = openTestDb());
   const directory = join(dirname(database.dbPath), "workspace");
   mkdirSync(directory);
@@ -179,12 +206,20 @@ function fixture(role: "project" | "ticket") {
   const ticketId = role === "ticket" ? "ticket-1" : null;
   if (ticketId !== null) insertTicket(database.db, testTicket("project-1", { id: ticketId }));
   let clock = 1_000;
-  const next = (kind: string) => `${kind}-${clock++}`;
-  const engine = createSessionEngine({
-    ledger: createSqliteSessionLedger(database.db),
-    clock: { now: () => clock++ },
-    ids: { next },
-  });
+  // A Session's short handle is the first eight characters of its id, so a
+  // Session id opens with its own number: the shared `session-` prefix would
+  // give every Session here the same handle, and no verb could address one.
+  const next = (kind: string) =>
+    kind === "session" ? `s${clock++}-session` : `${kind}-${clock++}`;
+  const wake = createSessionWakeBus(
+    createSessionEngine({
+      ledger: createSqliteSessionLedger(database.db),
+      clock: { now: () => clock++ },
+      ids: { next },
+    }),
+    { db: database.db },
+  );
+  const engine = wake.engine;
   const replies: ScriptedReply[] = [openPage("parent"), { text: "Parent ready" }];
   const script = scriptedProvider(replies);
   const browser = new MemoryBrowser();
@@ -204,6 +239,23 @@ function fixture(role: "project" | "ticket") {
     },
     now: () => clock++,
     resolveBrowserPort,
+    ...(shells === undefined
+      ? {}
+      : {
+          resolveShellPort: (
+            scope: Parameters<
+              NonNullable<Parameters<typeof createPiNativeAdapter>[0]["resolveShellPort"]>
+            >[0],
+          ) =>
+            createAgentShellPort({
+              host: shells,
+              scope,
+              session: scope,
+              workspacePath: directory,
+              identity: { sessionId: scope.sessionId, ticketDisplayId: null },
+              pathPrefixes: [],
+            }),
+        }),
     resolveRuntimeContext: async (sessionId) => {
       const { projection } = await host.projection({ sessionId });
       const session = projection.session;
@@ -266,7 +318,7 @@ function fixture(role: "project" | "ticket") {
     const sessionId = created.sessionId;
     await engine.getOrRecordSessionInput({
       sessionId,
-      input: { kind: "tool-surface", tools: SURFACE },
+      input: { kind: "tool-surface", tools: surfaceTools },
       provenance: { source: { kind: "system", id: "pi-runtime", detail: null }, venue: null },
     });
     const attached = await host.command({
@@ -312,10 +364,66 @@ function fixture(role: "project" | "ticket") {
     readTranscriptArtifact: (ref) => artifacts.read(ref),
     report: (message) => reports.push(message),
   });
+  // Real watch delivery, with only its coalescing clock driven explicitly.
+  const detached = createDetachedWorkTracker({
+    reportFailure: (error) => reports.push(String(error)),
+  });
+  const timers = new Map<object, () => void>();
+  const watches = (watchHost = createWatches({
+    runtime: {
+      projection: (input) => host.projection(input),
+      subscribe: (query, listener, onError) => host.subscribe(query, listener, onError),
+      command: (input) => {
+        const delivery = host.command(input);
+        detached.track(delivery);
+        return delivery;
+      },
+    },
+    sessionEngine: engine,
+    subscribeSessionWake: wake.subscribe,
+    subscribeTicketWake: () => () => {},
+    readTranscriptArtifact: (ref) => artifacts.read(ref),
+    readComment: () => null,
+    pendingSubagents: (id) => delegations.liveChildren(id),
+    detachedWork: detached,
+    report: (message) => reports.push(message),
+    setTimeout: (callback) => {
+      const handle = {};
+      timers.set(handle, callback);
+      return handle;
+    },
+    clearTimeout: (handle) => {
+      timers.delete(handle as object);
+    },
+  }));
+  const door = createAgentToolDoor({
+    db: database.db,
+    projects: () => listProjects(database.db),
+    sessions: () => null,
+    delegation: createTicketSessionDelegationStore(database.db),
+    automations: () => null,
+    actorTicketDisplay: () => null,
+    now: () => clock++,
+    authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
+    watches: () => watches,
+    delegate: () => delegations,
+    mcp: () => null,
+    supervise: () => ({ sessionEngine: engine, runtime: host }),
+  });
+  async function flushWatchNotices() {
+    for (const [handle, callback] of timers) {
+      timers.delete(handle);
+      callback();
+    }
+    await detached.drain();
+  }
   return {
     host,
     engine,
     start,
+    door,
+    watches,
+    flushWatchNotices,
     submitSessionMessage,
     delegations,
     browser,
@@ -532,4 +640,306 @@ describe("completed delegate browser cleanup (VC-754)", () => {
       expect(events.filter(({ payload }) => payload.kind === "attachment.closed")).toEqual([]);
     },
   );
+});
+
+/**
+ * A parent steering the child it delegated (VC-861). The steer is the ordinary
+ * supervision verb — the marked message the `session_send` door submits — so
+ * the child reads owner direction at its next step of the turn already running,
+ * that one turn still ends, and the delegation answers under its one
+ * `<operation>:answer` id rather than a second, resume-keyed notice.
+ */
+describe("a parent steers the delegate it started (VC-861)", () => {
+  it.each(["project", "ticket"] as const)(
+    "joins a %s Session's running child turn and reports exactly once",
+    async (role) => {
+      const f = fixture(role);
+      const parent = await f.start({
+        operationId: "parent",
+        projectId: "project-1",
+        ticketId: f.ticketId,
+        role,
+        title: "Parent",
+      });
+      await f.submitSessionMessage({
+        sessionId: parent.sessionId,
+        commandId: "parent:first",
+        messageId: "parent:first-message",
+        text: "Open a page",
+      });
+      const parentAttachment = (await f.host.projection({ sessionId: parent.sessionId })).projection
+        .liveExecutor!;
+      const parentTurnActive = async () =>
+        (await f.host.projection({ sessionId: parent.sessionId })).projection.turnActive;
+      /**
+       * The parent's durable "your delegate answered" receipts. Exactly one is
+       * the contract: a `:resume:` notice for the same turn would land here too.
+       */
+      const noticeReceipts = async () =>
+        (await f.engine.listEvents({ sessionId: parent.sessionId })).filter(
+          ({ payload }) =>
+            payload.kind === "command.receipt.recorded" &&
+            payload.receipt.commandId.startsWith("delegate-1") &&
+            payload.receipt.commandId.endsWith(DELEGATION_ID_SUFFIXES.notice),
+        );
+
+      // The child's first step holds a real page load open, so the delegation
+      // is genuinely mid-turn when the parent steers — not idle between turns.
+      f.replies.push(
+        openPage("child"),
+        { text: "Child final answer" },
+        { text: "Parent read the answer" },
+      );
+      const gate = (f.browser.loadGate = deferred());
+      unblockLoad = gate.resolve;
+      const delegation = await f.delegations.delegate({
+        operationId: "delegate-1",
+        parent: {
+          ...(role === "ticket"
+            ? { role: "ticket" as const, ticketId: f.ticketId! }
+            : { role: "project" as const, ticketId: null }),
+          projectId: "project-1",
+          sessionId: parent.sessionId,
+          rootThreadId: sessionRootThreadId(parent.sessionId),
+          attachmentId: parentAttachment.id,
+        },
+        task: "Research the fixture page",
+        title: "Browser helper",
+        actor: { kind: "session", sessionId: parent.sessionId, ticketId: f.ticketId },
+      });
+      const childId = delegation.childSessionId;
+      expect(delegation.state).toBe("running");
+      await vi.waitFor(() => expect(f.browser.list({ projectId: "project-1" })).toHaveLength(2));
+      expect((await f.host.projection({ sessionId: childId })).projection).toMatchObject({
+        turnActive: true,
+        liveExecutor: { status: "open" },
+      });
+      expect(f.delegations.liveChildren(parent.sessionId)).toEqual([childId]);
+
+      const steered = await f.door(
+        {
+          ...(role === "ticket"
+            ? { role: "ticket" as const, ticketId: f.ticketId! }
+            : { role: "project" as const, ticketId: null }),
+          sessionId: parent.sessionId,
+          projectId: "project-1",
+          rootThreadId: sessionRootThreadId(parent.sessionId),
+          attachmentId: parentAttachment.id,
+        },
+        {
+          verb: "session.send",
+          toolCallId: "steer-1",
+          input: { session: shortSessionId(childId), message: "Also check the fixture page title" },
+        },
+        new AbortController().signal,
+      );
+      expect(steered.text).toContain("Delivered into Session");
+      expect(steered.text).toContain("mid-stream");
+      // Steering opens no turn in the sender, and nothing is answered while the
+      // child is still working.
+      expect(await parentTurnActive()).toBe(false);
+      expect(await noticeReceipts()).toEqual([]);
+
+      // Released: the child reads the steer at its next step of the same turn,
+      // answers, and that one turn's end is the delegation's one notice.
+      f.browser.loadGate = null;
+      gate.resolve();
+      unblockLoad = undefined;
+      await vi.waitFor(async () => {
+        expect(await noticeReceipts()).toMatchObject([
+          {
+            payload: {
+              receipt: {
+                status: "accepted",
+                commandId: `delegate-1${DELEGATION_ID_SUFFIXES.notice}`,
+              },
+            },
+          },
+        ]);
+        expect(await parentTurnActive()).toBe(false);
+      });
+
+      // Drain the actual Watch registry's coalescing window too. The send door
+      // must not add a second host notice beside the delegation's own answer.
+      await f.flushWatchNotices();
+      const parentMessages = (await f.engine.listEvents({ sessionId: parent.sessionId })).filter(
+        ({ payload }) =>
+          payload.kind === "command.recorded" &&
+          payload.command.intent.kind === "message.submit" &&
+          payload.command.id !== "parent:first",
+      );
+      expect(parentMessages).toMatchObject([
+        { payload: { command: { id: `delegate-1${DELEGATION_ID_SUFFIXES.notice}` } } },
+      ]);
+      expect(steered.text).toContain("Its delegation answer reports back");
+      expect(f.watches.watching(parent.sessionId).sessions).toEqual([]);
+
+      // What the child read: the marker naming the parent, then the parent's
+      // words — never a plain message from its own user.
+      const marker = supervisionMarker(parent.sessionId);
+      const steeredSteps = f.script.requests.filter((request) =>
+        JSON.stringify(request).includes(marker),
+      );
+      expect(steeredSteps).toHaveLength(1);
+      expect(JSON.stringify(steeredSteps[0])).toContain("Also check the fixture page title");
+      // What the parent read: its delegate's answer, under the one notice.
+      expect(JSON.stringify(f.script.requests.at(-1))).toContain("| Child final answer");
+
+      const childEvents = await f.engine.listEvents({ sessionId: childId });
+      // The steer joined the kickoff's turn: it opened no second one.
+      const childTurns = (kind: "turn.started" | "turn.completed") =>
+        childEvents.filter(({ payload }) => payload.kind === kind).length;
+      expect(childTurns("turn.started")).toBe(1);
+      expect(childTurns("turn.completed")).toBe(1);
+      const steerEvent = childEvents.find(
+        ({ payload }) =>
+          payload.kind === "command.recorded" &&
+          payload.command.id === `${parent.sessionId}:steer-1`,
+      );
+      if (steerEvent === undefined || steerEvent.payload.kind !== "command.recorded")
+        throw new Error("the steer never reached the child's ledger");
+      if (steerEvent.payload.command.intent.kind !== "message.submit")
+        throw new Error("the steer was recorded as something other than a message");
+      // The child's own history holds the marked text its model read.
+      const recorded = await f.artifacts.read(steerEvent.payload.command.intent.reference);
+      expect(recorded.message.parts).toMatchObject([
+        { type: "text", text: expect.stringContaining(marker) },
+      ]);
+
+      expect((await f.host.projection({ sessionId: childId })).projection).toMatchObject({
+        turnActive: false,
+        lastTurnOutcome: "completed",
+        // A Ticket Session's delegate carries the Ticket but is not one itself.
+        session: { role: "subagent", parentSessionId: parent.sessionId, ticketId: f.ticketId },
+      });
+      expect(f.delegations.watching(childId)).toBe(false);
+      expect(f.delegations.liveChildren(parent.sessionId)).toEqual([]);
+      expect(f.reports).toEqual([]);
+      // The parent's own message and the kickoff; the notice rides the runtime.
+      expect(f.submitSessionMessage).toHaveBeenCalledTimes(2);
+      // One turn to ask, one turn to read the answer. Nothing else woke it.
+      expect(
+        (await f.engine.listEvents({ sessionId: parent.sessionId })).filter(
+          ({ payload }) => payload.kind === "turn.started",
+        ),
+      ).toHaveLength(2);
+    },
+  );
+});
+
+const startShell = (command: string): ScriptedReply => ({
+  tool: { name: "shell_start", args: { command } },
+});
+/**
+ * The pids `shell_start` reported, one per call, in the order first seen. The
+ * spawned shell leads its own group, and the pid is known at the spawn — so
+ * nothing races the turn's end the way a pid file the shell writes would.
+ */
+function startedPids(requests: ReturnType<typeof fixture>["script"]["requests"]): number[] {
+  const byCall = new Map<string, number>();
+  for (const message of requests.flat()) {
+    if (message.role !== "toolResult") continue;
+    const match = /Started background shell \S+ \(pid (\d+)\)/.exec(
+      JSON.stringify(message.content),
+    );
+    if (match !== null && !byCall.has(message.toolCallId))
+      byCall.set(message.toolCallId, Number(match[1]));
+  }
+  return [...byCall.values()];
+}
+/** Whether any process of the group `pid` leads is still alive. */
+function groupAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Real processes: the shell host spawns them in their own groups, as in a build.
+describe("completed delegate background shell cleanup (VC-809)", () => {
+  it("kills a delegate's shells with its attachment open, silently, and keeps a project's", async () => {
+    const notices: BackgroundShellNotice[] = [];
+    const shells = (shellHost = new BackgroundShellHost({
+      publishState: () => undefined,
+      publishRemoved: () => undefined,
+      onNotice: (notice) => notices.push(notice),
+      exitNoticeGraceMs: 10,
+      settleMs: 50,
+      killGraceMs: 200,
+    }));
+    const f = fixture("project", { shells });
+    const parent = await f.start({
+      operationId: "parent",
+      projectId: "project-1",
+      ticketId: null,
+      role: "project",
+      title: "Parent",
+    });
+    const child = await f.start({
+      operationId: "child",
+      projectId: "project-1",
+      ticketId: null,
+      role: "subagent",
+      parentSessionId: parent.sessionId,
+      title: "Helper",
+    });
+    f.replies.splice(
+      0,
+      f.replies.length,
+      startShell("exec sleep 300"),
+      { text: "Parent ready" },
+      startShell("exec sleep 300"),
+      { text: "Child answer" },
+      startShell("exec sleep 300"),
+      { text: "Child again" },
+    );
+    await f.submitSessionMessage({
+      sessionId: parent.sessionId,
+      commandId: "parent:first",
+      messageId: "parent:first-message",
+      text: "Start a server",
+    });
+    await f.submitSessionMessage({
+      sessionId: child.sessionId,
+      commandId: "child:first",
+      messageId: "child:first-message",
+      text: "Start a server and check it",
+    });
+    const { projection } = await f.host.projection({ sessionId: child.sessionId });
+    expect(projection.lastTurnOutcome).toBe("completed");
+    expect(projection.liveExecutor?.status).toBe("open");
+    expect(shells.list(child.sessionId)).toEqual([]);
+    const [parentPid, first] = startedPids(f.script.requests);
+    expect(first).toBeTypeOf("number");
+    await vi.waitFor(() => expect(groupAlive(first!)).toBe(false), { timeout: 5_000 });
+    // A Board or Ticket Session's shells outlive its turn, as before.
+    expect(shells.list(parent.sessionId)).toMatchObject([{ state: "running" }]);
+    expect(groupAlive(parentPid!)).toBe(true);
+
+    // A person resuming it gets a working shell port, retired again at the end.
+    await f.submitSessionMessage({
+      sessionId: child.sessionId,
+      commandId: "child:resume",
+      messageId: "child:resume-message",
+      text: "Once more",
+    });
+    expect(shells.list(child.sessionId)).toEqual([]);
+    const second = startedPids(f.script.requests)[2];
+    expect(second).toBeTypeOf("number");
+    await vi.waitFor(() => expect(groupAlive(second!)).toBe(false), { timeout: 5_000 });
+    const toolResults = f.script.requests.flatMap((request) =>
+      request.filter((message) => message.role === "toolResult"),
+    );
+    // Each request carries its Session's whole history, so count calls once.
+    expect(new Set(toolResults.map((message) => message.toolCallId)).size).toBe(3);
+    expect(toolResults.every((message) => !message.isError)).toBe(true);
+
+    // Volli's kill is not news: no exit notice reaches the answered child.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(notices).toEqual([]);
+    const events = await f.engine.listEvents({ sessionId: child.sessionId });
+    expect(events.filter(({ payload }) => payload.kind === "turn.started")).toHaveLength(2);
+  });
 });

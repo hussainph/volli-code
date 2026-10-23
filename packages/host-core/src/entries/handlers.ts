@@ -31,7 +31,14 @@ export type {
   RemoteHostUpdateWhen,
 } from "../handlers/remote-hosts-port";
 export type { RemoteSignInsPort } from "../handlers/remote-sign-ins-port";
+// What `project.remove` stops before its delete (VC-796), over a host's services.
+export {
+  hostProjectLiveWork,
+  type ProjectLiveWork,
+  type ProjectLiveWorkSources,
+} from "../project-remove";
 export type { HostLinkRelayPort, HostScopeRelayPort } from "../handlers/host-link-relay-port";
+export type { BrowserShortcutsPort } from "../handlers/browser-shortcuts-port";
 export {
   ADMITTED,
   admittedHandlers,

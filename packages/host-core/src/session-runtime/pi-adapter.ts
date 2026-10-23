@@ -136,7 +136,10 @@ import type { UIMessage } from "ai";
 import type { SessionWebPorts } from "../web/ports";
 import { readWorkspaceEnvironment } from "../session-env";
 import type { TurnAttachments } from "../turn-attachments";
+import { hostLogger } from "../log/root";
 import { STRUCTURED_ADAPTER_ID } from "./sessions";
+
+const log = hostLogger("pi-adapter");
 
 /**
  * The one adapter id. Pi is the structured product's single target executor.
@@ -268,7 +271,10 @@ export type AttachmentBrowserPort = RuntimeBrowserPort & {
  * The runtime's shell port with the one lifecycle door the adapter drives
  * (VC-270): the attachment ending. Required rather than optional, for
  * {@link AttachmentBrowserPort}'s reason — it is what keeps a Session's shells
- * from outliving it.
+ * from outliving it. A completed Subagent turn drives the same door early
+ * (VC-809): every shell the child owns, running or exited, is killed and
+ * forgotten (its removal published), and the port keeps serving the
+ * attachment for a turn a person resumes it with.
  */
 export type AttachmentShellPort = RuntimeShellPort & { dispose: () => void };
 
@@ -1978,6 +1984,17 @@ class PiBinding implements BindingHandle {
       // Capture at this boundary, before stream delivery can resume the child.
       if (this.#context.role === "subagent" && observation.state === "completed") {
         this.#browser?.turnEnded({ closeHeadlessOwned: true });
+        // Its background shells end here too (VC-809), killed as Volli's so
+        // no exit notice follows: a dev server left running would otherwise
+        // reopen the answered child when it exits, long after the parent was
+        // told. The port stays usable for a turn a person resumes it with.
+        // Like the tab cleanup, a failure here must not cost the delegate its
+        // answer: it is logged, and the attachment's end retries the kill.
+        try {
+          this.#shell?.dispose();
+        } catch (error) {
+          log.warn("completed delegate background shell cleanup failed", { error });
+        }
       } else {
         this.#browser?.turnEnded();
       }

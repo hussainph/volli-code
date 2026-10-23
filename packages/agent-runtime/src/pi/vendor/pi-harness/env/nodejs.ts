@@ -13,6 +13,7 @@ import {
   realpath,
   rename,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { homedir, constants as osConstants, tmpdir } from "node:os";
@@ -24,6 +25,7 @@ import {
   type ForegroundShellExecutor,
   ExecutionError,
   err,
+  type FileByteReader,
   FileError,
   type FileInfo,
   type FileKind,
@@ -464,6 +466,108 @@ class NodeTextLineReader implements TextLineReader {
   }
 }
 
+/**
+ * Positional reads over a regular file opened by {@link NodeExecutionEnv.openFileReader}
+ * (VC-801). Each read is bounded by its caller; nothing here buffers the file.
+ */
+class NodeFileByteReader implements FileByteReader {
+  readonly size: number;
+  private readonly file: Awaited<ReturnType<typeof openFile>>;
+  private readonly path: string;
+  private closed = false;
+
+  constructor(file: Awaited<ReturnType<typeof openFile>>, path: string, size: number) {
+    this.file = file;
+    this.path = path;
+    this.size = size;
+  }
+
+  async read(
+    position: number,
+    length: number,
+    context: Context,
+    into?: Uint8Array,
+  ): Promise<Result<Uint8Array, FileError>> {
+    const aborted = abortResult<Uint8Array>(context.abortSignal, this.path);
+    if (aborted) return aborted;
+    if (this.closed) return err(new FileError("invalid", "File reader is closed", this.path));
+    try {
+      const buffer = into ?? Buffer.allocUnsafe(length);
+      let filled = 0;
+      while (filled < length) {
+        const { bytesRead } = await this.file.read(
+          buffer,
+          filled,
+          length - filled,
+          position + filled,
+        );
+        const afterReadAbort = abortResult<Uint8Array>(context.abortSignal, this.path);
+        if (afterReadAbort) return afterReadAbort;
+        if (bytesRead === 0) break;
+        filled += bytesRead;
+      }
+      return ok(buffer.subarray(0, filled));
+    } catch (error) {
+      return err(toFileError(error, this.path));
+    }
+  }
+
+  async close(_context: Context): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    try {
+      await this.file.close();
+    } catch {
+      // Closing is best-effort, including after cancellation or an earlier I/O failure.
+    }
+  }
+}
+
+const NOT_A_REGULAR_FILE =
+  "Not a regular file (a FIFO, device or socket); only regular files can be read";
+
+/** Why a file of this kind cannot be read, or nothing when it is a regular file. */
+function notRegularFile(
+  stats: { isFile(): boolean; isDirectory(): boolean },
+  path: string,
+): FileError | undefined {
+  if (stats.isFile()) return undefined;
+  return stats.isDirectory()
+    ? new FileError("is_directory", "Path is a directory", path)
+    : new FileError("invalid", NOT_A_REGULAR_FILE, path);
+}
+
+/**
+ * Why an open failed. A socket cannot be opened at all, and its errno differs
+ * by platform (ENXIO, or macOS's EOPNOTSUPP, which libuv leaves unnamed), so
+ * the path's kind is looked up after the failure, to choose the words only.
+ */
+async function openFailure(error: unknown, path: string): Promise<FileError> {
+  try {
+    const refusal = notRegularFile(await stat(path), path);
+    if (refusal) return refusal;
+  } catch {
+    // The open's own error says it better.
+  }
+  return toFileError(error, path);
+}
+
+async function regularFileReader(
+  file: Awaited<ReturnType<typeof openFile>>,
+  path: string,
+  context: Context,
+): Promise<Result<FileByteReader, FileError>> {
+  const aborted = abortResult<FileByteReader>(context.abortSignal, path);
+  if (aborted) return aborted;
+  try {
+    const stats = await file.stat();
+    const refusal = notRegularFile(stats, path);
+    return refusal ? err(refusal) : ok(new NodeFileByteReader(file, path, stats.size));
+  } catch (error) {
+    return err(toFileError(error, path));
+  }
+}
+
 export class NodeExecutionEnv implements ExecutionEnv {
   cwd: string;
   private shellPath?: string;
@@ -885,6 +989,32 @@ export class NodeExecutionEnv implements ExecutionEnv {
     } catch (error) {
       return err(toFileError(error, resolved));
     }
+  }
+
+  /**
+   * Judged on the open descriptor rather than on the path, so there is no
+   * check-then-use window for a swap to slip a device past (VC-801; see
+   * docs/development/codeql-triage.md). Opened non-blocking, so a FIFO cannot
+   * hold the open, and without a controlling terminal, so a terminal cannot
+   * become one; neither flag changes anything for a regular file. A socket
+   * cannot be opened at all, and is refused in the same words.
+   */
+  async openFileReader(path: string, context: Context): Promise<Result<FileByteReader, FileError>> {
+    const resolved = resolvePath(this.cwd, path);
+    const aborted = abortResult<FileByteReader>(context.abortSignal, resolved);
+    if (aborted) return aborted;
+    let file: Awaited<ReturnType<typeof openFile>>;
+    try {
+      file = await openFile(
+        resolved,
+        constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOCTTY,
+      );
+    } catch (error) {
+      return err(await openFailure(error, resolved));
+    }
+    const opened = await regularFileReader(file, resolved, context);
+    if (!opened.ok) await file.close().catch(() => undefined);
+    return opened;
   }
 
   async writeFile(

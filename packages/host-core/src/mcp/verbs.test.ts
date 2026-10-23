@@ -694,6 +694,7 @@ describe("mcp_enable, mcp_disable, mcp_tools and mcp_refresh", () => {
     // Nothing was taken from this Session, so the install copy's "not available
     // in this Session" would be false here.
     expect(result.text).toContain("keeps every tool it already holds");
+    expect(result.text).toContain("answers that the server is disabled");
     expect(result.text).not.toContain("not available in this Session");
     expect(listMcpServers(h.db, "project-one")[0]?.enabled).toBe(false);
     expect(h.settings.selectedTools("project-one")).toEqual([]);

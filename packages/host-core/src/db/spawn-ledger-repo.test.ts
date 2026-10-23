@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import { SPAWN_LEDGER_PARKED_COLUMN_MIGRATION } from "./spawn-ledger-parked-migration";
+import { MIGRATIONS } from "./migrations";
 import {
   listOpenSpawns,
+  listParkedTerminalSpawns,
   markSpawnExited,
+  markSpawnParked,
   pruneSpawnLedger,
   recordSpawn,
   SPAWN_LEDGER_COMMAND_MAX,
@@ -110,6 +114,57 @@ describe("the spawn ledger's storage", () => {
     // WebContentsView with no child process (VC-341).
     expect(spawnLedgerEntryFrom({ ...row, kind: "browser" })).toBeNull();
     expect(spawnLedgerEntryFrom({ ...row, pid: 0 })).toBeNull();
+  });
+
+  it("lists only open terminal rows an earlier launch left parked (VC-833)", () => {
+    const { db: handle } = db();
+    const BOOT = NOW + DAY;
+    recordSpawn(handle, "parked", spawn({ kind: "terminal", pid: 1 }));
+    recordSpawn(handle, "woken", spawn({ kind: "terminal", pid: 2 }));
+    recordSpawn(handle, "never-parked", spawn({ kind: "terminal", pid: 3 }));
+    recordSpawn(handle, "exited", spawn({ kind: "terminal", pid: 4 }));
+    recordSpawn(handle, "this-launch", spawn({ kind: "terminal", pid: 5 }));
+    recordSpawn(handle, "a-shell", spawn({ kind: "shell", pid: 6 }));
+    for (const id of ["parked", "woken", "exited", "a-shell"]) markSpawnParked(handle, id, NOW);
+    markSpawnParked(handle, "woken", null);
+    markSpawnExited(handle, "exited", NOW + 1);
+    // Parked after this launch began: its own, not a stranded one.
+    markSpawnParked(handle, "this-launch", BOOT);
+    // A hand edit that made the pid unreadable must never name a signal.
+    recordSpawn(handle, "bad-pid", spawn({ kind: "terminal", pid: 7 }));
+    markSpawnParked(handle, "bad-pid", NOW);
+    handle.prepare("UPDATE spawned_processes SET pid = -1 WHERE id = 'bad-pid'").run();
+
+    expect(listParkedTerminalSpawns(handle, BOOT)).toEqual([
+      { id: "parked", ...spawn({ kind: "terminal", pid: 1 }) },
+    ]);
+  });
+
+  it("keeps the first park time while the mark stands, and clears it on wake", () => {
+    const { db: handle } = db();
+    recordSpawn(handle, "row-1", spawn({ kind: "terminal" }));
+    const parkedAt = () =>
+      (handle.prepare("SELECT parked_at FROM spawned_processes").get() as { parked_at: unknown })
+        .parked_at;
+    markSpawnParked(handle, "row-1", NOW);
+    markSpawnParked(handle, "row-1", NOW + 60_000);
+    expect(parkedAt()).toBe(NOW);
+    markSpawnParked(handle, "row-1", null);
+    expect(parkedAt()).toBeNull();
+    markSpawnParked(handle, "row-1", NOW + 120_000);
+    expect(parkedAt()).toBe(NOW + 120_000);
+  });
+
+  it("adds the parked column once, however often migration 063 is offered", () => {
+    const { db: handle } = db();
+    const migration = MIGRATIONS.find((entry) => entry.version === 63);
+    expect(migration?.sql).toBe(SPAWN_LEDGER_PARKED_COLUMN_MIGRATION);
+    // The test database already ran it; a re-offer must converge, not throw.
+    expect(() => migration?.apply?.(handle)).not.toThrow();
+    handle.exec("ALTER TABLE spawned_processes DROP COLUMN parked_at");
+    migration?.apply?.(handle);
+    const columns = handle.pragma("table_info(spawned_processes)") as { name: string }[];
+    expect(columns.filter(({ name }) => name === "parked_at")).toHaveLength(1);
   });
 
   it("prunes old exits but keeps open rows through the window the orphans live in", () => {

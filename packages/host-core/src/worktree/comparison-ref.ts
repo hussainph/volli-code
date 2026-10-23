@@ -9,34 +9,15 @@
  * both directions. When it does not (never-fetched repo, no remote, base is
  * itself a remote-tracking name), the local base branch is all there is.
  */
-import type { RunGit, RunGitAsync } from "./types";
+import type { RunGitAsync } from "./types";
 
 /**
  * `origin/<base>` when that remote-tracking ref exists, else `baseBranch`
  * unchanged (`null` passes through). Existence is probed with `git rev-parse
  * --verify --quiet` on the fully-qualified ref, so a base that is already a
  * remote-tracking name ("origin/main") simply fails the probe and falls back
- * to itself.
- */
-export function resolveComparisonRef(
-  git: RunGit,
-  cwd: string,
-  baseBranch: string | null,
-): string | null {
-  if (!baseBranch) return null;
-  const remoteRef = `origin/${baseBranch}`;
-  try {
-    git(["rev-parse", "--verify", "--quiet", `refs/remotes/${remoteRef}`], cwd);
-    return remoteRef;
-  } catch {
-    return baseBranch;
-  }
-}
-
-/**
- * Async counterpart for operations such as sync that must leave Electron main
- * responsive while Git runs local hooks. It deliberately keeps the same
- * origin-first answer as {@link resolveComparisonRef}; only execution changes.
+ * to itself. Async, so operations such as sync leave Electron main responsive
+ * while Git runs local hooks.
  */
 export async function resolveComparisonRefAsync(
   git: RunGitAsync,

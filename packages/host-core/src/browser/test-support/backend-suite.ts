@@ -47,7 +47,8 @@ const signal = (): AbortSignal => new AbortController().signal;
 /**
  * Every field each verb answers with, by the shared types. `satisfies` keeps
  * the lists honest: a field added to a result type fails to compile here until
- * the suite checks it on every backend.
+ * the suite checks it on every backend. `false` marks a field only a read the
+ * host's bound cut carries (VC-237), which the suite's small pages never are.
  */
 const PAGE_KEYS = {
   tabId: true,
@@ -61,8 +62,10 @@ const SNAPSHOT_KEYS = {
   snapshotText: true,
   generation: true,
   truncated: true,
+  whole: false,
+  empty: true,
   picture: true,
-} satisfies Record<keyof RuntimeBrowserSnapshot, true>;
+} satisfies Record<keyof RuntimeBrowserSnapshot, boolean>;
 export const RESULT_KEYS = {
   tab: {
     tabId: true,
@@ -73,7 +76,10 @@ export const RESULT_KEYS = {
     heldBy: true,
   } satisfies Record<keyof RuntimeBrowserTab, true>,
   snapshot: SNAPSHOT_KEYS,
-  act: { ...SNAPSHOT_KEYS, target: true } satisfies Record<keyof RuntimeBrowserActResult, true>,
+  act: { ...SNAPSHOT_KEYS, target: true, changed: true } satisfies Record<
+    keyof RuntimeBrowserActResult,
+    boolean
+  >,
   find: {
     ...PAGE_KEYS,
     query: true,
@@ -91,14 +97,17 @@ export const RESULT_KEYS = {
     width: true,
     height: true,
   } satisfies Record<keyof RuntimeBrowserScreenshot, true>,
-  console: { ...PAGE_KEYS, messages: true, truncated: true } satisfies Record<
+  console: { ...PAGE_KEYS, messages: true, truncated: true, kept: false } satisfies Record<
     keyof RuntimeBrowserConsole,
-    true
+    boolean
   >,
 } as const;
 
 const keysOf = (value: object): string[] => Object.keys(value).toSorted();
-const expectedKeys = (shape: object): string[] => Object.keys(shape).toSorted();
+const expectedKeys = (shape: Record<string, boolean>): string[] =>
+  Object.keys(shape)
+    .filter((key) => shape[key])
+    .toSorted();
 
 /** The ref the snapshot printed for an accessible name: `- role "name" [ref=eN]`. */
 export function refNamed(snapshotText: string, name: string): string {

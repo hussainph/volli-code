@@ -67,6 +67,11 @@ describe("ticketBranchDisplayId", () => {
     ["volli/VC-12", "VC-12"],
     ["volli/VC-2-3-things", "VC-2"],
     ["volli/A1B2C-7-x", "A1B2C-7"],
+    // Stacked PR branches cut from one ticket (VC-659): a suffix after the
+    // number still names the same ticket.
+    ["volli/VC-627c-hostd-stable-venue", "VC-627"],
+    ["volli/VC-627b", "VC-627"],
+    ["volli/VC-627-b-second-slice", "VC-627"],
     // Round-trips whatever `ticketBranchName` builds, slug or none.
     [ticketBranchName("VC-297", "Automation editor history shows every automation"), "VC-297"],
     [ticketBranchName("VC-3", "!!!"), "VC-3"],
@@ -80,12 +85,17 @@ describe("ticketBranchDisplayId", () => {
     ["volli/"],
     ["volli/VC"],
     ["volli/VC-"],
-    ["volli/VC-12x-slug"],
     ["volli/vc-12-lowercase-prefix"],
     ["volli/1VC-12-digit-first"],
     ["volli/ABCDEF-1-prefix-too-long"],
     ["feature/volli/VC-12-nested"],
     ["refs/heads/volli/VC-12-full-ref"],
+    // Only a one-letter slice or a slug may follow the number (VC-659).
+    ["volli/VC-627.bak"],
+    ["volli/VC-627_x"],
+    ["volli/VC-627C-uppercase-slice"],
+    ["volli/VC-627cd-two-letter-slice"],
+    ["volli/VC-627c.bak"],
   ])("reads %s as no ticket", (branch) => {
     expect(ticketBranchDisplayId(branch)).toBeNull();
   });
@@ -126,7 +136,17 @@ describe("classifyTicketWorktreeCheckout", () => {
   });
 
   it.each([
+    ["a stacked branch with a letter suffix", "volli/VC-297c-hostd-stable-venue"],
+    ["a stacked branch with a lettered slice", "volli/VC-297-b-second-slice"],
+  ])("adopts %s of the same ticket", (_label, branch) => {
+    expect(classify(branch)).toEqual({ kind: "adopt", branch });
+  });
+
+  it.each([
     ["another ticket's branch", "volli/VC-298-something-else"],
+    ["a ticket whose number only extends this one", "volli/VC-2970"],
+    ["a backup copy of this ticket's branch name", "volli/VC-297.bak"],
+    ["an underscore suffix on this ticket's number", "volli/VC-297_x"],
     ["a ticket whose number only starts the same", "volli/VC-2970-lookalike"],
     ["the same number under another prefix", "volli/VD-297-other-project"],
     ["a branch outside the convention", "fix/browser-tab-smoke-popup-flake"],

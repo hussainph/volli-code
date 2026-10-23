@@ -27,6 +27,7 @@ import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
 import { resolveChangeSetBaseRevision } from "./comparison-ref";
 import { runGitCapturingAsync, stderrOf } from "./git";
+import { readOnlyGitAsync } from "./scan";
 import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";
 
 export interface VenueSnapshotInput {
@@ -145,11 +146,16 @@ interface DirtyEntry {
  * are independent of each other, so the snapshot costs one round trip rather
  * than two, and the tree cannot move between them any more than it could
  * between two sequential spawns.
+ *
+ * Read-only git ({@link readOnlyGitAsync}): a venue may be the Main checkout
+ * many Sessions share, and a plain `git status` holds its `index.lock` for the
+ * whole untracked scan — any of their `git add`/`commit` calls would fail.
  */
 export async function venueSnapshot(
-  git: RunGitAsync,
+  runGit: RunGitAsync,
   input: VenueSnapshotInput,
 ): Promise<WorktreeResult<VenueSnapshot>> {
+  const git = readOnlyGitAsync(runGit);
   try {
     // `--show-current` rather than `rev-parse --abbrev-ref HEAD`: it prints
     // nothing on a detached HEAD (instead of the literal string "HEAD", which a

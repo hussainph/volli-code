@@ -13,7 +13,7 @@
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { Ticket } from "@volli/shared";
+import { USER_ACTOR, type Ticket } from "@volli/shared";
 
 import { TicketActivityFeed } from "./ticket-activity-feed";
 import { useBoardStore } from "@renderer/stores/board";
@@ -190,5 +190,91 @@ describe("the feed while its first read is in flight (VC-383)", () => {
     expect(loading()).toBeNull();
     expect(container?.textContent).not.toContain("No activity yet.");
     expect(container?.textContent).toContain("Couldn't load activity.");
+  });
+});
+
+/** An Escape keydown, composing (an IME's own, keyCode 229) or plain. */
+function escape(target: HTMLElement, isComposing: boolean): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key: "Escape",
+    isComposing,
+    keyCode: isComposing ? 229 : 27,
+    bubbles: true,
+    cancelable: true,
+  });
+  act(() => {
+    target.dispatchEvent(event);
+  });
+  return event;
+}
+
+/**
+ * VC-806: Chromium on macOS delivers the Escape that closes an IME's candidate
+ * window as a `keydown` with `isComposing` set. That keystroke is the IME's —
+ * taking it left edit mode and threw the edit away mid-word.
+ */
+describe("a comment being edited", () => {
+  // The feed's own "Add a comment" box is a textarea too.
+  const editor = () =>
+    container?.querySelector<HTMLTextAreaElement>("li textarea:not([aria-label])") ?? null;
+
+  beforeEach(() => {
+    // The comment body's clamp measures itself; jsdom has no layout to report.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+  });
+
+  async function openEditor(): Promise<HTMLTextAreaElement> {
+    doors.comments.mockResolvedValueOnce({
+      ok: true as const,
+      comments: [
+        {
+          id: "c1",
+          ticketId: "t1",
+          sessionId: null,
+          actor: USER_ACTOR,
+          body: "Original",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    });
+    await mount();
+    await act(async () => {
+      container?.querySelector<HTMLButtonElement>('[aria-label="Edit comment"]')?.click();
+    });
+    const textarea = editor()!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+        textarea,
+        "テスト",
+      );
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    return textarea;
+  }
+
+  it("stays in edit mode, draft intact, on a composing Escape", async () => {
+    const textarea = await openEditor();
+
+    const event = escape(textarea, true);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(editor()).toBe(textarea);
+    expect(textarea.value).toBe("テスト");
+  });
+
+  it("still leaves edit mode on a plain Escape", async () => {
+    const textarea = await openEditor();
+
+    escape(textarea, false);
+
+    expect(editor()).toBeNull();
   });
 });
