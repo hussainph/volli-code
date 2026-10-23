@@ -211,6 +211,52 @@ export class BrowserTabHost extends BrowserTabRegistry<
   BrowserTabHostDependencies
 > {
   private readonly securedSessions = new WeakSet<Session>();
+  private readonly clearingPartitions = new Map<string, Promise<void>>();
+
+  /**
+   * Retire only the agent scope's in-memory storage, never the person's profile.
+   * Shown tabs retain their partition; Session end deliberately does not call this.
+   */
+  clearAgentPartition(scope: { projectId: string; ticketId: string | null }): Promise<void> {
+    const partition = browserSessionPartition({ ...scope, createdBy: "session" });
+    const pending = this.clearingPartitions.get(partition);
+    if (pending !== undefined) return pending;
+    for (const entry of this.tabs.values()) {
+      if (
+        browserSessionPartition(entry.state) === partition &&
+        entry.state.presentation === "headless"
+      ) {
+        this.close(entry.state.tabId);
+      }
+    }
+    for (const entry of this.tabs.values()) {
+      if (browserSessionPartition(entry.state) === partition) return Promise.resolve();
+    }
+    // Install the barrier before calling Electron. A rapid unarchive must not
+    // load a new page while the old partition's credentials are being erased.
+    const clearing = Promise.resolve()
+      .then(async () => {
+        const isolatedSession = this.deps.fromPartition(partition);
+        const operations = ["clearStorageData", "clearCache"] as const;
+        await Promise.all(
+          operations.map(async (operation) => {
+            try {
+              await isolatedSession[operation]();
+            } catch (error) {
+              log.error("could not clear agent Browser partition", { partition, operation, error });
+            }
+          }),
+        );
+      })
+      .catch((error: unknown) => {
+        log.error("could not access agent Browser partition for cleanup", { partition, error });
+      })
+      .finally(() => {
+        this.clearingPartitions.delete(partition);
+      });
+    this.clearingPartitions.set(partition, clearing);
+    return clearing;
+  }
   /**
    * Who watches which tabs are ON SCREEN and where their pages sit (VC-239):
    * the cursor overlay, which draws only over a tab attached to the app window
@@ -482,6 +528,11 @@ export class BrowserTabHost extends BrowserTabRegistry<
   open(input: BrowserTabCreateOptions): BrowserTabState {
     if (!isAllowedBrowserTarget(input.url)) {
       throw new Error("Browser Tabs only support HTTP(S) URLs");
+    }
+    if (this.clearingPartitions.has(browserSessionPartition(input))) {
+      throw new Error(
+        "Browser storage for this scope is being cleared; try opening the tab again.",
+      );
     }
     this.assertCapacity(input);
     const tabId = this.deps.createId();

@@ -1394,6 +1394,11 @@ const appStartup = app.whenReady().then(async () => {
     projectOfTicket: (ticketId) =>
       sessionDb === null ? undefined : getTicketRow(sessionDb, ticketId)?.project_id,
     workspaces: () => (sessionDb === null ? [] : listProjects(sessionDb).map(({ id }) => id)),
+    // Tombstones cover hard deletion too, which cannot emit a Ticket Event
+    // after its history is gone. This feed sees every command door.
+    onTicketRemoved: (projectId, ticketId) => {
+      void browserTabs.clearAgentPartition({ projectId, ticketId });
+    },
   });
   tapDataChanged((change) => boardFeed.noteDataChanged(change));
   const runtimeAutomations = createRuntimeAutomations({
@@ -1841,7 +1846,10 @@ const appStartup = app.whenReady().then(async () => {
     // Archiving or deleting a ticket drops its Sessions' saved tool output (VC-469).
     piSessionsDirectory,
     // A removed Workspace's board feed is released, its followers told to resnapshot.
-    onProjectRemoved: (projectId) => boardFeed.dispose(projectId),
+    onProjectRemoved: (projectId) => {
+      boardFeed.dispose(projectId);
+      void browserTabs.clearAgentPartition({ projectId, ticketId: null });
+    },
   });
   // Pi sidecar cleanup is a separate, explicit surface: registration performs
   // no scan and no deletion. The read-only inventory must run before its
