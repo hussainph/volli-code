@@ -16,13 +16,13 @@
 import type { TicketWake } from "@volli/host-core/board";
 
 export interface HeadlessTabCloser {
-  closeHeadlessForTicket(ticketId: string): string[];
+  clearAgentPartition(scope: { projectId: string; ticketId: string | null }): Promise<void>;
 }
 
 /**
- * Closes an archived Ticket's headless agent tabs. Tabs the person previewed
- * or promoted are theirs and stand — the same trade the Session's own end
- * makes. Returns the unsubscribe.
+ * Closes an archived Ticket's headless agent tabs and clears its unused
+ * partition. Previewed or promoted tabs are the person's and retain storage.
+ * Returns the unsubscribe; cleanup failures are logged by the host.
  */
 export function closeHeadlessTabsOnTicketArchive(
   host: HeadlessTabCloser,
@@ -30,6 +30,6 @@ export function closeHeadlessTabsOnTicketArchive(
 ): () => void {
   return subscribe((wake) => {
     if (wake.event.payload.kind !== "archived") return;
-    host.closeHeadlessForTicket(wake.event.ticketId);
+    void host.clearAgentPartition({ projectId: wake.projectId, ticketId: wake.event.ticketId });
   });
 }

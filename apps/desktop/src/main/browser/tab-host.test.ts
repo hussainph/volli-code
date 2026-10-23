@@ -26,6 +26,9 @@ import {
   type BrowserTraceStepInput,
 } from "@volli/host-core/browser";
 
+import { createBoardChangeFeed, type TicketWake } from "@volli/host-core/board";
+import { installHostLog } from "@volli/host-core/log";
+import { closeHeadlessTabsOnTicketArchive } from "./lifecycle";
 import { BROWSER_START_URL } from "../../browser-start-page";
 import {
   BROWSER_INTERACTION_QUIET_MS,
@@ -39,6 +42,14 @@ import {
 } from "./tab-host";
 
 class FakeSession {
+  storage = new Set<string>();
+  cache = new Set<string>();
+  clearStorageData = vi.fn(async () => {
+    this.storage.clear();
+  });
+  clearCache = vi.fn(async () => {
+    this.cache.clear();
+  });
   permissionRequestHandler:
     | ((permission: string, callback: (granted: boolean) => void) => void)
     | null = null;
@@ -2418,6 +2429,257 @@ describe("BrowserTabHost lifecycle (VC-238)", () => {
       elsewhere.tabId,
       person.tabId,
     ]);
+  });
+});
+
+describe("agent partition retirement", () => {
+  const scope = { projectId: "project-1", ticketId: "ticket-1" };
+  const input = {
+    ...scope,
+    url: "https://agent.example.com",
+    createdBy: "session" as const,
+    ownerSessionId: "session-a",
+  };
+  const partition = browserSessionPartition(input);
+
+  function archiveWake(): (kind: "archived" | "unarchived") => void {
+    let listener!: (wake: TicketWake) => void;
+    closeHeadlessTabsOnTicketArchive(host, (next) => {
+      listener = next;
+      return () => {};
+    });
+    return (kind) =>
+      listener({
+        projectId: scope.projectId,
+        cursor: "c1",
+        event: {
+          id: "e1",
+          ticketId: scope.ticketId,
+          actor: "user",
+          createdAt: 1,
+          payload: { kind },
+        },
+      });
+  }
+
+  it("archives after closing headless tabs, clears once, and reopens fresh after unarchive", async () => {
+    host.open(input);
+    host.open({ ...input, ownerSessionId: "session-b" });
+    const isolated = sessions.get(partition)!;
+    isolated.storage.add("cookie=token");
+    isolated.cache.add("response");
+    isolated.clearStorageData.mockImplementation(async () => {
+      expect(
+        views.slice(0, 2).every((view) => view.webContents.close.mock.calls.length === 1),
+      ).toBe(true);
+      isolated.storage.clear();
+    });
+    const emit = archiveWake();
+    const cleanup = vi.spyOn(host, "clearAgentPartition");
+    // Board commands emit the archive wake before stamping the tombstone.
+    // Retention emits just the wake, so both paths must coalesce.
+    const feed = createBoardChangeFeed({
+      onTicketRemoved: (projectId, ticketId) => {
+        void host.clearAgentPartition({ projectId, ticketId });
+      },
+    });
+    emit("archived");
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith(scope);
+    feed.stamp(scope.projectId, [
+      { kind: "ticket", op: "delete", id: scope.ticketId, projectId: scope.projectId },
+    ]);
+    expect(cleanup).toHaveBeenCalledTimes(2);
+    expect(cleanup.mock.results[1]!.value).toBe(cleanup.mock.results[0]!.value);
+    await cleanup.mock.results[0]!.value;
+    expect(isolated.clearStorageData).toHaveBeenCalledOnce();
+    expect(isolated.clearCache).toHaveBeenCalledOnce();
+    expect(host.list(scope)).toEqual([]);
+
+    emit("unarchived");
+    const fresh = host.open(input);
+    expect(host.list(scope)).toEqual([fresh]);
+    expect(sessions.get(partition)).toBe(isolated);
+    expect(isolated.storage.size).toBe(0);
+    expect(isolated.cache.size).toBe(0);
+    expect(isolated.clearStorageData).toHaveBeenCalledOnce();
+  });
+
+  it.each(["preview", "tab"] as const)(
+    "leaves a partition with a person-shown %s tab alone",
+    async (presentation) => {
+      const shown = host.open(input);
+      host.open({ ...input, ownerSessionId: "session-b" });
+      host.setPresentation(shown.tabId, presentation);
+      const cleanup = vi.spyOn(host, "clearAgentPartition");
+      archiveWake()("archived");
+      expect(cleanup).toHaveBeenCalledExactlyOnceWith(scope);
+      await cleanup.mock.results[0]!.value;
+      expect(host.list(scope).map((tab) => tab.tabId)).toEqual([shown.tabId]);
+      expect(sessions.get(partition)!.clearStorageData).not.toHaveBeenCalled();
+      expect(sessions.get(partition)!.clearCache).not.toHaveBeenCalled();
+    },
+  );
+
+  it("never clears the person's persistent session, even with a personal tab on the Ticket", async () => {
+    const person = host.open({ ...scope, url: input.url, createdBy: "user" });
+    host.open(input);
+    const cleanup = vi.spyOn(host, "clearAgentPartition");
+    archiveWake()("archived");
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith(scope);
+    await cleanup.mock.results[0]!.value;
+    expect(host.list(scope)).toEqual([person]);
+    expect(sessions.get(partition)!.clearStorageData).toHaveBeenCalledOnce();
+    const personal = sessions.get("persist:volli-browser:user")!;
+    expect(personal.clearStorageData).not.toHaveBeenCalled();
+    expect(personal.clearCache).not.toHaveBeenCalled();
+  });
+
+  it("clears on a deletion tombstone, including a Ticket with no live tabs", async () => {
+    const cleanup = vi.spyOn(host, "clearAgentPartition");
+    const feed = createBoardChangeFeed({
+      onTicketRemoved: (projectId, ticketId) => {
+        void host.clearAgentPartition({ projectId, ticketId });
+      },
+    });
+    feed.stamp(scope.projectId, [
+      { kind: "ticket", op: "delete", id: scope.ticketId, projectId: scope.projectId },
+    ]);
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith(scope);
+    await cleanup.mock.results[0]!.value;
+    expect(sessions.get(partition)!.clearStorageData).toHaveBeenCalledOnce();
+    expect(sessions.get(partition)!.clearCache).toHaveBeenCalledOnce();
+  });
+
+  it("clears the removed Project's partition without touching Ticket or user partitions", async () => {
+    host.open({ ...input, ticketId: null });
+    const ticket = host.open(input);
+    const person = host.open({ ...scope, url: input.url, createdBy: "user" });
+    await host.clearAgentPartition({ projectId: scope.projectId, ticketId: null });
+    const project = sessions.get(browserSessionPartition({ ...input, ticketId: null }))!;
+    expect(project.clearStorageData).toHaveBeenCalledOnce();
+    expect(project.clearCache).toHaveBeenCalledOnce();
+    expect(sessions.get(partition)!.clearStorageData).not.toHaveBeenCalled();
+    expect(sessions.get("persist:volli-browser:user")!.clearStorageData).not.toHaveBeenCalled();
+    expect(host.list(scope)).toEqual([ticket, person]);
+  });
+
+  it("does not close or clear another scope with the same Ticket id", async () => {
+    const otherInput = { ...input, projectId: "project-2" };
+    const other = host.open(otherInput);
+    host.open(input);
+    await host.clearAgentPartition(scope);
+    const otherSession = sessions.get(browserSessionPartition(otherInput))!;
+    expect(otherSession.clearStorageData).not.toHaveBeenCalled();
+    expect(otherSession.clearCache).not.toHaveBeenCalled();
+    expect(host.list({ projectId: otherInput.projectId })).toEqual([other]);
+  });
+
+  it("keeps per-Ticket storage when a Session ends", () => {
+    host.open(input);
+    host.closeHeadlessOwnedBy(input.ownerSessionId);
+    expect(sessions.get(partition)!.clearStorageData).not.toHaveBeenCalled();
+    expect(sessions.get(partition)!.clearCache).not.toHaveBeenCalled();
+    expect(host.open(input).ticketId).toBe(scope.ticketId);
+  });
+
+  it("coalesces concurrent cleanup and refuses a new tab until both clears settle", async () => {
+    host.open(input);
+    let release!: () => void;
+    sessions.get(partition)!.clearCache.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const clearing = host.clearAgentPartition(scope);
+    expect(host.clearAgentPartition(scope)).toBe(clearing);
+    await Promise.resolve();
+    expect(() => host.open(input)).toThrow("storage for this scope is being cleared");
+    release();
+    await clearing;
+    expect(sessions.get(partition)!.clearStorageData).toHaveBeenCalledOnce();
+    expect(sessions.get(partition)!.clearCache).toHaveBeenCalledOnce();
+    expect(host.open(input).ticketId).toBe(scope.ticketId);
+  });
+
+  it("logs a failed close, keeps that tab's storage, and continues closing other tabs", async () => {
+    const stuck = host.open(input);
+    host.open({ ...input, ownerSessionId: "session-b" });
+    vi.spyOn(host, "close").mockImplementationOnce(() => {
+      throw new Error("close failed");
+    });
+    const records: unknown[] = [];
+    const undo = installHostLog({
+      level: "error",
+      sink: {
+        write: (record) => {
+          records.push(record);
+        },
+      },
+    });
+    try {
+      await expect(host.clearAgentPartition(scope)).resolves.toBeUndefined();
+      expect(host.list(scope).map((tab) => tab.tabId)).toEqual([stuck.tabId]);
+      expect(sessions.get(partition)!.clearStorageData).not.toHaveBeenCalled();
+      expect(sessions.get(partition)!.clearCache).not.toHaveBeenCalled();
+      expect(records).toEqual([expect.objectContaining({ partition, tabId: stuck.tabId })]);
+    } finally {
+      undo();
+    }
+  });
+
+  it("still clears when Electron throws closing a tab already forgotten from the registry", async () => {
+    host.open(input);
+    views[0]!.webContents.close.mockImplementationOnce(() => {
+      throw new Error("Object has been destroyed");
+    });
+    const records: unknown[] = [];
+    const undo = installHostLog({
+      level: "error",
+      sink: {
+        write: (record) => {
+          records.push(record);
+        },
+      },
+    });
+    try {
+      await expect(host.clearAgentPartition(scope)).resolves.toBeUndefined();
+      expect(host.list(scope)).toEqual([]);
+      expect(sessions.get(partition)!.clearStorageData).toHaveBeenCalledOnce();
+      expect(sessions.get(partition)!.clearCache).toHaveBeenCalledOnce();
+      expect(records).toHaveLength(1);
+    } finally {
+      undo();
+    }
+  });
+
+  it("logs failures independently and releases the cleanup barrier without a toast", async () => {
+    host.open(input);
+    const isolated = sessions.get(partition)!;
+    isolated.clearStorageData.mockRejectedValue(new Error("storage failed"));
+    isolated.clearCache.mockRejectedValue(new Error("cache failed"));
+    const records: unknown[] = [];
+    const undo = installHostLog({
+      level: "error",
+      sink: {
+        write: (record) => {
+          records.push(record);
+        },
+      },
+    });
+    try {
+      await expect(host.clearAgentPartition(scope)).resolves.toBeUndefined();
+      expect(records).toHaveLength(2);
+      expect(records).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ partition, operation: "clearStorageData" }),
+          expect.objectContaining({ partition, operation: "clearCache" }),
+        ]),
+      );
+      expect(host.open(input).ticketId).toBe(scope.ticketId);
+    } finally {
+      undo();
+    }
   });
 });
 

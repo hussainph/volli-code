@@ -24,11 +24,19 @@
  *   answers for is `subscription-resnapshot-required`; a host restart starts a
  *   new instance, so every Client resnapshots. Durability can come later
  *   without a wire change, because the cursor is opaque.
+ * - **Removal.** A Ticket's tombstone is the one stamp that says a Ticket left
+ *   the board, whichever writer made it (an archive keeps the row; a delete
+ *   drops both). {@link BoardChangeFeedOptions.onTicketRemoved} is the host's
+ *   own notice of that fact, for reclaiming what the Ticket held.
  *
  * In memory, single-threaded, host-owned: no Electron, no transport.
  */
 import { randomUUID } from "node:crypto";
 import { FeedResnapshotRequiredError, type BoardChange, type DataChangeScope } from "@volli/shared";
+
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("board-feed");
 
 /** One delivery: the changes stamped up to and including `cursor`, oldest first. */
 export interface BoardFeedBatch {
@@ -53,6 +61,15 @@ export interface BoardChangeFeedOptions {
   readonly workspaces?: () => readonly string[];
   /** Entities retained per Workspace; {@link BOARD_FEED_RETENTION} by default. */
   readonly retention?: number;
+  /**
+   * Told once per Ticket a committed stamp removed from the board: the
+   * tombstone an archive or a hard delete writes, and nothing else.
+   *
+   * Host teardown, not a Client delivery (VC-837 clears the Ticket's Browser
+   * partition here). A throw is reported and swallowed — the command it hangs
+   * off has already committed.
+   */
+  readonly onTicketRemoved?: (projectId: string, ticketId: string) => void;
 }
 
 interface Stamped {
@@ -160,6 +177,8 @@ export class BoardChangeFeed {
       feed.latest.delete(oldestKey);
       feed.floor = oldest.seq;
     }
+    // Before the subscribers: reclaim must not wait on, or be skipped by, one.
+    this.#announceRemovals(changes);
     const batch: BoardFeedBatch = {
       cursor: cursorOf(feed),
       changes,
@@ -167,6 +186,24 @@ export class BoardChangeFeed {
     // A copy: a listener may unsubscribe while the batch is delivered.
     // oxlint-disable-next-line unicorn/no-useless-spread
     for (const listener of [...feed.listeners.keys()]) listener(batch);
+  }
+
+  /**
+   * Reports the tombstones written by archive and delete commands, not rowless
+   * invalidations or changes to other entities. Errors are logged and swallowed:
+   * teardown must not unwind a command whose write has already committed.
+   */
+  #announceRemovals(changes: readonly BoardChange[]): void {
+    const removed = this.#options.onTicketRemoved;
+    if (removed === undefined) return;
+    for (const change of changes) {
+      if (change.kind !== "ticket" || change.op !== "delete") continue;
+      try {
+        removed(change.projectId, change.id);
+      } catch (error) {
+        log.error("ticket removal listener failed", { error, ticketId: change.id });
+      }
+    }
   }
 
   /**

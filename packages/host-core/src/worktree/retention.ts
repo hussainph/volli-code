@@ -30,6 +30,7 @@ import { recordTicketEvent } from "../db/events-repo";
 import { prepared } from "../db/prepared";
 import { getTicketRow } from "../db/tickets-repo";
 import { archiveTicketCommand } from "../ticket-commands";
+import { withTicketWake } from "../ticket-wake";
 import type { WorktreeTrimReport } from "@volli/shared";
 import type { BusyWorktreeSites } from "./activity";
 import type { AgentSiteReleaseReport } from "./agent-sites";
@@ -144,6 +145,11 @@ const USER_ACTOR: TicketEventActor = { kind: "user" };
  * is safely gone is the ticket archived (reversible; branch, `pr_url`, and the
  * event log all survive — #16). Never auto-invoked; the retention watch only
  * ever PROMPTS, the human disposes.
+ *
+ * The archive is announced like the board's own (`withTicketWake`): this path
+ * reaches `archiveTicketCommand` directly, and a committed archive that no
+ * wake names leaves main's post-archive work — closing the Ticket's headless
+ * Browser Tabs, clearing its partition (VC-837) — undone.
  */
 export async function archiveAndClean(
   deps: WorktreePorts,
@@ -161,7 +167,9 @@ export async function archiveAndClean(
   const removed = await remove(deps, ticketId, { ...opts, force: false });
   if (!removed.ok) return removed;
 
-  archiveTicketCommand(deps.db, ticketId, { now: Date.now(), actor: USER_ACTOR });
+  withTicketWake(deps.db, ticketId, () =>
+    archiveTicketCommand(deps.db, ticketId, { now: Date.now(), actor: USER_ACTOR }),
+  );
   return ok(undefined);
 }
 
