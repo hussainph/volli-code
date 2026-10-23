@@ -2475,18 +2475,22 @@ describe("agent partition retirement", () => {
       isolated.storage.clear();
     });
     const emit = archiveWake();
-    // Board commands stamp the archive tombstone before emitting the wake.
-    // Retention can emit just the wake, so both paths must coalesce.
+    const cleanup = vi.spyOn(host, "clearAgentPartition");
+    // Board commands emit the archive wake before stamping the tombstone.
+    // Retention emits just the wake, so both paths must coalesce.
     const feed = createBoardChangeFeed({
       onTicketRemoved: (projectId, ticketId) => {
         void host.clearAgentPartition({ projectId, ticketId });
       },
     });
+    emit("archived");
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith(scope);
     feed.stamp(scope.projectId, [
       { kind: "ticket", op: "delete", id: scope.ticketId, projectId: scope.projectId },
     ]);
-    emit("archived");
-    await host.clearAgentPartition(scope);
+    expect(cleanup).toHaveBeenCalledTimes(2);
+    expect(cleanup.mock.results[1]!.value).toBe(cleanup.mock.results[0]!.value);
+    await cleanup.mock.results[0]!.value;
     expect(isolated.clearStorageData).toHaveBeenCalledOnce();
     expect(isolated.clearCache).toHaveBeenCalledOnce();
     expect(host.list(scope)).toEqual([]);
@@ -2506,8 +2510,10 @@ describe("agent partition retirement", () => {
       const shown = host.open(input);
       host.open({ ...input, ownerSessionId: "session-b" });
       host.setPresentation(shown.tabId, presentation);
+      const cleanup = vi.spyOn(host, "clearAgentPartition");
       archiveWake()("archived");
-      await host.clearAgentPartition(scope);
+      expect(cleanup).toHaveBeenCalledExactlyOnceWith(scope);
+      await cleanup.mock.results[0]!.value;
       expect(host.list(scope).map((tab) => tab.tabId)).toEqual([shown.tabId]);
       expect(sessions.get(partition)!.clearStorageData).not.toHaveBeenCalled();
       expect(sessions.get(partition)!.clearCache).not.toHaveBeenCalled();
@@ -2517,8 +2523,10 @@ describe("agent partition retirement", () => {
   it("never clears the person's persistent session, even with a personal tab on the Ticket", async () => {
     const person = host.open({ ...scope, url: input.url, createdBy: "user" });
     host.open(input);
+    const cleanup = vi.spyOn(host, "clearAgentPartition");
     archiveWake()("archived");
-    await host.clearAgentPartition(scope);
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith(scope);
+    await cleanup.mock.results[0]!.value;
     expect(host.list(scope)).toEqual([person]);
     expect(sessions.get(partition)!.clearStorageData).toHaveBeenCalledOnce();
     const personal = sessions.get("persist:volli-browser:user")!;
@@ -2527,6 +2535,7 @@ describe("agent partition retirement", () => {
   });
 
   it("clears on a deletion tombstone, including a Ticket with no live tabs", async () => {
+    const cleanup = vi.spyOn(host, "clearAgentPartition");
     const feed = createBoardChangeFeed({
       onTicketRemoved: (projectId, ticketId) => {
         void host.clearAgentPartition({ projectId, ticketId });
@@ -2535,7 +2544,8 @@ describe("agent partition retirement", () => {
     feed.stamp(scope.projectId, [
       { kind: "ticket", op: "delete", id: scope.ticketId, projectId: scope.projectId },
     ]);
-    await host.clearAgentPartition(scope);
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith(scope);
+    await cleanup.mock.results[0]!.value;
     expect(sessions.get(partition)!.clearStorageData).toHaveBeenCalledOnce();
     expect(sessions.get(partition)!.clearCache).toHaveBeenCalledOnce();
   });
@@ -2590,6 +2600,57 @@ describe("agent partition retirement", () => {
     expect(sessions.get(partition)!.clearStorageData).toHaveBeenCalledOnce();
     expect(sessions.get(partition)!.clearCache).toHaveBeenCalledOnce();
     expect(host.open(input).ticketId).toBe(scope.ticketId);
+  });
+
+  it("logs a failed close, keeps that tab's storage, and continues closing other tabs", async () => {
+    const stuck = host.open(input);
+    host.open({ ...input, ownerSessionId: "session-b" });
+    vi.spyOn(host, "close").mockImplementationOnce(() => {
+      throw new Error("close failed");
+    });
+    const records: unknown[] = [];
+    const undo = installHostLog({
+      level: "error",
+      sink: {
+        write: (record) => {
+          records.push(record);
+        },
+      },
+    });
+    try {
+      await expect(host.clearAgentPartition(scope)).resolves.toBeUndefined();
+      expect(host.list(scope).map((tab) => tab.tabId)).toEqual([stuck.tabId]);
+      expect(sessions.get(partition)!.clearStorageData).not.toHaveBeenCalled();
+      expect(sessions.get(partition)!.clearCache).not.toHaveBeenCalled();
+      expect(records).toEqual([expect.objectContaining({ partition, tabId: stuck.tabId })]);
+    } finally {
+      undo();
+    }
+  });
+
+  it("still clears when Electron throws closing a tab already forgotten from the registry", async () => {
+    host.open(input);
+    views[0]!.webContents.close.mockImplementationOnce(() => {
+      throw new Error("Object has been destroyed");
+    });
+    const records: unknown[] = [];
+    const undo = installHostLog({
+      level: "error",
+      sink: {
+        write: (record) => {
+          records.push(record);
+        },
+      },
+    });
+    try {
+      await expect(host.clearAgentPartition(scope)).resolves.toBeUndefined();
+      expect(host.list(scope)).toEqual([]);
+      expect(sessions.get(partition)!.clearStorageData).toHaveBeenCalledOnce();
+      expect(sessions.get(partition)!.clearCache).toHaveBeenCalledOnce();
+      expect(records).toHaveLength(1);
+    } finally {
+      undo();
+    }
   });
 
   it("logs failures independently and releases the cleanup barrier without a toast", async () => {

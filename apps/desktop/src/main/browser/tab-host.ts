@@ -268,21 +268,29 @@ export class BrowserTabHost extends BrowserTabRegistry<
     const partition = browserSessionPartition({ ...scope, createdBy: "session" });
     const pending = this.clearingPartitions.get(partition);
     if (pending !== undefined) return pending;
-    for (const entry of this.tabs.values()) {
-      if (
-        browserSessionPartition(entry.state) === partition &&
-        entry.state.presentation === "headless"
-      ) {
-        this.close(entry.state.tabId);
-      }
-    }
-    for (const entry of this.tabs.values()) {
-      if (browserSessionPartition(entry.state) === partition) return Promise.resolve();
-    }
     // Install the barrier before calling Electron. A rapid unarchive must not
     // load a new page while the old partition's credentials are being erased.
     const clearing = Promise.resolve()
       .then(async () => {
+        const closing = [...this.tabs.values()].filter(
+          (entry) =>
+            browserSessionPartition(entry.state) === partition &&
+            entry.state.presentation === "headless",
+        );
+        for (const entry of closing) {
+          try {
+            this.close(entry.state.tabId);
+          } catch (error) {
+            log.error("could not close agent Browser tab for partition cleanup", {
+              partition,
+              tabId: entry.state.tabId,
+              error,
+            });
+          }
+        }
+        for (const entry of this.tabs.values()) {
+          if (browserSessionPartition(entry.state) === partition) return;
+        }
         const isolatedSession = this.deps.fromPartition(partition);
         const operations = ["clearStorageData", "clearCache"] as const;
         await Promise.all(
