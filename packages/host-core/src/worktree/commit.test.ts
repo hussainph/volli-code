@@ -32,7 +32,7 @@ function probeGit(gitDir: string, status: string) {
 }
 
 describe("commitRemaining", () => {
-  it("reports success for a real commit of 30,000 new files", async () => {
+  it("reports success for a real commit whose summary exceeds 1 MiB", async () => {
     const dir = tempDir("large-commit");
     const raw = (args: readonly string[]) => runNet("git", args, dir);
     await raw(["init", "--quiet", "--initial-branch=main", "--template="]);
@@ -42,12 +42,14 @@ describe("commitRemaining", () => {
     await raw(["config", "core.hooksPath", join(dir, ".git", "hooks")]);
     await raw(["config", "core.autocrlf", "false"]);
 
-    // Each ordinary summary line is 38 bytes: 30,000 short paths produce
-    // 1,140,000 bytes, exceeding execFile's default 1 MiB stdout ceiling.
-    // Identical tiny contents keep object creation cheap even at this scale.
-    const fileCount = 30_000;
+    // A 200-byte name gives a 221-byte summary line. 5,000 files produce
+    // 1,105,000 bytes: just above the 4,745-file minimum for exceeding 1 MiB,
+    // without the filesystem cost of tens of thousands of short paths.
+    // Identical tiny contents keep object creation cheap too.
+    const fileCount = 5_000;
     for (let i = 0; i < fileCount; i += 1) {
-      writeFileSync(join(dir, `fixture-${String(i).padStart(5, "0")}.txt`), "fixture\n");
+      const name = `fixture-${"x".repeat(183)}${String(i).padStart(5, "0")}.txt`;
+      writeFileSync(join(dir, name), "fixture\n");
     }
 
     const result = await commitRemaining(runGitCapturingAsync, runNet, {
@@ -67,7 +69,7 @@ describe("commitRemaining", () => {
       "chore(VC-12): commit remaining work",
     );
     expect((await raw(["status", "--porcelain"])).stdout).toBe("");
-  }, 60_000);
+  }, 10_000);
 
   it("stages -A and commits (async runner) with the generated chore(<id>) message when no choices are given", async () => {
     const git = probeGit(tempDir("gitdir"), " M src/a.ts\n");
