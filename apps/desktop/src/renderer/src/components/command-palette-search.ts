@@ -3,9 +3,12 @@
  * sections an `@` scope narrows to, WHERE a section truncates behind its
  * "Show all" row, and the exact match text a row hands cmdk to be judged by.
  *
- * Matching remains cmdk's native `defaultFilter`. The one product-level score
- * rule lives in {@link commandPaletteFilter}: a matching Ticket gets a fixed
- * section-priority point so cmdk cannot reorder Sessions ahead of Tickets.
+ * Matching remains cmdk's native `defaultFilter`. The product-level score
+ * rules live in {@link commandPaletteFilter}: a matching Ticket gets a fixed
+ * section-priority bonus so no score says a Session outranks a Ticket, and
+ * three typed intents win (VC-303) — an exact Ticket display id, a query that
+ * starts with a project's name, and a page command's own name. Section ORDER
+ * is the palette's to decide, not cmdk's: see {@link navigationLeads}.
  * The same wrapper scores the truncated slice and the mounted rows, preventing
  * the two passes from disagreeing.
  */
@@ -13,6 +16,7 @@ import { defaultFilter } from "cmdk";
 
 import type {
   CommandPaletteAutomationRunItem,
+  CommandPaletteNavigationItem,
   CommandPaletteSessionItem,
   CommandPaletteTicketItem,
 } from "@renderer/components/command-palette-model";
@@ -21,6 +25,13 @@ import type {
 
 /** The sections a typed `@` token can narrow the palette to. */
 export type PaletteScopeId = "tickets" | "sessions" | "automations";
+
+/**
+ * Every section that truncates behind a "Show all" row: the scopes, plus the
+ * Go to section, which no `@` token narrows to (it is a handful of pages, and
+ * its rows answer to their names — see {@link commandPaletteFilter}).
+ */
+export type PaletteSectionId = PaletteScopeId | "navigation";
 
 export interface PaletteScope {
   readonly id: PaletteScopeId;
@@ -93,24 +104,108 @@ export function showScopeSuggestions(query: string, scope: PaletteScopeId | null
 export function paletteEmptyCopy(scope: PaletteScopeId | null): string {
   const scoped = paletteScopeById(scope);
   return scoped === null
-    ? "No matching tickets or sessions."
+    ? "No matching tickets, sessions, or commands."
     : `No matching ${scoped.label.toLowerCase()}.`;
 }
 
 /* -------------------------------------------------------------- match text */
 
-/** Every Ticket value starts here, giving the shared filter a typed row marker. */
+/**
+ * Typed row markers: every Ticket, Session and Go to value starts with one, so
+ * the shared filter knows which rules a row is under. The Go to marker is not
+ * "go to " because the editor's Go to Line row already starts with that.
+ */
 const TICKET_ROW_PREFIX = "ticket ";
+const SESSION_ROW_PREFIX = "session ";
+const NAVIGATION_ROW_PREFIX = "navigate ";
 
 /**
- * cmdk's matcher plus VC-205's section priority. The added point is constant
- * within the Ticket section, so native relevance still orders its rows while
- * every matching Ticket group score remains above every other group's score.
- * Leading whitespace is ignored consistently for typed suggestions and rows.
+ * cmdk's native score is at most 1, so each bonus below is a band no native
+ * difference can cross. A Ticket's bonus is constant within its section, so
+ * native relevance still orders its rows while every matching Ticket outranks
+ * every Session; the project-qualified bonus lifts a row within its own
+ * section only; the outright bonus clears everything.
  */
-export function commandPaletteFilter(value: string, search: string, keywords?: string[]): number {
-  const score = defaultFilter(value, search.trimStart(), keywords);
-  return score > 0 && value.startsWith(TICKET_ROW_PREFIX) ? score + 1 : score;
+const TICKET_SECTION_BONUS = 10;
+const PROJECT_QUALIFIED_BONUS = 1;
+const OUTRIGHT_BONUS = 100;
+
+/** Lowercased words only: "Configure → Skills" and "configure skills" read alike. */
+function commandWords(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+/**
+ * Whether `query` names this command: its title in whole leading words —
+ * "settings", "board", "configure", "configure skills" — but not "sett". A
+ * half-typed word is still a search, and lifting a command above every
+ * Ticket that shares three letters with it would be guessing.
+ */
+function namesCommand(title: string, query: string): boolean {
+  const name = commandWords(title);
+  const typed = commandWords(query);
+  if (typed === "" || !name.startsWith(typed)) return false;
+  return name.length === typed.length || name.charAt(typed.length) === " ";
+}
+
+/**
+ * A Ticket or Session row's score under a project-qualified query: one that
+ * is the row's project name, or starts with it and a space ("alpha auth").
+ * The rest of the query is then matched alone, so the qualifier never has to
+ * survive cmdk's subsequence match against a title. 0 when the query does not
+ * name this row's project.
+ *
+ * The project name is the LAST keyword of both row kinds — see
+ * {@link ticketRowMatch} and {@link sessionRowMatch}, which keep it there.
+ */
+function projectQualifiedScore(value: string, query: string, keywords: readonly string[]): number {
+  const project = keywords.at(-1)?.trim().toLowerCase();
+  if (project === undefined || project === "") return 0;
+  if (query === project) return 1;
+  if (!query.startsWith(`${project} `)) return 0;
+  return defaultFilter(value, query.slice(project.length).trimStart(), [...keywords]);
+}
+
+/**
+ * cmdk's matcher plus the palette's ranking rules:
+ *
+ * - **Section priority** (VC-205): every matching Ticket outranks every other
+ *   row, so cmdk cannot reorder Sessions ahead of Tickets.
+ * - **Exact display id** (VC-303): "ALP-1" puts ALP-1 first. Natively it ties
+ *   with ALP-10, ALP-12 and every other id it is a prefix of.
+ * - **Project-qualified** (VC-303): "alpha auth" puts Alpha's matching
+ *   Tickets and Sessions ahead of every other project's in their sections.
+ * - **Command names** (VC-303): "Settings" puts the Settings row first, ahead
+ *   of any Ticket that happens to mention settings.
+ *
+ * Ties keep the model's order — recency, current project first — because
+ * every sort over these scores is stable. Leading whitespace is ignored
+ * consistently for typed suggestions and rows.
+ */
+export function commandPaletteFilter(
+  value: string,
+  search: string,
+  keywords: string[] = [],
+): number {
+  const typed = search.trimStart();
+  const score = defaultFilter(value, typed, keywords);
+  const query = typed.trimEnd().toLowerCase();
+  if (value.startsWith(NAVIGATION_ROW_PREFIX)) {
+    return keywords[0] !== undefined && namesCommand(keywords[0], query)
+      ? OUTRIGHT_BONUS + score
+      : score;
+  }
+  const ticket = value.startsWith(TICKET_ROW_PREFIX);
+  if (!ticket && !value.startsWith(SESSION_ROW_PREFIX)) return score;
+  const qualified = projectQualifiedScore(value, query, keywords);
+  const ranked = qualified > 0 ? qualified + PROJECT_QUALIFIED_BONUS : score;
+  if (ranked <= 0) return 0;
+  if (!ticket) return ranked;
+  const exactId = keywords[0]?.trim().toLowerCase() === query;
+  return ranked + TICKET_SECTION_BONUS + (exactId ? OUTRIGHT_BONUS : 0);
 }
 
 /**
@@ -124,6 +219,7 @@ export interface PaletteRowMatch {
   keywords: string[];
 }
 
+/** Display id FIRST and project name LAST: {@link commandPaletteFilter} reads both by position. */
 export function ticketRowMatch(item: CommandPaletteTicketItem): PaletteRowMatch {
   return {
     value: `${TICKET_ROW_PREFIX}${item.displayId} ${item.title} ${item.projectName}`,
@@ -139,10 +235,11 @@ export function sessionRowContext(item: CommandPaletteSessionItem): string {
     : `${item.projectName} · Board Session`;
 }
 
+/** Project name LAST: {@link commandPaletteFilter} reads it by position. */
 export function sessionRowMatch(item: CommandPaletteSessionItem): PaletteRowMatch {
   const context = sessionRowContext(item);
   return {
-    value: `session ${item.title} ${context} ${item.projectName}`,
+    value: `${SESSION_ROW_PREFIX}${item.title} ${context} ${item.projectName}`,
     keywords: [item.title, context, item.projectName],
   };
 }
@@ -152,6 +249,50 @@ export function automationRowMatch(item: CommandPaletteAutomationRunItem): Palet
     value: `run automation ${item.name} ${item.ticketDisplayId}`,
     keywords: [item.name, item.ticketDisplayId, "run", "automation"],
   };
+}
+
+/** Title FIRST: {@link commandPaletteFilter} reads it by position to know a command's name. */
+export function navigationRowMatch(item: CommandPaletteNavigationItem): PaletteRowMatch {
+  return {
+    value: `${NAVIGATION_ROW_PREFIX}${item.title} ${item.hint}`,
+    keywords: [item.title, ...item.keywords],
+  };
+}
+
+/**
+ * Whether the Go to section leads the list: the query names one of its
+ * commands ("Settings", "board") outright.
+ *
+ * The palette has to decide this itself. cmdk 1.1.1 sorts rows WITHIN a group
+ * by score, but its group reorder looks each group up as
+ * `[data-value="<encoded group id>"]` while the attribute holds the group's
+ * value, so it never finds one and groups keep their DOM order. Tickets lead
+ * by being rendered first; a named command leads by being rendered before
+ * them. No other section needs to move: an exact display id is a Ticket, and
+ * a project-qualified Session never outranks a matching Ticket.
+ */
+export function navigationLeads(
+  slice: PaletteSectionSlice<CommandPaletteNavigationItem>,
+  search: string,
+): boolean {
+  const top = slice.visible[0];
+  return (
+    top !== undefined &&
+    commandPaletteFilter(top.match.value, search, top.match.keywords) >= OUTRIGHT_BONUS
+  );
+}
+
+/**
+ * The Go to rows a palette mounts. Browsing (no query) shows the pages and
+ * leaves Configure's individual panes out — they are reached by name, and
+ * listing all seven under an empty query would make the one bounded-by-design
+ * section the longest thing on screen.
+ */
+export function browsableNavigationRows(
+  rows: readonly CommandPaletteNavigationItem[],
+  search: string,
+): readonly CommandPaletteNavigationItem[] {
+  return search === "" ? rows.filter((row) => row.id !== "configure-pane") : rows;
 }
 
 /* -------------------------------------------------------------- truncation */

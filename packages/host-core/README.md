@@ -158,7 +158,8 @@ One convention for what a module asks for and what it is (VC-632):
   process exit keeps main's historical behavior. Deadlines stay at the
   process edge: desktop 15 s with an Immediate native exit, `hostd` 30 s.
 - **The live host** owns `maintenance` (one spawn ledger, the orphan-process
-  service, retention and automatic reap), `secretStore`, `worktreeDeps`, and a
+  service, retention, automatic reap, and the one-shot SIGCONT at `start()` of
+  terminal trees a previous launch left parked — VC-833), `secretStore`, `worktreeDeps`, and a
   lazy `terminals.manager` when a terminal port exists (otherwise an explicit
   unavailable variant). A degraded host carries its classified failure, not
   nullable live services; recovery stays available for it. Desktop starts

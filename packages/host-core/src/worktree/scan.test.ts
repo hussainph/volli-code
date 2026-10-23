@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -15,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
-import { insertTicket, updateTicketFields } from "../db/tickets-repo";
+import { archiveTicket, insertTicket, updateTicketFields } from "../db/tickets-repo";
 import { projectContainerName } from "./containers";
 import { canonicalize } from "./paths";
 import { scanOrphans } from "./scan";
@@ -143,11 +144,10 @@ describe("scanOrphans is read-only", () => {
 
       const adminDir = join(projectPath, ".git", "worktrees");
       const before = { admin: fingerprint(adminDir), container: fingerprint(container) };
-      const { git, gitAsync, calls, syncCalls } = scriptedGit((args, cwd) => runRepoGit(cwd, args));
+      const { gitAsync, calls, syncCalls } = scriptedGit((args, cwd) => runRepoGit(cwd, args));
 
       const report = await scanOrphans({
         db: ctx.db,
-        git,
         gitAsync,
         home,
         // The fixture's branch tip is committed NOW, and the newer of dir mtime
@@ -224,10 +224,9 @@ describe("scanOrphans is read-only", () => {
 
       insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
 
-      const { git, gitAsync } = scriptedGit((args, cwd) => runRepoGit(cwd, args));
+      const { gitAsync } = scriptedGit((args, cwd) => runRepoGit(cwd, args));
       const report = await scanOrphans({
         db: ctx.db,
-        git,
         gitAsync,
         home,
         now: () => Date.now(),
@@ -278,7 +277,7 @@ describe("scanOrphans report", () => {
       `prunable gitdir file points to non-existent location\n`;
 
     const listCalls: string[] = [];
-    const { git, gitAsync, calls } = scriptedGit((rawArgs, cwd) => {
+    const { gitAsync, calls } = scriptedGit((rawArgs, cwd) => {
       const args = verb(rawArgs);
       if (args[0] === "worktree" && args[1] === "list") {
         listCalls.push(cwd);
@@ -291,7 +290,7 @@ describe("scanOrphans report", () => {
       return "";
     });
 
-    const report = await scanOrphans({ db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" });
+    const report = await scanOrphans({ db: ctx.db, gitAsync, home, now, blobsRoot: "unused" });
 
     expect(report.removable).toEqual([
       {
@@ -405,7 +404,7 @@ describe("scanOrphans report", () => {
       insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
 
       const inner = testCase.script(orphan, gitDir);
-      const { git, gitAsync } = scriptedGit((rawArgs, cwd) => {
+      const { gitAsync } = scriptedGit((rawArgs, cwd) => {
         const args = verb(rawArgs);
         if (args[0] === "worktree" && args[1] === "list") {
           return (
@@ -419,7 +418,6 @@ describe("scanOrphans report", () => {
 
       const report = await scanOrphans({
         db: ctx.db,
-        git,
         gitAsync,
         home,
         now,
@@ -454,7 +452,7 @@ describe("scanOrphans report", () => {
 
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
 
-    const { git, gitAsync } = scriptedGit((rawArgs) => {
+    const { gitAsync } = scriptedGit((rawArgs) => {
       const args = verb(rawArgs);
       if (args[0] === "worktree" && args[1] === "list") {
         return (
@@ -466,7 +464,7 @@ describe("scanOrphans report", () => {
       return "";
     });
 
-    const report = await scanOrphans({ db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" });
+    const report = await scanOrphans({ db: ctx.db, gitAsync, home, now, blobsRoot: "unused" });
 
     expect(report.removable).toEqual([]);
     expect(report.dirty).toEqual([
@@ -495,7 +493,7 @@ describe("scanOrphans report", () => {
 
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
 
-    const { git, gitAsync } = scriptedGit((rawArgs) => {
+    const { gitAsync } = scriptedGit((rawArgs) => {
       const args = verb(rawArgs);
       if (args[0] === "worktree" && args[1] === "list") {
         return (
@@ -510,7 +508,7 @@ describe("scanOrphans report", () => {
       return "";
     });
 
-    const report = await scanOrphans({ db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" });
+    const report = await scanOrphans({ db: ctx.db, gitAsync, home, now, blobsRoot: "unused" });
 
     expect(report.removable).toEqual([]);
     expect(report.keptRecent).toEqual([
@@ -544,7 +542,7 @@ describe("scanOrphans report", () => {
 
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
 
-    const { git, gitAsync } = scriptedGit((rawArgs) => {
+    const { gitAsync } = scriptedGit((rawArgs) => {
       const args = verb(rawArgs);
       if (args[0] === "worktree" && args[1] === "list") {
         return (
@@ -560,7 +558,7 @@ describe("scanOrphans report", () => {
       return "";
     });
 
-    const report = await scanOrphans({ db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" });
+    const report = await scanOrphans({ db: ctx.db, gitAsync, home, now, blobsRoot: "unused" });
 
     expect(report.removable).toEqual([]);
     expect(report.keptRecent).toEqual([
@@ -588,7 +586,7 @@ describe("scanOrphans report", () => {
 
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
 
-    const { git, gitAsync } = scriptedGit((rawArgs) => {
+    const { gitAsync } = scriptedGit((rawArgs) => {
       const args = verb(rawArgs);
       if (args[0] === "worktree" && args[1] === "list") {
         return (
@@ -600,7 +598,7 @@ describe("scanOrphans report", () => {
       return "";
     });
 
-    const report = await scanOrphans({ db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" });
+    const report = await scanOrphans({ db: ctx.db, gitAsync, home, now, blobsRoot: "unused" });
 
     expect(report.removable).toEqual([]);
     expect(report.keptRecent).toEqual([
@@ -636,7 +634,7 @@ describe("scanOrphans report", () => {
 
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
 
-    const { git, gitAsync } = scriptedGit((rawArgs) => {
+    const { gitAsync } = scriptedGit((rawArgs) => {
       const args = verb(rawArgs);
       if (args[0] === "worktree" && args[1] === "list") {
         return (
@@ -647,7 +645,7 @@ describe("scanOrphans report", () => {
       return "";
     });
 
-    const report = await scanOrphans({ db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" });
+    const report = await scanOrphans({ db: ctx.db, gitAsync, home, now, blobsRoot: "unused" });
 
     expect(report.removable).toEqual([]);
     expect(report.keptRecent).toEqual([]);
@@ -668,7 +666,7 @@ describe("scanOrphans report", () => {
 
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
 
-    const { git, gitAsync } = scriptedGit((rawArgs) => {
+    const { gitAsync } = scriptedGit((rawArgs) => {
       const args = verb(rawArgs);
       if (args[0] === "worktree" && args[1] === "list") {
         return (
@@ -679,7 +677,7 @@ describe("scanOrphans report", () => {
       return "";
     });
 
-    const report = await scanOrphans({ db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" });
+    const report = await scanOrphans({ db: ctx.db, gitAsync, home, now, blobsRoot: "unused" });
 
     expect(report.removable).toEqual([]);
     expect(report.keptRecent).toEqual([]);
@@ -693,7 +691,7 @@ describe("scanOrphans report", () => {
 
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
 
-    const { git, gitAsync } = scriptedGit((rawArgs) => {
+    const { gitAsync } = scriptedGit((rawArgs) => {
       const args = verb(rawArgs);
       if (args[0] === "worktree" && args[1] === "list") {
         return (
@@ -704,7 +702,7 @@ describe("scanOrphans report", () => {
       return "";
     });
 
-    const report = await scanOrphans({ db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" });
+    const report = await scanOrphans({ db: ctx.db, gitAsync, home, now, blobsRoot: "unused" });
 
     expect(report.removable).toEqual([]);
     expect(report.dirty).toEqual([]);
@@ -723,10 +721,18 @@ describe("scanOrphans report", () => {
     mkdirSync(strandedWt, { recursive: true });
 
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
-    insertTicket(ctx.db, testTicket("proj-1", { id: "ticket-82", status: "done" }));
+    insertTicket(
+      ctx.db,
+      testTicket("proj-1", {
+        id: "ticket-82",
+        ticketNumber: 82,
+        title: "Strand the checkout",
+        status: "done",
+      }),
+    );
     updateTicketFields(ctx.db, "ticket-82", { worktreePath: strandedWt, branch: "volli/VC-82" }, 1);
 
-    const { git, gitAsync } = scriptedGit((rawArgs) => {
+    const { gitAsync } = scriptedGit((rawArgs) => {
       const args = verb(rawArgs);
       if (args[0] === "worktree" && args[1] === "list") {
         return `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`;
@@ -734,18 +740,184 @@ describe("scanOrphans report", () => {
       return "";
     });
 
-    const report = await scanOrphans({ db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" });
+    const report = await scanOrphans({ db: ctx.db, gitAsync, home, now, blobsRoot: "unused" });
 
+    // The row names the ticket it can open (VC-292), not just the path.
     expect(report.dirty).toEqual([
       {
         path: strandedWt,
         projectId: "proj-1",
         projectName: expect.any(String),
         reason: expect.stringMatching(/ticket still points here/i),
+        ticket: {
+          id: "ticket-82",
+          projectId: "proj-1",
+          displayId: "VC-82",
+          title: "Strand the checkout",
+          archived: false,
+        },
       },
     ]);
     expect(report.removable).toEqual([]);
   });
+
+  // VC-292: an archived ticket still holds its checkout, so the row names it —
+  // and says it is archived, because the board cannot open it.
+  it("names an ARCHIVED ticket that still points at a forgotten directory", async () => {
+    const projectPath = tempDir("proj");
+    const home = tempDir("home");
+    const container = join(
+      home,
+      ".volli",
+      "worktrees",
+      projectContainerName(projectPath, "proj-1"),
+    );
+    const strandedWt = join(container, "VC-83-archived");
+    const unclaimedWt = join(container, "leftover");
+    mkdirSync(strandedWt, { recursive: true });
+    mkdirSync(unclaimedWt, { recursive: true });
+
+    insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+    insertTicket(
+      ctx.db,
+      testTicket("proj-1", {
+        id: "ticket-83",
+        ticketNumber: 83,
+        title: "Old work",
+        status: "done",
+      }),
+    );
+    updateTicketFields(ctx.db, "ticket-83", { worktreePath: strandedWt }, 1);
+    archiveTicket(ctx.db, "ticket-83", 5);
+
+    const { gitAsync } = scriptedGit((rawArgs) => {
+      const args = verb(rawArgs);
+      if (args[0] === "worktree" && args[1] === "list") {
+        return `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`;
+      }
+      return "";
+    });
+
+    const report = await scanOrphans({ db: ctx.db, gitAsync, home, now, blobsRoot: "unused" });
+    const byPath = new Map(report.dirty.map((orphan) => [orphan.path, orphan] as const));
+
+    expect(byPath.get(strandedWt)?.ticket).toEqual({
+      id: "ticket-83",
+      projectId: "proj-1",
+      displayId: "VC-83",
+      title: "Old work",
+      archived: true,
+    });
+    // An unclaimed leftover carries no ticket at all — the row's fallback.
+    expect(byPath.get(unclaimedWt)).not.toHaveProperty("ticket");
+    // Both folders are readable, so neither carries the negative stamp.
+    expect(byPath.get(strandedWt)).not.toHaveProperty("pathReadable");
+    expect(byPath.get(unclaimedWt)).not.toHaveProperty("pathReadable");
+  });
+
+  // VC-292: the reason, the ticket and the Delete are decided from ONE claim,
+  // asked the way main's delete guard asks it. A ticket in ANOTHER project
+  // that points at a folder in this container — or at a path inside it — is
+  // still a claim: the row names it, and says a ticket points here.
+  it("names a claiming ticket from another project, and a nested claim, the way the delete guard sees them", async () => {
+    const projectPath = tempDir("proj");
+    const otherPath = tempDir("other");
+    const home = tempDir("home");
+    const container = join(
+      home,
+      ".volli",
+      "worktrees",
+      projectContainerName(projectPath, "proj-1"),
+    );
+    const crossWt = join(container, "VC-7-cross");
+    const nestingWt = join(container, "nesting");
+    mkdirSync(crossWt, { recursive: true });
+    mkdirSync(join(nestingWt, "inner"), { recursive: true });
+
+    insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+    insertProject(ctx.db, testProject({ id: "proj-2", path: otherPath, ticketPrefix: "OT" }));
+    insertTicket(
+      ctx.db,
+      testTicket("proj-2", { id: "ticket-7", ticketNumber: 7, title: "Elsewhere", status: "done" }),
+    );
+    updateTicketFields(ctx.db, "ticket-7", { worktreePath: crossWt }, 1);
+    insertTicket(
+      ctx.db,
+      testTicket("proj-1", { id: "ticket-8", ticketNumber: 8, title: "Inner", status: "done" }),
+    );
+    updateTicketFields(ctx.db, "ticket-8", { worktreePath: join(nestingWt, "inner") }, 1);
+
+    const { gitAsync } = scriptedGit((rawArgs, cwd) => {
+      const args = verb(rawArgs);
+      if (args[0] === "worktree" && args[1] === "list") {
+        return `worktree ${cwd}\nHEAD a\nbranch refs/heads/main\n`;
+      }
+      return "";
+    });
+
+    const report = await scanOrphans({ db: ctx.db, gitAsync, home, now, blobsRoot: "unused" });
+    const byPath = new Map(report.dirty.map((orphan) => [orphan.path, orphan] as const));
+
+    expect(byPath.get(crossWt)).toMatchObject({
+      projectId: "proj-1",
+      reason: expect.stringMatching(/ticket still points here/i),
+      ticket: {
+        id: "ticket-7",
+        projectId: "proj-2",
+        displayId: "OT-7",
+        title: "Elsewhere",
+        archived: false,
+      },
+    });
+    expect(byPath.get(nestingWt)).toMatchObject({
+      reason: expect.stringMatching(/ticket still points here/i),
+      ticket: { id: "ticket-8", projectId: "proj-1" },
+    });
+  });
+
+  // VC-292: a folder the scan cannot open is said to be unreadable, so the row
+  // can name that before offering a Reveal that would fail. Root reads
+  // anything, so the fixture means nothing there.
+  it.skipIf(process.getuid?.() === 0)(
+    "marks a reported folder it cannot open as unreadable",
+    async () => {
+      const projectPath = tempDir("proj");
+      const home = tempDir("home");
+      const container = join(
+        home,
+        ".volli",
+        "worktrees",
+        projectContainerName(projectPath, "proj-1"),
+      );
+      const lockedWt = join(container, "locked");
+      mkdirSync(lockedWt, { recursive: true });
+      insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+
+      const { gitAsync } = scriptedGit((rawArgs) => {
+        const args = verb(rawArgs);
+        if (args[0] === "worktree" && args[1] === "list") {
+          return `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`;
+        }
+        return "";
+      });
+
+      chmodSync(lockedWt, 0o000);
+      try {
+        const report = await scanOrphans({
+          db: ctx.db,
+          gitAsync,
+          home,
+          now,
+          blobsRoot: "unused",
+        });
+        expect(report.dirty).toEqual([
+          expect.objectContaining({ path: lockedWt, pathReadable: false }),
+        ]);
+      } finally {
+        chmodSync(lockedWt, 0o755);
+      }
+    },
+  );
 
   // A project whose listing fails used to be skipped in silence,
   // which made every checkout in its container read as "not registered with
@@ -753,12 +925,12 @@ describe("scanOrphans report", () => {
   it("REPORTS a project whose git can't be read instead of skipping it in silence", async () => {
     const home = tempDir("home");
     insertProject(ctx.db, testProject({ id: "proj-1", path: "/repo" }));
-    const { git, gitAsync } = scriptedGit((rawArgs) => {
+    const { gitAsync } = scriptedGit((rawArgs) => {
       const args = verb(rawArgs);
       if (args[0] === "worktree" && args[1] === "list") throw new Error("not a git repo");
       return "";
     });
-    const report = await scanOrphans({ db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" });
+    const report = await scanOrphans({ db: ctx.db, gitAsync, home, now, blobsRoot: "unused" });
     expect(report).toEqual({
       revision: expect.any(String),
       scannedAt: NOW,
@@ -793,13 +965,13 @@ describe("scanOrphans report", () => {
     mkdirSync(orphan, { recursive: true });
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
 
-    const { git, gitAsync } = scriptedGit((rawArgs) => {
+    const { gitAsync } = scriptedGit((rawArgs) => {
       const args = verb(rawArgs);
       if (args[0] === "worktree" && args[1] === "list") throw new Error("index.lock exists");
       return "";
     });
 
-    const report = await scanOrphans({ db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" });
+    const report = await scanOrphans({ db: ctx.db, gitAsync, home, now, blobsRoot: "unused" });
 
     expect(report.unreadableProjects).toHaveLength(1);
     // The container's leaves are NOT re-described as forgotten by git; the one
@@ -848,7 +1020,7 @@ describe("scanOrphans report", () => {
         const f = activeFixture();
 
         const report = await scanOrphans(
-          { db: ctx.db, git: f.git, gitAsync: f.gitAsync, home: f.home, now, blobsRoot: "unused" },
+          { db: ctx.db, gitAsync: f.gitAsync, home: f.home, now, blobsRoot: "unused" },
           { busyWorktreeSites: async (target) => [{ directory: target, surface }] },
         );
 
@@ -868,7 +1040,7 @@ describe("scanOrphans report", () => {
       const f = activeFixture();
 
       const report = await scanOrphans(
-        { db: ctx.db, git: f.git, gitAsync: f.gitAsync, home: f.home, now, blobsRoot: "unused" },
+        { db: ctx.db, gitAsync: f.gitAsync, home: f.home, now, blobsRoot: "unused" },
         {
           busyWorktreeSites: async () => {
             throw new Error("the runtime is unreadable");
@@ -886,7 +1058,7 @@ describe("scanOrphans report", () => {
       const f = activeFixture();
 
       const report = await scanOrphans(
-        { db: ctx.db, git: f.git, gitAsync: f.gitAsync, home: f.home, now, blobsRoot: "unused" },
+        { db: ctx.db, gitAsync: f.gitAsync, home: f.home, now, blobsRoot: "unused" },
         { busyWorktreeSites: async () => [] },
       );
 
@@ -934,7 +1106,7 @@ describe("scanOrphans report", () => {
       const record = join(container, "VC-30-gone");
       mkdirSync(container, { recursive: true });
       insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
-      const { git, gitAsync } = scriptedGit((rawArgs) => {
+      const { gitAsync } = scriptedGit((rawArgs) => {
         const args = verb(rawArgs);
         if (args[0] === "worktree" && args[1] === "list") {
           return (
@@ -947,7 +1119,6 @@ describe("scanOrphans report", () => {
 
       const report = await scanOrphans({
         db: ctx.db,
-        git,
         gitAsync,
         home,
         now,
@@ -965,7 +1136,6 @@ describe("scanOrphans report", () => {
 
       const report = await scanOrphans({
         db: ctx.db,
-        git: f.git,
         gitAsync: f.gitAsync,
         home: f.home,
         now,
@@ -993,7 +1163,7 @@ describe("scanOrphans report", () => {
       insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
       insertTicket(ctx.db, testTicket("proj-1", { id: "ticket-31", status: "done" }));
       updateTicketFields(ctx.db, "ticket-31", { worktreePath: record, branch: "volli/VC-31" }, 1);
-      const { git, gitAsync } = scriptedGit((rawArgs) => {
+      const { gitAsync } = scriptedGit((rawArgs) => {
         const args = verb(rawArgs);
         if (args[0] === "worktree" && args[1] === "list") {
           return (
@@ -1006,7 +1176,6 @@ describe("scanOrphans report", () => {
 
       const report = await scanOrphans({
         db: ctx.db,
-        git,
         gitAsync,
         home,
         now,

@@ -8,6 +8,11 @@
  * existing directory, the base branch is detected, and the ticket prefix the
  * name derives must be unique across the workspace.
  *
+ * A folder whose project was removed is re-attached rather than registered
+ * again (VC-822): removal only detaches a project, so its tickets, Sessions,
+ * ticket counter and Automations come back with it. A removed project keeps
+ * its prefix for that return: a new project may not take it.
+ *
  * The `stat` and the branch detection are awaited, never blocking: desktop
  * runs this on Electron main, and a folder on an unmounted volume is where a
  * synchronous read freezes the window.
@@ -22,9 +27,13 @@ import type { Project } from "@volli/shared";
 import {
   countProjects,
   findProjectByPath,
+  findRemovedProjectByPrefix,
+  getProjectById,
   insertProject,
+  isProjectAttached,
   listProjects,
   nextSortOrder,
+  reattachProject,
 } from "./db/projects-repo";
 import { detectProjectBaseBranchAsync } from "./project-base-branch";
 
@@ -45,17 +54,22 @@ export interface ProjectCreatePorts {
   readonly detectBaseBranch?: (path: string) => Promise<string | null>;
   readonly now?: () => number;
   readonly newId?: () => string;
-  /** Announces a newly committed registration once; never an existing row or a preview. */
+  /**
+   * Announces a committed registration once: a new row, or a removed project
+   * re-attached. Never a project already on the rail, and never a preview.
+   */
   readonly onCreated?: (project: Project) => void;
 }
 
 /**
  * What a registration decided: the project already tracked at the path, a
- * refusal, or the new row — inserted, unless this was a preview.
+ * refusal, the removed project at the path put back on the rail, or the new
+ * row. A preview writes neither of the last two.
  */
 export type ProjectCreatePlan =
   | { readonly kind: "existing"; readonly project: Project }
   | { readonly kind: "refused"; readonly error: string }
+  | { readonly kind: "reattached"; readonly project: Project }
   | { readonly kind: "new"; readonly project: Project };
 
 /**
@@ -73,7 +87,8 @@ export async function planProjectCreate(
 ): Promise<ProjectCreatePlan> {
   const { db } = ports;
   const existing = findProjectByPath(db, input.path);
-  if (existing) return { kind: "existing", project: existing };
+  if (existing && isProjectAttached(db, existing.id))
+    return { kind: "existing", project: existing };
   let stats;
   try {
     stats = await stat(input.path);
@@ -81,6 +96,7 @@ export async function planProjectCreate(
     return { kind: "refused", error: "Project path does not exist" };
   }
   if (!stats.isDirectory()) return { kind: "refused", error: "Project path is not a directory" };
+  if (existing) return reattach(ports, existing.id, options);
   const baseBranch = await (ports.detectBaseBranch ?? detectProjectBaseBranchAsync)(input.path);
   // Detection yields to other requests. Re-read mutable project state only
   // after it returns, then validate and insert without another await.
@@ -89,6 +105,15 @@ export async function planProjectCreate(
   const ticketPrefix = derivePrefix(input.name);
   const prefixValidation = validateUniquePrefix(ticketPrefix, listProjects(db));
   if (!prefixValidation.ok) return { kind: "refused", error: prefixValidation.error };
+  // A removed project keeps its prefix (VC-822): taking it here would leave
+  // that project's folder impossible to add again.
+  const removedHolder = findRemovedProjectByPrefix(db, ticketPrefix);
+  if (removedHolder !== undefined) {
+    return {
+      kind: "refused",
+      error: `Ticket prefix "${ticketPrefix}" is used by ${removedHolder.name}, which was removed. Add its folder again first.`,
+    };
+  }
   const now = (ports.now ?? Date.now)();
   const project: Project = {
     id: (ports.newId ?? randomUUID)(),
@@ -106,6 +131,32 @@ export async function planProjectCreate(
     ports.onCreated?.(project);
   }
   return { kind: "new", project };
+}
+
+/**
+ * The removed project at the folder, put back on the rail with its own id,
+ * base branch and ticket counter. Asked again after the `stat` yielded, with
+ * no await from here to the write: a concurrent add may have re-attached it
+ * already. Its ticket prefix has to still be its own on the rail. A new
+ * project cannot take a removed one's, but an older build, which does not see
+ * the removal, can; two projects on the rail with one prefix would make every
+ * display id ambiguous.
+ */
+function reattach(
+  ports: ProjectCreatePorts,
+  removedId: string,
+  options: { readonly write: boolean },
+): ProjectCreatePlan {
+  const { db } = ports;
+  const current = getProjectById(db, removedId)!;
+  if (isProjectAttached(db, removedId)) return { kind: "existing", project: current };
+  const prefixValidation = validateUniquePrefix(current.ticketPrefix, listProjects(db), removedId);
+  if (!prefixValidation.ok) return { kind: "refused", error: prefixValidation.error };
+  if (!options.write) return { kind: "reattached", project: current };
+  reattachProject(db, removedId, (ports.now ?? Date.now)());
+  const project = getProjectById(db, removedId)!;
+  ports.onCreated?.(project);
+  return { kind: "reattached", project };
 }
 
 /** Creates the project at `path`, or answers with the one already tracked there. */

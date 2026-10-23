@@ -462,6 +462,7 @@ const ATTACHMENTS: readonly BlobLinkView[] = [
 const WORKTREE_STATUS = {
   uncommitted: true,
   sequencerActive: false,
+  unmergedPaths: 0,
   aheadOfBase: 3,
   behindBase: 0,
   unpushed: 3,

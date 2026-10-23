@@ -11,9 +11,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@renderer/components/ui/alert-dialog";
+import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
+import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
-import { busySessionInfo, describeBusy } from "@renderer/terminal/close-guard";
+import { busySessionInfo } from "@renderer/terminal/close-guard";
+
+import { openTurnCount, removeProjectBusyLines, runningShellCount } from "./remove-project-busy";
 
 interface RemoveProjectDialogProps {
   project: Project;
@@ -24,7 +28,7 @@ interface RemoveProjectDialogProps {
 /**
  * The live pane ids removing `projectId` would kill: its Board Sessions PLUS
  * every ticket session whose scope belongs to it (mirrors
- * `killProjectTicketSessions`'s enumeration). Only panes still live (no exit
+ * `forgetProjectSessions`'s enumeration). Only panes still live (no exit
  * code) — an exited pane has no PTY left to end.
  */
 function liveSessionIdsForProject(projectId: string): string[] {
@@ -50,6 +54,15 @@ export function RemoveProjectDialog({ project, open, onOpenChange }: RemoveProje
   // Busy foreground processes across the project's live sessions, filled in when
   // the (fail-open) probe resolves — the dialog renders immediately regardless.
   const [busyProcesses, setBusyProcesses] = React.useState<string[]>([]);
+  // The structured Sessions and background shells the host also stops (VC-796),
+  // read from what this window already holds.
+  const openTurns = useProjectSessionsStore((state) =>
+    openTurnCount(state.byProject[project.id]?.chat),
+  );
+  const runningShells = useBackgroundShellsStore((state) =>
+    runningShellCount(state.byId, project.id),
+  );
+  const busyLines = removeProjectBusyLines({ busyProcesses, openTurns, runningShells });
 
   React.useEffect(() => {
     if (!open) {
@@ -57,6 +70,8 @@ export function RemoveProjectDialog({ project, open, onOpenChange }: RemoveProje
       return;
     }
     let cancelled = false;
+    // Fail-open like the probe: a listing that cannot be read counts nothing.
+    void useProjectSessionsStore.getState().ensure(project.id);
     void busySessionInfo(liveSessionIdsForProject(project.id)).then((busy) => {
       if (!cancelled) setBusyProcesses(busy.map((entry) => entry.process));
     });
@@ -71,12 +86,14 @@ export function RemoveProjectDialog({ project, open, onOpenChange }: RemoveProje
         <AlertDialogHeader>
           <AlertDialogTitle>Remove {project.name} from Volli?</AlertDialogTitle>
           <AlertDialogDescription>
-            The folder on disk is untouched.
-            {busyProcesses.length > 0 && (
-              <span className="mt-2 block text-destructive">
-                {describeBusy(busyProcesses, ". Removing the project will end")}
+            {/* Removal detaches the project (VC-822): nothing is deleted. */}
+            The folder and its tickets and Sessions are kept. Add the folder again to bring them
+            back.
+            {busyLines.map((line) => (
+              <span key={line} className="mt-2 block text-destructive">
+                {line}
               </span>
-            )}
+            ))}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

@@ -72,7 +72,7 @@ for (const hasWeb of [false, true]) {
 
 describe("host capabilities at Session birth", () => {
   it.each<SessionRole>(roles)(
-    "freezes main's shipped %s surface across every verified birth combination",
+    "freezes the expected %s surface across every verified birth combination",
     (role) => {
       expect(combos).toHaveLength(MAIN_SURFACE_BASELINE.table.length);
       combos.forEach((combo, index) => {
@@ -127,7 +127,14 @@ describe("host capabilities at Session birth", () => {
       classify: false,
       codeModeBirth: { ...codeModeBirth, offered: false },
     });
-    expect(tools).toEqual(["read", "todo_write", "session.start", "session.delegate", "watch"]);
+    expect(tools).toEqual([
+      "read",
+      "todo_write",
+      "session.start",
+      "session.send",
+      "session.delegate",
+      "watch",
+    ]);
   });
 
   it("offers shell and browser capabilities independently", () => {

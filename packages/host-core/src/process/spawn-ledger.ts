@@ -24,7 +24,9 @@ import type Database from "better-sqlite3";
 
 import {
   listOpenSpawns,
+  listParkedTerminalSpawns,
   markSpawnExited,
+  markSpawnParked,
   pruneSpawnLedger,
   recordSpawn,
 } from "../db/spawn-ledger-repo";
@@ -73,6 +75,31 @@ export class SpawnLedger implements SpawnLedgerPort {
       markSpawnExited(this.#db, id, exitedAt);
     } catch (error) {
       this.#onError("could not close spawn row", { rowId: id, error });
+    }
+  }
+
+  /**
+   * Marks the row's terminal tree SIGSTOPped (`parkedAt`) or running again
+   * (`null`), so a launch that dies without waking it can be recovered by the
+   * next one (VC-833).
+   */
+  markParked(id: string, parkedAt: number | null): void {
+    if (this.#db === null) return;
+    try {
+      markSpawnParked(this.#db, id, parkedAt);
+    } catch (error) {
+      this.#onError("could not record a terminal's park state", { rowId: id, error });
+    }
+  }
+
+  /** Open terminal rows a launch before `parkedBefore` left marked parked (VC-833). */
+  listParkedTerminals(parkedBefore: number): SpawnLedgerEntry[] {
+    if (this.#db === null) return [];
+    try {
+      return listParkedTerminalSpawns(this.#db, parkedBefore);
+    } catch (error) {
+      this.#onError("could not read the parked terminals", { error });
+      return [];
     }
   }
 

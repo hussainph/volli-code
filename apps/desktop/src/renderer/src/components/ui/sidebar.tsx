@@ -93,10 +93,17 @@ function SidebarProvider({
   }, [setOpen]);
 
   // Adds a keyboard shortcut to toggle the sidebar. `event.repeat` is still
-  // excluded: a held ⌘B should toggle once, not strobe the shell.
+  // excluded: a held ⌘B should toggle once, not strobe the shell. ⌘ only, like
+  // every other app chord: ⌃B is macOS's "back one character" in text fields,
+  // and ⌥⌘B belongs to the right rail.
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === SIDEBAR_KEYBOARD_SHORTCUT && (event.metaKey || event.ctrlKey)) {
+      if (
+        event.key === SIDEBAR_KEYBOARD_SHORTCUT &&
+        event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey
+      ) {
         event.preventDefault();
         if (!event.repeat) toggleSidebar();
       }
@@ -491,10 +498,8 @@ function SidebarMenuSkeleton({
 }: React.ComponentProps<"div"> & {
   showIcon?: boolean;
 }) {
-  // Random width between 50 to 90%.
-  const width = React.useMemo(() => {
-    return `${Math.floor(Math.random() * 40) + 50}%`;
-  }, []);
+  // Random width between 50 to 90%, drawn once when the skeleton mounts.
+  const [width] = React.useState(() => `${Math.floor(Math.random() * 40) + 50}%`);
 
   return (
     <div

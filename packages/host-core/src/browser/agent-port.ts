@@ -120,7 +120,7 @@ export interface AgentBrowserBackend {
   back(tabId: string): BrowserTabState;
   forward(tabId: string): BrowserTabState;
   reload(tabId: string): BrowserTabState;
-  consoleOf(tabId: string): Pick<RuntimeBrowserConsole, "messages" | "truncated">;
+  consoleOf(tabId: string): Pick<RuntimeBrowserConsole, "messages" | "truncated" | "kept">;
   /** A live picture of the tab for the transcript card, or null when the host declined to look. */
   capturePicture(tabId: string, signal?: AbortSignal): Promise<string | null>;
   /** Keeps a model-requested screenshot for the person; answers the picture's id. */
@@ -452,6 +452,10 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
       snapshotText: printed.text,
       generation: printed.generation,
       truncated: printed.truncated,
+      // What the bound cut rides beside the cut text for the runtime to save
+      // (VC-237); the model is never sent it.
+      ...(printed.whole === undefined ? {} : { whole: printed.whole }),
+      empty: printed.empty,
       picture,
     };
   };
@@ -617,6 +621,11 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
           const tab = takeHold(resolve(input.tabId));
           keepAwake(tab.tabId);
           const ready = await syncedController(tab, controller, input.signal);
+          // The page as the action finds it (VC-277): compared with the fresh
+          // read below, it is what tells a click the page ignored from one
+          // that worked. The tree is the latest read's — the one the ref came
+          // from — rather than an extra read on every action.
+          const before = { url: tab.url, generation: ready.generation, tree: ready.treeDigest };
           const acted = await ready.act(
             {
               generation: input.generation,
@@ -636,7 +645,15 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
             "possible-navigation",
             true,
           );
-          return { ...snap, target: acted.target };
+          return {
+            ...snap,
+            target: acted.target,
+            changed: {
+              url: snap.url !== before.url,
+              generation: snap.generation !== before.generation,
+              tree: ready.treeDigest !== before.tree,
+            },
+          };
         }),
       );
     },
@@ -672,6 +689,7 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
         ...pageOf(tab),
         messages: record.messages,
         truncated: record.truncated,
+        ...(record.kept === undefined ? {} : { kept: record.kept }),
       };
     },
     acquire: async (input) => {

@@ -13,6 +13,7 @@ import {
   type ActiveAddHost,
   type AddHostEvent,
   type AddHostFacts,
+  type BrowserAppShortcutEvent,
   type DataChangedEvent,
   type HandlerCall,
   type ModelAccessSnapshot,
@@ -29,9 +30,11 @@ import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { listProjects } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
 import { BrowserPictureStore } from "../browser/picture-store";
+import { createBoardChangeFeed } from "../board/change-feed";
+import type { ProjectLiveWork } from "../project-remove";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import { createTicketCommand } from "../ticket-commands";
-import { runGitCapturing, runGitCapturingAsync } from "../worktree/git";
+import { runGitCapturingAsync } from "../worktree/git";
 import { ADMITTED, admittedHandlers, type HandlerPolicy } from "./handler-map";
 import {
   createHostHandlers,
@@ -39,6 +42,7 @@ import {
   type HostHandlerOptions,
   type HostHandlers,
 } from "./host-handlers";
+import type { BrowserShortcutsPort } from "./browser-shortcuts-port";
 import type { RemoteHostsPort } from "./remote-hosts-port";
 
 vi.mock("../session-runtime/model-access-preferences", async (importOriginal) => ({
@@ -110,7 +114,7 @@ function sealedMap(options: Partial<HostHandlerOptions> = {}) {
       automations: automations(),
       busyWorktreeSites: async () => [],
       now: () => 50,
-      worktree: { db: ctx.db, git: runGitCapturing, gitAsync: runGitCapturingAsync, blobsRoot: "" },
+      worktree: { db: ctx.db, gitAsync: runGitCapturingAsync, blobsRoot: "" },
       ...options,
     },
   );
@@ -768,6 +772,49 @@ describe("desktop-only commands", () => {
     expect(listProjects(ctx.db).map(({ id }) => id)).toEqual(["second", PROJECT]);
   });
 
+  // VC-796: the order itself is `../project-remove`'s; here, that the map
+  // runs it against this host's feed and bus, and refuses without live work.
+  it("removes a project after its live work stops, ends its feed and tells every window", async () => {
+    insertProject(ctx.db, testProject({ id: "second", ticketPrefix: "SE" }));
+    const boardFeed = createBoardChangeFeed();
+    boardFeed.cursor(PROJECT);
+    const stopped: string[] = [];
+    const projectLiveWork: ProjectLiveWork = {
+      releaseBindings: async () => {
+        stopped.push("bindings");
+        return { stillOpen: [] };
+      },
+      disposeShells: () => stopped.push("shells"),
+      killTerminals: () => stopped.push("terminals"),
+      closeBrowserTabs: () => stopped.push("tabs"),
+      mcp: null,
+    };
+
+    expect(
+      await handlers({ boardFeed, projectLiveWork })["project.remove"](
+        { projectId: PROJECT },
+        WINDOW,
+      ),
+    ).toBeNull();
+
+    expect(stopped).toEqual(["bindings", "shells", "terminals", "tabs"]);
+    expect(listProjects(ctx.db).map(({ id }) => id)).toEqual(["second"]);
+    // Detached at the host's clock, not deleted (VC-822).
+    expect(ctx.db.prepare("SELECT removed_at FROM projects WHERE id = ?").get(PROJECT)).toEqual({
+      removed_at: 50,
+    });
+    expect(boardFeed.size).toBe(0);
+    expect(publish.mock.calls).toEqual([["data-changed", {}]]);
+  });
+
+  it("refuses to remove a project on a host that cannot stop its live work", async () => {
+    expect(
+      await unavailable(() => handlers()["project.remove"]({ projectId: PROJECT }, WINDOW)),
+    ).toBe("Removing a project is unavailable on this host");
+    expect(listProjects(ctx.db).map(({ id }) => id)).toEqual([PROJECT]);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
   it("reads the host's trim settings, defaults included", async () => {
     expect(await handlers()["worktree.trimSettings"](undefined, WINDOW)).toMatchObject({
       trimOnFinish: expect.any(Boolean),
@@ -1271,5 +1318,42 @@ describe("moving a foreground command", () => {
         },
       })["shells.moveToBackground"](input, WINDOW),
     ).toThrow(failure);
+  });
+});
+
+// Browser page shortcuts (VC-301): desktop main's Browser Tab host, through
+// its port; absent everywhere else.
+describe("Browser page shortcuts", () => {
+  const EVENT: BrowserAppShortcutEvent = { tabId: "opaque-1", shortcut: { kind: "close-tab" } };
+
+  it("answers unavailable for both keys on a host with no Browser Tabs (hostd)", async () => {
+    for (const map of [handlers(), handlers({ browserShortcuts: null })]) {
+      const calls: (() => unknown)[] = [
+        () => map["browserShortcuts.subscribe"](undefined, WINDOW, sink()),
+        () => map["browserShortcuts.focusPage"]({ tabId: "opaque-1" }, WINDOW),
+      ];
+      for (const call of calls) {
+        expect(await unavailable(call)).toBe("Browser Tab shortcuts are unavailable on this host");
+      }
+    }
+  });
+
+  it("feeds the window every shortcut a page hands back, and answers the port's unsubscribe", async () => {
+    const unsubscribe = vi.fn();
+    const port = {
+      subscribe: vi.fn((listener: (event: BrowserAppShortcutEvent) => void) => {
+        listener(EVENT);
+        return unsubscribe;
+      }),
+      focusPage: vi.fn(),
+    } satisfies BrowserShortcutsPort;
+    const map = handlers({ browserShortcuts: port });
+    const shortcuts = sink();
+
+    expect(await map["browserShortcuts.subscribe"](undefined, WINDOW, shortcuts)).toBe(unsubscribe);
+    expect(shortcuts.emit).toHaveBeenCalledWith(EVENT);
+
+    expect(await map["browserShortcuts.focusPage"]({ tabId: "opaque-1" }, WINDOW)).toBeNull();
+    expect(port.focusPage).toHaveBeenCalledWith("opaque-1");
   });
 });

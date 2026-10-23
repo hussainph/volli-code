@@ -420,7 +420,7 @@ export function formatMarkdown(report: {
   if (cliff.length > 0) {
     sections.push(
       `## Overlay cache sweep: either side of eight Sessions streaming\n`,
-      `In-memory artifacts (so bottleneck 1 is out of the way), ${repetitions} waves per row. The Session runtime keeps a live overlay for at most eight Sessions (\`OVERLAY_CACHE_LIMIT\`), and a fold for at most eight Sessions without a subscriber (\`PROJECTION_CACHE_LIMIT\`).\n`,
+      `In-memory artifacts (so bottleneck 1 is out of the way), ${repetitions} waves per row. The Session runtime keeps a live overlay for at most eight Sessions with no turn running (\`OVERLAY_CACHE_LIMIT\`), and a fold for at most eight Sessions with neither a subscriber nor a turn running (\`PROJECTION_CACHE_LIMIT\`); a Session with a turn running or about to keeps both (VC-466).\n`,
       `| Subscribers | Deltas per reply | In flight | Ledger reads per turn | Ledger txns per turn | Ledger txn CPU per turn | Process CPU per turn (ms) | Process CPU (% one core) | Provider per turn (VC-119) | Runtime turn | First message → completion |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |`,
       ...cliff.map(cliffRow),
       ``,

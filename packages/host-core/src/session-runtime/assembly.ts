@@ -387,12 +387,16 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
               : (scope) => {
                   const host = new McpSessionHost({
                     workspacePath: scope.workspacePath,
-                    // Retained names survive missing configuration; calls below
-                    // return a named unavailable result for removed servers.
+                    // Retained names survive missing configuration; calls return
+                    // a named unavailable result for removed servers.
                     servers: serversForFrozenMcpTools(
                       mcpSettings.list(scope.projectId),
                       scope.mcpTools,
                     ),
+                    // Read at every call, so a server a person disables or
+                    // removes answers by name and is never contacted, and one
+                    // they enable again works with no reattach (VC-771).
+                    configured: (serverId) => mcpSettings.configured(scope.projectId, serverId),
                     // Credentials are resolved per connection and tokens per
                     // request, so this attachment sees a sign-in or a stored
                     // value a person adds while it runs (VC-470).
@@ -423,24 +427,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                   });
                   const routed = host.routed(bound.call);
                   return {
-                    call: (request, signal, ask) => {
-                      if (
-                        !mcpSettings
-                          .list(scope.projectId)
-                          .some((server) => server.id === request.serverId)
-                      ) {
-                        return Promise.resolve({
-                          content: [
-                            {
-                              type: "text" as const,
-                              text: `MCP tool ${request.toolName} is unavailable: its server was removed.`,
-                            },
-                          ],
-                          isError: true,
-                        });
-                      }
-                      return routed.call(request, signal, ask);
-                    },
+                    call: routed.call,
                     dispose: bound.dispose,
                   };
                 },
@@ -471,14 +458,23 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
               const grants = verbToolsOf(current.tools).filter(
                 (tool) => verbEntry(tool)?.retired === undefined,
               );
-              const tools = sessionToolSurface.resolve(
-                session.role,
-                session.role === "subagent" ? [] : grants,
-                parentId === null ? undefined : (parent?.tools ?? []),
-                mcpTools,
-                birth,
-                await sessionToolSurface.resolveClassify?.(session.projectId),
-              );
+              const tools = sessionToolSurface
+                .resolve(
+                  session.role,
+                  session.role === "subagent" ? [] : grants,
+                  parentId === null ? undefined : (parent?.tools ?? []),
+                  mcpTools,
+                  birth,
+                  await sessionToolSurface.resolveClassify?.(session.projectId),
+                )
+                .filter(
+                  // VC-861 is new-birth authority, not an additive refresh grant.
+                  // Preserve old Ticket surfaces across cold turns and reattach.
+                  (tool) =>
+                    tool !== "session.send" ||
+                    session.role !== "ticket" ||
+                    current.tools.includes("session.send"),
+                );
               const candidateCodeMode = codeMode.surfaceFor(birth, tools, mcpTools);
               const candidate = {
                 kind: "tool-surface" as const,

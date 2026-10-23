@@ -62,6 +62,7 @@ export async function projectAddVerb(
   if (dryRun) {
     const target = { kind: "project" as const, id: plan.project.id, label: plan.project.name };
     // A folder already tracked is answered, not written: say so in the preview.
+    // A removed one is re-attached (VC-822), which the preview names too.
     const preview =
       plan.kind === "existing"
         ? dryRunResponse(request, target, {
@@ -70,7 +71,20 @@ export async function projectAddVerb(
               `${plan.project.path} is already the project ${plan.project.name}; nothing changes.`,
             ],
           })
-        : dryRunResponse(request, { ...target, id: null });
+        : plan.kind === "reattached"
+          ? dryRunResponse(request, target, {
+              durableWrites: [
+                {
+                  resource: "project",
+                  operation: "update",
+                  summary: "Put the removed Project row back on the rail.",
+                },
+              ],
+              humanVisibleEffects: [
+                `${plan.project.path} was the removed project ${plan.project.name}; it comes back under that name, with its tickets and Sessions.`,
+              ],
+            })
+          : dryRunResponse(request, { ...target, id: null });
     return preview!;
   }
   return {

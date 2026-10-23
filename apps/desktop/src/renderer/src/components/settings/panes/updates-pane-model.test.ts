@@ -1,0 +1,168 @@
+import { describe, expect, it } from "vite-plus/test";
+
+import type { UpdateLastCheck, UpdateUiState } from "../../../../../ipc/contract";
+import { updateStatus } from "./updates-pane-model";
+
+const NOW = 10 * 60 * 60 * 1000;
+const THREE_HOURS_AGO = NOW - 3 * 60 * 60 * 1000;
+
+function snapshot(overrides: Partial<UpdateUiState> = {}): UpdateUiState {
+  return {
+    supported: true,
+    phase: "idle",
+    currentVersion: "0.2.0",
+    targetVersion: null,
+    percent: null,
+    error: null,
+    lastCheck: null,
+    ...overrides,
+  };
+}
+
+function checked(overrides: Partial<UpdateLastCheck>): UpdateLastCheck {
+  return { at: THREE_HOURS_AGO, result: "up-to-date", version: null, error: null, ...overrides };
+}
+
+describe("updateStatus", () => {
+  it("says a dev build has no updater, rather than offering a check", () => {
+    expect(updateStatus(snapshot({ supported: false }), NOW)).toEqual({
+      state: "exited",
+      label: "Off in development builds",
+      detail: null,
+      action: "Check now",
+    });
+  });
+
+  it("tells never-checked apart from up to date — the conflation idle used to carry", () => {
+    expect(updateStatus(snapshot(), NOW)).toMatchObject({
+      state: "idle",
+      label: "Not checked yet",
+    });
+    expect(updateStatus(snapshot({ lastCheck: checked({}) }), NOW)).toEqual({
+      state: "ready",
+      label: "Up to date · 3h ago",
+      detail: null,
+      action: "Check now",
+    });
+  });
+
+  it("keeps a failure readable with a retry, this run or after a relaunch", () => {
+    const failed = checked({ result: "error", error: "offline" });
+    // This run: the phase carries the failure.
+    expect(
+      updateStatus(snapshot({ phase: "error", error: "offline", lastCheck: failed }), NOW),
+    ).toEqual({
+      state: "error",
+      label: "Check failed · 3h ago",
+      detail: "offline",
+      action: "Retry",
+    });
+    // A relaunch: idle again, and the stored check still says what happened.
+    expect(updateStatus(snapshot({ lastCheck: failed }), NOW)).toEqual({
+      state: "error",
+      label: "Check failed · 3h ago",
+      detail: "offline",
+      action: "Retry",
+    });
+    // An error phase with no stored check (a broken db's run) still reads.
+    expect(updateStatus(snapshot({ phase: "error", error: "offline" }), NOW)).toMatchObject({
+      label: "Check failed",
+      detail: "offline",
+      action: "Retry",
+    });
+  });
+
+  it("names a failed download as the download's failure, not the check's", () => {
+    const failed = checked({ result: "download-error", version: "0.3.0", error: "ENOSPC" });
+    expect(
+      updateStatus(snapshot({ phase: "error", error: "ENOSPC", lastCheck: failed }), NOW),
+    ).toEqual({
+      state: "error",
+      label: "Download failed · 3h ago",
+      detail: "ENOSPC",
+      action: "Retry",
+    });
+    expect(updateStatus(snapshot({ lastCheck: failed }), NOW)).toEqual({
+      state: "error",
+      label: "Download failed · 3h ago",
+      detail: "ENOSPC",
+      action: "Retry",
+    });
+  });
+
+  it("shows a failure as one short sentence, never the raw updater dump", () => {
+    const raw =
+      'Cannot find latest-mac.yml (https://github.com/acme/volli/releases/latest-mac.yml): HttpError: 404 \nHeaders: { "set-cookie": "x" }';
+    const failed = checked({ result: "error", error: raw });
+    for (const state of [
+      snapshot({ phase: "error", error: raw, lastCheck: failed }),
+      snapshot({ lastCheck: failed }),
+    ]) {
+      const { detail } = updateStatus(state, NOW);
+      expect(detail).toBe("Cannot find latest-mac.yml: HttpError: 404");
+    }
+    // A record with no message (a tolerant read of an older row) says none.
+    expect(
+      updateStatus(snapshot({ lastCheck: checked({ result: "error", error: null }) }), NOW).detail,
+    ).toBeNull();
+    expect(updateStatus(snapshot({ phase: "error" }), NOW).detail).toBeNull();
+  });
+
+  it("shows the phase while something is happening", () => {
+    expect(updateStatus(snapshot({ phase: "checking" }), NOW)).toMatchObject({
+      state: "working",
+      label: "Checking…",
+    });
+    expect(
+      updateStatus(snapshot({ phase: "downloading", targetVersion: "0.3.0", percent: 41.6 }), NOW),
+    ).toMatchObject({ state: "working", label: "Downloading Volli 0.3.0 · 42%" });
+    expect(updateStatus(snapshot({ phase: "downloading" }), NOW)).toMatchObject({
+      label: "Downloading update",
+    });
+  });
+
+  it("names a staged download as ready to restart", () => {
+    expect(
+      updateStatus(snapshot({ phase: "downloaded", targetVersion: "0.3.0" }), NOW),
+    ).toMatchObject({ state: "ready", label: "Volli 0.3.0 ready to restart", action: "Check now" });
+    expect(updateStatus(snapshot({ phase: "downloaded" }), NOW)).toMatchObject({
+      label: "Ready to restart",
+    });
+  });
+
+  it("reads an earlier run's unfinished find as available — unless it is what runs now", () => {
+    expect(
+      updateStatus(
+        snapshot({ lastCheck: checked({ result: "available", version: "0.3.0" }) }),
+        NOW,
+      ),
+    ).toEqual({
+      state: "waiting",
+      label: "Volli 0.3.0 available · 3h ago",
+      detail: null,
+      action: "Check now",
+    });
+    expect(
+      updateStatus(snapshot({ lastCheck: checked({ result: "available", version: null }) }), NOW),
+    ).toMatchObject({ label: "Update available · 3h ago" });
+    // Installed since: the running build IS that version, or newer (a hand
+    // install, a numerically later canary). Stale — but never "Up to date",
+    // which no check said.
+    for (const version of ["0.2.0", "0.1.9", "0.2.0-canary.10"]) {
+      expect(
+        updateStatus(snapshot({ lastCheck: checked({ result: "available", version }) }), NOW),
+        version,
+      ).toEqual({ state: "idle", label: "Checked 3h ago", detail: null, action: "Check now" });
+    }
+    // Ordered as versions, not strings: canary.10 is newer than canary.9.
+    expect(
+      updateStatus(
+        snapshot({
+          currentVersion: "0.3.0-canary.9",
+          lastCheck: checked({ result: "available", version: "0.3.0-canary.10" }),
+        }),
+        NOW,
+      ),
+    ).toMatchObject({ state: "waiting", label: "Volli 0.3.0-canary.10 available · 3h ago" });
+  });
+});

@@ -35,6 +35,17 @@ export interface ScriptedGit {
   countMatching: (prefix: readonly string[]) => number;
 }
 
+export interface ScriptedGitOptions {
+  /**
+   * The code under test runs read-only git (`readOnlyGitAsync`, VC-834), so
+   * every call leads with `--no-optional-locks`. Strip that switch before the
+   * handler and the recorded calls see the args, so a suite scripts the verb,
+   * not the switch. The switch itself is pinned by its own test against the
+   * raw args (`read-only-reads.test.ts`).
+   */
+  readOnly?: boolean;
+}
+
 /**
  * Builds a recording `RunGit` from a handler. The handler receives the args and
  * cwd; return a string to act as stdout, or `throw` (optionally a
@@ -42,17 +53,22 @@ export interface ScriptedGit {
  */
 export function scriptedGit(
   handler: (args: readonly string[], cwd: string) => string,
+  options: ScriptedGitOptions = {},
 ): ScriptedGit {
   const calls: GitCall[] = [];
   const syncCalls: GitCall[] = [];
   const asyncCalls: GitCall[] = [];
-  const git: RunGit = (args, cwd) => {
+  const verb = (args: readonly string[]): readonly string[] =>
+    options.readOnly === true && args[0] === "--no-optional-locks" ? args.slice(1) : args;
+  const git: RunGit = (rawArgs, cwd) => {
+    const args = verb(rawArgs);
     const call = { args, cwd };
     calls.push(call);
     syncCalls.push(call);
     return handler(args, cwd);
   };
-  const gitAsync: RunGitAsync = async (args, cwd) => {
+  const gitAsync: RunGitAsync = async (rawArgs, cwd) => {
+    const args = verb(rawArgs);
     const call = { args, cwd };
     calls.push(call);
     asyncCalls.push(call);
@@ -67,4 +83,11 @@ export function scriptedGit(
     countMatching: (prefix) =>
       calls.filter((call) => prefix.every((token, i) => call.args[i] === token)).length,
   };
+}
+
+/** {@link scriptedGit} for the read-only verbs: see {@link ScriptedGitOptions.readOnly}. */
+export function scriptedReadOnlyGit(
+  handler: (args: readonly string[], cwd: string) => string,
+): ScriptedGit {
+  return scriptedGit(handler, { readOnly: true });
 }

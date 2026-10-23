@@ -22,6 +22,7 @@ import {
   constants,
   existsSync,
   fstatSync,
+  fsyncSync,
   linkSync,
   lstatSync,
   mkdirSync,
@@ -32,6 +33,7 @@ import {
   rmSync,
   unlinkSync,
   writeFileSync,
+  type Stats,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { blobRelPath } from "@volli/shared";
@@ -93,31 +95,85 @@ export function blobExists(root: string, hash: string): boolean {
 }
 
 /**
- * Writes bytes into the store and returns their hash. Idempotent: bytes
- * already present are left exactly as they are rather than rewritten, since
- * identical content is what produced the same path in the first place — and a
- * rewrite would briefly truncate a file another link is reading.
+ * Writes bytes into the store and returns their hash. Idempotent: a file
+ * already holding exactly these bytes is left as it is rather than rewritten,
+ * since identical content is what produced the same path in the first place —
+ * and a rewrite would briefly truncate a file another link is reading.
+ *
+ * Durable before it returns: the staged bytes are fsynced before they are
+ * published, and the directory entries after, so the `blobs` row a caller
+ * writes next can never outlive the file across a power cut.
+ *
+ * A file at the hash path is trusted only after its bytes are compared with
+ * the incoming ones. A crash before a write reached the disk can leave a short
+ * or zero-filled file there, and content addressing would otherwise route
+ * every later write of the same bytes onto it forever; such a file is replaced
+ * atomically by a synced copy.
  */
 export function writeBlob(root: string, bytes: Uint8Array): string {
   const hash = hashBytes(bytes);
   const destPath = blobFilePath(root, hash);
+  const shard = dirname(destPath);
   sweepStagingOnce(root);
+  let torn: Stats | undefined;
   try {
     // A descriptor-only fast path preserves deduplication even when the store
     // is read-only or full. No later write relies on this existence check.
-    const existing = openBlob(destPath);
-    closeSync(existing);
-    return hash;
+    torn = mismatchedBlob(destPath, bytes);
+    if (torn === undefined) return hash;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  mkdirSync(dirname(destPath), { recursive: true });
-  // Stage complete bytes on an exclusively created inode, then publish with a
-  // hard link: link is atomic and refuses any existing destination, including a
-  // dangling symlink. Filesystems without hard links use atomic rename instead:
-  // equal-hash writers have identical bytes, and open readers keep their inode.
-  // As with the rest of the store, ancestor directories must be user-owned.
-  const temporaryPath = join(dirname(destPath), `.blob-${randomUUID()}`);
+  const created = mkdirSync(shard, { recursive: true });
+  // Stage complete, synced bytes on an exclusively created inode, then publish
+  // with a hard link: link is atomic and refuses any existing destination,
+  // including a dangling symlink. Filesystems without hard links use atomic
+  // rename instead: equal-hash writers have identical bytes, and open readers
+  // keep their inode. As with the rest of the store, ancestor directories must
+  // be user-owned.
+  const temporaryPath = stageBlob(shard, bytes);
+  try {
+    if (torn === undefined) {
+      try {
+        try {
+          linkSync(temporaryPath, destPath);
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (!code || !["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV"].includes(code)) {
+            throw error;
+          }
+          renameSync(temporaryPath, destPath);
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        // Idempotence is only for real files, not symlinks or special files.
+        // This check is descriptor-based too, and never opens the winner for
+        // writing. A winner with the right bytes synced itself before linking.
+        torn = mismatchedBlob(destPath, bytes);
+        if (torn === undefined) return hash;
+      }
+    }
+    if (torn !== undefined && !replaceTornBlob(destPath, temporaryPath, torn, bytes, hash)) {
+      return hash;
+    }
+    syncDirectory(shard);
+    // A directory mkdir just created is itself an unsynced entry in its parent.
+    if (created !== undefined) {
+      const top = dirname(resolve(created));
+      for (let dir = resolve(shard); dir !== top && dir !== dirname(dir);) {
+        dir = dirname(dir);
+        syncDirectory(dir);
+      }
+    }
+    return hash;
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
+}
+
+/** Write `bytes` to a fresh staging file in `directory` and fsync them; returns its path. */
+function stageBlob(directory: string, bytes: Uint8Array): string {
+  const temporaryPath = join(directory, `.blob-${randomUUID()}`);
   const fd = openSync(
     temporaryPath,
     constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
@@ -127,29 +183,61 @@ export function writeBlob(root: string, bytes: Uint8Array): string {
     try {
       if (!fstatSync(fd).isFile()) throw new Error("Blob must be a regular file");
       writeFileSync(fd, bytes);
+      fsyncSync(fd);
     } finally {
       closeSync(fd);
     }
-    try {
-      try {
-        linkSync(temporaryPath, destPath);
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (!code || !["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV"].includes(code)) {
-          throw error;
-        }
-        renameSync(temporaryPath, destPath);
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      // Idempotence is only for real files, not symlinks or special files. This
-      // check is descriptor-based too, and never opens the winner for writing.
-      const existing = openBlob(destPath);
-      closeSync(existing);
-    }
-    return hash;
-  } finally {
+  } catch (error) {
     rmSync(temporaryPath, { force: true });
+    throw error;
+  }
+  return temporaryPath;
+}
+
+/**
+ * Whether the regular file at `path` holds exactly `bytes`: `undefined` when
+ * it does, else the stat of the inode that was judged wrong. Read through one
+ * validated descriptor; throws ENOENT when nothing is there.
+ */
+function mismatchedBlob(path: string, bytes: Uint8Array): Stats | undefined {
+  const fd = openBlob(path);
+  try {
+    const stat = fstatSync(fd);
+    if (stat.size === bytes.byteLength && readFileSync(fd).equals(bytes)) return undefined;
+    return stat;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Atomically put the synced staging file over the torn one judged as `torn`.
+ * Returns false when another writer already put the right bytes there. A path
+ * that changed since it was judged, to anything else, is never overwritten.
+ */
+function replaceTornBlob(
+  destPath: string,
+  temporaryPath: string,
+  torn: Stats,
+  bytes: Uint8Array,
+  hash: string,
+): boolean {
+  const current = lstatSync(destPath);
+  if (current.dev !== torn.dev || current.ino !== torn.ino) {
+    if (mismatchedBlob(destPath, bytes) === undefined) return false;
+    throw new Error(`Blob ${hash} changed while it was being repaired`);
+  }
+  renameSync(temporaryPath, destPath);
+  return true;
+}
+
+/** fsync a directory so the entries just made in it survive a power cut. */
+function syncDirectory(directory: string): void {
+  const fd = openSync(directory, constants.O_RDONLY);
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
   }
 }
 
@@ -165,16 +253,25 @@ function openBlob(path: string): number {
   }
 }
 
-/** Reads a Blob's bytes. Throws when they are absent — a missing Blob is a real failure, not an empty file. */
+/**
+ * Reads a Blob's bytes. Throws when they are absent — a missing Blob is a real
+ * failure, not an empty file — and when they no longer hash to their name, so
+ * a torn file is never handed on as if it were the attachment.
+ */
 export function readBlob(root: string, hash: string): Buffer {
   const path = blobFilePath(root, hash);
   sweepStagingOnce(root);
   const fd = openBlob(path);
+  let bytes: Buffer;
   try {
-    return readFileSync(fd);
+    bytes = readFileSync(fd);
   } finally {
     closeSync(fd);
   }
+  if (hashBytes(bytes) !== hash) {
+    throw new Error(`Blob ${hash} is corrupt: its stored bytes do not match their hash`);
+  }
+  return bytes;
 }
 
 /** Removes a Blob's bytes. Idempotent — a missing file is not an error. */
