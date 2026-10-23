@@ -13,6 +13,11 @@ import {
 import { describe, expect, it, vi } from "vite-plus/test";
 import { piExecutionEnv, scopedEnvironment, sessionCommandEnvironment } from "./execution-env";
 
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, rm: vi.fn(actual.rm) };
+});
+
 function workspace(): string {
   return mkdtempSync(join(tmpdir(), "volli-pi-env-"));
 }
@@ -205,6 +210,23 @@ describe("piExecutionEnv", () => {
     await env.cleanup(BACKGROUND_CONTEXT);
     expect(onCleanup).toHaveBeenCalledOnce();
     await expect(fs.stat(created.value)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("still closes and attempts every deletion if one spill directory is inaccessible", async () => {
+    const onCleanup = vi.fn();
+    const env = await piExecutionEnv(workspace(), { onCleanup });
+    const first = await env.createTempDir(undefined, BACKGROUND_CONTEXT);
+    const second = await env.createTempDir(undefined, BACKGROUND_CONTEXT);
+    if (!first.ok || !second.ok) throw new Error("temp creation failed");
+    vi.mocked(fs.rm).mockRejectedValueOnce(new Error("inaccessible directory"));
+    try {
+      await expect(env.cleanup(BACKGROUND_CONTEXT)).resolves.toBeUndefined();
+      expect(onCleanup).toHaveBeenCalledOnce();
+      await expect(fs.stat(second.value)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(first.value, { recursive: true, force: true });
+      await fs.rm(second.value, { recursive: true, force: true });
+    }
   });
 
   it("runs the attachment cleanup hook exactly once", async () => {

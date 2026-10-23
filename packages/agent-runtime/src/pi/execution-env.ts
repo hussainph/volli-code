@@ -347,8 +347,10 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
       await super.cleanup(context);
       // Runtime close drains tools first. Also account for a temp creation
       // already in flight: nothing created by this attachment may escape it.
-      await Promise.all(this.#pendingTempDirectories);
-      await Promise.all(
+      await Promise.allSettled(this.#pendingTempDirectories);
+      // Cleanup is best effort: one inaccessible directory must not prevent
+      // other deletions or the attachment's closed observation.
+      await Promise.allSettled(
         [...this.#tempDirectories].map((directory) =>
           rm(directory, { recursive: true, force: true }),
         ),
