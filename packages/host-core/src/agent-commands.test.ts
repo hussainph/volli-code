@@ -5242,9 +5242,9 @@ describe("agent command service", () => {
     );
     const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
-      if (args[0] === "diff" && args.includes("main...HEAD")) return "3\t1\tsrc/a.ts\n";
-      if (args[0] === "diff" && args.includes("HEAD")) return "9\t0\tsrc/wip.ts\n";
-      if (args[0] === "status") return "?? src/new.ts\n";
+      if (args[0] === "diff" && args.includes("main...HEAD")) return "3\t1\tsrc/a.ts\0";
+      if (args[0] === "diff" && args.includes("HEAD")) return "9\t0\tsrc/wip.ts\0";
+      if (args[0] === "ls-files") return "src/new.ts\0";
       return "";
     });
     const service = createAgentCommandService({
@@ -5310,7 +5310,7 @@ describe("agent command service", () => {
       }),
     );
     const numstat =
-      Array.from({ length: 25 }, (_, i) => `1\t0\tsrc/file-${i}.ts`).join("\n") + "\n";
+      Array.from({ length: 25 }, (_, i) => `1\t0\tsrc/file-${i}.ts`).join("\0") + "\0";
     const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "diff") return numstat;
@@ -5519,7 +5519,7 @@ describe("agent command service", () => {
         return "";
       }
       if (args[0] === "rev-list") return "2\n";
-      if (args[0] === "diff") return "3\t1\tsrc/a.ts\n";
+      if (args[0] === "diff") return "3\t1\tsrc/a.ts\0";
       return "";
     });
 
@@ -5615,7 +5615,7 @@ describe("agent command service", () => {
         return "";
       }
       if (args[0] === "rev-list") return "2\n";
-      if (args[0] === "diff") return "3\t1\tsrc/a.ts\n";
+      if (args[0] === "diff") return "3\t1\tsrc/a.ts\0";
       return "";
     });
 
@@ -5732,7 +5732,7 @@ describe("agent command service", () => {
       if (args[0] === "rev-parse") return "aaaaaaa\n";
       if (args[0] === "merge") return "";
       if (args[0] === "rev-list") return "2\n";
-      if (args[0] === "diff") return "3\t1\tsrc/a.ts\n";
+      if (args[0] === "diff") return "3\t1\tsrc/a.ts\0";
       return "";
     }, "some-other-branch");
 
@@ -5758,7 +5758,7 @@ describe("agent command service", () => {
       if (args[0] === "rev-parse") return "aaaaaaa\n";
       if (args[0] === "merge") throw new Error("Automatic merge failed");
       if (args[0] === "diff" && args.includes("--diff-filter=U")) {
-        return "packages/shared/src/x.ts\napps/desktop/src/y.tsx\n";
+        return "packages/shared/src/x.ts\0apps/desktop/src/y.tsx\0";
       }
       return "";
     });
@@ -5794,7 +5794,7 @@ describe("agent command service", () => {
         if (args[0] === "rev-parse" && args[3] === "MERGE_HEAD") throw new Error("no merge");
         if (args[0] === "rev-parse") return "aaaaaaa\n";
         if (args[0] === "merge" && conflicted) throw new Error("Automatic merge failed");
-        if (args[0] === "diff" && args.includes("--diff-filter=U")) return "src/x.ts\n";
+        if (args[0] === "diff" && args.includes("--diff-filter=U")) return "src/x.ts\0";
         return "";
       });
 

@@ -171,7 +171,7 @@ describe("background worktree status reads leave the index untouched (real git)"
       { args: "--no-optional-locks status --porcelain=v2 -z -uall", wrote: false },
       { args: "--no-optional-locks status --porcelain", wrote: false },
       { args: "--no-optional-locks status --porcelain=v2 -z -uall", wrote: false },
-      { args: "--no-optional-locks status --porcelain", wrote: false },
+      // diffStat enumerates untracked paths with ls-files, not a status refresh.
     ]);
   });
 });
