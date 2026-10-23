@@ -36,13 +36,14 @@ import {
   toError,
 } from "../types";
 import { OutputCapture } from "../execution/output-capture";
+// Volli (VC-820): product-owned disk budget, separate from Pi's inline limits.
+import { ShellSpillBudget } from "../../../shell-spill";
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
 const EXIT_STDIO_GRACE_MS = 100;
 const SPILL_HIGH_WATER_MARK = 8 * 1024 * 1024;
-
-type SpillChunk = string | Uint8Array;
+type SpillChunk = Uint8Array;
 
 function resolveTimeoutMs(timeout: number | undefined): Result<number | undefined, ExecutionError> {
   if (timeout === undefined) return ok(undefined);
@@ -528,6 +529,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
       const spillPrefix: SpillChunk[] = [];
       let spillPath: string | undefined;
+      const spillBudget = new ShellSpillBudget();
       const spillQueue: SpillChunk[] = [];
       let spillStart: Promise<void> | undefined;
       let spillStream: WriteStream | undefined;
@@ -600,6 +602,12 @@ export class NodeExecutionEnv implements ExecutionEnv {
         });
       };
       const startSpill = (chunk: SpillChunk): void => {
+        // Volli (VC-820): cap before queueing as well as before writing. Keep
+        // draining the process and capturing its tail after the spill is full.
+        chunk = spillBudget.take(chunk);
+        if (spillBudget.truncatedAt !== undefined)
+          capture.setSpillTruncatedAt(spillBudget.truncatedAt);
+        if (chunk.byteLength === 0) return;
         if (spillStream !== undefined) {
           writeSpill(spillStream, chunk);
           return;
@@ -775,6 +783,9 @@ export class NodeExecutionEnv implements ExecutionEnv {
                 ? { backgroundCaptureIncomplete: true }
                 : {}),
               truncation: output.truncation,
+              ...(output.spillTruncatedAt === undefined
+                ? {}
+                : { spillTruncatedAt: output.spillTruncatedAt }),
               ...(output.spillPath === undefined || spillError !== undefined
                 ? {}
                 : { spillPath: output.spillPath }),

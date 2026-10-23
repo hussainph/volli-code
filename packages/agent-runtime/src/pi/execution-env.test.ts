@@ -1,13 +1,16 @@
 import { mkdtempSync } from "node:fs";
+import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   BACKGROUND_CONTEXT,
   executeShellWithCapture,
+  NodeExecutionEnv,
+  withAbortSignal,
   type ExecutionEnv,
   type ShellCaptureOptions,
 } from "./harness-env";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { piExecutionEnv, scopedEnvironment, sessionCommandEnvironment } from "./execution-env";
 
 function workspace(): string {
@@ -153,6 +156,55 @@ describe("piExecutionEnv", () => {
     } finally {
       await env.cleanup(BACKGROUND_CONTEXT);
     }
+  });
+
+  it("removes only its own temp directories, even when cleanup races creation", async () => {
+    const first = await piExecutionEnv(workspace());
+    const second = await piExecutionEnv(workspace());
+    const held = Promise.withResolvers<Awaited<ReturnType<ExecutionEnv["createTempDir"]>>>();
+    const directory = await fs.mkdtemp(join(tmpdir(), "volli-pending-spill-"));
+    const other = await second.createTempFile(
+      { prefix: "pi-output-", suffix: ".log" },
+      BACKGROUND_CONTEXT,
+    );
+    expect(other.ok).toBe(true);
+    const create = vi
+      .spyOn(NodeExecutionEnv.prototype, "createTempDir")
+      .mockReturnValueOnce(held.promise);
+    try {
+      const pending = first.createTempDir(undefined, BACKGROUND_CONTEXT);
+      const cleanup = first.cleanup(BACKGROUND_CONTEXT);
+      held.resolve({ ok: true, value: directory });
+      await pending;
+      await cleanup;
+      await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+      if (!other.ok) throw other.error;
+      expect((await fs.stat(other.value)).isFile()).toBe(true);
+      await expect(first.createTempDir(undefined, BACKGROUND_CONTEXT)).resolves.toMatchObject({
+        ok: false,
+        error: { code: "invalid" },
+      });
+    } finally {
+      create.mockRestore();
+      await first.cleanup(BACKGROUND_CONTEXT);
+      await second.cleanup(BACKGROUND_CONTEXT);
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("handles a cancelled temp creation and still revokes the attachment", async () => {
+    const onCleanup = vi.fn();
+    const env = await piExecutionEnv(workspace(), { onCleanup });
+    const controller = new AbortController();
+    controller.abort();
+    expect(
+      await env.createTempDir(undefined, withAbortSignal(controller.signal, BACKGROUND_CONTEXT)),
+    ).toMatchObject({ ok: false, error: { code: "aborted" } });
+    const created = await env.createTempDir(undefined, BACKGROUND_CONTEXT);
+    if (!created.ok) throw created.error;
+    await env.cleanup(BACKGROUND_CONTEXT);
+    expect(onCleanup).toHaveBeenCalledOnce();
+    await expect(fs.stat(created.value)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("runs the attachment cleanup hook exactly once", async () => {

@@ -877,8 +877,11 @@ trust notice.
 These rules apply to MCP results only. `web_fetch` already returns at most
 25,000 characters of an extracted article, and saving the rest of a web page
 would put untrusted page text in a file that `read` would later return without
-the per-read markers `web_fetch` wraps it in. `execute` keeps Pi's own handling:
-the last 2,000 lines or 50 KB, with the full output in a Pi temp file.
+the per-read markers `web_fetch` wraps it in. `execute` keeps Pi's inline handling:
+the last 2,000 lines or 50 KB, with output saved in a temp file capped at 64 MiB.
+The result names the spill cap when exceeded. Native execution removes these
+files when its attachment closes; they are not Session-persistent MCP output.
+Spilling remains disabled while the launch holds credential values.
 
 ## What is out of scope
 

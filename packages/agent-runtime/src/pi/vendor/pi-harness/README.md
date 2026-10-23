@@ -110,7 +110,13 @@ branch-summary execution. `Agent`/agent loop are **not** vendored.
    delete a replacement handle; duplicate unreachable guards are omitted while
    failed commits and competing publications remain covered. Coverage thresholds
    and production source inclusion are unchanged.
-5. The copied core patch is deleted; ownership now lives here. Codemode is not
+5. **Bounded shell spills (VC-820):** `env/nodejs.ts` uses Volli's owned
+   `ShellSpillBudget` before queueing/writing. Capture metadata carries an optional
+   `spillTruncatedAt` byte cap through updates and completion; `tools/bash.ts`
+   appends a cap notice, including on failure, without changing the inline tail,
+   tool declaration or existing `Full output:` framing. Attachment temp-directory
+   ownership and deletion live outside the vendor in `execution-env.ts`.
+6. The copied core patch is deleted; ownership now lives here. Codemode is not
    vendored: its output/call-size patch is retained on 1.0.0 because upstream
    still lacks those limits.
 

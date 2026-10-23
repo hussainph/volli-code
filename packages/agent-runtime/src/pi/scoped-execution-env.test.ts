@@ -1,10 +1,14 @@
 import { EventEmitter } from "node:events";
 import { spawn as nodeSpawn, type SpawnOptions } from "node:child_process";
 import {
+  closeSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
+  readSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -27,6 +31,7 @@ import {
 import { NodeExecutionEnv } from "./harness-env";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { ScopedExecutionEnv, type ScopedExecutionEnvOptions } from "./scoped-execution-env";
+import { ShellSpillBudget } from "./shell-spill";
 
 type SandboxOverrides = Partial<NonNullable<ScopedExecutionEnvOptions["sandbox"]>>;
 
@@ -73,6 +78,18 @@ function collected(
       return view;
     },
   };
+}
+
+/** Bytes at `offset`, so a bounded assertion never has to read a spool whole. */
+function readBytes(path: string, offset: number, length: number): Buffer {
+  const descriptor = openSync(path, "r");
+  try {
+    const bytes = Buffer.alloc(length);
+    readSync(descriptor, bytes, 0, length, offset);
+    return bytes;
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 function roots() {
@@ -956,6 +973,73 @@ describe("ScopedExecutionEnv", () => {
     expect(seen.text).toBe("ccc");
     expect(seen.view?.spillPath).toBe(spillPath);
     expect(seen.updates.some((update) => update.kind === "metadata")).toBe(true);
+
+    await env.cleanup();
+    expect(existsSync(spillPath!)).toBe(false);
+  });
+
+  /**
+   * VC-820: the spool stops at {@link ShellSpillBudget.maxBytes}, and the
+   * model's window is untouched when it does — the tail is exactly what the
+   * caller's own limits select, and the notice rides beside it as metadata. The
+   * final chunk is cut two bytes into a four-byte character on purpose.
+   */
+  it("stops the spool at its byte cap without touching the retained tail", async () => {
+    const { worktree } = roots();
+    const running = child();
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => running) as never,
+    });
+    // A deliberately tiny window, so the spool starts on the first chunk and
+    // the tail the consumer sees is small enough to assert on exactly.
+    const seen = collected({ limits: { maxBytes: 8, maxLines: 100 }, spill: true });
+    const run = env.exec("output", seen.options);
+    await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
+
+    const chunk = "a".repeat(1024 * 1024);
+    const chunks = ShellSpillBudget.maxBytes / chunk.length;
+    const settled = () => new Promise<void>((resolve) => setImmediate(resolve));
+    for (let index = 0; index < chunks - 1; index += 1) {
+      running.stdout.write(chunk);
+      await settled();
+    }
+    // Two bytes short of the cap, so the next write is cut through the middle
+    // of a character rather than between two of them.
+    running.stdout.write("a".repeat(chunk.length - 2));
+    await settled();
+    running.stdout.write("😀😀");
+    await settled();
+    // Past a full spool: absorbed, counted, and never appended.
+    running.stdout.write("tail\n");
+    running.emit("close", 0);
+
+    const overflow = Buffer.byteLength("😀😀") + "tail\n".length;
+    const result = await run;
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        exitCode: 0,
+        // The tail the caller asked for is still the tail they get, and the
+        // totals still describe the whole output rather than the file.
+        truncation: { truncated: true, totalBytes: ShellSpillBudget.maxBytes - 2 + overflow },
+        spillTruncatedAt: ShellSpillBudget.maxBytes,
+      },
+    });
+    const spillPath = result.ok ? result.value.spillPath : undefined;
+    expect(spillPath).toBeDefined();
+    // The file stops at the cap: the two bytes that fitted of the cut
+    // character were withheld, not written back as a three-byte replacement.
+    const size = statSync(spillPath!).size;
+    expect(size).toBe(ShellSpillBudget.maxBytes - 2);
+    expect(readBytes(spillPath!, 0, 4).toString("utf8")).toBe("aaaa");
+    expect(readBytes(spillPath!, size - 4, 4).toString("utf8")).toBe("aaaa");
+    // The notice reaches the consumer through the update stream too, since it
+    // is discovered after the bytes it belongs to. The window beside it is the
+    // caller's alone: the last eight bytes of the final line, which is exactly
+    // what these limits select with no spool in the picture at all.
+    expect(seen.text).toBe("😀tail");
+    expect(seen.view?.spillTruncatedAt).toBe(ShellSpillBudget.maxBytes);
 
     await env.cleanup();
     expect(existsSync(spillPath!)).toBe(false);

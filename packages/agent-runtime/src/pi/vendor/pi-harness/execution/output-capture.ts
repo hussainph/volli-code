@@ -50,6 +50,7 @@ export class OutputCapture {
   #endsWithNewline = true;
   #currentLineBytes = 0;
   #spillPath: string | undefined;
+  #spillTruncatedAt: number | undefined;
   #disposed = false;
   readonly #publisher: AdaptivePublisher<ShellOutputView, ShellOutputUpdate>;
 
@@ -106,6 +107,13 @@ export class OutputCapture {
     this.flush();
   }
 
+  /** Volli (VC-820): publish the spill cap even on timeout/abort error paths. */
+  setSpillTruncatedAt(bytes: number): void {
+    if (this.#disposed || this.#spillTruncatedAt === bytes) return;
+    this.#spillTruncatedAt = bytes;
+    this.#publisher.markDirty();
+  }
+
   snapshot(): ShellOutputView {
     const retained =
       this.#retain === "head"
@@ -124,6 +132,7 @@ export class OutputCapture {
         totalLines,
       },
       ...(this.#spillPath === undefined ? {} : { spillPath: this.#spillPath }),
+      ...(this.#spillTruncatedAt === undefined ? {} : { spillTruncatedAt: this.#spillTruncatedAt }),
       ...(retained.lastLinePartial ? { lastLineBytes: this.#currentLineBytes } : {}),
     };
   }
@@ -195,6 +204,9 @@ function updateFrom(
   const metadata: ShellOutputMetadata = {
     truncation: current.truncation,
     ...(current.spillPath === undefined ? {} : { spillPath: current.spillPath }),
+    ...(current.spillTruncatedAt === undefined
+      ? {}
+      : { spillTruncatedAt: current.spillTruncatedAt }),
     ...(current.lastLineBytes === undefined ? {} : { lastLineBytes: current.lastLineBytes }),
   };
   if (current.text === previous.text) return { kind: "metadata", metadata };

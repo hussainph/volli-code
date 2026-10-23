@@ -1076,6 +1076,34 @@ describe("vendored bash contracts", () => {
     },
   );
 
+  it.each(["timeout", "exit"])(
+    "includes the spill cap on %s without changing the tail or path",
+    async (kind) => {
+      const env = await workspace();
+      const view = outputView("final tail");
+      view.spillPath = "/attachment/output.log";
+      view.spillTruncatedAt = 64 * 1024 * 1024;
+      view.truncation = { ...view.truncation, truncated: true, truncatedBy: "bytes" };
+      vi.spyOn(env, "exec").mockImplementation(async (_command, options, context) => {
+        options?.onUpdate?.({ kind: "replace", output: view }, context);
+        return kind === "timeout"
+          ? err(new ExecutionError("timeout", "timeout"))
+          : ok({ ...view, exitCode: 7 });
+      });
+      await expect(
+        createBashTool().execute(
+          "bash",
+          { command: "ignored", timeout: 1 },
+          () => {},
+          { env },
+          ...inert,
+        ),
+      ).rejects.toThrow(
+        `Full output: /attachment/output.log]\n\n[Spill truncated at 67108864 bytes.]\n\n${kind === "timeout" ? "Command timed out after 1 seconds" : "Command exited with code 7"}`,
+      );
+    },
+  );
+
   it("retains truncation and spill location when execution fails after output", async () => {
     const env = await workspace();
     const source = "x".repeat(DEFAULT_MAX_BYTES + 1);
