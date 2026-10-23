@@ -495,6 +495,65 @@ const steps = {
     }
   },
 
+  /** Replays a signal-killed terminal without making its durable Session disappear. */
+  terminalExitReplay: async (step) => {
+    const { createSessionEngine } = await n1("@volli/session-engine");
+    const { createSqliteSessionLedger } = await n1("./session-control/sqlite-ledger");
+    const { projectSession } = await n1("@volli/shared");
+    const db = openVolliDb(command.dbPath);
+    try {
+      let next = 0;
+      const engine = createSessionEngine({
+        ledger: createSqliteSessionLedger(db),
+        clock: { now: () => NOW },
+        ids: { next: (kind) => `terminal-exit-n1-${kind}-${++next}` },
+      });
+      const snapshot = await engine.getSession({ sessionId: step.sessionId });
+      const events = await engine.listEvents({ sessionId: step.sessionId });
+      const summarize = (projection) => {
+        const terminal = projection.attachments.find(({ id }) => id === step.attachmentId);
+        return {
+          sessionId: projection.session.id,
+          title: projection.session.title,
+          idle: !projection.turnActive,
+          terminal: terminal
+            ? { status: terminal.status, outcome: terminal.outcome, exitCode: terminal.exitCode }
+            : null,
+        };
+      };
+      const replay = summarize(projectSession(snapshot.session, events));
+      if (step.title) {
+        await engine.submit({
+          sessionId: step.sessionId,
+          commandId: "terminal-exit-n1-retitle",
+          provenance,
+          intent: { kind: "session.retitle", title: step.title },
+        });
+      }
+      const after = await engine.getSession({ sessionId: step.sessionId });
+      const listed = await engine.listSessions({
+        projectId: after.session.projectId,
+        scope: "all",
+      });
+      return {
+        snapshot: summarize(snapshot),
+        replay,
+        historyExitCode: events.find(
+          ({ payload }) =>
+            payload.kind === "attachment.exited" && payload.attachmentId === step.attachmentId,
+        )?.payload.exitCode,
+        historyOutcome: events.find(
+          ({ payload }) =>
+            payload.kind === "attachment.closed" && payload.attachmentId === step.attachmentId,
+        )?.payload.outcome,
+        titleAfter: after.session.title,
+        listed: listed.some(({ session }) => session.id === step.sessionId),
+      };
+    } finally {
+      db.close();
+    }
+  },
+
   /** Replays a moved bash row through N-1's own ledger and artifact reader. */
   bashReplay: async (step) => {
     const { createSessionEngine } = await n1("@volli/session-engine");
