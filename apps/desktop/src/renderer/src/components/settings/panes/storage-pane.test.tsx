@@ -14,6 +14,7 @@ import type {
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
 import { DataExportConfirmBody, StoragePane } from "./storage-pane";
+import { useRetentionTtlStore } from "@renderer/stores/retention-ttl";
 
 // The build-artifact section reads its setting on mount over the Session RPC
 // client (`worktree.trimSettings`, VC-608).
@@ -90,6 +91,7 @@ let container: HTMLElement | null = null;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  useRetentionTtlStore.setState({ ttlDays: null });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -101,6 +103,7 @@ afterEach(async () => {
   container?.remove();
   container = null;
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 function bridge(
@@ -195,6 +198,73 @@ function savedOutputRow(): string {
     )?.textContent ?? ""
   );
 }
+
+async function commitRetention(text: string): Promise<HTMLInputElement> {
+  const input = document.querySelector<HTMLInputElement>("#done-ttl-days");
+  if (!input) throw new Error("No retention field");
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    setter?.call(input, text);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+  });
+  return input;
+}
+
+describe("Settings → Storage retention", () => {
+  it.each(["2.5", "1e3", "7.9", "0"])("refuses %j without confirming or saving", async (text) => {
+    bridge();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await open();
+
+    const input = await commitRetention(text);
+
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(document.querySelector("[role='alert']")?.textContent).toBe(
+      "Enter a whole number of days, at least 1.",
+    );
+    expect(confirm).not.toHaveBeenCalled();
+    expect(window.api.retention.setTtlDays).not.toHaveBeenCalled();
+  });
+
+  it.each(["3", "003"])("confirms and saves the parsed number for %j", async (text) => {
+    bridge();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await open();
+
+    const input = await commitRetention(text);
+
+    expect(confirm).toHaveBeenCalledExactlyOnceWith(
+      "Keep Done worktrees for only 3 day(s)? Folders will be removed sooner.",
+    );
+    expect(window.api.retention.setTtlDays).toHaveBeenCalledExactlyOnceWith(3);
+    expect(input.value).toBe("3");
+  });
+
+  it("does not save when confirmation is declined", async () => {
+    bridge();
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    await open();
+
+    const input = await commitRetention("3");
+
+    expect(window.api.retention.setTtlDays).not.toHaveBeenCalled();
+    expect(input.value).toBe("30");
+  });
+
+  it("saves a whole number at the confirmation threshold without prompting", async () => {
+    bridge();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await open();
+
+    await commitRetention("7");
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(window.api.retention.setTtlDays).toHaveBeenCalledExactlyOnceWith(7);
+  });
+});
 
 describe("Settings → Storage Pi session logs", () => {
   it("keeps cleanup disabled until scan, confirms exact paths, and returns the revision", async () => {
