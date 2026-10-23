@@ -313,7 +313,7 @@ export interface ShellOutputLimits {
 /** Bounded shell capture requested by the caller. */
 export interface ShellOutputCaptureOptions {
   limits: ShellOutputLimits;
-  /** Preserve complete output in an execution-environment-local file after the limits are crossed. */
+  /** Preserve output in an execution-environment-local file after the limits are crossed. */
   spill?: boolean;
 }
 
@@ -324,6 +324,8 @@ export type ShellOutputTruncation = Omit<TruncationResult, "content">;
 export interface ShellOutputMetadata {
   truncation: ShellOutputTruncation;
   spillPath?: string;
+  /** Volli (VC-820): the spill hit its byte cap; older readers use the result text. */
+  spillTruncatedAt?: number;
   lastLineBytes?: number;
 }
 

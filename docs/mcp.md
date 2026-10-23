@@ -905,8 +905,11 @@ was read. The file's one-line header names the tool, where the text came from
 (the URL without its query string for `web_fetch`; the tab, its URL and the
 tree's generation for the browser) and the time. A search (`web_search`,
 `browser_find`) returns references and matches, not a read, and saves nothing.
-`execute` keeps Pi's own handling: the last 2,000 lines or 50 KB, with the full
-output in a Pi temp file.
+`execute` keeps Pi's inline handling: the last 2,000 lines or 50 KB, with output
+saved in a temp file capped at 64 MiB. The result names the spill cap when exceeded.
+Native execution removes these files when its attachment closes; they are not
+Session-persistent MCP output. Spilling remains disabled while the launch holds
+credential values.
 
 ## What is out of scope
 
