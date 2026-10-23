@@ -191,6 +191,16 @@ describe("formatCachedShare", () => {
     expect(formatCachedShare(summary)).toBe("<1%");
   });
 
+  it.each([
+    [0.99499, "99%"],
+    [0.995, ">99%"],
+    [0.997, ">99%"],
+    [0.99999, ">99%"],
+    [1, "100%"],
+  ])("formats cached share %s as %s", (cachedInputShare, expected) => {
+    expect(formatCachedShare({ ...EMPTY, cachedInputShare })).toBe(expected);
+  });
+
   it("reports a genuinely cold cache as 0%", () => {
     const summary = summarizeSessionUsage([
       op({ cacheReadTokens: 0, inputTokens: 500, cacheWriteTokens: 100 }),

@@ -2614,6 +2614,19 @@ describe("renderCliSuccess cost", () => {
     expect(text).toContain("since  2026-08-10T00:00:00.000Z");
   });
 
+  it.each([
+    [0, "0%"],
+    [0.99499, "99%"],
+    [0.995, ">99%"],
+    [0.997, ">99%"],
+    [0.99999, ">99%"],
+    [1, "100%"],
+  ])("formats cached share %s as %s", (cachedInputShare, expected) => {
+    expect(renderCliSuccess("cost", { ...base, cachedInputShare }, options)).toContain(
+      `cached  ${expected}`,
+    );
+  });
+
   it("never rounds a small but real cached share down to nothing", () => {
     expect(renderCliSuccess("cost", { ...base, cachedInputShare: 0.004 }, options)).toContain(
       "cached  <1%",
