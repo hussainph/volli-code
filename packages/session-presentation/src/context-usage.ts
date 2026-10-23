@@ -252,7 +252,8 @@ export function formatTokens(tokens: number): string {
   if (!Number.isFinite(tokens) || tokens < 0) return "0";
   if (tokens < 1000) return String(Math.round(tokens));
   if (tokens < 10_000) return `${trimmed(tokens / 1000)}k`;
-  if (tokens < 1_000_000) return `${Math.round(tokens / 1000)}k`;
+  const thousands = Math.round(tokens / 1000);
+  if (thousands < 1000) return `${thousands}k`;
   return `${trimmed(tokens / 1_000_000)}M`;
 }
 

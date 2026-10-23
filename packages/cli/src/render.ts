@@ -1249,7 +1249,9 @@ function cachedShareCell(data: Record<string, unknown>): string {
   const share = data["cachedInputShare"];
   if (typeof share !== "number" || !Number.isFinite(share)) return "-";
   const percent = share * 100;
-  return percent > 0 && percent < 1 ? "<1%" : `${Math.round(percent)}%`;
+  if (percent > 0 && percent < 1) return "<1%";
+  if (percent >= 99.5 && percent < 100) return ">99%";
+  return `${Math.round(percent)}%`;
 }
 
 function usageCountCell(value: unknown): number {
