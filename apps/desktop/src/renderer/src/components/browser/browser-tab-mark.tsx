@@ -4,7 +4,7 @@ import { RobotIcon } from "@phosphor-icons/react/dist/csr/Robot";
 /**
  * The glyph a Browser Tab wears wherever it is drawn: a browser for a
  * person's tab, a robot for one a Session owns (VC-238). The strip and the
- * preview both use it, so a promoted agent tab is marked the same way in both
+ * transcript card both use it, so an agent tab is marked the same way in both
  * places and a person can always tell which tabs an agent may still be
  * driving. `bold`, because these sit at 12px where regular draws lighter than
  * the label beside it.

@@ -30,6 +30,8 @@ import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   paneForTab,
+  pairForTab,
+  splitViewPanes,
   SPLIT_VIEW_ROOT_PANE_ID,
   type SplitViewNode,
   type SplitViewState,
@@ -58,7 +60,10 @@ function overlayPlacements(
   state: SplitViewState,
   placements: ProvisionalPanePlacements,
 ): SplitViewState {
-  const unclaimed = [...placements].filter(([id]) => paneForTab(state, chatTabId(id)) === null);
+  const unclaimed = [...placements].filter(
+    ([id]) =>
+      paneForTab(state, chatTabId(id)) === null && pairForTab(state, chatTabId(id)) === null,
+  );
   const rewrite = (node: SplitViewNode): SplitViewNode => {
     if (node.kind === "pane") {
       const here = unclaimed.filter(
@@ -66,6 +71,13 @@ function overlayPlacements(
       );
       if (here.length === 0) return node;
       const front = here.findLast(([, placement]) => placement.front);
+      if (state.pairs !== undefined) {
+        // A pair has one member per pane, never a hidden tab stack. Inactive
+        // local Drafts remain ordinary surface tabs until explicitly selected.
+        return front === undefined
+          ? node
+          : { ...node, tabIds: [chatTabId(front[0])], activeTabId: chatTabId(front[0]) };
+      }
       return {
         ...node,
         tabIds: [...node.tabIds, ...here.map(([id]) => chatTabId(id))],
@@ -100,6 +112,18 @@ export interface ProvisionalChatTabs {
   releaseActive: () => void;
   /** Takes the overlay for a Draft this surface is bringing forward. */
   takeActive: (sessionId: string, paneId?: string) => void;
+  /** Pair in exact visual order; an untouched Draft occupies a local null slot. */
+  pairTabs: (
+    firstId: string,
+    secondId: string,
+    writePair: (firstId: string | null, secondId: string | null) => void,
+  ) => void;
+  /** Dissolve before drag-out or close; empty Drafts name their placeholder pane, never a saved tab. */
+  unpairTab: (
+    tabId: string,
+    writeUnpair: (tabId: string) => void,
+    closePane: (paneId: string) => void,
+  ) => void;
   /** The Draft title for each open chat id, `null` where the chat is a Session. */
   titles: readonly (string | null)[];
   /**
@@ -134,9 +158,15 @@ export function useProvisionalChatTabs(
     readSplitView,
     claimTab,
     activateTab,
+    focusPane: focusDraftPane,
+    closePane: closeDraftPane,
   }: ProvisionalPaneLayoutHost & {
     /** A Draft with an existing durable claim is a normal tab selection. */
     activateTab(tabId: string): void;
+    /** Reveal/focus a retained pair slot without ever recording an empty Draft ID. */
+    focusPane(paneId: string): void;
+    /** Release a former local placeholder when its Draft is explicitly re-paired. */
+    closePane(paneId: string): void;
   },
 ): ProvisionalChatTabs {
   const overrideId = useChatSessionsStore((state) =>
@@ -145,8 +175,8 @@ export function useProvisionalChatTabs(
   React.useEffect(() => {
     return ownerId === null
       ? undefined
-      : registerProvisionalPaneHost(ownerId, { readSplitView, claimTab });
-  }, [ownerId, readSplitView, claimTab]);
+      : registerProvisionalPaneHost(ownerId, { readSplitView, claimTab, activateTab });
+  }, [ownerId, readSplitView, claimTab, activateTab]);
   const placements = useProvisionalPaneLayoutStore((state) =>
     ownerId === null
       ? EMPTY_PROVISIONAL_PANE_PLACEMENTS
@@ -185,7 +215,8 @@ export function useProvisionalChatTabs(
     ([id, placement]) =>
       placement.front &&
       placementPaneId(split, placement.paneId) === focusedPaneId &&
-      (split === null || paneForTab(split, chatTabId(id)) === null),
+      (split === null ||
+        (paneForTab(split, chatTabId(id)) === null && pairForTab(split, chatTabId(id)) === null)),
   );
   const activeOverride = focusedDraft?.[0] ?? null;
   const selectedPlacement =
@@ -201,7 +232,11 @@ export function useProvisionalChatTabs(
       new Set(
         emptyChatIds
           .map((sessionId) => chatTabId(sessionId))
-          .filter((tabId) => split === null || paneForTab(split, tabId) === null),
+          .filter(
+            (tabId) =>
+              split === null ||
+              (paneForTab(split, tabId) === null && pairForTab(split, tabId) === null),
+          ),
       ),
     [emptyChatIds, split],
   );
@@ -218,7 +253,15 @@ export function useProvisionalChatTabs(
       const layout = useProvisionalPaneLayoutStore.getState();
       const latest = readSplitView();
       const tabId = chatTabId(sessionId);
-      const claimedPane = latest === null ? null : paneForTab(latest, tabId);
+      const pair = pairForTab(latest, tabId);
+      const claimedPane =
+        pair === null
+          ? latest === null
+            ? null
+            : paneForTab(latest, tabId)
+          : pair.first.activeTabId === tabId
+            ? pair.first.id
+            : pair.second.id;
       if (claimedPane !== null) {
         deactivateProvisionalPane(ownerId, claimedPane, latest);
         layout.remove(ownerId, sessionId);
@@ -232,11 +275,86 @@ export function useProvisionalChatTabs(
         (previous === undefined
           ? (latest?.focusedPaneId ?? SPLIT_VIEW_ROOT_PANE_ID)
           : placementPaneId(latest, previous.paneId));
-      deactivateProvisionalPane(ownerId, paneId, latest);
+      // A retained destination can belong to an unselected pair. Selection
+      // must reveal that pair and focus its slot, not move the Draft to the
+      // unrelated ordinary tab that happened to be visible before the click.
+      focusDraftPane(paneId);
+      deactivateProvisionalPane(ownerId, paneId, readSplitView());
       useProvisionalPaneLayoutStore.getState().place(ownerId, sessionId, paneId);
       useChatSessionsStore.getState().setProvisionalActive(ownerId, sessionId);
     },
-    [ownerId, readSplitView, activateTab],
+    [ownerId, readSplitView, activateTab, focusDraftPane],
+  );
+
+  const pairTabs = React.useCallback(
+    (
+      firstId: string,
+      secondId: string,
+      writePair: (firstId: string | null, secondId: string | null) => void,
+    ) => {
+      if (firstId === secondId) return;
+      const firstEmpty = emptyTabIds.has(firstId);
+      const secondEmpty = emptyTabIds.has(secondId);
+      // Two untouched Drafts have no durable anchor. Leave that gesture local.
+      if (firstEmpty && secondEmpty) return;
+      if (!firstEmpty && !secondEmpty) {
+        releaseActive();
+        writePair(firstId, secondId);
+        return;
+      }
+      if (ownerId === null) return;
+      const sessionId = parseChatTabId(firstEmpty ? firstId : secondId);
+      if (sessionId === null) return;
+      const previousPaneId = useProvisionalPaneLayoutStore
+        .getState()
+        .byOwner.get(ownerId)
+        ?.get(sessionId)?.paneId;
+      writePair(firstEmpty ? null : firstId, secondEmpty ? null : secondId);
+      const pair = pairForTab(readSplitView(), firstEmpty ? secondId : firstId);
+      const slot = firstEmpty ? pair?.first : pair?.second;
+      // A refused write cannot relocate the renderer-only passenger.
+      if (slot?.activeTabId !== null) return;
+      const previous = readSplitView()
+        ?.pairs?.flatMap((item) => [item.first, item.second])
+        .find(
+          (pane) => pane.id === previousPaneId && pane.id !== slot.id && pane.activeTabId === null,
+        );
+      if (previous !== undefined) closeDraftPane(previous.id);
+      takeActive(sessionId, slot.id);
+    },
+    [ownerId, emptyTabIds, readSplitView, releaseActive, takeActive, closeDraftPane],
+  );
+  const unpairTab = React.useCallback(
+    (tabId: string, writeUnpair: (tabId: string) => void, closePane: (paneId: string) => void) => {
+      if (!emptyTabIds.has(tabId)) {
+        releaseActive();
+        writeUnpair(tabId);
+        return;
+      }
+      const sessionId = parseChatTabId(tabId);
+      if (ownerId === null || sessionId === null) return;
+      const paneId = useProvisionalPaneLayoutStore
+        .getState()
+        .byOwner.get(ownerId)
+        ?.get(sessionId)?.paneId;
+      const latest = readSplitView();
+      const placeholder = latest?.pairs
+        ?.flatMap((pair) => [pair.first, pair.second])
+        .find((pane) => pane.id === paneId && pane.activeTabId === null);
+      if (placeholder !== undefined) closePane(placeholder.id);
+      useProvisionalPaneLayoutStore.getState().remove(ownerId, sessionId);
+      // Front the released Draft as an ordinary tab, not in another pending slot.
+      const visible = readSplitView();
+      const destination =
+        visible === null
+          ? SPLIT_VIEW_ROOT_PANE_ID
+          : (
+              splitViewPanes(visible).find((pane) => pane.activeTabId !== null) ??
+              splitViewPanes(visible)[0]!
+            ).id;
+      takeActive(sessionId, destination);
+    },
+    [ownerId, emptyTabIds, readSplitView, releaseActive, takeActive],
   );
 
   const guardLayoutWrites = React.useCallback(
@@ -257,6 +375,11 @@ export function useProvisionalChatTabs(
             writes.moveTabToPane(tabId, paneId);
             return;
           }
+          const latest = readSplitView();
+          if (latest?.pairs !== undefined) {
+            const target = splitViewPanes(latest).find((pane) => pane.id === paneId);
+            if (target === undefined || target.activeTabId !== null) return;
+          }
           focusPane(paneId);
           const sessionId = parseChatTabId(tabId);
           if (sessionId !== null) takeActive(sessionId, paneId);
@@ -269,7 +392,11 @@ export function useProvisionalChatTabs(
           }
           // The pane is real and is recorded; only its passenger is not. The
           // newly focused empty pane shows the Draft through the overlay.
+          const before = readSplitView();
           writes.splitPane(paneId, edge, null, ids);
+          // A completed pair refuses a third pane. A refused gesture must not
+          // move the renderer-only passenger either.
+          if (readSplitView() === before) return;
           const sessionId = parseChatTabId(tabId);
           if (sessionId !== null) takeActive(sessionId, readSplitView()?.focusedPaneId);
         },
@@ -293,6 +420,8 @@ export function useProvisionalChatTabs(
     activeOverridePaneId,
     overlaySplitView,
     emptyTabIds,
+    pairTabs,
+    unpairTab,
     guardLayoutWrites,
     releaseActive,
     takeActive,

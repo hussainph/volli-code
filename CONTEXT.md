@@ -85,27 +85,27 @@ never stack above one another.
 _Avoid_: Board (for the page), Sessions page, dashboard, Files (as a nav item)
 
 **Split view**:
-A tabbed surface's plane divided into Panes, each holding a subset of that
-surface's tabs (VC-202). Both surfaces have one, each keeps its own, and tabs
-never cross between them. Splits open right or down only, which keeps the
-permanent tab's Pane in the top left. Top-edge Panes divide the main tab bar;
-only Panes below a down split add lower tab strips (VC-333). A
-surface with no split is not "a split view of one" — it is the plane it always
-was, and the app stores nothing for it.
+Two tabs grouped into one joined strip chip, with their content shown in two
+Panes. Home and each Ticket workspace own their pairs independently; a pair
+never crosses areas or holds more than two tabs. Selecting another tab shows
+it full width; returning restores the pair's geometry. Board and Ticket Body
+can be either member. Splits open beside or below, but the area's one tab strip
+never divides. Unpairing releases both members as ordinary tabs without closing
+either. Saved older pane layouts convert on read without removing tabs.
 _Avoid_: split screen, editor group, pane tree, multi-pane mode
 
 **Pane**:
-One cell of a Split view: a set of tab ids, the one it has in front, and its own
-tab strip. The FOCUSED Pane is the surface's context — the right rail reads it,
-and the surface's active tab is its front tab. A Pane holding nothing draws the
-surface menu (New chat, New terminal, Open file…, Close pane) rather than an
-empty plane. Not to be confused with a terminal pane, which is one shell inside
-a Split Tab.
+One content cell of the selected tab pair. The FOCUSED Pane supplies the area's
+context to its right rail. Panes do not own separate tab strips or stacks of
+background tabs. A temporary empty partner draws the surface menu (New chat,
+New terminal, New browser, Open file…, Close pane) until a tab fills it. A
+terminal pane is different: it is one shell inside a terminal Split Tab.
 _Avoid_: split, group, editor group, window, terminal pane
 
 **Drop zone**:
 Where a dragged tab, Session row or file row may land on a Pane: its centre
-(move here) or its right/bottom edge (split there). Zones appear only while a
+(reveal or unpair here) or its right/bottom edge (pair there). A tab's left/right
+strip edges also form pairs. Zones appear only while a
 compatible drag is live, and what lights up is the RESULT — the half the split
 would open, or the whole Pane a move would fill — never the region being
 hit-tested. A payload from another surface shows no zones at all.
@@ -391,7 +391,7 @@ The Session that opened a Browser Tab (`ownerSessionId`), or nobody for a
 person's tab. Ownership is who may drive a tab through the Browser port: a
 Session sees the person's tabs and its own, so two Sessions on one Ticket
 never see each other's. It is separate from the storage partition, which stays
-per Ticket. Six headless tabs per owner; the person's own cap is counted
+per Ticket. Six live tabs per owner; the person's own cap is counted
 apart, so a fleet of agents can never stop a person opening one. Distinct from
 a **tab hold**: ownership says whose tab it is and outlives every turn, while
 a hold says whose turn it is to write to it right now. A Session owns its
@@ -400,12 +400,14 @@ _Avoid_: creator, session tab (ambiguous with the Session's own tabs)
 
 **Presentation**:
 Where a Browser Tab is drawn, decided by the person and held by main:
-`headless` (on no surface a person can look at), `preview` (pinned live above
-the owning chat's composer, one per Session), or `tab` (an item in the Home or
-Ticket strip, marked as driven). A person's tabs are always `tab`. Show, Hide
-and Open as tab change presentation and nothing else — not the owner, the
-generation, the cookies, or anything the agent sees. A tab the person has shown
-is theirs and survives its Session.
+`headless` (on no surface a person can look at), `tab` (an item in the Home or
+Ticket strip), or the compatible legacy `preview` (pinned live above the owning
+chat's composer). A person's tabs are always `tab`. **Open beside chat** promotes
+a Session's tab into the strip and pairs it with its owner; the Island's **Show
+tab** focuses its existing pair when one exists. Neither changes ownership,
+generation, cookies or what the agent sees. A revealed tab survives its Session.
+The preview representation remains readable but is no longer the default reveal
+path.
 _Avoid_: visibility (that is whether the native plane is attached right now),
 shown/hidden as states (they are the actions)
 **Tab hold**:

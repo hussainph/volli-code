@@ -6,7 +6,6 @@ import type { BrowserApi } from "@renderer/components/browser/browser-api";
 import {
   browserTabDisplayTitle,
   browserTabOwnerLabel,
-  previewedBrowserTab,
   sessionBrowserTabs,
   stripBrowserTabs,
   hydrateBrowserTabs,
@@ -90,11 +89,17 @@ describe("browser tab store", () => {
       },
     } as unknown as BrowserApi;
 
-    const stop = subscribeBrowserTabs(api);
+    const onClosed = vi.fn((closed: BrowserTabState) => {
+      expect(useBrowserTabsStore.getState().byId[closed.tabId]).toBe(closed);
+    });
+    const stop = subscribeBrowserTabs(api, onClosed);
     listener?.({ tab: tab() });
     expect(useBrowserTabsStore.getState().byId["tab-1"]).toBeDefined();
     listener?.({ closedTabId: "tab-1" });
     expect(useBrowserTabsStore.getState().byId).toEqual({});
+    expect(onClosed).toHaveBeenCalledWith(tab());
+    listener?.({ closedTabId: "already-gone" });
+    expect(onClosed).toHaveBeenCalledTimes(1);
     stop();
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
@@ -165,17 +170,6 @@ describe("strip and inventory selection (VC-238)", () => {
     expect(inventory.map((one) => one.tabId)).toEqual(["mine-headless", "mine-shown", "child"]);
     expect(sessionBrowserTabs(byId, "s1")).toHaveLength(2);
     expect(sessionBrowserTabs({}, "s1")).toEqual([]);
-  });
-
-  it("finds the one tab a chat is previewing, or none", () => {
-    const byId = Object.fromEntries(
-      [agent("a", "s1", "headless"), agent("b", "s1", "preview"), agent("c", "s2", "preview")].map(
-        (one) => [one.tabId, one],
-      ),
-    );
-
-    expect(previewedBrowserTab(byId, "s1")?.tabId).toBe("b");
-    expect(previewedBrowserTab(byId, "s3")).toBeNull();
   });
 
   it("says who is driving a tab in the chat's own terms", () => {

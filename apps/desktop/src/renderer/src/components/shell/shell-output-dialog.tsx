@@ -15,7 +15,7 @@
  * would pay for output nobody is reading. Closing the dialog unmounts the
  * view, and the poll with it.
  *
- * A Radix portal, so a pinned Browser preview under it freezes onto pixels
+ * A Radix portal, so a Browser pane under it freezes onto pixels
  * for as long as it is open — the same rule every menu obeys.
  */
 import { ShellOutputView } from "@renderer/components/shell/shell-output-view";

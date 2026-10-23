@@ -25,9 +25,8 @@ import { useSplitShortcuts } from "./use-split-shortcuts";
 
 const PROJECT = "project-1";
 const LEFT = browserTabId("tab-left");
-const MIDDLE = browserTabId("tab-middle");
 const RIGHT = browserTabId("tab-right");
-const STRIP = [LEFT, MIDDLE, RIGHT];
+const STRIP = [LEFT, RIGHT];
 
 let container: HTMLDivElement;
 let root: Root;
@@ -51,15 +50,15 @@ function paneOf(tabId: string): string {
   return pane.id;
 }
 
-/** ⌃⌘→ as main hands it back from the middle pane's page. */
-function pressRightInMiddlePage(): boolean {
+/** ⌃⌘← as main hands it back from the right member's page. */
+function pressLeftInRightPage(): boolean {
   return runBrowserAppShortcut({
-    tabId: "tab-middle",
+    tabId: "tab-right",
     shortcut: {
       kind: "replay",
       chord: {
-        key: "ArrowRight",
-        code: "ArrowRight",
+        key: "ArrowLeft",
+        code: "ArrowLeft",
         metaKey: true,
         ctrlKey: true,
         altKey: false,
@@ -76,18 +75,14 @@ beforeEach(() => {
   useWorkspaceStore.setState({
     byProject: { [PROJECT]: { ...DEFAULT_WORKSPACE_UI, nav: "home", homeActiveTab: LEFT } },
   } as never);
-  // Three panes in a row, one Browser Tab each: left | middle | right.
+  // One bounded pair. A second split cannot create a third pane (VC-614).
   const workspace = useWorkspaceStore.getState();
   workspace.splitHomePane(PROJECT, SPLIT_VIEW_ROOT_PANE_ID, "right", {
-    tabId: MIDDLE,
-    surfaceTabIds: STRIP,
-  });
-  workspace.splitHomePane(PROJECT, paneOf(MIDDLE), "right", {
     tabId: RIGHT,
     surfaceTabIds: STRIP,
   });
   // The last pane clicked IN THE APP was the left one; the person then clicked
-  // into the middle pane's native page, which the split view never heard.
+  // into the right member's native page, which the split view never heard.
   workspace.focusHomePane(PROJECT, SPLIT_VIEW_ROOT_PANE_ID);
 
   container = document.createElement("div");
@@ -109,29 +104,40 @@ afterEach(() => {
 describe("⌃⌘ + an arrow from inside a Browser page", () => {
   it("moves from the pane drawing the page, not the pane last clicked in the app", () => {
     // The surface's wiring: BrowserPane's onFocusPane is focusHomePane(pane).
-    unregister = registerBrowserPaneCommands("tab-middle", {
+    unregister = registerBrowserPaneCommands("tab-right", {
       close: () => true,
       focusAddress: () => undefined,
-      focusPane: () => useWorkspaceStore.getState().focusHomePane(PROJECT, paneOf(MIDDLE)),
+      focusPane: () => useWorkspaceStore.getState().focusHomePane(PROJECT, paneOf(RIGHT)),
     });
 
-    expect(pressRightInMiddlePage()).toBe(true);
-
-    expect(split().focusedPaneId).toBe(paneOf(RIGHT));
+    const focused: string[] = [];
+    const unsubscribe = useWorkspaceStore.subscribe(() => focused.push(split().focusedPaneId));
+    const right = paneOf(RIGHT);
+    const left = paneOf(LEFT);
+    try {
+      expect(pressLeftInRightPage()).toBe(true);
+      // The final pane alone cannot prove the origin with just two members:
+      // without the handoff, left-at-left would also end on the left. Observe
+      // the real store transitions: focus the page's member, then move left.
+      expect(focused).toEqual([right, left]);
+      expect(split().focusedPaneId).toBe(left);
+    } finally {
+      unsubscribe();
+    }
   });
 
-  it("would land one pane short without it — the failure the pane focus exists for", () => {
+  it("would stay at the stale member without the native-page focus handoff", () => {
     // No pane registered for the page: the chord starts from the stale pane.
-    expect(pressRightInMiddlePage()).toBe(true);
+    expect(pressLeftInRightPage()).toBe(true);
 
-    expect(split().focusedPaneId).toBe(paneOf(MIDDLE));
+    expect(split().focusedPaneId).toBe(paneOf(LEFT));
   });
 
   it("reports the chord as unclaimed when the surface is not split, so focus goes back to the page", () => {
     useWorkspaceStore.setState({
-      byProject: { [PROJECT]: { ...DEFAULT_WORKSPACE_UI, nav: "home", homeActiveTab: MIDDLE } },
+      byProject: { [PROJECT]: { ...DEFAULT_WORKSPACE_UI, nav: "home", homeActiveTab: RIGHT } },
     } as never);
 
-    expect(pressRightInMiddlePage()).toBe(false);
+    expect(pressLeftInRightPage()).toBe(false);
   });
 });

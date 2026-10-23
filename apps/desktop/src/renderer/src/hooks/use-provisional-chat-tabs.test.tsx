@@ -2,10 +2,9 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import {
-  paneForTab,
-  resolveSplitView,
-  singlePaneSplitView,
-  splitViewPanes,
+  projectSplitView,
+  pairForTab,
+  groupedSplitView,
   SPLIT_VIEW_ROOT_PANE_ID,
   type BlobLinkView,
   type SplitViewState,
@@ -130,6 +129,14 @@ function surface(ticket: boolean, { oldChat = false } = {}) {
     reorderPane: vi.fn(),
     reorderSurface: vi.fn(),
   };
+  const writePair = vi.fn((first: string | null, second: string | null) => {
+    if (ticket) store.getState().pairTicketTabs("project-1", ownerId, first, second);
+    else store.getState().pairHomeTabs("project-1", first, second);
+  });
+  const writeUnpair = vi.fn((tabId: string) => {
+    if (ticket) store.getState().unpairTicketTab("project-1", ownerId, tabId);
+    else store.getState().unpairHomeTab("project-1", tabId);
+  });
   let provisional: ProvisionalChatTabs;
   let guarded: SplitSurfaceWrites;
   let browserFlight: Promise<void> | undefined;
@@ -162,6 +169,8 @@ function surface(ticket: boolean, { oldChat = false } = {}) {
     provisional = useProvisionalChatTabs(ownerId, chats, {
       readSplitView,
       claimTab,
+      focusPane,
+      closePane,
       activateTab: (tabId) => {
         if (ticket) store.getState().setTicketActiveTab("project-1", ownerId, tabId);
         else store.getState().setHomeActiveTab("project-1", tabId);
@@ -187,8 +196,13 @@ function surface(ticket: boolean, { oldChat = false } = {}) {
       recordedTab: recorded,
       recordResolvedTab: store.getState().recordResolvedHomeTab,
     });
-    const split = readSplitView() ?? singlePaneSplitView([], recorded, SPLIT_VIEW_ROOT_PANE_ID);
-    const view = resolveSplitView(provisional.overlaySplitView(split), tabIds(), permanentTabId);
+    const split = readSplitView() ?? groupedSplitView([], recorded);
+    const view = projectSplitView(
+      provisional.overlaySplitView(split),
+      tabIds(),
+      provisional.activeOverrideTabId ?? recorded,
+      permanentTabId,
+    );
     return (
       <SplitViewGrid
         view={view}
@@ -222,7 +236,8 @@ function surface(ticket: boolean, { oldChat = false } = {}) {
   }
   if (oldChat) {
     useChatSessionsStore.getState().openChatTab(ownerId, "old");
-    store.getState().setHomeActiveTab("project-1", "chat:old");
+    if (ticket) store.getState().setTicketActiveTab("project-1", ownerId, "chat:old");
+    else store.getState().setHomeActiveTab("project-1", "chat:old");
   }
   writes.splitPane(SPLIT_VIEW_ROOT_PANE_ID, "right", null, oldChat ? ["chat:old"] : []);
   useChatDraftsStore.getState().openProvisional("draft-1", {
@@ -238,6 +253,8 @@ function surface(ticket: boolean, { oldChat = false } = {}) {
     data,
     store,
     writes,
+    writePair,
+    writeUnpair,
     focusPane,
     focusDown: () => {
       if (ticket) store.getState().focusAdjacentTicketPane("project-1", ownerId, "down");
@@ -276,205 +293,240 @@ function surface(ticket: boolean, { oldChat = false } = {}) {
       act(() => root.render(<Harness />));
     },
     view: () =>
-      resolveSplitView(
-        provisional.overlaySplitView(
-          readSplitView() ?? singlePaneSplitView([], recordedActive(), SPLIT_VIEW_ROOT_PANE_ID),
-        ),
+      projectSplitView(
+        provisional.overlaySplitView(readSplitView() ?? groupedSplitView([], recordedActive())),
         tabIds(),
+        provisional.activeOverrideTabId ?? recordedActive(),
         permanentTabId,
       ),
   };
 }
 
-it("Home's stale-tab receipt never persists an unfocused empty Draft or selects its pane when it gains content", () => {
-  const s = surface(false, { oldChat: true });
-  act(() => s.writes.splitPane("n1", "down", null, []));
-  act(() => s.closeChat("old"));
-  expect(s.provisional().activeOverride).toBeNull();
-  expect(s.readSplitView()?.focusedPaneId).toBe("n3");
-  expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
-  act(() => useChatDraftsStore.getState().setDraft("draft-1", "earned content"));
-  expect(paneForTab(s.restoredSplit()!, DRAFT_TAB)).toBe("n1");
-  expect(s.readSplitView()?.focusedPaneId).toBe("n3");
-});
-
-it("Ticket's stale-tab receipt preserves a background Draft and focused empty pane", () => {
-  const s = surface(true);
-  act(() => s.guarded().moveTabToPane(DRAFT_TAB, SPLIT_VIEW_ROOT_PANE_ID));
-  act(() => s.focusPane("n1"));
-  act(() => s.store.getState().recordResolvedTicketTab("project-1", s.ownerId, "missing-terminal"));
-  const split = s.readSplitView();
-  act(() => s.store.getState().recordResolvedTicketTab("project-1", s.ownerId, "doc"));
-  expect(s.recordedActive()).toBe("doc");
-  expect(s.readSplitView()).toBe(split);
-  expect(s.readSplitView()?.focusedPaneId).toBe("n1");
-  expect(s.view().panes.find((pane) => pane.id === SPLIT_VIEW_ROOT_PANE_ID)?.activeTabId).toBe(
-    DRAFT_TAB,
-  );
-  expect(
-    useProvisionalPaneLayoutStore.getState().byOwner.get(s.ownerId)?.get("draft-1")?.front,
-  ).toBe(true);
-  expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
-});
+const attachment: BlobLinkView = {
+  linkId: null,
+  blobHash: "a".repeat(64),
+  label: "shot.png",
+  originalName: "shot.png",
+  mime: "image/png",
+  sizeBytes: 1,
+};
 
 for (const ticket of [false, true]) {
-  describe(`provisional pane layout — ${ticket ? "Ticket" : "Home"}`, () => {
-    it("closes the empty source after moving and splitting a Draft elsewhere, without teleporting it", () => {
+  describe(`provisional grouped layout — ${ticket ? "Ticket" : "Home"}`, () => {
+    const preview = (s: ReturnType<typeof surface>) => {
+      if (ticket) s.store.getState().previewTicketFile("project-1", s.ownerId, "readme.md");
+      else s.store.getState().previewHomeFile("project-1", "readme.md");
+    };
+    const select = (s: ReturnType<typeof surface>, tabId: string) => {
+      if (ticket) s.store.getState().setTicketActiveTab("project-1", s.ownerId, tabId);
+      else s.store.getState().setHomeActiveTab("project-1", tabId);
+    };
+    const openSecond = (s: ReturnType<typeof surface>) => {
+      useChatDraftsStore.getState().openProvisional("draft-2", {
+        projectId: "project-1",
+        ticketId: ticket ? s.ownerId : null,
+        title: null,
+        operationId: "op-2",
+      });
+      useChatSessionsStore.getState().openChatTab(s.ownerId, "draft-2");
+      useChatSessionsStore.getState().setProvisionalActive(s.ownerId, "draft-2");
+    };
+
+    it("renders a local Draft in the pending partner without recording its identity", () => {
       const s = surface(ticket);
-      act(() => s.guarded().moveTabToPane(DRAFT_TAB, SPLIT_VIEW_ROOT_PANE_ID));
-      act(() => s.guarded().splitPane(SPLIT_VIEW_ROOT_PANE_ID, "down", DRAFT_TAB, [DRAFT_TAB]));
-      expect(s.view().panes.find((pane) => pane.id === "n3")?.activeTabId).toBe(DRAFT_TAB);
+      expect(s.view().panes.map((pane) => pane.activeTabId)).toEqual([
+        ticket ? "doc" : "board",
+        DRAFT_TAB,
+      ]);
+      expect(s.provisional().activeOverridePaneId).toBe("n1");
+      expect(s.readSplitView()?.pairs?.[0]?.second.activeTabId).toBeNull();
+      expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
+      s.remount();
+      expect(s.view().panes[1]?.activeTabId).toBe(DRAFT_TAB);
+    });
 
-      const emptyPane = container.querySelector('[data-pane-id="n1"]')!;
-      const close = emptyPane.querySelector('[aria-label="Close pane"]')!;
-      // The pointer-down that precedes a real click focuses the source. It must
-      // not replace this row with the Draft and swallow the subsequent click.
-      act(() => close.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
-      expect(s.view().focusedPaneId).toBe("n1");
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBeNull();
+    it("commits first content into the pending member and hands back the overlay", () => {
+      const s = surface(ticket);
+      act(() => useChatDraftsStore.getState().setDraft("draft-1", "words"));
+      expect(s.claimTab).toHaveBeenCalledWith(DRAFT_TAB, "n1", true);
+      expect(pairForTab(s.restoredSplit(), DRAFT_TAB)?.second.id).toBe("n1");
       expect(s.provisional().activeOverride).toBeNull();
-      expect(emptyPane.contains(close)).toBe(true);
-      act(() => close.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+      expect(s.view().panes[1]?.activeTabId).toBe(DRAFT_TAB);
+      expect(useProvisionalPaneLayoutStore.getState().byOwner.has(s.ownerId)).toBe(false);
+    });
 
-      expect(s.view().panes.map((pane) => pane.id)).toEqual([SPLIT_VIEW_ROOT_PANE_ID, "n3"]);
-      expect(s.view().panes.find((pane) => pane.id === "n3")?.activeTabId).toBe(DRAFT_TAB);
-      expect(JSON.stringify(s.readSplitView())).not.toContain(DRAFT_TAB);
+    for (const content of ["typing", "attachment", "promotion"] as const) {
+      it(`saves unfocused ${content} in its pending slot without stealing focus`, () => {
+        const s = surface(ticket);
+        const composer = container.querySelector<HTMLTextAreaElement>(
+          '[aria-label="Draft composer"]',
+        )!;
+        composer.focus();
+        act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
+        expect(document.activeElement).toBe(composer);
+        expect(s.provisional().activeOverride).toBeNull();
+        const recorded = s.recordedActive();
+        act(() => {
+          if (content === "typing") {
+            composer.value = "background words";
+            composer.dispatchEvent(new Event("input", { bubbles: true }));
+          } else if (content === "attachment") {
+            useChatDraftsStore.getState().setDraftAttachments("draft-1", [attachment]);
+          } else useChatDraftsStore.getState().completePromotion("draft-1");
+        });
+        expect(pairForTab(s.restoredSplit(), DRAFT_TAB)?.second.id).toBe("n1");
+        expect(s.readSplitView()?.focusedPaneId).toBe(SPLIT_VIEW_ROOT_PANE_ID);
+        expect(s.recordedActive()).toBe(recorded);
+      });
+    }
+
+    it("does not split a pending pair into an arbitrary third pane or move its Draft on refusal", () => {
+      const s = surface(ticket);
+      const before = s.readSplitView();
+      act(() => s.guarded().splitPane(SPLIT_VIEW_ROOT_PANE_ID, "down", DRAFT_TAB, [DRAFT_TAB]));
+      act(() => s.writes.splitPane("n1", "down", null, []));
+      expect(s.readSplitView()).toBe(before);
+      expect(s.view().panes).toHaveLength(2);
+      expect(s.view().panes[1]?.activeTabId).toBe(DRAFT_TAB);
       expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
     });
 
-    it("saves typing in the still-DOM-focused composer after keyboard pane focus moves", () => {
+    it("refuses a centre move into an occupied member without moving the empty Draft", () => {
       const s = surface(ticket);
-      act(() => s.writes.splitPane("n1", "down", null, []));
-      act(() => s.focusPane("n1"));
-      const composer = container.querySelector<HTMLTextAreaElement>(
-        '[aria-label="Draft composer"]',
-      )!;
-      composer.focus();
-      act(() => s.focusDown());
-      const recorded = s.recordedActive();
-      expect(document.activeElement).toBe(composer);
-      expect(s.provisional().activeOverride).toBeNull();
-      act(() => {
-        composer.value = "background words";
-        composer.dispatchEvent(new Event("input", { bubbles: true }));
-      });
-      expect(s.claimTab).toHaveBeenCalledWith(DRAFT_TAB, "n1", true);
-      expect(paneForTab(s.readSplitView()!, DRAFT_TAB)).toBe("n1");
-      expect(s.readSplitView()?.focusedPaneId).toBe("n3");
-      expect(s.recordedActive()).toBe(recorded);
-      expect(paneForTab(s.restoredSplit()!, DRAFT_TAB)).toBe("n1");
-      expect(useProvisionalPaneLayoutStore.getState().byOwner.get(s.ownerId)).toBeUndefined();
+      act(() => s.guarded().moveTabToPane(DRAFT_TAB, SPLIT_VIEW_ROOT_PANE_ID));
+      expect(s.view().panes[0]?.activeTabId).toBe(ticket ? "doc" : "board");
+      expect(s.view().panes[1]?.activeTabId).toBe(DRAFT_TAB);
+      expect(s.provisional().activeOverridePaneId).toBe("n1");
     });
 
-    it("opens a browser in a neighboring empty pane without moving or forgetting the empty Draft", async () => {
+    it("moves an ordinary local Draft into an explicitly focused empty partner", () => {
       const s = surface(ticket);
-      act(() => s.writes.splitPane("n1", "down", null, []));
-      const row = container.querySelector('[data-pane-id="n3"] [aria-label="New browser"]')!;
-      await act(async () => {
-        row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-        await s.browserFlight();
-      });
-      expect(s.browserApi.open).toHaveBeenCalledWith({
-        projectId: "project-1",
-        ...(ticket ? { ticketId: "ticket-1" } : {}),
-        url: BROWSER_START_URL,
-      });
-      expect(s.view().panes.find((pane) => pane.id === "n3")?.activeTabId).toBe(
-        "browser:browser-1",
-      );
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(DRAFT_TAB);
-      expect(s.view().panes[0]?.tabIds).not.toContain(DRAFT_TAB);
-      expect(s.readSplitView()?.focusedPaneId).toBe("n3");
-      expect(s.recordedActive()).toBe("browser:browser-1");
-      expect(useChatSessionsStore.getState().openTabs[s.ownerId]).toContain("draft-1");
-      expect(JSON.stringify(s.readSplitView())).not.toContain(DRAFT_TAB);
+      act(() => s.closePane("n1"));
+      act(() => s.provisional().releaseActive());
+      act(() => s.writes.splitPane(SPLIT_VIEW_ROOT_PANE_ID, "down", null, []));
+      act(() => s.guarded().moveTabToPane(DRAFT_TAB, "n3"));
+      expect(s.view().focusedPaneId).toBe("n3");
+      expect(s.view().panes[1]?.activeTabId).toBe(DRAFT_TAB);
+      expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
       s.remount();
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(DRAFT_TAB);
-      act(() => s.focusPane("n1"));
-      expect(s.provisional().activeOverride).toBe("draft-1");
+      expect(s.view().panes[1]?.activeTabId).toBe(DRAFT_TAB);
     });
 
-    it("saves an attachment that finishes after a neighboring browser took focus", async () => {
+    it("retains a hidden pending destination when an unrelated browser is selected", async () => {
       const s = surface(ticket);
-      act(() => s.writes.splitPane("n1", "down", null, []));
+      act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
       await act(async () => {
-        container
-          .querySelector('[data-pane-id="n3"] [aria-label="New browser"]')!
-          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
-        await s.browserFlight();
+        await s.createBrowser();
       });
-      const attachment: BlobLinkView = {
-        linkId: null,
-        blobHash: "a".repeat(64),
-        label: "shot.png",
-        originalName: "shot.png",
-        mime: "image/png",
-        sizeBytes: 1,
-      };
+      expect(s.view().panes.map((pane) => pane.activeTabId)).toEqual(["browser:browser-1"]);
+      expect(s.provisional().activeOverride).toBeNull();
+      expect(
+        useProvisionalPaneLayoutStore.getState().byOwner.get(s.ownerId)?.get("draft-1"),
+      ).toEqual({ paneId: "n1", front: true });
+      expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
+      s.remount();
+      expect(s.view().panes).toHaveLength(1);
       act(() => useChatDraftsStore.getState().setDraftAttachments("draft-1", [attachment]));
-      expect(s.claimTab).toHaveBeenCalledWith(DRAFT_TAB, "n1", true);
-      expect(paneForTab(s.restoredSplit()!, DRAFT_TAB)).toBe("n1");
-      expect(s.readSplitView()?.focusedPaneId).toBe("n3");
+      expect(pairForTab(s.restoredSplit(), DRAFT_TAB)?.second.id).toBe("n1");
       expect(s.recordedActive()).toBe("browser:browser-1");
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(DRAFT_TAB);
+      expect(s.view().panes).toHaveLength(1);
     });
 
-    it("reselects a typed-then-cleared Draft with a durable pane claim", async () => {
+    it("saves a late attachment to a hidden pending pair after the surface unmounts", async () => {
+      const s = surface(ticket);
+      act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
+      await act(async () => {
+        await s.createBrowser();
+      });
+      const finish = useChatDraftsStore.getState().beginAttachmentImport("draft-1");
+      s.unmount();
+      await Promise.resolve().then(() => {
+        useChatDraftsStore.getState().setDraftAttachments("draft-1", [attachment]);
+        finish();
+      });
+      expect(pairForTab(s.restoredSplit(), DRAFT_TAB)?.second.id).toBe("n1");
+      expect(s.recordedActive()).toBe("browser:browser-1");
+      expect(useProvisionalPaneLayoutStore.getState().byOwner.has(s.ownerId)).toBe(false);
+    });
+
+    it("a browser filling the pending slot leaves the inactive Draft ordinary, not in a hidden stack", async () => {
+      const s = surface(ticket);
+      await act(async () => {
+        await s.createBrowser();
+      });
+      expect(s.view().panes[1]?.activeTabId).toBe("browser:browser-1");
+      expect(s.view().panes[1]?.tabIds).toEqual(["browser:browser-1"]);
+      act(() => useChatDraftsStore.getState().setDraft("draft-1", "background"));
+      expect(s.claimTab).toHaveBeenCalledWith(DRAFT_TAB, "n1", false);
+      expect(pairForTab(s.restoredSplit(), DRAFT_TAB)).toBeNull();
+      expect(s.recordedActive()).toBe("browser:browser-1");
+      expect(useProvisionalPaneLayoutStore.getState().byOwner.has(s.ownerId)).toBe(false);
+      act(() => select(s, DRAFT_TAB));
+      expect(s.view().panes.map((pane) => pane.activeTabId)).toEqual([DRAFT_TAB]);
+    });
+
+    it("fronting a Draft over a full member commits it as an ordinary tab, without replacing the pair", async () => {
+      const s = surface(ticket);
+      await act(async () => {
+        await s.createBrowser();
+      });
+      act(() => s.provisional().takeActive("draft-1"));
+      expect(s.view().panes.map((pane) => pane.activeTabId)).toEqual([DRAFT_TAB]);
+      expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
+      act(() => useChatDraftsStore.getState().setDraft("draft-1", "ordinary"));
+      expect(s.view().panes.map((pane) => pane.activeTabId)).toEqual([DRAFT_TAB]);
+      expect(pairForTab(s.restoredSplit(), "browser:browser-1")).not.toBeNull();
+      expect(pairForTab(s.restoredSplit(), DRAFT_TAB)).toBeNull();
+    });
+
+    it("reselects a typed-then-cleared paired Draft as a durable member", async () => {
       const s = surface(ticket);
       act(() => useChatDraftsStore.getState().setDraft("draft-1", "x"));
       act(() => useChatDraftsStore.getState().setDraft("draft-1", ""));
+      act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
       await act(async () => {
         await s.createBrowser();
       });
       expect(s.provisional().emptyTabIds.has(DRAFT_TAB)).toBe(false);
-      act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
       act(() => s.provisional().takeActive("draft-1"));
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(DRAFT_TAB);
       expect(s.readSplitView()?.focusedPaneId).toBe("n1");
-      act(() => useChatDraftsStore.getState().setDraft("draft-1", "again"));
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(DRAFT_TAB);
-    });
-
-    it("a durable tab moved into a background Draft pane comes to front without relocating the Draft", () => {
-      const s = surface(ticket, { oldChat: true });
-      act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
-      act(() => s.provisional().releaseActive());
-      act(() => s.guarded().moveTabToPane("chat:old", "n1"));
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe("chat:old");
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.tabIds).toContain(DRAFT_TAB);
-      act(() => useChatDraftsStore.getState().setDraft("draft-1", "background"));
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe("chat:old");
-      expect(paneForTab(s.restoredSplit()!, DRAFT_TAB)).toBe("n1");
+      expect(s.view().panes[1]?.activeTabId).toBe(DRAFT_TAB);
     });
 
     for (const sameUnderlying of [false, true]) {
-      it(`direct file preview dismisses the Draft ${sameUnderlying ? "even when the saved file is already active" : "when opening a new file"}`, () => {
+      it(`file preview dismisses the local Draft ${sameUnderlying ? "even if already active" : "on first open"}`, () => {
         const s = surface(ticket);
-        const preview = () => {
-          if (ticket) s.store.getState().previewTicketFile("project-1", s.ownerId, "readme.md");
-          else s.store.getState().previewHomeFile("project-1", "readme.md");
-        };
         if (sameUnderlying) {
-          act(preview);
+          act(() => preview(s));
           act(() => s.provisional().takeActive("draft-1"));
-          expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(DRAFT_TAB);
         }
-        act(preview);
-        expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe("file:readme.md");
+        act(() => preview(s));
         expect(s.provisional().activeOverride).toBeNull();
+        expect(s.view().panes[1]?.activeTabId).toBe("file:readme.md");
         act(() => useChatDraftsStore.getState().setDraft("draft-1", "later"));
-        expect(paneForTab(s.restoredSplit()!, DRAFT_TAB)).toBe("n1");
-        expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe("file:readme.md");
+        expect(pairForTab(s.restoredSplit(), DRAFT_TAB)).toBeNull();
+        expect(s.view().panes[1]?.tabIds).toEqual(["file:readme.md"]);
+        expect(useProvisionalPaneLayoutStore.getState().byOwner.has(s.ownerId)).toBe(false);
       });
     }
 
-    it("direct workspace open dismisses a Draft covering the same already-active browser", async () => {
+    it("unmounted selection deactivates the Draft before a late import becomes ordinary", () => {
+      const s = surface(ticket);
+      s.unmount();
+      preview(s);
+      useChatDraftsStore.getState().setDraft("draft-1", "late import");
+      expect(s.claimTab).toHaveBeenCalledWith(DRAFT_TAB, "n1", false);
+      expect(pairForTab(s.restoredSplit(), DRAFT_TAB)).toBeNull();
+      expect(s.recordedActive()).toBe("file:readme.md");
+      expect(useProvisionalPaneLayoutStore.getState().byOwner.has(s.ownerId)).toBe(false);
+    });
+
+    it("an explicit workspace open uncovers the same underlying browser", async () => {
       const s = surface(ticket);
       await act(async () => {
         await s.createBrowser();
       });
       act(() => s.provisional().takeActive("draft-1"));
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(DRAFT_TAB);
       act(() => {
         if (ticket)
           s.store
@@ -482,117 +534,55 @@ for (const ticket of [false, true]) {
             .openTicketWorkspace("project-1", s.ownerId, { tabId: "browser:browser-1" });
         else s.store.getState().openHome("project-1", "browser:browser-1");
       });
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(
-        "browser:browser-1",
-      );
       expect(s.provisional().activeOverride).toBeNull();
+      expect(s.view().panes[1]?.activeTabId).toBe("browser:browser-1");
       expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
     });
 
-    it("unmounted selection deactivates foreground before a late import saves the claim", () => {
-      const s = surface(ticket);
-      s.unmount();
-      if (ticket) s.store.getState().previewTicketFile("project-1", s.ownerId, "readme.md");
-      else s.store.getState().previewHomeFile("project-1", "readme.md");
-      useChatDraftsStore.getState().setDraft("draft-1", "finished import");
-      expect(paneForTab(s.restoredSplit()!, DRAFT_TAB)).toBe("n1");
-      expect(s.claimTab).toHaveBeenCalledWith(DRAFT_TAB, "n1", false);
-      expect(splitViewPanes(s.readSplitView()!).find((pane) => pane.id === "n1")?.activeTabId).toBe(
-        "file:readme.md",
-      );
-    });
-
-    it("saves attachment completion after the surface unmounts, before revisiting or relaunch", async () => {
-      const s = surface(ticket);
-      act(() => s.writes.splitPane("n1", "down", null, []));
-      await act(async () => {
-        container
-          .querySelector('[data-pane-id="n3"] [aria-label="New browser"]')!
-          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
-        await s.browserFlight();
-      });
-      const finishImport = useChatDraftsStore.getState().beginAttachmentImport("draft-1");
-      s.unmount();
-      const attachment: BlobLinkView = {
-        linkId: null,
-        blobHash: "b".repeat(64),
-        label: "late.png",
-        originalName: "late.png",
-        mime: "image/png",
-        sizeBytes: 1,
-      };
-      await Promise.resolve().then(() => {
-        useChatDraftsStore.getState().setDraftAttachments("draft-1", [attachment]);
-        finishImport();
-      });
-      expect(s.claimTab).toHaveBeenCalledWith(DRAFT_TAB, "n1", true);
-      expect(paneForTab(s.restoredSplit()!, DRAFT_TAB)).toBe("n1");
-      expect(s.readSplitView()?.focusedPaneId).toBe("n3");
-      expect(s.recordedActive()).toBe("browser:browser-1");
-      expect(useProvisionalPaneLayoutStore.getState().byOwner.get(s.ownerId)).toBeUndefined();
-    });
-
-    for (const keepSplit of [false, true]) {
-      it(`releases a closed destination's Draft when selecting a browser ${keepSplit ? "while still split" : "after collapse to unsplit"}`, async () => {
-        const s = surface(ticket);
-        if (keepSplit) act(() => s.writes.splitPane(SPLIT_VIEW_ROOT_PANE_ID, "down", null, []));
-        act(() => s.closePane("n1"));
-        if (keepSplit) act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
-        await act(async () => {
-          await s.createBrowser();
-        });
-        expect(s.provisional().activeOverride).toBeNull();
-        expect(s.view().panes[0]?.activeTabId).toBe("browser:browser-1");
-        expect(s.view().panes[0]?.tabIds).toContain(DRAFT_TAB);
-        expect(s.recordedActive()).toBe("browser:browser-1");
-      });
-    }
-
-    it("opening a new Draft deactivates an older Draft whose destination collapsed", () => {
+    it("closing the pending partner returns its local Draft to the ordinary surface", () => {
       const s = surface(ticket);
       act(() => s.closePane("n1"));
-      act(() => {
-        useChatDraftsStore.getState().openProvisional("draft-2", {
-          projectId: "project-1",
-          ticketId: ticket ? s.ownerId : null,
-          title: null,
-          operationId: "op-2",
-        });
-        useChatSessionsStore.getState().openChatTab(s.ownerId, "draft-2");
-        useChatSessionsStore.getState().setProvisionalActive(s.ownerId, "draft-2");
-      });
-      expect(s.view().panes[0]?.activeTabId).toBe("chat:draft-2");
-      const placements = useProvisionalPaneLayoutStore.getState().byOwner.get(s.ownerId)!;
-      expect(placements.get("draft-1")?.front).toBe(false);
-      expect(placements.get("draft-2")?.front).toBe(true);
-      act(() => useChatDraftsStore.getState().setDraft("draft-2", "content"));
-      expect(s.provisional().activeOverride).toBeNull();
-      expect(s.view().panes[0]?.activeTabId).toBe("chat:draft-2");
+      expect(s.view().panes.map((pane) => pane.activeTabId)).toEqual([DRAFT_TAB]);
+      expect(s.provisional().activeOverridePaneId).toBe(SPLIT_VIEW_ROOT_PANE_ID);
+      expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
+      act(() => useChatDraftsStore.getState().setDraft("draft-1", "content"));
+      expect(s.recordedActive()).toBe(DRAFT_TAB);
     });
 
-    it("reacquires one foreground Draft after multiple destinations collapse to primary", async () => {
+    it("a closed destination does not cover a later browser selection", async () => {
       const s = surface(ticket);
-      act(() => s.writes.splitPane("n1", "down", null, []));
-      act(() => {
-        useChatDraftsStore.getState().openProvisional("draft-2", {
-          projectId: "project-1",
-          ticketId: ticket ? s.ownerId : null,
-          title: null,
-          operationId: "op-2",
-        });
-        useChatSessionsStore.getState().openChatTab(s.ownerId, "draft-2");
-        useChatSessionsStore.getState().setProvisionalActive(s.ownerId, "draft-2");
-      });
       act(() => s.closePane("n1"));
-      act(() => s.closePane("n3"));
       await act(async () => {
         await s.createBrowser();
       });
       expect(s.provisional().activeOverride).toBeNull();
-      act(() => s.provisional().takeActive("draft-1"));
-      expect(s.view().panes[0]?.activeTabId).toBe(DRAFT_TAB);
-      act(() => s.provisional().takeActive("draft-2"));
-      expect(s.view().panes[0]?.activeTabId).toBe("chat:draft-2");
+      expect(s.view().panes.map((pane) => pane.activeTabId)).toEqual(["browser:browser-1"]);
+      expect(useChatSessionsStore.getState().openTabs[s.ownerId]).toContain("draft-1");
+    });
+
+    it("owns multiple empty Drafts as ordinary tabs without making a per-pane stack", () => {
+      const s = surface(ticket);
+      act(() => openSecond(s));
+      expect(s.view().panes[1]?.tabIds).toEqual(["chat:draft-2"]);
+      expect(useChatSessionsStore.getState().openTabs[s.ownerId]).toEqual(["draft-1", "draft-2"]);
+      act(() => useChatDraftsStore.getState().setDraft("draft-1", "background"));
+      expect(pairForTab(s.restoredSplit(), DRAFT_TAB)).toBeNull();
+      expect(s.view().panes[1]?.activeTabId).toBe("chat:draft-2");
+      act(() => useChatSessionsStore.getState().dropChatTabs([s.ownerId]));
+      expect(useProvisionalPaneLayoutStore.getState().byOwner.has(s.ownerId)).toBe(false);
+    });
+
+    it("reacquires one foreground Draft after its pair dissolves", async () => {
+      const s = surface(ticket);
+      act(() => openSecond(s));
+      act(() => s.closePane("n1"));
+      await act(async () => {
+        await s.createBrowser();
+      });
+      for (const id of ["draft-1", "draft-2"]) {
+        act(() => s.provisional().takeActive(id));
+        expect(s.view().panes[0]?.activeTabId).toBe(`chat:${id}`);
+      }
       expect(
         [...useProvisionalPaneLayoutStore.getState().byOwner.get(s.ownerId)!.values()].filter(
           (placement) => placement.front,
@@ -600,136 +590,187 @@ for (const ticket of [false, true]) {
       ).toHaveLength(1);
     });
 
-    it("saves a background Draft without replacing the browser selected in that same pane", async () => {
-      const s = surface(ticket);
-      await act(async () => {
-        await s.createBrowser();
-      });
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(
-        "browser:browser-1",
-      );
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.tabIds).toContain(DRAFT_TAB);
-      act(() => useChatDraftsStore.getState().setDraft("draft-1", "background content"));
-      expect(s.claimTab).toHaveBeenCalledWith(DRAFT_TAB, "n1", false);
-      expect(paneForTab(s.restoredSplit()!, DRAFT_TAB)).toBe("n1");
-      expect(s.recordedActive()).toBe("browser:browser-1");
-      expect(s.readSplitView()?.focusedPaneId).toBe("n1");
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(
-        "browser:browser-1",
-      );
-    });
-
-    it("records an unfocused promoted Draft without stealing focus", () => {
-      const s = surface(ticket);
-      act(() => s.writes.splitPane("n1", "down", null, []));
-      act(() => useChatDraftsStore.getState().completePromotion("draft-1"));
-      expect(s.claimTab).toHaveBeenCalledWith(DRAFT_TAB, "n1", true);
-      expect(paneForTab(s.readSplitView()!, DRAFT_TAB)).toBe("n1");
-      expect(s.readSplitView()?.focusedPaneId).toBe("n3");
-    });
-
     for (const failure of ["refusal", "exception"] as const) {
-      it(`surfaces browser ${failure} without changing a Draft or its placement`, async () => {
+      it(`surfaces browser ${failure} without changing a local Draft's placement`, async () => {
         const s = surface(ticket);
-        act(() => s.writes.splitPane("n1", "down", null, []));
-        const before = s.readSplitView();
+        act(() => s.provisional().releaseActive());
         if (failure === "refusal")
           s.browserApi.open.mockResolvedValueOnce({ ok: false, error: "offline" });
         else s.browserApi.open.mockRejectedValueOnce(new Error("offline"));
+        const before = s.readSplitView();
         await act(async () => {
           container
-            .querySelector('[data-pane-id="n3"] [aria-label="New browser"]')!
+            .querySelector('[data-pane-id="n1"] [aria-label="New browser"]')!
             .dispatchEvent(new MouseEvent("click", { bubbles: true }));
           await s.browserFlight();
         });
         expect(toastError).toHaveBeenCalledWith("Could not open Browser Tab: offline");
-        expect(useBrowserTabsStore.getState().byId).toEqual({});
         expect(s.readSplitView()).toBe(before);
-        expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(DRAFT_TAB);
+        expect(useBrowserTabsStore.getState().byId).toEqual({});
+        expect(useChatSessionsStore.getState().openTabs[s.ownerId]).toContain("draft-1");
       });
     }
 
-    it("retains placement on same-pane selection, reacquires it, and cleans it on close", () => {
+    it("filters every layout write and cleans renderer-only placement when closed", () => {
       const s = surface(ticket);
+      act(() => s.guarded().reorderSurface("other", [DRAFT_TAB, "other"]));
+      act(() => s.guarded().reorderPane("n1", "other", [DRAFT_TAB, "other"]));
+      act(() => s.guarded().reorderSurface(DRAFT_TAB, [DRAFT_TAB, "other"]));
+      act(() => s.guarded().reorderPane("n1", DRAFT_TAB, [DRAFT_TAB, "other"]));
+      expect(s.writes.reorderSurface).toHaveBeenCalledExactlyOnceWith("other", ["other"]);
+      expect(s.writes.reorderPane).toHaveBeenCalledExactlyOnceWith("n1", "other", ["other"]);
       act(() => s.provisional().releaseActive());
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.tabIds).toContain(DRAFT_TAB);
+      expect(s.view().panes[1]?.tabIds).toEqual([]);
       act(() => s.provisional().takeActive("draft-1"));
       expect(s.provisional().activeOverrideTabId).toBe(DRAFT_TAB);
-      expect(s.provisional().activeOverridePaneId).toBe("n1");
-      act(() => useChatSessionsStore.getState().closeChatTab(s.ownerId, "draft-1"));
-      expect(useProvisionalPaneLayoutStore.getState().byOwner.get(s.ownerId)).toBeUndefined();
+      act(() => s.closeChat("draft-1"));
+      expect(useProvisionalPaneLayoutStore.getState().byOwner.has(s.ownerId)).toBe(false);
       expect(s.view().panes.some((pane) => pane.tabIds.includes(DRAFT_TAB))).toBe(false);
-    });
-
-    it("owns multiple empty Drafts without losing the first pane's assignment", () => {
-      const s = surface(ticket);
-      act(() => s.writes.splitPane("n1", "down", null, []));
-      act(() => {
-        useChatDraftsStore.getState().openProvisional("draft-2", {
-          projectId: "project-1",
-          ticketId: ticket ? s.ownerId : null,
-          title: null,
-          operationId: "op-2",
-        });
-        useChatSessionsStore.getState().openChatTab(s.ownerId, "draft-2");
-        useChatSessionsStore.getState().setProvisionalActive(s.ownerId, "draft-2");
-      });
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(DRAFT_TAB);
-      expect(s.view().panes.find((pane) => pane.id === "n3")?.activeTabId).toBe("chat:draft-2");
-      act(() => useChatSessionsStore.getState().dropChatTabs([s.ownerId]));
-      expect(useProvisionalPaneLayoutStore.getState().byOwner.get(s.ownerId)).toBeUndefined();
-    });
-
-    it("moves the same Draft into an already focused empty pane", () => {
-      const s = surface(ticket);
-      act(() => s.writes.splitPane("n1", "down", null, []));
-      expect(s.view().focusedPaneId).toBe("n3");
-      act(() => s.guarded().moveTabToPane(DRAFT_TAB, "n3"));
-      expect(s.view().panes.find((pane) => pane.id === "n3")?.activeTabId).toBe(DRAFT_TAB);
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBeNull();
-    });
-
-    it("retains the moved Draft's destination when the surface unmounts with an empty pane focused", () => {
-      const s = surface(ticket);
-      act(() => s.guarded().splitPane(SPLIT_VIEW_ROOT_PANE_ID, "down", DRAFT_TAB, [DRAFT_TAB]));
-      act(() => s.focusPane("n1"));
-      s.remount();
-      expect(s.view().panes.find((pane) => pane.id === "n3")?.activeTabId).toBe(DRAFT_TAB);
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBeNull();
-      expect(s.provisional().activeOverride).toBeNull();
-    });
-
-    it("relinquishes the Draft to the primary only when its own pane closes", () => {
-      const s = surface(ticket);
-      act(() => s.writes.splitPane(SPLIT_VIEW_ROOT_PANE_ID, "down", null, []));
-      act(() => s.closePane("n1"));
-      expect(s.view().panes.find((pane) => pane.id === SPLIT_VIEW_ROOT_PANE_ID)?.activeTabId).toBe(
-        DRAFT_TAB,
-      );
-      expect(s.provisional().activeOverridePaneId).toBe(SPLIT_VIEW_ROOT_PANE_ID);
-      expect(s.view().panes.find((pane) => pane.id === "n3")?.activeTabId).toBeNull();
-    });
-
-    it("hands the overlay back without recording an empty Draft", () => {
-      const s = surface(ticket);
-      act(() => s.provisional().releaseActive());
-      expect(s.provisional().activeOverride).toBeNull();
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.tabIds).toContain(DRAFT_TAB);
-      expect(
-        useProvisionalPaneLayoutStore.getState().byOwner.get(s.ownerId)?.get("draft-1"),
-      ).toEqual({ paneId: "n1", front: false });
       expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
     });
 
-    it("keeps a Draft in its destination when a keyboard split changes pane focus", () => {
-      const s = surface(ticket);
-      act(() => s.writes.splitPane("n1", "down", null, []));
-      expect(s.view().panes.find((pane) => pane.id === "n1")?.activeTabId).toBe(DRAFT_TAB);
-      expect(s.view().panes.find((pane) => pane.id === "n3")?.activeTabId).toBeNull();
-      expect(s.view().focusedPaneId).toBe("n3");
-      act(() => s.closePane("n3"));
-      expect(s.provisional().activeOverridePaneId).toBe("n1");
-      expect(s.provisional().activeOverrideTabId).toBe(DRAFT_TAB);
+    it("stale-tab receipt cannot persist a background empty Draft or change pane focus", () => {
+      const s = surface(ticket, { oldChat: true });
+      act(() => s.provisional().releaseActive());
+      act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
+      act(() => s.closeChat("old"));
+      expect(s.provisional().activeOverride).toBeNull();
+      expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
+      act(() => useChatDraftsStore.getState().setDraft("draft-1", "earned content"));
+      expect(s.recordedActive()).not.toBe(DRAFT_TAB);
     });
+  });
+}
+
+for (const ticket of [false, true]) {
+  it(`${ticket ? "Ticket" : "Home"} reselects a hidden empty Draft in its retained pending partner`, async () => {
+    const s = surface(ticket);
+    act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
+    await act(async () => {
+      await s.createBrowser();
+    });
+    act(() => s.provisional().takeActive("draft-1"));
+    expect(s.provisional().activeOverrideTabId).toBe(DRAFT_TAB);
+    expect(s.view().focusedPaneId).toBe("n1");
+    expect(s.view().panes[1]?.activeTabId).toBe(DRAFT_TAB);
+    expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
+    act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
+    expect(s.provisional().activeOverride).toBeNull();
+  });
+}
+
+for (const ticket of [false, true]) {
+  for (const draftFirst of [false, true]) {
+    describe(`${ticket ? "Ticket" : "Home"} explicit empty Draft ${draftFirst ? "left" : "right"} pair`, () => {
+      const setup = async () => {
+        const s = surface(ticket);
+        act(() => {
+          s.closePane("n1");
+          s.provisional().releaseActive();
+        });
+        await act(async () => {
+          await s.createBrowser();
+        });
+        const ids = draftFirst
+          ? [DRAFT_TAB, "browser:browser-1"]
+          : ["browser:browser-1", DRAFT_TAB];
+        act(() => s.provisional().pairTabs(ids[0]!, ids[1]!, s.writePair));
+        return s;
+      };
+      it("writes only the real anchor, renders exact order, retains hidden placement and commits first content there", async () => {
+        const s = await setup();
+        expect(s.writePair).toHaveBeenCalledExactlyOnceWith(
+          draftFirst ? null : "browser:browser-1",
+          draftFirst ? "browser:browser-1" : null,
+        );
+        const pair = s.readSplitView()!.pairs![0]!;
+        const slot = draftFirst ? pair.first : pair.second;
+        const anchor = draftFirst ? pair.second : pair.first;
+        expect(s.readSplitView()!.focusedPaneId).toBe(slot.id);
+        expect(s.recordedActive()).toBe("browser:browser-1");
+        expect(s.view().panes.map((p) => p.activeTabId)).toEqual(
+          draftFirst ? [DRAFT_TAB, "browser:browser-1"] : ["browser:browser-1", DRAFT_TAB],
+        );
+        expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
+        s.remount();
+        expect(s.view().panes).toHaveLength(2);
+        act(() => {
+          s.focusPane(anchor.id);
+          s.provisional().releaseActive();
+        });
+        act(() => {
+          if (ticket) s.store.getState().setTicketActiveTab("project-1", s.ownerId, "doc");
+          else s.store.getState().setHomeActiveTab("project-1", "board");
+        });
+        expect(s.view().panes).toHaveLength(1);
+        act(() => s.provisional().takeActive("draft-1"));
+        expect(s.view().focusedPaneId).toBe(slot.id);
+        expect(s.view().panes).toHaveLength(2);
+        act(() => s.focusPane(anchor.id));
+        act(() => useChatDraftsStore.getState().setDraft("draft-1", "earned"));
+        expect(pairForTab(s.restoredSplit(), DRAFT_TAB)?.[draftFirst ? "first" : "second"].id).toBe(
+          slot.id,
+        );
+        expect(s.readSplitView()!.focusedPaneId).toBe(anchor.id);
+        expect(s.recordedActive()).toBe("browser:browser-1");
+      });
+      it("re-pairs a local passenger without leaving its former anchor paired to a ghost menu", async () => {
+        const s = await setup();
+        const oldPair = s.readSplitView()!.pairs![0]!;
+        const real = ticket ? "doc" : "board";
+        act(() =>
+          s
+            .provisional()
+            .pairTabs(draftFirst ? DRAFT_TAB : real, draftFirst ? real : DRAFT_TAB, s.writePair),
+        );
+        expect(s.readSplitView()!.pairs).toHaveLength(1);
+        expect(s.readSplitView()!.pairs![0]!.id).not.toBe(oldPair.id);
+        expect(pairForTab(s.readSplitView(), "browser:browser-1")).toBeNull();
+        expect(s.view().panes.map((p) => p.activeTabId)).toEqual(
+          draftFirst ? [DRAFT_TAB, real] : [real, DRAFT_TAB],
+        );
+        expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
+      });
+      it("dissolves by placeholder pane before drag-out or close, without writing an empty ID", async () => {
+        const s = await setup();
+        const slot = (
+          draftFirst ? s.readSplitView()!.pairs![0]!.first : s.readSplitView()!.pairs![0]!.second
+        ).id;
+        const close = vi.fn(s.closePane);
+        act(() => s.provisional().unpairTab(DRAFT_TAB, s.writeUnpair, close));
+        expect(close).toHaveBeenCalledExactlyOnceWith(slot);
+        expect(s.writeUnpair).not.toHaveBeenCalled();
+        expect(s.readSplitView()).toBeNull();
+        expect(s.view().panes.map((p) => p.activeTabId)).toEqual([DRAFT_TAB]);
+        expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
+        act(() => s.closeChat("draft-1"));
+        expect(s.view().panes.map((p) => p.activeTabId)).toEqual(["browser:browser-1"]);
+        expect(useProvisionalPaneLayoutStore.getState().byOwner.has(s.ownerId)).toBe(false);
+      });
+    });
+  }
+  it(`${ticket ? "Ticket" : "Home"} guards empty/empty and refused pairing, while real pairs/unpairs use their normal writers`, () => {
+    const s = surface(ticket);
+    const refuse = vi.fn();
+    const before = s.provisional().activeOverridePaneId;
+    act(() => s.provisional().pairTabs(DRAFT_TAB, DRAFT_TAB, refuse));
+    act(() => s.provisional().pairTabs(DRAFT_TAB, "browser:missing", refuse));
+    expect(s.provisional().activeOverridePaneId).toBe(before);
+    act(() => {
+      useChatDraftsStore.getState().openProvisional("draft-2", {
+        projectId: "project-1",
+        ticketId: ticket ? s.ownerId : null,
+        title: null,
+        operationId: "op-2",
+      });
+      useChatSessionsStore.getState().openChatTab(s.ownerId, "draft-2");
+    });
+    refuse.mockClear();
+    act(() => s.provisional().pairTabs(DRAFT_TAB, "chat:draft-2", refuse));
+    expect(refuse).not.toHaveBeenCalled();
+    act(() => s.provisional().pairTabs("chat:real", "browser:real", s.writePair));
+    expect(s.writePair).toHaveBeenCalledExactlyOnceWith("chat:real", "browser:real");
+    act(() => s.provisional().unpairTab("chat:real", s.writeUnpair, s.closePane));
+    expect(s.writeUnpair).toHaveBeenCalledExactlyOnceWith("chat:real");
   });
 }

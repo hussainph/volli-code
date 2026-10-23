@@ -1,49 +1,10 @@
 /**
- * SPLIT VIEW — how one tabbed surface's tabs are spread over several panes
- * (VC-202).
- *
- * Both tabbed surfaces (Home, and a ticket workspace) already own one ordered
- * strip of tabs and one active tab. A split view sits BESIDE that, exactly as
- * an arrangement does (`tab-order.ts`): a binary tree whose leaves are panes,
- * each pane naming a subset of the surface's tab ids and its own front tab. The
- * surface keeps composing and arranging its tabs the way it always did; this
- * model only says which pane each of them is drawn in.
- *
- * THE MODEL NAMES IDS, AND IDS ONLY, and — like an arrangement — it never has
- * to be true. A pane may name a tab that does not exist yet (a Session that has
- * not hydrated), and a tab may exist that no pane names (it was opened by a
- * path that predates this feature, or restored at boot). Neither is repaired at
- * rest. {@link sanitizeSplitView} checks SHAPE and nothing else, and
- * {@link resolveSplitView} does the reconciling at RENDER time, against the
- * live strip, without writing anything back. That is the same discipline
- * `tab-order.ts` states and for the same reason: a Session that has not
- * hydrated yet looks exactly like a Session that is gone, and only one of those
- * may lose its place.
- *
- * TWO RULES CARRY THE WHOLE COMPATIBILITY STORY:
- *
- *  1. **A single pane is not a split.** The store holds `SplitViewState | null`
- *     per surface and collapses back to `null` the moment only one pane is
- *     left, so "no split" has exactly one representation and every pre-existing
- *     code path keeps running untouched. {@link isSinglePane} is what the store
- *     asks after each operation; {@link sanitizeSplitView} refuses a persisted
- *     single-pane tree for the same reason.
- *  2. **The primary pane is the first leaf, and it is where everything
- *     unclaimed lives.** Splits only ever open a pane to the RIGHT or BELOW
- *     (the vocabulary the in-app terminal split already uses), so the top-left
- *     leaf is stable — which keeps the primary pane at the start of the main
- *     tab bar, and makes "the permanent tab (Board / Body) never leaves the
- *     primary pane" a property of the model
- *     rather than a rule every caller has to remember.
- *
- * Every operation is IDENTITY-STABLE: it returns its input when nothing
- * changed, so a store `set` for a no-op never notifies a subscriber, and
- * unchanged subtrees keep their references across a change so a memoized pane
- * does not re-render because its neighbour resized.
- *
- * No DOM, no React, no clock, no randomness: `splitPane` takes an injected
- * `mintId` (the renderer passes `() => crypto.randomUUID()`), which is also
- * what makes the tests here deterministic.
+ * A surface owns one ordinary tab strip and any number of bounded tab pairs.
+ * `pairs` is additive persisted metadata; `root` remains a valid legacy tree
+ * containing only the selected pair (or a single full-width tab). Older builds
+ * ignore the metadata and recover every other tab from the surface's live strip.
+ * No operation closes a tab: removing a pair only relinquishes its membership.
+ * Missing live IDs are reconciled at render time, never pruned at rest.
  */
 
 /** `row` = side-by-side (a vertical divider); `column` = stacked. */
@@ -79,7 +40,16 @@ export interface SplitViewBranch {
 
 export type SplitViewNode = SplitViewPane | SplitViewBranch;
 
+export interface SplitViewPair extends SplitViewBranch {
+  first: SplitViewPane;
+  second: SplitViewPane;
+}
+
 export interface SplitViewState {
+  /** Absent only on legacy state; each member belongs to at most one pair. */
+  pairs?: readonly SplitViewPair[];
+  /** The selected ordinary tab or focused member; null for an empty menu. */
+  selectedTabId?: string | null;
   root: SplitViewNode;
   /** A pane id; the pane whose active tab is the surface's active tab. */
   focusedPaneId: string;
@@ -208,11 +178,12 @@ export function activeTabInSplitView(state: SplitViewState): string | null {
 export function isSinglePane(
   state: SplitViewState,
 ): state is SplitViewState & { root: SplitViewPane } {
-  return state.root.kind === "pane";
+  return state.root.kind === "pane" && (state.pairs?.length ?? 0) === 0;
 }
 
 /** Focus a pane. Ignores an id that names none — focus is never left dangling. */
 export function focusPane(state: SplitViewState, paneId: string): SplitViewState {
+  if (state.pairs !== undefined) return focusPairPane(state, paneId);
   if (state.focusedPaneId === paneId) return state;
   if (findPane(state, paneId) === null) return state;
   return { ...state, focusedPaneId: paneId };
@@ -230,6 +201,7 @@ export function focusPane(state: SplitViewState, paneId: string): SplitViewState
  * focus is.
  */
 export function activateTab(state: SplitViewState, tabId: string): SplitViewState {
+  if (state.pairs !== undefined) return activatePairTab(state, tabId);
   const holder = findPaneWithTab(state, tabId);
   if (holder === null) {
     return replacePane(state, state.focusedPaneId, (pane) => ({
@@ -255,6 +227,24 @@ export function claimTabInPane(
   paneId: string,
   activate: boolean,
 ): SplitViewState {
+  if (state.pairs !== undefined) {
+    // A background draft is ordinary until explicitly fronted. A bounded
+    // partner has no hidden per-pane tab stack to claim an inactive tab into.
+    if (!activate || pairForTab(state, tabId) !== null) return state;
+    const pair = state.pairs.find((candidate) =>
+      [candidate.first, candidate.second].some(
+        (pane) => pane.id === paneId && pane.activeTabId === null,
+      ),
+    );
+    if (pair === undefined) return state;
+    const next = fillPairPane(state, pair, paneId, tabId);
+    return projectPairs(
+      next,
+      next.pairs!,
+      state.focusedPaneId === paneId ? tabId : (state.selectedTabId ?? null),
+      state.focusedPaneId,
+    );
+  }
   if (findPaneWithTab(state, tabId) !== null) return state;
   return replacePane(state, paneId, (pane) => ({
     ...pane,
@@ -310,6 +300,19 @@ function dropPane(node: SplitViewNode, paneId: string): SplitViewNode {
  * area takes it, which is where the eye already went.
  */
 export function closePane(state: SplitViewState, paneId: string): SplitViewState {
+  if (state.pairs !== undefined) {
+    const pair = state.pairs.find(
+      (candidate) => candidate.first.id === paneId || candidate.second.id === paneId,
+    );
+    if (pair === undefined) return state;
+    const other = pair.first.id === paneId ? pair.second : pair.first;
+    const selected = state.root.id === pair.id ? other.activeTabId : state.selectedTabId;
+    return projectPairs(
+      state,
+      state.pairs.filter((item) => item !== pair),
+      selected ?? null,
+    );
+  }
   const closing = findPane(state, paneId);
   if (closing === null) return state;
   if (paneId === primaryPaneId(state)) return state;
@@ -339,6 +342,10 @@ function firstPaneOf(node: SplitViewNode): SplitViewPane {
  * nobody asked for is just a hole in the layout.
  */
 export function removeTab(state: SplitViewState, tabId: string): SplitViewState {
+  if (state.pairs !== undefined) {
+    if (pairForTab(state, tabId) !== null) return unpairTab(state, tabId);
+    return state.selectedTabId === tabId ? projectPairs(state, state.pairs, null) : state;
+  }
   const holder = findPaneWithTab(state, tabId);
   if (holder === null) return state;
   const stripped = paneWithoutTab(holder, tabId);
@@ -363,6 +370,17 @@ export function moveTabToPane(
   tabId: string,
   paneId: string,
 ): SplitViewState {
+  if (state.pairs !== undefined) {
+    const pair = state.pairs.find(
+      (candidate) => candidate.first.id === paneId || candidate.second.id === paneId,
+    );
+    if (pair === undefined) return state;
+    const target = pair.first.id === paneId ? pair.first : pair.second;
+    if (target.activeTabId === tabId) return focusPane(state, paneId);
+    // A full pair cannot absorb a third member, even through a centre drop.
+    if (target.activeTabId !== null) return state;
+    return fillPairPane(state, pair, paneId, tabId);
+  }
   const target = findPane(state, paneId);
   if (target === null) return state;
   const source = findPaneWithTab(state, tabId);
@@ -395,6 +413,7 @@ export function reorderPaneTabs(
   paneId: string,
   ids: readonly string[],
 ): SplitViewState {
+  if (state.pairs !== undefined) return state; // One member per pane; ordering belongs to the strip.
   const pane = findPane(state, paneId);
   if (pane === null) return state;
   const tabIds = [...new Set(ids.filter((id) => id.length > 0))];
@@ -425,6 +444,11 @@ export function splitPane(
   opts: { tabId?: string },
   mintId: () => string,
 ): SplitViewState {
+  if (state.pairs !== undefined) {
+    const target = findPane(state, paneId);
+    if (target?.activeTabId == null || pairForTab(state, target.activeTabId) !== null) return state;
+    return pairTabs(state, target.activeTabId, opts.tabId ?? null, edge, mintId, paneId);
+  }
   const target = findPane(state, paneId);
   if (target === null) return state;
   const { tabId } = opts;
@@ -465,6 +489,17 @@ export function setSplitRatio(
   ratio: number,
 ): SplitViewState {
   if (!Number.isFinite(ratio)) return state;
+  if (state.pairs !== undefined) {
+    const pair = state.pairs.find((candidate) => candidate.id === splitId);
+    const clamped = clampRatio(ratio);
+    if (pair === undefined || pair.ratio === clamped) return state;
+    return projectPairs(
+      state,
+      state.pairs.map((item) => (item === pair ? { ...item, ratio: clamped } : item)),
+      state.selectedTabId ?? null,
+      state.focusedPaneId,
+    );
+  }
   const clamped = clampRatio(ratio);
   const root = rewrite(state.root, (node) =>
     node.kind === "split" && node.id === splitId && node.ratio !== clamped
@@ -493,6 +528,23 @@ export function renamedTabInSplitView(
   toId: string,
 ): SplitViewState {
   if (fromId === toId) return state;
+  if (state.pairs !== undefined) {
+    const pair = pairForTab(state, fromId);
+    if (pair === null) return state;
+    const stripped = unpairTab(state, toId);
+    const rename = (pane: SplitViewPane): SplitViewPane =>
+      pane.activeTabId === fromId ? { ...pane, activeTabId: toId, tabIds: [toId] } : pane;
+    const renamedPair = { ...pair, first: rename(pair.first), second: rename(pair.second) };
+    const pairs = stripped.pairs!.map((item) => (item.id === pair.id ? renamedPair : item));
+    return projectPairs(
+      stripped,
+      pairs,
+      state.selectedTabId === fromId || state.selectedTabId === toId
+        ? toId
+        : (state.selectedTabId ?? null),
+      state.focusedPaneId,
+    );
+  }
   const holder = findPaneWithTab(state, fromId);
   if (holder === null) return state;
   const stale = findPaneWithTab(state, toId);
@@ -632,8 +684,7 @@ function compareMetrics(a: DirectionMetrics, b: DirectionMetrics): number {
  * way one reaches storage is a build that stopped between a collapse and its
  * write.
  */
-export function sanitizeSplitView(raw: unknown): SplitViewState | null {
-  if (typeof raw !== "object" || raw === null) return null;
+function sanitizeLegacySplitView(raw: object): SplitViewState | null {
   const { root, focusedPaneId } = raw as { root?: unknown; focusedPaneId?: unknown };
   const node = sanitizeNode(root, new Set<string>(), new Set<string>(), 1);
   if (node === null || node.kind === "pane") return null;
@@ -759,6 +810,7 @@ export function resolveSplitView(
   orderedTabIds: readonly string[],
   permanentTabId: string,
 ): ResolvedSplitView {
+  if (state.pairs !== undefined) return resolvePairView(state, orderedTabIds, permanentTabId);
   const live = new Set(orderedTabIds);
   const claimed = new Set<string>([permanentTabId]);
   const panes = splitViewPanes(state);
@@ -809,5 +861,312 @@ function resolveNode(
     ratio: node.ratio,
     first: resolveNode(node.first, resolved),
     second: resolveNode(node.second, resolved),
+  };
+}
+
+/** Pair membership for the combined strip chip; never depends on selection. */
+export function pairForTab(state: SplitViewState | null, tabId: string): SplitViewPair | null {
+  return (
+    state?.pairs?.find(
+      (pair) => pair.first.activeTabId === tabId || pair.second.activeTabId === tabId,
+    ) ?? null
+  );
+}
+
+/** Enter the additive model without creating a split. */
+export function groupedSplitView(
+  tabIds: readonly string[],
+  selectedTabId: string | null,
+): SplitViewState {
+  return { ...singlePaneSplitView(tabIds, selectedTabId), pairs: [], selectedTabId };
+}
+
+function member(id: string, tabId: string | null): SplitViewPane {
+  return { kind: "pane", id, tabIds: tabId === null ? [] : [tabId], activeTabId: tabId };
+}
+
+function projectPairs(
+  state: SplitViewState,
+  pairs: readonly SplitViewPair[],
+  selectedTabId: string | null,
+  focusId?: string,
+): SplitViewState {
+  const pair =
+    selectedTabId === null
+      ? undefined
+      : pairs.find(
+          (candidate) =>
+            candidate.first.activeTabId === selectedTabId ||
+            candidate.second.activeTabId === selectedTabId,
+        );
+  const root = pair ?? member(SPLIT_VIEW_ROOT_PANE_ID, selectedTabId);
+  const focusedPaneId =
+    pair === undefined
+      ? SPLIT_VIEW_ROOT_PANE_ID
+      : [pair.first.id, pair.second.id].includes(focusId ?? "")
+        ? focusId!
+        : pair.first.activeTabId === selectedTabId
+          ? pair.first.id
+          : pair.second.id;
+  if (
+    state.pairs === pairs &&
+    state.root === root &&
+    state.selectedTabId === selectedTabId &&
+    state.focusedPaneId === focusedPaneId
+  )
+    return state;
+  return { root, focusedPaneId, pairs, selectedTabId };
+}
+
+/** Explicit pairing intent (chip edge drop / browser beside its owning chat).
+ * A null member is a temporary partner menu; at least one member must be real.
+ * Re-pairing releases former partners as ordinary tabs; no tab is ever closed.
+ */
+export function pairTabs(
+  state: SplitViewState,
+  firstTabId: string | null,
+  secondTabId: string | null,
+  edge: SplitViewEdge,
+  mintId: () => string,
+  firstPaneId?: string,
+): SplitViewState {
+  if (firstTabId === "" || secondTabId === "" || firstTabId === secondTabId) return state;
+  const existing = pairForTab(state, (firstTabId ?? secondTabId)!);
+  if (
+    existing?.first.activeTabId === firstTabId &&
+    existing.second.activeTabId === secondTabId &&
+    existing.direction === (edge === "right" ? "row" : "column")
+  ) {
+    return projectPairs(
+      state,
+      state.pairs!,
+      secondTabId ?? firstTabId,
+      firstTabId === null ? existing.first.id : existing.second.id,
+    );
+  }
+  const pairs = (state.pairs ?? []).filter(
+    (pair) =>
+      ![pair.first.activeTabId, pair.second.activeTabId].some(
+        (id) => id !== null && (id === firstTabId || id === secondTabId),
+      ),
+  );
+  // Pane ids are globally unique across pairs, including hidden ones.
+  const used = new Set(pairs.flatMap((pair) => [pair.first.id, pair.second.id]));
+  const secondId = mintId();
+  const id = mintId();
+  const firstId = firstPaneId !== undefined && !used.has(firstPaneId) ? firstPaneId : `${id}:first`;
+  const pair: SplitViewPair = {
+    kind: "split",
+    id,
+    direction: edge === "right" ? "row" : "column",
+    ratio: SPLIT_VIEW_DEFAULT_RATIO,
+    first: member(firstId, firstTabId),
+    second: member(secondId, secondTabId),
+  };
+  return projectPairs(
+    state,
+    [...pairs, pair],
+    secondTabId ?? firstTabId,
+    firstTabId === null ? firstId : secondId,
+  );
+}
+
+/** Drag-out and close both dissolve membership; the caller owns tab lifetime. */
+export function unpairTab(state: SplitViewState, tabId: string): SplitViewState {
+  const pair = pairForTab(state, tabId);
+  if (pair === null) return state;
+  const other = pair.first.activeTabId === tabId ? pair.second.activeTabId : pair.first.activeTabId;
+  return projectPairs(
+    state,
+    state.pairs!.filter((item) => item !== pair),
+    state.selectedTabId === tabId ? other : (state.selectedTabId ?? null),
+  );
+}
+
+function fillPairPane(
+  state: SplitViewState,
+  pair: SplitViewPair,
+  paneId: string,
+  tabId: string,
+): SplitViewState {
+  const detached = unpairTab(state, tabId);
+  const next =
+    pair.first.id === paneId
+      ? { ...pair, first: member(paneId, tabId) }
+      : { ...pair, second: member(paneId, tabId) };
+  return projectPairs(
+    detached,
+    detached.pairs!.map((item) => (item.id === pair.id ? next : item)),
+    tabId,
+    paneId,
+  );
+}
+
+function activatePairTab(state: SplitViewState, tabId: string): SplitViewState {
+  const pair = pairForTab(state, tabId);
+  if (pair !== null) return projectPairs(state, state.pairs!, tabId);
+  // Only an explicitly focused empty partner accepts activation. Ordinary
+  // selections never replace a member of a completed pair.
+  const pending = state.pairs!.find((candidate) =>
+    [candidate.first, candidate.second].some(
+      (pane) => pane.id === state.focusedPaneId && pane.activeTabId === null,
+    ),
+  );
+  if (pending !== undefined) return fillPairPane(state, pending, state.focusedPaneId, tabId);
+  if (state.root.kind === "pane" && state.selectedTabId === tabId) return state;
+  return projectPairs(state, state.pairs!, tabId);
+}
+
+function focusPairPane(state: SplitViewState, paneId: string): SplitViewState {
+  if (state.focusedPaneId === paneId) return state;
+  const pair = state.pairs!.find(
+    (candidate) => candidate.first.id === paneId || candidate.second.id === paneId,
+  );
+  if (pair === undefined) return state;
+  const pane = pair.first.id === paneId ? pair.first : pair.second;
+  // Keep the owner's selection while the partner menu is empty.
+  return projectPairs(
+    state,
+    state.pairs!,
+    pane.activeTabId ?? pair.first.activeTabId ?? pair.second.activeTabId,
+    paneId,
+  );
+}
+
+/** Tolerant migration: only the front tabs of the first two old panes pair.
+ * All other tabs remain in the surface's authoritative strip, not pane claims.
+ */
+export function sanitizeSplitView(raw: unknown): SplitViewState | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const record = raw as { pairs?: unknown; selectedTabId?: unknown; focusedPaneId?: unknown };
+  if (record.pairs === undefined) {
+    const legacy = sanitizeLegacySplitView(raw);
+    if (legacy === null) return null;
+    const [first, second] = splitViewPanes(legacy);
+    if (first!.activeTabId === null || second!.activeTabId === null) return null;
+    const branch = legacy.root as SplitViewBranch;
+    const pair: SplitViewPair = {
+      ...branch,
+      first: member(first!.id, first!.activeTabId),
+      second: member(second!.id, second!.activeTabId),
+    };
+    const selected = activeTabInSplitView(legacy) ?? first!.activeTabId;
+    return projectPairs(groupedSplitView([], selected), [pair], selected);
+  }
+  if (!Array.isArray(record.pairs)) return null;
+  const pairs: SplitViewPair[] = [];
+  const usedNodes = new Set<string>();
+  const usedTabs = new Set<string>();
+  for (const rawPair of record.pairs) {
+    const node = sanitizeNode(rawPair, new Set(), new Set(), 1);
+    if (node?.kind !== "split" || node.first.kind !== "pane" || node.second.kind !== "pane")
+      continue;
+    const { first, second } = node;
+    if (
+      (first.activeTabId === null && second.activeTabId === null) ||
+      [first, second].some(
+        (pane) => pane.tabIds.length > 1 || (pane.tabIds.length === 1 && pane.activeTabId === null),
+      )
+    )
+      continue;
+    const ids = [node.id, first.id, second.id];
+    const tabs = [...first.tabIds, ...second.tabIds];
+    if (ids.some((id) => usedNodes.has(id)) || tabs.some((id) => usedTabs.has(id))) continue;
+    ids.forEach((id) => usedNodes.add(id));
+    tabs.forEach((id) => usedTabs.add(id));
+    pairs.push({ ...node, first, second });
+  }
+  if (pairs.length === 0) return null;
+  const selected =
+    typeof record.selectedTabId === "string" || record.selectedTabId === null
+      ? record.selectedTabId
+      : (pairs[0]!.first.activeTabId ?? pairs[0]!.second.activeTabId);
+  return projectPairs(
+    groupedSplitView([], selected),
+    pairs,
+    selected,
+    typeof record.focusedPaneId === "string" ? record.focusedPaneId : undefined,
+  );
+}
+
+/** Selected-pair render projection. Unrelated selections are full width;
+ * absent pair members degrade to the selected live tab until hydration arrives.
+ */
+export function projectSplitView(
+  state: SplitViewState | null,
+  orderedTabIds: readonly string[],
+  selectedTabId: string | null,
+  permanentTabId: string,
+): ResolvedSplitView {
+  if (state === null)
+    return resolvePairView(groupedSplitView([], selectedTabId), orderedTabIds, permanentTabId);
+  if (state.pairs === undefined) return resolveSplitView(state, orderedTabIds, permanentTabId);
+  // Renderer-local draft overlays may replace a pane's front without writing
+  // empty Draft IDs to pair metadata. Retain that root only for its own pair.
+  const next =
+    state.selectedTabId === selectedTabId
+      ? state
+      : renderedPair(state, selectedTabId) !== null
+        ? { ...state, selectedTabId }
+        : projectPairs(state, state.pairs, selectedTabId);
+  return resolvePairView(next, orderedTabIds, permanentTabId);
+}
+
+function renderedPair(state: SplitViewState, selectedTabId: string | null): SplitViewPair | null {
+  const pair = pairForTab(state, selectedTabId ?? "");
+  const { root } = state;
+  const saved = state.pairs!.find((item) => item.id === root.id);
+  if (
+    root.kind === "split" &&
+    root.first.kind === "pane" &&
+    root.second.kind === "pane" &&
+    saved !== undefined &&
+    (saved.first.activeTabId === null || saved.first.activeTabId === root.first.activeTabId) &&
+    (saved.second.activeTabId === null || saved.second.activeTabId === root.second.activeTabId) &&
+    (root.id === pair?.id ||
+      root.first.activeTabId === selectedTabId ||
+      root.second.activeTabId === selectedTabId)
+  ) {
+    return { ...root, first: root.first, second: root.second };
+  }
+  return pair;
+}
+
+function resolvePairView(
+  state: SplitViewState,
+  orderedTabIds: readonly string[],
+  permanentTabId: string,
+): ResolvedSplitView {
+  const live = new Set([permanentTabId, ...orderedTabIds]);
+  const pair = renderedPair(state, state.selectedTabId ?? null);
+  const selected =
+    state.selectedTabId !== null &&
+    state.selectedTabId !== undefined &&
+    live.has(state.selectedTabId)
+      ? state.selectedTabId
+      : permanentTabId;
+  const root =
+    pair !== null &&
+    (pair.first.activeTabId === null || live.has(pair.first.activeTabId)) &&
+    (pair.second.activeTabId === null || live.has(pair.second.activeTabId))
+      ? pair
+      : member(SPLIT_VIEW_ROOT_PANE_ID, selected);
+  const panes: ResolvedSplitViewPane[] = [];
+  const visit = (pane: SplitViewPane): ResolvedSplitViewPane => {
+    const resolved = { ...pane, index: panes.length, isPrimary: panes.length === 0 };
+    panes.push(resolved);
+    return resolved;
+  };
+  const resolvedRoot: ResolvedSplitViewNode =
+    root.kind === "pane"
+      ? visit(root)
+      : { ...root, first: visit(root.first), second: visit(root.second) };
+  const focused = panes.find((pane) => pane.id === state.focusedPaneId) ?? panes[0]!;
+  return {
+    root: resolvedRoot,
+    panes,
+    focusedPaneId: focused.id,
+    primaryPaneId: panes[0]!.id,
+    activeTabId: focused.activeTabId,
   };
 }

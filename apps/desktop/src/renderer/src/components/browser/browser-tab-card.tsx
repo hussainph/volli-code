@@ -9,9 +9,9 @@
  * for URL, title, loading and error; once it is gone the card says so and
  * keeps the facet's last facts, so a reopened chat still reads.
  *
- * The person decides where a tab is drawn — Show pins it above this chat's
- * composer, Open as tab promotes it into the strip, Hide returns it to
- * headless — and the model never can. Every action here is a request to main
+ * The person decides where a tab is drawn: Open beside chat pairs it with
+ * its owner, or Open as tab promotes it into the strip when no paired host
+ * is available. The model never can. Every action here is a request to main
  * through the same preload bridge the Browser pane uses; main answers with a
  * state push, and a refused request is a toast, like every failed mutation.
  *
@@ -20,7 +20,10 @@
  */
 import * as React from "react";
 import { errorMessage, isBrowserTraceAction, type ActivityBrowse } from "@volli/shared";
-import { SpinnerGapIcon } from "@phosphor-icons/react/dist/csr/SpinnerGap";
+import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
+import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
+import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { Spinner } from "@renderer/components/ui/spinner";
 import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
 
 import type { BrowserTabPresentation, BrowserTabState } from "../../../../ipc/contract";
@@ -47,6 +50,8 @@ export interface BrowserCardHost {
    * is nowhere to open it, and the card then offers no Replay.
    */
   openTrace?(request: BrowserTraceRequest): void;
+  /** Reveal this live tab beside its owning chat (or focus its existing pair). */
+  openBeside?(tabId: string): Promise<void>;
 }
 
 export const BrowserCardHostContext = React.createContext<BrowserCardHost | null>(null);
@@ -196,15 +201,15 @@ export function BrowserTabCard({
   return (
     <div
       data-browser-tab-card={facet.tabId ?? undefined}
-      className="my-1 flex flex-col gap-2 rounded-md border border-border/50 bg-muted/30 p-2 text-ui"
+      className="my-1 flex flex-col gap-2 rounded-container border border-border bg-card p-2 text-ui shadow-raised"
     >
       <div className="flex min-w-0 items-center gap-2">
         <BrowserTabMark driven={driven} />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-foreground">{title ?? url ?? "Browser Tab"}</div>
-          {url !== null ? (
-            <div className="truncate font-mono text-muted-foreground">{url}</div>
-          ) : null}
+          <div className="truncate font-semibold text-foreground">
+            {title ?? url ?? "Browser Tab"}
+          </div>
+          {url !== null ? <div className="truncate text-muted-foreground">{url}</div> : null}
         </div>
         <TabStatus live={live} facet={facet} />
       </div>
@@ -224,48 +229,27 @@ export function BrowserTabCard({
       ) : null}
       {facet.picture !== null ? <BrowserPicture state={picture} /> : null}
       {host !== null && (live !== undefined || replay !== null) ? (
-        <div className="flex flex-wrap items-center gap-1">
-          {live?.createdBy === "session" ? (
-            live.presentation === "headless" ? (
-              <>
-                <Button
-                  size="xs"
-                  variant="secondary"
-                  onClick={() => present("preview", "show Browser Tab")}
-                >
-                  Show
-                </Button>
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  onClick={() => present("tab", "open Browser Tab")}
-                >
-                  Open as tab
-                </Button>
-              </>
-            ) : (
-              <>
-                <Button
-                  size="xs"
-                  variant="secondary"
-                  onClick={() => present("headless", "hide Browser Tab")}
-                >
-                  Hide
-                </Button>
-                {live.presentation === "preview" ? (
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    onClick={() => present("tab", "open Browser Tab")}
-                  >
-                    Open as tab
-                  </Button>
-                ) : null}
-              </>
-            )
-          ) : null}
+        <div className="-mx-2 -mb-2 flex flex-wrap items-center gap-1 border-t border-border/50 px-2 py-2">
+          {live === undefined ? null : (
+            <Button
+              size="xs"
+              variant="secondary"
+              onClick={() => {
+                if (host.openBeside !== undefined) {
+                  void request(
+                    host.openBeside(live.tabId).then(() => ({ ok: true as const })),
+                    "show Browser Tab",
+                  );
+                } else present("tab", "open Browser Tab");
+              }}
+            >
+              <ArrowSquareOutIcon />
+              {live.ownerSessionId === null ? "Open as tab" : "Open beside chat"}
+            </Button>
+          )}
           {replay === null ? null : (
             <Button size="xs" variant="ghost" onClick={replay}>
+              <ClockCounterClockwiseIcon />
               Replay
             </Button>
           )}
@@ -278,6 +262,7 @@ export function BrowserTabCard({
                 void request(host.api.close({ tabId: live.tabId }), "close Browser Tab")
               }
             >
+              <XIcon />
               Close
             </Button>
           )}
@@ -307,7 +292,7 @@ function TabStatus({ live, facet }: { live: BrowserTabState | undefined; facet: 
   if (live.loading) {
     return (
       <span className="flex shrink-0 items-center gap-1 text-muted-foreground">
-        <SpinnerGapIcon aria-hidden className="size-3.5 animate-spin text-primary" />
+        <Spinner className="size-3.5" />
         Loading
       </span>
     );

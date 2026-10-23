@@ -28,8 +28,8 @@
  *    work channel — the card stays open regardless of the pointer, which is
  *    what lets it grow real controls. One card at a time through shared
  *    coordination, so a hand-off closes the old card in the same frame.
- *  • ROW = VERB, actions revealed on row hover, destructive arms first. The
- *    now channel is the confirmation; there is no toast.
+ *  • ROW = VERB. Browser rows always show the tab and carry a one-press close
+ *    with Undo; other destructive actions arm first. Mutation failures toast.
  *  • CLUSTER GRAMMAR: globe + count for tabs (arc orbits while loading), toned
  *    round chips for subagents (the people idiom; arc while working, dim +
  *    badge on fail, cap 4 + "+n"), n/n checklist, terminal glyph with state IN
@@ -66,7 +66,6 @@ import {
   ArrowSquareOutIcon,
   CheckCircleIcon,
   CircleIcon,
-  ClockCounterClockwiseIcon,
   ProhibitIcon,
   EyeIcon,
   GlobeSimpleIcon,
@@ -612,13 +611,9 @@ function ClusterShell({
  * The card is where the island stops being a status display and becomes a
  * control surface. Three decisions:
  *
- *  • ROW = VERB. Activating a row does the obvious promotion — tab → pinned
- *    preview above this composer, subagent → overlay, shell → output — on
- *    `ListRow`'s own activatable branch, so hover fill and focus ring come
- *    for free and an inert row cannot lie. The converse holds too: a row with
- *    nowhere to go draws INERT rather than activatable-and-idle. Two rows are
- *    inert today — a tab that already is the preview, and every plan step
- *    (VC-268; see `PlanCard`).
+ *  • ROW = VERB. Activating a row shows its subject — tab → workspace,
+ *    subagent → overlay, shell → output — on `ListRow`'s activatable branch.
+ *    Only plan steps are inert: there is no per-step destination yet.
  *  • ACTIONS ARE SIBLINGS of the row target (a button inside a button is not
  *    markup), revealed on row hover by default. Hidden actions keep their
  *    width so hover never shifts the name. The verb also appears as the first
@@ -745,12 +740,15 @@ function ActionButton({
   label,
   armedLabel = "Click again",
   destructive = false,
+  reversible = false,
   onPress,
   children,
 }: React.PropsWithChildren<{
   label: string;
   armedLabel?: string;
   destructive?: boolean;
+  /** Undo-backed closes act on the first press instead of arming. */
+  reversible?: boolean;
   onPress(): void;
 }>) {
   const { arm } = React.useContext(CardContext);
@@ -775,7 +773,7 @@ function ActionButton({
               "bg-destructive/10 text-destructive hover:bg-destructive/10 hover:text-destructive",
           )}
           onClick={() => {
-            if (destructive && arm && !armed) {
+            if (destructive && !reversible && arm && !armed) {
               setArmed(true);
               return;
             }
@@ -835,52 +833,46 @@ function TabsCard({ tabs, reduce }: { tabs: readonly IslandTab[]; reduce: boolea
   return (
     <Card glyph={GlobeSimpleIcon} heading={tabsHeading(tabs)}>
       <CardRows>
-        {tabs.map((tab) => {
-          // The verb pins the tab above THIS composer (VC-238's Show). A tab
-          // that already is the preview has nowhere to go, so its row is inert
-          // and offers only Close; a headless tab and a strip tab can both be
-          // brought here. "Open as tab" is not offered from the island — it
-          // stays on the preview chrome and the transcript card.
-          const showable = tab.surface !== "preview";
-          return (
-            <CardRow
-              key={tab.id}
-              reduce={reduce}
-              data-island-row={tab.id}
-              leading={<TabChip tab={tab} />}
-              primary={tab.host}
-              primaryTrailing={
-                <>
-                  <RowState>{tabStateWord(tab)}</RowState>
-                  <RowOwner>{tab.owner}</RowOwner>
-                </>
-              }
-              onActivate={showable ? () => actions.promoteTab(tab.id) : null}
-              actions={
-                <RowActions>
-                  {showable ? (
-                    <ActionButton label="Show here" onPress={() => actions.promoteTab(tab.id)}>
+        {tabs
+          .toSorted((a, b) => Number(Boolean(b.needsAttention)) - Number(Boolean(a.needsAttention)))
+          .map((tab) => {
+            const showLabel = tab.surface === "tab" ? "Show tab" : "Open beside chat";
+            return (
+              <CardRow
+                key={tab.id}
+                reduce={reduce}
+                data-island-row={tab.id}
+                leading={<TabChip tab={tab} />}
+                density="two-line"
+                primary={tab.title ?? tab.host}
+                primaryTrailing={<RowState>{tabStateWord(tab)}</RowState>}
+                secondary={
+                  <span className="flex min-w-0 items-center gap-1 text-ui text-muted-foreground">
+                    <span className="truncate">{tab.detail ?? tab.host}</span>
+                    <RowOwner>{tab.owner}</RowOwner>
+                  </span>
+                }
+                title={`${showLabel}: ${tab.title ?? tab.host}\n${tab.detail ?? tab.host}`}
+                aria-label={`${showLabel}: ${tab.title ?? tab.host}`}
+                onActivate={() => actions.promoteTab(tab.id)}
+                actions={
+                  <span className="flex shrink-0 items-center">
+                    <ActionButton label={showLabel} onPress={() => actions.promoteTab(tab.id)}>
                       <ArrowSquareOutIcon />
                     </ActionButton>
-                  ) : null}
-                  {/* Every tab here is a Session's, so every one has a replay
-                      (VC-453) — possibly empty, which the replay says. */}
-                  <ActionButton label="Replay" onPress={() => actions.replayTab(tab.id)}>
-                    <ClockCounterClockwiseIcon />
-                  </ActionButton>
-                  <ActionButton
-                    label="Close tab"
-                    armedLabel="Click again to close"
-                    destructive
-                    onPress={() => actions.closeTab(tab.id)}
-                  >
-                    <XIcon />
-                  </ActionButton>
-                </RowActions>
-              }
-            />
-          );
-        })}
+                    <ActionButton
+                      label="Close tab"
+                      destructive
+                      reversible
+                      onPress={() => actions.closeTab(tab.id)}
+                    >
+                      <XIcon />
+                    </ActionButton>
+                  </span>
+                }
+              />
+            );
+          })}
       </CardRows>
     </Card>
   );
