@@ -174,6 +174,17 @@ describe("runInventoryTool", () => {
     },
   );
 
+  it("leaves lsof inheriting the caller's locale and zone without overrides", async () => {
+    vi.stubEnv("LC_ALL", "en_US.UTF-8");
+    vi.stubEnv("TZ", "America/New_York");
+
+    // Version-only: assert the spawn options even on a host without lsof.
+    await runInventoryTool("lsof", ["-v"]);
+
+    expect(execFile).toHaveBeenCalledWith("lsof", ["-v"], expect.any(Object), expect.any(Function));
+    expect(Object.hasOwn(vi.mocked(execFile).mock.calls[0]![2]!, "env")).toBe(false);
+  });
+
   it("runs a real tool and hands back its output", async () => {
     await expect(runInventoryTool("echo", ["hello"])).resolves.toBe("hello\n");
   });

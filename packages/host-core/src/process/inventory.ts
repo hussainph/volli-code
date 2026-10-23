@@ -36,7 +36,11 @@ export const INVENTORY_TIMEOUT_MS = 15_000;
 /** Enough for a machine with thousands of processes; a bound rather than a budget. */
 const INVENTORY_MAX_BUFFER = 8 * 1024 * 1024;
 
-/** Runs one read-only tool and answers with its stdout, or `null` when it could not run. */
+/**
+ * Runs one read-only tool and answers with its stdout, or `null` when it could
+ * not run. `ps` must report C-locale UTC start times; other tools inherit the
+ * caller's environment (lsof's path encoding depends on its locale).
+ */
 export type InventoryRunner = (file: string, args: readonly string[]) => Promise<string | null>;
 
 /** The default runner: the tool itself, bounded in time and output. */
@@ -49,8 +53,8 @@ export const runInventoryTool: InventoryRunner = (file, args) =>
         timeout: INVENTORY_TIMEOUT_MS,
         maxBuffer: INVENTORY_MAX_BUFFER,
         encoding: "utf8",
-        // lstart must have English fields and an unambiguous UTC wall clock.
-        env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+        // Pin only ps: changing lsof's locale can escape non-ASCII cwd paths.
+        ...(file === "ps" ? { env: { ...process.env, LC_ALL: "C", TZ: "UTC" } } : {}),
       },
       // stderr is dropped on purpose: `lsof` reports every process it may not
       // inspect there, and a permission it never had is not a finding.
