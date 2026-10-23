@@ -195,7 +195,7 @@ describe("archiveAndClean", () => {
     try {
       const dirty = statusGit(wt, gitDir, true);
       const refused = await archiveAndClean(
-        { db: ctx.db, git: dirty.git, gitAsync: dirty.gitAsync, blobsRoot: "unused" },
+        { db: ctx.db, gitAsync: dirty.gitAsync, blobsRoot: "unused" },
         "t1",
       );
       expect(refused.ok).toBe(false);
@@ -203,7 +203,7 @@ describe("archiveAndClean", () => {
 
       const clean = statusGit(wt, gitDir, false);
       const result = await archiveAndClean(
-        { db: ctx.db, git: clean.git, gitAsync: clean.gitAsync, blobsRoot: "unused" },
+        { db: ctx.db, gitAsync: clean.gitAsync, blobsRoot: "unused" },
         "t1",
       );
       expect(result.ok).toBe(true);
