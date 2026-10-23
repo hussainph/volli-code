@@ -17,6 +17,7 @@ import {
   notificationRoute,
   staleNotificationItemMessage,
   type TerminalSessionPlacement,
+  visibleNotificationSurface,
 } from "./notification-target";
 
 const NO_ITEM = { interactionId: null, attentionId: null } as const;
@@ -25,6 +26,7 @@ const NO_ITEM = { interactionId: null, attentionId: null } as const;
 const QUIET = {
   projectId: "p1" as string | null,
   nav: "home" as "home" | "automations" | "configure",
+  settingsOpen: false,
   openTicketId: null as string | null,
   activeTicketTabId: null as string | null,
   homeActiveTab: "board",
@@ -32,10 +34,16 @@ const QUIET = {
   chatItem: NO_ITEM,
 };
 
+/** The report as the hook makes it: resolve the surface once, then decide. */
+const reportFor = (
+  reading: Parameters<typeof visibleNotificationSurface>[0] &
+    Parameters<typeof activeNotificationTarget>[1],
+) => activeNotificationTarget(visibleNotificationSurface(reading), reading);
+
 describe("activeNotificationTarget", () => {
   it("names the chat Session in front of a ticket workspace, and the item it shows", () => {
     expect(
-      activeNotificationTarget({
+      reportFor({
         ...QUIET,
         openTicketId: "t1",
         activeTicketTabId: "chat:s1",
@@ -55,7 +63,7 @@ describe("activeNotificationTarget", () => {
     // The item comes from `sessionNotificationItem`, which is also what the
     // producer used — so the comparison is between two answers to one question.
     expect(
-      activeNotificationTarget({
+      reportFor({
         ...QUIET,
         openTicketId: "t1",
         activeTicketTabId: "chat:s1",
@@ -68,7 +76,7 @@ describe("activeNotificationTarget", () => {
     // A harness alert names a terminal Session, so a window with that terminal
     // in front has to report the same thing or the alert is shouted twice.
     expect(
-      activeNotificationTarget({
+      reportFor({
         ...QUIET,
         openTicketId: "t1",
         activeTicketTabId: "term-root",
@@ -86,7 +94,7 @@ describe("activeNotificationTarget", () => {
 
   it("names a Board terminal Session Home has in front", () => {
     expect(
-      activeNotificationTarget({
+      reportFor({
         ...QUIET,
         homeActiveTab: "term-root",
         terminalSessionId: "term-root",
@@ -103,7 +111,7 @@ describe("activeNotificationTarget", () => {
 
   it("names the ticket when its non-chat, non-terminal tab is in front", () => {
     expect(
-      activeNotificationTarget({
+      reportFor({
         ...QUIET,
         openTicketId: "t1",
         activeTicketTabId: "diff:src/app.ts",
@@ -112,7 +120,7 @@ describe("activeNotificationTarget", () => {
   });
 
   it("names the ticket when its strip has nothing in front yet", () => {
-    expect(activeNotificationTarget({ ...QUIET, openTicketId: "t1" })).toEqual({
+    expect(reportFor({ ...QUIET, openTicketId: "t1" })).toEqual({
       kind: "ticket",
       projectId: "p1",
       ticketId: "t1",
@@ -121,7 +129,7 @@ describe("activeNotificationTarget", () => {
 
   it("names a Board chat Session that Home has in front", () => {
     expect(
-      activeNotificationTarget({
+      reportFor({
         ...QUIET,
         homeActiveTab: "chat:s9",
         chatItem: { interactionId: "i9", attentionId: null },
@@ -136,14 +144,85 @@ describe("activeNotificationTarget", () => {
     });
   });
 
+  // A remembered ticket is on screen only behind Home's Board tab. Any other
+  // Home tab in front is reported as itself, project-scoped.
+  it("names the Home Session tab in front, not the ticket remembered behind it", () => {
+    const target = reportFor({
+      ...QUIET,
+      openTicketId: "t1",
+      activeTicketTabId: "chat:s1",
+      homeActiveTab: "chat:s9",
+      chatItem: { interactionId: "i9", attentionId: null },
+    });
+    expect(target).toEqual({
+      kind: "session",
+      projectId: "p1",
+      ticketId: null,
+      sessionId: "s9",
+      interactionId: "i9",
+      attentionId: null,
+    });
+    expect(target).not.toMatchObject({ sessionId: "s1" });
+  });
+
+  it("names the Home terminal tab in front, not the ticket remembered behind it", () => {
+    expect(
+      reportFor({
+        ...QUIET,
+        openTicketId: "t1",
+        activeTicketTabId: "chat:s1",
+        homeActiveTab: "term-root",
+        terminalSessionId: "term-pane",
+      }),
+    ).toEqual({
+      kind: "session",
+      projectId: "p1",
+      ticketId: null,
+      sessionId: "term-pane",
+      interactionId: null,
+      attentionId: null,
+    });
+  });
+
+  it("does not name the remembered ticket when a Home file or browser tab is in front", () => {
+    expect(
+      reportFor({
+        ...QUIET,
+        openTicketId: "t1",
+        activeTicketTabId: "diff:src/app.ts",
+        homeActiveTab: "file:src/app.ts",
+      }),
+    ).toBeNull();
+  });
+
+  it("shows nothing while Settings covers the workspace", () => {
+    // Settings hides Home (main-content.tsx), so nothing behind it is on screen.
+    const behind = [
+      { openTicketId: "t1", activeTicketTabId: "chat:s1" },
+      { openTicketId: "t1", activeTicketTabId: "diff:src/app.ts" },
+      { homeActiveTab: "chat:s9" },
+      { homeActiveTab: "term-root", terminalSessionId: "term-root" },
+    ];
+    for (const surface of behind) {
+      expect(
+        reportFor({
+          ...QUIET,
+          ...surface,
+          settingsOpen: true,
+          chatItem: { interactionId: "i1", attentionId: null },
+        }),
+      ).toBeNull();
+    }
+  });
+
   it("shows nothing suppressible on the board itself", () => {
-    expect(activeNotificationTarget(QUIET)).toBeNull();
+    expect(reportFor(QUIET)).toBeNull();
   });
 
   it("shows nothing on the other nav pages", () => {
     for (const nav of ["automations", "configure"] as const) {
       expect(
-        activeNotificationTarget({
+        reportFor({
           ...QUIET,
           nav,
           openTicketId: "t1",
@@ -155,7 +234,7 @@ describe("activeNotificationTarget", () => {
 
   it("shows nothing before a project is chosen", () => {
     expect(
-      activeNotificationTarget({
+      reportFor({
         ...QUIET,
         projectId: null,
         openTicketId: "t1",

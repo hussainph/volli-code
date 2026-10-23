@@ -156,7 +156,8 @@ export interface SessionToolSurfacePorts {
    * grants(session)` (VC-162).
    *
    * Takes the Role because the Role decides the base verb half — a Project
-   * Session carries the agent-control family and a Ticket Role carries none.
+   * Session carries project-wide control; a Ticket Role carries
+   * delegation-scoped steering.
    * The separate `grants` argument is the durable birth exception, which keeps
    * availability-as-enforcement without turning it into a bundle edit. Before
    * this argument existed every Session resolved the same list, and "Role

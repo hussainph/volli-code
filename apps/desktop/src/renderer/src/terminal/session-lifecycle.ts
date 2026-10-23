@@ -61,32 +61,38 @@ export function closeTicketSession(ticketId: string, sessionId: string): void {
   closeTerminalSession(ticketId, sessionId);
 }
 
-/** Tear down every ticket session of a ticket (e.g. its project was removed). */
+/** Tear down every ticket session of a ticket: dispose its engines, kill its live PTYs. */
 export function killTicketSessions(ticketId: string): void {
   killOwnerSessions(ticketId);
 }
 
-/** Tear down every session of a removed project, whether or not views are mounted. */
-export function killProjectSessions(projectId: string): void {
-  killOwnerSessions(projectId);
-}
-
 /**
- * Tear down every TICKET session whose scope belongs to `projectId`, keyed off
- * the sessions store rather than the board's live ticket list — so archived
- * tickets (whose ids `ticketsByProject` no longer holds) don't leak a PTY when
- * their project is removed. Each ticket owner's tabs all share the ticket's
+ * Forget every terminal view of a removed project (VC-796): its Board Sessions'
+ * owner, and every ticket owner whose scope belongs to it — keyed off the
+ * sessions store rather than the board's live ticket list, so an archived
+ * ticket's views go too. Each ticket owner's tabs all share the ticket's
  * scope, so one tab's scope identifies the whole container's project.
+ *
+ * The host ended these PTYs before it deleted the project, for every window
+ * at once, so nothing is killed from here: this disposes the engines that drew
+ * them and drops the records, whether or not a view is mounted.
  */
-export function killProjectTicketSessions(projectId: string): void {
+export function forgetProjectSessions(projectId: string): void {
   const owners = Object.entries(useSessionsStore.getState().byOwner)
-    .filter(([, container]) =>
-      container.tabs.some(
-        (tab) => tab.scope.kind === "ticket" && tab.scope.projectId === projectId,
-      ),
+    .filter(
+      ([ownerId, container]) =>
+        ownerId === projectId ||
+        container.tabs.some(
+          (tab) => tab.scope.kind === "ticket" && tab.scope.projectId === projectId,
+        ),
     )
     .map(([ownerId]) => ownerId);
-  for (const ownerId of owners) killOwnerSessions(ownerId);
+  for (const ownerId of owners) {
+    for (const tab of useSessionsStore.getState().byOwner[ownerId]!.tabs) {
+      for (const pane of sessionPanes(tab.layout)) disposeEngine(pane.sessionId);
+    }
+    useSessionsStore.getState().forgetOwner(ownerId);
+  }
 }
 
 /** Dispose every engine + kill every live PTY under an owner, then forget it. */

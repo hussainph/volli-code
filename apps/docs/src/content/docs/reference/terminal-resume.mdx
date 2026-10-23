@@ -1,0 +1,31 @@
+---
+title: Terminal resume
+description: Which terminal TUIs Volli can resume, the command it runs for each, and what a fresh launch is.
+---
+
+import HarnessResume from "../../../components/HarnessResume.astro";
+
+When a closed terminal record offers **Resume session**, Volli opens a new
+terminal and runs the TUI that was last running in the old one with that TUI's
+own resume flags. The table is generated from the same definitions Volli builds
+the command from.
+
+<HarnessResume />
+
+- **Resume a known session** runs when Volli holds the TUI's session id, shown
+  as `<id>`.
+- **Resume the latest** runs when it does not. The TUI picks its most recent
+  session in the working directory, which may not be the one that terminal ran.
+- **Fresh launch** is a terminal that resumes nothing: the TUI starts a new
+  session. Where Volli mints the id, its wrapper passes it as `<uuid>`.
+  Otherwise Volli records the id when the TUI reports it, or when you run
+  `volli session link <id>`.
+- **Minimum version**: Volli checks no TUI version before it resumes. **Not
+  pinned** means the command assumes none.
+
+Volli runs each command through its wrapper for that TUI, which also adds
+Volli's own configuration flags. The table leaves those out. A TUI you register
+yourself declares its own resume flags and is not listed here.
+
+See [Use terminal companions](/guides/terminal-companions/) for how terminal
+Sessions work.

@@ -53,7 +53,7 @@ import { createOutputPipeline } from "./output";
 import type { OutputPipeline, OutputSink } from "./output";
 import { createCommandRun } from "./command-run";
 import type { CommandRunOutcome } from "./command-run";
-import { ParkController } from "./park-controller";
+import { ParkController, type ParkLedger } from "./park-controller";
 import {
   terminalNativeReference,
   terminalSessionRecord,
@@ -156,6 +156,8 @@ interface Session {
   parkedManually: boolean;
   /** Consecutive CPU-quiet sweeps observed; parks at `quietSamplesRequired`. */
   quietCpuSamples: number;
+  /** The shell's spawn-ledger row, which carries the durable parked mark (VC-833). */
+  spawnLedgerId: string | null;
   /**
    * The sentinel-gated command this session is currently running for Volli
    * rather than for the user, or `null`.
@@ -234,10 +236,14 @@ export interface PtyManagerPorts {
   ): Promise<{ refused: readonly { harnessId: string; path: string; reason: string }[] }>;
 }
 
+/** The spawn ledger as the terminal door uses it: the spawn rows plus the parked mark. */
+type TerminalSpawnLedger = SpawnLedgerPort & ParkLedger;
+
 /** Records nothing: the spawn ledger a test that is not about the ledger wants. */
-const NO_SPAWN_LEDGER: SpawnLedgerPort = {
+const NO_SPAWN_LEDGER: TerminalSpawnLedger = {
   recordSpawn: () => null,
   markExited: () => {},
+  markParked: () => {},
 };
 
 const TERMINAL_VENUE = { id: "local", kind: "local" as const };
@@ -285,10 +291,11 @@ export interface PtyManagerOptions {
   readonly blobsRootPath?: string;
   /**
    * Where each spawned shell is recorded so a sweep after a crash can still say
-   * whose process it is (VC-341). Defaults to the ledger that remembers
-   * nothing, which is what every test that is not about the ledger wants.
+   * whose process it is (VC-341), and whether Volli left its tree SIGSTOPped
+   * (VC-833). Defaults to the ledger that remembers nothing, which is what
+   * every test that is not about the ledger wants.
    */
-  readonly spawnLedger?: SpawnLedgerPort;
+  readonly spawnLedger?: TerminalSpawnLedger;
   /**
    * The process's one reader of who is working (VC-339, VC-403), shared with
    * the structured door rather than built here. Defaults to `null`, which
@@ -379,7 +386,7 @@ export class PtyManager {
   private readonly parkConfig: ParkConfig;
   private readonly agentRuntime: AgentRuntimeEnvironment | null;
   private readonly blobsRootPath: string;
-  private readonly spawnLedger: SpawnLedgerPort;
+  private readonly spawnLedger: TerminalSpawnLedger;
   /** The explicit {@link PtyManagerOptions.venue}, when one was given. */
   private readonly venueOverride: SessionExecutionVenue | undefined;
 
@@ -410,6 +417,7 @@ export class PtyManager {
         const session = this.sessions.get(id);
         if (session !== undefined) this.pushParkState(session, id);
       },
+      ledger: this.spawnLedger,
     });
   }
 
@@ -936,6 +944,7 @@ export class PtyManager {
         parkedPids: null,
         parkedManually: false,
         quietCpuSamples: 0,
+        spawnLedgerId: ledgerId,
         setupRun: null,
         attachmentId,
         terminalDetail,
@@ -1632,6 +1641,20 @@ export class PtyManager {
     } catch (error) {
       return { ok: false, error: errorMessage(error) };
     }
+  }
+
+  /**
+   * Kills the live sessions among `sessionIds`, whichever window holds them,
+   * and names the ones it killed: a removed project's terminals (VC-796),
+   * which the host ends before it detaches the project (VC-822). An id with
+   * no live session is skipped.
+   */
+  killSessions(sessionIds: ReadonlySet<string>): string[] {
+    const killed = Array.from(this.sessions.keys()).filter((sessionId) =>
+      sessionIds.has(sessionId),
+    );
+    for (const sessionId of killed) this.killSession(sessionId);
+    return killed;
   }
 
   /** Kills every live session. Wired to `before-quit`. */

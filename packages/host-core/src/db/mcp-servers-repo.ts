@@ -161,6 +161,22 @@ export function getMcpServer(db: Database.Database, serverId: string): McpServer
   return row === undefined ? undefined : mapRow(row);
 }
 
+/**
+ * Whether one server is configured in a project, and enabled, without parsing
+ * its row: what an attachment checks before every MCP call (VC-771).
+ */
+export function getMcpServerEnabled(
+  db: Database.Database,
+  projectId: string,
+  serverId: string,
+): boolean | undefined {
+  const row = prepared<[string, string], { enabled: number }>(
+    db,
+    "SELECT enabled FROM mcp_servers WHERE id = ? AND project_id = ?",
+  ).get(serverId, projectId);
+  return row === undefined ? undefined : row.enabled === 1;
+}
+
 export function putMcpServer(db: Database.Database, server: McpServerRecord): McpServerRecord {
   const sanitized = sanitizeMcpServerDraft(server);
   if (!sanitized.ok) throw new Error(sanitized.reason);

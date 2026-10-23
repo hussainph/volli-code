@@ -607,6 +607,138 @@ describe("formatAXFind (VC-364)", () => {
   });
 });
 
+/** The lines of a print that carry a ref. */
+function refsIn(lines: readonly string[]): string[] {
+  return lines.filter((line) => line.includes("[ref="));
+}
+
+describe("formatAXSnapshot whole print (VC-237)", () => {
+  it("prints a dense tree whole beside the cut print, with refs only where the cut print showed them", () => {
+    const nodes = longPage(1_500);
+    const printed = formatAXSnapshot(nodes);
+
+    expect(printed.truncated).toBe(true);
+    expect(printed.whole).toBeDefined();
+    const shown = printed.text.split("\n");
+    const whole = printed.whole!.text.split("\n");
+    expect(printed.whole!.bounded).toBe(false);
+    // Every element is there: the 1,500 links and the footer the cut lost.
+    expect(whole.filter((line) => line.includes('- link "Article number'))).toHaveLength(1_500);
+    expect(printed.whole!.text).toContain('- button "Delete Account"');
+    // The cut print is its start, line for line.
+    expect(whole.slice(0, shown.length - 1)).toEqual(shown.slice(0, -1));
+    // Refs exactly as the cut print carried them, and none past it.
+    expect(refsIn(whole)).toEqual(refsIn(shown));
+    expect(whole.slice(shown.length).some((line) => line.includes("[ref="))).toBe(false);
+    expect(printed.whole!.text).not.toContain("[new]");
+  });
+
+  it("carries [new] for an element the cut print marked new, and on nothing it did not show", () => {
+    const nodes = page([
+      button("a", "Save", 100),
+      button("b", "Cancel", 101),
+      button("c", "a third button that the bound cuts", 102),
+    ]);
+    const first = formatAXSnapshot(page([button("a", "Save", 100)]));
+    const printed = formatAXSnapshot(nodes, { maxChars: 60, ledger: ledgerAfter(first) });
+
+    expect(printed.text).toBe(
+      ['- button "Save" [ref=e1]', '- button "Cancel" [ref=e2] [new]'].join("\n"),
+    );
+    expect(printed.whole).toEqual({
+      text: [
+        '- button "Save" [ref=e1]',
+        '- button "Cancel" [ref=e2] [new]',
+        '- button "a third button that the bound cuts"',
+      ].join("\n"),
+      bounded: false,
+    });
+  });
+
+  it("walks past the snapshot's node bound for the whole print", () => {
+    const printed = formatAXSnapshot(longPage(3_000));
+
+    expect(printed.whole?.text).toContain('- link "Article number 2999 with a descriptive title"');
+    expect(printed.whole?.text).toContain('- button "Delete Account"');
+    expect(printed.whole?.bounded).toBe(false);
+  });
+
+  it("says when the whole print itself stopped at Volli's own bound", () => {
+    const long = "n".repeat(1_000);
+    const nodes = page(
+      Array.from({ length: 9_000 }, (_, index) =>
+        node({ nodeId: `p${index}`, role: { value: "paragraph" }, name: { value: long } }),
+      ),
+    );
+    const printed = formatAXSnapshot(nodes);
+
+    expect(printed.whole?.bounded).toBe(true);
+    // Volli's 8 MiB bound on one whole print.
+    expect(printed.whole!.text.length).toBeLessThanOrEqual(8 * 1_024 * 1_024);
+    expect(printed.whole!.text.endsWith('"')).toBe(true);
+  });
+
+  it("drops the colon of the last line the whole print's own bound cut beneath", () => {
+    const long = "n".repeat(1_000);
+    const sections = Array.from({ length: 9_000 }, (_, index) => [
+      node({
+        nodeId: `s${index}`,
+        role: { value: "region" },
+        name: { value: long },
+        childIds: [`t${index}`],
+      }),
+      node({ nodeId: `t${index}`, role: { value: "paragraph" }, name: { value: "x" } }),
+    ]);
+    const nodes = [
+      node({
+        nodeId: "root",
+        role: { value: "RootWebArea" },
+        childIds: sections.map(([section]) => section!.nodeId),
+      }),
+      ...sections.flat(),
+    ];
+    const printed = formatAXSnapshot(nodes);
+
+    expect(printed.whole?.bounded).toBe(true);
+    expect(printed.whole!.text.endsWith(":")).toBe(false);
+  });
+
+  it("saves what a hidden run of nodes kept the cut print from reaching, on a tree that is not empty", () => {
+    // Ignored nodes spend the snapshot's node budget before any content;
+    // the whole print walks further and finds the page behind them.
+    const hidden = Array.from({ length: 2_500 }, (_, index) =>
+      node({ nodeId: `h${index}`, ignored: true, role: { value: "generic" } }),
+    );
+    const nodes = [
+      node({
+        nodeId: "root",
+        role: { value: "RootWebArea" },
+        childIds: [...hidden.map((one) => one.nodeId), "b"],
+      }),
+      ...hidden,
+      button("b", "Save", 100),
+    ];
+
+    const printed = formatAXSnapshot(nodes);
+
+    expect(printed).toMatchObject({ text: "", truncated: true, empty: false });
+    expect(printed.whole).toEqual({ text: '- button "Save"', bounded: false });
+  });
+
+  it("prints nothing more when the cut print already showed the whole tree", () => {
+    expect(formatAXSnapshot(page([button("a", "Save", 100)])).whole).toBeUndefined();
+    // A cycle stops the walk, but walking further finds nothing more to print.
+    const cyclic: AXNodeLike[] = [
+      node({ nodeId: "1", role: { value: "RootWebArea" }, childIds: ["2"] }),
+      node({ nodeId: "2", role: { value: "group" }, name: { value: "cycle" }, childIds: ["3"] }),
+      node({ nodeId: "3", role: { value: "button" }, name: { value: "Save" }, childIds: ["2"] }),
+    ];
+    const printed = formatAXSnapshot(cyclic);
+    expect(printed.truncated).toBe(true);
+    expect(printed.whole).toBeUndefined();
+  });
+});
+
 describe("normalizeFindQuery", () => {
   it("collapses whitespace and refuses an empty or oversized query", () => {
     expect(normalizeFindQuery("  Sign \n in ")).toBe("sign in");

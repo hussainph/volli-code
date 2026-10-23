@@ -261,6 +261,7 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
       "--label": { kind: "value", key: "label" },
       "--project": { kind: "value", key: "project" },
       "--limit": { kind: "value", key: "limit", parse: positiveIntValue },
+      "--no-body": { kind: "flag", key: "body", value: false },
     },
   },
   "ticket.show": {

@@ -3,9 +3,10 @@
  * VC-456's file-sync probe: how long one `FileHandle.sync()` takes on the
  * volume the bench's disposable profile lives on, one at a time and 40 at once.
  *
- * The transcript-artifact store syncs a file and its directory for every
- * artifact it publishes, so this is the unit that cost is made of. On macOS,
- * libuv implements `sync()` with `F_FULLFSYNC`.
+ * The transcript-artifact store syncs every artifact's file before it
+ * publishes it, and its directory once per batch of concurrent publications
+ * (VC-465), so this is the unit that cost is made of. On macOS, libuv
+ * implements `sync()` with `F_FULLFSYNC`.
  *
  * The runner starts it twice, under the default four-thread libuv pool and
  * under 64 threads. `parallelism` is the time the syncs take one after another

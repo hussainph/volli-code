@@ -205,13 +205,13 @@ describe("volli:list-directory", () => {
     });
   });
 
-  it("types a symlinked directory as a file in listings", async () => {
+  it("types a symlinked directory as a file in listings, and marks it a link", async () => {
     syncRoots([root]);
     await expect(listDirectory(join(root, "links"))).resolves.toEqual({
       ok: true,
       entries: [
         { name: "real-dir", kind: "dir" },
-        { name: "linked", kind: "file" },
+        { name: "linked", kind: "file", link: true },
       ],
     });
   });

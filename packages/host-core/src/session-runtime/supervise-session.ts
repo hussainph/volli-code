@@ -10,7 +10,8 @@
  * Both operations resolve their target inside the CALLER'S project, before any
  * handle is parsed — the same scoping the start operation pins. A Session
  * cannot stop or steer outside the project its attachment belongs to, because
- * no other project's Sessions are ever candidates.
+ * no other project's Sessions are ever candidates. A Board Session may steer
+ * any Session in that project; a Ticket Session only the subagents it delegated.
  *
  * ## What a stop is
  *
@@ -170,6 +171,10 @@ export async function stopSessionOperation(
   });
 }
 
+export interface SendSessionPorts extends SuperviseSessionPorts {
+  sessionEngine: SuperviseSessionPorts["sessionEngine"] & Pick<SessionEngine, "getSession">;
+}
+
 export interface SendSessionInput extends SuperviseTargetInput {
   /** Idempotency key: the message command id derives from it. */
   operationId: string;
@@ -202,7 +207,7 @@ export function supervisionMarker(callerSessionId: string): string {
 
 /** Steer a message into another Session's live attachment. */
 export async function sendSessionMessageOperation(
-  ports: SuperviseSessionPorts,
+  ports: SendSessionPorts,
   input: SendSessionInput,
 ): Promise<SendSessionOutcome> {
   const message = input.message.trim();
@@ -210,6 +215,29 @@ export async function sendSessionMessageOperation(
     throw new SuperviseSessionError("`message` must be non-empty text.");
   }
   const target = await resolveTarget(ports, input);
+  // Runtime identity describes the attachment's brief, not durable authority:
+  // a Ticket whose ticketId was nulled on deletion attaches as project. Its
+  // Role remains ticket, so losing the Ticket must not grant Board steering.
+  const caller = await ports.sessionEngine.getSession({ sessionId: input.callerSessionId });
+  if (caller === null || caller.session.projectId !== input.projectId) {
+    throw new SuperviseSessionError(
+      "The calling Session is unavailable in this project; nothing was sent.",
+    );
+  }
+  const callerRole = caller.session.role;
+  if (callerRole === "subagent") {
+    throw new SuperviseSessionError("A subagent Session cannot steer other Sessions.");
+  }
+  if (
+    callerRole !== "project" &&
+    (callerRole !== "ticket" ||
+      target.session.role !== "subagent" ||
+      target.session.parentSessionId !== input.callerSessionId)
+  ) {
+    throw new SuperviseSessionError(
+      `Session ${input.handle} is not one this Session delegated; a ticket Session may steer only its own subagents.`,
+    );
+  }
   if (target.stopped !== null) {
     throw new SuperviseSessionError(
       `Session ${input.handle} is stopped; a stopped Session reads nothing. A person can reattach it, or start a new Session.`,

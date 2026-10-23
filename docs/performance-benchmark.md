@@ -84,10 +84,36 @@ ledger row passes the production codec during verification. Verification also
 checks schema, exact counts/distribution, foreign keys, overlaps, long-Session
 folding, a content-addressed artifact and bounded `app_state` values.
 
+### Generation clock and sidebar bands
+
+Every timestamp is relative to a generation clock: `--clock` (ISO or epoch ms),
+defaulting to now, recorded as the manifest's `generatedAt`. The seed and the
+clock together are the recipe; the same pair rebuilds the same bytes. A frozen
+base date used to put every Session past the sidebar's seven-day Previous bound,
+so both bands measured empty (VC-415).
+
+Sessions are scheduled into the sidebar's bands explicitly, at the owner
+profile's ratios (14 Active, 141 Previous of 1,198 in `real`), against the
+windows in `src/renderer/src/components/sidebar/session-band-windows.ts`, which
+the generator loads rather than copies. The newest Sessions went quiet inside
+the Active window and carry unread receipts, which keeps them in Active for the
+whole run rather than for thirty minutes. The long chat and the next Sessions
+off Done tickets (whose Sessions the sidebar cleans away) sit between that
+window and the age bound; the rest are aged-out history. The manifest's
+`recency` block records the rows each band is scheduled to render and
+`stableUntil`, the first instant any band would change on its own (about a day
+after generation). Verification re-derives the split from the production fold;
+the runner refuses a reused fixture whose `stableUntil` falls inside the run.
+`fixture.test.mjs` builds both bands for `small` with the renderer's
+`buildActiveSessionListing` and checks they hold the scheduled counts.
+
 Generation uses a fixed sentinel root for portable byte-identical database
-bytes. `localizeFixture` rewrites only schema-confirmed project/worktree columns
-to the actual profile. `fixture.test.mjs` compares same-seed digests from distinct
-output paths.
+bytes. Migration bookkeeping that is not part of the recipe (each migration's
+applied-at wall time, the credential-mirror lineage id) is pinned to the clock
+and seed. `localizeFixture` rewrites only schema-confirmed project/worktree
+columns to the actual profile. `fixture.test.mjs` rebuilds from a manifest's
+recorded seed and clock and compares digests, including from distinct output
+paths.
 
 `--force` deletes only recognized fixtures. It refuses root, home, repository,
 symlinks, non-directories, directories containing `package.json`/`.git`, and
@@ -116,8 +142,8 @@ profile. The built-renderer assertion rejects dev-server runs.
 4. **New chat:** `+ Chat` until the visible composer enables and accepts focus.
 5. **New terminal:** until real terminal canvas answers `stty size` via its PTY.
 6. **Sidebar:** close/open separately, retaining rAF deltas through transitions.
-   Inspect active/previous row counts first: a frozen fixture timestamp can
-   empty an age-bounded Previous band, measuring chrome rather than listing.
+   Inspect active/previous row counts first: an empty band measures chrome
+   rather than listing. Both are populated from the generation clock (above).
 7. **Ticket switch:** pre-open both workspaces, then time switching existing tabs
    until heading/editor are visible and accept focus, not a first open.
 8. **Board render:** until published held-ticket count equals the fixture and

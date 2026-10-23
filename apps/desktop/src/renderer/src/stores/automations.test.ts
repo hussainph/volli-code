@@ -15,6 +15,7 @@ import {
   createAutomationsStore,
   effectiveArmedIn,
   offeredInDigitOrder,
+  offeredInPinnedOrder,
   offeredInRankOrder,
   selectArmedAutomation,
   selectArmings,
@@ -1212,6 +1213,22 @@ describe("the digit order (VC-132)", () => {
     expect(
       offeredInDigitOrder(slicesFor(store.getState(), "p1"), "doing").map((row) => row.id),
     ).toEqual(["automation-2", "automation-1"]);
+  });
+
+  it("draws the lane's whole pinned list, whose first nine are the drag's digits", () => {
+    const crowd = Array.from({ length: 11 }, (_, index) =>
+      automation({ id: `crowd-${index}`, trigger: COLUMNS_TRIGGER }),
+    );
+    const slices: OfferedListSlices = {
+      automations: crowd,
+      armings: [{ ...ARMING, automationId: "crowd-10" }],
+      orders: [],
+      enabledAutomationIds: ["crowd-10"],
+    };
+    const pinned = offeredInPinnedOrder(slices, "doing").map((row) => row.id);
+    expect(pinned).toHaveLength(11);
+    expect(pinned[0]).toBe("crowd-10");
+    expect(offeredInDigitOrder(slices, "doing").map((row) => row.id)).toEqual(pinned.slice(0, 9));
   });
 
   it("offers nothing for a column no Trigger names", async () => {

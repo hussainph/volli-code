@@ -5,9 +5,13 @@ import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
 import { FolderSimpleIcon } from "@phosphor-icons/react/dist/csr/FolderSimple";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
+import { HouseIcon } from "@phosphor-icons/react/dist/csr/House";
+import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
 import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
+import { ListBulletsIcon } from "@phosphor-icons/react/dist/csr/ListBullets";
 import { ListNumbersIcon } from "@phosphor-icons/react/dist/csr/ListNumbers";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
@@ -21,13 +25,18 @@ import {
   buildCommandPaletteItems,
   buildEditorCommandItems,
   buildHostCommandItems,
+  buildNavigationCommandItems,
   paletteRunContext,
   type CommandPaletteItems,
+  type CommandPaletteNavigationItem,
 } from "@renderer/components/command-palette-model";
 import {
   PALETTE_SCOPES,
   automationRowMatch,
+  browsableNavigationRows,
   commandPaletteFilter,
+  navigationLeads,
+  navigationRowMatch,
   paletteEmptyCopy,
   paletteScopeById,
   parsePaletteScopeQuery,
@@ -37,7 +46,9 @@ import {
   slicePaletteSection,
   ticketRowMatch,
   type PaletteScopeId,
+  type PaletteSectionId,
 } from "@renderer/components/command-palette-search";
+import { configureGroups } from "@renderer/components/settings/configure-groups";
 import { canGoToLine, runGoToLine } from "@renderer/editor/go-to-line";
 import { openAddHostSheet, openHostsSettings } from "@renderer/components/hosts/host-entry";
 import { useCloudEnabled } from "@renderer/components/hosts/use-hosts";
@@ -72,7 +83,7 @@ interface CommandPaletteProps {
 const EMPTY_COMMAND_PALETTE_ITEMS: CommandPaletteItems = { tickets: [], sessions: [] };
 
 /** Nothing expanded — the shared reset value, so the resets compare equal. */
-const NOTHING_EXPANDED: ReadonlySet<PaletteScopeId> = new Set();
+const NOTHING_EXPANDED: ReadonlySet<PaletteSectionId> = new Set();
 
 /** Each scope suggestion row wears its section's own glyph. */
 const SCOPE_ICONS: Record<PaletteScopeId, Icon> = {
@@ -101,13 +112,46 @@ const PALETTE_ROW = `flex cursor-default items-center gap-2 rounded-lg px-2 py-2
 /** The row's leading glyph: bare and muted. */
 const PALETTE_ROW_ICON = "size-4 shrink-0 text-muted-foreground";
 
+/** The page glyph each Go to row wears; a Configure pane wears its rail icon. */
+const NAVIGATION_ICONS: Record<
+  Exclude<CommandPaletteNavigationItem["id"], "configure-pane">,
+  Icon
+> = {
+  home: HouseIcon,
+  board: KanbanIcon,
+  list: ListBulletsIcon,
+  configure: SlidersHorizontalIcon,
+  settings: GearSixIcon,
+};
+
+/**
+ * One Go to row's page of `projectId`: Home, the Board tab in a view, or
+ * Configure (on a named pane). Settings is app-wide and opened by the row
+ * itself; with no project selected the model offers no other row.
+ */
+function goToProjectPage(item: CommandPaletteNavigationItem, projectId: string | null): void {
+  if (projectId === null) return;
+  const workspace = useWorkspaceStore.getState();
+  if (item.id === "home") {
+    workspace.openHome(projectId);
+  } else if (item.id === "board" || item.id === "list") {
+    // The Board tab's own act, then the view: what the header's segmented
+    // toggle would leave on screen.
+    workspace.openHomeBoard(projectId);
+    workspace.setBoardView(projectId, item.id);
+  } else if (item.id === "configure" || item.id === "configure-pane") {
+    if (item.id === "configure-pane") useUiStore.getState().requestConfigureCategory(item.paneKey);
+    workspace.setNav(projectId, "configure");
+  }
+}
+
 interface ShowAllRowProps {
-  sectionId: PaletteScopeId;
+  sectionId: PaletteSectionId;
   /** The section's full match count — what expanding reveals. */
   total: number;
   /** The section's plural noun, spoken in the row. */
   noun: string;
-  onExpand: (sectionId: PaletteScopeId) => void;
+  onExpand: (sectionId: PaletteSectionId) => void;
 }
 
 /**
@@ -136,9 +180,10 @@ function ShowAllRow({ sectionId, total, noun, onExpand }: ShowAllRowProps) {
 
 /**
  * Universal ⌘K destination picker for tickets, open terminals, closed terminal
- * records, and durable chats. Tickets lead (VC-205); each section truncates behind a "Show all"
- * row; and a completed `@` token — typed, or picked from the rows `@` itself
- * surfaces — narrows the palette to one section.
+ * records, durable chats, and the app's pages (VC-303). Tickets lead (VC-205)
+ * unless a query names a page or an exact Ticket id; each section truncates
+ * behind a "Show all" row; and a completed `@` token — typed, or picked from
+ * the rows `@` itself surfaces — narrows the palette to one section.
  */
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const projects = useProjectsStore((state) => state.projects);
@@ -202,7 +247,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   // Which sections have had their "Show all" row taken. Reset on every
   // keystroke: a changed query is a new result set, and a new result set
   // starts truncated again.
-  const [expanded, setExpanded] = React.useState<ReadonlySet<PaletteScopeId>>(NOTHING_EXPANDED);
+  const [expanded, setExpanded] = React.useState<ReadonlySet<PaletteSectionId>>(NOTHING_EXPANDED);
   const openTicketId = useWorkspaceStore((state) =>
     selectedProjectId === null ? null : (state.byProject[selectedProjectId]?.openTicketId ?? null),
   );
@@ -252,6 +297,21 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     useCloudEnabled() && open,
     useHostsWritable(),
     remoteHostList,
+  );
+
+  // The page rows (VC-303). Configure's panes come off the rail's own
+  // definition, so a pane added there is reachable here with no second list;
+  // their icons ride along by key.
+  const configureCategories = React.useMemo(
+    () =>
+      open && selectedProject !== null
+        ? configureGroups(selectedProject).flatMap((group) => group.categories)
+        : [],
+    [open, selectedProject],
+  );
+  const navigationCommands = React.useMemo(
+    () => (open ? buildNavigationCommandItems(selectedProject, configureCategories) : []),
+    [open, selectedProject, configureCategories],
   );
 
   // Closed and invisible: every board/session mutation would otherwise
@@ -312,7 +372,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     setExpanded(NOTHING_EXPANDED);
   }, []);
 
-  const expandSection = React.useCallback((sectionId: PaletteScopeId) => {
+  const expandSection = React.useCallback((sectionId: PaletteSectionId) => {
     setExpanded((previous) => new Set(previous).add(sectionId));
   }, []);
 
@@ -333,6 +393,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     automationRowMatch,
     query,
     expanded.has("automations"),
+  );
+
+  const navigationSlice = slicePaletteSection(
+    browsableNavigationRows(navigationCommands, query),
+    navigationRowMatch,
+    query,
+    expanded.has("navigation"),
   );
 
   const scopeDef = paletteScopeById(scope);
@@ -361,11 +428,65 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     onOpenChange(false);
   }, [onOpenChange]);
 
+  // The Go to section, mounted in one of two places: first when the query
+  // names one of its commands, last otherwise (see `navigationLeads` for why
+  // the palette, not cmdk, decides this).
+  const navigationGroup =
+    scope === null && navigationSlice.visible.length > 0 ? (
+      <Command.Group heading="Go to" className={MENU_LABEL_CMDK}>
+        {navigationSlice.visible.map(({ row: item, match }) => {
+          // A Configure pane is keyed by, and wears the rail icon of, its pane.
+          const { key, RowIcon } =
+            item.id === "configure-pane"
+              ? {
+                  key: `navigation:pane:${item.paneKey}`,
+                  RowIcon:
+                    configureCategories.find((category) => category.key === item.paneKey)?.icon ??
+                    SlidersHorizontalIcon,
+                }
+              : { key: `navigation:${item.id}`, RowIcon: NAVIGATION_ICONS[item.id] };
+          return (
+            <Command.Item
+              key={key}
+              value={match.value}
+              keywords={match.keywords}
+              onSelect={() => {
+                if (item.id === "settings") {
+                  // Not `finishNavigation`, which closes Settings.
+                  useUiStore.getState().setSettingsOpen(true);
+                  onOpenChange(false);
+                  return;
+                }
+                goToProjectPage(item, selectedProjectId);
+                finishNavigation();
+              }}
+              className={PALETTE_ROW}
+            >
+              <RowIcon aria-hidden className={PALETTE_ROW_ICON} />
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate text-ui font-medium">{item.title}</span>
+                <span className="truncate text-label text-muted-foreground">{item.hint}</span>
+              </span>
+            </Command.Item>
+          );
+        })}
+        {navigationSlice.hiddenCount > 0 ? (
+          <ShowAllRow
+            sectionId="navigation"
+            total={navigationSlice.visible.length + navigationSlice.hiddenCount}
+            noun="pages"
+            onExpand={expandSection}
+          />
+        ) : null}
+      </Command.Group>
+    ) : null;
+  const navigationFirst = navigationLeads(navigationSlice, query);
+
   return (
     <Command.Dialog
       open={open}
       onOpenChange={onOpenChange}
-      label="Search tickets and sessions"
+      label="Search tickets, sessions, and commands"
       filter={commandPaletteFilter}
       loop
       // The app's one `--scrim`, plus a blur no other overlay takes. This used
@@ -399,7 +520,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           }}
           placeholder={
             scopeDef === null
-              ? "Search tickets and sessions…"
+              ? "Search tickets, sessions, and commands…"
               : `Search ${scopeDef.label.toLowerCase()}…`
           }
           className="min-w-0 flex-1 bg-transparent text-ui text-foreground outline-none placeholder:text-muted-foreground"
@@ -410,6 +531,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       </div>
       <Command.List className="max-h-[min(460px,60vh)] overflow-y-auto p-2 [scrollbar-gutter:stable]">
         <Command.Empty className={EMPTY_INLINE}>{paletteEmptyCopy(scope)}</Command.Empty>
+
+        {navigationFirst ? navigationGroup : null}
 
         {showScopeSuggestions(query, scope) ? (
           <Command.Group heading="Filter" className={MENU_LABEL_CMDK}>
@@ -717,6 +840,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             })}
           </Command.Group>
         ) : null}
+        {navigationFirst ? null : navigationGroup}
       </Command.List>
       <div className="flex h-9 items-center justify-end gap-4 border-t border-border px-4 text-label text-muted-foreground">
         <span>@ filter</span>

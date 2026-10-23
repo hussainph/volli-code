@@ -1,7 +1,7 @@
 /**
  * Frozen main baseline for the desktop Session tool surface (VC-622 a2).
  *
- * Provenance: every value below was produced by main's own
+ * Original provenance: these values were produced by main's own
  * `sessionToolSurface.resolve` closure as it shipped at bdc0e925b (the last
  * main commit before VC-622 lifted it), extracted verbatim by the a1 verifier
  * (reference-only scratch: .scratch/vc622a1-verify/verify-tests/
@@ -15,6 +15,12 @@
  * shared resolver at test time; the covering test reads this file and
  * nothing else.
  *
+ * VC-861 updates the Ticket birth entries by adding `session.send` in canonical
+ * order; project/subagent entries and the matrix keep their original bytes.
+ * LEGACY_TICKET_SURFACE below pins the old headless Ticket birth as a literal;
+ * assembly.test.ts uses it to prove reattach and refresh cannot widen that
+ * authority. No durable Session record is rewritten.
+ *
  * Encoding:
  * - `surfaces` — one distinct resolved surface per entry, tools comma-joined
  *   in the frozen canonical order (no tool name contains a comma, checked
@@ -24,6 +30,21 @@
  * - `table` — one entry per verified combination in enumeration order;
  *   `n >= 0` names `surfaces[n]`, `n < 0` names `errors[-n - 1]`.
  */
+import type { SessionToolId } from "@volli/shared";
+
+/** Pre-VC-861 headless Ticket birth: no web, browser, shells, or person ports.
+ * Pinned bytes, deliberately not filtered out of today's resolver output.
+ */
+export const LEGACY_TICKET_SURFACE: readonly SessionToolId[] = [
+  "read",
+  "edit",
+  "write",
+  "execute",
+  "todo_write",
+  "session.delegate",
+  "watch",
+];
+
 export interface MainSurfaceBaseline {
   readonly surfaces: readonly string[];
   readonly errors: readonly string[];
@@ -38,18 +59,18 @@ export const MAIN_SURFACE_BASELINE: MainSurfaceBaseline = {
     "read,edit,write,execute,ask_user,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,codemode,request_secret,session.start,automation.run,session.stop,session.send,session.delegate,mcp.list,mcp.preview,mcp.install,mcp.refresh,mcp.enable,mcp.disable,mcp.tools,mcp.remove,watch",
     "read,browser_tabs,todo_write,shell_start,session.start,automation.run,session.stop,session.send,session.delegate,mcp.list,mcp.preview,mcp.install,mcp.refresh,mcp.enable,mcp.disable,mcp.tools,mcp.remove,watch",
     "read,browser_tabs,todo_write,shell_start,codemode,session.start,automation.run,session.stop,session.send,session.delegate,mcp.list,mcp.preview,mcp.install,mcp.refresh,mcp.enable,mcp.disable,mcp.tools,mcp.remove,watch",
-    "read,edit,write,execute,ask_user,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,request_secret,session.delegate,watch",
-    "read,edit,write,execute,ask_user,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,request_secret,session.delegate,watch",
-    "read,edit,write,execute,ask_user,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,codemode,request_secret,session.delegate,watch",
-    "read,edit,write,execute,ask_user,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,codemode,request_secret,session.delegate,watch",
-    "read,browser_tabs,todo_write,shell_start,session.delegate,watch",
-    "read,browser_tabs,todo_write,shell_start,codemode,session.delegate,watch",
-    "read,edit,write,execute,ask_user,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,request_secret,session.start,session.delegate,watch",
-    "read,edit,write,execute,ask_user,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,request_secret,session.start,session.delegate,watch",
-    "read,edit,write,execute,ask_user,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,codemode,request_secret,session.start,session.delegate,watch",
-    "read,edit,write,execute,ask_user,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,codemode,request_secret,session.start,session.delegate,watch",
-    "read,browser_tabs,todo_write,shell_start,session.start,session.delegate,watch",
-    "read,browser_tabs,todo_write,shell_start,codemode,session.start,session.delegate,watch",
+    "read,edit,write,execute,ask_user,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,request_secret,session.send,session.delegate,watch",
+    "read,edit,write,execute,ask_user,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,request_secret,session.send,session.delegate,watch",
+    "read,edit,write,execute,ask_user,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,codemode,request_secret,session.send,session.delegate,watch",
+    "read,edit,write,execute,ask_user,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,codemode,request_secret,session.send,session.delegate,watch",
+    "read,browser_tabs,todo_write,shell_start,session.send,session.delegate,watch",
+    "read,browser_tabs,todo_write,shell_start,codemode,session.send,session.delegate,watch",
+    "read,edit,write,execute,ask_user,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,request_secret,session.start,session.send,session.delegate,watch",
+    "read,edit,write,execute,ask_user,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,request_secret,session.start,session.send,session.delegate,watch",
+    "read,edit,write,execute,ask_user,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,codemode,request_secret,session.start,session.send,session.delegate,watch",
+    "read,edit,write,execute,ask_user,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,codemode,request_secret,session.start,session.send,session.delegate,watch",
+    "read,browser_tabs,todo_write,shell_start,session.start,session.send,session.delegate,watch",
+    "read,browser_tabs,todo_write,shell_start,codemode,session.start,session.send,session.delegate,watch",
     "read,edit,write,execute,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,shell_start,shell_output,shell_kill,browser_find",
     "read,edit,write,execute,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,shell_start,shell_output,shell_kill,browser_find,classify",
     "read,edit,write,execute,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,shell_start,shell_output,shell_kill,browser_find,codemode",
@@ -62,18 +83,18 @@ export const MAIN_SURFACE_BASELINE: MainSurfaceBaseline = {
     "read,edit,write,execute,ask_user,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,codemode,request_secret,session.start,automation.run,session.stop,session.send,session.delegate,mcp.list,mcp.preview,mcp.install,mcp.refresh,mcp.enable,mcp.disable,mcp.tools,mcp.remove,watch",
     "read,web_fetch,browser_tabs,todo_write,shell_start,session.start,automation.run,session.stop,session.send,session.delegate,mcp.list,mcp.preview,mcp.install,mcp.refresh,mcp.enable,mcp.disable,mcp.tools,mcp.remove,watch",
     "read,web_fetch,browser_tabs,todo_write,shell_start,codemode,session.start,automation.run,session.stop,session.send,session.delegate,mcp.list,mcp.preview,mcp.install,mcp.refresh,mcp.enable,mcp.disable,mcp.tools,mcp.remove,watch",
-    "read,edit,write,execute,ask_user,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,request_secret,session.delegate,watch",
-    "read,edit,write,execute,ask_user,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,request_secret,session.delegate,watch",
-    "read,edit,write,execute,ask_user,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,codemode,request_secret,session.delegate,watch",
-    "read,edit,write,execute,ask_user,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,codemode,request_secret,session.delegate,watch",
-    "read,web_fetch,browser_tabs,todo_write,shell_start,session.delegate,watch",
-    "read,web_fetch,browser_tabs,todo_write,shell_start,codemode,session.delegate,watch",
-    "read,edit,write,execute,ask_user,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,request_secret,session.start,session.delegate,watch",
-    "read,edit,write,execute,ask_user,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,request_secret,session.start,session.delegate,watch",
-    "read,edit,write,execute,ask_user,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,codemode,request_secret,session.start,session.delegate,watch",
-    "read,edit,write,execute,ask_user,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,codemode,request_secret,session.start,session.delegate,watch",
-    "read,web_fetch,browser_tabs,todo_write,shell_start,session.start,session.delegate,watch",
-    "read,web_fetch,browser_tabs,todo_write,shell_start,codemode,session.start,session.delegate,watch",
+    "read,edit,write,execute,ask_user,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,request_secret,session.send,session.delegate,watch",
+    "read,edit,write,execute,ask_user,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,request_secret,session.send,session.delegate,watch",
+    "read,edit,write,execute,ask_user,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,codemode,request_secret,session.send,session.delegate,watch",
+    "read,edit,write,execute,ask_user,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,codemode,request_secret,session.send,session.delegate,watch",
+    "read,web_fetch,browser_tabs,todo_write,shell_start,session.send,session.delegate,watch",
+    "read,web_fetch,browser_tabs,todo_write,shell_start,codemode,session.send,session.delegate,watch",
+    "read,edit,write,execute,ask_user,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,request_secret,session.start,session.send,session.delegate,watch",
+    "read,edit,write,execute,ask_user,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,request_secret,session.start,session.send,session.delegate,watch",
+    "read,edit,write,execute,ask_user,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,codemode,request_secret,session.start,session.send,session.delegate,watch",
+    "read,edit,write,execute,ask_user,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,todo_write,shell_start,shell_output,shell_kill,browser_find,classify,codemode,request_secret,session.start,session.send,session.delegate,watch",
+    "read,web_fetch,browser_tabs,todo_write,shell_start,session.start,session.send,session.delegate,watch",
+    "read,web_fetch,browser_tabs,todo_write,shell_start,codemode,session.start,session.send,session.delegate,watch",
     "read,edit,write,execute,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,shell_start,shell_output,shell_kill,browser_find",
     "read,edit,write,execute,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,shell_start,shell_output,shell_kill,browser_find,classify",
     "read,edit,write,execute,web_fetch,web_search,browser_tabs,browser_navigate,browser_snapshot,browser_act,browser_screenshot,browser_console,browser_acquire,browser_release,shell_start,shell_output,shell_kill,browser_find,codemode",

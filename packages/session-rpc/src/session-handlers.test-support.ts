@@ -229,6 +229,7 @@ export function sessionHandlersFrom(
       need(ports.desktop?.["shells.moveToBackground"], RUNTIME)(input, call),
     "project.reorder": (input, call) =>
       need(ports.desktop?.["project.reorder"], BOARD)(input, call),
+    "project.remove": (input, call) => need(ports.desktop?.["project.remove"], BOARD)(input, call),
     "worktree.trimSettings": (input, call) =>
       need(ports.desktop?.["worktree.trimSettings"], BOARD)(input, call),
     "hosts.snapshot": remote("hosts.snapshot"),
@@ -266,6 +267,8 @@ export function sessionHandlersFrom(
     "hostScope.query": remote("hostScope.query"),
     "hostScope.mutate": remote("hostScope.mutate"),
     "hostScope.subscribe": remote("hostScope.subscribe"),
+    "browserShortcuts.subscribe": remote("browserShortcuts.subscribe"),
+    "browserShortcuts.focusPage": remote("browserShortcuts.focusPage"),
   };
   return {
     ...handlers,

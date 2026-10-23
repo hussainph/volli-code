@@ -325,9 +325,11 @@ export async function ticketListVerb(
   const priority = request.args["priority"];
   const label = request.args["label"];
   const limit = request.args["limit"];
+  const body = request.args["body"];
   const listPriorityError = invalidPriorityResponse(priority);
   if (listPriorityError) return listPriorityError;
   if (
+    (body !== undefined && typeof body !== "boolean") ||
     (status !== undefined && !isTicketStatus(status)) ||
     (label !== undefined && typeof label !== "string") ||
     (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0))
@@ -347,7 +349,15 @@ export async function ticketListVerb(
         (canonicalLabel !== undefined && ticket.labels.includes(canonicalLabel)),
     )
     .slice(0, typeof limit === "number" ? limit : undefined)
-    .map((ticket) => agentTicket(ticket, resolved.project));
+    .map((ticket) => {
+      const row = agentTicket(ticket, resolved.project);
+      if (body !== false) return row;
+      // `body: false` (`--no-body`, and every human table) omits the one field
+      // that is most of the answer (VC-824). Opt-in, so a caller that reads
+      // `body` from the default rows keeps it.
+      const { body: _body, ...summary } = row;
+      return summary;
+    });
   return { v: 1, ok: true, data: { tickets } };
 }
 

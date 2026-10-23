@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import {
   AUTHOR_MODEL_ONLY_MODE,
   resolveSkillMode,
@@ -5,6 +6,8 @@ import {
   type Project,
   type SkillReference,
 } from "@volli/shared";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -35,6 +38,16 @@ const skills: SkillReference[] = [
     effectivePolicy: { modelDiscoverable: true, userInvokable: false },
     policyDiagnostic: null,
     root: ".agents/skills/house-style",
+  },
+  {
+    name: "a-skill-whose-name-is-far-too-long-for-its-twenty-percent-column",
+    description:
+      "A description long enough that the table can only ever show its first few words before the cell clips it.",
+    body: "## Steps\n\nRead every line of this before acting.",
+    authorPolicy: SKILL_POLICY_DEFAULT,
+    effectivePolicy: SKILL_POLICY_DEFAULT,
+    policyDiagnostic: null,
+    root: "/Users/me/.agents/skills/a-skill-whose-name-is-far-too-long-for-its-twenty-percent-column",
   },
 ];
 
@@ -95,6 +108,52 @@ describe("Configure → Skills", () => {
     const background = skills[2]!;
     expect(resolveSkillMode({}, background)).toBe(AUTHOR_MODEL_ONLY_MODE);
     expect(resolveSkillMode({ "house-style": "auto" }, background)).toBe("auto");
+  });
+
+  it("previews a skill's full name, description and body without touching its mode", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe(): void {}
+        unobserve(): void {}
+        disconnect(): void {}
+      },
+    );
+    const setSkillModes = vi.fn();
+    vi.stubGlobal("api", { projects: { setSkillModes } });
+    const long = skills[3]!;
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () =>
+        root.render(
+          <TooltipProvider>
+            <SkillsPane project={project} />
+          </TooltipProvider>,
+        ),
+      );
+      // The table clips the name, so the cell carries it whole on hover too.
+      expect(container.querySelector(`span[title="${long.name}"]`)).not.toBeNull();
+
+      const preview = container.querySelector<HTMLButtonElement>(
+        `button[aria-label="Preview ${long.name}"]`,
+      );
+      await act(async () => preview?.click());
+
+      const dialog = document.querySelector('[data-testid="content-preview-dialog"]');
+      expect(dialog?.querySelector("h2")?.textContent).toBe(long.name);
+      expect(dialog?.textContent).toContain(long.description);
+      expect(dialog?.textContent).toContain(`Personal · ${long.root}`);
+      expect(dialog?.querySelector(".typeset h2")?.textContent).toBe("Steps");
+      expect(dialog?.textContent).toContain("Read every line of this before acting.");
+      expect(setSkillModes).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
   });
 
   describe("ruled", () => {

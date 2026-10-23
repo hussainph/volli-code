@@ -38,7 +38,9 @@
  *
  * Everything here is read-only against git and defensive at launch: a
  * reconciliation that throws must not cost the app its start, so a failure
- * lands as `indeterminate` and is reported, never rethrown into boot.
+ * lands as `indeterminate` and is reported, never rethrown into boot. The reads
+ * go through the async runner: nothing here has a gate that may not yield, so
+ * a launch has no reason to block its first window on git (VC-786).
  */
 import { statSync } from "node:fs";
 
@@ -47,7 +49,7 @@ import type { OrphanCleanupRun } from "@volli/shared";
 import type { OrphanCleanupEngine } from "./cleanup-engine";
 import { parseWorktreeList } from "./git";
 import { canonicalize } from "./paths";
-import { readOnlyGit } from "./scan";
+import { readOnlyGitAsync } from "./scan";
 import type { WorktreePorts } from "./types";
 
 const REMOVED_AFTER_INTERRUPTION =
@@ -78,11 +80,15 @@ function onDisk(path: string): boolean | null {
 }
 
 /** Whether git still registers `path` as a live worktree of `projectPath`; `null` if unreadable. */
-function registered(deps: WorktreePorts, path: string, projectPath: string | null): boolean | null {
+async function registered(
+  deps: WorktreePorts,
+  path: string,
+  projectPath: string | null,
+): Promise<boolean | null> {
   if (projectPath === null) return null;
   try {
     const entries = parseWorktreeList(
-      readOnlyGit(deps.git)(["worktree", "list", "--porcelain"], projectPath),
+      await readOnlyGitAsync(deps.gitAsync)(["worktree", "list", "--porcelain"], projectPath),
     );
     return entries.some(
       (entry) => canonicalize(entry.path) === canonicalize(path) && entry.prunable === null,
@@ -93,8 +99,12 @@ function registered(deps: WorktreePorts, path: string, projectPath: string | nul
 }
 
 /** What the world now says about a worktree directory whose removal was announced. */
-function judgeWorktree(deps: WorktreePorts, path: string, projectPath: string | null): Verdict {
-  const isRegistered = registered(deps, path, projectPath);
+async function judgeWorktree(
+  deps: WorktreePorts,
+  path: string,
+  projectPath: string | null,
+): Promise<Verdict> {
+  const isRegistered = await registered(deps, path, projectPath);
   const present = onDisk(path);
   if (isRegistered === false && present === false) {
     return { state: "completed", detail: REMOVED_AFTER_INTERRUPTION };
@@ -110,11 +120,15 @@ function judgeWorktree(deps: WorktreePorts, path: string, projectPath: string | 
  * record that is still stale proves the prune did not run; anything else is a
  * state this host cannot attribute to this command.
  */
-function judgeMetadata(deps: WorktreePorts, path: string, projectPath: string | null): Verdict {
+async function judgeMetadata(
+  deps: WorktreePorts,
+  path: string,
+  projectPath: string | null,
+): Promise<Verdict> {
   if (projectPath === null) return { state: "indeterminate", detail: UNKNOWN_PRUNE };
   try {
     const stillStale = parseWorktreeList(
-      readOnlyGit(deps.git)(["worktree", "list", "--porcelain"], projectPath),
+      await readOnlyGitAsync(deps.gitAsync)(["worktree", "list", "--porcelain"], projectPath),
     ).some((entry) => entry.prunable !== null && canonicalize(entry.path) === canonicalize(path));
     return stillStale
       ? { state: "failed", detail: NOT_PRUNED }
@@ -145,8 +159,8 @@ export async function reconcileInterruptedCleanups(deps: {
       if (item.state !== "executing") continue;
       const verdict =
         item.kind === "worktree"
-          ? judgeWorktree(deps.worktree, item.path, item.projectPath)
-          : judgeMetadata(deps.worktree, item.path, item.projectPath);
+          ? await judgeWorktree(deps.worktree, item.path, item.projectPath)
+          : await judgeMetadata(deps.worktree, item.path, item.projectPath);
       await deps.engine.settleItem({
         commandId: run.id,
         itemId: item.id,

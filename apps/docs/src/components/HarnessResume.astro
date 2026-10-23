@@ -1,0 +1,28 @@
+---
+import { NO_COMMAND, NOT_PINNED, SESSION_ID_SOURCE_NOTES, resumeRows } from "../lib/harness-resume";
+---
+
+<table>
+  <thead>
+    <tr>
+      <th>TUI</th>
+      <th>Resume a known session</th>
+      <th>Resume the latest</th>
+      <th>Fresh launch</th>
+      <th>Minimum version</th>
+    </tr>
+  </thead>
+  <tbody>
+    {
+      resumeRows.map((row) => (
+        <tr>
+          <td>{row.label} (<code>{row.harnessId}</code>)</td>
+          <td>{row.byId === null ? NO_COMMAND : <code>{row.byId}</code>}</td>
+          <td>{row.latest === null ? NO_COMMAND : <code>{row.latest}</code>}</td>
+          <td><code>{row.freshLaunch}</code> {SESSION_ID_SOURCE_NOTES[row.sessionIdSource]}</td>
+          <td>{row.minimumVersion ?? NOT_PINNED}</td>
+        </tr>
+      ))
+    }
+  </tbody>
+</table>

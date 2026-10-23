@@ -72,6 +72,7 @@ export const DOC_SECTIONS: DocSection[] = [
       { label: "CLI errors", slug: "reference/cli-errors" },
       { label: "Agent operating model", slug: "reference/agent-operating-model" },
       { label: "Agent capability changes", slug: "reference/agent-capability-changes" },
+      { label: "Terminal resume", slug: "reference/terminal-resume" },
       { label: "Keyboard shortcuts", slug: "reference/keyboard-shortcuts" },
       { label: "Troubleshooting", slug: "reference/troubleshooting" },
       { label: "Build from source", slug: "reference/build-from-source" },

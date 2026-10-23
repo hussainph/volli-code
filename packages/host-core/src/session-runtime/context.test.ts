@@ -208,6 +208,35 @@ it.each([undefined, true] as const)(
     expect(f.resolve).not.toHaveBeenCalled();
   },
 );
+it.each(["project", "ticket"] as const)(
+  "keeps legacy %s steering authority on backfill",
+  async (role) => {
+    const f = fixture();
+    f.getSession.mockResolvedValue({
+      session: {
+        id: "s",
+        projectId: "p",
+        ticketId: role === "ticket" ? "t" : null,
+        role,
+        parentSessionId: null,
+      },
+      modelSelection: { providerId: "scripted", modelId: "test", reasoningLevel: "off" },
+    });
+    f.resolve.mockReturnValue(["read", "codemode", "session.send", "session.delegate", "watch"]);
+    const expected =
+      role === "ticket"
+        ? ["read", "session.delegate", "watch"]
+        : ["read", "session.send", "session.delegate", "watch"];
+    expect((await f.context("s"))?.toolSurface).toEqual(expected);
+    const frozen = f.getOrRecordSessionInput.mock.calls[0]![0].input;
+    expect(frozen.tools).toEqual(expected);
+    f.listEvents.mockResolvedValue([inputEvent(frozen)]);
+    f.resolve.mockClear();
+    expect((await f.context("s"))?.toolSurface).toEqual(frozen.tools);
+    expect(f.resolve).not.toHaveBeenCalled();
+  },
+);
+
 it("backfills a legacy ask_user surface without opting into a new declaration", async () => {
   const f = fixture();
   f.resolve.mockReturnValue(["read", "ask_user", "codemode"]);

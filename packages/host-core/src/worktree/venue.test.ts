@@ -11,7 +11,7 @@ import { openTestDb, testProject, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { insertTicket, updateTicketFields } from "../db/tickets-repo";
 import { GitError } from "./git";
-import { scriptedGit } from "./scripted-git";
+import { scriptedReadOnlyGit } from "./scripted-git";
 import { readVenue, venueSnapshot } from "./venue";
 
 /** Real git in a temp repo, with an identity so commits do not need the host's. */
@@ -44,7 +44,7 @@ function tracked(code: string, path: string): string {
  * status/numstat payloads are whatever the case under test needs.
  */
 function scriptedVenueGit(opts: { branch?: string; status?: string; numstat?: string }) {
-  return scriptedGit((args) => {
+  return scriptedReadOnlyGit((args) => {
     if (args[0] === "branch") return `${opts.branch ?? "volli/VC-81-auto-title"}\n`;
     if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no such ref");
     if (args[0] === "merge-base") return "basesha\n";
@@ -164,7 +164,7 @@ describe("venueSnapshot", () => {
   });
 
   it("drops the diff when the base branch cannot be resolved at all", async () => {
-    const { gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "branch") return "volli/VC-9\n";
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no such ref");
       if (args[0] === "merge-base") throw new GitError("failed", "fatal: no merge base", args);
@@ -224,7 +224,7 @@ describe("venueSnapshot", () => {
   });
 
   it("surfaces git's own message rather than a silently empty venue", async () => {
-    const { gitAsync } = scriptedGit(() => {
+    const { gitAsync } = scriptedReadOnlyGit(() => {
       throw new GitError("failed", "fatal: not a git repository", ["status"]);
     });
 

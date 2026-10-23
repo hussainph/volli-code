@@ -36,12 +36,17 @@
  * A per-project policy needs a project, and this runs before the verb resolves
  * its own. Both rungs are therefore cheap by construction:
  *
- * - The CALLER's project comes from an explicit `--project`, the authenticated
- *   Session's own project, or a cwd inside a project root — and NEVER the
- *   expensive rung (indexing every Ticket's worktree path to match a cwd).
+ * - The CALLER's project is the authenticated Session's own project whenever
+ *   there is one: the token proved it, and no argument the caller chose can
+ *   swap it for another (VC-789). Only a caller with no Session — whose
+ *   selector is all it has to say where it stands — falls back to an explicit
+ *   `--project`, then a cwd inside a project root, and NEVER the expensive
+ *   rung (indexing every Ticket's worktree path to match a cwd).
  * - The TARGET's project comes from the display id's own prefix, which names a
- *   project directly. No Ticket is loaded and no table is scanned; the verb's
- *   own resolution does that afterwards, with the full ladder.
+ *   project directly, and from `--project` on a verb that declares it, since
+ *   that flag names where the verb's write lands. No Ticket is loaded and no
+ *   table is scanned; the verb's own resolution does that afterwards, with the
+ *   full ladder.
  *
  * When neither resolves, the built-in defaults apply. For the property this
  * ticket is about that is the fail-CLOSED direction and not a gap: the built-in
@@ -146,23 +151,50 @@ function personOnlyRefusal(request: AgentRequest, actor: DoorActor): AgentRespon
   );
 }
 
-/** The project the caller is acting FROM — the cheap rungs only. */
+/** The project an explicit `--project` names, by the verbs' own rules. */
+function selectedProjectId(projects: readonly Project[], request: AgentRequest): string | null {
+  const selector = request.args["project"];
+  if (typeof selector !== "string") return null;
+  const named = projects.find(
+    ({ name, path, ticketPrefix }) =>
+      name === selector || path === selector || ticketPrefix === selector,
+  );
+  return named?.id ?? null;
+}
+
+/**
+ * The project the caller is acting FROM — the cheap rungs only.
+ *
+ * An authenticated Session's project comes from its token and nothing else
+ * (VC-789): `--project` names a target, never the caller, so it cannot lift a
+ * Session out from under its own project's narrowing.
+ */
 function callerProjectId(
   projects: readonly Project[],
   envSession: EnvSessionIdentity | null,
   request: AgentRequest,
 ): string | null {
-  const selector = request.args["project"];
-  if (typeof selector === "string") {
-    const named = projects.find(
-      ({ name, path, ticketPrefix }) =>
-        name === selector || path === selector || ticketPrefix === selector,
-    );
-    if (named) return named.id;
-  }
   if (envSession) return envSession.projectId;
+  const selected = selectedProjectId(projects, request);
+  if (selected !== null) return selected;
   const byCwd = projects.filter((project) => pathContains(project.path, request.ctx.cwd));
   return byCwd.length === 1 ? byCwd[0]!.id : null;
+}
+
+/**
+ * The project `--project` names as where the write lands, for a verb that
+ * declares the flag (`ticket.create`, `label.merge`). Declared rather than
+ * inferred, like {@link VerbEntry.positionalSubject}: a verb that takes no
+ * `--project` writes nowhere it names, so a raw request adding one decides
+ * nothing about the target — and cannot shed the caller's policy either.
+ */
+function selectedTargetProjectId(
+  entry: VerbEntry,
+  projects: readonly Project[],
+  request: AgentRequest,
+): string | null {
+  if (!entry.options.some(({ name }) => name === "--project")) return null;
+  return selectedProjectId(projects, request);
 }
 
 /**
@@ -219,6 +251,7 @@ export function coordinationRefusal(
     [
       callerProjectId(projects, envSession, request),
       targetProjectId(entry, projects, request),
+      selectedTargetProjectId(entry, projects, request),
     ].filter((projectId): projectId is string => projectId !== null),
   );
   // No project resolved at all means the built-in defaults, which grant an

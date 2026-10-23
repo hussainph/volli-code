@@ -69,4 +69,49 @@ describe("command palette section priority", () => {
     );
     expect(headings).toEqual(["Tickets", "Sessions"]);
   });
+
+  // A guard on the library, not on the palette: cmdk 1.1.1 sorts rows within a
+  // group but never moves a group (its reorder looks groups up by an encoded
+  // id their `data-value` never holds). The palette therefore decides section
+  // order itself — `navigationLeads` — and this test is what fails, telling
+  // someone to revisit that, if a cmdk upgrade starts reordering groups.
+  it("keeps groups in their DOM order even when a later group scores higher", async () => {
+    await act(async () => {
+      root?.render(
+        <Command filter={commandPaletteFilter}>
+          <Command.Input value="Settings" onValueChange={() => {}} />
+          <Command.List>
+            <Command.Group heading="Tickets">
+              <Command.Item
+                value="ticket DRV-4 Review the settings copy Drive"
+                keywords={["DRV-4", "Review the settings copy", "Drive"]}
+              >
+                Review the settings copy
+              </Command.Item>
+            </Command.Group>
+            <Command.Group heading="Go to">
+              <Command.Item value="navigate Settings App-wide" keywords={["Settings"]}>
+                Settings
+              </Command.Item>
+            </Command.Group>
+          </Command.List>
+        </Command>,
+      );
+    });
+
+    const headings = Array.from(
+      container?.querySelectorAll<HTMLElement>("[cmdk-group-heading]") ?? [],
+      (heading) => heading.textContent,
+    );
+    expect(
+      commandPaletteFilter("navigate Settings App-wide", "Settings", ["Settings"]),
+    ).toBeGreaterThan(
+      commandPaletteFilter("ticket DRV-4 Review the settings copy Drive", "Settings", [
+        "DRV-4",
+        "Review the settings copy",
+        "Drive",
+      ]),
+    );
+    expect(headings).toEqual(["Tickets", "Go to"]);
+  });
 });
