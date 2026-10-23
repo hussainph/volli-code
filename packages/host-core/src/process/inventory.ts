@@ -39,7 +39,7 @@ const INVENTORY_MAX_BUFFER = 8 * 1024 * 1024;
 /**
  * Runs one read-only tool and answers with its stdout, or `null` when it could
  * not run. `ps` must report C-locale UTC start times; other tools inherit the
- * caller's environment (lsof's path encoding depends on its locale).
+ * caller's environment. {@link parseLsofCwd} decodes lsof names across locales.
  */
 export type InventoryRunner = (file: string, args: readonly string[]) => Promise<string | null>;
 
@@ -53,7 +53,7 @@ export const runInventoryTool: InventoryRunner = (file, args) =>
         timeout: INVENTORY_TIMEOUT_MS,
         maxBuffer: INVENTORY_MAX_BUFFER,
         encoding: "utf8",
-        // Pin only ps: changing lsof's locale can escape non-ASCII cwd paths.
+        // Pin only ps; lsof inherits the caller's locale and its names are decoded.
         ...(file === "ps" ? { env: { ...process.env, LC_ALL: "C", TZ: "UTC" } } : {}),
       },
       // stderr is dropped on purpose: `lsof` reports every process it may not
@@ -113,6 +113,52 @@ export function parsePsTable(stdout: string): ProcessFact[] {
     });
 }
 
+const LSOF_C_ESCAPES: Readonly<Record<string, number>> = {
+  "\\": 0x5c,
+  b: 0x08,
+  f: 0x0c,
+  r: 0x0d,
+  n: 0x0a,
+  t: 0x09,
+};
+
+/**
+ * Apple's lsof `safestrprt` / `safepup` quote backslashes as `\\`, C whitespace
+ * as `\[bfrnt]`, and non-printable bytes as `\xNN`. Decode bytes BEFORE UTF-8,
+ * not each escape as a character: C/missing locales escape every non-ASCII byte.
+ *
+ * Caret notation (`^@`…`^_` / `^?`) is ambiguous: literal carets are NOT quoted.
+ * Conservatively drop those spellings instead of choosing either cwd identity.
+ * A UTF-8 LC_CTYPE would not fix this ambiguity (or non-printable Unicode), and
+ * is overridden by an inherited LC_ALL. Keep lsof's inherited environment intact.
+ * Contract: https://github.com/apple-oss-distributions/lsof/blob/main/lsof/misc.c
+ */
+function decodeLsofName(value: string): string | null {
+  // Raw controls, lone surrogates, and replacements are not readable lsof output.
+  if (/[\p{Cc}\p{Cs}\uFFFD]|\^[@-_?]/u.test(value)) return null;
+  const chunks: Buffer[] = [];
+  let offset = 0;
+  for (const match of value.matchAll(/\\(x[0-9a-f]{2}|[\\bfrnt])|\\/g)) {
+    chunks.push(Buffer.from(value.slice(offset, match.index)));
+    const escaped = match[1];
+    if (escaped === undefined) return null;
+    const byte = escaped.startsWith("x")
+      ? Number.parseInt(escaped.slice(1), 16)
+      : LSOF_C_ESCAPES[escaped]!;
+    chunks.push(Buffer.from([byte]));
+    offset = match.index + match[0].length;
+  }
+  chunks.push(Buffer.from(value.slice(offset)));
+  try {
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
+    // A NUL cannot be part of a POSIX pathname, even if written as an escape.
+    return decoded.includes("\0") ? null : decoded;
+  } catch {
+    // Invalid UTF-8 must not become U+FFFD and accidentally name another cwd.
+    return null;
+  }
+}
+
 /**
  * `lsof -F` output into pid → working directory.
  *
@@ -123,6 +169,7 @@ export function parsePsTable(stdout: string): ProcessFact[] {
  */
 export function parseLsofCwd(stdout: string): Map<number, string> {
   const cwds = new Map<number, string>();
+  const seen = new Set<number>();
   let pid: number | null = null;
   for (const line of stdout.split("\n")) {
     const letter = line[0];
@@ -130,10 +177,14 @@ export function parseLsofCwd(stdout: string): Map<number, string> {
     if (letter === "p") {
       const parsed = Number(value);
       pid = Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-    } else if (letter === "n" && pid !== null && value.startsWith("/")) {
-      // First name wins: a process has one cwd, and a second `n` under the same
-      // `p` would be a file this selection was never supposed to include.
-      if (!cwds.has(pid)) cwds.set(pid, value);
+    } else if (letter === "n" && pid !== null) {
+      // First name wins, even if unreadable: a second `n` would be a file
+      // this selection was never supposed to include, not a fallback cwd.
+      if (!seen.has(pid)) {
+        seen.add(pid);
+        const cwd = value.startsWith("/") ? decodeLsofName(value) : null;
+        if (cwd !== null) cwds.set(pid, cwd);
+      }
     }
   }
   return cwds;

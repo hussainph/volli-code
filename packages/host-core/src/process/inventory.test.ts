@@ -1,4 +1,7 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { ledgerEntryMatches } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -104,8 +107,116 @@ describe("parseLsofCwd", () => {
     expect([...cwds]).toEqual([]);
   });
 
+  it.each([
+    ["/work/café/東京/😀", "/work/café/東京/😀"],
+    [String.raw`/work/caf\xc3\xa9`, "/work/café"],
+    [String.raw`/work/\xe6\x9d\xb1\xe4\xba\xac/\xf0\x9f\x98\x80`, "/work/東京/😀"],
+    [String.raw`/work/café/\xe6\x9d\xb1`, "/work/café/東"],
+    [String.raw`/work/\xe2\x80\x8b`, "/work/\u200b"],
+    [String.raw`/work/\xef\xbf\xbd`, "/work/\ufffd"],
+    [String.raw`/work/\x7f`, "/work/\x7f"],
+    [String.raw`/work/caf\\xc3\\xa9`, String.raw`/work/caf\xc3\xa9`],
+    [String.raw`/work/back\\slash`, String.raw`/work/back\slash`],
+    [String.raw`/work/end\\`, "/work/end\\"],
+    [String.raw`/work/\\n`, String.raw`/work/\n`],
+    [String.raw`/work/\b\f\r\n\t`, "/work/\b\f\r\n\t"],
+    ["/work/100%/^literal", "/work/100%/^literal"],
+  ])("reads lsof name %j exactly", (name, expected) => {
+    expect(parseLsofCwd(`p7\nn${name}\n`).get(7)).toBe(expected);
+  });
+
+  it.each([
+    String.raw`/work/unknown\q`,
+    "/work/trailing\\",
+    String.raw`/work/\x`,
+    String.raw`/work/\xc`,
+    String.raw`/work/\xgg`,
+    String.raw`/work/\xff`,
+    String.raw`/work/\xc3`,
+    String.raw`/work/\xc0\xaf`,
+    String.raw`/work/\xed\xa0\x80`,
+    String.raw`/work/\x00`,
+    "/work/raw\tcontrol",
+    "/work/raw\0nul",
+    "/work/invalid�utf8",
+    "/work/\ud800",
+    "/work/\udfff",
+    // lsof does not quote literal carets: each is also a control byte's spelling.
+    "/work/^A",
+    "/work/^@",
+    "/work/^?",
+    "/work/^_",
+    "/work/^\\\\",
+  ])("drops unreadable or ambiguous name %j without guessing", (name) => {
+    expect([...parseLsofCwd(`p7\nn${name}\np8\nn/readable\n`)]).toEqual([[8, "/readable"]]);
+  });
+
+  it.each(["/work/^A", "relative", ""])(
+    "does not replace unreadable first name %j with a later name under the same pid",
+    (name) => {
+      expect([...parseLsofCwd(`p7\nn${name}\nn/second\np8\nn/other`)]).toEqual([[8, "/other"]]);
+    },
+  );
+
   it("keeps the first name under a pid — a process has one working directory", () => {
     expect(parseLsofCwd(["p7", "n/first", "n/second"].join("\n")).get(7)).toBe("/first");
+  });
+});
+
+describe.skipIf(process.platform !== "darwin")("parseLsofCwd with real macOS lsof", () => {
+  it.each(["en_US.UTF-8", "C", "missing"])("preserves cwd identity with locale %s", (locale) => {
+    const tempRoot = fileURLToPath(new URL("../../../../.tmp/", import.meta.url));
+    mkdirSync(tempRoot, { recursive: true });
+    const root = mkdtempSync(join(tempRoot, "lsof-cwd-"));
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) {
+      if (key === "LANG" || key.startsWith("LC_")) delete env[key];
+    }
+    if (locale !== "missing") env["LC_ALL"] = locale;
+    // The child stands in each test directory and asks lsof about itself. No
+    // race waiting for a background process to chdir, and no survivor to reap.
+    const probe = `
+      const { execFileSync } = require('node:child_process');
+      process.stdout.write(execFileSync('/usr/sbin/lsof',
+        ['-a', '-p', String(process.pid), ...${JSON.stringify(LSOF_ARGS)}],
+        { timeout: 5000 }));
+    `;
+    try {
+      for (const name of [
+        "café-東京-😀",
+        String.raw`caf\xc3\xa9`,
+        String.raw`back\slash`,
+        String.raw`literal\n`,
+        "line\nbreak",
+        "control\u0001",
+        "control^A",
+      ]) {
+        const cwd = join(root, name);
+        mkdirSync(cwd);
+        const stdout = execFileSync(process.execPath, ["-e", probe], {
+          cwd,
+          env,
+          encoding: "utf8",
+          timeout: 10_000,
+        });
+        const cwds = [...parseLsofCwd(stdout).values()];
+        if (name.startsWith("control")) {
+          // A real control byte and its literal caret spelling collide.
+          expect(stdout).toContain("control^A\n");
+          expect(cwds).toEqual([]);
+        } else {
+          expect(cwds).toEqual([realpathSync(cwd)]);
+          if (name === "café-東京-😀") {
+            expect(stdout).toContain(locale === "en_US.UTF-8" ? name : String.raw`caf\xc3\xa9`);
+          }
+          if (name === String.raw`caf\xc3\xa9`) {
+            expect(stdout).toContain(String.raw`caf\\xc3\\xa9`);
+          }
+        }
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -124,6 +235,23 @@ describe("readProcessInventory", () => {
     expect(facts.map((fact) => [fact.pid, fact.cwd])).toEqual([
       [1, null],
       [4242, "/work/VC-341"],
+      [9001, null],
+    ]);
+  });
+
+  it("does not conflate escaped UTF-8, literal escapes, or an unreadable cwd", async () => {
+    const lsof = [
+      "p1",
+      String.raw`n/work/caf\xc3\xa9`,
+      "p4242",
+      String.raw`n/work/caf\\xc3\\xa9`,
+      "p9001",
+      "n/work/^A",
+    ].join("\n");
+    const facts = await readProcessInventory(async (file) => (file === "ps" ? PS_FIXTURE : lsof));
+    expect(facts.map((fact) => [fact.pid, fact.cwd])).toEqual([
+      [1, "/work/café"],
+      [4242, String.raw`/work/caf\xc3\xa9`],
       [9001, null],
     ]);
   });
