@@ -1,6 +1,6 @@
-# Multi-arch Node 24.21.0 bookworm-slim index (amd64 on CI/dogfood, arm64 locally).
+# Multi-arch Node 24.22.1 bookworm-slim index (amd64 on CI/dogfood, arm64 locally).
 # Update the tag AND digest with .nvmrc; the build refuses version drift.
-FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
+FROM node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
 
 # Development tools for git/worktrees and future Node-ABI native builds, plus
 # standalone Chromium's runtime libraries (not Electron or a browser binary).

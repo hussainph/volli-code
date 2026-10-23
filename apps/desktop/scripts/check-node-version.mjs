@@ -104,6 +104,13 @@ function selfTest() {
     ["24.12.9", "^24.13.0", false],
     ["22.16.0", "^24.13.0", false],
     ["25.0.0", "^24.13.0", false],
+    // October 2026 security floor: reject even the preceding patch.
+    ["24.22.0", "^24.22.1", false],
+    ["24.22.1", "^24.22.1", true],
+    ["v24.22.1", "^24.22.1", true],
+    ["24.22.2", "^24.22.1", true],
+    ["24.23.0", "^24.22.1", true],
+    ["25.0.0", "^24.22.1", false],
     // Pre-release / build suffixes compare on the numeric triple.
     ["24.13.0-nightly", "^24.13.0", true],
     // ^0.y.z pins the minor.

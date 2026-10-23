@@ -27,8 +27,8 @@ and come back to a finished Session whose branch was pushed.
   **fine-grained token** limited to that one repository with Contents: read and
   write.
 - **A model sign-in:** an Anthropic (or other provider) **API key**, or, for an
-  OAuth sign-in such as a Claude Pro/Max account, Node 22.19 or later with
-  `npx` and a browser on your Mac (step 5). Not a copy of your Mac's
+  OAuth sign-in such as a Claude Pro/Max account, Node 24.x (24.22.1 or newer)
+  with `npx` and a browser on your Mac (step 5). Not a copy of your Mac's
   `auth.json`.
 - **An email address for the agent's commits** (step 6), for example
   `you+volli-box@example.com`.
@@ -260,13 +260,13 @@ The top-level name is the provider id from `volli model list` (`anthropic`,
 **Or an OAuth sign-in made for the box.** Do not copy your Mac's
 `~/.pi/agent/auth.json`: both machines would then refresh one grant, and the
 first refresh on either logs the other out (your desktop included). Make a
-separate grant on your Mac with Pi's own login tool. It needs Node 22.19 or
-later and `npx` on the Mac (`node --version`; Homebrew's `brew install node`
-gives both), and it writes `auth.json` into the current folder, so use a new,
-empty one:
+separate grant on your Mac with Pi's own login tool. Use Node 24.x (24.22.1
+or newer) and `npx` on the Mac (`node --version`; the repo's `.nvmrc` pins a
+supported version). It writes `auth.json` into the current folder, so use a
+new, empty one:
 
 ```sh
-mac$ node --version                       # v22.19.0 or later
+mac$ node --version                       # v24.22.1 or newer 24.x
 mac$ mkdir -m 700 ~/box-login && cd ~/box-login
 mac$ (umask 077 && npx -y @earendil-works/pi-ai@1.0.0 login anthropic)
 ```
