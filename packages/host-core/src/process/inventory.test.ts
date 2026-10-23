@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { execFile } from "node:child_process";
+
+import { ledgerEntryMatches } from "@volli/shared";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   LSOF_ARGS,
@@ -10,6 +13,17 @@ import {
   runInventoryTool,
 } from "./inventory";
 
+vi.mock("node:child_process", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:child_process")>();
+  return { ...original, execFile: vi.fn(original.execFile) };
+});
+
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.unstubAllEnvs();
+});
+
+// `LC_ALL=C TZ=UTC` output: the five-word start time is always UTC.
 const PS_FIXTURE = [
   "    1     0     1  10672 ??       Tue Jul 21 01:41:03 2026     /sbin/launchd",
   " 4242  4200  4242 512000 s003     Wed Sep  9 12:03:41 2026     node dev-server.js --port 3000",
@@ -24,10 +38,21 @@ describe("parsePsLine", () => {
       pgid: 4242,
       rssBytes: 512_000 * 1024,
       tty: "s003",
-      startedAt: Date.parse("Wed Sep 9 12:03:41 2026"),
+      startedAt: Date.parse("2026-09-09T12:03:41Z"),
       command: "node dev-server.js --port 3000",
       cwd: null,
     });
+  });
+
+  it("matches the ledger for a spawn in the repeated fall-back hour", () => {
+    vi.stubEnv("TZ", "America/New_York");
+    // 01:30 EST is the second 01:30 on this date, at 06:30 UTC (not 05:30).
+    const startedAt = Date.parse("2026-11-01T01:30:00-05:00");
+    const fact = parsePsLine("4242 1 4242 100 ?? Sun Nov 1 06:30:00 2026 node server.js");
+
+    expect(fact?.startedAt).toBe(startedAt);
+    expect(fact).not.toBeNull();
+    expect(ledgerEntryMatches({ pid: 4242, startedAt }, fact!)).toBe(true);
   });
 
   it("reads `??` as no controlling terminal, which is what tells a daemon from a shell", () => {
@@ -115,6 +140,40 @@ describe("readProcessInventory", () => {
 });
 
 describe("runInventoryTool", () => {
+  it.runIf(process.platform === "darwin" || process.platform === "linux")(
+    "passes C locale and UTC to real ps despite the caller's locale and zone",
+    async () => {
+      vi.stubEnv("LANG", "de_DE.UTF-8");
+      vi.stubEnv("LC_ALL", "de_DE.UTF-8");
+      vi.stubEnv("LC_TIME", "ja_JP.UTF-8");
+      vi.stubEnv("TZ", "America/New_York");
+      const args = ["-p", String(process.pid), "-o", PS_ARGS[1]];
+      const expectedStart = Date.now() - process.uptime() * 1000;
+
+      const stdout = await runInventoryTool("ps", args);
+
+      expect(execFile).toHaveBeenCalledWith(
+        "ps",
+        args,
+        expect.objectContaining({
+          env: expect.objectContaining({
+            LANG: "de_DE.UTF-8",
+            LC_TIME: "ja_JP.UTF-8",
+            LC_ALL: "C",
+            TZ: "UTC",
+          }),
+        }),
+        expect.any(Function),
+      );
+      expect(stdout).not.toBeNull();
+      const facts = parsePsTable(stdout!);
+      expect(facts).toHaveLength(1);
+      expect(facts[0]!.pid).toBe(process.pid);
+      // Compare with Node's uptime, allowing for ps's one-second resolution.
+      expect(Math.abs(facts[0]!.startedAt - expectedStart)).toBeLessThan(5_000);
+    },
+  );
+
   it("runs a real tool and hands back its output", async () => {
     await expect(runInventoryTool("echo", ["hello"])).resolves.toBe("hello\n");
   });

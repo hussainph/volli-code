@@ -45,7 +45,13 @@ export const runInventoryTool: InventoryRunner = (file, args) =>
     execFile(
       file,
       [...args],
-      { timeout: INVENTORY_TIMEOUT_MS, maxBuffer: INVENTORY_MAX_BUFFER, encoding: "utf8" },
+      {
+        timeout: INVENTORY_TIMEOUT_MS,
+        maxBuffer: INVENTORY_MAX_BUFFER,
+        encoding: "utf8",
+        // lstart must have English fields and an unambiguous UTC wall clock.
+        env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+      },
       // stderr is dropped on purpose: `lsof` reports every process it may not
       // inspect there, and a permission it never had is not a finding.
       (error, stdout) => resolve(error !== null && stdout.length === 0 ? null : stdout),
@@ -62,8 +68,9 @@ export const LSOF_ARGS = ["-d", "cwd", "-F", "pn", "-w"] as const;
  * One `ps` row into a fact, or `null` when it cannot be read as one.
  *
  * The shape is fixed by {@link PS_ARGS}: five leading columns, then `lstart`'s
- * five words (`Tue Jul 21 01:41:03 2026`), then the command — which is the only
- * field allowed to contain spaces, and so is everything that is left.
+ * five words (`Tue Jul 21 01:41:03 2026`, in C locale and UTC as requested by
+ * the runner), then the command — which is the only field allowed to contain
+ * spaces, and so is everything that is left.
  */
 export function parsePsLine(line: string): ProcessFact | null {
   const words = line.trim().split(/\s+/);
@@ -71,7 +78,7 @@ export function parsePsLine(line: string): ProcessFact | null {
   const [pid, ppid, pgid, rssKib, tty, ...rest] = words;
   const numbers = [pid, ppid, pgid, rssKib].map((word) => Number(word));
   if (numbers.some((value) => !Number.isInteger(value) || value < 0)) return null;
-  const startedAt = Date.parse(rest.slice(0, 5).join(" "));
+  const startedAt = Date.parse(`${rest.slice(0, 5).join(" ")} UTC`);
   if (!Number.isFinite(startedAt)) return null;
   // Whatever is left after the date is the command, and there is always
   // something left: a line with fewer than eleven words was refused above.
