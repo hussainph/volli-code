@@ -139,7 +139,6 @@ branch-summary execution. `Agent`/agent loop are **not** vendored.
    counted in the file's bytes (less a leading BOM), which differs from
    decoding everything only for invalid UTF-8. A negative `limit` now selects
    no lines where `Array.prototype.slice` counted from the end.
-
 8. **Bounded shell spills (VC-820):** `env/nodejs.ts` uses Volli's owned
    `ShellSpillBudget` before queueing/writing. Capture metadata carries an optional
    `spillTruncatedAt` byte cap through updates and completion; `tools/bash.ts`

@@ -68,7 +68,7 @@ describe("foreground bash capture", () => {
     "caps a real 200 MiB execute spill but keeps the final tail (%s)",
     async (path) => {
       const env = await piExecutionEnv(await workspace(), {
-        ...(path === "foreground" ? { foregroundExecutor: childExecutor() } : {}),
+        foregroundExecutor: path === "foreground" ? childExecutor() : undefined,
       });
       const [bash] = createSessionTools({ tools: { tools: ["execute"] } }, env);
       let spillPath: string;

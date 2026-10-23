@@ -16,6 +16,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import {
   applyShellOutputUpdate,
@@ -999,17 +1000,16 @@ describe("ScopedExecutionEnv", () => {
 
     const chunk = "a".repeat(1024 * 1024);
     const chunks = ShellSpillBudget.maxBytes / chunk.length;
-    const settled = () => new Promise<void>((resolve) => setImmediate(resolve));
     for (let index = 0; index < chunks - 1; index += 1) {
       running.stdout.write(chunk);
-      await settled();
+      await nextTurn();
     }
     // Two bytes short of the cap, so the next write is cut through the middle
     // of a character rather than between two of them.
     running.stdout.write("a".repeat(chunk.length - 2));
-    await settled();
+    await nextTurn();
     running.stdout.write("😀😀");
-    await settled();
+    await nextTurn();
     // Past a full spool: absorbed, counted, and never appended.
     running.stdout.write("tail\n");
     running.emit("close", 0);
