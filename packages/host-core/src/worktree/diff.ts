@@ -4,23 +4,24 @@
  * whole delta from its base) and "what the agent is doing right now" (the
  * uncommitted tree). These are different questions, hence two modes:
  *
- *  - `working-tree`: `git diff --numstat HEAD` (uncommitted TRACKED changes)
+ *  - `working-tree`: `git diff --numstat -z -M HEAD` (uncommitted TRACKED changes)
  *    plus untracked files — numstat NEVER lists an untracked file, so we scoop
- *    them from `git status --porcelain` (`??` lines) and append them with null
+ *    them from `git ls-files -o --exclude-standard -z` and append them with null
  *    counts. Without this the rail would under-report a brand-new file.
- *  - `merge-base`: `git diff --numstat <base>...HEAD` — the three-dot range is
+ *  - `merge-base`: `git diff --numstat -z -M <base>...HEAD` — the three-dot range is
  *    the merge-base diff (what the PR shows), NOT `<base>..HEAD`.
  *
  * Two numstat subtleties handled: BINARY files print `-\t-` (represented as null
  * counts, so a `0` never masquerades as "unchanged" and binaries never skew the
- * line totals), and RENAMES print the path with `=>` markers (`old => new` or
- * `pre/{old => new}/suf`) — we keep the NEW path, the thing that exists now.
+ * line totals), and RENAMES carry separate old/new NUL tokens — we keep the
+ * NEW path, the thing that exists now.
  */
 import { DiffFileStat, DiffStat } from "@volli/shared";
 import type { WorktreeDiffMode } from "@volli/shared";
 
 import { resolveComparisonRefAsync } from "./comparison-ref";
 import { stderrOf } from "./git";
+import { parseNumstatTokens, splitNul } from "./git-output";
 import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";
 
 export interface DiffStatInput {
@@ -29,65 +30,14 @@ export interface DiffStatInput {
   baseBranch: string | null;
 }
 
-/**
- * Resolves the displayed path from a numstat path field, collapsing git's rename
- * markers to the NEW path. `pre/{old => new}/suf` → `pre/new/suf`; a whole-path
- * `old => new` (no braces) → `new`; a plain path is returned unchanged.
- */
-function resolveNumstatPath(raw: string): string {
-  if (raw.includes("{")) {
-    // Non-greedy so multiple `{…}` segments each collapse to their new side.
-    return raw.replace(/\{.*? => (.*?)\}/g, "$1");
-  }
-  const arrow = raw.indexOf(" => ");
-  return arrow === -1 ? raw : raw.slice(arrow + " => ".length);
-}
-
-/** `"-"` (binary) → null; otherwise the parsed integer (NaN → null, defensive). */
-function parseCount(field: string): number | null {
-  if (field === "-") return null;
-  const n = Number.parseInt(field, 10);
-  return Number.isInteger(n) ? n : null;
-}
-
-/**
- * Parses `git diff --numstat` output into per-file stats (untracked=false).
- *
- * Exported for `sync.ts`, which measures what a merge moved with the same
- * `--numstat` read over a different range. One parser rather than two: the
- * binary and rename subtleties above are exactly the kind of detail a second
- * copy gets subtly wrong, and a sync report that disagrees with a diff report
- * about the same file is worse than either alone.
- */
+/** Adapts the shared `git diff --numstat -z` parser to the worktree report schema. */
 export function parseNumstat(out: string): DiffFileStat[] {
-  const files: DiffFileStat[] = [];
-  for (const line of out.split("\n")) {
-    if (line.trim().length === 0) continue;
-    const match = /^(\S+)\t(\S+)\t(.*)$/.exec(line);
-    if (!match) continue;
-    files.push({
-      insertions: parseCount(match[1]!),
-      deletions: parseCount(match[2]!),
-      path: resolveNumstatPath(match[3]!),
-      untracked: false,
-    });
-  }
-  return files;
-}
-
-/** Pulls `??` (untracked) paths out of `git status --porcelain`, as null-count files. */
-function parseUntracked(out: string): DiffFileStat[] {
-  const files: DiffFileStat[] = [];
-  for (const line of out.split("\n")) {
-    if (!line.startsWith("?? ")) continue;
-    files.push({
-      path: line.slice("?? ".length),
-      insertions: null,
-      deletions: null,
-      untracked: true,
-    });
-  }
-  return files;
+  return parseNumstatTokens(splitNul(out)).map(({ path, insertions, deletions }) => ({
+    path,
+    insertions,
+    deletions,
+    untracked: false,
+  }));
 }
 
 /** Sums the non-null (text) insertions/deletions into repo-wide totals. */
@@ -122,12 +72,19 @@ export async function diffStat(
         : null;
     const numstatArgs =
       mode === "working-tree"
-        ? ["diff", "--numstat", "HEAD"]
-        : ["diff", "--numstat", `${base}...HEAD`];
+        ? ["diff", "--numstat", "-z", "-M", "HEAD"]
+        : ["diff", "--numstat", "-z", "-M", `${base}...HEAD`];
     const tracked = parseNumstat(await git(numstatArgs, input.worktreePath));
     const untracked =
       mode === "working-tree"
-        ? parseUntracked(await git(["status", "--porcelain"], input.worktreePath))
+        ? splitNul(
+            await git(["ls-files", "-o", "--exclude-standard", "-z"], input.worktreePath),
+          ).map((path): DiffFileStat => ({
+            path,
+            insertions: null,
+            deletions: null,
+            untracked: true,
+          }))
         : [];
     const files = [...tracked, ...untracked];
     return ok({

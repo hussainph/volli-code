@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vite-plus/test";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { GitError } from "./git";
+import { GitError, runGitCapturingAsync } from "./git";
 import { scriptedGit } from "./scripted-git";
 import { previewSyncWithBase, syncWithBase } from "./sync";
 import type { RunGitAsync } from "./types";
@@ -17,12 +20,18 @@ function ticketBranchGit(git: RunGitAsync): RunGitAsync {
     args[0] === "branch" && args[1] === "--show-current" ? `${TICKET_BRANCH}\n` : git(args, cwd);
 }
 
+/** Git's `-z` reads terminate every field with NUL, so fixtures must too. */
+function nulDelimited(records: readonly string[]): string {
+  return records.map((record) => `${record}\0`).join("");
+}
+
 /**
  * A scripted repo where HEAD moves when the merge runs, so the "what moved"
  * report is measured rather than asserted into existence.
  */
-function mergingRepo(options: { conflicts?: readonly string[] } = {}) {
+function mergingRepo(options: { conflicts?: readonly string[]; numstat?: readonly string[] } = {}) {
   let head = "aaaaaaa";
+  const numstat = options.numstat ?? ["3\t1\tsrc/a.ts", "10\t0\tsrc/b.ts"];
   return scriptedGit((args) => {
     if (args[0] === "rev-parse" && args[1] === "--verify" && args[3] === "MERGE_HEAD") {
       // No merge in flight until one conflicts.
@@ -40,9 +49,9 @@ function mergingRepo(options: { conflicts?: readonly string[] } = {}) {
       return "Updating aaaaaaa..ddddddd\n";
     }
     if (args[0] === "diff" && args.includes("--diff-filter=U")) {
-      return (options.conflicts ?? []).join("\n");
+      return nulDelimited(options.conflicts ?? []);
     }
-    if (args[0] === "diff") return "3\t1\tsrc/a.ts\n10\t0\tsrc/b.ts\n";
+    if (args[0] === "diff") return nulDelimited(numstat);
     if (args[0] === "rev-list") return "2\n";
     return "";
   });
@@ -146,6 +155,15 @@ describe("syncWithBase — a clean merge", () => {
       "--no-edit",
       "origin/main",
     ]);
+    // `-z` keeps paths literal and separates both rename paths; `-M` enables
+    // rename detection independently of the user's git configuration.
+    expect(calls.find((call) => call.args[0] === "diff")?.args).toEqual([
+      "diff",
+      "--numstat",
+      "-z",
+      "-M",
+      "aaaaaaa..ddddddd",
+    ]);
   });
 
   it("reports an unmoved HEAD as already up to date rather than as a merge", async () => {
@@ -224,18 +242,50 @@ describe("syncWithBase — a clean merge", () => {
   });
 });
 
-describe("syncWithBase — a conflicted merge", () => {
-  it("reports the conflicted paths and leaves the merge in flight", async () => {
-    const { gitAsync, calls } = mergingRepo({
-      conflicts: ["packages/shared/src/x.ts", "apps/desktop/src/y.tsx"],
+describe("syncWithBase — NUL-delimited movement", () => {
+  it("keeps a rename destination and counts it against the new path", async () => {
+    // `--numstat -z` prints a rename as an empty path field followed by the old
+    // and new paths as separate tokens. Reporting the old half would name a file
+    // the merge removed.
+    const { gitAsync } = mergingRepo({
+      numstat: ["2\t2\t", "src/old name.ts", "src/new café.ts", "1\t0\tnotes/my plan.md"],
     });
 
     const result = await syncWithBase(ticketBranchGit(gitAsync), SYNC_INPUT, "merge");
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    expect(result.value.diff).toEqual({
+      files: [
+        { path: "src/new café.ts", insertions: 2, deletions: 2, untracked: false },
+        { path: "notes/my plan.md", insertions: 1, deletions: 0, untracked: false },
+      ],
+      insertions: 3,
+      deletions: 2,
+    });
+  });
+});
+
+describe("syncWithBase — a conflicted merge", () => {
+  it("reports the conflicted paths literally and leaves the merge in flight", async () => {
+    // Exactly the paths a line-splitting parse mangles: a space, a non-ASCII
+    // name, and a newline must each come back as the string an agent can hand
+    // to `read`.
+    const conflicts = ["notes/my plan.md", "src/café.ts", "src/line\nbreak.ts"];
+    const { gitAsync, calls } = mergingRepo({ conflicts });
+
+    const result = await syncWithBase(ticketBranchGit(gitAsync), SYNC_INPUT, "merge");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
     expect(result.value.status).toBe("conflicted");
-    expect(result.value.conflicts).toEqual(["packages/shared/src/x.ts", "apps/desktop/src/y.tsx"]);
+    expect(result.value.conflicts).toEqual(conflicts);
+    expect(calls.find((call) => call.args.includes("--diff-filter=U"))?.args).toEqual([
+      "diff",
+      "--name-only",
+      "-z",
+      "--diff-filter=U",
+    ]);
     // Nothing tidies up after the conflict: the worktree stays conflicted for
     // the session to resolve, which is the whole contract.
     expect(calls.some((call) => call.args.includes("--abort"))).toBe(false);
@@ -401,5 +451,125 @@ describe("syncWithBase — it never blocks", () => {
     if (result.ok) return;
     expect(result.error).toContain("No base branch");
     expect(calls).toEqual([]);
+  });
+});
+
+// Real-git regressions: a scripted runner cannot show that git C-quotes these
+// paths when a read lacks `-z`, so it cannot prove the report is one an agent
+// can open. Every fixture pins quoting, hooks and signing and runs under an
+// empty global config, so no machine setting decides the outcome (VC-791).
+describe("syncWithBase — real git paths", () => {
+  let root: string;
+  let dir: string;
+
+  const git = (args: readonly string[], cwd?: string): string =>
+    execFileSync("git", [...args], {
+      cwd: cwd ?? dir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  const commit = (message: string): void => {
+    git(["add", "-A"]);
+    git(["commit", "--quiet", "-m", message]);
+  };
+
+  beforeEach(() => {
+    root = realpathSync(mkdtempSync(join(process.cwd(), ".volli-sync-test-")));
+    dir = join(root, "repo");
+    mkdirSync(dir);
+    const config = join(root, "global.config");
+    writeFileSync(config, "");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", config);
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    git(["init", "--quiet", "--initial-branch=main"]);
+    git(["config", "user.name", "Volli Test"]);
+    git(["config", "user.email", "test@volli.local"]);
+    git(["config", "commit.gpgSign", "false"]);
+    git(["config", "core.hooksPath", "/dev/null"]);
+    // Git's default quoting stays ON — `-z` is the only reason paths are literal.
+    git(["config", "core.quotePath", "true"]);
+    git(["config", "core.autocrlf", "false"]);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("reports spaces, a non-ASCII name and a rename destination literally", async () => {
+    mkdirSync(join(dir, "src"));
+    writeFileSync(join(dir, "src/my plan.md"), "one\ntwo\n");
+    writeFileSync(join(dir, "src/café.ts"), "before\n");
+    writeFileSync(join(dir, "src/old name.ts"), "rename body\n");
+    commit("base");
+
+    git(["checkout", "--quiet", "-b", "ticket"]);
+    writeFileSync(join(dir, "ticket.txt"), "ticket work\n");
+    commit("ticket work");
+
+    git(["checkout", "--quiet", "main"]);
+    writeFileSync(join(dir, "src/my plan.md"), "one\ntwo\nthree\n");
+    writeFileSync(join(dir, "src/café.ts"), "after\n");
+    renameSync(join(dir, "src/old name.ts"), join(dir, "src/new café.ts"));
+    commit("main moves");
+    const ticketTip = git(["rev-parse", "ticket"]).trim();
+
+    git(["checkout", "--quiet", "ticket"]);
+    const result = await syncWithBase(
+      runGitCapturingAsync,
+      { worktreePath: dir, branch: "ticket", baseBranch: "main" },
+      "merge",
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    expect(result.value.status).toBe("merged");
+    expect(result.value.mergedRef).toBe("main");
+    // The merge commit itself plus the base commit it brought in.
+    expect(result.value.commits).toBe(2);
+    const diff = result.value.diff;
+    expect(diff).not.toBeNull();
+    expect(diff?.files.map((file) => file.path).toSorted()).toEqual([
+      "src/café.ts",
+      "src/my plan.md",
+      "src/new café.ts",
+    ]);
+    expect(diff).toMatchObject({ insertions: 2, deletions: 1 });
+    // The premise: the same range without `-z` C-quotes the café path, which is
+    // what the old parse handed back as a path nobody could open.
+    expect(git(["diff", "--numstat", `${ticketTip}..HEAD`])).toContain("\\303\\251");
+  });
+
+  it("lists a conflict on src/café.ts literally and leaves the merge in flight", async () => {
+    mkdirSync(join(dir, "src"));
+    mkdirSync(join(dir, "notes"));
+    const conflicted = ["notes/my plan.md", "src/café.ts", "src/line\nbreak.ts"];
+    for (const path of conflicted) writeFileSync(join(dir, path), "base\n");
+    commit("base");
+
+    git(["checkout", "--quiet", "-b", "ticket"]);
+    for (const path of conflicted) writeFileSync(join(dir, path), "ticket side\n");
+    commit("ticket side");
+
+    git(["checkout", "--quiet", "main"]);
+    for (const path of conflicted) writeFileSync(join(dir, path), "main side\n");
+    commit("main side");
+
+    git(["checkout", "--quiet", "ticket"]);
+    const result = await syncWithBase(
+      runGitCapturingAsync,
+      { worktreePath: dir, branch: "ticket", baseBranch: "main" },
+      "merge",
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    expect(result.value.status).toBe("conflicted");
+    expect(result.value.conflicts.toSorted()).toEqual(conflicted.toSorted());
+    expect(result.value.diff).toEqual({ files: [], insertions: 0, deletions: 0 });
+    // The merge is left in flight on purpose: the session resolving these paths
+    // owns the conflicted checkout.
+    expect(git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]).trim()).toMatch(/^[0-9a-f]+$/);
+    // The premise: without `-z` the same read C-quotes the non-ASCII name.
+    expect(git(["diff", "--name-only", "--diff-filter=U"])).toContain("\\303\\251");
   });
 });
