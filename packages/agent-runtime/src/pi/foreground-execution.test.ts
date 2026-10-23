@@ -85,9 +85,9 @@ describe("foreground bash capture", () => {
           truncation: { maxBytes: 50 * 1024, maxLines: 2000, truncated: true },
         });
         expect(text(result).length).toBeLessThan(52_000);
-        expect((await stat(spillPath)).size).toBe(ShellSpillBudget.maxBytes);
         const file = await open(spillPath, "r");
         try {
+          expect((await file.stat()).size).toBe(ShellSpillBudget.maxBytes);
           const { buffer } = await file.read(Buffer.alloc(11), 0, 11, 0);
           expect(buffer.toString()).toBe("first-byte\n");
         } finally {
