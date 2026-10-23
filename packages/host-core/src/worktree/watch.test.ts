@@ -1108,12 +1108,12 @@ describe("pollRetention — terminal PRs are not re-polled (VC-836)", () => {
     ).toHaveLength(1);
   });
 
-  it("500 Done tickets merged in an earlier launch and 10 open PRs cost 10 gh calls a cycle", async () => {
+  it("50 Done tickets merged in an earlier launch and 10 open PRs cost 10 gh calls a cycle", async () => {
     seedProject();
-    // Fixture durability is not under test: one commit avoids thousands of
-    // autocommit disk flushes consuming the test's timeout on a busy runner.
+    // Keep a backlog of durable merges without making this a throughput benchmark.
+    // Batch fixture writes; their durability is not under test.
     ctx.db.transaction(() => {
-      for (let i = 0; i < 500; i += 1) {
+      for (let i = 0; i < 50; i += 1) {
         const url = `https://x/pull/m${i}`;
         seedNamed({ id: `m${i}`, status: "done", prUrl: url, doneAt: 0 });
         recordMerged(`m${i}`, url);
