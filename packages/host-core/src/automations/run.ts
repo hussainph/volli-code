@@ -28,7 +28,6 @@ import {
   type AutomationRunRefusalCode,
   type AutomationRunTarget,
   type ChatSessionRecord,
-  type CommandReceipt,
   type PromptResource,
   type PromptTemplate,
   type SkillReference,
@@ -36,6 +35,7 @@ import {
 } from "@volli/shared";
 
 import type { AutomationEngine, AutomationRunDelivery, AutomationRunPlan } from "./engine";
+import { attachRefusal } from "../session-runtime/attach-refusal";
 import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import {
   StructuredSessionsError,
@@ -98,15 +98,27 @@ export interface AutomationRunnerPorts {
   /** The frozen Run projection that owns a pending delivery's launch title. */
   findRun(runId: string): AutomationRun | undefined;
   findTicket(ticketId: string): AutomationRunTicket | undefined;
-  /** Whether a Project scope names a project this host actually has. */
+  /** Whether a Project scope names a project this host has on its rail. */
   findProject(projectId: string): boolean;
+  /**
+   * Whether the project was removed (VC-822): detached, its Automations kept.
+   * A Run there is refused as `PROJECT_REMOVED` rather than as not found, so
+   * the skip a schedule records says what happened. Absent: never removed.
+   */
+  projectRemoved?(projectId: string): boolean;
   listRunsForTicket(ticketId: string): readonly AutomationRun[];
   /**
-   * One Automation's Runs in one project — the single-flight subject for a Run
-   * that names no Ticket. A schedule cannot ask "is this Ticket busy", so it
-   * asks whether an earlier Run of itself is still working here.
+   * One Automation's Runs in one project that could still be live — the
+   * single-flight subject for a Run that names no Ticket. A schedule cannot ask
+   * "is this Ticket busy", so it asks whether an earlier Run of itself is still
+   * working here.
+   *
+   * Only the Runs whose durable Session facts leave working or waiting
+   * possible (VC-816): a long-lived schedule has thousands of Runs, and every
+   * one handed here costs a projection read before this Run can start. The
+   * guard still reads each Run returned, and that read decides.
    */
-  listProjectRunsForAutomation(input: {
+  listPossiblyLiveProjectRunsForAutomation(input: {
     automationId: string;
     projectId: string;
   }): readonly AutomationRun[];
@@ -254,22 +266,11 @@ export interface AutomationRunner {
 }
 
 /** One refusal shape, so the IPC layer never has to parse a bare string. */
+/** Read after "Skipped — " in a schedule's history, so it starts as a sentence. */
+const PROJECT_REMOVED_REFUSAL = "The project was removed from Volli.";
+
 function refuse(code: AutomationRunRefusalCode, error: string): AutomationRunRefusal {
   return { ok: false, code, error };
-}
-
-/**
- * Why an attach was not ready, in words, from the receipt it answered with.
- *
- * A rejected attach carries the diagnosis a person needs — an unpreparable
- * worktree names the path and git's reason — and that sentence is the reason
- * this Run has no first turn. The other statuses have no such sentence, so they
- * are named as what they are rather than dressed up as one.
- */
-function attachRefusal(receipt: CommandReceipt | null): string {
-  if (receipt === null) return "the attach reported no receipt";
-  if (receipt.status === "rejected") return receipt.detail ?? receipt.code;
-  return `the attach is ${receipt.status}`;
 }
 
 interface InstructionDeliveryFailure {
@@ -353,7 +354,9 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
     // Never inspect only the newest Run. An older Session can be resumed after
     // a newer Run has gone idle; every Run-owned Session must be quiet before a
     // Ticket gets another Run. An unreadable projection fails closed rather
-    // than accidentally admitting a second live worker.
+    // than accidentally admitting a second live worker. A schedule's list
+    // arrives already narrowed to the Runs whose Sessions could still be live
+    // (VC-816), so a Run it omits is never read and cannot refuse here.
     for (const run of runs) {
       // "stopped" admits a new Run exactly as "idle" does: a supervisor ending
       // an earlier Run's work is the opposite of that work still being live —
@@ -671,6 +674,9 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
       const ticket = deps.findTicket(scope.ticketId);
       if (ticket === undefined)
         return refuse("TICKET_NOT_FOUND", "The requested Ticket was not found.");
+      if (deps.projectRemoved?.(ticket.projectId) === true) {
+        return refuse("PROJECT_REMOVED", PROJECT_REMOVED_REFUSAL);
+      }
       if (
         automation !== null &&
         automation.projectId !== null &&
@@ -691,6 +697,9 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
         }),
         priorRuns: deps.listRunsForTicket(ticket.id),
       };
+    }
+    if (deps.projectRemoved?.(scope.projectId) === true) {
+      return refuse("PROJECT_REMOVED", PROJECT_REMOVED_REFUSAL);
     }
     if (!deps.findProject(scope.projectId)) {
       return refuse("PROJECT_NOT_FOUND", "The requested project was not found.");
@@ -716,7 +725,7 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
       priorRuns:
         automation === null
           ? []
-          : deps.listProjectRunsForAutomation({
+          : deps.listPossiblyLiveProjectRunsForAutomation({
               automationId: automation.id,
               projectId: scope.projectId,
             }),

@@ -148,6 +148,8 @@ export function CommitField({
           }}
           onBlur={() => void commit()}
           onKeyDown={(event) => {
+            // Never mid-word: an IME's Enter and Escape are its own.
+            if (event.nativeEvent.isComposing) return;
             if (event.key === "Enter") {
               event.preventDefault();
               event.currentTarget.blur();

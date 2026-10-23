@@ -494,6 +494,12 @@ export interface VerbEntry {
   /** Rendered after `<id>` for positionals the option table cannot express. */
   readonly extraUsage?: string;
   readonly options: readonly VerbOption[];
+  /**
+   * The recovery a RESPONSE_TOO_LARGE refusal prints for this verb, when its
+   * own filters say more than the code's generic guidance (VC-824). Absent
+   * means the generic guidance.
+   */
+  readonly overflowNext?: string;
 }
 
 /**
@@ -1014,7 +1020,16 @@ export const VERB_REGISTRY = [
       { name: "--label", kind: "value", placeholder: "<name>", help: "Filter by label." },
       { name: "--project", kind: "value", placeholder: "<p>", help: "Target project." },
       { name: "--limit", kind: "value", placeholder: "<n>", help: "Cap the number of rows." },
+      {
+        name: "--no-body",
+        kind: "flag",
+        help: "Omit ticket bodies from --json rows; `ticket show` reads one.",
+      },
     ],
+    // Filters first: they shrink the answer from any app build. An older app
+    // ignores --no-body and sends the bodies anyway.
+    overflowNext:
+      "Narrow it with `--status <column>` or `--limit <n>`. With a matching app build, `--no-body` also drops bodies from `--json`; `volli ticket show <id>` reads one.",
   },
   {
     key: "ticket.show",
@@ -2664,7 +2679,8 @@ export const VERB_REGISTRY = [
     summary: "Steer a message into another running agent session.",
     example: 'volli session send a1b2c3d4 -m "Use the thinking-orbs library"',
     notes: [
-      "Runs as a named tool in the Board Session's tool bundle; the shell never executes it.",
+      "Runs as a named tool in Board and new Ticket Session tool bundles; the shell never executes it.",
+      "A Board Session may steer any Session in its project; a Ticket Session only the subagents it delegated. A refusal names the rule.",
       "Delivers into the target's live executor — mid-turn it steers the model now, between turns it opens one.",
       "The message arrives marked as supervisor steering from this Session, never as the target's own user.",
     ],
@@ -2681,7 +2697,7 @@ export const VERB_REGISTRY = [
         "The steering message appears in the target Session's transcript, marked with the sending Session.",
       ],
       nonEffects: [
-        "It does not wait for the target's turn to finish; the calling Session watches the target and is told when that turn ends, through a later notice.",
+        "It does not wait for the target's turn to finish; an active delegate reports through its delegation answer, and other targets through a later watch notice.",
         "No Ticket moves, no Session stops, and no new Session starts.",
       ],
     },
@@ -2689,9 +2705,10 @@ export const VERB_REGISTRY = [
       name: "session_send",
       description: [
         "Steer a message into another agent Session in this project: mid-turn the model reads it now, between turns it opens a new turn.",
-        "Use it to redirect running work — a correction, a constraint, an owner decision — instead of stopping the Session and starting over.",
+        "Use it to redirect running work, including a subagent you delegated — a correction, a constraint, an owner decision — instead of stopping the Session and starting over.",
+        "A Board Session may steer any Session in its project; a Ticket Session only the subagents it delegated. A refusal names the rule.",
         "The message is delivered marked as steering from this Session; the receipt says whether it opened or joined a turn.",
-        "It does not wait for a reply. This Session watches the target: a notice from Volli arrives here when the turn your message opened or joined ends, when it signals done or blocked, or if it is stopped.",
+        "It does not wait for a reply. A subagent still working on your delegation reports back through its delegation answer, without a separate watch. For other targets this Session watches the turn your message opened or joined, its done or blocked signal, and its stop; a notice from Volli arrives here.",
         "Volli binds the calling Session and project itself: name the target session and nothing about yourself.",
       ].join(" "),
       input: [
@@ -2749,6 +2766,7 @@ export const VERB_REGISTRY = [
       "Runs as a named tool in the project and ticket Role bundles; the shell never executes it.",
       "Returns as soon as the subagent starts. When its first turn completes, a notice from Volli arrives in this Session carrying its final message; `volli session answer <handle>` prints it again in full.",
       "The subagent shares this Session's working directory, holds every coding tool, and cannot ask a person or start, stop, steer or delegate to other Sessions.",
+      "If it drifts while it is still working and you hold session_send, steer it with session_send; it reads the message mid-turn and the delegation still answers exactly once.",
     ],
     effects: {
       durableWrites: [
@@ -2789,6 +2807,7 @@ export const VERB_REGISTRY = [
         "A subagent works in its own context, not yours, and only its answer comes back here. Use it for bounded work when the raw output would crowd this conversation and you will not need it again — a broad codebase search, log or test triage, a diff review, web research — for independent checks to run in parallel, or for a second-opinion review; a cheaper `tier` often fits.",
         "Stay inline instead for a specific file read, a known-symbol lookup, a small edit, or work that needs what you have already worked out.",
         "Hand one well-defined task to a new subagent Session and return at once; the subagent runs on its own, with no time limit, until it answers.",
+        "If it drifts while it is still working and you hold `session_send`, steer it with `session_send`; it reads the message mid-turn and the delegation still answers exactly once.",
         "Its answer arrives by itself: when it finishes, a notice from Volli lands in this Session carrying its final message — read mid-turn if you are working, or opening a new turn if you have ended yours. Keep working meanwhile; do not poll or wait for it. A very long answer is cut, and `volli session answer <handle>` prints it in full. Several may run at once: launch independent tasks in the same turn rather than one after another.",
         "The subagent starts with none of your context, so brief it as if it knows nothing: the goal, the paths and decisions it needs, its constraints, and what the answer should contain. It cannot ask a person, so an unclear requirement comes back as an open question, not a guess.",
         "It shares this Session's working directory and holds every coding tool, so give each file one owner and keep it clear of edits you are making.",
@@ -3431,8 +3450,20 @@ export const VERB_REGISTRY = [
             description:
               "unwatch: how many of the named targets this Session was watching and now is not. watch: always 0.",
           },
+          stopped: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "watch: the named Sessions already stopped; nothing reports from them unless a person reattaches one. unwatch: always empty.",
+          },
+          detached: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "watch: the named Sessions with no live executor; nothing reports from them until a person reattaches one. unwatch: always empty.",
+          },
         },
-        required: ["action", "sessions", "tickets", "ended"],
+        required: ["action", "sessions", "tickets", "ended", "stopped", "detached"],
         additionalProperties: false,
       },
     },

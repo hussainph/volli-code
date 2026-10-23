@@ -24,6 +24,7 @@
 import { CLEANUP_PRESERVATION_RULES, preservationRuleText } from "@volli/shared";
 
 import type {
+  DirtyWorktreeOrphan,
   KeptWorktreeMetadata,
   KeptWorktreeOrphan,
   OrphanAgeBasis,
@@ -46,7 +47,7 @@ export interface OrphansScan {
   keptRecent: KeptWorktreeOrphan[];
   keptMetadata: KeptWorktreeMetadata[];
   unreadableProjects: UnreadableWorktreeProject[];
-  dirty: { path: string; projectId?: string; projectName?: string; reason: string }[];
+  dirty: DirtyWorktreeOrphan[];
   runs: OrphanCleanupRun[];
 }
 
@@ -191,6 +192,65 @@ export function describeKeptMetadata(entry: KeptWorktreeMetadata): string {
 /** A project whose worktrees couldn't even be listed — reported, not hidden (VC-284). */
 export function describeUnreadableProject(entry: UnreadableWorktreeProject): string {
   return `${entry.projectName} — worktrees couldn't be listed: ${entry.error}.`;
+}
+
+/**
+ * What one dirty-orphan row leads with and offers (VC-292).
+ *
+ * The ticket that claims the folder comes first, so a reason that says "use
+ * Remove worktree on that ticket" sits beside a way to open it; the path is
+ * secondary (whole on hover and copy). Every state the row cannot act on is a
+ * named fallback rather than a button left to fail.
+ */
+export interface DirtyOrphanRow {
+  /** The ticket's display id, or `null` when no ticket claims the folder. */
+  displayId: string | null;
+  /** The ticket's title, or the folder's own name when there is no ticket. */
+  title: string;
+  /**
+   * The explicit fallbacks, as badges: an archived ticket, no ticket at all,
+   * a folder the scan could not open. Empty when the row can act on itself.
+   */
+  notices: string[];
+  /** The ticket to open, in its own project, when it is on the board to be opened. */
+  openTicket: { projectId: string; ticketId: string } | null;
+  /**
+   * Whether this list's own Delete applies. A folder a ticket still claims is
+   * that ticket's to clear — main refuses the delete — so the row offers the
+   * ticket instead of a button that can only fail.
+   */
+  deletable: boolean;
+  /** The secondary line: the project, then why the scan won't touch it. */
+  meta: string;
+}
+
+export function dirtyOrphanRow(orphan: DirtyWorktreeOrphan): DirtyOrphanRow {
+  const ticket = orphan.ticket;
+  const notices: string[] = [];
+  if (ticket === undefined) notices.push("No ticket");
+  else if (ticket.archived) notices.push("Archived ticket");
+  if (orphan.pathReadable === false) notices.push("Can't read folder");
+  const reason =
+    ticket?.archived === true
+      ? `${orphan.reason} Restore ${ticket.displayId} from the Archive to open it.`
+      : orphan.reason;
+  return {
+    displayId: ticket?.displayId ?? null,
+    title: ticket?.title ?? folderName(orphan.path),
+    notices,
+    openTicket:
+      ticket === undefined || ticket.archived
+        ? null
+        : { projectId: ticket.projectId, ticketId: ticket.id },
+    deletable: ticket === undefined,
+    meta: orphan.projectName ? `${orphan.projectName} — ${reason}` : reason,
+  };
+}
+
+/** The last segment of a path — the one part of it a person named or recognises. */
+function folderName(path: string): string {
+  const segments = path.split(/[\\/]/).filter((segment) => segment.length > 0);
+  return segments.at(-1) ?? path;
 }
 
 /** The retention window Storage shows so an eligibility date can be understood. */

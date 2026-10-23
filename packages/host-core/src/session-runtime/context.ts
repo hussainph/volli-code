@@ -119,7 +119,12 @@ export function createRuntimeContextResolver(options: {
             tools: options
               .toolSurface()!
               .resolve(attaching.role, [])
-              .filter((tool) => tool !== "codemode"),
+              .filter(
+                (tool) =>
+                  tool !== "codemode" &&
+                  // VC-861 grants steering only at new Ticket birth, not backfill.
+                  (tool !== "session.send" || attaching.role !== "ticket"),
+              ),
             mcpManagementNames: "server",
           },
           provenance,

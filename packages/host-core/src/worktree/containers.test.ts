@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { insertProject } from "../db/projects-repo";
+import { detachProject, insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import {
   isOwnedWorktreePath,
@@ -48,6 +48,22 @@ describe("ownedContainers", () => {
       { projectId: "aaaaaaaa-1111", path: "/home/me/.volli/worktrees/alpha-aaaaaaaa" },
       { projectId: "bbbbbbbb-2222", path: "/home/me/.volli/worktrees/beta-bbbbbbbb" },
     ]);
+  });
+
+  // VC-822: a removed project's checkouts are kept for its return, so no
+  // destructive worktree path may reach its container.
+  it("leaves out a removed project's container", () => {
+    insertProject(ctx.db, testProject({ id: "aaaaaaaa-1111", path: "/repos/alpha" }));
+    insertProject(ctx.db, testProject({ id: "bbbbbbbb-2222", path: "/repos/beta" }));
+    detachProject(ctx.db, "aaaaaaaa-1111", 5);
+
+    const containers = ownedContainers(ctx.db, "/home/me");
+    expect(containers).toEqual([
+      { projectId: "bbbbbbbb-2222", path: "/home/me/.volli/worktrees/beta-bbbbbbbb" },
+    ]);
+    expect(
+      isOwnedWorktreePath(containers, "/home/me/.volli/worktrees/alpha-aaaaaaaa/VC-1-kept"),
+    ).toBe(false);
   });
 });
 

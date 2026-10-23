@@ -293,7 +293,7 @@ try {
   // also proves provenance survives the palette's own flattening.
   const palette = await (async () => {
     await page.keyboard.press("Meta+k");
-    const dialog = page.getByRole("dialog", { name: "Search tickets and sessions" });
+    const dialog = page.getByRole("dialog", { name: "Search tickets, sessions, and commands" });
     await dialog.waitFor({ state: "visible", timeout: 10000 });
     const rows = await waitUntil("the palette lists the open Sessions", async () => {
       const count = await dialog.getByRole("option").count();

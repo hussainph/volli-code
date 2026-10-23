@@ -32,6 +32,7 @@ import { subscribeWorktreePhases } from "@renderer/stores/worktree";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
+import { deliverTerminalOutput } from "@renderer/terminal/output-dispatch";
 import { getEngine } from "@renderer/terminal/registry";
 import { adjacentPaneId, type TerminalFocusDirection } from "@renderer/terminal/pane-navigation";
 import { closeTerminalPane } from "@renderer/terminal/session-lifecycle";
@@ -142,12 +143,12 @@ export function SessionsLayer({ visible, visibleTabIds, rail, plane = null }: Se
   // sessions): fan output to the matching engine (lookup ONLY — creating here
   // would leak engines for events racing a close), bump the session's activity,
   // record exits, and mirror the warm-park tier's park/wake/pin pushes (decision
-  // #31) into the store. Every chunk is acked exactly once here: main's
-  // flow-control bookkeeping must not starve.
+  // #31) into the store. Every chunk is acked exactly once, after the engine
+  // has parsed it (VC-821, `terminal/output-dispatch.ts`): main's flow-control
+  // bookkeeping must neither starve nor be satisfied early.
   React.useEffect(() => {
     const offData = window.api.terminal.onData((event) => {
-      getEngine(event.sessionId)?.write(event.data);
-      window.api.terminal.ack(event.sessionId, event.data.length);
+      deliverTerminalOutput(event, getEngine(event.sessionId), window.api.terminal.ack);
       useSessionsStore.getState().bumpOutput(event.sessionId, Date.now());
     });
     const offExit = window.api.terminal.onExit((event) => {

@@ -40,6 +40,7 @@ import {
   type AddHostFacts,
   type AddHostStartInput,
   type AddHostStepId,
+  type BrowserAppShortcutEvent,
   type CreateRemoteProjectInput,
   type CreateRemoteProjectResult,
   type DesktopCatalogEntry,
@@ -67,10 +68,12 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
 import { AsyncQueue } from "./async-queue";
+import { boardId } from "./board-schema";
 import {
   createCatalogBuilders,
   hostAnswer,
   HostProcedureError,
+  PROJECT_RESOURCE,
   type CatalogCallerContext,
   type CatalogMismatch,
   type ProcedurePaths,
@@ -125,6 +128,7 @@ export interface DesktopRouterHandlers {
     { shellId: string }
   >;
   readonly "project.reorder": HostHandler<{ orderedIds: readonly string[] }, null>;
+  readonly "project.remove": HostHandler<{ projectId: string }, null>;
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
   /** Remote hosts this desktop added over SSH (VC-700 PR 2): desktop main's registry. */
   readonly "hosts.snapshot": HostHandler<void, RemoteHostsSnapshot>;
@@ -204,6 +208,9 @@ export interface DesktopRouterHandlers {
     HostLinkRelaySubscribeCall,
     HostLinkRelayEvent
   >;
+  /** App shortcuts out of a focused Browser page (VC-301): desktop main's Browser Tab host. */
+  readonly "browserShortcuts.subscribe": DesktopSubscriptionHandler<void, BrowserAppShortcutEvent>;
+  readonly "browserShortcuts.focusPage": HostHandler<{ tabId: string }, null>;
 }
 
 type AssertNever<Type extends never> = Type;
@@ -335,6 +342,27 @@ async function relayAnswer(run: () => unknown): Promise<unknown> {
   }
 }
 
+/** One Browser page shortcut, as main hands it to the window (VC-301). */
+const browserAppShortcutEventSchema = z.object({
+  tabId: z.string().min(1),
+  shortcut: z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("replay"),
+      chord: z.object({
+        key: z.string(),
+        code: z.string(),
+        metaKey: z.boolean(),
+        ctrlKey: z.boolean(),
+        altKey: z.boolean(),
+        shiftKey: z.boolean(),
+        repeat: z.boolean(),
+      }),
+    }),
+    z.object({ kind: z.literal("close-tab") }),
+    z.object({ kind: z.literal("focus-address") }),
+  ]),
+});
+
 const trimSettingsSchema = z.object({
   keepPatterns: z.array(z.string()),
   trimOnFinish: z.boolean(),
@@ -435,6 +463,18 @@ export function createDesktopRouter() {
         .input(z.object({ orderedIds: z.array(z.string()) }))
         .output(z.null())
         .mutation(({ ctx, input }) => ctx.handlers["project.reorder"](input, ctx.call)),
+      /**
+       * `volli:project-remove` projects the same handler (VC-796): the
+       * project's live work stopped, then the project detached (VC-822),
+       * then every window told.
+       */
+      remove: workspaceProcedure(
+        "project.remove",
+        z.strictObject({ projectId: boardId }),
+        ({ projectId }) => ({ kind: PROJECT_RESOURCE, id: projectId }),
+      )
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["project.remove"](input, ctx.call)),
     },
     worktree: {
       /** Was `volli:worktree-trim-settings-get`: the host-level trim settings. */
@@ -694,6 +734,31 @@ export function createDesktopRouter() {
           );
         }),
     },
+    /**
+     * App shortcuts out of a focused Browser page (VC-301). No channel
+     * preceded them on the bridge's terms: host-placed like `hosts.*`, the
+     * person's own window only; desktop main's Browser Tab host answers
+     * through the map, and every other host answers unavailable.
+     */
+    browserShortcuts: {
+      /** Every app chord a focused page hands back, from now on; nothing is replayed to a late window. */
+      subscribe: hostProcedure("browserShortcuts.subscribe").subscription(async function* ({
+        ctx,
+        signal,
+      }) {
+        yield* desktopStream<BrowserAppShortcutEvent>(
+          ctx,
+          "browserShortcuts.subscribe",
+          signal,
+          (sink) => ctx.handlers["browserShortcuts.subscribe"](undefined, ctx.call, sink),
+        );
+      }),
+      /** Keyboard focus back to the page whose shortcut the window had nothing to do with. */
+      focusPage: hostProcedure("browserShortcuts.focusPage")
+        .input(z.strictObject({ tabId: z.string().min(1).max(256) }))
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["browserShortcuts.focusPage"](input, ctx.call)),
+    },
   });
 }
 
@@ -717,5 +782,6 @@ export function desktopProcedureSchemas(router: DesktopRouter = createDesktopRou
     "hostSignIns.run": hostSignInRunEventSchema,
     "hostLink.subscribe": hostLinkRelayEventSchema,
     "hostScope.subscribe": hostLinkRelayEventSchema,
+    "browserShortcuts.subscribe": browserAppShortcutEventSchema,
   });
 }

@@ -99,6 +99,16 @@ export interface PendingArmedRunCoordinator {
 const INTERRUPTED_ATTEMPT_ERROR =
   "The armed automation Run stopped before confirming whether it started.";
 
+/**
+ * How far past its deadline a countdown found at start() may be and still
+ * fire on its own. Beyond this the window elapsed while the host was down, so
+ * nobody was shown its Cancel: the arrival is retained for a person's Retry
+ * instead, the same human restart an interrupted attempt already waits on.
+ */
+const RECOVERY_TOLERANCE_MS = 2_000;
+
+const CLOSED_COUNTDOWN_ERROR = "The app closed before the countdown finished.";
+
 export function createPendingArmedRunCoordinator(
   deps: PendingArmedRunCoordinatorPorts,
 ): PendingArmedRunCoordinator {
@@ -197,7 +207,8 @@ export function createPendingArmedRunCoordinator(
     }
   }
 
-  async function settle(id: string): Promise<void> {
+  /** `recovered` marks a countdown whose window elapsed while the host was down. */
+  async function settle(id: string, recovered = false): Promise<void> {
     const pending = deps.getPending(id);
     // Replaced, cancelled, cascaded away, or already claimed by another
     // callback. Re-publish the durable truth so a window that still held this
@@ -232,6 +243,17 @@ export function createPendingArmedRunCoordinator(
       return;
     }
 
+    if (recovered) {
+      // Nobody saw this window, so nothing confirmed the Run. Retain the exact
+      // arrival under one command id and let only a person's Retry start it.
+      const attempt = deps.beginAttempt(pending.id, deps.nextId(), CLOSED_COUNTDOWN_ERROR);
+      if (attempt === undefined) return;
+      clearScheduled(pending.id);
+      publish();
+      deps.onSettled?.({ kind: "failed", pending, error: attempt.error });
+      return;
+    }
+
     // Mint and retain the command BEFORE Run crosses a process/runtime
     // boundary. The atomic transition also closes the countdown, and a crash
     // anywhere after it leaves one exact arrival-shaped Retry intent.
@@ -246,7 +268,13 @@ export function createPendingArmedRunCoordinator(
     start() {
       if (running) return;
       running = true;
-      for (const pending of list()) schedule(pending);
+      const now = deps.now();
+      for (const pending of list()) {
+        // Gone, left-column, disarmed and switched-off still abandon as at
+        // any deadline; only a start is withheld for a window nobody saw.
+        if (now - pending.startAt > RECOVERY_TOLERANCE_MS) track(settle(pending.id, true));
+        else schedule(pending);
+      }
     },
 
     stop() {

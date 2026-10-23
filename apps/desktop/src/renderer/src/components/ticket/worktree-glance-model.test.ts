@@ -9,6 +9,7 @@ function status(over: Partial<WorktreeStatusSnapshot> = {}): WorktreeStatusSnaps
   return {
     uncommitted: false,
     sequencerActive: false,
+    unmergedPaths: 0,
     aheadOfBase: 0,
     behindBase: 0,
     unpushed: 0,

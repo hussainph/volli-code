@@ -256,6 +256,7 @@ describe("read verb contracts are unchanged by the async runner", () => {
       status: {
         uncommitted: true,
         sequencerActive: false,
+        unmergedPaths: 0,
         aheadOfBase: null,
         behindBase: null,
         unpushed: null,
@@ -288,9 +289,9 @@ describe("read verb contracts are unchanged by the async runner", () => {
 describe("resolveWorktreeTarget", () => {
   it("answers the on-disk identity without spawning git", () => {
     stampTicket();
-    const { git, calls } = scriptedGit(() => "");
+    const { calls } = scriptedGit(() => "");
 
-    const resolved = resolveWorktreeTarget({ db: ctx.db, git }, "t1");
+    const resolved = resolveWorktreeTarget({ db: ctx.db }, "t1");
 
     expect(resolved).toMatchObject({
       kind: "ok",

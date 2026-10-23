@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { diffStat } from "./diff";
 import { GitError, runGitCapturingAsync } from "./git";
-import { scriptedGit } from "./scripted-git";
+import { scriptedReadOnlyGit } from "./scripted-git";
 
 function runRepoGit(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -13,7 +13,7 @@ function runRepoGit(cwd: string, ...args: string[]): string {
 
 describe("diffStat — working-tree mode", () => {
   it("sums tracked numstat and appends untracked files with null counts", async () => {
-    const { gitAsync: git, calls } = scriptedGit((args) => {
+    const { gitAsync: git, calls } = scriptedReadOnlyGit((args) => {
       if (args[0] === "diff") return ["3\t1\tsrc/a.ts", "10\t0\tsrc/b.ts", ""].join("\0");
       if (args[0] === "ls-files") return "src/new.ts\0";
       return "";
@@ -45,7 +45,7 @@ describe("diffStat — working-tree mode", () => {
   });
 
   it("represents binary files (-\\t-) with null insertions/deletions, excluded from totals", async () => {
-    const { gitAsync: git } = scriptedGit((args) => {
+    const { gitAsync: git } = scriptedReadOnlyGit((args) => {
       if (args[0] === "diff") return ["-\t-\tassets/logo.png", "5\t2\tsrc/a.ts", ""].join("\0");
       if (args[0] === "ls-files") return "";
       return "";
@@ -64,7 +64,7 @@ describe("diffStat — working-tree mode", () => {
   });
 
   it("appends only paths returned by the untracked file listing", async () => {
-    const { gitAsync: git } = scriptedGit((args) => {
+    const { gitAsync: git } = scriptedReadOnlyGit((args) => {
       if (args[0] === "diff") return "";
       if (args[0] === "ls-files") return "src/really-new.ts\0";
       return "";
@@ -78,7 +78,7 @@ describe("diffStat — working-tree mode", () => {
   });
 
   it("returns err carrying stderr when the diff read fails", async () => {
-    const { gitAsync: git } = scriptedGit((args) => {
+    const { gitAsync: git } = scriptedReadOnlyGit((args) => {
       if (args[0] === "diff") throw new GitError("failed", "fatal: bad revision HEAD", args);
       return "";
     });
@@ -91,7 +91,7 @@ describe("diffStat — working-tree mode", () => {
 
 describe("diffStat — merge-base mode", () => {
   it("diffs <base>...HEAD (three-dot) and never reads untracked", async () => {
-    const { gitAsync: git, calls } = scriptedGit((args) => {
+    const { gitAsync: git, calls } = scriptedReadOnlyGit((args) => {
       if (args[0] === "diff") return "4\t0\tsrc/a.ts\0";
       // No remote-tracking ref — comparisons stay on the local base.
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no such ref");
@@ -116,7 +116,7 @@ describe("diffStat — merge-base mode", () => {
   });
 
   it("diffs against origin/<base> when the remote-tracking ref exists", async () => {
-    const { gitAsync: git, calls } = scriptedGit((args) => {
+    const { gitAsync: git, calls } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "abc123\n";
       if (args[0] === "diff") return "4\t0\tsrc/a.ts\0";
       return "";
@@ -133,7 +133,7 @@ describe("diffStat — merge-base mode", () => {
   });
 
   it("errs when the base branch is unknown", async () => {
-    const { gitAsync: git, calls } = scriptedGit(() => "");
+    const { gitAsync: git, calls } = scriptedReadOnlyGit(() => "");
     const result = await diffStat(git, { worktreePath: "/wt", baseBranch: null }, "merge-base");
     expect(result.ok).toBe(false);
     // No git spawned — it fails fast on the missing base.
@@ -143,7 +143,7 @@ describe("diffStat — merge-base mode", () => {
 
 describe("diffStat — rename path handling", () => {
   it("keeps the new path for a rename with a common prefix", async () => {
-    const { gitAsync: git } = scriptedGit((args) => {
+    const { gitAsync: git } = scriptedReadOnlyGit((args) => {
       if (args[0] === "diff") return "2\t2\t\0src/old.ts\0src/new.ts\0";
       return "";
     });
@@ -154,7 +154,7 @@ describe("diffStat — rename path handling", () => {
   });
 
   it("keeps the new path for a whole-path rename", async () => {
-    const { gitAsync: git } = scriptedGit((args) => {
+    const { gitAsync: git } = scriptedReadOnlyGit((args) => {
       if (args[0] === "diff") return "1\t1\t\0old/a.ts\0new/b.ts\0";
       return "";
     });
@@ -165,7 +165,7 @@ describe("diffStat — rename path handling", () => {
   });
 
   it("keeps the new path for a renamed directory", async () => {
-    const { gitAsync: git } = scriptedGit((args) => {
+    const { gitAsync: git } = scriptedReadOnlyGit((args) => {
       if (args[0] === "diff") return "0\t0\t\0src/a/index.ts\0src/b/index.ts\0";
       return "";
     });

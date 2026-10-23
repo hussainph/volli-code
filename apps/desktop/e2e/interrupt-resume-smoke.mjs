@@ -24,8 +24,10 @@
  *         `sessionId: { kind: "reported" | "none" }` (opencode, codex), since
  *         an `argv`-tier one always has a minted seed;
  *       – the harness's own wrapper minted one for THAT LAUNCH (`volli session
- *         harness <slug> --mint`, `sessionId: { kind: "argv" }`) → check 5,
- *         which asserts the resume comes back with that exact id.
+ *         harness <slug> --mint`, `sessionId: { kind: "argv" }`) and the
+ *         launch's own SessionStart confirmed it (the fake `claude` fires one,
+ *         as a real one does at boot) → check 5, which asserts the resume comes
+ *         back with that exact id.
  *     Resume opens a new attachment on the same durable Volli Session; it does
  *     not mint a second Session. Ticket history names the successful reattachment
  *     and its user origin, while process lifecycle evidence stays in the ledger.
@@ -719,8 +721,9 @@ async function main() {
     //
     // The other half of what check 4 stopped covering. An `argv`-tier harness
     // gets a fresh UUIDv4 from its own wrapper's synchronous `volli session
-    // harness --mint` call on every launch, written to `harness_session_id`,
-    // and a resume must come back with THAT id — not merely some uuid, and
+    // harness --mint` call on every launch, written to `harness_session_id`
+    // once the launch's SessionStart names it (VC-807: the fake fires one, as
+    // a real claude does at boot), and a resume must come back with THAT id — not merely some uuid, and
     // emphatically not `VOLLI_SESSION` (reusing the PTY's own id per launch is
     // the collision this path replaced). Check 3 proves the `volli session
     // link` seed; this proves the minted one, which nothing else here reaches.

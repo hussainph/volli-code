@@ -13,7 +13,7 @@ import type Database from "better-sqlite3";
 import { displayTicketId } from "@volli/shared";
 import type { Logger } from "./log/logger";
 import { hostLogger } from "./log/root";
-import { getProjectById } from "./db/projects-repo";
+import { getProjectById, isProjectAttached, isProjectRemoved } from "./db/projects-repo";
 import { getTicket, getTicketRow } from "./db/tickets-repo";
 import {
   getAutomation,
@@ -21,6 +21,7 @@ import {
   listAllAutomations,
   listAutomationsForProject,
   listColumnArmings,
+  listPossiblyLiveProjectRunsForAutomation,
   listProjectRunsForAutomation,
   listRunsForProject,
   listRunsForTicket,
@@ -89,7 +90,7 @@ export type AutomationSessionPorts = Omit<
   | "findTicket"
   | "findProject"
   | "listRunsForTicket"
-  | "listProjectRunsForAutomation"
+  | "listPossiblyLiveProjectRunsForAutomation"
   | "onRunStarted"
 >;
 
@@ -138,7 +139,9 @@ export function createHostAutomations(input: HostAutomationsInput): HostAutomati
 
   const service = createAutomationService({
     engine,
-    findProject: (projectId) => getProjectById(db, projectId) !== undefined,
+    // A removed project is detached, not deleted (VC-822): its Automations
+    // stay, but none of them is edited, scheduled or run until it is back.
+    findProject: (projectId) => isProjectAttached(db, projectId),
     findAutomation: (automationId) => getAutomation(db, automationId),
     listAutomationsForProject: (projectId) => listAutomationsForProject(db, projectId),
     runsForTicket: (ticketId) => listRunsForTicket(db, ticketId),
@@ -167,9 +170,11 @@ export function createHostAutomations(input: HostAutomationsInput): HostAutomati
       findAutomation: (automationId) => getAutomation(db, automationId),
       findRun: (runId) => getAutomationRun(db, runId),
       findTicket: (ticketId) => getTicket(db, ticketId),
-      findProject: (projectId) => getProjectById(db, projectId) !== undefined,
+      findProject: (projectId) => isProjectAttached(db, projectId),
+      projectRemoved: (projectId) => isProjectRemoved(db, projectId),
       listRunsForTicket: (ticketId) => listRunsForTicket(db, ticketId),
-      listProjectRunsForAutomation: (query) => listProjectRunsForAutomation(db, query),
+      listPossiblyLiveProjectRunsForAutomation: (query) =>
+        listPossiblyLiveProjectRunsForAutomation(db, query),
       ...ports,
       // A Run that names no Ticket (VC-130's schedule Target) OMITS the
       // property rather than sending `undefined` for it: the Electron
@@ -201,6 +206,8 @@ export function createHostAutomations(input: HostAutomationsInput): HostAutomati
       readTicket: (ticketId) => {
         const row = getTicketRow(db, ticketId);
         if (row === undefined || row.archived_at !== null) return undefined;
+        // An armed column in a removed project starts nothing (VC-822).
+        if (!isProjectAttached(db, row.project_id)) return undefined;
         const ticket = getTicket(db, ticketId);
         const project = getProjectById(db, row.project_id);
         if (ticket === undefined || project === undefined) return undefined;
@@ -267,6 +274,9 @@ export function createHostAutomations(input: HostAutomationsInput): HostAutomati
         // anyone reloading.
         events.publish("data-changed", { projectId: skip.skip.projectId });
       },
+      // Accepted or completed only. A rejected Run's occurrence is still owed
+      // its skip, so a rejection must not let the timer step over it.
+      runAccepted: async (commandId) => (await engine.replayRun(commandId))?.ok === true,
       startRun: async (request) => {
         // UNATTENDED (VC-133), and this is the case VC-112 names outright:
         // "a column move is attended because a person is right there; a

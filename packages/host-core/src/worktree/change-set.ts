@@ -32,6 +32,7 @@ import {
 import { resolveChangeSetBaseRevision } from "./comparison-ref";
 import { stderrOf } from "./git";
 import { parseNumstatTokens, splitNul, type ParsedNumstat } from "./git-output";
+import { readOnlyGitAsync } from "./scan";
 import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";
 
 export interface ChangeSetInput {
@@ -96,12 +97,18 @@ const UNTRACKED_STAT_CONCURRENCY = 16;
 /**
  * Builds a {@link ChangeSetSnapshot} for the worktree. Failures surface real
  * git stderr (never a silent empty snapshot). Missing base fails fast.
+ *
+ * Read-only git ({@link readOnlyGitAsync}): this is refetched within a second
+ * of any write in the worktree, and a plain `git status -uall` holds the
+ * worktree's `index.lock` for its whole untracked scan — exactly when the
+ * agent that wrote is likely to run its own `git add`/`commit`.
  */
 export async function changeSetSnapshot(
-  git: RunGitAsync,
+  runGit: RunGitAsync,
   input: ChangeSetInput,
   readUntrackedFileStat: ReadUntrackedFileStat = readUntrackedStat,
 ): Promise<WorktreeResult<ChangeSetSnapshot>> {
+  const git = readOnlyGitAsync(runGit);
   if (!input.baseBranch) {
     return err("No base branch is known for this worktree, so its Change Set cannot be computed.");
   }
@@ -186,9 +193,11 @@ export async function changeSetSnapshot(
  * the resolved base and appends untracked and unmerged paths from porcelain.
  */
 export async function changeSetPaths(
-  git: RunGitAsync,
+  runGit: RunGitAsync,
   input: ChangeSetInput,
 ): Promise<WorktreeResult<string[]>> {
+  // Read-only for the reason the snapshot is ({@link changeSetSnapshot}).
+  const git = readOnlyGitAsync(runGit);
   if (!input.baseBranch) {
     return err("No base branch is known for this worktree, so its Change Set cannot be computed.");
   }

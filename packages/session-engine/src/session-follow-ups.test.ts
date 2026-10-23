@@ -140,6 +140,7 @@ function fixture(
     diagnostics?: () => void;
     retryDelays?: readonly number[];
     admissionTimeoutMs?: number;
+    firstAttachPreparationTimeoutMs?: number;
     prepare?: () => void | Promise<void>;
     reaffirm?: () => void | Promise<void>;
   } = {},
@@ -183,6 +184,9 @@ function fixture(
       ...(options.admissionTimeoutMs === undefined
         ? {}
         : { followUpAdmissionTimeoutMs: options.admissionTimeoutMs }),
+      ...(options.firstAttachPreparationTimeoutMs === undefined
+        ? {}
+        : { firstAttachPreparationTimeoutMs: options.firstAttachPreparationTimeoutMs }),
     });
   return { engine, artifacts, followUps, adapter, errors, runtime };
 }
@@ -1264,12 +1268,19 @@ describe("host follow-up commands", () => {
     await runtime.command({ commandId: "stop", sessionId, command: { kind: "session.stop" } });
     await runtime.recoverFollowUps();
     expect(f.adapter.commands.filter(({ kind }) => kind === "message.submit")).toHaveLength(1);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([
+      "Queued message is waiting: session_stopped. Reattach the Session to retry.",
+    ]);
     await f.engine.submit({
       commandId: "archive",
       sessionId,
       intent: { kind: "session.archive" },
       provenance: { source: { kind: "user", id: "test", detail: null }, venue: null },
     });
+    await runtime.recoverFollowUps();
+    expect(await attentionDetails(runtime, sessionId)).toEqual([
+      "Queued message is waiting: session_archived. Reopen the Session to retry.",
+    ]);
     expect(
       (
         await runtime.command({
@@ -1525,9 +1536,11 @@ describe("host follow-ups never strand a row", () => {
       .toBe("client-attach");
     await queue(runtime, sessionId, "kickoff");
     await runtime.recoverFollowUps();
-    // Not claimed: no `releasing` row with nobody to send it; the wait is named.
+    // Attaching is normal progress, not a delivery failure or a claimed row.
     expect(await queueStates(runtime, sessionId)).toEqual(["kickoff:queued"]);
     expect(submits(adapter)).toEqual([]);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+    expect(f.errors).toEqual([]);
     gate.resolve();
     expect((await clientAttach).receipt?.status).toBe("accepted");
     await expect.poll(() => submits(adapter)).toEqual([deliveryId(sessionId, "kickoff")]);
@@ -1569,14 +1582,94 @@ describe("host follow-ups never strand a row", () => {
     await runtime.recoverFollowUps();
     expect(await queueStates(runtime, sessionId)).toEqual(["kickoff:queued"]);
     expect(submits(adapter)).toEqual([]);
-    expect(await attentionDetails(runtime, sessionId)).toEqual([
-      "Queued message is waiting: executor_start_pending. Finish or retry the attachment.",
-    ]);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+    // The racing attach's refusal remains diagnostic, not user Attention.
     expect(String(f.errors[0])).toContain("executor_start_pending");
     gate.resolve();
     await clientAttach;
     await expect.poll(() => submits(adapter)).toEqual([deliveryId(sessionId, "kickoff")]);
     await expect.poll(() => queueStates(runtime, sessionId)).toEqual([]);
+  });
+
+  it.each([
+    ["live", "archived"],
+    ["live", "attention"],
+    ["orphaned", "archived"],
+    ["orphaned", "attention"],
+  ] as const)("keeps %s starts from hiding %s queue blockers", async (start, blocker) => {
+    const adapter = new GatedAdapter();
+    const f = fixture({ adapter });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    const gate = Promise.withResolvers<void>();
+    let clientAttach: Promise<unknown> | undefined;
+    const provenance = {
+      source: { kind: "user" as const, id: "test", detail: null },
+      venue: null,
+    };
+    if (start === "live") {
+      adapter.gate = gate.promise;
+      clientAttach = runtime.command({
+        commandId: "client-attach",
+        sessionId,
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      });
+      await expect
+        .poll(async () => (await f.engine.getSession({ sessionId }))?.pendingExecutorStart?.id)
+        .toBe("client-attach");
+    } else {
+      await f.engine.submit({
+        commandId: "stale-start",
+        sessionId,
+        intent: { kind: "executor.start", adapterId: "fake", continuity: "fresh" },
+        provenance,
+      });
+    }
+    try {
+      await queue(runtime, sessionId, "first");
+      await runtime.recoverFollowUps();
+      if (blocker === "archived") {
+        await f.engine.submit({
+          commandId: "archive",
+          sessionId,
+          intent: { kind: "session.archive" },
+          provenance,
+        });
+      } else {
+        await f.engine.observe({
+          id: "unrelated-attention",
+          sessionId,
+          attachmentId: null,
+          occurredAt: 400,
+          provenance,
+          kind: "attention.raised",
+          attention: {
+            id: "unrelated-attention",
+            attachmentId: null,
+            kind: "configuration_invalid",
+            detail: "Choose a model",
+            diagnostic: null,
+          },
+        });
+      }
+      await runtime.recoverFollowUps();
+      expect(await attentionDetails(runtime, sessionId)).toEqual(
+        blocker === "archived"
+          ? ["Queued message is waiting: session_archived. Reopen the Session to retry."]
+          : ["Choose a model", "Queued message is waiting: configuration_invalid: Choose a model"],
+      );
+      expect(await queueStates(runtime, sessionId)).toEqual(["first:queued"]);
+      expect(submits(adapter)).toEqual([]);
+      expect(f.errors).toEqual([]);
+    } finally {
+      gate.resolve();
+      if (start === "live" && blocker === "archived") {
+        await expect(clientAttach).rejects.toThrow(`Session ${sessionId} is archived`);
+      } else {
+        await clientAttach;
+      }
+      await runtime.close();
+    }
   });
 
   it("never claims behind a stale start, and returns a recovered claim to the queue", async () => {
@@ -1592,11 +1685,16 @@ describe("host follow-ups never strand a row", () => {
     await queue(runtime, sessionId, "first");
     await runtime.recoverFollowUps();
     expect(await queueStates(runtime, sessionId)).toEqual(["first:queued"]);
+    const actionableAttention = [
+      "Queued message is waiting: executor_start_pending. Finish or retry the attachment.",
+    ];
+    expect(await attentionDetails(runtime, sessionId)).toEqual(actionableAttention);
     await f.followUps.transaction(sessionId, (state) => {
       state.entries[0].state = "releasing";
     });
     await runtime.recoverFollowUps();
     expect(await queueStates(runtime, sessionId)).toEqual(["first:queued"]);
+    expect(await attentionDetails(runtime, sessionId)).toEqual(actionableAttention);
     expect(f.adapter.attaches).toBe(0);
     // A claim with no recorded intent sent nothing: cancelling it is safe.
     await f.followUps.transaction(sessionId, (state) => {
@@ -2321,6 +2419,91 @@ describe("host follow-ups never strand a row", () => {
       expect(await attentionDetails(runtime, sessionId)).toEqual([]);
       await runtime.close();
     }
+  });
+
+  it("waits out a first attach's slow workspace preparation instead of failing it unrecoverable (VC-799)", async () => {
+    // A Session's first attach is where its worktree is made, and under load
+    // that preparation outlasts the admission bound, which never stopped it.
+    const gate = Promise.withResolvers<void>();
+    const reached = Promise.withResolvers<void>();
+    const f = fixture({
+      admissionTimeoutMs: 10,
+      retryDelays: [],
+      prepare: () => {
+        reached.resolve();
+        return gate.promise;
+      },
+    });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    const attaching = runtime.command({
+      commandId: "operation:start",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    // Past the bound from the moment the preparation is waited on.
+    await reached.promise;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    gate.resolve();
+    expect((await attaching).receipt).toMatchObject({ status: "accepted" });
+    expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+    expect(f.adapter.attaches).toBe(1);
+    await runtime.close();
+  });
+
+  it("fails a first attach whose preparation outlasts its own ceiling as configuration_invalid (VC-799)", async () => {
+    const stalled = Promise.withResolvers<void>();
+    const f = fixture({
+      admissionTimeoutMs: 10,
+      firstAttachPreparationTimeoutMs: 20,
+      retryDelays: [],
+      prepare: () => stalled.promise,
+    });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    const attached = await runtime.command({
+      commandId: "operation:start",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    expect(attached.receipt).toMatchObject({
+      status: "rejected",
+      code: "location_unavailable",
+      detail: "Workspace preparation did not finish within 0.02 s.",
+    });
+    const { projection } = await runtime.projection({ sessionId });
+    expect(projection.attention.active.map(({ kind }) => kind)).toEqual(["configuration_invalid"]);
+    expect(f.adapter.attaches).toBe(0);
+    stalled.resolve();
+    await runtime.close();
+  });
+
+  it("still bounds the workspace preparation of a Session that has attached before (VC-799)", async () => {
+    const stalled = Promise.withResolvers<void>();
+    let preparing: Promise<void> | undefined;
+    const f = fixture({ admissionTimeoutMs: 10, retryDelays: [], prepare: () => preparing });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await attach(runtime, sessionId);
+    const attachmentId = (await runtime.projection({ sessionId })).projection.liveExecutor!.id;
+    await runtime.command({
+      commandId: "release",
+      sessionId,
+      command: { kind: "adapter.release", attachmentId },
+    });
+    preparing = stalled.promise;
+    const reattached = await runtime.command({
+      commandId: "reattach",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "context_replay" },
+    });
+    expect(reattached.receipt).toMatchObject({
+      status: "rejected",
+      code: "location_unavailable",
+      detail: expect.stringContaining("queue_admission_timeout: workspace preparation"),
+    });
+    stalled.resolve();
+    await runtime.close();
   });
 
   it("bounds cold binding recovery and prevents a late handle activating after close", async () => {

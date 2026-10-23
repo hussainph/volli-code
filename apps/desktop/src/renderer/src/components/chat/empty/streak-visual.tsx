@@ -36,7 +36,7 @@ export function StreakVisual() {
   // The window is a fact about now, so it is taken once per mount rather than
   // per render — a grid whose first cell slid while the pointer was over it
   // would be a different chart under the same tooltip.
-  const now = React.useMemo(() => Date.now(), []);
+  const [now] = React.useState(() => Date.now());
   React.useEffect(() => {
     void refresh(streakWindowStart(now));
   }, [now, refresh]);

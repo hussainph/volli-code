@@ -88,7 +88,7 @@ function checkBuild() {
     const markdown = files.get(mirror);
     if (!markdown?.startsWith("# ")) problems.push(`${route}: missing Markdown mirror ${mirror}`);
     if (route !== "/" && !indexed.includes(mirror)) problems.push(`${route}: absent from llms.txt`);
-    if (markdown && /<Agent(?:VerbEffects|ErrorRecovery|CapabilityChanges)\s*\/>/.test(markdown)) {
+    if (markdown && /<(?:Agent(?:VerbEffects|ErrorRecovery|CapabilityChanges)|HarnessResume)\s*\/>/.test(markdown)) {
       problems.push(`${mirror}: unexpanded reference component`);
     }
     const source = html.match(/<copy-page\b[^>]*data-source="([^"]+)"/)?.[1];
@@ -122,6 +122,7 @@ function checkBuild() {
     ["/reference/command-effects.md", "### `ticket.move`"],
     ["/reference/cli-errors.md", "### `APP_UNREACHABLE`"],
     ["/reference/agent-capability-changes.md", "## VC-457"],
+    ["/reference/terminal-resume.md", "| Claude Code (`claude-code`) | `claude --resume <id>` |"],
   ]) {
     if (!files.get(path)?.includes(text))
       problems.push(`${path}: generated reference content missing`);

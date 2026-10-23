@@ -5,12 +5,16 @@ import type { SessionLocation, SessionLocationResolver } from "@volli/session-en
 import type { Session, SessionExecutionVenue } from "@volli/shared";
 
 import type { HostEventBus } from "../ports";
-import { getProjectById } from "../db/projects-repo";
+import { getProjectById, isProjectAttached } from "../db/projects-repo";
 import { getTicket } from "../db/tickets-repo";
 import { acquireWorktreeStartLease, ensure, UNDER_DELETION_REFUSAL } from "../worktree";
 import { worktreeDeps } from "../worktree-runtime";
 
 const LOCAL: SessionLocation["venue"] = { id: "local", kind: "local" };
+
+/** Why a Session of a removed project does not start (VC-822). */
+const PROJECT_REMOVED_REFUSAL =
+  "This Session's project was removed from Volli. Add its folder again to use it.";
 
 /**
  * Resolves immutable Session identity to its trusted project/worktree directory.
@@ -72,6 +76,7 @@ export function createSessionLocationResolver(
 
   const prepare = async (session: Session): Promise<SessionLocation> => {
     const { project, ticket } = site(session);
+    if (!isProjectAttached(db, project.id)) throw new Error(PROJECT_REMOVED_REFUSAL);
     if (ticket === null || !ticket.usesWorktree) {
       return withStartLease(project.path, async () => ({ directory: project.path, venue }));
     }
@@ -113,6 +118,7 @@ export function createSessionLocationResolver(
     prepare,
 
     async reaffirm(session, directory) {
+      if (!isProjectAttached(db, session.projectId)) throw new Error(PROJECT_REMOVED_REFUSAL);
       // A turn is about to write into this directory, so it is a start like any
       // other, and the lease is taken before the question rather than after it:
       // a directory a cleanup is removing right now must never be reaffirmed as

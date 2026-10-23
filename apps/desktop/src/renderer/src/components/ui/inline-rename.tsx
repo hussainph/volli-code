@@ -125,6 +125,9 @@ export function InlineRename({
       // window's. Blanket swallowing killed ⌘K and ⌘T for as long as any
       // rename was open.
       if (!event.metaKey && !event.ctrlKey) event.stopPropagation();
+      // Never mid-word: an IME's Enter accepts a candidate and its Escape
+      // closes the candidate window — neither commits nor cancels the rename.
+      if (event.nativeEvent.isComposing) return;
       if (event.key === "Enter") {
         event.preventDefault();
         commit();
