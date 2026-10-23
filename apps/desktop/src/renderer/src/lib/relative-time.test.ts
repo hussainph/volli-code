@@ -97,11 +97,12 @@ describe("nextAgeChangeAt", () => {
     expect(straddle(NOW - 30 * SECOND, NOW)).toEqual(["now", "1m"]);
   });
 
-  it("is unchanged by the minute rung's wording: the 45s bucket still closes at 60s", () => {
-    expect(nextAgeChangeAt(NOW - 45 * SECOND, NOW)).toBe(NOW - 45 * SECOND + MINUTE);
-    expect(nextAgeChangeAt(NOW - 59 * SECOND, NOW)).toBe(NOW - 59 * SECOND + MINUTE);
-    // And the rung after it: the words changed, the buckets did not.
-    expect(nextAgeChangeAt(NOW - 60 * SECOND, NOW)).toBe(NOW - 60 * SECOND + 2 * MINUTE);
+  it("waits until two minutes once the first minute is on screen", () => {
+    for (const seconds of [45, 59, 60, 119]) {
+      const stamp = NOW - seconds * SECOND;
+      expect(nextAgeChangeAt(stamp, NOW)).toBe(stamp + 2 * MINUTE);
+      expect(straddle(stamp, NOW)).toEqual(["1m", "2m"]);
+    }
   });
 
   it("closes every later bucket on its own unit", () => {
