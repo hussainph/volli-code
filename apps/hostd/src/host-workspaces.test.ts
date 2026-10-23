@@ -825,11 +825,27 @@ describe("bounded host catalog", () => {
     const f = fixture();
     insertProject(f.db, testProject({ id: randomUUID(), path: f.folder() }));
     const service = fakeGit(f, "exec sleep 60", { testOnly: { rowTimeoutMs: 30 } });
-    const spawn = vi.spyOn(processes, "spawn");
-    expect(await service.list()).toEqual({ workspaces: [], omitted: 1 });
-    // Let the child reach its own timeout rather than changing it to shutdown.
-    await vi.waitFor(() => expect(spawn.mock.results[0]!.value.signalCode).not.toBeNull());
-    await service.close();
+    const spawn = processes.spawn;
+    const spawned = Promise.withResolvers<ReturnType<typeof spawn>>();
+    vi.spyOn(processes, "spawn").mockImplementationOnce((...args) => {
+      const child = spawn(...args);
+      spawned.resolve(child);
+      return child;
+    });
+    // Filesystem latency must not consume the row budget before Git starts.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const listing = service.list();
+      const child = await spawned.promise;
+      expect(child.signalCode).toBeNull();
+      await vi.advanceTimersByTimeAsync(30);
+      expect(await listing).toEqual({ workspaces: [], omitted: 1 });
+      // Let the child reach its own timeout rather than changing it to shutdown.
+      await vi.waitFor(() => expect(child.signalCode).not.toBeNull());
+      await service.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("uses UTF-8 JSON bytes and keeps complete rows when the byte budget fills", async () => {

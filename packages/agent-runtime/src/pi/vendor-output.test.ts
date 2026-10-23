@@ -141,6 +141,35 @@ describe("adaptive shell output publication", () => {
     }
   });
 
+  it("publishes spill capping as metadata without changing the retained text", () => {
+    const updates: ShellOutputUpdate[] = [];
+    const capture = new OutputCapture(undefined, context, {
+      onUpdate: (update) => updates.push(update),
+      onError: () => {},
+    });
+    capture.push("same tail");
+    capture.flush();
+    capture.setSpillTruncatedAt(64 * 1024 * 1024);
+    capture.flush();
+    expect(updates.at(-1)).toMatchObject({
+      kind: "metadata",
+      metadata: { spillTruncatedAt: 64 * 1024 * 1024 },
+    });
+    expect(updates.reduce<ShellOutputView | undefined>(applyShellOutputUpdate, undefined)).toEqual(
+      capture.snapshot(),
+    );
+    const count = updates.length;
+    capture.setSpillTruncatedAt(64 * 1024 * 1024);
+    capture.flush();
+    expect(updates).toHaveLength(count);
+    capture.dispose();
+    capture.setSpillTruncatedAt(1);
+    expect(capture.snapshot()).toMatchObject({
+      text: "same tail",
+      spillTruncatedAt: 64 * 1024 * 1024,
+    });
+  });
+
   it("publishes sliding windows as deltas and replaces unrelated windows", () => {
     vi.useFakeTimers();
     const updates: ShellOutputUpdate[] = [];

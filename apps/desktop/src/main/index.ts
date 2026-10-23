@@ -180,6 +180,7 @@ import {
   collectUnlinkedBlobs,
   blobProtocolResponse,
   blobsRoot,
+  globalCommandsRoot,
 } from "@volli/host-core/files";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
@@ -1408,6 +1409,11 @@ const appStartup = app.whenReady().then(async () => {
     projectOfTicket: (ticketId) =>
       sessionDb === null ? undefined : getTicketRow(sessionDb, ticketId)?.project_id,
     workspaces: () => (sessionDb === null ? [] : listProjects(sessionDb).map(({ id }) => id)),
+    // Tombstones cover hard deletion too, which cannot emit a Ticket Event
+    // after its history is gone. This feed sees every command door.
+    onTicketRemoved: (projectId, ticketId) => {
+      void browserTabs.clearAgentPartition({ projectId, ticketId });
+    },
   });
   tapDataChanged((change) => boardFeed.noteDataChanged(change));
   const runtimeAutomations = createRuntimeAutomations({
@@ -1520,6 +1526,17 @@ const appStartup = app.whenReady().then(async () => {
     ready: RecoveredSessionServices<RuntimeSessionFacade>,
   ): HostHandlerMap => {
     const { runtime, sessions } = recoveredRuntimeSessionServices(ready);
+    const projectLiveWork = hostProjectLiveWork({
+      runtime: () => sessionRuntime,
+      shells: backgroundShells,
+      terminals: () => ptyManagerRef ?? null,
+      browser: browserTabs,
+      mcp: mcpSettings,
+      newCommandId: randomUUID,
+      onReleaseError: (sessionId, error) => {
+        log.error("could not release session of a removed project", { sessionId, error });
+      },
+    });
     return createHostHandlers(hostPorts, {
       db: sessionDb,
       dataDir: hostCore.dataDir,
@@ -1534,17 +1551,13 @@ const appStartup = app.whenReady().then(async () => {
       interruptTicketSessions: interruptTicketSessionsAnnounced,
       // What removing a project stops before it detaches it (VC-796): every door
       // that removes one, the window's `volli:project-remove` included.
-      projectLiveWork: hostProjectLiveWork({
-        runtime: () => sessionRuntime,
-        shells: backgroundShells,
-        terminals: () => ptyManagerRef ?? null,
-        browser: browserTabs,
-        mcp: mcpSettings,
-        newCommandId: randomUUID,
-        onReleaseError: (sessionId, error) => {
-          log.error("could not release session of a removed project", { sessionId, error });
+      projectLiveWork: {
+        ...projectLiveWork,
+        closeBrowserTabs: (projectId) => {
+          projectLiveWork.closeBrowserTabs(projectId);
+          void browserTabs.clearAgentPartition({ projectId, ticketId: null });
         },
-      }),
+      },
       ...(liveHost === undefined ? {} : { detachedWork: liveHost.detachedWork }),
       // This Mac's recent log (VC-699): main's, the in-process host's and the
       // renderer's lines, which the dev log viewer reads through `host.logs`.
@@ -1891,7 +1904,7 @@ const appStartup = app.whenReady().then(async () => {
   registerFileIpcHandlers(
     dbHandle,
     {
-      globalCommandsDir: join(fsDeps.userDataDir, "commands"),
+      globalCommandsDir: globalCommandsRoot(fsDeps.userDataDir),
       globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
     },
     liveHost?.fileServices ?? createHostFileServices(hostPorts),

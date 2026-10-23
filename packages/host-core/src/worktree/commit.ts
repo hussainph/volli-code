@@ -136,8 +136,9 @@ export async function commitRemaining(
   try {
     if (includeUnstaged) await net("git", ["add", "-A"], input.worktreePath);
     // Args array, never a shell string (net.ts), and the message is the VALUE
-    // of `-m` — a leading `-` is not a word git can read as a flag.
-    await net("git", ["commit", "-m", message], input.worktreePath);
+    // of `-m` — a leading `-` is not a word git can read as a flag. The unused
+    // per-file summary can be huge, so suppress it (hook stderr still surfaces).
+    await net("git", ["commit", "--quiet", "-m", message], input.worktreePath);
     return ok({ committed: true, message });
   } catch (caught) {
     return err(extractFailure(caught).stderr);

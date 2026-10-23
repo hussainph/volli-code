@@ -32,6 +32,11 @@ import type { LogRecord } from "@volli/shared";
 
 import { MAX_LOG_LINE_BYTES, type LogSink } from "./logger";
 
+/** Rotating diagnostic logs under the host profile; not durable user content. */
+export function profileLogsRoot(userDataPath: string): string {
+  return join(userDataPath, "logs");
+}
+
 export interface LogFilePolicy {
   /** No file grows past this; the next line starts the next index for its day. */
   readonly maxFileBytes: number;

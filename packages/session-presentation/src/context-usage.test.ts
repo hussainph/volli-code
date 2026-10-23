@@ -216,6 +216,15 @@ describe("contextGridCells", () => {
 });
 
 describe("formatTokens", () => {
+  it.each([
+    [999_499, "999k"],
+    [999_500, "1M"],
+    [999_999, "1M"],
+    [1_000_000, "1M"],
+  ])("formats %s tokens as %s at the unit boundary", (tokens, expected) => {
+    expect(formatTokens(tokens)).toBe(expected);
+  });
+
   it("compacts the way the pill needs", () => {
     expect(formatTokens(0)).toBe("0");
     expect(formatTokens(417)).toBe("417");

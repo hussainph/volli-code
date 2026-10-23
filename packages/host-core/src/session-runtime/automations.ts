@@ -8,7 +8,6 @@
  * database did not open gets the degraded variant instead: no service, no
  * runner and no timers, chosen once at construction.
  */
-import { join } from "node:path";
 import type Database from "better-sqlite3";
 import type { HostedSessionRuntime } from "@volli/session-engine";
 import {
@@ -22,7 +21,7 @@ import type { DbHandle } from "../index";
 import type { Logger } from "../log/logger";
 import type { HostEventBus } from "../ports/events";
 import { getProjectById } from "../db/projects-repo";
-import { loadPromptTemplates } from "../prompt-templates";
+import { globalCommandsRoot, loadPromptTemplates } from "../prompt-templates";
 import { loadSkills } from "../skills";
 import { chatSessionRecord } from "../session-control";
 import {
@@ -129,7 +128,7 @@ function automationSessionPorts(
       const [loaded, skills] = await Promise.all([
         loadPromptTemplates({
           projectCommandsDir: projectCommandsDir(project.path),
-          globalCommandsDir: join(directories.dataDir, "commands"),
+          globalCommandsDir: globalCommandsRoot(directories.dataDir),
         }),
         loadSkills({
           projectSkillsDir: projectSkillsDir(project.path),

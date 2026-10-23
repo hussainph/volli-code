@@ -425,6 +425,7 @@ afterEach(async () => {
   root = null;
   container?.remove();
   container = null;
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -607,6 +608,38 @@ describe("running by hand", () => {
 });
 
 describe("run history", () => {
+  it("ticks Run and skipped due ages with one clock without reloading history", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const now = new Date("2026-06-01T12:00:00Z").getTime();
+    vi.setSystemTime(now);
+    await mount({
+      runs: [run({ createdAt: now - 44_000 })],
+      skips: [skip({ dueAt: now - 43_000, recordedAt: now })],
+    });
+    const skipRow = () => historySection().querySelector('[data-run-history-skip="skip-1"]')!;
+    expect(historyRun("run-1").textContent).toContain("just now");
+    expect(skipRow().textContent).toContain("just now");
+    expect(vi.getTimerCount()).toBe(1);
+
+    await act(async () => vi.advanceTimersByTime(1_001));
+    expect(historyRun("run-1").textContent).toContain("1m ago");
+    expect(skipRow().textContent).toContain("just now");
+    await act(async () => vi.advanceTimersByTime(1_001));
+    expect(skipRow().textContent).toContain("1m ago");
+    // Model a suspended page: the next callback sees the jumped wall clock.
+    vi.setSystemTime(now + 3_600_000);
+    await act(async () => vi.advanceTimersToNextTimer());
+    expect(historyRun("run-1").textContent).toContain("1h ago");
+    expect(skipRow().textContent).toContain("1h ago");
+    expect(doors.runsForProject).toHaveBeenCalledTimes(1);
+    expect(doors.skipsForProject).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(1);
+
+    await act(async () => root?.unmount());
+    root = null;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("names the Automation and the model and effort the Run resolved", async () => {
     await mount({ runs: [run()] });
 

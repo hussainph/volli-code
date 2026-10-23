@@ -12,14 +12,13 @@
  *
  * Nothing here is visible to a person using the app: no window, no setting.
  */
-import { join } from "node:path";
-
 import {
   consoleSink,
   createLogRing,
   createRotatingFileSink,
   hostLogger,
   installHostLog,
+  profileLogsRoot,
   reportToStderr,
   teeSinks,
   type LogRing,
@@ -58,7 +57,7 @@ export interface DesktopLogOptions {
 
 /** The profile's log directory. */
 export function desktopLogDirectory(userData: string): string {
-  return join(userData, "logs");
+  return profileLogsRoot(userData);
 }
 
 /** Installs the desktop's log root: every host logger writes here from now on. */

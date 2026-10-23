@@ -30,9 +30,9 @@ describe("closeHeadlessTabsOnTicketArchive", () => {
   it("closes an archived Ticket's headless agent tabs, and nothing on any other event", () => {
     const closed: string[] = [];
     const host = {
-      closeHeadlessForTicket: (ticketId: string) => {
-        closed.push(ticketId);
-        return [];
+      clearAgentPartition: async (scope: { projectId: string; ticketId: string | null }) => {
+        expect(scope.projectId).toBe("project-1");
+        closed.push(scope.ticketId!);
       },
     };
     const seam = wakeSeam();
@@ -58,9 +58,8 @@ describe("closeHeadlessTabsOnTicketArchive", () => {
     const seam = wakeSeam();
     const stop = closeHeadlessTabsOnTicketArchive(
       {
-        closeHeadlessForTicket: (ticketId) => {
-          closed.push(ticketId);
-          return [];
+        clearAgentPartition: async ({ ticketId }) => {
+          closed.push(ticketId!);
         },
       },
       seam.subscribe,

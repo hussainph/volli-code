@@ -18,6 +18,17 @@ import { GIT_MAX_CONCURRENT_CHILDREN, resetGitChildSlotsForTest, withGitChildSlo
 import { netFailure, scriptedNet } from "./scripted-net";
 
 describe("the network runner and the local git bound", () => {
+  it.each(["stdout", "stderr"] as const)("captures more than 1 MiB on %s", async (stream) => {
+    const size = 1024 * 1024 + 1;
+    const result = await runNet(
+      process.execPath,
+      ["-e", `process.${stream}.write('x'.repeat(${size}))`],
+      process.cwd(),
+    );
+    expect(result[stream]).toBe("x".repeat(size));
+    expect(result[stream === "stdout" ? "stderr" : "stdout"]).toBe("");
+  });
+
   it("runs OUTSIDE the shared pool, so a push cannot starve the local reads", async () => {
     // The one deliberate exclusion (VC-389). These verbs are bounded at 120 s;
     // a push holding one of five slots would strand every 8 s local read queued

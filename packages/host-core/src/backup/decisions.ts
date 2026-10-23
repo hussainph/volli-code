@@ -34,6 +34,11 @@ import {
   SECRET_STORE_FILE_NAME,
 } from "../secrets";
 import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
+import { blobsRoot } from "../blob-store";
+import { browserTracesRoot } from "../browser/trace-disk";
+import { profileLogsRoot } from "../log/file-sink";
+import { globalCommandsRoot } from "../prompt-templates";
+import { sessionTranscriptsRoot } from "../session-runtime/transcript-artifacts";
 
 /** What a backup does with one persisted table. */
 export type BackupDecisionKind = "include" | "rebuild" | "exclude";
@@ -561,20 +566,39 @@ export const COLUMN_REDACTIONS: readonly ColumnRedaction[] = [
 /**
  * Files and directories under the profile root (Electron `userData`).
  *
- * The two included areas are bound to the functions that build them, so a
- * store that moves takes its declaration with it rather than leaving a stale
- * string here.
+ * Store areas are bound to the functions that build them. Profile wiring is
+ * scanned by `profile-wiring.test.ts`, so a new root needs a decision too.
+ * The commands inclusion is a transport requirement, not yet implemented by
+ * bundle version 1: its closed artifact inventory needs the VC-867 compatibility plan.
  */
 export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
   {
-    area: "blobs",
+    area: blobsRoot(""),
     decision: "include",
     reason: "Attachment bytes. A restored ticket without them has lost its attachments.",
   },
   {
-    area: "session-transcripts",
+    area: sessionTranscriptsRoot(""),
     decision: "include",
     reason: "Transcript artifacts; session events hold only references to these files.",
+  },
+  {
+    area: globalCommandsRoot(""),
+    decision: "include",
+    reason:
+      "User-authored global prompt templates, not runtime scratch. Bundle transport is pending VC-867's N-1-safe extension; version 1 does not carry them yet.",
+  },
+  {
+    area: browserTracesRoot(""),
+    decision: "exclude",
+    reason:
+      "Bounded browser evidence and frames, retained locally rather than portable history; may contain captured page content. Source Browser Traces do not travel.",
+  },
+  {
+    area: profileLogsRoot(""),
+    decision: "exclude",
+    reason:
+      "Rotating diagnostics from this machine, not user-authored content; a restored host starts its own logs.",
   },
   {
     area: "volli.db",
@@ -661,6 +685,62 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
     area: "browser-pictures",
     decision: "exclude",
     reason: "Bounded capture cache for browser tabs; re-captured, never recovered.",
+  },
+  // Other profile areas discovered from production host wiring, not a
+  // second curated directory list in the test.
+  {
+    area: "hostd-cache",
+    decision: "exclude",
+    reason: "Downloaded host installation artifacts; fetched and verified again when needed.",
+  },
+  {
+    area: "remote-hosts.json",
+    decision: "exclude",
+    reason:
+      "This desktop's remote-host links and device enrollment state; a restored machine enrolls its own links.",
+  },
+  {
+    area: "credentials",
+    decision: "exclude",
+    reason: "Host Git sign-in credentials; credentials never travel in a backup.",
+  },
+  {
+    area: "enrolled-devices.json",
+    decision: "exclude",
+    reason: "This host's device enrollment and revocation trust; a restored host enrolls anew.",
+  },
+  {
+    area: "hostd-status.json",
+    decision: "exclude",
+    reason:
+      "The running headless host's health snapshot, pid and socket, not durable user content.",
+  },
+  {
+    area: "hostd.lock",
+    decision: "exclude",
+    reason:
+      "The headless host's single-instance process lock; it cannot be restored on another host.",
+  },
+  {
+    area: ".volli-restore-*",
+    decision: "exclude",
+    reason: "Temporary restore staging; never a source of user data for another backup.",
+  },
+  {
+    area: ".volli-replaced-*",
+    decision: "exclude",
+    reason:
+      "The old profile set aside by restore, including machine-bound credentials; never recursively backed up.",
+  },
+  {
+    area: "volli.db.restore-*",
+    decision: "exclude",
+    reason: "Temporary database recovery staging from a local safety copy, not a separate store.",
+  },
+  {
+    area: "volli.db.damaged-*",
+    decision: "exclude",
+    reason: "A damaged local database set aside during recovery; not part of a healthy backup.",
   },
 ];
 

@@ -296,6 +296,7 @@ function toneClass(fraction: number | null): string {
 function formatPercent(fraction: number): string {
   const percent = fraction * 100;
   if (percent > 0 && percent < 1) return "<1%";
+  if (percent >= 99.5 && percent < 100) return ">99%";
   return `${Math.round(percent)}%`;
 }
 

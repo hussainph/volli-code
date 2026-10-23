@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, open, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { piExecutionEnv } from "./execution-env";
 import { createSessionTools } from "./tools";
+import { ShellSpillBudget } from "./shell-spill";
 import { withCallScope } from "./call-scope";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "./harness-env";
 import { NodeExecutionEnv } from "./vendor/pi-harness/env/nodejs";
@@ -63,6 +64,43 @@ const failingCaptureExecutor: ForegroundShellExecutor = async (input) => {
 };
 
 describe("foreground bash capture", () => {
+  it.each(["foreground", "standalone"])(
+    "caps a real 200 MiB execute spill but keeps the final tail (%s)",
+    async (path) => {
+      const env = await piExecutionEnv(await workspace(), {
+        foregroundExecutor: path === "foreground" ? childExecutor() : undefined,
+      });
+      const [bash] = createSessionTools({ tools: { tools: ["execute"] } }, env);
+      let spillPath: string;
+      try {
+        const result = await bash!.execute("huge", {
+          command:
+            "printf 'first-byte\\n'; head -c 209715200 /dev/zero | tr '\\0' x; printf '\\nfinal-tail\\n'",
+        });
+        spillPath = (result.details as { fullOutputPath: string }).fullOutputPath;
+        expect(text(result)).toContain(`Full output: ${spillPath}`);
+        expect(text(result)).toContain(`[Spill truncated at ${ShellSpillBudget.maxBytes} bytes.]`);
+        expect(text(result)).toContain("final-tail");
+        expect(result.details).toMatchObject({
+          truncation: { maxBytes: 50 * 1024, maxLines: 2000, truncated: true },
+        });
+        expect(text(result).length).toBeLessThan(52_000);
+        const file = await open(spillPath, "r");
+        try {
+          expect((await file.stat()).size).toBe(ShellSpillBudget.maxBytes);
+          const { buffer } = await file.read(Buffer.alloc(11), 0, 11, 0);
+          expect(buffer.toString()).toBe("first-byte\n");
+        } finally {
+          await file.close();
+        }
+      } finally {
+        await env.cleanup(BACKGROUND_CONTEXT);
+      }
+      await expect(stat(dirname(spillPath!))).rejects.toMatchObject({ code: "ENOENT" });
+    },
+    60_000,
+  );
+
   it("keeps bounded capture and complete spill, with the original frozen declaration", async () => {
     const cwd = await workspace();
     const runner = vi.fn(childExecutor(true));

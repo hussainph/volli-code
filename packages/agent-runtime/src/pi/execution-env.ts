@@ -14,10 +14,14 @@
  */
 
 import { addAbortListener } from "node:events";
+import { rm } from "node:fs/promises";
 import type { ForegroundShellExecutor } from "./vendor/pi-harness/types";
 
 import {
   NodeExecutionEnv,
+  err,
+  FileError,
+  type Result,
   type Context,
   type ExecutionEnv,
   type ShellExecOptions,
@@ -277,6 +281,8 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
   readonly #environment: Readonly<Record<string, string>> | undefined;
   readonly #secretEnvironment: PiExecutionEnvOptions["secretEnvironment"];
   readonly #onCleanup: (() => void | Promise<void>) | undefined;
+  readonly #tempDirectories = new Set<string>();
+  readonly #pendingTempDirectories = new Set<Promise<Result<string, FileError>>>();
   #cleaned = false;
 
   constructor(options: PiExecutionEnvOptions & { cwd: string }) {
@@ -292,11 +298,9 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
    * Pi's bash tool asks for the host environment; here is the only place that
    * can decline.
    *
-   * Only the environment is this override's business. Output capture,
-   * truncation and spilling are 0.85's `capture`/`onUpdate` contract and are
-   * left entirely to {@link NodeExecutionEnv} — `options` is forwarded whole,
-   * so a caller's limits, retention and update callback reach Pi's own
-   * implementation untouched.
+   * Output capture and truncation remain in NodeExecutionEnv; options are
+   * forwarded whole so the inline tail and update contract stay untouched.
+   * This attachment owns the temp directories used by its bounded spills.
    */
   override async exec(command: string, options: ShellExecOptions | undefined, context: Context) {
     // Resolve credentials before building the record or starting a child;
@@ -319,11 +323,39 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
     return super.exec(command, { ...options, env, inheritEnv: false }, context);
   }
 
+  override async createTempDir(
+    prefix: string | undefined,
+    context: Context,
+  ): Promise<Result<string, FileError>> {
+    if (this.#cleaned) return err(new FileError("invalid", "Session attachment is closed"));
+    const pending = super.createTempDir(prefix, context).then((created) => {
+      if (created.ok) this.#tempDirectories.add(created.value);
+      return created;
+    });
+    this.#pendingTempDirectories.add(pending);
+    try {
+      return await pending;
+    } finally {
+      this.#pendingTempDirectories.delete(pending);
+    }
+  }
+
   override async cleanup(context: Context): Promise<void> {
     if (this.#cleaned) return;
     this.#cleaned = true;
     try {
       await super.cleanup(context);
+      // Runtime close drains tools first. Also account for a temp creation
+      // already in flight: nothing created by this attachment may escape it.
+      await Promise.allSettled(this.#pendingTempDirectories);
+      // Cleanup is best effort: one inaccessible directory must not prevent
+      // other deletions or the attachment's closed observation.
+      await Promise.allSettled(
+        [...this.#tempDirectories].map((directory) =>
+          rm(directory, { recursive: true, force: true }),
+        ),
+      );
+      this.#tempDirectories.clear();
     } finally {
       await this.#onCleanup?.();
     }

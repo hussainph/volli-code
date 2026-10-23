@@ -31,6 +31,7 @@ import {
 
 import { resolveChangeSetBaseRevision } from "./comparison-ref";
 import { stderrOf } from "./git";
+import { parseNumstatTokens, splitNul, type ParsedNumstat } from "./git-output";
 import { readOnlyGitAsync } from "./scan";
 import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";
 
@@ -74,14 +75,6 @@ interface ParsedNameStatus {
   status: ChangeSetFileStatus;
   path: string;
   previousPath?: string;
-}
-
-interface ParsedNumstat {
-  path: string;
-  previousPath?: string;
-  insertions: number | null;
-  deletions: number | null;
-  binary: boolean;
 }
 
 interface UntrackedFileStat {
@@ -373,31 +366,6 @@ function parseRawNumstat(out: string): {
   return { nameStatuses, numstats: parseNumstatTokens(tokens, i) };
 }
 
-/** Parses the trailing numstat block, starting after all raw records. */
-function parseNumstatTokens(tokens: readonly string[], start: number): ParsedNumstat[] {
-  const entries: ParsedNumstat[] = [];
-  let i = start;
-  while (i < tokens.length) {
-    const field = tokens[i++]!;
-    if (field.length === 0) continue;
-    const parts = field.split("\t");
-    if (parts.length < 2) continue;
-    const insertions = parseCount(parts[0]!);
-    const deletions = parseCount(parts[1]!);
-    const pathPart = parts[2] ?? "";
-    const binary = insertions === null && deletions === null;
-    if (pathPart.length > 0) {
-      entries.push({ path: pathPart, insertions, deletions, binary });
-      continue;
-    }
-    const previousPath = tokens[i++] ?? "";
-    const path = tokens[i++] ?? "";
-    if (path.length === 0) continue;
-    entries.push({ path, previousPath, insertions, deletions, binary });
-  }
-  return entries;
-}
-
 /**
  * Parses untracked entries from `git status --porcelain=v2 -z`.
  * Format: `? <path>\0` (literal space after `?`).
@@ -593,21 +561,6 @@ function statusFromCode(kind: string): ChangeSetFileStatus {
     default:
       return "conflicted";
   }
-}
-
-/** `"-"` (binary) → null; otherwise the parsed integer. */
-function parseCount(field: string): number | null {
-  if (field === "-") return null;
-  const n = Number.parseInt(field, 10);
-  return Number.isInteger(n) ? n : null;
-}
-
-function splitNul(out: string): string[] {
-  if (out.length === 0) return [];
-  const parts = out.split("\0");
-  // git's trailing NUL leaves a final empty token — drop it.
-  if (parts.length > 0 && parts[parts.length - 1] === "") parts.pop();
-  return parts;
 }
 
 function total(files: readonly ChangeSetFile[], key: "insertions" | "deletions"): number {
