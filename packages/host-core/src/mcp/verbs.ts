@@ -140,9 +140,12 @@ function refusal(text: string): RuntimeVerbResult {
 const TOOL_REFRESH_NOTE =
   "Selected Code-Mode-only tools become usable in this Session before the next program. Other additions wait for a cold prompt cache, compaction or a model switch. New root Sessions get the updated MCP tools; delegated helpers inherit their parent's current recorded MCP tools, including refreshed additions. Existing tools are never removed.";
 
-/** Disabling keeps inherited tools but stops offering them to new root Sessions. */
+/**
+ * Disabling keeps inherited tools but stops offering them to new root Sessions,
+ * and stops the server for the Sessions that keep them (VC-771).
+ */
 const KEPT_ON_DISABLE_NOTE =
-  "This Session keeps every tool it already holds, and a delegated helper inherits them. New root Sessions are no longer offered them.";
+  "This Session keeps every tool it already holds, and a delegated helper inherits them. New root Sessions are no longer offered them. Until it is turned on again, a call to one of its tools answers that the server is disabled, and the server is not started; turning it on makes the same calls work again.";
 
 /** A list of tool names as the caller spelled it, each counted once. */
 function nameList(raw: unknown): readonly string[] {

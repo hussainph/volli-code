@@ -8,7 +8,7 @@ import type {
   WebContentsViewConstructorOptions,
   WebPreferences,
 } from "electron";
-import type { RuntimeBrowserConsoleMessage } from "@volli/shared";
+import type { BrowserAppShortcutEvent, RuntimeBrowserConsoleMessage } from "@volli/shared";
 import {
   BROWSER_DEFAULT_BOUNDS,
   browserSessionPartition,
@@ -24,6 +24,7 @@ import {
 
 import { isBrowserStartUrl } from "../../browser-start-page";
 import type { BrowserTabBounds, BrowserTabCaptureFrame, BrowserTabState } from "../../ipc/contract";
+import { browserKeyRoute } from "./app-shortcuts";
 import { debuggerTransport, loadWaiter } from "./webcontents-cdp";
 import { hostLogger } from "@volli/host-core/log";
 
@@ -47,6 +48,12 @@ export interface BrowserTabHostDependencies extends BrowserTabRegistryPorts {
    * than a BrowserWindow (VC-278).
    */
   createStageWindow: () => BaseWindow;
+  /**
+   * Hands an app shortcut pressed inside a shown page to the window it is
+   * shown in (VC-301; {@link browserKeyRoute}). Absent, every key stays the
+   * page's, which is what a host with no app renderer to route to should do.
+   */
+  deliverAppShortcut?: (window: BrowserWindow, event: BrowserAppShortcutEvent) => void;
 }
 
 /**
@@ -87,6 +94,46 @@ interface BrowserTabEntry extends BrowserTabRecord {
   lastInteractionAt: number | null;
   /** Bounded native transcript-preview captures, deduplicated by generation. */
   pictureCaptures: Map<number, Promise<NativeImage>>;
+  /** Who paints this tab's plane right now; see {@link BrowserTabSurface}. */
+  surface: BrowserTabSurface;
+  /** The background last handed to the native view, so a repeat is not sent twice. */
+  paintedBackground: string | null;
+}
+
+/**
+ * Who owns what a tab's plane shows (VC-302), which decides the color the
+ * native view paints where no document has.
+ *
+ * `app` is every state the product draws rather than a website: a tab before
+ * its first navigation commits, the blank start page, a failed load's empty
+ * error document, and a page whose renderer died. The view composites ABOVE
+ * the renderer's themed placeholder, so these states can only match the app by
+ * painting the theme themselves — left alone the plane is black until a frame
+ * arrives, and `about:blank` then paints Chromium's white even in Dark.
+ *
+ * `page` is a committed website. It gets Chromium's own default back, because
+ * Electron's view background is also the page's base background: a site that
+ * sets no background of its own must keep drawing on white, never on whatever
+ * the app's theme happens to be.
+ */
+type BrowserTabSurface = "app" | "page";
+
+/**
+ * The base background a website is drawn on — Chromium's default canvas, and
+ * what a WebContentsView paints when nothing sets one. Restored when a site
+ * commits, after the app-owned blank or loading plane was themed.
+ */
+const BROWSER_PAGE_BACKGROUND = "#FFFFFF";
+
+/**
+ * Chromium's net::ERR_ABORTED: an older load cancelled because a newer one won.
+ * Not a failed user operation, and it leaves the previous document in place.
+ */
+const NET_ERR_ABORTED = -3;
+
+/** Whether a load failure is the tab's own page failing, not a frame or a superseded load. */
+function isMainFrameFailure(errorCode: number, isMainFrame: boolean): boolean {
+  return isMainFrame && errorCode !== NET_ERR_ABORTED;
 }
 
 /**
@@ -270,6 +317,13 @@ export class BrowserTabHost extends BrowserTabRegistry<
   private readonly planeListeners = new Set<(attachedTabIds: readonly string[]) => void>();
   /** The off-screen stage, built on the first tab that needs one; see {@link requireStage}. */
   private stageWindow: BaseWindow | null = null;
+
+  /**
+   * The app theme's plane color (`--background`), or null until the renderer
+   * first reports one. Every app-owned plane paints it ({@link BrowserTabSurface}); see
+   * {@link setThemeBackground}.
+   */
+  private themeBackground: string | null = null;
 
   /** The settle wait every Session's port binds; see {@link waitForLoad}. */
   private readonly loadWait = loadWaiter((tabId) => this.webContentsOf(tabId));
@@ -524,6 +578,39 @@ export class BrowserTabHost extends BrowserTabRegistry<
     };
   }
 
+  /**
+   * Follows the app's effective theme (VC-302): main calls this with the plane
+   * rung (`--background`) the renderer actually painted, on its first durable
+   * paint and again on every change — a theme pick, a project override, the
+   * system flipping under `auto`. That rung, not the window edge, because it is
+   * what a Browser pane's plane is drawn in. Every app-owned plane repaints
+   * now; a tab showing a website keeps the page's own background
+   * ({@link BrowserTabSurface}).
+   *
+   * A tab opened before the first call shows the native default until that
+   * call arrives, and is repainted by it then.
+   */
+  setThemeBackground(background: string): void {
+    this.themeBackground = background;
+    for (const entry of this.tabs.values()) {
+      if (entry.surface === "app") this.paintPlane(entry);
+    }
+  }
+
+  /** Records who owns a tab's plane and paints the matching background. */
+  private claimSurface(entry: BrowserTabEntry, surface: BrowserTabSurface): void {
+    entry.surface = surface;
+    this.paintPlane(entry);
+  }
+
+  private paintPlane(entry: BrowserTabEntry): void {
+    const background = entry.surface === "page" ? BROWSER_PAGE_BACKGROUND : this.themeBackground;
+    if (background === null || background === entry.paintedBackground) return;
+    if (entry.view.webContents.isDestroyed()) return;
+    entry.view.setBackgroundColor(background);
+    entry.paintedBackground = background;
+  }
+
   /** Creates one hidden tab; visibility is a separate renderer-measured act. */
   open(input: BrowserTabCreateOptions): BrowserTabState {
     if (!isAllowedBrowserTarget(input.url)) {
@@ -567,7 +654,12 @@ export class BrowserTabHost extends BrowserTabRegistry<
       lastInteractionAt: null,
       pictureCaptures: new Map(),
       hold: null,
+      surface: "app",
+      paintedBackground: null,
     };
+    // Themed from birth, before it is staged, shown or loaded: until the first
+    // navigation commits, the plane is the app's, whatever URL it is headed to.
+    this.paintPlane(entry);
     this.tabs.set(tabId, entry);
     // Before the load below, not after: the first navigation is what allocates
     // the surface the compositor then hands to captures and hit-testing, and a
@@ -600,6 +692,20 @@ export class BrowserTabHost extends BrowserTabRegistry<
     });
     view.webContents.on("focus", () => {
       if (entry.parent.kind === "window") entry.lastInteractionAt = this.now();
+    });
+    // App chords out of the page (VC-301), taken before the page or the menu
+    // can have them. Only while the page holds native focus on screen: a
+    // person's key cannot arrive any other way, and CDP key events reach this
+    // same hook — an agent pressing ⌘W into a page nobody is focused on is the
+    // page's input, never a close.
+    view.webContents.on("before-input-event", (event, key) => {
+      const deliver = this.deps.deliverAppShortcut;
+      const window = this.windowOf(entry);
+      if (deliver === undefined || window === null || !view.webContents.isFocused()) return;
+      const route = browserKeyRoute(key);
+      if (route.kind === "page") return;
+      event.preventDefault();
+      if (route.kind === "app") deliver(window, { tabId, shortcut: route.shortcut });
     });
     view.webContents.setWindowOpenHandler(({ url }) => {
       // A hostile page can ask indefinitely; the same cap used by every other
@@ -638,16 +744,26 @@ export class BrowserTabHost extends BrowserTabRegistry<
     view.webContents.on(
       "did-fail-load",
       (_event, errorCode, errorDescription, _validatedUrl, isMainFrame) => {
-        // ERR_ABORTED is Chromium cancelling an older load because a newer one
-        // won. It is not a failed user operation and must not overwrite the
-        // newer page with a stale error.
-        if (!isMainFrame || errorCode === -3) return;
+        // A superseded load must not overwrite the newer page with a stale error.
+        if (!isMainFrameFailure(errorCode, isMainFrame)) return;
         const message = `Could not load page: ${errorDescription}`;
         this.recordConsole(entry, { level: "error", text: message });
         this.publish(entry, {
           error: message,
           loading: false,
         });
+      },
+    );
+    // A main-frame navigation that failed before its site could commit. What
+    // shows then is Chromium's error document, empty in Electron, so the plane
+    // is the app's again and the chrome's alert names what went wrong
+    // (VC-302). Not `did-fail-load`: that also fires when a site that already
+    // committed fails partway, and its own page is still showing then.
+    view.webContents.on(
+      "did-fail-provisional-load",
+      (_event, errorCode, _errorDescription, _validatedUrl, isMainFrame) => {
+        if (!isMainFrameFailure(errorCode, isMainFrame)) return;
+        this.claimSurface(entry, "app");
       },
     );
     view.webContents.on("page-title-updated", (_event, title) => {
@@ -678,8 +794,15 @@ export class BrowserTabHost extends BrowserTabRegistry<
         error: `The page stopped responding and its renderer exited (${details.reason}).`,
         loading: false,
       });
+      // The page's pixels went with its renderer; what is left is the app's.
+      this.claimSurface(entry, "app");
     });
-    view.webContents.on("did-navigate", (_event, url) => this.publish(entry, { url }));
+    view.webContents.on("did-navigate", (_event, url) => {
+      // A commit, not a start: until the new document commits the old plane is
+      // still what shows, so a themed blank stays themed for the whole load.
+      this.claimSurface(entry, isBrowserStartUrl(url) ? "app" : "page");
+      this.publish(entry, { url });
+    });
     view.webContents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
       if (isMainFrame) this.publish(entry, { url });
     });
@@ -798,6 +921,23 @@ export class BrowserTabHost extends BrowserTabRegistry<
     this.beginProductNavigation(entry);
     entry.view.webContents.reload();
     return { ...entry.state };
+  }
+
+  /**
+   * Gives keyboard focus back to one shown page, after an app shortcut taken
+   * from it turned out to mean nothing to the renderer (VC-301). Main moved
+   * focus to the app before the renderer could decide, and a key that did
+   * nothing must not also strand the person outside the page they were typing
+   * in.
+   *
+   * Quiet for a tab that is gone or off screen, like {@link hide}: it asks for
+   * an end state, and a page nobody can see has no focus to return to.
+   */
+  focusPage(tabId: string): void {
+    const entry = this.tabs.get(tabId);
+    if (entry === undefined || entry.parent.kind !== "window") return;
+    const contents = entry.view.webContents;
+    if (!contents.isDestroyed()) contents.focus();
   }
 
   /** Toggles Chromium DevTools inside this tab's measured plane. */

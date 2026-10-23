@@ -110,7 +110,9 @@ describe("a user turn that delivered a skill", () => {
     const html = turn(message);
 
     expect(html).toContain("can you tell me what /hussain-sol does?");
-    expect(html).toContain('aria-label="Skills delivered with this message"');
+    // A labelled generic div is ignored by assistive tech; the role makes the
+    // label count (VC-516).
+    expect(html).toContain('role="group" aria-label="Skills delivered with this message"');
     // The chip is the file's one vocabulary for a skill name: a Badge.
     expect(html).toMatch(/data-slot="badge"[^>]*>hussain-sol</);
     expect(html).not.toContain("fifteen kilobytes");
@@ -189,7 +191,6 @@ describe("VC-758 message and work status rows", () => {
         context={{
           ...context,
           deliveryLabels: new Map([["steer", "Pending"]]),
-          steeringMessages: new Set(["steer"]),
         }}
         live={false}
       />,
@@ -210,43 +211,15 @@ describe("VC-758 message and work status rows", () => {
       expect(html).not.toContain("Delivered");
     },
   );
-  it("keeps durable non-delivered states visible", () => {
-    for (const label of ["Not delivered", "Delivery unconfirmed"] as const) {
-      const html = renderToStaticMarkup(
-        <ChatTurn
-          messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
-          context={{ ...context, deliveryLabels: new Map([["user", label]]) }}
-          live={false}
-        />,
-      );
-      expect(html).toContain(`>${label}</span>`);
-    }
-  });
-  it.each(["Delivery unconfirmed", "Not delivered"])(
-    "keeps the explicit %s explanation immediately visible",
-    (label) => {
-      const html = renderToStaticMarkup(
-        <ChatTurn
-          messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
-          context={context}
-          live={false}
-          deliveryLabel={label}
-        />,
-      );
-      expect(html).toContain(`>${label}</span>`);
-    },
-  );
-  it.each(["Delivered", "Recorded"])("does not draw a successful %s footer", (label) => {
+  it("keeps definite durable refusal visible", () => {
     const html = renderToStaticMarkup(
       <ChatTurn
         messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
-        context={{ ...context, deliveryLabels: new Map([["user", "Delivered"]]) }}
+        context={{ ...context, deliveryLabels: new Map([["user", "Not delivered"]]) }}
         live={false}
-        deliveryLabel={label}
       />,
     );
-    expect(html).not.toContain("message-delivery");
-    expect(html).not.toContain(label);
+    expect(html).toContain(">Not delivered</span>");
   });
   it.each(["send", "steer"] as const)(
     "keeps accepted held %s quiet even before durable proof arrives",

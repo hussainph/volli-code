@@ -5,7 +5,7 @@ import type {
   WebContentsView,
   WebContentsViewConstructorOptions,
 } from "electron";
-import type { BrowserTabState } from "@volli/shared";
+import type { BrowserAppShortcutEvent, BrowserTabState } from "@volli/shared";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -115,6 +115,9 @@ class FakeWebContents {
     return false;
   }
   focused = false;
+  focus = vi.fn(() => {
+    this.focused = true;
+  });
   isFocused(): boolean {
     return this.focused;
   }
@@ -162,6 +165,7 @@ class FakeWebContents {
 class FakeView {
   readonly webContents = new FakeWebContents();
   setBounds = vi.fn();
+  setBackgroundColor = vi.fn();
 }
 
 const fakeWindow = {
@@ -268,6 +272,8 @@ let views: FakeView[];
 let viewOptions: WebContentsViewConstructorOptions[];
 let sessions: Map<string, FakeSession>;
 let published: unknown[];
+/** Every app shortcut the host handed back, with the window it named (VC-301). */
+let delivered: { window: unknown; event: BrowserAppShortcutEvent }[];
 let host: BrowserTabHost;
 let pictures: BrowserPictureStore;
 let persisted: Map<string, { bytes: Uint8Array; record: BrowserPictureRecord }>;
@@ -280,6 +286,7 @@ beforeEach(() => {
   viewOptions = [];
   sessions = new Map();
   published = [];
+  delivered = [];
   persisted = new Map();
   stages = [];
   stageBuilds = "ok";
@@ -324,6 +331,7 @@ beforeEach(() => {
     createStageWindow: newStage,
     publishState: (event) => published.push(event),
     publishClosed: (tabId) => published.push({ closedTabId: tabId }),
+    deliverAppShortcut: (window, event) => delivered.push({ window, event }),
   });
 });
 
@@ -1017,6 +1025,165 @@ describe("BrowserTabHost native surface", () => {
     views[0]?.webContents.emit("destroyed");
 
     expect(() => host.hide(tab.tabId)).not.toThrow();
+  });
+});
+
+/** One user tab and its page view, for the plane-background tests (VC-302). */
+function openPlaneTab(url: string): { tabId: string; view: FakeView } {
+  const tab = host.open({ url, projectId: "project-1", ticketId: null, createdBy: "user" });
+  const view = views.at(-1);
+  if (view === undefined) throw new Error("expected page view");
+  return { tabId: tab.tabId, view };
+}
+
+/** A committed main-frame document, as Electron reports one. */
+function commitDocument(view: FakeView, url: string): void {
+  view.webContents.url = url;
+  view.webContents.emit("did-navigate", {}, url, 200, "OK");
+}
+
+describe("BrowserTabHost plane background (VC-302)", () => {
+  const DARK = "#141414";
+  const LIGHT = "#FAFAF7";
+
+  it("themes a new tab's plane before its first load, whatever it is headed to", () => {
+    host.setThemeBackground(DARK);
+    const blank = openPlaneTab(BROWSER_START_URL);
+    const site = openPlaneTab("https://example.com");
+
+    for (const { view } of [blank, site]) {
+      expect(view.setBackgroundColor).toHaveBeenCalledOnce();
+      expect(view.setBackgroundColor).toHaveBeenCalledWith(DARK);
+      // Painted before the load, so the plane is never black while it waits.
+      expect(view.setBackgroundColor.mock.invocationCallOrder[0]).toBeLessThan(
+        view.webContents.loadURL.mock.invocationCallOrder[0]!,
+      );
+    }
+  });
+
+  it("stays themed while loading, hands a committed site Chromium's white, and themes the start page again", () => {
+    host.setThemeBackground(DARK);
+    const { view } = openPlaneTab("https://example.com");
+
+    view.webContents.emit("did-start-navigation", navigationDetails("https://example.com"));
+    view.webContents.emit("did-start-loading");
+    expect(view.setBackgroundColor).toHaveBeenLastCalledWith(DARK);
+
+    commitDocument(view, "https://example.com");
+    expect(view.setBackgroundColor).toHaveBeenLastCalledWith("#FFFFFF");
+
+    // A second site is still a site: nothing to repaint.
+    commitDocument(view, "https://example.com/next");
+    expect(view.setBackgroundColor).toHaveBeenCalledTimes(2);
+
+    commitDocument(view, BROWSER_START_URL);
+    expect(view.setBackgroundColor).toHaveBeenLastCalledWith(DARK);
+  });
+
+  it("repaints every app-owned plane on a theme change and leaves websites their own", () => {
+    host.setThemeBackground(DARK);
+    const blank = openPlaneTab(BROWSER_START_URL);
+    const site = openPlaneTab("https://example.com");
+    commitDocument(blank.view, BROWSER_START_URL);
+    commitDocument(site.view, "https://example.com");
+    blank.view.setBackgroundColor.mockClear();
+    site.view.setBackgroundColor.mockClear();
+
+    host.setThemeBackground(LIGHT);
+    host.setThemeBackground(LIGHT);
+
+    expect(blank.view.setBackgroundColor).toHaveBeenCalledOnce();
+    expect(blank.view.setBackgroundColor).toHaveBeenCalledWith(LIGHT);
+    expect(site.view.setBackgroundColor).not.toHaveBeenCalled();
+  });
+
+  it("paints a tab opened before the theme is known as soon as it is", () => {
+    const { view } = openPlaneTab(BROWSER_START_URL);
+    expect(view.setBackgroundColor).not.toHaveBeenCalled();
+
+    host.setThemeBackground(LIGHT);
+
+    expect(view.setBackgroundColor).toHaveBeenCalledWith(LIGHT);
+  });
+
+  it("returns a failed load's error document to the theme, and the error stays named", () => {
+    host.setThemeBackground(DARK);
+    const { view } = openPlaneTab("https://example.com");
+    commitDocument(view, "https://example.com");
+    view.setBackgroundColor.mockClear();
+
+    // A subframe failing, or Chromium cancelling a load for a newer one, leaves
+    // the site's own document on screen.
+    view.webContents.emit("did-fail-provisional-load", {}, -105, "X", "https://ad.example", false);
+    view.webContents.emit(
+      "did-fail-provisional-load",
+      {},
+      -3,
+      "ABORTED",
+      "https://a.example",
+      true,
+    );
+    expect(view.setBackgroundColor).not.toHaveBeenCalled();
+
+    view.webContents.emit(
+      "did-fail-provisional-load",
+      {},
+      -105,
+      "ERR_NAME_NOT_RESOLVED",
+      "https://missing.example",
+      true,
+    );
+    view.webContents.emit(
+      "did-fail-load",
+      {},
+      -105,
+      "ERR_NAME_NOT_RESOLVED",
+      "https://missing.example",
+      true,
+    );
+    expect(view.setBackgroundColor).toHaveBeenCalledOnce();
+    expect(view.setBackgroundColor).toHaveBeenCalledWith(DARK);
+    // What the chrome's alert reads: the themed plane is never a silent one.
+    expect(published.at(-1)).toMatchObject({
+      error: "Could not load page: ERR_NAME_NOT_RESOLVED",
+      loading: false,
+    });
+
+    host.setThemeBackground(LIGHT);
+    expect(view.setBackgroundColor).toHaveBeenLastCalledWith(LIGHT);
+  });
+
+  it("returns a dead renderer's plane to the theme", () => {
+    host.setThemeBackground(DARK);
+    const { view } = openPlaneTab("https://example.com");
+    commitDocument(view, "https://example.com");
+
+    view.webContents.emit("render-process-gone", {}, { reason: "crashed" });
+
+    expect(view.setBackgroundColor).toHaveBeenLastCalledWith(DARK);
+    expect(published.at(-1)).toMatchObject({ loading: false });
+    expect((published.at(-1) as { error: string }).error).toContain("crashed");
+  });
+
+  it("forgets a closed tab: a later theme change paints nothing for it", () => {
+    host.setThemeBackground(DARK);
+    const { tabId, view } = openPlaneTab(BROWSER_START_URL);
+    host.close(tabId);
+    view.setBackgroundColor.mockClear();
+
+    host.setThemeBackground(LIGHT);
+
+    expect(view.setBackgroundColor).not.toHaveBeenCalled();
+  });
+
+  it("never themes the DevTools view, which is Chromium's to paint", () => {
+    host.setThemeBackground(DARK);
+    const { tabId } = openPlaneTab("https://example.com");
+    host.show(tabId);
+    host.toggleDevTools(tabId);
+    host.setThemeBackground(LIGHT);
+
+    expect(views[1]?.setBackgroundColor).not.toHaveBeenCalled();
   });
 });
 
@@ -3041,5 +3208,185 @@ describe("BrowserTabHost as the desktop's Browser backend (VC-561)", () => {
     await wait;
     expect(settled).toBe(true);
     expect(contents.listeners.get("did-stop-loading")).toHaveLength(1);
+  });
+});
+
+function appKey(overrides: Partial<Electron.Input> = {}): Electron.Input {
+  return {
+    type: "keyDown",
+    key: "k",
+    code: "KeyK",
+    isAutoRepeat: false,
+    isComposing: false,
+    shift: false,
+    control: false,
+    alt: false,
+    meta: true,
+    location: 0,
+    modifiers: ["meta"],
+    ...overrides,
+  };
+}
+
+/** Presses one key into a page the way Chromium does; returns the event's preventDefault. */
+function press(contents: FakeWebContents, input: Electron.Input) {
+  const event = { preventDefault: vi.fn() };
+  contents.emit("before-input-event", event, input);
+  return event.preventDefault;
+}
+
+describe("BrowserTabHost app shortcuts (VC-301)", () => {
+  function shownUserTab() {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    host.show(tab.tabId);
+    return tab;
+  }
+
+  it("takes an app chord from the focused page and hands it to the window the page is on", () => {
+    const tab = shownUserTab();
+    const contents = views[0]!.webContents;
+    contents.focused = true;
+
+    const prevented = press(contents, appKey());
+
+    expect(prevented).toHaveBeenCalledOnce();
+    expect(delivered).toEqual([
+      {
+        window: fakeWindow,
+        event: {
+          tabId: tab.tabId,
+          shortcut: {
+            kind: "replay",
+            chord: {
+              key: "k",
+              code: "KeyK",
+              metaKey: true,
+              ctrlKey: false,
+              altKey: false,
+              shiftKey: false,
+              repeat: false,
+            },
+          },
+        },
+      },
+    ]);
+  });
+
+  it("names the page's own tab for close, whichever other tab is also on screen", () => {
+    shownUserTab();
+    const second = shownUserTab();
+    const contents = views[1]!.webContents;
+    contents.focused = true;
+
+    press(contents, appKey({ key: "w", code: "KeyW" }));
+
+    expect(delivered.map(({ event }) => event)).toEqual([
+      { tabId: second.tabId, shortcut: { kind: "close-tab" } },
+    ]);
+  });
+
+  it("leaves every key that is not the app's to the page", () => {
+    shownUserTab();
+    const contents = views[0]!.webContents;
+    contents.focused = true;
+
+    const prevented = press(contents, appKey({ key: "b", code: "KeyB" }));
+
+    expect(prevented).not.toHaveBeenCalled();
+    expect(delivered).toEqual([]);
+  });
+
+  it("swallows a held close's repeats without closing again", () => {
+    shownUserTab();
+    const contents = views[0]!.webContents;
+    contents.focused = true;
+
+    const prevented = press(contents, appKey({ key: "w", code: "KeyW", isAutoRepeat: true }));
+
+    // Kept from the page, and so from the menu's Close Window, but not delivered.
+    expect(prevented).toHaveBeenCalledOnce();
+    expect(delivered).toEqual([]);
+  });
+
+  it("leaves keys alone in a page without native focus, which is how CDP input arrives", () => {
+    shownUserTab();
+    const contents = views[0]!.webContents;
+    contents.focused = false;
+
+    const prevented = press(contents, appKey({ key: "w", code: "KeyW" }));
+
+    expect(prevented).not.toHaveBeenCalled();
+    expect(delivered).toEqual([]);
+  });
+
+  it("leaves keys alone in a tab that is not on screen", () => {
+    host.open({
+      url: "https://agent.example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "session",
+      ownerSessionId: "session-a",
+    });
+    const contents = views[0]!.webContents;
+    contents.focused = true;
+
+    const prevented = press(contents, appKey());
+
+    expect(prevented).not.toHaveBeenCalled();
+    expect(delivered).toEqual([]);
+  });
+
+  it("hands focus back to a shown page whose shortcut the app had nothing to do with", () => {
+    const tab = shownUserTab();
+
+    host.focusPage(tab.tabId);
+
+    expect(views[0]!.webContents.focus).toHaveBeenCalledOnce();
+  });
+
+  it("returns no focus to a page that is off screen or gone", () => {
+    const tab = shownUserTab();
+    host.hide(tab.tabId);
+    host.focusPage(tab.tabId);
+    host.focusPage("opaque-missing");
+
+    expect(views[0]!.webContents.focus).not.toHaveBeenCalled();
+  });
+
+  it("leaves every key to the page when the host has no renderer to route to", () => {
+    const quiet = new BrowserTabHost({
+      pictures,
+      now: () => clock,
+      createId: () => "quiet-1",
+      createView: () => {
+        const view = new FakeView();
+        views.push(view);
+        return view as unknown as WebContentsView;
+      },
+      fromPartition: () => new FakeSession() as unknown as Session,
+      getWindow: () => appWindow as unknown as BrowserWindow,
+      createStageWindow: newStage,
+      publishState: () => undefined,
+      publishClosed: () => undefined,
+    });
+    const tab = quiet.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    quiet.show(tab.tabId);
+    const contents = views.at(-1)!.webContents;
+    contents.focused = true;
+
+    const prevented = press(contents, appKey());
+
+    expect(prevented).not.toHaveBeenCalled();
+    expect(delivered).toEqual([]);
   });
 });

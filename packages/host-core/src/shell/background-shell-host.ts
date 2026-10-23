@@ -21,9 +21,9 @@
  * {@link SHELL_OUTPUT_MAX_BYTES}; a read cursor, so a read returns only what
  * arrived since the last one and a poll loop costs the same context every
  * time; `startedAt`, `exitedAt`, the exit code and the signal. An exited
- * shell's record and tail stay readable until its Session's attachment ends,
- * so a model that comes back to a finished build can still read how it
- * finished.
+ * shell's record and tail stay readable until its Session's attachment ends —
+ * a Subagent Session's only until its turn completes (VC-809) — so a model
+ * that comes back to a finished build can still read how it finished.
  *
  * WHAT IT REFUSES. The per-Session cap, a shell another Session owns (unknown
  * rather than forbidden — a shell this Session cannot touch is one it was
@@ -56,6 +56,8 @@
  * {@link SHELL_KILL_GRACE_MS}. {@link disposeSession} is the attachment's end
  * — stop, done, detach, replace, relaunch, all through the adapter's one
  * release path — and kills every shell the Session started and forgets them.
+ * A Subagent Session's completed turn calls it too (VC-809), so a shell it
+ * left running cannot reopen it after its parent has the answer.
  * Shells are live resources, not ledger facts: nothing here survives a
  * relaunch, and nothing is written to the database. The record flips to
  * `exited` on the child's `close`, not its `exit` — the two are not ordered
@@ -1022,8 +1024,8 @@ export class BackgroundShellHost {
   }
 
   /**
-   * The attachment's end: kill every shell the Session started and forget
-   * them. Fire-and-forget on the kill, because release must not wait on a
+   * The attachment's end — or a Subagent Session's completed turn (VC-809):
+   * kill every shell the Session started and forget them. Fire-and-forget on the kill, because release must not wait on a
    * process that ignores SIGTERM — the SIGKILL still follows after the grace.
    *
    * A Session that has ended is told nothing (VC-495): an exit notice still

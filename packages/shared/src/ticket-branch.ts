@@ -48,12 +48,19 @@ export function ticketBranchName(ticketId: string, title: string): string {
 }
 
 /**
- * `volli/<DISPLAY-ID>` then either the end or `-<slug>`. The display id is a
- * ticket prefix (`isValidPrefix`: a letter then up to four letters or digits,
- * never a hyphen) and a ticket number, so the first `-<digits>` closes it and
- * no slug can be mistaken for part of the id: `volli/VC-2-3-things` is VC-2's.
+ * `volli/<DISPLAY-ID>`, an optional one-letter stacked-PR slice (`c` in
+ * `volli/VC-627c-venue`, VC-659), then either the end or `-<slug>`. The
+ * display id is a ticket prefix (`isValidPrefix`: a letter then up to four
+ * letters or digits, never a hyphen) and a ticket number, so the first
+ * `-<digits>` closes it and no slug can be mistaken for part of the id:
+ * `volli/VC-2-3-things` is VC-2's, and a slice cut as `volli/VC-627-b-…` is
+ * VC-627's through its slug. Anything else after the number is refused —
+ * `volli/VC-6270` is VC-6270's, never VC-627's, and `volli/VC-627.bak` or
+ * `volli/VC-627_x` belong to no ticket. Linear (CodeQL js/polynomial-redos,
+ * #429): it is anchored, and `\d+` can only give back digits, which neither
+ * the slice letter nor `-` nor the end can match.
  */
-const TICKET_BRANCH = /^volli\/([A-Z][A-Z0-9]{0,4}-\d+)(?:-|$)/;
+const TICKET_BRANCH = /^volli\/([A-Z][A-Z0-9]{0,4}-\d+)[a-z]?(?:-|$)/;
 
 /**
  * The display id a ticket branch names (`"VC-12"` for `volli/VC-12-mcp-server`
@@ -73,7 +80,8 @@ export function ticketBranchDisplayId(branch: string): string | null {
  * - `expected` — the branch the ticket records (or would name).
  * - `adopt` — a different branch of the SAME ticket (its display id parses out
  *   of it). This is the ticket's work, moved: an agent in the worktree cut a
- *   narrower branch, or the slug drifted with a retitle. The checkout is what
+ *   narrower branch or a stacked-PR slice (`volli/VC-627c-…`, VC-659), or the
+ *   slug drifted with a retitle. The checkout is what
  *   is true, so the ticket takes it on rather than refusing to open.
  * - `foreign` — a branch that is not this ticket's: another ticket's, or one
  *   outside the `volli/` convention. Whose work it is cannot be known from

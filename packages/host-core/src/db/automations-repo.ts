@@ -21,6 +21,7 @@ import {
   parseAutomationRuntime as readAutomationRuntime,
   parseAutomationSkipReason,
   parseAutomationTrigger,
+  SESSION_USER_BLOCKING_ATTENTION_KINDS,
 } from "@volli/shared";
 import type {
   Automation,
@@ -424,6 +425,125 @@ export function listProjectRunsForAutomation(
     `SELECT automation_runs.* FROM automation_runs
        JOIN sessions ON sessions.id = automation_runs.session_id
       WHERE automation_runs.automation_id = ? AND sessions.project_id = ?
+      ORDER BY automation_runs.created_at DESC, automation_runs.id DESC`,
+  ).all(input.automationId, input.projectId);
+  return rows.map(mapRun);
+}
+
+/**
+ * Literal SQL for the user-blocking Attention kinds. They are a compile-time
+ * constant from `@volli/shared`, never input, so writing them into the
+ * statement text is safe and keeps the statement cacheable by `prepared`.
+ */
+const USER_BLOCKING_ATTENTION_KINDS_SQL = SESSION_USER_BLOCKING_ATTENTION_KINDS.map(
+  (kind) => `'${kind}'`,
+).join(", ");
+
+/**
+ * The subset of {@link listProjectRunsForAutomation} whose Sessions could
+ * still read as working or waiting, newest first (VC-816).
+ *
+ * This is the single-flight guard's candidate list. The guard reads the
+ * projection of every Run it is given, and an Automation on an hourly schedule
+ * collects thousands of Runs. Reading all of them made every new Run slower
+ * than the last. It also meant that one old Session whose projection could not
+ * be read refused every later Run.
+ *
+ * The narrowing drops only Sessions whose durable facts show they cannot be
+ * working or waiting. Every Session it keeps is still read through the
+ * ordinary projection, and that read decides; this query decides nothing
+ * except which Sessions skip it. It is the same pattern as
+ * `listAttachedSessions` (VC-403) and `catchUpSessionResumptions`. The rule
+ * it mirrors is `chatSessionRecord`'s activity over `foldSession`:
+ *
+ *  - `working` needs `turnActive`. The fold sets it on `turn.started` and
+ *    clears it on `turn.completed`, `turn.interrupted`, `attachment.closed`
+ *    and `attachment.failed`. A Session is kept when its latest
+ *    `turn.started` comes after every one of those.
+ *  - `waiting` needs an active Interaction or an active user-blocking
+ *    Attention. The fold opens them only on `interaction.opened` and
+ *    `attention.raised`, and closes them only on `interaction.resolved` /
+ *    `interaction.cancelled` and `attention.cleared` for the same id. A
+ *    Session is kept while any of them has no later close.
+ *  - Any open attachment keeps a Session as well. A Session that holds a live
+ *    binding is the first place to look for live work, and the partial
+ *    `session_attachments_open` index makes the check cost nothing.
+ *
+ * Each test is wider than the fold, never narrower. For example, a later
+ * re-raise that turned an Attention non-blocking still keeps the Session. A
+ * wider test costs one extra projection read; a narrower one would admit a
+ * second worker.
+ *
+ * An archived Session is never kept. The Session Engine refuses every command
+ * on one, so nothing can resume its work or answer its question. This is the
+ * ticket's terminal state, and it is why an archived Session whose projection
+ * can no longer be read stops refusing new Runs.
+ *
+ * Every test is an index seek on `session_event_sequence_match (session_id,
+ * kind, sequence)` and compares the Session's OWN `sequence`, the local
+ * order `docs/BOUNDARIES.md` rule 2 lets a reducer depend on. JSON is read
+ * only from the few Interaction and Attention rows.
+ */
+export function listPossiblyLiveProjectRunsForAutomation(
+  db: Database.Database,
+  input: { automationId: string; projectId: string },
+): AutomationRun[] {
+  const rows = prepared<[string, string], AutomationRunRow>(
+    db,
+    `SELECT automation_runs.* FROM automation_runs
+       JOIN sessions ON sessions.id = automation_runs.session_id
+      WHERE automation_runs.automation_id = ? AND sessions.project_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM session_event_sequence archived
+           WHERE archived.session_id = sessions.id AND archived.kind = 'session.archived'
+        )
+        AND (
+          EXISTS (
+            SELECT 1 FROM session_attachments attachment
+             WHERE attachment.session_id = sessions.id
+               AND attachment.closed_sequence IS NULL
+               AND attachment.observed_kind = 'opened'
+          )
+          OR COALESCE((
+            SELECT MAX(event.sequence) FROM session_event_sequence kinds
+              JOIN session_events event ON event.id = kinds.event_id
+             WHERE kinds.session_id = sessions.id AND kinds.kind = 'turn.started'
+          ), 0) > COALESCE((
+            SELECT MAX(event.sequence) FROM session_event_sequence kinds
+              JOIN session_events event ON event.id = kinds.event_id
+             WHERE kinds.session_id = sessions.id
+               AND kinds.kind IN ('turn.completed', 'turn.interrupted', 'attachment.closed', 'attachment.failed')
+          ), 0)
+          OR EXISTS (
+            SELECT 1 FROM session_event_sequence kinds
+              JOIN session_events opened ON opened.id = kinds.event_id
+             WHERE kinds.session_id = sessions.id AND kinds.kind = 'interaction.opened'
+               AND NOT EXISTS (
+                 SELECT 1 FROM session_event_sequence later
+                   JOIN session_events ended ON ended.id = later.event_id
+                  WHERE later.session_id = sessions.id
+                    AND later.kind IN ('interaction.resolved', 'interaction.cancelled')
+                    AND ended.sequence > opened.sequence
+                    AND json_extract(ended.payload, '$.interactionId')
+                        = json_extract(opened.payload, '$.interaction.id')
+               )
+          )
+          OR EXISTS (
+            SELECT 1 FROM session_event_sequence kinds
+              JOIN session_events raised ON raised.id = kinds.event_id
+             WHERE kinds.session_id = sessions.id AND kinds.kind = 'attention.raised'
+               AND json_extract(raised.payload, '$.attention.kind')
+                   IN (${USER_BLOCKING_ATTENTION_KINDS_SQL})
+               AND NOT EXISTS (
+                 SELECT 1 FROM session_event_sequence later
+                   JOIN session_events cleared ON cleared.id = later.event_id
+                  WHERE later.session_id = sessions.id AND later.kind = 'attention.cleared'
+                    AND cleared.sequence > raised.sequence
+                    AND json_extract(cleared.payload, '$.attentionId')
+                        = json_extract(raised.payload, '$.attention.id')
+               )
+          )
+        )
       ORDER BY automation_runs.created_at DESC, automation_runs.id DESC`,
   ).all(input.automationId, input.projectId);
   return rows.map(mapRun);

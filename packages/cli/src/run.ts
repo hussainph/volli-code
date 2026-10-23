@@ -62,7 +62,8 @@ export interface RunCliDependencies {
 }
 
 function clientError(error: unknown): AgentError {
-  if (error instanceof AgentClientError) return makeAgentError(error.code, error.message);
+  if (error instanceof AgentClientError)
+    return makeAgentError(error.code, error.message, error.next);
   return makeAgentError("MUTATION_FAILED", errorMessage(error));
 }
 
@@ -457,10 +458,17 @@ export async function runCli(
     // `doctor` is the one command whose arguments are measurements rather than
     // intent: what this process can see from inside the environment under test,
     // which main has no way to observe and must not reconstruct.
+    //
+    // The `ticket list` table prints id, column, title and labels, never a
+    // body, and bodies are most of the answer: asking for them would put a
+    // long-lived board past the client's response limit (VC-824). `--json`
+    // keeps its full rows unless the caller passes `--no-body` itself.
     const args =
       command === "doctor" && invocation.args["dryRun"] !== true
         ? { ...invocation.args, ...(await doctorObservation(dependencies)) }
-        : invocation.args;
+        : command === "ticket.list" && !invocation.json
+          ? { ...invocation.args, body: false }
+          : invocation.args;
     // The person's credential on a headless host (VC-623). Never beside a
     // Session's environment: `operatorTokenFor` returns nothing there without
     // reading anything, so an agent's request is byte-for-byte what it was.

@@ -9,6 +9,7 @@ import type {
   Result,
 } from "../../../../ipc/contract";
 import type { BrowserApi } from "@renderer/components/browser/browser-api";
+import { registerBrowserPaneCommands } from "@renderer/components/browser/browser-app-shortcuts";
 import { BrowserChrome } from "@renderer/components/browser/browser-chrome";
 import { BrowserPlaneController } from "@renderer/components/browser/browser-plane";
 import {
@@ -174,11 +175,24 @@ export function BrowserPane({
   visible,
   api,
   onTabState,
+  onClose,
+  onFocusPane,
 }: {
   tab: BrowserTabState;
   visible: boolean;
   api: BrowserApi;
   onTabState(tab: BrowserTabState): void;
+  /**
+   * Closes this tab the way its surface's close control does — what ⌘W pressed
+   * inside the page runs (VC-301). Absent, ⌘W in the page does nothing.
+   */
+  onClose?: () => void;
+  /**
+   * Makes the split-view pane drawing this tab the focused one — run before a
+   * chord from inside the page is replayed, because a click into the native
+   * page never told the split view which pane the person is in (VC-301).
+   */
+  onFocusPane?: () => void;
 }) {
   const anchorRef = React.useRef<HTMLDivElement>(null);
   const addressRef = React.useRef<HTMLInputElement>(null);
@@ -201,6 +215,30 @@ export function BrowserPane({
     previousUrlRef.current = next;
     setAddress((current) => (current === previousUrl ? next : current));
   }, [tab.url]);
+
+  // Chords pressed inside THIS page come back from main named by tab
+  // (VC-301), so the pane drawing the tab is the one that answers — never the
+  // split view's focused pane. Only while shown: a hidden plane holds no focus
+  // to press them from. The surface's callbacks are read through a ref so a
+  // fresh callback each render does not re-register.
+  const surfaceRef = React.useRef({ onClose, onFocusPane });
+  surfaceRef.current = { onClose, onFocusPane };
+  React.useEffect(() => {
+    if (!visible) return;
+    return registerBrowserPaneCommands(tab.tabId, {
+      close: () => {
+        const close = surfaceRef.current.onClose;
+        if (close === undefined) return false;
+        close();
+        return true;
+      },
+      focusAddress: () => {
+        addressRef.current?.focus();
+        addressRef.current?.select();
+      },
+      focusPane: () => surfaceRef.current.onFocusPane?.(),
+    });
+  }, [tab.tabId, visible]);
 
   // A tab that has been sent nowhere yet is a question, so the caret starts in
   // the address bar — the bargain ⌘T makes in every other browser.

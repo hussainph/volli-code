@@ -28,6 +28,7 @@ import {
   NO_AUTOMATION_TRIGGER,
   offeredAutomationsForColumn,
   offeredAutomationsInDigitOrder,
+  offeredAutomationsInPinnedOrder,
   parseAutomationSkipReason,
   parseAutomationTrigger,
   sameAutomationRunRequestIdentity,
@@ -499,6 +500,28 @@ describe("offeredAutomationsInDigitOrder", () => {
         rankedAutomationIds: ["shared", "r1"],
       }).map((row) => row.id),
     ).toEqual(["shared", "r1"]);
+  });
+});
+
+describe("offeredAutomationsInPinnedOrder", () => {
+  const crowd = Array.from({ length: 12 }, (_, index) =>
+    automation({ id: `c${index}`, trigger: { kind: "columns", columns: ["doing"] } }),
+  );
+
+  it("keeps every row past the ninth, pinned the same way the digits are", () => {
+    const input = {
+      automations: crowd,
+      status: "doing" as const,
+      rankedAutomationIds: ["c11"],
+      effectiveArmedAutomationId: "c5",
+    };
+    const pinned = offeredAutomationsInPinnedOrder(input).map((row) => row.id);
+    expect(pinned).toHaveLength(12);
+    expect(pinned.slice(0, 2)).toEqual(["c5", "c11"]);
+    // The digit order is this list's first nine — one list, cut in one place.
+    expect(offeredAutomationsInDigitOrder(input).map((row) => row.id)).toEqual(
+      pinned.slice(0, MAX_OFFERED_DIGITS),
+    );
   });
 });
 

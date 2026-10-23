@@ -181,7 +181,10 @@ request: those endpoints carry prompts in their own `instructions`/`system` and
 JSON-only (`JsonValue` arrays readonly). Runtime tools already produced JSON,
 so only test fixtures needed retyping. `ExecutionEnv` gained
 `openTextLineReader`; `ScopedExecutionEnv` returns `not_supported`, as it does
-for `readTextLines`.
+for `readTextLines`. (VC-801 later added a Volli-owned `openFileReader`, which
+`read` uses; `ScopedExecutionEnv` guards and delegates it like
+`readBinaryFile`, and `refusingCredentialReads` refuses it for credential
+files.)
 
 The optional `Model.inputLimits` and `Model.promptCache` fields (0.87) are used
 only by Pi's coding-agent for image resizing and cache warming.

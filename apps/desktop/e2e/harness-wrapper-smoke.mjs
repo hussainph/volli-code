@@ -347,8 +347,10 @@ async function main() {
         UUID_V4.test(first ?? "") &&
         UUID_V4.test(second ?? "") &&
         first !== second &&
-        // The newest launch is what a resume of this session must find.
-        seed === second;
+        // Neither launch fired a SessionStart (the fake binary has no hooks), so
+        // neither proved itself, and neither id may become the seed (VC-807).
+        seed !== first &&
+        seed !== second;
       return { ok, detail: `first=${first} second=${second} seed=${seed}` };
     });
 

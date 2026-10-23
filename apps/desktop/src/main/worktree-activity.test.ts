@@ -7,7 +7,6 @@ import { insertProject, insertTicket, updateTicketFields } from "@volli/host-cor
 import { BackgroundShellHost } from "@volli/host-core/session-runtime";
 import {
   busySiteWithin,
-  runGitCapturing,
   runGitCapturingAsync,
   trimFinishedWorktree,
   type AgentSiteRuntime,
@@ -106,7 +105,6 @@ function trimFixture() {
         {
           worktree: {
             db: ctx.db,
-            git: runGitCapturing,
             gitAsync: runGitCapturingAsync,
             blobsRoot: "unused",
           },

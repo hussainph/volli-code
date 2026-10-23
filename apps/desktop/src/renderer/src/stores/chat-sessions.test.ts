@@ -2481,10 +2481,12 @@ describe("dropChatTabs", () => {
       rehomedTicketBySession: { "durable-1": "t1" },
     });
 
+    store.getState().rememberIdleSend("durable-1", { id: "pending", text: "pending" }, true);
     store.getState().dropChatTabs(["p1", "missing-owner"]);
 
     expect(store.getState().sessions["durable-1"]).toBeUndefined();
     expect(getChatClient("durable-1")).toBeUndefined();
+    expect(store.getState().idleSends["durable-1"]).toBeUndefined();
     expect(store.getState().openTabs).toEqual({});
     expect(store.getState().rehomedTicketBySession).toEqual({});
   });
@@ -2662,4 +2664,59 @@ it("VC-758 keeps an accepted message visible until its delayed host projection l
     expect(store.getState().sessions["durable-9"]?.queue.map((entry) => entry.id)).toEqual(["q1"]),
   );
   expect(useChatDraftsStore.getState().drafts["durable-9"]?.held ?? []).toEqual([]);
+});
+
+describe("resident idle-send shadows", () => {
+  it.each(["accepted", "refused"] as const)(
+    "settles a queued idle-send shadow when the host command is %s",
+    async (outcome) => {
+      const { store, state } = fixture();
+      store.getState().adoptChatSession("durable-9");
+      await vi.waitFor(() =>
+        expect(store.getState().sessions["durable-9"]?.projection).not.toBeNull(),
+      );
+      store.getState().rememberIdleSend("durable-9", { id: "other", text: "another send" });
+      store.getState().rememberIdleSend("durable-9", { id: "q1", text: "first" });
+      if (outcome === "refused") state.answer = () => REFUSED;
+      await expect(
+        store.getState().enqueue("durable-9", { id: "q1", text: "first" }),
+      ).resolves.toBe(outcome === "accepted" ? "delivered" : "refused");
+      expect(store.getState().idleSends["durable-9"]?.find((row) => row.id === "q1")).toEqual(
+        outcome === "accepted" ? { id: "q1", text: "first", accepted: true } : undefined,
+      );
+      expect(store.getState().idleSends["durable-9"]?.[0]?.id).toBe("other");
+    },
+  );
+
+  it("keeps multiple sends ordered and their accepted content across queue gaps, until explicitly retired", () => {
+    const { store } = fixture();
+    const state = store.getState();
+    state.rememberIdleSend("pending", { id: "one", text: "first" });
+    state.rememberIdleSend("pending", { id: "two", text: "second" }, true);
+    state.rememberIdleSend("pending", { id: "one", text: "first, amended" }, true);
+    state.rememberIdleSend("pending", { id: "one", text: "first, final" });
+    expect(store.getState().idleSends.pending).toEqual([
+      { id: "one", text: "first, final", accepted: true },
+      { id: "two", text: "second", accepted: true },
+    ]);
+    const stable = store.getState();
+    state.forgetIdleSend("unknown", "one");
+    state.forgetIdleSend("pending", "unknown");
+    expect(store.getState()).toBe(stable);
+    state.forgetIdleSend("pending", "one");
+    expect(store.getState().idleSends.pending?.map((row) => row.id)).toEqual(["two"]);
+    state.forgetIdleSend("pending", "two");
+    expect(store.getState().idleSends).toEqual({});
+  });
+
+  it("clears shadows when closing even a still-provisional Session", () => {
+    const { store } = fixture();
+    store.getState().rememberIdleSend("provisional", { id: "one", text: "first" });
+    expect(store.getState().sessions.provisional).toBeUndefined();
+    store.getState().closeChatSession("provisional");
+    expect(store.getState().idleSends.provisional).toBeUndefined();
+    const stable = store.getState();
+    store.getState().closeChatSession("provisional");
+    expect(store.getState()).toBe(stable);
+  });
 });

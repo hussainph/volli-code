@@ -9,7 +9,7 @@ import { actorSessionTicketDisplay } from "../agent-dispatch/resolution";
 import type { AgentToolDoor } from "../agent-tool-door";
 import { createHostAgentToolDoor, createHostAgentWatches } from "../agent-services";
 import type { Watches } from "../watches";
-import { createDelegations, type Delegations } from "./delegate-session";
+import { commandOriginOf, createDelegations, type Delegations } from "./delegate-session";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { RuntimeSessionFacade, RuntimeSessionServices } from "./facade";
 import { readRecoveredSessionServices, type RecoveredSessionServices } from "./lifecycle";
@@ -73,17 +73,27 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
       const store = sessionDelegation;
       unsubscribeDelegations = sessionWakeBus.subscribe((wake) => {
         const payload = wake.event.payload;
-        if (payload.kind !== "turn.started" || created.watching(wake.event.sessionId)) return;
+        // A turn's start re-arms a settled child; so does a message steered
+        // into a turn already running (VC-809), which that start never saw.
+        const joined =
+          payload.kind === "command.recorded" && payload.command.intent.kind === "message.submit";
+        if (payload.kind !== "turn.started" && !joined) return;
+        if (created.watching(wake.event.sessionId)) return;
         const entry = store.subagentDelegation(wake.event.sessionId);
         if (entry === null) return;
-        const work = created
-          .rearm(entry, { turnId: payload.turnId, afterSequence: wake.event.sequence })
-          .catch((error: unknown) => {
-            options.log.error("could not re-arm the notice for a resumed subagent", {
-              childSessionId: entry.childSessionId,
-              error,
-            });
+        const work = (
+          payload.kind === "turn.started"
+            ? created.rearm(entry, { turnId: payload.turnId, afterSequence: wake.event.sequence })
+            : created.rearmJoined(entry, {
+                origin: commandOriginOf(wake.event),
+                afterSequence: wake.event.sequence,
+              })
+        ).catch((error: unknown) => {
+          options.log.error("could not re-arm the notice for a resumed subagent", {
+            childSessionId: entry.childSessionId,
+            error,
           });
+        });
         liveHost?.detachedWork.track(work);
       });
     }

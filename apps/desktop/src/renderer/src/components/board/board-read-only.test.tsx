@@ -130,6 +130,8 @@ describe("board create controls", () => {
 });
 
 describe("a column composer", () => {
+  /** A keydown no IME is composing — the composer's guard reads it (VC-806). */
+  const PLAIN = { isComposing: false };
   let composer: ReturnType<typeof useTicketComposer> | null = null;
   function Probe({ initiallyOpen = false }: { initiallyOpen?: boolean }) {
     composer = useTicketComposer({ projectId: "remote", status: "todo", initiallyOpen });
@@ -159,7 +161,9 @@ describe("a column composer", () => {
     expect(composer!.canWrite).toBe(false);
 
     const preventDefault = vi.fn();
-    act(() => composer!.handleKeyDown({ key: "Enter", preventDefault } as never));
+    act(() =>
+      composer!.handleKeyDown({ key: "Enter", preventDefault, nativeEvent: PLAIN } as never),
+    );
     expect(addTicket).not.toHaveBeenCalled();
     expect(composer!.title).toBe("Do not write while offline");
     expect(toast).toHaveBeenCalledWith(REASON, { id: "host-read-only" });
@@ -174,7 +178,9 @@ describe("a column composer", () => {
     world.setHetzner({ link: { status: "open" } });
     act(() => composer!.openComposer());
     expect(composer!.open).toBe(true);
-    act(() => composer!.handleKeyDown({ key: "Enter", preventDefault } as never));
+    act(() =>
+      composer!.handleKeyDown({ key: "Enter", preventDefault, nativeEvent: PLAIN } as never),
+    );
     expect(addTicket).toHaveBeenCalledWith("remote", "todo", "Do not write while offline");
   });
 

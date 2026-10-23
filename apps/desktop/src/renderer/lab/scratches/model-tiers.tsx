@@ -303,14 +303,21 @@ function labModelAccess(): ModelAccessClient {
 /* ------------------------------------------------------------------ scratch */
 
 export default function ModelTiersScratch() {
-  const [generation, setGeneration] = React.useState(0);
-  const client = React.useMemo(labModelAccess, [generation]);
+  // Reset swaps in a fresh client and remounts the provider around it.
+  const [{ generation, client }, setLab] = React.useState(() => ({
+    generation: 0,
+    client: labModelAccess(),
+  }));
 
   return (
     <ModelAccessProvider key={generation} client={client}>
       <div className="flex flex-col gap-6">
         <div className="flex items-center gap-2">
-          <Button variant="secondary" size="sm" onClick={() => setGeneration((n) => n + 1)}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setLab({ generation: generation + 1, client: labModelAccess() })}
+          >
             Reset defaults
           </Button>
           <span className="text-ui text-muted-foreground">

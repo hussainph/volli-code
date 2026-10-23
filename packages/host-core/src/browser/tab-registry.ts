@@ -46,8 +46,16 @@ const log = hostLogger("browser");
 
 export const BROWSER_TITLE_MAX_CHARS = 512;
 export const BROWSER_ERROR_MAX_CHARS = 1_024;
+/** The most recent console messages one read shows a model, and their characters. */
 export const BROWSER_CONSOLE_MAX_MESSAGES = 100;
 export const BROWSER_CONSOLE_MAX_CHARS = 30_000;
+/**
+ * The console a tab keeps (VC-237): far more than one read shows, so the
+ * runtime can save what a read left out, and still a bound — a page can log
+ * forever, and this is memory every open tab holds.
+ */
+const BROWSER_CONSOLE_KEPT_MAX_MESSAGES = 1_000;
+const BROWSER_CONSOLE_KEPT_MAX_CHARS = 256_000;
 
 /** Keeps page-owned chrome facts bounded and on one renderer/model-owned line. */
 function boundedBrowserTitle(title: string): string {
@@ -109,7 +117,9 @@ export type BrowserTabChrome = Pick<
 /** The registry's record of one tab. A backend's entry extends it with its engine's handles. */
 export interface BrowserTabRecord {
   state: BrowserTabState;
+  /** The console as kept, oldest first, within the kept bounds. */
   console: RuntimeBrowserConsoleMessage[];
+  /** Whether the kept console has lost anything to its bounds. */
   consoleTruncated: boolean;
   /** Live agent holds against background throttling; see {@link BrowserTabRegistry.holdAwake}. */
   wakeLeases: number;
@@ -273,14 +283,14 @@ export abstract class BrowserTabRegistry<
   }
 
   protected recordConsole(entry: E, message: RuntimeBrowserConsoleMessage): void {
-    const text = message.text.slice(0, BROWSER_CONSOLE_MAX_CHARS);
+    const text = message.text.slice(0, BROWSER_CONSOLE_KEPT_MAX_CHARS);
     if (text.length !== message.text.length) entry.consoleTruncated = true;
     entry.console.push({ ...message, text });
 
     let chars = entry.console.reduce((total, one) => total + one.text.length, 0);
     while (
-      entry.console.length > BROWSER_CONSOLE_MAX_MESSAGES ||
-      chars > BROWSER_CONSOLE_MAX_CHARS
+      entry.console.length > BROWSER_CONSOLE_KEPT_MAX_MESSAGES ||
+      chars > BROWSER_CONSOLE_KEPT_MAX_CHARS
     ) {
       const removed = entry.console.shift();
       chars -= removed?.text.length ?? 0;
@@ -711,15 +721,49 @@ export abstract class BrowserTabRegistry<
     };
   }
 
-  /** Page console and renderer-failure evidence recorded from the moment the tab exists. */
+  /**
+   * Page console and renderer-failure evidence recorded from the moment the
+   * tab exists: the most recent messages within the bounds one read shows,
+   * each cut to them, and — when that left any of the kept console out — the
+   * whole kept console beside it (VC-237), for the runtime to save.
+   */
   consoleOf(tabId: string): {
     messages: RuntimeBrowserConsoleMessage[];
     truncated: boolean;
+    kept?: { messages: RuntimeBrowserConsoleMessage[]; bounded: boolean };
   } {
     const entry = this.requireTab(tabId);
+    const messages: RuntimeBrowserConsoleMessage[] = [];
+    let chars = 0;
+    let cut = false;
+    // Newest first, as many as fit: what keeping only the bounds' worth
+    // would have left.
+    for (let index = entry.console.length - 1; index >= 0; index -= 1) {
+      const message = entry.console[index]!;
+      const text = message.text.slice(0, BROWSER_CONSOLE_MAX_CHARS);
+      if (
+        messages.length === BROWSER_CONSOLE_MAX_MESSAGES ||
+        chars + text.length > BROWSER_CONSOLE_MAX_CHARS
+      ) {
+        cut = true;
+        break;
+      }
+      if (text.length !== message.text.length) cut = true;
+      messages.push({ ...message, text });
+      chars += text.length;
+    }
+    messages.reverse();
     return {
-      messages: entry.console.map((message) => ({ ...message })),
-      truncated: entry.consoleTruncated,
+      messages,
+      truncated: entry.consoleTruncated || cut,
+      ...(cut
+        ? {
+            kept: {
+              messages: entry.console.map((message) => ({ ...message })),
+              bounded: entry.consoleTruncated,
+            },
+          }
+        : {}),
     };
   }
 

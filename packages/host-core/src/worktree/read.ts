@@ -51,7 +51,7 @@ import { resolveChangeSetBaseRevision } from "./comparison-ref";
 import { diffStat } from "./diff";
 import { runGitCapturingAsync, stderrOf } from "./git";
 import { getWorktreeStatus, type WorktreeStatusReport } from "./status";
-import type { RunGit, RunGitAsync } from "./types";
+import type { RunGitAsync } from "./types";
 
 /**
  * The narrow deps the read verbs need — a structural subset of {@link
@@ -62,13 +62,6 @@ import type { RunGit, RunGitAsync } from "./types";
  */
 export interface WorktreeReadPorts {
   db: Database.Database;
-  /**
-   * The synchronous runner. No read verb in this module uses it any more
-   * (VC-369 moved the last two, status and diff, onto {@link gitAsync}); it
-   * stays on the bundle because callers pass their full `WorktreePorts`, whose
-   * write paths still have it.
-   */
-  git?: RunGit;
   /**
    * The non-blocking runner EVERY read verb here uses. Defaults to the real
    * {@link runGitCapturingAsync} — never to a wrapper around `git`, which

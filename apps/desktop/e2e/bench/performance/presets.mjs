@@ -1,4 +1,5 @@
-export const FIXTURE_SCHEMA_VERSION = 1;
+// 2: timestamps are relative to a recorded generation clock (VC-415).
+export const FIXTURE_SCHEMA_VERSION = 2;
 export const DEFAULT_SEED = 353_259_855;
 export const REAL_BUSY_CORE_DEFAULT = 2;
 

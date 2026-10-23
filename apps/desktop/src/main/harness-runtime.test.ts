@@ -600,6 +600,10 @@ describe("ensureHarnessRuntime", () => {
  * live PTY's real environment; this runs it in milliseconds, in CI.
  */
 /** Drops a stand-in `volli` shim where the wrapper will look for the real one. */
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function installFakeVolli(shimPath: string, script: string): Promise<void> {
   await mkdir(join(shimPath, ".."), { recursive: true });
   await writeFile(shimPath, script, { mode: 0o755 });
@@ -881,6 +885,111 @@ describe("the generated wrapper, run", () => {
     });
     expect(elsewhere.config).toBe("unset");
   });
+
+  /** A built-in harness's real wrapper over a fake binary, and a `volli` that logs every call. */
+  async function builtInRuntime(id: string): Promise<{
+    wrapperPath: string;
+    session: Record<string, string>;
+  }> {
+    const paths = await scratch();
+    const adapter = adapterFor(id);
+    const binaryPath = await fakeBinary(adapter.command);
+    const runtime = await ensureHarnessRuntime({
+      ...paths,
+      socketPath: "/tmp/volli.sock",
+      adapters: [adapter],
+      adapterCensus: "complete",
+      resolveCommand: () => Promise.resolve(binaryPath),
+    });
+    const wrapperPath = runtime.wrapperPaths.get(id as HarnessId);
+    if (wrapperPath === undefined) throw new Error("no wrapper was written");
+    await installFakeVolli(paths.shimPath, FAKE_VOLLI);
+    return { wrapperPath, session: mintingSession({ ...runtime.env, PATH: "/nonexistent" }) };
+  }
+
+  /** Every call the wrappers made to `volli`, in order. */
+  async function volliCalls(): Promise<string[]> {
+    const log = await readFile(join(scratchRoot, "mint-log"), "utf8").catch(() => "");
+    return log.split("\n").filter(Boolean);
+  }
+
+  /**
+   * The calls once `expected` of them have landed, and a moment more for any
+   * straggler. The announce is detached by design, so a launch that makes one
+   * is waited for rather than read once.
+   */
+  async function volliCallsSettled(expected: number): Promise<string[]> {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if ((await volliCalls()).length >= expected) break;
+      await pause(20);
+    }
+    await pause(250);
+    return volliCalls();
+  }
+
+  // VC-807. Each of these went through the wrapper and was minted for as a
+  // launch: the phantom id overwrote the seed of the conversation the user
+  // really had, and Resume session ran `claude --resume <the phantom>`.
+  it.each([
+    [["--version"]],
+    [["-v"]],
+    [["--help"]],
+    [["mcp", "list"]],
+    [["doctor"]],
+    [["update"]],
+    [["install"]],
+  ])("asks the app for nothing when claude is run as `claude %j`", async (words) => {
+    const { wrapperPath, session } = await builtInRuntime("claude-code");
+
+    const run = await runWrapper(wrapperPath, words, session);
+    const launch = await runWrapper(wrapperPath, ["hello"], session);
+
+    expect(run.code).toBe(0);
+    expect(run.args).not.toContain("--session-id");
+    expect(run.args.slice(-words.length)).toEqual(words);
+    // The real launch after it still mints, and is the only call made.
+    expect(launch.args).toContain("--session-id");
+    expect(await volliCalls()).toEqual(["session harness claude-code --mint"]);
+  });
+
+  // VC-807. The announce for `codex --help` repointed the running harness at
+  // codex while keeping claude's id, so resume built `codex resume <claude id>`.
+  it.each([
+    ["codex", ["--help"]],
+    ["codex", ["login"]],
+    ["opencode", ["--version"]],
+  ])("announces nothing when %s is run with %j", async (id, words) => {
+    const { wrapperPath, session } = await builtInRuntime(id);
+
+    const run = await runWrapper(wrapperPath, words, session);
+    await runWrapper(wrapperPath, ["hello"], session);
+
+    expect(run.code).toBe(0);
+    expect(run.args.slice(-words.length)).toEqual(words);
+    expect(await volliCallsSettled(1)).toEqual([`session harness ${id}`]);
+  });
+
+  // VC-807. A `claude -p` fired by a live claude's own Bash tool inherits PATH
+  // and `VOLLI_SESSION`. It must not mint over the parent's seed, nor carry the
+  // injected hooks that would report its turns as the parent's.
+  it.each([
+    ["CLAUDECODE", "1"],
+    ["CLAUDE_CODE_ENTRYPOINT", "cli"],
+  ])(
+    "runs a claude nested inside a running claude (%s set) exactly as outside Volli",
+    async (marker, value) => {
+      const { wrapperPath, session } = await builtInRuntime("claude-code");
+
+      const run = await runWrapper(wrapperPath, ["-p", "hello"], {
+        ...session,
+        [marker]: value,
+      });
+
+      expect(run.code).toBe(0);
+      expect(run.args).toEqual(["-p", "hello"]);
+      expect(await volliCalls()).toEqual([]);
+    },
+  );
 });
 
 describe("harnessLaunchArgv", () => {

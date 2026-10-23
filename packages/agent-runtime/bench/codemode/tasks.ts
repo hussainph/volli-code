@@ -243,6 +243,7 @@ function browserTabs(): TaskRun {
       snapshotText: pageSnapshot(slug, pages.get(url) === true),
       generation: 1,
       truncated: false,
+      empty: false,
       picture: null,
     };
   };
@@ -274,7 +275,11 @@ function browserTabs(): TaskRun {
     },
     act: async (input) => {
       count("act");
-      return { ...snapshot(input.tabId), target: null };
+      return {
+        ...snapshot(input.tabId),
+        target: null,
+        changed: { url: false, generation: false, tree: false },
+      };
     },
     screenshot: async ({ tabId }) => {
       count("screenshot");
@@ -357,7 +362,14 @@ function sessionFanout(): TaskRun {
       }
       return {
         text: `Watching ${[...watched].join(", ")}. Notices arrive as new turns.`,
-        details: { action: "watch", sessions, tickets: ticketsWatched, ended: 0 },
+        details: {
+          action: "watch",
+          sessions,
+          tickets: ticketsWatched,
+          ended: 0,
+          stopped: [],
+          detached: [],
+        },
       };
     }
     return { text: `${request.verb} is not part of this fixture.` };
@@ -496,6 +508,7 @@ function browserCrawl(): TaskRun {
           : statusPage(service, known[page.load <= 1 ? 0 : 1], page.load),
       generation: page.load,
       truncated: false,
+      empty: false,
       picture: null,
     };
   };
@@ -533,7 +546,11 @@ function browserCrawl(): TaskRun {
     },
     act: async (input) => {
       count("act");
-      return { ...snapshot(input.tabId), target: null };
+      return {
+        ...snapshot(input.tabId),
+        target: null,
+        changed: { url: false, generation: false, tree: false },
+      };
     },
     screenshot: async ({ tabId }) => {
       count("screenshot");

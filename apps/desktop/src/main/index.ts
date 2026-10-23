@@ -169,6 +169,7 @@ import type { OpenNativeBinding } from "@volli/session-engine";
 import {
   admittedHandlers,
   createHostHandlers,
+  hostProjectLiveWork,
   ROUTER_POLICY,
   type HostHandlerMap,
 } from "@volli/host-core/handlers";
@@ -249,7 +250,7 @@ import { confirmDestructiveClose, prepareTerminalQuit, registerTerminalIpcHandle
 import { ensureHarnessWorkspaceFiles } from "./harness-workspace";
 import { clientEventSink } from "./client-event-sink";
 import type { AgentRuntimeEnvironment, PtyManager } from "@volli/host-core/pty";
-import { registerThemeIpcHandlers } from "./theme-ipc";
+import { desktopThemeHooks, registerThemeIpcHandlers } from "./theme-ipc";
 import { defaultFsDeps } from "./fs-deps";
 import { firstPaintArguments, resolveFirstPaint } from "./window-theme";
 import { registerFileIpcHandlers } from "./volli-fs-ipc";
@@ -288,9 +289,11 @@ import { readCliStatus } from "./cli-status";
 import {
   readAllowPrerelease,
   readUpdateChannel,
+  readUpdateLastCheck,
   runningBuildKind,
   startAutoUpdate,
   writeUpdateChannel,
+  writeUpdateLastCheck,
 } from "./auto-update";
 import {
   PACKAGED_RENDERER_CURSOR_URL,
@@ -310,6 +313,7 @@ import {
   browserTracesRoot,
   BrowserTraceStore,
 } from "@volli/host-core/browser";
+import { createBrowserShortcutRelay } from "./browser/app-shortcut-relay";
 import { BrowserTabHost } from "./browser/tab-host";
 import { registerOrphanProcessIpcHandlers } from "./process/ipc";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
@@ -1281,6 +1285,13 @@ const appStartup = app.whenReady().then(async () => {
     now: Date.now,
     persist: browserPictureDisk(browserPicturesRoot(app.getPath("userData"))),
   });
+  // App shortcuts out of a focused Browser page (VC-301): the host delivers,
+  // the handler map's `browserShortcuts.*` entries subscribe and hand focus back.
+  const browserShortcutRelay = createBrowserShortcutRelay((error) =>
+    hostLogger("browser").warn("browser shortcut listener threw", {
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  );
   const browserTabs = new BrowserTabHost({
     createId: randomUUID,
     createView: (options) => new WebContentsView(options),
@@ -1306,6 +1317,9 @@ const appStartup = app.whenReady().then(async () => {
       }),
     publishState: (tab) => publishBrowserTabEvent({ tab }),
     publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
+    // An app chord pressed in a shown page (VC-301), to the windows following
+    // the desktop-only `browserShortcuts.subscribe` entry.
+    deliverAppShortcut: (window, event) => browserShortcutRelay.deliver(window, event),
     pictures: browserPictures,
     // A Session's steps in its own tabs, kept for the person to replay after
     // the live set has moved on (VC-453) — its own directory, never a Blob.
@@ -1511,6 +1525,17 @@ const appStartup = app.whenReady().then(async () => {
     ready: RecoveredSessionServices<RuntimeSessionFacade>,
   ): HostHandlerMap => {
     const { runtime, sessions } = recoveredRuntimeSessionServices(ready);
+    const projectLiveWork = hostProjectLiveWork({
+      runtime: () => sessionRuntime,
+      shells: backgroundShells,
+      terminals: () => ptyManagerRef ?? null,
+      browser: browserTabs,
+      mcp: mcpSettings,
+      newCommandId: randomUUID,
+      onReleaseError: (sessionId, error) => {
+        log.error("could not release session of a removed project", { sessionId, error });
+      },
+    });
     return createHostHandlers(hostPorts, {
       db: sessionDb,
       dataDir: hostCore.dataDir,
@@ -1523,6 +1548,15 @@ const appStartup = app.whenReady().then(async () => {
       automations: runtimeAutomations,
       busyWorktreeSites,
       interruptTicketSessions: interruptTicketSessionsAnnounced,
+      // What removing a project stops before it detaches it (VC-796): every door
+      // that removes one, the window's `volli:project-remove` included.
+      projectLiveWork: {
+        ...projectLiveWork,
+        closeBrowserTabs: (projectId) => {
+          projectLiveWork.closeBrowserTabs(projectId);
+          void browserTabs.clearAgentPartition({ projectId, ticketId: null });
+        },
+      },
       ...(liveHost === undefined ? {} : { detachedWork: liveHost.detachedWork }),
       // This Mac's recent log (VC-699): main's, the in-process host's and the
       // renderer's lines, which the dev log viewer reads through `host.logs`.
@@ -1565,6 +1599,11 @@ const appStartup = app.whenReady().then(async () => {
             error: error instanceof Error ? error.message : String(error),
           }),
       }),
+      // App shortcuts out of a focused Browser page (VC-301).
+      browserShortcuts: {
+        subscribe: browserShortcutRelay.subscribe,
+        focusPage: (tabId) => browserTabs.focusPage(tabId),
+      },
     });
   };
   /** Built once, at the first door that needs it; every later door gets the same object. */
@@ -1845,11 +1884,6 @@ const appStartup = app.whenReady().then(async () => {
     mcpSettings: mcpSettings ?? undefined,
     // Archiving or deleting a ticket drops its Sessions' saved tool output (VC-469).
     piSessionsDirectory,
-    // A removed Workspace's board feed is released, its followers told to resnapshot.
-    onProjectRemoved: (projectId) => {
-      boardFeed.dispose(projectId);
-      void browserTabs.clearAgentPartition({ projectId, ticketId: null });
-    },
   });
   // Pi sidecar cleanup is a separate, explicit surface: registration performs
   // no scan and no deletion. The read-only inventory must run before its
@@ -1882,19 +1916,15 @@ const appStartup = app.whenReady().then(async () => {
   // The window background follows the global theme: every window repaints its
   // edge the moment the theme is persisted, so a resize right after a theme
   // change can't reveal the previous palette.
+  //
+  // The renderer has already run the whole pipeline, so main takes the colors
+  // it actually painted rather than re-deriving them and hoping the two agree.
+  // Browser Tab planes composite above the renderer, so its theme cannot show
+  // through them; their app-owned states repaint to the plane rung (VC-302).
   registerThemeIpcHandlers(
     dbHandle,
     { fs: fsDeps, now: Date.now, appearance: currentAppearance },
-    {
-      // The renderer has already run the whole pipeline, so main takes the color
-      // it actually painted rather than re-deriving one and hoping the two
-      // agree. No try/catch — there is nothing here to fail.
-      onFirstPaintChanged: (paint) => {
-        for (const window of BrowserWindow.getAllWindows()) {
-          window.setBackgroundColor(paint.background);
-        }
-      },
-    },
+    desktopThemeHooks({ windows: () => BrowserWindow.getAllWindows(), browserTabs }),
   );
   // Keep the host's former boot point. Nothing schedules before runtime recovery.
   runtimeAutomations.start(recoveredSessionAutomationPorts(readyRuntimeServices));
@@ -2396,11 +2426,11 @@ const appStartup = app.whenReady().then(async () => {
   // native notification per downloaded version, failures only ever log.
   // Wired OUTSIDE the dbHandle.ok block: a broken db must not also strand
   // the install on a stale build (an update may well be what fixes it), so
-  // that case just falls back to the default prerelease policy (off).
+  // that case just falls back to the updater's version-derived default.
   const autoUpdate = startAutoUpdate({
     isPackaged: app.isPackaged,
     updater: autoUpdater,
-    allowPrerelease: dbHandle.ok ? readAllowPrerelease(dbHandle.db) : false,
+    allowPrerelease: dbHandle.ok ? readAllowPrerelease(dbHandle.db) : null,
     currentVersion: app.getVersion(),
     notify: (request) => notifications.deliver(request),
     log: hostLogger("auto-update").info,
@@ -2414,6 +2444,14 @@ const appStartup = app.whenReady().then(async () => {
     // when no window is left to show it (macOS keeps the app alive).
     hasUpdateSurface: () =>
       BrowserWindow.getAllWindows().some((window) => !window.webContents.isDestroyed()),
+    // Settings → Updates' Status row survives a relaunch (VC-294); on a
+    // broken db it lives for this run only, like the channel below.
+    lastCheck: dbHandle.ok
+      ? {
+          read: () => readUpdateLastCheck(dbHandle.db),
+          write: (check) => writeUpdateLastCheck(dbHandle.db, check),
+        }
+      : undefined,
   });
   // The sidebar's door onto that updater (VC-59) — same guarded invoke
   // surface as everything else, and like startAutoUpdate itself deliberately
@@ -2443,10 +2481,13 @@ const appStartup = app.whenReady().then(async () => {
     // pretending. VC-111 — retires the hand-run `sqlite3` INSERT.
     channel: dbHandle.ok
       ? {
-          read: () => readUpdateChannel(dbHandle.db),
+          // The effective line: a never-chosen canary build reads Canary
+          // (VC-851), so the select and the support report agree with the feed.
+          read: () => readUpdateChannel(dbHandle.db, buildKind),
           // The updater rides along so entering canary widens the RUNNING
           // process too — "Check now" right after switching must actually
-          // see prereleases. One-way; see `writeUpdateChannel`.
+          // see prereleases. Leaving applies at the next launch; see
+          // `writeUpdateChannel`.
           write: (channel) => writeUpdateChannel(dbHandle.db, channel, Date.now(), autoUpdater),
         }
       : undefined,
@@ -2910,8 +2951,11 @@ const appStartup = app.whenReady().then(async () => {
   registerSupportIpcHandlers({
     appVersion: () => app.getVersion(),
     database: () => (dbHandle.ok ? dbHandle.db : null),
+    buildKind,
     platform: process.platform,
     arch: process.arch,
+    // Redacted to one sentence inside the collector (VC-294).
+    lastUpdateCheck: () => autoUpdate.state().lastCheck,
   });
 
   try {

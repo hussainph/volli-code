@@ -140,6 +140,11 @@ export interface SessionRuntimePorts {
   followUpRetryDelaysMs?: readonly number[];
   /** Bounds queue attach/admission, not model execution or a person's answer. */
   followUpAdmissionTimeoutMs?: number;
+  /**
+   * The ceiling on a Session's first attach's workspace preparation, which is
+   * not admission-bounded (VC-799). Ten minutes unless a test says otherwise.
+   */
+  firstAttachPreparationTimeoutMs?: number;
   /** The one structured executor this runtime attaches. */
   executor: NativeHarnessAdapter;
   artifacts: TranscriptArtifactStore;
@@ -745,6 +750,14 @@ interface BindingRecord {
   lastProgressAt: number;
   /** Tool calls seen starting live and not yet finished; folded by `nextInFlightTools`. */
   inFlightTools: readonly SessionInFlightTool[];
+  /**
+   * True from this binding's `turn.started` until that turn completes or is
+   * interrupted; absent before its first turn. While it holds, the Session's
+   * overlay and fold are exempt from their caches' bounds (the runtime's
+   * `#streamingSessions`), and it lives on the record so that a binding which
+   * goes away mid-turn takes the exemption with it.
+   */
+  turnOpen?: boolean;
   reconcileInFlight: Promise<void> | null;
   /**
    * The same translator the attachment's sink holds, for the replay path.
@@ -951,18 +964,54 @@ export const SNAPSHOT_ARTIFACT_READ_CONCURRENCY = 16;
  *
  * So it stays at eight, and eight is now a bound on background reads: the
  * Sessions nobody is looking at, each of which costs exactly one re-read when
- * it is dropped.
+ * it is dropped. A Session with a turn running or about to is exempt as well
+ * (VC-466): nobody need be watching a background turn, but the turn itself
+ * reads its fold at every step, and a ninth turn running at once would
+ * otherwise make each of those reads a re-fold.
  */
 export const PROJECTION_CACHE_LIMIT = 8;
 /**
- * How many Sessions keep a transient overlay, bounded the same way and for the
- * same reason as the fold cache above: the explicit drop points (attachment
- * closure, release, close) cover every orderly end, and this covers the rest,
- * so no single rule's absence leaves the map growing. An evicted overlay costs
- * the tail of one in-flight message — the emitter's next reset or settle
- * rebuilds it.
+ * How many Sessions with no turn running keep a transient overlay. The explicit
+ * drop points (attachment closure, release, close) cover every orderly end, and
+ * this covers the rest, so no single rule's absence leaves the map growing.
+ *
+ * A Session whose turn is running is exempt (VC-466), so this bounds only
+ * overlays with nothing left to stream into them, and the exempt ones are
+ * bounded by the turns running at once. A streaming Session's overlay is read
+ * on every delta and holds the only baseline its message in flight has: the
+ * fold acts on no delta for a message it holds no entry for, so dropping the
+ * overlay mid-message would cost a ledger read to re-seed it and, for a chat
+ * opened before the message settles, the rest of that message.
  */
 const OVERLAY_CACHE_LIMIT = 8;
+
+/**
+ * Evicts the least recently kept unexempt entries of an insertion-ordered cache
+ * until at most `limit` of them remain. An exempt entry keeps its place and
+ * counts against nothing.
+ *
+ * `exemption` is asked for its predicate only when the cache is over its limit:
+ * a cache under it evicts nothing, and the overlay cache is kept on every
+ * delta.
+ */
+function trimCache(
+  cache: Map<string, unknown>,
+  limit: number,
+  exemption: () => (key: string) => boolean,
+): void {
+  if (cache.size <= limit) return;
+  const exempt = exemption();
+  let evictable = 0;
+  for (const key of cache.keys()) {
+    if (!exempt(key)) evictable += 1;
+  }
+  for (const oldest of cache.keys()) {
+    if (evictable <= limit) break;
+    if (exempt(oldest)) continue;
+    cache.delete(oldest);
+    evictable -= 1;
+  }
+}
 
 /**
  * The message a Session's admission is currently held for.
@@ -1641,13 +1690,27 @@ class DefaultSessionRuntime implements SessionRuntime {
     // The directory has to be real before it is bound: an adapter handed one
     // that is not there fails per prompt, deep inside the harness, wearing
     // whatever name that harness gives a missing path.
+    //
+    // A Session's FIRST attach, from any door but the queue's own, is where
+    // its worktree is made, and under load that outlasts the admission bound —
+    // which never stopped the preparation, only failed the attach while the
+    // preparation went on to finish. So it waits under a generous ceiling of
+    // its own instead (VC-799), and outlasting that is a configuration
+    // failure for a person to look at, like any preparation that fails. Every
+    // later attach, and every attach a queue drain makes, keeps the bound.
+    const firstAttach =
+      !request.commandId.startsWith("follow-up:") &&
+      projection.attachments.every(({ openedAt }) => openedAt === null);
     let site: SessionLocation;
     try {
-      site = await this.#queueAdmissionWait(
-        `follow-up:${request.commandId}`,
-        this.ports.locations.prepare(projection.session),
-        "workspace preparation",
-      );
+      const preparing = this.ports.locations.prepare(projection.session);
+      site = firstAttach
+        ? await this.#firstAttachPreparation(preparing)
+        : await this.#queueAdmissionWait(
+            `follow-up:${request.commandId}`,
+            preparing,
+            "workspace preparation",
+          );
     } catch (error) {
       return this.#failAttach({
         request,
@@ -1833,6 +1896,9 @@ class DefaultSessionRuntime implements SessionRuntime {
         );
         await this.#reconcileBinding(binding);
       } catch (error) {
+        // Shutdown is not a recovery failure: leave the replay unreceipted for
+        // the next launch, as the retry path does.
+        if (this.#closed) throw error;
         const receipt = await this.#recordDelivery(
           request.sessionId,
           outcome.payload.attachment.id,
@@ -2237,15 +2303,16 @@ class DefaultSessionRuntime implements SessionRuntime {
 
   /**
    * An executor start that has not finished, durably pending or still being
-   * admitted in this process. The engine refuses a second start meanwhile, and
-   * the start's own completion wakes the queue (see `#admitCommand`).
+   * admitted in this process. The engine refuses a second start meanwhile.
+   * Only a start still in flight has a completion that wakes the queue.
    */
   #executorStartPending(projection: SessionProjection): boolean {
-    return (
-      projection.pendingExecutorStart !== null ||
-      projection.commands.some(
-        ({ id, intent }) => intent.kind === "executor.start" && this.#inFlight.has(id),
-      )
+    return projection.pendingExecutorStart !== null || this.#executorStartInFlight(projection);
+  }
+
+  #executorStartInFlight(projection: SessionProjection): boolean {
+    return projection.commands.some(
+      ({ id, intent }) => intent.kind === "executor.start" && this.#inFlight.has(id),
     );
   }
 
@@ -2287,6 +2354,30 @@ class DefaultSessionRuntime implements SessionRuntime {
     return this.#requireSession(projection.session.id);
   }
 
+  /**
+   * A first attach's workspace preparation, under its own ceiling rather than
+   * the admission bound. The ceiling rejects with a plain error, which the
+   * attach records as `configuration_invalid`; the preparation itself is not
+   * stopped, so a worktree it finishes later is there for the Retry.
+   */
+  async #firstAttachPreparation(preparing: Promise<SessionLocation>): Promise<SessionLocation> {
+    const ceilingMs =
+      this.ports.firstAttachPreparationTimeoutMs ?? FIRST_ATTACH_PREPARATION_TIMEOUT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ceiling = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(new Error(`Workspace preparation did not finish within ${ceilingMs / 1000} s.`)),
+        ceilingMs,
+      );
+    });
+    try {
+      return await Promise.race([preparing, ceiling]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async #queueAdmissionWait<T>(
     commandId: string,
     operation: Promise<T>,
@@ -2323,6 +2414,8 @@ class DefaultSessionRuntime implements SessionRuntime {
     const startPending = this.#executorStartPending(projection);
     const ownFailureId = this.#followUpFailureAttentionId(sessionId);
     const blockers = projection.attention.active.filter(({ id }) => id !== ownFailureId);
+    // Only an in-flight start is normal progress: its completion wakes the
+    // queue. A durable orphan has no wake and still needs actionable Attention.
     const blockedDetail =
       projection.status !== "open"
         ? "Queued message is waiting: session_archived. Reopen the Session to retry."
@@ -2330,7 +2423,7 @@ class DefaultSessionRuntime implements SessionRuntime {
           ? "Queued message is waiting: session_stopped. Reattach the Session to retry."
           : blockers.length > 0
             ? `Queued message is waiting: ${blockers.map(({ kind, detail }) => `${kind}: ${detail}`).join("; ")}`
-            : startPending
+            : startPending && !this.#executorStartInFlight(projection)
               ? "Queued message is waiting: executor_start_pending. Finish or retry the attachment."
               : undefined;
     // Set inside the claim transaction, so no cancel can interleave.
@@ -4250,6 +4343,16 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
     const binding = this.#bindings.get(spec.attachmentId);
     if (binding && observation.cursor !== undefined) binding.cursor = observation.cursor;
+    // A start lands here in the same tick that released its accepted start
+    // above, so the Session's exemption never lapses between the two.
+    if (
+      binding &&
+      (observation.kind === "turn.started" ||
+        observation.kind === "turn.completed" ||
+        observation.kind === "turn.interrupted")
+    ) {
+      binding.turnOpen = observation.kind === "turn.started";
+    }
     await this.#publish([event]);
     if (
       source === "live" &&
@@ -4369,14 +4472,38 @@ class DefaultSessionRuntime implements SessionRuntime {
     return this.#keepOverlay(sessionId, created);
   }
 
+  /** Keeps one Session's overlay, evicting by recency among the Sessions with no turn running. */
   #keepOverlay(sessionId: string, overlay: SessionOverlayState): SessionOverlayState {
     this.#overlays.delete(sessionId);
     this.#overlays.set(sessionId, overlay);
-    for (const oldest of this.#overlays.keys()) {
-      if (this.#overlays.size <= OVERLAY_CACHE_LIMIT) break;
-      this.#overlays.delete(oldest);
-    }
+    trimCache(this.#overlays, OVERLAY_CACHE_LIMIT, () => {
+      const streaming = this.#streamingSessions();
+      return (key) => streaming.has(key);
+    });
     return overlay;
+  }
+
+  /**
+   * The Sessions with a turn running or about to: a start this process has
+   * accepted and not yet seen open, or a turn one of its live bindings has open
+   * — the same two halves {@link pendingTurnStarts} and the committed
+   * `turn.started` facts make up, read here from process-local state alone.
+   *
+   * Both caches exempt these from their bounds. Each such Session will read its
+   * overlay or its fold again within milliseconds — every delta, every step of
+   * the turn — and recency cannot tell that from a Session some other read
+   * touched once; with more of them than the bound, each evicts the next.
+   *
+   * Exempt, not pinned: an accepted start ends when its turn opens (which sets
+   * the binding's flag in the same tick) or its command settles, and an open
+   * turn when it completes, is interrupted, or its binding goes away.
+   */
+  #streamingSessions(): ReadonlySet<string> {
+    const streaming = new Set(this.#acceptedStarts.keys());
+    for (const { spec, turnOpen } of this.#bindings.values()) {
+      if (turnOpen === true) streaming.add(spec.sessionId);
+    }
+    return streaming;
   }
 
   #clearOverlayMessage(sessionId: string, messageId: string): void {
@@ -4505,6 +4632,12 @@ class DefaultSessionRuntime implements SessionRuntime {
       sink,
     };
     this.#bindings.set(attachmentId, record);
+    // The attach can outlive `close()`: shutdown's release has already run and
+    // will not come back for this handle. Hand it to that same release at once,
+    // before its sink activates, and refuse like every other closed path. The
+    // registration is synchronous with the release, so no caller observes it;
+    // the open path stays synchronous from registration to activation.
+    if (this.#closed) await this.#assertBindingOperationOpen();
     await sink.activate();
     return record;
   }
@@ -5261,20 +5394,19 @@ class DefaultSessionRuntime implements SessionRuntime {
    * bounded by how many Sessions the user can have open at once — which is
    * their choice to make, and which they are already paying for in the
    * renderer.
+   *
+   * A Session with a turn running or about to is exempt on the same terms
+   * (VC-466; {@link #streamingSessions}): a background turn has nobody watching
+   * it, but it reads its own fold at every step, and the exemption ends when
+   * the turn settles.
    */
   #keepHistory(sessionId: string, history: ProjectedHistory): ProjectedHistory {
     this.#histories.delete(sessionId);
     this.#histories.set(sessionId, history);
-    let evictable = 0;
-    for (const key of this.#histories.keys()) {
-      if (!this.#subscribers.has(key)) evictable += 1;
-    }
-    for (const oldest of this.#histories.keys()) {
-      if (evictable <= PROJECTION_CACHE_LIMIT) break;
-      if (this.#subscribers.has(oldest)) continue;
-      this.#histories.delete(oldest);
-      evictable -= 1;
-    }
+    trimCache(this.#histories, PROJECTION_CACHE_LIMIT, () => {
+      const streaming = this.#streamingSessions();
+      return (key) => this.#subscribers.has(key) || streaming.has(key);
+    });
     return history;
   }
 
@@ -5340,6 +5472,8 @@ function followUpFailureDetail(error: unknown): string {
 
 /** Pre-intent release retries: quick for a blip, then sparse, then visible and waiting. */
 const FOLLOW_UP_RETRY_DELAYS_MS: readonly number[] = [1_000, 5_000, 30_000, 120_000, 600_000];
+/** A first attach's preparation ceiling: generous, for a loaded machine making a worktree. */
+const FIRST_ATTACH_PREPARATION_TIMEOUT_MS = 10 * 60_000;
 
 export function createSessionRuntime(ports: SessionRuntimePorts): HostedSessionRuntime {
   return new DefaultSessionRuntime(ports);
