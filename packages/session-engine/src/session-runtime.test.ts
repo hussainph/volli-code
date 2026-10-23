@@ -6119,13 +6119,34 @@ function historyReply(index: number, chars: number): RuntimeObservation {
   };
 }
 
+/** Seed history, not hundreds of live observation/checkpoint transactions. */
+async function historyTurns(count: number) {
+  const ledger = createInMemorySessionLedger();
+  const engine = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+  const seeded = composition({ engine });
+  const sessionId = await createAndAttach(seeded.runtime);
+  // Keep the real observation codec and ledger validation; only the repeated
+  // fixture writes are batched. In-memory transactions clone the whole ledger
+  // for rollback, and observing each turn also refreshes its projection.
+  await seeded.adapter.emit({ kind: "turn", state: "started", turnId: "turn-0" });
+  await ledger.transaction((transaction) => {
+    const first = transaction.listEvents({ sessionId }).at(-1)!;
+    if (first.payload.kind !== "turn.started") throw new Error("Expected a turn fixture");
+    for (let index = 1; index < count; index += 1) {
+      transaction.appendEvent({
+        ...first,
+        id: `history-turn-${index}`,
+        sequence: first.sequence + index,
+        payload: { ...first.payload, turnId: `turn-${index}` },
+      });
+    }
+  });
+  return { ...seeded, sessionId };
+}
+
 describe("SessionRuntime bounded history window (VC-315)", () => {
   it("snapshots only the newest events, and pages back through every one exactly once", async () => {
-    const { runtime, adapter } = composition();
-    const sessionId = await createAndAttach(runtime);
-    for (let index = 0; index < SESSION_HISTORY_WINDOW.events + 40; index += 1) {
-      await adapter.emit({ kind: "turn", state: "started", turnId: `turn-${index}` });
-    }
+    const { runtime, sessionId } = await historyTurns(SESSION_HISTORY_WINDOW.events + 40);
 
     const snapshot = await runtime.snapshot({ sessionId });
 
@@ -6149,7 +6170,9 @@ describe("SessionRuntime bounded history window (VC-315)", () => {
     };
     const { runtime, adapter } = composition({ artifacts });
     const sessionId = await createAndAttach(runtime);
-    const replies = 80;
+    // About twelve replies fill the byte window. Keep more than that plus
+    // the 32-read allowance below, so reading all history would still fail.
+    const replies = 48;
     for (let index = 0; index < replies; index += 1)
       await adapter.emit(historyReply(index, 40_000));
     reads = 0;
@@ -6166,6 +6189,7 @@ describe("SessionRuntime bounded history window (VC-315)", () => {
     expect(bytes + historyFrameBytes(refused!)).toBeGreaterThan(SESSION_HISTORY_WINDOW.bytes);
     // Lazy: what the snapshot read is bounded by its window, not by the history.
     expect(snapshot.transcript.length).toBeLessThan(replies);
+    expect(replies).toBeGreaterThan(snapshot.transcript.length + 32);
     reads = 0;
     await runtime.snapshot({ sessionId });
     expect(reads).toBeLessThan(snapshot.transcript.length + 32);
@@ -6195,11 +6219,8 @@ describe("SessionRuntime bounded history window (VC-315)", () => {
   it("reads a sparse ledger without repeating a frame", async () => {
     // A ledger that skipped a retired kind has holes in its sequences, and a
     // double that ignores the range read entirely answers with every event.
-    const seeded = composition();
-    const sessionId = await createAndAttach(seeded.runtime);
-    for (let index = 0; index < 70; index += 1) {
-      await seeded.adapter.emit({ kind: "turn", state: "started", turnId: `turn-${index}` });
-    }
+    const seeded = await historyTurns(70);
+    const { sessionId } = seeded;
     const sparse = (await seeded.engine.listEvents({ sessionId })).filter(
       ({ sequence }) => sequence % 3 !== 0,
     );
