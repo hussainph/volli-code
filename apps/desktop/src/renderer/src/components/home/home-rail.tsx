@@ -103,7 +103,7 @@ import {
   type HomeRailMode,
   type HomeSessionRow,
 } from "@renderer/components/home/home-rail-model";
-import { delayUntil } from "@renderer/lib/boundary-timer";
+import { useAgeNow } from "@renderer/lib/use-age-now";
 import { compactAge } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
@@ -375,13 +375,8 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
   const harness = useSessionsStore(
     useShallow((state) => homeTerminalIndex(state.harness, terminals)),
   );
-  // The clock the roster's STATE column is read against, advanced only on the
-  // instant a state can change on its own (the working→idle window closing).
-  // Between boundaries it is deliberately behind the wall clock, and no row is
-  // re-derived for the difference, because no row can move in that gap.
-  const [activityNow, setActivityNow] = React.useState(() => Date.now());
-
   const panes = React.useMemo(() => homeLivePanes(liveTabs ?? EMPTY_TABS), [liveTabs]);
+  const activityNow = Date.now();
   const pulse = React.useMemo(
     () => ({ panes, lastOutputAt, parkState, harness, now: activityNow }),
     [panes, lastOutputAt, parkState, harness, activityNow],
@@ -390,15 +385,6 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
     () => homeSessionRows(chats, terminals, openChatIds, pulse),
     [chats, terminals, openChatIds, pulse],
   );
-  // One timer on the one instant a word can change by itself, rather than an
-  // interval re-deriving the roster sixty times a minute against the chance
-  // that it has (`lib/boundary-timer.ts`, and the Ticket roster's own pattern).
-  const statusBoundaryAt = nextHomeSessionStatusChangeAt(terminals, pulse);
-  React.useEffect(() => {
-    if (statusBoundaryAt === null) return;
-    const timer = window.setTimeout(() => setActivityNow(Date.now()), delayUntil(statusBoundaryAt));
-    return () => window.clearTimeout(timer);
-  }, [statusBoundaryAt]);
   const [query, setQuery] = React.useState("");
   const searching = query.trim() !== "";
   const { live, earlier } = React.useMemo(
@@ -410,6 +396,13 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
   // who wants the record open wants it open at both.
   const foldOpen = useUiStore((state) => state.railFolds.sessionsRecord);
   const filterable = rows.length > HOME_SESSION_FILTER_THRESHOLD || searching;
+  const visibleRows = searching || foldOpen ? [...live, ...earlier] : live;
+  const now = useAgeNow(
+    visibleRows.map((row) => row.at),
+    // A status transition can make a filtered-out row match (e.g. "idle").
+    // Only ages are visibility-scoped; keep the roster's full status boundary.
+    nextHomeSessionStatusChangeAt(terminals, pulse),
+  );
 
   return (
     <div className={SECTION}>
@@ -466,7 +459,7 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
       {live.length > 0 ? (
         <ul className="flex flex-col" data-testid="home-sessions-live">
           {live.map((row) => (
-            <BoardSessionRow key={row.id} projectId={projectId} row={row} />
+            <BoardSessionRow key={row.id} projectId={projectId} row={row} now={now} />
           ))}
         </ul>
       ) : null}
@@ -475,7 +468,7 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
         // rows behind a caret the reader would have to guess was hiding them.
         <ul className="flex flex-col" data-testid="home-sessions-earlier">
           {earlier.map((row) => (
-            <BoardSessionRow key={row.id} projectId={projectId} row={row} />
+            <BoardSessionRow key={row.id} projectId={projectId} row={row} now={now} />
           ))}
         </ul>
       ) : (
@@ -501,7 +494,7 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
           <RailFoldBody>
             <ul className="flex flex-col" data-testid="home-sessions-earlier">
               {earlier.map((row) => (
-                <BoardSessionRow key={row.id} projectId={projectId} row={row} />
+                <BoardSessionRow key={row.id} projectId={projectId} row={row} now={now} />
               ))}
             </ul>
           </RailFoldBody>
@@ -525,7 +518,15 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
  * and spending the quiet line on a word the mark already carries is what left
  * no room for the state.
  */
-function BoardSessionRow({ projectId, row }: { projectId: string; row: HomeSessionRow }) {
+function BoardSessionRow({
+  projectId,
+  row,
+  now,
+}: {
+  projectId: string;
+  row: HomeSessionRow;
+  now: number;
+}) {
   const provenance = useSessionProvenance(projectId, row.id);
   const provenanceLine = sessionProvenanceHoverLine(provenance);
   const Glyph = row.kind === "chat" ? ChatCircleIcon : TerminalWindowIcon;
@@ -548,7 +549,7 @@ function BoardSessionRow({ projectId, row }: { projectId: string; row: HomeSessi
           <span className="flex min-w-0 items-center gap-1 text-label text-muted-foreground">
             <StatusDot state={row.state} />
             <span className="truncate">{row.stateLabel}</span>
-            <span className="shrink-0">· {compactAge(row.at)}</span>
+            <span className="shrink-0">· {compactAge(row.at, now)}</span>
           </span>
         }
         className={row.live ? undefined : "text-muted-foreground"}

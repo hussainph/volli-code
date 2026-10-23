@@ -55,6 +55,7 @@ import {
   SectionAction,
 } from "@renderer/components/settings/kit";
 import { relativeTime } from "@renderer/lib/relative-time";
+import { useAgeNow } from "@renderer/lib/use-age-now";
 import { cn } from "@renderer/lib/utils";
 
 import {
@@ -426,11 +427,7 @@ export function McpPane({ project }: { project: Project }) {
             a person looks. Fifty of these ride in `MCP_OPERATION_HISTORY_LIMIT`,
             so the list is bounded and the detail is asked for.
           */}
-          <ul className={cn("flex flex-col", SCROLL_BOX)}>
-            {operations.map((entry) => (
-              <ActivityRow key={entry.id} entry={entry} />
-            ))}
-          </ul>
+          <OperationHistory operations={operations} />
         </PrefSection>
       )}
 
@@ -478,6 +475,17 @@ export function McpPane({ project }: { project: Project }) {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+function OperationHistory({ operations }: { operations: readonly McpOperationRecord[] }) {
+  const now = useAgeNow(operations.map((entry) => entry.createdAt));
+  return (
+    <ul className={cn("flex flex-col", SCROLL_BOX)}>
+      {operations.map((entry) => (
+        <ActivityRow key={entry.id} entry={entry} now={now} />
+      ))}
+    </ul>
   );
 }
 
@@ -575,7 +583,7 @@ function DisclosureCaret({ open }: { open: boolean }) {
  * disclosure. A removal's detail records the whole transport it destroyed,
  * which is precious and long enough that fifty of them are the page.
  */
-function ActivityRow({ entry }: { entry: McpOperationRecord }) {
+function ActivityRow({ entry, now }: { entry: McpOperationRecord; now: number }) {
   const [open, setOpen] = React.useState(false);
 
   return (
@@ -592,7 +600,7 @@ function ActivityRow({ entry }: { entry: McpOperationRecord }) {
               {entry.summary}
             </p>
             <p className="text-ui text-muted-foreground">
-              {relativeTime(entry.createdAt)} · {operationActor(entry)}
+              {relativeTime(entry.createdAt, now)} · {operationActor(entry)}
             </p>
           </div>
           {entry.detail === null ? null : (

@@ -19,6 +19,13 @@ import { TicketActivityFeed } from "./ticket-activity-feed";
 import { useBoardStore } from "@renderer/stores/board";
 import { useTicketActivityStore } from "@renderer/stores/ticket-activity";
 
+import { useAgeNow } from "@renderer/lib/use-age-now";
+
+vi.mock("@renderer/lib/use-age-now", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@renderer/lib/use-age-now")>();
+  return { useAgeNow: vi.fn(original.useAgeNow) };
+});
+
 vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
 
 let root: Root | null = null;
@@ -85,6 +92,13 @@ async function planningChange(version: number, ticketId: string | null): Promise
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
   doors.events.mockClear();
   doors.comments.mockClear();
   Object.defineProperty(window, "api", {
@@ -97,7 +111,90 @@ beforeEach(() => {
 
 afterEach(async () => {
   if (root !== null) await unmount();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe("the feed's age clock", () => {
+  it("advances a comment without a store change, rendering only once over a quiet minute", async () => {
+    vi.useFakeTimers();
+    const now = new Date(2026, 6, 14, 12).getTime();
+    vi.setSystemTime(now);
+    useTicketActivityStore.getState().apply("t1", {
+      events: [],
+      comments: [
+        {
+          id: "c1",
+          ticketId: "t1",
+          sessionId: null,
+          actor: "user",
+          body: "A comment",
+          createdAt: now - 30_000,
+          updatedAt: now - 30_000,
+        },
+      ],
+      version: 1,
+    });
+    const renders = vi.mocked(useAgeNow);
+    await mount();
+    renders.mockClear();
+    expect(container?.textContent).toContain("just now");
+    expect(vi.getTimerCount()).toBe(1);
+    await act(async () => vi.advanceTimersByTime(14_999));
+    expect(renders).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTime(16_001));
+    expect(container?.textContent).toContain("1m ago");
+    expect(container?.textContent).not.toContain("just now");
+    expect(renders).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTime(29_000));
+    expect(renders).toHaveBeenCalledTimes(1);
+    expect(doors.events).not.toHaveBeenCalled();
+    expect(doors.comments).not.toHaveBeenCalled();
+    await unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clocks only the bunch summary until its event stamps are expanded", async () => {
+    vi.useFakeTimers();
+    const now = new Date(2026, 6, 14, 12).getTime();
+    vi.setSystemTime(now);
+    useTicketActivityStore.getState().apply("t1", {
+      events: [
+        {
+          id: "e1",
+          ticketId: "t1",
+          actor: "user",
+          createdAt: now - 118_000,
+          payload: { kind: "body_edited" },
+        },
+        {
+          id: "e2",
+          ticketId: "t1",
+          actor: "user",
+          createdAt: now - 30_000,
+          payload: { kind: "retitled", from: "A", to: "B" },
+        },
+      ],
+      comments: [],
+      version: 1,
+    });
+    await mount();
+    const renders = vi.mocked(useAgeNow);
+    renders.mockClear();
+    await act(async () => vi.advanceTimersByTime(3_000));
+    expect(renders).not.toHaveBeenCalled();
+    expect(container?.textContent).toContain("just now");
+    await act(async () =>
+      container?.querySelector<HTMLButtonElement>("button[aria-expanded]")?.click(),
+    );
+    expect(container?.textContent).toContain("2m ago");
+    expect(vi.getTimerCount()).toBe(1);
+    renders.mockClear();
+    await act(async () => vi.advanceTimersByTime(12_001));
+    expect(container?.textContent?.match(/1m ago/g)).toHaveLength(2);
+    expect(container?.textContent).not.toContain("just now");
+    expect(renders).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("the Doc tab's activity cache", () => {

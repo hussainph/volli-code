@@ -213,6 +213,7 @@ afterEach(async () => {
   container?.remove();
   container = null;
   document.body.innerHTML = "";
+  vi.useRealTimers();
   await new Promise((resolve) => setTimeout(resolve, 0));
   vi.clearAllMocks();
 });
@@ -264,6 +265,28 @@ describe("the server table", () => {
     await click(button("Cancel", dialog()));
     await click(labelled("Open Sentry"));
     expect(dialog().textContent).toContain("Never refreshed");
+  });
+
+  it("ticks the refreshed stamp only while its dialog is open and reopens with fresh time", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const now = new Date("2026-06-01T12:00:00Z").getTime();
+    vi.setSystemTime(now);
+    const list = listing([record({ refreshedAt: now - 44_000 })]);
+    await render({ list });
+    expect(vi.getTimerCount()).toBe(0);
+    await click(labelled("Open Fixture"));
+    expect(dialog().textContent).toContain("Refreshed just now");
+    await act(async () => vi.advanceTimersByTime(1_001));
+    expect(dialog().textContent).toContain("Refreshed 1m ago");
+    await act(async () => vi.advanceTimersByTime(3_600_000));
+    expect(dialog().textContent).toContain("Refreshed 1h ago");
+    await click(button("Cancel", dialog()));
+    await act(async () => vi.runOnlyPendingTimers());
+    expect(vi.getTimerCount()).toBe(0);
+    vi.setSystemTime(now + 7_200_000);
+    await click(labelled("Open Fixture"));
+    expect(dialog().textContent).toContain("Refreshed 2h ago");
+    expect(list).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a 34-tool catalog to a count: no description and no tool control until a server is opened (VC-397)", async () => {
@@ -1166,6 +1189,33 @@ describe("sign-in and credentials (VC-470)", () => {
 });
 
 describe("recent activity (VC-380)", () => {
+  it("ticks operation ages together without reloading the pane", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const now = new Date("2026-06-01T12:00:00Z").getTime();
+    vi.setSystemTime(now);
+    const list = listing([], {
+      operations: [
+        operation({ createdAt: now - 44_000 }),
+        operation({ id: "operation-2", createdAt: now - 43_000 }),
+      ],
+    });
+    await render({ list });
+    expect(text().match(/just now/g)).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(1);
+    await act(async () => vi.advanceTimersByTime(1_001));
+    expect(text()).toContain("1m ago");
+    expect(text()).toContain("just now");
+    await act(async () => vi.advanceTimersByTime(1_001));
+    expect(text().match(/1m ago/g)).toHaveLength(2);
+    await act(async () => vi.advanceTimersByTime(3_600_000));
+    expect(text().match(/1h ago/g)).toHaveLength(2);
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(1);
+    await act(async () => root?.unmount());
+    root = null;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("shows a person what an agent Session installed, and when", async () => {
     await render({ list: listing([record()], { operations: [operation()] }) });
 

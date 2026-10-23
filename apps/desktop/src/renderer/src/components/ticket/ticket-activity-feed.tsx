@@ -57,6 +57,7 @@ import {
 } from "@renderer/components/ticket/activity";
 import { ClampedMarkdown } from "@renderer/components/ticket/clamped-markdown";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
+import { useAgeNow } from "@renderer/lib/use-age-now";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
@@ -97,7 +98,15 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
 };
 
 /** The single muted line for one property-change event: icon + sentence + time. */
-function EventLine({ event, muted = false }: { event: TicketEvent; muted?: boolean }) {
+function EventLine({
+  event,
+  now,
+  muted = false,
+}: {
+  event: TicketEvent;
+  now: number;
+  muted?: boolean;
+}) {
   const Icon = EVENT_ICON[event.payload.kind];
   const sentence = describeEvent(event.payload, event.actor);
   if (sentence === null) return null; // defensive: `commented` is filtered upstream
@@ -110,18 +119,20 @@ function EventLine({ event, muted = false }: { event: TicketEvent; muted?: boole
     >
       <Icon className={cn("shrink-0", muted ? "size-3" : "size-3.5")} />
       <span className="min-w-0 truncate">{sentence}</span>
-      <span className="shrink-0 text-muted-foreground/70">· {relativeTime(event.createdAt)}</span>
+      <span className="shrink-0 text-muted-foreground/70">
+        · {relativeTime(event.createdAt, now)}
+      </span>
     </div>
   );
 }
 
 /** The expanded bunch: the whole run, threaded, as de-emphasised one-liners. */
-function BunchEventList({ events }: { events: readonly TicketEvent[] }) {
+function BunchEventList({ events, now }: { events: readonly TicketEvent[]; now: number }) {
   return (
     <ul className="mt-1 ml-2 flex flex-col gap-1 border-l border-border/70 pl-2">
       {events.map((event) => (
         <li key={event.id}>
-          <EventLine event={event} muted />
+          <EventLine event={event} now={now} muted />
         </li>
       ))}
     </ul>
@@ -138,12 +149,17 @@ function BunchRow({
   label,
   at,
   events,
+  now,
+  expanded,
+  onToggle,
 }: {
   label: TicketEvent;
   at: number;
   events: TicketEvent[];
+  now: number;
+  expanded: boolean;
+  onToggle: () => void;
 }) {
-  const [expanded, setExpanded] = React.useState(false);
   const sentence = describeEvent(label.payload, label.actor);
   if (sentence === null) return null; // defensive: `commented` is filtered upstream
   const Icon = EVENT_ICON[label.payload.kind];
@@ -156,7 +172,7 @@ function BunchRow({
         {hidden > 0 ? (
           <button
             type="button"
-            onClick={() => setExpanded((value) => !value)}
+            onClick={onToggle}
             aria-expanded={expanded}
             className="flex shrink-0 items-center gap-1 rounded-sm text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
           >
@@ -166,9 +182,9 @@ function BunchRow({
             />
           </button>
         ) : null}
-        <span className="shrink-0 text-muted-foreground/70">· {relativeTime(at)}</span>
+        <span className="shrink-0 text-muted-foreground/70">· {relativeTime(at, now)}</span>
       </div>
-      {expanded && hidden > 0 ? <BunchEventList events={events} /> : null}
+      {expanded && hidden > 0 ? <BunchEventList events={events} now={now} /> : null}
     </li>
   );
 }
@@ -196,11 +212,13 @@ function AuthorChip({ actor }: { actor: string }) {
  */
 function CommentBlock({
   comment,
+  now,
   projectId,
   canWrite,
   onChanged,
 }: {
   comment: TicketComment;
+  now: number;
   projectId: string;
   /** Read-only (VC-576): the comment reads; Edit and Delete stand down. */
   canWrite: boolean;
@@ -249,7 +267,7 @@ function CommentBlock({
           {commentAuthorLabel(comment.actor)}
         </span>
         <span className="text-ui text-muted-foreground">
-          {relativeTime(comment.createdAt)}
+          {relativeTime(comment.createdAt, now)}
           {comment.updatedAt > comment.createdAt ? " · edited" : ""}
         </span>
         {isUser && !editing && !optimistic && canWrite ? (
@@ -543,6 +561,23 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   const pending = listingState === undefined || listingState === "loading";
   const failed = listingState === "failed";
   const feed = buildActivityFeed(events, comments);
+  const [expandedBunches, setExpandedBunches] = React.useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const now = useAgeNow(
+    pending || failed
+      ? []
+      : feed.flatMap((item) =>
+          item.kind === "comment"
+            ? [item.comment.createdAt]
+            : [
+                item.at,
+                ...(expandedBunches.has(item.id)
+                  ? item.events.map((event) => event.createdAt)
+                  : []),
+              ],
+        ),
+  );
 
   return (
     <section className="flex flex-col gap-4 border-t border-border pt-6">
@@ -578,11 +613,27 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
         <ul className="flex flex-col gap-2">
           {feed.map((item) =>
             item.kind === "bunch" ? (
-              <BunchRow key={item.id} label={item.label} at={item.at} events={item.events} />
+              <BunchRow
+                key={item.id}
+                label={item.label}
+                at={item.at}
+                events={item.events}
+                now={now}
+                expanded={expandedBunches.has(item.id)}
+                onToggle={() =>
+                  setExpandedBunches((previous) => {
+                    const next = new Set(previous);
+                    if (next.has(item.id)) next.delete(item.id);
+                    else next.add(item.id);
+                    return next;
+                  })
+                }
+              />
             ) : (
               <CommentBlock
                 key={item.id}
                 comment={item.comment}
+                now={now}
                 projectId={ticket.projectId}
                 canWrite={canWrite}
                 onChanged={() => void refetchComments()}
