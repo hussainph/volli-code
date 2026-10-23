@@ -14,6 +14,7 @@ import {
 } from "./credentials";
 import { McpTransportFailure, type McpProtocolClient } from "./discovery";
 import {
+  disconnectMcpServer,
   exceedsHostBound,
   McpCallBlocked,
   McpSessionHost,
@@ -118,7 +119,7 @@ describe("McpSessionHost", () => {
     expect(JSON.stringify(result)).not.toContain("secret-blob");
   });
 
-  it("rejects disabled or unknown servers, and passes a megabyte result through whole (VC-469)", async () => {
+  it("answers disabled or unknown servers by name, and passes a megabyte result through whole (VC-469)", async () => {
     // Over the old 256 KiB refusal by four times: the runtime cuts what the
     // model reads and saves the whole, so the host hands it over untouched.
     const huge = "x".repeat(1_048_576);
@@ -131,14 +132,21 @@ describe("McpSessionHost", () => {
       open,
     });
 
-    for (const serverId of ["missing", "disabled"]) {
+    for (const [serverId, why] of [
+      ["missing", "its server was removed."],
+      ["disabled", "its server is disabled in Settings. Ask the person to enable it."],
+    ] as const) {
       await expect(
         host.port.call(
           { serverId, toolName: "one", arguments: {}, toolCallId: "one" },
           new AbortController().signal,
         ),
-      ).rejects.toThrow("MCP server is unavailable for this Session");
+      ).resolves.toEqual({
+        content: [{ type: "text", text: `MCP tool one is unavailable: ${why}` }],
+        isError: true,
+      });
     }
+    expect(open).not.toHaveBeenCalled();
     await expect(
       host.port.call(
         { serverId: "server-1", toolName: "large", arguments: {}, toolCallId: "one" },
@@ -842,5 +850,146 @@ describe("McpSessionHost — calls blocked on a person (VC-470)", () => {
     expect(clients[1]!.close).not.toHaveBeenCalled();
     await host.close();
     expect(clients[1]!.close).toHaveBeenCalledOnce();
+  });
+});
+
+describe("McpSessionHost with a server a person disabled (VC-771)", () => {
+  const call = { serverId: "server-1", toolName: "lookup", arguments: {}, toolCallId: "c1" };
+  const disabled = {
+    content: [
+      {
+        type: "text",
+        text: "MCP tool lookup is unavailable: its server is disabled in Settings. Ask the person to enable it.",
+      },
+    ],
+    isError: true,
+  };
+  const removed = {
+    content: [{ type: "text", text: "MCP tool lookup is unavailable: its server was removed." }],
+    isError: true,
+  };
+
+  it("says a server added again after attach needs the next attachment, and contacts nothing", async () => {
+    let configured = { enabled: true };
+    const open = vi.fn(async () => client(async () => ({ content: [], isError: false })));
+    // Removed when this attachment bound its transports, so it holds none for it.
+    const host = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [],
+      open,
+      configured: () => configured,
+    });
+    const signal = new AbortController().signal;
+
+    await expect(host.port.call(call, signal)).resolves.toEqual({
+      content: [
+        {
+          type: "text",
+          text: "MCP tool lookup is unavailable: its server was added again after this Session attached, so it can be called once the Session next attaches.",
+        },
+      ],
+      isError: true,
+    });
+    configured = { enabled: false };
+    await expect(host.port.call(call, signal)).resolves.toEqual(disabled);
+    expect(open).not.toHaveBeenCalled();
+    await host.close();
+  });
+
+  it("reads enablement live: disabled contacts nothing, enabled again works with no reattach", async () => {
+    let configured: { enabled: boolean } | undefined = { enabled: false };
+    const protocol = client(async () => ({
+      content: [{ type: "text", text: "lookup ok" }],
+      isError: false,
+    }));
+    const open = vi.fn(async () => protocol);
+    // Bound enabled, as `serversForFrozenMcpTools` binds it; only the live row says no.
+    const host = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [server],
+      open,
+      configured: () => configured,
+    });
+    const signal = new AbortController().signal;
+
+    await expect(host.port.call(call, signal)).resolves.toEqual(disabled);
+    await expect(host.rawPort.call(call, signal)).resolves.toEqual(disabled);
+    expect(open).not.toHaveBeenCalled();
+
+    configured = { enabled: true };
+    await expect(host.port.call(call, signal)).resolves.toEqual({
+      content: [{ type: "text", text: "lookup ok" }],
+      isError: false,
+    });
+    expect(open).toHaveBeenCalledOnce();
+
+    configured = undefined;
+    await expect(host.port.call(call, signal)).resolves.toEqual(removed);
+    // The connection this attachment held to it was closed.
+    await vi.waitFor(() => expect(protocol.close).toHaveBeenCalledOnce());
+    expect(open).toHaveBeenCalledOnce();
+    await host.close();
+  });
+
+  it("answers a call that queued before the server was disabled without opening it", async () => {
+    let configured = { enabled: true };
+    const open = vi.fn(async () => client(async () => ({ content: [], isError: false })));
+    const host = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [server],
+      open,
+      configured: () => configured,
+    });
+    // A stand-in for the per-server budget: the person disables the server
+    // while this call waits for a slot.
+    const queued = async (request: typeof call, signal: AbortSignal) => {
+      configured = { enabled: false };
+      return host.rawPort.call(request, signal);
+    };
+
+    await expect(host.routed(queued).call(call, new AbortController().signal)).resolves.toEqual(
+      disabled,
+    );
+    expect(open).not.toHaveBeenCalled();
+    await host.close();
+  });
+
+  it("disconnects every live attachment from a server, after the calls on it finish", async () => {
+    let release!: () => void;
+    const running = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const clients: McpProtocolClient[] = [];
+    const open = vi.fn(async () => {
+      const opened = client(async ({ name }) => {
+        if (name === "slow") await running;
+        return { content: [{ type: "text", text: `${name} ok` }], isError: false };
+      });
+      clients.push(opened);
+      return opened;
+    });
+    const busy = new McpSessionHost({ workspacePath: "/workspace", servers: [server], open });
+    const idle = new McpSessionHost({ workspacePath: "/workspace", servers: [server], open });
+    const signal = new AbortController().signal;
+    await idle.port.call(call, signal);
+    const slow = busy.port.call({ ...call, toolName: "slow" }, signal);
+    await vi.waitFor(() => expect(open).toHaveBeenCalledTimes(2));
+
+    disconnectMcpServer("other-server");
+    disconnectMcpServer(server.id);
+
+    await vi.waitFor(() => expect(clients[0]!.close).toHaveBeenCalledOnce());
+    // The call still running finishes on its connection, which closes after.
+    expect(clients[1]!.close).not.toHaveBeenCalled();
+    release();
+    await expect(slow).resolves.toEqual({
+      content: [{ type: "text", text: "slow ok" }],
+      isError: false,
+    });
+    await vi.waitFor(() => expect(clients[1]!.close).toHaveBeenCalledOnce());
+    // A later call opens afresh.
+    await idle.port.call(call, signal);
+    expect(open).toHaveBeenCalledTimes(3);
+    await Promise.all([busy.close(), idle.close()]);
   });
 });

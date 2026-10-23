@@ -219,12 +219,14 @@ function sessionLabel(targetSessionId: string, title: string | null): string {
 }
 
 /**
- * Who stopped a watched Session. A stop by the watcher itself is never worded
- * here: {@link onSessionWake} does not report it.
+ * Who stopped a watched Session, as the reader reads it. A notice never names
+ * a stop by its watcher ({@link onSessionWake} does not report one), so only
+ * the watch receipt passes `readerSessionId` to say "by this Session".
  */
-function stoppedBy(by: SessionStopActor): string {
+export function stoppedBy(by: SessionStopActor, readerSessionId?: string): string {
   if (by.kind === "user") return "by the user";
   if (by.kind === "watchdog") return "by Volli's watchdog";
+  if (by.sessionId === readerSessionId) return "by this Session";
   return `by Session ${shortSessionId(by.sessionId)}`;
 }
 

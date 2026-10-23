@@ -76,6 +76,33 @@ describe("renderZshInitFile", () => {
     );
   });
 
+  // A user's file reads $ZDOTDIR the way their own terminal sets it: siblings
+  // sourced from it, /etc/zshrc's HISTFILE, compinit's dump. Sourced with ours
+  // in place, all of those land in Volli's userData instead.
+  it("sources each user file with ZDOTDIR swapped to theirs, and restores ours after", () => {
+    for (const name of ZSH_INIT_FILENAMES) {
+      const content = renderZshInitFile(name);
+      const source = content.indexOf(`. "$VOLLI_USER_ZDOTDIR/${name}"`);
+      const swap = content.indexOf('ZDOTDIR="$VOLLI_USER_ZDOTDIR"');
+      const restore = content.indexOf("ZDOTDIR=$volli_own_zdotdir");
+      expect(content).toContain("volli_own_zdotdir=${ZDOTDIR:-}");
+      expect(swap).toBeGreaterThan(-1);
+      expect(swap).toBeLessThan(source);
+      expect(restore).toBeGreaterThan(source);
+    }
+  });
+
+  // macOS /etc/zshrc sets HISTFILE from ZDOTDIR before the user's .zshrc runs,
+  // while ZDOTDIR is still ours.
+  it("moves a HISTFILE left inside Volli's directory back to the user's, after their .zshrc", () => {
+    const content = renderZshInitFile(".zshrc");
+    const fix = content.indexOf('HISTFILE="$VOLLI_USER_ZDOTDIR/.zsh_history"');
+    expect(content).toContain('case "${HISTFILE:-}" in');
+    expect(content).toContain('"$ZDOTDIR"/*)');
+    expect(fix).toBeGreaterThan(content.indexOf("ZDOTDIR=$volli_own_zdotdir"));
+    expect(fix).toBeLessThan(content.indexOf('path=("$VOLLI_BIN_DIR" $path)'));
+  });
+
   it("exports the user's ZDOTDIR so a nested shell still finds their real files", () => {
     expect(renderZshInitFile(".zshenv")).toContain("export VOLLI_USER_ZDOTDIR");
   });

@@ -273,7 +273,8 @@ const DESCRIPTIONS: Record<ShellToolId, string> = {
     "Start a command that runs beside the turn instead of holding it: a dev server, a watch build, a long test run, a log tail.",
     "Returns the shell's id and whatever it printed in its first second, so a server's listening line comes back in the same call.",
     "When it exits, Volli sends you a notice with how it ended and the end of its output, by itself: do not poll or sleep for it. Optional notifyOn adds one notice the first time output matches, even before a newline.",
-    "Volli caps how many a Session may hold and kills every one when the Session's attachment ends. Use execute for a command you want to wait on.",
+    "Volli caps how many a Session may hold and kills every one when the Session's attachment ends. A Subagent Session's shells end silently when its turn completes, so a subagent reads what it needs or waits inside the turn.",
+    "Use execute for a command you want to wait on.",
   ].join(" "),
   shell_output: [
     "Read a background shell's output. By default this returns only what is new since the last read of that shell, so polling costs the same each time;",
@@ -281,7 +282,7 @@ const DESCRIPTIONS: Record<ShellToolId, string> = {
   ].join(" "),
   shell_kill: [
     "End a background shell: SIGTERM, then SIGKILL if it lingers.",
-    "Its output stays readable with shell_output until the Session's attachment ends.",
+    "Its output stays readable with shell_output until the Session's attachment ends, or for a Subagent Session until its turn completes.",
   ].join(" "),
 };
 

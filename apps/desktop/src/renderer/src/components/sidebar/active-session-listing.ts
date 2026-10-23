@@ -73,23 +73,15 @@ import {
   type SessionPane,
   type SessionTab,
 } from "../../stores/sessions";
+import {
+  ACTIVE_QUIET_WINDOW_MS,
+  DONE_LINGER_MS,
+  PREVIOUS_MAX_AGE_MS,
+} from "./session-band-windows";
 
-/**
- * How long a Session that has gone quiet stays in Active. Long enough that
- * stepping away from a running agent does not reshuffle the list under you,
- * short enough that Active still means "recent".
- */
-export const ACTIVE_QUIET_WINDOW_MS = 30 * 60_000;
-
-/**
- * How long a ticket's Sessions linger in Previous after it lands in Done. The
- * ticket is finished; its Sessions are the trace of finishing it, and stay
- * reachable for one hour of "wait, what did it actually do".
- */
-export const DONE_LINGER_MS = 60 * 60_000;
-
-/** How old a Previous row gets before it counts as concluded business. */
-export const PREVIOUS_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+// The windows live in a dependency-free leaf so the performance fixture can
+// read the same values (VC-415); this module stays their door for the app.
+export { ACTIVE_QUIET_WINDOW_MS, DONE_LINGER_MS, PREVIOUS_MAX_AGE_MS };
 
 /**
  * Where a row's click lands — and, because a row is selected exactly when its
@@ -474,6 +466,52 @@ export function groupPreviousByTicket(rows: readonly PreviousSessionRow[]): Prev
     existing.rows.push(row);
   }
   return entries;
+}
+
+/**
+ * How many Previous entries the band draws before its "Show more" control, and
+ * how many each press of it adds (VC-116).
+ *
+ * Counted in ENTRIES — a ticket folder or a ticketless Session, the band's top
+ * level — not in Sessions: a collapsed folder is one row however many Sessions
+ * it holds, and the Sessions inside one the reader has opened are rows they
+ * asked for by name.
+ */
+export const PREVIOUS_BAND_LIMIT = 20;
+
+/** What the Previous band draws once its cap has had its say. */
+export interface PreviousBandSlice {
+  /** The entries to mount, in the band's own order. */
+  entries: PreviousListingEntry[];
+  /** Entries held behind "Show more" — 0 once the band fits or is fully shown. */
+  hiddenCount: number;
+}
+
+/**
+ * Caps the Previous band at its first `limit` entries (VC-116).
+ *
+ * The band is unbounded by design: everything a project ever ran that cleanup
+ * has not retired sits here, and drawing all of it costs the render and puts
+ * the rows a reader came for a long scroll behind the ones they did not.
+ *
+ * **The cap never hides where you are.** An entry `isPinned` answers for — the
+ * one holding the Session in front of you — stays drawn wherever it ranks, at
+ * its own place in the order, so the highlight the sidebar marks the current
+ * tab with cannot vanish behind "Show more". Nothing else needs that exemption:
+ * the Active band is never capped, and a Session asking for a person is pinned
+ * to Active for as long as it asks ({@link PreviousListingEntry}).
+ *
+ * A pure filter over {@link groupPreviousByTicket}'s output, so it cannot
+ * reorder the band or change which entries exist — only which are mounted.
+ */
+export function capPreviousEntries(
+  entries: readonly PreviousListingEntry[],
+  limit: number,
+  isPinned: (entry: PreviousListingEntry) => boolean,
+): PreviousBandSlice {
+  if (entries.length <= limit) return { entries: [...entries], hiddenCount: 0 };
+  const shown = entries.filter((entry, index) => index < limit || isPinned(entry));
+  return { entries: shown, hiddenCount: entries.length - shown.length };
 }
 
 /**

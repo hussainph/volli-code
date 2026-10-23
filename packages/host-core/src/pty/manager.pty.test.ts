@@ -21,6 +21,7 @@ import { syncProjectRoots } from "../project-roots";
 import { worktreeDeps } from "../worktree-runtime";
 import { PtyManager, type PtyManagerPorts } from "./manager";
 import { parkConfigFromEnv } from "./park";
+import type { ParkLedger } from "./park-controller";
 
 /** A client connection: what it was sent, and a disconnect the test pulls. */
 function makeClient(id: string) {
@@ -69,11 +70,15 @@ async function until(predicate: () => boolean, what: string, timeoutMs = 10_000)
   }
 }
 
-/** A ledger that remembers each shell's pid and when the supervisor saw it exit. */
+/**
+ * A ledger that remembers each shell's pid, when the supervisor saw it exit,
+ * and whether its tree is marked parked (VC-833).
+ */
 function makeLedger() {
   const pids: number[] = [];
   const exited = new Set<number>();
-  const ledger: SpawnLedgerPort = {
+  const parked = new Set<number>();
+  const ledger: SpawnLedgerPort & ParkLedger = {
     recordSpawn: (row) => {
       pids.push(row.pid);
       return String(pids.length - 1);
@@ -81,8 +86,12 @@ function makeLedger() {
     markExited: (id) => {
       exited.add(Number(id));
     },
+    markParked: (id, parkedAt) => {
+      if (parkedAt === null) parked.delete(Number(id));
+      else parked.add(Number(id));
+    },
   };
-  return { ledger, pids, exited };
+  return { ledger, pids, exited, parked };
 }
 
 const isAlive = (pid: number): boolean => {
@@ -234,6 +243,49 @@ describe("terminal supervisor on node-pty under plain Node (VC-560)", () => {
     expect(manager.kill(next.sink, sessionId)).toEqual({ ok: true });
     await until(() => ledger.exited.has(0), "the shell to exit after an explicit close");
     expect(manager.peek(sessionId, 1)).toBeUndefined();
+  });
+
+  it("marks a parked shell's ledger row, and a kill clears the mark and ends the tree (VC-833)", async () => {
+    const parking = new PtyManager({
+      host,
+      db: testDb.db,
+      dbError: "",
+      sessionEngine: createTestSessionEngine(testDb.db),
+      parkConfig: { ...parkConfigFromEnv({}, "darwin"), enabled: true },
+      spawnLedger: ledger.ledger,
+    });
+    const owner = makeClient("owner");
+    const created = await parking.create(owner.sink, {
+      workspaceId: "w",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+    });
+    if (!created.ok) throw new Error(created.error);
+    const pid = ledger.pids[0] ?? -1;
+    try {
+      expect(await parking.park(owner.sink, created.sessionId, { manual: true })).toEqual({
+        ok: true,
+      });
+      expect(ledger.parked.has(0)).toBe(true);
+      expect(parking.wake(owner.sink, created.sessionId)).toEqual({ ok: true });
+      expect(ledger.parked.has(0)).toBe(false);
+
+      expect(await parking.park(owner.sink, created.sessionId, { manual: true })).toEqual({
+        ok: true,
+      });
+      expect(ledger.parked.has(0)).toBe(true);
+      parking.killAll();
+      expect(ledger.parked.size).toBe(0);
+      await until(() => ledger.exited.has(0), "the parked shell to exit after the quit's kill");
+    } finally {
+      // A failed assertion must not leave this test's own shell frozen behind
+      // it — which is the very leak under test.
+      if (isAlive(pid)) {
+        process.kill(-pid, "SIGCONT");
+        parking.killAll();
+      }
+    }
   });
 
   it("kills a close-policy client's terminal when it disconnects, as a desktop window's", async () => {

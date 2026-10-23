@@ -259,6 +259,9 @@ export default defineConfig(({ mode }) => ({
         // which a permanent Change Set list satisfied forever. Each transition
         // is gated because none of them is visible in a screenshot.
         "src/components/browser/browser-plane-freeze.ts",
+        // Which pane a ⌘W or ⌘L from inside a page acts on (VC-301): a missed
+        // branch here is a close landing on the wrong tab.
+        "src/components/browser/browser-app-shortcuts.ts",
         // Where the Browser replay moves (VC-453): which step a key, a drag or
         // a growing trace lands on. None of it shows in a screenshot.
         "src/components/browser/browser-trace-model.ts",
@@ -431,6 +434,10 @@ export default defineConfig(({ mode }) => ({
         // and which are only killable one at a time. A missed branch there is
         // a button that signals something the person never singled out.
         "src/components/settings/panes/processes-model.ts",
+        // What Updates says the last check found (VC-294). The defect was a
+        // page that looked identical whatever a check answered, and a failure
+        // that lived only as long as its toast — every phase is a branch here.
+        "src/components/settings/panes/updates-pane-model.ts",
         // What the user is TOLD about a launch-wide environment fault — the
         // same class of decision as cli-status-model, enrolled for the same
         // reason (VC-94).
@@ -493,6 +500,9 @@ export default defineConfig(({ mode }) => ({
         // unavailable tool, or a row that called a broken server Ready, is a
         // tool offered to every new Session that nobody chose.
         "src/components/settings/configure/mcp-tools-model.ts",
+        // Whether a repo has AGENTS.md / CLAUDE.md (VC-305): a wrong answer
+        // offers Reveal on a file that is not there, or hides one that is.
+        "src/components/settings/configure/instruction-files.ts",
         "src/components/update/live-work-copy.ts",
         "src/components/ticket/session-history.ts",
         "src/components/ticket/ticket-chat-tab.ts",
@@ -683,6 +693,10 @@ export default defineConfig(({ mode }) => ({
         "src/terminal/local-fonts.ts",
         "src/terminal/option-as-alt.ts",
         "src/terminal/session-lifecycle.ts",
+        // The flow-control ack (VC-821). Enrolled because a missed branch here
+        // fails silently and permanently: a chunk whose credit is never
+        // returned leaves its PTY paused, and the pane simply stops updating.
+        "src/terminal/output-dispatch.ts",
         // How a burst of invalidations becomes one (VC-359). Enrolled because
         // the merge is a SAFETY rule, not an optimisation: it may only ever
         // widen, and the one kind a venue cache depends on has to survive a
@@ -693,6 +707,10 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/ipc-descriptors.ts",
         "**/src/main/ipc-registry.ts",
         "**/src/main/navigation.ts",
+        // Which keys leave a Browser page for the app (VC-301). Every branch
+        // is a chord taken from, or left to, a page the person is typing in.
+        "**/src/main/browser/app-shortcuts.ts",
+        "**/src/main/browser/app-shortcut-relay.ts",
         // The notification delivery boundary (VC-295). Enrolled for the same
         // reason the IPC handlers are: a missed branch here is an alert that
         // escapes a preference, a click that opens nothing, or a suppression

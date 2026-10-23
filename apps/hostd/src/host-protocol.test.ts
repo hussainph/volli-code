@@ -17,6 +17,7 @@ import {
   hostResourceWorkspace,
   isLiteralLoopback,
   parseListen,
+  servedWorkspace,
   sessionWorkspace,
 } from "./host-protocol";
 
@@ -138,6 +139,15 @@ describe("hostd's board feed and resource port (VC-565)", () => {
       [{ kind: "ticket", op: "upsert", id: "ticket-1", projectId: PROJECT }],
       [{ kind: "project", op: "upsert", id: PROJECT, projectId: PROJECT }],
     ]);
+  });
+
+  // VC-822: a removed project is detached, not deleted; no Workspace door
+  // serves it until its folder is added again.
+  it("serves a Workspace only while its project is on the rail", () => {
+    expect(servedWorkspace(db, PROJECT)).toEqual({ id: PROJECT, epoch: 4 });
+    db.prepare("UPDATE projects SET removed_at = 9 WHERE id = ?").run(PROJECT);
+    expect(servedWorkspace(db, PROJECT)).toBeNull();
+    expect(servedWorkspace(db, "no-such-project")).toBeNull();
   });
 
   it("answers a Session from its ledger and every board kind from the board", async () => {

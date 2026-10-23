@@ -154,7 +154,6 @@ describe("Working visual and screen-reader lifetimes", () => {
 describe("calm message delivery timing", () => {
   it.each([
     ["send", "Sending…"],
-    ["steer", "Sends after this step"],
     ["queue", "Queuing…"],
   ] as const)("delays %s state 600ms but never delays the words", async (delivery, copy) => {
     await render(
@@ -173,24 +172,38 @@ describe("calm message delivery timing", () => {
     expect(container.textContent).not.toContain("Pending");
   });
 
-  it("delays durable pending steering too, not only held messages", async () => {
+  it("never adds a tab to held steering", async () => {
     await render(
-      <ChatTurn
-        messages={[user]}
-        context={{
-          ...context,
-          deliveryLabels: new Map([[user.id, "Pending"]]),
-          steeringMessages: new Set([user.id]),
-        }}
-        live={false}
+      <PendingMessage
+        message={{ id: "steer", text: "Keep these words", state: "sending", delivery: "steer" }}
+        context={context}
       />,
     );
+    await advance(5000);
+    expect(container.textContent).toContain("Keep these words");
     expect(footer()).toBeNull();
-    await advance(599);
-    expect(footer()).toBeNull();
-    await advance(1);
-    expect(footer()?.textContent).toBe("Sends after this step");
   });
+
+  it.each(["Pending", "Delivered", "Delivery unconfirmed"] as const)(
+    "never shows durable %s plumbing, even after the local wait delay",
+    async (label) => {
+      await render(
+        <ChatTurn
+          messages={[user]}
+          context={{
+            ...context,
+            deliveryLabels: new Map([[user.id, label]]),
+          }}
+          live={false}
+        />,
+      );
+      expect(footer()).toBeNull();
+      await advance(599);
+      expect(footer()).toBeNull();
+      await advance(1);
+      expect(footer()).toBeNull();
+    },
+  );
 
   it("never flashes state for a send accepted before 600ms, including after its old deadline", async () => {
     const message = {
@@ -229,20 +242,21 @@ describe("calm message delivery timing", () => {
     expect(footer()?.textContent).toBe("Queued");
   });
 
-  it.each(["Not delivered", "Delivery unconfirmed"] as const)(
-    "shows %s immediately even if pending has not reached its delay",
-    async (label) => {
-      await render(
-        <ChatTurn messages={[user]} context={context} live={false} deliveryLabel="Sending…" />,
-      );
-      await advance(100);
-      expect(footer()).toBeNull();
-      await render(
-        <ChatTurn messages={[user]} context={context} live={false} deliveryLabel={label} />,
-      );
-      expect(footer()?.textContent).toBe(label);
-    },
-  );
+  it("shows a durable refusal immediately even if the local wait has not reached its delay", async () => {
+    await render(
+      <ChatTurn messages={[user]} context={context} live={false} deliveryLabel="Sending…" />,
+    );
+    await advance(100);
+    expect(footer()).toBeNull();
+    await render(
+      <ChatTurn
+        messages={[user]}
+        context={{ ...context, deliveryLabels: new Map([[user.id, "Not delivered"]]) }}
+        live={false}
+      />,
+    );
+    expect(footer()?.textContent).toBe("Not delivered");
+  });
 
   it("starts a fresh delay when the same component receives a different message", async () => {
     await render(

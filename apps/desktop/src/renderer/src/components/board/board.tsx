@@ -118,6 +118,12 @@ interface DragState {
   ticketIds: string[];
   preview: Ticket[];
   hiddenAtStart: TicketStatus[];
+  /**
+   * The one column every lifted ticket already stands in, or `null` for a group
+   * drawn from several. A release there is not an arrival, so its Offered rows
+   * are drawn inert — it starts nothing whatever row the picker names.
+   */
+  originStatus: TicketStatus | null;
   /** Final slot in the preview, ready for the atomic persistence call. */
   drop: DropTarget | null;
 }
@@ -558,6 +564,9 @@ export const Board = React.memo(function Board({
   // pill that stands in for an EMPTY one. An empty column can be armed, so the
   // pill has to be able to grow the same picker; what a column offers is a fact
   // about the column, never about how much of it is on screen.
+  // Fixed for the whole gesture, so it is a primitive dependency rather than
+  // the drag state itself, which changes on every slot the card crosses.
+  const originStatus = drag?.originStatus ?? null;
   const offeredPanelFor = React.useCallback(
     (status: TicketStatus): ColumnOfferedPanelProps | undefined =>
       showsOfferedList(picker, status)
@@ -566,9 +575,10 @@ export const Board = React.memo(function Board({
             expanded: isPickerColumn(picker, status),
             highlighted: highlightedIndex(picker, pickerColumns, status),
             armedId: offeredByStatus.armed[status],
+            inert: status === originStatus,
           }
         : undefined,
-    [picker, pickerColumns, offeredByStatus],
+    [picker, pickerColumns, offeredByStatus, originStatus],
   );
   // One column is being aimed at, and the rest — standing or collapsed — are
   // not the question.
@@ -942,6 +952,9 @@ export const Board = React.memo(function Board({
       ticketIds,
       preview: storeTickets,
       hiddenAtStart: hidden,
+      originStatus: selectedTickets.every((ticket) => ticket.status === activeTicket.status)
+        ? activeTicket.status
+        : null,
       drop: null,
     });
     // A drag may BEGIN with ⌥ already down, and that drag never sees a keydown.

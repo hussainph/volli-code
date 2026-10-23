@@ -146,7 +146,7 @@ import type {
   FileSearchResult,
   FileWriteInput,
   FileWriteResult,
-  FirstPaintHint,
+  FirstPaintReport,
   HarnessEventNotice,
   HarnessPendingResult,
   HarnessRegisteredResult,
@@ -568,7 +568,10 @@ const api = {
   projects: {
     pickFolder: (): Promise<PickFolderResult> => invoke("volli:pick-project-folder"),
     syncRoots: (paths: string[]): Promise<void> => invoke("volli:sync-project-roots", paths),
-    /** Creates a project row, or (`created: false`) returns the existing one already tracked at `path`. */
+    /**
+     * Creates a project row, or (`created: false`) returns the existing one
+     * tracked at `path`, re-attaching it if it was removed (VC-822).
+     */
     create: (input: ProjectCreateInput): Promise<ProjectCreateResult> =>
       invoke("volli:project-create", input),
     /** Updates the project's pinned automation base branch and/or worktree setup command. */
@@ -1632,9 +1635,10 @@ const api = {
      * Records the mode and background this paint resolved to, so the NEXT
      * launch constructs its window with both already known. A hint, not an
      * authority: `{canvas, appearance}` stays the pair everything is derived
-     * from, and this row is overwritten on every paint.
+     * from, and this row is overwritten on every paint. The plane color
+     * (`--background`) rides along for Browser Tab planes and is not stored.
      */
-    setFirstPaint: (hint: FirstPaintHint): Promise<Result> =>
+    setFirstPaint: (hint: FirstPaintReport): Promise<Result> =>
       invoke("volli:theme-first-paint-set", hint),
     /**
      * What main resolved for THIS window before the renderer existed — the

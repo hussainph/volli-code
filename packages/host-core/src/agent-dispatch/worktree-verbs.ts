@@ -169,7 +169,7 @@ export async function worktreeStatusVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, git, gitAsync, worktreeExists } = context;
+  const { options, projects, envSession, gitAsync, worktreeExists } = context;
   // Context resolution (which ticket the agent means) stays this door's
   // concern; the git compose + the no-worktree / stamped-but-deleted
   // discrimination live behind the ticketId-in read verb (CONCEPT #42).
@@ -182,7 +182,7 @@ export async function worktreeStatusVerb(
   // an agent asking about a ticket whose rail is open gets the answer main
   // already holds instead of spawning the five-child read again.
   const read = await getWorktreeSnapshots().readStatus(resolved.ticket.id, () =>
-    readWorktreeStatus({ db: options.db, git, gitAsync, worktreeExists }, resolved.ticket.id),
+    readWorktreeStatus({ db: options.db, gitAsync, worktreeExists }, resolved.ticket.id),
   );
   switch (read.kind) {
     case "missing-ticket":
@@ -215,7 +215,7 @@ export async function worktreeDiffVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, git, gitAsync, worktreeExists } = context;
+  const { options, projects, envSession, gitAsync, worktreeExists } = context;
   const resolved = resolveWorktreeTicket(options.db, projects, envSession, request);
   if (!resolved.ok) return resolved.response;
   // Merge-base ("what the PR would contain") is the default; --working-tree
@@ -223,7 +223,7 @@ export async function worktreeDiffVerb(
   const mode: WorktreeDiffMode =
     request.args["workingTree"] === true ? "working-tree" : "merge-base";
   const read = await readWorktreeDiff(
-    { db: options.db, git, gitAsync, worktreeExists },
+    { db: options.db, gitAsync, worktreeExists },
     resolved.ticket.id,
     mode,
   );
@@ -286,11 +286,11 @@ export async function worktreeSyncVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, git, gitAsync, worktreeExists } = context;
+  const { options, projects, envSession, gitAsync, worktreeExists } = context;
   const resolved = resolveWorktreeTicket(options.db, projects, envSession, request);
   if (!resolved.ok) return resolved.response;
   const mode = request.args["abort"] === true ? "abort" : "merge";
-  const deps = { db: options.db, git, gitAsync, worktreeExists };
+  const deps = { db: options.db, gitAsync, worktreeExists };
 
   // A preview has to resolve the same base and safety check as the real write,
   // but it must stop before either `git merge --no-edit` or `git merge --abort`.

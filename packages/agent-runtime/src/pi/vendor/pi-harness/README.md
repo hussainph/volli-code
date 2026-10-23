@@ -110,15 +110,42 @@ branch-summary execution. `Agent`/agent loop are **not** vendored.
    delete a replacement handle; duplicate unreachable guards are omitted while
    failed commits and competing publications remain covered. Coverage thresholds
    and production source inclusion are unchanged.
-5. **Bounded shell spills (VC-820):** `env/nodejs.ts` uses Volli's owned
+5. The copied core patch is deleted; ownership now lives here. Codemode is not
+   vendored: its output/call-size patch is retained on 1.0.0 because upstream
+   still lacks those limits.
+6. **Edit byte preservation:** `edit` reads bytes and decodes strict UTF-8,
+   refusing a file that does not decode instead of writing U+FFFD back. Matching
+   (exact, then fuzzy) still runs on the LF-normalized view, but the result is
+   overlaid onto the original text: untouched lines keep their own CRLF, LF or
+   lone-CR endings and edited lines take their region's ending, where upstream
+   rewrote the whole file with its first line ending. `applyEditsToContent`
+   (upstream `applyEditsToNormalizedContent`) takes the original text, and the
+   reported `patch` is built from the original and written text so it applies
+   to the file's bytes. `detectLineEnding` and `restoreLineEndings` are removed.
+7. **Bounded read (VC-801):** `read` no longer calls `readBinaryFile`. It opens
+   the file through a new `FileSystem.openFileReader` (Node: opened
+   `O_NONBLOCK | O_NOCTTY` and judged by `fstat` on the descriptor, so a
+   directory, FIFO, device or socket is refused at once without a pathname
+   check/use window, symlinks followed; see
+   `docs/development/codeql-triage.md`) and reads
+   the first 8 KiB. An image signature there still reads the whole file into
+   the unchanged image path; a NUL byte there answers a binary notice (a
+   UTF-16 notice when a UTF-16 BOM leads) instead of decoded text; anything
+   else streams in 256 KiB reads into one reused buffer, finding lines by
+   their LF byte and decoding only the prefix the 2,000-line / 50 KiB cut can
+   show. Every byte is still read, so the hint can name the line count. Text,
+   continuation offsets and truncation wording are unchanged;
+   `details.truncation.totalBytes` and an oversized first line's size are
+   counted in the file's bytes (less a leading BOM), which differs from
+   decoding everything only for invalid UTF-8. A negative `limit` now selects
+   no lines where `Array.prototype.slice` counted from the end.
+
+8. **Bounded shell spills (VC-820):** `env/nodejs.ts` uses Volli's owned
    `ShellSpillBudget` before queueing/writing. Capture metadata carries an optional
    `spillTruncatedAt` byte cap through updates and completion; `tools/bash.ts`
    appends a cap notice, including on failure, without changing the inline tail,
    tool declaration or existing `Full output:` framing. Attachment temp-directory
    ownership and deletion live outside the vendor in `execution-env.ts`.
-6. The copied core patch is deleted; ownership now lives here. Codemode is not
-   vendored: its output/call-size patch is retained on 1.0.0 because upstream
-   still lacks those limits.
 
 ## Compatibility evidence
 

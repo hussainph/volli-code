@@ -605,6 +605,12 @@ export class ScopedExecutionEnv implements ExecutionEnv {
     return guarded.ok ? this.#delegate.readBinaryFile(guarded.value, context) : guarded;
   }
 
+  /** `read`'s bounded way in (VC-801): the same guard as {@link readBinaryFile}. */
+  async openFileReader(path: string, context: Context = BACKGROUND_CONTEXT) {
+    const guarded = await this.#guard(path, context);
+    return guarded.ok ? this.#delegate.openFileReader(guarded.value, context) : guarded;
+  }
+
   async fileInfo(path: string, context: Context = BACKGROUND_CONTEXT) {
     const guarded = await this.#guard(path, context);
     return guarded.ok ? this.#delegate.fileInfo(guarded.value, context) : guarded;

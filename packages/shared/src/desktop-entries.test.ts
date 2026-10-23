@@ -47,11 +47,13 @@ describe("the desktop-only tier", () => {
     expect(hostCommands.map(({ key }) => key)).toEqual([
       "project.reorder",
       "worktree.trimSettings",
+      "project.remove",
     ]);
     for (const entry of DESKTOP_ENTRIES) {
-      const clientLocal = /^(hosts|hostAdd|hostSignIns|hostLink|hostScope|shells)\./u.test(
-        entry.key,
-      );
+      const clientLocal =
+        /^(hosts|hostAdd|hostSignIns|hostLink|hostScope|shells|browserShortcuts)\./u.test(
+          entry.key,
+        );
       expect(entry.compatibility, entry.key).toBe(clientLocal ? "client-local" : "host-command");
     }
   });

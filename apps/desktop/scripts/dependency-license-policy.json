@@ -45,7 +45,7 @@
   "reviewed": {
     "@img/sharp-libvips-*": {
       "license": "LGPL-3.0-or-later",
-      "versions": ["1.3.3", "1.3.4"],
+      "versions": ["1.3.4"],
       "reviewedAt": "2026-10-13",
       "componentElections": {
         "cairo": {
@@ -65,7 +65,7 @@
         "was never permissive; the 1.3.3 README said MPL-2.0, while 1.3.4 correctly says MPL-1.1.",
         "Compared both manifests, README tables and versions.json: same LGPL package license, same",
         "29 listed components, no newly bundled component keys. 1.3.4 is what apps/desktop ships.",
-        "Retain the prior 1.3.3 review for miniflare's dev-only sharp 0.35.4; it is not the desktop payload.",
+        "The 1.3.3 review (miniflare's dev-only sharp 0.35.4) was retired when VC-793 overrode that copy to 0.35.5.",
         "The package ships NO license text of its own — only the README's table of component licenses —",
         "so the full LGPLv3 and GPLv3 texts LGPLv3 section 4(b) requires must come from elsewhere."
       ],
@@ -311,12 +311,15 @@
 
     "dompurify": {
       "license": "(MPL-2.0 OR Apache-2.0)",
-      "versions": ["3.4.16"],
+      "versions": ["3.4.16", "3.4.17"],
+      "reviewedAt": "2026-10-19",
       "disposition": "shipped",
       "summary": [
         "Dual-licensed, so the choice is ours. Volli elects Apache-2.0, which is already the dominant",
         "license in this tree and carries no reciprocity. Recorded because the elected half must appear",
-        "in the notices — an entry reading only \"MPL-2.0 OR Apache-2.0\" leaves the reader guessing."
+        "in the notices — an entry reading only \"MPL-2.0 OR Apache-2.0\" leaves the reader guessing.",
+        "3.4.17's installed LICENSE contains Apache-2.0 in full; its manifest retains the same",
+        "dual-license expression. The existing Apache-2.0 election still applies to both versions."
       ],
       "obligations": ["Notices must state Apache-2.0 as the elected license."],
       "electedLicense": "Apache-2.0",

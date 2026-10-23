@@ -191,6 +191,30 @@ export interface TextLineReader {
 }
 
 /**
+ * Positional byte reader over one open regular file (VC-801, a local
+ * divergence): `read` reads only what it is asked for, where it is asked, so a
+ * caller can look at a file of any size without holding it.
+ */
+export interface FileByteReader {
+  /** Size in bytes when the file was opened. */
+  readonly size: number;
+  /**
+   * Read up to `length` bytes from byte `position`; fewer only at end of file.
+   * With `into` (at least `length` bytes) the bytes land there and the result
+   * is a view of it, valid until the next read into it; without it, a new
+   * buffer is allocated.
+   */
+  read(
+    position: number,
+    length: number,
+    context: Context,
+    into?: Uint8Array,
+  ): Promise<Result<Uint8Array, FileError>>;
+  /** Release the open file. Must be best-effort and must not throw or reject. */
+  close(context: Context): Promise<void>;
+}
+
+/**
  * Filesystem capability used by the harness.
  *
  * Paths passed to methods may be absolute or relative to {@link cwd}. Paths returned by file operations are addressed paths
@@ -219,6 +243,12 @@ export interface FileSystem {
   ): Promise<Result<string[], FileError>>;
   /** Read a binary file. */
   readBinaryFile(path: string, context: Context): Promise<Result<Uint8Array, FileError>>;
+  /**
+   * Open a regular file for positional byte reads, following symlinks. Anything
+   * else — a directory, FIFO, device or socket — is refused at once, without
+   * waiting on a writer or reading a byte.
+   */
+  openFileReader(path: string, context: Context): Promise<Result<FileByteReader, FileError>>;
   /** Create or overwrite a file, creating parent directories when supported. */
   writeFile(
     path: string,

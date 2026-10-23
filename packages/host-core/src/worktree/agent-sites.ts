@@ -138,13 +138,48 @@ export async function releaseAgentSites(
   directory: string,
   deps: { newCommandId: () => string; onError: (sessionId: string, error: unknown) => void },
 ): Promise<AgentSiteReleaseReport> {
-  const bindings = agentSitesWithin(runtime, directory);
+  return releaseBindings(
+    runtime,
+    () => agentSitesWithin(runtime, directory),
+    { kind: "volli", reason: "worktree-notice" },
+    deps,
+  );
+}
+
+/**
+ * Ends every binding these Sessions hold, wherever it is rooted: a removed
+ * project's Sessions (VC-796) are rooted in the project folder and in ticket
+ * worktrees that need not sit under it, so the directory cannot select them.
+ *
+ * The same release, report and failure stance as {@link releaseAgentSites};
+ * the origin is the person's, because removing the project was their act.
+ */
+export async function releaseAgentSessions(
+  runtime: AgentSiteRuntime,
+  sessionIds: ReadonlySet<string>,
+  deps: { newCommandId: () => string; onError: (sessionId: string, error: unknown) => void },
+): Promise<AgentSiteReleaseReport> {
+  return releaseBindings(
+    runtime,
+    () => runtime.openNativeBindings().filter(({ sessionId }) => sessionIds.has(sessionId)),
+    { kind: "user" },
+    deps,
+  );
+}
+
+async function releaseBindings(
+  runtime: AgentSiteRuntime,
+  select: () => readonly OpenNativeBinding[],
+  origin: SessionOrigin,
+  deps: { newCommandId: () => string; onError: (sessionId: string, error: unknown) => void },
+): Promise<AgentSiteReleaseReport> {
+  const bindings = select();
   if (bindings.length === 0) return { released: [], stillOpen: [] };
   for (const binding of bindings) {
     try {
       await runtime.command({
         commandId: deps.newCommandId(),
-        origin: { kind: "volli", reason: "worktree-notice" },
+        origin,
         sessionId: binding.sessionId,
         command: { kind: "adapter.release", attachmentId: binding.attachmentId },
       });
@@ -152,7 +187,7 @@ export async function releaseAgentSites(
       deps.onError(binding.sessionId, error);
     }
   }
-  const remaining = agentSitesWithin(runtime, directory);
+  const remaining = select();
   const stillOpen = new Set(remaining.map(({ sessionId }) => sessionId));
   return {
     released: bindings

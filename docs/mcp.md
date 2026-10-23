@@ -27,9 +27,15 @@ new executable tools and the last-cold provider declaration epoch separately:
   including refreshed additions, never the project's later selection. Running
   delegates refresh by the same rules, bounded by their parent.
 - Disabling or deselecting tools does not remove an existing name or definition.
-  A removed server's tools remain named and return an unavailable error; restoring
-  its original ID restores calling. Older app builds may require that configuration
-  to reattach. See [Recovering](#recovering-from-a-failed-or-regretted-change).
+  A disabled server's tools remain named, and a call returns `MCP tool <name> is
+  unavailable: its server is disabled in Settings. Ask the person to enable it.`
+  without starting or contacting the server; disabling also closes the
+  connections Sessions already held to it. Enabling it again makes the same calls
+  work, with no reattach. A removed server's tools likewise remain named and
+  return `MCP tool <name> is unavailable: its server was removed.`; restoring its
+  original ID restores calling from the Session's next attachment (until then a
+  call says the server was added again and needs it). Older app builds may
+  require that configuration to reattach. See [Recovering](#recovering-from-a-failed-or-regretted-change).
 
 Older builds skip refresh facts and use the immutable birth surface. Existing
 MCP schemas, routes and descriptions remain frozen; arbitrary upstream changes
@@ -582,13 +588,16 @@ describes the structured half of a result (see
 
 Sessions keep the tool names and can reattach, but calls return a named
 unavailable error. **Re-add the server under the same id** — the removal's audit
-record contains its transport — to restore calling. Pre-refresh app builds may
-also need that configuration restored before they can reattach.
+record contains its transport — to restore calling from each Session's next
+attachment; a Session still attached from before says so until then.
+Pre-refresh app builds may also need that configuration restored before they can
+reattach.
 
 To avoid this entirely, prefer **`server_disable`**. It keeps the configuration, so
 existing Sessions still reattach, while new root Sessions are not offered the
 tools. A helper delegated from a Session that already holds them still inherits
-them. That is what most callers actually mean.
+them. Their calls answer that the server is disabled until it is enabled again,
+when they work with no reattach. That is what most callers actually mean.
 
 ## Where installs are recorded
 
@@ -852,8 +861,9 @@ trust notice.
   sidecars, because a tool result can contain anything the server could see.
   Volli does not mark them for other backup tools such as Time Machine.
 - **Reading them back.** When `read` opens a saved file, its result starts with
-  a notice that the file is untrusted data, so the warning is not lost when the
-  model reads the rest of a result later. A Session whose authority is set to
+  a notice that the file is untrusted data, and the file's text sits between
+  markers minted for that read, so the warning is not lost when the model reads
+  the rest of a result later and the text cannot write its own end to them. A Session whose authority is set to
   `enforce` may read, but never write, the saved output its own history names:
   its own, and that of every earlier attachment whose conversation it carries,
   after a relaunch as well as on the first attach. It may not read another
@@ -874,14 +884,32 @@ trust notice.
     remote, can be up to 8 MiB plus 64 KiB (`MCP_STDIO_BUFFER_MAX_BYTES`),
     enough for an 8 MiB result and its framing.
 
-These rules apply to MCP results only. `web_fetch` already returns at most
-25,000 characters of an extracted article, and saving the rest of a web page
-would put untrusted page text in a file that `read` would later return without
-the per-read markers `web_fetch` wraps it in. `execute` keeps Pi's inline handling:
-the last 2,000 lines or 50 KB, with output saved in a temp file capped at 64 MiB.
-The result names the spill cap when exceeded. Native execution removes these
-files when its attachment closes; they are not Session-persistent MCP output.
-Spilling remains disabled while the launch holds credential values.
+Web reads are cut by bounds of their own, and save what those bounds cut to
+the same directory, under the same limits and lifetime (VC-237):
+
+- `web_fetch` returns at most 25,000 characters of a page. The rest of the
+  text Volli read is saved. A page past extraction's own bounds was never
+  read whole, so a saved page can still stop short of the page's end, and the
+  result says so.
+- `browser_snapshot`, `browser_navigate` and `browser_act` print at most
+  30,000 characters of the accessibility tree. The tree is saved whole, walked
+  as far as `browser_find` walks (20,000 nodes) and to at most 8 MiB. Only the
+  elements the result showed carry refs in the file; nothing past them can be
+  acted on from it.
+- `browser_console` shows the most recent 100 messages within 30,000
+  characters. A tab keeps up to 1,000 messages and 256,000 characters, and
+  the read saves all of that when it showed less.
+
+The result names the file, its size and the lines the text is on, and when it
+was read. The file's one-line header names the tool, where the text came from
+(the URL without its query string for `web_fetch`; the tab, its URL and the
+tree's generation for the browser) and the time. A search (`web_search`,
+`browser_find`) returns references and matches, not a read, and saves nothing.
+`execute` keeps Pi's inline handling: the last 2,000 lines or 50 KB, with output
+saved in a temp file capped at 64 MiB. The result names the spill cap when exceeded.
+Native execution removes these files when its attachment closes; they are not
+Session-persistent MCP output. Spilling remains disabled while the launch holds
+credential values.
 
 ## What is out of scope
 

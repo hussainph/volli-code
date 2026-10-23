@@ -1257,6 +1257,63 @@ describe("SessionRuntime durable boundary invariants", () => {
     first.adapter.attach = originalAttach;
   });
 
+  it("leaves a replayed attach unreceipted when shutdown wins its recovery", async () => {
+    const first = composition();
+    const created = await create(first.runtime);
+    await first.engine.submit({
+      commandId: "recover-closing-attach",
+      sessionId: created.sessionId,
+      intent: { kind: "executor.start", adapterId: "invariant-adapter", continuity: "fresh" },
+      provenance: { source: { kind: "user", id: "test", detail: null }, venue },
+    });
+    await first.engine.observe({
+      id: "recover-closing-attach-opened",
+      sessionId: created.sessionId,
+      commandId: "recover-closing-attach",
+      occurredAt: 100,
+      provenance: { source: { kind: "adapter", id: "invariant-adapter", detail: null }, venue },
+      kind: "attachment.opened",
+      attachment: {
+        id: "recover-closing-attach-opened",
+        sessionId: created.sessionId,
+        adapterId: "invariant-adapter",
+        venue,
+        continuity: "fresh",
+        native: {
+          id: "recover-native",
+          detail: {
+            kind: "volli.native-binding.v1",
+            profileId: "native",
+            directory: "/ticket/original",
+            locator: null,
+          },
+        },
+        authority: null,
+      },
+    });
+    const attachStarted = Promise.withResolvers<void>();
+    const releaseAttach = Promise.withResolvers<void>();
+    const originalAttach = first.adapter.attach.bind(first.adapter);
+    first.adapter.attach = async (spec, sink) => {
+      attachStarted.resolve();
+      await releaseAttach.promise;
+      return originalAttach(spec, sink);
+    };
+
+    const recovering = attach(first.runtime, created.sessionId, "recover-closing-attach");
+    await attachStarted.promise;
+    await first.runtime.close();
+    releaseAttach.resolve();
+
+    await expect(recovering).rejects.toThrow("Session runtime is closed");
+    expect(first.adapter.releases).toBe(1);
+    expect(first.adapter.reconciles).toBe(0);
+    const session = await first.engine.getSession({ sessionId: created.sessionId });
+    expect(
+      session?.receipts.filter(({ commandId }) => commandId === "recover-closing-attach"),
+    ).toEqual([]);
+  });
+
   it("keeps the durable attachment identity when an opened attach is replayed without a receipt", async () => {
     const { runtime, engine, adapter } = composition();
     const created = await create(runtime);

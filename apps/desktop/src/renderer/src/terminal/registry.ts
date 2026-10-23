@@ -61,12 +61,42 @@ if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
   unsubscribeDevicePixelRatio = watchDevicePixelRatio(window, fitLiveEngines);
 }
 
+/**
+ * Dispose every engine as the page goes away (reload, navigation, close).
+ *
+ * The flow-control ack for a chunk is sent once xterm has parsed it (VC-821),
+ * and a renderer reload tears xterm down without running any of those
+ * callbacks. Main does not see a reload as a detach, so every chunk still
+ * queued (up to a watermark plus a batch) would stay unacked and the PTY would
+ * stay paused (the credit leak VC-425 tracks). `dispose` releases what each
+ * engine still holds, so disposing here returns that credit while the page can
+ * still send it.
+ */
+function disposeAllEngines(): void {
+  const live = [...engines.values()];
+  engines.clear();
+  for (const engine of live) {
+    try {
+      engine.dispose();
+    } catch (error) {
+      console.warn("terminal dispose on page hide failed:", error);
+    }
+  }
+}
+
+let unsubscribePageHide: (() => void) | null = null;
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("pagehide", disposeAllEngines);
+  unsubscribePageHide = () => window.removeEventListener("pagehide", disposeAllEngines);
+}
+
 // The registry outlives this module: Vite re-evaluates it on every renderer HMR
 // edit, and without a teardown each outgoing copy keeps its module-lifetime
 // subscriptions forever.
 import.meta.hot?.dispose(() => {
   unsubscribeTerminalAppearanceChanged();
   unsubscribeDevicePixelRatio?.();
+  unsubscribePageHide?.();
 });
 
 /** The engine for `sessionId`, constructing it on first request. */

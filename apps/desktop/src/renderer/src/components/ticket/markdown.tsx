@@ -1,9 +1,19 @@
 import * as React from "react";
-import DOMPurify, { type Config as DOMPurifyConfig } from "dompurify";
+import DOMPurify, {
+  type Config as DOMPurifyConfig,
+  type UponSanitizeAttributeHookEvent,
+  type UponSanitizeElementHookEvent,
+} from "dompurify";
 import { Marked } from "marked";
 import { markdownImageNotice, resolveMarkdownImageSrc } from "@volli/shared";
 
 import { useMarkdownAttachments } from "@renderer/components/attachments/markdown-image";
+import { chatSanitizerKeepsClass } from "@renderer/components/ui/ai-elements/chat-markdown";
+import {
+  allowsPreviewAttribute,
+  PREVIEW_DROPPED_TAGS,
+  PREVIEW_TAGS,
+} from "@renderer/editor/markdown-preview-html";
 import { cn } from "@renderer/lib/utils";
 
 /**
@@ -45,17 +55,123 @@ export const ALLOWED_URI_REGEXP =
   /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix|volli-blob):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
 
 /**
- * `data:` is admitted on `<img>` ONLY.
+ * The sanitizer's configuration: the file Preview's ALLOWLIST, not DOMPurify's
+ * defaults (VC-839).
  *
- * The resolver has already narrowed data URIs to `data:image/*`, so this is the
- * second of two gates rather than the only one; scoping it to the tag as well
- * means a future caller cannot turn it into a `data:text/html` link by reusing
- * this config.
+ * A comment is written by any Session, so its body is whatever a prompt
+ * injection in a repository file, a web page or an MCP result made it — and
+ * DOMPurify's DEFAULT lists are written to stop script, not to keep one
+ * fragment from styling or impersonating the page around it. They kept
+ * `<style>`, `style=`, `<form action>` with its controls, `<dialog>`,
+ * `popover*`, SVG and MathML trees, and whatever the next release adds; and
+ * nothing around a comment contains a global sheet or a `position:fixed` box.
+ *
+ * So this renderer draws exactly what Preview draws, read from Preview's own
+ * policy (`editor/markdown-preview-html.ts`) rather than copied:
+ *
+ *  - tags: {@link PREVIEW_TAGS}, Preview's list narrowed by chat's. Anything
+ *    else is unwrapped, so its text still reads;
+ *  - subtrees that go whole: {@link PREVIEW_DROPPED_TAGS} (`style`, `svg`,
+ *    `video`, …), so no stylesheet or foreign markup is left loose as text;
+ *  - attributes: {@link allowsPreviewAttribute} per element, in
+ *    {@link keepAllowedAttribute}, which also narrows `class` and drops `id`.
+ *
+ * `data:` is admitted on `<img>` ONLY. The resolver has already narrowed data
+ * URIs to `data:image/*`, so this is the second of two gates rather than the
+ * only one; scoping it to the tag as well means a future caller cannot turn it
+ * into a `data:text/html` link by reusing this config.
  */
 const SANITIZE_CONFIG: DOMPurifyConfig = {
   ALLOWED_URI_REGEXP,
   ADD_DATA_URI_TAGS: ["img"],
+  ALLOWED_TAGS: [...PREVIEW_TAGS],
+  ADD_FORBID_CONTENTS: [...PREVIEW_DROPPED_TAGS],
 };
+
+/**
+ * What this renderer's own `image` renderer (below) writes beyond Preview's
+ * policy: the class of the notice an unrenderable image is drawn as, and
+ * `loading="lazy"` on the images it does draw.
+ */
+const OWN_CLASS = { tag: "span", token: "typeset-image-missing" } as const;
+const OWN_ATTRIBUTE = { tag: "img", name: "loading" } as const;
+
+/**
+ * DOMPurify reports attributes by their lowercase HTML name; Preview's policy
+ * is written in hast's property names. The two differ only by case for the
+ * multi-word names that policy admits, and by dash-to-camel for `aria-*` and
+ * `data-*`.
+ */
+const HAST_PROPERTY_NAMES: Readonly<Record<string, string>> = {
+  class: "className",
+  colspan: "colSpan",
+  rowspan: "rowSpan",
+};
+
+function hastPropertyName(attribute: string): string {
+  const named = HAST_PROPERTY_NAMES[attribute];
+  if (named !== undefined) return named;
+  if (!/^(?:aria|data)-/.test(attribute)) return attribute;
+  return attribute.replace(/-([a-z])/g, (_match: string, letter: string) => letter.toUpperCase());
+}
+
+/**
+ * Keeps an attribute only where Preview's policy admits it for this element,
+ * with two narrowings Preview gets elsewhere:
+ *
+ *  - `class` keeps only the tokens chat's sanitizer keeps on this tag
+ *    (`language-*` on `code`, `task-list-item` on `li`, …) plus this
+ *    renderer's own. Every utility in the app's stylesheet is otherwise one
+ *    attribute away: `class="fixed inset-0 z-50 bg-background"` covers the
+ *    whole window without a single `style`.
+ *  - `id` goes. A comment shares the document with the app, so its ids would
+ *    share the app's namespace; marked writes none.
+ */
+function keepAllowedAttribute(node: Element, event: UponSanitizeAttributeHookEvent): void {
+  const tag = node.localName;
+  const name = event.attrName;
+  if (tag === OWN_ATTRIBUTE.tag && name === OWN_ATTRIBUTE.name) return;
+  if (name === "id" || !allowsPreviewAttribute(tag, hastPropertyName(name))) {
+    event.keepAttr = false;
+    return;
+  }
+  if (name !== "class") return;
+  const kept = event.attrValue
+    .split(/\s+/)
+    .filter(
+      (token) =>
+        chatSanitizerKeepsClass(tag, token) || (tag === OWN_CLASS.tag && token === OWN_CLASS.token),
+    );
+  if (kept.length === 0) event.keepAttr = false;
+  else event.attrValue = kept.join(" ");
+}
+
+/**
+ * Removes every `<input>` that is not a GFM task-list checkbox — `type=checkbox`
+ * and `disabled`, the shape marked writes for `- [ ]` / `- [x]`. A text field
+ * in a comment can only ever be asking a person to type something into it.
+ */
+function keepOnlyTaskCheckboxes(node: Node, event: UponSanitizeElementHookEvent): void {
+  if (event.tagName !== "input" || !(node instanceof Element)) return;
+  const taskCheckbox =
+    node.getAttribute("type")?.toLowerCase() === "checkbox" && node.hasAttribute("disabled");
+  if (!taskCheckbox) node.remove();
+}
+
+/**
+ * This surface's own DOMPurify instance, so the hooks above cannot leak into
+ * any other caller of the shared default one.
+ *
+ * Registered only where DOMPurify works at all: without a DOM (a Node-only
+ * test importing this module through a component tree) the instance has
+ * neither `addHook` nor `sanitize`, so rendering still throws rather than
+ * passing markup through unsanitized.
+ */
+const purifier = DOMPurify();
+if (purifier.isSupported) {
+  purifier.addHook("uponSanitizeElement", keepOnlyTaskCheckboxes);
+  purifier.addHook("uponSanitizeAttribute", keepAllowedAttribute);
+}
 
 /** Escapes a string for interpolation into an HTML attribute or text node. */
 function escapeHtml(value: string): string {
@@ -84,19 +200,19 @@ export function Markdown({ source, className }: { source: string; className?: st
           const resolution = resolveMarkdownImageSrc(href, byName);
           const alt = escapeHtml(text);
           if (resolution.kind === "render") {
-            return `<img src="${escapeHtml(resolution.src)}" alt="${alt}" loading="lazy" />`;
+            return `<img src="${escapeHtml(resolution.src)}" alt="${alt}" ${OWN_ATTRIBUTE.name}="lazy" />`;
           }
           // Drawn, not dropped: an image that silently vanishes is
           // indistinguishable from one nobody wrote. The alt text rides along
           // because it is usually the only description of what is missing.
           const notice = escapeHtml(markdownImageNotice(resolution) ?? "");
           const label = text.trim() === "" ? notice : `${notice} — ${alt}`;
-          return `<span class="typeset-image-missing">${label}</span>`;
+          return `<span class="${OWN_CLASS.token}">${label}</span>`;
         },
       },
     });
     const raw = renderer.parse(source, { async: false, gfm: true });
-    return DOMPurify.sanitize(raw, SANITIZE_CONFIG);
+    return purifier.sanitize(raw, SANITIZE_CONFIG);
   }, [source, byName]);
 
   return <div className={cn("typeset", className)} dangerouslySetInnerHTML={{ __html: html }} />;

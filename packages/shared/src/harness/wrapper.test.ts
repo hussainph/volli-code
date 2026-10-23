@@ -207,7 +207,7 @@ describe("renderWrapperScript", () => {
   });
 
   it("gates both calls on there being an app to ask", () => {
-    expect(claude).toContain('if [ -n "${VOLLI_SOCKET:-}" ]; then');
+    expect(claude).toContain('&& [ -n "${VOLLI_SOCKET:-}" ]; then');
   });
 
   // A harness TUI is about to own this terminal: neither call may print into
@@ -246,6 +246,70 @@ describe("renderWrapperScript", () => {
     expect(lines.findIndex((line) => line.includes("session harness"))).toBeGreaterThan(
       lines.indexOf("fi", gate),
     );
+  });
+
+  // VC-807. `claude --version`, `claude mcp list` and `codex --help` went
+  // through the wrapper and were announced as launches: the running harness
+  // moved and a mint overwrote the resume seed for a session that never began.
+  it("tells Volli nothing about an invocation that only asks the harness about itself", () => {
+    expect(claude).toContain(
+      "  case $volli_arg in\n    '--version'|'-v'|'--help'|'-h')\n      volli_launch=0\n",
+    );
+    expect(claude).toContain(
+      `case "\${1:-}" in\n  'mcp'|'doctor'|'update'|'upgrade'|'install'|'auth'|'setup-token'|'plugin'|'plugins')\n    volli_launch=0\n`,
+    );
+    expect(claude).toContain('if [ "$volli_launch" = 1 ] && [ -n "${VOLLI_SOCKET:-}" ]; then');
+    const codex = renderWrapperScript(adapterFor("codex"), BARE);
+    expect(codex).toContain("'--version'|'-V'|'--help'|'-h')");
+    expect(codex).toContain('if [ "$volli_launch" = 1 ] && [ -n "${VOLLI_SOCKET:-}" ]; then');
+    const opencode = renderWrapperScript(adapterFor("opencode"), BARE);
+    expect(opencode).toContain("'--version'|'-v'|'--help'|'-h')");
+  });
+
+  it("scans nothing for a harness that declares no such invocation", () => {
+    const bare = renderWrapperScript(bareAdapter(), BARE);
+    expect(bare).not.toContain("volli_launch");
+    expect(bare).toContain('if [ -n "${VOLLI_SOCKET:-}" ]; then');
+  });
+
+  it("renders only the half of the scan a harness declares", () => {
+    const flagsOnly = renderWrapperScript(
+      bareAdapter({ nonSessionArgv: { flags: ["--version"], subcommands: [] } }),
+      BARE,
+    );
+    expect(flagsOnly).toContain("'--version')");
+    expect(flagsOnly).not.toContain('case "${1:-}" in');
+    const subcommandsOnly = renderWrapperScript(
+      bareAdapter({ nonSessionArgv: { flags: [], subcommands: ["login"] } }),
+      BARE,
+    );
+    expect(subcommandsOnly).toContain("  'login')");
+    expect(subcommandsOnly).not.toContain('for volli_arg in "$@"; do');
+    expect(subcommandsOnly).toContain('if [ "$volli_launch" = 1 ]');
+  });
+
+  // VC-807. A `claude -p` or `claude mcp list` run by a live claude's own Bash
+  // tool inherits `VOLLI_SESSION`. It must not announce, mint, or carry the
+  // hooks that would report its turns as the parent's.
+  it("hands a run nested inside a running harness straight to the real binary", () => {
+    const lines = claude.split("\n");
+    const gate = lines.findIndex((line) => line.includes('[ -n "${CLAUDECODE:-}" ]'));
+    expect(lines[gate]).toContain('[ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ] ||');
+    expect(lines.slice(gate + 1, gate + 3)).toEqual(['  exec "$volli_real" "$@"', "fi"]);
+    // After the outside-Volli passthrough, before anything Volli adds.
+    expect(gate).toBeGreaterThan(lines.indexOf('if [ -z "${VOLLI_SESSION:-}" ]; then'));
+    expect(gate).toBeLessThan(lines.findIndex((line) => line.includes("session harness")));
+    expect(gate).toBeLessThan(lines.findIndex((line) => line.includes("VOLLI_HARNESS_ARGV_")));
+  });
+
+  it("skips a marker that is not a shell name rather than render a broken wrapper", () => {
+    const script = renderWrapperScript(
+      bareAdapter({ sessionMarkers: ["NOT-A-NAME", "MY_HARNESS_RUN"] }),
+      BARE,
+    );
+    expect(script).toContain('if [ -n "${MY_HARNESS_RUN:-}" ]; then');
+    expect(script).not.toContain("NOT-A-NAME");
+    expect(renderWrapperScript(bareAdapter(), BARE)).not.toContain("Nested inside");
   });
 
   it("quotes a slug and a cli path so neither can become shell", () => {

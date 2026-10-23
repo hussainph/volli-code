@@ -127,6 +127,12 @@ export interface ExportProject {
   rowVersion: number;
   createdAt: number;
   updatedAt: number;
+  /**
+   * When the person removed the project (migration 064), or `null` while it
+   * is on the rail. A removed project is detached, not deleted (VC-822), so
+   * the export carries it with everything it held.
+   */
+  removedAt: number | null;
 }
 
 export interface ExportTicket {
@@ -419,6 +425,7 @@ interface ProjectRow {
   row_version: number;
   created_at: number;
   updated_at: number;
+  removed_at: number | null;
 }
 
 /**
@@ -460,6 +467,7 @@ function exportProjects(db: Database.Database): ExportProject[] {
     rowVersion: row.row_version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    removedAt: row.removed_at,
   }));
 }
 
