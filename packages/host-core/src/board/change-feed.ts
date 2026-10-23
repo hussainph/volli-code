@@ -189,11 +189,9 @@ export class BoardChangeFeed {
   }
 
   /**
-   * Reports every Ticket tombstone this stamp carries. It is the same change
-   * for both writers (`board.archiveTicket`, `board.deleteTicket`); an upsert,
-   * a `ticketEvent` or a `project` change means the Ticket is still on the
-   * board. Errors are reported and swallowed, as in `emitTicketWake`: the
-   * caller was already answered.
+   * Reports the tombstones written by archive and delete commands, not rowless
+   * invalidations or changes to other entities. Errors are logged and swallowed:
+   * teardown must not unwind a command whose write has already committed.
    */
   #announceRemovals(changes: readonly BoardChange[]): void {
     const removed = this.#options.onTicketRemoved;
