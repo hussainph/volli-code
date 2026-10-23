@@ -889,6 +889,109 @@ describe.skipIf(manifest === null)(
       },
     );
 
+    it("replays a signal-killed terminal as failed with exit 137 and keeps its Session navigable in N−1", async () => {
+      await headProfile();
+      const { head, guarded } = await probe();
+      if (guarded && headFloor() > head) return; // The refusal test owns a raised floor.
+      const sessionId = "session-head";
+      const attachmentId = "head-sigkill-terminal";
+      const headTitle = "History after SIGKILL";
+      const n1Title = "Still navigable after SIGKILL";
+      const writer = openVolliDb(dbPath);
+      try {
+        const engine = headEngine(writer, "signal-exit");
+        await engine.observe({
+          id: "head-terminal-opened",
+          sessionId,
+          occurredAt: NOW,
+          provenance,
+          kind: "attachment.opened",
+          attachment: {
+            id: attachmentId,
+            sessionId,
+            adapterId: "terminal",
+            venue: { id: "n1-local", kind: "local" },
+            continuity: "fresh",
+            native: { id: null, detail: null },
+            authority: null,
+          },
+        });
+        // PTY signal death uses the existing numeric status and close vocabulary:
+        // 128 + SIGKILL (9), not a new signal field, event kind or close outcome.
+        await engine.observe({
+          id: "head-terminal-exited",
+          sessionId,
+          occurredAt: NOW + 1,
+          provenance,
+          kind: "attachment.exited",
+          attachmentId,
+          exitCode: 137,
+        });
+        await engine.observe({
+          id: "head-terminal-closed",
+          sessionId,
+          occurredAt: NOW + 2,
+          provenance,
+          kind: "attachment.closed",
+          attachmentId,
+          outcome: "failed",
+        });
+        // A known fact after the death must replay too: losing a process is not
+        // losing the Session or truncating its history at the exit event.
+        await engine.submit({
+          sessionId,
+          commandId: "head-after-sigkill",
+          provenance,
+          intent: { kind: "session.retitle", title: headTitle },
+        });
+      } finally {
+        writer.close();
+      }
+
+      const step = { kind: "terminalExitReplay", sessionId, attachmentId };
+      const expected = (title: string) => ({
+        sessionId,
+        title,
+        idle: true,
+        terminal: { status: "closed", outcome: "failed", exitCode: 137 },
+      });
+      // Use N−1's own SQLite codec, engine and full history fold. These are
+      // observable summaries, not an assertion of its entire decoded shape.
+      // Fixed older builds need no signal-specific UI: numeric 137 + failed
+      // is the graceful fallback, and the Session remains in history navigation.
+      const replayed = value(await n1(dbPath, [{ ...step, title: n1Title }]), 0);
+      expect(replayed).toMatchObject({
+        snapshot: expected(headTitle),
+        replay: expected(headTitle),
+        historyExitCode: 137,
+        historyOutcome: "failed",
+        titleAfter: n1Title,
+        listed: true,
+      });
+      // A separate older process must still navigate/replay the same Session
+      // after writing to it; no warm projection may hide a broken cold read.
+      const cold = value(await n1(dbPath, [step]), 0);
+      expect(cold).toMatchObject({
+        snapshot: expected(n1Title),
+        replay: expected(n1Title),
+        historyExitCode: 137,
+        historyOutcome: "failed",
+        titleAfter: n1Title,
+        listed: true,
+      });
+      assertHeadReads(dbPath);
+      const reopened = openVolliDb(dbPath);
+      try {
+        const session = await headEngine(reopened).getSession({ sessionId });
+        expect(session?.session.title).toBe(n1Title);
+        expect(session?.attachments).toMatchObject([
+          { id: attachmentId, status: "closed", outcome: "failed", exitCode: 137 },
+        ]);
+      } finally {
+        reopened.close();
+      }
+    });
+
     it("shows and answers all three head-written ask_user prompts without erasing the birth marker", async () => {
       await headProfile();
       const { head, guarded } = await probe();

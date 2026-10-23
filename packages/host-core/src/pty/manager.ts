@@ -174,6 +174,8 @@ interface Session {
    * launches the harness.
    */
   setupRun: SetupRun | null;
+  /** An explicit close is completed even when node-pty reports our kill signal. */
+  killedByVolli: boolean;
   /** The durable terminal attachment, not Session-owned terminal state. */
   attachmentId: string;
   terminalDetail: TerminalAttachmentDetail;
@@ -937,6 +939,7 @@ export class PtyManager {
         parkedManually: false,
         quietCpuSamples: 0,
         setupRun: null,
+        killedByVolli: false,
         attachmentId,
         terminalDetail,
       };
@@ -1020,7 +1023,11 @@ export class PtyManager {
         pty.write(`${scope.launchCommand}\r`);
       }
 
-      pty.onExit(({ exitCode }) => {
+      pty.onExit(({ exitCode: reportedExitCode, signal }) => {
+        // node-pty leaves exitCode at 0 for signal deaths. Use the conventional
+        // shell status for both the live pane and the existing durable exit fact,
+        // so older readers also see failure without needing a new event shape.
+        const exitCode = signal === undefined || signal === 0 ? reportedExitCode : 128 + signal;
         // Flush buffered output first so the renderer never sees the exit
         // event ahead of the shell's final bytes.
         session.output.flush();
@@ -1094,7 +1101,7 @@ export class PtyManager {
         attachmentId: session.attachmentId,
         occurredAt,
         provenance: terminalSystemProvenance(this.venue),
-        outcome: exitCode === 0 ? "completed" : "failed",
+        outcome: session.killedByVolli || exitCode === 0 ? "completed" : "failed",
       });
     } catch (error) {
       log.error("failed to close terminal attachment", {
@@ -1625,11 +1632,17 @@ export class PtyManager {
     // revocation cannot wait for onExit either: a failed native kill may never
     // produce one.
     this.agentRuntime?.revokeSessionToken?.(session.attachmentId);
+    // Keep the intent on the captured session: onExit runs after forget(), and
+    // may even fire synchronously inside kill(). Its exit status stays factual,
+    // but a requested close must not be recorded as a failed attachment.
+    session.killedByVolli = true;
     this.forget(sessionId);
     try {
       session.pty.kill();
       return { ok: true };
     } catch (error) {
+      // A failed delivery is not evidence that we caused a later signal death.
+      session.killedByVolli = false;
       return { ok: false, error: errorMessage(error) };
     }
   }
