@@ -32,6 +32,7 @@ describe("the desktop's log", () => {
     const userData = profile();
     const log = startDesktopLog({ userData, dev: false, env: {} });
     logs.push(log);
+    expect(desktopLogDirectory(userData)).toBe(join(userData, "logs"));
     expect(log.directory).toBe(desktopLogDirectory(userData));
     expect(log.level).toBe("info");
     withTrace(TRACE, { door: "ipc" }, () =>

@@ -180,6 +180,7 @@ import {
   collectUnlinkedBlobs,
   blobProtocolResponse,
   blobsRoot,
+  globalCommandsRoot,
 } from "@volli/host-core/files";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
@@ -1891,7 +1892,7 @@ const appStartup = app.whenReady().then(async () => {
   registerFileIpcHandlers(
     dbHandle,
     {
-      globalCommandsDir: join(fsDeps.userDataDir, "commands"),
+      globalCommandsDir: globalCommandsRoot(fsDeps.userDataDir),
       globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
     },
     liveHost?.fileServices ?? createHostFileServices(hostPorts),

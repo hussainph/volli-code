@@ -25,7 +25,10 @@ import {
 import type { PiRuntimeHost } from "./pi-adapter";
 
 vi.mock("../db/projects-repo", () => ({ getProjectById: vi.fn() }));
-vi.mock("../prompt-templates", () => ({ loadPromptTemplates: vi.fn() }));
+vi.mock("../prompt-templates", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../prompt-templates")>()),
+  loadPromptTemplates: vi.fn(),
+}));
 vi.mock("../skills", () => ({ loadSkills: vi.fn() }));
 vi.mock("../automation-services", () => ({ createHostAutomations: vi.fn() }));
 

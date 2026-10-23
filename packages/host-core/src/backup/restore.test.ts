@@ -22,6 +22,7 @@ import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { blobFilePath, blobsRoot } from "../blob-store";
+import { globalCommandsRoot } from "../prompt-templates";
 import { packArchive, unpackArchive } from "./archive";
 import { MIGRATIONS } from "../db/migrations";
 import { createSqliteSessionFollowUpLedger } from "../db/session-follow-up-repo";
@@ -97,6 +98,28 @@ function restoredDb(root: string) {
 }
 
 describe("restoreBackupBundle — a clean restore", () => {
+  it("restores a version-1 bundle without commands and leaves local templates alone", async () => {
+    // The unchanged version-1 writer/reader are the real codecs used by
+    // older builds, not a permissive stand-in for a future artifact format.
+    const bytes = bundleBytes();
+    const target = targetProfile();
+    const commands = globalCommandsRoot(target.root);
+    mkdirSync(commands);
+    const template = "Review $1.\n";
+    writeFileSync(join(commands, "review.md"), template);
+
+    const result = await restoreBackupBundle({
+      bundle: bytes,
+      profileRoot: target.root,
+      projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+      now: 1_800_000_000_000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(readFileSync(join(commands, "review.md"), "utf8")).toBe(template);
+    expect(existsSync(blobFilePath(blobsRoot(target.root), source.blobHashes.ticket))).toBe(true);
+  });
+
   it("preserves pending host follow-ups and their release boundary", async () => {
     source = createFixtureProfile();
     await createSqliteSessionFollowUpLedger(source.db).transaction("session-root", (state) => {

@@ -44,6 +44,11 @@ import {
  */
 const MAX_TEMPLATES_PER_DIR = 200;
 
+/** The person’s global prompt templates under the host profile. */
+export function globalCommandsRoot(userDataPath: string): string {
+  return join(userDataPath, "commands");
+}
+
 /** The frontmatter fence, and the only key this format reads. */
 const FRONTMATTER_FENCE = "---";
 
