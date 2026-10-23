@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vite-plus/test";
 
 import {
+  globalCommandsRoot,
   loadPromptTemplates,
   parsePromptTemplateFile,
   readPromptTemplateDir,
@@ -15,7 +16,7 @@ const tempDirs: string[] = [];
 function makeCommandsDir(files: Record<string, string> = {}): string {
   const root = mkdtempSync(join(tmpdir(), "volli-commands-test-"));
   tempDirs.push(root);
-  const dir = join(root, "commands");
+  const dir = globalCommandsRoot(root);
   mkdirSync(dir, { recursive: true });
   for (const [name, content] of Object.entries(files)) {
     writeFileSync(join(dir, name), content, "utf8");
@@ -27,11 +28,17 @@ function makeCommandsDir(files: Record<string, string> = {}): string {
 function missingDir(): string {
   const root = mkdtempSync(join(tmpdir(), "volli-commands-test-"));
   tempDirs.push(root);
-  return join(root, "commands");
+  return globalCommandsRoot(root);
 }
 
 afterAll(() => {
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+});
+
+describe("globalCommandsRoot", () => {
+  it("places global templates directly under the host profile", () => {
+    expect(globalCommandsRoot("/profile")).toBe("/profile/commands");
+  });
 });
 
 describe("parsePromptTemplateFile", () => {

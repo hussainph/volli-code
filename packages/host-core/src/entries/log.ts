@@ -27,6 +27,7 @@ export {
 export {
   createRotatingFileSink,
   LOG_FILE_POLICY,
+  profileLogsRoot,
   type LogFileFailure,
   type LogFileHandle,
   type LogFilePolicy,

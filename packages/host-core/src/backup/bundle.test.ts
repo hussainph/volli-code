@@ -295,6 +295,43 @@ describe("readBackupBundle", () => {
     expect(result.problems[0]?.message).toMatch(/manifest does not list/);
   });
 
+  it.each(["command", "data", "blob", "transcript"])(
+    "version 1 cannot carry an additive commands artifact as kind %s",
+    (kind) => {
+      profile = createFixtureProfile();
+      const bytes = Buffer.from("Review $1.\n");
+      const path = "artifacts/commands/review.md";
+      const extended = repack(build().bytes, (entries) => {
+        const manifestEntry = entries.find((entry) => entry.path === MANIFEST_PATH)!;
+        const manifest = JSON.parse(manifestEntry.bytes.toString("utf8")) as BackupManifest;
+        // Keep the inventory well-formed and correctly hashed: the shipped
+        // codec refuses the extension itself, not corrupt/missing bytes.
+        manifestEntry.bytes = Buffer.from(
+          JSON.stringify({
+            ...manifest,
+            entries: [
+              ...manifest.entries,
+              {
+                path,
+                kind,
+                sizeBytes: bytes.length,
+                sha256: createHash("sha256").update(bytes).digest("hex"),
+              },
+            ],
+          }),
+        );
+        entries.push({ path, bytes });
+      });
+
+      const result = readBackupBundle(extended);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.problems).toEqual([
+        { kind: "manifest", message: expect.stringMatching(/malformed|wrong place/) },
+      ]);
+    },
+  );
+
   it("reports malformed data", () => {
     profile = createFixtureProfile();
     const broken = Buffer.from("{ this is not json", "utf8");
