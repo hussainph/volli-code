@@ -139,9 +139,6 @@ export function StoragePane() {
 function RetentionSection({ onDays }: { onDays: (days: number) => void }) {
   const [days, setDays] = React.useState("");
   const [loaded, setLoaded] = React.useState(false);
-  // CommitField validates before confirming and committing. Parse once for
-  // that transaction so the confirmed number is exactly the one we write.
-  const parsedDays = React.useRef<number | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -187,19 +184,19 @@ function RetentionSection({ onDays }: { onDays: (days: number) => void }) {
           width="sm"
           value={days}
           disabled={!loaded}
-          validate={(next) => {
-            parsedDays.current = parseRetentionDays(next);
-            return parsedDays.current === null ? RETENTION_DAYS_ERROR : null;
+          validate={(next) => (parseRetentionDays(next) === null ? RETENTION_DAYS_ERROR : null)}
+          confirm={(next) => {
+            const parsed = parseRetentionDays(next);
+            return (
+              parsed !== null &&
+              (parsed >= CONFIRM_BELOW_DAYS ||
+                window.confirm(
+                  `Keep Done worktrees for only ${parsed} day(s)? Folders will be removed sooner.`,
+                ))
+            );
           }}
-          confirm={() =>
-            parsedDays.current !== null &&
-            (parsedDays.current >= CONFIRM_BELOW_DAYS ||
-              window.confirm(
-                `Keep Done worktrees for only ${parsedDays.current} day(s)? Folders will be removed sooner.`,
-              ))
-          }
-          onCommit={async (): Promise<CommitResult> => {
-            const parsed = parsedDays.current;
+          onCommit={async (next): Promise<CommitResult> => {
+            const parsed = parseRetentionDays(next);
             if (parsed === null) return { ok: false, error: RETENTION_DAYS_ERROR };
             try {
               const result = await window.api.retention.setTtlDays(parsed);
