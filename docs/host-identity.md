@@ -1,5 +1,12 @@
 # Host, workspace and execution identity
 
+> **Superseded (VC-869).** Volli Cloud is moving to a design with no host
+> process: the backend is the single authority and Runners execute
+> ([Workspace authority and offline](BOUNDARIES.md#workspace-authority-and-offline)).
+> This document still describes code in this repository. It is kept for
+> maintenance only and goes when that code is deleted or renamed; don't build
+> new work on it.
+
 These identity and storage contracts accompany the [host protocol](host-protocol.md).
 They distinguish durable names from local locators, authority generations and
 live execution. Some worker/lease storage is an additive foundation, not an

@@ -3,25 +3,28 @@
 **Electron main is a host, not the product API.**
 
 The product is the durable core: persisted commands, idempotent acceptance with
-receipts, immutable events and projections. Electron main hosts it through IPC;
-`hostd` hosts the same services through the [host protocol](host-protocol.md).
-The core never depends on Electron. A Workspace has one authority; the transport
+receipts, immutable events and projections. Today Electron main hosts it through
+IPC, and `hostd` hosts the same services through the superseded
+[host protocol](host-protocol.md). The target is Volli Cloud: no host process,
+the backend (Convex) is the one authority, and Runners execute
+([Workspace authority and offline](#workspace-authority-and-offline)). The core
+never depends on Electron. A Workspace has one authority; the transport, runner
 or viewing device does not create another.
 
 Two corollaries that settle recurring questions:
 
-- **Clients talk to hosts, never to databases.** Each host's SQLite is a
-  private materialization of the ledger it owns; it is an implementation
-  detail behind the host's API, not a sync surface. A future server's store
-  is a greenfield choice invisible to every client, and the local `volli.db`
-  never migrates — it is the local cache layer of the story, not the thing
-  that must become Postgres.
+- **Clients talk to the authority's API, never to databases.** Today each
+  host's SQLite is a private materialization of the ledger it owns, behind the
+  host's API, not a sync surface. Under Volli Cloud, clients and runners call
+  backend functions; a runner's SQLite holds machine state, not board truth.
+  The local `volli.db` is never synced: a one-way migration exports it into the
+  backend with ids preserved, then signed-out mode retires.
 - **`@volli/shared` carries domain vocabulary, not transport.** The Electron
   channel catalog and its runtime validators are desktop-owned: the transport
-  contract belongs to the host that owns the transport. A future non-desktop
-  client imports `@volli/shared` for domain types and speaks to a host's API;
-  it must never inherit the desktop's Electron channel catalog by importing the
-  domain package.
+  contract belongs to whoever owns the transport. A non-desktop client or a
+  runner imports `@volli/shared` for domain types and speaks to the authority's
+  API; it must never inherit the desktop's Electron channel catalog by
+  importing the domain package.
 
 ## Standing rules (review criteria)
 
@@ -34,19 +37,19 @@ These rules apply to every durable domain surface and transport.
    retrofitted: cross-writer string equality must always mean "same logical
    fact", and today's ids all pass — keep it true.
 
-2. **Per-session `sequence` is provisional local order.** It is enforced
-   single-writer at exactly one append gate (`appendEvent` in
-   `packages/host-core/src/session-control/sqlite-ledger.ts`). No writer or
-   reducer may depend on cross-session global order, and none may treat
-   adjacency — "immediately preceded by event X" — as an implicit position. A
-   future authority assigns final order and local logs rebase onto it; code
-   that quietly assumed local order was final is the code that breaks.
-   The Workspace change-feed cursor is not such a sequence and sits outside
-   this rule (VC-630; `docs/host-protocol.md`, "Workspace change
-   feed"). With one authority it is that authority's delivery
-   order for one Workspace and epoch, used only to resume a subscription. Its
-   changes name state, never a delta, so no reducer reads meaning from their
-   order or adjacency either.
+2. **The backend assigns final order.** Per-session `sequence` written
+   locally is provisional. Today it is enforced single-writer at exactly one
+   append gate (`appendEvent` in
+   `packages/host-core/src/session-control/sqlite-ledger.ts`); under Volli
+   Cloud the Session ledger assigns it when it accepts a fact from a runner's
+   Retry buffer. No writer or reducer may depend on cross-session global
+   order, and none may treat adjacency — "immediately preceded by event X" —
+   as an implicit position. Code that quietly assumed local order was final is
+   the code that breaks.
+   The superseded host protocol's Workspace change-feed cursor is not such a
+   sequence and sits outside this rule (VC-630; `docs/host-protocol.md`,
+   "Workspace change feed"): it is delivery order, used only to resume a
+   subscription, and its changes name state, never a delta.
 
 3. **RPC payloads stay JSON-safe.** The Electron transport carries `Date`,
    `Map`, and `undefined` by structured clone; an HTTP transport would mangle
@@ -57,10 +60,12 @@ These rules apply to every durable domain surface and transport.
    existing example, and session-rpc re-exports the types for compatibility.
    See `docs/host-protocol.md` for the opaque-type/runtime-validation limit.
 
-4. **A receipt is local acceptance, not eternal finality.** UI code may
-   render "accepted" from a receipt; it may not be written so that a remote
-   authority reordering or rejecting the command later is unrepresentable.
-   Leave reconciliation semantics undecided rather than assumed absent.
+4. **A receipt is acceptance by its issuer, not eternal finality.** UI code
+   may render "accepted" from a receipt; it may not be written so that the
+   backend reordering or rejecting the command later is unrepresentable. A
+   local receipt, or a fact still in a runner's Retry buffer, is not yet the
+   backend's. Leave reconciliation semantics undecided rather than assumed
+   absent.
 
 5. **No new raw IPC for new domain surfaces.** New features take the command
    → event → projection shape with IPC as a dumb transport, the way Sessions
@@ -78,17 +83,21 @@ These rules apply to every durable domain surface and transport.
    existing raw channels migrate
    opportunistically when a surface is touched — never as a big-bang rewrite;
    under the `cloud` flag, an area's channels are deleted when that area moves.
+   An area that moves to Convex keeps one definition per command; its doors
+   still carry no behaviour of their own.
 
-6. **Host code never imports `electron`.** This applies to
-   `packages/host-core`, `packages/host-protocol` and `apps/hostd`. They host
-   the same core without depending on Electron.
+6. **Host and runner code never imports `electron`.** This applies to
+   `packages/host-core`, `packages/host-protocol` and `apps/hostd` today, and
+   to `apps/runner` and everything it composes when it lands. They run the
+   same core without depending on Electron.
 
 7. **No new shared/business state in `app_state`.** Every new key must be
    classified as client-local, host, or workspace state (mixed keys name both
    halves as `split`). Host is host-level state shared by every workspace on
    that host, in the host-level file defined by `host-identity.md`.
-   Workspace state belongs behind the workspace authority, not in the
-   client-local catch-all. The typed inventory is
+   Workspace state belongs behind the Workspace authority (the backend, once
+   that area is ported), not in the client-local catch-all; host state becomes
+   runner-local state. The typed inventory is
    `packages/shared/src/app-state-keys.ts`, enforced by
    `packages/shared/src/app-state-keys.test.ts` and the typed repo writers;
    channel placements live in `apps/desktop/src/ipc/placement.ts`, enforced by
@@ -162,11 +171,32 @@ raw transaction controls, nesting and the packaged handler. Cross-ledger work
 is proved by `packages/host-core/src/db/transaction-gate-ledgers.test.ts`, which
 composes the Session, Automation and cleanup ledgers in the Linux packages lane.
 
-## Workspace authority
+## Workspace authority and offline
 
-One authority owns each Workspace. Clients speak its API, never its database.
-Plain local work remains offline. A remote Workspace is read-only while its host
-is unavailable; moving authority requires authenticated fenced promotion, never
-silent failover, a guessed larger epoch or merging conflicting histories.
-Machine-bound resources are supervised or streamed, not shared by replaying
-filesystem paths on the viewing device.
+**The backend is the single authority** for every signed-in Workspace: its
+projects, board, Session ledger, attention and config. Board and Session rules
+are backend functions, written once. There is no second authority to fail over
+to, so there is no fenced promotion and no epoch: authority never moves.
+
+**Runners may hold facts the backend has not accepted; clients hold none.** A
+runner sends each durable fact as its own mutation through its ordered Retry
+buffer: crash-safe, idempotent by `commandId`, never awaited by the agent. A
+fact in the buffer is pending, not truth; the backend accepts it and assigns
+final order. A client (desktop window, web, phone, CLI) reads projections and
+sends commands; it buffers nothing durable of its own.
+
+**Offline.** Signed in and offline, the board is a read-only cache, and Sessions
+on this Mac keep running while their facts wait in the Retry buffer. Signed out,
+the local SQLite mode keeps fully working, frozen with no new features, until it
+is retired after migration; an embedded local backend may bring offline work
+back later with the same functions.
+
+**Machine-bound resources stay on their machine.** Working copies, terminals and
+browser tabs are supervised by their runner and streamed to clients over a
+relay, never shared by replaying filesystem paths on the viewing device. In the
+backend model, machine paths live on per-runner Working copy records, not on
+board rows.
+
+**Transition.** Today the desktop and `hostd` are still SQLite authorities over
+the host protocol; that path is superseded and frozen behind the `cloud` flag
+until it is deleted. Don't extend it.
