@@ -602,6 +602,17 @@ describe("createHostCore composition", () => {
     expect(supplied.reclaim).toBe(reclaim);
   });
 
+  it("reads worktrees through one service over the host's own database", async () => {
+    const core = live(compose({ log: { error: vi.fn() } }, headlessOptions(dataDir())));
+    // Each host owns its read service (VC-788); a read resolves the ticket in
+    // this host's database, which has never heard of this one.
+    expect(await core.worktreeReads.readStatus("no-such-ticket")).toEqual({
+      kind: "missing-ticket",
+    });
+    const other = live(compose({ log: { error: vi.fn() } }, headlessOptions(dataDir())));
+    expect(other.worktreeReads).not.toBe(core.worktreeReads);
+  });
+
   it("narrows the host itself with isLiveHost", () => {
     const root = dataDir();
     const healthy = compose({ log: { error: vi.fn() } }, headlessOptions(dataDir()));
