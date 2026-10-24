@@ -3,9 +3,12 @@
  * feed, F1): one feed per Workspace, a tracked cursor, resume or resnapshot.
  *
  * - **Stamp.** Every board command stamps the rows it committed, naming the
- *   Client's `commandId` (T5), in the synchronous turn of its COMMIT. Every
- *   other writer (the agent socket's verbs, Session lifecycle, retention,
- *   worktree work) already announces `data-changed` on the host's event bus;
+ *   Client's `commandId` (T5), in the synchronous turn of its COMMIT; the
+ *   agent socket's ticket create, update, move and comment are those
+ *   commands (VC-794). Every other writer (the socket's verbs with no map
+ *   entry yet, such as `ticket.signal` and `label.merge`, Session lifecycle,
+ *   retention, worktree work) already announces `data-changed` on the host's
+ *   event bus;
  *   {@link BoardChangeFeed.noteDataChanged} stamps those too, rowless, so no
  *   committed board change lacks a cursor whichever door made it. A command
  *   that stamps its own rows announces its `data-changed` through

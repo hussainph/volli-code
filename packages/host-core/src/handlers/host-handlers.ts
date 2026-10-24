@@ -12,8 +12,9 @@ import type {
  * ({@link HostHandlerMap}), and its only invocation path takes a policy
  * (`./handler-map`). The tRPC routers (IPC and WebSocket) call
  * `ctx.handlers[key]` on the router policy's view; the agent socket's
- * `AGENT_VERB_TABLE` binds a both-door key only as a projection of
- * `handlers[key]` under its coordination policy (`agent-dispatch/table.ts`);
+ * `AGENT_VERB_TABLE` binds a both-door key, and the ticket writes whose
+ * command is a board key (VC-794), only as a projection of `handlers[key]`
+ * under its coordination policy (`agent-dispatch/table.ts`);
  * a legacy per-channel IPC handler that still serves a catalog command
  * invokes the same entry under the desktop window's policy until its area
  * moves. So "both doors reach the same function, admitted" is a fact of the
@@ -454,6 +455,8 @@ export interface HostHandlerOptions {
   /** Where a Done move's detached trim enrols, so shutdown drains it (VC-627). */
   readonly detachedWork?: DetachedWorkPort;
   readonly now?: () => number;
+  /** Test seam: mints a created ticket's id. Defaults to `randomUUID`. */
+  readonly newId?: () => string;
   /** Test seam: the worktree bundle a Done trim runs through. Defaults to the host's. */
   readonly worktree?: WorktreePorts;
   /** Sees every policy verdict at the map, before the handler it admits. */
@@ -680,6 +683,7 @@ function hostHandlerEntries(
     ...createBoardHandlers({
       db,
       now,
+      ...(options.newId === undefined ? {} : { newId: options.newId }),
       events: ports.events,
       feed,
       worktree,

@@ -181,16 +181,19 @@ export interface AgentCommandServiceOptions {
   onSessionStarted?: (notice: SessionStartedNotice) => void;
   /**
    * The host's handler map (VC-668), as far as this door projects it: every
-   * verb that is also a catalog command is bound in `table.ts` as a
-   * projection of `handlers[key]`, never as a handler of its own. A Done
-   * move's trim, its interrupts and its armed arrival therefore belong to the
+   * verb that is also a catalog command, and the ticket create, update and
+   * comment (whose commands are the board's, VC-794), is bound in `table.ts`
+   * as a projection of `handlers[key]`, never as a handler of its own. A Done
+   * move's trim, its interrupts and its armed arrival, and every projected
+   * write's receipt, feed rows and `data-changed`, therefore belong to the
    * handler, which the composition root built once for every door. The
    * projection invokes it only under {@link AgentCommandContext.handlerPolicy}.
    */
   handlers: HostHandlerMap;
   /**
-   * Called after a socket command COMMITS a planning mutation, with the exact
-   * ticket it resolved and touched — the scope index.ts broadcasts as
+   * Called after a socket command with no map entry COMMITS a planning
+   * mutation (a projected write announces through the map's own bus), with
+   * the exact ticket it resolved and touched — the scope index.ts broadcasts as
    * `volli:data-changed` so the renderer refreshes the right surfaces promptly.
    * Never called for a read-only command or a no-op (e.g. a same-column
    * `ticket.move`). A ticketless Session mutation is project-scoped rather than

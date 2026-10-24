@@ -2,11 +2,13 @@
  * The ticket write verbs exposed on the Agent CLI: create, update, move,
  * comment, and signal. Archive is app-only curation (VC-163).
  *
- * Coordination tier — every one of them wants an authenticated session actor,
- * every one commits through `ticket-commands.ts` rather than touching a repo
- * directly, and every one that COMMITS tells `onMutation` the exact ticket it
- * touched so the renderer refreshes the right surfaces. A no-op (a same-column
- * move) deliberately reports nothing.
+ * Coordination tier — every one of them wants an authenticated session actor.
+ * Create, update, move and comment are projections of the host's handler map
+ * (VC-668, VC-794): this file maps the request and the answer, and the write,
+ * its wakes, its feed rows and its `data-changed` are the handler's, whichever
+ * door asked. `ticket.signal` has no map entry yet: it commits through
+ * `ticket-commands.ts` and tells `onMutation` the ticket it touched. A no-op
+ * (a same-column move) deliberately reports nothing.
  */
 
 import type Database from "better-sqlite3";
@@ -21,32 +23,17 @@ import {
   isTicketSignalVerdict,
   isTicketStatus,
   isValidBranchName,
-  labelNameKey,
   parseHarnessId,
   shortSessionId,
   TICKET_SIGNAL_KINDS,
   TICKET_SIGNAL_VERDICTS,
   TICKET_STATUS_LABELS,
 } from "@volli/shared";
-import type {
-  AgentRequest,
-  AgentResponse,
-  HarnessId,
-  Ticket,
-  TicketBodyMutation,
-} from "@volli/shared";
+import type { AgentRequest, AgentResponse, HarnessId, TicketBodyMutation } from "@volli/shared";
 
 import { getRegisteredHarness } from "../db/harness-registry-repo";
-import { findLabelByName } from "../db/labels-repo";
-import {
-  createTicketCommand,
-  createTicketCommentCommand,
-  createTicketSignalCommand,
-  setTicketLabelsCommand,
-  setTicketPriorityCommand,
-  updateTicketFieldsCommand,
-} from "../ticket-commands";
-import { emitTicketWakesSince, withTicketWake } from "../ticket-wake";
+import { createTicketSignalCommand } from "../ticket-commands";
+import { withTicketWake } from "../ticket-wake";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 import { dryRunResponse } from "./preview";
@@ -131,15 +118,16 @@ function isBodyMutation(value: unknown): value is TicketBodyMutation {
   );
 }
 
-/** `volli ticket create` — a new ticket, in Backlog unless told otherwise. */
-export async function ticketCreateVerb(
-  context: AgentCommandContext,
-  request: AgentRequest,
-): Promise<AgentResponse> {
-  const { options, projects, envSession, now, newId, actor: attribution } = context;
+/**
+ * `volli ticket create` — a new ticket, in Backlog unless told otherwise: the
+ * socket's projection of `board.createTicket` (VC-794). This maps the request
+ * (the project, the arguments, a dry-run preview) and the answer; the write,
+ * its wake and its feed rows are the handler's.
+ */
+export const ticketCreateDecode: SocketDecode<"board.createTicket"> = (context, request) => {
+  const { options, projects, envSession, actor: attribution } = context;
   const resolvedActor = attributedActor(attribution);
   if (!resolvedActor.ok) return resolvedActor.response;
-  const actor = resolvedActor.actor;
   const resolved = projectForCreate(options.db, projects, envSession, request);
   if (!resolved.ok) return resolved.response;
   const createPriorityError = invalidPriorityResponse(request.args["priority"]);
@@ -168,57 +156,44 @@ export async function ticketCreateVerb(
     label: `${resolved.project.name} (${resolved.project.ticketPrefix})`,
   });
   if (createPreview !== null) return createPreview;
-
-  try {
-    const createdAt = now();
-    const ticket = createTicketCommand(
-      options.db,
-      {
-        id: newId(),
-        projectId: resolved.project.id,
-        title: title.trim(),
-        body: typeof request.args["body"] === "string" ? request.args["body"] : "",
-        status,
-        priority,
-        labels,
-        usesWorktree:
-          typeof request.args["usesWorktree"] === "boolean" ? request.args["usesWorktree"] : true,
-        preferredHarnessId: requestedHarness.harnessId,
-        // An explicit per-ticket override only (decision 11). `null` means
-        // "inherit the pinned project setting" — resolved late by worktree
-        // automation at use time, NOT stamped here from a snapshot.
-        baseBranch: typeof base === "string" ? base : null,
-      },
-      { now: createdAt, actor },
-    );
-    // The wake goes out after the create's transaction returned, and with no
-    // mark to take: a ticket that did not exist a moment ago has no events its
-    // creation did not write (VC-85).
-    emitTicketWakesSince(options.db, ticket.id, 0);
-    options.onMutation?.({
-      ticketId: ticket.id,
+  return {
+    input: {
       projectId: resolved.project.id,
-      kind: "ticket",
-    });
-    return {
+      title: title.trim(),
+      body: typeof request.args["body"] === "string" ? request.args["body"] : "",
+      status,
+      priority,
+      labels,
+      usesWorktree:
+        typeof request.args["usesWorktree"] === "boolean" ? request.args["usesWorktree"] : true,
+      ...(requestedHarness.harnessId === undefined
+        ? {}
+        : { preferredHarnessId: requestedHarness.harnessId }),
+      // An explicit per-ticket override only (decision 11). `null` means
+      // "inherit the pinned project setting" — resolved late by worktree
+      // automation at use time, NOT stamped here from a snapshot.
+      baseBranch: typeof base === "string" ? base : null,
+    },
+    call: { actor: resolvedActor.actor },
+    reply: ({ ticket }) => ({
       v: 1,
       ok: true,
       data: { ticket: agentTicket(ticket, resolved.project) },
-    };
-  } catch (error) {
-    return failure("MUTATION_FAILED", errorMessage(error));
-  }
-}
+    }),
+  };
+};
 
-/** `volli ticket update` — a ticket's fields or body, in one transaction. */
-export async function ticketUpdateVerb(
-  context: AgentCommandContext,
-  request: AgentRequest,
-): Promise<AgentResponse> {
-  const { options, projects, now, actor: attribution } = context;
+/**
+ * `volli ticket update` — a ticket's fields, priority, labels or body: the
+ * socket's projection of `board.updateTicket` (VC-794), one command and so one
+ * transaction and one wake. The body mutation is checked here against the
+ * body as read, so its refusal keeps its own code, and applied again by the
+ * handler to the body as it stands inside the write.
+ */
+export const ticketUpdateDecode: SocketDecode<"board.updateTicket"> = (context, request) => {
+  const { options, projects, actor: attribution } = context;
   const resolvedActor = attributedActor(attribution);
   if (!resolvedActor.ok) return resolvedActor.response;
-  const actor = resolvedActor.actor;
   const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
   if (!resolved.ok) return resolved.response;
   const title = request.args["title"];
@@ -256,63 +231,27 @@ export async function ticketUpdateVerb(
     label: updateDisplayId,
   });
   if (updatePreview !== null) return updatePreview;
-  try {
-    const updatedAt = now();
-    const run = options.db.transaction((): Ticket => {
-      let ticket = updateTicketFieldsCommand(
-        options.db,
-        {
-          ticketId: resolved.ticket.id,
-          ...(typeof title === "string" ? { title: title.trim() } : {}),
-          ...(nextBody?.ok ? { body: nextBody.body } : {}),
-          ...(typeof base === "string" ? { baseBranch: base } : {}),
-          ...(requestedHarness.harnessId !== undefined
-            ? { preferredHarnessId: requestedHarness.harnessId }
-            : {}),
-        },
-        { now: updatedAt, actor },
-      );
-      if (isTicketPriority(priority) && priority !== resolved.ticket.priority) {
-        ticket = setTicketPriorityCommand(
-          options.db,
-          { ticketId: resolved.ticket.id, priority },
-          { now: updatedAt, actor },
-        );
-      }
-      const currentLabels = resolved.ticket.labels;
-      const canonicalName = (name: string) =>
-        findLabelByName(options.db, resolved.project.id, name)?.name ?? name;
-      const canonicalAdds = addLabels.map(canonicalName);
-      const currentKeys = new Set(currentLabels.map(labelNameKey));
-      const removedKeys = new Set(removeLabels.map(canonicalName).map(labelNameKey));
-      const requestedLabels = currentLabels
-        .filter((label) => !removedKeys.has(labelNameKey(label)))
-        .concat(canonicalAdds.filter((label) => !currentKeys.has(labelNameKey(label))));
-      ticket = setTicketLabelsCommand(
-        options.db,
-        { ticketId: resolved.ticket.id, labels: requestedLabels },
-        { now: updatedAt, actor },
-      );
-      return ticket;
-    });
-    // One command, up to three events (fields, priority, labels), and the wake
-    // carries each of them in the order they were written — after the
-    // transaction, never inside it.
-    const updated = withTicketWake(options.db, resolved.ticket.id, run);
-    options.onMutation?.({
+  return {
+    input: {
       ticketId: resolved.ticket.id,
-      projectId: resolved.project.id,
-      kind: "ticket",
-    });
-    return {
+      ...(typeof title === "string" ? { title: title.trim() } : {}),
+      ...(isBodyMutation(mutation) ? { bodyMutation: mutation } : {}),
+      ...(typeof base === "string" ? { baseBranch: base } : {}),
+      ...(requestedHarness.harnessId !== undefined
+        ? { preferredHarnessId: requestedHarness.harnessId }
+        : {}),
+      ...(isTicketPriority(priority) ? { priority } : {}),
+      ...(addLabels.length > 0 ? { addLabels } : {}),
+      ...(removeLabels.length > 0 ? { removeLabels } : {}),
+    },
+    call: { actor: resolvedActor.actor },
+    reply: ({ ticket }) => ({
       v: 1,
       ok: true,
-      data: { ticket: agentTicket(updated, resolved.project) },
-    };
-  } catch (error) {
-    return failure("MUTATION_FAILED", errorMessage(error));
-  }
-}
+      data: { ticket: agentTicket(ticket, resolved.project) },
+    }),
+  };
+};
 
 /**
  * `volli ticket move` — a ticket to another column: the socket's projection
@@ -373,71 +312,57 @@ export const ticketMoveDecode: SocketDecode<"ticket.move"> = (context, request) 
   };
 };
 
-/** `volli ticket comment` — a comment on a ticket. */
-export async function ticketCommentVerb(
-  context: AgentCommandContext,
-  request: AgentRequest,
-): Promise<AgentResponse> {
-  const { options, projects, now, actor: attribution } = context;
+/**
+ * `volli ticket comment` — a comment on a ticket: the socket's projection of
+ * `board.createComment` (VC-794). The handler takes its author from the
+ * call's actor, never from the request.
+ */
+export const ticketCommentDecode: SocketDecode<"board.createComment"> = (context, request) => {
+  const { options, projects, actor: attribution } = context;
   const resolvedActor = attributedActor(attribution);
   if (!resolvedActor.ok) return resolvedActor.response;
-  const actor = resolvedActor.actor;
   const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
   if (!resolved.ok) return resolved.response;
   const message = request.args["message"];
   if (typeof message !== "string" || message.trim().length === 0) {
     return failure("INVALID_REQUEST", "ticket comment requires a message.");
   }
+  const commentDisplayId = displayTicketId(
+    resolved.project.ticketPrefix,
+    resolved.ticket.ticketNumber,
+  );
   const commentPreview = dryRunResponse(request, {
     kind: "ticket",
-    id: displayTicketId(resolved.project.ticketPrefix, resolved.ticket.ticketNumber),
-    label: displayTicketId(resolved.project.ticketPrefix, resolved.ticket.ticketNumber),
+    id: commentDisplayId,
+    label: commentDisplayId,
   });
   if (commentPreview !== null) return commentPreview;
-  try {
-    const comment = withTicketWake(options.db, resolved.ticket.id, () =>
-      createTicketCommentCommand(
-        options.db,
-        {
-          ticketId: resolved.ticket.id,
-          body: message,
-          // From the RESOLVED actor, never from `request.ctx.env.session` (VC-163).
-          // Reading the raw claim here was a second, independent derivation of
-          // the same fact, and the two could disagree in exactly the case that
-          // matters: a forged `VOLLI_SESSION` with no token attributes the EVENT
-          // as unauthenticated while stamping the COMMENT with the Session it
-          // named — a row citing a Session that did not write it.
-          //
-          // The comment's actor column stores the kind verbatim; only a
-          // `session` carries an id to cite beside it.
-          commentActor: actor.kind,
-          sessionId: actor.kind === "session" ? actor.sessionId : null,
-        },
-        { now: now(), actor },
-      ),
-    );
-    options.onMutation?.({
-      ticketId: resolved.ticket.id,
-      projectId: resolved.project.id,
-      kind: "comment",
-    });
-    return {
+  return {
+    input: { ticketId: resolved.ticket.id, body: message },
+    // From the RESOLVED actor, never from `request.ctx.env.session` (VC-163).
+    // Reading the raw claim was a second, independent derivation of the same
+    // fact, and the two could disagree in exactly the case that matters: a
+    // forged `VOLLI_SESSION` with no token attributes the EVENT as
+    // unauthenticated while stamping the COMMENT with the Session it named —
+    // a row citing a Session that did not write it. The handler stores the
+    // actor's kind and, only for a `session`, the id it cites.
+    call: { actor: resolvedActor.actor },
+    reply: ({ comment }) => ({
       v: 1,
       ok: true,
       data: {
         comment: {
-          ticket: displayTicketId(resolved.project.ticketPrefix, resolved.ticket.ticketNumber),
+          ticket: commentDisplayId,
           body: comment.body,
           actor: comment.actor,
           session: comment.sessionId ? shortSessionId(comment.sessionId) : null,
           createdAt: comment.createdAt,
         },
       },
-    };
-  } catch (error) {
-    return failure("MUTATION_FAILED", errorMessage(error));
-  }
-}
+    }),
+  };
+};
+
 /**
  * `volli ticket signal` — one typed verdict on a ticket (VC-85).
  *

@@ -91,6 +91,7 @@ import type {
   AgentResponse,
   AuthorityActorKind,
   AuthorityPolicy,
+  HostHandlerKey,
   Project,
   VerbEntry,
 } from "@volli/shared";
@@ -289,19 +290,22 @@ export function coordinationRefusal(
  *
  * It is the socket's coordination policy, judged again at the map rather than
  * trusted from the dispatch line that already ran it, and it admits only the
- * key this request's verb projects (a both-door entry's socket binding id is
- * its key). It is deliberately not the catalog's router actor: `ticket.move`
- * is person-only on the WebSocket until VC-565, while a Session the project's
- * policy admits has always moved tickets here.
+ * key this request's verb projects (`projected`: a both-door entry's socket
+ * binding id is its key, and `ticket.create`/`update`/`comment` name their
+ * board key, VC-794; undefined for a verb that projects none). It is
+ * deliberately not the catalog's router actor: the board's keys are
+ * person-only on the WebSocket until VC-565, while a Session the project's
+ * policy admits has always written tickets here.
  */
 export function socketHandlerPolicy(
   request: AgentRequest,
+  projected: HostHandlerKey | undefined,
   coordination: () => AgentResponse | null,
 ): HandlerPolicy {
   return {
     door: "agent-socket",
     admit(key) {
-      if (key !== request.cmd) return refused(`${request.cmd} does not reach ${key}.`);
+      if (key !== projected) return refused(`${request.cmd} does not reach ${key}.`);
       const refusal = coordination();
       return refusal === null || refusal.ok
         ? ADMITTED

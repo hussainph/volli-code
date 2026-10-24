@@ -28,6 +28,7 @@ import type {
   TicketEventActor,
 } from "@volli/shared";
 
+import { projectedHandlerKey } from "./agent-dispatch/projection";
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
 import { coordinationRefusal, socketHandlerPolicy } from "./agent-dispatch/admission";
 import { isHostHandlerMap } from "./handlers/handler-map";
@@ -261,7 +262,7 @@ export function createAgentCommandService(
         envSessionTerminal,
         authenticatedSessionId: door.kind === "session" ? door.sessionId : null,
         actor,
-        handlerPolicy: socketHandlerPolicy(request, () =>
+        handlerPolicy: socketHandlerPolicy(request, projectedHandlerKey(binding), () =>
           coordinationRefusal(readPolicy, projects, envSession, request, door),
         ),
       };
