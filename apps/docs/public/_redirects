@@ -1,0 +1,5 @@
+# Cloudflare Pages redirects for renamed docs routes. Keep old URLs working:
+# when a page moves, map its route, its trailing-slash form, and its .md mirror.
+/guides/ticket-workspace /guides/ticket-view/ 301
+/guides/ticket-workspace/ /guides/ticket-view/ 301
+/guides/ticket-workspace.md /guides/ticket-view.md 301
