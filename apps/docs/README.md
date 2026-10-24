@@ -20,10 +20,10 @@ pnpm -C apps/docs deploy   # build, then wrangler pages deploy
 ```
 src/content/docs/     pages, one .mdx per route
 src/data/navigation.ts shared sidebar and llms.txt navigation
-public/_redirects     old routes kept working after a rename
 src/lib/generated-markdown.ts data-backed Markdown reference expansion
 src/styles/volli.css  the brand layer
 src/components/       Starlight components and overrides
+public/_redirects     old routes kept working after a rename
 scripts/check-docs.mjs built-page integrity checks
 astro.config.mjs      Starlight configuration
 ```
