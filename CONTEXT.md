@@ -561,6 +561,11 @@ A notice is never sent for the Session's own `shell_kill` (its tool
 result is the news), for an exit the model already read, for output `shell_start`
 already returned, or once the Session's attachment has ended; a person's kill
 from the Island is sent, because nothing else would tell the Session.
+A shell is live while its process group is (VC-666), and a live shell keeps
+its worktree busy: a grandchild that escaped the group (`setsid`, a
+daemonizing server) while holding the shell's output pipe does not keep it
+live — once the group is empty Volli stops reading that pipe and the shell
+exits; the escaped process is left running.
 _Avoid_: background job, `&` (which loses the handle), terminal (a shell a
 person types into), daemon
 

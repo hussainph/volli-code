@@ -58,6 +58,15 @@ function start(
   return host.start(who, { command, cwd: workspace(), title, env: ENV });
 }
 
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function until(predicate: () => boolean, timeoutMs = 4_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
@@ -456,6 +465,74 @@ describe("BackgroundShellHost", () => {
     expect(host.listAll()).toEqual([]);
     expect(() => process.kill(active.pid, 0)).toThrow();
     expect(() => process.kill(disposing.pid, 0)).toThrow();
+  });
+
+  describe("a grandchild that escaped the process group while holding the pipe (VC-666)", () => {
+    // A detached Node child is `setsid`'d into its own session and group, yet
+    // inherits the shell's stdout and stderr: the pipe outlives the group.
+    const ESCAPE = `"${process.execPath}" -e 'const c = require("child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { detached: true, stdio: "inherit" }); console.log("escaped:" + c.pid); c.unref()'`;
+    const escaped: number[] = [];
+
+    afterEach(() => {
+      for (const pid of escaped.splice(0)) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
+    });
+
+    async function escapedPid(host: BackgroundShellHost, who = owner): Promise<number> {
+      let seen = "";
+      await until(() => {
+        seen = host.read(who, "sh-1", 64_000).output;
+        return /escaped:\d+/.test(seen);
+      });
+      const pid = Number(/escaped:(\d+)/.exec(seen)![1]);
+      escaped.push(pid);
+      return pid;
+    }
+
+    it("settles the shell and frees its worktree once the group is empty", async () => {
+      const { host, published } = harness();
+      await start(host, `${ESCAPE}; echo done`);
+      const pid = await escapedPid(host);
+
+      await until(() => host.list(owner.sessionId)[0]?.state === "exited");
+      expect(host.list(owner.sessionId)[0]).toMatchObject({ code: 0, signal: null });
+      expect(host.liveCwds()).toEqual([]);
+      expect(published.at(-1)).toMatchObject({ shellId: "sh-1", state: "exited" });
+      expect(host.read(owner, "sh-1", 1_000).output).toContain("done");
+      // Volli stops listening; the escaped process is not its to kill.
+      expect(alive(pid)).toBe(true);
+    });
+
+    it("frees the worktree of a disposed Session's shell once its group is killed", async () => {
+      const { host, removed } = harness();
+      await start(host, `${ESCAPE}; sleep 30`);
+      const pid = await escapedPid(host);
+      expect(host.liveCwds()).toHaveLength(1);
+
+      host.disposeSession(owner.sessionId);
+
+      expect(removed).toEqual(["sh-1"]);
+      await until(() => host.liveCwds().length === 0);
+      expect(alive(pid)).toBe(true);
+    });
+
+    it("keeps a shell live while a member of its group still holds the pipe", async () => {
+      const { host } = harness();
+      const started = await start(host, "sleep 30 & exit 0");
+      // The leader is gone, but its group is not: a group kill still reaches it.
+      await until(() => !alive(started.pid));
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      expect(host.list(owner.sessionId)[0]?.state).toBe("running");
+      expect(host.liveCwds()).toHaveLength(1);
+
+      await host.kill(owner, "sh-1");
+      expect(host.liveCwds()).toEqual([]);
+    });
   });
 
   it("marks nothing when the ledger declined to record the spawn", async () => {

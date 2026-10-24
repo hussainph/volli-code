@@ -65,6 +65,17 @@
  * beat its last stdout chunk into the ring. Private foreground calls instead
  * finish after leader exit and a 100ms stdio idle grace (or normal close),
  * then close their own pipes; promotion withdraws that foreground-only wait.
+ *
+ * WHAT KEEPS IT LIVE (VC-666). The shell's process group, not its pipes. A
+ * grandchild that left the group (`setsid`, a daemonizing server) can hold
+ * our stdout long after everything the shell started is gone, and a live
+ * shell keeps its worktree busy ({@link liveCwds}) — after its Session is
+ * disposed, with no list entry left to stop it from. So once the leader has
+ * exited the host polls the group every {@link GROUP_POLL_MS}; when no member
+ * is left it gives the pipes one more poll to drain, then closes its own read
+ * ends, which fires the `close` that settles the record as usual. The escaped
+ * process is not ours to kill and is left running; Volli simply stops
+ * listening, so its later writes to that pipe fail (EPIPE / SIGPIPE).
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -103,6 +114,11 @@ export const SHELL_START_SETTLE_MS = 1_000;
 export const SHELL_KILL_GRACE_MS = 5_000;
 /** Foreground leader exit gets the executor's 100ms idle window to drain final bytes. */
 const FOREGROUND_EXIT_STDIO_GRACE_MS = 100;
+/**
+ * How often a shell whose leader exited but whose pipes are still open checks
+ * its process group (VC-666); also the drain grace once the group is empty.
+ */
+const GROUP_POLL_MS = 250;
 
 /** How long an exit waits for the model to have read it itself before a notice is sent. */
 export const SHELL_EXIT_NOTICE_GRACE_MS = 1_000;
@@ -571,11 +587,12 @@ export class BackgroundShellHost {
       // still in flight. `close` is Node's own guarantee that every stdio
       // stream has finished emitting before it fires, so a read after
       // `state === "exited"` never misses output the process produced. This
-      // only waits on OUR pipes, not a lingering process: `& disown` inside
-      // the command orphans a grandchild holding our stdout open, which is
-      // exactly the `&` CONTEXT.md's Background shell entry says to avoid —
-      // an accepted edge, not one this host promises to resolve promptly.
+      // only waits on OUR pipes, not a lingering process. A grandchild still
+      // in the group keeps the shell running (a group kill reaches it); one
+      // that escaped the group while holding our stdout is cut loose by
+      // `watchGroup` once the group is empty (VC-666).
       child.once("close", settle);
+      child.once("exit", () => this.watchGroup(entry));
       // A spawn that failed after a pid was handed out (rare) ends the same way.
       child.once("error", () => settle(null, null));
     });
@@ -599,6 +616,30 @@ export class BackgroundShellHost {
       this.deps.publishState(this.stateOf(entry));
     }
     return entry;
+  }
+
+  /**
+   * After the leader exits, the process group decides liveness (VC-666): while
+   * any member is left the shell is running; once none is, the pipes get one
+   * poll to drain and then the host closes its read ends, so a grandchild that
+   * escaped the group cannot hold the record open — or its worktree busy —
+   * forever. A private foreground call is left to its own leader-exit drain,
+   * which also respects the executor's backpressure pause; it can no longer be
+   * promoted once its leader has exited.
+   */
+  private watchGroup(entry: ShellEntry): void {
+    if (entry.foreground) return;
+    const closePipes = (): void => {
+      if (entry.record.state === "exited") return;
+      entry.child.stdout?.destroy();
+      entry.child.stderr?.destroy();
+    };
+    const poll = (): void => {
+      if (entry.record.state === "exited") return;
+      if (groupAlive(entry.pid)) setTimeout(poll, GROUP_POLL_MS);
+      else setTimeout(closePipes, GROUP_POLL_MS);
+    };
+    setTimeout(poll, GROUP_POLL_MS);
   }
 
   /** Run privately until exit, cancellation, or an atomic move to the background. */
@@ -967,7 +1008,8 @@ export class BackgroundShellHost {
         // An escaped grandchild may be in its own group yet still hold our
         // pipes. After the kill grace, private foreground cleanup must not
         // join that unrelated writer forever. Background shells keep their
-        // existing close-based drain semantics, including after promotion.
+        // close-based drain, including after promotion; `watchGroup` closes
+        // their pipes once the group is empty (VC-666).
         entry.child.stdout?.destroy();
         entry.child.stderr?.destroy();
       }
@@ -1062,6 +1104,19 @@ function lastBytes(text: string, bytes: number): { text: string; cut: boolean } 
 /** A record as handed out: a copy, so a caller never holds the live one. */
 function copyOf(record: RuntimeShellRecord): RuntimeShellRecord {
   return { ...record };
+}
+
+/**
+ * Whether any process is still in the group `pgid` leads. ESRCH is the only
+ * answer that means empty; EPERM means a member exists we may not signal.
+ */
+function groupAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
 }
 
 /** Signal the process group, falling back to the process when the group is gone. */
