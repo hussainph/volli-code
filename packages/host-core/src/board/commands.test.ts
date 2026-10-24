@@ -1075,9 +1075,10 @@ describe("comments", () => {
       actor: "session",
       actorContext: { sessionId: "s-1" },
     });
-    // An unauthenticated caller a project's policy admits is stored as such, citing nobody.
+    // An unauthenticated caller a project's policy admits is stored as such, and
+    // cites nobody, whatever the input names.
     const anonymous = await map["board.createComment"](
-      { ticketId: "t-1", body: "anonymous" },
+      { ticketId: "t-1", body: "anonymous", sessionId: "s-1" },
       { actor: { kind: "unauthenticated" } },
     );
     expect(anonymous.comment).toMatchObject({ actor: "unauthenticated", sessionId: null });

@@ -12,12 +12,12 @@
  * policy (`context.handlerPolicy`), so the handler runs only once that
  * policy admits it. {@link projectHandler} is the only way to bind such a verb in
  * `AGENT_VERB_TABLE`: the table's type demands the brand it mints for every
- * `SocketHandlerKey` and every {@link SocketBoardProjections} verb, and
+ * {@link SocketHandlerKey} and every {@link SocketBoardProjections} verb, and
  * the private registry below lets a test prove at runtime that each such
  * binding reaches exactly its own key.
  */
 import { errorMessage, isHandlerRefused, isOperationUnavailable } from "@volli/shared";
-import type { AgentRequest, AgentResponse, HandlerCall, HostHandlerKey } from "@volli/shared";
+import type { AgentRequest, AgentResponse, HandlerCall, SocketHandlerKey } from "@volli/shared";
 
 import { invokeHandler } from "../handlers/handler-map";
 import type { HostHandlerInput, HostHandlerOutput, HostHandlers } from "../handlers/host-handlers";
@@ -38,8 +38,17 @@ export interface SocketBoardProjections {
   readonly "ticket.comment": "board.createComment";
 }
 
+/**
+ * Every key a socket verb may project: a both-door key under its own name,
+ * or a board key a ticket write names. Nothing else can be branded, so a
+ * verb cannot be bound to (and its policy cannot admit) any other handler.
+ */
+export type SocketProjectedKey =
+  | SocketHandlerKey
+  | SocketBoardProjections[keyof SocketBoardProjections];
+
 /** A request the projection could map: the handler's input and call, and how to answer. */
-export interface SocketDecoded<Key extends HostHandlerKey> {
+export interface SocketDecoded<Key extends SocketProjectedKey> {
   readonly input: HostHandlerInput<Key>;
   readonly call: HandlerCall;
   /** The handler's answer, as the socket's wire shape. */
@@ -50,7 +59,7 @@ export interface SocketDecoded<Key extends HostHandlerKey> {
  * The request side of a projection: the handler's input, or the door's own
  * answer when it needs no command (a refusal, a no-op, a dry-run preview).
  */
-export type SocketDecode<Key extends HostHandlerKey> = (
+export type SocketDecode<Key extends SocketProjectedKey> = (
   context: AgentCommandContext,
   request: AgentRequest,
 ) => SocketDecoded<Key> | AgentResponse;
@@ -58,14 +67,14 @@ export type SocketDecode<Key extends HostHandlerKey> = (
 declare const PROJECTION: unique symbol;
 
 /** A table binding {@link projectHandler} minted for `Key`; nothing else carries the brand. */
-export interface ProjectedVerbBinding<Key extends HostHandlerKey> extends AgentVerbBinding {
+export interface ProjectedVerbBinding<Key extends SocketProjectedKey> extends AgentVerbBinding {
   readonly [PROJECTION]: Key;
 }
 
-const projected = new WeakMap<AgentVerbBinding, HostHandlerKey>();
+const projected = new WeakMap<AgentVerbBinding, SocketProjectedKey>();
 
 /** The key a binding projects, or undefined for a socket verb with a handler of its own. */
-export function projectedHandlerKey(binding: AgentVerbBinding): HostHandlerKey | undefined {
+export function projectedHandlerKey(binding: AgentVerbBinding): SocketProjectedKey | undefined {
   return projected.get(binding);
 }
 
@@ -78,7 +87,7 @@ export function projectedHandlerKey(binding: AgentVerbBinding): HostHandlerKey |
  * cannot answer it now (retryable), `MUTATION_FAILED` otherwise, with the
  * handler's own message.
  */
-export function projectHandler<Key extends HostHandlerKey>(
+export function projectHandler<Key extends SocketProjectedKey>(
   key: Key,
   binding: Pick<AgentVerbBinding, "envSession"> & { readonly decode: SocketDecode<Key> },
 ): ProjectedVerbBinding<Key> {

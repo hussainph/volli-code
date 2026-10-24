@@ -11,6 +11,7 @@
  * (a same-column move) deliberately reports nothing.
  */
 
+import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
   applyTicketBodyMutation,
@@ -105,6 +106,16 @@ function resolveRequestedHarness(
   return { ok: true, harnessId: parsed };
 }
 
+/**
+ * The `commandId` a projected board write records its receipt under. NDJSON
+ * v1 carries no command id, so the door mints one per request (HP § Command
+ * catalog): the write is receipted like any board command, and a socket retry
+ * is still not deduplicated, as before.
+ */
+function socketCommandId(): string {
+  return randomUUID();
+}
+
 function isBodyMutation(value: unknown): value is TicketBodyMutation {
   if (typeof value !== "object" || value === null || !("mode" in value)) return false;
   if (value.mode === "replace") return "body" in value && typeof value.body === "string";
@@ -158,6 +169,7 @@ export const ticketCreateDecode: SocketDecode<"board.createTicket"> = (context, 
   if (createPreview !== null) return createPreview;
   return {
     input: {
+      commandId: socketCommandId(),
       projectId: resolved.project.id,
       title: title.trim(),
       body: typeof request.args["body"] === "string" ? request.args["body"] : "",
@@ -233,6 +245,7 @@ export const ticketUpdateDecode: SocketDecode<"board.updateTicket"> = (context, 
   if (updatePreview !== null) return updatePreview;
   return {
     input: {
+      commandId: socketCommandId(),
       ticketId: resolved.ticket.id,
       ...(typeof title === "string" ? { title: title.trim() } : {}),
       ...(isBodyMutation(mutation) ? { bodyMutation: mutation } : {}),
@@ -338,7 +351,7 @@ export const ticketCommentDecode: SocketDecode<"board.createComment"> = (context
   });
   if (commentPreview !== null) return commentPreview;
   return {
-    input: { ticketId: resolved.ticket.id, body: message },
+    input: { commandId: socketCommandId(), ticketId: resolved.ticket.id, body: message },
     // From the RESOLVED actor, never from `request.ctx.env.session` (VC-163).
     // Reading the raw claim was a second, independent derivation of the same
     // fact, and the two could disagree in exactly the case that matters: a

@@ -1638,6 +1638,22 @@ describe("volli:ticket-create — body, labels, usesWorktree", () => {
 });
 
 describe("volli:ticket-update — worktree identity", () => {
+  it("passes only the channel's declared fields to the handler, never the agent socket's", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+
+    const result = invoke<TicketResult>("volli:ticket-update", {
+      ticketId: ticket.id,
+      title: "Renamed",
+      priority: "high",
+      addLabels: ["smuggled"],
+      bodyMutation: { mode: "edit" },
+    } as never);
+    expect(result).toMatchObject({ ok: true, ticket: { title: "Renamed", labels: [] } });
+    if (!result.ok) return;
+    expect(result.ticket.priority).toBe(ticket.priority);
+  });
+
   it("records one worktree_changed event when all three fields change together", () => {
     const projectId = createProject();
     const ticket = createTicket(projectId);

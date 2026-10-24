@@ -177,8 +177,9 @@ export interface BoardUpdateTicketInput extends BoardCommandId {
   readonly usesWorktree?: boolean;
   // The agent socket's `volli ticket update` (VC-794): one command that may
   // also set the harness and priority, mutate the body and edit labels, all
-  // in this handler's one transaction and one wake. Host-side only, like
-  // `worktreePath`: the board router's schema offers none of them.
+  // in this handler's one transaction and one wake. The socket's decode
+  // validates them; the board router's schema and the desktop's
+  // `volli:ticket-update` channel pass none of them on.
   readonly preferredHarnessId?: HarnessId;
   readonly priority?: TicketPriority;
   /** Applied to the body as it stands inside the write; never with `body`. */
@@ -989,8 +990,9 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     },
 
     // The caller is the author, never an input field: the person (the window,
-    // the board router, an operator), or the Session the agent socket
-    // authenticated (VC-794), whose id the comment cites.
+    // the board router, an operator), who may link a Session, or the Session
+    // the agent socket authenticated (VC-794), which cites only itself. Any
+    // other caller cites none.
     "board.createComment": (input, call) => {
       const {
         receipt,
@@ -1011,7 +1013,12 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
               ticketId: input.ticketId,
               body: input.body,
               commentActor: call.actor.kind,
-              sessionId: call.actor.kind === "session" ? call.actor.sessionId : input.sessionId,
+              sessionId:
+                call.actor.kind === "session"
+                  ? call.actor.sessionId
+                  : call.actor.kind === "user"
+                    ? input.sessionId
+                    : null,
             },
             { now: now(), actor: call.actor },
           ),

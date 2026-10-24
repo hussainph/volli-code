@@ -101,7 +101,9 @@ export type SocketDelegatedHandlerKey = (typeof SOCKET_DELEGATED_HANDLER_KEYS)[n
 /**
  * The handler keys the agent socket also serves: its `AGENT_VERB_TABLE`
  * binding for each must be a projection of the map, never a handler of its
- * own. A both-door entry's socket binding id is its key.
+ * own. A both-door entry's socket binding id is its key. The socket's ticket
+ * writes that project a board key under another name are host-core's
+ * `SocketBoardProjections` (VC-794).
  */
 export type SocketHandlerKey = Exclude<
   Extract<HostHandlerKey, AgentCommandBindingId>,

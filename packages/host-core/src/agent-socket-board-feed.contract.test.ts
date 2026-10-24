@@ -8,10 +8,12 @@
  * database, with a real board change feed that the map's commands stamp and
  * the host's event bus feeds through `noteDataChanged` (as main and hostd
  * wire it), served on the real agent socket to a real authenticated Session.
+ * Each write is receipted under a command id the door minted for it.
  */
 import { connect } from "node:net";
 import { dirname, join } from "node:path";
 
+import type Database from "better-sqlite3";
 import type { AgentRequest, AgentResponse, BoardChange, DataChangeScope } from "@volli/shared";
 import { afterEach, expect, it } from "vite-plus/test";
 
@@ -58,6 +60,13 @@ function roundTrip(socketPath: string, request: AgentRequest): Promise<AgentResp
       }
     });
   });
+}
+
+/** Every board command receipt the host recorded. */
+function receipts(db: Database.Database): { command_id: string; operation: string }[] {
+  return db
+    .prepare("SELECT command_id, operation FROM board_command_receipts ORDER BY rowid")
+    .all() as { command_id: string; operation: string }[];
 }
 
 /** A host as main and hostd compose one, serving its agent socket to one Session. */
@@ -118,6 +127,9 @@ it("stamps a socket create, update and comment with the rows they committed, non
   const [created] = listTicketsByProject(db, PROJECT);
   const { body: _body, ...summary } = created!;
   const onCreate = take();
+  // The door minted the write's command id: its receipt, and every row it stamped, name it.
+  const createId = onCreate[0]!.commandId!;
+  expect(receipts(db)).toEqual([{ command_id: createId, operation: "board.createTicket" }]);
   expect(onCreate).toEqual([
     {
       kind: "label",
@@ -125,14 +137,23 @@ it("stamps a socket create, update and comment with the rows they committed, non
       id: expect.any(String),
       projectId: PROJECT,
       label: expect.objectContaining({ name: "api" }),
+      commandId: createId,
     },
-    { kind: "ticket", op: "upsert", id: created!.id, projectId: PROJECT, ticket: summary },
+    {
+      kind: "ticket",
+      op: "upsert",
+      id: created!.id,
+      projectId: PROJECT,
+      ticket: summary,
+      commandId: createId,
+    },
     {
       kind: "ticketEvent",
       op: "upsert",
       id: created!.id,
       projectId: PROJECT,
       ticketId: created!.id,
+      commandId: createId,
     },
   ]);
 
@@ -147,8 +168,18 @@ it("stamps a socket create, update and comment with the rows they committed, non
   expect(updated).toMatchObject({ body: "Its body.\n\nMore.", priority: "high" });
   const { body: _updatedBody, ...updatedSummary } = updated;
   const onUpdate = take();
+  const updateId = onUpdate[0]!.commandId!;
+  expect(updateId).not.toBe(createId);
+  expect(onUpdate.every((change) => change.commandId === updateId)).toBe(true);
   expect(onUpdate.filter(({ kind }) => kind === "ticket")).toEqual([
-    { kind: "ticket", op: "upsert", id: created!.id, projectId: PROJECT, ticket: updatedSummary },
+    {
+      kind: "ticket",
+      op: "upsert",
+      id: created!.id,
+      projectId: PROJECT,
+      ticket: updatedSummary,
+      commandId: updateId,
+    },
   ]);
   expect(onUpdate.filter(({ kind }) => kind === "label")).toHaveLength(2);
 
@@ -156,7 +187,9 @@ it("stamps a socket create, update and comment with the rows they committed, non
   await run("ticket.comment", { id: "VC-1", message: "Working on it" });
   const [comment] = listComments(db, created!.id);
   expect(comment).toMatchObject({ actor: "session", sessionId: SESSION, body: "Working on it" });
-  expect(take()).toEqual([
+  const onComment = take();
+  const commentId = onComment[0]!.commandId!;
+  expect(onComment).toEqual([
     {
       kind: "comment",
       op: "upsert",
@@ -164,6 +197,7 @@ it("stamps a socket create, update and comment with the rows they committed, non
       projectId: PROJECT,
       ticketId: created!.id,
       comment,
+      commandId: commentId,
     },
     {
       kind: "ticketEvent",
@@ -171,8 +205,16 @@ it("stamps a socket create, update and comment with the rows they committed, non
       id: created!.id,
       projectId: PROJECT,
       ticketId: created!.id,
+      commandId: commentId,
     },
   ]);
+  expect(receipts(db)).toEqual(
+    expect.arrayContaining([
+      { command_id: updateId, operation: "board.updateTicket" },
+      { command_id: commentId, operation: "board.createComment" },
+    ]),
+  );
+  expect(receipts(db)).toHaveLength(3);
 
   // The flag-off windows still heard each write once, and the tap stamped none of them.
   expect(tapped).toEqual([
