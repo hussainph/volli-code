@@ -3,7 +3,7 @@
  * answer when it finishes.
  *
  * The second occupant of the manager's sentinel slot. `worktree/setup-run.ts`
- * is the first: it runs a project's setup command after a fresh worktree and
+ * is the first: it runs a project's setup command in a new worktree and
  * drives that ticket's `setting-up → ready | failed` phase. This one drives
  * nothing durable — it exists so a surface that OFFERED to run something (the
  * dependency offer, VC-156) can say when the offer has been fulfilled, and

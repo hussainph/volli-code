@@ -423,7 +423,18 @@ describe("ensure — first-run steps are a durable fact of the worktree (VC-835)
     });
   }
 
-  it("owes the setup run on a creation whose project has a setup command, and only then", async () => {
+  it("owes the setup run on a creation whose project has a setup command", async () => {
+    const projectPath = tempDir("proj");
+    seedWithSetup(projectPath, "touch .setup-ran");
+    const home = tempDir("home");
+    const { gitAsync } = addingGit(projectPath, (path) => mkdirSync(path, { recursive: true }));
+
+    const result = await ensure({ db: ctx.db, gitAsync, home, blobsRoot: "unused" }, "ticket-1");
+
+    expect(result).toMatchObject({ ok: true, value: { created: true, setupPending: true } });
+  });
+
+  it("owes no setup run when the project's command is blank", async () => {
     const projectPath = tempDir("proj");
     seedWithSetup(projectPath, "  ");
     const home = tempDir("home");
@@ -431,8 +442,33 @@ describe("ensure — first-run steps are a durable fact of the worktree (VC-835)
 
     const result = await ensure({ db: ctx.db, gitAsync, home, blobsRoot: "unused" }, "ticket-1");
 
-    // A blank command is no command: nothing for a door to claim.
     expect(result).toMatchObject({ ok: true, value: { created: true, setupPending: false } });
+  });
+
+  it("still owes both steps after a `worktree add` that failed past leaving the checkout registered", async () => {
+    // The add outlived its deadline but git had already registered the
+    // worktree (VC-785's state): the pending record was written before it.
+    const projectPath = tempDir("proj");
+    writeFileSync(join(projectPath, ".env"), "SECRET=1");
+    seedWithSetup(projectPath, "touch .setup-ran");
+    const home = tempDir("home");
+    let worktreePath = "";
+    let timedOut = false;
+    const { gitAsync } = addingGit(projectPath, (path) => {
+      worktreePath = path;
+      mkdirSync(path, { recursive: true });
+      if (!timedOut) {
+        timedOut = true;
+        throw new GitError("Git command timed out after 120000ms.", "", ["worktree", "add"], true);
+      }
+    });
+    const deps = { db: ctx.db, gitAsync, home, blobsRoot: "unused" };
+
+    expect((await ensure(deps, "ticket-1")).ok).toBe(false);
+    const retry = await ensure(deps, "ticket-1");
+
+    expect(retry).toMatchObject({ ok: true, value: { created: false, setupPending: true } });
+    expect(readFileSync(join(worktreePath, ".env"), "utf8")).toBe("SECRET=1");
   });
 
   it("runs the copy and still owes setup on the Retry after a first start's copy failed", async () => {
@@ -442,8 +478,8 @@ describe("ensure — first-run steps are a durable fact of the worktree (VC-835)
     const home = tempDir("home");
     // The add "succeeds" but leaves a FILE where the checkout should be, so
     // the copy step cannot write into it — a registered worktree, a failed
-    // copy: the state a Retry used to reconcile to `already-present` and skip
-    // both creation-only steps from.
+    // copy: a Retry reconciles to `already-present` and must still run both
+    // creation-only steps.
     let worktreePath = "";
     const { gitAsync, countMatching } = addingGit(projectPath, (path) => {
       worktreePath = path;

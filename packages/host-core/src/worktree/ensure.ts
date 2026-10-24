@@ -241,14 +241,14 @@ async function runEnsure(
   // this call: a creation whose copy failed owes it to the Retry, which
   // reconciles to `already-present`.
   setPhase(ticketId, "copying", deps.onPhase);
-  if (isFirstRunPending(deps, identity.path, "copy")) {
-    try {
+  try {
+    if (isFirstRunPending(deps, identity.path, "copy")) {
       await copyIncludedFiles(project.path, identity.path);
       completeFirstRunCopy(deps, identity.path);
-    } catch (caught) {
-      const message = caught instanceof Error ? caught.message : String(caught);
-      return fail(deps, ticketId, "copy", message, message);
     }
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : String(caught);
+    return fail(deps, ticketId, "copy", message, message);
   }
 
   // Materialize the ticket's file attachments into the fresh worktree
@@ -286,8 +286,15 @@ async function runEnsure(
   }
 
   // Read after every other step: the copy and attachments stages can fail,
-  // and the setup a failed start owes is the Retry's to report.
-  const setupPending = isFirstRunPending(deps, identity.path, "setup");
+  // and the setup a failed start owes is the Retry's to report. A record that
+  // cannot be read fails the start rather than quietly owing nothing.
+  let setupPending: boolean;
+  try {
+    setupPending = isFirstRunPending(deps, identity.path, "setup");
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : String(caught);
+    return fail(deps, ticketId, "create", message, message);
+  }
   setPhase(ticketId, "ready", deps.onPhase);
   const result: WorktreeIdentity = {
     worktreePath: identity.path,

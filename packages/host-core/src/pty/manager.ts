@@ -42,6 +42,7 @@ import {
   acquireWorktreeStartLease,
   claimFirstRunSetup,
   createSetupRun,
+  recordSetupFailure,
   ensure,
   runGitCapturingAsync,
   UNDER_DELETION_REFUSAL,
@@ -165,8 +166,8 @@ interface Session {
    *
    * Two occupants, one slot, because the manager's job is identical for both:
    * feed the handle output chunks from `onData` and notify it of a premature
-   * shell death from `onExit`. A freshly-created worktree session's setup
-   * command is the first ({@link createSetupRun}, worktree-support §6), which
+   * shell death from `onExit`. The setup command of a worktree that still
+   * owed it when this terminal started is the first ({@link createSetupRun}, worktree-support §6), which
    * owns tail scanning, that ticket's phase transitions and the
    * `worktree_failed(setup)` event. An offered install is the second
    * ({@link createCommandRun}, VC-156), which owns nothing durable and merely
@@ -1021,10 +1022,19 @@ export class PtyManager {
           this.adapterFor,
         );
         const setupCommand = worktree.setupCommand?.trim() ?? "";
-        const claimedSetup =
-          worktreeOutcome.setupPending &&
-          identity.worktreePath !== null &&
-          claimFirstRunSetup(this.host.worktreeDeps(db), identity.worktreePath);
+        let claimedSetup = false;
+        if (worktreeOutcome.setupPending && identity.worktreePath !== null) {
+          try {
+            claimedSetup = claimFirstRunSetup(this.host.worktreeDeps(db), identity.worktreePath);
+          } catch (error) {
+            // Still owed, and said on the ticket; the terminal itself starts.
+            recordSetupFailure(
+              { db, onPhase: this.host.worktreeDeps(db).onPhase },
+              worktree.ticketId,
+              `[setup command could not be claimed (${errorMessage(error)})]`,
+            );
+          }
+        }
         if (claimedSetup && setupCommand.length > 0) {
           // `file` is the resolved shell the PTY was spawned with — the sentinel
           // wrapper is shell-aware (fish is not POSIX), so it must match.

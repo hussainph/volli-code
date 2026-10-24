@@ -1,8 +1,10 @@
 /**
- * The sentinel-gated setup-command state machine (worktree-support §6). The
- * setup command runs in the session's live terminal AFTER the PTY spawns — never
- * as the pane's primary process — so `ensure` (ensure.ts) ends at
- * `ready` with the identity and deliberately does NOT run setup. Historically
+ * The sentinel-gated setup-command state machine (worktree-support §6). When a
+ * terminal claims a worktree's pending setup run (`first-run.ts`), the command
+ * runs in the session's live terminal AFTER the PTY spawns — never as the
+ * pane's primary process — so `ensure` (ensure.ts) ends at `ready` with the
+ * identity and deliberately does NOT run setup. A structured Session runs it
+ * through `setup-exec.ts` instead. Historically
  * pty.ts owned the whole machine inline: arming the watch, writing the sentinel
  * line, scanning output tails, driving `setting-up → ready | failed`, and
  * emitting the `worktree_failed(setup)` event itself. That is worktree-module

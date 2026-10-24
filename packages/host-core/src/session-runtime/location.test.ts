@@ -295,9 +295,43 @@ describe("desktop Session location resolver", () => {
           setupPending: true,
         },
       });
-      const resolver = createSessionLocationResolver(testDb.db, ports, options);
+      const resolver = createSessionLocationResolver(testDb.db, ports, {
+        ...options,
+        // A fixed shell, so the suite never runs the developer's own profile.
+        setupEnvironment: async () => ({
+          shellPath: "/bin/sh",
+          env: { PATH: process.env["PATH"] ?? "/usr/bin:/bin" },
+        }),
+      });
       return { worktreePath, resolver, session: ticketSession(project.id, ticket.id) };
     }
+
+    afterEach(() => {
+      worktreeHome.current = "/volli-location-test-home";
+    });
+
+    it("holds a second start until the first one's setup finishes, though its ensure no longer sees it owed", async () => {
+      const { worktreePath, resolver, session } = setupTicket("sleep 0.3; touch .setup-ran");
+      ensureWorktree.mockReset();
+      const outcome = (setupPending: boolean) => ({
+        ok: true,
+        value: {
+          identity: { worktreePath, branch: "volli/VC-3-doing", baseBranch: "main" },
+          created: setupPending,
+          restamped: setupPending,
+          setupPending,
+        },
+      });
+      ensureWorktree.mockResolvedValueOnce(outcome(true)).mockResolvedValueOnce(outcome(false));
+
+      const first = resolver.prepare(session);
+      // Let the first start claim the run before the second asks.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await resolver.prepare(session);
+
+      expect(existsSync(join(worktreePath, ".setup-ran"))).toBe(true);
+      await first;
+    });
 
     it("runs it in a chat's new worktree before the location is handed to the binding", async () => {
       const { worktreePath, resolver, session } = setupTicket("touch .setup-ran");

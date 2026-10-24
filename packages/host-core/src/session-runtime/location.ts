@@ -18,6 +18,24 @@ import { worktreeDeps } from "../worktree-runtime";
 
 const LOCAL: SessionLocation["venue"] = { id: "local", kind: "local" };
 
+/** Where a worktree's setup command runs: `<shellPath> -c <command>` under `env`. */
+export interface WorktreeSetupEnvironment {
+  shellPath: string;
+  env: Record<string, string>;
+}
+
+/**
+ * The host's own environment, less every marker saying an agent session is
+ * already running in it — for a resolver composed without the runtime's
+ * provider (tests, and any host that has nothing to add).
+ */
+async function hostSetupEnvironment(): Promise<WorktreeSetupEnvironment> {
+  return {
+    shellPath: process.env["SHELL"] || "/bin/sh",
+    env: scrubInheritedSessionEnv(process.env, harnessAdapters),
+  };
+}
+
 /** Why a Session of a removed project does not start (VC-822). */
 const PROJECT_REMOVED_REFUSAL =
   "This Session's project was removed from Volli. Add its folder again to use it.";
@@ -72,9 +90,14 @@ async function withStartLease<T>(directory: string, work: () => Promise<T>): Pro
 export function createSessionLocationResolver(
   db: Database.Database,
   ports: { events: HostEventBus },
-  options: { dataDir: string; venue?: SessionExecutionVenue },
+  options: {
+    dataDir: string;
+    venue?: SessionExecutionVenue;
+    setupEnvironment?: (sessionId: string) => Promise<WorktreeSetupEnvironment>;
+  },
 ): SessionLocationResolver {
   const venue = options.venue ?? LOCAL;
+  const setupEnvironment = options.setupEnvironment ?? hostSetupEnvironment;
   const site = (session: Session) => {
     const project = getProjectById(db, session.projectId);
     if (!project) throw new Error(`Project ${session.projectId} was not found`);
@@ -104,7 +127,7 @@ export function createSessionLocationResolver(
         const at = ticket.worktreePath === null ? "" : ` at ${ticket.worktreePath}`;
         throw new Error(`Couldn't prepare the worktree${at} — ${outcome.error}`);
       }
-      const { identity, created, restamped, setupPending } = outcome.value;
+      const { identity, created, restamped } = outcome.value;
       if (identity.worktreePath === null) throw new Error("Worktree path was not resolved");
       // A fresh `git worktree add` just stamped worktree_path/branch/base_branch
       // on the ticket, or a reuse adopted the same-ticket branch actually
@@ -118,24 +141,25 @@ export function createSessionLocationResolver(
           kind: "worktree",
         });
       }
-      if (setupPending) {
-        const setup = await runPendingWorktreeSetup(deps, {
-          ticketId: ticket.id,
-          worktreePath: identity.worktreePath,
-          // Read now, not from the Session's start: the command a person sees
-          // in Configure is the one that runs.
-          setupCommand: getProjectById(db, project.id)?.setupCommand ?? null,
-          shellPath: process.env["SHELL"] || "/bin/sh",
-          // The app's environment (its adopted login PATH included) less every
-          // marker saying an agent session is already running in it, as a
-          // terminal's shell starts from.
-          env: scrubInheritedSessionEnv(process.env, harnessAdapters),
-        });
-        if (setup.kind === "failed") {
-          throw new Error(
-            `Couldn't prepare the worktree at ${identity.worktreePath} — ${setup.message}`,
-          );
-        }
+      // Asked on every prepare, not only when this `ensure` saw the run
+      // pending: another start that claimed it may still be running it (a
+      // first attach that outlived its ceiling, whose Retry is this call), and
+      // this start waits for it rather than starting its agent in a checkout
+      // still being set up. With nothing pending or running, it is one unlink
+      // that finds no file.
+      const setup = await runPendingWorktreeSetup(deps, {
+        ticketId: ticket.id,
+        worktreePath: identity.worktreePath,
+        // Read now, not from the Session's start: the command a person sees
+        // in Configure is the one that runs.
+        setupCommand: getProjectById(db, project.id)?.setupCommand ?? null,
+        // Asked only when the run is this call's to make.
+        environment: () => setupEnvironment(session.id),
+      });
+      if (setup.kind === "failed") {
+        throw new Error(
+          `Couldn't prepare the worktree at ${identity.worktreePath} — ${setup.message}`,
+        );
       }
       return { directory: identity.worktreePath, venue };
     });
