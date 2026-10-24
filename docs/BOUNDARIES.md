@@ -97,7 +97,8 @@ These rules apply to every durable domain surface and transport.
    that host, in the host-level file defined by `host-identity.md`.
    Workspace state belongs behind the Workspace authority (the backend, once
    that area is ported), not in the client-local catch-all; host state becomes
-   runner-local state. The typed inventory is
+   runner-local state. (These classes are code names from VC-574; `workspace`
+   there predates the team-container meaning in `CONTEXT.md`.) The typed inventory is
    `packages/shared/src/app-state-keys.ts`, enforced by
    `packages/shared/src/app-state-keys.test.ts` and the typed repo writers;
    channel placements live in `apps/desktop/src/ipc/placement.ts`, enforced by
@@ -187,8 +188,8 @@ sends commands; it buffers nothing durable of its own.
 
 **Offline.** Signed in and offline, the board is a read-only cache, and Sessions
 on this Mac keep running while their facts wait in the Retry buffer. Signed out,
-the local SQLite mode keeps fully working, frozen with no new features, until it
-is retired after migration; an embedded local backend may bring offline work
+the local SQLite mode keeps fully working; from 0.3 GA it is frozen (no new
+features) until it is retired after migration; an embedded local backend may bring offline work
 back later with the same functions.
 
 **Machine-bound resources stay on their machine.** Working copies, terminals and

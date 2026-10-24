@@ -13,8 +13,8 @@ a time, with a switcher. Projects can move between Workspaces. Not a database
 file, a worktree, or the ticket surface (**Ticket view**). Internal identifiers
 such as `useWorkspaceStore` and `workspaceRailHidden` predate this meaning and
 name the project rail; they are wire format, not copy.
-_Avoid_: team (as the object name), org, personal workspace (there are no
-Workspace types), Ticket workspace
+_Avoid_: org, personal workspace (the signup Workspace is an ordinary one;
+there are no Workspace types), Ticket workspace
 
 **Member**:
 A person's membership in one Workspace, with a role; it can be suspended
@@ -78,7 +78,7 @@ _Avoid_: API key, device credential
 
 **Environment recipe**:
 A project's description of how to set up a Runner for it: size, setup and
-resume scripts (`.agents/setup`, `.agents/resume`) and the secrets they need.
+resume scripts (planned as `.agents/setup` and `.agents/resume`) and the secrets they need.
 An agent usually writes it; a form is the fallback.
 _Avoid_: Dockerfile, image, template
 
@@ -171,11 +171,11 @@ rail page and tabs are VC-121).
 _Avoid_: global files, project file tab, Files page, Files nav
 
 **Ticket Files**:
-The ticket-workspace view of files in that ticket's worktree.
+The Ticket view's list of files in that ticket's Working copy.
 _Avoid_: Project Files, artifact files
 
 **Session**:
-The durable identity and locally ordered history of an agentic conversation. A
+The durable identity and ordered history of an agentic conversation. A
 Session is created before any executor attaches and outlives terminal panes,
 processes, the Agent Runtime, UI surfaces, and the Runner it ran on. It remains
 openable after an attachment, turn, or Run completes; only explicit archival
@@ -290,7 +290,7 @@ fields in stored overrides are ignored.
 _Avoid_: tool permissions, model judgment, repo instruction file
 
 **Session Event**:
-An immutable fact in a Session's locally ordered ledger: an attachment outcome,
+An immutable fact in a Session's ordered ledger: an attachment outcome,
 native observation, command outcome, message/turn boundary, or recovery signal.
 The Session Engine assigns the per-Session sequence; timestamps are metadata, not
 ledger order. Session Events are not Ticket Events, although a planner event may
@@ -761,7 +761,7 @@ _Avoid_: Session, provider session, terminal pane
 **Session Attachment**:
 One historical association between an existing Session and an executor or
 transport: its runtime identity, native recovery reference where available,
-venue (its Working copy kind; see `VenueKind`), and attach/detach outcome. A Session keeps many historical attachments
+Working copy kind (`venue`, a `VenueKind`), and attach/detach outcome. A Session keeps many historical attachments
 but has at most one live executor attachment. A terminal companion is a workspace
 view, not an alternate structured attachment.
 _Avoid_: Session, terminal, harness state
