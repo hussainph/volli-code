@@ -113,8 +113,8 @@ describe("watchSessionActivity", () => {
     const { bus, commit } = stubBus(() => projection());
     const watch = watchSessionActivity(bus, { listOpenNativeBindings: noOpenBindings, publish });
 
-    // `session.retitled` is what `submit` appends and does not return: the
-    // decorator this watch used to be never saw it as an event (VC-790).
+    // `session.retitled` is what `submit` appends and does not return; the
+    // wake bus announces it all the same.
     commit("session.retitled");
     await watch.flush();
 

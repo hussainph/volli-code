@@ -15,9 +15,8 @@
  * process's one Engine, and it announces every committed Session Event —
  * including the `session.signaled` / `session.stopped` / `session.retitled`
  * that `submit` appends but does not return — with no per-Session bookkeeping
- * at all. This watch used to be a second, hand-forwarded Engine decorator that
- * read events off return values instead; two decorators with two capture rules
- * were a trap for the next observer (VC-790), so it listens to the bus.
+ * at all. It is a subscriber rather than an Engine decorator of its own: one
+ * decorator means one rule for which events an observer is handed.
  *
  * ── WHAT IT PUBLISHES ─────────────────────────────────────────────────────
  * The whole {@link SessionListingRow}, built by the same `sessionListingRow`
@@ -106,8 +105,8 @@ export interface SessionActivityWatchPorts {
    * Every folded Session's projection, handed over BEFORE the row-difference
    * gate below (VC-133).
    *
-   * This watch is the process's one choke point on durable Session writes, so
-   * an observer that needs to notice a state CHANGE belongs here rather than
+   * This watch already folds every Session the wake bus says moved, so an
+   * observer that needs to notice a state CHANGE belongs here rather than
    * holding its own subscription per Session. `automations/run-attention.ts` is
    * the caller: it decides whether an unattended Run has just entered `waiting`
    * or `error`.
@@ -161,7 +160,7 @@ export interface SessionActivityWatchPorts {
 }
 
 /** What the watch reads from: the wake bus, and an Engine to fold a Session with. */
-export interface SessionActivitySource {
+export interface SessionActivityFeed {
   engine: Pick<SessionEngine, "getSession">;
   subscribe: SubscribeSessionWake;
 }
@@ -178,7 +177,7 @@ export interface SessionActivityWatch {
  * re-publishes the affected Session's listing row.
  */
 export function watchSessionActivity(
-  source: SessionActivitySource,
+  source: SessionActivityFeed,
   ports: SessionActivityWatchPorts,
 ): SessionActivityWatch {
   const { engine } = source;

@@ -56,9 +56,10 @@
  *
  * ## Listeners cannot break a write
  *
- * The mutation's caller has already been answered by the time the fan-out
- * runs, so a throwing listener must not unwind a write that committed honest
- * work. Errors are reported and swallowed — the isolation every fan-out in
+ * The fan-out runs after the write committed and before its caller
+ * continues — that ordering is what lets a quit gate read a `turn.started`
+ * synchronously — so a throwing listener must not unwind a write that
+ * committed honest work, nor reach the caller as the write's own failure. Errors are reported and swallowed — the isolation every fan-out in
  * this process practises.
  */
 

@@ -203,18 +203,27 @@ function composition(
     onSubscriberFailure?: (error: unknown) => void;
     onProjectionCheckpointFailure?: (error: unknown) => void;
     observability?: ObservabilitySink;
-    committed?: SubscribeCommittedSessionEvents;
+    /**
+     * Where the runtime hears committed events. Absent means what every host
+     * composes (VC-790): {@link committedStream} over the engine, which the
+     * returned `engine` then writes through. `false` composes none, for the
+     * fallback the runtime keeps without it.
+     */
+    committed?: SubscribeCommittedSessionEvents | false;
   } = {},
 ): { runtime: HostedSessionRuntime; engine: SessionEngine; adapter: FakeAdapter } {
   let now = 100;
   const clock = options.clock ?? { now: () => now++ };
-  const engine =
+  const base =
     options.engine ??
     createSessionEngine({
       ledger: createInMemorySessionLedger(),
       clock,
       ids: ids(),
     });
+  const stream = options.committed === undefined ? committedStream(base) : null;
+  const engine = stream?.engine ?? base;
+  const committed = stream?.committed ?? options.committed;
   const adapter = options.adapter ?? new FakeAdapter();
   return {
     engine,
@@ -231,7 +240,7 @@ function composition(
         ? { onProjectionCheckpointFailure: options.onProjectionCheckpointFailure }
         : {}),
       ...(options.observability ? { observability: options.observability } : {}),
-      ...(options.committed ? { committed: options.committed } : {}),
+      ...(committed ? { committed } : {}),
     }),
   };
 }
@@ -246,10 +255,14 @@ function committedStream(base: SessionEngine) {
   const listeners = new Set<(event: SessionEvent) => void>();
   const announced = new Map<string, number>();
   async function announce(sessionId: string): Promise<void> {
-    const events = await base.listEvents({
-      sessionId,
-      afterSequence: announced.get(sessionId) ?? 0,
-    });
+    let events: readonly SessionEvent[];
+    try {
+      events = await base.listEvents({ sessionId, afterSequence: announced.get(sessionId) ?? 0 });
+    } catch {
+      // As the real bus does: a read-back that failed must not fail the write
+      // it followed, and the next write's announce picks these events up.
+      return;
+    }
     if (events.length === 0) return;
     announced.set(sessionId, events[events.length - 1]!.sequence);
     for (const event of events) {
@@ -300,7 +313,7 @@ function committedStream(base: SessionEngine) {
   return { engine, committed, listeners };
 }
 
-/** {@link composition} with its runtime fed by {@link committedStream}, as the host composes it. */
+/** {@link composition} as the host composes it, with the stream's listeners exposed. */
 function committedComposition(
   options: Omit<NonNullable<Parameters<typeof composition>[0]>, "engine" | "committed"> = {},
 ) {
@@ -5346,7 +5359,7 @@ describe("SessionRuntime transient transcript overlay", () => {
    * defensive fallback (`#nextAfterGap`); the tests after it pin the stream.
    */
   it("delivers past a gap left by a writer that bypassed the publish path", async () => {
-    const { runtime, engine, adapter } = composition();
+    const { runtime, engine, adapter } = composition({ committed: false });
     const sessionId = await createAndAttach(runtime);
     const kinds: string[] = [];
     const stop = await runtime.subscribe(
@@ -5432,7 +5445,7 @@ describe("SessionRuntime transient transcript overlay", () => {
     stop();
   });
 
-  it("delivers each sequence once when the stream and the runtime's publish both carry it", async () => {
+  it("delivers a mid-turn retitle in ledger order, once each, to a slow consumer", async () => {
     const { runtime, engine, adapter } = committedComposition();
     const sessionId = await createAndAttach(runtime);
     const sequences: number[] = [];
@@ -5442,8 +5455,8 @@ describe("SessionRuntime transient transcript overlay", () => {
       { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
       async (emission) => {
         if (!isSessionStreamFrame(emission)) return;
-        // A slow consumer keeps each frame in flight while its second copy
-        // arrives — the copy that must not be left behind the cursor.
+        // A slow consumer keeps each frame in flight while later ones — from
+        // the runtime's publish and from the committed stream — queue behind.
         await settleMicrotasks();
         sequences.push(emission.sequence);
         kinds.push(emission.event.payload.kind);
@@ -5471,6 +5484,51 @@ describe("SessionRuntime transient transcript overlay", () => {
     ]);
     expect(new Set(sequences).size).toBe(sequences.length);
     expect(failures).toEqual([]);
+  });
+
+  it("leaves the runtime's own events to its publish, so a frame still means it is done", async () => {
+    // Host-notice delivery submits the moment it sees `attachment.opened`, and
+    // must find the binding installed. The runtime publishes that frame only
+    // after installing it; the committed stream must not deliver it earlier.
+    const { runtime } = committedComposition();
+    const created = await runtime.command({
+      commandId: "command-create",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Native Session",
+      },
+    });
+    const { sessionId } = created;
+    const boundAtFrame: boolean[] = [];
+    const sequences: number[] = [];
+    const stop = await runtime.subscribe(
+      { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+      (emission) => {
+        if (!isSessionStreamFrame(emission)) return;
+        sequences.push(emission.sequence);
+        if (emission.event.payload.kind === "attachment.opened") {
+          const attachmentId = emission.event.payload.attachment.id;
+          boundAtFrame.push(
+            runtime.openNativeBindings().some((binding) => binding.attachmentId === attachmentId),
+          );
+        }
+      },
+    );
+
+    await runtime.command({
+      commandId: "command-attach",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    await settleMicrotasks();
+    stop();
+
+    expect(boundAtFrame).toEqual([true]);
+    expect(new Set(sequences).size).toBe(sequences.length);
   });
 
   it("ends a subscription whose drain fails on a committed event, even when the reporter throws", async () => {
