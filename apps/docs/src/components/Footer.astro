@@ -9,9 +9,9 @@
  * copyright notice and license travel with the font software, and the route
  * emits them (src/pages/licenses.txt.ts); this link is how a reader finds them.
  *
- * The edit link, timestamp, and pagination come from Starlight's own Footer,
+ * The timestamp and pagination come from Starlight's own Footer,
  * rendered as-is and restyled in volli.css. Rebuilding them here would mean
- * importing three `virtual:starlight/components/*` modules, whose types are
+ * importing `virtual:starlight/components/*` modules, whose types are
  * internal to the package.
  */
 import Default from "@astrojs/starlight/components/Footer.astro";
@@ -35,7 +35,7 @@ const REPOSITORY_URL = "https://github.com/hussainph/volli-code";
     <a href="/llms.txt">All docs as plain text</a>
     <a href="/licenses.txt">Licenses</a>
   </nav>
-  <p class="volli-footer-note">Open source under Apache-2.0.</p>
+  <p class="volli-footer-note">Released under Apache-2.0.</p>
 </div>
 
 <style>

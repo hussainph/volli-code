@@ -1,7 +1,11 @@
 # CodeQL triage
 
-`.github/workflows/codeql.yml` runs build-less JS/TS `security-extended` analysis
-on PRs against main, pushes to main and the scheduled weekly run.
+The CodeQL workflow is not running: code scanning on a private repository
+needs a GitHub Code Security licence, which a personal account cannot hold.
+It was a build-less JS/TS `security-extended` analysis on PRs against main,
+pushes to main and a weekly schedule; restore `.github/workflows/codeql.yml`
+from history if the repository moves to an account that has the licence. The
+findings already recorded, and the handling rules below, still apply.
 
 ## Read the right check
 

@@ -13,8 +13,7 @@ import Base from "../layouts/Base.astro";
 
 const LATEST_RELEASE_URL = `${RELEASES_URL}/latest`;
 
-const description =
-  "Download Volli for Apple silicon Macs — free and open source, served straight from GitHub Releases.";
+const description = "Download Volli for Apple silicon Macs — free, signed and notarized.";
 ---
 
 <Base
@@ -70,14 +69,6 @@ const description =
           <dd>
             Your projects, tickets and chats stay on your Mac. Model requests go only to the
             provider you sign in to. <a href={`${DOCS_URL}/start/install/`}>Where it all lives</a>.
-          </dd>
-        </div>
-        <div>
-          <dt>Build it yourself</dt>
-          <dd>
-            Get the source on <a href={REPOSITORY_URL}>GitHub</a> and follow the <a
-              href={`${DOCS_URL}/start/install/`}>install guide</a
-            >.
           </dd>
         </div>
         <div>

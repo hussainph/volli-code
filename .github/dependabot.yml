@@ -1,10 +1,10 @@
 version: 2
 
-# Weekly cadence. This was monthly because "every Dependabot PR triggers a CI
-# run against the paid Actions minutes pool" — which stopped being true when
-# the repository went public and standard runners became free. Monthly batching
-# now only delays security fixes and makes each PR a bigger, harder-to-bisect
-# jump, so the reason for it is gone with the bill.
+# Weekly cadence. Dependabot's own update jobs are free, but every PR it opens
+# runs the full CI against billed minutes on this private repository. Weekly
+# still wins over monthly: monthly batching delays security fixes and makes
+# each PR a bigger, harder-to-bisect jump, and the open-PR limits below bound
+# the CI runs either way.
 updates:
   - package-ecosystem: github-actions
     directory: /

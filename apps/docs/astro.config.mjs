@@ -52,9 +52,6 @@ export default defineConfig({
           href: "https://github.com/hussainph/volli-code",
         },
       ],
-      editLink: {
-        baseUrl: "https://github.com/hussainph/volli-code/edit/main/apps/docs/",
-      },
       components: {
         // The header lockup and links, drawn like volli.app's header: the
         // mark and "Volli" (home to volli.app), "Docs", then GitHub and

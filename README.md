@@ -75,4 +75,4 @@ See the [installation guide](https://docs.volli.app/start/install/) for native d
 - [Report a bug or give feedback](https://github.com/hussainph/volli-code/issues)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
-- [Apache-2.0 license](LICENSE)
+- [Apache-2.0 license](LICENSE): every released build is licensed under Apache-2.0, whatever this repository's visibility

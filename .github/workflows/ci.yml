@@ -1,17 +1,16 @@
 name: CI
 
-# This repository is PUBLIC, so standard GitHub-hosted runners — Linux AND
-# macOS — are free. The previous version of this file was written for a private
-# repo on the free-tier minutes pool, and every decision in it optimised for
-# billed minutes: the desktop smoke lane was manual-only because it cost ~40
-# billed minutes, the push-to-main lane was deleted as a duplicate bill, and
-# Dependabot was throttled to monthly. None of that is true any more.
+# This repository is PRIVATE, so every GitHub-hosted minute is billed, and a
+# macOS minute costs about ten times a Linux one: the macOS smoke lanes below
+# are most of the bill. The layout was tuned while standard runners were free,
+# so it still spends minutes for latency; any change that trades them back
+# (fewer macOS jobs per push, self-hosted macOS runners) is a budget decision
+# for a maintainer, not a drive-by edit.
 #
-# The budget that replaced it is WALL CLOCK, plus GitHub's cap on concurrent
-# macOS jobs (5 on Free/Pro/Team). So this file spends minutes freely and
-# guards latency instead. The number it is tuned against is the time an agent
-# waits on a PR (VC-461): before this layout, a median of ~10 min, and a
-# second push costs the whole of it again.
+# Its budget is WALL CLOCK, plus GitHub's cap on concurrent macOS jobs (5 on
+# Free/Pro/Team). The number it is tuned against is the time an agent waits on
+# a PR (VC-461): before this layout, a median of ~10 min, and a second push
+# costs the whole of it again.
 #
 #   - Tests are SHARDED across Linux jobs. The old critical path was one job
 #     that ran every check and build and THEN `vp run -r test:coverage`, which

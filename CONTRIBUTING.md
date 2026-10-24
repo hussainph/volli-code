@@ -21,7 +21,7 @@ Keep each change focused. Do not include unrelated formatting, generated files, 
 
 Open a pull request against `main`. Describe the user-facing change, link the related issue or Ticket when one exists, and list the checks you ran. Attach screenshots or a recording to the pull request for visual changes; do not commit PR evidence to the repository.
 
-This repository is public. Keep internal plans, research notes, strategy, business material, and product comparisons out of commits. Describe behavior and technical reasons in pull requests, comments, and test names rather than internal process history. `node scripts/check-public-content.mjs` checks the restricted documentation directories.
+This repository is private and stays publishable: write every commit as if it were public. Keep internal plans, research notes, strategy, business material, and product comparisons out of commits. Describe behavior and technical reasons in pull requests, comments, and test names rather than internal process history. `node scripts/check-public-content.mjs` checks the restricted documentation directories.
 
 Maintainers review pull requests for product fit, implementation quality, and test coverage. Opening a pull request does not guarantee that it will be merged.
 

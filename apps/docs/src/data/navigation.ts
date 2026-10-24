@@ -75,7 +75,6 @@ export const DOC_SECTIONS: DocSection[] = [
       { label: "Terminal resume", slug: "reference/terminal-resume" },
       { label: "Keyboard shortcuts", slug: "reference/keyboard-shortcuts" },
       { label: "Troubleshooting", slug: "reference/troubleshooting" },
-      { label: "Build from source", slug: "reference/build-from-source" },
     ],
   },
   {
