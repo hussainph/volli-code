@@ -1,5 +1,12 @@
 # Host protocol v1
 
+> **Superseded (VC-869).** Volli Cloud is moving to a design with no host
+> process: the backend is the single authority and Runners execute
+> ([Workspace authority and offline](BOUNDARIES.md#workspace-authority-and-offline)).
+> This document still describes code in this repository. It is kept for
+> maintenance only and goes when that code is deleted or renamed; don't build
+> new work on it.
+
 The host protocol uses one command catalog over JSON-safe transport. Desktop main
 and hostd compose the same host-core services. Network access is behind the
 `cloud` experiment; flag-off desktop behavior is unchanged. Identity lifetimes

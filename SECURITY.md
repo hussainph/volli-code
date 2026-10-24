@@ -24,7 +24,24 @@ Being honest about the above is deliberate: do not rely on this project for a th
 
 ## Cloud threat model
 
-Before enabling **Volli Cloud (unstable)** in Settings → Experimental, understand what you are trusting:
+Volli Cloud is being rebuilt around a cloud backend and Runners (see `docs/BOUNDARIES.md`, "Workspace authority and offline"). This section has two parts: the outline the new design is held to, which is **not shipped yet**, and the trust boundaries of the experimental host path that ships today behind the flag.
+
+### Volli Cloud design outline (not shipped)
+
+What each party can reach, and what it never holds:
+
+- **The backend** is the single authority for Workspaces, Members, projects, the board, the Session ledger and config. Bulk history (packed transcripts, agent logs, blobs) sits in object storage under keys the backend authorizes. The design stores team secrets and model keys encrypted per Workspace and audits deletes and policy changes; a self-service hard delete is designed to purge the data, including from backups, after a fixed window.
+- **Model credentials.** API keys and Workspace model keys live in the backend's Model gateway; Runners receive short-lived, scoped Runner tokens, never the raw key. **Subscriptions never leave your machine**: Mac and Linux runners use them locally from the sealed store, and Volli Cloud runners use API keys only. Migrating from local mode re-enters API keys by default; uploading them to the team secrets manager is an explicit opt-in.
+- **Runners** connect outbound and authenticate with Runner tokens. A compromised runner can act within its tokens: write facts for the Sessions it runs and read the secrets injected into them. It holds no board authority, and a Mac runner runs only its owner's work. Secrets are injected into the runner environment, never into transcripts, and are redacted before anything is uploaded.
+- **Volli Cloud runners** are disposable, isolated environments built from the project's Environment recipe. Their snapshots expire automatically, separately from the rest of the history.
+- **Clients** (desktop, web, phone, CLI) hold no durable authority. A compromised client acts as its signed-in person, within that person's Member role.
+- **Members** see every project in their Workspace. Ticket work is shared by default and ad-hoc chats are private; an admin can make everything shared. An agent acts on behalf of the person who started its Session: their model connection, their git identity and their name on board changes.
+- **Git** stays the person's. Volli never commits or pushes on its own; agents push only when asked or per the project's ship behaviour, using the person's GitHub App user-to-server token on the runner.
+- **Terminals and browser screencasts** are streamed runner-to-client over an authorized relay for one Session; they are never stored in the backend.
+
+### Experimental host path (superseded)
+
+Before enabling **Volli Cloud (unstable)** in Settings → Experimental today, understand what you are trusting:
 
 - **A compromised box** can put untrusted content in your views; remote content does not itself run code on your Mac ([view sanitizer](apps/desktop/src/renderer/src/components/ticket/markdown.tsx#L98-L102)). Sign-in URLs open on their own only over HTTPS on the provider's exact authorization domains in this Mac's [versioned catalog](packages/shared/src/sign-in-catalog.ts); other HTTP(S) pages require a click on an in-app link naming the domain ([sign-in runner](apps/desktop/src/main/host-sign-ins/sign-in-runner.ts), [link surface](apps/desktop/src/renderer/src/components/hosts/sign-ins/host-sign-in-rows.tsx)). This checks the initial URL, not subsequent browser redirects.
 - **A compromised renderer** (the app's UI process) acts as you on every enrolled box: it can run code as the box user through agents (`sessions.create` / `sessions.attach`; [device policy](packages/shared/src/catalog-actor.ts#L37-L41), [Session handlers](packages/host-core/src/handlers/host-handlers.ts#L567-L580)), capture the sudo password you enter ([password field](apps/desktop/src/renderer/src/components/hosts/add-host-sheet.tsx#L445-L490)), and request “Send from this Mac”. Copying a stored provider API key now requires your approval in a window-parented native dialog owned by main; the renderer's confirmation alone cannot authorize it, and Cancel sends nothing ([key transfer](apps/desktop/src/main/host-sign-ins/send-from-this-mac.ts)).
