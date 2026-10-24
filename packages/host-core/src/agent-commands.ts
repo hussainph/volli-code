@@ -42,6 +42,7 @@ import type { DoorActor } from "./agent-dispatch/resolution";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
 import { terminalSessionRecord } from "./session-control";
 import { runGitCapturingAsync } from "./worktree";
+import { createWorktreeReadService } from "./worktree-reads";
 
 export {
   composeProjectBrief,
@@ -85,6 +86,9 @@ export function createAgentCommandService(
   // serves runs on it, and there is no synchronous runner to fall back to.
   const gitAsync = options.gitAsync ?? runGitCapturingAsync;
   const worktreeExists = options.worktreeExists ?? existsSync;
+  const worktreeReads =
+    options.worktreeReads ??
+    createWorktreeReadService({ deps: () => ({ db: options.db, gitAsync, worktreeExists }) });
   const sessionEngine = options.sessionEngine;
   const terminalUpdateLocks = new Map<string, Promise<void>>();
   /**
@@ -250,6 +254,7 @@ export function createAgentCommandService(
         newId,
         gitAsync,
         worktreeExists,
+        worktreeReads,
         sessionEngine,
         watermarks,
         terminalUpdateLocks,

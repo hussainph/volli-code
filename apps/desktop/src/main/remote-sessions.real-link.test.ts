@@ -33,7 +33,7 @@ import { insertProject } from "@volli/host-core/db";
 import { admittedHandlers, createHostHandlers, ROUTER_POLICY } from "@volli/host-core/handlers";
 import { createTestSessionEngine, openTestDb, testProject } from "@volli/host-core/testing";
 import { createLogRing } from "@volli/host-core/log";
-import { runGitCapturingAsync } from "@volli/host-core/worktree";
+import { createWorktreeReadService, runGitCapturingAsync } from "@volli/host-core/worktree";
 import { createSessionRuntime, createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
 import {
   createSurfaceStore,
@@ -235,6 +235,7 @@ async function box(features: readonly string[] = FEATURES) {
         kind: "live",
         execution: { kind: "unavailable", pendingArmedRuns: { noteDeliberateMove: () => {} } },
       } as unknown as Parameters<typeof createHostHandlers>[1]["automations"],
+      worktreeReads: createWorktreeReadService({ deps: () => ({ db: ctx.db }) }),
       busyWorktreeSites: async () => [],
       logs: createLogRing(),
       worktree: { db: ctx.db, gitAsync: runGitCapturingAsync, blobsRoot: "" },

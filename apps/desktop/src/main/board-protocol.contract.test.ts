@@ -47,7 +47,7 @@ import {
   type HostHandlerMap,
 } from "@volli/host-core/handlers";
 import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/testing";
-import { runGitCapturingAsync } from "@volli/host-core/worktree";
+import { createWorktreeReadService, runGitCapturingAsync } from "@volli/host-core/worktree";
 import { createHostRouter, RpcDiagnosticLog, type DesktopIpcRouter } from "@volli/session-rpc";
 import { startHostProtocolListener } from "@volli/session-rpc/websocket";
 import {
@@ -151,6 +151,7 @@ function openHost(): Host {
       kind: "live",
       execution: { kind: "unavailable", pendingArmedRuns: { noteDeliberateMove: () => {} } },
     } as unknown as Parameters<typeof createHostHandlers>[1]["automations"],
+    worktreeReads: createWorktreeReadService({ deps: () => ({ db: ctx.db }) }),
     busyWorktreeSites: async () => [],
     boardFeed: feed,
     now,

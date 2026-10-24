@@ -2,11 +2,11 @@
  * The rail's last-known snapshot (VC-372): the cache's own rules, and the
  * acceptance counts on the real read verbs.
  *
- * The integration half runs a real `WorktreeChangeWatchManager` over a fake
- * `fs.watch` and the real ticketId-in read verbs over a scripted git, wired the
- * way `data-ipc.ts` wires them — so "zero git children across a Now↔Diffs flip"
- * is a count on the runner itself, not on a seam that could agree while
- * production still spawns.
+ * The integration half runs the host's real read service (`worktree-reads.ts`,
+ * VC-788) — its real `WorktreeChangeWatchManager` over a fake `fs.watch`, and
+ * the real ticketId-in read verbs over a scripted git — so "zero git children
+ * across a Now↔Diffs flip" is a count on the runner itself, not on a seam that
+ * could agree while production still spawns.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,24 +17,11 @@ import type { HostClientEventSink } from "../ports";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { insertTicket } from "../db/tickets-repo";
-import {
-  WATCH_REWATCH_GRACE_MS,
-  WorktreeChangeWatchManager,
-  type WorktreeWatchFn,
-} from "./change-set-watch";
-import {
-  readWorktreeBaseFile,
-  readWorktreeChangeSet,
-  readWorktreeStatus,
-  type WorktreeChangeSetRead,
-  type WorktreeStatusRead,
-} from "./read";
+import { createWorktreeReadService, type WorktreeReadService } from "../worktree-reads";
+import { WATCH_REWATCH_GRACE_MS, type WorktreeWatchFn } from "./change-set-watch";
+import type { WorktreeChangeSetRead, WorktreeStatusRead } from "./read";
 import { scriptedReadOnlyGit, type ScriptedGit } from "./scripted-git";
-import {
-  createWorktreeSnapshotCache,
-  getWorktreeSnapshots,
-  resetWorktreeSnapshotsForTest,
-} from "./snapshot";
+import { createWorktreeSnapshotCache } from "./snapshot";
 
 const TICKET_ID = "t1";
 
@@ -224,32 +211,30 @@ interface WatchCall {
 describe("the rail across a Now↔Diffs flip (VC-372)", () => {
   let ctx: TestDb;
   let tempDirs: string[] = [];
-  let managers: WorktreeChangeWatchManager[] = [];
+  let services: WorktreeReadService[] = [];
 
   beforeEach(() => {
     vi.useFakeTimers();
-    resetWorktreeSnapshotsForTest();
     ctx = openTestDb();
   });
 
   afterEach(() => {
-    // Release every root before the cache is thrown away, so no timer or
-    // handle outlives its test (and no late coverage report lands in the next).
-    for (const manager of managers.splice(0)) manager.unwatchTicket(TICKET_ID);
-    resetWorktreeSnapshotsForTest();
+    // Release every root before the service is thrown away, so no timer or
+    // handle outlives its test.
+    for (const service of services.splice(0)) service.releaseTicket(TICKET_ID);
     vi.useRealTimers();
     ctx.cleanup();
     for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
   /**
-   * The production composition, one panel at a time: the singleton cache wraps
-   * the ticketId-in read verbs, and the real watch manager reports coverage and
-   * changes into it exactly as `data-ipc.ts` wires them.
+   * The production composition, one panel at a time: the host's read service,
+   * its snapshot wrapping the ticketId-in read verbs and its real watch manager
+   * reporting coverage and changes into it.
    */
   function railHarness(): {
     git: ScriptedGit;
-    manager: WorktreeChangeWatchManager;
+    service: WorktreeReadService;
     webContents: HostClientEventSink;
     watchCalls: WatchCall[];
     armCalls: string[][];
@@ -298,24 +283,18 @@ describe("the rail across a Now↔Diffs flip (VC-372)", () => {
       return watcher;
     };
 
-    const manager = new WorktreeChangeWatchManager({
-      watch: watchFn,
-      git: async (args) => {
-        armCalls.push([...args]);
-        return "";
-      },
-      gitPathIsDirectory: () => false,
-      onCoverageChange: (ticketId, covered) => {
-        const snapshots = getWorktreeSnapshots();
-        if (covered) snapshots.noteCovered(ticketId);
-        else snapshots.noteUncovered(ticketId);
-      },
-      onRelevantChange: (ticketIds) => {
-        const snapshots = getWorktreeSnapshots();
-        for (const ticketId of ticketIds) snapshots.invalidate(ticketId);
+    const service = createWorktreeReadService({
+      deps: () => ({ db: ctx.db, gitAsync: git.gitAsync }),
+      watch: {
+        watch: watchFn,
+        git: async (args) => {
+          armCalls.push([...args]);
+          return "";
+        },
+        gitPathIsDirectory: () => false,
       },
     });
-    managers.push(manager);
+    services.push(service);
 
     const webContents = {
       id: "1",
@@ -325,27 +304,18 @@ describe("the rail across a Now↔Diffs flip (VC-372)", () => {
       removeCloseListener: vi.fn(),
     };
 
-    let statusLoads = 0;
-    let changeSetLoads = 0;
-    const readStatus = () =>
-      getWorktreeSnapshots().readStatus(TICKET_ID, async () => {
-        statusLoads += 1;
-        return readWorktreeStatus({ db: ctx.db, gitAsync: git.gitAsync }, TICKET_ID);
-      });
-    const readChangeSet = () =>
-      getWorktreeSnapshots().readChangeSet(TICKET_ID, async () => {
-        changeSetLoads += 1;
-        return readWorktreeChangeSet({ db: ctx.db, gitAsync: git.gitAsync }, TICKET_ID);
-      });
+    const readStatus = () => service.readStatus(TICKET_ID);
+    const readChangeSet = () => service.readChangeSet(TICKET_ID);
 
     return {
       git,
-      manager,
+      service,
       webContents,
       watchCalls,
       armCalls,
-      statusLoads: () => statusLoads,
-      changeSetLoads: () => changeSetLoads,
+      // Each read that reached git: its one signature command, counted on the runner.
+      statusLoads: () => git.countMatching(["status", "--porcelain"]),
+      changeSetLoads: () => git.countMatching(["diff", "--raw", "--numstat"]),
       readStatus,
       readChangeSet,
       // A panel mounting: it reads the pair, then subscribes (the real order —
@@ -353,15 +323,18 @@ describe("the rail across a Now↔Diffs flip (VC-372)", () => {
       async mount() {
         await readStatus();
         await readChangeSet();
-        await manager.watch(webContents, TICKET_ID, worktreePath);
+        expect(await service.watch(webContents, TICKET_ID)).toEqual({
+          kind: "ok",
+          result: { ok: true },
+        });
       },
       // A rail page flip: the outgoing panel releases, the incoming one reads
       // and subscribes, all in one render commit.
       async flip() {
-        manager.unwatch(webContents, TICKET_ID);
+        service.unwatch(webContents, TICKET_ID);
         await readStatus();
         await readChangeSet();
-        await manager.watch(webContents, TICKET_ID, worktreePath);
+        await service.watch(webContents, TICKET_ID);
       },
       fireChange(filename: string) {
         watchCalls[0]!.cb("change", filename);
@@ -415,12 +388,7 @@ describe("the rail across a Now↔Diffs flip (VC-372)", () => {
     // `baseRevision` in the snapshot the page already read, so the only
     // worktree read it needs is the base blob itself — not the Change Set.
     await rail.readChangeSet();
-    const base = await readWorktreeBaseFile(
-      { db: ctx.db, gitAsync: rail.git.gitAsync },
-      TICKET_ID,
-      "src/a.ts",
-      "base-sha",
-    );
+    const base = await rail.service.readBaseFile(TICKET_ID, "src/a.ts", "base-sha");
 
     expect(base.kind).toBe("ok");
     expect(rail.changeSetLoads()).toBe(1);
@@ -437,7 +405,7 @@ describe("the rail across a Now↔Diffs flip (VC-372)", () => {
 
     // The panel closes for good: nothing re-watches within the grace, so the
     // root is really torn down and no coverage remains.
-    rail.manager.unwatch(rail.webContents, TICKET_ID);
+    rail.service.unwatch(rail.webContents, TICKET_ID);
     vi.advanceTimersByTime(WATCH_REWATCH_GRACE_MS);
     await rail.flip();
 

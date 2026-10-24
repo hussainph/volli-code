@@ -55,6 +55,7 @@ import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import type { Sessions } from "../session-runtime/sessions";
 import type { HandlerPolicy, HostHandlerMap } from "../handlers/handler-map";
 import type { RunGitAsync } from "../worktree";
+import type { WorktreeReadService } from "../worktree-reads";
 import type { VerifyOperatorToken } from "./resolution";
 
 export interface AgentCommandServiceOptions {
@@ -67,11 +68,14 @@ export interface AgentCommandServiceOptions {
   now?: () => number;
   newId?: () => string;
   /**
-   * The git runner every worktree verb executes through — the non-blocking
-   * one. All git calls stay inside the worktree module (CONCEPT #42); this seam
-   * only lets tests substitute a scripted runner. Defaults to
-   * {@link runGitCapturingAsync}. There is no synchronous runner here, so a
-   * verb cannot put a git child back onto Electron main's thread (VC-786).
+   * The git runner the worktree verbs this service runs itself (`worktree
+   * sync`, the collision scan) execute through — the non-blocking one. All git
+   * calls stay inside the worktree module (CONCEPT #42); this seam only lets
+   * tests substitute a scripted runner. Defaults to {@link runGitCapturingAsync}.
+   * There is no synchronous runner here, so a verb cannot put a git child back
+   * onto Electron main's thread (VC-786). `worktree status` and `worktree diff`
+   * read through {@link worktreeReads} and its own runner; this one reaches them
+   * only through the default service built when that is omitted.
    */
   gitAsync?: RunGitAsync;
   /**
@@ -80,9 +84,18 @@ export interface AgentCommandServiceOptions {
    * but-deleted directory refuses with INVALID_REQUEST rather than letting
    * status.ts's errs-dirty fallback report `uncommitted: true` for a tree that's
    * gone. The same kind of seam as {@link gitAsync} — defaults to {@link existsSync}; tests
-   * substitute a scripted predicate.
+   * substitute a scripted predicate. Like {@link gitAsync}, it reaches `worktree
+   * status` / `worktree diff` only through the default {@link worktreeReads}.
    */
   worktreeExists?: (path: string) => boolean;
+  /**
+   * The host's worktree read service (VC-788): `worktree status` and
+   * `worktree diff` read through the same snapshot and coalescers every other
+   * door does. The host compositions pass their own (`HostAgentCommandOptions`
+   * requires it); absent, the service builds a private one over
+   * {@link gitAsync} and {@link worktreeExists} — a suite's isolated host.
+   */
+  worktreeReads?: WorktreeReadService;
   observeSession?: (
     sessionId: string,
     lines: number,
@@ -356,6 +369,8 @@ export interface AgentCommandContext {
   readonly gitAsync: RunGitAsync;
   /** {@link AgentCommandServiceOptions.worktreeExists}, defaulted to `existsSync`. */
   readonly worktreeExists: (path: string) => boolean;
+  /** {@link AgentCommandServiceOptions.worktreeReads}, defaulted to a private service. */
+  readonly worktreeReads: WorktreeReadService;
   /**
    * The app's one durable Session Engine. Lifted out of `options` because it
    * is a service rather than a seam: every verb that touches a Session reads

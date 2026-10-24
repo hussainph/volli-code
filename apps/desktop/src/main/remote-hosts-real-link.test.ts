@@ -84,6 +84,7 @@ async function host(features: readonly HostFeature[]) {
       modelAccess: null,
       experiments: null,
       automations: { kind: "degraded" } as never,
+      worktreeReads: null,
       busyWorktreeSites: async () => [],
       logs: createLogRing(),
     }),

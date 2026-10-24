@@ -41,7 +41,7 @@ import { subscribeTicketWake, type TicketWake } from "../ticket-wake";
 import * as worktreeModule from "../worktree";
 import { runGitCapturingAsync } from "../worktree/git";
 import { resetRepositoryTurnsForTest } from "../worktree/repository-turn";
-import { resetWorktreeSnapshotsForTest } from "../worktree/snapshot";
+import { createWorktreeReadService, type WorktreeReadService } from "../worktree-reads";
 import type { EnsureOutcome } from "../worktree";
 import type { WorktreeResult } from "../worktree/types";
 import { createBoardChangeFeed, type BoardChangeFeed, type BoardFeedBatch } from "./change-feed";
@@ -64,6 +64,8 @@ let publish: Mock<(topic: string, change: unknown) => void>;
 let tempDirs: string[];
 let wakes: TicketWake[];
 let stopWakes: () => void;
+/** The host's worktree read service, built fresh per case: its snapshot is per host. */
+let worktreeReads: WorktreeReadService;
 
 beforeEach(() => {
   ctx = openTestDb();
@@ -79,14 +81,15 @@ beforeEach(() => {
   tempDirs = [];
   wakes = [];
   stopWakes = subscribeTicketWake((wake) => wakes.push(wake));
-  resetWorktreeSnapshotsForTest();
+  worktreeReads = createWorktreeReadService({
+    deps: () => ({ db: ctx.db, gitAsync: runGitCapturingAsync }),
+  });
   resetRepositoryTurnsForTest();
 });
 
 afterEach(() => {
   stopWakes();
   vi.restoreAllMocks();
-  resetWorktreeSnapshotsForTest();
   resetRepositoryTurnsForTest();
   ctx.cleanup();
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
@@ -111,6 +114,7 @@ function handlers(options: Partial<HostHandlerOptions> = {}): HostHandlers {
         experiments: null,
         automations: { kind: "degraded" } as RuntimeAutomations,
         busyWorktreeSites: async () => [],
+        worktreeReads,
         now: () => 50,
         worktree: {
           db: ctx.db,
@@ -1293,6 +1297,7 @@ describe("moves", () => {
       events: { publish } as never,
       feed,
       worktree: () => ({ db: ctx.db }) as never,
+      worktreeReads: () => worktreeReads,
       busyWorktreeSites: async () => [],
       ticketSignals: null,
       // Moves, but ignores the seam: no receipt joins its transaction.
@@ -1345,6 +1350,7 @@ describe("worktree scope", () => {
     );
     feed.subscribe("real", null, (batch) => batches.push(batch));
     seed("t-1", "todo", { projectId: "real" });
+    const invalidate = vi.spyOn(worktreeReads, "invalidate");
     const map = handlers({
       worktree: {
         db: ctx.db,
@@ -1376,6 +1382,8 @@ describe("worktree scope", () => {
     ]);
     // The field write is the window's own; the moved checkout is everyone's.
     expect(published()).toEqual([{ ticketId: "t-1", projectId: "real", kind: "worktree" }]);
+    // A last-known answer taken without the checkout cannot describe it (VC-372).
+    expect(invalidate).toHaveBeenCalledExactlyOnceWith("t-1");
   });
 
   it("reports a failed materialization after saying the scope changed", async () => {

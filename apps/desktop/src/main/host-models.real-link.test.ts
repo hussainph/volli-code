@@ -137,6 +137,7 @@ async function fixture(
       modelAccess: null,
       experiments: null,
       automations: { kind: "degraded" } as never,
+      worktreeReads: null,
       busyWorktreeSites: async () => [],
       hostScopeRelay: relay,
     }),

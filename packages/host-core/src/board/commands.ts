@@ -95,7 +95,7 @@ import {
 import { withTicketWake } from "../ticket-wake";
 import { ensure } from "../worktree";
 import type { BusyWorktreeSites } from "../worktree/activity";
-import { getWorktreeSnapshots } from "../worktree/snapshot";
+import type { WorktreeReadInvalidation } from "../worktree-reads";
 import type { WorktreePorts } from "../worktree/types";
 import type { BoardChangeFeed, BoardFeedBatch } from "./change-feed";
 import { recordBoardCommand, replayBoardCommand, replayOrphanedBoardCommand } from "./receipts";
@@ -264,6 +264,12 @@ export interface BoardCommandOptions {
   readonly feed: BoardChangeFeed;
   /** The worktree bundle a materialization and an archive's trim run through. */
   readonly worktree: (db: Database.Database) => WorktreePorts;
+  /**
+   * The host's worktree reads: a materialization or a trim retires their
+   * answers (VC-372). Asked at use, like {@link worktree}: a host whose
+   * database did not open has none, and runs no command that would ask.
+   */
+  readonly worktreeReads: () => WorktreeReadInvalidation;
   readonly busyWorktreeSites: BusyWorktreeSites;
   readonly detachedWork?: DetachedWorkPort;
   /** The Session ledger's latest outcome per ticket, or null on a host without one. */
@@ -816,6 +822,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
           trimFinishedTicketInBackground(
             {
               worktree: options.worktree(db),
+              worktreeReads: options.worktreeReads(),
               now,
               detachedWork: options.detachedWork,
               busySites: options.busyWorktreeSites,
@@ -1124,7 +1131,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     });
     // A checkout appeared (or the attempt left one half-made): a last-known
     // snapshot taken without one cannot describe it (VC-372).
-    getWorktreeSnapshots().invalidate(committed.id);
+    options.worktreeReads().invalidate(committed.id);
     const ticket = getTicket(db, committed.id) ?? committed;
     // Said on both outcomes, before the answer: success has a new identity
     // stamp to show, and failure a scope flag that really did change under a

@@ -35,6 +35,7 @@ import type { ProjectLiveWork } from "../project-remove";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import { createTicketCommand } from "../ticket-commands";
 import { runGitCapturingAsync } from "../worktree/git";
+import { createWorktreeReadService } from "../worktree-reads";
 import { ADMITTED, admittedHandlers, type HandlerPolicy } from "./handler-map";
 import {
   createHostHandlers,
@@ -113,6 +114,9 @@ function sealedMap(options: Partial<HostHandlerOptions> = {}) {
       experiments: null,
       automations: automations(),
       busyWorktreeSites: async () => [],
+      worktreeReads: createWorktreeReadService({
+        deps: () => ({ db: ctx.db, gitAsync: runGitCapturingAsync }),
+      }),
       now: () => 50,
       worktree: { db: ctx.db, gitAsync: runGitCapturingAsync, blobsRoot: "" },
       ...options,

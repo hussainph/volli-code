@@ -532,7 +532,6 @@ describe("host-core's package interface", () => {
     const testing = surfaceOf(join(SRC, "testing/index.ts"));
     for (const reset of [
       "resetDeletionLeasesForTest",
-      "resetWorktreeSnapshotsForTest",
       "resetOrphanScanForTest",
       "resetRetentionWatcherForTest",
     ])

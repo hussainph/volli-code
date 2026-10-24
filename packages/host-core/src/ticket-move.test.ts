@@ -17,7 +17,8 @@ import { executeTicketMove, type TicketMovePorts } from "./ticket-move";
 import { subscribeTicketWake, type TicketWake } from "./ticket-wake";
 import * as worktree from "./worktree";
 import { runGitCapturingAsync } from "./worktree/git";
-import { getWorktreeSnapshots, resetWorktreeSnapshotsForTest } from "./worktree/snapshot";
+import { createWorktreeSnapshotCache, type WorktreeSnapshotCache } from "./worktree/snapshot";
+import { createWorktreeReadService } from "./worktree-reads";
 import type { TrimFinishOutcome } from "./worktree/retention";
 import type { WorktreeStatusRead } from "./worktree/read";
 
@@ -30,16 +31,23 @@ let ports: TicketMovePorts;
 let unsubscribe: () => void;
 let wakes: TicketWake[];
 let tempDirs: string[];
+/** The read service's own cache, so a case can prime and observe it directly. */
+let snapshots: WorktreeSnapshotCache;
 
 beforeEach(() => {
   ctx = openTestDb();
   insertProject(ctx.db, testProject({ id: PROJECT, ticketPrefix: "VC" }));
+  snapshots = createWorktreeSnapshotCache();
   ports = {
     worktree: {
       db: ctx.db,
       gitAsync: runGitCapturingAsync,
       blobsRoot: "unused",
     },
+    worktreeReads: createWorktreeReadService({
+      deps: () => ({ db: ctx.db, gitAsync: runGitCapturingAsync }),
+      snapshots,
+    }),
     now: () => 100,
     busySites: async () => [],
     onMutation: vi.fn(),
@@ -50,13 +58,11 @@ beforeEach(() => {
   wakes = [];
   unsubscribe = subscribeTicketWake((wake) => wakes.push(wake));
   tempDirs = [];
-  resetWorktreeSnapshotsForTest();
 });
 
 afterEach(() => {
   unsubscribe();
   vi.restoreAllMocks();
-  resetWorktreeSnapshotsForTest();
   ctx.cleanup();
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
 });
@@ -725,7 +731,6 @@ describe("background Done trim", () => {
         { worktreePath: root, branch: "main", baseBranch: "main" },
         2,
       );
-      const snapshots = getWorktreeSnapshots();
       snapshots.noteCovered("target");
       const status: WorktreeStatusRead = {
         kind: "ok",
@@ -794,7 +799,7 @@ describe("background Done trim", () => {
       ticket("target");
       const failure = new Error("trim failed");
       const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
-      const invalidate = vi.spyOn(getWorktreeSnapshots(), "invalidate");
+      const invalidate = vi.spyOn(ports.worktreeReads, "invalidate");
       const pending = deferred<TrimFinishOutcome>();
       vi.spyOn(worktree, "trimFinishedWorktree").mockReturnValue(pending.promise);
       const reply = executeTicketMove(

@@ -11,10 +11,12 @@
  */
 import type { DbHandle } from "@volli/host-core";
 import { createHostHandlers, type ProjectLiveWork } from "@volli/host-core/handlers";
+import { createWorktreeReadService } from "@volli/host-core/worktree";
 import type { TicketMovedNotice } from "@volli/shared";
 
 import { windowEventBus } from "./broadcast";
 import { registerDataIpcHandlers as register } from "./data-ipc";
+import { worktreeDeps } from "./worktree-host";
 
 type Options = Parameters<typeof register>[1];
 
@@ -28,8 +30,14 @@ export type TestDataIpcOptions = Omit<Options, "handlers"> & {
 
 export function registerDataIpcHandlers(handle: DbHandle, options: TestDataIpcOptions): void {
   const { interruptTicketSessions, onDeliberateMove, projectLiveWork, handlers, ...rest } = options;
+  // A fresh host's read service per registration, as a fresh launch builds one:
+  // no case is served another case's last-known snapshot (VC-788).
+  const worktreeReads =
+    rest.worktreeReads ??
+    (handle.ok ? createWorktreeReadService({ deps: () => worktreeDeps(handle.db) }) : undefined);
   register(handle, {
     ...rest,
+    ...(worktreeReads === undefined ? {} : { worktreeReads }),
     handlers:
       handlers ??
       createHostHandlers(
@@ -59,6 +67,7 @@ export function registerDataIpcHandlers(handle: DbHandle, options: TestDataIpcOp
           // the map; reporting the whole tree busy keeps it that way.
           busyWorktreeSites:
             rest.busyWorktreeSites ?? (async () => [{ directory: "/", surface: "agent" }]),
+          worktreeReads: worktreeReads ?? null,
           ...(interruptTicketSessions === undefined ? {} : { interruptTicketSessions }),
           ...(projectLiveWork === undefined ? {} : { projectLiveWork }),
           ...(rest.detachedWork === undefined ? {} : { detachedWork: rest.detachedWork }),

@@ -17,7 +17,11 @@ import type { IpcResponse } from "@volli/host-protocol/ipc";
 import { listProjects, insertProject } from "@volli/host-core/db";
 import { admittedHandlers, createHostHandlers, ROUTER_POLICY } from "@volli/host-core/handlers";
 import { openTestDb, testHostHandlers, testProject, type TestDb } from "@volli/host-core/testing";
-import { getTrimSettings, setTrimSettings } from "@volli/host-core/worktree";
+import {
+  createWorktreeReadService,
+  getTrimSettings,
+  setTrimSettings,
+} from "@volli/host-core/worktree";
 import { SESSION_RPC_IPC_CHANNEL } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -142,6 +146,7 @@ describe("shells.moveToBackground", () => {
             sessions: null,
             modelAccess: null,
             experiments: null,
+            worktreeReads: createWorktreeReadService({ deps: () => ({ db: ctx.db }) }),
             busyWorktreeSites: async () => [],
             automations: { kind: "degraded", start() {}, stop() {}, settled: async () => {} },
             backgroundShells: { moveForeground },

@@ -1548,6 +1548,8 @@ const appStartup = app.whenReady().then(async () => {
       experiments: { snapshot: readExperiments, set: setExperiment },
       automations: runtimeAutomations,
       busyWorktreeSites,
+      // The host's one worktree read service (VC-788); none without a database.
+      worktreeReads: liveHost?.worktreeReads ?? null,
       interruptTicketSessions: interruptTicketSessionsAnnounced,
       // What removing a project stops before it detaches it (VC-796): every door
       // that removes one, the window's `volli:project-remove` included.
@@ -1872,7 +1874,13 @@ const appStartup = app.whenReady().then(async () => {
     listOpenNativeBindings,
     ...(liveHost === undefined
       ? {}
-      : { detachedWork: liveHost.detachedWork, maintenance: liveHost.maintenance }),
+      : {
+          detachedWork: liveHost.detachedWork,
+          maintenance: liveHost.maintenance,
+          // The window's worktree reads and change watches ride the host's one
+          // service, the same one the agent socket reads (VC-788).
+          worktreeReads: liveHost.worktreeReads,
+        }),
     busyWorktreeSites,
     releaseAgentSites,
     // `volli:ticket-move` projects the host's move: its backward-move
@@ -2964,6 +2972,9 @@ const appStartup = app.whenReady().then(async () => {
       liveHost !== undefined
         ? createHostAgentCommands(hostPorts, {
             db: liveHost.database.db,
+            // `worktree status` / `worktree diff` share the window's snapshot
+            // and coalescers (VC-788).
+            worktreeReads: liveHost.worktreeReads,
             appVersion: app.getVersion(),
             // The verifying half of the same registry the attachments mint from.
             // Without it every socket caller is unauthenticated by default, which

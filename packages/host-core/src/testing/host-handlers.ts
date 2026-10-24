@@ -30,6 +30,7 @@ import type { RuntimeAutomations } from "../session-runtime/automations";
 import type { HostSessionPorts } from "../session-services";
 import { runGitCapturingAsync, type RunGitAsync } from "../worktree";
 import type { BusyWorktreeSites } from "../worktree/activity";
+import { createWorktreeReadService, type WorktreeReadInvalidation } from "../worktree-reads";
 
 /** What a test may observe or substitute around a command. */
 export interface TestHandlerPorts {
@@ -41,6 +42,11 @@ export interface TestHandlerPorts {
   readonly onMutation?: (change: Omit<DataChangedEvent, "entity">) => void;
   readonly detachedWork?: DetachedWorkPort;
   readonly gitAsync?: RunGitAsync;
+  /**
+   * The worktree read service the board's acts invalidate. Absent, the map gets
+   * a private one; a test that shares it with a socket passes the same object.
+   */
+  readonly worktreeReads?: WorktreeReadInvalidation;
   readonly now?: () => number;
   /** Sees every policy verdict at the map, before the handler it admits. */
   readonly onAdmission?: AdmissionObserver;
@@ -91,6 +97,9 @@ export function testHostHandlers(ports: TestHandlerPorts): HostHandlerMap {
     experiments: null,
     automations,
     busyWorktreeSites: ports.busyWorktreeSites ?? (async () => []),
+    worktreeReads:
+      ports.worktreeReads ??
+      createWorktreeReadService({ deps: () => ({ db: ports.db, gitAsync: ports.gitAsync }) }),
     ...(ports.interruptTicketSessions === undefined
       ? {}
       : { interruptTicketSessions: ports.interruptTicketSessions }),

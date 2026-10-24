@@ -36,7 +36,7 @@ import {
 } from "@volli/host-core/handlers";
 import { openTestDb, testProject, testTicket } from "@volli/host-core/testing";
 import { createLogRing } from "@volli/host-core/log";
-import { runGitCapturingAsync } from "@volli/host-core/worktree";
+import { createWorktreeReadService, runGitCapturingAsync } from "@volli/host-core/worktree";
 import { readHostError } from "@volli/host-protocol";
 import {
   createHostLink,
@@ -171,6 +171,7 @@ async function box(features: readonly string[] = EVERY_FEATURE): Promise<Box> {
         kind: "live",
         execution: { kind: "unavailable", pendingArmedRuns: { noteDeliberateMove: () => {} } },
       } as unknown as Parameters<typeof createHostHandlers>[1]["automations"],
+      worktreeReads: createWorktreeReadService({ deps: () => ({ db: ctx.db }) }),
       busyWorktreeSites: async () => [],
       boardFeed: feed,
       logs: createLogRing(),
@@ -313,6 +314,7 @@ async function desktopMain(link: HostLink) {
       modelAccess: null,
       experiments: null,
       automations: { kind: "degraded" } as never,
+      worktreeReads: null,
       busyWorktreeSites: async () => [],
       hostLinkRelay: relay,
     },

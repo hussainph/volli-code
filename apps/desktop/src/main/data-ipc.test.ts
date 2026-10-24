@@ -248,7 +248,6 @@ import {
   testSession,
   type TestDb,
   resetOrphanScanForTest,
-  resetWorktreeSnapshotsForTest,
   resetDeletionLeasesForTest,
 } from "@volli/host-core/testing";
 import type { AutoTitleRequest } from "@volli/host-core/session-runtime";
@@ -342,9 +341,8 @@ beforeEach(() => {
   handlers.clear();
   vi.resetAllMocks();
   dataChangedSends.length = 0;
-  // The rail's last-known snapshot is process-wide (VC-372): each test starts
-  // from a clean launch, and from no prior test's watch manager hooks.
-  resetWorktreeSnapshotsForTest();
+  // Each registration builds its own host read service (VC-788), so each test
+  // starts with a clean snapshot; only the captured watch hooks need dropping.
   worktreeWatch.options = undefined;
   // The orphan sweep is cached once per launch (module state) — drop it so each
   // test starts from a clean launch and its own mocked sweep runs.
