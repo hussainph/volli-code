@@ -195,8 +195,20 @@ function createAgentCommandService(
   // states build the real map the socket projects, as a root builds it.
   const { busyWorktreeSites, interruptTicketSessions, onDeliberateMove, detachedWork, ...service } =
     options;
+  // One host, one read service: a case's board acts retire the answers its
+  // socket reads are served from.
+  const worktreeReads =
+    options.worktreeReads ??
+    createWorktreeReadService({
+      deps: () => ({
+        db: options.db,
+        gitAsync: options.gitAsync,
+        worktreeExists: options.worktreeExists,
+      }),
+    });
   return createAgentCommandServiceBase({
     ...service,
+    worktreeReads,
     handlers:
       options.handlers ??
       testHostHandlers({
@@ -208,9 +220,7 @@ function createAgentCommandService(
         notify: options.notify,
         onMutation: options.onMutation,
         gitAsync: options.gitAsync,
-        // One host, one read service: a case's board acts retire the answers
-        // its socket reads are served from.
-        worktreeReads: options.worktreeReads,
+        worktreeReads,
         now: options.now,
       }),
     sessionEngine: options.sessionEngine ?? createTestSessionEngine(options.db),
@@ -5258,6 +5268,10 @@ describe("agent command service", () => {
       await gate;
       return scripted(args, cwd);
     };
+    const worktreeReads = createWorktreeReadService({
+      deps: () => ({ db: ctx.db, gitAsync, worktreeExists: alwaysExists }),
+      now: () => 0,
+    });
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
@@ -5265,16 +5279,17 @@ describe("agent command service", () => {
       newId: () => "ticket-one",
       gitAsync,
       worktreeExists: alwaysExists,
-      worktreeReads: createWorktreeReadService({
-        deps: () => ({ db: ctx.db, gitAsync, worktreeExists: alwaysExists }),
-        now: () => 0,
-      }),
+      worktreeReads,
     });
     await seedWorktreeTicket(service);
-    /** Starts the requests together, lets each reach its read, then opens git. */
+    const statusReads = vi.spyOn(worktreeReads, "readStatus");
+    const diffReads = vi.spyOn(worktreeReads, "readDiff");
+    /** Starts the requests together, waits until each reached its read, then opens git. */
     const burst = async (requests: AgentRequest[]): Promise<AgentResponse[]> => {
       const pending = Promise.all(requests.map((request) => service.execute(request)));
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() => {
+        expect(statusReads.mock.calls.length + diffReads.mock.calls.length).toBe(requests.length);
+      });
       open();
       return pending;
     };

@@ -233,18 +233,21 @@ never holds an app lifecycle.
   directories and symlinks.
 - `host.worktrees.deps(db)` captures the host's event bus and `dataDir`;
   desktop callers not yet moved pass the same facts through `worktree-host.ts`.
-- `host.worktreeReads` (`worktree-reads.ts`, VC-788) is the host's one worktree
-  read pipeline: the change watch, the last-known status/Change Set snapshot
-  and the share-window coalescers, composed once per host. Desktop's rail
-  channels, the agent socket's `worktree status` / `worktree diff` and hostd's
-  socket all read through it, and every worktree-mutating act calls its
-  `invalidate` (or `invalidateAll`). There is no process-wide snapshot: a test
-  builds its own service, injecting a snapshot cache when it drives coverage.
   Session locations take `events` and `dataDir` for worktree materialization
   and publication, and never import desktop's broadcast adapter.
   `worktree/repository-turn.ts` keeps its per-process ordering. Project roots
   stay in desktop's 100% gate: desktop's IPC/PTY tests cover branches this
   package's do not.
+- `host.worktreeReads` (`worktree-reads.ts`, VC-788) is the host's one worktree
+  read pipeline: the change watch, the last-known status/Change Set snapshot
+  and the share-window coalescers, composed once per host. Desktop's rail
+  channels, the agent socket's `worktree status` / `worktree diff` and hostd's
+  socket all read through it, and every worktree-mutating act calls its
+  `invalidate` (or `invalidateAll`). Sharing covers reads that overlap (the
+  share window) and, while a client's watch covers the worktree, the snapshot;
+  two back-to-back reads nobody watches each pay their own git set. There is no
+  process-wide snapshot: a test builds its own service, injecting a snapshot
+  cache when it drives coverage.
 - `secrets/` holds `SecretStore`, the headless file key, and the typed sealed
   credential module: the credential lock, the durable file contract, the key
   id and `VHC1` envelope over the keyring port (`ports/credential-keyring.ts`)

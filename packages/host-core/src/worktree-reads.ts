@@ -3,12 +3,7 @@
  * last-known snapshot and the coalescers, composed once per host so every door
  * — the desktop window's IPC, the agent socket's `worktree status` /
  * `worktree diff`, and hostd's socket — asks the same question at the same
- * cost.
- *
- * Before this, desktop main assembled the pipeline itself and the socket verbs
- * read the git functions around it: a polling agent paid a whole diff per call,
- * and hostd had no coalescing at all. The pieces are unchanged; only their
- * owner is:
+ * cost:
  *
  * - **Coalescing** (`worktree/coalesce.ts`, VC-369): one read in flight per
  *   ticket, with a share window for the status and diff reads so two callers
@@ -55,7 +50,7 @@ import { createWorktreeSnapshotCache, type WorktreeSnapshotCache } from "./workt
 type Result = { ok: true } | { ok: false; error: string };
 
 /** A watch request's answer: the ticket's resolution failure, or the watch's own result. */
-export type WorktreeWatchRead = WorktreeReadFailure | { kind: "ok"; result: Result };
+type WorktreeWatchRead = WorktreeReadFailure | { kind: "ok"; result: Result };
 
 /** What a worktree-mutating act needs from the service: the means to retire its answers. */
 export interface WorktreeReadInvalidation {
@@ -93,7 +88,7 @@ export interface WorktreeReadService extends WorktreeReadInvalidation {
   releaseTicket(ticketId: string): void;
 }
 
-export interface WorktreeReadServiceOptions {
+interface WorktreeReadServiceOptions {
   /**
    * The read deps, asked per read: the database, the non-blocking git runner
    * and the disk-existence seam. Production passes the host's worktree deps.

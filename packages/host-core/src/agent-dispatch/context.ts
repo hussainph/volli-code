@@ -68,11 +68,14 @@ export interface AgentCommandServiceOptions {
   now?: () => number;
   newId?: () => string;
   /**
-   * The git runner every worktree verb executes through — the non-blocking
-   * one. All git calls stay inside the worktree module (CONCEPT #42); this seam
-   * only lets tests substitute a scripted runner. Defaults to
-   * {@link runGitCapturingAsync}. There is no synchronous runner here, so a
-   * verb cannot put a git child back onto Electron main's thread (VC-786).
+   * The git runner the worktree verbs this service runs itself (`worktree
+   * sync`, the collision scan) execute through — the non-blocking one. All git
+   * calls stay inside the worktree module (CONCEPT #42); this seam only lets
+   * tests substitute a scripted runner. Defaults to {@link runGitCapturingAsync}.
+   * There is no synchronous runner here, so a verb cannot put a git child back
+   * onto Electron main's thread (VC-786). `worktree status` and `worktree diff`
+   * read through {@link worktreeReads} and its own runner; this one reaches them
+   * only through the default service built when that is omitted.
    */
   gitAsync?: RunGitAsync;
   /**
@@ -81,7 +84,8 @@ export interface AgentCommandServiceOptions {
    * but-deleted directory refuses with INVALID_REQUEST rather than letting
    * status.ts's errs-dirty fallback report `uncommitted: true` for a tree that's
    * gone. The same kind of seam as {@link gitAsync} — defaults to {@link existsSync}; tests
-   * substitute a scripted predicate.
+   * substitute a scripted predicate. Like {@link gitAsync}, it reaches `worktree
+   * status` / `worktree diff` only through the default {@link worktreeReads}.
    */
   worktreeExists?: (path: string) => boolean;
   /**

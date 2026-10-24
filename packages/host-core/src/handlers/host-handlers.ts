@@ -543,6 +543,7 @@ export interface HostHandlerOptions {
 /** Messages a client may show; unchanged from the router's own (VC-564). */
 const SESSIONS_UNAVAILABLE = "Sessions are unavailable on this transport";
 const RUNTIME_UNAVAILABLE = "The Session runtime is unavailable on this host";
+const WORKTREE_READS_UNAVAILABLE = "Worktree reads are unavailable on this host";
 const EXPERIMENTS_UNAVAILABLE = "Experimental settings are unavailable on this transport";
 const MODEL_ACCESS_UNAVAILABLE = "Model Access is unavailable on this transport";
 const PREFERENCES_UNAVAILABLE = "Model Access preferences are unavailable on this transport";
@@ -627,7 +628,7 @@ function hostHandlerEntries(
   const modelAccess = () => present(options.modelAccess, MODEL_ACCESS_UNAVAILABLE);
   const preferences = () => present(db, PREFERENCES_UNAVAILABLE);
   const board = () => present(db, BOARD_UNAVAILABLE);
-  const worktreeReads = () => present(options.worktreeReads, BOARD_UNAVAILABLE);
+  const worktreeReads = () => present(options.worktreeReads, WORKTREE_READS_UNAVAILABLE);
   const sessionReads = () => present(options.sessionReads ?? null, SESSION_READS_UNAVAILABLE);
   const signIns = () => present(options.signIns ?? null, SIGN_INS_UNAVAILABLE);
   const remoteHosts = () => present(options.remoteHosts ?? null, REMOTE_HOSTS_UNAVAILABLE);
