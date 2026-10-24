@@ -222,6 +222,9 @@ function createAgentCommandService(
         gitAsync: options.gitAsync,
         worktreeReads,
         now: options.now,
+        // The service's ids are the map's too: a created ticket's id is the
+        // handler's to mint (VC-794), from the same seam a case states.
+        newId: options.newId,
       }),
     sessionEngine: options.sessionEngine ?? createTestSessionEngine(options.db),
     verifySessionToken: options.verifySessionToken ?? DOOR_TOKENS.verify,

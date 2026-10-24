@@ -759,8 +759,9 @@ export const BOARD_ENTRIES = [
   },
   // The board's own operations (VC-565): the person's, on the WebSocket and
   // the desktop's IPC bridge, on no agent surface. The agent CLI keeps its
-  // `ticket.*`/`project.*` verbs and their socket handlers unchanged, so
-  // these take the router's `board.<verb>` paths rather than those keys.
+  // `ticket.*`/`project.*` verbs and their wire shape, so these take the
+  // router's `board.<verb>` paths rather than those keys; its ticket create,
+  // update and comment are projections of these handlers (VC-794).
   boardRead("board.snapshot", "Read one Workspace's board: its project, tickets and labels."),
   boardRead("board.roster", "Read one Workspace's tickets (without bodies) and labels."),
   boardRead("board.changes", "Follow one Workspace's board changes, resuming after a cursor."),

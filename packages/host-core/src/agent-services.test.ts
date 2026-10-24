@@ -69,11 +69,22 @@ it("uses the same event bus and attention delivery for socket commands without a
       cwd: project.path,
       env: { session: session.id, token },
     };
+    // The create is the handler map's (VC-794), which announces on the bus the
+    // map was built with; the signal, which has no map entry, announces here.
+    const created = await commands.execute({
+      v: 1,
+      cmd: "ticket.create",
+      args: { title: "Headless ticket" },
+      ctx: context,
+    });
+    expect(created).toMatchObject({ ok: true });
+    expect(publish).not.toHaveBeenCalled();
+    const display = (created as { data: { ticket: { id: string } } }).data.ticket.id;
     await expect(
       commands.execute({
         v: 1,
-        cmd: "ticket.create",
-        args: { title: "Headless ticket" },
+        cmd: "ticket.signal",
+        args: { id: display, kind: "implement", verdict: "pass" },
         ctx: context,
       }),
     ).resolves.toMatchObject({ ok: true });

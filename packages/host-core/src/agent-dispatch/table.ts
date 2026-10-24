@@ -54,14 +54,18 @@ import {
   sessionShowVerb,
 } from "./session-verbs";
 import {
-  ticketCommentVerb,
-  ticketCreateVerb,
+  ticketCommentDecode,
+  ticketCreateDecode,
   ticketMoveDecode,
   ticketSignalVerb,
-  ticketUpdateVerb,
+  ticketUpdateDecode,
 } from "./ticket-verbs";
 import { worktreeDiffVerb, worktreeStatusVerb, worktreeSyncVerb } from "./worktree-verbs";
-import { projectHandler, type ProjectedVerbBinding } from "./projection";
+import {
+  projectHandler,
+  type ProjectedVerbBinding,
+  type SocketBoardProjections,
+} from "./projection";
 
 /**
  * Whether the dispatch resolves `VOLLI_SESSION` to an identity before calling
@@ -111,23 +115,36 @@ export interface AgentVerbBinding {
  * A verb that is also a catalog command ({@link SocketHandlerKey}) must be a
  * {@link ProjectedVerbBinding}: `projectHandler`'s projection of the host's
  * `handlers[key]` (VC-668), so a second implementation of a command both
- * doors serve does not compile. Every other verb keeps its own handler until
- * its area makes it a catalog entry.
+ * doors serve does not compile. So must a ticket write whose command is a
+ * board handler under the board's key ({@link SocketBoardProjections},
+ * VC-794). Every other verb keeps its own handler until its area makes it a
+ * catalog entry.
  */
 export const AGENT_VERB_TABLE: {
   readonly [Id in AgentCommandBindingId]: Id extends SocketHandlerKey
     ? ProjectedVerbBinding<Id>
-    : AgentVerbBinding;
+    : Id extends keyof SocketBoardProjections
+      ? ProjectedVerbBinding<SocketBoardProjections[Id]>
+      : AgentVerbBinding;
 } = {
   identify: { handle: identifyVerb, envSession: "resolve" },
   board: { handle: boardVerb, envSession: "resolve" },
   "ticket.list": { handle: ticketListVerb, envSession: "resolve" },
   "ticket.show": { handle: ticketShowVerb, envSession: "resolve" },
   "ticket.events": { handle: ticketEventsVerb, envSession: "resolve" },
-  "ticket.create": { handle: ticketCreateVerb, envSession: "resolve" },
-  "ticket.update": { handle: ticketUpdateVerb, envSession: "resolve" },
+  "ticket.create": projectHandler("board.createTicket", {
+    decode: ticketCreateDecode,
+    envSession: "resolve",
+  }),
+  "ticket.update": projectHandler("board.updateTicket", {
+    decode: ticketUpdateDecode,
+    envSession: "resolve",
+  }),
   "ticket.move": projectHandler("ticket.move", { decode: ticketMoveDecode, envSession: "resolve" }),
-  "ticket.comment": { handle: ticketCommentVerb, envSession: "resolve" },
+  "ticket.comment": projectHandler("board.createComment", {
+    decode: ticketCommentDecode,
+    envSession: "resolve",
+  }),
   // Identity is the whole requirement, exactly as it is for the two session
   // signals below: a verdict needs a signer, not a terminal attachment, so the
   // roster buys this verb nothing.

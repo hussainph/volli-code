@@ -19,6 +19,7 @@ import {
   type TicketMovedNotice,
 } from "@volli/shared";
 
+import type { BoardChangeFeed } from "../board/change-feed";
 import type { DetachedWorkPort } from "../detached-work";
 import {
   sealHostHandlers,
@@ -48,6 +49,10 @@ export interface TestHandlerPorts {
    */
   readonly worktreeReads?: WorktreeReadInvalidation;
   readonly now?: () => number;
+  /** Mints a created ticket's id, as the agent service's own `newId` does in a socket test. */
+  readonly newId?: () => string;
+  /** The host's board feed, when a test reads what the map stamps on it. */
+  readonly boardFeed?: BoardChangeFeed;
   /** Sees every policy verdict at the map, before the handler it admits. */
   readonly onAdmission?: AdmissionObserver;
   /**
@@ -105,6 +110,8 @@ export function testHostHandlers(ports: TestHandlerPorts): HostHandlerMap {
       : { interruptTicketSessions: ports.interruptTicketSessions }),
     ...(ports.detachedWork === undefined ? {} : { detachedWork: ports.detachedWork }),
     ...(ports.now === undefined ? {} : { now: ports.now }),
+    ...(ports.newId === undefined ? {} : { newId: ports.newId }),
+    ...(ports.boardFeed === undefined ? {} : { boardFeed: ports.boardFeed }),
     ...(ports.onAdmission === undefined ? {} : { onAdmission: ports.onAdmission }),
     ...(ports.productionWorktree === undefined
       ? {

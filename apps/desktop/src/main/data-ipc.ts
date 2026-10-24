@@ -745,8 +745,20 @@ export function registerDataIpcHandlers(
     // Switching a ticket into worktree scope makes its checkout before it
     // answers (VC-98), so that one transition is asynchronous; every other
     // update stays the synchronous write it has always been.
+    //
+    // Only the channel's declared fields reach the handler: its other inputs
+    // (a priority, a body mutation, label edits) are the agent socket's, and
+    // this guard does not validate them.
     "volli:ticket-update": (input: TicketUpdateInput): TicketResult | Promise<TicketResult> => {
-      const updated = board("board.updateTicket", input);
+      const { ticketId, title, body, worktreePath, branch, baseBranch, usesWorktree } = input;
+      const declared: TicketUpdateInput = { ticketId };
+      if (title !== undefined) declared.title = title;
+      if (body !== undefined) declared.body = body;
+      if (worktreePath !== undefined) declared.worktreePath = worktreePath;
+      if (branch !== undefined) declared.branch = branch;
+      if (baseBranch !== undefined) declared.baseBranch = baseBranch;
+      if (usesWorktree !== undefined) declared.usesWorktree = usesWorktree;
+      const updated = board("board.updateTicket", declared);
       return updated instanceof Promise
         ? updated.then(({ ticket }) => ({ ok: true, ticket }))
         : { ok: true, ticket: updated.ticket };

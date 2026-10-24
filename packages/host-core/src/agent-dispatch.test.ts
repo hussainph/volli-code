@@ -47,6 +47,7 @@ import {
   OperationUnavailableError,
   VERB_REGISTRY,
 } from "@volli/shared";
+import type { AgentRequest } from "@volli/shared";
 
 import { createAgentCommandService } from "./agent-commands";
 import { socketHandlerPolicy } from "./agent-dispatch/admission";
@@ -164,14 +165,75 @@ describe("a catalog command's socket verb is a projection of the host's map (VC-
     (key) => key in AGENT_VERB_TABLE && !delegated.includes(key),
   );
 
-  it("binds exactly the both-door commands as projections, each of its own key", () => {
+  // The ticket writes whose command is a board handler under the board's key (VC-794).
+  const BOARD_PROJECTIONS: Readonly<Record<string, string>> = {
+    "ticket.create": "board.createTicket",
+    "ticket.update": "board.updateTicket",
+    "ticket.comment": "board.createComment",
+  };
+
+  it("binds exactly the both-door commands and the board's ticket writes as projections", () => {
     expect(SOCKET_HANDLER_KEYS).toEqual(["ticket.move"]);
     for (const key of delegated) expect(key in AGENT_VERB_TABLE, key).toBe(true);
     for (const [id, binding] of Object.entries(AGENT_VERB_TABLE)) {
       expect(projectedHandlerKey(binding), id).toBe(
-        (SOCKET_HANDLER_KEYS as readonly string[]).includes(id) ? id : undefined,
+        (SOCKET_HANDLER_KEYS as readonly string[]).includes(id) ? id : BOARD_PROJECTIONS[id],
       );
     }
+  });
+
+  it("admits a board ticket write at the map under the board's key, and no other key", async () => {
+    const { env, verify } = scenario();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, status: "todo" }),
+    );
+    const log: string[] = [];
+    const note = (name: string) => () => {
+      log.push(`handler ${name}`);
+      throw new Error("stop");
+    };
+    const service = createAgentCommandService({
+      handlers: sealTestHandlers(
+        {
+          "board.createTicket": note("board.createTicket"),
+          "board.updateTicket": note("board.updateTicket"),
+          "board.createComment": note("board.createComment"),
+        },
+        ({ door, key, admitted }) =>
+          log.push(`${door} ${admitted ? "admitted" : "refused"} ${key}`),
+      ),
+      db: ctx.db,
+      sessionEngine: createTestSessionEngine(ctx.db),
+      appVersion: "1.2.3",
+      verifySessionToken: verify,
+    });
+    const run = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env } });
+    await run("ticket.create", { title: "New" });
+    await run("ticket.update", { id: "VC-1", title: "Renamed" });
+    await run("ticket.comment", { id: "VC-1", message: "Hello" });
+    expect(log).toEqual([
+      "agent-socket admitted board.createTicket",
+      "handler board.createTicket",
+      "agent-socket admitted board.updateTicket",
+      "handler board.updateTicket",
+      "agent-socket admitted board.createComment",
+      "handler board.createComment",
+    ]);
+    const policy = socketHandlerPolicy(
+      { v: 1, cmd: "ticket.update", args: {}, ctx: { cwd: "/", env: {} } },
+      "board.updateTicket",
+      () => null,
+    );
+    expect(policy.admit("board.setPriority", {}, { actor: { kind: "user" } })).toEqual({
+      admitted: false,
+      message: "ticket.update does not reach board.setPriority.",
+      hint: null,
+    });
+    expect(policy.admit("board.updateTicket", {}, { actor: { kind: "user" } })).toEqual({
+      admitted: true,
+    });
   });
 
   it("reaches handlers[key] with the decoded input and the attributed actor, admitted first", async () => {
@@ -290,6 +352,7 @@ describe("a catalog command's socket verb is a projection of the host's map (VC-
   it("admits at the map only the key the request's own verb projects", () => {
     const policy = socketHandlerPolicy(
       { v: 1, cmd: "ticket.show", args: {}, ctx: { cwd: "/", env: {} } },
+      undefined,
       () => null,
     );
     expect(policy.door).toBe("agent-socket");
