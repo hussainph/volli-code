@@ -148,6 +148,7 @@ import type { BusyWorktreeSites } from "../worktree/activity";
 import { getTrimSettings } from "../worktree/trim-settings";
 import type { WorktreePorts } from "../worktree/types";
 import { worktreeDeps } from "../worktree-runtime";
+import type { WorktreeReadInvalidation } from "../worktree-reads";
 
 /** A subscription's sink: the stream a door turns into its own envelope. */
 export interface HandlerSink<Emission> {
@@ -449,6 +450,12 @@ export interface HostHandlerOptions {
   readonly automations: RuntimeAutomations;
   /** The same busy-worktree guard every destructive worktree path reads. */
   readonly busyWorktreeSites: BusyWorktreeSites;
+  /**
+   * The host's worktree read service (VC-788), whose last-known answers a
+   * scope switch's materialization and a Done or archive trim retire. Null
+   * only on a host whose database did not open, where no board command runs.
+   */
+  readonly worktreeReads: WorktreeReadInvalidation | null;
   /** Interrupts a ticket's live agent attachments after a committed backward move. */
   readonly interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
   /** Where a Done move's detached trim enrols, so shutdown drains it (VC-627). */
@@ -620,6 +627,7 @@ function hostHandlerEntries(
   const modelAccess = () => present(options.modelAccess, MODEL_ACCESS_UNAVAILABLE);
   const preferences = () => present(db, PREFERENCES_UNAVAILABLE);
   const board = () => present(db, BOARD_UNAVAILABLE);
+  const worktreeReads = () => present(options.worktreeReads, BOARD_UNAVAILABLE);
   const sessionReads = () => present(options.sessionReads ?? null, SESSION_READS_UNAVAILABLE);
   const signIns = () => present(options.signIns ?? null, SIGN_INS_UNAVAILABLE);
   const remoteHosts = () => present(options.remoteHosts ?? null, REMOTE_HOSTS_UNAVAILABLE);
@@ -650,6 +658,7 @@ function hostHandlerEntries(
         executeTicketMove(
           {
             worktree: worktree(database),
+            worktreeReads: worktreeReads(),
             now,
             busySites: options.busyWorktreeSites,
             interruptTicketSessions: options.interruptTicketSessions,
@@ -683,6 +692,7 @@ function hostHandlerEntries(
       events: ports.events,
       feed,
       worktree,
+      worktreeReads,
       busyWorktreeSites: options.busyWorktreeSites,
       detachedWork: options.detachedWork,
       ticketSignals: options.ticketSignals ?? null,

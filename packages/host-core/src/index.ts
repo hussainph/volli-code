@@ -6,6 +6,7 @@ import type { ConnectivityPort, PiModelAccess } from "@volli/agent-runtime";
 import type { SessionExecutionVenue } from "@volli/shared";
 import { openVolliDb } from "./db";
 import { createWorktreeRuntime, type WorktreeRuntime } from "./worktree-runtime";
+import { createWorktreeReadService, type WorktreeReadService } from "./worktree-reads";
 import type { WorktreePorts } from "./worktree";
 import type { TransactionViolationHandler } from "./db/transaction-gate";
 import { clientCapabilities, type ClientCapabilityPort } from "./ports/client";
@@ -113,6 +114,11 @@ export interface LiveHostCore extends HostLifecycleOwner, HostSessionServices {
   readonly database: { ok: true; db: Database.Database };
   readonly worktrees: WorktreeRuntime;
   readonly worktreeDeps: WorktreePorts;
+  /**
+   * The host's one worktree read pipeline (VC-788): every door's status, diff,
+   * Change Set and base reads, and every client's change watch, go through it.
+   */
+  readonly worktreeReads: WorktreeReadService;
   readonly runtimeServices: HostRuntimeServices;
   readonly maintenance: HostMaintenance;
   readonly client: ClientCapabilityPort;
@@ -157,6 +163,8 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
   }
   const sessionServices = createHostSessionServices(db, ports);
   const worktrees = createWorktreeRuntime(ports, options);
+  const worktreeDeps = worktrees.deps(db);
+  const worktreeReads = createWorktreeReadService({ deps: () => worktreeDeps });
   const client = clientCapabilities(ports.client);
   const detachedWork = createDetachedWorkTracker({
     reportFailure: (error) => ports.log.error("detached work failed", { error }),
@@ -201,7 +209,8 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
     ...sessionServices,
     ...owner,
     worktrees,
-    worktreeDeps: worktrees.deps(db),
+    worktreeDeps,
+    worktreeReads,
     client,
     maintenance,
     detachedWork,

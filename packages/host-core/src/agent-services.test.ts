@@ -21,6 +21,7 @@ import { insertProject } from "./db/projects-repo";
 import { createTestSessionEngine } from "./testing/session-engine";
 import { insertSession } from "./session-control/test-support";
 import { createSessionTokenRegistry } from "./session-tokens";
+import { createWorktreeReadService } from "./worktree-reads";
 
 vi.mock("./agent-commands", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./agent-commands")>();
@@ -57,6 +58,7 @@ it("uses the same event bus and attention delivery for socket commands without a
       {
         handlers: testHostHandlers({ db: ctx.db }),
         db: ctx.db,
+        worktreeReads: createWorktreeReadService({ deps: () => ({ db: ctx.db }) }),
         sessionEngine: createTestSessionEngine(ctx.db),
         appVersion: "0.2.1",
         verifySessionToken: tokens.verify,
@@ -114,6 +116,10 @@ it("keeps event and attention routing out of every caller's options", () => {
   expectTypeOf<HostAgentToolDoorOptions>().not.toHaveProperty("onMutation");
   expectTypeOf<HostAgentToolDoorOptions>().not.toHaveProperty("onSessionStarted");
   expectTypeOf<HostAgentWatchesOptions>().not.toHaveProperty("subscribeTicketWake");
+});
+
+it("requires the host's worktree read service, so the socket shares its other doors' reads", () => {
+  expectTypeOf<undefined>().not.toExtend<HostAgentCommandOptions["worktreeReads"]>();
 });
 
 it("requires the host's handler map at both the typed and JavaScript doors", () => {

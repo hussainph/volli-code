@@ -42,4 +42,3 @@ export {
 } from "../session-control/test-support";
 export { createTestSessionEngine } from "./session-engine";
 export { resetDeletionLeasesForTest } from "../worktree/deletion-lease";
-export { resetWorktreeSnapshotsForTest } from "../worktree/snapshot";

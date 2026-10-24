@@ -55,6 +55,7 @@ import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import type { Sessions } from "../session-runtime/sessions";
 import type { HandlerPolicy, HostHandlerMap } from "../handlers/handler-map";
 import type { RunGitAsync } from "../worktree";
+import type { WorktreeReadService } from "../worktree-reads";
 import type { VerifyOperatorToken } from "./resolution";
 
 export interface AgentCommandServiceOptions {
@@ -83,6 +84,14 @@ export interface AgentCommandServiceOptions {
    * substitute a scripted predicate.
    */
   worktreeExists?: (path: string) => boolean;
+  /**
+   * The host's worktree read service (VC-788): `worktree status` and
+   * `worktree diff` read through the same snapshot and coalescers every other
+   * door does. The host compositions pass their own (`HostAgentCommandOptions`
+   * requires it); absent, the service builds a private one over
+   * {@link gitAsync} and {@link worktreeExists} — a suite's isolated host.
+   */
+  worktreeReads?: WorktreeReadService;
   observeSession?: (
     sessionId: string,
     lines: number,
@@ -356,6 +365,8 @@ export interface AgentCommandContext {
   readonly gitAsync: RunGitAsync;
   /** {@link AgentCommandServiceOptions.worktreeExists}, defaulted to `existsSync`. */
   readonly worktreeExists: (path: string) => boolean;
+  /** {@link AgentCommandServiceOptions.worktreeReads}, defaulted to a private service. */
+  readonly worktreeReads: WorktreeReadService;
   /**
    * The app's one durable Session Engine. Lifted out of `options` because it
    * is a service rather than a seam: every verb that touches a Session reads

@@ -41,11 +41,17 @@ export function createHostAgentSocket() {
   });
 }
 
-/** What the host routes for the caller; supplying any of it would bypass the ports. */
+/**
+ * What the host routes for the caller; supplying any of it would bypass the
+ * ports. The worktree read service is required here: a host's socket that
+ * built a private one would read past the snapshot and coalescers its other
+ * doors share (VC-788).
+ */
 export type HostAgentCommandOptions = Omit<
   AgentCommandServiceOptions,
   "notify" | "onMutation" | "onSessionStarted" | "onHarnessEvent" | "onSessionHarness"
->;
+> &
+  Required<Pick<AgentCommandServiceOptions, "worktreeReads">>;
 
 /** The verb door the agent socket serves, for desktop and hostd composition. */
 export function createHostAgentCommands(

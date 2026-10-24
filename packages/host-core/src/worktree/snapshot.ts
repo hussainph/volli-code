@@ -1,6 +1,8 @@
 /**
  * The rail's last-known worktree snapshot (VC-372), beside the VC-369
- * coalescers.
+ * coalescers. One cache per host, owned by its worktree read service
+ * (`worktree-reads.ts`, VC-788): every door that host serves reads through the
+ * same instance, so a read by one is a saving for the others.
  *
  * Coalescing shares a read that is STILL RUNNING; it keeps no last result, so
  * any second read more than the share window away spawns the whole git set
@@ -188,22 +190,4 @@ export function createWorktreeSnapshotCache(
       return value;
     },
   };
-}
-
-let snapshots = createWorktreeSnapshotCache();
-
-/**
- * The main process's one snapshot store. Main serves every window and the CLI's
- * `worktree status` from the same last-known answer, so a read by one is a
- * saving for the others; a per-registration instance would silently stop that
- * sharing (and the CLI's `worktree sync` invalidation has no other way to reach
- * the IPC handlers' store).
- */
-export function getWorktreeSnapshots(): WorktreeSnapshotCache {
-  return snapshots;
-}
-
-/** Test seam: start from a clean process, as a fresh launch does. */
-export function resetWorktreeSnapshotsForTest(): void {
-  snapshots = createWorktreeSnapshotCache();
 }

@@ -30,6 +30,7 @@
  * Refresh `current.json` with `VOLLI_RECORD_SESSION_LISTING_WIRE=1` and review
  * the diff; never refresh `n-minus-one.json` to make a change pass.
  */
+import { createWorktreeReadService } from "@volli/host-core/worktree";
 import { readFileSync, writeFileSync } from "node:fs";
 
 import { createTRPCClient, createWSClient, getUntypedClient, wsLink } from "@trpc/client";
@@ -249,6 +250,7 @@ function deterministicHost() {
       modelAccess: null,
       experiments: null,
       automations: { kind: "degraded" } as never,
+      worktreeReads: createWorktreeReadService({ deps: () => ({ db: db.db }) }),
       busyWorktreeSites: async () => [],
       sessionListing: {
         db: db.db,

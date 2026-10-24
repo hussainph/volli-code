@@ -9,6 +9,7 @@
  * and window are doubles. No provider, Electron process or outward connection
  * is needed. HOST health cannot substitute for this Workspace's welcome.
  */
+import { createWorktreeReadService } from "@volli/host-core/worktree";
 import { randomUUID } from "node:crypto";
 
 import { boardResourceWorkspace } from "@volli/host-core/board";
@@ -255,6 +256,7 @@ async function path(features: readonly string[] = FEATURES) {
         kind: "live",
         execution: { kind: "unavailable", pendingArmedRuns: { noteDeliberateMove() {} } },
       } as never,
+      worktreeReads: createWorktreeReadService({ deps: () => ({ db: ctx.db }) }),
       busyWorktreeSites: async () => [],
       sessionListing: {
         db: ctx.db,

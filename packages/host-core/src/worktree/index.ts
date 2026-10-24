@@ -130,8 +130,6 @@ export {
   WATCH_DEBOUNCE_MS,
   WATCH_MAX_WAIT_MS,
 } from "./change-set-watch";
-export { createCoalescer } from "./coalesce";
-export type { Coalescer } from "./coalesce";
 export { commitRemaining } from "./commit";
 export type { CommitOutcome, CommitRemainingInput } from "./commit";
 export {

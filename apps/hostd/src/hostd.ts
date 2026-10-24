@@ -376,6 +376,9 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
         };
         const commands = createHostAgentCommands(ports, {
           db: host.database.db,
+          // `worktree status` / `worktree diff` read through the host's one
+          // service (VC-788): the same snapshot and coalescers as every door.
+          worktreeReads: host.worktreeReads,
           ...sessionPorts,
           // The one object every door projects (VC-668). A Done move's trim,
           // its armed arrival and its drain at stop are the handler's.

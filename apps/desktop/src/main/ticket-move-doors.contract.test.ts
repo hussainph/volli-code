@@ -35,7 +35,6 @@ import { getTicket, getTicketRow, listTicketEvents } from "@volli/host-core/db";
 import {
   createTestSessionEngine,
   openTestDb,
-  resetWorktreeSnapshotsForTest,
   sealTestHandlers,
   testHostHandlers,
   testProject,
@@ -52,7 +51,7 @@ import {
   type HostHandlerMap,
   type HostHandlers,
 } from "@volli/host-core/handlers";
-import { getWorktreeSnapshots } from "@volli/host-core/worktree";
+import { createWorktreeReadService, type WorktreeReadService } from "@volli/host-core/worktree";
 import {
   createBoardRouter,
   RpcDiagnosticLog,
@@ -95,6 +94,8 @@ let ctx: TestDb;
 let projectId: string;
 let closers: (() => Promise<void>)[];
 let tempDirs: string[];
+/** The host's one worktree read service, which every door's map and channel share. */
+let worktreeReads: WorktreeReadService;
 
 /** A fresh board: VC-1 alone in Todo, on a worktree when one is named. */
 function seed(worktreePath?: string): void {
@@ -119,14 +120,13 @@ beforeEach(() => {
   projectId = randomUUID();
   closers = [];
   tempDirs = [];
-  resetWorktreeSnapshotsForTest();
+  worktreeReads = createWorktreeReadService({ deps: () => ({ db: ctx.db }) });
 });
 
 afterEach(async () => {
   for (const close of closers.splice(0)) await close();
   ipc.handlers.clear();
   vi.restoreAllMocks();
-  resetWorktreeSnapshotsForTest();
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -138,6 +138,7 @@ function host(ports: Omit<TestHandlerPorts, "db"> = {}) {
   const published: Omit<DataChangedEvent, "entity">[] = [];
   const handlers = testHostHandlers({
     db: ctx.db,
+    worktreeReads,
     onDeliberateMove: ({ ticketId, from, to }) => arrivals.push({ ticketId, from, to }),
     interruptTicketSessions: (ticketId) => {
       interrupted.push(ticketId);
@@ -167,7 +168,7 @@ async function opener(door: Door, handlers: HostHandlerMap, options: OpenerOptio
     case "ipc": {
       registerDataIpcHandlers(
         { ok: true, db: ctx.db },
-        { sessionEngine: createTestSessionEngine(ctx.db), handlers },
+        { sessionEngine: createTestSessionEngine(ctx.db), handlers, worktreeReads },
       );
       const channel = ipc.handlers.get("volli:ticket-move")!;
       return async (toStatus: TicketStatus) => {
@@ -221,6 +222,7 @@ async function opener(door: Door, handlers: HostHandlerMap, options: OpenerOptio
       const service = createAgentCommandService({
         handlers,
         db: ctx.db,
+        worktreeReads,
         sessionEngine: createTestSessionEngine(ctx.db),
         appVersion: "1.2.3",
         // The person at the host's shell: the socket's user, as the other
@@ -420,7 +422,7 @@ describe("the desktop window's volli:ticket-move channel", () => {
       );
       registerDataIpcHandlers(
         { ok: true, db: ctx.db },
-        { sessionEngine: createTestSessionEngine(ctx.db), handlers: map },
+        { sessionEngine: createTestSessionEngine(ctx.db), handlers: map, worktreeReads },
       );
       const input = { projectId, ticketId: "ticket-1", toStatus: "doing", toIndex: 0 };
       const reply = ipc.handlers.get("volli:ticket-move")!({ sender: {} }, input);
@@ -472,7 +474,7 @@ async function doneThrough(door: Door, busy: boolean) {
   tempDirs.push(dataDir);
   seed(root);
   try {
-    const invalidate = vi.spyOn(getWorktreeSnapshots(), "invalidate");
+    const invalidate = vi.spyOn(worktreeReads, "invalidate");
     const detached: Promise<unknown>[] = [];
     const { handlers, published } = host({
       productionWorktree: { dataDir },

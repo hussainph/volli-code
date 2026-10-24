@@ -388,6 +388,9 @@ export function createHeadlessSessionRuntime(input: {
           experiments: null,
           automations,
           busyWorktreeSites,
+          // The host's one worktree read service (VC-788): a scope switch's
+          // materialization and a Done trim retire the answers it holds.
+          worktreeReads: host.worktreeReads,
           detachedWork: host.detachedWork,
           // Served before any door opens: hostd hands it over before it
           // settles the socket or starts the listener.
