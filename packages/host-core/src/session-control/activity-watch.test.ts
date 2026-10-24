@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { SessionEngine } from "@volli/session-engine";
 import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
-import type { SessionAttachmentProjection, SessionProjection } from "@volli/shared";
+import type { SessionAttachmentProjection, SessionEvent, SessionProjection } from "@volli/shared";
 
 import { watchSessionActivity } from "./activity-watch";
+import type { SessionWakeListener } from "./session-wake";
 
 /** No executor binding is open: these rows rest at not-live. */
 const noOpenBindings = () => [];
@@ -64,57 +64,58 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
 }
 
 /**
- * A stub Engine whose reads answer from `current`, so a test can move a Session
- * and then trigger the watch by calling a write. Only the members the watch
- * touches are real; the rest exist to satisfy the interface and throw if used,
- * which is how a forwarding mistake surfaces as a failure rather than as
- * `undefined`.
+ * A stub wake bus: `commit` announces one committed Session Event to every
+ * subscriber, the way `session-wake.ts` does after a write's transaction, and
+ * the Engine half answers the fold's one read from `current`.
  */
-const unused = (name: string) => () => {
-  throw new Error(`unexpected ${name}`);
-};
-
-function stubEngine(current: () => SessionProjection | null) {
-  const engine = {
-    createSession: vi.fn(async () => ({ session: { id: "session-1" } })),
-    getOrRecordSessionInput: vi.fn(async () => ({})),
-    recordToolRefresh: vi.fn(async () => ({ sessionId: "session-1" })),
-    observe: vi.fn(async () => ({ sessionId: "session-1" })),
-    submit: vi.fn(async () => ({})),
-    completeModelSelection: vi.fn(async () => ({})),
-    getSession: vi.fn(async () => current()),
-    getBaseSession: unused("getBaseSession"),
-    listSessions: unused("listSessions"),
-    countSessions: unused("countSessions"),
-    listAttachedSessions: unused("listAttachedSessions"),
-    listSessionStarts: unused("listSessionStarts"),
-    listLatestTicketSignals: unused("listLatestTicketSignals"),
-    listEvents: unused("listEvents"),
-    latestEventSequence: unused("latestEventSequence"),
-    getProjectionCheckpoint: unused("getProjectionCheckpoint"),
-    saveProjectionCheckpoint: unused("saveProjectionCheckpoint"),
-    reportUsage: unused("reportUsage"),
-  } as unknown as SessionEngine;
-  return engine;
+function stubBus(current: () => SessionProjection | null) {
+  const listeners = new Set<SessionWakeListener>();
+  let sequence = 0;
+  const getSession = vi.fn(async () => current());
+  const bus = {
+    engine: { getSession },
+    subscribe(listener: SessionWakeListener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+  function commit(
+    kind: SessionEvent["payload"]["kind"] = "turn.started",
+    sessionId = "session-1",
+  ): SessionEvent {
+    sequence += 1;
+    const event = {
+      id: `event-${sequence}`,
+      sessionId,
+      sequence,
+      occurredAt: sequence,
+      recordedAt: sequence,
+      provenance: {
+        source: { kind: "system", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+      commandId: null,
+      payload: { kind },
+    } as unknown as SessionEvent;
+    // A snapshot, as the real bus takes: a listener may stop the watch mid-wake.
+    const settled = [...listeners];
+    for (const listener of settled) listener({ event, cursor: `cursor-${sequence}` });
+    return event;
+  }
+  return { bus, getSession, commit, listeners };
 }
 
 describe("watchSessionActivity", () => {
-  it("publishes the changed Session's listing row after a write", async () => {
+  it("publishes the changed Session's listing row after a committed fact", async () => {
     const publish = vi.fn();
-    const watch = watchSessionActivity(
-      stubEngine(() => projection()),
-      { listOpenNativeBindings: noOpenBindings, publish },
-    );
+    const { bus, commit } = stubBus(() => projection());
+    const watch = watchSessionActivity(bus, { listOpenNativeBindings: noOpenBindings, publish });
 
-    await watch.engine.submit({
-      commandId: "command-1",
-      sessionId: "session-1",
-      intent: { kind: "session.retitle", title: "Renamed" },
-      provenance: {
-        source: { kind: "user", id: "renderer", detail: null },
-        venue: { id: "local", kind: "local" },
-      },
-    });
+    // `session.retitled` is what `submit` appends and does not return: the
+    // decorator this watch used to be never saw it as an event (VC-790).
+    commit("session.retitled");
     await watch.flush();
 
     expect(publish).toHaveBeenCalledTimes(1);
@@ -141,12 +142,14 @@ describe("watchSessionActivity", () => {
       automationName: "Nightly sweep",
       automationRunId: null,
     }));
-    const watch = watchSessionActivity(
-      stubEngine(() => projection()),
-      { listOpenNativeBindings: noOpenBindings, publish, provenanceOf },
-    );
+    const { bus, commit } = stubBus(() => projection());
+    const watch = watchSessionActivity(bus, {
+      listOpenNativeBindings: noOpenBindings,
+      publish,
+      provenanceOf,
+    });
 
-    await watch.engine.observe({} as never);
+    commit();
     await watch.flush();
 
     expect(provenanceOf).toHaveBeenCalledWith({
@@ -168,12 +171,14 @@ describe("watchSessionActivity", () => {
   it("carries the Session's unread state on the pushed row", async () => {
     const publish = vi.fn();
     const readOf = vi.fn(() => ({ unreadSince: 4_000 }));
-    const watch = watchSessionActivity(
-      stubEngine(() => projection()),
-      { listOpenNativeBindings: noOpenBindings, publish, readOf },
-    );
+    const { bus, commit } = stubBus(() => projection());
+    const watch = watchSessionActivity(bus, {
+      listOpenNativeBindings: noOpenBindings,
+      publish,
+      readOf,
+    });
 
-    await watch.engine.observe({} as never);
+    commit();
     await watch.flush();
 
     expect(readOf).toHaveBeenCalledWith("session-1");
@@ -183,12 +188,10 @@ describe("watchSessionActivity", () => {
 
   it("leaves a read Session's row exactly as it was before unread existed", async () => {
     const publish = vi.fn();
-    const watch = watchSessionActivity(
-      stubEngine(() => projection()),
-      { listOpenNativeBindings: noOpenBindings, publish },
-    );
+    const { bus, commit } = stubBus(() => projection());
+    const watch = watchSessionActivity(bus, { listOpenNativeBindings: noOpenBindings, publish });
 
-    await watch.engine.observe({} as never);
+    commit();
     await watch.flush();
 
     // The resting state is the field's ABSENCE, not a value: no receipt reader
@@ -200,12 +203,14 @@ describe("watchSessionActivity", () => {
   it("republishes when only the read state moved, and not when it did not", async () => {
     const publish = vi.fn();
     let read = { unreadSince: null as number | null };
-    const watch = watchSessionActivity(
-      stubEngine(() => projection()),
-      { listOpenNativeBindings: noOpenBindings, publish, readOf: () => read },
-    );
+    const { bus, commit } = stubBus(() => projection());
+    const watch = watchSessionActivity(bus, {
+      listOpenNativeBindings: noOpenBindings,
+      publish,
+      readOf: () => read,
+    });
     const write = async () => {
-      await watch.engine.observe({} as never);
+      commit();
       await watch.flush();
     };
 
@@ -232,12 +237,13 @@ describe("watchSessionActivity", () => {
     const publish = vi.fn();
     let live = projection();
     let liveBindings: { attachmentId: string }[] = [];
-    const watch = watchSessionActivity(
-      stubEngine(() => live),
-      { publish, listOpenNativeBindings: () => liveBindings },
-    );
+    const { bus, commit } = stubBus(() => live);
+    const watch = watchSessionActivity(bus, {
+      publish,
+      listOpenNativeBindings: () => liveBindings,
+    });
     const write = async () => {
-      await watch.engine.observe({} as never);
+      commit();
       await watch.flush();
     };
 
@@ -274,33 +280,51 @@ describe("watchSessionActivity", () => {
     watch.stop();
   });
 
-  it("coalesces a burst of writes into one fold", async () => {
+  it("coalesces a burst of committed facts into one fold", async () => {
     const publish = vi.fn();
-    const engine = stubEngine(() => projection());
-    const watch = watchSessionActivity(engine, { listOpenNativeBindings: noOpenBindings, publish });
+    const { bus, commit, getSession } = stubBus(() => projection());
+    const watch = watchSessionActivity(bus, { listOpenNativeBindings: noOpenBindings, publish });
 
-    await watch.engine.observe({} as never);
-    await watch.engine.observe({} as never);
-    await watch.engine.observe({} as never);
+    // What one `submit` announces: its command, its effect and its receipt.
+    commit("command.recorded");
+    commit("session.signaled");
+    commit("command.receipt.recorded");
     await watch.flush();
 
-    expect(engine.getSession).toHaveBeenCalledTimes(1);
+    expect(getSession).toHaveBeenCalledTimes(1);
     expect(publish).toHaveBeenCalledTimes(1);
     watch.stop();
   });
 
-  it("swallows a fold failure without failing the write that triggered it", async () => {
+  it("folds each Session a burst touched, once each", async () => {
+    const publish = vi.fn();
+    const { bus, commit, getSession } = stubBus(() => projection());
+    const watch = watchSessionActivity(bus, { listOpenNativeBindings: noOpenBindings, publish });
+
+    commit("turn.started", "session-1");
+    commit("turn.started", "session-2");
+    commit("turn.completed", "session-1");
+    await watch.flush();
+
+    expect(getSession.mock.calls).toEqual([
+      [{ sessionId: "session-1" }],
+      [{ sessionId: "session-2" }],
+    ]);
+    watch.stop();
+  });
+
+  it("swallows a fold failure without throwing into the bus", async () => {
     const publish = vi.fn();
     const onError = vi.fn();
-    const engine = stubEngine(() => projection());
-    (engine.getSession as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("ledger gone"));
-    const watch = watchSessionActivity(engine, {
+    const { bus, commit, getSession } = stubBus(() => projection());
+    getSession.mockRejectedValue(new Error("ledger gone"));
+    const watch = watchSessionActivity(bus, {
       listOpenNativeBindings: noOpenBindings,
       publish,
       onError,
     });
 
-    await expect(watch.engine.observe({} as never)).resolves.toBeDefined();
+    expect(() => commit()).not.toThrow();
     await watch.flush();
 
     expect(publish).not.toHaveBeenCalled();
@@ -311,12 +335,14 @@ describe("watchSessionActivity", () => {
   it("says nothing about a Session the ledger no longer has", async () => {
     const publish = vi.fn();
     const onError = vi.fn();
-    const watch = watchSessionActivity(
-      stubEngine(() => null),
-      { listOpenNativeBindings: noOpenBindings, publish, onError },
-    );
+    const { bus, commit } = stubBus(() => null);
+    const watch = watchSessionActivity(bus, {
+      listOpenNativeBindings: noOpenBindings,
+      publish,
+      onError,
+    });
 
-    await watch.engine.observe({} as never);
+    commit();
     await watch.flush();
 
     expect(publish).not.toHaveBeenCalled();
@@ -324,58 +350,70 @@ describe("watchSessionActivity", () => {
     watch.stop();
   });
 
-  it("stops publishing once stopped", async () => {
+  it("stops listening once stopped", async () => {
     const publish = vi.fn();
-    const watch = watchSessionActivity(
-      stubEngine(() => projection()),
-      { listOpenNativeBindings: noOpenBindings, publish },
-    );
+    const observeEvent = vi.fn();
+    const { bus, commit, listeners } = stubBus(() => projection());
+    const watch = watchSessionActivity(bus, {
+      listOpenNativeBindings: noOpenBindings,
+      publish,
+      observeEvent,
+    });
 
     watch.stop();
-    await watch.engine.observe({} as never);
+    expect(listeners.size).toBe(0);
+    commit();
     await watch.flush();
 
     expect(publish).not.toHaveBeenCalled();
+    expect(observeEvent).not.toHaveBeenCalled();
   });
 
-  it("marks the Session behind every mutating method, not only the two obvious ones", async () => {
+  it("ignores the rest of a wake it was stopped during", async () => {
+    // The bus snapshots its listeners per wake, so a watch stopped by an
+    // earlier listener is still handed that one event.
     const publish = vi.fn();
-    const engine = stubEngine(() => projection());
-    const watch = watchSessionActivity(engine, { listOpenNativeBindings: noOpenBindings, publish });
+    const observeEvent = vi.fn();
+    const { bus, commit } = stubBus(() => projection());
+    let watch: ReturnType<typeof watchSessionActivity> | undefined;
+    bus.subscribe(() => watch?.stop());
+    watch = watchSessionActivity(bus, {
+      listOpenNativeBindings: noOpenBindings,
+      publish,
+      observeEvent,
+    });
 
-    await watch.engine.createSession({} as never);
-    await watch.engine.getOrRecordSessionInput({ sessionId: "session-1" } as never);
-    await watch.engine.completeModelSelection({ sessionId: "session-1" } as never);
+    commit();
     await watch.flush();
 
-    // All three reach the same Session, so they coalesce into one publish — the
-    // point of the assertion is that none of them was forgotten, which a
-    // `getSession` that never ran would have hidden.
-    expect(engine.getSession).toHaveBeenCalledTimes(1);
-    expect(publish).toHaveBeenCalledTimes(1);
-    watch.stop();
+    expect(observeEvent).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("publishes on its own timer, with no one calling flush", async () => {
     const publish = vi.fn();
-    const watch = watchSessionActivity(
-      stubEngine(() => projection()),
-      { listOpenNativeBindings: noOpenBindings, publish, coalesceMs: 0 },
-    );
+    const { bus, commit } = stubBus(() => projection());
+    const watch = watchSessionActivity(bus, {
+      listOpenNativeBindings: noOpenBindings,
+      publish,
+      coalesceMs: 0,
+    });
 
-    await watch.engine.observe({} as never);
+    commit();
     await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
     watch.stop();
   });
 
   it("cancels a pending flush when stopped mid-window", async () => {
     const publish = vi.fn();
-    const watch = watchSessionActivity(
-      stubEngine(() => projection()),
-      { listOpenNativeBindings: noOpenBindings, publish, coalesceMs: 5 },
-    );
+    const { bus, commit } = stubBus(() => projection());
+    const watch = watchSessionActivity(bus, {
+      listOpenNativeBindings: noOpenBindings,
+      publish,
+      coalesceMs: 5,
+    });
 
-    await watch.engine.observe({} as never);
+    commit();
     watch.stop();
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -384,14 +422,14 @@ describe("watchSessionActivity", () => {
 
   it("reports a fold failure to the host log when given no diagnostics seam", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const engine = stubEngine(() => projection());
-    (engine.getSession as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("ledger gone"));
-    const watch = watchSessionActivity(engine, {
+    const { bus, commit, getSession } = stubBus(() => projection());
+    getSession.mockRejectedValue(new Error("ledger gone"));
+    const watch = watchSessionActivity(bus, {
       listOpenNativeBindings: noOpenBindings,
       publish: vi.fn(),
     });
 
-    await watch.engine.observe({} as never);
+    commit();
     await watch.flush();
 
     expect(warn).toHaveBeenCalledWith("[activity-watch] session activity watch failed", {
@@ -401,70 +439,23 @@ describe("watchSessionActivity", () => {
     watch.stop();
   });
 
-  it("forwards every non-activity method to the wrapped engine untouched", async () => {
-    const engine = stubEngine(() => projection());
-    const reads = {
-      getSession: vi.fn(async () => null),
-      getBaseSession: vi.fn(async () => null),
-      listSessions: vi.fn(async () => []),
-      countSessions: vi.fn(async () => 0),
-      // The concurrency budget's read (VC-403). A read like any other: it
-      // must pass straight through, and must never mark a Session dirty.
-      listAttachedSessions: vi.fn(async () => []),
-      listSessionStarts: vi.fn(async () => []),
-      listLatestTicketSignals: vi.fn(async () => []),
-      listEvents: vi.fn(async () => []),
-      latestEventSequence: vi.fn(async () => 0),
-      getProjectionCheckpoint: vi.fn(async () => null),
-      saveProjectionCheckpoint: vi.fn(async () => undefined),
-      // A cost read is a read: it must pass straight through, and must never
-      // be mistaken for a write that marks a Session dirty.
-      reportUsage: vi.fn(async () => ({
-        total: EMPTY_SESSION_USAGE_SUMMARY,
-        groups: [],
-        meteredSessionCount: 0,
-      })),
-    };
-    Object.assign(engine, reads);
-    const watch = watchSessionActivity(engine, {
-      listOpenNativeBindings: noOpenBindings,
-      publish: vi.fn(),
-    });
-
-    await watch.engine.getSession({ sessionId: "session-1" });
-    await watch.engine.getBaseSession({ sessionId: "session-1" });
-    await watch.engine.listSessions({ projectId: "project-1", scope: "all" });
-    await watch.engine.countSessions({ projectId: "project-1", scope: "all" });
-    await watch.engine.listAttachedSessions();
-    await watch.engine.listSessionStarts({ sinceMs: 0 });
-    await watch.engine.listLatestTicketSignals({ projectId: "project-1" });
-    await watch.engine.listEvents({ sessionId: "session-1" });
-    await watch.engine.latestEventSequence({ sessionId: "session-1" });
-    await watch.engine.getProjectionCheckpoint({ sessionId: "session-1" });
-    await watch.engine.saveProjectionCheckpoint({} as never);
-    await watch.engine.reportUsage({ scope: { kind: "all" } });
-
-    for (const read of Object.values(reads)) expect(read).toHaveBeenCalledTimes(1);
-    watch.stop();
-  });
-
   it("hands every folded projection to the observer, before the row gate (VC-133)", async () => {
     // The notification rule hangs off this port. It must see the projection —
     // the listing row cannot spell `error` at all — and it must see every fold,
     // because "did this LISTING change" is a different question from "did this
     // Session change".
-    let state = projection();
-    const engine = stubEngine(() => state);
+    const state = projection();
+    const { bus, commit } = stubBus(() => state);
     const observe = vi.fn();
     const publish = vi.fn();
-    const watch = watchSessionActivity(engine, {
+    const watch = watchSessionActivity(bus, {
       listOpenNativeBindings: noOpenBindings,
       publish,
       observe,
       coalesceMs: 0,
     });
 
-    await watch.engine.submit({ sessionId: "session-1" } as never);
+    commit("command.recorded");
     await watch.flush();
     expect(observe).toHaveBeenCalledTimes(1);
     expect(observe.mock.calls[0]?.[0]).toBe(state);
@@ -472,7 +463,7 @@ describe("watchSessionActivity", () => {
     // A second fold that leaves the row byte-identical still reaches the
     // observer, though the publish gate correctly swallows it.
     const publishes = publish.mock.calls.length;
-    await watch.engine.submit({ sessionId: "session-1" } as never);
+    commit("command.recorded");
     await watch.flush();
     expect(observe).toHaveBeenCalledTimes(2);
     expect(publish.mock.calls.length).toBe(publishes);
@@ -480,72 +471,45 @@ describe("watchSessionActivity", () => {
     watch.stop();
   });
 
-  it("hands every committed fact over synchronously as its write resolves, before any fold (VC-577)", async () => {
-    const engine = stubEngine(() => projection());
+  it("hands every committed fact over synchronously, before any fold (VC-577)", async () => {
+    const { bus, commit, getSession } = stubBus(() => projection());
     const observeEvent = vi.fn();
     const onError = vi.fn();
-    const watch = watchSessionActivity(engine, {
+    const watch = watchSessionActivity(bus, {
       listOpenNativeBindings: noOpenBindings,
       publish: vi.fn(),
       observeEvent,
       onError,
     });
-    const event = await watch.engine.observe({} as never);
-    expect(observeEvent).toHaveBeenCalledExactlyOnceWith(event);
-    // A throwing reader is reported, and the write's own result still returns.
+    const started = commit("turn.started");
+    // Every kind, not only the ones `observe` returns: a `submit`'s own
+    // events reach the reader too, and it picks what it counts.
+    const signaled = commit("session.signaled");
+    expect(observeEvent.mock.calls).toEqual([[started], [signaled]]);
+    expect(getSession).not.toHaveBeenCalled();
+    // A throwing reader is reported, and the Session is still marked.
     const failure = new Error("reader");
     observeEvent.mockImplementation(() => {
       throw failure;
     });
-    await expect(watch.engine.observe({} as never)).resolves.toEqual({ sessionId: "session-1" });
+    expect(() => commit("turn.completed")).not.toThrow();
     expect(onError).toHaveBeenCalledWith(failure);
+    await watch.flush();
+    expect(getSession).toHaveBeenCalledTimes(1);
     watch.stop();
-  });
-
-  it("announces committed tool refreshes, ignores no-ops and contains observer failures", async () => {
-    const engine = stubEngine(() => projection());
-    const observeEvent = vi.fn();
-    const onError = vi.fn();
-    const watch = watchSessionActivity(engine, {
-      listOpenNativeBindings: noOpenBindings,
-      publish: vi.fn(),
-      observeEvent,
-      onError,
-    });
-    const event = await watch.engine.recordToolRefresh({} as never);
-    expect(observeEvent).toHaveBeenCalledWith(event);
-    const failure = new Error("refresh reader");
-    observeEvent.mockImplementation(() => {
-      throw failure;
-    });
-    await expect(watch.engine.recordToolRefresh({} as never)).resolves.toEqual({
-      sessionId: "session-1",
-    });
-    expect(onError).toHaveBeenCalledWith(failure);
-    vi.mocked(engine.recordToolRefresh).mockResolvedValue(null);
-    await expect(watch.engine.recordToolRefresh({} as never)).resolves.toBeNull();
-    expect(observeEvent).toHaveBeenCalledTimes(2);
-    watch.stop();
-    const withoutObserver = watchSessionActivity(engine, {
-      listOpenNativeBindings: noOpenBindings,
-      publish: vi.fn(),
-    });
-    vi.mocked(engine.recordToolRefresh).mockResolvedValue(event);
-    await withoutObserver.engine.recordToolRefresh({} as never);
-    withoutObserver.stop();
   });
 
   it("does not require an observer", async () => {
     // Optional for the reason `provenanceOf` is: a test that only asks whether
     // a write was noticed has no notification channel to hand in.
-    const engine = stubEngine(() => projection());
-    const watch = watchSessionActivity(engine, {
+    const { bus, commit } = stubBus(() => projection());
+    const watch = watchSessionActivity(bus, {
       listOpenNativeBindings: noOpenBindings,
       publish: vi.fn(),
       coalesceMs: 0,
     });
-    await watch.engine.submit({ sessionId: "session-1" } as never);
-    await watch.engine.createSession({} as never);
+    commit("command.recorded");
+    commit("session.created");
     await expect(watch.flush()).resolves.toBeUndefined();
     watch.stop();
   });
@@ -556,12 +520,12 @@ describe("watchSessionActivity", () => {
     // and it has to be told synchronously: the coalescing timer can merge the
     // create with the write that puts the Session in `error`, and by then a
     // first fold cannot tell "it just broke" from "it was already broken".
-    const engine = stubEngine(() => projection());
+    const { bus, commit } = stubBus(() => projection());
     const observeBirth = vi.fn();
     const observe = vi.fn(() => {
       expect(observeBirth).toHaveBeenCalledWith("session-1");
     });
-    const watch = watchSessionActivity(engine, {
+    const watch = watchSessionActivity(bus, {
       listOpenNativeBindings: noOpenBindings,
       publish: vi.fn(),
       observe,
@@ -569,29 +533,52 @@ describe("watchSessionActivity", () => {
       coalesceMs: 0,
     });
 
-    await watch.engine.createSession({} as never);
+    // What one `createSession` commits.
+    commit("command.recorded");
+    commit("session.created");
+    commit("command.receipt.recorded");
     expect(observeBirth).toHaveBeenCalledTimes(1);
     await watch.flush();
     expect(observe).toHaveBeenCalledTimes(1);
     watch.stop();
   });
 
-  it("announces no birth for a write to a Session that already existed", async () => {
-    // Every other mutating method reaches a Session this process did not
-    // necessarily create, so none of them may claim a baseline.
-    const engine = stubEngine(() => projection());
+  it("reports a throwing birth observer and still marks the Session", async () => {
+    const onError = vi.fn();
+    const failure = new Error("birth");
+    const { bus, commit, getSession } = stubBus(() => projection());
+    const watch = watchSessionActivity(bus, {
+      listOpenNativeBindings: noOpenBindings,
+      publish: vi.fn(),
+      observeBirth: () => {
+        throw failure;
+      },
+      onError,
+    });
+
+    expect(() => commit("session.created")).not.toThrow();
+    expect(onError).toHaveBeenCalledWith(failure);
+    await watch.flush();
+    expect(getSession).toHaveBeenCalledTimes(1);
+    watch.stop();
+  });
+
+  it("announces no birth for a fact about a Session that already existed", async () => {
+    // Every other kind reaches a Session this process did not necessarily
+    // create, so none of them may claim a baseline.
+    const { bus, commit } = stubBus(() => projection());
     const observeBirth = vi.fn();
-    const watch = watchSessionActivity(engine, {
+    const watch = watchSessionActivity(bus, {
       listOpenNativeBindings: noOpenBindings,
       publish: vi.fn(),
       observeBirth,
       coalesceMs: 0,
     });
 
-    await watch.engine.submit({ sessionId: "session-1" } as never);
-    await watch.engine.observe({} as never);
-    await watch.engine.getOrRecordSessionInput({ sessionId: "session-1" } as never);
-    await watch.engine.completeModelSelection({ sessionId: "session-1" } as never);
+    commit("command.recorded");
+    commit("turn.started");
+    commit("session.input.recorded");
+    commit("model.selected");
     await watch.flush();
 
     expect(observeBirth).not.toHaveBeenCalled();

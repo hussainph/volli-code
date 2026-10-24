@@ -207,7 +207,6 @@ import type {
   PendingArmedRunSettledNotice,
   SessionActivityNotice,
   SessionHarnessNotice,
-  SessionRetitledEvent,
   SessionStartedNotice,
   SessionsInterruptedEvent,
   WorktreePhase,
@@ -2774,14 +2773,6 @@ export type VolliIpcEvent =
   // so every window can surface the automated de-escalation where the mover is
   // looking (a toast with a jump-to-ticket action) — never silently.
   | "volli:sessions-interrupted"
-  // A Session was retitled by main rather than by a person (VC-81's auto-title
-  // model call). Every other retitle originates in the renderer, which moves
-  // its own labels optimistically; this one has no such writer, and
-  // `session.retitle` goes straight to the ledger WITHOUT the runtime publish
-  // (see chat/rename.ts), so nothing on screen would learn the title changed
-  // until an unrelated refresh. The durable write is still the truth — this
-  // only tells the windows to catch up.
-  | "volli:session-retitled"
   // A native alert was clicked (VC-295). Main has already brought the window
   // forward; the payload is the alert's target, and routing to it — selecting
   // the Session, then revealing the question or failure it named, or saying so
@@ -2908,7 +2899,6 @@ export type {
   PendingArmedRunSettledNotice,
   SessionActivityNotice,
   SessionHarnessNotice,
-  SessionRetitledEvent,
   SessionStartedNotice,
   SessionsInterruptedEvent,
   WorktreePhase,

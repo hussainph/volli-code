@@ -160,6 +160,7 @@ export function createHeadlessSessionRuntime(input: {
   const assembly: ReturnType<typeof createRuntimeAssembly> = createRuntimeAssembly({
     dbHandle: host.database,
     sessionEngine,
+    sessionWake: host.sessionWakeBus.subscribe,
     dataDir: host.dataDir,
     binDir: options.binDir,
     venue: options.venue,
@@ -231,7 +232,6 @@ export function createHeadlessSessionRuntime(input: {
     assembly,
     homeDir,
     venue: options.venue,
-    events: ports.events,
     decisions,
     delegation,
   });

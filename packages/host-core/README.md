@@ -363,10 +363,16 @@ to the `SecretStore` it builds rather than to `createHostCore`. See
 `createHostCore` returns `sessionLedger`, `hostNoticeOutbox`, `sessionWakeBus`,
 `sessionReadWatch`, `sessionActivityWatch` and `sessionEngine` on the live
 host; a degraded host has none of them. The outbox shares the engine's one
-transaction writer. The wake bus decorates the engine inside the activity
-watch: committed facts fan out before a listing row becomes dirty. Resumption
-history, unattended Run notifications, scheduled resume and read receipts
-observe in their original order, before the row is built.
+transaction writer. The wake bus (`session-control/session-wake.ts`) is the
+one decorator over the engine (VC-790): every committed Session Event, whoever
+wrote it, fans out to its subscribers after the write's transaction. The
+activity watch is one of them — it marks the Session's listing row dirty and
+folds it on a 60 ms timer — and the Session runtime is another: the runtime
+assembly hands it `sessionWakeBus.subscribe` as its `committed` port, so a
+write made around the runtime (a retitle, a CLI signal, a terminal's command
+bookkeeping) reaches an open chat stream as it commits. Resumption history,
+unattended Run notifications, scheduled resume and read receipts observe in
+their original order, before the row is built.
 
 `HostCorePorts` extends `HostSessionPorts`, which holds the ports Session
 composition uses: `events`, `attention` and `log`. Its adapters are captured,
@@ -375,8 +381,8 @@ database is known. Desktop wires `onFocusedSessionsChanged` to the returned
 read watch.
 
 The live-work watch (`liveWork`, `session-control/live-work.ts`, VC-577) is
-fed by the activity watch's `observeEvent` port: every committed turn fact,
-synchronously as its write resolves, never the 60 ms coalesced fold (which
+fed by the activity watch's `observeEvent` port: every committed fact,
+synchronously as the wake bus announces it, never the 60 ms coalesced fold (which
 only seeds a Session no fact has reached yet). It counts Sessions with a turn
 open on a binding this process holds, Sessions with work the runtime accepted
 but whose turn has not opened (`HostedSessionRuntime.pendingTurnStarts`:
@@ -401,7 +407,8 @@ ports, `listOpenNativeBindings` and `observeScheduledResume`, that desktop and
 Engine construction is private to the Sessions module (`src/sessions/engine.ts`,
 in no entry). It requires the shared ledger; terminal, data and runtime
 consumers receive the composed engine and never construct a fallback. The wake
-decorator lives beside the activity watch in `src/session-control/`.
+decorator lives beside the activity watch in `src/session-control/`; a new
+post-commit observer subscribes to it rather than wrapping the engine again.
 
 Coverage entries for the activity/read/peek watches, concurrency budget and
 `db/export.ts` run here at unchanged 100% thresholds. The export test and

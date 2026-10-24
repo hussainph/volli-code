@@ -41,6 +41,7 @@ import {
   type SessionStreamEmission,
   type SessionStreamFrame,
   type SessionStreamOverlay,
+  type SubscribeCommittedSessionEvents,
   type TranscriptArtifactStore,
   type TranscriptDelta,
 } from "./index";
@@ -202,6 +203,7 @@ function composition(
     onSubscriberFailure?: (error: unknown) => void;
     onProjectionCheckpointFailure?: (error: unknown) => void;
     observability?: ObservabilitySink;
+    committed?: SubscribeCommittedSessionEvents;
   } = {},
 ): { runtime: HostedSessionRuntime; engine: SessionEngine; adapter: FakeAdapter } {
   let now = 100;
@@ -229,7 +231,87 @@ function composition(
         ? { onProjectionCheckpointFailure: options.onProjectionCheckpointFailure }
         : {}),
       ...(options.observability ? { observability: options.observability } : {}),
+      ...(options.committed ? { committed: options.committed } : {}),
     }),
+  };
+}
+
+/**
+ * The host's post-commit wake bus in miniature (`session-wake.ts` in
+ * host-core): wraps an Engine so every write, once it settles, announces each
+ * event it appended — including the ones `submit` appends and does not return
+ * — to every listener, in ledger order.
+ */
+function committedStream(base: SessionEngine) {
+  const listeners = new Set<(event: SessionEvent) => void>();
+  const announced = new Map<string, number>();
+  async function announce(sessionId: string): Promise<void> {
+    const events = await base.listEvents({
+      sessionId,
+      afterSequence: announced.get(sessionId) ?? 0,
+    });
+    if (events.length === 0) return;
+    announced.set(sessionId, events[events.length - 1]!.sequence);
+    for (const event of events) {
+      // A snapshot, as the real bus takes: a listener may unsubscribe on the event.
+      const settled = [...listeners];
+      for (const listener of settled) listener(event);
+    }
+  }
+  const engine: SessionEngine = {
+    ...base,
+    createSession: async (request) => {
+      const result = await base.createSession(request);
+      await announce(result.session.id);
+      return result;
+    },
+    getOrRecordSessionInput: async (request) => {
+      const result = await base.getOrRecordSessionInput(request);
+      await announce(request.sessionId);
+      return result;
+    },
+    recordToolRefresh: async (request) => {
+      const result = await base.recordToolRefresh(request);
+      await announce(request.sessionId);
+      return result;
+    },
+    observe: async (observation) => {
+      const result = await base.observe(observation);
+      await announce(result.sessionId);
+      return result;
+    },
+    submit: async (request) => {
+      const result = await base.submit(request);
+      await announce(request.sessionId);
+      return result;
+    },
+    completeModelSelection: async (request) => {
+      const result = await base.completeModelSelection(request);
+      await announce(request.sessionId);
+      return result;
+    },
+  };
+  const committed: SubscribeCommittedSessionEvents = (listener) => {
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  };
+  return { engine, committed, listeners };
+}
+
+/** {@link composition} with its runtime fed by {@link committedStream}, as the host composes it. */
+function committedComposition(
+  options: Omit<NonNullable<Parameters<typeof composition>[0]>, "engine" | "committed"> = {},
+) {
+  let now = 100;
+  const clock = options.clock ?? { now: () => now++ };
+  const stream = committedStream(
+    createSessionEngine({ ledger: createInMemorySessionLedger(), clock, ids: ids() }),
+  );
+  return {
+    ...composition({ ...options, clock, engine: stream.engine, committed: stream.committed }),
+    listeners: stream.listeners,
   };
 }
 
@@ -5212,18 +5294,6 @@ describe("SessionRuntime transient transcript overlay", () => {
   });
 
   /**
-   * The runtime is not the ledger's only writer, and a subscriber that assumed
-   * it was went deaf for the rest of the Session.
-   *
-   * A retitle submitted straight to the Engine — what `volli:session-rename`
-   * does, and what a chat titling itself from its first message now does on
-   * every first turn — appends three events the publish path never sees. The
-   * drain delivers `cursor + 1` and nothing else, so those three were a hole
-   * that never filled: the turn's own `turn.completed` landed behind it and was
-   * never handed over, leaving the Session working forever with a Stop button
-   * nothing could clear.
-   */
-  /**
    * The other way a subscriber went deaf: its own drain failing. A listener
    * that throws — or a frame the artifact store cannot read back yet — used to
    * remove the subscriber and tell no one. The transport's queue stayed open,
@@ -5260,6 +5330,21 @@ describe("SessionRuntime transient transcript overlay", () => {
     expect(delivered).toEqual([]);
   });
 
+  /**
+   * The runtime is not the ledger's only writer, and a subscriber that assumed
+   * it was went deaf for the rest of the Session.
+   *
+   * A retitle submitted straight to the Engine — what `volli:session-rename`
+   * does, and what a chat titling itself from its first message now does on
+   * every first turn — appends three events the publish path never sees. The
+   * drain delivers `cursor + 1` and nothing else, so those three were a hole
+   * that never filled: the turn's own `turn.completed` landed behind it and was
+   * never handed over, leaving the Session working forever with a Stop button
+   * nothing could clear.
+   *
+   * This runtime is composed without the committed stream, so it pins the
+   * defensive fallback (`#nextAfterGap`); the tests after it pin the stream.
+   */
   it("delivers past a gap left by a writer that bypassed the publish path", async () => {
     const { runtime, engine, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
@@ -5302,6 +5387,161 @@ describe("SessionRuntime transient transcript overlay", () => {
       "command.receipt.recorded",
       "turn.completed",
     ]);
+  });
+
+  // VC-790: the same out-of-band writers, heard as they commit. Without the
+  // committed stream a retitle at rest reached nobody until some later
+  // published event exposed the gap it left.
+  it("delivers a retitle made around the runtime to an idle subscriber as it commits", async () => {
+    const { runtime, engine } = committedComposition();
+    const sessionId = await createAndAttach(runtime);
+    const frames: SessionStreamFrame[] = [];
+    const failures: unknown[] = [];
+    const stop = await runtime.subscribe(
+      { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+      (emission) => {
+        if (isSessionStreamFrame(emission)) frames.push(emission);
+      },
+      (error) => failures.push(error),
+    );
+
+    // Straight to the Engine, exactly as `volli:session-rename` and the
+    // auto-titler do it — and nothing after it.
+    await engine.submit({
+      commandId: "rename-at-rest",
+      sessionId,
+      intent: { kind: "session.retitle", title: "Titled from its first message" },
+      provenance: { source: { kind: "system", id: "auto-title", detail: null }, venue },
+    });
+    await settleMicrotasks();
+
+    expect(frames.map((frame) => frame.event.payload.kind)).toEqual([
+      "command.recorded",
+      "session.retitled",
+      "command.receipt.recorded",
+    ]);
+    const retitled = frames[1]!.event;
+    expect(retitled.payload).toEqual({
+      kind: "session.retitled",
+      title: "Titled from its first message",
+    });
+    // Durable frames, contiguous with what the subscriber already had.
+    const sequences = frames.map((frame) => frame.sequence);
+    expect(sequences).toEqual([sequences[0]!, sequences[0]! + 1, sequences[0]! + 2]);
+    expect(failures).toEqual([]);
+    stop();
+  });
+
+  it("delivers each sequence once when the stream and the runtime's publish both carry it", async () => {
+    const { runtime, engine, adapter } = committedComposition();
+    const sessionId = await createAndAttach(runtime);
+    const sequences: number[] = [];
+    const kinds: string[] = [];
+    const failures: unknown[] = [];
+    const stop = await runtime.subscribe(
+      { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+      async (emission) => {
+        if (!isSessionStreamFrame(emission)) return;
+        // A slow consumer keeps each frame in flight while its second copy
+        // arrives — the copy that must not be left behind the cursor.
+        await settleMicrotasks();
+        sequences.push(emission.sequence);
+        kinds.push(emission.event.payload.kind);
+      },
+      (error) => failures.push(error),
+    );
+
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-1", occurredAt: 800 });
+    await engine.submit({
+      commandId: "rename-mid-turn",
+      sessionId,
+      intent: { kind: "session.retitle", title: "Mid-turn" },
+      provenance: { source: { kind: "user", id: "renderer", detail: null }, venue },
+    });
+    await adapter.emit({ kind: "turn", state: "completed", turnId: "turn-1", occurredAt: 801 });
+    await settleMicrotasks();
+    stop();
+
+    expect(kinds).toEqual([
+      "turn.started",
+      "command.recorded",
+      "session.retitled",
+      "command.receipt.recorded",
+      "turn.completed",
+    ]);
+    expect(new Set(sequences).size).toBe(sequences.length);
+    expect(failures).toEqual([]);
+  });
+
+  it("ends a subscription whose drain fails on a committed event, even when the reporter throws", async () => {
+    const { runtime, engine } = committedComposition({
+      onSubscriberFailure: () => {
+        throw new Error("reporter down");
+      },
+    });
+    const sessionId = await createAndAttach(runtime);
+    const failures: unknown[] = [];
+    await runtime.subscribe(
+      { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+      () => {
+        throw new Error("listener exploded");
+      },
+      (error) => failures.push(error),
+    );
+
+    // The write itself is untouched: a post-commit listener has no caller.
+    await expect(
+      engine.submit({
+        commandId: "rename-into-a-broken-listener",
+        sessionId,
+        intent: { kind: "session.retitle", title: "Unheard" },
+        provenance: { source: { kind: "user", id: "renderer", detail: null }, venue },
+      }),
+    ).resolves.toMatchObject({ receipt: { status: "completed" } });
+    await settleMicrotasks();
+    // Each of the write's three events was enqueued before the first failed,
+    // and every one of their drain links reaches the failure path; the
+    // subscription is still told once, with the listener's own error.
+    expect(failures).toHaveLength(1);
+    expect(String(failures[0])).toContain("listener exploded");
+  });
+
+  it("feeds only subscribers of the Session that committed, and lets go of the stream on close", async () => {
+    const { runtime, engine, listeners } = committedComposition();
+    const watched = await createAndAttach(runtime);
+    const other = await runtime.command({
+      commandId: "command-create-other",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Other",
+      },
+    });
+    const kinds: string[] = [];
+    await runtime.subscribe(
+      {
+        sessionId: watched,
+        afterSequence: (await runtime.snapshot({ sessionId: watched })).throughSequence,
+      },
+      (emission) => {
+        if (isSessionStreamFrame(emission)) kinds.push(emission.event.payload.kind);
+      },
+    );
+    await engine.submit({
+      commandId: "rename-other",
+      sessionId: other.sessionId,
+      intent: { kind: "session.retitle", title: "Not yours" },
+      provenance: { source: { kind: "user", id: "renderer", detail: null }, venue },
+    });
+    await settleMicrotasks();
+    expect(kinds).toEqual([]);
+
+    expect(listeners.size).toBe(1);
+    await runtime.close();
+    expect(listeners.size).toBe(0);
   });
 
   it("drops live transcript state when the attachment closes and when it is released", async () => {

@@ -12,6 +12,7 @@ import {
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { watchSessionActivity } from "../session-control/activity-watch";
+import { createSessionWakeBus } from "../session-control/session-wake";
 import { catchUpSessionResumptions, observeSessionResumptions } from "./session-resumptions";
 
 /** No executor binding is open: these rows rest at not-live. */
@@ -210,8 +211,9 @@ describe("Session resumption catch-up", () => {
     const runAttention = vi.fn();
     const schedule = vi.fn();
     const publishRow = vi.fn();
+    const wake = createSessionWakeBus(f.engine, { db: ctx.db });
     const watch = watchSessionActivity(
-      { ...f.engine, getSession: async () => projection },
+      { engine: { getSession: async () => projection }, subscribe: wake.subscribe },
       {
         listOpenNativeBindings: noOpenBindings,
         publish: publishRow,
@@ -222,7 +224,7 @@ describe("Session resumption catch-up", () => {
         },
       },
     );
-    await watch.engine.submit({
+    await wake.engine.submit({
       commandId: "retitle",
       sessionId,
       intent: { kind: "session.retitle", title: "New" },

@@ -43,6 +43,7 @@ import type { BackgroundShellHost } from "../shell/background-shell-host";
 import { createAgentShellPort } from "../shell/agent-port";
 import { browserAgentPort } from "../browser/agent-port";
 import type { BrowserBackend } from "../browser/backend";
+import type { SubscribeSessionWake } from "../session-control/session-wake";
 import type { AttachmentIdentities } from "./attachment-identity";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { SessionToolSurfacePorts } from "./sessions";
@@ -67,6 +68,13 @@ export interface RuntimeAssemblyOptions {
   dbHandle: DbHandle;
   /** Receive the host's one engine; never construct another writer. */
   sessionEngine: SessionEngine | null;
+  /**
+   * The host's post-commit stream over that engine (`sessionWakeBus.subscribe`).
+   * Required, `null` only where there is no engine: the Session runtime feeds
+   * open chats from it, so a write made around the runtime reaches them as it
+   * commits (VC-790).
+   */
+  sessionWake: SubscribeSessionWake | null;
   dataDir: string;
   binDir: string;
   venue: SessionExecutionVenue;
@@ -116,6 +124,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
   const {
     dbHandle,
     sessionEngine,
+    sessionWake,
     dataDir,
     binDir,
     venue,
@@ -558,6 +567,12 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           transcriptDirectory,
           executor: piRuntimeHost.adapter,
           sessionEngine,
+          ...(sessionWake === null
+            ? {}
+            : {
+                committed: (listener: (event: SessionEvent) => void) =>
+                  sessionWake(({ event }) => listener(event)),
+              }),
           artifacts: transcriptArtifacts,
           ...(agentObservability === null ? {} : { observability: agentObservability }),
         })

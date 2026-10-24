@@ -4,25 +4,24 @@
  *
  * `ticket-wake.ts`'s twin, one ledger over. Watches (`watches.ts`, VC-457 —
  * built for the retired `session.await`, VC-324) need an in-process wake on a
- * Session's own durable facts, and until this
- * module nothing in main could observe one as an EVENT: the renderer fan-out
- * carries listing rows, and `session-control/activity-watch.ts` — the only
- * other observer on this write path — coalesces on a 60ms timer and
- * re-publishes a re-derived {@link SessionListingRow}. A row draws liveness; a
- * waiter must decide whether THIS is the fact it parked on. So this bus
- * carries the durable {@link SessionEvent} itself, un-coalesced, with its
- * cursor. Both observers stay: a UI refresh and an agent wake are different
- * needs that only look alike.
+ * Session's own durable facts, so this bus carries the durable
+ * {@link SessionEvent} itself, un-coalesced, with its cursor. Every other
+ * post-commit observer listens here too (VC-790): the listing fold
+ * (`activity-watch.ts`, which coalesces on a 60ms timer and re-publishes a
+ * re-derived {@link SessionListingRow}), the live-work count, delegations,
+ * host-notice delivery, and `SessionRuntime`'s open chat streams, which is how
+ * a write made around the runtime — a retitle, a CLI signal, a terminal's
+ * command bookkeeping — reaches an open chat as it commits.
  *
- * ## Why a decorator, and why over the same five methods
+ * ## Why a decorator, and why it is the only one
  *
- * `activity-watch.ts`'s header carries the argument and it holds unchanged
- * here: main constructs exactly ONE {@link SessionEngine}, every durable write
- * in the process goes through one of its five mutating methods, and wrapping
- * it once therefore sees every write with no per-Session bookkeeping. The
+ * Main constructs exactly ONE {@link SessionEngine}, every durable write in
+ * the process goes through one of its mutating methods, and wrapping it once
+ * therefore sees every write with no per-Session bookkeeping. The
  * exhaustiveness is the property a subscription could never offer — every read
  * method is forwarded by hand, so a method added to the interface fails to
- * compile here until it has been given an answer.
+ * compile here until it has been given an answer. One decorator, one capture
+ * rule: an observer subscribes here rather than wrapping the Engine again.
  *
  * ## Why the events are read back rather than taken from the return value
  *
@@ -108,10 +107,10 @@ export interface SessionWakeBus {
  * Wrap `engine` so every durable Session Event it commits is announced.
  *
  * The wrapper delegates by construction: every method is forwarded, and only
- * the five that can write are decorated. Read methods are passed through
+ * the ones that can write are decorated. Read methods are passed through
  * explicitly rather than spread from the original object so that a new method
  * on {@link SessionEngine} is a compile error here, not a silently missing
- * forward — the same rule `activity-watch.ts` holds.
+ * forward.
  */
 export function createSessionWakeBus(
   engine: SessionEngine,
@@ -172,10 +171,9 @@ export function createSessionWakeBus(
     observe: (observation) => afterCommit(() => engine.observe(observation)),
     submit: (request) => afterCommit(() => engine.submit(request)),
     completeModelSelection: (request) => afterCommit(() => engine.completeModelSelection(request)),
-    // Enumerated, not spread, for the reason given in `activity-watch.ts`: a
-    // future Engine WRITE adopted silently by a spread would commit without
-    // ever waking a waiter, and the compile error a new method causes here is
-    // the prompt to decide which of the two it is.
+    // Enumerated, not spread: a future Engine WRITE adopted silently by a
+    // spread would commit without ever waking an observer, and the compile
+    // error a new method causes here is the prompt to decide which it is.
     getSession: (query) => engine.getSession(query),
     getBaseSession: (query) => engine.getBaseSession(query),
     listSessions: (query) => engine.listSessions(query),

@@ -126,8 +126,32 @@ export interface SessionRuntimeIds {
   next(kind: "attachment" | "event" | "receipt" | "attention"): string;
 }
 
+/**
+ * Hear every Session Event the ledger commits, whoever wrote it; returns
+ * unsubscribe. Called synchronously, once per event, in ledger order, after
+ * the write's transaction committed.
+ */
+export type SubscribeCommittedSessionEvents = (
+  listener: (event: SessionEvent) => void,
+) => () => void;
+
 export interface SessionRuntimePorts {
   engine: SessionEngine;
+  /**
+   * The host's post-commit stream of every durable Session Event (VC-790).
+   *
+   * The runtime is not the ledger's only writer: a Session retitle, an agent
+   * CLI signal and a terminal's own command bookkeeping all submit straight to
+   * the Engine, and what they append is never handed to {@link #publish}. With
+   * this port each such event is enqueued for the Session's live subscribers
+   * the moment it commits, so a write that lands while a chat is idle reaches
+   * it without waiting on an unrelated later event. Events the runtime
+   * publishes itself arrive here too; the drain delivers each sequence once.
+   *
+   * Absent, those writes still arrive — but only when a later published event
+   * exposes the gap they left (see `#nextAfterGap`).
+   */
+  committed?: SubscribeCommittedSessionEvents;
   /** Durable host queue. Explicit queue commands fail closed when not composed. */
   followUps?: SessionFollowUpLedger;
   /** Diagnostics for an automatic release failure; the item remains durable. */
@@ -802,6 +826,12 @@ interface Subscriber {
    * from the ledger.
    */
   onFailure?: (error: unknown) => void;
+  /**
+   * Set by the first {@link DefaultSessionRuntime#failSubscriber}. Every drain
+   * link queued behind a failed one reaches the same `catch`, and the
+   * subscription dies once: it is told once, with the error that killed it.
+   */
+  failed?: true;
   draining: Promise<void>;
   active: boolean;
 }
@@ -1077,7 +1107,12 @@ class DefaultSessionRuntime implements SessionRuntime {
   /** Follow-up drains the latch held back, woken when it lifts. */
   readonly #heldFollowUpDrains = new Set<string>();
 
-  constructor(private readonly ports: SessionRuntimePorts) {}
+  /** Ends the {@link SessionRuntimePorts.committed} subscription; set once, at construction. */
+  readonly #stopCommitted: () => void;
+
+  constructor(private readonly ports: SessionRuntimePorts) {
+    this.#stopCommitted = ports.committed?.((event) => this.#committed(event)) ?? (() => {});
+  }
 
   pendingTurnStarts(): ReadonlySet<string> {
     const pending = new Set(this.#acceptedStarts.keys());
@@ -4009,6 +4044,7 @@ class DefaultSessionRuntime implements SessionRuntime {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    this.#stopCommitted();
     for (const { timer } of this.#followUpRetries.values()) clearTimeout(timer);
     this.#followUpRetries.clear();
     // The cache is derived and best-effort: a failed shutdown write only makes
@@ -4858,6 +4894,28 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
   }
 
+  /**
+   * One event the ledger committed, from {@link SessionRuntimePorts.committed}.
+   *
+   * Deliberately narrower than {@link #publish}: it records the durable
+   * sequence and feeds subscribers, and nothing else. Follow-up scheduling
+   * stays on the runtime's own publishes, which are the writes it was built
+   * for. The drain dedupes on sequence, so an event the runtime is about to
+   * publish as well is delivered once — whichever path enqueues it first.
+   */
+  #committed(event: SessionEvent): void {
+    // No closed check: `close()` unsubscribes in the same tick it closes.
+    this.#recordDurableSequence(event.sessionId, event.sequence);
+    const subscribers = this.#subscribers.get(event.sessionId);
+    if (!subscribers) return;
+    for (const subscriber of subscribers) {
+      // `#enqueue` routes a drain failure to `#failSubscriber`, which reports
+      // it and ends the subscription; what can still reject here is that
+      // reporter throwing, and a post-commit listener has no caller to tell.
+      this.#enqueue(subscriber, [event]).catch(() => undefined);
+    }
+  }
+
   async #enqueue(subscriber: Subscriber, events: readonly SessionEvent[]): Promise<void> {
     if (!subscriber.active) return;
     for (const event of events) {
@@ -4885,6 +4943,11 @@ class DefaultSessionRuntime implements SessionRuntime {
           if (!subscriber.active) break;
           await subscriber.listener(frame);
           subscriber.cursor = event.sequence;
+          // The same sequence can be enqueued again while it is being
+          // delivered — the committed stream and the runtime's own publish
+          // both carry it. Drop that copy now: left behind the cursor it would
+          // read as a hole `#nextAfterGap` can never close.
+          subscriber.events.delete(event.sequence);
         }
       })
       .catch((error: unknown) => this.#failSubscriber(subscriber, error));
@@ -4908,10 +4971,17 @@ class DefaultSessionRuntime implements SessionRuntime {
    * for exactly this reason, so the hole is closed from it rather than by asking
    * every writer to remember to publish.
    *
+   * Since VC-790 those writers' events normally arrive on their own, through
+   * {@link SessionRuntimePorts.committed}, the moment they commit. This stays as
+   * the defensive fallback: for a runtime composed without that port, and for
+   * an event the committed stream has not carried yet (a read-back that failed
+   * is retried only on the next write's drain).
+   *
    * A non-empty buffer is the whole test for "there is a hole", and it is exact
    * rather than a heuristic: {@link #enqueue} admits only sequences above the
-   * cursor, this is reached only when `cursor + 1` is absent, so anything still
-   * buffered is strictly beyond the hole. A healthy stream drains its buffer
+   * cursor and drops a copy of the one it just delivered, this is reached only
+   * when `cursor + 1` is absent, so anything still buffered is strictly beyond
+   * the hole. A healthy stream drains its buffer
    * empty every time and therefore never reads the ledger at all.
    *
    * Returning the event rather than a flag is what bounds the loop: a hole the
@@ -5026,6 +5096,8 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 
   async #failSubscriber(subscriber: Subscriber, error: unknown): Promise<void> {
+    if (subscriber.failed) return;
+    subscriber.failed = true;
     try {
       await this.ports.onSubscriberFailure?.(error);
     } finally {

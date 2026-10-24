@@ -1304,11 +1304,6 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     owner: "VC-565",
     reason: "Fired by a backward ticket move.",
   },
-  "volli:session-retitled": {
-    placement: "workspace",
-    owner: "VC-565",
-    reason: "Session listing fact (VC-574 E5).",
-  },
   "volli:notification-activated": {
     placement: "client-local",
     owner: "VC-578",

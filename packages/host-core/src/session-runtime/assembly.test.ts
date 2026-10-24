@@ -90,6 +90,7 @@ async function fixture(): Promise<RuntimeAssemblyOptions> {
   return {
     dbHandle: composed.database,
     sessionEngine: composed.sessionEngine,
+    sessionWake: composed.sessionWakeBus.subscribe,
     dataDir: root,
     binDir: join(root, "bin"),
     venue: { id: "test-host", kind: "remote" },
