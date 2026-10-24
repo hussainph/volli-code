@@ -2,12 +2,18 @@ import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
 import type { SessionLocation, SessionLocationResolver } from "@volli/session-engine";
+import { harnessAdapters, scrubInheritedSessionEnv } from "@volli/shared";
 import type { Session, SessionExecutionVenue } from "@volli/shared";
 
 import type { HostEventBus } from "../ports";
 import { getProjectById, isProjectAttached } from "../db/projects-repo";
 import { getTicket } from "../db/tickets-repo";
-import { acquireWorktreeStartLease, ensure, UNDER_DELETION_REFUSAL } from "../worktree";
+import {
+  acquireWorktreeStartLease,
+  ensure,
+  runPendingWorktreeSetup,
+  UNDER_DELETION_REFUSAL,
+} from "../worktree";
 import { worktreeDeps } from "../worktree-runtime";
 
 const LOCAL: SessionLocation["venue"] = { id: "local", kind: "local" };
@@ -32,6 +38,12 @@ const PROJECT_REMOVED_REFUSAL =
  * single-flight and its reconcile already owns "registered, directory missing →
  * prune, then recreate at the same path" — so a worktree comes back where it
  * was, on the branch it was on, with the work that was committed to it intact.
+ *
+ * `prepare` also runs the project's setup command when the worktree still owes
+ * it (VC-835) — the terminal runs it in its shell, and a chat has no shell, so
+ * it runs here, before the binding exists and so before the first turn. A
+ * setup that fails fails the start with its exit code; it is claimed before it
+ * runs, so the Retry starts the agent rather than running it again.
  *
  * Both of them are also agent STARTS, so both take the worktree start lease
  * (VC-284). A Session can be bound to a directory this app now
@@ -84,14 +96,15 @@ export function createSessionLocationResolver(
     // durable event, and a cleanup must not be able to take the directory
     // between it succeeding and the binding existing.
     return withStartLease(ticket.worktreePath ?? project.path, async () => {
-      const outcome = await ensure(worktreeDeps(db, ports, options), ticket.id);
+      const deps = worktreeDeps(db, ports, options);
+      const outcome = await ensure(deps, ticket.id);
       if (!outcome.ok) {
         // The path is the whole diagnosis when it is a stale stamp pointing at a
         // checkout somebody deleted, so it is named whenever the ticket has one.
         const at = ticket.worktreePath === null ? "" : ` at ${ticket.worktreePath}`;
         throw new Error(`Couldn't prepare the worktree${at} — ${outcome.error}`);
       }
-      const { identity, created, restamped } = outcome.value;
+      const { identity, created, restamped, setupPending } = outcome.value;
       if (identity.worktreePath === null) throw new Error("Worktree path was not resolved");
       // A fresh `git worktree add` just stamped worktree_path/branch/base_branch
       // on the ticket, or a reuse adopted the same-ticket branch actually
@@ -104,6 +117,25 @@ export function createSessionLocationResolver(
           projectId: project.id,
           kind: "worktree",
         });
+      }
+      if (setupPending) {
+        const setup = await runPendingWorktreeSetup(deps, {
+          ticketId: ticket.id,
+          worktreePath: identity.worktreePath,
+          // Read now, not from the Session's start: the command a person sees
+          // in Configure is the one that runs.
+          setupCommand: getProjectById(db, project.id)?.setupCommand ?? null,
+          shellPath: process.env["SHELL"] || "/bin/sh",
+          // The app's environment (its adopted login PATH included) less every
+          // marker saying an agent session is already running in it, as a
+          // terminal's shell starts from.
+          env: scrubInheritedSessionEnv(process.env, harnessAdapters),
+        });
+        if (setup.kind === "failed") {
+          throw new Error(
+            `Couldn't prepare the worktree at ${identity.worktreePath} — ${setup.message}`,
+          );
+        }
       }
       return { directory: identity.worktreePath, venue };
     });

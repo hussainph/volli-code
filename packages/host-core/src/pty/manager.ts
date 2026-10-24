@@ -40,6 +40,7 @@ import { isPathWithinRoots } from "../project-roots";
 import { ensureProjectArtifactsDir } from "../volli-fs";
 import {
   acquireWorktreeStartLease,
+  claimFirstRunSetup,
   createSetupRun,
   ensure,
   runGitCapturingAsync,
@@ -994,13 +995,17 @@ export class PtyManager {
       //
       // For a worktree session the harness command opens with the orientation
       // preamble (agents must never re-infer their cwd) — buildable only now
-      // that ensure resolved the identity. When ensure FRESHLY created the
-      // worktree AND the project defines a setup command, that command runs
-      // FIRST, sentinel-gated (§6): the worktree module's `createSetupRun` handle
-      // owns the whole machine (wrapped line, phase `setting-up`, tail scan,
-      // failure event); the manager only writes its command line and holds the
-      // handle in `setupRun` so the onData handler can feed it. A reused worktree (created
-      // false) is already `ready` from ensure and launches immediately.
+      // that ensure resolved the identity. When the worktree still owes its
+      // setup run (a durable fact of the worktree, VC-835 — not whether THIS
+      // ensure created it), this terminal claims it, and if the project defines
+      // a setup command, that command runs FIRST, sentinel-gated (§6): the
+      // worktree module's `createSetupRun` handle owns the whole machine
+      // (wrapped line, phase `setting-up`, tail scan, failure event); the
+      // manager only writes its command line and holds the handle in
+      // `setupRun` so the onData handler can feed it. A worktree whose
+      // setup already ran — here or in a structured Session's start — is
+      // already `ready` from ensure and launches immediately. The claim is a
+      // synchronous unlink so nothing can come between it and the write.
       const worktree = scope.worktree;
       if (worktree !== null && worktreeOutcome !== null) {
         const identity = worktreeOutcome.identity;
@@ -1016,7 +1021,11 @@ export class PtyManager {
           this.adapterFor,
         );
         const setupCommand = worktree.setupCommand?.trim() ?? "";
-        if (worktreeOutcome.created && setupCommand.length > 0) {
+        const claimedSetup =
+          worktreeOutcome.setupPending &&
+          identity.worktreePath !== null &&
+          claimFirstRunSetup(this.host.worktreeDeps(db), identity.worktreePath);
+        if (claimedSetup && setupCommand.length > 0) {
           // `file` is the resolved shell the PTY was spawned with — the sentinel
           // wrapper is shell-aware (fish is not POSIX), so it must match.
           const setupRun = createSetupRun(

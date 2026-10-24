@@ -230,6 +230,15 @@ export { buildSetupSentinelLine, parseSetupSentinel } from "./setup";
 export { createSetupRun } from "./setup-run";
 export type { SetupRun, SetupRunPorts, SetupRunParams, SetupFeedResult } from "./setup-run";
 
+// Whether a worktree still owes its setup run is a durable fact of the worktree
+// (VC-835), not of one `ensure` call: a door claims the run before starting it,
+// so exactly one door runs it. The terminal claims and types it into its shell;
+// a structured Session claims and runs it as a child process before its first
+// turn.
+export { claimFirstRunSetup } from "./first-run";
+export { runPendingWorktreeSetup } from "./setup-exec";
+export type { WorktreeSetupExecOutcome, WorktreeSetupExecParams } from "./setup-exec";
+
 // The default git runners (both capture stderr) — callers build `deps.git` /
 // `deps.gitAsync` from these. The async one exists because the Change Set reads
 // must never block main; see git.ts.

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -10,12 +10,18 @@ import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-hel
 
 // Only `ensure` is stood in for, so `prepare` can be asked the one question no
 // return value answers: whether a ticketless Session touches git at all.
-const { ensureWorktree } = vi.hoisted(() => ({ ensureWorktree: vi.fn() }));
+const { ensureWorktree, worktreeHome } = vi.hoisted(() => ({
+  ensureWorktree: vi.fn(),
+  // The `~` the worktree deps resolve, where a pending setup run is recorded.
+  worktreeHome: { current: "/volli-location-test-home" },
+}));
 vi.mock("../worktree", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../worktree")>();
   return { ...actual, ensure: ensureWorktree };
 });
-vi.mock("../worktree-runtime", () => ({ worktreeDeps: (db: unknown) => ({ db }) }));
+vi.mock("../worktree-runtime", () => ({
+  worktreeDeps: (db: unknown) => ({ db, home: worktreeHome.current }),
+}));
 // Spied rather than fanned out, so a suite can say which prepares told the
 // ticket's surfaces their identity moved.
 const dataChanged = vi.fn();
@@ -23,6 +29,8 @@ const ports = { events: { publish: dataChanged } };
 const options = { dataDir: "/profile" };
 
 import { createSessionLocationResolver } from "./location";
+import { listTicketEvents } from "../db/events-repo";
+import { markFirstRunPending } from "../worktree/first-run";
 import {
   acquireDeletionLease,
   acquireWorktreeStartLease,
@@ -259,7 +267,65 @@ describe("desktop Session location resolver", () => {
       };
     });
     await expect(resolver.reaffirm(session, worktreePath)).resolves.toBeUndefined();
-    expect(ensureWorktree).toHaveBeenCalledWith({ db: testDb.db }, ticket.id);
+    expect(ensureWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({ db: testDb.db }),
+      ticket.id,
+    );
+  });
+
+  describe("the project's setup command (VC-835)", () => {
+    function setupTicket(setupCommand: string) {
+      testDb = openTestDb();
+      const root = scratch();
+      worktreeHome.current = join(root, "home");
+      const worktreePath = join(root, "VC-3-doing");
+      mkdirSync(worktreePath);
+      const project = testProject({ id: "project-1", path: join(root, "main"), setupCommand });
+      const ticket = testTicket(project.id, { id: "ticket-1", worktreePath: null });
+      insertProject(testDb.db, project);
+      insertTicket(testDb.db, ticket);
+      // What `ensure` records before it creates the worktree.
+      markFirstRunPending({ home: worktreeHome.current }, worktreePath, ticket.id, ["setup"]);
+      ensureWorktree.mockResolvedValue({
+        ok: true,
+        value: {
+          identity: { worktreePath, branch: "volli/VC-3-doing", baseBranch: "main" },
+          created: true,
+          restamped: true,
+          setupPending: true,
+        },
+      });
+      const resolver = createSessionLocationResolver(testDb.db, ports, options);
+      return { worktreePath, resolver, session: ticketSession(project.id, ticket.id) };
+    }
+
+    it("runs it in a chat's new worktree before the location is handed to the binding", async () => {
+      const { worktreePath, resolver, session } = setupTicket("touch .setup-ran");
+
+      await expect(resolver.prepare(session)).resolves.toMatchObject({ directory: worktreePath });
+
+      expect(existsSync(join(worktreePath, ".setup-ran"))).toBe(true);
+      // A second Session in the same worktree: setup already ran.
+      rmSync(join(worktreePath, ".setup-ran"));
+      await expect(resolver.prepare(session)).resolves.toMatchObject({ directory: worktreePath });
+      expect(existsSync(join(worktreePath, ".setup-ran"))).toBe(false);
+    });
+
+    it("fails the start with the exit code, and the Retry starts without running it again", async () => {
+      const { worktreePath, resolver, session } = setupTicket("touch attempt-$$; exit 7");
+
+      await expect(resolver.prepare(session)).rejects.toThrow(
+        `Couldn't prepare the worktree at ${worktreePath} — The project's setup command exited with code 7.`,
+      );
+      expect(
+        listTicketEvents(testDb!.db, "ticket-1").find((e) => e.payload.kind === "worktree_failed")
+          ?.payload,
+      ).toMatchObject({ stage: "setup" });
+
+      await expect(resolver.prepare(session)).resolves.toMatchObject({ directory: worktreePath });
+      const attempts = readdirSync(worktreePath).filter((name) => name.startsWith("attempt-"));
+      expect(attempts).toHaveLength(1);
+    });
   });
 
   // A reuse that adopted the same-ticket branch actually checked out changed
