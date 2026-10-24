@@ -59,8 +59,9 @@
  * The fan-out runs after the write committed and before its caller
  * continues — that ordering is what lets a quit gate read a `turn.started`
  * synchronously — so a throwing listener must not unwind a write that
- * committed honest work, nor reach the caller as the write's own failure. Errors are reported and swallowed — the isolation every fan-out in
- * this process practises.
+ * committed honest work, nor reach the caller as the write's own failure.
+ * Errors are reported and swallowed — the isolation every fan-out in this
+ * process practises.
  */
 
 import type Database from "better-sqlite3";

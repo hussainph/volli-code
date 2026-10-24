@@ -151,6 +151,13 @@ export interface SessionRuntimePorts {
    *
    * Absent, those writes still arrive — but only when a later published event
    * exposes the gap they left (see `#nextAfterGap`).
+   *
+   * The contract a composer owes: the stream announces the commits of
+   * {@link engine} — the same Engine, not another writer's — and it announces
+   * each write's events before that write's promise settles. The runtime
+   * relies on the second to tell its own events from the rest; a stream that
+   * announced later would hand subscribers the runtime's own facts before it
+   * had finished with them.
    */
   committed?: SubscribeCommittedSessionEvents;
   /** Durable host queue. Explicit queue commands fail closed when not composed. */
