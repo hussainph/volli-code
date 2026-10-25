@@ -9,8 +9,11 @@ import {
   scheduledResumeRetryCommandId,
   scheduledResumeSettleCommandId,
   scheduledResumeVerdict,
+  sessionContinuedSince,
+  ticketSiblingMovedOn,
   type ScheduledResumeSibling,
 } from "./scheduled-resume";
+import { restartResumeCommandId } from "./restart-resume";
 import type {
   CommandReceipt,
   SessionAttachmentProjection,
@@ -483,5 +486,57 @@ describe("attentionResumeAt", () => {
     expect(attentionResumeAt({ kind: "adapter_unrecoverable", resetsAt: null }, 0)).toBeNull();
     expect(attentionResumeAt({ kind: "adapter_unrecoverable" }, 0)).toBeNull();
     expect(attentionResumeAt({ kind: "quota_exhausted", resetsAt: 5 }, 0)).toBeNull();
+  });
+});
+
+describe("the stale-session rules a restart resume shares (VC-450)", () => {
+  const restart = restartResumeCommandId(ATTACHMENT_ID, "turn-1");
+  const retry = (
+    id: string,
+    createdAt: number,
+    status: "accepted" | "rejected" | null = "accepted",
+  ) => row(id, createdAt, { kind: "executor.retry", attachmentId: ATTACHMENT_ID }, status);
+
+  it("counts a person's act after the moment, and nothing before it or refused", () => {
+    expect(sessionContinuedSince(projection([retry("r", 200)]), 100)).toBe(true);
+    expect(sessionContinuedSince(projection([retry("r", 100)]), 100)).toBe(false);
+    expect(sessionContinuedSince(projection([retry("r", 200, "rejected")]), 100)).toBe(false);
+    // Bookkeeping continues nothing.
+    expect(
+      sessionContinuedSince(
+        projection([row("t", 200, { kind: "session.retitle", title: "x" })]),
+        100,
+      ),
+    ).toBe(false);
+  });
+
+  it("never counts a host's own resume as a person picking the Session up", () => {
+    // The restart resume itself, and a scheduled resume's retry.
+    expect(sessionContinuedSince(projection([retry(restart, 200)]), 100)).toBe(false);
+    expect(
+      sessionContinuedSince(projection([schedule("schedule-1", 50), retry(RETRY_ID, 200)]), 100),
+    ).toBe(false);
+  });
+
+  it("keeps a restart resume from cancelling a pending schedule as continued", () => {
+    expect(pendingScheduledResume(projection([schedule(), retry(restart, 200)]))).toMatchObject({
+      continued: false,
+    });
+  });
+
+  it("does not let a sibling's restart resume supersede anyone", () => {
+    const resuming = sibling({
+      turnActive: true,
+      commands: [retry(restart, 300).command],
+      receipts: [retry(restart, 300).receipt!],
+    });
+    expect(ticketSiblingMovedOn(resuming, 100)).toBe(false);
+    // A person's retry there still does.
+    expect(
+      ticketSiblingMovedOn(
+        sibling({ commands: [retry("r", 300).command], receipts: [retry("r", 300).receipt!] }),
+        100,
+      ),
+    ).toBe(true);
   });
 });

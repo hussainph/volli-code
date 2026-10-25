@@ -619,3 +619,71 @@ it("recovers only the supplied headless venue, leaving other hosts alone", async
     ),
   ).toBe(true);
 });
+
+function recoverySweep(target: Recorder, shouldStop?: () => boolean) {
+  const onRecovered = vi.fn();
+  const result = closeStaleAttachments({
+    engine: target.engine,
+    reconcile: target.reconcile,
+    projectIds: ["p", "q"],
+    newId: () => "event",
+    now: () => 1,
+    onError: vi.fn(),
+    onRecovered,
+    ...(shouldStop === undefined ? {} : { shouldStop }),
+  });
+  return { result, onRecovered };
+}
+describe("closeStaleAttachments → the turns a restart resume may continue (VC-450)", () => {
+  const pi = (id: string, status: BootRecoveryAttachment["status"] = "open") =>
+    attachment({ id, adapterId: "pi", status });
+
+  it("names every turn it rebuilt, and when the lost process was last alive", async () => {
+    const target = recorder(
+      {
+        p: [
+          { ...session("rebuilt", [pi("pi-1")], true), lastActivityAt: 500 },
+          { ...session("idle", [pi("pi-2")]), lastActivityAt: 900 },
+        ],
+        q: [
+          { ...session("lost", [pi("pi-3")], true), lastActivityAt: 700 },
+          session("unstamped", [pi("pi-4", "closed")]),
+        ],
+      },
+      undefined,
+      async ({ attachmentId }) => {
+        if (attachmentId === "pi-3") throw new Error("sidecar gone");
+      },
+    );
+    const { result, onRecovered } = recoverySweep(target);
+    await result;
+    expect(onRecovered).toHaveBeenCalledExactlyOnceWith({
+      turns: [{ sessionId: "rebuilt", attachmentId: "pi-1" }],
+      lostAt: 900,
+    });
+  });
+
+  it("knows no moment when nothing was stamped, and tells nothing of a sweep a shutdown cut short", async () => {
+    const quiet = recoverySweep(recorder({ p: [session("s", [pi("pi-1", "closed")])] }));
+    await quiet.result;
+    expect(quiet.onRecovered).toHaveBeenCalledExactlyOnceWith({ turns: [], lostAt: null });
+
+    // Cut short at a reconcile, and at the very last close.
+    let stop = false;
+    const target = recorder({ p: [session("s", [pi("pi-1")], true)] }, undefined, async () => {
+      stop = true;
+    });
+    const cut = recoverySweep(target, () => stop);
+    await cut.result;
+    expect(cut.onRecovered).not.toHaveBeenCalled();
+    let late = false;
+    const last = recoverySweep(
+      recorder({ q: [session("terminal", [attachment()])] }, async () => {
+        late = true;
+      }),
+      () => late,
+    );
+    await last.result;
+    expect(last.onRecovered).not.toHaveBeenCalled();
+  });
+});

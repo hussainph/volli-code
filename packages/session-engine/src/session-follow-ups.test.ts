@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { UIMessage } from "ai";
-import type { RuntimeObservation, SessionLedger } from "@volli/shared";
+import {
+  RECOVERED_TURN_INTERRUPTED_DETAIL,
+  restartResumeCommandId,
+  type RuntimeObservation,
+  type RuntimeResumeBoundary,
+  type SessionLedger,
+} from "@volli/shared";
 import {
   createSessionEngine,
   createSessionRuntime,
@@ -52,6 +58,7 @@ class Adapter implements NativeHarnessAdapter {
   reconcileGate: Promise<void> | undefined;
   reconciling = false;
   reconcileStarted?: () => void;
+  boundary: RuntimeResumeBoundary | undefined;
   async attach(
     _spec: Parameters<NativeHarnessAdapter["attach"]>[0],
     sink: ObservationSink,
@@ -118,6 +125,7 @@ class Adapter implements NativeHarnessAdapter {
         this.released++;
         if (this.releaseFailure) throw this.releaseFailure;
       },
+      ...(this.boundary === undefined ? {} : { resumeBoundary: () => this.boundary ?? null }),
     };
   }
   emit(observation: RuntimeObservation) {
@@ -2252,6 +2260,73 @@ describe("host follow-ups never strand a row", () => {
     expect(await attentionDetails(runtime, sessionId)).toEqual([]);
     expect(await queueStates(runtime, sessionId)).toEqual([]);
     await runtime.close();
+  });
+
+  describe("a turn recovery found interrupted (VC-450)", () => {
+    async function recovered(f: ReturnType<typeof fixture>) {
+      const runtime = f.runtime();
+      const sessionId = await create(runtime);
+      await attach(runtime, sessionId);
+      await runtime.command({
+        commandId: "active",
+        sessionId,
+        command: { kind: "message.submit", message: message("active") },
+      });
+      await f.adapter.emit({
+        kind: "attention",
+        state: "raised",
+        reason: "partial-turn",
+        message: RECOVERED_TURN_INTERRUPTED_DETAIL,
+      });
+      await f.adapter.emit({ kind: "turn", state: "interrupted", turnId: "turn:active" });
+      const attachmentId = (await f.engine.getSession({ sessionId }))!.liveExecutor!.id;
+      return { runtime, sessionId, attachmentId };
+    }
+
+    it("reads the executor's resume boundary, and null where it cannot say", async () => {
+      const silent = fixture();
+      const unsaid = await recovered(silent);
+      expect(unsaid.runtime.resumeBoundary({ attachmentId: unsaid.attachmentId })).toBeNull();
+      expect(unsaid.runtime.resumeBoundary({ attachmentId: "unknown" })).toBeNull();
+      await unsaid.runtime.close();
+
+      const telling = fixture();
+      telling.adapter.boundary = "tool-in-flight";
+      const said = await recovered(telling);
+      expect(said.runtime.resumeBoundary({ attachmentId: said.attachmentId })).toBe(
+        "tool-in-flight",
+      );
+      await said.runtime.close();
+    });
+
+    it("keeps the restart warning through a Retry, and lets a message answer it", async () => {
+      for (const retry of ["person", "host"] as const) {
+        const f = fixture();
+        const { runtime, sessionId, attachmentId } = await recovered(f);
+        await runtime.command({
+          ...(retry === "host" ? { origin: { kind: "volli", reason: "relaunch-recovery" } } : {}),
+          commandId:
+            retry === "host"
+              ? restartResumeCommandId(attachmentId, "turn:active")
+              : "retry-by-hand",
+          sessionId,
+          command: { kind: "executor.retry", attachmentId },
+        });
+        expect(await attentionDetails(runtime, sessionId)).toEqual([
+          RECOVERED_TURN_INTERRUPTED_DETAIL,
+        ]);
+        await runtime.close();
+      }
+      const f = fixture();
+      const typed = await recovered(f);
+      await typed.runtime.command({
+        commandId: "typed",
+        sessionId: typed.sessionId,
+        command: { kind: "message.submit", message: message("typed") },
+      });
+      expect(await attentionDetails(typed.runtime, typed.sessionId)).toEqual([]);
+      await typed.runtime.close();
+    });
   });
 
   it("bounds workspace resolution and preparation without losing the queued payload", async () => {

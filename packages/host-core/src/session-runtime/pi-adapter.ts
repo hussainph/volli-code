@@ -102,6 +102,7 @@ import {
   type RuntimeAskRequest,
   type RuntimeAskUserRequest,
   type RuntimeAttachmentHandle,
+  type RuntimeResumeBoundary,
   type RuntimeBrowserPort,
   type RuntimeMcpCall,
   type RuntimeMcpCallResult,
@@ -1527,6 +1528,13 @@ class PiBinding implements BindingHandle {
         native: this.#native,
       })),
     };
+  }
+
+  /** Where the recovered conversation stands; a closed or releasing binding has nothing to continue. */
+  resumeBoundary(): RuntimeResumeBoundary | null {
+    const handle = this.#handle;
+    if (handle === null || this.#releasing) return "none";
+    return handle.resumeBoundary?.() ?? null;
   }
 
   /**

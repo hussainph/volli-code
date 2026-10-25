@@ -1126,6 +1126,8 @@ export function ChatPlane({
       sessionModel,
       signInProviders,
       scheduledResume: projection?.scheduledResume ?? null,
+      turnActive: projection?.turnActive ?? false,
+      liveExecutorId,
       now: resumeNow,
     },
     blockerActs,
@@ -1700,9 +1702,12 @@ export function ChatPlane({
   const stopTurn = React.useCallback(() => void interrupt(), [interrupt]);
   const turnRunning = working || turnActive || openingSendIds.size > 0;
   // Runtime failures need recovery only once work has stopped. A new turn
-  // removes the old failure surface, even before Attention catches up.
+  // removes the old failure surface, even before Attention catches up — all
+  // but a row about that turn itself (a restart resume's).
   const blockerPresentation = visibleBlocker(
-    turnRunning && candidateBlocker?.placement === "timeline" ? null : candidateBlocker,
+    turnRunning && candidateBlocker?.placement === "timeline" && !candidateBlocker.duringTurn
+      ? null
+      : candidateBlocker,
     dismissedBlockerKey,
   );
   React.useEffect(() => {

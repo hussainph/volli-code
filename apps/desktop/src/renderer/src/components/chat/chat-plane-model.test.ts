@@ -12,7 +12,13 @@ import type {
   SessionAttention,
   SessionInteractionResolution,
 } from "@volli/shared";
-import { COMPACT_VERB, COPY_VERB, LOGIN_VERB, SETTINGS_VERB } from "@volli/shared";
+import {
+  COMPACT_VERB,
+  COPY_VERB,
+  LOGIN_VERB,
+  RECOVERED_TURN_INTERRUPTED_DETAIL,
+  SETTINGS_VERB,
+} from "@volli/shared";
 import type { BlobLinkView } from "@volli/shared";
 import type { UIMessage } from "ai";
 import type { QueuedMessage } from "@volli/session-presentation";
@@ -267,6 +273,8 @@ function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBloc
     sessionModel: { providerId: "openai-codex", providerLabel: "OpenAI Codex", state: "available" },
     signInProviders: [],
     scheduledResume: null,
+    turnActive: false,
+    liveExecutorId: null,
     now: 0,
     ...overrides,
   };
@@ -741,6 +749,75 @@ describe("sessionBlocker", () => {
       ["Waiting for an answer", null],
       ["Waiting for approval", null],
     ]);
+  });
+
+  it("offers Resume on a turn a lost process cut short, and says when a restart resumed it (VC-450)", () => {
+    const acted: string[] = [];
+    const acts: SessionBlockerActs = { ...ACTS, retryRuntime: () => acted.push("retryRuntime") };
+    const recovered: SessionAttention = {
+      ...attention("partial_turn_interrupted", RECOVERED_TURN_INTERRUPTED_DETAIL),
+      attachmentId: "attachment-1",
+    };
+    const live = (overrides: Partial<SessionBlockerInput>) =>
+      sessionBlocker(
+        {
+          ...raised(recovered),
+          liveExecutorId: "attachment-1",
+          ...overrides,
+        },
+        acts,
+        false,
+      );
+
+    // Idle on the rebuilt attachment: Resume continues it.
+    const idle = live({});
+    expect(idle).toMatchObject({
+      message: "Turn interrupted",
+      detail: RECOVERED_TURN_INTERRUPTED_DETAIL,
+      action: { label: "Resume" },
+      placement: "timeline",
+    });
+    expect(idle).not.toHaveProperty("duringTurn");
+    idle?.action?.act();
+    expect(acted).toEqual(["retryRuntime"]);
+
+    // Running while the warning stands: the restart resume, said while it runs.
+    expect(live({ turnActive: true })).toEqual({
+      message: "Resumed after restart",
+      detail: null,
+      tone: "waiting",
+      action: null,
+      duringTurn: true,
+      placement: "timeline",
+    });
+
+    // A genuine partial-turn diagnostic is neither resumable nor a resume.
+    for (const turnActive of [false, true]) {
+      expect(
+        sessionBlocker(
+          {
+            ...raised({ ...recovered, detail: "Pi recovery history disagreed." }),
+            liveExecutorId: "attachment-1",
+            turnActive,
+          },
+          acts,
+          false,
+        ),
+      ).toMatchObject({ message: "Turn interrupted", action: null });
+    }
+
+    // Once the attachment is gone, typing is the recovery.
+    expect(live({ liveExecutorId: "attachment-2" })).toMatchObject({
+      message: "Turn interrupted",
+      action: null,
+    });
+    expect(
+      sessionBlocker(
+        { ...raised(attention("partial_turn_interrupted")), liveExecutorId: null },
+        acts,
+        false,
+      ),
+    ).toMatchObject({ message: "Turn interrupted", action: null });
   });
 
   it("retries the run itself once the runtime has stopped retrying for you", () => {

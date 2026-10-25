@@ -35,6 +35,8 @@ export interface BootRecoverySession {
   readonly attachments: readonly BootRecoveryAttachment[];
   /** Whether the durable ledger still has a turn open from the prior process. */
   readonly turnActive: boolean;
+  /** The newest thing that happened here — evidence of when the prior process was last alive. */
+  readonly lastActivityAt?: number;
   /** Cards parked in the lost process cannot resume their tool call after boot. */
   readonly interactions?: {
     readonly active: readonly Pick<SessionInteraction, "id" | "attachmentId" | "kind">[];
@@ -74,6 +76,20 @@ export interface BootRecoveryOptions {
    * that omit this always sweep to completion.
    */
   shouldStop?(): boolean;
+  /**
+   * Told once, when a sweep finishes, which interrupted turns it recovered onto
+   * a rebuilt attachment — the turns a restart resume may continue (VC-450) —
+   * and when the prior process was last known alive: the newest activity any
+   * listed Session recorded, or `null` when none did. A sweep a shutdown cut
+   * short tells nothing; the next launch recovers the rest.
+   */
+  onRecovered?(recovered: BootRecoveredTurns): void;
+}
+
+/** The interrupted turns one sweep recovered onto a live attachment. */
+export interface BootRecoveredTurns {
+  readonly turns: readonly { readonly sessionId: string; readonly attachmentId: string }[];
+  readonly lostAt: number | null;
 }
 
 /**
@@ -90,10 +106,15 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
   // already in flight may finish, and a reconcile unblocked by that close is a
   // stop, not a lost sidecar — no durable fact is recorded from it.
   const stopping = () => options.shouldStop?.() ?? false;
+  const recovered: { sessionId: string; attachmentId: string }[] = [];
+  let lostAt: number | null = null;
   for (const projectId of options.projectIds) {
     if (stopping()) return closed;
     const sessions = await options.engine.listSessions({ projectId, scope: "all" });
     for (const projection of sessions) {
+      if (projection.lastActivityAt !== undefined) {
+        lostAt = Math.max(lostAt ?? projection.lastActivityAt, projection.lastActivityAt);
+      }
       for (const attachment of projection.attachments) {
         if (stopping()) return closed;
         // A local process restart cannot recover the promise that parked a
@@ -129,6 +150,7 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
               sessionId: projection.session.id,
               attachmentId: attachment.id,
             });
+            recovered.push({ sessionId: projection.session.id, attachmentId: attachment.id });
             continue;
           } catch (error) {
             if (stopping()) return closed;
@@ -154,6 +176,7 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
       }
     }
   }
+  if (!stopping()) options.onRecovered?.({ turns: recovered, lostAt });
   return closed;
 }
 

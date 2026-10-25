@@ -25,7 +25,8 @@ import {
 import type { AgentObservability } from "../observability/settings";
 import { relayShellNotices } from "../shell/shell-notices";
 import type { BackgroundShellNotice } from "../shell/background-shell-host";
-import { closeStaleAttachments } from "./boot-recovery";
+import { closeStaleAttachments, type BootRecoveredTurns } from "./boot-recovery";
+import { resumeRecoveredTurns } from "./restart-resume";
 import { createHostNoticeDelivery } from "./durable-host-notice-delivery";
 import { catchUpSessionResumptions } from "./session-resumptions";
 import type { TicketSessionDelegationStore } from "./delegation-store";
@@ -170,6 +171,8 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   let closing = false;
   // The startup release sweep, which may outlive readiness (never rejects).
   let followUpRecovery: Promise<void> | undefined;
+  // Turns a restart resume continued, which outlive readiness (never rejects).
+  let restartResumeRuns: Promise<void> | undefined;
   const closed = Promise.withResolvers<false>();
 
   function close(): Promise<void> {
@@ -193,15 +196,21 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     // A host may close the database only after both drain and an in-flight boot
     // sweep finish. Closing the runtime also unblocks its reconciliation path.
     // A startup release that outlived readiness still writes the queue ledger.
-    drain = Promise.all([shutdown, boot?.catch(() => undefined), followUpRecovery]).then(
-      () => undefined,
-    );
+    drain = Promise.all([
+      shutdown,
+      boot?.catch(() => undefined),
+      followUpRecovery,
+      restartResumeRuns,
+    ]).then(() => undefined);
     return drain;
   }
   options.installQuitHold(close);
 
   async function recover(): Promise<RecoveredSessionServices<Services>> {
     let held: string[] = [];
+    // The restart resume the sweep armed, run once the queue has had its turn.
+    // Written by the sweep's callback, so held in a box TypeScript cannot narrow.
+    const recovery: { resume?: () => Promise<void> } = {};
     if (database.ok && sessionEngine !== null) {
       // Compare before recovery itself can append events. A present watermark
       // is consumed in the same transaction that refuses any stale queued rows.
@@ -227,6 +236,10 @@ export function createSessionRuntimeLifecycle<Services>(options: {
           now: Date.now,
           onError: (attachmentId, error) =>
             ports.log.error("failed to recover attachment", { attachmentId, error }),
+          onRecovered: (recovered) => {
+            if (runtime === null) return;
+            recovery.resume = () => resumeRestartTurns(runtime, sessionEngine, recovered);
+          },
         });
       } catch (error) {
         ports.log.error("failed to recover stale attachments", { error });
@@ -270,6 +283,11 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     if (runtime !== null) await recoverFollowUps(runtime);
     if (closing)
       throw new SessionRuntimeClosingError("The Session runtime closed during recovery.");
+    // After the queue: a message the person queued behind the lost turn is
+    // their own word on what comes next, and a turn it opened is one the
+    // restart resume then leaves alone (VC-450). Its turns outlive readiness;
+    // close waits for them.
+    restartResumeRuns = recovery.resume?.();
     try {
       await notices?.recover();
     } catch (error) {
@@ -304,6 +322,25 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     };
     issuedProofs.add(proof);
     return proof;
+  }
+  /** The restart resume over this host's runtime and engine (VC-450). */
+  function resumeRestartTurns(
+    hosted: HostedSessionRuntime,
+    engine: NonNullable<typeof sessionEngine>,
+    recovered: BootRecoveredTurns,
+  ): Promise<void> {
+    return resumeRecoveredTurns(
+      {
+        projection: async (sessionId) => (await hosted.projection({ sessionId })).projection,
+        ticketSessions: ({ projectId, ticketId }) =>
+          engine.listSessions({ projectId, scope: "ticket", ticketId }),
+        resumeBoundary: (input) => hosted.resumeBoundary(input),
+        pendingTurnStarts: () => hosted.pendingTurnStarts(),
+        command: (request) => hosted.command(request),
+        shouldStop: () => closing,
+      },
+      recovered,
+    );
   }
   /**
    * Release/reconcile durable follow-ups, preferably before any Client or

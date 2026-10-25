@@ -2250,6 +2250,75 @@ describe("asking the driver", () => {
     await third.close();
   });
 
+  it("tells where a recovered turn stands, and resumes a lost tool call as interrupted (VC-450)", async () => {
+    const attachment = fixture();
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("read", { path: "MARKER.txt" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("Read it.");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession(attachment.spec);
+    expect(first.resumeBoundary?.()).toBe("none");
+    await first.submitUserMessage("Read the marker", "queue", "before-crash");
+    // Settled: the reply finished, nothing is left to continue.
+    expect(first.resumeBoundary?.()).toBe("none");
+    const recovery = first.recovery!;
+    await first.close();
+    // The process died while the tool ran: its result, and everything after
+    // it, never reached the sidecar.
+    const lines = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
+    const lost = lines.findIndex((line) => line.includes('"role":"toolResult"'));
+    expect(lost).toBeGreaterThan(0);
+    writeFileSync(recovery.sessionFilePath, `${lines.slice(0, lost).join("\n")}\n`);
+
+    let context: Context | undefined;
+    const second = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, request) => {
+            context = request;
+            emit.text("Checked before repeating it.");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession({ ...attachment.spec, recovery });
+    await second.reconcile(null);
+    expect(second.resumeBoundary?.()).toBe("tool-in-flight");
+    expect(await second.retry("resume")).toMatchObject({ kind: "delivered", delivery: "retry" });
+    const results = context?.messages.filter((message) => message.role === "toolResult");
+    expect(results).toEqual([
+      expect.objectContaining({
+        toolName: "read",
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: expect.stringContaining("cut short before its result was recorded"),
+          },
+        ],
+      }),
+    ]);
+    // Durable, so the next attach finds the answer instead of the lost call.
+    expect(second.resumeBoundary?.()).toBe("none");
+    await second.close();
+    const repaired = entryRecords(recovery.sessionFilePath).filter((entry) => {
+      const message = entry["message"] as { role?: string } | undefined;
+      return message?.role === "toolResult";
+    });
+    expect(repaired).toHaveLength(1);
+  });
+
   it("reaches the person through the frozen ask_user tool", async () => {
     const asked: RuntimeAskUserRequest[] = [];
     const attachment = fixture({
@@ -4963,23 +5032,29 @@ describe("startSession", () => {
       const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
       const replay = await secondHandle.reconcile(null);
 
+      // A reply that settled and lost only its end marker leaves nothing to
+      // resume, so it raises no restart warning (VC-450); withheld history
+      // still says why it was withheld.
       expect(kinds([...replay.observations])).toEqual([
         "turn:started",
         "usage",
-        ...(conflictingHistory ? [] : ["message-settled"]),
-        "attention",
+        ...(conflictingHistory ? ["attention"] : ["message-settled"]),
         "turn:interrupted",
       ]);
-      expect(replay.observations.filter(({ kind }) => kind === "attention")).toEqual([
-        expect.objectContaining({
-          kind: "attention",
-          state: "raised",
-          reason: "partial-turn",
-          message: conflictingHistory
-            ? "Pi recovery history disagreed about a settled assistant message; the incomplete turn was withheld."
-            : "A recovered Pi turn ended before its completion marker was committed.",
-        }),
-      ]);
+      expect(replay.observations.filter(({ kind }) => kind === "attention")).toEqual(
+        conflictingHistory
+          ? [
+              expect.objectContaining({
+                kind: "attention",
+                state: "raised",
+                reason: "partial-turn",
+                message:
+                  "Pi recovery history disagreed about a settled assistant message; the incomplete turn was withheld.",
+              }),
+            ]
+          : [],
+      );
+      expect(secondHandle.resumeBoundary?.()).toBe(conflictingHistory ? "settled" : "none");
       expect(replay.receipts).toEqual([
         expect.objectContaining({ commandId: "command-partial-turn" }),
       ]);

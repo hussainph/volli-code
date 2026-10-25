@@ -204,7 +204,9 @@ One convention for what a module asks for and what it is (VC-632):
   host-owned ports and pre-execution hooks, never separate executors.
 - **Recovery before consumers.** `session-runtime/lifecycle` installs the
   quit hold synchronously, then recovers stale attachments, delegations,
-  durable shell notices and scheduled resume. Only `await lifecycle.ready()`
+  queued follow-ups, the restart resume of turns recovery rebuilt
+  (`session-runtime/restart-resume`, which outlives readiness and is drained
+  on close), durable shell notices and scheduled resume. Only `await lifecycle.ready()`
   issues `RecoveredSessionServices`, the opaque proof that public tool/watch
   doors, CLI Session ports, the renderer's listing/peek/stop hooks, the
   Session RPC edge and runtime Automations require. One idempotent `close()`

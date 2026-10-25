@@ -4,6 +4,7 @@ import type {
   ModelSelection,
   RuntimeMessageSettle,
   RuntimeObservation,
+  RuntimeResumeBoundary,
   SessionAttachmentContinuity,
   SessionInteraction,
   SessionInteractionResolution,
@@ -198,6 +199,12 @@ export interface BindingHandle {
    * it was asking stays unanswered, and nothing may conclude otherwise.
    */
   withdrawInteraction?(interactionId: string): Promise<void>;
+  /**
+   * Where this idle binding's conversation stands, read before a host
+   * continues a turn a lost process cut short (VC-450). Optional, and `null`
+   * when the executor cannot say: either way nothing is continued on its own.
+   */
+  resumeBoundary?(): RuntimeResumeBoundary | null;
   release(reason: ReleaseReason): Promise<void>;
 }
 
