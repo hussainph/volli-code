@@ -61,7 +61,7 @@ import {
 import { internal } from "./_generated/api";
 import type { DataModel, Doc } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
-import { requireSessionActor } from "./lib/auth";
+import { findVisibleProject, requireSessionActor } from "./lib/auth";
 import { requireRunner } from "./lib/runnerAuth";
 import { nullable } from "./lib/validators";
 
@@ -298,7 +298,8 @@ export type CommandArtifactBody = { digest: string; mediaType: string; body: str
  * is staged under `digest` (never staged, spilled, or swept after a pack).
  *
  * Runner-only (a runner token), and fenced like an accept: the Session must
- * be the runner owner's, and the claim this runner's at `generation`.
+ * be the runner owner's in a project they can still see, and the claim
+ * this runner's at `generation`.
  */
 export const commandArtifact = query({
   args: { sessionId: v.string(), generation: v.number(), digest: v.string() },
@@ -311,7 +312,10 @@ export const commandArtifact = query({
       .withIndex("by_uuid", (q) => q.eq("id", args.sessionId))
       .unique();
     const intake =
-      session === null || session.deletedAt !== null || session.ownerUserId !== caller.ownerUserId
+      session === null ||
+      session.deletedAt !== null ||
+      session.ownerUserId !== caller.ownerUserId ||
+      (await findVisibleProject(ctx, caller.ownerUserId, session.projectId)) === null
         ? null
         : await ctx.db
             .query("sessionIntake")

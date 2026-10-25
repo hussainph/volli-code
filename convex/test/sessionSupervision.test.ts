@@ -235,6 +235,24 @@ describe("an agent's steer into a Session on another runner", () => {
         outcome: { status: "done", result: null },
       }),
     ).resolves.toMatchObject({ ack: "recorded" });
+
+    // A surviving claim is not continued permission after Workspace access
+    // is lost. The common read must preserve the UI receiver's membership
+    // fence too, even for the exact same owned Session, runner and generation.
+    await w.t.run(async (ctx) => {
+      const project = await ctx.db
+        .query("projects")
+        .withIndex("by_uuid", (q) => q.eq("id", w.projectId))
+        .unique();
+      const member = await ctx.db
+        .query("workspaceMembers")
+        .withIndex("by_workspace_user", (q) =>
+          q.eq("workspaceId", project!.workspaceId).eq("userId", w.alice),
+        )
+        .unique();
+      await ctx.db.delete(member!._id);
+    });
+    await expect(read(w.remote)).rejects.toThrow(code("not_claimed"));
   });
 
   test("a Ticket Session steers and stops its own subagents only", async () => {
