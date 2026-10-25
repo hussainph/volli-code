@@ -24,6 +24,7 @@ export * from "./visibility";
 
 // The board vocabulary the cloud schema validates against, re-exported so the
 // backend can import this entry point alone.
+export type { SessionRole } from "../agent-runtime";
 export {
   TICKET_PRIORITIES,
   TICKET_STATUSES,

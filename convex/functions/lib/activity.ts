@@ -55,7 +55,6 @@ import {
   activityTicketIds,
   activityUserIds,
   actorUserId,
-  canSeeSession,
   readActivityEvent,
   renderTicketKey,
   type ActivityEvent,
@@ -72,6 +71,7 @@ import {
 
 import type { DataModel, Doc } from "../_generated/dataModel.js";
 import type { Viewer } from "./auth";
+import { boardEventVisibility } from "./visibility";
 
 type Reader = { db: GenericDatabaseReader<DataModel> };
 
@@ -142,16 +142,10 @@ function decodeFeedCursor(text: string): FeedCursor {
 // ── visibility ───────────────────────────────────────────────────────────────
 
 /**
- * Whether the viewer may see a board event that names a Session: the Session
- * is live, belongs to the event's project, and is the viewer's own, shared,
- * or the Workspace shares everything (`canSeeSession`, with `shareAll`
- * applied at read time). A Session id carried only as attribution (an agent
- * Actor, a `session` origin) does not hide the change: only the payload's own
- * `sessionId` does. Each Session is read once per page.
- *
- * The Session visibility work (VC-899) adds `visibleBoardEvents` with the
- * same rule; once it is on main this check delegates to it, so the feed and a
- * ticket's history filter through one function.
+ * Whether the viewer may see a board event that names a Session: the one
+ * Session visibility check every board-event read shares
+ * (`boardEventVisibility` in `./visibility`), with `shareAll` applied at read
+ * time. Each Session is read once per page.
  */
 export function sessionVisibility(
   ctx: Reader,
@@ -159,32 +153,7 @@ export function sessionVisibility(
   membership: MembershipFacts,
   policy: PolicyFacts,
 ): (event: ActivityEvent) => Promise<boolean> {
-  const verdicts = new Map<string, boolean>();
-  return async (event) => {
-    const sessionId = (event.payload as { sessionId?: unknown }).sessionId;
-    if (typeof sessionId !== "string") return true;
-    const key = `${event.projectId}:${sessionId}`;
-    let verdict = verdicts.get(key);
-    if (verdict === undefined) {
-      const session = await ctx.db
-        .query("sessions")
-        .withIndex("by_uuid", (q) => q.eq("id", sessionId))
-        .unique();
-      verdict =
-        session !== null &&
-        session.deletedAt === null &&
-        session.projectId === event.projectId &&
-        canSeeSession(
-          viewer,
-          { ownerUserId: session.ownerUserId as UserId, visibility: session.visibility },
-          { workspaceId: membership.workspaceId },
-          membership,
-          policy,
-        );
-      verdicts.set(key, verdict);
-    }
-    return verdict;
-  };
+  return boardEventVisibility(ctx, { viewer, membership, policy });
 }
 
 // ── the read ─────────────────────────────────────────────────────────────────

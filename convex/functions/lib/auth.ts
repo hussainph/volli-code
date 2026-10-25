@@ -326,6 +326,84 @@ export async function requireProject(
   return { viewer, project: access.project, membership: access.membership };
 }
 
+/** The Session fields a visibility decision reads. */
+export type SessionVisibilityRow = Pick<
+  Doc<"sessions">,
+  "projectId" | "ownerUserId" | "visibility" | "deletedAt" | "role"
+>;
+
+/** A Session row as the shared predicates read it. */
+export function sessionFacts(
+  session: Pick<Doc<"sessions">, "ownerUserId" | "visibility" | "role">,
+): {
+  ownerUserId: UserId;
+  visibility: Doc<"sessions">["visibility"];
+  role: Doc<"sessions">["role"];
+} {
+  return {
+    ownerUserId: session.ownerUserId as UserId,
+    visibility: session.visibility,
+    role: session.role,
+  };
+}
+
+/** A Session the viewer can see, with the project and policy its visibility was decided under. */
+export interface VisibleSession {
+  viewer: Viewer;
+  session: Doc<"sessions">;
+  project: Doc<"projects">;
+  policy: PolicyFacts;
+}
+
+/**
+ * One project's Sessions as the viewer may see them: the viewer, their active
+ * membership and the Workspace policy, each looked up once, and `canSee`, the
+ * decision for any number of that project's Session rows. `shareAll` is read
+ * here, at read time, and nowhere is it written onto a Session.
+ */
+export interface SessionScope {
+  viewer: Viewer;
+  project: Doc<"projects">;
+  membership: MembershipFacts;
+  policy: PolicyFacts;
+  /** Live, in this project, and visible to the viewer (owner, shared, or `shareAll`). */
+  canSee(session: SessionVisibilityRow): boolean;
+}
+
+async function sessionScope(
+  ctx: ReadCtx,
+  viewer: Viewer,
+  project: Doc<"projects">,
+  membership: MembershipFacts,
+): Promise<SessionScope> {
+  const policy = await findPolicy(ctx, project.workspaceId);
+  const workspace = { workspaceId: project.workspaceId as WorkspaceId };
+  return {
+    viewer,
+    project,
+    membership,
+    policy,
+    canSee: (session) =>
+      session.deletedAt === null &&
+      session.projectId === project.id &&
+      canSeeSession(viewer, sessionFacts(session), workspace, membership, policy),
+  };
+}
+
+/**
+ * The scope for reading a project's Sessions (listings, feeds): the project
+ * must be live and the viewer an active Member of its CURRENT Workspace, or
+ * `not_found` / `not_a_member` as {@link requireProject} says. Filter each
+ * Session row with `canSee`.
+ */
+export async function requireSessionScope(
+  ctx: ReadCtx,
+  projectId: ProjectId | string,
+): Promise<SessionScope> {
+  const { viewer, project, membership } = await requireProject(ctx, projectId);
+  return sessionScope(ctx, viewer, project, membership);
+}
+
 /**
  * A live Session the viewer can see: owner, shared, or the Workspace shares
  * everything. Whether a Session exists is part of what may be private, so
@@ -334,7 +412,7 @@ export async function requireProject(
 export async function requireSessionVisible(
   ctx: ReadCtx,
   sessionId: SessionId | string,
-): Promise<{ viewer: Viewer; session: Doc<"sessions">; project: Doc<"projects"> }> {
+): Promise<VisibleSession> {
   const absent = () => authError("not_found", "That session does not exist.");
   const viewer = await requireViewer(ctx);
   const session = await ctx.db
@@ -344,25 +422,18 @@ export async function requireSessionVisible(
   if (session === null || session.deletedAt !== null) throw absent();
   const access = await projectAccess(ctx, viewer, session.projectId);
   if (access.kind !== "ok") throw absent();
-  const policy = await findPolicy(ctx, access.project.workspaceId);
-  const visible = canSeeSession(
-    viewer,
-    { ownerUserId: session.ownerUserId as UserId, visibility: session.visibility },
-    { workspaceId: access.project.workspaceId as WorkspaceId },
-    access.membership,
-    policy,
-  );
-  if (!visible) throw absent();
-  return { viewer, session, project: access.project };
+  const scope = await sessionScope(ctx, viewer, access.project, access.membership);
+  if (!scope.canSee(session)) throw absent();
+  return { viewer, session, project: access.project, policy: scope.policy };
 }
 
 /** A Session the viewer may act on (0.3: its owner only). */
 export async function requireSessionActor(
   ctx: ReadCtx,
   sessionId: SessionId | string,
-): Promise<{ viewer: Viewer; session: Doc<"sessions">; project: Doc<"projects"> }> {
+): Promise<VisibleSession> {
   const access = await requireSessionVisible(ctx, sessionId);
-  if (!canActOnSession(access.viewer, { ownerUserId: access.session.ownerUserId as UserId })) {
+  if (!canActOnSession(access.viewer, sessionFacts(access.session))) {
     throw authError("forbidden", "Only the session's owner can do this.");
   }
   return access;

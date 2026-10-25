@@ -25,9 +25,11 @@ import type * as lib_boardReceipts from "../lib/boardReceipts.js";
 import type * as lib_firstSignIn from "../lib/firstSignIn.js";
 import type * as lib_objectStore from "../lib/objectStore.js";
 import type * as lib_validators from "../lib/validators.js";
+import type * as lib_visibility from "../lib/visibility.js";
 import type * as lib_workspaces from "../lib/workspaces.js";
 import type * as members from "../members.js";
 import type * as projects from "../projects.js";
+import type * as sessionVisibility from "../sessionVisibility.js";
 import type * as transcripts from "../transcripts.js";
 import type * as workspaces from "../workspaces.js";
 
@@ -55,9 +57,11 @@ declare const fullApi: ApiFromModules<{
   "lib/firstSignIn": typeof lib_firstSignIn;
   "lib/objectStore": typeof lib_objectStore;
   "lib/validators": typeof lib_validators;
+  "lib/visibility": typeof lib_visibility;
   "lib/workspaces": typeof lib_workspaces;
   members: typeof members;
   projects: typeof projects;
+  sessionVisibility: typeof sessionVisibility;
   transcripts: typeof transcripts;
   workspaces: typeof workspaces;
 }>;

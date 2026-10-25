@@ -53,7 +53,7 @@ import {
 import { internal } from "./_generated/api.js";
 import type { Doc } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server.js";
-import { authError, requireProject } from "./lib/auth";
+import { authError, requireProject, requireSessionScope } from "./lib/auth";
 import {
   boardActor,
   boardError,
@@ -74,6 +74,7 @@ import {
 } from "./lib/board";
 import { enqueueSideEffects, hasLiveWorktree } from "./lib/boardEffects";
 import { withBoardReceipt } from "./lib/boardReceipts";
+import { visibleBoardEvents } from "./lib/visibility";
 import { literals, nullable } from "./lib/validators";
 
 const ticketStatus = literals(TICKET_STATUSES);
@@ -137,16 +138,21 @@ export const archivedTickets = query({
   },
 });
 
-/** A ticket's history, in `seq` order. */
+/**
+ * A ticket's history, in `seq` order. An event about a Session the viewer
+ * cannot see (a private one that is not theirs, unless the Workspace shares
+ * everything) is left out.
+ */
 export const ticketEvents = query({
   args: { ticketId: v.string() },
   handler: async (ctx, { ticketId }) => {
-    await requireTicket(ctx, ticketId);
+    const { project } = await requireTicket(ctx, ticketId);
     const events = await ctx.db
       .query("boardEvents")
       .withIndex("by_ticket_seq", (q) => q.eq("ticketId", ticketId))
       .collect();
-    return events.map(publicRow);
+    const scope = await requireSessionScope(ctx, project.id);
+    return (await visibleBoardEvents(ctx, scope, events)).map(publicRow);
   },
 });
 

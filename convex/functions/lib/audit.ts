@@ -1,6 +1,7 @@
 /**
  * The audit trail: one `auditLog` row per change worth answering "who did
- * this, and when" about (membership, invites, policy, Workspace settings, account deletion).
+ * this, and when" about (membership, invites, policy, Workspace settings, account deletion,
+ * sharing a Session).
  *
  * Each row names its Actor and what changed. `detail` is written only through
  * {@link audit}, from the typed entries below, and never holds a secret or an
@@ -29,9 +30,10 @@ export type AuditKind =
   | "member.removed"
   | "member.left"
   | "account.deletion_requested"
-  | "account.deletion_cancelled";
+  | "account.deletion_cancelled"
+  | "session.shared";
 
-export type AuditTargetKind = "workspace" | "policy" | "invite" | "member" | "user";
+export type AuditTargetKind = "workspace" | "policy" | "invite" | "member" | "user" | "session";
 
 /** A JSON-safe value for an audit row's `detail`. */
 export type AuditValue =

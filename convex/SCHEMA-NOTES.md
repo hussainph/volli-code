@@ -27,7 +27,7 @@ that writes one.
 - **Closed vocabularies are literal unions built with `literals(...)`.** The
   ones a runner or client also reads (ticket statuses and priorities, board
   event kinds, job kinds and statuses, the Actor's arms and reasons, member
-  roles and statuses, Session visibility, Working copy states, link kinds) come
+  roles and statuses, Session visibility and its reason, Working copy states, link kinds) come
   from `@volli/shared/cloud`, so the schema and the shared types cannot drift.
   The rest are inline in `schema.ts` for now; move a list to the shared
   package when something outside `convex/` needs to read it. Adding a value is
@@ -50,6 +50,13 @@ that writes one.
 - **Every public function requires an identity.** Start with the helpers in
   `lib/auth.ts`; the decisions are the pure predicates in
   `@volli/shared/cloud` (`canSeeProject`, `canSeeSession`, `canManage`, …).
+- **Session visibility is decided in one place.** A Session-creating write takes
+  `visibility`, `visibilityReason` and `sharedAt` from `visibilityForNewSession`
+  (`lib/visibility.ts`), never from its caller. A read of Sessions goes through
+  `requireSessionVisible` (one) or `requireSessionScope(...).canSee` (many), and
+  a read of board events through `visibleBoardEvents`, so `shareAll` is applied
+  at read time and nothing writes it onto a Session. The only visibility write
+  after creation is `shareSession`: `private → shared`, never back.
 
 ## Deviations from the design
 
@@ -69,7 +76,7 @@ Each was a decision made while turning the design into code.
    Automation run trigger and status; deletion target kind and status; billing
    merchant mode; GitHub repository selection; MCP credential kind; local
    credential kind; environment `runsOn` and `requiresOs`; client kind; board
-   event kind; job kind; Session `visibilityReason`; the Actor's `via`,
+   event kind; job kind; the Actor's `via`,
    `reason` and `was`.
 4. Where the design gives a shape, the field is an object rather than `json`:
    `runners.platform`, `runners.autoUpdate`, `runnerPresence.load`,
@@ -109,8 +116,9 @@ Each was a decision made while turning the design into code.
 12. `workspaceInvites.email` is nullable: `null` is a single-use link invite,
     accepted only with its token. An email invite is accepted only by a
     person whose verified email matches, by id or by token.
-13. Workspace and Member writes record an Actor in `auditLog` (`workspace.*`,
-    `policy.updated`, `invite.*`, `member.*`) with an `auditEntry` id, through
+13. Workspace and Member writes, and sharing a Session, record an Actor in
+    `auditLog` (`workspace.*`, `policy.updated`, `invite.*`, `member.*`,
+    `session.shared`) with an `auditEntry` id, through
     `lib/audit.ts`. `detail` is typed JSON from that helper rather than a
     shared codec (nothing outside `convex/` reads it yet), and never holds an
     invite token; only the token's sha256 is stored.
@@ -118,9 +126,11 @@ Each was a decision made while turning the design into code.
     Member changes are rare next to the reads that want it. It is recounted
     from the active Member rows in every Member transaction rather than
     incremented, so it cannot drift.
-15. Workspace, Member and invite mutations carry no `commandId`. Each is
+15. Workspace, Member and invite mutations, and `sessionVisibility.share`,
+    carry no `commandId`. Each is
     idempotent by its target state (a role, a status), a create by the
-    client's id, an invite acceptance by the invite. The exception is a lost
+    client's id, an invite acceptance by the invite, a share by the one-way
+    flip (sharing a shared Session writes nothing). The exception is a lost
     reply to `invites.create` for a link: a retry leaves a second pending link
     nobody holds, which expires after 7 days (the invite lifetime) and can be
     revoked.
@@ -165,3 +175,14 @@ Each was a decision made while turning the design into code.
     lines after redaction, not its raw bytes; the offsets still name the
     source file's range. A Session in `releasing` still takes its holder's
     uploads, so a handoff can pack.
+24. Board events about a Session the viewer cannot see are dropped from reads
+    (`boardEventVisibility` / `visibleBoardEvents`; the activity feeds and
+    `board.ticketEvents` read through it). A Session id
+    carried only as attribution on a board change everyone sees (an agent
+    Actor's `sessionId`, a `session` origin on a shared Session's start) is
+    kept: the change and the person it acted for are board facts, and the id
+    reads as `not_found` to anyone who cannot see that Session (deviation 8
+    still holds for every lookup). A subagent is never shared on its own
+    (`share_parent`); sharing its root carries down. `sessions.sharedAt` is
+    when a Session became shared: its creation time when born shared, the
+    flip's time otherwise.
