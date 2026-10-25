@@ -83,6 +83,15 @@ describe("preview access", () => {
     );
     const noEmail = t.withIdentity({ subject: "no-email", issuer: "https://issuer.test" });
     const { userId } = await noEmail.mutation(api.accounts.ensureViewer, {});
+    // Nullable tombstone-compatible profile fields never manufacture an email grant.
+    await t.run(async (ctx) => {
+      const user = await ctx.db
+        .query("users")
+        .withIndex("by_uuid", (q) => q.eq("id", userId))
+        .unique();
+      await ctx.db.patch(user!._id, { emailVerified: true });
+    });
+    expect((await noEmail.query(api.accounts.viewer, {}))?.previewAccess).toBe("waitlisted");
     await t.mutation(internal.previewAccess.set, { kind: "user", value: userId, enabled: true });
     expect((await noEmail.mutation(api.accounts.ensureViewer, {})).previewAccess).toBe("granted");
     await t.mutation(internal.previewAccess.set, { kind: "user", value: userId, enabled: false });
