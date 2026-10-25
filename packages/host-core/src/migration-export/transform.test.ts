@@ -187,12 +187,12 @@ describe("sequentialPositionKey", () => {
 });
 
 describe("derived ids", () => {
-  it("are RFC 9562 UUIDv5 under the frozen namespace", () => {
+  it("are RFC 9562 UUIDv8 (SHA-256, name-based) under the frozen namespace", () => {
     expect(MIGRATION_DERIVED_ID_NAMESPACE).toBe("5b0f6c0e-3c1f-4f7a-9c43-6f2a1d3e8b57");
-    // Cross-checked against the `uuid` package's v5 for the same name.
-    expect(primaryRepoId("proj-alpha")).toBe("1d88f805-4623-5a75-915f-a74fef4a6aa9");
+    // Cross-checked with Python's hashlib + uuid for the same name.
+    expect(primaryRepoId("proj-alpha")).toBe("563c43fb-a2d8-8cd2-a753-e6e9322814a5");
     expect(derivedId("a")).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
   });
 

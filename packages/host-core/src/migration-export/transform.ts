@@ -165,7 +165,7 @@ export function sequentialPositionKey(index: number): string {
 // ---- derived ids ------------------------------------------------------------
 
 /**
- * The UUIDv5 namespace for records the export makes that have no source row.
+ * The namespace for ids of records the export makes that have no source row.
  *
  * DURABLE, not live: a re-run of the export, and the importer's "skip rows
  * whose digest matches" rule, both depend on the same input
@@ -178,14 +178,19 @@ function uuidBytes(uuid: string): Buffer {
   return Buffer.from(uuid.replaceAll("-", ""), "hex");
 }
 
-/** RFC 9562 UUIDv5 of `parts` joined by `\u0000` under {@link MIGRATION_DERIVED_ID_NAMESPACE}. */
+/**
+ * A name-based UUID for `parts` joined by `\u0000` under
+ * {@link MIGRATION_DERIVED_ID_NAMESPACE}: RFC 9562's UUIDv8 (§5.8, custom),
+ * built the way v5 is but over SHA-256 rather than SHA-1. An id, not a secret;
+ * SHA-256 only keeps a weak hash out of the codebase.
+ */
 export function derivedId(...parts: readonly string[]): string {
-  const hash = createHash("sha1")
+  const hash = createHash("sha256")
     .update(uuidBytes(MIGRATION_DERIVED_ID_NAMESPACE))
     .update(parts.join("\u0000"), "utf8")
     .digest();
   const bytes = hash.subarray(0, 16);
-  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[6] = (bytes[6]! & 0x0f) | 0x80;
   bytes[8] = (bytes[8]! & 0x3f) | 0x80;
   const hex = bytes.toString("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
