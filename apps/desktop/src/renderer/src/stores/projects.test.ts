@@ -2008,6 +2008,17 @@ describe("a cloud launch's projects (VC-889)", () => {
     expect(gateway.setSelection).toHaveBeenCalledOnce();
   });
 
+  it("shows the offline snapshot's projects without persisting anything", () => {
+    const gateway = fakeGateway();
+    const announced = vi.fn();
+    const store = createProjectsStore(gateway, announced);
+    const a = project({ id: "a", path: "" });
+    store.getState().showCloudSnapshot([a], "a");
+    expect(store.getState().projects).toEqual([a]);
+    expect(announced).toHaveBeenCalledWith("a");
+    expect(gateway.setSelection).not.toHaveBeenCalled();
+  });
+
   it("keeps the cloud selection through a local launch's own selection changes", () => {
     const gateway = fakeGateway();
     const store = createProjectsStore(

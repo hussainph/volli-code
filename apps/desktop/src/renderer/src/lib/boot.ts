@@ -34,10 +34,16 @@ import { useBoardStore } from "@renderer/stores/board";
 import { cloudBoardSource, installCloudBoardSource } from "@renderer/stores/board-source";
 import { ConvexBoardSource } from "@renderer/stores/cloud-board/source";
 import {
+  BOARD_SNAPSHOT_AFTER_MS,
+  createSnapshotWriter,
+  decodeBoardSnapshot,
+  liveBoardSnapshot,
+} from "@renderer/stores/cloud-board/snapshot";
+import {
   followCloudWorkspace,
   useCloudWorkspaceStore,
 } from "@renderer/stores/cloud-board/workspace";
-import { createCloudHostSource } from "@renderer/stores/cloud-link";
+import { createCloudHostSource, useCloudLinkInputs } from "@renderer/stores/cloud-link";
 import {
   canWriteProject,
   hostOfProject,
@@ -314,6 +320,70 @@ export interface CloudBoardDeps {
 }
 
 /**
+ * The last-seen board, kept on this Mac for a launch that cannot reach
+ * Volli Cloud (VC-889, D3): read once, shown by the Workspace follower if no
+ * live list answers in time, and written again whenever the live board
+ * settles.
+ */
+let stopKeepingBoard: () => void = () => {};
+
+function cloudBoardSnapshot(userId: string, source: ConvexBoardSource) {
+  // One writer per window: a second start replaces the first's.
+  stopKeepingBoard();
+  const timers = {
+    setTimeout: (run: () => void, ms: number): unknown => setTimeout(run, ms),
+    clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  };
+  const writer = createSnapshotWriter({
+    read: (savedAt) =>
+      liveBoardSnapshot({
+        userId,
+        savedAt,
+        showingSnapshot: useCloudLinkInputs.getState().input.snapshotAt !== null,
+        workspace: useCloudWorkspaceStore.getState().workspace,
+        projects: useProjectsStore.getState().projects,
+        ticketsByProject: useBoardStore.getState().ticketsByProject,
+        labelsByProject: useBoardStore.getState().labelsByProject,
+        painted: (projectId) => source.painted(projectId),
+      }),
+    save: (text) => sessionRpcClient().cloud.saveSnapshot.mutate({ text }),
+    clock: { now: () => Date.now(), ...timers },
+    warn: (message, error) => console.warn(message, error),
+  });
+  const stops = [
+    useBoardStore.subscribe((state, previous) => {
+      if (
+        state.ticketsByProject !== previous.ticketsByProject ||
+        state.labelsByProject !== previous.labelsByProject
+      ) {
+        writer.schedule();
+      }
+    }),
+    useProjectsStore.subscribe((state, previous) => {
+      if (state.projects !== previous.projects) writer.schedule();
+    }),
+  ];
+  stopKeepingBoard = () => {
+    for (const stop of stops) stop();
+  };
+  return {
+    afterMs: BOARD_SNAPSHOT_AFTER_MS,
+    snapshot: async () => {
+      try {
+        const { text } = await sessionRpcClient().cloud.readSnapshot.query();
+        return decodeBoardSnapshot(text, userId);
+      } catch (error) {
+        console.warn("couldn't read the board snapshot", error);
+        return null;
+      }
+    },
+    shown: (savedAt: number | null) =>
+      useCloudLinkInputs.getState().update({ snapshotAt: savedAt }),
+    ...timers,
+  };
+}
+
+/**
  * A cloud launch's board (VC-889): the board source over the window's Volli
  * Cloud client, Volli Cloud's link in the host-connection store, the current
  * Workspace's projects, and then the client itself. Does nothing in a local
@@ -336,6 +406,7 @@ export async function startCloudBoard(
     persisted: bootCloudSelection,
     failed: (message) => toastError(message),
     notice: (message) => toast.warning(message),
+    offline: cloudBoardSnapshot(launch.userId, source),
   });
   try {
     await deps.start(launch);

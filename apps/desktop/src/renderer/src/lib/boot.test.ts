@@ -22,6 +22,10 @@ import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { adoptLaunch, launchStore } from "@renderer/stores/launch";
 import { cloudBoardSource } from "@renderer/stores/board-source";
 import { useCloudWorkspaceStore } from "@renderer/stores/cloud-board/workspace";
+import {
+  BOARD_SNAPSHOT_DEBOUNCE_MS,
+  decodeBoardSnapshot,
+} from "@renderer/stores/cloud-board/snapshot";
 
 import type { BoardSyncTransport } from "@renderer/stores/board-sync";
 
@@ -1659,5 +1663,41 @@ describe("a cloud launch's boot (VC-889)", () => {
     start.mockRejectedValueOnce("refused" as never);
     await startCloudBoard({ start: start as never });
     expect(error).toHaveBeenCalledWith("Couldn’t start Volli Cloud: refused", expect.anything());
+  });
+
+  it("keeps the live board on this Mac once it settles, and logs a keep that fails (D3)", async () => {
+    vi.useFakeTimers();
+    try {
+      await boot(
+        fakeGateway(),
+        fakeStorage(),
+        async () => true,
+        async () => CLOUD,
+      );
+      const mutate = vi.fn(async (_input: { text: string }) => null);
+      vi.mocked(sessionRpcClient).mockReturnValue({
+        cloud: { saveSnapshot: { mutate } },
+      } as never);
+      await startCloudBoard({ start: vi.fn() as never });
+      useCloudWorkspaceStore.setState({ workspace: { id: "w1", name: "Team" } });
+      // A board change and a project-list change are one write, once quiet.
+      useBoardStore.getState().paintBoard("nothing-listed", [], [], new Set());
+      useProjectsStore.setState({ projects: [] });
+      await vi.advanceTimersByTimeAsync(BOARD_SNAPSHOT_DEBOUNCE_MS);
+      expect(mutate).toHaveBeenCalledOnce();
+      expect(decodeBoardSnapshot(mutate.mock.calls[0]![0].text, "u")).toMatchObject({
+        workspace: { id: "w1", name: "Team" },
+        projects: [],
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      mutate.mockRejectedValueOnce(new Error("disk full"));
+      useProjectsStore.setState({ projects: [] });
+      await vi.advanceTimersByTimeAsync(BOARD_SNAPSHOT_DEBOUNCE_MS);
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.any(Error));
+    } finally {
+      useCloudWorkspaceStore.setState({ workspace: null });
+      vi.mocked(sessionRpcClient).mockReset();
+      vi.useRealTimers();
+    }
   });
 });

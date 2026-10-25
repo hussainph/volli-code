@@ -31,6 +31,7 @@
  */
 import {
   BOARD_RESOURCE_KINDS,
+  CLOUD_SNAPSHOT_TEXT_MAX,
   DESKTOP_CATALOG_ENTRIES,
   HOST_LINK_RELAY_EVENT_ID_MAX,
   HOST_LINK_RELAY_PATH_MAX,
@@ -246,6 +247,8 @@ export interface DesktopRouterHandlers {
   readonly "cloud.launch": HostHandler<void, CloudLaunch>;
   readonly "cloud.relaunch": HostHandler<void, null>;
   readonly "cloud.reportUnsavedWrites": HostHandler<{ count: number }, null>;
+  readonly "cloud.saveSnapshot": HostHandler<{ text: string }, null>;
+  readonly "cloud.readSnapshot": HostHandler<void, { text: string | null }>;
 }
 
 type AssertNever<Type extends never> = Type;
@@ -893,6 +896,13 @@ export function createDesktopRouter() {
         .input(z.strictObject({ count: z.number().int().nonnegative().max(1_000_000) }))
         .output(z.null())
         .mutation(({ ctx, input }) => ctx.handlers["cloud.reportUnsavedWrites"](input, ctx.call)),
+      saveSnapshot: hostProcedure("cloud.saveSnapshot")
+        .input(z.strictObject({ text: z.string().min(1).max(CLOUD_SNAPSHOT_TEXT_MAX) }))
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["cloud.saveSnapshot"](input, ctx.call)),
+      readSnapshot: hostProcedure("cloud.readSnapshot")
+        .output(z.object({ text: z.string().max(CLOUD_SNAPSHOT_TEXT_MAX).nullable() }))
+        .query(({ ctx }) => ctx.handlers["cloud.readSnapshot"](undefined, ctx.call)),
     },
   });
 }

@@ -178,6 +178,7 @@ import { observeKeychainUse, webSealingLifecycle } from "./web/sealing-lifecycle
 import { createDesktopRemoteHosts, remoteHostsPort } from "./remote-hosts";
 import { accountPort, createDesktopAccount, resolveAccountConfig } from "./account";
 import { ACCOUNT_CLOUD_OFF } from "./account/service";
+import { CLOUD_SNAPSHOT_DIRECTORY, cloudSnapshotFiles } from "./cloud-snapshot";
 import {
   CLOUD_LAUNCH_APP_STATE_KEY,
   chooseProductStore,
@@ -856,9 +857,24 @@ const appStartup = app.whenReady().then(async () => {
           },
     hostLogger("cloud-launch"),
   );
+  // The last-seen cloud board for an offline launch (VC-889, D3): cleared
+  // with the marker, whenever the account ends up signed out.
+  const cloudSnapshots = cloudSnapshotFiles(
+    join(app.getPath("userData"), CLOUD_SNAPSHOT_DIRECTORY),
+  );
   const account = createDesktopAccount({
     config: accountConfig,
-    marker: launchMarker,
+    marker: {
+      write: (userId) => launchMarker.write(userId),
+      clear: () => {
+        launchMarker.clear();
+        try {
+          cloudSnapshots.clearAll();
+        } catch (error) {
+          hostLogger("cloud-launch").warn("could not clear the board snapshots", { error });
+        }
+      },
+    },
     enabled: () => isExperimentEnabled("cloud"),
     inventory: hostPrivateInventory,
     unlockInventory: unlockHostPrivate,
@@ -1476,6 +1492,12 @@ const appStartup = app.whenReady().then(async () => {
           if (!isExperimentEnabled("cloud")) throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
           recordUnsavedBoardWrites(count);
         },
+        // Only a cloud launch has a board to keep, and only its own account's.
+        saveSnapshot: (text) => {
+          if (launch.store !== "cloud") throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
+          cloudSnapshots.write(launch.userId, text);
+        },
+        readSnapshot: () => (launch.store === "cloud" ? cloudSnapshots.read(launch.userId) : null),
       }),
     };
   };

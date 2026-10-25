@@ -217,6 +217,8 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "cloud.launch": "ipc",
   "cloud.relaunch": "ipc",
   "cloud.reportUnsavedWrites": "ipc",
+  "cloud.saveSnapshot": "ipc",
+  "cloud.readSnapshot": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

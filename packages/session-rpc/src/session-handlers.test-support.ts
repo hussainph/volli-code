@@ -284,6 +284,8 @@ export function sessionHandlersFrom(
     "cloud.launch": remote("cloud.launch"),
     "cloud.relaunch": remote("cloud.relaunch"),
     "cloud.reportUnsavedWrites": remote("cloud.reportUnsavedWrites"),
+    "cloud.saveSnapshot": remote("cloud.saveSnapshot"),
+    "cloud.readSnapshot": remote("cloud.readSnapshot"),
   };
   return {
     ...handlers,

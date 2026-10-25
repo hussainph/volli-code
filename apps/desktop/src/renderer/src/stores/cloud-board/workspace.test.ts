@@ -4,7 +4,8 @@ import type { Project } from "@volli/shared";
 import type { CloudSession } from "@renderer/lib/cloud-client";
 
 import { fakeCloud, refusal } from "./fake-cloud.test-support";
-import type { CloudProjectRow } from "./projection";
+import { projectRows, type CloudProjectRow } from "./projection";
+import { BOARD_SNAPSHOT_VERSION, type BoardSnapshot } from "./snapshot";
 import {
   createCloudProject,
   followCloudWorkspace,
@@ -28,7 +29,10 @@ function projectRow(id: string, overrides: Partial<CloudProjectRow> = {}): Cloud
 const W1 = { workspaceId: "w1", name: "Dana's Workspace" };
 const W2 = { workspaceId: "w2", name: "Team" };
 
-function harness(persisted: CloudWorkspaceDeps["persisted"] = null) {
+function harness(
+  persisted: CloudWorkspaceDeps["persisted"] = null,
+  offline?: { snapshot: BoardSnapshot | null },
+) {
   const cloud = fakeCloud();
   let listener: ((session: CloudSession | null) => void) | null = null;
   const state = {
@@ -42,7 +46,13 @@ function harness(persisted: CloudWorkspaceDeps["persisted"] = null) {
       state.projects = [];
       state.selectedProjectId = null;
     }),
+    showCloudSnapshot: vi.fn((projects: Project[], selected: string | null) => {
+      state.projects = projects;
+      state.selectedProjectId = selected;
+    }),
   };
+  const timers: (() => void)[] = [];
+  const shown = vi.fn<(savedAt: number | null) => void>();
   const deps: CloudWorkspaceDeps = {
     follow: (next) => {
       listener = next;
@@ -51,11 +61,22 @@ function harness(persisted: CloudWorkspaceDeps["persisted"] = null) {
       };
     },
     projects: { getState: () => state },
-    board: { seedProject: vi.fn(), forget: vi.fn() },
+    board: { seedProject: vi.fn(), forget: vi.fn(), paintBoard: vi.fn() },
     workspace: useCloudWorkspaceStore,
     persisted,
     failed: vi.fn(),
     notice: vi.fn(),
+    ...(offline === undefined
+      ? {}
+      : {
+          offline: {
+            afterMs: 4_000,
+            snapshot: async () => offline.snapshot,
+            shown,
+            setTimeout: (run: () => void) => timers.push(run) - 1,
+            clearTimeout: vi.fn(),
+          },
+        }),
   };
   const stop = followCloudWorkspace(deps);
   return {
@@ -66,8 +87,49 @@ function harness(persisted: CloudWorkspaceDeps["persisted"] = null) {
     connect: () => listener!(cloud.session),
     close: () => listener!(null),
     listening: () => listener !== null,
+    shown,
+    /** The offline timer runs out, and the snapshot (if any) is read. */
+    timeout: async () => {
+      timers[0]!();
+      await Promise.resolve();
+      await Promise.resolve();
+    },
   };
 }
+
+const SNAPSHOT: BoardSnapshot = {
+  version: BOARD_SNAPSHOT_VERSION,
+  userId: "user-1",
+  savedAt: 42,
+  workspace: { id: "w1", name: W1.name },
+  projects: projectRows([projectRow("a"), projectRow("b")]),
+  boards: {
+    a: {
+      tickets: [
+        {
+          id: "t1",
+          projectId: "a",
+          ticketNumber: 1,
+          title: "Kept",
+          body: "",
+          status: "todo",
+          priority: "medium",
+          labels: [],
+          usesWorktree: true,
+          preferredHarnessId: "claude-code",
+          order: 0,
+          worktreePath: null,
+          branch: null,
+          baseBranch: null,
+          prUrl: null,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+      labels: [],
+    },
+  },
+};
 
 afterEach(() => {
   useCloudWorkspaceStore.setState({ workspace: null, localProjects: 0 });
@@ -201,5 +263,91 @@ describe("a new project in the Workspace (VC-889)", () => {
     const refused = createCloudProject({ name: "X" }, cloud.session, "w1");
     cloud.mutations[0]!.reject(refusal("prefix_taken", "Prefix taken."));
     expect(await refused).toEqual({ ok: false, error: "Prefix taken." });
+  });
+});
+
+describe("the offline snapshot at launch (VC-889, D3)", () => {
+  it("shows the last-seen board, read-only, when no live list answers in time", async () => {
+    const h = harness({ workspaceId: "w1", projectId: "b" }, { snapshot: SNAPSHOT });
+    h.connect();
+    await h.timeout();
+    expect(useCloudWorkspaceStore.getState().workspace).toEqual({ id: "w1", name: W1.name });
+    expect(h.deps.board.paintBoard).toHaveBeenCalledWith(
+      "a",
+      SNAPSHOT.boards["a"]!.tickets,
+      [],
+      new Set(["t1"]),
+    );
+    // A project whose board the snapshot did not hold paints empty.
+    expect(h.deps.board.paintBoard).toHaveBeenCalledWith("b", [], [], new Set());
+    expect(h.state.showCloudSnapshot).toHaveBeenCalledWith(SNAPSHOT.projects, "b");
+    expect(h.shown).toHaveBeenCalledExactlyOnceWith(42);
+    expect(h.deps.board.seedProject).not.toHaveBeenCalled();
+  });
+
+  it("swaps to the live board when it answers, with no relaunch and nothing announced", async () => {
+    const h = harness(null, { snapshot: SNAPSHOT });
+    h.connect();
+    await h.timeout();
+    expect(h.state.selectedProjectId).toBe("a");
+    h.state.selectedProjectId = "b";
+    h.cloud.answer("workspaces:listMine", {}, [W1]);
+    // Still the snapshot until the projects answer.
+    expect(h.deps.board.forget).not.toHaveBeenCalled();
+    h.cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("b"), projectRow("c")]);
+    expect(vi.mocked(h.deps.board.forget).mock.calls).toEqual([["a"], ["b"], ["a"]]);
+    expect(h.deps.notice).not.toHaveBeenCalled();
+    expect(h.shown).toHaveBeenLastCalledWith(null);
+    expect(vi.mocked(h.deps.board.seedProject).mock.calls).toEqual([["b"], ["c"]]);
+    expect(h.state.selectedProjectId).toBe("b");
+  });
+
+  it("replaces a snapshot of another Workspace once the live one's list answers", async () => {
+    const h = harness(null, { snapshot: SNAPSHOT });
+    h.connect();
+    await h.timeout();
+    h.cloud.answer("workspaces:listMine", {}, [W2]);
+    expect(h.deps.board.forget).not.toHaveBeenCalled();
+    expect(h.state.projects.map(({ id }) => id)).toEqual(["a", "b"]);
+    h.cloud.answer("projects:list", { workspaceId: "w2" }, [projectRow("t")]);
+    expect(h.state.projects.map(({ id }) => id)).toEqual(["t"]);
+  });
+
+  it("keeps the snapshot through a new client, and drops it when the client closes", async () => {
+    const h = harness(null, { snapshot: SNAPSHOT });
+    h.connect();
+    await h.timeout();
+    h.connect();
+    expect(h.state.clearCloud).not.toHaveBeenCalled();
+    expect(h.state.projects).toHaveLength(2);
+    h.close();
+    expect(h.state.clearCloud).toHaveBeenCalledOnce();
+    expect(h.shown).toHaveBeenLastCalledWith(null);
+  });
+
+  it("shows nothing when the live list answered first, nothing was kept, or the client closed", async () => {
+    const live = harness(null, { snapshot: SNAPSHOT });
+    live.connect();
+    live.cloud.answer("workspaces:listMine", {}, [W1]);
+    live.cloud.answer("projects:list", { workspaceId: "w1" }, []);
+    await live.timeout();
+    expect(live.shown).not.toHaveBeenCalled();
+
+    const none = harness(null, { snapshot: null });
+    none.connect();
+    await none.timeout();
+    expect(none.shown).not.toHaveBeenCalled();
+
+    const closed = harness(null, { snapshot: SNAPSHOT });
+    closed.connect();
+    closed.close();
+    await closed.timeout();
+    expect(closed.shown).not.toHaveBeenCalled();
+  });
+
+  it("stops its timer when it stops following", () => {
+    const h = harness(null, { snapshot: SNAPSHOT });
+    h.stop();
+    expect(h.deps.offline!.clearTimeout).toHaveBeenCalledWith(0);
   });
 });

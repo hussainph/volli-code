@@ -60,9 +60,12 @@ describe("the cloud board source (VC-889)", () => {
     source.attach(cloud.session);
     expect(cloud.watchers("board:roster", { projectId: P })).toBe(1);
     expect(screen.paint).not.toHaveBeenCalled();
+    expect(source.painted(P)).toBe(false);
+    expect(source.painted("elsewhere")).toBe(false);
 
     cloud.answer("board:roster", { projectId: P }, { tickets: [row(1)], labels: [] });
     expect(screen.paint).toHaveBeenCalledOnce();
+    expect(source.painted(P)).toBe(true);
     const [projectId, tickets, labels, unloaded] = screen.paint.mock.calls[0]!;
     expect(projectId).toBe(P);
     expect(tickets).toMatchObject([{ id: "t1", body: "" }]);

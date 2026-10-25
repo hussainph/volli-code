@@ -166,6 +166,11 @@ export class ConvexBoardSource implements BoardSource {
     return this.#boards.has(projectId);
   }
 
+  /** Whether the project's board has painted from a live answer (what an offline snapshot may keep). */
+  painted(projectId: string): boolean {
+    return (this.#boards.get(projectId)?.roster ?? null) !== null;
+  }
+
   projectOf(ticketId: string): string | undefined {
     return this.#ticketProject.get(ticketId);
   }

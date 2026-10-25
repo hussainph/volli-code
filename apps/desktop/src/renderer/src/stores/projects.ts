@@ -247,6 +247,11 @@ interface ProjectsState {
    */
   clearCloud(): void;
   /**
+   * The offline snapshot's projects (VC-889, D3): shown read-only until the
+   * live list answers, persisting nothing.
+   */
+  showCloudSnapshot(projects: Project[], selectedProjectId: string | null): void;
+  /**
    * The current Volli Cloud Workspace's projects, from its `projects.list`
    * (VC-889): the rail's whole list in a cloud launch. `selectedProjectId` is
    * what the caller resolved; the selection is persisted as the cloud one.
@@ -589,6 +594,12 @@ export function createProjectsStore(
         const previous = get().selectedProjectId;
         set({ projects: [], selectedProjectId: null });
         announceSelection(previous, null);
+      },
+
+      showCloudSnapshot(projects, selectedProjectId) {
+        const previous = get().selectedProjectId;
+        set({ projects, selectedProjectId });
+        announceSelection(previous, selectedProjectId);
       },
 
       hydrateCloud(workspaceId, projects, selectedProjectId) {

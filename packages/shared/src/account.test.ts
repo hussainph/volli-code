@@ -58,6 +58,8 @@ describe("the account wire vocabulary", () => {
       ["cloud.launch", "read"],
       ["cloud.relaunch", "natural"],
       ["cloud.reportUnsavedWrites", "natural"],
+      ["cloud.saveSnapshot", "natural"],
+      ["cloud.readSnapshot", "read"],
     ]);
     for (const entry of cloud) {
       expect(entry.placement, entry.key).toBe("host");

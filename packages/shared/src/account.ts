@@ -124,5 +124,8 @@ export type CloudLaunch =
   | { readonly store: "local" }
   | { readonly store: "cloud"; readonly userId: string; readonly backendUrl: string };
 
+/** The largest last-seen board snapshot the window may keep (VC-889, D3), in characters. */
+export const CLOUD_SNAPSHOT_TEXT_MAX = 16 * 1024 * 1024;
+
 /** The launch every flag-off, signed-out or unconfigured app makes. */
 export const LOCAL_LAUNCH: CloudLaunch = Object.freeze({ store: "local" });

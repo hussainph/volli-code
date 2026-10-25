@@ -7,6 +7,12 @@
  * Mac A's WebSocket can be cut: a wrapper over the platform's WebSocket that
  * the test severs and restores, so the real protocol keeps running.
  *
+ * The offline relaunch (D3) runs the same way: a first launch keeps its board,
+ * a second launches with the backend unreachable (its socket cut from the
+ * start: the fixture owns the backend process, so "the backend is down" is a
+ * socket that reaches nothing), shows the kept board read-only, and goes live
+ * when the socket is restored.
+ *
  * Runs only under the fixture, which hands it the backend's URL and the test
  * issuer's key: CI's `Convex (codegen + backend)` lane runs it so (and
  * requires it to run); it skips everywhere else, the desktop lanes included.
@@ -19,7 +25,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { ConvexHttpClient } from "convex/browser";
 import { ConvexReactClient } from "convex/react";
 import { api } from "@volli/convex/api";
-import type { AccountAccessToken, Label, Ticket } from "@volli/shared";
+import type { AccountAccessToken, Label, Project, Ticket } from "@volli/shared";
 
 import { DEV_AUDIENCE, DEV_ISSUER, DEV_KEY_ID } from "../../../../main/account/dev-issuer";
 import { signEs256Jwt } from "../../../../main/account/jwt";
@@ -27,11 +33,19 @@ import {
   closeCloudClient,
   startCloudClient,
   type CloudClientDeps,
+  type CloudSession,
 } from "@renderer/lib/cloud-client";
 
 import { createCloudHostSource, createCloudLinkInputStore } from "../cloud-link";
 import { CLOUD_HOST_ID, createHostConnectionStore, type HostLinkView } from "../host-connection";
+import {
+  decodeBoardSnapshot,
+  encodeBoardSnapshot,
+  liveBoardSnapshot,
+  type BoardSnapshot,
+} from "./snapshot";
 import { ConvexBoardSource } from "./source";
+import { followCloudWorkspace, useCloudWorkspaceStore } from "./workspace";
 
 const url = process.env["VOLLI_CONVEX_URL"];
 const privateKeyPem = process.env["VOLLI_CONVEX_TEST_PRIVATE_KEY"];
@@ -83,6 +97,149 @@ function cuttableWebSocket() {
 }
 
 const SERVING = { status: "open" } as const;
+
+/** Client glue over `socket`, signed in as `subject`, its token door always answering. */
+function windowDeps(
+  socket: ReturnType<typeof cuttableWebSocket>,
+  inputs: ReturnType<typeof createCloudLinkInputStore>,
+  subject: string,
+): CloudClientDeps {
+  return {
+    load: async () => ({
+      ConvexReactClient: class extends ConvexReactClient {
+        constructor(address: string, options: { unsavedChangesWarning: boolean }) {
+          super(address, { ...options, webSocketConstructor: socket.WebSocket });
+        }
+      } as never,
+      api,
+    }),
+    account: {
+      accessToken: async (): Promise<AccountAccessToken> => ({
+        kind: "token",
+        token: token(subject),
+        expiresAt: Date.now() + 3_600_000,
+      }),
+      subscribe: () => ({ unsubscribe: () => {} }),
+    },
+    window: {
+      navigator: { onLine: true },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    },
+    inputs: inputs.getState(),
+    reportUnsavedWrites: vi.fn(),
+    clock: {
+      now: () => Date.now(),
+      setTimeout: (run, ms) => setTimeout(run, ms),
+      clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      setInterval: (run, ms) => setInterval(run, ms),
+      clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
+    },
+  };
+}
+
+/**
+ * One launch's cloud board, as boot wires it: the client, the board source,
+ * the Workspace follower and Volli Cloud's link, over in-test stores.
+ */
+async function launchWindow(
+  subject: string,
+  socket: ReturnType<typeof cuttableWebSocket>,
+  kept: string | null,
+) {
+  const inputs = createCloudLinkInputStore();
+  const session = await startCloudClient(
+    { store: "cloud", userId: subject, backendUrl: url! },
+    windowDeps(socket, inputs, subject),
+  );
+  const boards = new Map<string, { tickets: Ticket[]; labels: Label[] }>();
+  const projectState = {
+    projects: [] as Project[],
+    selectedProjectId: null as string | null,
+    hydrateCloud: (_workspaceId: string, projects: Project[], selected: string | null) => {
+      projectState.projects = projects;
+      projectState.selectedProjectId = selected;
+    },
+    clearCloud: () => {
+      projectState.projects = [];
+      projectState.selectedProjectId = null;
+    },
+    showCloudSnapshot: (projects: Project[], selected: string | null) => {
+      projectState.projects = projects;
+      projectState.selectedProjectId = selected;
+    },
+  };
+  const projects = { getState: () => projectState, subscribe: () => () => {} };
+  const hosts = createHostConnectionStore();
+  const stopHosts = hosts.getState().attach(createCloudHostSource({ projects, inputs }));
+  const view = {
+    paint: (id: string, tickets: Ticket[], labels: Label[]) =>
+      void boards.set(id, { tickets, labels }),
+    notePlanningChange: vi.fn(),
+    failed: vi.fn(),
+    refused: vi.fn(),
+    unconfirmed: vi.fn(),
+    readOnly: (id: string) =>
+      hosts.getState().projects[id]?.link.status === "open" ? null : "Read-only",
+    dropped: vi.fn(),
+  };
+  const source = new ConvexBoardSource(view, subject);
+  source.attach(session);
+  const stopFollowing = followCloudWorkspace({
+    follow: (listener: (next: CloudSession | null) => void) => {
+      listener(session);
+      return () => {};
+    },
+    projects,
+    board: {
+      seedProject: (projectId) => void source.open(projectId),
+      forget: (projectId) => {
+        boards.delete(projectId);
+        source.close(projectId);
+      },
+      paintBoard: (projectId, tickets, labels) => void boards.set(projectId, { tickets, labels }),
+    },
+    workspace: useCloudWorkspaceStore,
+    persisted: null,
+    failed: vi.fn(),
+    notice: vi.fn(),
+    offline: {
+      afterMs: 1_000,
+      snapshot: async () => decodeBoardSnapshot(kept, subject),
+      shown: (savedAt) => inputs.getState().update({ snapshotAt: savedAt }),
+      setTimeout: (run, ms) => setTimeout(run, ms),
+      clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    },
+  });
+  const close = () => {
+    stopFollowing();
+    source.closeAll();
+    stopHosts();
+    closeCloudClient();
+    useCloudWorkspaceStore.setState({ workspace: null });
+  };
+  return {
+    session,
+    source,
+    view,
+    boards,
+    projectState,
+    close,
+    link: (projectId: string): HostLinkView => hosts.getState().projects[projectId]!.link,
+    /** The board this window would keep now, if it is the live one. */
+    keep: (): BoardSnapshot | null =>
+      liveBoardSnapshot({
+        userId: subject,
+        savedAt: Date.now(),
+        showingSnapshot: inputs.getState().input.snapshotAt !== null,
+        workspace: useCloudWorkspaceStore.getState().workspace,
+        projects: projectState.projects,
+        ticketsByProject: Object.fromEntries([...boards].map(([id, board]) => [id, board.tickets])),
+        labelsByProject: Object.fromEntries([...boards].map(([id, board]) => [id, board.labels])),
+        painted: (projectId) => source.painted(projectId),
+      }),
+  };
+}
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -314,6 +471,82 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
         history.filter(({ payload }) => (payload as { kind: string }).kind === "status_changed"),
       ).toHaveLength(1);
       expect(view.failed).not.toHaveBeenCalled();
+    }, 120_000);
+
+    it("shows the last-seen board when a relaunch cannot reach the backend, then goes live", async () => {
+      const subject = `live-snapshot-${randomUUID()}`;
+      const http = new ConvexHttpClient(url!);
+      http.setAuth(token(subject));
+      await http.mutation(api.accounts.ensureViewer, {});
+      const [workspace] = await http.query(api.workspaces.listMine, {});
+      const projectId = randomUUID();
+      await http.mutation(api.projects.create, {
+        commandId: randomUUID(),
+        workspaceId: workspace!.workspaceId,
+        projectId,
+        name: "Snapshot board",
+        ticketPrefix: "SNAP",
+        origin: "blank",
+      });
+      const ticketId = randomUUID();
+      await http.mutation(api.board.createTicket, {
+        commandId: randomUUID(),
+        projectId,
+        ticketId,
+        status: "todo",
+        title: "Seen before the outage",
+      });
+
+      // Launch 1, online: the live board settles, and its snapshot is kept.
+      const first = await launchWindow(subject, cuttableWebSocket(), null);
+      cleanups.push(() => first.close());
+      await vi.waitFor(() => expect(first.boards.get(projectId)?.tickets).toHaveLength(1), {
+        timeout: 15_000,
+      });
+      await vi.waitFor(() => expect(first.keep()).not.toBeNull(), { timeout: 15_000 });
+      const kept = encodeBoardSnapshot(first.keep()!);
+      const savedAt = decodeBoardSnapshot(kept, subject)!.savedAt;
+      first.close();
+
+      // The board moves on while this Mac is away.
+      await http.mutation(api.board.moveTickets, {
+        commandId: randomUUID(),
+        projectId,
+        ticketIds: [ticketId],
+        toStatus: "done",
+      });
+
+      // Launch 2, the backend unreachable: the kept board, read-only, saying how old.
+      const socket = cuttableWebSocket();
+      socket.cut();
+      const second = await launchWindow(subject, socket, kept);
+      cleanups.push(() => second.close());
+      await vi.waitFor(() => expect(second.projectState.projects).toHaveLength(1), {
+        timeout: 10_000,
+      });
+      expect(second.projectState.selectedProjectId).toBe(projectId);
+      expect(useCloudWorkspaceStore.getState().workspace?.id).toBe(workspace!.workspaceId);
+      expect(second.boards.get(projectId)?.tickets).toMatchObject([
+        { id: ticketId, title: "Seen before the outage", status: "todo", body: "" },
+      ]);
+      expect(second.link(projectId)).toMatchObject({ status: "offline", asOf: savedAt });
+      // Nothing is written from the snapshot, and every write refuses.
+      expect(second.keep()).toBeNull();
+      const mutation = vi.spyOn(second.session.client, "mutation");
+      await second.source.moveTickets(projectId, [ticketId], "doing", 0);
+      expect(second.view.refused).toHaveBeenCalled();
+      expect(mutation).not.toHaveBeenCalled();
+
+      // The backend is back: the live board replaces the snapshot, no relaunch.
+      socket.restore();
+      await vi.waitFor(() => expect(second.link(projectId)).toEqual(SERVING), { timeout: 30_000 });
+      await vi.waitFor(
+        () => expect(second.boards.get(projectId)?.tickets[0]?.status).toBe("done"),
+        { timeout: 15_000 },
+      );
+      expect(second.source.painted(projectId)).toBe(true);
+      expect(second.keep()?.boards[projectId]?.tickets[0]?.status).toBe("done");
+      expect(second.view.failed).not.toHaveBeenCalled();
     }, 120_000);
   },
 );

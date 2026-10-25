@@ -99,6 +99,15 @@ describe("Volli Cloud's link view (VC-889)", () => {
     expect(cloudLinkView(woke, at(100 + CLOUD_RESUME_SETTLE_MS))).toEqual(SERVING);
   });
 
+  it("reads offline, with the snapshot's age, while the offline snapshot is on screen", () => {
+    expect(cloudLinkView(input({ snapshotAt: 40, connection: null }), at(99))).toEqual({
+      status: "offline",
+      since: 40,
+      retryAt: null,
+      asOf: 40,
+    });
+  });
+
   it("refuses writes when Volli Cloud refused the sign-in", () => {
     expect(cloudLinkView(input({ authenticated: false }), at(0))).toEqual({
       status: "incompatible",
