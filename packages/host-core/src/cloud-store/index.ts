@@ -1,6 +1,7 @@
 /** The cloud product store: one owner-scoped local ledger, one shared runner link. No Electron. */
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type {
   HostedSessionRuntime,
   SessionLocationResolver,
@@ -47,6 +48,7 @@ import { createCloudSessionVerbs } from "../cloud-agent/session-verbs";
 import { getProjectById } from "../db/projects-repo";
 import { createCloudRestartRecovery } from "./recovery";
 import { createCloudTranscriptPublisher } from "./transcripts";
+import { createTranscriptPacking } from "./transcript-packing";
 import { startStreamChunks, type StreamChunks } from "../cloud-runner/stream-chunker";
 
 export interface CloudRunnerSyncConnection {
@@ -85,6 +87,7 @@ export function createCloudProductStore(options: {
     runnerToken?: () => Promise<string | null>;
     startStreams(): void;
     stopStreams(): Promise<void>;
+    packing: ReturnType<typeof createTranscriptPacking>;
   } | null = null;
   let runtime: HostedSessionRuntime | null = null;
   let artifacts: TranscriptArtifactStore | null = null;
@@ -112,7 +115,12 @@ export function createCloudProductStore(options: {
   const publishTranscriptFacts = createCloudTranscriptPublisher({
     current: () => active,
     artifacts: () => artifacts,
-    engine: { getBaseSession: (query) => owner.engine.getBaseSession(query) },
+    engine: {
+      getBaseSession: (query) => owner.engine.getBaseSession(query),
+      getSession: (query) => owner.engine.getSession(query),
+    },
+    ownerUserId,
+    piDirectory: () => join(host.dataDir, "pi-sessions"),
     ledger: sqliteDrainLedger(db),
     cursors: sqliteDrainCursorStore(db),
     backendUrl: options.backendUrl,
@@ -132,6 +140,7 @@ export function createCloudProductStore(options: {
     onBlocked: (sessionId, block) =>
       log.warn("Session cloud drain stopped", { sessionId, code: block.code }),
     onRetry: (sessionId) => log.warn("Session cloud drain will retry", { sessionId }),
+    onAccepted: (sessionId, through) => active?.packing.accepted(sessionId, through),
   });
   const context = createCloudContext({
     db,
@@ -393,6 +402,7 @@ export function createCloudProductStore(options: {
       active?.startStreams();
       followUpMirror.bind();
       refreshFollowUps();
+      active?.packing.refresh();
     },
     /** The runtime lifecycle's durable outbox door, for `session.notice` jobs. */
     bindNotices(outbox: SessionNoticeOutbox): void {
@@ -421,12 +431,44 @@ export function createCloudProductStore(options: {
         ended = true;
         await streams?.stop();
       };
+      const packing = createTranscriptPacking({
+        ownerUserId,
+        link: parts.link,
+        cursors: sqliteDrainCursorStore(db),
+        ledger: sqliteDrainLedger(db),
+        pack: publishTranscriptFacts.pack,
+        onError: (sessionId, code) =>
+          log.warn("Session history upload was retained", { sessionId, code }),
+        onReport: (sessionId, report) => {
+          for (const segment of report.transcript) {
+            if (segment.missing.length > 0)
+              log.warn("Session history pack has missing bodies", {
+                sessionId,
+                missing: segment.missing,
+              });
+          }
+          if (
+            report.piLogs.missing.length ||
+            report.piLogs.truncated.length ||
+            report.piLogs.oversized.length
+          )
+            log.warn("Session Pi history could not be fully uploaded", {
+              sessionId,
+              missing: report.piLogs.missing,
+              truncated: report.piLogs.truncated,
+              oversized: report.piLogs.oversized,
+            });
+        },
+      });
+      // A replaced registration cannot keep a timer or an upload alive.
+      active?.packing.close();
       active = {
         link: parts.link,
         runnerId: parts.runnerId,
         ...(parts.runnerToken === undefined ? {} : { runnerToken: parts.runnerToken }),
         startStreams,
         stopStreams,
+        packing,
       };
       recovery.observe(parts.link);
       const reports = publisher(registry());
@@ -532,6 +574,7 @@ export function createCloudProductStore(options: {
           started = true;
           sync ??= startRunnerSync({ link: parts.link, drain, inbox, presence: parts.presence });
           startStreams();
+          packing.start();
           void reports.flush();
           refreshFollowUps();
         },
@@ -543,7 +586,9 @@ export function createCloudProductStore(options: {
         async stop() {
           offReports();
           try {
+            const packingStopped = packing.stop();
             await stopStreams();
+            await packingStopped;
             if (sync !== null) await sync.stop();
           } finally {
             if (active?.link === parts.link) active = null;
@@ -551,6 +596,7 @@ export function createCloudProductStore(options: {
         },
         async close() {
           offReports();
+          packing.close();
           await stopStreams();
           inbox.stop();
           drain.stop();
@@ -563,6 +609,7 @@ export function createCloudProductStore(options: {
     dispose() {
       followUpMirror.close();
       offWake();
+      active?.packing.close();
       void active?.stopStreams().catch(() => log.warn("Session live chunks did not close"));
       drain.stop();
       for (const reports of publishers.values()) reports.stop();
