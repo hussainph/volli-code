@@ -22,6 +22,11 @@
  */
 import * as React from "react";
 import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
+import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
+import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
+import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
+import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
+import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
 import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 
@@ -29,6 +34,7 @@ import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
+import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { sessionProvenanceHoverLine, type BrowserTabHolder } from "@volli/shared";
 
@@ -40,7 +46,8 @@ import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
 import {
   GroupedTabList,
   groupTabItems,
-  type TabPair,
+  type TabGroup,
+  type TabMenuLabel,
 } from "@renderer/components/split/grouped-tab-chip";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
@@ -197,8 +204,16 @@ export function tabTitleWithProvenance(title: string, provenanceLine: string | n
  * convention, so two strips on one screen cannot drift apart.
  */
 export interface TicketTabListProps {
-  pairs?: readonly TabPair[];
-  onUnpair?(pairId: string): void;
+  /**
+   * The TOP strip's tab groups, one chip each (VC-614). Present only on the
+   * top strip — a group pane's own strip draws its stack as plain tabs, the
+   * Body included, every one of them draggable out of the pane.
+   */
+  groups?: readonly TabGroup[];
+  /** The group on screen, whose chip is drawn active. */
+  shownGroupId?: string | null;
+  /** Dissolve a group from its chip's menu; every tab stays open. */
+  onUngroup?(groupId: string): void;
   /** The ticket's owning project, used to resolve file tabs in main. */
   projectId: string;
   ticketId: string;
@@ -220,9 +235,9 @@ export interface TicketTabListProps {
   onRenameSessionTab(tabId: string, title: string): void;
   /**
    * A tab was dragged to a new place (VC-189): the tab that moved, and the
-   * strip's movable tab ids in the order the drop left them. An unpaired Body
-   * does not drag; a paired Body can leave its pair. Optional: a strip without
-   * it mounts no drag machinery.
+   * strip's movable tab ids in the order the drop left them. The top strip's
+   * Body does not drag; a pane strip's does, so it can leave its group.
+   * Optional: a strip without it mounts no drag machinery.
    */
   onReorderTabs?(movedId: string, ids: readonly string[]): void;
 }
@@ -255,6 +270,7 @@ function TicketTab({
   active,
   tabStop,
   dragId,
+  menu,
   editing,
   onSelect,
   onClose,
@@ -269,8 +285,10 @@ function TicketTab({
   active: boolean;
   /** This tab is the strip's single roving-tabindex entry point. */
   tabStop: boolean;
-  /** This tab's sortable id, absent for an unpaired Body tab. */
+  /** This tab's sortable id; absent for the top strip's Body and a chip segment. */
   dragId?: string;
+  /** False for a group chip's segment, whose right-click is the chip's menu. */
+  menu: boolean;
   editing: boolean;
   onSelect(): void;
   onClose(): void;
@@ -431,7 +449,9 @@ function TicketTab({
   // submenu, the two Copy Path items and Word Wrap whether pinned or previewed;
   // preview tabs additionally get Keep Open. Doc and Diff tabs still have
   // nothing to offer.
-  if (!renamable && fileTarget === null && !(preview && onPin !== undefined)) return inner;
+  if (!menu || (!renamable && fileTarget === null && !(preview && onPin !== undefined))) {
+    return inner;
+  }
 
   return (
     <ContextMenu>
@@ -595,18 +615,35 @@ export function TicketPaneTabStrip({ label, ...list }: TicketTabListProps & { la
 }
 
 /**
- * Every tab but an unpaired Body tab may be dragged. A paired Body keeps an
- * individual drag identity so it can leave its pair. A strip with no
- * `onReorderTabs` mounts no drag machinery at all.
+ * What a strip drags. The top strip drags its ordinary tabs but the Body — a
+ * chip is not a sortable — and a pane strip drags every tab of its stack. A
+ * strip with no `onReorderTabs` mounts no drag machinery at all.
  */
-function reorderFor({ tabs, pairs, onReorderTabs }: TicketTabListProps) {
+function reorderFor({ tabs, groups, onReorderTabs }: TicketTabListProps) {
   if (onReorderTabs === undefined) return undefined;
   return {
-    ids: groupTabItems(tabs, pairs).flatMap((group) =>
-      group.tabs.filter((tab) => tab.kind !== "body" || group.pair !== null).map((tab) => tab.id),
-    ),
+    ids:
+      groups === undefined
+        ? tabs.map((tab) => tab.id)
+        : groupTabItems(tabs, groups).flatMap((item) =>
+            item.group === null && item.tab.kind !== "body" ? [item.tab.id] : [],
+          ),
     onReorder: onReorderTabs,
   };
+}
+
+const TICKET_TAB_ICONS = {
+  body: FileTextIcon,
+  session: TerminalWindowIcon,
+  file: FileIcon,
+  diff: GitDiffIcon,
+  chat: ChatCircleIcon,
+  browser: BrowserIcon,
+} as const;
+
+/** What a group chip's menu says about a ticket tab. */
+function ticketTabMenuLabel(tab: TicketTabDescriptor): TabMenuLabel {
+  return { label: tab.label, icon: TICKET_TAB_ICONS[tab.kind] };
 }
 
 /** The tabs themselves, drawn the same wherever the strip around them is. */
@@ -615,8 +652,9 @@ function TicketTabList({
   ticketId,
   tabs,
   activeTabId,
-  pairs,
-  onUnpair,
+  groups,
+  shownGroupId,
+  onUngroup,
   onSelectTab,
   onCloseTab,
   onPinFileTab,
@@ -624,8 +662,17 @@ function TicketTabList({
 }: TicketTabListProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
   return (
-    <GroupedTabList tabs={tabs} pairs={pairs} activeTabId={activeTabId} onUnpair={onUnpair}>
-      {(tab, { active, tabStop, paired }) => (
+    <GroupedTabList
+      tabs={tabs}
+      groups={groups}
+      activeTabId={activeTabId}
+      shownGroupId={shownGroupId}
+      edgeTargets={groups !== undefined}
+      describe={ticketTabMenuLabel}
+      onSelect={(tab) => onSelectTab(tab.id)}
+      onUngroup={onUngroup}
+    >
+      {(tab, { active, tabStop, grouped }) => (
         <TicketTab
           key={tab.id}
           projectId={projectId}
@@ -633,9 +680,10 @@ function TicketTabList({
           tab={tab}
           active={active}
           tabStop={tabStop}
-          // The unpaired Body stays permanent. Inside a pair it drags on its
-          // own, just like the other member, so either can leave the pair.
-          dragId={tab.kind === "body" && !paired ? undefined : tab.id}
+          // The top strip's Body stays permanent, and a chip segment is the
+          // chip's; in a pane strip every tab drags, so it can leave the group.
+          dragId={grouped || (groups !== undefined && tab.kind === "body") ? undefined : tab.id}
+          menu={!grouped}
           editing={editingId === tab.id}
           onSelect={() => onSelectTab(tab.id)}
           onClose={() => onCloseTab(tab)}

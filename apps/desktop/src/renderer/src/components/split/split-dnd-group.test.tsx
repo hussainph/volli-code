@@ -9,6 +9,7 @@ import type {
 } from "@dnd-kit/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { SplitDnd } from "./split-dnd";
+import { splitZoneId, type SplitDropOperation } from "./split-drop";
 import { Tab, TabStrip, TabStripSurface } from "@renderer/components/ui/tab-strip";
 
 const harness = vi.hoisted(() => ({ props: null as DndContextProps | null }));
@@ -80,14 +81,18 @@ afterEach(() => {
 
 function mountPairSurface() {
   const pair = vi.fn();
+  const drop = vi.fn<(operation: SplitDropOperation) => void>();
   act(() =>
     root.render(
       <SplitDnd
         origin={{ scope: "project", projectId: "p", ticketId: null }}
-        panes={[{ paneId: "root", tabIds: ["source", "target"] }]}
-        onTabDrop={() => {}}
+        panes={[
+          { paneId: "root", tabIds: ["source", "target"] },
+          { paneId: "pane-2", tabIds: ["stacked"] },
+        ]}
+        onTabDrop={drop}
         onNativeDrop={() => {}}
-        onPairTabs={pair}
+        onGroupDrop={pair}
       >
         <div data-slot="tab-scroll">
           <div data-pair-target-id="target">Target</div>
@@ -103,7 +108,7 @@ function mountPairSurface() {
     over: null,
   } as unknown as DragEndEvent;
   act(() => harness.props!.onDragStart?.(event as unknown as DragStartEvent));
-  return { pair, event };
+  return { pair, drop, event };
 }
 function move(event: DragEndEvent, x: number, y = 15) {
   act(() => {
@@ -115,10 +120,10 @@ function move(event: DragEndEvent, x: number, y = 15) {
   });
 }
 
-describe("pair edge coordinates", () => {
+describe("top-strip edge grouping", () => {
   it.each([
-    [110, "left", ["source", "target"]],
-    [190, "right", ["target", "source"]],
+    [110, "left", ["target", "source", "left"]],
+    [190, "right", ["target", "source", "right"]],
   ] as const)(
     "uses viewport pointer %s despite scroll-adjusted drag delta",
     (x, edge, expected) => {
@@ -139,12 +144,29 @@ describe("pair edge coordinates", () => {
     act(() => harness.props!.onDragEnd?.(event));
     expect(pair).not.toHaveBeenCalled();
   });
-  it("does not turn the centre of a tab into a pair edge", () => {
+  it("does not turn the centre of a tab into a group edge", () => {
     const { pair, event } = mountPairSurface();
     move(event, 150);
     expect(host.querySelector("[data-pair-drop-edge]")).toBeNull();
     act(() => harness.props!.onDragEnd?.(event));
     expect(pair).not.toHaveBeenCalled();
+  });
+
+  it("hands a pane's centre zone to the ordinary drop: the tab joins that stack", () => {
+    const { pair, drop, event } = mountPairSurface();
+    move(event, 400, 300);
+    act(() =>
+      harness.props!.onDragEnd?.({
+        ...event,
+        over: { id: splitZoneId("pane-2", "center") },
+      } as unknown as DragEndEvent),
+    );
+    expect(pair).not.toHaveBeenCalled();
+    expect(drop).toHaveBeenCalledExactlyOnceWith({
+      kind: "move",
+      tabId: "source",
+      paneId: "pane-2",
+    });
   });
 });
 

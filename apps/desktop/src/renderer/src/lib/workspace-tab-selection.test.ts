@@ -1,4 +1,4 @@
-import { singlePaneSplitView, splitPane } from "@volli/shared";
+import { emptySplitView, splitPane } from "@volli/shared";
 import { expect, it, vi } from "vite-plus/test";
 
 import {
@@ -13,19 +13,16 @@ it("delivers selection intent only to its owner and resolves existing or newly o
   const stopA = subscribeWorkspaceTabSelection("a", a);
   const stopB = subscribeWorkspaceTabSelection("a", b);
   const stopC = subscribeWorkspaceTabSelection("c", c);
-  const split = splitPane(
-    singlePaneSplitView(["chat:old"], "chat:old", "root"),
-    "root",
-    "right",
-    {},
-    () => "right",
-  );
+  // A group of two: chat:old's pane, and the empty pane ⌘\ opened and focused.
+  const ids = ["opened", "group", "old"];
+  const split = splitPane(emptySplitView("chat:old"), "root", "right", {}, () => ids.shift()!);
   publishWorkspaceTabSelection("a", "chat:old", split);
-  expect(a).toHaveBeenLastCalledWith("root");
-  expect(b).toHaveBeenLastCalledWith("root");
+  expect(a).toHaveBeenLastCalledWith("old");
+  expect(b).toHaveBeenLastCalledWith("old");
   expect(c).not.toHaveBeenCalled();
+  // A tab no group holds was opened where the focus is.
   publishWorkspaceTabSelection("a", "chat:new", split);
-  expect(a).toHaveBeenLastCalledWith("right");
+  expect(a).toHaveBeenLastCalledWith("opened");
   stopA();
   publishWorkspaceTabSelection("a", "chat:new", null);
   expect(a).toHaveBeenCalledTimes(2);

@@ -49,7 +49,6 @@ import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 
 import {
   isSplitZoneId,
-  parseSplitZoneId,
   splitDropAccepts,
   splitTabDropOperation,
   subscribeSplitDrag,
@@ -97,9 +96,11 @@ export interface SplitDndProps {
   /** A Session or file row dropped on a zone. */
   onNativeDrop(payload: SplitDragPayload, paneId: string, zone: SplitDropZone): void;
   children: React.ReactNode;
-  /** A tab released on another member's left/right edge forms a bounded pair. */
-  onPairTabs?(firstTabId: string, secondTabId: string): void;
-  onUnpairTab?(tabId: string): void;
+  /**
+   * A tab released on the left or right quarter of a top-strip tab — an
+   * ordinary one, or a group chip's segment — groups beside it on that edge.
+   */
+  onGroupDrop?(targetTabId: string, tabId: string, edge: "left" | "right"): void;
 }
 
 /**
@@ -146,8 +147,7 @@ export function SplitDnd({
   panes,
   onTabDrop,
   onNativeDrop,
-  onPairTabs,
-  onUnpairTab,
+  onGroupDrop,
   children,
 }: SplitDndProps) {
   const areaRef = React.useRef<HTMLDivElement>(null);
@@ -165,7 +165,7 @@ export function SplitDnd({
   }, []);
   const pairDrop = React.useCallback(
     (event: DragMoveEvent | DragEndEvent) => {
-      if (onPairTabs === undefined || !(event.activatorEvent instanceof MouseEvent)) return null;
+      if (onGroupDrop === undefined || !(event.activatorEvent instanceof MouseEvent)) return null;
       const pointer = pointerRef.current;
       if (pointer === null) return null;
       const { x, y } = pointer;
@@ -187,7 +187,7 @@ export function SplitDnd({
       }
       return null;
     },
-    [onPairTabs],
+    [onGroupDrop],
   );
   const sensors = useSurfaceSensors();
   const reducedMotion = useReducedMotion();
@@ -214,20 +214,8 @@ export function SplitDnd({
       setGhostLabel(null);
       clearPairPreview();
       const pair = pairDrop(event);
-      if (pair !== null && onPairTabs !== undefined) {
-        const moving = String(active.id);
-        onPairTabs(
-          pair.edge === "left" ? moving : pair.id,
-          pair.edge === "left" ? pair.id : moving,
-        );
-        return;
-      }
-      if (
-        over !== null &&
-        parseSplitZoneId(String(over.id))?.zone === "center" &&
-        onUnpairTab !== undefined
-      ) {
-        onUnpairTab(String(active.id));
+      if (pair !== null && onGroupDrop !== undefined) {
+        onGroupDrop(pair.id, String(active.id), pair.edge);
         return;
       }
       const operation = splitTabDropOperation({
@@ -237,7 +225,7 @@ export function SplitDnd({
       });
       if (operation !== null) onTabDrop(operation);
     },
-    [onTabDrop, onPairTabs, onUnpairTab, pairDrop, clearPairPreview],
+    [onTabDrop, onGroupDrop, pairDrop, clearPairPreview],
   );
 
   const handleDragCancel = React.useCallback(() => {

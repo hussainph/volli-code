@@ -384,11 +384,13 @@ function abandonChat(sessionId: string): void {
  * the recorded id while it still names an open tab, and its DEFAULT is the
  * permanent Board tab — so a fresh Session that recorded nothing would land
  * behind the board, and the chord would look like it had done nothing at all.
+ * It is recorded as OPENED, not selected (VC-614): while a tab group is shown
+ * the new tab joins its focused pane rather than replacing the group.
  */
 export async function startProjectTerminal(projectId: string): Promise<string | null> {
   const sessionId = await createTerminalSession(projectScope(projectId));
   if (sessionId === null) return null;
-  useProjectUiStore.getState().setHomeActiveTab(projectId, sessionId);
+  useProjectUiStore.getState().openHomeTab(projectId, sessionId);
   // Returned for the one caller that has something to say to the shell it just
   // opened — the dependency offer types its install into it (VC-156). Every
   // other caller ignores it, exactly as it did when this returned nothing.
@@ -409,7 +411,9 @@ export async function startProjectChat(
     skills,
     land: (sessionId, isSession) => {
       useChatSessionsStore.getState().openChatTab(projectId, sessionId);
-      if (isSession) useProjectUiStore.getState().setHomeActiveTab(projectId, chatTabId(sessionId));
+      // A Draft is renderer-only until its first content (the surface places
+      // it in the focused pane); a Session born with content OPENS there.
+      if (isSession) useProjectUiStore.getState().openHomeTab(projectId, chatTabId(sessionId));
       return true;
     },
   });
@@ -437,7 +441,7 @@ export async function startProjectChat(
 export async function startTicketTerminal(projectId: string, ticketId: string): Promise<void> {
   const sessionId = await createTerminalSession(ticketScope(projectId, ticketId));
   if (sessionId === null) return;
-  useProjectUiStore.getState().setTicketActiveTab(projectId, ticketId, sessionId);
+  useProjectUiStore.getState().openTicketTab(projectId, ticketId, sessionId);
 }
 
 /**
@@ -505,7 +509,7 @@ export async function startTicketChat(
       if (!tickets.some((candidate) => candidate.id === ticketId)) return false;
       useChatSessionsStore.getState().openChatTab(ticketId, booted);
       if (isSession) {
-        useProjectUiStore.getState().setTicketActiveTab(projectId, ticketId, chatTabId(booted));
+        useProjectUiStore.getState().openTicketTab(projectId, ticketId, chatTabId(booted));
         // The rail's row for this Session needs no read here (VC-373): the
         // chat was minted through the Session Engine, so `volli:session-activity`
         // announces its listing row and the rail's cache folds it in — without

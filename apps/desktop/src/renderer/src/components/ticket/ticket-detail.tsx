@@ -7,6 +7,7 @@ import {
   EMPTY_TAB_ORDER,
   errorMessage,
   projectSplitView,
+  SPLIT_VIEW_ROOT_PANE_ID,
   type FileSource,
   type FileWorkspaceTab,
   type ResolvedSplitViewPane,
@@ -84,7 +85,12 @@ import { SplitDropZones } from "@renderer/components/split/split-drop-zones";
 import { paneStripLabel, partitionPaneTabs } from "@renderer/components/split/split-tab-partition";
 import { SplitViewGrid } from "@renderer/components/split/split-view-grid";
 import { SplitViewTabBar } from "@renderer/components/split/split-view-tab-bar";
-import { groupedTabIds, stripTabPairs } from "@renderer/components/split/split-tab-pairs";
+import {
+  groupedTabIds,
+  stripTabGroups,
+  surfaceOrderAfterReorder,
+  topStripTabIds,
+} from "@renderer/components/split/split-tab-groups";
 import { TerminalPaneAnchor } from "@renderer/components/split/terminal-pane-anchor";
 import {
   TicketPaneTabStrip,
@@ -324,8 +330,8 @@ export function TicketDetail({
     guardLayoutWrites,
     releaseActive,
     takeActive,
-    pairTabs: pairProvisionalTabs,
-    unpairTab: unpairProvisionalTab,
+    groupTabs: groupProvisionalTabs,
+    ungroupTab: ungroupProvisionalTab,
     titles: draftChatTitles,
   } = useProvisionalChatTabs(ticket.id, openChatIds, {
     readSplitView,
@@ -336,11 +342,10 @@ export function TicketDetail({
     closePane: (paneId) =>
       useProjectUiStore.getState().closeTicketPane(projectId, ticket.id, paneId),
   });
-  function unpairLocalTab(id: string): void {
-    unpairProvisionalTab(
-      id,
-      (tabId) => useProjectUiStore.getState().unpairTicketTab(projectId, ticket.id, tabId),
-      (paneId) => useProjectUiStore.getState().closeTicketPane(projectId, ticket.id, paneId),
+  /** A tab out of its group, an untouched Draft out of its renderer-local pane. */
+  function ungroupLocalTab(id: string): void {
+    ungroupProvisionalTab(id, (tabId) =>
+      useProjectUiStore.getState().ungroupTicketTab(projectId, ticket.id, tabId),
     );
   }
   const chatStatuses = useChatSessionsStore(
@@ -796,6 +801,17 @@ export function TicketDetail({
     },
     [releaseActive, setTicketActiveTab, projectId, takeActive, ticket.id],
   );
+  /**
+   * {@link setActiveTab} for a tab that was just OPENED — a new terminal, chat
+   * or Browser Tab: while a group is shown it joins the focused pane's stack.
+   */
+  const openTab = React.useCallback(
+    (tabId: string) => {
+      releaseActive();
+      useProjectUiStore.getState().openTicketTab(projectId, ticket.id, tabId);
+    },
+    [releaseActive, projectId, ticket.id],
+  );
 
   // The `@file` index + create/open wiring, shared by the Doc body editor and
   // every open markdown file tab so any of them can reference (and create) files.
@@ -1033,21 +1049,26 @@ export function TicketDetail({
    * path. `activeTab.id` rather than `activeTabId` because the fallback above
    * is exactly what a pane should show when the record names nothing live.
    */
-  const split = projectSplitView(
-    splitView === null ? null : overlaySplitView(splitView),
-    tabs.map((tab) => tab.id),
-    activeTab.id,
-    BODY_TAB_ID,
-  );
-  const pairs = stripTabPairs(splitView, split);
+  const tabIds = tabs.map((tab) => tab.id);
+  const overlaid = splitView === null ? null : overlaySplitView(splitView);
+  const split = projectSplitView(overlaid, tabIds, activeTab.id, BODY_TAB_ID);
   const paneStrips = partitionPaneTabs(split, tabs);
+  // The top strip: ordinary tabs, and one chip per group (VC-614).
+  const groups = stripTabGroups(overlaid, split, tabIds);
+  const drawnTabIds = groupedTabIds(tabIds, groups);
+  // What the top strip drags: its ordinary tabs, never the Body.
+  const topTabIds = topStripTabIds(drawnTabIds, groups).filter((id) => id !== BODY_TAB_ID);
 
   // ⌘\ / ⇧⌘\ / ⌃⌘arrows, for this workspace. Home mounts the same hook; the
   // chord asks which surface is in front and exactly one of them acts.
   useSplitShortcuts({
     projectId,
     ticketId: ticket.id,
-    orderedTabIds: tabs.map((tab) => tab.id).filter((tabId) => !emptyProvisionalTabIds.has(tabId)),
+    paneId: split.focusedPaneId,
+    targetTabId:
+      split.activeTabId === null || emptyProvisionalTabIds.has(split.activeTabId)
+        ? null
+        : split.activeTabId,
   });
 
   /**
@@ -1186,16 +1207,16 @@ export function TicketDetail({
   // New-session button so both take the exact same path.
   const createSession = React.useCallback(async () => {
     const sessionId = await createTerminalSession(ticketScope(projectId, ticket.id));
-    if (sessionId !== null) setActiveTab(sessionId);
-  }, [projectId, ticket.id, setActiveTab]);
+    if (sessionId !== null) openTab(sessionId);
+  }, [projectId, ticket.id, openTab]);
 
   // Opens the tab first and asks where to go second — see the note on Home's
   // twin. The `window.prompt` this replaces throws in Electron by definition,
   // and threw from outside the try, so the press was swallowed whole.
   const createBrowser = React.useCallback(
     // The shared door refuses a remote project's (VC-711).
-    () => openBrowserTab(browserApi, { projectId, ticketId: ticket.id }, setActiveTab),
-    [browserApi, projectId, setActiveTab, ticket.id],
+    () => openBrowserTab(browserApi, { projectId, ticketId: ticket.id }, openTab),
+    [browserApi, projectId, openTab, ticket.id],
   );
 
   // Mints one durable chat Session on this ticket and opens its tab, through
@@ -1214,7 +1235,7 @@ export function TicketDetail({
           if (!tickets.some((candidate) => candidate.id === ticket.id)) return false;
           useChatSessionsStore.getState().openChatTab(ticket.id, sessionId);
           if (isSession) {
-            setActiveTab(chatTabId(sessionId));
+            openTab(chatTabId(sessionId));
             // So an immediate creator's rail row appears without waiting on a
             // terminal event. Provisional promotion refreshes it later.
             void useTicketSessionRecordsStore.getState().refresh(ticket.id);
@@ -1223,20 +1244,23 @@ export function TicketDetail({
         },
       });
     },
-    [projectId, setActiveTab, ticket.id],
+    [projectId, openTab, ticket.id],
   );
 
   // A rail row for a Session with no live client adopts it; one already open
   // just comes to the front. `adoptChatSession` is idempotent, so this is the
-  // single path both cases take.
+  // single path both cases take — a tab it had to open OPENS (into the shown
+  // group's focused pane), one already open is SELECTED where it is.
   const activateChat = React.useCallback(
     (sessionId: string) => {
       const chat = useChatSessionsStore.getState();
+      const wasOpen = chat.openTabs[ticket.id]?.includes(sessionId) === true;
       chat.adoptChatSession(sessionId);
       chat.openChatTab(ticket.id, sessionId);
-      setActiveTab(chatTabId(sessionId));
+      if (wasOpen) setActiveTab(chatTabId(sessionId));
+      else openTab(chatTabId(sessionId));
     },
-    [setActiveTab, ticket.id],
+    [openTab, setActiveTab, ticket.id],
   );
 
   // Escape closes the detail view and returns to the board — but only when
@@ -1299,12 +1323,10 @@ export function TicketDetail({
           }
           useBrowserTabsStore.getState().remove(opaqueId);
           // The split-view half of a close this store does not own — the same
-          // statement the chat branch below makes. Unsplit, the reset to the
-          // Body applies only when the closed tab was the one in front.
-          if (splitView !== null) {
-            removeTicketTabFromSplit(projectId, ticket.id, tab.id);
-            return;
-          }
+          // statement the chat branch below makes. A tab of the group on screen
+          // hands over to its pane's successor; otherwise the reset to the Body
+          // applies only when the closed tab was the one in front.
+          removeTicketTabFromSplit(projectId, ticket.id, tab.id);
           const active =
             useProjectUiStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.active ??
             BODY_TAB_ID;
@@ -1322,16 +1344,15 @@ export function TicketDetail({
       // Draft, while a durable Session keeps its history for the rail to reopen.
       // Standing the active tab down first, because the relaunch
       // effect would otherwise read the persisted id, find the Session still on
-      // record, and put the tab back. While SPLIT that stand-down is the split
-      // view's own: it knows which pane held the tab and what succeeds it
-      // there, where a blind reset to the Body would yank the eye into the
-      // primary pane.
-      if (splitView === null) {
-        if (activeTabId === tab.id) setActiveTab(BODY_TAB_ID);
-      } else {
-        removeTicketTabFromSplit(projectId, ticket.id, tab.id);
-      }
-      if (emptyProvisionalTabIds.has(tab.id)) unpairLocalTab(tab.id);
+      // record, and put the tab back. For a tab of the group on screen that
+      // stand-down is the split view's own: it knows which pane held the tab
+      // and what succeeds it there, where a blind reset to the Body would yank
+      // the eye out of the group.
+      removeTicketTabFromSplit(projectId, ticket.id, tab.id);
+      const recorded =
+        useProjectUiStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.active;
+      if (recorded === tab.id) setActiveTab(BODY_TAB_ID);
+      if (emptyProvisionalTabIds.has(tab.id)) ungroupLocalTab(tab.id);
       useChatSessionsStore.getState().closeChatTab(ticket.id, chatId);
       return;
     }
@@ -1353,23 +1374,40 @@ export function TicketDetail({
   /**
    * This workspace's half of the drop-routing seam (`split-surface-drop.ts`):
    * the ticket store twins, and this workspace's own doors for a native
-   * payload. The decisions — pane-or-surface reorder, the unsplit centre's
-   * activation door, the first split's strip claim — live in the seam, one
-   * copy shared with Home.
+   * payload. The decisions — surface-or-pane reorder, the full-width centre's
+   * activation door, a move to the top strip leaving its group — live in the
+   * seam, one copy shared with Home.
    */
   // Every writer here records durable workspace layout, so each is wrapped by
   // the one rule about an empty Chat Draft — see `useProvisionalChatTabs`,
-  // which Home shares.
+  // which Home shares. A drop's target is the tab drawn where it landed, never
+  // an untouched Draft no layout may name.
+  const dropTarget = (paneId: string) => {
+    const front = split.panes.find((pane) => pane.id === paneId)?.activeTabId ?? null;
+    return front === null || emptyProvisionalTabIds.has(front) ? {} : { targetTabId: front };
+  };
   const paneWrites: SplitSurfaceWrites = {
-    reorderSurface: (movedId, ids) => moveTicketTab(projectId, ticket.id, movedId, ids),
+    // The top strip drags its ordinary tabs; every group keeps its slots.
+    reorderSurface: (movedId, ids) =>
+      moveTicketTab(
+        projectId,
+        ticket.id,
+        movedId,
+        surfaceOrderAfterReorder(
+          drawnTabIds.filter((id) => !emptyProvisionalTabIds.has(id)),
+          topTabIds.filter((id) => !emptyProvisionalTabIds.has(id)),
+          ids,
+        ).filter((id) => id !== BODY_TAB_ID),
+      ),
     reorderPane: (paneId, movedId, ids) =>
       moveTicketTabInPane(projectId, ticket.id, paneId, movedId, ids),
     moveTabToPane: (tabId, paneId) => moveTicketTabToPane(projectId, ticket.id, tabId, paneId),
-    splitPane: (paneId, edge, tabId, surfaceTabIds) =>
+    ungroupTab: (tabId) =>
+      useProjectUiStore.getState().ungroupTicketTab(projectId, ticket.id, tabId),
+    splitPane: (paneId, edge, tabId) =>
       splitTicketPane(projectId, ticket.id, paneId, edge, {
         ...(tabId === null ? {} : { tabId }),
-        surfaceTabIds,
-        targetTabId: split.panes.find((pane) => pane.id === paneId)?.activeTabId ?? undefined,
+        ...dropTarget(paneId),
       }),
     // The door the strip's own select takes.
     activateTab: (tabId) => setActiveTab(tabId),
@@ -1378,26 +1416,20 @@ export function TicketDetail({
   const dropWrites = guardLayoutWrites(paneWrites, (paneId) =>
     focusTicketPane(projectId, ticket.id, paneId),
   );
-  const dropState = { isSplit: split.panes.length > 1, orderedTabIds: tabs.map((tab) => tab.id) };
 
-  /** A drop on one pane's strip — surface arrangement unsplit, pane order split. */
+  /** A drop on one strip — the top strip's arrangement, or a group pane's stack. */
   function reorderInPane(paneId: string, movedId: string, ids: readonly string[]): void {
-    unpairLocalTab(movedId);
-    reorderDropWrite({ ...dropState, isSplit: false }, dropWrites, paneId, movedId, ids);
+    reorderDropWrite(dropWrites, paneId, movedId, ids);
   }
 
   /** A tab let go somewhere on this workspace (VC-202 §4) — the seam routes, the twins write. */
   function applySplitDrop(operation: SplitDropOperation): void {
-    if (operation.kind === "reorder") {
-      reorderInPane(operation.paneId, operation.movedId, operation.ids);
-      return;
-    }
-    tabDropWrite(dropState, dropWrites, operation);
+    tabDropWrite(dropWrites, operation);
   }
 
   /** A Session or file row dropped on a pane — opened by this workspace's doors, placed by the seam. */
   function handleNativeDrop(payload: SplitDragPayload, paneId: string, zone: SplitDropZone): void {
-    nativeDropWrite(dropState, dropWrites, payload, paneId, zone);
+    nativeDropWrite(dropWrites, payload, paneId, zone);
   }
 
   /**
@@ -1561,71 +1593,50 @@ export function TicketDetail({
     // the only one this subtree's strips register into.
     <SplitDnd
       origin={{ scope: "ticket", projectId, ticketId: ticket.id }}
+      // The top strip is the full-width pane's strip; a shown group's panes
+      // draw their own.
       panes={[
-        {
-          paneId: "root",
-          tabIds: groupedTabIds(
-            tabs.map((tab) => tab.id),
-            pairs,
-          ).filter((id) => id !== BODY_TAB_ID || pairs.some((pair) => pair.tabIds.includes(id))),
-        },
+        { paneId: SPLIT_VIEW_ROOT_PANE_ID, tabIds: topTabIds },
+        ...(split.groupId === null
+          ? []
+          : split.panes.map((pane) => ({ paneId: pane.id, tabIds: pane.tabIds }))),
       ]}
-      onPairTabs={(first, second) =>
-        pairProvisionalTabs(first, second, (firstId, secondId) =>
-          useProjectUiStore.getState().pairTicketTabs(projectId, ticket.id, firstId, secondId),
+      onGroupDrop={(targetTabId, tabId, edge) =>
+        groupProvisionalTabs(targetTabId, tabId, edge, (target, tab, side) =>
+          useProjectUiStore.getState().groupTicketTabs(projectId, ticket.id, target, tab, side),
         )
       }
-      onUnpairTab={unpairLocalTab}
       onTabDrop={applySplitDrop}
       onNativeDrop={handleNativeDrop}
     >
       <div className="flex min-h-0 flex-1 flex-col">
         {terminalFocused ? null : (
-          <SplitViewTabBar
-            view={split}
-            tabs={{ ids: tabs.map((tab) => tab.id), activeTabId: activeTab.id }}
-            railWidth={railCollapsed ? 0 : railWidth}
-            onFocusPane={(paneId) => focusTicketPane(projectId, ticket.id, paneId)}
-            onResizeSplit={(splitId, ratio) =>
-              setTicketSplitRatio(projectId, ticket.id, splitId, ratio)
-            }
-            renderStrip={(pane, last) => {
-              const list = {
-                label: pane.isPrimary ? "Ticket tabs" : paneStripLabel(pane),
-                projectId,
-                ticketId: ticket.id,
-                tabs,
-                pairs,
-                onUnpair: (pairId: string) => {
-                  const pair = pairs.find((item) => item.id === pairId);
-                  if (pair !== undefined)
-                    unpairLocalTab(
-                      pair.tabIds.includes(activeTab.id) ? activeTab.id : pair.tabIds[0],
-                    );
-                },
-                activeTabId: pane.activeTabId ?? "",
-                onSelectTab: setActiveTab,
-                onReorderTabs: (movedId: string, ids: readonly string[]) =>
-                  reorderInPane(pane.id, movedId, ids),
-                onPinFileTab: (relPath: string) => pinTicketFile(projectId, ticket.id, relPath),
-                onCloseTab: closeTab,
-                onRenameSessionTab: renameSessionTab,
-              };
-              return last ? (
-                <TicketTabStrip
-                  {...list}
-                  creating={creating || creatingChat}
-                  onNewSession={() => void createSession()}
-                  onNewChat={() => void createChat()}
-                  onNewBrowser={() => void createBrowser()}
-                  railCollapsed={railCollapsed}
-                  onToggleRail={toggleRailCollapsed}
-                />
-              ) : (
-                <TicketPaneTabStrip {...list} />
-              );
-            }}
-          />
+          <SplitViewTabBar>
+            <TicketTabStrip
+              label="Ticket tabs"
+              projectId={projectId}
+              ticketId={ticket.id}
+              tabs={tabs}
+              groups={groups}
+              shownGroupId={split.groupId}
+              onUngroup={(groupId) => {
+                releaseActive();
+                useProjectUiStore.getState().ungroupTicket(projectId, ticket.id, groupId);
+              }}
+              activeTabId={activeTab.id}
+              onSelectTab={setActiveTab}
+              onReorderTabs={(movedId, ids) => reorderInPane(SPLIT_VIEW_ROOT_PANE_ID, movedId, ids)}
+              onPinFileTab={(relPath) => pinTicketFile(projectId, ticket.id, relPath)}
+              onCloseTab={closeTab}
+              onRenameSessionTab={renameSessionTab}
+              creating={creating || creatingChat}
+              onNewSession={() => void createSession()}
+              onNewChat={() => void createChat()}
+              onNewBrowser={() => void createBrowser()}
+              railCollapsed={railCollapsed}
+              onToggleRail={toggleRailCollapsed}
+            />
+          </SplitViewTabBar>
         )}
         <div className="flex min-h-0 flex-1 overflow-hidden">
           {terminalFocused ? (
@@ -1639,10 +1650,10 @@ export function TicketDetail({
           ) : (
             <SplitViewGrid
               view={split}
-              retainedTabIds={browserTabs.map((tab) => browserTabId(tab.tabId))}
               renderStrip={(pane) =>
-                // Only lower panes render here; top-edge panes share the main
-                // bar. Empty lower panes keep just their menu.
+                // Every pane of a shown group draws its own stack — a pane of
+                // one tab too, so it can be dragged out or closed. An empty
+                // pane keeps just its menu.
                 pane.tabIds.length === 0 ? null : (
                   <TicketPaneTabStrip
                     label={paneStripLabel(pane)}

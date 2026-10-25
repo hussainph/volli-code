@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act } from "react";
+import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -13,10 +14,17 @@ import {
   type TicketTabDescriptor,
 } from "@renderer/components/ticket/ticket-tabs";
 import { Tab, TabStrip } from "@renderer/components/ui/tab-strip";
-import { GroupedTabList, groupTabItems, type TabPair } from "./grouped-tab-chip";
+import { GroupedTabList, groupTabItems, type TabGroup } from "./grouped-tab-chip";
 
 const noop = () => {};
-const pair: TabPair = { id: "pair-1", tabIds: ["chat:one", "browser:one"] };
+/** [chat:one, term] stacked in one pane (chat in front) | [browser:one]. */
+const group: TabGroup = {
+  id: "group-1",
+  panes: [
+    { paneId: "p1", tabIds: ["chat:one", "term"], activeTabId: "chat:one" },
+    { paneId: "p2", tabIds: ["browser:one"], activeTabId: "browser:one" },
+  ],
+};
 const chat: HomeTabDescriptor = {
   kind: "chat",
   id: "chat:one",
@@ -32,6 +40,24 @@ const browser: HomeTabDescriptor = {
   loading: false,
   driven: false,
   heldBy: null,
+};
+const file: HomeTabDescriptor = {
+  kind: "file",
+  id: "file:a.ts",
+  relPath: "a.ts",
+  title: "a.ts",
+  hint: null,
+  preview: false,
+  dirty: false,
+};
+const term: HomeTabDescriptor = {
+  kind: "file",
+  id: "term",
+  relPath: "term",
+  title: "Notes",
+  hint: null,
+  preview: false,
+  dirty: false,
 };
 let container: HTMLDivElement;
 let root: Root;
@@ -71,21 +97,29 @@ function press(element: Element, key: string) {
     ),
   );
 }
+async function openChipMenu() {
+  const chip = container.querySelector('[data-slot="grouped-tab-chip"]')!;
+  await act(async () => {
+    chip.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
+  });
+}
 
 function home(
   activeTabId: string,
-  pairs: readonly TabPair[] = [pair],
-  callbacks = { select: vi.fn(), close: vi.fn(), unpair: vi.fn(), rename: vi.fn() },
+  groups: readonly TabGroup[] = [group],
+  shownGroupId: string | null = "group-1",
+  callbacks = { select: vi.fn(), close: vi.fn(), ungroup: vi.fn(), rename: vi.fn() },
 ) {
   act(() =>
     root.render(
       <HomePaneTabStrip
         label="Home tabs"
         projectId="project"
-        tabs={[HOME_BOARD_TAB, chat, browser]}
+        tabs={[HOME_BOARD_TAB, chat, file, browser, term]}
         activeTabId={activeTabId}
-        pairs={pairs}
-        onUnpair={callbacks.unpair}
+        groups={groups}
+        shownGroupId={shownGroupId}
+        onUngroup={callbacks.ungroup}
         onSelect={callbacks.select}
         onClose={callbacks.close}
         onRename={callbacks.rename}
@@ -97,54 +131,68 @@ function home(
   return callbacks;
 }
 
-it("groups at the first member, using tuple order and leaving incomplete or overlapping pairs alone", () => {
-  const tabs = [{ id: "first" }, { id: "browser:one" }, { id: "other" }, { id: "chat:one" }];
-  const groups = groupTabItems(tabs, [
-    pair,
-    { id: "overlap", tabIds: ["chat:one", "other"] },
-    { id: "missing", tabIds: ["first", "absent"] },
-    { id: "same", tabIds: ["other", "other"] },
-  ]);
-  expect(groups.map((group) => group.tabs.map((item) => item.id))).toEqual([
-    ["first"],
-    ["chat:one", "browser:one"],
-    ["other"],
-  ]);
+it("draws a group as one chip where its earliest tab sits, each pane's front a segment", () => {
+  const tabs = [
+    { id: "first" },
+    { id: "browser:one" },
+    { id: "other" },
+    { id: "term" },
+    { id: "chat:one" },
+  ];
+  const items = groupTabItems(tabs, [group]);
+  expect(
+    items.map((item) =>
+      item.group === null ? item.tab.id : item.segments.map((segment) => segment.id),
+    ),
+  ).toEqual(["first", ["chat:one", "browser:one"], "other"]);
+  // A front that is not live falls back to the stack's first live tab.
+  const fallback = groupTabItems([{ id: "term" }, { id: "browser:one" }], [group]);
+  expect(fallback[0]).toMatchObject({ segments: [{ id: "term" }, { id: "browser:one" }] });
+  // A group with nothing live draws no segment at all.
+  expect(groupTabItems([{ id: "x" }], [group])).toEqual([{ group: null, tab: { id: "x" } }]);
+  expect(groupTabItems([{ id: "term" }], [group])[0]).toMatchObject({ segments: [{ id: "term" }] });
 });
 
-describe("paired Home tabs", () => {
-  it("selects both members, marks the focused one, and preserves the nodes when focus switches", () => {
+describe("a Home tab group's chip", () => {
+  it("selects every segment, marks the focused pane's front, keeps its nodes as focus moves", () => {
     home(chat.id);
-    const group = container.querySelector('[data-slot="grouped-tab-chip"]');
+    const chip = container.querySelector('[data-slot="grouped-tab-chip"]');
+    expect(chip?.getAttribute("aria-label")).toBe("Tab group");
+    expect(chip?.getAttribute("data-active")).toBe("true");
     const first = tab("Chat");
     const second = tab("Page");
+    // The stacked tab behind the front is not a top-level tab.
+    expect(container.querySelector('[role="tab"][aria-label="Notes"]')).toBeNull();
     expect(first.querySelector('[data-session-glyph="working"]')).not.toBeNull();
-    expect(first.querySelector('[data-slot="tab-state"]')).toBeNull();
     expect(first.getAttribute("aria-selected")).toBe("true");
     expect(second.getAttribute("aria-selected")).toBe("true");
     expect(first.tabIndex).toBe(0);
     expect(second.tabIndex).toBe(-1);
     expect(first.parentElement?.getAttribute("data-focused")).toBe("true");
     home(browser.id);
-    expect(container.querySelector('[data-slot="grouped-tab-chip"]')).toBe(group);
+    expect(container.querySelector('[data-slot="grouped-tab-chip"]')).toBe(chip);
     expect(tab("Chat")).toBe(first);
-    expect(tab("Page")).toBe(second);
     expect(first.parentElement?.getAttribute("data-focused")).toBe("false");
     expect(second.parentElement?.getAttribute("data-focused")).toBe("true");
     expect(second.tabIndex).toBe(0);
   });
 
-  it("keeps individual selection, closing, rename and keyboard traversal; Unpair does not select", () => {
+  it("draws an unshown group's chip inactive beside an ordinary tab in front", () => {
+    home(file.id, [group], null);
+    expect(
+      container.querySelector('[data-slot="grouped-tab-chip"]')?.getAttribute("data-active"),
+    ).toBe("false");
+    expect(tab("Chat").getAttribute("aria-selected")).toBe("false");
+    expect(tab("a.ts").getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("keeps per-segment selection, closing, rename and keyboard traversal", () => {
     const callbacks = home(chat.id);
     click(tab("Page"));
     expect(callbacks.select).toHaveBeenCalledWith(browser);
     callbacks.select.mockClear();
     click(container.querySelector('[aria-label="Close Page"]')!);
     expect(callbacks.close).toHaveBeenCalledWith(browser);
-    expect(callbacks.select).not.toHaveBeenCalled();
-    click(container.querySelector('[aria-label="Unpair tabs"]')!);
-    expect(callbacks.unpair).toHaveBeenCalledWith(pair.id);
-    expect(callbacks.close).toHaveBeenCalledTimes(1);
     expect(callbacks.select).not.toHaveBeenCalled();
     act(() => tab("Chat").focus());
     press(tab("Chat"), "ArrowRight");
@@ -153,22 +201,59 @@ describe("paired Home tabs", () => {
     expect(container.querySelector('input[aria-label="Rename Chat"]')).not.toBeNull();
   });
 
-  it("does not group single tabs and can pair the permanent Board without making it closable", () => {
-    home(HOME_BOARD_TAB.id, []);
-    expect(container.querySelector('[data-slot="grouped-tab-chip"]')).toBeNull();
-    home(browser.id, [{ id: "board-pair", tabIds: [HOME_BOARD_TAB.id, browser.id] }]);
+  it("lists the whole group by pane on right-click, front checked, and ungroups from there", async () => {
+    const callbacks = home(chat.id);
+    await openChipMenu();
+    const labels = [...document.querySelectorAll('[data-slot="context-menu-label"]')].map(
+      (label) => label.textContent,
+    );
+    expect(labels).toEqual(["Pane 1", "Pane 2"]);
+    const items = [...document.querySelectorAll('[data-slot="context-menu-radio-item"]')];
+    expect(items.map((item) => [item.textContent, item.getAttribute("aria-checked")])).toEqual([
+      ["Chat", "true"],
+      ["Notes", "false"],
+      ["Page", "true"],
+    ]);
+    // A segment's own tab menu gives way to the chip's.
+    expect(document.querySelector('[data-slot="context-menu-item"]')?.textContent).toBe("Ungroup");
+    await act(async () => {
+      items[1]!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(callbacks.select).toHaveBeenCalledWith(term);
+    await openChipMenu();
+    await act(async () => {
+      document
+        .querySelector('[data-slot="context-menu-item"]')!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(callbacks.ungroup).toHaveBeenCalledWith("group-1");
+  });
+
+  it("can hold the permanent Board without making it closable or draggable", () => {
+    home(
+      browser.id,
+      [
+        {
+          id: "board-group",
+          panes: [
+            { paneId: "a", tabIds: [HOME_BOARD_TAB.id], activeTabId: HOME_BOARD_TAB.id },
+            { paneId: "b", tabIds: [browser.id], activeTabId: browser.id },
+          ],
+        },
+      ],
+      "board-group",
+    );
     expect(tab("Board").getAttribute("aria-selected")).toBe("true");
     expect(container.querySelector('[aria-label="Close Board"]')).toBeNull();
     expect(tab("Page").getAttribute("aria-selected")).toBe("true");
   });
 });
 
-it("pairs Ticket Body and Browser tabs with the same member controls and single entry point", () => {
+it("groups Ticket Body and Browser tabs with the same segment controls and single entry point", () => {
   const body: TicketTabDescriptor = { id: "body", kind: "body", label: "Body" };
   const page: TicketTabDescriptor = { id: browser.id, kind: "browser", label: "Page" };
   const onSelect = vi.fn();
   const onClose = vi.fn();
-  const onUnpair = vi.fn();
   act(() =>
     root.render(
       <TicketPaneTabStrip
@@ -177,11 +262,19 @@ it("pairs Ticket Body and Browser tabs with the same member controls and single 
         ticketId="ticket"
         tabs={[body, page]}
         activeTabId={page.id}
-        pairs={[{ id: "body-pair", tabIds: [body.id, page.id] }]}
+        groups={[
+          {
+            id: "body-group",
+            panes: [
+              { paneId: "a", tabIds: [body.id], activeTabId: body.id },
+              { paneId: "b", tabIds: [page.id], activeTabId: page.id },
+            ],
+          },
+        ]}
+        shownGroupId="body-group"
         onSelectTab={onSelect}
         onCloseTab={onClose}
         onRenameSessionTab={noop}
-        onUnpair={onUnpair}
       />,
     ),
   );
@@ -193,8 +286,6 @@ it("pairs Ticket Body and Browser tabs with the same member controls and single 
   expect(onSelect).toHaveBeenCalledWith("body");
   click(container.querySelector('[aria-label="Close Page"]')!);
   expect(onClose).toHaveBeenCalledWith(page);
-  click(container.querySelector('[aria-label="Unpair tabs"]')!);
-  expect(onUnpair).toHaveBeenCalledWith("body-pair");
 });
 
 it("uses the same SessionGlyph and no duplicate state mark on Ticket chat tabs", () => {
@@ -216,19 +307,23 @@ it("uses the same SessionGlyph and no duplicate state mark on Ticket chat tabs",
   expect(tab("Chat").querySelector('[data-slot="tab-state"]')).toBeNull();
 });
 
-it("retains each member's sortable registration instead of making the group draggable", () => {
+it("leaves a chip's segments out of the sortable — the chip is not dragged, its tabs move in pane strips", () => {
   act(() =>
     root.render(
-      <TabStrip label="Tabs" reorder={{ ids: [...pair.tabIds], onReorder: noop }}>
+      <TabStrip label="Tabs" reorder={{ ids: ["x"], onReorder: noop }}>
         <GroupedTabList
-          tabs={[{ id: pair.tabIds[0] }, { id: pair.tabIds[1] }]}
-          pairs={[pair]}
-          activeTabId={pair.tabIds[0]}
+          tabs={[{ id: "x" }, { id: "chat:one" }, { id: "browser:one" }]}
+          groups={[group]}
+          shownGroupId={null}
+          activeTabId="x"
+          edgeTargets
+          describe={(item) => ({ label: item.id, icon: ChatCircleIcon })}
+          onSelect={noop}
         >
           {(item, state) => (
             <Tab
               label={item.id}
-              dragId={item.id}
+              dragId={state.grouped ? undefined : item.id}
               active={state.active}
               tabStop={state.tabStop}
               onActivate={noop}
@@ -238,9 +333,33 @@ it("retains each member's sortable registration instead of making the group drag
       </TabStrip>,
     ),
   );
-  for (const id of pair.tabIds)
-    expect(tab(id).getAttribute("aria-describedby")).toContain("DndDescribedBy");
+  expect(tab("x").getAttribute("aria-describedby")).toContain("DndDescribedBy");
+  expect(tab("chat:one").hasAttribute("aria-describedby")).toBe(false);
+  // Every top-level item is an edge target for grouping, segments included.
   expect(
-    container.querySelector('[data-slot="grouped-tab-chip"]')?.hasAttribute("aria-describedby"),
-  ).toBe(false);
+    [...container.querySelectorAll("[data-pair-target-id]")].map((node) =>
+      node.getAttribute("data-pair-target-id"),
+    ),
+  ).toEqual(["x", "chat:one", "browser:one"]);
+});
+
+it("marks no edge targets on a pane's own strip", () => {
+  act(() =>
+    root.render(
+      <HomePaneTabStrip
+        label="Pane 1 tabs"
+        projectId="project"
+        tabs={[chat, browser]}
+        activeTabId={chat.id}
+        onSelect={noop}
+        onClose={noop}
+        onRename={noop}
+        onReorder={noop}
+        onPinFile={noop}
+        onCloseOtherFiles={noop}
+      />,
+    ),
+  );
+  expect(container.querySelector("[data-pair-target-id]")).toBeNull();
+  expect(container.querySelector('[data-slot="grouped-tab-chip"]')).toBeNull();
 });

@@ -343,7 +343,7 @@ describe("verbs", () => {
     expect(toastError).not.toHaveBeenCalled();
   });
 
-  it("opens a legacy preview from the Island beside its owner without losing its identity", async () => {
+  it("shows a legacy preview from the Island as a SELECTED tab, without losing its identity", async () => {
     const legacy = tab({ tabId: "legacy", presentation: "preview" });
     registry([legacy]);
     useProjectUiStore.setState({ byProject: {} });
@@ -374,9 +374,9 @@ describe("verbs", () => {
       expect(probe.latest().feed.model.tabs).toMatchObject([
         { id: "legacy", promoted: true, surface: "tab" },
       ]);
-      expect(useProjectUiStore.getState().byProject[PROJECT]?.homeSplitView?.pairs).toMatchObject([
-        { first: { activeTabId: `chat:${SESSION}` }, second: { activeTabId: "browser:legacy" } },
-      ]);
+      // Showing is a selection (VC-614): the tab comes forward full width and
+      // is never pulled into a group — "Open beside chat" is the grouping door.
+      expect(useProjectUiStore.getState().byProject[PROJECT]?.homeSplitView ?? null).toBeNull();
       expect(useProjectUiStore.getState().byProject[PROJECT]?.homeActiveTab).toBe("browser:legacy");
     } finally {
       adopt.mockRestore();

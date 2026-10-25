@@ -11,7 +11,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { SPLIT_VIEW_ROOT_PANE_ID, splitViewPanes } from "@volli/shared";
+import { projectSplitView, SPLIT_VIEW_ROOT_PANE_ID, splitViewPanes } from "@volli/shared";
 
 import {
   registerBrowserPaneCommands,
@@ -33,7 +33,20 @@ let root: Root;
 let unregister: (() => void) | null = null;
 
 function Probe(): null {
-  useSplitShortcuts({ projectId: PROJECT, ticketId: null, orderedTabIds: STRIP });
+  // What the surface hands the hook: the pane it DRAWS in focus, and its front.
+  const ui = useProjectUiStore((state) => state.byProject[PROJECT]);
+  const view = projectSplitView(
+    ui?.homeSplitView ?? null,
+    ["board", ...STRIP],
+    ui?.homeActiveTab ?? "board",
+    "board",
+  );
+  useSplitShortcuts({
+    projectId: PROJECT,
+    ticketId: null,
+    paneId: view.focusedPaneId,
+    targetTabId: view.activeTabId,
+  });
   return null;
 }
 
@@ -75,12 +88,9 @@ beforeEach(() => {
   useProjectUiStore.setState({
     byProject: { [PROJECT]: { ...DEFAULT_PROJECT_UI, nav: "home", homeActiveTab: LEFT } },
   } as never);
-  // One bounded pair. A second split cannot create a third pane (VC-614).
+  // One group of two Browser Tabs, side by side.
   const workspace = useProjectUiStore.getState();
-  workspace.splitHomePane(PROJECT, SPLIT_VIEW_ROOT_PANE_ID, "right", {
-    tabId: RIGHT,
-    surfaceTabIds: STRIP,
-  });
+  workspace.splitHomePane(PROJECT, SPLIT_VIEW_ROOT_PANE_ID, "right", { tabId: RIGHT });
   // The last pane clicked IN THE APP was the left one; the person then clicked
   // into the right member's native page, which the split view never heard.
   workspace.focusHomePane(PROJECT, paneOf(LEFT));
@@ -116,7 +126,7 @@ describe("⌃⌘ + an arrow from inside a Browser page", () => {
     const left = paneOf(LEFT);
     try {
       expect(pressLeftInRightPage()).toBe(true);
-      // The final pane alone cannot prove the origin with just two members:
+      // The final pane alone cannot prove the origin with just two panes:
       // without the handoff, left-at-left would also end on the left. Observe
       // the real store transitions: focus the page's member, then move left.
       expect(focused).toEqual([right, left]);
@@ -126,18 +136,42 @@ describe("⌃⌘ + an arrow from inside a Browser page", () => {
     }
   });
 
-  it("would stay at the stale member without the native-page focus handoff", () => {
+  it("would stay at the stale pane without the native-page focus handoff", () => {
     // No pane registered for the page: the chord starts from the stale pane.
     expect(pressLeftInRightPage()).toBe(true);
 
     expect(split().focusedPaneId).toBe(paneOf(LEFT));
   });
 
-  it("reports the chord as unclaimed when the surface is not split, so focus goes back to the page", () => {
+  it("reports the chord as unclaimed while no group is shown, so focus goes back to the page", () => {
     useProjectUiStore.setState({
       byProject: { [PROJECT]: { ...DEFAULT_PROJECT_UI, nav: "home", homeActiveTab: RIGHT } },
     } as never);
 
     expect(pressLeftInRightPage()).toBe(false);
+  });
+});
+
+/** ⌘\\ pressed with nothing focused but the window. */
+function pressSplit(): void {
+  act(() => {
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "\\", code: "Backslash", metaKey: true }),
+    );
+  });
+}
+
+describe("⌘\\ splits the pane the surface draws in focus (VC-614)", () => {
+  it("splits a shown group's focused pane, growing the group past two", () => {
+    pressSplit();
+    expect(splitViewPanes(split()).map((pane) => pane.tabIds)).toEqual([[LEFT], [], [RIGHT]]);
+    expect(split().pairs).toHaveLength(1);
+  });
+
+  it("makes a new group of two from a full-width tab, its new pane an empty menu", () => {
+    act(() => useProjectUiStore.getState().setHomeActiveTab(PROJECT, "board"));
+    pressSplit();
+    expect(split().pairs).toHaveLength(2);
+    expect(splitViewPanes(split()).map((pane) => pane.tabIds)).toEqual([["board"], []]);
   });
 });
