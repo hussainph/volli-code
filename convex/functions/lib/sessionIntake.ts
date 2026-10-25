@@ -64,6 +64,7 @@ import {
   stableJson,
   syncListing,
 } from "./sessionDerived";
+import { endedTurnsOf, scheduleStreamCleanup } from "./streamChunks";
 
 // ── limits ──────────────────────────────────────────────────────────────────
 
@@ -418,6 +419,13 @@ export async function acceptFacts(
     lastEventId: fresh.at(-1)!.id,
     lastAcceptedAt: now,
   });
+  // Streamed text: the chunk rows of every turn this batch ended go (S3).
+  await scheduleStreamCleanup(
+    ctx,
+    sessionId,
+    { turnIds: endedTurnsOf(foldable.map(({ event }) => event)), messageIds: [] },
+    now,
+  );
   quarantined += await advanceFold(ctx, session, head, foldable, acceptedThrough, now);
   return { acceptedThrough, duplicates, quarantined, unknownKinds };
 }

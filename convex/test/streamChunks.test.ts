@@ -15,6 +15,7 @@ import {
 import { api, internal } from "../functions/_generated/api";
 import type { DataModel } from "../functions/_generated/dataModel.js";
 import { endedTurnsOf, scheduleStreamCleanup } from "../functions/lib/streamChunks";
+import { seedTestWorld } from "../functions/lib/testWorld";
 import schema from "../functions/schema";
 import {
   SETTLE_ATTEMPTS,
@@ -22,6 +23,7 @@ import {
   SINCE_MAX_STREAMS,
 } from "../functions/streamChunks";
 import { SESSION_MAX_VIEWERS } from "../functions/sessionViewers";
+import { wire, writeSession } from "./sessionFixtures";
 
 const modules = import.meta.glob("../functions/**/*.ts");
 
@@ -870,5 +872,47 @@ describe("sessionViewers", () => {
     const viewers = await t.run((ctx) => ctx.db.query("sessionViewers").collect());
     expect(viewers.map((viewer) => viewer.id)).toEqual([live]);
     expect(await t.run((ctx) => ctx.db.query("sessionViewerHeartbeats").collect())).toHaveLength(1);
+  });
+});
+
+describe("sessions.accept ends a turn's streams", () => {
+  test("accepting a turn's end deletes that turn's chunk rows and leaves the next turn's", async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    const alice = await signIn(t, OWNER);
+    const seeded = await t.run((ctx) => seedTestWorld(ctx, { ownerUserId: alice, runners: 1 }));
+    const runnerId = seeded.runnerIds[0]!;
+    const { sessionId, events } = await writeSession({
+      projectId: seeded.projectId,
+      ticketId: seeded.ticketId,
+    });
+    const end = events.findIndex(({ payload }) => payload.kind === "turn.completed");
+    const ended = events[end]!.payload as { turnId: string };
+    const runner = asRunner(t, runnerId);
+    for (const event of events.slice(0, end)) {
+      await runner.mutation(api.sessions.accept, {
+        sessionId,
+        generation: 1,
+        events: [wire(event)],
+      });
+    }
+    for (const [messageId, turnId] of [
+      ["m1", ended.turnId],
+      ["m2", "turn-next"],
+    ] as const) {
+      await runner.mutation(api.streamChunks.append, {
+        sessionId,
+        messageId,
+        turnId,
+        ...chunk(0, [reset("a")]),
+      });
+    }
+    await runner.mutation(api.sessions.accept, {
+      sessionId,
+      generation: 1,
+      events: [wire(events[end]!)],
+    });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect((await rowsOf(t, sessionId)).map((row) => row.messageId)).toEqual(["m2"]);
   });
 });
