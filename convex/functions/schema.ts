@@ -863,15 +863,22 @@ export default defineSchema({
     createdAt: time,
   }).index("by_session_file_offset", ["sessionId", "piFileId", "startOffset"]),
   // Ephemeral streaming deltas, sent only while someone views the Session.
+  // `delta` is the chunk's transcript-overlay operations as JSON text
+  // (`@volli/shared/cloud` stream-chunks); `baseline` marks a chunk that
+  // starts with a `reset`, where a reader may start or restart the stream.
   streamChunks: defineTable({
     sessionId: uuid,
     messageId: v.string(),
     seq: v.number(),
     turnId: nullable(v.string()),
-    delta: json,
+    baseline: v.boolean(),
+    throughSequence: v.number(),
+    delta: v.string(),
     createdAt: time,
   })
     .index("by_session_message_seq", ["sessionId", "messageId", "seq"])
+    .index("by_session_message_baseline", ["sessionId", "messageId", "baseline", "seq"])
+    .index("by_session_created", ["sessionId", "createdAt"])
     .index("by_created", ["createdAt"]),
   sessionViewers: defineTable({
     id: uuid,

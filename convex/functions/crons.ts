@@ -37,5 +37,15 @@ crons.interval(
   internal.githubIngest.reconcileAll,
   {},
 );
+// Viewers whose heartbeat lapsed (sessionViewers.ts): a client that vanished
+// without closing stops its Session streaming within two minutes.
+crons.interval(
+  "sessionViewers: expiry sweep",
+  { minutes: 1 },
+  internal.sessionViewers.sweepExpired,
+  {},
+);
+// Stream chunks older than 15 minutes (streamChunks.ts), whatever their message did.
+crons.interval("streamChunks: ttl sweep", { minutes: 5 }, internal.streamChunks.sweep, {});
 
 export default crons;
