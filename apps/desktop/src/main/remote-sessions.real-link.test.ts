@@ -268,7 +268,7 @@ async function box(features: readonly string[] = FEATURES) {
     "session.subscribeQueue": counted("session.subscribeQueue"),
   };
 
-  const boardWorkspace = boardResourceProject(ctx.db);
+  const boardProject = boardResourceProject(ctx.db);
   const diagnostics = new RpcDiagnosticLog();
   const listener = await startHostProtocolListener({
     router: createHostRouter(),
@@ -292,7 +292,7 @@ async function box(features: readonly string[] = FEATURES) {
       resourceWorkspace: async (resource: { kind: string; id: string }) =>
         resource.kind === "session"
           ? ((await engine.getSession({ sessionId: resource.id }))?.session.projectId ?? null)
-          : boardWorkspace(resource),
+          : boardProject(resource),
     }),
   });
   cleanups.push(() => listener.close());

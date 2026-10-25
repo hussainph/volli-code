@@ -114,7 +114,7 @@ export function registerFileIpcHandlers(
 
   const handlers: IpcHandlerTable<FileIpcChannel> = {
     // Scope follows the surface that asked (VC-190): Home hands no ticketId and
-    // gets Main; a Ticket workspace hands its own and gets that worktree —
+    // gets Main; a Ticket view hands its own and gets that worktree —
     // through `resolveFileScope`, the same seam `volli:file-read` resolves
     // through, so quick-open can never offer a row the read then answers from
     // the other checkout.

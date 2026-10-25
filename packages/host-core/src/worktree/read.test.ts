@@ -8,7 +8,7 @@
  * happily confirm while production freezes: `readWorktreeStatus` used to take a
  * `RunGit` and every suite handed it a scripted synchronous function, so the
  * five `execFileSync` children it really spawned were invisible here. The freeze
- * was reported as the whole app rainbow-wheeling when a ticket workspace opened,
+ * was reported as the whole app rainbow-wheeling when a Ticket view opened,
  * which is main blocked, not a slow renderer.
  *
  * So the test below measures the thing itself: a `git` shim first on PATH that

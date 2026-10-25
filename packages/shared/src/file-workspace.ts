@@ -3,7 +3,7 @@
  * their order, which one is active, and which single tab is the replaceable
  * *preview* slot. Pure reducer-style state transitions — no persistence, no
  * document contents, no editor bindings; the renderer holds one of these per
- * project (and one per ticket workspace, since the same relPath in two
+ * project (and one per Ticket view, since the same relPath in two
  * checkouts is two different documents, decision #54) and main persists the
  * serialized shape verbatim.
  */
@@ -152,7 +152,7 @@ export function renameFile(
  * silently replaced by the next glance from the navigator. That is decision
  * #56's "a dirty tab is never replaced" applied to the other way a tab earns
  * its slot, and it is here in the reducer rather than at the two call sites so
- * Home and the ticket workspace cannot answer it differently.
+ * Home and the Ticket view cannot answer it differently.
  *
  * `toIndex` is clamped into the strip rather than validated: a drop lands
  * between two tabs that exist, so an index past either end means "the end it

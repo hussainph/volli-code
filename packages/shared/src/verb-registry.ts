@@ -1181,7 +1181,7 @@ export const VERB_REGISTRY = [
             "Update the requested Ticket fields and append attributed Ticket events for changes.",
         },
       ],
-      humanVisible: ["Updated fields appear on the Ticket card and in its Ticket workspace."],
+      humanVisible: ["Updated fields appear on the Ticket card and in its Ticket view."],
       nonEffects: ["The Ticket does not move, no Session starts, and no worktree is materialized."],
     },
     positionalId: "required",

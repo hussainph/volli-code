@@ -266,7 +266,7 @@ async function path(features: readonly string[] = FEATURES) {
       },
     },
   );
-  const boardWorkspace = boardResourceProject(ctx.db);
+  const boardProject = boardResourceProject(ctx.db);
   const listener = await startHostProtocolListener({
     router: createHostRouter(),
     bind: { host: "127.0.0.1", port: 5388 },
@@ -288,7 +288,7 @@ async function path(features: readonly string[] = FEATURES) {
       resourceWorkspace: async (resource: { kind: string; id: string }) =>
         resource.kind === "session"
           ? ((await engine.getSession({ sessionId: resource.id }))?.session.projectId ?? null)
-          : boardWorkspace(resource),
+          : boardProject(resource),
     }),
   });
   cleanups.push(() => listener.close());

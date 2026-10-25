@@ -318,7 +318,7 @@ export default defineConfig(({ mode }) => ({
         // Quick-open's three decisions (VC-190): which checkout ⌘P searches,
         // what a query matches, and whether an invocation previews or pins.
         // Pure `.ts` beside the overlay for the gate's sake — a scope that
-        // silently answered "Main" inside a Ticket workspace would open the
+        // silently answered "Main" inside a Ticket view would open the
         // wrong file with no error anywhere.
         "src/components/files/quick-open-model.ts",
         // Search's own decisions (VC-193): the scope pair a query is sent

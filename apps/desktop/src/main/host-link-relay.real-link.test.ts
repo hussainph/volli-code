@@ -195,7 +195,7 @@ async function box(features: readonly string[] = EVERY_FEATURE): Promise<Box> {
     "session.subscribe": sessionStream("session.subscribe"),
     "session.subscribeQueue": sessionStream("session.subscribeQueue"),
   };
-  const boardWorkspace = boardResourceProject(ctx.db);
+  const boardProject = boardResourceProject(ctx.db);
   const diagnostics = new RpcDiagnosticLog();
   const listener = await startHostProtocolListener({
     router: createHostRouter(),
@@ -219,7 +219,7 @@ async function box(features: readonly string[] = EVERY_FEATURE): Promise<Box> {
       handlers: handlers as never,
       diagnostics,
       resourceWorkspace: (resource: { kind: string; id: string }) =>
-        resource.kind === "session" ? PROJECT : boardWorkspace(resource),
+        resource.kind === "session" ? PROJECT : boardProject(resource),
     }),
   });
   cleanups.push(() => listener.close());
