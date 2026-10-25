@@ -14,6 +14,7 @@
     "with-backend": "node fixture/with-backend.ts"
   },
   "dependencies": {
+    "@volli/shared": "workspace:*",
     "convex": "1.48.0"
   },
   "devDependencies": {

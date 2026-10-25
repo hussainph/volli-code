@@ -112,6 +112,13 @@ export default defineConfig({
         files: ["**/*.test.ts", "**/*.test.tsx"],
         rules: { "react/globals": "off" },
       },
+      {
+        // Convex documents carry the system fields `_id` and `_creationTime`,
+        // which every backend function reads and patches by. Only those two
+        // names are allowed, and only in `convex/`.
+        files: ["convex/**/*.ts"],
+        rules: { "eslint/no-underscore-dangle": ["error", { allow: ["_id", "_creationTime"] }] },
+      },
     ],
   },
   staged: {

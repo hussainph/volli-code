@@ -27,6 +27,8 @@ export type TestIssuer = {
 export type MintOptions = {
   /** Lifetime from now; negative mints an already-expired token. */
   ttlSeconds?: number;
+  /** Extra profile claims (`email`, `email_verified`, `name`, …), as a real provider would send. */
+  claims?: Record<string, string | boolean>;
 };
 
 const base64url = (value: string | Buffer) => Buffer.from(value).toString("base64url");
@@ -56,6 +58,7 @@ export function mintTestToken(
   const header = base64url(JSON.stringify({ alg: "ES256", typ: "JWT", kid: TEST_KEY_ID }));
   const body = base64url(
     JSON.stringify({
+      ...options.claims,
       iss: TEST_ISSUER,
       aud: TEST_AUDIENCE,
       sub: subject,
