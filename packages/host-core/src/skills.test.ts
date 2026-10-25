@@ -281,7 +281,6 @@ describe("loadSkills", () => {
     const result = await loadSkills({
       projectSkillsDir: project,
       globalSkillsDir: global,
-      cloud: false,
     });
 
     expect(result.ok).toBe(true);
@@ -304,7 +303,6 @@ describe("loadSkills", () => {
     const result = await loadSkills({
       projectSkillsDir: project,
       globalSkillsDir: global,
-      cloud: false,
     });
 
     expect(result.ok).toBe(true);
@@ -322,30 +320,14 @@ describe("loadSkills", () => {
     ]);
   });
 
-  it("lets the personal tier win a shared slug with the cloud flag on", async () => {
-    const project = makeSkillsDir({ shared: "---\ndescription: from project\n---\nProject body" });
-    const global = makeSkillsDir({ shared: "---\ndescription: from home\n---\nPersonal body" });
-
-    const result = await loadSkills({
-      projectSkillsDir: project,
-      globalSkillsDir: global,
-      cloud: true,
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      skills: [{ name: "shared", description: "from home", root: `${global}/shared` }],
-    });
-  });
-
   it("treats either tier's absence as an empty tier", async () => {
     const global = makeSkillsDir({ personal: "body" });
 
     await expect(
-      loadSkills({ projectSkillsDir: missingDir(), globalSkillsDir: global, cloud: false }),
+      loadSkills({ projectSkillsDir: missingDir(), globalSkillsDir: global }),
     ).resolves.toMatchObject({ ok: true, skills: [{ name: "personal" }] });
     await expect(
-      loadSkills({ projectSkillsDir: missingDir(), globalSkillsDir: missingDir(), cloud: false }),
+      loadSkills({ projectSkillsDir: missingDir(), globalSkillsDir: missingDir() }),
     ).resolves.toEqual({ ok: true, skills: [] });
   });
 
@@ -355,10 +337,10 @@ describe("loadSkills", () => {
     chmodSync(locked, 0o000);
     try {
       await expect(
-        loadSkills({ projectSkillsDir: locked, globalSkillsDir: readable, cloud: false }),
+        loadSkills({ projectSkillsDir: locked, globalSkillsDir: readable }),
       ).resolves.toMatchObject({ ok: false });
       await expect(
-        loadSkills({ projectSkillsDir: readable, globalSkillsDir: locked, cloud: false }),
+        loadSkills({ projectSkillsDir: readable, globalSkillsDir: locked }),
       ).resolves.toMatchObject({ ok: false });
     } finally {
       chmodSync(locked, 0o755);

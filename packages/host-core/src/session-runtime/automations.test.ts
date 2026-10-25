@@ -240,13 +240,12 @@ describe("live runtime automations", () => {
     expect(loadSkills).toHaveBeenCalledWith({
       projectSkillsDir: "/repo/.agents/skills",
       globalSkillsDir: "/home/.agents/skills",
-      cloud: false,
     });
     vi.mocked(getProjectById).mockReturnValueOnce(project).mockReturnValueOnce(undefined);
     await expect(f.ports().promptSupply("p1")).rejects.toThrow("Unknown project");
   });
 
-  it("hands the cloud flag to both prompt supply reads", async () => {
+  it("hands the cloud flag to the prompt template read", async () => {
     const f = fixture({ cloud: true });
     f.owner.start(f.ready());
     vi.mocked(getProjectById).mockReturnValue(project);
@@ -254,7 +253,10 @@ describe("live runtime automations", () => {
     vi.mocked(loadSkills).mockResolvedValue({ ok: true, skills: [] });
     await f.ports().promptSupply("p1");
     expect(loadPromptTemplates).toHaveBeenCalledWith(expect.objectContaining({ cloud: true }));
-    expect(loadSkills).toHaveBeenCalledWith(expect.objectContaining({ cloud: true }));
+    expect(loadSkills).toHaveBeenCalledWith({
+      projectSkillsDir: "/repo/.agents/skills",
+      globalSkillsDir: "/home/.agents/skills",
+    });
   });
 
   it("refuses prompt supply when the project or either disk read cannot be used", async () => {

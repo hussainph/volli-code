@@ -1430,7 +1430,7 @@ describe("registerFileIpcHandlers", () => {
     expect(result.templates?.find((entry) => entry.name === "review")?.content).toBe("Review $1.");
   });
 
-  it("lets the personal tier win a shared template and skill name with the cloud flag on", async () => {
+  it("lets the personal tier win a shared template name but never a repo skill's with the cloud flag on", async () => {
     const setup = setupDbAndHandlers(undefined, undefined, true);
     ctx = setup.ctx;
     mkdirSync(join(setup.projectPath, ".volli", "commands"), { recursive: true });
@@ -1457,7 +1457,8 @@ describe("registerFileIpcHandlers", () => {
     }>("volli:prompt-templates", {}, { projectId: setup.projectId });
 
     expect(result.templates?.map((entry) => entry.content.trim())).toEqual(["Personal"]);
-    expect(result.skills?.map((entry) => entry.description)).toEqual(["Personal PDFs"]);
+    // Repo files always apply: a personal skill cannot replace the repo's slug.
+    expect(result.skills?.map((entry) => entry.description)).toEqual(["Project PDFs"]);
   });
 
   it("answers prompt-templates with BOTH skill tiers beside the templates", async () => {
