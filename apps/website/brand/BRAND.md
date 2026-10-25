@@ -15,8 +15,9 @@ The thing a visitor should feel is not "AI" and not "productivity". It is
 
 Three facts carry the trust, and they are said once, plainly, in prose:
 
-- **It's yours.** Local-first. Projects, chats and history live on your Mac. No
-  Volli account. Each worktree is an ordinary Git checkout.
+- **It's yours.** Signed-out projects, chats and history live on your Mac with
+  no Volli account. The invite-only cloud preview syncs signed-in Workspace
+  history. Each worktree is an ordinary Git checkout.
 - **It's open.** Apache-2.0, on GitHub.
 - **It's your models.** Requests go to the provider and account you configure.
 
@@ -153,3 +154,8 @@ requirements, and the alpha note.
 
 **Docs.** The same night, ink and ember; Mona Sans; no world behind reading
 text. The docs are where the product nouns live.
+
+**Legal.** A text-only reading column, with a plain document title, version,
+date and links between the legal pages. Semantic headings and lists keep
+agreements readable without JavaScript; no World, reveal motion or marketing
+super around legal text. This is the website's long-form reading layout.

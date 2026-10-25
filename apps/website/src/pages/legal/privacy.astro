@@ -1,0 +1,114 @@
+---
+import Legal from "../../layouts/Legal.astro";
+---
+
+<Legal
+  title="Preview Privacy"
+  description="What Volli’s invite-only cloud preview stores, who processes it, and how to request access or deletion."
+  path="/legal/privacy/"
+>
+  <p>
+    This page covers the invite-only Volli 0.3 cloud preview and our website and docs.
+    Volli is operated by Hussain Phalasiya in Ontario, Canada. For privacy questions or
+    requests, reply privately through your preview invitation. Do not post personal data
+    or private code in a public issue.
+  </p>
+
+  <h2>What the preview handles</h2>
+  <ul>
+    <li>
+      <strong>Account and access:</strong> your name, email, sign-in identity and session
+      information from the sign-in service, invitation eligibility, and the version and
+      time of your Preview Agreement acceptance.
+    </li>
+    <li>
+      <strong>Workspace data:</strong> Workspace and project details, membership, tickets,
+      comments, settings and Session history. History includes prompts, model responses,
+      tool calls and results, and agent logs; it can contain source code, file contents,
+      paths, personal information or secrets encountered by an agent.
+    </li>
+    <li>
+      <strong>Connections and stored credentials:</strong> API keys, secrets or integration
+      credentials you choose to store with Volli, and connected-account metadata. If you
+      connect GitHub, this includes profile, verified email, repository and installation
+      information, and authorization tokens. These are separate from subscription logins
+      kept on your machine.
+    </li>
+    <li>
+      <strong>Service and support data:</strong> device and runner connection information,
+      app version, sign-in and security records, service errors, and anything you choose
+      to send us for support. Website and service requests expose connection information
+      such as IP addresses and browser details to the providers handling them.
+    </li>
+  </ul>
+  <p>
+    We use this data to authenticate you, control preview access, sync your work, operate
+    and secure the service, respond to support and privacy requests, and comply with law.
+    We do not sell personal data, use your content for advertising, or use it to train AI models.
+  </p>
+
+  <h2>Local tools do not mean local history</h2>
+  <p>
+    In signed-out local mode, your board and Session history are stored on your device.
+    Signed-in preview Workspaces and their history sync through our cloud backend. An
+    agent running on your Mac can put file contents and command output into that history.
+    Treat a synced Session as sensitive as the material it reads. Avoid submitting secrets
+    or sensitive or regulated personal data; do not assume redaction catches everything.
+  </p>
+  <p>
+    Model requests go to the model provider or gateway you choose, under your agreement
+    with it. When you use a backend-held API connection, Volli's gateway on Cloudflare
+    relays requests and responses, including prompts and code context. Subscription
+    sign-in credentials and keys kept only on your machine do not pass through that
+    gateway. MCP servers, web tools and other services you use can also receive the data
+    you or an agent sends them. They have their own privacy practices. Signed-out mode
+    does not stop those requests or app update checks.
+  </p>
+
+  <h2>Who can receive data</h2>
+  <p>
+    Our preview subprocessors are <strong>Convex, Cloudflare and WorkOS</strong>. See
+    <a href="/legal/subprocessors/">their roles and the data they process</a>. Data may be
+    processed outside Canada, including in the United States and on global networks,
+    under different laws. We do not promise Canadian-only storage.
+  </p>
+  <p>
+    Other Workspace members can see work shared with them; ticket work is shared by
+    default, and Workspace policies can broaden visibility. We may access data as needed
+    for support, service operation, security or legal requirements. We may disclose data
+    when the law requires it. No system can guarantee perfect security or confidentiality.
+  </p>
+
+  <h2>Optional telemetry</h2>
+  <p>
+    Optional crash reporting and product analytics remain off in this preview unless you
+    separately consent. Accepting the Preview Agreement does not opt you in. We will
+    update this notice and the provider list before introducing an optional telemetry
+    service. Operational records needed to run and secure the service are separate from
+    optional telemetry. A telemetry collector you configure yourself receives the events
+    you enable for it.
+  </p>
+
+  <h2>Retention and your choices</h2>
+  <p>
+    We retain account and Workspace data to operate the preview unless it is deleted.
+    This is not a promise of permanent storage: preview data may be lost or reset.
+    Keep your own copies. Settings → Account offers account deletion with a 30-day
+    recovery period. You can also ask for access, correction, an export or deletion
+    privately through your invitation contact. We may need to verify your identity.
+    For shared Workspace content, we may need to involve its owner.
+  </p>
+  <p>
+    Account deletion does not promise that every backup or security record disappears
+    at the end of the recovery period. We may retain records for security or legal
+    obligations and do not promise a fixed backup purge deadline for this preview.
+    Depending on where you live, you may also have rights to object to or restrict
+    processing, withdraw consent, or complain to a privacy regulator. These rights are
+    not limited by this notice.
+  </p>
+  <p>
+    We will publish an updated version here before materially changing these practices.
+    For questions, including how to stop using the preview or exercise your rights,
+    contact the person who sent your invitation privately.
+  </p>
+</Legal>

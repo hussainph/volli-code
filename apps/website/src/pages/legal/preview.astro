@@ -1,0 +1,71 @@
+---
+import { PREVIEW_PRIVACY_URL } from "@volli/shared";
+import Legal from "../../layouts/Legal.astro";
+---
+
+<Legal
+  title="Preview Agreement"
+  description="The agreement for Volli’s free, invite-only 0.3 preview: no SLA, possible data loss, and your responsibilities when using agents."
+  path="/legal/preview/"
+>
+  <p>
+    This agreement is between you and Hussain Phalasiya, the operator of Volli in Ontario,
+    Canada ("Volli", "we"). It covers the invite-only Volli 0.3 cloud preview. By choosing to
+    continue with sign-in after being shown this agreement, you agree to it. If you do not
+    agree, do not join the preview. If you join for an organization, you must have its authority.
+  </p>
+
+  <h2>A free, unfinished preview</h2>
+  <p>
+    We do not charge for this preview. There is no paid subscription or automatic conversion
+    to one. Your model providers and other services may charge you under your own agreements.
+    We may change, suspend or end the preview or your access to it. An invitation is for you;
+    do not share sign-in credentials or bypass invitation or security controls.
+  </p>
+  <p>
+    The preview is provided "as is" and "as available", without warranties to the extent the
+    law allows. There is no service-level agreement (SLA), uptime commitment or guaranteed
+    support. Features may break, and data may be lost or reset. Keep independent copies of
+    work you cannot lose. Do not rely on the preview for critical or regulated work.
+  </p>
+
+  <h2>You direct the agents</h2>
+  <p>
+    Agents can run commands, change or delete files, and send data to external services using
+    the access you give them. They can make mistakes or be misled by content they read.
+    Choose their access carefully and review code, commands and other output before relying
+    on it. You are responsible for the actions you authorize, the content you submit, and
+    compliance with your model providers' terms. Do not use Volli unlawfully, harm others,
+    access systems without permission, or interfere with the service's security.
+  </p>
+
+  <h2>Your content and cloud history</h2>
+  <p>
+    You keep your rights in the content you submit. We claim no ownership of your content or
+    model output; we assign to you any rights we have in that output. Other people's rights
+    and model-provider terms may still apply. You permit us to store, process, transmit and
+    display your content only to provide, secure and support the preview and comply with law.
+    We do not use it to train AI models.
+  </p>
+  <p>
+    Signed-in Workspace data and Session history sync to our service providers, even when
+    tools run on your Mac. History can contain code, command output and secrets. Workspace
+    members may see shared work. Read the <a href={PREVIEW_PRIVACY_URL}>Privacy page</a> before
+    submitting data. Agreement to these terms is not consent to optional telemetry.
+  </p>
+
+  <h2>Stopping and changes</h2>
+  <p>
+    You can stop using the preview at any time. For access, export or deletion requests,
+    contact us privately through your preview invitation. We will publish material changes
+    with a new agreement version and ask you to accept before continuing under that version.
+    These terms do not change the open-source licenses of released Volli code.
+  </p>
+
+  <h2>Your legal rights</h2>
+  <p>
+    Ontario law and applicable Canadian federal law govern this agreement, subject to any
+    mandatory protections where you live. Nothing in this agreement excludes rights,
+    warranties or liability that the law does not allow us to exclude.
+  </p>
+</Legal>

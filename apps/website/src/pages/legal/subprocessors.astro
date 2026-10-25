@@ -1,0 +1,48 @@
+---
+import Legal from "../../layouts/Legal.astro";
+---
+
+<Legal
+  title="Preview Subprocessors"
+  description="Convex, Cloudflare and WorkOS provide the backend, hosting and sign-in for Volli’s invite-only preview."
+  path="/legal/subprocessors/"
+>
+  <p>
+    These are the service providers Volli uses to process data for the invite-only 0.3
+    preview. This is a preview list, not a list of planned integrations.
+  </p>
+  <ul>
+    <li>
+      <strong>Convex, Inc.</strong> — backend database and server functions. Processes
+      account, Workspace, membership, board, configuration and Session records,
+      credentials you choose to store, connected-account and repository metadata, and
+      device and runner metadata needed for the service.
+    </li>
+    <li>
+      <strong>Cloudflare, Inc.</strong> — website and docs hosting, and object storage for
+      synced Session transcript bodies and agent logs. Also relays model requests and
+      responses, including prompts and code, when a backend-held API connection is used.
+      Processes stored history, relayed data and connection information for requests to
+      its services.
+    </li>
+    <li>
+      <strong>WorkOS, Inc.</strong> — AuthKit sign-in and authentication sessions. Processes
+      profile and identity information, email, and sign-in connection and session metadata.
+    </li>
+  </ul>
+  <p>
+    These providers may process data outside Canada, including in the United States and
+    on global networks. We make no region-specific storage promise for this preview.
+  </p>
+  <h2>Services you choose</h2>
+  <p>
+    Model providers, gateways, git hosts, MCP servers and other tools you connect are
+    services you direct, not additional Volli preview subprocessors. They can receive
+    prompts, code or other data you send, under your agreements with them. Your own Mac
+    runs the preview's agent tools.
+  </p>
+  <p>
+    We will update this list before adding a provider that processes preview data.
+    Questions or privacy requests can be sent privately through your preview invitation.
+  </p>
+</Legal>
