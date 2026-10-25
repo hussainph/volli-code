@@ -31,6 +31,7 @@ export * from "./agent-product";
 export * from "./agent-plan";
 export * from "./agent-runtime";
 export * from "./agent-observability";
+export * from "./telemetry-vocabulary";
 export * from "./automation";
 export * from "./automation-schedule";
 export * from "./automation-schedule-pass";

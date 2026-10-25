@@ -221,6 +221,10 @@ jobs:
           node --test scripts/check-public-content.test.mjs
           node scripts/check-public-content.mjs
 
+      # docs/telemetry.md is generated from the telemetry vocabulary (VC-505).
+      - name: Check generated telemetry field list
+        run: node scripts/generate-telemetry-fields.mjs --check
+
       - name: Check committed protocol schema and additive compatibility
         env:
           PROTOCOL_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
