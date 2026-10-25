@@ -141,12 +141,17 @@ export function createCloudSessionLocationResolver(options: CloudSessionLocation
     const ticket = facts.ticket;
     if (!ticket) return { checkoutPath, directory: checkoutPath };
     if (ticket.checkoutMode === "main_checkout") {
-      registry.workingCopies.register({
-        ticketId: ticket.id,
-        projectRepoId: repoId,
-        absPath: checkoutPath,
-        kind: "main_checkout",
-      });
+      // The checkout already owns the shared-mode path. Once an isolated copy
+      // has a stamp, retain it while shared mode is active: a later switch back
+      // must reuse that exact directory/branch, including adopted worktrees.
+      registry.workingCopies.pathOf(ticket.id, repoId);
+      if (registry.workingCopies.get(ticket.id, repoId)?.kind !== "worktree")
+        registry.workingCopies.register({
+          ticketId: ticket.id,
+          projectRepoId: repoId,
+          absPath: checkoutPath,
+          kind: "main_checkout",
+        });
       return { checkoutPath, directory: checkoutPath };
     }
     const generated = resolveWorktreeIdentity({
@@ -199,11 +204,15 @@ export function createCloudSessionLocationResolver(options: CloudSessionLocation
     const known = facts.ticket
       ? registry.workingCopies.get(facts.ticket.id, facts.primaryRepo.id)
       : null;
+    const reportingKnownKind = known?.kind === facts.ticket?.checkoutMode;
     const current =
       state === "reclaimed" || (state === "failed" && !existsSync(directory))
-        ? { branch: known?.branch ?? facts.ticket?.branch ?? null, headSha: known?.headSha ?? null }
+        ? {
+            branch: (reportingKnownKind ? known?.branch : null) ?? facts.ticket?.branch ?? null,
+            headSha: reportingKnownKind ? (known?.headSha ?? null) : null,
+          }
         : await head(directory);
-    baseBranch = known?.baseBranch ?? baseBranch;
+    baseBranch = (reportingKnownKind ? known?.baseBranch : null) ?? baseBranch;
     if (facts.ticket) {
       const input: CloudWorkingCopyReport = {
         ticketId: facts.ticket.id,
@@ -214,23 +223,29 @@ export function createCloudSessionLocationResolver(options: CloudSessionLocation
         baseBranch,
         headSha: current.headSha,
       };
-      registry.workingCopies.register({
-        ticketId: facts.ticket.id,
-        projectRepoId: facts.primaryRepo.id,
-        absPath: directory,
-        kind: facts.ticket.checkoutMode,
-        branch: current.branch,
-        baseBranch,
-        headSha: current.headSha,
-      });
+      const preserveIsolated =
+        facts.ticket.checkoutMode === "main_checkout" && known?.kind === "worktree";
+      const stamp = preserveIsolated
+        ? known
+        : {
+            ticketId: facts.ticket.id,
+            projectRepoId: facts.primaryRepo.id,
+            absPath: directory,
+            kind: facts.ticket.checkoutMode,
+            branch: current.branch,
+            baseBranch,
+            headSha: current.headSha,
+          };
+      registry.workingCopies.register(stamp);
       const answer = await reports.workingCopy(input);
-      registry.workingCopies.register({
-        ticketId: facts.ticket.id,
-        projectRepoId: facts.primaryRepo.id,
-        absPath: directory,
-        kind: facts.ticket.checkoutMode,
-        workingCopyId: answer.workingCopyId,
-      });
+      // A report's current mode is cloud metadata, not permission to replace
+      // the isolated machine stamp with the shared checkout's path or HEAD.
+      const currentStamp = registry.workingCopies.get(facts.ticket.id, facts.primaryRepo.id);
+      if (currentStamp?.absPath === stamp.absPath && currentStamp.kind === stamp.kind)
+        registry.workingCopies.register({
+          ...currentStamp,
+          workingCopyId: answer.workingCopyId,
+        });
       return { ...input, workingCopyId: answer.workingCopyId };
     }
     return current;

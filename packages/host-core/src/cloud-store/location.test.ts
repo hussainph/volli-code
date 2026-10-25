@@ -144,6 +144,63 @@ describe("cloud Session locations", () => {
     expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM ticket_events").get()).toEqual({ n: 0 });
   });
 
+  it.each([
+    { adopted: true, retitled: false },
+    { adopted: true, retitled: true },
+    { adopted: false, retitled: true },
+  ])(
+    "retains the isolated stamp across shared-mode round trips ($adopted adopted, $retitled retitled)",
+    async ({ adopted, retitled }) => {
+      const value = facts();
+      if (adopted) {
+        const path = join(root, "chosen-isolated-folder");
+        const branch = "volli/VC-12-original-name";
+        git(checkout, ["worktree", "add", "-b", branch, path, "main"]);
+        insertProject(ctx.db, testProject({ id: PROJECT, path: checkout }));
+        insertTicket(
+          ctx.db,
+          testTicket(PROJECT, { id: TICKET, ticketNumber: 12, worktreePath: path, branch }),
+        );
+      }
+      const { registry, location, reports } = fixture(value);
+      const isolated = await location.prepare(session);
+      const stamp = registry.workingCopies.get(TICKET, REPO);
+      value.ticket!.checkoutMode = "main_checkout";
+      if (retitled) value.ticket!.title = "A completely different title";
+      expect((await location.prepare(session)).directory).toBe(checkout);
+      expect(reports.workingCopy).toHaveBeenLastCalledWith(
+        expect.objectContaining({ kind: "main_checkout", branch: "main" }),
+      );
+      expect(registry.workingCopies.get(TICKET, REPO)).toEqual(stamp);
+      expect(
+        (
+          await location.prepareRegistered({
+            sessionId: SESSION,
+            projectId: PROJECT,
+            ticketId: TICKET,
+          })
+        )?.directory,
+      ).toBe(checkout);
+
+      // No launch-local cache can preserve identity: reopen the registry/resolver.
+      const reopened = createRunnerPathRegistry(ctx.db, { runnerId: "runner-a" });
+      const resumed = createCloudSessionLocationResolver({
+        registry: reopened,
+        forSession: async () => value,
+        reports,
+        gitAsync: runGitCapturingAsync,
+        home: root,
+      });
+      value.ticket!.checkoutMode = "worktree";
+      expect((await resumed.prepare(session)).directory).toBe(isolated.directory);
+      expect(git(isolated.directory, ["branch", "--show-current"])).toBe(stamp!.branch);
+      expect(reopened.workingCopies.get(TICKET, REPO)).toEqual(stamp);
+      expect(git(checkout, ["worktree", "list", "--porcelain"]).match(/^worktree /gm)).toHaveLength(
+        2,
+      );
+    },
+  );
+
   it("requires one folder selection on a registry miss and rejects mismatched query identities", async () => {
     const registry = createRunnerPathRegistry(ctx.db, { runnerId: "runner" });
     const gitAsync = vi.fn(runGitCapturingAsync);
