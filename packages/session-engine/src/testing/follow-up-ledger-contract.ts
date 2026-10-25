@@ -158,7 +158,7 @@ export function describeSessionFollowUpLedgerContract(
       ).rejects.toThrow("read failed");
     });
 
-    it("prunes settled history outside seven days, keeping newest 64, pending and unresolved replies", async () => {
+    it("prunes old settled replies, keeping newest 64, pending/unresolved replies and compact queue identities", async () => {
       const { followUps } = await fresh("session-retention");
       const old = Date.now() - 8 * 24 * 60 * 60_000;
       await followUps.transaction("session-retention", (state) => {
@@ -166,9 +166,24 @@ export function describeSessionFollowUpLedgerContract(
         for (let i = 0; i < 100; i++) {
           const id = `queued-${i}`;
           const result = queuedResult(id);
-          result.command = { ...result.command, createdAt: old + i };
-          if (result.command.intent.kind === "message.queue")
-            result.command.intent.message.id = `message-${i}`;
+          result.command = {
+            ...result.command,
+            route: null,
+            createdAt: old + i,
+            intent:
+              i === 3
+                ? {
+                    kind: "message.queue",
+                    message: { id: "old-queue-identity", role: "user", parts: [] },
+                  }
+                : i % 2 === 0
+                  ? {
+                      kind: "message.edit",
+                      messageId: `message-${i}`,
+                      message: { id: `message-${i}`, role: "user", parts: [] },
+                    }
+                  : { kind: "message.cancel", messageId: `message-${i}` },
+          };
           result.receipt = { ...deliveryReceipt(), commandId: id, recordedAt: old + i };
           if (i === 1)
             result.receipt = {
@@ -195,8 +210,54 @@ export function describeSessionFollowUpLedgerContract(
       for (const id of ["queued-0", "queued-1", "queued-2", "queued-99"])
         expect(stored.commands).toHaveProperty(id);
       expect(stored.commands).not.toHaveProperty("queued-3");
+      expect(
+        await followUps.transaction(
+          "session-retention",
+          (_state, _proof, queued) => [queued?.("old-queue-identity"), queued?.("never-queued")],
+          { mode: "read" },
+        ),
+      ).toEqual([true, false]);
+      expect(stored.commands).not.toHaveProperty("queued-4");
+      expect(stored.commands).not.toHaveProperty("queued-5");
       expect(stored.releases).toEqual({});
       expect(stored.entries).toEqual([entry(0)]);
+    });
+
+    it("keeps queue identities Session-scoped and never leaks them from failed or read-only work", async () => {
+      const { followUps } = await fresh("session-identity-a", "session-identity-b");
+      const write = (state: SessionFollowUpState) => {
+        state.commands.queued = { signature: "sig", result: queuedResult("queued") };
+        state.revision++;
+      };
+      await expect(
+        followUps.transaction("session-identity-a", (state) => {
+          write(state);
+          throw new Error("rollback");
+        }),
+      ).rejects.toThrow("rollback");
+      await followUps.transaction("session-identity-a", write, { mode: "read" });
+      expect(
+        await followUps.transaction(
+          "session-identity-a",
+          (_state, _proof, queued) => queued?.("message-0"),
+          { mode: "read" },
+        ),
+      ).toBe(false);
+      await followUps.transaction("session-identity-a", write);
+      expect(
+        await followUps.transaction(
+          "session-identity-a",
+          (_state, _proof, queued) => queued?.("message-0"),
+          { mode: "read" },
+        ),
+      ).toBe(true);
+      expect(
+        await followUps.transaction(
+          "session-identity-b",
+          (_state, _proof, queued) => queued?.("message-0"),
+          { mode: "read" },
+        ),
+      ).toBe(false);
     });
 
     it("hands each transaction a private state: a reference kept past commit changes nothing", async () => {

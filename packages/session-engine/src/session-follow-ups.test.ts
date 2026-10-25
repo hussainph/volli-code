@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { UIMessage } from "ai";
+import { TERMINAL_JOB_TTL_MS } from "@volli/shared/cloud";
 import {
   RECOVERED_TURN_INTERRUPTED_DETAIL,
   restartResumeCommandId,
@@ -8,6 +9,7 @@ import {
   type SessionLedger,
 } from "@volli/shared";
 import {
+  FOLLOW_UP_COMMAND_RETENTION_MS,
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamQueue,
@@ -242,6 +244,10 @@ async function releaseEvidence(f: ReturnType<typeof fixture>, sessionId: string,
 }
 
 describe("host follow-up commands", () => {
+  it("retains replies for at least the backend terminal-job dedupe window", () => {
+    expect(FOLLOW_UP_COMMAND_RETENTION_MS).toBeGreaterThanOrEqual(TERMINAL_JOB_TTL_MS);
+  });
+
   async function queuedActive(f: ReturnType<typeof fixture>) {
     const runtime = f.runtime();
     const sessionId = await create(runtime);
@@ -481,38 +487,116 @@ describe("host follow-up commands", () => {
     expect(f.adapter.commands).toHaveLength(2);
   });
 
-  it("refuses a steer of an old delivered message after its queue reply is pruned and runtime restarts", async () => {
-    const f = fixture();
-    const active = await queuedActive(f);
-    await f.adapter.complete("active");
-    await active.runtime.recoverFollowUps();
-    await active.runtime.close();
-    await f.followUps.transaction(active.sessionId, (state) => {
-      const old = Date.now() - 8 * 24 * 60 * 60_000;
-      state.commands.queued.result.receipt!.recordedAt = old;
-      for (let i = 0; i < 64; i++) {
-        const result = structuredClone(state.commands.queued.result);
-        if (result.command.intent.kind === "message.queue")
-          result.command.intent.message.id = `other-${i}`;
-        result.receipt!.recordedAt = old + i + 1;
-        state.commands[`newer-${i}`] = { signature: `newer-${i}`, result };
+  it.each(["idle", "arbitrary-steer"] as const)(
+    "retains compact identity proof for an old %s delivery across reply pruning and restart without artifact reads",
+    async (delivery) => {
+      const f = fixture();
+      const active = await queuedActive(f);
+      if (delivery === "idle") {
+        await f.adapter.complete("active");
+        await active.runtime.recoverFollowUps();
+      } else {
+        await active.runtime.command({ ...active.steer, commandId: "arbitrary-delivery-id" });
       }
-    });
-    expect(
-      await f.followUps.transaction(
-        active.sessionId,
-        (state) => Object.hasOwn(state.commands, "queued"),
-        { mode: "read" },
-      ),
-    ).toBe(false);
-    const runtime = f.runtime();
-    await expect(runtime.command(active.steer)).rejects.toThrow("already been submitted");
-    expect(f.adapter.commands).toHaveLength(2);
-    expect(
-      await f.followUps.transaction(active.sessionId, (state) => state.releases, { mode: "read" }),
-    ).toEqual({});
-    await runtime.close();
-  });
+      await active.runtime.close();
+      await f.followUps.transaction(active.sessionId, (state) => {
+        const old = Date.now() - 8 * 24 * 60 * 60_000;
+        state.commands.queued.result.receipt!.recordedAt = old;
+        for (let i = 0; i < 64; i++) {
+          const result = structuredClone(state.commands.queued.result);
+          result.command = {
+            ...result.command,
+            route: null,
+            intent: { kind: "message.cancel", messageId: `other-${i}` },
+          };
+          result.receipt!.recordedAt = old + i + 1;
+          state.commands[`newer-${i}`] = { signature: `newer-${i}`, result };
+        }
+      });
+      const retained = await f.followUps.transaction(active.sessionId, (state) => state.commands, {
+        mode: "read",
+      });
+      expect(retained).not.toHaveProperty("queued");
+      expect(retained).not.toHaveProperty("arbitrary-delivery-id");
+      expect(
+        await f.followUps.transaction(
+          active.sessionId,
+          (_state, _proof, queued) => queued?.("queued"),
+          { mode: "read" },
+        ),
+      ).toBe(true);
+      let reads = 0;
+      f.artifacts.read = async () => {
+        reads++;
+        throw new Error("unrelated artifact unavailable");
+      };
+      const runtime = f.runtime();
+      await expect(runtime.command(active.steer)).rejects.toThrow(
+        "already been delivered or removed",
+      );
+      expect(reads).toBe(0);
+      expect(f.adapter.commands).toHaveLength(2);
+      expect(
+        await f.followUps.transaction(active.sessionId, (state) => state.releases, {
+          mode: "read",
+        }),
+      ).toEqual({});
+      await runtime.close();
+    },
+  );
+
+  it.each([false, true])(
+    "ordinary steers hydrate no unrelated history, reply pruning=%s",
+    async (prune) => {
+      const f = fixture();
+      const { runtime, sessionId } = await queuedActive(f);
+      if (prune) {
+        await f.followUps.transaction(sessionId, (state) => {
+          const old = Date.now() - 8 * 24 * 60 * 60_000;
+          for (let i = 0; i < 70; i++) {
+            const result = structuredClone(state.commands.queued.result);
+            result.command = {
+              ...result.command,
+              route: null,
+              intent: { kind: "message.cancel", messageId: `old-${i}` },
+            };
+            result.receipt!.recordedAt = old + i;
+            state.commands[`old-${i}`] = { signature: `old-${i}`, result };
+          }
+        });
+        expect(
+          await f.followUps.transaction(
+            sessionId,
+            (state) => Object.hasOwn(state.commands, "old-0"),
+            { mode: "read" },
+          ),
+        ).toBe(false);
+      }
+      const history = (await f.engine.getSession({ sessionId }))!;
+      const unrelated = new Set(
+        history.commands.flatMap(({ intent }) =>
+          intent.kind === "message.submit" ? [intent.reference.id] : [],
+        ),
+      );
+      const read = f.artifacts.read.bind(f.artifacts);
+      let unrelatedReads = 0;
+      f.artifacts.read = async (reference) => {
+        if (unrelated.has(reference.id)) {
+          unrelatedReads++;
+          throw new Error("unrelated historical artifact missing");
+        }
+        return read(reference);
+      };
+      const result = await runtime.command({
+        commandId: "fresh-steer",
+        sessionId,
+        command: { kind: "message.submit", delivery: "steer", message: message("fresh-steer") },
+      });
+      expect(result.receipt?.status).toBe("accepted");
+      expect(unrelatedReads).toBe(0);
+      await runtime.close();
+    },
+  );
 
   it("continues at the next idle boundary after recovering a settled previous delivery", async () => {
     const storage = createInMemorySessionFollowUpLedger();

@@ -79,13 +79,21 @@ export function emptySessionFollowUpState(): SessionFollowUpState {
  */
 export type SessionFollowUpDeliveryProof = (deliveryCommandId: string) => boolean;
 
-/** Atomic, synchronous read/modify/write. Storage commits before resolving. */
+/** Exact runner-local proof that this identity was used by a queue command. */
+export type SessionFollowUpQueuedMessageProof = (messageId: string) => boolean;
+
+/**
+ * Atomic, synchronous read/modify/write. Storage commits before resolving.
+ * Writers index message.queue identities before pruning their last reply;
+ * queuedMessageProof reads that exact, Session-scoped index in this snapshot.
+ */
 export interface SessionFollowUpLedger {
   transaction<T>(
     sessionId: string,
     work: (
       state: SessionFollowUpState,
       deliveryProof?: SessionFollowUpDeliveryProof,
+      queuedMessageProof?: SessionFollowUpQueuedMessageProof,
     ) => Synchronous<T>,
     /** A snapshot-only transaction: mutations to its private state are discarded. */
     options?: { mode: "read" },
@@ -97,7 +105,7 @@ export interface SessionFollowUpLedger {
 export const FOLLOW_UP_COMMAND_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const FOLLOW_UP_RECENT_COMMANDS = 64;
 
-/** Applied by each adapter inside the write transaction, never on a pure read. */
+/** Applied after atomically indexing queue identities, never on a pure read. */
 export function pruneSessionFollowUpState(state: SessionFollowUpState, now: number): void {
   // Keep writing the v1 field: older readers require a record, even when empty.
   state.releases = {};

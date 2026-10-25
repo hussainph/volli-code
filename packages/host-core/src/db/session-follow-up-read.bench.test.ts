@@ -5,6 +5,7 @@ import {
   canonicalJson,
   emptySessionFollowUpState,
   projectSessionFollowUps,
+  pruneSessionFollowUpState,
   type SessionFollowUpState,
 } from "@volli/session-engine";
 import { createSqliteSessionFollowUpLedger } from "./session-follow-up-repo";
@@ -31,24 +32,31 @@ function fixture(pruned: boolean): SessionFollowUpState {
         state: "queued",
         message,
       });
-    if (!pruned || i < QUEUED || i >= HISTORY - 64)
-      state.commands[id] = {
-        signature: canonicalJson({ commandId: id, message }),
-        result: {
+    state.commands[id] = {
+      signature: canonicalJson({ commandId: id, message }),
+      result: {
+        sessionId: "synthetic",
+        command: {
+          id,
           sessionId: "synthetic",
-          command: {
-            id,
-            sessionId: "synthetic",
-            createdAt: i,
-            route: null,
-            intent: { kind: "message.queue", message },
-          },
-          receipt: null,
-          throughSequence: 0,
-          refusal: null,
+          createdAt: i,
+          route: null,
+          intent: { kind: "message.queue", message },
         },
-      };
-    if (!pruned && i >= QUEUED)
+        receipt: {
+          id: `queued-receipt-${i}`,
+          commandId: id,
+          status: "accepted",
+          acceptedAt: i,
+          result: { kind: "message.submitted", sessionId: "synthetic" },
+          recordedAt: i,
+          sequence: i,
+        },
+        throughSequence: 0,
+        refusal: null,
+      },
+    };
+    if (i >= QUEUED)
       state.releases[`delivery-${i}`] = {
         command: {
           id: `delivery-${i}`,
@@ -71,6 +79,9 @@ function fixture(pruned: boolean): SessionFollowUpState {
         },
       };
   }
+  // Price the real payload-retention policy. Compact identity proofs live
+  // outside this JSON row and do not participate in these projection reads.
+  if (pruned) pruneSessionFollowUpState(state, Date.now());
   return state;
 }
 

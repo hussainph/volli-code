@@ -789,7 +789,7 @@ export class FollowUpQueue {
     const signature = canonicalJson(intentRequest);
     const claim = await ledger.transaction<
       { result: SessionRuntimeCommandResult } | { entry: StoredSessionFollowUp } | null
-    >(request.sessionId, (state) => {
+    >(request.sessionId, (state, _deliveryProof, queuedMessageProof) => {
       const prior = Object.hasOwn(state.commands, request.commandId)
         ? state.commands[request.commandId]
         : undefined;
@@ -804,6 +804,7 @@ export class FollowUpQueue {
       if (!entry) {
         // A turn-end release that already won must not be followed by a second send.
         if (
+          queuedMessageProof?.(request.command.message.id) ||
           Object.values(state.commands).some(
             ({ result }) =>
               result.command.intent.kind === "message.queue" &&
@@ -838,19 +839,9 @@ export class FollowUpQueue {
       state.revision += 1;
       return { entry };
     });
-    if (!claim) {
-      // Queue reply retention is bounded. The event ledger is not: an old
-      // delivered identity must still refuse a new steer after pruning (and
-      // after restart). Artifact ids are digests, not message ids, so consult
-      // the immutable message.submit payloads rather than the queue's cache.
-      for (const command of projection.commands) {
-        if (command.intent.kind !== "message.submit" || command.id === request.commandId) continue;
-        const { message } = await this.ports.artifacts.read(command.intent.reference);
-        if (message.id === request.command.message.id)
-          throw new SessionRuntimeConflictError("This message has already been submitted");
-      }
-      return null;
-    }
+    // A compact runner-local identity proof survives reply pruning. A fresh
+    // ordinary steer never needs historical artifact bodies.
+    if (!claim) return null;
     if ("result" in claim) return claim.result;
     this.#notify(request.sessionId);
     return this.#deliverSteer(request.sessionId, claim.entry, projection);

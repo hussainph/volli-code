@@ -148,6 +148,7 @@ export function consumeFollowUpCleanClose(
       }
       if (changed) {
         state.revision += 1;
+        indexQueuedMessageIdentities(db, session_id, state);
         pruneSessionFollowUpState(state, Date.now());
         prepared<[string, string]>(
           db,
@@ -198,6 +199,7 @@ export function createSqliteSessionFollowUpLedger(
       let after: SessionFollowUpState | null = null;
       const delivered = new Map<string, CommandReceipt>();
       const readOnly = options?.mode === "read";
+      let logChanges = !readOnly && log.enabled("info");
       const settle = readOnly ? readTransaction : settleTransaction;
       const settled = settle(db, () => {
         if (ownsSession !== undefined && !ownsSession(sessionId)) {
@@ -208,7 +210,10 @@ export function createSqliteSessionFollowUpLedger(
           "SELECT state FROM session_follow_up_queue WHERE session_id = ?",
         ).get(sessionId);
         const state = stored ? readState(stored.state) : emptySessionFollowUpState();
-        if (!readOnly) before = rowsOf(state);
+        // An older build can restore full replies without populating this
+        // index. Backfill in the same write transaction, before any pruning.
+        if (!readOnly) indexQueuedMessageIdentities(db, sessionId, state);
+        if (logChanges) before = rowsOf(state);
         const evidence = (deliveryCommandId: string): CommandReceipt | null => {
           const { command, receipts, events } = readSqliteSessionCommandEvidence(
             db,
@@ -219,13 +224,22 @@ export function createSqliteSessionFollowUpLedger(
             ? null
             : sessionFollowUpDeliveryEvidence(sessionId, command, receipts, events);
         };
-        const result = work(state, (deliveryCommandId) => evidence(deliveryCommandId) !== null);
+        const result = work(
+          state,
+          (deliveryCommandId) => evidence(deliveryCommandId) !== null,
+          (messageId) =>
+            prepared<[string, string]>(
+              db,
+              "SELECT 1 FROM session_follow_up_identities WHERE session_id = ? AND message_id = ?",
+            ).get(sessionId, messageId) !== undefined,
+        );
         if (result && typeof result === "object" && "then" in result) {
           throw new Error("Follow-up ledger transaction must be synchronous");
         }
         // Snapshot reads neither serialize/prune state nor acquire a writer lock.
         // Even accidental callback mutations are discarded, as the port promises.
         if (readOnly) return result;
+        if (stored || state.revision > 0) indexQueuedMessageIdentities(db, sessionId, state);
         pruneSessionFollowUpState(state, Date.now());
         const encoded = canonicalJson(state);
         // Ordinary projections do not create rows or rewrite unchanged state.
@@ -238,18 +252,35 @@ export function createSqliteSessionFollowUpLedger(
           `,
           ).run(sessionId, encoded, state.entries.length);
           after = state;
-          const remaining = new Set(state.entries.map(({ id }) => id));
-          for (const [messageId, row] of before) {
-            if (remaining.has(messageId)) continue;
-            const receipt = evidence(row.deliveryCommandId);
-            if (receipt !== null) delivered.set(row.deliveryCommandId, receipt);
+          if (logChanges) {
+            try {
+              const remaining = new Set(state.entries.map(({ id }) => id));
+              for (const [messageId, row] of before) {
+                if (remaining.has(messageId)) continue;
+                const receipt = evidence(row.deliveryCommandId);
+                if (receipt !== null) delivered.set(row.deliveryCommandId, receipt);
+              }
+            } catch {
+              // These reads describe a committed change; they do not authorize
+              // it. Lose this diagnostic, never roll back valid queue work or
+              // guess "withdrawn" when delivery evidence could not be decoded.
+              // The deliveryProof passed to work above remains fail-closed.
+              logChanges = false;
+            }
           }
         }
         return result;
       });
       // Each committed queue transition, with why, inside the operation that made it (VC-699).
       return settled.then((result) => {
-        if (after !== null) logQueueChanges(sessionId, before, after, delivered);
+        if (logChanges && after !== null) {
+          try {
+            logQueueChanges(sessionId, before, after, delivered);
+          } catch {
+            // A failing sink must not turn an already-committed mutation into
+            // a rejection (and invite an unnecessary caller retry).
+          }
+        }
         return result;
       });
     },
@@ -265,6 +296,21 @@ export function createSqliteSessionFollowUpLedger(
       );
     },
   };
+}
+
+/** Compact identities survive reply pruning; payloads remain only in the queue/ledger. */
+function indexQueuedMessageIdentities(
+  db: Database.Database,
+  sessionId: string,
+  state: SessionFollowUpState,
+): void {
+  for (const { result } of Object.values(state.commands)) {
+    if (result.command.intent.kind !== "message.queue") continue;
+    prepared<[string, string]>(
+      db,
+      "INSERT OR IGNORE INTO session_follow_up_identities(session_id, message_id) VALUES (?, ?)",
+    ).run(sessionId, result.command.intent.message.id);
+  }
 }
 
 /** Native deferred transactions participate in the existing ownership guard. */

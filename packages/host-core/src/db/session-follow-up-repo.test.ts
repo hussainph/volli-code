@@ -4,6 +4,7 @@ import { createTestSessionEngine } from "../testing/session-engine";
 import { insertProject } from "./projects-repo";
 import { createSqliteSessionFollowUpLedger } from "./session-follow-up-repo";
 import { SESSION_FOLLOW_UP_MIGRATION } from "./session-follow-up-migration";
+import { SESSION_FOLLOW_UP_IDENTITIES_MIGRATION } from "./session-follow-up-identities-migration";
 import { MIGRATIONS, migrate } from "./migrations";
 import { readMinReaderVersion } from "./schema-compatibility";
 import { openRawDb, openTestDb, testProject, type TestDb } from "./test-helpers";
@@ -214,6 +215,99 @@ describe("durable host follow-up storage", () => {
     ).toEqual(stored);
   });
 
+  it("adds an N−1-safe identity index and atomically backfills older queue replies before pruning", async () => {
+    const f = await setup();
+    f.db.exec("DROP TABLE session_follow_up_identities");
+    f.db.pragma("user_version = 66");
+    f.db.prepare("DELETE FROM migration_history WHERE version = 67").run();
+    const floor = readMinReaderVersion(f.db);
+    const history = await f.engine.getSession({ sessionId: f.sessionId });
+    const legacy = emptySessionFollowUpState();
+    legacy.revision = 1;
+    const old = Date.now() - 8 * 24 * 60 * 60_000;
+    for (let i = 0; i < 70; i++) {
+      const id = `queue-${i}`;
+      legacy.commands[id] = {
+        signature: id,
+        result: {
+          sessionId: f.sessionId,
+          command: {
+            id,
+            sessionId: f.sessionId,
+            createdAt: old + i,
+            route: null,
+            intent: {
+              kind: "message.queue",
+              message: { id: `message-${i}`, role: "user", parts: [] },
+            },
+          },
+          receipt: {
+            id,
+            commandId: id,
+            status: "accepted",
+            acceptedAt: old + i,
+            recordedAt: old + i,
+            sequence: 0,
+            result: { kind: "message.submitted", sessionId: f.sessionId },
+          },
+          throughSequence: 0,
+          refusal: null,
+        },
+      };
+    }
+    f.db
+      .prepare("INSERT INTO session_follow_up_queue VALUES (?, ?, ?)")
+      .run(f.sessionId, JSON.stringify(legacy), 0);
+    expect(migrate(f.db, fixture!.dbPath)).toBe(true);
+    expect(MIGRATIONS.find(({ version }) => version === 67)).toMatchObject({
+      sql: SESSION_FOLLOW_UP_IDENTITIES_MIGRATION,
+    });
+    expect(MIGRATIONS.find(({ version }) => version === 67)?.raisesMinReader).toBeUndefined();
+    expect(readMinReaderVersion(f.db)).toBe(floor);
+    expect(f.db.prepare("SELECT * FROM session_follow_up_identities").all()).toEqual([]);
+    await expect(
+      f.ledger.transaction(f.sessionId, (state) => {
+        state.revision++;
+        throw new Error("rollback");
+      }),
+    ).rejects.toThrow("rollback");
+    expect(f.db.prepare("SELECT * FROM session_follow_up_identities").all()).toEqual([]);
+    expect(
+      await f.ledger.transaction(f.sessionId, (state) => Object.keys(state.commands).length, {
+        mode: "read",
+      }),
+    ).toBe(70);
+    await f.ledger.transaction(f.sessionId, (state) => {
+      state.revision++;
+    });
+    expect(
+      await f.ledger.transaction(f.sessionId, (state) => Object.keys(state.commands).length, {
+        mode: "read",
+      }),
+    ).toBe(64);
+    const second = openRawDb(fixture!.dbPath);
+    try {
+      const reopened = createSqliteSessionFollowUpLedger(second);
+      expect(
+        await reopened.transaction(
+          f.sessionId,
+          (_state, _proof, queued) => [queued?.("message-0"), queued?.("never-queued")],
+          { mode: "read" },
+        ),
+      ).toEqual([true, false]);
+    } finally {
+      second.close();
+    }
+    expect(
+      f.db.prepare("SELECT COUNT(*) AS count FROM session_follow_up_identities").get(),
+    ).toEqual({ count: 70 });
+    f.db.exec(SESSION_FOLLOW_UP_IDENTITIES_MIGRATION);
+    expect(migrate(f.db, fixture!.dbPath)).toBe(false);
+    expect(await f.engine.getSession({ sessionId: f.sessionId })).toEqual(history);
+    f.db.prepare("DELETE FROM sessions WHERE id = ?").run(f.sessionId);
+    expect(f.db.prepare("SELECT * FROM session_follow_up_identities").all()).toEqual([]);
+  });
+
   it("fails loudly on unsupported/corrupt state and cascades only with its Session", async () => {
     const f = await setup();
     f.db
@@ -358,6 +452,112 @@ function entry(state: "queued" | "releasing", id: string) {
 }
 
 describe("queue transitions as log lines (VC-699)", () => {
+  it.each(["error", "info"] as const)(
+    "keeps %s diagnostics cheap and non-fatal without weakening withdrawal proof",
+    async (level) => {
+      const f = await setup();
+      const claimed = {
+        id: "message",
+        commandId: "queued",
+        deliveryCommandId: "delivery",
+        state: "releasing" as const,
+        message: { id: "message", role: "user" as const, parts: [] },
+      };
+      await f.ledger.transaction(f.sessionId, (state) => {
+        state.entries = [claimed];
+        state.revision = 1;
+      });
+      let evidenceReads = 0;
+      const failing = new Proxy(f.db, {
+        get(target, property) {
+          if (property === "prepare")
+            return (sql: string) => {
+              if (sql.includes("session_events")) {
+                evidenceReads++;
+                throw new Error("evidence decoder unavailable");
+              }
+              return target.prepare(sql);
+            };
+          const value: unknown = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const ledger = createSqliteSessionFollowUpLedger(failing);
+      const { installHostLog } = await import("../log/root");
+      const records: unknown[] = [];
+      const undo = installHostLog({ level, sink: { write: (record) => records.push(record) } });
+      try {
+        await expect(
+          ledger.transaction(f.sessionId, (state) => {
+            state.entries = [];
+            state.revision++;
+            return "committed";
+          }),
+        ).resolves.toBe("committed");
+        expect(evidenceReads).toBe(level === "info" ? 1 : 0);
+        expect(records).toEqual([]);
+        expect(
+          await ledger.transaction(f.sessionId, (state) => state.entries, { mode: "read" }),
+        ).toEqual([]);
+        await ledger.transaction(f.sessionId, (state) => {
+          state.entries = [claimed];
+          state.revision++;
+        });
+        // Unlike diagnostics, a proof that authorizes a withdrawal must fail
+        // closed. A decoder failure cannot authorize removal of a live claim.
+        await expect(
+          ledger.transaction(f.sessionId, (state, proof) => {
+            if (!proof!("delivery")) state.entries = [];
+          }),
+        ).rejects.toThrow("evidence decoder unavailable");
+        expect(
+          await ledger.transaction(f.sessionId, (state) => state.entries.length, { mode: "read" }),
+        ).toBe(1);
+      } finally {
+        undo();
+      }
+    },
+  );
+
+  it("does not reject a committed queue mutation when the diagnostic sink throws", async () => {
+    const f = await setup();
+    await f.ledger.transaction(f.sessionId, (state) => {
+      state.entries = [
+        {
+          id: "message",
+          commandId: "queued",
+          deliveryCommandId: "delivery",
+          state: "queued",
+          message: { id: "message", role: "user", parts: [] },
+        },
+      ];
+      state.revision = 1;
+    });
+    const { installHostLog } = await import("../log/root");
+    const undo = installHostLog({
+      level: "info",
+      sink: {
+        write: () => {
+          throw new Error("sink unavailable");
+        },
+      },
+    });
+    try {
+      await expect(
+        f.ledger.transaction(f.sessionId, (state) => {
+          state.entries = [];
+          state.revision++;
+          return "committed";
+        }),
+      ).resolves.toBe("committed");
+      expect(
+        await f.ledger.transaction(f.sessionId, (state) => state.entries, { mode: "read" }),
+      ).toEqual([]);
+    } finally {
+      undo();
+    }
+  });
+
   it("logs committed removal dispositions from transactional event evidence, not release history", async () => {
     const f = await setup();
     await f.ledger.transaction(f.sessionId, (state) => {
