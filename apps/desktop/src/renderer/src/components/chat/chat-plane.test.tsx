@@ -185,7 +185,7 @@ describe("SessionBlocker hit testing", () => {
       <SessionBlocker
         blocker={{
           message: "Environment setup failed",
-          detail: "`.agents/setup` exited with code 1: boom",
+          detail: ".agents/setup exited with code 1: boom",
           tone: "error",
           action: { label: "Retry setup", act: NO_ACT },
           secondaryAction: { label: "Start anyway", act: NO_ACT },

@@ -373,8 +373,8 @@ describe("desktop Session location resolver", () => {
   });
 
   // VC-584: with environment recipes on, the working copy's own
-  // `.agents/setup` runs, a failed one keeps refusing starts until answered,
-  // and `.agents/resume` runs once per runner epoch.
+  // .agents/setup runs, a failed one keeps refusing starts until answered,
+  // and .agents/resume runs once per runner epoch.
   describe("the environment recipe (VC-584)", () => {
     function recipeTicket(files: { setup?: string; resume?: string }) {
       testDb = openTestDb();
@@ -440,13 +440,13 @@ describe("desktop Session location resolver", () => {
       const { worktreePath, resolver, session } = recipeTicket({ setup: "echo nope\nexit 1\n" });
 
       await expect(resolver.prepare(session)).rejects.toThrow(
-        `Couldn't prepare the worktree at ${worktreePath} — \`.agents/setup\` exited with code 1: nope`,
+        `Couldn't prepare the worktree at ${worktreePath} — .agents/setup exited with code 1: nope`,
       );
       await expect(resolver.prepare(session)).rejects.toThrow(
-        "Environment setup failed: `.agents/setup` exited with code 1: nope. Retry setup, or start anyway.",
+        "Environment setup failed: .agents/setup exited with code 1: nope. Retry setup, or start anyway.",
       );
 
-      startWorktreeSetupAnyway({ home: worktreeHome.current }, worktreePath, 1);
+      startWorktreeSetupAnyway({ home: worktreeHome.current }, worktreePath, "ticket-1", 1);
       await expect(resolver.prepare(session)).resolves.toMatchObject({ directory: worktreePath });
     });
   });

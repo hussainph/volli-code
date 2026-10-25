@@ -66,7 +66,10 @@ async function request(path: string, type: string, input: unknown): Promise<IpcR
 beforeEach(() => {
   ctx = openTestDb();
   rpc = registerSessionRpcIpcHandlers({
-    handlers: admittedHandlers(testHostHandlers({ db: ctx.db, now: () => 77 }), ROUTER_POLICY),
+    handlers: admittedHandlers(
+      testHostHandlers({ db: ctx.db, now: () => 77, environmentRecipes: () => true }),
+      ROUTER_POLICY,
+    ),
   });
 });
 

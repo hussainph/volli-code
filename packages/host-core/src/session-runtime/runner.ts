@@ -347,6 +347,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
         : { refineAutoTitle: (request) => void autoTitler.refine(request) }),
       pictures: assembly.pictures,
       modelAccess: assembly.piRuntimeHost,
+      environmentRecipes: () => input.cloudEnabled(),
       automations,
       // The host's one worktree read service (VC-788): a scope switch's
       // materialization and a Done trim retire the answers it holds.

@@ -119,7 +119,13 @@ export function markFirstRunPending(
     if (steps.includes(step)) writeFileSync(markerPath(deps, worktreePath, step), body, "utf8");
     else unlinkMarker(markerPath(deps, worktreePath, step));
   }
+  // A new working copy at this path owes nothing an earlier one's recipe runs
+  // recorded (`environment-runs.ts`): neither its outcome nor its failure.
+  for (const record of RUN_RECORDS) unlinkMarker(workingCopyRecordPath(deps, worktreePath, record));
 }
+
+/** The environment recipe's run records (`environment-runs.ts`, `resume-exec.ts`), by suffix. */
+const RUN_RECORDS = ["setup-run.json", "resume-run.json", "resume.log"] as const;
 
 /** Removes one marker; `true` when this call removed it, `false` when it was already gone. */
 function unlinkMarker(path: string): boolean {

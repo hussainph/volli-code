@@ -5,8 +5,10 @@
  *
  * The recipe itself (`.agents/setup`, `.agents/resume`) runs on the runner
  * (`@volli/host-core`'s worktree module). This is what crosses to a window:
- * JSON-safe, with no machine paths in it.
+ * JSON-safe, with the runner's own ids left behind. A run's summary and
+ * output are the script's, and may name paths on the runner.
  */
+import { redactPayloadSecrets } from "./secret-redaction";
 
 /** Which script ran: the working copy's own `.agents/setup`, or the project's stored command. */
 export type EnvironmentRecipeSource = "repo" | "legacyCommand";
@@ -14,7 +16,7 @@ export type EnvironmentRecipeSource = "repo" | "legacyCommand";
 /** The last setup run, as a window shows it. */
 export interface WorktreeSetupRunView {
   source: EnvironmentRecipeSource;
-  /** The one-line reason ("`.agents/setup` exited with code 1: …"). */
+  /** The one-line reason (".agents/setup exited with code 1: …"). */
   summary: string;
   exitCode: number | null;
   endedAt: number;
@@ -64,7 +66,8 @@ export function environmentFixTicket(
     run.source === "repo"
       ? "the repository's `.agents/setup`"
       : "the project's stored setup command (Configure → Worktrees → Then run)";
-  const tail = run.tail.trim().slice(-FIX_TICKET_TAIL_MAX_CHARS);
+  // Board content: credential shapes in the output never reach it.
+  const tail = redactPayloadSecrets(run.tail.trim()).slice(-FIX_TICKET_TAIL_MAX_CHARS);
   // Longer than any backtick run in the output, so the output cannot close it.
   const longestRun = Math.max(0, ...(tail.match(/`+/g) ?? []).map((ticks) => ticks.length));
   const fence = "`".repeat(Math.max(3, longestRun + 1));
@@ -79,7 +82,7 @@ export function environmentFixTicket(
       "- Non-interactive: no prompts.",
       "- Idempotent: check before installing.",
       "- Install from the lockfile; guard system tools with `command -v` and `VOLLI_RUNNER_KIND` (`mac`, `linux` or `cloud`).",
-      "- Start no long-running processes: anything left running is stopped. Services belong in `.agents/resume`.",
+      "- Start no long-running processes. Services belong in `.agents/resume`.",
       "",
       `When it passes, answer ${failedTicket}'s setup with Retry setup.`,
       ...(tail.length === 0 ? [] : ["", "Output:", "", `${fence}text`, tail, fence]),

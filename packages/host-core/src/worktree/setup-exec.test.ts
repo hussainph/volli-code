@@ -213,7 +213,7 @@ describe("runPendingWorktreeSetup", () => {
   });
 });
 
-/** Writes the working copy's `.agents/setup`. */
+/** Writes the working copy's .agents/setup. */
 function withRecipe(worktreePath: string, body: string, mode = 0o755): void {
   mkdirSync(join(worktreePath, ".agents"), { recursive: true });
   writeFileSync(join(worktreePath, ".agents", "setup"), body);
@@ -253,7 +253,7 @@ describe("runPendingWorktreeSetup with environment recipes", () => {
       endedAt: 42,
       outcome: "succeeded",
       exitCode: 0,
-      summary: "`.agents/setup` succeeded.",
+      summary: ".agents/setup succeeded.",
     });
     expect(phases).toEqual(["setting-up", "ready"]);
   });
@@ -295,7 +295,7 @@ describe("runPendingWorktreeSetup with environment recipes", () => {
     const failed = await runPendingWorktreeSetup(deps, { ...params(null), recipe });
     expect(failed).toMatchObject({
       kind: "failed",
-      message: "`.agents/setup` exited with code 127: pnpm: not found",
+      message: ".agents/setup exited with code 127: pnpm: not found",
       run: { outcome: "failed", exitCode: 127, tail: "pnpm: not found\n" },
     });
     const event = listTicketEvents(ctx.db, "t").find((e) => e.payload.kind === "worktree_failed");
@@ -309,18 +309,18 @@ describe("runPendingWorktreeSetup with environment recipes", () => {
     expect(blocked).toMatchObject({
       kind: "failed",
       message:
-        "Environment setup failed: `.agents/setup` exited with code 127: pnpm: not found. Retry setup, or start anyway.",
+        "Environment setup failed: .agents/setup exited with code 127: pnpm: not found. Retry setup, or start anyway.",
     });
     expect(listTicketEvents(ctx.db, "t")).toHaveLength(events);
 
-    startWorktreeSetupAnyway({ home }, worktreePath, 1);
+    startWorktreeSetupAnyway({ home }, worktreePath, "t", 1);
     expect(await runPendingWorktreeSetup(deps, { ...params(null), recipe })).toEqual({
       kind: "skipped",
     });
 
     // Retry: the next start runs it again, as a retry.
     withRecipe(worktreePath, '#!/bin/sh\nprintf %s "$VOLLI_SETUP_REASON" > reason.txt\n');
-    retryWorktreeSetup({ home }, worktreePath, "t");
+    retryWorktreeSetup({ home }, worktreePath, "t", 1);
     expect(await runPendingWorktreeSetup(deps, { ...params(null), recipe })).toEqual({
       kind: "succeeded",
     });
@@ -342,7 +342,7 @@ describe("runPendingWorktreeSetup with environment recipes", () => {
 
     expect(outcome).toMatchObject({
       kind: "failed",
-      message: "`.agents/setup` did not finish within 200 ms and was stopped.",
+      message: ".agents/setup did not finish within 200 ms and was stopped.",
     });
     expect(readEnvironmentRun({ home }, worktreePath, "setup")).toMatchObject({
       outcome: "timed_out",
@@ -364,7 +364,7 @@ describe("runPendingWorktreeSetup with environment recipes", () => {
 
     expect(outcome).toMatchObject({
       kind: "failed",
-      message: "`.agents/setup` could not start (no PATH yet).",
+      message: ".agents/setup could not start (no PATH yet).",
     });
     expect(readEnvironmentRun({ home }, worktreePath, "setup")).toMatchObject({
       outcome: "failed",
@@ -385,17 +385,60 @@ describe("runPendingWorktreeSetup with environment recipes", () => {
     }
   });
 
-  it("names a recipe that cannot be read, keeping the stored command from running in its place", async () => {
-    const { worktreePath, deps, params } = pendingWorktree();
-    withRecipe(worktreePath, "true\n", 0o000);
+  it.skipIf(process.getuid?.() === 0)(
+    "names a recipe that cannot be read, records it, and keeps refusing starts",
+    async () => {
+      const { home, worktreePath, deps, params } = pendingWorktree();
+      withRecipe(worktreePath, "true\n", 0o000);
 
-    const outcome = await runPendingWorktreeSetup(deps, { ...params("touch stored-ran"), recipe });
+      const outcome = await runPendingWorktreeSetup(deps, {
+        ...params("touch stored-ran"),
+        recipe,
+      });
 
-    // Root reads anything; the claim was still consumed either way.
-    if (outcome.kind === "failed") {
-      expect(outcome.message).toMatch(/could not be read/);
+      expect(outcome).toMatchObject({
+        kind: "failed",
+        message: expect.stringMatching(/^\.agents\/setup could not be read/),
+      });
       expect(existsSync(join(worktreePath, "stored-ran"))).toBe(false);
-    }
+      expect(readEnvironmentRun({ home }, worktreePath, "setup")).toMatchObject({
+        source: "repo",
+        outcome: "failed",
+      });
+      // The claim is spent, but the next start is still refused.
+      expect(await runPendingWorktreeSetup(deps, { ...params(null), recipe })).toMatchObject({
+        kind: "failed",
+        message: expect.stringMatching(
+          /^Environment setup failed: \.agents\/setup could not be read/,
+        ),
+      });
+    },
+  );
+
+  it("forgets an earlier failure when a retried run has nothing left to run", async () => {
+    const { home, worktreePath, deps, params } = pendingWorktree();
+    await runPendingWorktreeSetup(deps, { ...params("false"), recipe });
+    retryWorktreeSetup({ home }, worktreePath, "t", 1);
+
+    expect(await runPendingWorktreeSetup(deps, { ...params(null), recipe })).toEqual({
+      kind: "skipped",
+    });
+    expect(readEnvironmentRun({ home }, worktreePath, "setup")).toBeNull();
+    expect(await runPendingWorktreeSetup(deps, { ...params(null), recipe })).toEqual({
+      kind: "skipped",
+    });
+  });
+
+  it("ignores the repository's .agents/setup with recipes off, recording nothing", async () => {
+    const { home, worktreePath, deps, params } = pendingWorktree();
+    withRecipe(worktreePath, "#!/bin/sh\ntouch recipe-ran\n");
+
+    expect(await runPendingWorktreeSetup(deps, params("touch stored-ran"))).toEqual({
+      kind: "succeeded",
+    });
+    expect(existsSync(join(worktreePath, "stored-ran"))).toBe(true);
+    expect(existsSync(join(worktreePath, "recipe-ran"))).toBe(false);
+    expect(readEnvironmentRun({ home }, worktreePath, "setup")).toBeNull();
   });
 });
 

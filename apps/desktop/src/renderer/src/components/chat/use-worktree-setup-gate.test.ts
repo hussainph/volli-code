@@ -47,7 +47,7 @@ const PROJECT = "project-1";
 const TICKET = "ticket-1";
 const RUN = {
   source: "repo" as const,
-  summary: "`.agents/setup` exited with code 1: boom",
+  summary: ".agents/setup exited with code 1: boom",
   exitCode: 1,
   endedAt: 1_000,
   tail: "boom",
@@ -57,7 +57,7 @@ const PREPARATION: SessionAttention = {
   id: "attention-1",
   attachmentId: null,
   kind: "configuration_invalid",
-  detail: "Couldn't prepare the worktree at /w — `.agents/setup` exited with code 1: boom",
+  detail: "Couldn't prepare the worktree at /w — .agents/setup exited with code 1: boom",
   diagnostic: null,
 };
 

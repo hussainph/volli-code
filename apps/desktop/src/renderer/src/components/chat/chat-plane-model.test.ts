@@ -525,10 +525,10 @@ describe("sessionBlocker", () => {
   // VC-584: a working copy's failed environment setup holds every start.
   describe("a failed environment setup", () => {
     const PREPARATION_FAILED =
-      "Couldn't prepare the worktree at /w — `.agents/setup` exited with code 1: boom";
+      "Couldn't prepare the worktree at /w — .agents/setup exited with code 1: boom";
     const RUN = {
       source: "repo" as const,
-      summary: "`.agents/setup` exited with code 1: boom",
+      summary: ".agents/setup exited with code 1: boom",
       exitCode: 1,
       endedAt: 1_000,
       tail: "boom",
@@ -539,6 +539,25 @@ describe("sessionBlocker", () => {
         true,
       );
       expect(mayBeWorktreeSetupGate(attention("configuration_invalid", "Bad model"))).toBe(false);
+      // The same preparation failing in git is not the setup's to answer.
+      expect(
+        mayBeWorktreeSetupGate(
+          attention(
+            "configuration_invalid",
+            "Couldn't prepare the worktree at /w — fatal: bad ref",
+          ),
+        ),
+      ).toBe(false);
+      for (const clause of [
+        "Environment setup failed: it broke. Retry setup, or start anyway.",
+        "The project's setup command exited with code 2.",
+      ]) {
+        expect(
+          mayBeWorktreeSetupGate(
+            attention("configuration_invalid", `Couldn't prepare the worktree at /w — ${clause}`),
+          ),
+        ).toBe(true);
+      }
       expect(mayBeWorktreeSetupGate(attention("configuration_invalid"))).toBe(false);
       expect(mayBeWorktreeSetupGate(attention("auth_required", PREPARATION_FAILED))).toBe(false);
       expect(mayBeWorktreeSetupGate(null)).toBe(false);

@@ -79,7 +79,7 @@ describe("runWorktreeResume", () => {
     expect(await runWorktreeResume(deps, params())).toEqual({
       kind: "finished",
       ok: true,
-      summary: "`.agents/resume` succeeded.",
+      summary: ".agents/resume succeeded.",
     });
     expect(await runWorktreeResume(deps, params())).toEqual({ kind: "skipped" });
     noteRunnerWake();
@@ -117,7 +117,7 @@ describe("runWorktreeResume", () => {
     expect(await runWorktreeResume(deps, params())).toEqual({
       kind: "finished",
       ok: false,
-      summary: "`.agents/resume` exited with code 2.",
+      summary: ".agents/resume exited with code 2.",
     });
     expect(readEnvironmentRun({ home }, worktreePath, "resume")).toMatchObject({
       outcome: "failed",
@@ -151,7 +151,7 @@ describe("runWorktreeResume", () => {
           },
         }),
       ),
-    ).toEqual({ kind: "finished", ok: false, summary: "`.agents/resume` could not start." });
+    ).toEqual({ kind: "finished", ok: false, summary: ".agents/resume could not start." });
 
     noteRunnerWake();
     withResume("#!/volli-no-such-interpreter\n", 0o755);

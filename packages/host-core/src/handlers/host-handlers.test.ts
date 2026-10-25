@@ -932,9 +932,10 @@ describe("desktop-only commands", () => {
   describe("environment setup", () => {
     let home: string;
     const worktreePath = "/wt/VC-7";
-    const map = () =>
+    const map = (recipes = true) =>
       handlers({
         worktree: { db: ctx.db, gitAsync: runGitCapturingAsync, blobsRoot: "", home },
+        environmentRecipes: () => recipes,
       });
     const fail = () =>
       recordEnvironmentRun(
@@ -964,6 +965,21 @@ describe("desktop-only commands", () => {
       );
     });
     afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+    it("has no gate to show or answer while recipes are off", async () => {
+      fail();
+      expect(await map(false)["worktree.setupStatus"]({ ticketId: "wt-ticket" }, WINDOW)).toEqual({
+        kind: "none",
+      });
+      expect(
+        await unavailable(() =>
+          map(false)["worktree.answerSetup"]({ ticketId: "wt-ticket", answer: "retry" }, WINDOW),
+        ),
+      ).toBe("Environment setup is off on this host");
+      expect(await handlers()["worktree.setupStatus"]({ ticketId: "wt-ticket" }, WINDOW)).toEqual({
+        kind: "none",
+      });
+    });
 
     it("answers none for a ticket with no working copy, and refuses an unknown one", async () => {
       expect(await map()["worktree.setupStatus"]({ ticketId: "plain-ticket" }, WINDOW)).toEqual({

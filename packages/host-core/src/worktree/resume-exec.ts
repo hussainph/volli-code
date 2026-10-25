@@ -14,8 +14,10 @@
  * the `cloud` flag, like the rest of the recipe.
  */
 import { spawn } from "node:child_process";
+import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 
 import { recordEnvironmentRun } from "./environment-runs";
+import { ensureWorkingCopyRecordDir, workingCopyRecordPath } from "./first-run";
 import { canonicalize } from "./paths";
 import {
   localRunnerKind,
@@ -37,9 +39,6 @@ const RESUME_WAIT_MS = 10_000;
 
 /** A resume still running after this long is stopped. */
 const RESUME_HARD_LIMIT_MS = 10 * 60_000;
-
-/** How long output may keep draining after the script exited. */
-const DRAIN_GRACE_MS = 250;
 
 /** One start's resume request. */
 export interface WorktreeResumeParams {
@@ -119,7 +118,7 @@ async function startResume(
     recipe = resolveRecipe(params.worktreePath, "resume", null);
   } catch (error) {
     log.warn("could not read .agents/resume", { ticketId: params.ticketId, error });
-    return { kind: "finished", ok: false, summary: "`.agents/resume` could not be read." };
+    return { kind: "finished", ok: false, summary: ".agents/resume could not be read." };
   }
   if (recipe === null) return { kind: "skipped" };
   const now = params.now ?? Date.now;
@@ -130,11 +129,22 @@ async function startResume(
     environment = await params.environment();
   } catch (error) {
     log.warn("could not start .agents/resume", { ticketId: params.ticketId, error });
-    return { kind: "finished", ok: false, summary: "`.agents/resume` could not start." };
+    return { kind: "finished", ok: false, summary: ".agents/resume could not start." };
   }
   const invocation = recipeInvocation(recipe, environment.shellPath);
+  // Its output goes to a file, never a pipe: a service it starts in the
+  // background inherits these descriptors, and a pipe this host closes (or
+  // takes with it when it quits) would break the service's next write.
+  let runLog: { path: string; fd: number };
+  try {
+    ensureWorkingCopyRecordDir(deps);
+    const path = workingCopyRecordPath(deps, params.worktreePath, "resume.log");
+    runLog = { path, fd: openSync(path, "w") };
+  } catch (error) {
+    log.warn("could not open the resume log", { ticketId: params.ticketId, error });
+    return { kind: "finished", ok: false, summary: ".agents/resume could not start." };
+  }
   const finished = new Promise<{ ok: boolean; summary: string }>((resolve) => {
-    let tail = "";
     let settled = false;
     // Its own process group, so what it starts outlives this host; stdin is
     // empty, as for setup.
@@ -150,9 +160,11 @@ async function startResume(
           reason: { script: "resume", why: reason },
         }),
       },
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", runLog.fd, runLog.fd],
       detached: true,
     });
+    // The child holds its own copy now.
+    closeSync(runLog.fd);
     child.unref();
     const limit = setTimeout(() => {
       // Only the script itself: what it started is meant to keep running.
@@ -163,17 +175,15 @@ async function startResume(
       if (settled) return;
       settled = true;
       clearTimeout(limit);
-      child.stdout?.destroy();
-      child.stderr?.destroy();
       const ok = error === undefined && code === 0;
       const summary =
         error !== undefined
-          ? `\`.agents/resume\` could not start (${error.message}).`
+          ? `.agents/resume could not start (${error.message}).`
           : code !== null
             ? ok
-              ? "`.agents/resume` succeeded."
-              : `\`.agents/resume\` exited with code ${code}.`
-            : `\`.agents/resume\` was stopped by ${signal ?? "a signal"}.`;
+              ? ".agents/resume succeeded."
+              : `.agents/resume exited with code ${code}.`
+            : `.agents/resume was stopped by ${signal ?? "a signal"}.`;
       try {
         recordEnvironmentRun(
           deps,
@@ -187,7 +197,13 @@ async function startResume(
             ticketId: params.ticketId,
             startedAt,
           },
-          { endedAt: now(), outcome: ok ? "succeeded" : "failed", exitCode: code, summary, tail },
+          {
+            endedAt: now(),
+            outcome: ok ? "succeeded" : "failed",
+            exitCode: code,
+            summary,
+            tail: readTail(runLog.path),
+          },
         );
       } catch (recordError) {
         log.error("failed to record the resume run", { ticketId: params.ticketId, recordError });
@@ -195,19 +211,10 @@ async function startResume(
       if (!ok) log.warn("resume failed", { ticketId: params.ticketId, summary });
       resolve({ ok, summary });
     };
-    for (const stream of [child.stdout, child.stderr]) {
-      stream?.setEncoding("utf8");
-      stream?.on("data", (chunk: string) => {
-        tail = (tail + chunk).slice(-SETUP_TAIL_MAX_CHARS);
-      });
-    }
     child.once("error", (error) => settle(null, null, error));
-    // The script's exit is the end of the run. Its last output can still be in
-    // the pipes; services it started may keep them open, and are not waited on.
-    child.once("exit", (code, signal) => {
-      child.once("close", () => settle(code, signal));
-      setTimeout(() => settle(code, signal), DRAIN_GRACE_MS).unref?.();
-    });
+    // The script's exit is the end of the run; services it started are not
+    // waited on.
+    child.once("exit", (code, signal) => settle(code, signal));
   });
   let wait: ReturnType<typeof setTimeout> | undefined;
   const waited = new Promise<"background">((resolve) => {
@@ -218,4 +225,25 @@ async function startResume(
   clearTimeout(wait);
   if (first === "background") return { kind: "background" };
   return { kind: "finished", ...first };
+}
+
+/**
+ * The log's bounded tail; empty when it cannot be read. Only the end is read:
+ * a service the script started may keep writing to the same file.
+ */
+function readTail(path: string): string {
+  try {
+    const fd = openSync(path, "r");
+    try {
+      const size = fstatSync(fd).size;
+      const length = Math.min(size, SETUP_TAIL_MAX_CHARS * 4);
+      const bytes = Buffer.alloc(length);
+      readSync(fd, bytes, 0, length, size - length);
+      return bytes.toString("utf8").slice(-SETUP_TAIL_MAX_CHARS);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return "";
+  }
 }

@@ -19,6 +19,7 @@ import {
   isBlockingSetupRun,
   markSetupStartedAnyway,
   readEnvironmentRun,
+  unreadableSetupRun,
   type EnvironmentRunFact,
 } from "./environment-runs";
 import { isFirstRunPending, rearmFirstRunSetup } from "./first-run";
@@ -40,14 +41,29 @@ export type WorktreeSetupStatus =
   | { kind: "failed"; run: EnvironmentRunFact }
   | { kind: "started-anyway"; run: EnvironmentRunFact };
 
-/** Reads the working copy's setup status. Throws when its record cannot be read. */
-export function worktreeSetupStatus(deps: HomePorts, worktreePath: string): WorktreeSetupStatus {
+/**
+ * Reads the working copy's setup status. A record that cannot be read reads as
+ * a failed setup that says so, which either answer replaces.
+ */
+export function worktreeSetupStatus(
+  deps: HomePorts,
+  worktreePath: string,
+  ticketId: string,
+  now: number,
+): WorktreeSetupStatus {
   if (isWorktreeSetupRunning(worktreePath)) return { kind: "running" };
   if (isFirstRunPending(deps, worktreePath, "setup")) return { kind: "pending" };
-  const run = readEnvironmentRun(deps, worktreePath, "setup");
+  let run: EnvironmentRunFact | null;
+  try {
+    run = readEnvironmentRun(deps, worktreePath, "setup");
+  } catch {
+    run = unreadableSetupRun(ticketId, now);
+  }
   if (run === null) return { kind: "none" };
-  if (run.outcome === "succeeded") return { kind: "succeeded", run };
-  return isBlockingSetupRun(run) ? { kind: "failed", run } : { kind: "started-anyway", run };
+  if (isBlockingSetupRun(run)) return { kind: "failed", run };
+  return run.startedAnywayAt === undefined
+    ? { kind: "succeeded", run }
+    : { kind: "started-anyway", run };
 }
 
 /**
@@ -59,8 +75,9 @@ export function retryWorktreeSetup(
   deps: HomePorts,
   worktreePath: string,
   ticketId: string,
+  now: number,
 ): WorktreeSetupStatus {
-  const status = worktreeSetupStatus(deps, worktreePath);
+  const status = worktreeSetupStatus(deps, worktreePath, ticketId, now);
   if (status.kind !== "failed" && status.kind !== "started-anyway") return status;
   rearmFirstRunSetup(deps, worktreePath, ticketId);
   return { kind: "pending" };
@@ -70,10 +87,13 @@ export function retryWorktreeSetup(
 export function startWorktreeSetupAnyway(
   deps: HomePorts,
   worktreePath: string,
+  ticketId: string,
   now: number,
 ): WorktreeSetupStatus {
-  const status = worktreeSetupStatus(deps, worktreePath);
+  const status = worktreeSetupStatus(deps, worktreePath, ticketId, now);
   if (status.kind !== "failed") return status;
-  const run = markSetupStartedAnyway(deps, worktreePath, now);
-  return run === null ? worktreeSetupStatus(deps, worktreePath) : { kind: "started-anyway", run };
+  const run = markSetupStartedAnyway(deps, worktreePath, ticketId, now);
+  return run === null
+    ? worktreeSetupStatus(deps, worktreePath, ticketId, now)
+    : { kind: "started-anyway", run };
 }

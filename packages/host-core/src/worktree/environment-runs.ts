@@ -17,12 +17,13 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 
 import { ensureWorkingCopyRecordDir, workingCopyRecordPath } from "./first-run";
+import { localRunnerKind } from "./recipe";
 import type { RecipeScript, ResolvedRecipe, ResumeReason, RunnerKind, SetupReason } from "./recipe";
 import type { WorktreePorts } from "./types";
 
 type HomePorts = Pick<WorktreePorts, "home">;
 
-/** How a run ended. */
+/** How a run ended. A record a later build wrote may name another; see {@link isFact}. */
 export type EnvironmentRunOutcome = "succeeded" | "failed" | "timed_out";
 
 /** One run of one recipe script in one working copy. */
@@ -62,13 +63,18 @@ function factPath(deps: HomePorts, worktreePath: string, script: RecipeScript): 
   return workingCopyRecordPath(deps, worktreePath, `${script}-run.json`);
 }
 
+/**
+ * Tolerant on read: an outcome this build does not know (a later build's) is
+ * kept as written, and only the outcomes this build knows to be failures
+ * block ({@link isBlockingSetupRun}).
+ */
 function isFact(value: unknown): value is EnvironmentRunFact {
   if (typeof value !== "object" || value === null) return false;
   const fact = value as Partial<EnvironmentRunFact>;
   return (
     typeof fact.id === "string" &&
     (fact.script === "setup" || fact.script === "resume") &&
-    (fact.outcome === "succeeded" || fact.outcome === "failed" || fact.outcome === "timed_out") &&
+    typeof fact.outcome === "string" &&
     typeof fact.summary === "string" &&
     typeof fact.endedAt === "number"
   );
@@ -126,22 +132,76 @@ export function recordEnvironmentRun(
  * Whether the working copy's last setup run blocks a start: it did not
  * succeed, and nobody chose to start anyway.
  */
-export function isBlockingSetupRun(fact: EnvironmentRunFact | null): fact is EnvironmentRunFact {
-  return fact !== null && fact.outcome !== "succeeded" && fact.startedAnywayAt === undefined;
+export function isBlockingSetupRun(fact: EnvironmentRunFact | null): boolean {
+  return (
+    fact !== null &&
+    (fact.outcome === "failed" || fact.outcome === "timed_out") &&
+    fact.startedAnywayAt === undefined
+  );
+}
+
+/**
+ * Why the working copy's next setup runs: its first, or a retry after an
+ * earlier run (one whose record cannot be read counts as earlier).
+ */
+export function setupReasonAfter(deps: HomePorts, worktreePath: string): SetupReason {
+  try {
+    return readEnvironmentRun(deps, worktreePath, "setup") === null ? "new-working-copy" : "retry";
+  } catch {
+    return "retry";
+  }
+}
+
+/** Forgets the working copy's last `script` run: the run it described no longer applies. */
+export function clearEnvironmentRun(
+  deps: HomePorts,
+  worktreePath: string,
+  script: RecipeScript,
+): void {
+  rmSync(factPath(deps, worktreePath, script), { force: true });
+}
+
+/**
+ * The fact a setup record that cannot be read stands for: a failed setup, so
+ * a start never reads "nothing failed" from it, and either answer replaces it.
+ */
+export function unreadableSetupRun(ticketId: string, now: number): EnvironmentRunFact {
+  return {
+    id: randomUUID(),
+    script: "setup",
+    source: "repo",
+    scriptSha: "",
+    reason: "new-working-copy",
+    runnerKind: localRunnerKind(),
+    ticketId,
+    startedAt: now,
+    endedAt: now,
+    outcome: "failed",
+    exitCode: null,
+    summary: "The environment setup record could not be read.",
+    tail: "",
+  };
 }
 
 /**
  * Start anyway: records that a person chose to work in the working copy
- * despite its failed setup. Returns the updated fact, or `null` when there is
- * no blocking run to answer.
+ * despite its failed setup. A record that cannot be read is replaced by one
+ * that says so. Returns the updated fact, or `null` when there is no blocking
+ * run to answer.
  */
 export function markSetupStartedAnyway(
   deps: HomePorts,
   worktreePath: string,
+  ticketId: string,
   now: number,
 ): EnvironmentRunFact | null {
-  const fact = readEnvironmentRun(deps, worktreePath, "setup");
-  if (!isBlockingSetupRun(fact)) return null;
+  let fact: EnvironmentRunFact | null;
+  try {
+    fact = readEnvironmentRun(deps, worktreePath, "setup");
+  } catch {
+    fact = unreadableSetupRun(ticketId, now);
+  }
+  if (fact === null || !isBlockingSetupRun(fact)) return null;
   const answered: EnvironmentRunFact = { ...fact, startedAnywayAt: now };
   writeFact(deps, worktreePath, answered);
   return answered;

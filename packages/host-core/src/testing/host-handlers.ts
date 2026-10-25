@@ -78,6 +78,8 @@ export interface TestHandlerPorts {
    * of the test's `git`/`gitAsync` bundle.
    */
   readonly productionWorktree?: { readonly dataDir: string };
+  /** Environment recipes on (VC-584, the `cloud` flag); absent is off. */
+  readonly environmentRecipes?: () => boolean;
 }
 
 /**
@@ -122,6 +124,9 @@ export function testHostHandlers(ports: TestHandlerPorts): HostHandlerMap {
     ...(ports.refineAutoTitle === undefined ? {} : { refineAutoTitle: ports.refineAutoTitle }),
     modelAccess: null,
     experiments: null,
+    ...(ports.environmentRecipes === undefined
+      ? {}
+      : { environmentRecipes: ports.environmentRecipes }),
     automations,
     busyWorktreeSites: ports.busyWorktreeSites ?? (async () => []),
     worktreeReads:

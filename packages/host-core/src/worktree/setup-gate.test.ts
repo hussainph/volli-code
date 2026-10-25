@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
@@ -69,50 +69,88 @@ describe("environment run facts", () => {
     expect(isBlockingSetupRun(null)).toBe(false);
     expect(isBlockingSetupRun(record("succeeded"))).toBe(false);
     expect(isBlockingSetupRun(record("timed_out"))).toBe(true);
-    expect(markSetupStartedAnyway({ home }, worktreePath, 9)).toMatchObject({
+    expect(markSetupStartedAnyway({ home }, worktreePath, "t", 9)).toMatchObject({
       startedAnywayAt: 9,
     });
     expect(isBlockingSetupRun(readEnvironmentRun({ home }, worktreePath, "setup"))).toBe(false);
-    expect(markSetupStartedAnyway({ home }, worktreePath, 10)).toBeNull();
+    expect(markSetupStartedAnyway({ home }, worktreePath, "t", 10)).toBeNull();
   });
 });
 
 describe("the setup gate", () => {
   it("reads none, pending, succeeded, failed and started-anyway", () => {
-    expect(worktreeSetupStatus({ home }, worktreePath)).toEqual({ kind: "none" });
+    expect(worktreeSetupStatus({ home }, worktreePath, "t", 1)).toEqual({ kind: "none" });
     markFirstRunPending({ home }, worktreePath, "t", ["setup"]);
-    expect(worktreeSetupStatus({ home }, worktreePath)).toEqual({ kind: "pending" });
+    expect(worktreeSetupStatus({ home }, worktreePath, "t", 1)).toEqual({ kind: "pending" });
     claimFirstRunSetup({ home }, worktreePath);
     record("succeeded");
-    expect(worktreeSetupStatus({ home }, worktreePath)).toMatchObject({ kind: "succeeded" });
+    expect(worktreeSetupStatus({ home }, worktreePath, "t", 1)).toMatchObject({
+      kind: "succeeded",
+    });
     record("failed");
-    expect(worktreeSetupStatus({ home }, worktreePath)).toMatchObject({ kind: "failed" });
-    expect(startWorktreeSetupAnyway({ home }, worktreePath, 5)).toMatchObject({
+    expect(worktreeSetupStatus({ home }, worktreePath, "t", 1)).toMatchObject({ kind: "failed" });
+    expect(startWorktreeSetupAnyway({ home }, worktreePath, "t", 5)).toMatchObject({
       kind: "started-anyway",
       run: { startedAnywayAt: 5 },
     });
-    expect(worktreeSetupStatus({ home }, worktreePath)).toMatchObject({ kind: "started-anyway" });
+    expect(worktreeSetupStatus({ home }, worktreePath, "t", 1)).toMatchObject({
+      kind: "started-anyway",
+    });
   });
 
   it("owes the run again on Retry after a failure, and only then", () => {
-    expect(retryWorktreeSetup({ home }, worktreePath, "t")).toEqual({ kind: "none" });
+    expect(retryWorktreeSetup({ home }, worktreePath, "t", 1)).toEqual({ kind: "none" });
     record("succeeded");
-    expect(retryWorktreeSetup({ home }, worktreePath, "t")).toMatchObject({ kind: "succeeded" });
+    expect(retryWorktreeSetup({ home }, worktreePath, "t", 1)).toMatchObject({ kind: "succeeded" });
     record("failed");
-    expect(retryWorktreeSetup({ home }, worktreePath, "t")).toEqual({ kind: "pending" });
+    expect(retryWorktreeSetup({ home }, worktreePath, "t", 1)).toEqual({ kind: "pending" });
     // A run already owed is not owed twice, and the claim takes it once.
-    expect(retryWorktreeSetup({ home }, worktreePath, "t")).toEqual({ kind: "pending" });
+    expect(retryWorktreeSetup({ home }, worktreePath, "t", 1)).toEqual({ kind: "pending" });
     expect(claimFirstRunSetup({ home }, worktreePath)).toBe(true);
     expect(claimFirstRunSetup({ home }, worktreePath)).toBe(false);
     // Retrying a working copy someone started anyway owes it again too.
-    startWorktreeSetupAnyway({ home }, worktreePath, 1);
-    expect(retryWorktreeSetup({ home }, worktreePath, "t")).toEqual({ kind: "pending" });
+    startWorktreeSetupAnyway({ home }, worktreePath, "t", 1);
+    expect(retryWorktreeSetup({ home }, worktreePath, "t", 1)).toEqual({ kind: "pending" });
+  });
+
+  it("reads a record it cannot read as a failed setup that either answer replaces", () => {
+    record("failed");
+    const path = workingCopyRecordPath({ home }, worktreePath, "setup-run.json");
+    writeFileSync(path, "{");
+    expect(worktreeSetupStatus({ home }, worktreePath, "t", 1)).toMatchObject({
+      kind: "failed",
+      run: { summary: "The environment setup record could not be read." },
+    });
+    expect(startWorktreeSetupAnyway({ home }, worktreePath, "t", 4)).toMatchObject({
+      kind: "started-anyway",
+      run: { startedAnywayAt: 4 },
+    });
+    writeFileSync(path, "{");
+    expect(retryWorktreeSetup({ home }, worktreePath, "t", 1)).toEqual({ kind: "pending" });
+  });
+
+  it("keeps an outcome a later build wrote, without blocking on it", () => {
+    const path = workingCopyRecordPath({ home }, worktreePath, "setup-run.json");
+    record("failed");
+    const fact = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    writeFileSync(path, JSON.stringify({ ...fact, outcome: "cancelled" }));
+    expect(worktreeSetupStatus({ home }, worktreePath, "t", 1)).toMatchObject({
+      kind: "succeeded",
+      run: { outcome: "cancelled" },
+    });
+  });
+
+  it("forgets an earlier working copy's runs when a new one is created at the same path", () => {
+    record("failed");
+    markFirstRunPending({ home }, worktreePath, "t", ["copy"]);
+    expect(readEnvironmentRun({ home }, worktreePath, "setup")).toBeNull();
+    expect(worktreeSetupStatus({ home }, worktreePath, "t", 1)).toEqual({ kind: "none" });
   });
 
   it("answers Start anyway only for a failed setup", () => {
-    expect(startWorktreeSetupAnyway({ home }, worktreePath, 1)).toEqual({ kind: "none" });
+    expect(startWorktreeSetupAnyway({ home }, worktreePath, "t", 1)).toEqual({ kind: "none" });
     record("succeeded");
-    expect(startWorktreeSetupAnyway({ home }, worktreePath, 1)).toMatchObject({
+    expect(startWorktreeSetupAnyway({ home }, worktreePath, "t", 1)).toMatchObject({
       kind: "succeeded",
     });
   });

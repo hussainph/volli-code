@@ -567,14 +567,27 @@ export interface SessionBlockerActs {
 const WORKTREE_PREPARATION_FAILED = "Couldn't prepare the worktree";
 
 /**
+ * How the setup's own refusals continue that sentence
+ * (`worktree/setup-exec.ts`): the run that just failed, or the gate an
+ * earlier failure left. A git or copy failure in the same preparation names
+ * neither, and is not the setup's to answer.
+ */
+const SETUP_FAILURE_CLAUSES = [
+  " — Environment setup failed: ",
+  " — .agents/setup ",
+  " — The project's setup command ",
+];
+
+/**
  * Whether an Attention may be a working copy's setup gate refusing a start
- * (VC-584): the configuration failure a start raises when preparing its
- * worktree failed. Only then is the setup's status worth one read.
+ * (VC-584): the configuration failure a start raises when its worktree's
+ * setup failed. Only then is the setup's status worth one read.
  */
 export function mayBeWorktreeSetupGate(attention: SessionAttention | null): boolean {
+  const detail = attention?.kind === "configuration_invalid" ? attention.detail : null;
   return (
-    attention?.kind === "configuration_invalid" &&
-    attention.detail?.startsWith(WORKTREE_PREPARATION_FAILED) === true
+    detail?.startsWith(WORKTREE_PREPARATION_FAILED) === true &&
+    SETUP_FAILURE_CLAUSES.some((clause) => detail.includes(clause))
   );
 }
 

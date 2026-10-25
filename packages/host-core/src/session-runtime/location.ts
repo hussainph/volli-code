@@ -108,7 +108,7 @@ export function createSessionLocationResolver(
 ): SessionLocationResolver {
   const venue = options.venue ?? LOCAL;
   const setupEnvironment = options.setupEnvironment ?? hostSetupEnvironment;
-  if (options.power !== undefined) watchRunnerWakes(options.power);
+
   const site = (session: Session) => {
     const project = getProjectById(db, session.projectId);
     if (!project) throw new Error(`Project ${session.projectId} was not found`);
@@ -186,6 +186,9 @@ export function createSessionLocationResolver(
       // The first start since this runner started or woke brings the working
       // copy's services back. Waited on briefly, never a block.
       if (recipe !== undefined) {
+        // Subscribed on the first recipe start, so a host with recipes off
+        // never listens.
+        if (options.power !== undefined) watchRunnerWakes(options.power);
         await runWorktreeResume(deps, {
           ticketId: ticket.id,
           worktreePath: identity.worktreePath,

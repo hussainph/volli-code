@@ -12,14 +12,8 @@
  */
 import { basename } from "node:path";
 
-import { readEnvironmentRun, recordEnvironmentRun } from "./environment-runs";
-import {
-  localRunnerKind,
-  recipeCommandLine,
-  recipeEnvironment,
-  resolveRecipe,
-  type SetupReason,
-} from "./recipe";
+import { recordEnvironmentRun, setupReasonAfter } from "./environment-runs";
+import { localRunnerKind, recipeCommandLine, recipeEnvironment, resolveRecipe } from "./recipe";
 import type { WorktreePorts } from "./types";
 import { hostLogger } from "../log/root";
 
@@ -51,13 +45,7 @@ export function terminalSetupCommand(
   const recipe = resolveRecipe(params.worktreePath, "setup", params.storedCommand);
   if (recipe === null) return null;
   const now = params.now ?? Date.now;
-  let previous: unknown = null;
-  try {
-    previous = readEnvironmentRun(deps, params.worktreePath, "setup");
-  } catch {
-    previous = "unreadable";
-  }
-  const reason: SetupReason = previous === null ? "new-working-copy" : "retry";
+  const reason = setupReasonAfter(deps, params.worktreePath);
   const runnerKind = localRunnerKind();
   const shell = basename(params.shellPath).replace(/^-/, "") === "fish" ? "fish" : "posix";
   const command =
@@ -75,7 +63,7 @@ export function terminalSetupCommand(
           shell,
         );
   const startedAt = now();
-  const subject = recipe.source === "repo" ? "`.agents/setup`" : "The project's setup command";
+  const subject = recipe.source === "repo" ? ".agents/setup" : "The project's setup command";
   return {
     command,
     onSettled: ({ exitCode }) => {

@@ -39,6 +39,14 @@ describe("environmentFixTicket", () => {
   });
 });
 
+describe("environmentFixTicket redaction", () => {
+  it("keeps a credential in the output off the board", () => {
+    const token = `ghp_${"a".repeat(36)}`;
+    const ticket = environmentFixTicket("VC-1", { ...run, tail: `auth ${token}\n` });
+    expect(ticket.body).not.toContain(token);
+  });
+});
+
 describe("WORKTREE_SETUP_ANSWERS", () => {
   it("lists both answers", () => {
     expect(WORKTREE_SETUP_ANSWERS).toEqual(["retry", "start-anyway"]);

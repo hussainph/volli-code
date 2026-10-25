@@ -67,7 +67,7 @@ describe("terminalSetupCommand", () => {
       source: "repo",
       outcome: "failed",
       exitCode: 4,
-      summary: "`.agents/setup` exited with code 4.",
+      summary: ".agents/setup exited with code 4.",
     });
   });
 
@@ -82,7 +82,7 @@ describe("terminalSetupCommand", () => {
     expect(readEnvironmentRun({ home }, worktreePath, "setup")).toMatchObject({
       reason: "retry",
       exitCode: null,
-      summary: "`.agents/setup` did not finish: the terminal's shell exited first.",
+      summary: ".agents/setup did not finish: the terminal's shell exited first.",
     });
   });
 

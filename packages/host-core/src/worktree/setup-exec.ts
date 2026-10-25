@@ -35,8 +35,10 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 
 import {
+  clearEnvironmentRun,
   isBlockingSetupRun,
   readEnvironmentRun,
+  setupReasonAfter,
   recordEnvironmentRun,
   type EnvironmentRunFact,
   type EnvironmentRunOutcome,
@@ -52,6 +54,7 @@ import {
   resolveRecipe,
   type ResolvedRecipe,
   type RunnerKind,
+  type SetupReason,
 } from "./recipe";
 import { recordSetupFailure, SETUP_TAIL_MAX_CHARS } from "./setup-run";
 import type { WorktreePorts } from "./types";
@@ -183,9 +186,23 @@ export function runPendingWorktreeSetup(
     try {
       recipe = resolveRecipe(params.worktreePath, "setup", params.setupCommand);
     } catch (error) {
+      // The claim is spent, so this failure is a fact like any other: the
+      // next start is refused with it rather than starting unset-up.
+      const start = runStart(deps, params, params.recipe, { source: "repo", sha: "" });
       return Promise.resolve(
-        fail(deps, params, null, `could not be read (${errorText(error)})`, ""),
+        fail(deps, params, start, `could not be read (${errorText(error)})`, "", {
+          source: "repo",
+        }),
       );
+    }
+    if (recipe === null) {
+      // Nothing to run any more: whatever an earlier run recorded no longer
+      // describes this working copy.
+      try {
+        clearEnvironmentRun(deps, params.worktreePath, "setup");
+      } catch (error) {
+        log.error("failed to clear the setup run record", { ticketId: params.ticketId, error });
+      }
     }
   }
   if (recipe === null) return Promise.resolve({ kind: "skipped" });
@@ -212,7 +229,7 @@ function gateOutcome(
       message: `The environment setup record could not be read (${errorText(error)}).`,
     };
   }
-  if (!isBlockingSetupRun(last)) return { kind: "skipped" };
+  if (last === null || !isBlockingSetupRun(last)) return { kind: "skipped" };
   return { kind: "failed", message: blockedMessage(last), run: last };
 }
 
@@ -235,19 +252,7 @@ async function execSetup(
   recipe: ResolvedRecipe,
 ): Promise<WorktreeSetupExecOutcome> {
   setPhase(params.ticketId, "setting-up", deps.onPhase);
-  const now = params.now ?? Date.now;
-  const start: EnvironmentRunStart | null =
-    params.recipe === undefined
-      ? null
-      : {
-          script: "setup",
-          source: recipe.source,
-          scriptSha: recipe.sha,
-          reason: readPrevious(deps, params.worktreePath) === null ? "new-working-copy" : "retry",
-          runnerKind: params.recipe.runnerKind ?? localRunnerKind(),
-          ticketId: params.ticketId,
-          startedAt: now(),
-        };
+  const start = params.recipe === undefined ? null : runStart(deps, params, params.recipe, recipe);
   let environment: { shellPath: string; env: Record<string, string> };
   try {
     environment = await params.environment();
@@ -274,7 +279,7 @@ async function execSetup(
             projectId: params.recipe.projectId,
             ticket: params.recipe.ticketDisplayId,
             workingCopy: params.worktreePath,
-            reason: { script: "setup", why: start!.reason as "new-working-copy" | "retry" },
+            reason: { script: "setup", why: start!.reason },
           }),
         };
   const { result, tail } = await spawnSetup(
@@ -301,16 +306,24 @@ async function execSetup(
   return fail(deps, params, start, describe(result), tail, recipe, result);
 }
 
-/** The last setup fact, read leniently: an unreadable one only means "not a first run". */
-function readPrevious(
+/** A setup run's opening facts. */
+type SetupRunStart = EnvironmentRunStart & { script: "setup"; reason: SetupReason };
+
+function runStart(
   deps: WorktreePorts,
-  worktreePath: string,
-): EnvironmentRunFact | null | "unreadable" {
-  try {
-    return readEnvironmentRun(deps, worktreePath, "setup");
-  } catch {
-    return "unreadable";
-  }
+  params: WorktreeSetupExecParams,
+  context: WorktreeRecipeContext,
+  recipe: Pick<ResolvedRecipe, "source" | "sha">,
+): SetupRunStart {
+  return {
+    script: "setup",
+    source: recipe.source,
+    scriptSha: recipe.sha,
+    reason: setupReasonAfter(deps, params.worktreePath),
+    runnerKind: context.runnerKind ?? localRunnerKind(),
+    ticketId: params.ticketId,
+    startedAt: (params.now ?? Date.now)(),
+  };
 }
 
 function describe(result: ExecResult): string {
@@ -327,8 +340,8 @@ function describe(result: ExecResult): string {
 }
 
 /** What a reason's sentence is about. */
-function subject(recipe: ResolvedRecipe | undefined): string {
-  return recipe?.source === "repo" ? "`.agents/setup`" : "The project's setup command";
+function subject(recipe: Pick<ResolvedRecipe, "source"> | undefined): string {
+  return recipe?.source === "repo" ? ".agents/setup" : "The project's setup command";
 }
 
 function spawnSetup(
@@ -427,7 +440,7 @@ function fail(
   start: EnvironmentRunStart | null,
   reason: string,
   tail: string,
-  recipe?: ResolvedRecipe,
+  recipe?: Pick<ResolvedRecipe, "source">,
   result?: ExecResult,
 ): WorktreeSetupExecOutcome {
   const what = subject(recipe);
