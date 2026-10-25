@@ -4040,6 +4040,35 @@ describe("closing a grouped Home file that hands over to a chat", () => {
   });
 });
 
+describe("doors that reopen a chat's tab OPEN it (VC-614)", () => {
+  it("joins Home's focused pane with open, and selects full width without", () => {
+    const store = splitStore();
+    store.getState().groupHomeTabs("project-a", "chat:one", "browser:one");
+    store.getState().openHome("project-a", "chat:reopened", { open: true });
+    expect(panesOf(homeSplit(store))[1]).toEqual([
+      "n1",
+      ["browser:one", "chat:reopened"],
+      "chat:reopened",
+    ]);
+    store.getState().openHome("project-a", "chat:selected", { open: false });
+    expect(homeSplit(store)?.root).toMatchObject({ kind: "pane", activeTabId: "chat:selected" });
+    expect(groupForTab(homeSplit(store), "chat:selected")).toBeNull();
+  });
+
+  it("joins a ticket's focused pane with open", () => {
+    const store = splitStore();
+    store.getState().groupTicketTabs("project-a", "ticket-1", "chat:one", "browser:one");
+    store
+      .getState()
+      .openTicketView("project-a", "ticket-1", { tabId: "chat:reopened", open: true });
+    expect(panesOf(ticketSplit(store))[1]).toEqual([
+      "n1",
+      ["browser:one", "chat:reopened"],
+      "chat:reopened",
+    ]);
+  });
+});
+
 describe("Home Browser Tab close with groups", () => {
   it("returns through MRU and shows the group the returned tab belongs to", () => {
     const store = splitStore();

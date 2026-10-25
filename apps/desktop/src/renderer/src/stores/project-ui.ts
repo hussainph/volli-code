@@ -803,8 +803,11 @@ interface ProjectUiStoreState {
    * this Board Session" routes through here rather than pairing `setNav` with
    * `setHomeActiveTab` itself — which would also flash one frame of Home with
    * the OLD tab in front.
+   *
+   * `opts.open` says the door had to OPEN that tab (a chat it reopened): while
+   * a group is shown the tab joins its focused pane instead of replacing it.
    */
-  openHome(projectId: string, tabId?: string): void;
+  openHome(projectId: string, tabId?: string, opts?: { open?: boolean }): void;
   /**
    * The permanent Board tab's own act: Home, the Board tab, no open ticket.
    *
@@ -843,9 +846,13 @@ interface ProjectUiStoreState {
    * Every surface that promises "the user is now looking at this ticket" —
    * the command palette, Active Sessions, and the new-ticket kickoff — routes
    * through this one seam instead of hand-rolling setNav+openTicket(+tab)
-   * themselves.
+   * themselves. `opts.open` is {@link ProjectUiStoreState.openHome}'s.
    */
-  openTicketView(projectId: string, ticketId: string, opts?: { tabId?: string }): void;
+  openTicketView(
+    projectId: string,
+    ticketId: string,
+    opts?: { tabId?: string; open?: boolean },
+  ): void;
   /**
    * Opens a ticket's exact live terminal tab, optionally focusing one split
    * pane. A thin wrapper over {@link openTicketView}'s ordering, plus the
@@ -1931,7 +1938,7 @@ export function createProjectUiStore(
           });
         },
 
-        openHome(projectId, tabId) {
+        openHome(projectId, tabId, opts) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             return patchProjectUi(
@@ -1943,7 +1950,7 @@ export function createProjectUiStore(
                     nav: "home",
                     homeActiveTab: tabId,
                     homeTabHistory: homeHistoryAfterVisit(current, tabId),
-                    ...homeSplitWrite(activatedHomeSplit(current, tabId)),
+                    ...homeSplitWrite(activatedHomeSplit(current, tabId, opts?.open === true)),
                   },
             );
           });
@@ -2018,7 +2025,7 @@ export function createProjectUiStore(
                 [ticketId]: {
                   ...existing,
                   active: tabId,
-                  ...ticketSplitWrite(activatedTicketSplit(existing, tabId)),
+                  ...ticketSplitWrite(activatedTicketSplit(existing, tabId, opts?.open === true)),
                 },
               },
             });

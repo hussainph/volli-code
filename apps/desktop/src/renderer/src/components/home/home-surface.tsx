@@ -857,9 +857,12 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     (sessionId: string) => {
       if (selectedId === null) return;
       const chat = useChatSessionsStore.getState();
+      const wasOpen = chat.openTabs[selectedId]?.includes(sessionId) === true;
       chat.adoptChatSession(sessionId);
       chat.openChatTab(selectedId, sessionId);
-      setHomeActiveTab(selectedId, chatTabId(sessionId));
+      // A child it had to open OPENS into a shown group's focused pane.
+      if (wasOpen) setHomeActiveTab(selectedId, chatTabId(sessionId));
+      else useProjectUiStore.getState().openHomeTab(selectedId, chatTabId(sessionId));
     },
     [selectedId, setHomeActiveTab],
   );
