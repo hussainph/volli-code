@@ -147,7 +147,7 @@ describe("mergePromptTemplates", () => {
     expect(merged[0]?.source).toBe("project");
   });
 
-  it("lets the personal name replace the project one with the cloud flag on (Q57)", () => {
+  it("lets the personal name replace the project one with the cloud flag on", () => {
     const merged = mergePromptTemplates({
       project: [template({ name: "review", content: "project body" })],
       global: [template({ name: "review", content: "global body" })],

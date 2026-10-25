@@ -20,6 +20,7 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { writeThrough } from "@renderer/stores/mutate";
 import { effectiveAppearance, useThemeStore, type ThemeScope } from "@renderer/stores/theme";
+import { resolveThemeSurface } from "@renderer/theme/apply";
 
 /**
  * Configure → Appearance: one project's per-surface theming (#69).
@@ -148,7 +149,8 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
     [project.id],
   );
   // Resolved for THIS project — its own appearance override when it has one.
-  const resolved = resolveAppearance(appearance ?? globalAppearance, systemPrefersDark);
+  const mode = resolveThemeSurface(appearance, globalAppearance).value;
+  const resolved = resolveAppearance(mode, systemPrefersDark);
   const inherited = describeAppearance(
     globalAppearance,
     resolveAppearance(globalAppearance, systemPrefersDark),
@@ -162,7 +164,7 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
     <PrefSection title="App theme" icon={PaletteIcon}>
       <CanvasEditor
         scope={scope}
-        canvas={own ?? globalCanvas}
+        canvas={resolveThemeSurface(own, globalCanvas).value}
         resolved={resolved}
         mode={
           <OverrideControl
@@ -173,7 +175,7 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
           >
             <AppearanceModeChoice
               iconOnly
-              value={appearance ?? globalAppearance}
+              value={mode}
               testId="project-appearance-mode"
               onChange={writeMode}
             />

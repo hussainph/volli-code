@@ -44,9 +44,8 @@ export type { SecretMetadata, SecretScope } from "@volli/shared";
 
 /**
  * Nearest scope wins: session > project > always, by name. These are the
- * store's own local scopes, resolved through the one config resolver; they
- * become config levels (personal-for-project > personal > project >
- * workspace) when secrets move to the backend (P4).
+ * store's own local scopes, not config levels, resolved through the one
+ * config resolver.
  */
 const SECRET_SCOPE_PLAN: ConfigPlan<"union", SecretScope> = {
   merge: "union",

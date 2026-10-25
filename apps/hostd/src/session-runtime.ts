@@ -123,9 +123,10 @@ export function createHeadlessSessionRuntime(input: {
   const sessionEngine = host.sessionEngine;
   const homeDir = headlessHomeDir(env);
   // hostd keeps no stored experiments: the `cloud` flag is the environment's
-  // opt-in, captured once at boot like the desktop's.
+  // opt-in, read once at boot. (Not `host-protocol.ts`' twin: that module is
+  // the superseded WebSocket surface, and this one must not load it.)
   const cloud = parseExperimentEnvironment(env["VOLLI_EXPERIMENTAL"]).ids.includes("cloud");
-  const cloudEnabled = (): boolean => cloud;
+  const cloudFlag = (): boolean => cloud;
   // One lazy module: its model access is `headlessModelAccess`, handed to host-core.
   const { modelAccess, decisions, mcp: mcpSettings, webAccess } = host.runtimeServices;
   const mcpDispatch = hostMcpDispatch({
@@ -234,14 +235,14 @@ export function createHeadlessSessionRuntime(input: {
     events: ports.events,
     piRuntimeHost: assembly.piRuntimeHost,
     homeDir,
-    cloudEnabled,
+    cloudEnabled: cloudFlag,
     log: ports.log,
   });
   const facade = createRuntimeSessionFacade({
     host,
     assembly,
     homeDir,
-    cloudEnabled,
+    cloudEnabled: cloudFlag,
     venue: options.venue,
     decisions,
     delegation,

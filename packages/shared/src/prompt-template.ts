@@ -182,7 +182,7 @@ export function promptTemplateDescription(input: {
  * `promptTemplates` surface's precedence ({@link configPlan}): the project's
  * `.volli/commands/` wins a name the global `<userData>/commands/` also
  * defines — unless the `cloud` flag is on, where the personal template wins
- * (Volli Cloud's personal > project order, Q57).
+ * (Volli Cloud's personal > project order).
  *
  * Precedence is by name, not by file: one template named `review` replaces
  * the other `review` outright rather than joining it, because two rows
@@ -197,10 +197,10 @@ export function mergePromptTemplates(input: {
   const merged: PromptTemplate[] = [];
   for (const { value, level } of resolveConfigEntries(
     configPlan("promptTemplates", input.cloud),
-    { repo: input.project, personal: input.global },
+    { project: input.project, personal: input.global },
     (template) => template.name,
   )) {
-    merged.push({ ...value, source: level === "repo" ? "project" : "personal" });
+    merged.push({ ...value, source: level === "project" ? "project" : "personal" });
   }
   return merged.toSorted((a, b) => a.name.localeCompare(b.name));
 }

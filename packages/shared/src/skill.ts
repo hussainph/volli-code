@@ -213,7 +213,7 @@ export function compareSkillNames(left: string, right: string): number {
  * The two tiers merged into the one list every surface sees, by the `skills`
  * surface's precedence ({@link configPlan}): the project's vendored skill wins
  * a slug the personal tier also defines — unless the `cloud` flag is on, where
- * the personal skill wins (Volli Cloud's personal > project order, Q57).
+ * the personal skill wins (Volli Cloud's personal > project order).
  *
  * Precedence is by name and it replaces outright, `mergePromptTemplates`'
  * rule for `mergePromptTemplates`' reason — two rows spelled `/review` are

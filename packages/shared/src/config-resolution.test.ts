@@ -9,18 +9,28 @@ import {
 
 describe("configPlan", () => {
   it("keeps the repo tier first for skills and prompt templates with cloud off", () => {
-    expect(configPlan("skills", false)).toEqual({ merge: "union", order: ["repo", "personal"] });
+    expect(configPlan("skills", false)).toEqual({
+      merge: "union",
+      order: ["policy", "repo", "personal"],
+      deny: ["policy"],
+    });
     expect(configPlan("promptTemplates", false)).toEqual({
       merge: "union",
-      order: ["repo", "personal"],
+      order: ["policy", "project", "personal"],
+      deny: ["policy"],
     });
   });
 
-  it("puts personal over the repo tier for skills and prompt templates with cloud on (Q57)", () => {
-    expect(configPlan("skills", true)).toEqual({ merge: "union", order: ["personal", "repo"] });
+  it("puts personal over the repo tier for skills and prompt templates with cloud on", () => {
+    expect(configPlan("skills", true)).toEqual({
+      merge: "union",
+      order: ["policy", "personal", "repo"],
+      deny: ["policy"],
+    });
     expect(configPlan("promptTemplates", true)).toEqual({
       merge: "union",
-      order: ["personal", "repo"],
+      order: ["policy", "personal", "project"],
+      deny: ["policy"],
     });
   });
 
@@ -91,6 +101,7 @@ describe("resolveConfigEntries", () => {
   const plan: ConfigPlan<"union"> = {
     merge: "union",
     order: ["policy", "personal", "project", "workspace", "repo"],
+    deny: ["policy", "project"],
   };
 
   it("unions every level and lets the highest level win a shared key outright", () => {
@@ -140,6 +151,33 @@ describe("resolveConfigEntries", () => {
     expect(resolved).toEqual([
       { key: "tool", value: entry("tool", "personal"), level: "personal" },
     ]);
+  });
+
+  it("ignores deny lists from levels the plan does not let deny", () => {
+    const resolved = resolveConfigEntries(plan, { repo: [entry("tool", "repo")] }, byName, {
+      personal: ["tool"],
+      workspace: ["tool"],
+    });
+    expect(resolved.map(({ key }) => key)).toEqual(["tool"]);
+    expect(
+      resolveConfigEntries(
+        { merge: "union", order: ["personal", "repo"] },
+        { repo: [entry("tool", "repo")] },
+        byName,
+        { personal: ["tool"] },
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("lets policy deny a skill whatever level defines it", () => {
+    expect(
+      resolveConfigEntries(
+        configPlan("skills", true),
+        { repo: [entry("risky", "repo")], personal: [entry("risky", "personal")] },
+        byName,
+        { policy: ["risky"] },
+      ),
+    ).toEqual([]);
   });
 
   it("ignores levels outside the plan's order", () => {

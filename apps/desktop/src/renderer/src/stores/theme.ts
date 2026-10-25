@@ -64,6 +64,7 @@ import { create } from "zustand";
 import { toastError } from "@renderer/lib/toast";
 import {
   resolveActiveTheme,
+  resolveThemeSurface,
   type ActiveTheme,
   type ProjectSurfaceOverride,
 } from "@renderer/theme/apply";
@@ -321,7 +322,7 @@ export function appliedCanvas(
   // a workspace the store isn't showing has no override to read, and must not
   // borrow another workspace's.
   if (scope.kind === "global" || scope.projectId !== state.projectId) return state.globalCanvas;
-  return state.projectOverride?.canvas ?? state.globalCanvas;
+  return resolveThemeSurface(state.projectOverride?.canvas ?? null, state.globalCanvas).value;
 }
 
 /**

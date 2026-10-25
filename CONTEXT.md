@@ -87,8 +87,7 @@ One of the four places configuration is defined: personal, Workspace, project,
 and repo files (`AGENTS.md`, `.agents/*`, `.mcp.json`), which always apply.
 Define at the widest level that is true, switch on at the narrowest level that
 is needed. Precedence is personal > project > Workspace; admin policy overrides
-all. Repo files rank last: no level can switch one off, but a same-named entry
-at any level replaces it.
+all.
 _Avoid_: scope (overloaded), profile
 
 **Needs-you inbox**:

@@ -96,7 +96,7 @@ describe("mergeSkills", () => {
     expect(mergeSkills({ project: [project], global: [global], cloud: false })).toEqual([project]);
   });
 
-  it("lets the personal skill win a shared slug with the cloud flag on (Q57)", () => {
+  it("lets the personal skill win a shared slug with the cloud flag on", () => {
     const project = skill({ name: "shared", description: "vendored" });
     const global = skill({
       name: "shared",

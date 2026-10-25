@@ -1,36 +1,42 @@
 /**
- * Config resolution: the one precedence rule every configuration surface reads
- * (VC-40, P3).
+ * Config resolution: the one precedence rule every configuration surface reads.
  *
- * Configuration comes in levels. Volli Cloud's target order (Q57) is
+ * Configuration comes in levels. Volli Cloud's target order is
  * **personal > project > workspace**, admin **policy** over all of them, and
- * **repo** files — `AGENTS.md`, `.agents/*`, `.volli/commands/`, `.mcp.json`,
- * read from the Working copy and never stored — always apply: no level can
- * switch a repo entry off (only policy can deny it), but a same-named entry at
- * any configured level replaces it. So repo sits last in the order.
+ * **repo** files — `AGENTS.md`, `.agents/*`, `.mcp.json`, read from the
+ * Working copy and never stored — always apply: no configured level can switch
+ * a repo entry off (only a surface's declared deny levels, i.e. policy, can),
+ * and a repo entry whose name no level defines is always in effect. Where a
+ * configured level defines the same name, the configured entry replaces it, so
+ * repo sits last in the order.
  *
- * Each surface declares two things here and nowhere else:
+ * Each configuration surface declares, in the table below:
  *
  *  - its **merge**: `override` (one value; the highest level that sets it
  *    wins, `null`/`undefined` meaning "inherit") or `union` (a keyed
  *    collection; every level contributes, and for a key several levels define
- *    the highest wins outright). A union also takes **deny lists**: a key a
- *    level denies is removed from that level and every level below it, which
- *    is how admin policy will override all.
+ *    the highest wins outright).
+ *  - its **deny levels** (unions only): the levels whose deny lists remove a
+ *    key from themselves and every level below them — how admin policy
+ *    overrides all. A deny level must be in the order (policy first, so it
+ *    is present before its rows exist); a deny list from any other level is
+ *    ignored.
  *  - its **order**: the levels it reads, highest first. A surface that still
  *    resolves in its pre-cloud order declares that order literally and says
- *    why; a surface that moves to Q57 under the `cloud` flag declares both, so
- *    flag-off behaviour stays byte-identical.
+ *    why; a surface that moves to the target order under the `cloud` flag
+ *    declares both (`flagOff` and `cloud`), so flag-off behaviour stays
+ *    byte-identical.
  *
  * Today only local levels exist: `personal` (this person's machine-wide
- * settings and `~/.agents/skills`), `project` (the project row), and `repo`.
+ * settings, `~/.agents/skills`, `<userData>/commands`), `project` (the
+ * project row and the self-gitignored `.volli/commands/`), and `repo`.
  * `workspace` and `policy` are absent until their Convex rows land; they plug
  * into the same declarations.
  *
  * Pure: no Node/DOM imports.
  */
 
-/** Every configuration level, in Volli Cloud's target precedence (Q57), highest first. */
+/** Every configuration level, in Volli Cloud's target precedence, highest first. */
 const CONFIG_PRECEDENCE = ["policy", "personal", "project", "workspace", "repo"] as const;
 
 /** One configuration level. */
@@ -40,17 +46,19 @@ export type ConfigLevel = (typeof CONFIG_PRECEDENCE)[number];
 export type ConfigMerge = "override" | "union";
 
 /**
- * A resolved precedence: what to merge, and the levels to read, highest first.
- * Generic over the level vocabulary so a surface with its own local scopes
- * (the secret store's `session > project > always`) resolves through the same
- * code until its levels become config levels.
+ * A resolved precedence: what to merge, the levels to read (highest first),
+ * and — for a union — the levels whose deny lists count. Generic over the
+ * level vocabulary so a store with its own local scopes (the secret store's
+ * `session > project > always`, declared beside it) resolves through the same
+ * code.
  */
 export interface ConfigPlan<M extends ConfigMerge, L extends string = ConfigLevel> {
   readonly merge: M;
   readonly order: readonly L[];
+  readonly deny?: readonly L[];
 }
 
-/** The given levels in target order — a declaration that cannot drift from Q57. */
+/** The given levels in target order — a declaration that cannot drift from it. */
 function targetOrder(...levels: readonly ConfigLevel[]): readonly ConfigLevel[] {
   return CONFIG_PRECEDENCE.filter((level) => levels.includes(level));
 }
@@ -67,20 +75,30 @@ const CONFIG_SURFACES = {
   /**
    * Skills: `<project>/.agents/skills` (repo) and `~/.agents/skills`
    * (personal), by slug. Today the repo's copy wins; under `cloud` the
-   * personal one does (Q57).
+   * personal one does (the target order).
    */
   skills: {
     merge: "union",
-    local: ["repo", "personal"],
-    cloud: targetOrder("personal", "repo"),
+    deny: ["policy"],
+    flagOff: ["policy", "repo", "personal"],
+    cloud: targetOrder("policy", "personal", "repo"),
   },
-  /** Prompt templates: `<project>/.volli/commands` (repo) and `<userData>/commands` (personal), by name. Same flip as skills. */
+  /**
+   * Prompt templates: `<project>/.volli/commands` (project — `.volli` is
+   * self-gitignored, so these are the project's local assets, not repo files)
+   * and `<userData>/commands` (personal), by name. Same flip as skills.
+   */
   promptTemplates: {
     merge: "union",
-    local: ["repo", "personal"],
-    cloud: targetOrder("personal", "repo"),
+    deny: ["policy"],
+    flagOff: ["policy", "project", "personal"],
+    cloud: targetOrder("policy", "personal", "project"),
   },
-  /** A skill's invocation mode: the project's rule, over the skill's own declaration (the caller's fallback). */
+  /**
+   * A skill's invocation mode: the project's rule, over the declaration in
+   * the skill's own file — which is the definition itself rather than a
+   * configured level, so it is the caller's fallback, not a level here.
+   */
   skillMode: { merge: "override", order: ["project"] },
   /**
    * The decision model: a project's override over the app-wide setting. Kept
@@ -92,8 +110,10 @@ const CONFIG_SURFACES = {
   theme: { merge: "override", order: ["project", "personal"] },
 } as const satisfies Record<
   string,
-  | { merge: ConfigMerge; order: readonly ConfigLevel[] }
-  | { merge: ConfigMerge; local: readonly ConfigLevel[]; cloud: readonly ConfigLevel[] }
+  { merge: ConfigMerge; deny?: readonly ConfigLevel[] } & (
+    | { order: readonly ConfigLevel[] }
+    | { flagOff: readonly ConfigLevel[]; cloud: readonly ConfigLevel[] }
+  )
 >;
 
 /** A surface declared in the table above. */
@@ -112,8 +132,12 @@ export function configPlan<S extends ConfigSurfaceId>(
 ): ConfigPlan<SurfaceDeclaration<S>["merge"]> {
   const declared: SurfaceDeclaration<ConfigSurfaceId> = CONFIG_SURFACES[surface];
   const order =
-    "order" in declared ? declared.order : flag[0] === true ? declared.cloud : declared.local;
-  return { merge: declared.merge as SurfaceDeclaration<S>["merge"], order };
+    "order" in declared ? declared.order : flag[0] === true ? declared.cloud : declared.flagOff;
+  return {
+    merge: declared.merge as SurfaceDeclaration<S>["merge"],
+    order,
+    ...("deny" in declared ? { deny: declared.deny } : {}),
+  };
 }
 
 /** An `override` surface's answer: the value in force and the level that set it. */
@@ -150,8 +174,9 @@ export interface ResolvedConfigEntry<T, L extends string = ConfigLevel> {
  * Resolve a `union` surface: every level's entries, keyed by `keyOf`, where a
  * key several levels define resolves to the highest level's entry outright
  * (it replaces, never merges fields). Within one level a later entry replaces
- * an earlier one with the same key. A key a level denies is removed from that
- * level and every level below it; a higher level may still define it.
+ * an earlier one with the same key. A key one of the plan's deny levels denies
+ * is removed from that level and every level below it (a higher level may
+ * still define it); deny lists from levels the plan does not name are ignored.
  *
  * Levels are walked lowest first, so the result is in first-seen order from
  * the bottom of the plan; callers that present a list sort it themselves.
@@ -168,6 +193,7 @@ export function resolveConfigEntries<T, L extends string = ConfigLevel>(
       const key = keyOf(value);
       byKey.set(key, { key, value, level });
     }
+    if (plan.deny?.includes(level) !== true) continue;
     for (const key of deny[level] ?? []) byKey.delete(key);
   }
   return [...byKey.values()];
