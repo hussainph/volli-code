@@ -21,15 +21,6 @@ import type { TicketStatus, HarnessId } from "./ticket";
 import type { TicketEventActorKind } from "./ticket-events";
 
 /**
- * A retitle main performed on its own (VC-81 auto-titling), pushed so live
- * surfaces can move their labels the same way a renderer rename does.
- */
-export interface SessionRetitledEvent {
-  sessionId: string;
-  title: string;
-}
-
-/**
  * A run's answer: the durable Run (holding the fresh Session's id and the
  * RESOLVED model), or a coded refusal the caller classifies without string
  * matching. The Session boots detached — VC-16's optimistic open — so an ok

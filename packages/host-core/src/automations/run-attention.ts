@@ -30,8 +30,8 @@
  *    they were going to answer a question and now there is nothing to answer.
  *
  * ── WHY IT RIDES `activity-watch` ─────────────────────────────────────────
- * That decorator is already the single choke point every durable Session write
- * in this process passes through, and it already folds the affected Session's
+ * It already hears every durable Session write in this process, through the
+ * one post-commit wake bus over the Engine, and it already folds the affected Session's
  * projection on a short coalescing timer. This observer needs exactly that
  * projection at exactly that moment, so taking a port on it costs one call and
  * no new bookkeeping — versus a per-Session subscription held open for the life

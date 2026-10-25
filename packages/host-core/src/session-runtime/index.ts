@@ -6,6 +6,7 @@ import {
   type HostedSessionRuntime,
   type NativeHarnessAdapter,
   type SessionEngine,
+  type SubscribeCommittedSessionEvents,
   type TranscriptArtifactStore,
 } from "@volli/session-engine";
 import { createCheckpointFailureReporter } from "../session-control";
@@ -29,6 +30,14 @@ export interface HostSessionRuntimeOptions {
   transcriptDirectory: string;
   executor: NativeHarnessAdapter;
   sessionEngine: SessionEngine;
+  /**
+   * Every Session Event `sessionEngine` commits, from the host's wake bus
+   * (`session-control/session-wake.ts`). It is how a write made around the
+   * runtime — a retitle, a CLI signal, a terminal's command bookkeeping —
+   * reaches an open chat as it commits (VC-790). Absent, such a write waits
+   * for the next event the runtime publishes itself.
+   */
+  committed?: SubscribeCommittedSessionEvents;
   /**
    * The one artifact store for this launch. Passed in when another reader needs
    * the same store — `session peek`'s chat transcript tail reads it straight
@@ -62,6 +71,7 @@ export function createHostSessionRuntime(options: HostSessionRuntimeOptions): Ho
   const onProjectionCheckpointFailure = createCheckpointFailureReporter();
   return createSessionRuntime({
     engine: options.sessionEngine,
+    ...(options.committed === undefined ? {} : { committed: options.committed }),
     followUps: createSqliteSessionFollowUpLedger(options.db),
     // The payload stays durable and the Session raises Attention; this is the
     // operator's record of why an automatic release did not go out.

@@ -1,8 +1,9 @@
 /**
- * The push channel for Session state — a decorator over the Session Engine that
- * notices when a Session's durable history moved and re-derives its listing row.
+ * The push channel for Session state — a subscriber on the host's post-commit
+ * wake bus that notices when a Session's durable history moved and re-derives
+ * its listing row.
  *
- * ── WHY A DECORATOR AND NOT A SUBSCRIPTION ────────────────────────────────
+ * ── WHY THE WAKE BUS AND NOT A RUNTIME SUBSCRIPTION ───────────────────────
  * `SessionRuntime.subscribe` already streams one Session's frames, and that is
  * exactly why it cannot serve here: it is per-Session, and a listing is a
  * question about a PROJECT — every Session in it, including the ones nobody has
@@ -10,13 +11,12 @@
  * Session for as long as the app is running, replaying every transcript delta
  * into main, to answer a question whose whole content is "did anything change".
  *
- * The Engine, by contrast, is a single choke point. Main constructs exactly one
- * (`index.ts`), the runtime holds it as a port, the agent socket and the IPC
- * handlers submit through it, and every durable write in the process goes
- * through one of its five mutating methods. Wrapping it once therefore sees
- * every change with no per-Session bookkeeping at all — and a mutating method
- * added to the interface fails to compile here until it has been given an
- * answer, which is the property a subscription could never have offered.
+ * The wake bus (`session-wake.ts`), by contrast, is the one decorator over the
+ * process's one Engine, and it announces every committed Session Event —
+ * including the `session.signaled` / `session.stopped` / `session.retitled`
+ * that `submit` appends but does not return — with no per-Session bookkeeping
+ * at all. It is a subscriber rather than an Engine decorator of its own: one
+ * decorator means one rule for which events an observer is handed.
  *
  * ── WHAT IT PUBLISHES ─────────────────────────────────────────────────────
  * The whole {@link SessionListingRow}, built by the same `sessionListingRow`
@@ -36,8 +36,8 @@
  * frame or two.
  *
  * Failures are swallowed with a diagnostic and never propagated: this is an
- * observer bolted onto the write path, and a fold that throws must not be able
- * to fail the command that triggered it.
+ * observer of the write path, and a fold that throws must not be able to fail
+ * the command that triggered it.
  */
 import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import { PERSON_STARTED, SESSION_READ } from "@volli/shared";
@@ -50,6 +50,7 @@ import type {
 } from "@volli/shared";
 
 import { sessionListingRow } from "./listing-row";
+import type { SubscribeSessionWake } from "./session-wake";
 import { hostLogger } from "../log/root";
 
 const log = hostLogger("activity-watch");
@@ -104,8 +105,8 @@ export interface SessionActivityWatchPorts {
    * Every folded Session's projection, handed over BEFORE the row-difference
    * gate below (VC-133).
    *
-   * This watch is the process's one choke point on durable Session writes, so
-   * an observer that needs to notice a state CHANGE belongs here rather than
+   * This watch already folds every Session the wake bus says moved, so an
+   * observer that needs to notice a state CHANGE belongs here rather than
    * holding its own subscription per Session. `automations/run-attention.ts` is
    * the caller: it decides whether an unattended Run has just entered `waiting`
    * or `error`.
@@ -123,20 +124,20 @@ export interface SessionActivityWatchPorts {
    */
   observe?: (projection: SessionProjection) => void;
   /**
-   * Every fact `observe` committed, handed over synchronously the moment the
-   * write resolves — before the coalescing timer, and before the caller that
-   * wrote it continues (VC-577).
+   * Every committed fact, handed over synchronously as the wake bus announces
+   * it — after the write's transaction, before the coalescing timer, and
+   * before the caller that wrote it continues (VC-577).
    *
    * For a reader that must never lag a durable write: the host's live-work
    * count, which a quit decision reads inside `before-quit` and so cannot
-   * wait out {@link DEFAULT_COALESCE_MS}. Only `observe` can write the facts
-   * that open or close a turn. Must not throw; a throw is reported and the
-   * write's own result is still returned.
+   * wait out {@link DEFAULT_COALESCE_MS}. Every kind arrives, so the reader
+   * picks the ones it counts. Must not throw; a throw is reported and the
+   * Session is still marked.
    */
   observeEvent?: (event: SessionEvent) => void;
   /**
-   * A Session this process just minted, announced from the create itself
-   * rather than from a fold (VC-133).
+   * A Session this process just minted, announced from its committed
+   * `session.created` rather than from a fold (VC-133).
    *
    * The observer above measures CHANGES, and a change needs a baseline. Every
    * other Session it meets was already alive when this process started, so its
@@ -145,8 +146,8 @@ export interface SessionActivityWatchPorts {
    * exist a moment ago needs nobody.
    *
    * It cannot be folded out of the create instead: `getSession` is async and
-   * this decoration sits on the optimistic-open path VC-16 exists to keep
-   * fast, and the coalescing timer may well merge the create with the very
+   * the create sits on the optimistic-open path VC-16 exists to keep fast,
+   * and the coalescing timer may well merge the create with the very
    * write that puts the Session in `error` — which is exactly the Automation
    * Run whose pinned model went away. The id alone, synchronously, says all
    * the observer needs.
@@ -158,33 +159,28 @@ export interface SessionActivityWatchPorts {
   onError?: (error: unknown) => void;
 }
 
+/** What the watch reads from: the wake bus, and an Engine to fold a Session with. */
+export interface SessionActivityFeed {
+  engine: Pick<SessionEngine, "getSession">;
+  subscribe: SubscribeSessionWake;
+}
+
 export interface SessionActivityWatch {
-  /**
-   * The engine every caller must use from here on. It is behaviourally the one
-   * that was handed in — same results, same errors, same timing — plus a note
-   * taken after each mutating call.
-   */
-  engine: SessionEngine;
-  /** Cancels the pending flush. Used at shutdown and by tests. */
+  /** Unsubscribes and cancels the pending flush. Used at shutdown and by tests. */
   stop(): void;
   /** Flushes now rather than on the timer. Exposed for tests; nothing in the app calls it. */
   flush(): Promise<void>;
 }
 
 /**
- * Wraps `engine` so every durable write it accepts eventually re-publishes the
- * affected Session's listing row.
- *
- * The wrapper delegates by construction — every method is forwarded, and only
- * the five that can write are decorated. The read methods are passed through
- * untouched rather than spread from the original object so that a new method on
- * {@link SessionEngine} is a compile error here, not a silently missing
- * forward.
+ * Subscribes to `source` so every committed Session Event eventually
+ * re-publishes the affected Session's listing row.
  */
 export function watchSessionActivity(
-  engine: SessionEngine,
+  source: SessionActivityFeed,
   ports: SessionActivityWatchPorts,
 ): SessionActivityWatch {
+  const { engine } = source;
   const coalesceMs = ports.coalesceMs ?? DEFAULT_COALESCE_MS;
   const onError =
     ports.onError ?? ((error: unknown) => log.warn("session activity watch failed", { error }));
@@ -209,7 +205,6 @@ export function watchSessionActivity(
   let stopped = false;
 
   function mark(sessionId: string): void {
-    if (stopped) return;
     dirty.add(sessionId);
     if (timer !== null) return;
     timer = setTimeout(() => {
@@ -261,80 +256,31 @@ export function watchSessionActivity(
     }
   }
 
-  const watched: SessionEngine = {
-    async createSession(request) {
-      const result = await engine.createSession(request);
-      // Before `mark`, so the baseline exists before any fold can read it.
-      ports.observeBirth?.(result.session.id);
-      mark(result.session.id);
-      return result;
-    },
-    async getOrRecordSessionInput(request) {
-      const result = await engine.getOrRecordSessionInput(request);
-      mark(request.sessionId);
-      return result;
-    },
-    async recordToolRefresh(request) {
-      const event = await engine.recordToolRefresh(request);
-      if (event !== null) {
-        if (ports.observeEvent !== undefined) {
-          try {
-            ports.observeEvent(event);
-          } catch (error) {
-            onError(error);
-          }
-        }
-        mark(event.sessionId);
-      }
-      return event;
-    },
-    async observe(observation) {
-      const event = await engine.observe(observation);
-      if (ports.observeEvent !== undefined) {
-        try {
-          ports.observeEvent(event);
-        } catch (error) {
-          onError(error);
-        }
-      }
-      mark(event.sessionId);
-      return event;
-    },
-    async submit(request) {
-      const result = await engine.submit(request);
-      mark(request.sessionId);
-      return result;
-    },
-    async completeModelSelection(request) {
-      const result = await engine.completeModelSelection(request);
-      mark(request.sessionId);
-      return result;
-    },
-    // Passthroughs are written out rather than spread from `engine`, and the
-    // cost of that is real: a new Engine method must be added here and in
-    // `session-wake.ts` before this compiles. That is the point. A spread would
-    // adopt every future method silently, including a new WRITE, which would
-    // then never mark its Session dirty and would simply stop appearing in the
-    // activity stream. The type error is the prompt to classify the new method
-    // as intercepted or inert; only the answer "inert" belongs in this list.
-    getSession: (query) => engine.getSession(query),
-    getBaseSession: (query) => engine.getBaseSession(query),
-    listSessions: (query) => engine.listSessions(query),
-    countSessions: (query) => engine.countSessions(query),
-    listAttachedSessions: () => engine.listAttachedSessions(),
-    listSessionStarts: (query) => engine.listSessionStarts(query),
-    listLatestTicketSignals: (query) => engine.listLatestTicketSignals(query),
-    listEvents: (query) => engine.listEvents(query),
-    latestEventSequence: (query) => engine.latestEventSequence(query),
-    getProjectionCheckpoint: (query) => engine.getProjectionCheckpoint(query),
-    saveProjectionCheckpoint: (checkpoint) => engine.saveProjectionCheckpoint(checkpoint),
-    reportUsage: (query) => engine.reportUsage(query),
-  };
+  /** Runs one observer port; a throw is reported and never skips the mark. */
+  function tell(observer: () => void): void {
+    try {
+      observer();
+    } catch (error) {
+      onError(error);
+    }
+  }
+
+  const unsubscribe = source.subscribe(({ event }) => {
+    // The bus fans each wake out over a snapshot of its listeners, so a stop
+    // made by an earlier listener for this same event still reaches here.
+    if (stopped) return;
+    // Before `mark`, so the baseline exists before any fold can read it. The
+    // bus is seeded at construction, so a `session.created` it announces is a
+    // Session minted in this process.
+    if (event.payload.kind === "session.created") tell(() => ports.observeBirth?.(event.sessionId));
+    tell(() => ports.observeEvent?.(event));
+    mark(event.sessionId);
+  });
 
   return {
-    engine: watched,
     stop() {
       stopped = true;
+      unsubscribe();
       if (timer !== null) {
         clearTimeout(timer);
         timer = null;

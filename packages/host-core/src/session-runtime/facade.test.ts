@@ -152,7 +152,6 @@ async function fixture() {
     assembly,
     homeDir: "/home",
     venue: { id: "remote", kind: "remote" },
-    events,
     decisions: null,
     delegation,
   });
@@ -252,10 +251,15 @@ describe("lifted Session facade and recovered agent staging", () => {
     );
     const titlePorts = vi.mocked(createAutoTitler).mock.calls[0]![0];
     await titlePorts.retitle("s", "title");
-    expect(f.events.publish).toHaveBeenCalledWith("session-retitled", {
-      sessionId: "s",
-      title: "title",
-    });
+    // The durable write is the whole of it: the wake bus carries the event
+    // to open chats (VC-790), so nothing is pushed beside it.
+    expect(f.engine.submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "s",
+        intent: { kind: "session.retitle", title: "title" },
+      }),
+    );
+    expect(f.events.publish).not.toHaveBeenCalled();
     await titlePorts.recordUsage("s", {} as Parameters<typeof titlePorts.recordUsage>[1]);
     expect(f.engine.observe).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -480,7 +484,6 @@ describe("lifted Session facade and recovered agent staging", () => {
       },
       homeDir: "/home",
       venue: { id: "local", kind: "local" },
-      events: f.events,
       decisions: null,
       delegation: null,
     });
@@ -530,7 +533,6 @@ async function alternate(
     assembly: f.assembly,
     homeDir: "/home",
     venue: { id: "remote", kind: "remote" },
-    events: f.events,
     decisions: null,
     delegation: f.delegation,
     ...change,

@@ -76,7 +76,6 @@ const WINDOW_DELIVERY: { [T in HostBroadcastEventTopic]: (payload: HostEventMap[
     dataChanges.queue(change);
   },
   "session-activity": (notice) => sendToEveryWindow("volli:session-activity", notice),
-  "session-retitled": (event) => sendToEveryWindow("volli:session-retitled", event),
   "sessions-interrupted": (event) => sendToEveryWindow("volli:sessions-interrupted", event),
   "session-started": (notice) => sendToEveryWindow("volli:session-started", notice),
   "harness-event": (notice) => sendToEveryWindow("volli:harness-event", notice),

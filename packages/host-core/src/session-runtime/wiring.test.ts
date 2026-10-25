@@ -101,6 +101,7 @@ function assemble({
   return createRuntimeAssembly({
     dbHandle: host.database,
     sessionEngine: host.sessionEngine,
+    sessionWake: host.sessionWakeBus.subscribe,
     dataDir,
     binDir: join(dataDir, "bin"),
     venue: { id: "test-host", kind: "remote" },
@@ -223,5 +224,40 @@ describe("Session runtime wiring through the real host composition", () => {
     await lifecycle!.close();
     await commitSession(host, "after-close");
     expect(observe).toHaveBeenCalledTimes(1);
+  });
+
+  it("feeds the assembled runtime's open chats from the host's wake bus (VC-790)", async () => {
+    const composed = await composedHost();
+    const { host } = composed;
+    const runtime = assemble(composed).sessionRuntime;
+    if (runtime === null) throw new Error("the assembly built no Session runtime");
+    const sessionId = await commitSession(host, "an-open-chat");
+    const kinds: string[] = [];
+    const stop = await runtime.subscribe(
+      { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+      (emission) => {
+        if ("event" in emission && emission.event !== null) {
+          kinds.push(emission.event.payload.kind);
+        }
+      },
+    );
+
+    // Around the runtime, as `volli:session-rename` and the auto-titler write,
+    // with nothing published after it.
+    await host.sessionEngine.submit({
+      commandId: "retitle-at-rest",
+      sessionId,
+      intent: { kind: "session.retitle", title: "Named while idle" },
+      provenance: {
+        source: { kind: "system", id: "auto-title", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(kinds).toEqual(["command.recorded", "session.retitled", "command.receipt.recorded"]),
+    );
+    stop();
+    await runtime.close();
   });
 });

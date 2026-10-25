@@ -160,7 +160,6 @@ describe("the host event bus over every window (VC-554)", () => {
   // is the one that coalesces, and is covered above.
   const SENT: { [T in Exclude<HostBroadcastEventTopic, "data-changed">]: HostEventMap[T] } = {
     "session-activity": { projectId: "p", ticketId: null } as HostEventMap["session-activity"],
-    "session-retitled": { sessionId: "s", title: "Named" },
     "sessions-interrupted": { ticketId: "t", sessionIds: ["s"] },
     "session-started": { sessionId: "s" } as HostEventMap["session-started"],
     "harness-event": { sessionId: "s" } as HostEventMap["harness-event"],
@@ -202,12 +201,12 @@ describe("the host event bus over every window (VC-554)", () => {
     const window = windowFixture();
     windows.push(window);
 
-    windowEventBus.publish("session-retitled", { sessionId: "s", title: "Named" });
+    windowEventBus.publish("worktree-phase", { ticketId: "t", phase: "ready" });
     broadcastSessionsInterrupted("t", ["s"]);
     broadcastSystemAppearance(true);
 
     expect(window.webContents.send.mock.calls).toEqual([
-      ["volli:session-retitled", { sessionId: "s", title: "Named" }],
+      ["volli:worktree-phase", { ticketId: "t", phase: "ready" }],
       ["volli:sessions-interrupted", { ticketId: "t", sessionIds: ["s"] }],
       ["volli:system-appearance-changed", true],
     ]);

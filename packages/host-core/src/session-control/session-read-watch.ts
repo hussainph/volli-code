@@ -16,8 +16,8 @@
  * focused" is Electron's (`active-targets.ts` says so in its own header: a
  * renderer's `document.hasFocus()` silences alerts on another Space), and "did
  * a turn just end" is visible in one place only — the activity watch's
- * `observe` port, which is the choke point every durable Session write in this
- * process already passes through. So the decision is made once, where it is
+ * `observe` port, which folds every Session the post-commit wake bus says a
+ * durable write moved. So the decision is made once, where it is
  * true, and everything downstream is a projection of the stamp it writes.
  *
  * ── WHY IT RIDES `activity-watch` ─────────────────────────────────────────

@@ -27,7 +27,6 @@ import type {
   PendingArmedRunSettledNotice,
   SessionActivityNotice,
   SessionHarnessNotice,
-  SessionRetitledEvent,
   SessionsInterruptedEvent,
   SessionStartedNotice,
   TerminalDataEvent,
@@ -51,8 +50,6 @@ export interface HostEventMap {
   "data-changed": DataChangeScope;
   /** One Session's listing row, re-derived after its durable history moved. */
   "session-activity": SessionActivityNotice;
-  /** A retitle the host made on its own behalf (auto-titling). */
-  "session-retitled": SessionRetitledEvent;
   /** A backward move interrupted live Sessions. Never sent with no Sessions. */
   "sessions-interrupted": SessionsInterruptedEvent;
   /** A Session started from outside any client window (the agent socket). */

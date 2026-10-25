@@ -689,7 +689,7 @@ One Workspace's facts never reach another Workspace's connection.
 
 | Class | Meaning | Examples |
 |---|---|---|
-| feed | A durable change; it travels on the Workspace change feed (F1), not as a topic | `data-changed`, `session-retitled` once their areas move |
+| feed | A durable change; it travels on the Workspace change feed (F1), not as a topic | `data-changed` once its area moves |
 | overlay | Live state with a latest value, coalesced per key. Never a durable cursor. A (re)connecting Client subscribes, and the subscription's first yield is the baseline, taken in the same synchronous turn the listener is installed, so no change falls between them | `shell-state`, `browser-tab-state`, `worktree-phase`, `pending-armed-runs-changed` |
 | notice | Ephemeral, for connections open at the time, dropped otherwise. Never the only carrier of a durable fact | `session-started`, `pending-armed-run-settled` |
 

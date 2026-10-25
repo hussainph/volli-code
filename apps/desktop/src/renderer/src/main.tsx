@@ -15,7 +15,6 @@ import {
   announcePendingArmedRunSettlement,
   receivePendingArmedRuns,
 } from "./components/automations/armed-run";
-import { applyRemoteChatTitle } from "./chat/rename";
 import { interruptToastModel } from "./components/sessions/interrupt-toast";
 import { activateNotificationTarget } from "./lib/notification-activation";
 import { desktopNotificationSurface } from "./lib/notification-surface";
@@ -101,15 +100,6 @@ async function main() {
   // Workspace's snapshot lands. With the flag off this reads the flag and
   // does nothing else.
   void startBoardProtocolIfEnabled();
-
-  // Auto-title landings (VC-81). A retitle main performed itself has no
-  // renderer behind it to move labels the way a rename does, and
-  // `session.retitle` skips the runtime publish, so this push is what makes
-  // the model's title appear. No toast: nobody asked for it, and the label
-  // changing IS the feedback.
-  window.api.sessions.onRetitled((event) => {
-    applyRemoteChatTitle(event.sessionId, event.title);
-  });
 
   // Backward-move interrupt announcements (issue #78, CONCEPT #20): automation
   // only ever de-escalates, and never silently — the move that Esc'd live

@@ -4,7 +4,7 @@
  * `@volli/shared`'s `sessionWedge`.
  *
  * ── WHY A SCAN AND NOT A SUBSCRIPTION ─────────────────────────────────────
- * `activity-watch.ts` decorates the engine and sees every durable write; a
+ * The wake bus (`session-wake.ts`) sees every durable write; a
  * wedge is the ABSENCE of writes, which no write-side observer can notice.
  * The complement of a push channel is a clock, so this is one: every interval
  * it asks the runtime which native bindings are open — the exact "an executor

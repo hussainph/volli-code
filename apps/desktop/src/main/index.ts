@@ -1339,6 +1339,7 @@ const appStartup = app.whenReady().then(async () => {
   const runtimeInputs: Omit<RuntimeAssemblyOptions, "resolveRuntimeContext"> = {
     dbHandle,
     sessionEngine,
+    sessionWake: sessionWakeBus === null ? null : sessionWakeBus.subscribe,
     dataDir: hostCore.dataDir,
     binDir: runtimePaths.binDir,
     venue: { id: "local", kind: "local" },
@@ -1428,7 +1429,6 @@ const appStartup = app.whenReady().then(async () => {
     assembly: assembledRuntime,
     homeDir: fsDeps.homeDir,
     venue: runtimeInputs.venue,
-    events: hostPorts.events,
     decisions: desktopDecisions,
     delegation: sessionDelegation,
   });

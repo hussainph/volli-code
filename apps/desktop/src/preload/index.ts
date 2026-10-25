@@ -213,7 +213,6 @@ import type {
   SessionReadSetResult,
   SessionRenameInput,
   SessionRenameResult,
-  SessionRetitledEvent,
   SessionsInterruptedEvent,
   SessionsResult,
   SessionStartedNotice,
@@ -755,18 +754,6 @@ const api = {
       ipcRenderer.on("volli:sessions-interrupted" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:sessions-interrupted" satisfies VolliIpcEvent, listener);
-    },
-    /**
-     * Subscribes to retitles main performed itself (VC-81 auto-titling).
-     * Renderer-originated renames move their own labels and never arrive
-     * here; this carries the ones nothing on screen would otherwise learn.
-     */
-    onRetitled: (callback: (event: SessionRetitledEvent) => void): (() => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, payload: SessionRetitledEvent) =>
-        callback(payload);
-      ipcRenderer.on("volli:session-retitled" satisfies VolliIpcEvent, listener);
-      return () =>
-        ipcRenderer.removeListener("volli:session-retitled" satisfies VolliIpcEvent, listener);
     },
     /**
      * Subscribes to canonical harness events (harness-events): a hook the

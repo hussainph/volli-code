@@ -105,7 +105,8 @@ export function createHostSessionServices(
       ports.attention.deliver(request);
     },
   });
-  // Wake committed facts before marking listing rows dirty, as in desktop.
+  // The process's one Engine decorator: every committed Session Event is
+  // announced here, after its transaction, to every observer below.
   const sessionWakeBus = createSessionWakeBus(createHostSessionEngine(sessionLedger), {
     db,
   });
@@ -143,7 +144,9 @@ export function createHostSessionServices(
     starts: { hold: () => runtime.holdTurnStarts(), release: () => runtime.releaseTurnStarts() },
     onError: (error) => ports.log.warn("live work listener failed", { error }),
   });
-  const sessionActivityWatch = watchSessionActivity(sessionWakeBus.engine, {
+  // The one decorator over the Engine is the wake bus; the activity watch and
+  // the Session runtime's open chat streams both listen to it (VC-790).
+  const sessionActivityWatch = watchSessionActivity(sessionWakeBus, {
     publish: publishSessionActivity,
     provenanceOf: (born) => readSessionProvenance(db, born),
     readOf: (sessionId) => readSessionUnread(db, sessionId),
@@ -158,7 +161,7 @@ export function createHostSessionServices(
       sessionReadWatch.observe(projection);
       liveWork.observeSession(projection);
     },
-    // Synchronous, as each write resolves: a quit decision must never lag a
+    // Synchronous, as each write commits: a quit decision must never lag a
     // committed `turn.started` behind the coalesced fold above (VC-577).
     observeEvent: (event) => liveWork.observeEvent(event),
     observeBirth: (sessionId) => {
@@ -166,7 +169,7 @@ export function createHostSessionServices(
       sessionReadWatch.observeBirth(sessionId);
     },
   });
-  const sessionEngine = sessionActivityWatch.engine;
+  const sessionEngine = sessionWakeBus.engine;
   runtimeWiring.set(sessionEngine, runtime);
   return {
     sessionLedger,
