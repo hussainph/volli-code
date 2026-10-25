@@ -16,7 +16,10 @@
  *
  * Jobs that share a `sessionId` run one at a time, in claim order (a
  * per-Session lane), so a cancel never overtakes the follow-up it cancels;
- * other jobs run side by side, up to {@link INBOX_LIMITS.concurrent}.
+ * other jobs run side by side, up to {@link INBOX_LIMITS.concurrent}. A job
+ * waiting its turn keeps its lease renewed, and does not run if the lease is
+ * taken away meanwhile. A lane is only as live as its running job, so
+ * executors honour their abort signal.
  *
  * Ready jobs are claimed when the backend's `runnerJobs.wake` subscription
  * says there are some (and when their `availableAt` comes due), with a poll
@@ -317,13 +320,23 @@ export function createInboxWorker(options: InboxWorkerOptions): InboxWorker {
   function runJob(claimed: ClaimedJob, executor: JobExecutor, abort: AbortController) {
     const { job } = claimed;
     let result: Promise<JobOutcome>;
-    try {
-      result = executor(claimed, {
-        signal: abort.signal,
-        renew: (extendMs) => renewOne(job.id, extendMs),
+    if (abort.signal.aborted) {
+      // Its lease was taken away while it waited its turn: nothing to run.
+      result = Promise.resolve({
+        status: "failed",
+        code: "lease_lost",
+        detail: String(abort.signal.reason),
+        retryable: false,
       });
-    } catch (error) {
-      result = Promise.reject(error);
+    } else {
+      try {
+        result = executor(claimed, {
+          signal: abort.signal,
+          renew: (extendMs) => renewOne(job.id, extendMs),
+        });
+      } catch (error) {
+        result = Promise.reject(error);
+      }
     }
     result
       .then(

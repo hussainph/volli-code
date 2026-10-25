@@ -571,6 +571,46 @@ describe("the inbox worker", () => {
     worker.stop();
   });
 
+  it("a job whose lease is taken away while it waits in its lane does not run", async () => {
+    const session = (id: string) => {
+      const claimed = job(id);
+      (claimed.job as { sessionId: string | null }).sessionId = "s1";
+      return claimed;
+    };
+    const inbox = fakeInbox([[session("a1"), session("a2")]]);
+    const worker = createInboxWorker({
+      backend: inbox.backend,
+      journal: memoryJournal().store,
+      bootId: BOOT,
+      ...manualTimers(),
+    });
+    const started: string[] = [];
+    let finishA1!: () => void;
+    worker.register("workingCopy.refresh", (claimed) => {
+      started.push(claimed.job.id);
+      return new Promise((done) => (finishA1 = () => done(DONE)));
+    });
+    await worker.start();
+    inbox.renewAnswers.push(
+      { ok: true, lease: { bootId: BOOT, attempt: 1, expiresAt: 1 } },
+      { ok: false, reason: "cancelled" },
+    );
+    await worker.renewInFlight();
+    finishA1();
+    await flush();
+    expect(started).toEqual(["a1"]);
+    expect(
+      inbox.completes.map((c) => [
+        c.jobId,
+        c.outcome.status === "failed" ? c.outcome.code : "done",
+      ]),
+    ).toEqual([
+      ["a1", "done"],
+      ["a2", "lease_lost"],
+    ]);
+    worker.stop();
+  });
+
   it("claims when the wake subscription says jobs are ready or come due, instead of polling", async () => {
     const inbox = fakeInbox([[], [], [job("j1")], [], [job("j2")]]);
     const timers = manualTimers();
