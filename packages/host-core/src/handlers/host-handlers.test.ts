@@ -1578,6 +1578,11 @@ describe("the Volli Cloud account", () => {
     () => map["cloud.reportUnsavedWrites"]({ count: 1 }, WINDOW),
     () => map["cloud.saveSnapshot"]({ text: "{}" }, WINDOW),
     () => map["cloud.readSnapshot"](undefined, WINDOW),
+    () => map["account.githubSubscribe"](undefined, WINDOW, sink()),
+    () => map["account.githubConnect"](undefined, WINDOW),
+    () => map["account.githubInstall"](undefined, WINDOW),
+    () => map["account.githubCancel"](undefined, WINDOW),
+    () => map["account.githubDisconnect"](undefined, WINDOW),
   ];
 
   it("answers unavailable for every key on a host with no account service (hostd)", async () => {
@@ -1607,6 +1612,13 @@ describe("the Volli Cloud account", () => {
       reportUnsavedWrites: vi.fn(),
       saveSnapshot: vi.fn(),
       readSnapshot: vi.fn(() => "{}"),
+      github: {
+        subscribe: vi.fn(() => () => {}),
+        connect: vi.fn(),
+        install: vi.fn(),
+        cancel: vi.fn(),
+        disconnect: vi.fn(),
+      },
     } satisfies AccountPort;
     const map = handlers({ account: port });
     const snapshots = sink();
@@ -1646,5 +1658,59 @@ describe("the Volli Cloud account", () => {
     expect(await map["cloud.saveSnapshot"]({ text: '{"v":1}' }, WINDOW)).toBeNull();
     expect(port.saveSnapshot).toHaveBeenCalledWith('{"v":1}');
     expect(await map["cloud.readSnapshot"](undefined, WINDOW)).toEqual({ text: "{}" });
+  });
+
+  it("forwards the GitHub half to the port's own and feeds the window its snapshots", async () => {
+    const GITHUB = {
+      state: "ready",
+      connection: { status: "active", login: "dana", name: null },
+      installations: [],
+      waiting: null,
+      requested: false,
+      failure: null,
+    } as const;
+    const unsubscribe = vi.fn();
+    const github = {
+      subscribe: vi.fn((listener: (snapshot: typeof GITHUB) => void) => {
+        listener(GITHUB);
+        return unsubscribe;
+      }),
+      connect: vi.fn(async () => {}),
+      install: vi.fn(async () => {}),
+      cancel: vi.fn(),
+      disconnect: vi.fn(async () => {}),
+    };
+    const port = {
+      snapshot: vi.fn(() => SNAPSHOT),
+      subscribe: vi.fn(() => () => {}),
+      signIn: vi.fn(),
+      cancelSignIn: vi.fn(),
+      signOut: vi.fn(),
+      requestDeletion: vi.fn(),
+      cancelDeletion: vi.fn(),
+      accessToken: vi.fn(async () => ({ kind: "signed-out" as const })),
+      launch: vi.fn(() => ({ store: "local" as const })),
+      relaunch: vi.fn(),
+      reportUnsavedWrites: vi.fn(),
+      saveSnapshot: vi.fn(),
+      readSnapshot: vi.fn(() => null),
+      github,
+    } satisfies AccountPort;
+    const map = handlers({ account: port });
+    const snapshots = sink();
+
+    expect(await map["account.githubSubscribe"](undefined, WINDOW, snapshots)).toBe(unsubscribe);
+    expect(snapshots.emit).toHaveBeenCalledWith(GITHUB);
+    for (const key of [
+      "account.githubConnect",
+      "account.githubInstall",
+      "account.githubCancel",
+      "account.githubDisconnect",
+    ] as const) {
+      expect(await map[key](undefined, WINDOW)).toBeNull();
+    }
+    for (const method of ["connect", "install", "cancel", "disconnect"] as const) {
+      expect(github[method]).toHaveBeenCalledOnce();
+    }
   });
 });

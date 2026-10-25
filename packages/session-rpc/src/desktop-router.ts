@@ -39,6 +39,7 @@ import {
   type AccountAccessToken,
   type AccountConnection,
   type CloudLaunch,
+  type AccountGithubSnapshot,
   type AccountSnapshot,
   type ActiveAddHost,
   type AddHostAnswer,
@@ -79,6 +80,7 @@ import { z } from "zod";
 import {
   accountAccessTokenInputSchema,
   accountAccessTokenSchema,
+  accountGithubSnapshotSchema,
   accountSignInInputSchema,
   accountSnapshotSchema,
   cloudLaunchSchema,
@@ -249,6 +251,12 @@ export interface DesktopRouterHandlers {
   readonly "cloud.reportUnsavedWrites": HostHandler<{ count: number }, null>;
   readonly "cloud.saveSnapshot": HostHandler<{ text: string }, null>;
   readonly "cloud.readSnapshot": HostHandler<void, { text: string | null }>;
+  /** The account's GitHub connection and the App's installations (VC-897). */
+  readonly "account.githubSubscribe": DesktopSubscriptionHandler<void, AccountGithubSnapshot>;
+  readonly "account.githubConnect": HostHandler<void, null>;
+  readonly "account.githubInstall": HostHandler<void, null>;
+  readonly "account.githubCancel": HostHandler<void, null>;
+  readonly "account.githubDisconnect": HostHandler<void, null>;
 }
 
 type AssertNever<Type extends never> = Type;
@@ -875,6 +883,35 @@ export function createDesktopRouter() {
       cancelDeletion: hostProcedure("account.cancelDeletion")
         .output(z.null())
         .mutation(({ ctx }) => ctx.handlers["account.cancelDeletion"](undefined, ctx.call)),
+      /**
+       * The account's GitHub connection and the App's installations (VC-897):
+       * the snapshot first, then again on every change, so a browser round
+       * trip main is following lands without a refresh. A new subscription
+       * reads both afresh.
+       */
+      githubSubscribe: hostProcedure("account.githubSubscribe").subscription(async function* ({
+        ctx,
+        signal,
+      }) {
+        yield* desktopStream<AccountGithubSnapshot>(
+          ctx,
+          "account.githubSubscribe",
+          signal,
+          (sink) => ctx.handlers["account.githubSubscribe"](undefined, ctx.call, sink),
+        );
+      }),
+      githubConnect: hostProcedure("account.githubConnect")
+        .output(z.null())
+        .mutation(({ ctx }) => ctx.handlers["account.githubConnect"](undefined, ctx.call)),
+      githubInstall: hostProcedure("account.githubInstall")
+        .output(z.null())
+        .mutation(({ ctx }) => ctx.handlers["account.githubInstall"](undefined, ctx.call)),
+      githubCancel: hostProcedure("account.githubCancel")
+        .output(z.null())
+        .mutation(({ ctx }) => ctx.handlers["account.githubCancel"](undefined, ctx.call)),
+      githubDisconnect: hostProcedure("account.githubDisconnect")
+        .output(z.null())
+        .mutation(({ ctx }) => ctx.handlers["account.githubDisconnect"](undefined, ctx.call)),
       accessToken: hostProcedure("account.accessToken")
         .input(accountAccessTokenInputSchema)
         .output(accountAccessTokenSchema)
@@ -929,5 +966,6 @@ export function desktopProcedureSchemas(router: DesktopRouter = createDesktopRou
     "hostScope.subscribe": hostLinkRelayEventSchema,
     "browserShortcuts.subscribe": browserAppShortcutEventSchema,
     "account.subscribe": accountSnapshotSchema,
+    "account.githubSubscribe": accountGithubSnapshotSchema,
   });
 }

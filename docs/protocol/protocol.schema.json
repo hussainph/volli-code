@@ -252,6 +252,224 @@
         "outputValidation": "network-and-tests",
         "voidOutput": false
       },
+      "account.githubCancel": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "account.githubConnect": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "account.githubDisconnect": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "account.githubInstall": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "account.githubSubscribe": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "subscription",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "connection": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "login": {
+                      "maxLength": 512,
+                      "type": "string"
+                    },
+                    "name": {
+                      "anyOf": [
+                        {
+                          "maxLength": 512,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "status": {
+                      "enum": [
+                        "active",
+                        "needs_reconnect"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "login",
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "failure": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "installations": {
+              "anyOf": [
+                {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "accountLogin": {
+                        "maxLength": 512,
+                        "type": "string"
+                      },
+                      "accountType": {
+                        "enum": [
+                          "user",
+                          "org"
+                        ],
+                        "type": "string"
+                      },
+                      "configureUrl": {
+                        "maxLength": 512,
+                        "pattern": "^https?:\\/\\/",
+                        "type": "string"
+                      },
+                      "installationId": {
+                        "maxLength": 512,
+                        "type": "string"
+                      },
+                      "repositorySelection": {
+                        "enum": [
+                          "all",
+                          "selected"
+                        ],
+                        "type": "string"
+                      },
+                      "suspended": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "installationId",
+                      "accountLogin",
+                      "accountType",
+                      "repositorySelection",
+                      "suspended",
+                      "configureUrl"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 500,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "requested": {
+              "type": "boolean"
+            },
+            "state": {
+              "enum": [
+                "unavailable",
+                "loading",
+                "ready",
+                "failed"
+              ],
+              "type": "string"
+            },
+            "waiting": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "connect",
+                    "install"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "connection",
+            "installations",
+            "waiting",
+            "requested",
+            "failure"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "documented-yield",
+        "voidOutput": false
+      },
       "account.requestDeletion": {
         "compatibility": "client-local",
         "input": {

@@ -219,6 +219,12 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "cloud.reportUnsavedWrites": "ipc",
   "cloud.saveSnapshot": "ipc",
   "cloud.readSnapshot": "ipc",
+  // The account's GitHub connection and installations (VC-897).
+  "account.githubSubscribe": "ipc",
+  "account.githubConnect": "ipc",
+  "account.githubInstall": "ipc",
+  "account.githubCancel": "ipc",
+  "account.githubDisconnect": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

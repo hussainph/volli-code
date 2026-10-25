@@ -526,6 +526,46 @@ export const DESKTOP_ENTRIES = [
     idempotency: "read",
     summary: "The last-seen Volli Cloud board kept on this Mac, if any.",
   },
+  // The account's GitHub connection and the GitHub App's installations
+  // (VC-897; wire types in `./account`). Host-placed for the reason the
+  // account is: the connection is the person's, and desktop main follows its
+  // browser round trips. Served through `AccountPort.github`, `cloud` only.
+  {
+    key: "account.githubSubscribe",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "The account's GitHub connection and installations now, then on every change.",
+  },
+  {
+    // `natural`: a second start while a flow is in flight replaces it.
+    key: "account.githubConnect",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Connect (or reconnect) GitHub in the browser.",
+  },
+  {
+    key: "account.githubInstall",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Install the Volli GitHub App on a GitHub account in the browser.",
+  },
+  {
+    key: "account.githubCancel",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Stop waiting for the GitHub browser round trip.",
+  },
+  {
+    key: "account.githubDisconnect",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Disconnect GitHub: revoke the App's authorization and forget the connection.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];

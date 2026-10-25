@@ -15,6 +15,7 @@ import { ConvexError, v } from "convex/values";
 
 import { CLIENT_KINDS, newId, type ClientKind, type PersonActor } from "@volli/shared/cloud";
 
+import { internal } from "./_generated/api.js";
 import type { DataModel, Doc } from "./_generated/dataModel.js";
 import { mutation, query } from "./_generated/server";
 import { authError, ensureViewer as ensureViewerRow, findViewer, type Viewer } from "./lib/auth";
@@ -161,9 +162,12 @@ async function pendingRequest(
  * `requireViewer` in `lib/auth.ts`), and its signed-in devices are revoked. Idempotent: a
  * second request answers the pending one.
  *
- * Revoking the sign-in provider's sessions, runner credentials and the GitHub
- * grant needs server-held secrets and is the retention job's first step
- * (VC-905), keyed by the `deletionRequests` row written here.
+ * The person's GitHub authorization of the App is revoked at once (on
+ * GitHub, and the sealed tokens forgotten; `github.revokeForUser`): a
+ * restored account connects GitHub again. Revoking the sign-in provider's
+ * sessions and runner credentials needs server-held secrets and is the
+ * retention job's first step (VC-905), keyed by the `deletionRequests` row
+ * written here.
  */
 export const requestDeletion = mutation({
   args: deletionArgs,
@@ -202,6 +206,13 @@ export const requestDeletion = mutation({
       .collect();
     for (const device of devices) {
       if (device.revokedAt === null) await ctx.db.patch(device._id, { revokedAt: now });
+    }
+    const github = await ctx.db
+      .query("githubConnections")
+      .withIndex("by_user", (q) => q.eq("userId", person.userId))
+      .unique();
+    if (github !== null) {
+      await ctx.scheduler.runAfter(0, internal.github.revokeForUser, { userId: person.userId });
     }
     await audit(ctx, {
       workspaceId: null,

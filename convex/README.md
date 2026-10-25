@@ -57,6 +57,11 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 | `functions/secrets.ts`                                              | Team secrets: `listWorkspace`, `listProject` (with what overrides what), `listPersonal`, `set` (an action: it seals), `setExposure`, `remove`. Metadata only on the way out: no query returns a secret's value. Rules: `secrets.ts` in `@volli/shared/cloud`.                       |
 | `functions/secretsDelivery.ts`                                      | The resolved set for a runner's claimed Session or leased job (`deliver`, internal): claim, ownership, membership and opt-out checks, precedence, exposure, then opened in memory.                                                                                                  |
 | `functions/lib/sealing.ts`, `secretKeys.ts`                         | Envelope encryption: per-Workspace and per-person data keys wrapped by a root key behind `RootKeyProvider`; `secretKeys:rewrap` re-wraps after a root key rotation. See "Secrets root key" below.                                                                                   |
+| `functions/github.ts`                                               | The GitHub App, the person's side: `config`, `connection`, `flow` reads; `beginConnect`, `beginInstall`, `installations`, `disconnect`.                                                                                                                                             |
+| `functions/githubHttp.ts`, `githubFlows.ts`                         | The Convex site's routes: `GET` and `POST /github/oauth/callback` (ask, then connect), `GET /github/setup`, `POST /github/webhook`. `githubFlows.ts` finishes a flow.                                                                                                               |
+| `functions/githubIngest.ts`                                         | Webhook deliveries applied once (dedup on the delivery id), the reconciles they nudge, the hourly redelivery sweep, the daily reconcile and the purge.                                                                                                                              |
+| `functions/githubTokens.ts`                                         | A person's user access token: handed out until 30 minutes before expiry, then refreshed once under a lease. No query returns a token.                                                                                                                                               |
+| `functions/lib/github/`                                             | Configuration from deployment variables, the App JWT and webhook signatures (WebCrypto), a small REST client with typed errors, sealing, installation writes.                                                                                                                       |
 | `functions/_generated/`                                             | Output of `convex codegen`, **committed**. CI regenerates it and fails on any drift. Never edit or format it by hand.                                                                                                                                                               |
 | `fixture/backend.json`                                              | The pin: one backend release, the `convex` npm version that goes with it, and a sha256 for each platform's zip.                                                                                                                                                                     |
 | `fixture/backend.ts`                                                | Downloads and verifies the binary, then starts a backend: free loopback ports, a fresh data dir, a random instance secret, beacon off. `stop()` kills it and deletes the dir.                                                                                                       |
@@ -268,6 +273,49 @@ Before a production deployment stores a sealed secret:
    itself until done). When no `secretKeys` row names the old `kid`, drop it
    from the variable. Values are never re-encrypted; only data keys are.
 5. **Never** set it on a deployment that also sets `VOLLI_TEST_JWKS`.
+
+## GitHub App
+
+One GitHub App per environment, owned by a GitHub organization. The
+deployment reads it from variables; nothing about the App is in the
+database. Without them `github.config` answers `configured: false`, starting
+a flow or listing installations answers `github_not_configured`, the routes
+answer 503 and the sweeps do nothing.
+
+| Variable                           | What it holds                                                                          |
+| ---------------------------------- | -------------------------------------------------------------------------------------- |
+| `GITHUB_APP_ID`                    | The App id. Webhooks must name it as their target                                      |
+| `GITHUB_APP_SLUG`                  | The App's URL name (`github.com/apps/<slug>`)                                          |
+| `GITHUB_APP_CLIENT_ID`             | The App's client id: the JWT issuer and the OAuth client                               |
+| `GITHUB_APP_CLIENT_SECRET`         | A client secret (GitHub allows two at once while rotating)                             |
+| `GITHUB_APP_PRIVATE_KEY`           | A private key in PKCS#8 PEM (`openssl pkcs8 -topk8 -nocrypt -in key.pem`)              |
+| `GITHUB_WEBHOOK_SECRETS`           | `current[,previous]`: both are accepted while the webhook secret rotates               |
+| `GITHUB_API_URL`, `GITHUB_WEB_URL` | Optional; default `https://api.github.com` and `https://github.com` (tests use a fake) |
+
+People's tokens are sealed under their own data key (`VOLLI_SECRETS_ROOT_KEYS`
+must be set; see "Secrets root key").
+
+Registering an App (once per environment):
+
+1. In the owning organization: Settings → Developer settings → GitHub Apps → New GitHub App.
+2. Callback URLs: `https://<deployment>.convex.site/github/oauth/callback` first, then the
+   sign-in provider's GitHub redirect URI.
+3. Keep **Expire user authorization tokens** on. Leave **Request user authorization (OAuth)
+   during installation** and **Enable Device Flow** off.
+4. Setup URL `https://<deployment>.convex.site/github/setup`, with **Redirect on update** on.
+5. Webhook: active, URL `https://<deployment>.convex.site/github/webhook`, a secret from
+   `openssl rand -hex 32`, SSL verification on.
+6. Repository permissions: Metadata read; Contents, Pull requests read and write; Workflows
+   write; Checks, Commit statuses, Actions, Issues read. Account permissions: Email addresses
+   read. Events: Installation target, Repository, Pull request.
+7. Where it can be installed: **Any account** for production and staging, **Only on this
+   account** for a dev App.
+8. Create it; note the App id, client id and slug; generate a client secret and a private key;
+   set the variables above with `npx convex env set`, then delete the local key files.
+
+Rotation: add the new key or secret on GitHub, update the variable (for the
+webhook secret, `new,old` first, then `new` alone once GitHub sends with it),
+then delete the old one on GitHub.
 
 ## CI
 

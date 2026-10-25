@@ -251,6 +251,33 @@ Each was a decision made while turning the design into code.
     sequence 1 is the Engine's `session.create` command (`session.created`
     follows at 2 and must match the row).
 
+35. **GitHub installations are global**, not owned by a Workspace (the
+    design gave `githubInstallations` a `workspaceId`). A GitHub account can
+    install an App only once, and its repositories serve a person's personal
+    and team Workspaces alike, so the row is unique by `installationId` and
+    the Workspace a repository serves is its project's. `workspaceId` and
+    `by_workspace` are gone (no deployment held a row); the table gains
+    `accountId` (GitHub's numeric id), the `permissions` and
+    `events` snapshot, `deletedAt` and `reconciledAt`, and
+    `installedByUserId` is nullable (an install started on GitHub's own page
+    has no Volli person).
+36. `githubConnections` gains the GitHub profile (`login`, `name`, verified
+    `emails`), a `status` (`active` / `needs_reconnect` / `revoked`), the
+    refresh lease and `updatedAt`, as required fields: no deployment held a
+    row. The sealed tokens are nullable (forgotten on revoke). `by_github_user`
+    holds one Volli account per GitHub account. The tokens are sealed under
+    the person's data key (`secretKeys` owner `u:{userId}`), bound to the
+    person and to the token's role.
+37. Two new tables: `githubFlows` (a connect or install browser round trip,
+    single use, purged an hour after it expires; a request to an
+    organization's owners waits 14 days) and `githubWebhookDeliveries` (one
+    row per applied delivery id, so a redelivery is a no-op; purged after
+    seven days).
+38. `projectRepos` gains optional `githubAccess` and `accessCheckedAt`
+    (optional: rows the migration importer writes need not carry them; absent
+    reads as not yet checked) and two indexes, `by_github_repo` (webhook
+    routing) and `by_installation` (an installation's removal or reconcile).
+
 ## Migrated rows
 
 - `automationRuns` has optional `error` and `retryCommandId`: a migrated

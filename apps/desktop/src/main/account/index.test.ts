@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { accountPort, createDesktopAccount, resolveAccountConfig } from "./index";
+import {
+  accountPort,
+  createDesktopAccount,
+  createDesktopGithub,
+  resolveAccountConfig,
+} from "./index";
 import { tempInventory, testKeyPair } from "./test-support";
 
 const cleanups: (() => void)[] = [];
@@ -16,14 +21,15 @@ describe("desktop main's account composition", () => {
     cleanups.push(temp.dispose);
     const opened: string[] = [];
     const marker = { write: vi.fn(), clear: vi.fn() };
+    const config = resolveAccountConfig({
+      packaged: false,
+      env: {
+        VOLLI_ACCOUNT_PROVIDER: "dev",
+        VOLLI_CONVEX_TEST_PRIVATE_KEY: testKeyPair().privateKeyPem,
+      },
+    });
     const service = createDesktopAccount({
-      config: resolveAccountConfig({
-        packaged: false,
-        env: {
-          VOLLI_ACCOUNT_PROVIDER: "dev",
-          VOLLI_CONVEX_TEST_PRIVATE_KEY: testKeyPair().privateKeyPem,
-        },
-      }),
+      config,
       enabled: () => true,
       inventory: temp.inventory,
       unlockInventory: async () => {},
@@ -36,16 +42,28 @@ describe("desktop main's account composition", () => {
       marker,
     });
     cleanups.push(() => service.dispose());
+    const github = createDesktopGithub({
+      config,
+      enabled: () => true,
+      account: service,
+      openBrowser: (url) => void opened.push(url),
+      log: log(),
+    });
+    cleanups.push(() => github.dispose());
     const relaunch = vi.fn();
     const reportUnsavedWrites = vi.fn();
     const saveSnapshot = vi.fn();
-    const port = accountPort(service, {
-      launch: () => ({ store: "local" }),
-      relaunch,
-      reportUnsavedWrites,
-      saveSnapshot,
-      readSnapshot: () => "{}",
-    });
+    const port = accountPort(
+      service,
+      {
+        launch: () => ({ store: "local" }),
+        relaunch,
+        reportUnsavedWrites,
+        saveSnapshot,
+        readSnapshot: () => "{}",
+      },
+      github,
+    );
     await port.saveSnapshot("{}");
     expect(saveSnapshot).toHaveBeenCalledWith("{}");
     expect(await port.readSnapshot()).toBe("{}");
@@ -79,6 +97,19 @@ describe("desktop main's account composition", () => {
     stop();
     expect(frames).toEqual(["signed-out", "signing-in", "signed-in", "signed-out"]);
     expect(marker.clear).toHaveBeenCalled();
+
+    // No backend in this build: the GitHub half has no section, and its
+    // commands refuse without opening anything.
+    const githubFrames: string[] = [];
+    const stopGithub = await port.github.subscribe(
+      (snapshot) => void githubFrames.push(snapshot.state),
+    );
+    expect(githubFrames).toEqual(["unavailable"]);
+    await expect(Promise.resolve().then(() => port.github.connect())).rejects.toThrow(
+      "no Volli Cloud backend",
+    );
+    stopGithub();
+    expect(opened).toHaveLength(1);
   });
 
   it("logs a configuration it ignored, and answers an unconfigured build", async () => {

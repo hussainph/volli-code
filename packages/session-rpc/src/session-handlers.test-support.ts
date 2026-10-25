@@ -286,6 +286,11 @@ export function sessionHandlersFrom(
     "cloud.reportUnsavedWrites": remote("cloud.reportUnsavedWrites"),
     "cloud.saveSnapshot": remote("cloud.saveSnapshot"),
     "cloud.readSnapshot": remote("cloud.readSnapshot"),
+    "account.githubSubscribe": remote("account.githubSubscribe"),
+    "account.githubConnect": remote("account.githubConnect"),
+    "account.githubInstall": remote("account.githubInstall"),
+    "account.githubCancel": remote("account.githubCancel"),
+    "account.githubDisconnect": remote("account.githubDisconnect"),
   };
   return {
     ...handlers,
