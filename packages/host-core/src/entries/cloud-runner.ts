@@ -18,7 +18,8 @@
  * (cursor rows in `sqliteDrainCursorStore`, nudged from the Session
  * engine's append path, adopted at a Session's birth) and
  * `createInboxWorker` (`wake: wakeOverLink(link)`, executors registered per kind, outcomes in
- * `sqliteJobJournalStore`), with a sealed `RunnerLinkStore`;
+ * `sqliteJobJournalStore`), with a sealed `RunnerLinkStore`, and beside it
+ * `startStreamChunks({ link, runtime })` for streamed text;
  * `volli-runner link` calls `linkWithInstallToken` / `linkWithDeviceCode`.
  */
 export {
@@ -65,6 +66,11 @@ export {
   type JobJournalStore,
 } from "../cloud-runner/inbox";
 export { sqliteDrainCursorStore, sqliteJobJournalStore } from "../cloud-runner/sqlite-stores";
+export {
+  startStreamChunks,
+  type StreamChunks,
+  StreamLinkOfflineError,
+} from "../cloud-runner/stream-chunker";
 export {
   acceptOverLink,
   inboxOverLink,

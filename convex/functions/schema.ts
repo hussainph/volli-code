@@ -26,6 +26,8 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 import {
+  ATTENTION_CLEARED_REASONS,
+  ATTENTION_SOURCES,
   BOARD_EVENT_KINDS,
   CHECKOUT_MODES,
   GITHUB_ACCOUNT_TYPES,
@@ -867,15 +869,22 @@ export default defineSchema({
     createdAt: time,
   }).index("by_session_file_offset", ["sessionId", "piFileId", "startOffset"]),
   // Ephemeral streaming deltas, sent only while someone views the Session.
+  // `delta` is the chunk's transcript-overlay operations as JSON text
+  // (`@volli/shared/cloud` stream-chunks); `baseline` marks a chunk that
+  // starts with a `reset`, where a reader may start or restart the stream.
   streamChunks: defineTable({
     sessionId: uuid,
     messageId: v.string(),
     seq: v.number(),
     turnId: nullable(v.string()),
-    delta: json,
+    baseline: v.boolean(),
+    throughSequence: v.number(),
+    delta: v.string(),
     createdAt: time,
   })
     .index("by_session_message_seq", ["sessionId", "messageId", "seq"])
+    .index("by_session_message_baseline", ["sessionId", "messageId", "baseline", "seq"])
+    .index("by_session_created", ["sessionId", "createdAt"])
     .index("by_created", ["createdAt"]),
   sessionViewers: defineTable({
     id: uuid,
@@ -995,35 +1004,33 @@ export default defineSchema({
     .index("by_kind_status", ["kind", "status", "createdAt"]),
 
   // ── attention / Needs-you ──────────────────────────────────────────────────
+  // Written only by `lib/attention.ts`.
   attentionItems: defineTable({
-    // Derived and frozen for Session items (`s:{sessionId}:{sourceId}`), a UUID otherwise.
+    // Frozen, derived by each producer (`attention.ts` in `@volli/shared/cloud`):
+    // `s:{sessionId}:{sourceId}`, `t:{ticketId}:review:{userId}`, `r:{runnerId}:{alert}`.
     id: v.string(),
     userId: uuid,
-    projectId: uuid,
+    // Null for an item that belongs to no project (a runner alert, billing).
+    projectId: nullable(uuid),
+    // A billing item's Workspace; every other item reaches its Workspace through its project.
+    workspaceId: v.optional(nullable(uuid)),
     ticketId: nullable(uuid),
     sessionId: nullable(uuid),
-    source: literals([
-      "session_attention",
-      "interaction",
-      "session_blocked",
-      "review_requested",
-      "mention",
-      "environment_failed",
-      "runner_alert",
-      "billing",
-    ]),
+    source: literals(ATTENTION_SOURCES),
     sourceId: v.string(),
     kind: v.string(),
     title: v.string(),
     detail: nullable(v.string()),
     raisedAt: time,
     clearedAt: nullable(time),
-    clearedReason: nullable(literals(["resolved", "access_lost", "superseded", "deleted"])),
+    clearedReason: nullable(literals(ATTENTION_CLEARED_REASONS)),
     seenAt: nullable(time),
   })
     .index("by_uuid", ["id"])
     .index("by_user_open", ["userId", "clearedAt", "raisedAt"])
-    .index("by_session", ["sessionId", "clearedAt"]),
+    .index("by_session", ["sessionId", "clearedAt"])
+    // A ticket's open items of one source (its review requests, re-targeted on each board write).
+    .index("by_ticket", ["ticketId", "source", "clearedAt"]),
 
   // ── config, secrets, model connections ─────────────────────────────────────
   configEntries: defineTable({

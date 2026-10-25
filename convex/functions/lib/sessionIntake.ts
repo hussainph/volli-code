@@ -54,16 +54,12 @@ import {
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel.js";
 import type { MutationCtx } from "../_generated/server";
+import { raiseQuarantine } from "./attention";
 import { findVisibleProject } from "./auth";
 import type { CallingRunner } from "./runnerAuth";
 import { visibilityForNewSession } from "./visibility";
-import {
-  EMPTY_USAGE_TOTALS,
-  deriveFromFact,
-  raiseQuarantine,
-  stableJson,
-  syncListing,
-} from "./sessionDerived";
+import { EMPTY_USAGE_TOTALS, deriveFromFact, stableJson, syncListing } from "./sessionDerived";
+import { endedTurnsOf, scheduleStreamCleanup } from "./streamChunks";
 
 // ── limits ──────────────────────────────────────────────────────────────────
 
@@ -418,6 +414,13 @@ export async function acceptFacts(
     lastEventId: fresh.at(-1)!.id,
     lastAcceptedAt: now,
   });
+  // Streamed text: the chunk rows of every turn this batch ended go (S3).
+  await scheduleStreamCleanup(
+    ctx,
+    sessionId,
+    { turnIds: endedTurnsOf(foldable.map(({ event }) => event)), messageIds: [] },
+    now,
+  );
   quarantined += await advanceFold(ctx, session, head, foldable, acceptedThrough, now);
   return { acceptedThrough, duplicates, quarantined, unknownKinds };
 }

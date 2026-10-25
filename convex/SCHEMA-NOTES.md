@@ -198,9 +198,9 @@ Each was a decision made while turning the design into code.
     a runner linked by a device code starts with the right install mode.
 27. A runner cut off for credential reuse is recorded as a `token_reuse`
     runner event and shown in the owner's runner list
-    (`statusReason: credential_reuse`). It raises no Needs-you item yet:
-    `attentionItems.projectId` is required, and a runner belongs to no
-    project. The attention work decides how person-level items are stored.
+    (`statusReason: credential_reuse`). It also raises a Needs-you runner
+    alert for the owner (`r:{runnerId}:credential_reuse`, project-less, see
+    39), cleared when they remove the runner.
 28. `runnerJobs.failure` (optional, added after the first version) holds the
     job's last failure: what the runner reported, or a lease that ran out
     (`by: "backend"`). A retry keeps it, so a waiting job and a dead letter both
@@ -250,7 +250,6 @@ Each was a decision made while turning the design into code.
 34. A Session started on a runner is created by its first `accept`, whose
     sequence 1 is the Engine's `session.create` command (`session.created`
     follows at 2 and must match the row).
-
 35. **GitHub installations are global**, not owned by a Workspace (the
     design gave `githubInstallations` a `workspaceId`). A GitHub account can
     install an App only once, and its repositories serve a person's personal
@@ -277,7 +276,23 @@ Each was a decision made while turning the design into code.
     (optional: rows the migration importer writes need not carry them; absent
     reads as not yet checked) and two indexes, `by_github_repo` (webhook
     routing) and `by_installation` (an installation's removal or reconcile).
-39. `sessions.by_place_runner` (added with Mac re-registration) finds the
+39. `attentionItems` is written only by `lib/attention.ts`. Its ids are each
+    producer's frozen derivation (`attention.ts` in `@volli/shared/cloud`):
+    `s:{sessionId}:{sourceId}` (Session items; the backend's own source ids
+    are `volli:blocked`, `volli:quarantine:{sequence}` and
+    `volli:notify:{notifyId}`), `t:{ticketId}:review:{userId}` (review
+    requests) and `r:{runnerId}:{alert}` (runner alerts), so a refold, a
+    retry or a later board write finds the same row. Widened (expand only):
+    `projectId` is `nullable` (a runner alert belongs to no project, and is
+    visible to its person only); `workspaceId` (optional, nullable) is set
+    only on a billing item, the same exception usage rows make; `source`
+    gains `notify`; `by_ticket` (ticket, source, cleared) finds a ticket's
+    open review requests.
+    Visibility is decided at read time (`canSeeAttention`, membership through
+    the project's current Workspace); an `access_lost` sweep after a Member is
+    suspended, removed or leaves keeps stored rows honest for counts and
+    pushes, and a person active there again by the time it runs keeps theirs.
+40. `sessions.by_place_runner` (added with Mac re-registration) finds the
     Sessions placed on a runner, so a Mac that lost its credential and
     registers again as its successor (`registerThisMac` with
     `replacesRunnerId`) moves them in the same transaction. The predecessor
@@ -287,7 +302,7 @@ Each was a decision made while turning the design into code.
     which the offline sweep does not watch. Working-copy jobs stay with the
     replaced runner until Working copies move; that move is not part of this
     handover.
-40. `runners.desktopRegistrationId` is an optional desktop registration retry
+41. `runners.desktopRegistrationId` is an optional desktop registration retry
     key (a client-minted lowercase UUID); older rows and other link methods
     omit it. `registerThisMac` and `linkFromDesktop` accept optional nullable
     `registrationId` (invalid values are ignored). A matching caller-owned,
@@ -317,3 +332,32 @@ Each was a decision made while turning the design into code.
   the intake stores JSON text (note 32); the intake reads both. A payload with
   a key a Convex value refuses (`$schema`, non-ASCII) cannot be imported that
   way, so the import should send them as text.
+
+## Streamed text
+
+Where `streamChunks` and `sessionViewers` depart from the data-model design:
+
+- `streamChunks` gains `baseline` and `throughSequence`, and the
+  `by_session_message_baseline` and `by_session_created` indexes, before
+  its first writer. `baseline` marks a chunk that starts with a `reset`,
+  where a late joiner starts and a reader that missed rows restarts;
+  `throughSequence` is the overlay's staleness guard. Both are required,
+  not `v.optional`: no row was ever written without them. `delta` is
+  `v.string()`, the operations' JSON text, because their payloads carry
+  object keys a Convex value refuses. An increment is capped at 16 KB as
+  designed; a baseline (one `reset` of the whole message) at 64 KB, the
+  inline cap of a settled body. A larger message stops streaming and shows
+  whole when it settles.
+- The cursor read is per Session, not `chunksSince(messageId, seq)`: one
+  `streamChunks.since` finds the open streams among the Session's newest
+  rows plus the reader's cursors, and starts a stream without a cursor (or
+  with one a newer baseline overtook) at its latest baseline rather than at
+  seq 0, so a late joiner reads at most ~10 s of rows per stream.
+- `streamChunks` rows are deleted by the runner's `settle`, which names the
+  settling fact's sequence and deletes once `acceptedThrough` reaches it
+  — the runner knows which streams a settled fact ends, including a
+  streamed text message that settles under its executor's own id; the
+  accept fold learns message ids only once transcript bodies arrive with
+  `accept`, and then calls the same cleanup through
+  `scheduleStreamCleanup` — by the accept fold at turn end, and by a
+  15-minute sweep.

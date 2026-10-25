@@ -10,6 +10,7 @@
 
 import type * as accounts from "../accounts.js";
 import type * as activity from "../activity.js";
+import type * as attention from "../attention.js";
 import type * as board from "../board.js";
 import type * as boardReceipts from "../boardReceipts.js";
 import type * as crons from "../crons.js";
@@ -23,6 +24,7 @@ import type * as health from "../health.js";
 import type * as http from "../http.js";
 import type * as invites from "../invites.js";
 import type * as lib_activity from "../lib/activity.js";
+import type * as lib_attention from "../lib/attention.js";
 import type * as lib_audit from "../lib/audit.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_board from "../lib/board.js";
@@ -42,6 +44,7 @@ import type * as lib_sealing from "../lib/sealing.js";
 import type * as lib_secrets from "../lib/secrets.js";
 import type * as lib_sessionDerived from "../lib/sessionDerived.js";
 import type * as lib_sessionIntake from "../lib/sessionIntake.js";
+import type * as lib_streamChunks from "../lib/streamChunks.js";
 import type * as lib_testWorld from "../lib/testWorld.js";
 import type * as lib_validators from "../lib/validators.js";
 import type * as lib_visibility from "../lib/visibility.js";
@@ -55,8 +58,10 @@ import type * as runners from "../runners.js";
 import type * as secretKeys from "../secretKeys.js";
 import type * as secrets from "../secrets.js";
 import type * as secretsDelivery from "../secretsDelivery.js";
+import type * as sessionViewers from "../sessionViewers.js";
 import type * as sessionVisibility from "../sessionVisibility.js";
 import type * as sessions from "../sessions.js";
+import type * as streamChunks from "../streamChunks.js";
 import type * as testJobs from "../testJobs.js";
 import type * as testSeed from "../testSeed.js";
 import type * as transcripts from "../transcripts.js";
@@ -71,6 +76,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   accounts: typeof accounts;
   activity: typeof activity;
+  attention: typeof attention;
   board: typeof board;
   boardReceipts: typeof boardReceipts;
   crons: typeof crons;
@@ -84,6 +90,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   invites: typeof invites;
   "lib/activity": typeof lib_activity;
+  "lib/attention": typeof lib_attention;
   "lib/audit": typeof lib_audit;
   "lib/auth": typeof lib_auth;
   "lib/board": typeof lib_board;
@@ -103,6 +110,7 @@ declare const fullApi: ApiFromModules<{
   "lib/secrets": typeof lib_secrets;
   "lib/sessionDerived": typeof lib_sessionDerived;
   "lib/sessionIntake": typeof lib_sessionIntake;
+  "lib/streamChunks": typeof lib_streamChunks;
   "lib/testWorld": typeof lib_testWorld;
   "lib/validators": typeof lib_validators;
   "lib/visibility": typeof lib_visibility;
@@ -116,8 +124,10 @@ declare const fullApi: ApiFromModules<{
   secretKeys: typeof secretKeys;
   secrets: typeof secrets;
   secretsDelivery: typeof secretsDelivery;
+  sessionViewers: typeof sessionViewers;
   sessionVisibility: typeof sessionVisibility;
   sessions: typeof sessions;
+  streamChunks: typeof streamChunks;
   testJobs: typeof testJobs;
   testSeed: typeof testSeed;
   transcripts: typeof transcripts;

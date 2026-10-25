@@ -5,6 +5,7 @@ import * as cloud from "./index";
 test("the cloud entry point exposes each module", () => {
   for (const name of [
     "readActor",
+    "reviewRequestee",
     "readActivityEvent",
     "isBoardEventKind",
     "parseGatewayGrantClaims",
@@ -12,6 +13,7 @@ test("the cloud entry point exposes each module", () => {
     "isJobKind",
     "positionBetween",
     "transcriptPackKey",
+    "parseStreamChunkOps",
     "renderTicketKey",
     "canSeeSession",
     "decideMemberChange",
