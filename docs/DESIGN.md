@@ -348,48 +348,54 @@ Click-and-drag tiles — board cards, tabs before the drag engages — keep the 
 click is the primary answer, and the closed hand appears only once a drag is actually carrying
 something. The UI lab (`renderer/lab/`) is a scratch space and is not held to this.
 
-## Split view — grouped tab pairs
+## Split view — tab groups
 
-A split belongs to **two tabs**, not to the whole work area. Home and each Ticket
-keep one strip. A pair is one joined chip with a seam between its members;
-selecting either member shows the two planes and their existing divider.
-Selecting an unrelated tab restores a full-width plane. Returning to the chip
-restores its divider ratio and orientation.
+A split belongs to a **tab group**, not to the whole work area (VC-614). Home
+and each Ticket keep ONE top strip for ordinary tabs and every group: a group
+is one chip with a seam between its segments, and each segment is one pane's
+front tab. Selecting a segment shows the group with that pane focused;
+selecting an ordinary tab restores a full-width plane, and the chip brings the
+group back with its ratios, stacks and fronts. The focused pane's front has a
+fine primary underline inside the chip.
 
-A pair holds at most two tabs and stays inside its area. Board and Ticket Body
-may be members, on either side. A tab dropped on another tab's left or right
-edge forms a pair; dragging a member back into the strip or the plane's centre,
-closing it, or pressing **Unpair tabs** dissolves the pair without closing the
-other member. The focused member has a fine primary underline inside the joined
-chip. Each member retains its own close, rename and context menu.
+A group has two or more panes, each a stack of tabs with **its own folder
+strip** above it — a pane of one tab too, so its tab can always be closed,
+renamed or dragged. A tab opened while a group is shown joins the focused
+pane's stack, in front. Right-click the chip for the whole group, pane by pane
+(each front checked) and **Ungroup**. A tab dropped on a top-strip tab's left
+or right edge groups beside it; a pane's centre stacks, its edges split; a
+pane's tab dropped on the top strip leaves its group. Nothing here closes a
+tab: a pane emptied by a move collapses, and a group left with one pane
+dissolves into ordinary tabs.
 
 | Mark | Treatment | Says |
 |---|---|---|
-| Focused plane | `ring-1 ring-primary/50 ring-inset` | the rail reads this member |
-| Other plane | `ring-1 ring-border/50 ring-inset` | the other member of the selected pair |
-| Divider | 6px grip, `bg-border` hairline → `bg-primary/70` on hover, 150ms | resize the selected pair |
-| Tab-edge drop mark | a primary edge at the insertion side | join these two tabs |
-| Content drop preview | `bg-primary/10`, `ring-1 ring-primary/40 ring-inset` | the resulting half-plane |
+| Focused plane | `ring-1 ring-primary/50 ring-inset` | the rail reads this pane, and new tabs open here |
+| Other plane | `ring-1 ring-border/50 ring-inset` | another pane of the shown group |
+| Divider | 6px grip, `bg-border` hairline → `bg-primary/70` on hover, 150ms | resize two panes |
+| Tab-edge drop mark | a primary edge at the insertion side | group beside this tab |
+| Content drop preview | `bg-primary/10`, `ring-1 ring-primary/40 ring-inset` | the resulting half-plane, or the whole pane |
 
-An ordinary full-width tab has no plane ring or divider. The main strip never
-splits into pane-specific strips. Live terminals retain their viewport hosts;
-Browser panes are keyed siblings whose grid positions change without remounting.
+An ordinary full-width tab has no plane ring, divider or pane strip. Live
+terminals and Browser Tabs are resident behind anchors, so grouping, switching
+and moving re-anchor them without remounting.
 
-**Open beside chat** reveals an agent Browser Tab next to its owning chat, or
-focuses its existing pair. The Activity Island lists page titles over host:port
-and path; it does not embed a thumbnail or a pinned preview. A close removes the
-row immediately and offers Undo before native destruction.
+**Open beside chat** shows an agent Browser Tab to the right of its owning chat,
+splitting the chat's pane when the chat is already grouped. The Activity Island
+lists page titles over host:port and path; it does not embed a thumbnail or a
+pinned preview, and **Show tab** only selects. A close removes the row
+immediately and offers Undo before native destruction.
 
-The existing split shortcuts open a temporary empty partner. Its menu offers
-New chat, New terminal, New browser, Open file… and Close pane; the next opened
-tab fills it. Keyboard splits have no entry animation. Drag previews alone
-transition, with reduced motion disabling them. Untouched Chat Draft identities
-stay renderer-local until their first content.
+`⌘\` / `⇧⌘\` split the focused pane (a full-width tab becomes a group of two)
+and open an empty pane whose menu offers New chat, New terminal, New browser,
+Open file… and Close pane. Keyboard splits have no entry animation. Drag
+previews alone transition, with reduced motion disabling them. Untouched Chat
+Draft identities stay renderer-local until their first content, which claims
+them into the pane they were opened in.
 
-Saved legacy layouts become one pair from the front tabs of their first two
-panes. All other tabs remain ordinary strip entries. Pair metadata is additive;
-the legacy root remains readable, so older builds can safely open the same
-workspace even when they cannot retain every pair.
+Saved legacy splits read back as one group, stacks kept. Group metadata is
+additive; `root` stays the shown group (or one pane) as a legacy tree, so older
+builds open the same workspace safely even when they cannot keep the groups.
 
 ## The ticket rail (VC-406)
 
