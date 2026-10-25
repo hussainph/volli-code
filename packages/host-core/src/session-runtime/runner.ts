@@ -1,0 +1,385 @@
+/**
+ * The runner composition (VC-671): the Session runtime a host assembles.
+ *
+ * A host hands it the host it opened and the adapters only its environment
+ * can answer — where a Session's commands find `volli`, what a person can be
+ * asked, which browser a Session drives, the quit hold — and gets back the
+ * services its doors read, the host-runtime owner `host.start` adopts, and
+ * the recovered proof every ledger consumer needs. Everything between is
+ * private staging: the attachment identities and their tokens, the
+ * concurrency budget, the delegation store, observability, the background
+ * shells, the attachment assembly, the facade/tool-door cycle, Automations
+ * and the recovery lifecycle. Construction is synchronous and inert; the quit
+ * hold is installed before anything can yield (`lifecycle.ts`). The drain
+ * follows the host's own stop policy.
+ *
+ * The one fork is the product store: where projects, the board and Session
+ * history live. `local`, the host's own SQLite, is the only store.
+ */
+import type { CodeModeSandboxAssets } from "@volli/agent-runtime";
+import type { HostedSessionRuntime } from "@volli/session-engine";
+import {
+  DEFAULT_CODE_MODE_POLICY,
+  displayTicketId,
+  type SessionExecutionVenue,
+} from "@volli/shared";
+import { isLiveHost, type HostCore, type HostCorePorts, type HostRuntimeOwner } from "../index";
+import { getProjectById } from "../db/projects-repo";
+import { getTicket } from "../db/tickets-repo";
+import { hostLogger } from "../log/root";
+import { hostMcpDispatch } from "../mcp/dispatch-policy";
+import { hostCodeMode } from "../codemode/dev-config";
+import { AgentObservability } from "../observability/settings";
+import type { SecretService } from "../secrets/service";
+import {
+  createSessionConcurrencyEnvReader,
+  type SessionConcurrencyEnvReader,
+} from "../session-concurrency";
+import { createSessionTokenRegistry, type SessionTokenRegistry } from "../session-tokens";
+import { BackgroundShellHost, type BackgroundShellHostPorts } from "../shell/background-shell-host";
+import type { BrowserPictureStore } from "../browser/picture-store";
+import type { HostHandlerMap } from "../handlers/handler-map";
+import { createAttachmentIdentities } from "./attachment-identity";
+import { createRuntimeAssembly, type RuntimeAssemblyOptions } from "./assembly";
+import { createRuntimeAutomations, type RuntimeAutomations } from "./automations";
+import { createRuntimeContextResolver } from "./context";
+import { createTicketSessionDelegationStore } from "./delegation-store";
+import {
+  createRuntimeSessionFacade,
+  recoveredSessionAutomationPorts,
+  type RuntimeSessionFacade,
+} from "./facade";
+import {
+  createSessionRuntimeLifecycle,
+  type RecoveredSessionServices,
+  type SessionRuntimeLifecycle,
+} from "./lifecycle";
+import { readCodeModePolicy } from "./model-access-preferences";
+import type { PiRuntimeHost } from "./pi-adapter";
+
+/**
+ * Where a runner's product state lives: projects, the board and Session
+ * history. `local` is the host's own SQLite. A store is chosen here, once;
+ * nothing below it forks on where state lives.
+ */
+export type RunnerProductStore = { readonly kind: "local"; readonly host: HostCore };
+
+/** The recovered proof every ledger consumer requires (`lifecycle.ts`). */
+export type RunnerReady = RecoveredSessionServices<RuntimeSessionFacade>;
+
+export interface RunnerCompositionInput {
+  store: RunnerProductStore;
+  ports: Pick<HostCorePorts, "events" | "attention" | "power" | "connectivity" | "log">;
+  /** The build, as the observability exporter names its service. */
+  version: string;
+  venue: SessionExecutionVenue;
+  /** Upgrade-only ownership of a venue an older build recorded (`boot-recovery.ts`). */
+  ownsLegacyVenue?(venue: SessionExecutionVenue): boolean;
+  homeDir: string;
+  /** Prepended to every Session command's PATH: where `volli` resolves. */
+  binDir: string;
+  /**
+   * The process environment: developer opt-ins (MCP parallel reads, Code
+   * Mode) and the no-clobber reference for each Session's concurrency budget.
+   */
+  env: Readonly<Record<string, string | undefined>>;
+  /** A packaged build ignores the developer opt-ins above. */
+  packaged: boolean;
+  /** Whether the `cloud` flag is on now; read at every skills and prompt-template load. */
+  cloudEnabled(): boolean;
+  /** Where Code Mode's worker and WebAssembly are; absent offers no Code Mode. */
+  codeModeSandbox?: CodeModeSandboxAssets;
+  secrets: SecretService;
+  /** What a person at this host can answer for a Session, and the browser it can drive. */
+  capabilities: {
+    askUser: boolean;
+    requestSecret: boolean;
+    browser?: RuntimeAssemblyOptions["browser"];
+    /** The screenshot store, when the host shows pictures outside the runtime. */
+    pictures?: BrowserPictureStore;
+  };
+  /** Before a Session command runs: desktop's login-PATH adoption. */
+  beforeExecution(): Promise<unknown>;
+  /** The host's additions to a Session command's environment, over its concurrency budget. */
+  sessionEnvironment?(budget: Record<string, string>): Record<string, string>;
+  /** A client's live feed of background shells; the host's live work is always fed. */
+  shellFeed?: Pick<BackgroundShellHostPorts, "publishState" | "publishRemoved">;
+  /**
+   * The host's one handler map for the recovered services (VC-923): the tool
+   * door projects it and serves its own verbs into it.
+   */
+  handlers(ready: RunnerReady): HostHandlerMap;
+  /** A transport built from ready services, closed inside the Session drain. */
+  transport?(): { close(): Promise<void> } | null;
+  /** Synchronous: desktop installs its accepted-quit hold over `close`. */
+  installQuitHold(close: () => Promise<void>): void;
+  /** The host's own producers, stopped beside the scheduler and the agent watches. */
+  stopProducers?(): void;
+}
+
+/** What the host's edge adds when `host.start` adopts the runner. */
+export interface RunnerHostEdge {
+  /** Binds the recovered services, after Automations start and before the tool door. */
+  bind?(ready: RunnerReady): void | Promise<void>;
+  closeSocket?(): Promise<boolean | void>;
+  drainRequests?(): Promise<boolean | void>;
+  /** Runs before the runner's own close (a transport that streams from it). */
+  beforeClose?(): Promise<void>;
+}
+
+export interface RunnerComposition {
+  /** The Session runtime; null when the host or its model access did not come up. */
+  readonly runtime: HostedSessionRuntime | null;
+  readonly piRuntimeHost: PiRuntimeHost | null;
+  readonly piSessionsDirectory: string;
+  readonly pictures: BrowserPictureStore;
+  readonly transcriptArtifacts: ReturnType<typeof createRuntimeAssembly>["transcriptArtifacts"];
+  readonly shells: BackgroundShellHost;
+  /** Minted per attachment, verified at the agent socket. */
+  readonly tokens: SessionTokenRegistry;
+  /** Null when there is no Session Engine to count the fleet with. */
+  readonly concurrency: SessionConcurrencyEnvReader | null;
+  readonly observability: AgentObservability | null;
+  readonly automations: RuntimeAutomations;
+  /** The owner `host.start` adopts: recovery, Automations, the tool door, then `edge.bind`. */
+  owner(edge?: RunnerHostEdge): HostRuntimeOwner;
+  /** The recovered proof; starts or joins recovery. */
+  ready(): Promise<RunnerReady>;
+}
+
+/** Synchronous and inert: no ledger is read until `owner().start` or `ready()`. */
+export function createRunnerComposition(input: RunnerCompositionInput): RunnerComposition {
+  const { store, ports, venue } = input;
+  const host = store.host;
+  const live = isLiveHost(host) ? host : undefined;
+  const db = live?.database.db ?? null;
+  const sessionEngine = live?.sessionEngine ?? null;
+  const runtimeServices = live?.runtimeServices;
+
+  const delegation = db === null ? null : createTicketSessionDelegationStore(db);
+  const tokens = createSessionTokenRegistry();
+  // One identity per attachment, shared by `execute` and background shells
+  // (VC-270): a second mint would retire the token already exported.
+  const identities = createAttachmentIdentities({
+    mint: tokens.mint,
+    revoke: tokens.revoke,
+    ticketDisplayIdOf: (ticketId) => {
+      if (db === null) return null;
+      const ticket = getTicket(db, ticketId);
+      const project = ticket === undefined ? undefined : getProjectById(db, ticket.projectId);
+      return ticket && project ? displayTicketId(project.ticketPrefix, ticket.ticketNumber) : null;
+    },
+  });
+  // The opt-in export (VC-119): a profile that never asked builds no exporter.
+  const observability =
+    db === null ? null : new AgentObservability({ db, serviceVersion: input.version });
+  observability?.start();
+  const mcpDispatch = hostMcpDispatch({
+    env: input.env,
+    packaged: input.packaged,
+    log: hostLogger("mcp").warn,
+  });
+  const codeMode = hostCodeMode({
+    env: input.env,
+    packaged: input.packaged,
+    log: hostLogger("codemode").warn,
+    policy: () => (db === null ? DEFAULT_CODE_MODE_POLICY : readCodeModePolicy(db)),
+    sandboxAvailable: input.codeModeSandbox !== undefined,
+  });
+  // Where a shell's exit or match is steered (VC-495): the lifecycle below.
+  let lifecycle: SessionRuntimeLifecycle<RuntimeSessionFacade>;
+  const shells = new BackgroundShellHost({
+    redactOutput: (text) => input.secrets.store.redact(text),
+    redactNoticeOutput: (text) => input.secrets.store.redactPartial(text),
+    onNotice: (notice) => lifecycle.relayShellNotice(notice),
+    // The host's live work counts running shells (VC-577) off the same feed
+    // a client gets, so the two can never disagree about one shell.
+    publishState: (started) => {
+      live?.liveWork.observeShell(started);
+      input.shellFeed?.publishState(started);
+    },
+    publishRemoved: (shellId) => {
+      live?.liveWork.forgetShell(shellId);
+      input.shellFeed?.publishRemoved(shellId);
+    },
+    // One row per started shell (VC-341).
+    ...(live === undefined ? {} : { ledger: live.maintenance.spawnLedger }),
+  });
+  // This process's one reader of who is working (VC-403).
+  const concurrency: SessionConcurrencyEnvReader | null =
+    sessionEngine === null
+      ? null
+      : createSessionConcurrencyEnvReader({
+          listAttachedSessions: () => sessionEngine.listAttachedSessions(),
+        });
+  // One Session's share of the machine (VC-339), under the host's additions.
+  const concurrencyEnvFor = async (sessionId: string): Promise<Record<string, string>> => {
+    const budget =
+      concurrency === null
+        ? {}
+        : await concurrency({ excludeSessionId: sessionId, environment: input.env });
+    return input.sessionEnvironment?.(budget) ?? budget;
+  };
+  const assemblyInputs: Omit<RuntimeAssemblyOptions, "resolveRuntimeContext"> = {
+    dbHandle: host.database,
+    sessionEngine,
+    sessionWake: live?.sessionWakeBus.subscribe ?? null,
+    dataDir: host.dataDir,
+    binDir: input.binDir,
+    venue,
+    hostPorts: ports,
+    modelAccess: runtimeServices?.modelAccess ?? null,
+    decisions: runtimeServices?.decisions ?? null,
+    webAccess: runtimeServices?.webAccess ?? null,
+    mcpSettings: runtimeServices?.mcp ?? null,
+    mcpDispatch,
+    codeMode,
+    ...(input.codeModeSandbox === undefined ? {} : { codeModeSandbox: input.codeModeSandbox }),
+    ...(input.capabilities.pictures === undefined ? {} : { pictures: input.capabilities.pictures }),
+    observability,
+    delegation,
+    secrets: input.secrets,
+    attachmentIdentities: identities,
+    shells,
+    ...(input.capabilities.browser === undefined ? {} : { browser: input.capabilities.browser }),
+    askUser: input.capabilities.askUser,
+    requestSecret: input.capabilities.requestSecret,
+    beforeExecution: input.beforeExecution,
+    concurrencyEnvFor,
+    // The facade/tool-door cycle: no verb runs before both exist, and every
+    // acquisition still passes ready().
+    callVerb: async (caller, request, signal, budgetAsk) => {
+      const door = agents.toolDoor(await lifecycle.ready());
+      if (door === null) throw new Error("This host has no Volli verb handlers.");
+      signal.throwIfAborted();
+      return door(caller, request, signal, budgetAsk);
+    },
+  };
+  const assembly: ReturnType<typeof createRuntimeAssembly> =
+    db !== null && sessionEngine !== null && delegation !== null
+      ? createRuntimeAssembly({
+          ...assemblyInputs,
+          resolveRuntimeContext: createRuntimeContextResolver({
+            db,
+            sessionEngine,
+            venue,
+            mcpDispatch,
+            // Boot reconciliation is itself an internal consumer; awaiting
+            // ready here would make recovery wait on its own promise.
+            waitForBirth: (sessionId) => facade.waitForBirth(sessionId),
+            toolSurface: () => assembly.sessionToolSurface,
+          }),
+        })
+      : createRuntimeAssembly({ ...assemblyInputs, resolveRuntimeContext: async () => null });
+  const automations = createRuntimeAutomations({
+    host,
+    events: ports.events,
+    piRuntimeHost: assembly.piRuntimeHost,
+    homeDir: input.homeDir,
+    cloudEnabled: () => input.cloudEnabled(),
+    log: hostLogger("automations"),
+  });
+  const facade = createRuntimeSessionFacade({
+    host,
+    assembly,
+    homeDir: input.homeDir,
+    cloudEnabled: () => input.cloudEnabled(),
+    venue,
+    decisions: runtimeServices?.decisions ?? null,
+    delegation,
+  });
+  const agents = facade.agents({
+    host,
+    delegation,
+    automations,
+    mcpSettings: runtimeServices?.mcp ?? null,
+    events: ports.events,
+    log: hostLogger("session-agents"),
+    handlers: (ready) => input.handlers(ready),
+  });
+  const stopProducers = (): void => {
+    try {
+      input.stopProducers?.();
+    } finally {
+      automations.stop();
+      agents.stop();
+    }
+  };
+  // The host's policy decides the drain: `desktop-quit` joins only the Session
+  // lifecycle (and `transport`); `drain-and-close` also closes the background
+  // shells before the database and settles Automations.
+  const fullDrain = host.stopPolicy === "drain-and-close";
+  lifecycle = createSessionRuntimeLifecycle<RuntimeSessionFacade>({
+    venue,
+    ...(input.ownsLegacyVenue === undefined ? {} : { ownsLegacyVenue: input.ownsLegacyVenue }),
+    host,
+    ports,
+    runtime: assembly.sessionRuntime,
+    rpc: () => {
+      const transport = input.transport?.() ?? null;
+      if (!fullDrain) return transport;
+      // A full drain joins shell termination before SQLite closes.
+      return {
+        close: async () => {
+          try {
+            await transport?.close();
+          } finally {
+            await shells.close();
+          }
+        },
+      };
+    },
+    observability,
+    delegation,
+    delegationsFor: agents.recoveryDelegationsFor,
+    services: () => facade,
+    stopProducers,
+    installQuitHold: (close) => input.installQuitHold(close),
+  });
+  const close = async (): Promise<void> => {
+    if (!fullDrain) return lifecycle.close();
+    try {
+      await lifecycle.close();
+    } finally {
+      await automations.settled();
+    }
+  };
+  return {
+    runtime: assembly.sessionRuntime,
+    piRuntimeHost: assembly.piRuntimeHost,
+    piSessionsDirectory: assembly.piSessionsDirectory,
+    pictures: assembly.pictures,
+    transcriptArtifacts: assembly.transcriptArtifacts,
+    shells,
+    tokens,
+    concurrency,
+    observability,
+    automations,
+    owner: (edge = {}) => ({
+      start: async () => {
+        const ready = await lifecycle.ready();
+        // Nothing schedules before runtime recovery.
+        automations.start(recoveredSessionAutomationPorts(ready));
+        try {
+          await edge.bind?.(ready);
+        } catch (error) {
+          // A host whose doors never bound runs no scheduler.
+          automations.stop();
+          throw error;
+        }
+        agents.toolDoor(ready);
+      },
+      stopProducers,
+      close: async () => {
+        try {
+          await edge.beforeClose?.();
+        } finally {
+          await close();
+        }
+      },
+      ...(edge.closeSocket === undefined ? {} : { closeSocket: edge.closeSocket }),
+      ...(edge.drainRequests === undefined ? {} : { drainRequests: edge.drainRequests }),
+    }),
+    ready: () => lifecycle.ready(),
+  };
+}

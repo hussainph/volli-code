@@ -667,6 +667,8 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     const host: DegradedHostCore = {
       kind: "degraded",
       dataDir: "/data",
+
+      stopPolicy: "drain-and-close",
       dbPath: "/data/volli.db",
       database: { ok: false, error: "unavailable" },
       databaseFailure: { kind: "other" },

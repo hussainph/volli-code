@@ -94,6 +94,8 @@ export interface HostCoreOptions {
 
 interface HostLifecycleOwner {
   readonly dataDir: string;
+  /** How `stop` drains; a runtime composed over this host drains to match. */
+  readonly stopPolicy: HostStopPolicy;
   readonly dbPath: string;
   readonly database: DbHandle;
   start(runtime?: HostRuntimeOwner): Promise<void>;
@@ -155,6 +157,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
     return {
       kind: "degraded",
       dataDir: options.dataDir,
+      stopPolicy: options.stopPolicy ?? "drain-and-close",
       dbPath,
       database: { ok: false, error: message },
       databaseFailure: failure,
@@ -204,6 +207,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
   return {
     kind: "live",
     dataDir: options.dataDir,
+    stopPolicy: options.stopPolicy ?? "drain-and-close",
     dbPath,
     database: { ok: true, db },
     ...sessionServices,

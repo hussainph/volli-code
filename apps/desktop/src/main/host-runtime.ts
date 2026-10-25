@@ -1,35 +1,5 @@
-/** Desktop's actual host edge, shared by boot and recorded-port composition tests. */
-import type { HostCore } from "@volli/host-core";
+/** Desktop's quit edge: the synchronous gates before the host's accepted quit. */
 import { quitAlreadyRefused, refuseQuit } from "./quit-gate";
-import type {
-  RecoveredSessionServices,
-  SessionRuntimeLifecycle,
-} from "@volli/host-core/session-runtime";
-
-export function createDesktopHostRuntime<Services>(options: {
-  host: HostCore;
-  lifecycle: Pick<SessionRuntimeLifecycle<Services>, "ready" | "close">;
-  bindReady(ready: RecoveredSessionServices<Services>): void;
-  stopProducers(): void;
-  closeSocket(): Promise<boolean | void>;
-}) {
-  const owner = {
-    start: async () => {
-      options.bindReady(await options.lifecycle.ready());
-    },
-    stopProducers: options.stopProducers,
-    // Desktop's accepted quit has always joined only the Session lifecycle
-    // beside the socket. Shell/Automation/detached joins belong to hostd.
-    close: () => options.lifecycle.close(),
-    closeSocket: options.closeSocket,
-  };
-  return {
-    async start(): Promise<RecoveredSessionServices<Services>> {
-      await options.host.start(owner);
-      return options.lifecycle.ready();
-    },
-  };
-}
 
 /**
  * The menu-bar branch's two seams (VC-577), present only with the `cloud`

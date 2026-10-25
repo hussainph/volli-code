@@ -6,10 +6,10 @@
  * Importing index.ts is impractical (Electron, top-level boot side effects), so
  * this file parses it with oxc (the parser vite-plus ships), lifts the exact
  * composition expressions out of the source — `prepareHostQuit`, the three
- * late-bound quit gates, the accepted-quit hold, and the
- * `createDesktopHostRuntime` call — strips their types, and evaluates them with
+ * late-bound quit gates, the accepted-quit hold, and the runner's host edge
+ * — strips their types, and evaluates them with
  * every free identifier bound to a recorded port. The real `prepareDesktopQuit`,
- * `createDesktopHostRuntime`, `registerAcceptedQuitCoordinator` and quit-gate
+ * `registerAcceptedQuitCoordinator` and quit-gate
  * helpers run unmodified; only index.ts's surroundings are fakes.
  *
  * An identifier the lifted code starts to need that this file does not bind
@@ -19,14 +19,13 @@
 import { readFileSync } from "node:fs";
 import { parseSync, transformSync } from "vite/rolldown/utils";
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { HostRuntimeOwner } from "@volli/host-core";
 import {
   createClientStateFlush,
   MENU_BAR_FLUSH_OVERDUE_MS,
   SHUTDOWN_FLUSH_TIMEOUT_MS,
   type FlushTarget,
 } from "./client-state-flush";
-import { createDesktopHostRuntime, prepareDesktopQuit } from "./host-runtime";
+import { prepareDesktopQuit } from "./host-runtime";
 import {
   planUnsavedQuit,
   quitAlreadyRefused,
@@ -288,12 +287,12 @@ function liftedQuitPath(options: {
   scope["systemShutdownTeardown"] = evaluate(initializerOf("systemShutdownTeardown"), scope);
   scope["systemShutdownFlush"] = evaluate(initializerOf("systemShutdownFlush"), scope);
   scope["prepareHostQuit"] = evaluate(initializerOf("prepareHostQuit"), scope);
-  const lifecycleCall = exactlyOne(
-    callsTo("createSessionRuntimeLifecycle"),
-    "createSessionRuntimeLifecycle(...) call",
+  const runnerCall = exactlyOne(
+    callsTo("createRunnerComposition"),
+    "createRunnerComposition(...) call",
   );
   const installQuitHold = evaluate<() => void>(
-    objectProperty(argument(lifecycleCall, 0), "installQuitHold"),
+    objectProperty(argument(runnerCall, 0), "installQuitHold"),
     scope,
   );
   installQuitHold();
@@ -347,16 +346,16 @@ describe("index.ts quit wiring", () => {
     }
   });
 
-  it("has one accepted-quit hold, registered through the Session runtime lifecycle", () => {
+  it("has one accepted-quit hold, registered through the runner composition", () => {
     const hold = exactlyOne(
       callsTo("registerAcceptedQuitCoordinator"),
       "registerAcceptedQuitCoordinator(...) call",
     );
-    const lifecycleCall = exactlyOne(
-      callsTo("createSessionRuntimeLifecycle"),
-      "createSessionRuntimeLifecycle(...) call",
+    const runnerCall = exactlyOne(
+      callsTo("createRunnerComposition"),
+      "createRunnerComposition(...) call",
     );
-    const installQuitHold = objectProperty(argument(lifecycleCall, 0), "installQuitHold");
+    const installQuitHold = objectProperty(argument(runnerCall, 0), "installQuitHold");
     expect(hold.start >= installQuitHold.start && hold.end <= installQuitHold.end).toBe(true);
   });
 
@@ -841,124 +840,98 @@ function callsToMember(name: string): AstNode[] {
   });
 }
 
-/** The recorded `vi.fn` at `binding` or `binding.member` in a lifted scope. */
-function spy(scope: Record<string, unknown>, path: string) {
-  const [binding, member] = path.split(".");
-  const target = scope[binding as string] as Record<string, ReturnType<typeof vi.fn>>;
-  return member === undefined
-    ? (target as unknown as ReturnType<typeof vi.fn>)
-    : (target[member] as ReturnType<typeof vi.fn>);
-}
-
 describe("index.ts desktop host runtime wiring", () => {
-  function liftedDesktopRuntime() {
-    const proof = { services: { kind: "recovered" } };
-    const rpc = { kind: "session-rpc" };
-    const handlers = { kind: "host-handlers" };
-    let owner: HostRuntimeOwner | undefined;
-    const createDesktopHostRuntimeSpy = vi.fn(createDesktopHostRuntime);
-    const scope: Record<string, unknown> = {
-      createDesktopHostRuntime: createDesktopHostRuntimeSpy,
-      hostCore: {
-        start: vi.fn(async (runtime: HostRuntimeOwner) => {
-          owner = runtime;
-          await runtime.start();
-        }),
-      },
-      runtimeLifecycle: {
-        ready: vi.fn(async () => proof),
-        close: vi.fn(async () => {}),
-      },
-      sessionRpc: null,
-      // The host's one handler map (VC-668), built at readiness.
-      handlersFor: vi.fn(() => handlers),
-      createSessionRpc: vi.fn(() => rpc),
-      runtimeSessionAgents: { toolDoor: vi.fn(), stop: vi.fn() },
-      runtimeAutomations: { stop: vi.fn(), settled: vi.fn(async () => {}) },
-      ptyManagerRef: { stopParkSweep: vi.fn() },
-      backgroundShells: { close: vi.fn(async () => {}) },
-      shutdownAgentSocket: vi.fn(async () => true),
-      hostClosing: false,
-    };
-    const call = exactlyOne(
-      callsTo("createDesktopHostRuntime"),
-      "createDesktopHostRuntime(...) call",
-    );
-    const desktopRuntime = evaluate<{ start(): Promise<unknown> }>(call, scope);
-    return {
-      call,
-      desktopRuntime,
-      proof,
-      rpc,
-      handlers,
-      scope,
-      createDesktopHostRuntimeSpy,
-      owner: () => {
-        if (owner === undefined) throw new Error("index.ts's runtime never reached host.start.");
-        return owner;
-      },
-    };
-  }
-
-  it("is the runtime index.ts boots, over the host core it built", () => {
-    const { call } = liftedDesktopRuntime();
-    expect(initializerOf("desktopRuntime")).toBe(call);
-    const ready = initializerOf("readyRuntimeServices");
-    expect(ready.type).toBe("AwaitExpression");
-    expect(sourceOf(ready)).toBe("await desktopRuntime.start()");
-    expect(isCallTo(initializerOf("hostCore"), "createHostCore")).toBe(true);
-    expect(isCallTo(initializerOf("runtimeLifecycle"), "createSessionRuntimeLifecycle")).toBe(true);
-    expect(isCallTo(initializerOf("agentSocket"), "createHostAgentSocket")).toBe(true);
-    const shutdown = Symbol("agentSocket.shutdown");
-    expect(evaluate(initializerOf("shutdownAgentSocket"), { agentSocket: { shutdown } })).toBe(
-      shutdown,
-    );
-  });
-
-  it("builds the host core with desktop's quit stop policy", () => {
+  it("builds the host core with desktop's quit stop policy, and the runner over it", () => {
     const hostCoreCall = initializerOf("hostCore");
     expect(isCallTo(hostCoreCall, "createHostCore")).toBe(true);
     expect(evaluate(objectProperty(argument(hostCoreCall, 1), "stopPolicy"), {})).toBe(
       "desktop-quit",
     );
+    const runnerCall = initializerOf("runner");
+    expect(isCallTo(runnerCall, "createRunnerComposition")).toBe(true);
+    // The runner's drain follows the host's policy; its store is the host index.ts built.
+    const hostCore = { kind: "host" };
+    expect(evaluate(objectProperty(argument(runnerCall, 0), "store"), { hostCore })).toEqual({
+      kind: "local",
+      host: hostCore,
+    });
   });
 
-  it("hands createDesktopHostRuntime index's host, Session lifecycle and agent socket", async () => {
-    const f = liftedDesktopRuntime();
-    expect(f.createDesktopHostRuntimeSpy).toHaveBeenCalledOnce();
-    const options = f.createDesktopHostRuntimeSpy.mock.calls[0]?.[0];
-    expect(options?.host).toBe(f.scope["hostCore"]);
-    expect(options?.lifecycle).toBe(f.scope["runtimeLifecycle"]);
-
-    // start: host adopts the owner, which binds only the recovered services.
-    expect(await f.desktopRuntime.start()).toBe(f.proof);
-    expect(spy(f.scope, "hostCore.start")).toHaveBeenCalledOnce();
-    expect(spy(f.scope, "handlersFor")).toHaveBeenCalledExactlyOnceWith(f.proof);
-    expect(spy(f.scope, "createSessionRpc")).toHaveBeenCalledExactlyOnceWith(f.proof, f.handlers);
-    expect(f.scope["sessionRpc"]).toBe(f.rpc);
-    expect(spy(f.scope, "runtimeSessionAgents.toolDoor")).toHaveBeenCalledWith(f.proof);
-
-    // stop: index's producers stop synchronously.
-    f.owner().stopProducers();
-    expect(f.scope["hostClosing"]).toBe(true);
-    expect(spy(f.scope, "runtimeAutomations.stop")).toHaveBeenCalledOnce();
-    expect(spy(f.scope, "runtimeSessionAgents.stop")).toHaveBeenCalledOnce();
-    expect(spy(f.scope, "ptyManagerRef.stopParkSweep")).toHaveBeenCalledOnce();
-
-    // close joins index's Session runtime lifecycle; the socket is index's.
-    await f.owner().close();
-    expect(spy(f.scope, "runtimeLifecycle.close")).toHaveBeenCalledOnce();
-    expect(spy(f.scope, "shutdownAgentSocket")).not.toHaveBeenCalled();
-    expect(await f.owner().closeSocket?.()).toBe(true);
-    expect(spy(f.scope, "shutdownAgentSocket")).toHaveBeenCalledOnce();
+  it("hands the runner the late-bound Session RPC and desktop's own producer stops", () => {
+    const runnerInput = argument(initializerOf("runner"), 0);
+    const rpc = { kind: "session-rpc" };
+    const transport = evaluate<() => unknown>(objectProperty(runnerInput, "transport"), {
+      sessionRpc: rpc,
+    });
+    expect(transport()).toBe(rpc);
+    const scope: Record<string, unknown> = {
+      hostClosing: false,
+      ptyManagerRef: { stopParkSweep: vi.fn() },
+    };
+    evaluate<() => void>(objectProperty(runnerInput, "stopProducers"), scope)();
+    expect(scope["hostClosing"]).toBe(true);
+    expect(
+      (scope["ptyManagerRef"] as { stopParkSweep: ReturnType<typeof vi.fn> }).stopParkSweep,
+    ).toHaveBeenCalledOnce();
   });
 
-  it("adds no shell or Automation waits to desktop's quit", async () => {
-    const f = liftedDesktopRuntime();
-    await f.desktopRuntime.start();
-    f.owner().stopProducers();
-    await Promise.all([f.owner().close(), f.owner().closeSocket?.()]);
-    expect(spy(f.scope, "backgroundShells.close")).not.toHaveBeenCalled();
-    expect(spy(f.scope, "runtimeAutomations.settled")).not.toHaveBeenCalled();
+  it("declares everything the accepted-quit hold reaches before the runner installs it", () => {
+    const runner = initializerOf("runner");
+    for (const name of [
+      "prepareHostQuit",
+      "systemShutdownFlush",
+      "menuBarHost",
+      "hostClosing",
+      "unsavedQuit",
+      "terminalQuit",
+      "abortRepack",
+      "systemShutdownTeardown",
+    ]) {
+      expect(initializerOf(name).start, name).toBeLessThan(runner.start);
+    }
+  });
+
+  it("starts the host over the runner's owner, binding the Session RPC and the agent socket", async () => {
+    const ready = initializerOf("readyRuntimeServices");
+    expect(sourceOf(ready)).toBe("await runner.ready()");
+    expect(isCallTo(initializerOf("agentSocket"), "createHostAgentSocket")).toBe(true);
+    const shutdown = Symbol("agentSocket.shutdown");
+    expect(evaluate(initializerOf("shutdownAgentSocket"), { agentSocket: { shutdown } })).toBe(
+      shutdown,
+    );
+    // The host adopts exactly the runner's owner.
+    const hostStart = exactlyOne(
+      nodesWhere(
+        (node) =>
+          node.type === "CallExpression" && sourceOf(child(node, "callee")) === "hostCore.start",
+      ),
+      "hostCore.start(...) call",
+    );
+    expect(sourceOf(argument(hostStart, 0)).startsWith("runner.owner(")).toBe(true);
+    const ownerCall = exactlyOne(
+      nodesWhere(
+        (node) =>
+          node.type === "CallExpression" && sourceOf(child(node, "callee")) === "runner.owner",
+      ),
+      "runner.owner(...) call",
+    );
+    const proof = { kind: "recovered" };
+    const rpc = { kind: "session-rpc" };
+    const handlers = { kind: "host-handlers" };
+    const scope: Record<string, unknown> = {
+      sessionRpc: null,
+      handlersFor: vi.fn(() => handlers),
+      createSessionRpc: vi.fn(() => rpc),
+      shutdownAgentSocket: vi.fn(async () => true),
+    };
+    const edge = evaluate<{ bind(ready: unknown): void; closeSocket(): Promise<unknown> }>(
+      argument(ownerCall, 0),
+      scope,
+    );
+    edge.bind(proof);
+    expect(scope["handlersFor"]).toHaveBeenCalledExactlyOnceWith(proof);
+    expect(scope["createSessionRpc"]).toHaveBeenCalledExactlyOnceWith(proof, handlers);
+    expect(scope["sessionRpc"]).toBe(rpc);
+    expect(await edge.closeSocket()).toBe(true);
   });
 });

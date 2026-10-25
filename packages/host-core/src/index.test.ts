@@ -498,6 +498,7 @@ describe("createHostCore", () => {
       "kind",
       "start",
       "stop",
+      "stopPolicy",
       "warnIfFollowUpCleanCloseSkipped",
     ]);
     for (const field of [

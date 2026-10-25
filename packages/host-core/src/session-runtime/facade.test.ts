@@ -61,6 +61,8 @@ function degradedHost(error: string): DegradedHostCore {
   return {
     kind: "degraded",
     dataDir: "/data",
+
+    stopPolicy: "drain-and-close",
     dbPath: "/data/volli.db",
     database: { ok: false, error },
     databaseFailure: { kind: "other" },
