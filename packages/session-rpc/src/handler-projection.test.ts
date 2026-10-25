@@ -136,6 +136,8 @@ const SAMPLE_INPUTS: {
   "runners.subscribeThisMac": undefined,
   "runners.addThisMac": undefined,
   "runners.removeThisMac": undefined,
+  "checkouts.status": { projectId: PROJECT },
+  "checkouts.chooseFolder": { projectId: PROJECT },
   "ticket.move": { projectId: PROJECT, ticketId: "ticket-1", toStatus: "done" },
   "sessions.create": { operationId: "op", projectId: PROJECT, ticketId: null, title: null },
   "sessions.attach": { operationId: "op", ...SESSION },

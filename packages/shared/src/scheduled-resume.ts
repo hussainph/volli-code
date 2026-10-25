@@ -355,8 +355,14 @@ export function scheduledResumeVerdict(
  * own schedule, or continuing after the same process loss, is doing what was
  * already asked of it, and whichever resume runs first must not talk the
  * other out of it.
+ *
+ * It reads no Session identity, so the backend can ask it of a sibling whose
+ * commands it reads from accepted facts (`runnerRecovery.ticketSiblings`).
  */
-export function ticketSiblingMovedOn(sibling: ScheduledResumeSibling, since: number): boolean {
+export function ticketSiblingMovedOn(
+  sibling: Pick<ScheduledResumeSibling, "turnActive" | "commands" | "receipts">,
+  since: number,
+): boolean {
   const receipts = latestReceipts(sibling.receipts);
   const scheduledRetries = scheduledRetryIds(sibling.commands);
   const automatic = (id: string) => scheduledRetries.has(id) || isRestartResumeCommandId(id);

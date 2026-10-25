@@ -7,12 +7,19 @@ import { hostWorld, type HostWorld } from "@renderer/components/hosts/hosts.test
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { projectScope, useSessionsStore } from "@renderer/stores/sessions";
+import { projectScope, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
 import { NewSessionControl } from "./new-session-control";
 import { bootChatSession, createTerminalSession, startProjectChat } from "./session-create";
 
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { error: vi.fn() }));
 vi.mock("sonner", () => ({ toast }));
+const cloud = vi.hoisted(() => ({ connected: null as boolean | null }));
+vi.mock("@renderer/lib/cloud-client", () => ({
+  cloudSession: () =>
+    cloud.connected === null
+      ? null
+      : { client: { connectionState: () => ({ isWebSocketConnected: cloud.connected }) } },
+}));
 vi.mock("@renderer/terminal/registry", () => ({
   disposeEngine: vi.fn(),
   getOrCreateEngine: vi.fn(),
@@ -29,6 +36,7 @@ let world: HostWorld | null = null;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  cloud.connected = null;
   vi.stubGlobal("api", {
     terminal: { create },
     appState: { set: vi.fn(async () => ({ ok: true })) },
@@ -68,16 +76,30 @@ function newChat(container: HTMLElement): HTMLButtonElement {
 }
 
 describe("NewSessionControl host read-only", () => {
-  it("disables creation in a cloud launch and never creates a local Session", async () => {
+  it("offers cloud chat but refuses unconnected starts and keeps terminal creation unavailable", async () => {
     adoptLaunch({ store: "cloud", userId: "u", backendUrl: "https://example.convex.cloud" });
     world = hostWorld({ cloud: true });
-    const container = await world.render(control("local"));
-    expect(newChat(container).disabled).toBe(true);
-    expect(container.textContent).toBeTruthy();
-    expect(container.querySelector('[aria-label="Not available yet in cloud"]')).not.toBeNull();
+    const onNewChat = vi.fn();
+    const container = await world.render(control("local", onNewChat));
+    expect(newChat(container).disabled).toBe(false);
+    expect(container.querySelector('[aria-label="Not available yet in cloud"]')).toBeNull();
+    newChat(container).click();
+    expect(onNewChat).toHaveBeenCalledOnce();
+    // The control follows the cloud link. The semantic start also checks the
+    // actual client at the press; this fixture has none, so it opens no draft
+    // and never falls back to a local durable Session or terminal.
+    const durableCreate = vi.spyOn(useChatSessionsStore.getState(), "createChatSession");
     await startProjectChat("local");
     expect(await createTerminalSession(projectScope("local"))).toBeNull();
+    expect(useChatDraftsStore.getState().drafts).toEqual({});
+    expect(durableCreate).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith("Volli Cloud is not connected", {
+      id: "cloud-session-not-connected",
+    });
+    expect(toast).toHaveBeenCalledWith("Not available yet in cloud", {
+      id: "cloud-session-read-only",
+    });
   });
   it("disables and marks the wrapper offline, then restores it when the host opens", async () => {
     world = hostWorld({ hetzner: { link: OFFLINE } });
@@ -109,6 +131,52 @@ describe("NewSessionControl host read-only", () => {
 });
 
 describe("Session creation host read-only", () => {
+  it.each([projectScope("local"), ticketScope("local", "t1")])(
+    "opens connected cloud chat doors without a legacy Workspace grant (%j)",
+    async (scope) => {
+      adoptLaunch({ store: "cloud", userId: "u", backendUrl: "https://example.convex.cloud" });
+      cloud.connected = true;
+      world = hostWorld({ cloud: true });
+      const durableCreate = vi
+        .spyOn(useChatSessionsStore.getState(), "createChatSession")
+        .mockResolvedValue("cloud-session");
+      const land = vi.fn(() => true);
+
+      const draftId = await bootChatSession(scope, { land });
+      expect(draftId).not.toBeNull();
+      expect(land).toHaveBeenCalledWith(draftId, false);
+      expect(useChatDraftsStore.getState().drafts[draftId!]?.provisional).toMatchObject({
+        projectId: "local",
+        ticketId: scope.kind === "ticket" ? "t1" : null,
+        phase: "draft",
+      });
+      expect(durableCreate).not.toHaveBeenCalled();
+      await expect(bootChatSession(scope, { createsSessionNow: true, land })).resolves.toBe(
+        "cloud-session",
+      );
+      expect(durableCreate).toHaveBeenCalledExactlyOnceWith({
+        projectId: "local",
+        ticketId: scope.kind === "ticket" ? "t1" : null,
+        title: null,
+      });
+      expect(land).toHaveBeenLastCalledWith("cloud-session", true);
+      expect(toast).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+
+      // A socket lost between drawing the button and pressing it still
+      // refuses before a Draft or durable create, even without a host grant.
+      cloud.connected = false;
+      const drafts = useChatDraftsStore.getState().drafts;
+      await expect(bootChatSession(scope, { land })).resolves.toBeNull();
+      await expect(bootChatSession(scope, { createsSessionNow: true, land })).resolves.toBeNull();
+      expect(useChatDraftsStore.getState().drafts).toBe(drafts);
+      expect(durableCreate).toHaveBeenCalledOnce();
+      expect(toast).toHaveBeenCalledWith("Volli Cloud is not connected", {
+        id: "cloud-session-not-connected",
+      });
+    },
+  );
+
   it("refuses both chat doors and terminal creation without opening a draft or contacting main", async () => {
     world = hostWorld({ hetzner: { link: OFFLINE } });
     const land = vi.fn(() => true);

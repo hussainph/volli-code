@@ -32,6 +32,7 @@ import {
   type SessionRowVendor,
 } from "@renderer/components/sidebar/session-band-row";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
+import { CloudCheckoutControl } from "@renderer/components/cloud-checkout/cloud-checkout-control";
 import { resumeTicketSession } from "@renderer/components/sessions/session-create";
 import {
   ContextMenu,
@@ -1131,6 +1132,7 @@ export function TicketSessionsPanel({
             onNewTerminal={onNewSession}
           />
         </RailFoldHeadingRow>
+        <CloudCheckoutControl projectId={projectId} />
         {/* ONE field over the WHOLE roster, live rows and record alike — in
             flow, above the rows it narrows, exactly where Home's is. It used to
             live INSIDE the fold and reach only the record, so a reader who

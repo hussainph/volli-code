@@ -96,6 +96,7 @@ describe("app_state key registry", () => {
       "volli:notification-preferences": "client-local VC-578",
       "volli:cloud-launch": "client-local stays",
       "volli:cloud-runner": "client-local stays",
+      "volli:runner-resident": "client-local stays",
       "volli:runner-site:": "client-local stays",
       "volli:runner-report:": "client-local stays",
       "volli:model-picker-view": "client-local VC-572",

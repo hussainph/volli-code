@@ -52,6 +52,7 @@ import {
 } from "./host-handlers";
 import type { AccountPort } from "./account-port";
 import type { RunnerAccountPort } from "./runner-account-port";
+import type { CloudCheckoutPort } from "./cloud-checkout-port";
 import type { BrowserShortcutsPort } from "./browser-shortcuts-port";
 import type { RemoteHostsPort } from "./remote-hosts-port";
 
@@ -183,6 +184,25 @@ describe("the map", () => {
   it("has a handler for every key, and no other", () => {
     expectTypeOf<HostHandlerCoverage>().toEqualTypeOf<never>();
     expect(Object.keys(handlers()).toSorted()).toEqual([...HOST_HANDLER_KEYS].toSorted());
+  });
+
+  it("forwards a composition's optional entity id source to the board map", async () => {
+    const newId = vi.fn(() => "composition-ticket");
+    const map = handlers({ newId });
+    const { ticket: createdTicket } = await map["board.createTicket"](
+      {
+        projectId: PROJECT,
+        commandId: "composition-create",
+        status: "todo",
+        title: "Composition id",
+        body: "",
+        labels: [],
+        priority: "medium",
+      },
+      USER,
+    );
+    expect(createdTicket.id).toBe("composition-ticket");
+    expect(newId).toHaveBeenCalledOnce();
   });
 
   it("refuses to build without the busy-worktree guard, for a JavaScript caller too", () => {
@@ -1768,5 +1788,43 @@ describe("this Mac as a runner", () => {
     expect(port.addThisMac).toHaveBeenCalledOnce();
     expect(await map["runners.removeThisMac"](undefined, WINDOW)).toBeNull();
     expect(port.removeThisMac).toHaveBeenCalledOnce();
+  });
+});
+
+// A cloud project's folder on this Mac (VC-895 N2-3): desktop main, through
+// its port; absent everywhere else.
+describe("a cloud project's folder on this Mac", () => {
+  const CLOUD_PROJECT = "11111111-1111-4111-8111-111111111111";
+
+  it("answers unavailable for every key on a host with no project folders (hostd)", async () => {
+    for (const map of [handlers(), handlers({ checkouts: null })]) {
+      for (const call of [
+        () => map["checkouts.status"]({ projectId: CLOUD_PROJECT }, WINDOW),
+        () => map["checkouts.chooseFolder"]({ projectId: CLOUD_PROJECT }, WINDOW),
+      ]) {
+        expect(await unavailable(call)).toBe("Project folders are unavailable on this host");
+      }
+    }
+  });
+
+  it("forwards the project to the port and answers its path-free result", async () => {
+    const port = {
+      status: vi.fn(() => ({ state: "missing" as const })),
+      chooseFolder: vi.fn(async () => ({
+        outcome: "chosen" as const,
+        projectRepoId: CLOUD_PROJECT,
+      })),
+    } satisfies CloudCheckoutPort;
+    const map = handlers({ checkouts: port });
+
+    expect(await map["checkouts.status"]({ projectId: CLOUD_PROJECT }, WINDOW)).toEqual({
+      state: "missing",
+    });
+    expect(port.status).toHaveBeenCalledWith(CLOUD_PROJECT);
+    expect(await map["checkouts.chooseFolder"]({ projectId: CLOUD_PROJECT }, WINDOW)).toEqual({
+      outcome: "chosen",
+      projectRepoId: CLOUD_PROJECT,
+    });
+    expect(port.chooseFolder).toHaveBeenCalledWith(CLOUD_PROJECT);
   });
 });

@@ -2,7 +2,7 @@
  * `@volli/shared/cloud`: the Volli Cloud data model's Convex-independent half
  * (ids, the Actor, attention items, board events, the activity feed, runner jobs, column positions, object-storage
  * keys and their presigned URLs, ticket keys, transcript packs, visibility,
- * Member rules, the bounded Session fold, streamed-text chunks). The backend (`convex/`), the runner and clients import it
+ * Member rules, the bounded Session fold, streamed-text chunks, a Session's Place). The backend (`convex/`), the runner and clients import it
  * from here; nothing in it names a backend row id.
  */
 export * from "./activity";
@@ -21,6 +21,7 @@ export * from "./jobs";
 export * from "./members";
 export * from "./notices";
 export * from "./migration-import";
+export * from "./place";
 export * from "./positions";
 export * from "./preview-access";
 export * from "./project-rules";

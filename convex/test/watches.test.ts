@@ -439,6 +439,42 @@ describe("durable watches", () => {
     expect((await watchRows(w.t, w.watcher.sessionId))[0]?.turnArmed).toBe(false);
   });
 
+  test("an inline steering body and its automatic watch commit together, with exact retries", async () => {
+    // A Board Session may steer any Session of its project.
+    const w = await world(true);
+    const commandId = newId("command");
+    // An agent's steer carries its body as `artifact` (never a person's `body`).
+    const steer = steerArgs(commandId);
+    const digest = JSON.parse(steer.intent).reference.digest as string;
+    const args = { sessionId: w.target.sessionId, commandId, ...steer };
+    await expect(
+      w.as.mutation(api.sessions.command, { ...args, artifact: "corrupt" }),
+    ).rejects.toThrow(code("invalid_request"));
+    const { artifact, ...withoutArtifact } = args;
+    await expect(
+      w.as.mutation(api.sessions.command, { ...withoutArtifact, body: artifact }),
+    ).rejects.toThrow(code("invalid_request"));
+    expect(await watchRows(w.t, w.watcher.sessionId)).toHaveLength(0);
+    const first = await w.as.mutation(api.sessions.command, args);
+    expect((await watchRows(w.t, w.watcher.sessionId))[0]).toMatchObject({
+      origin: "steered",
+      turnArmed: true,
+    });
+    expect(
+      await w.t.run(async (ctx) => {
+        const bodies = await ctx.db
+          .query("transcriptArtifacts")
+          .withIndex("by_session_digest", (q) =>
+            q.eq("sessionId", w.target.sessionId).eq("digest", digest),
+          )
+          .collect();
+        return bodies.map(({ body }) => body);
+      }),
+    ).toEqual([artifact]);
+    expect(await w.as.mutation(api.sessions.command, args)).toEqual(first);
+    expect(await watchRows(w.t, w.watcher.sessionId)).toHaveLength(1);
+  });
+
   test("quotes a bounded staged last reply as untrusted prose", async () => {
     const w = await world();
     await accept(w.t, w.watcher.runnerId, w.target.sessionId, w.target.events.slice(w.turnEnd));

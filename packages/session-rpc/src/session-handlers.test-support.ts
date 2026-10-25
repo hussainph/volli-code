@@ -295,6 +295,8 @@ export function sessionHandlersFrom(
     "runners.subscribeThisMac": remote("runners.subscribeThisMac"),
     "runners.addThisMac": remote("runners.addThisMac"),
     "runners.removeThisMac": remote("runners.removeThisMac"),
+    "checkouts.status": remote("checkouts.status"),
+    "checkouts.chooseFolder": remote("checkouts.chooseFolder"),
   };
   return {
     ...handlers,

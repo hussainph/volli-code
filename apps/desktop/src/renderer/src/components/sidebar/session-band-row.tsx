@@ -42,6 +42,7 @@
  * and the row hands its own row back to it.
  */
 import * as React from "react";
+import { useSessionPlace } from "@renderer/lib/cloud-places";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { AsteriskIcon } from "@phosphor-icons/react/dist/csr/Asterisk";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
@@ -334,9 +335,20 @@ function sessionRowDragPayload(
  * a band of twenty rows is actually scanned for: which ticket each row is on.
  * A ticketless Session says so rather than leaving a hole.
  */
-export function activeSubtitle(row: ActiveSessionRow, ticketPrefix: string, now: number): string {
+export function activeSubtitle(
+  row: ActiveSessionRow,
+  ticketPrefix: string,
+  now: number,
+  /**
+   * A cloud Session whose runner is not running it says what it waits for
+   * ("Waiting for hp-mac — asleep since 14:02") in its age's place: that IS
+   * where it lives, and its age stands still until the runner is back.
+   */
+  away: string | null = null,
+): string {
   const where =
     row.ticket === null ? "No ticket" : displayTicketId(ticketPrefix, row.ticket.ticketNumber);
+  if (away !== null) return `${where} · ${away}`;
   return row.lastActivityAt === null
     ? where
     : `${where} · ${relativeTime(row.lastActivityAt, now)}`;
@@ -411,6 +423,12 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
   // A Draft stands for no Session, so it has no peek and nothing to read.
   const peekable = canPeekRow(row.id);
   const title = unread ? "font-semibold text-sidebar-foreground" : "font-medium";
+  // A cloud launch only: elsewhere no Session has a Place and this is null.
+  const place = useSessionPlace(
+    row.target === null || row.target.kind === "terminal" ? null : row.target.sessionId,
+  );
+  const away =
+    place !== null && (place.kind === "waiting" || place.kind === "removed") ? place.label : null;
 
   return (
     <SidebarMenuItem
@@ -499,7 +517,7 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
           // them is the measured one (`globals.css`, the section-heading note).
           secondary={
             <span className="session-row-meta block truncate text-ui text-muted-foreground transition-colors">
-              {activeSubtitle(row, ticketPrefix, now)}
+              {activeSubtitle(row, ticketPrefix, now, away)}
             </span>
           }
           trailing={unread ? <UnreadDot /> : undefined}

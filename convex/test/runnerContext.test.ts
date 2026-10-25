@@ -223,6 +223,60 @@ describe("runnerContext.forSession", () => {
   });
 });
 
+describe("runnerContext.forProject", () => {
+  test("reads the owner's project and primary repo without writing anything", async () => {
+    const world = await runnerWorld();
+    const result = await world.runner.query(api.runnerContext.forProject, {
+      projectId: world.projectId,
+    });
+    expect(result).toMatchObject({
+      ownerUserId: world.alice.userId,
+      project: { id: world.projectId, name: "Test", ticketPrefix: "TS" },
+      primaryRepo: { id: world.projectRepoId, projectId: world.projectId, baseBranch: "develop" },
+    });
+    for (const row of [result.project, result.primaryRepo]) {
+      expect(row).not.toHaveProperty("_id");
+      expect(row).not.toHaveProperty("path");
+    }
+    expect(Object.keys(result).toSorted()).toEqual(["ownerUserId", "primaryRepo", "project"]);
+    expect(await world.t.run((ctx) => ctx.db.query("sessions").collect())).toEqual([]);
+    expect(await world.t.run((ctx) => ctx.db.query("projectCheckouts").collect())).toEqual([]);
+  });
+
+  test("answers a folder project's default primary repo without minting it", async () => {
+    const world = await runnerWorld({ repo: false });
+    expect(
+      (await world.runner.query(api.runnerContext.forProject, { projectId: world.projectId }))
+        .primaryRepo,
+    ).toMatchObject({ id: world.projectId, projectId: world.projectId, provider: "none" });
+    expect(await world.t.run((ctx) => ctx.db.query("projectRepos").collect())).toEqual([]);
+  });
+
+  test("refuses a malformed id, nonmembers, a former member, and non-runners", async () => {
+    const world = await runnerWorld();
+    const args = { projectId: world.projectId };
+    await expect(
+      world.runner.query(api.runnerContext.forProject, { projectId: "not-an-id" }),
+    ).rejects.toBeDefined();
+    await expect(
+      world.runner.query(api.runnerContext.forProject, { projectId: newId("project") }),
+    ).rejects.toMatchObject(code("not_found"));
+    await expect(
+      world.outsiderRunner.query(api.runnerContext.forProject, args),
+    ).rejects.toMatchObject(code("not_found"));
+    await expect(world.t.query(api.runnerContext.forProject, args)).rejects.toMatchObject(
+      code("unauthenticated"),
+    );
+    await expect(world.alice.as.query(api.runnerContext.forProject, args)).rejects.toMatchObject(
+      code("not_a_runner"),
+    );
+    await clearMembership(world.t, world.workspaceId, world.alice.userId);
+    await expect(world.runner.query(api.runnerContext.forProject, args)).rejects.toMatchObject(
+      code("not_found"),
+    );
+  });
+});
+
 async function retentionHistory(
   world: Awaited<ReturnType<typeof runnerWorld>>,
   status: Doc<"tickets">["status"],

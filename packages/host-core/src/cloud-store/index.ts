@@ -1,5 +1,6 @@
 /** The cloud product store: one owner-scoped local ledger, one shared runner link. No Electron. */
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import type {
   HostedSessionRuntime,
   SessionLocationResolver,
@@ -11,7 +12,6 @@ import { createFactDrain } from "../cloud-runner/drain";
 import { createInboxWorker, type JobExecutor } from "../cloud-runner/inbox";
 import { sqliteDrainCursorStore, sqliteJobJournalStore } from "../cloud-runner/sqlite-stores";
 import {
-  acceptOverLink,
   inboxOverLink,
   startRunnerSync,
   wakeOverLink,
@@ -43,6 +43,9 @@ import {
 import { createCloudBoardVerbs, CLOUD_VERB_BUDGET_MS } from "../cloud-agent/board-verbs";
 import { createCloudSessionVerbs } from "../cloud-agent/session-verbs";
 import { getProjectById } from "../db/projects-repo";
+import { createCloudRestartRecovery } from "./recovery";
+import { createCloudTranscriptPublisher } from "./transcripts";
+import { startStreamChunks, type StreamChunks } from "../cloud-runner/stream-chunker";
 
 export interface CloudRunnerSyncConnection {
   start(): void;
@@ -50,6 +53,9 @@ export interface CloudRunnerSyncConnection {
   /** Close a lost identity without attempting one last presence report. */
   close(): Promise<void>;
   waiting(): number;
+  /** Sleep fences new inbox claims until the wake presence sequence finishes. */
+  suspend?(): void;
+  resume?(): Promise<void>;
 }
 
 export function createCloudProductStore(options: {
@@ -75,6 +81,8 @@ export function createCloudProductStore(options: {
     link: BackendLink;
     runnerId: string;
     runnerToken?: () => Promise<string | null>;
+    startStreams(): void;
+    stopStreams(): Promise<void>;
   } | null = null;
   let runtime: HostedSessionRuntime | null = null;
   let artifacts: TranscriptArtifactStore | null = null;
@@ -97,17 +105,28 @@ export function createCloudProductStore(options: {
       throw new Error("Volli Cloud is unreachable; this ticket's brief can't be read.");
     return active.link;
   };
+  // A restart resume's first-connect wait and sibling reads (N2-3).
+  const recovery = createCloudRestartRecovery({ currentLink: () => active?.link ?? null });
+  const publishTranscriptFacts = createCloudTranscriptPublisher({
+    current: () => active,
+    artifacts: () => artifacts,
+    engine: { getBaseSession: (query) => owner.engine.getBaseSession(query) },
+    ledger: sqliteDrainLedger(db),
+    cursors: sqliteDrainCursorStore(db),
+    backendUrl: options.backendUrl,
+    redaction: {
+      step: (window, from, final) => host.secretStore.redactStreamStep(window, from, final),
+      complete: () => {
+        const state = host.secretStore.status().state;
+        return state === "ready" || state === "empty";
+      },
+    },
+  });
   const drain = createFactDrain({
     ownerUserId,
     ledger: sqliteDrainLedger(db),
     cursors: sqliteDrainCursorStore(db),
-    accept: (args, callOptions) => {
-      try {
-        return acceptOverLink(link())(args, callOptions);
-      } catch (error) {
-        return Promise.reject(error);
-      }
-    },
+    accept: publishTranscriptFacts,
     onBlocked: (sessionId, block) =>
       log.warn("Session cloud drain stopped", { sessionId, code: block.code }),
     onRetry: (sessionId) => log.warn("Session cloud drain will retry", { sessionId }),
@@ -277,15 +296,85 @@ export function createCloudProductStore(options: {
     sessionBirth: { beforeCreate: context.beforeCreate },
     ticketDisplayIdOf: context.ticketDisplayIdOf,
     brief: context.brief,
+    recovery,
     locations,
     drain,
     registry,
+    /**
+     * "Choose the folder for <project> on this Mac" (N2-3): the checkout a
+     * cloud project's Sessions start from. The path stays in this runner's
+     * registry; the backend hears only path-free checkout metadata.
+     */
+    checkouts: {
+      /**
+       * Whether this runner can locate the project's folder: registered, or
+       * adoptable from a frozen local project with the same id, and still on
+       * disk. `null` when this Mac has no runner identity to hold one.
+       */
+      located(projectId: string): boolean | null {
+        if ((active?.runnerId ?? options.runnerId()) === null) return null;
+        const checkout = registry().checkouts.ofProject(projectId);
+        return checkout !== null && existsSync(checkout.absPath);
+      },
+      /**
+       * The project and its primary repository as Volli Cloud answers this
+       * runner (`runnerContext.forProject`: the owner's current membership).
+       * A read: nothing is reserved or minted, and no path is sent.
+       */
+      async site(
+        projectId: string,
+      ): Promise<{ projectId: string; projectRepoId: string; projectName: string }> {
+        if (active === null)
+          throw new Error("Volli Cloud is unreachable. Choose the folder once this Mac connects.");
+        if (active.link.query === undefined)
+          throw new Error("Runner context reads are unavailable.");
+        const facts = (await active.link.query("runnerContext:forProject", { projectId })) as {
+          ownerUserId: string;
+          project: { id: string; name: string };
+          primaryRepo: { id: string; projectId: string };
+        };
+        if (
+          facts.ownerUserId !== ownerUserId ||
+          facts.project.id !== projectId ||
+          facts.primaryRepo.projectId !== projectId
+        )
+          throw new Error("Volli Cloud returned another owner's project.");
+        return { projectId, projectRepoId: facts.primaryRepo.id, projectName: facts.project.name };
+      },
+      /** Registers the folder locally, then queues its path-free checkout report. */
+      async choose(input: {
+        projectId: string;
+        projectRepoId: string;
+        absPath: string;
+      }): Promise<void> {
+        const paths = registry();
+        const checkout = paths.checkouts.register({ ...input, adoptedFromFrozen: false });
+        const read = (args: readonly string[]) =>
+          runGitCapturingAsync(args, input.absPath).then(
+            (out) => out.trim() || null,
+            () => null,
+          );
+        // A folder project may be no repository at all: unknown, never guessed.
+        const [headSha, headBranch] = await Promise.all([
+          read(["rev-parse", "HEAD"]),
+          read(["branch", "--show-current"]),
+        ]);
+        await publisher(paths).reports.checkout({
+          projectId: input.projectId,
+          projectRepoId: input.projectRepoId,
+          kind: checkout.kind,
+          headBranch,
+          headSha,
+        });
+      },
+    },
     bindEnvironment(prepare: NonNullable<CloudSessionLocationOptions["prepareEnvironment"]>): void {
       prepareEnvironment = prepare;
     },
     bindRuntime(value: HostedSessionRuntime | null, store: TranscriptArtifactStore): void {
       runtime = value;
       artifacts = store;
+      active?.startStreams();
     },
     /** The runtime lifecycle's durable outbox door, for `session.notice` jobs. */
     bindNotices(outbox: SessionNoticeOutbox): void {
@@ -298,11 +387,30 @@ export function createCloudProductStore(options: {
       runnerId: string;
       runnerToken?(): Promise<string | null>;
     }): CloudRunnerSyncConnection {
+      let started = false;
+      let ended = false;
+      let streams: StreamChunks | null = null;
+      const startStreams = () => {
+        if (!started || ended || runtime === null || active?.link !== parts.link) return;
+        streams ??= startStreamChunks({
+          link: parts.link,
+          runtime,
+          onError: (_error, sessionId) =>
+            log.warn("Session live chunks were not sent", { sessionId }),
+        });
+      };
+      const stopStreams = async () => {
+        ended = true;
+        await streams?.stop();
+      };
       active = {
         link: parts.link,
         runnerId: parts.runnerId,
         ...(parts.runnerToken === undefined ? {} : { runnerToken: parts.runnerToken }),
+        startStreams,
+        stopStreams,
       };
+      recovery.observe(parts.link);
       const reports = publisher(registry());
       const offReports = parts.link.onStatus((status) => {
         if (status.state === "connected") void reports.flush();
@@ -389,13 +497,20 @@ export function createCloudProductStore(options: {
       let sync: RunnerSync | null = null;
       return {
         start() {
+          started = true;
           sync ??= startRunnerSync({ link: parts.link, drain, inbox, presence: parts.presence });
+          startStreams();
           void reports.flush();
         },
         waiting: () => drain.status().waiting + reports.pending(),
+        suspend: () => sync?.suspend(),
+        resume: async () => {
+          await sync?.resume();
+        },
         async stop() {
           offReports();
           try {
+            await stopStreams();
             if (sync !== null) await sync.stop();
           } finally {
             if (active?.link === parts.link) active = null;
@@ -403,6 +518,7 @@ export function createCloudProductStore(options: {
         },
         async close() {
           offReports();
+          await stopStreams();
           inbox.stop();
           drain.stop();
           await parts.link.close();
@@ -413,6 +529,7 @@ export function createCloudProductStore(options: {
     },
     dispose() {
       offWake();
+      void active?.stopStreams().catch(() => log.warn("Session live chunks did not close"));
       drain.stop();
       for (const reports of publishers.values()) reports.stop();
     },

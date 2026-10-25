@@ -299,6 +299,7 @@ jobs:
           apps/desktop/e2e/volli-drive/lib/remote-acceptance.test.mjs
           apps/desktop/e2e/volli-drive/lib/native-window-lifecycle.test.mjs
           apps/desktop/e2e/volli-drive/lib/sshd-fixture.test.mjs
+          apps/desktop/e2e/volli-drive/lib/cloud-acceptance.test.mjs
 
       # Every workspace manifest must declare the license the root declares
       # (VC-411). Not expressible as a lint rule, so it is its own step.
@@ -784,6 +785,10 @@ jobs:
 
       # The cloud board through the real transport (VC-889): two windows on the
       # same live board, and one cut off goes read-only with its board intact.
+      # And the 0.3-C demo as two windows (VC-895): Mac B sees Mac A's Session,
+      # "Waiting for <Mac A>" through a SIMULATED sleep (the smoke power seam:
+      # real power events, runner transport held down), its command queued,
+      # then caught up on wake.
       # Required here, like the sign-in test above: it fails rather than skips.
       - name: Desktop cloud board and Sessions against the pinned backend
         env:
@@ -792,7 +797,7 @@ jobs:
         working-directory: convex
         run: >-
           node fixture/with-backend.ts --deploy --
-          sh -c 'cd ../apps/desktop && vp test run src/renderer/src/stores/cloud-board/convex.live.test.ts src/main/cloud-sessions.live.test.ts --maxWorkers=2'
+          sh -c 'cd ../apps/desktop && vp test run src/renderer/src/stores/cloud-board/convex.live.test.ts src/main/cloud-sessions.live.test.ts src/main/cloud-runner/waiting-for-mac.live.test.ts --maxWorkers=2'
 
   # N-1 compatibility (VC-633). A previous build, run from its own shipped
   # sources, against a profile THIS build migrated to its head: it must write

@@ -39,6 +39,13 @@ describe("a runner's status", () => {
     expect(at("draining")).toEqual({ state: "parked", label: "Finishing its work" });
     expect(at("upgrade_required")).toEqual({ state: "error", label: "Needs an update" });
     expect(at("degraded")).toEqual({ state: "error", label: "Degraded" });
+    expect(at("degraded", "disk full")).toEqual({ state: "error", label: "Degraded: disk full" });
+  });
+
+  it("reads serving, waiting and removed by the same rule a Session's Place does", () => {
+    // A runner replaced by its successor reads as removed, as its Sessions' Places do.
+    expect(at("revoked", "replaced")).toEqual({ state: "error", label: "Removed" });
+    expect(at("revoked", null)).toEqual({ state: "error", label: "Removed" });
   });
 
   it("names the time today and the date before that", () => {

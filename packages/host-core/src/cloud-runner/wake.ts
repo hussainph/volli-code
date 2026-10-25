@@ -70,15 +70,15 @@ export function createRunnerPowerCycle(options: RunnerPowerCycleOptions): Runner
     },
     async resume() {
       options.link.reconnectNow();
-      // Recorded at once; sent on the new connection, or re-published by the next beat.
-      const online = options.presence.setState("online").catch(report);
       try {
         await options.token({ forceRefreshToken: true });
       } catch (error) {
         // Offline right after wake: the link asks again when it connects.
         report(error);
       }
-      await online;
+      // Presence and inbox work use the refreshed identity, not the token
+      // the socket held before sleep. The connector resumes sync after this.
+      await options.presence.setState("online").catch(report);
       await options.presence.beatNow().catch(report);
     },
   };

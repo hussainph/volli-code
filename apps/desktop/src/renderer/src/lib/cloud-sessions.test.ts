@@ -16,13 +16,20 @@ const mocks = await vi.hoisted(async () => {
     })),
     chat: { getState: () => ({ rebindChatSessions: rebind }) },
     follow: null as ((session: CloudSession | null) => void) | null,
+    followers: new Set<(session: CloudSession | null) => void>(),
     stop: vi.fn(),
   };
 });
 vi.mock("./cloud-client", () => ({
   followCloudSession: (fn: (session: CloudSession | null) => void) => {
-    mocks.follow = fn;
-    return mocks.stop;
+    mocks.followers.add(fn);
+    mocks.follow = (session) => {
+      for (const listener of mocks.followers) listener(session);
+    };
+    return () => {
+      mocks.followers.delete(fn);
+      mocks.stop();
+    };
   },
 }));
 vi.mock("@renderer/stores/projects", () => ({ useProjectsStore: mocks.projects }));
@@ -31,6 +38,12 @@ vi.mock("@renderer/stores/ticket-session-records", () => ({
   useTicketSessionRecordsStore: mocks.tickets,
 }));
 vi.mock("@renderer/stores/chat-sessions", () => ({ useChatSessionsStore: mocks.chat }));
+vi.mock("./session-rpc-ipc-link", () => ({
+  sessionRpcClient: () => ({
+    runners: { subscribeThisMac: { subscribe: () => ({ unsubscribe: () => {} }) } },
+  }),
+}));
+import { useCloudPlacesStore } from "./cloud-places";
 import { bindCloudSessions, cloudSessionReader } from "./cloud-sessions";
 
 let stop: (() => void) | null = null;
@@ -94,6 +107,10 @@ describe("cloud Session binding", () => {
       },
     });
     expect(mocks.tickets.getState().byTicket.t).toHaveLength(1);
+    // The Place the listing shape drops is kept for "Waiting for <Mac>".
+    expect(useCloudPlacesStore.getState().sessions).toEqual({
+      s: { placeRunnerId: "r", turnActive: false },
+    });
     expect(await cloudSessionReader("p").listForTicket({ ticketId: "t" })).toMatchObject({
       ok: true,
       sessions: [{ record: { sessionId: "s" } }],
@@ -111,6 +128,7 @@ describe("cloud Session binding", () => {
     mocks.projects.setState({ projects: [] });
     expect(fake.watchers("sessions:list", args)).toBe(0);
     expect(mocks.rows.getState().byProject).toMatchObject({ p: { chat: [] } });
+    expect(useCloudPlacesStore.getState().sessions).toEqual({});
     mocks.projects.setState({ projects: [{ id: "p" }] });
     mocks.follow!(null);
     expect(mocks.tickets.getState().byTicket.t).toEqual([]);
@@ -119,6 +137,35 @@ describe("cloud Session binding", () => {
     stop = null;
     expect(mocks.stop).toHaveBeenCalled();
     expect(fake.watchers("sessions:list", args)).toBe(0);
+  });
+
+  it("reports a failed Place read and removes its stale runner label", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fake = fakeCloud();
+    mocks.projects.setState({ projects: [{ id: "p" }] });
+    stop = bindCloudSessions();
+    mocks.follow!(fake.session);
+    fake.answer("sessions:list", args, { page: [row], isDone: true, continueCursor: "end" });
+    const placeArgs = { sessionIds: ["s"] };
+    fake.answer("runners:places", placeArgs, [
+      {
+        sessionId: "s",
+        place: {
+          id: "r",
+          name: "hp-mac",
+          kind: "mac",
+          status: "offline",
+          statusChangedAt: 0,
+          statusReason: null,
+          owned: true,
+        },
+      },
+    ]);
+    expect(useCloudPlacesStore.getState().runners.r?.name).toBe("hp-mac");
+    const failure = new Error("place unavailable");
+    fake.fail("runners:places", placeArgs, failure);
+    expect(warn).toHaveBeenCalledWith("[volli] cloud Session places:", failure);
+    expect(useCloudPlacesStore.getState().runners).toEqual({});
   });
 
   it("reports failed cloud reads without ever using local IPC", async () => {

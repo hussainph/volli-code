@@ -7,9 +7,9 @@
  * - `command` (client): a person's intent for their Session (or an agent's,
  *   acting for the Session owner through its runner, within its supervision
  *   scope: `lib/sessionCommands.ts`), queued as a `session.command` job for
- *   the Session's runner, with a message's body staged beside it. The job row is the first
- *   receipt (`queued`); the engine's own receipt, folded on accept, is the
- *   second.
+ *   the Session's runner, with a message's body staged beside it in the same
+ *   transaction. The job row is the first receipt (`queued`); the engine's
+ *   own receipt, folded on accept, is the second.
  * - `snapshot`, `history`, `list`, `attention` (client): the Session's
  *   bounded current state, a window of its history by sequence, the listing
  *   rows of a project or ticket, and the viewer's open attention items. An
@@ -28,8 +28,11 @@ import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 
 import {
+  assertCloudInteractionReference,
+  CLOUD_MESSAGE_MEDIA_TYPE,
   decodeSessionCommandIntent,
   encodeSessionJson,
+  readCloudMessageBody,
   scrubSessionAttachment,
   scrubSessionAttachmentFailure,
   scrubSessionAttention,
@@ -43,6 +46,7 @@ import {
 import {
   canSeeSession,
   cloudSessionView,
+  INLINE_ARTIFACT_MAX_BYTES,
   SESSION_COMMAND_FORMAT,
   type CloudSessionState,
   type UserId,
@@ -50,7 +54,13 @@ import {
 } from "@volli/shared/cloud";
 
 import type { Doc } from "./_generated/dataModel.js";
-import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server";
+import {
+  internalMutation,
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server";
 import {
   findMembership,
   findPolicy,
@@ -177,7 +187,95 @@ export const transferClaim = internalMutation({
 
 // ── commands (client) ───────────────────────────────────────────────────────
 
-/** An intent's JSON text; a message body travels as a transcript artifact (`artifact`), not in it. */
+/** A checked message body, ready to stage beside its command. */
+type StagedBody = Pick<CommandArtifact, "digest" | "mediaType" | "bytes" | "body">;
+
+/**
+ * Stages a command's message body for its Session through the transcript
+ * staging rule (`stageArtifactRows`: once per digest, no referencing sequence
+ * yet; the runner's own staging records it when the event is accepted).
+ *
+ * The body was checked against its digest; a row already staged under that
+ * digest is not. A row holding the same bytes is this body. An inline row
+ * holding other bytes cannot be this digest's (it is corrupt), so it takes
+ * the checked body rather than be handed to a runner. A spilled row is left
+ * as it is: its object is checked by digest wherever it is read.
+ */
+async function stageCommandBody(
+  ctx: MutationCtx,
+  session: Doc<"sessions">,
+  staged: StagedBody,
+): Promise<void> {
+  const existing = await ctx.db
+    .query("transcriptArtifacts")
+    .withIndex("by_session_digest", (q) =>
+      q.eq("sessionId", session.id).eq("digest", staged.digest),
+    )
+    .first();
+  if (existing !== null && existing.body !== null && existing.body !== staged.body) {
+    await ctx.db.patch(existing._id, {
+      body: staged.body,
+      bytes: staged.bytes,
+      mediaType: staged.mediaType,
+    });
+  }
+  await stageArtifactRows(
+    ctx,
+    { sessionId: session.id, projectId: session.projectId },
+    [{ ...staged, spillKey: null, sequence: null }],
+    "client",
+    Date.now(),
+  );
+}
+
+/**
+ * A new interaction answer is persisted only for an open, ordinary question
+ * of the Session's live attachment, as its caught-up fold says: a generic
+ * answer may carry secret bytes in any field, so a credential request (which
+ * person-only credential controls answer), an unknown or settled question, or
+ * a fold still catching up is refused before anything is written. The
+ * refusal never repeats the answer.
+ */
+async function requireAnswerableInteraction(
+  ctx: QueryCtx,
+  sessionId: string,
+  intent: { interactionId: string; attachmentId: string },
+): Promise<void> {
+  const intake = await ctx.db
+    .query("sessionIntake")
+    .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+    .unique();
+  const doc = await ctx.db
+    .query("sessionStates")
+    .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+    .unique();
+  let state: CloudSessionState | null = null;
+  try {
+    state = readStoredState(doc);
+  } catch {
+    state = null;
+  }
+  if (
+    intake === null ||
+    doc === null ||
+    state === null ||
+    (doc.catchUpAt ?? null) !== null ||
+    state.throughSequence !== intake.acceptedThrough
+  ) {
+    throw fail("not_ready", "This session is still catching up. Answer again in a moment.");
+  }
+  const interaction = state.fold.projection.interactions.active.find(
+    ({ id }) => id === intent.interactionId,
+  );
+  if (interaction === undefined || interaction.attachmentId !== intent.attachmentId) {
+    throw fail("interaction_closed", "That question is no longer open.");
+  }
+  if (interaction.credential !== undefined) {
+    throw fail("credential_required", "A credential request is answered with credential controls.");
+  }
+}
+
+/** An intent's JSON text; a message body travels beside it as a transcript artifact, not in it. */
 const MAX_INTENT_BYTES = 64 * 1024;
 
 /**
@@ -188,11 +286,24 @@ const MAX_INTENT_BYTES = 64 * 1024;
  * different intent under a used id is `id_taken`. An agent may use its tool
  * call's frozen `<callerSessionId>:<toolCallId>` operation id.
  *
- * `artifact` (optional, additive): a `message.submit`'s body as the canonical
- * JSON of its `SessionTranscriptArtifact`, at most 64 KB, staged in this
- * transaction so a runner that never wrote the body can hydrate it
- * (`transcripts.commandArtifact`). An agent's `message.submit` must carry
- * it: its target may be on another runner.
+ * A `message.submit`'s body, the canonical JSON of its transcript artifact
+ * (at most 64 KB), may travel beside it, staged in this transaction so a
+ * runner that never wrote it can hydrate it (`transcripts.commandArtifact`).
+ * Two additive spellings, each checked by its own contract, at most one per
+ * call (both is `invalid_request`, whatever they hold):
+ *
+ * - `body` (a person's client): the artifact the runtime writes for this
+ *   command (`cloudMessageSubmit` in `@volli/shared` builds both), bound to
+ *   this Session and command id.
+ * - `artifact` (an agent's verb, `lib/sessionCommands.ts`): the message is
+ *   `<commandId>:message`, text parts only. An agent's `message.submit` must
+ *   carry it (never `body`): its target may be on another runner.
+ *
+ * A person's message without either is queued as before: its reference
+ * names a body the runner holds itself. An interaction answer carries none:
+ * its reference must be the one its intent derives. No other intent takes a
+ * body. A new interaction answer must name an open, ordinary question
+ * (`requireAnswerableInteraction`) before anything is persisted.
  */
 export const command = mutation({
   args: {
@@ -200,6 +311,7 @@ export const command = mutation({
     commandId: v.string(),
     intent: v.string(),
     artifact: v.optional(v.string()),
+    body: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const caller = await requireActor(ctx, PERSON_OR_AGENT);
@@ -224,14 +336,60 @@ export const command = mutation({
       );
     }
     checkSupervision(caller, session, intent);
-    let artifact: CommandArtifact | null = null;
-    if (args.artifact !== undefined) {
-      if (intent.kind !== "message.submit") {
-        throw fail("invalid_request", "Only a message.submit carries a message body.");
+    const scope = { sessionId: session.id, commandId: args.commandId };
+    let staged: StagedBody | null = null;
+    if (args.body !== undefined && args.artifact !== undefined) {
+      throw fail("invalid_request", "A message carries its body once: `body` or `artifact`.");
+    }
+    if (caller.kind === "agent" && args.body !== undefined) {
+      throw fail("invalid_request", "An agent's message carries its body (`artifact`).");
+    }
+    if (
+      (args.body !== undefined || args.artifact !== undefined) &&
+      intent.kind !== "message.submit"
+    ) {
+      throw fail("invalid_request", "Only a message.submit carries a message body.");
+    }
+    if (intent.kind === "message.submit" && args.artifact !== undefined) {
+      staged = await readCommandArtifact(args.artifact, intent, args.commandId);
+    } else if (intent.kind === "message.submit" && args.body !== undefined) {
+      if (new TextEncoder().encode(args.body).length > INLINE_ARTIFACT_MAX_BYTES) {
+        throw fail(
+          "invalid_request",
+          `A message is limited to ${INLINE_ARTIFACT_MAX_BYTES} bytes.`,
+        );
       }
-      artifact = await readCommandArtifact(args.artifact, intent, args.commandId);
+      try {
+        readCloudMessageBody({ ...scope, reference: intent.reference, body: args.body });
+      } catch (error) {
+        throw fail("invalid_request", error instanceof Error ? error.message : "Unreadable body.");
+      }
+      // Checked above: the reference's digest is the body's sha256.
+      staged = {
+        digest: intent.reference.digest!,
+        mediaType: CLOUD_MESSAGE_MEDIA_TYPE,
+        bytes: new TextEncoder().encode(args.body).length,
+        body: args.body,
+      };
     } else if (caller.kind === "agent" && intent.kind === "message.submit") {
       throw fail("invalid_request", "An agent's message carries its body (`artifact`).");
+    } else if (intent.kind === "interaction.resolve") {
+      try {
+        assertCloudInteractionReference(scope, intent);
+      } catch (error) {
+        throw fail(
+          "invalid_request",
+          error instanceof Error ? error.message : "Unreadable answer.",
+        );
+      }
+      // An exact replay of a queued answer is answered from its job (the
+      // card may have settled since); a different intent under its id is
+      // `id_taken` there. Only a new answer is checked against the Session.
+      const queued = await ctx.db
+        .query("runnerJobs")
+        .withIndex("by_uuid", (q) => q.eq("id", args.commandId))
+        .unique();
+      if (queued === null) await requireAnswerableInteraction(ctx, session.id, intent);
     }
     const intake = await ctx.db
       .query("sessionIntake")
@@ -263,17 +421,8 @@ export const command = mutation({
           })
         : null;
     // Staged in the job's transaction: the job exists exactly when its body
-    // does. Idempotent by digest, so a replay stages nothing twice. No
-    // sequence yet: the referencing event is the target runner's to record.
-    if (artifact !== null) {
-      await stageArtifactRows(
-        ctx,
-        { sessionId: session.id, projectId: session.projectId },
-        [{ ...artifact, spillKey: null, sequence: null }],
-        "client",
-        Date.now(),
-      );
-    }
+    // does. Idempotent by digest, so a replay stages nothing twice.
+    if (staged !== null) await stageCommandBody(ctx, session, staged);
     const job = (await ctx.db
       .query("runnerJobs")
       .withIndex("by_uuid", (q) => q.eq("id", args.commandId))

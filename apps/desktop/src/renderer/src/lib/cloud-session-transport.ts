@@ -2,8 +2,23 @@
  * The chat core's Session edge in a cloud launch (VC-931): the same
  * {@link ChatSessionTransport} `chat/transport.ts` hands every
  * `ChatSessionClient`, answered from Volli Cloud instead of This Mac's IPC.
- * Read-only for now: every write, create and attach refuses with
- * {@link CLOUD_SESSION_UNAVAILABLE}.
+ *
+ * **Writes (VC-895).** A command for an existing Session goes to
+ * `sessions.command`, which queues it as a `session.command` job for the
+ * Session's runner, wherever that runner is: a message (its canonical
+ * transcript artifact staged beside it, so the runner reads the same bytes),
+ * an interaction answer, model choice, interrupt, retry, compaction and
+ * scheduled resumes. The job row is the backend's first receipt and
+ * `sessionMessages.pending` lists it until the runner answers it (the
+ * composer's "Sent — waiting for hp-mac", `cloud-places.ts`); the Session's
+ * own receipt arrives as a fact in its history. Nothing the backend has not
+ * accepted is held here. A message with files or skills refuses with
+ * {@link CLOUD_ATTACHMENTS_UNAVAILABLE}: both live on this Mac, not on the
+ * Session's runner. Queue edits, interaction withdrawal and reconcile have no
+ * cloud command and refuse with {@link CLOUD_SESSION_UNAVAILABLE}. Create and
+ * attach are this Mac's own (runner-originated Sessions start here): they go
+ * to {@link CloudSessionTransportDeps.local} when the launch supplies it, and
+ * refuse otherwise.
  *
  * **Reads.** `snapshot` is `sessions.snapshot` (the bounded fold, as the
  * projection) beside the newest window of `sessions.history`, its bodies
@@ -54,6 +69,12 @@ import {
   type ChatStreamEvent,
   type FlushScheduler,
 } from "@volli/session-presentation";
+import {
+  cloudInteractionResolve,
+  cloudMessageSubmit,
+  type CloudUiMessage,
+  type SessionCommandIntent,
+} from "@volli/shared";
 import { SESSION_VIEWER_HEARTBEAT_MS } from "@volli/shared/cloud";
 import type { SessionStreamOverlay } from "@volli/session-engine";
 import { decompress } from "fzstd";
@@ -83,6 +104,13 @@ import {
 /** What a cloud launch says before its client runs, or after it closed. */
 export const CLOUD_NOT_CONNECTED = "Volli Cloud is not connected";
 
+/** What a message with files or skills says in a cloud Session: they live on this Mac, not its runner. */
+export const CLOUD_ATTACHMENTS_UNAVAILABLE =
+  "Files and skills can’t be sent to a cloud Session yet. Send the text alone.";
+
+/** What a command that needs the Session's live run says when it has none. */
+export const CLOUD_NO_LIVE_RUN = "This Session has no live run";
+
 /** Facts a snapshot window, an older page and one live page hold at most. */
 const SNAPSHOT_WINDOW = 50;
 const OLDER_PAGE = 50;
@@ -92,6 +120,8 @@ const LIVE_PAGE = 100;
  * fails as still arriving: a stale state is never drawn as the current one.
  */
 const FOLD_WAIT_MS = 15_000;
+/** How often a command for a Session not registered yet is tried again (see `untilArrived`). */
+const ARRIVAL_RETRY_MS = 500;
 /** The shortest renewal a lease may ask for; anything shorter is a malformed lease. */
 const MIN_HEARTBEAT_MS = 1_000;
 
@@ -125,6 +155,16 @@ export interface CloudSessionPort {
   }): Promise<unknown>;
   heartbeatViewer(viewerId: string): Promise<unknown>;
   closeViewer(viewerId: string): Promise<unknown>;
+  /**
+   * `sessions.command`: `intent` is a `SessionCommandIntent`'s JSON text;
+   * `body` is a message's canonical transcript artifact, staged beside it.
+   */
+  command(args: {
+    sessionId: string;
+    commandId: string;
+    intent: string;
+    body?: string;
+  }): Promise<unknown>;
 }
 
 interface ConvexWatch {
@@ -173,6 +213,7 @@ export function cloudSessionPort(session: CloudSession): CloudSessionPort {
     openViewer: (args) => client.mutation(api.sessionViewers.open, args),
     heartbeatViewer: (viewerId) => client.mutation(api.sessionViewers.heartbeat, { viewerId }),
     closeViewer: (viewerId) => client.mutation(api.sessionViewers.close, { viewerId }),
+    command: (args) => client.mutation(api.sessions.command, args),
   };
 }
 
@@ -220,6 +261,11 @@ export interface CloudSessionTransportDeps {
   clock: CloudClock;
   /** Background failures nobody is waiting on: streamed text. */
   warn(message: string, error?: unknown): void;
+  /**
+   * This Mac's own create and attach, for Sessions that start here (a
+   * runner-originated start). Absent: both refuse.
+   */
+  local?: Pick<ChatSessionTransport, "createSession" | "attachSession">;
 }
 
 /** The chat core's resnapshot signal (`isResnapshotRequired`), with the cause's words. */
@@ -243,6 +289,11 @@ function olderCursor(page: CloudHistoryRead): number | null {
   return page.hasMore && page.entries.length > 0 ? page.entries[0]!.sequence : null;
 }
 
+/** The backend's `not_found`: for a Session, one it has not been told of (yet). */
+function isNotFound(failure: unknown): boolean {
+  return (failure as { data?: { code?: unknown } } | null)?.data?.code === "not_found";
+}
+
 function refuse(message: string): () => Promise<never> {
   return () => Promise.reject(new Error(message));
 }
@@ -262,6 +313,101 @@ function refusingStream(message: string): ChatSessionRpc["session"]["subscribe"]
       };
     },
   };
+}
+
+type ChatCommandRequest = Parameters<ChatSessionRpc["session"]["command"]["mutate"]>[0];
+type CloudCommandIntent = Exclude<
+  SessionCommandIntent,
+  { kind: "session.create" | "message.submit" | "interaction.resolve" }
+>;
+
+/** What `sessions.command` is sent: the intent's JSON text and, for a message, its staged body. */
+export interface CloudCommandWire {
+  intent: string;
+  body?: string;
+}
+
+/**
+ * A message's parts as a cloud Session may carry them: text only. A file part
+ * names a Blob in this Mac's store and a skill's resource was read from this
+ * Mac's disk, and neither exists on the runner the Session lives on.
+ */
+function cloudMessage(message: UIMessage): CloudUiMessage {
+  if (message.parts.some((part) => part.type !== "text"))
+    throw new Error(CLOUD_ATTACHMENTS_UNAVAILABLE);
+  const metadata = message.metadata as Record<string, unknown> | undefined;
+  const title = metadata?.autoTitleBaseline;
+  return {
+    id: message.id,
+    role: message.role,
+    parts: message.parts,
+    ...(typeof title === "string" ? { metadata: { autoTitleBaseline: title } } : {}),
+  };
+}
+
+/** A bodiless command's wire: its intent's JSON text. */
+function bodilessCommand(value: CloudCommandIntent): CloudCommandWire {
+  return { intent: JSON.stringify(value) };
+}
+
+/**
+ * The durable intent a chat command is, for `sessions.command`. `attachment`
+ * answers the Session's live run for the commands that name one and were sent
+ * without it ({@link CLOUD_NO_LIVE_RUN} when there is none). A message's body
+ * and an answer's reference are built by `@volli/shared`'s
+ * `cloud-message-artifact`, exactly as the runner's runtime records them.
+ */
+async function cloudCommand(
+  scope: { sessionId: string; commandId: string },
+  command: ChatCommandRequest["command"],
+  attachment: () => Promise<string | null>,
+): Promise<CloudCommandWire> {
+  const live = async (given: string | undefined): Promise<string> => {
+    const id = given ?? (await attachment());
+    if (id === null) throw new Error(CLOUD_NO_LIVE_RUN);
+    return id;
+  };
+  switch (command.kind) {
+    case "message.submit": {
+      const { intent: text, body } = cloudMessageSubmit({
+        ...scope,
+        message: cloudMessage(command.message),
+      });
+      return { intent: text, body };
+    }
+    case "interaction.resolve":
+      return {
+        intent: cloudInteractionResolve({
+          ...scope,
+          attachmentId: await live(undefined),
+          interactionId: command.interactionId,
+          resolution: command.resolution,
+        }).intent,
+      };
+    case "model.select":
+      return bodilessCommand({ kind: command.kind, selection: command.selection });
+    case "executor.interrupt":
+    case "executor.retry":
+      return bodilessCommand({
+        kind: command.kind,
+        attachmentId: await live(command.attachmentId),
+      });
+    case "context.compact":
+      return bodilessCommand({
+        kind: command.kind,
+        attachmentId: await live(command.attachmentId),
+        instructions: command.instructions ?? null,
+      });
+    case "resume.schedule":
+      return bodilessCommand({
+        kind: command.kind,
+        attentionId: command.attentionId,
+        attachmentId: command.attachmentId,
+        resumeAt: command.resumeAt,
+      });
+    case "resume.cancel":
+      return bodilessCommand({ kind: command.kind, scheduleId: command.scheduleId });
+  }
 }
 
 /** Every write the chat core can send, refused. */
@@ -476,8 +622,18 @@ export function createCloudSessionTransport(deps: CloudSessionTransportDeps): Ch
    * behind the stream) is watched for a while rather than read stale.
    */
   async function settledSnapshot(sessionId: string, through: number): Promise<CloudSnapshotRead> {
-    const answer = await port.snapshot(sessionId);
-    if (cloudSnapshotSettled(answer, through)) return readCloudSnapshot(answer);
+    // A Session this Mac just started is unknown to Volli Cloud until its
+    // runner's first accept registers it: waited for like a first fold, and
+    // only then refused in the backend's own words.
+    let absent: unknown = null;
+    let answer: unknown = null;
+    try {
+      answer = await port.snapshot(sessionId);
+    } catch (failure) {
+      if (!isNotFound(failure)) throw failure;
+      absent = failure;
+    }
+    if (absent === null && cloudSnapshotSettled(answer, through)) return readCloudSnapshot(answer);
     let latest = answer;
     return new Promise((resolve, reject) => {
       let done = false;
@@ -496,19 +652,42 @@ export function createCloudSessionTransport(deps: CloudSessionTransportDeps): Ch
         }
       };
       const timer = deps.clock.setTimeout(
-        () => finish(() => reject(new Error(CLOUD_SESSION_ARRIVING))),
+        () => finish(() => reject(absent ?? new Error(CLOUD_SESSION_ARRIVING))),
         FOLD_WAIT_MS,
       );
       const stop = port.watchSnapshot(sessionId, (result) => {
         if (result.kind === "loading") return;
         if (result.kind === "error") {
+          if (isNotFound(result.error)) {
+            absent = result.error;
+            return;
+          }
           finish(() => reject(result.error));
           return;
         }
+        absent = null;
         latest = result.value;
         if (cloudSnapshotSettled(latest, through)) finish(read);
       });
     });
+  }
+
+  /**
+   * A command for a Session this Mac just started: its runner registers it
+   * with Volli Cloud on its first accept, a moment after the start, so the
+   * backend answers `not_found` until then. Retried by the same `commandId`
+   * (idempotent) for as long as a first fold is waited for, then the refusal
+   * stands.
+   */
+  async function untilArrived<T>(send: () => Promise<T>): Promise<T> {
+    for (let waited = 0; ; waited += ARRIVAL_RETRY_MS) {
+      try {
+        return await send();
+      } catch (failure) {
+        if (!isNotFound(failure) || waited >= FOLD_WAIT_MS) throw failure;
+      }
+      await new Promise<void>((resolve) => deps.clock.setTimeout(resolve, ARRIVAL_RETRY_MS));
+    }
   }
 
   async function readWindow(sessionId: string, args: { beforeSequence: number; limit: number }) {
@@ -574,6 +753,28 @@ export function createCloudSessionTransport(deps: CloudSessionTransportDeps): Ch
         },
       },
       ...readOnlyWrites(CLOUD_SESSION_UNAVAILABLE),
+      command: {
+        async mutate({ sessionId, commandId, command }) {
+          const wire = await cloudCommand({ sessionId, commandId }, command, async () => {
+            try {
+              return (
+                readCloudSnapshot(await port.snapshot(sessionId)).projection.liveExecutor?.id ??
+                null
+              );
+            } catch (failure) {
+              // A Session with no fold yet has no run; anything else is a failed read.
+              if (failure instanceof Error && failure.message === CLOUD_SESSION_ARRIVING)
+                return null;
+              throw failure;
+            }
+          });
+          await untilArrived(() => port.command({ sessionId, commandId, ...wire }));
+          // Queued for the Session's runner: the job is the backend's receipt
+          // (`sessionMessages.pending` lists it until the runner answers it),
+          // and the engine's own arrives as a fact in the Session's history.
+          return { sessionId };
+        },
+      },
     },
   };
 
@@ -582,8 +783,8 @@ export function createCloudSessionTransport(deps: CloudSessionTransportDeps): Ch
     streamRecovery: "host-link",
     scheduler: deps.scheduler,
     newCommandId: deps.newCommandId,
-    createSession: refuse(CLOUD_SESSION_UNAVAILABLE),
-    attachSession: refuse(CLOUD_SESSION_UNAVAILABLE),
+    createSession: deps.local?.createSession ?? refuse(CLOUD_SESSION_UNAVAILABLE),
+    attachSession: deps.local?.attachSession ?? refuse(CLOUD_SESSION_UNAVAILABLE),
   };
 }
 
@@ -640,6 +841,10 @@ export function createCloudViewer(deps: CloudViewerDeps, sessionId: string): () 
   let timer: unknown = null;
   let stopped = false;
   let sent = false;
+  // Runner-originated Drafts become visible before their first accept. Give
+  // that birth a short, bounded arrival window rather than missing the first
+  // turn's live chunks until the normal 20-second heartbeat.
+  let arrivalRetries = FOLD_WAIT_MS / ARRIVAL_RETRY_MS;
   let last: Promise<unknown> = Promise.resolve();
 
   const clear = () => {
@@ -660,6 +865,11 @@ export function createCloudViewer(deps: CloudViewerDeps, sessionId: string): () 
       .then(() => (stopped ? undefined : step()))
       .catch((error: unknown) => {
         if (stopped) return;
+        if (isNotFound(error) && arrivalRetries > 0) {
+          arrivalRetries -= 1;
+          schedule(ARRIVAL_RETRY_MS);
+          return;
+        }
         deps.warn("[cloud-session] couldn't keep a viewer open", error);
         schedule(SESSION_VIEWER_HEARTBEAT_MS);
       });
@@ -672,6 +882,7 @@ export function createCloudViewer(deps: CloudViewerDeps, sessionId: string): () 
         sessionId,
         clientSessionId: deps.clientSessionId,
       });
+      arrivalRetries = 0;
       schedule(heartbeatMs(lease));
     });
   const beat = () =>
@@ -727,9 +938,13 @@ function transcriptReaderFor(session: CloudSession): CloudTranscriptReader {
 
 /**
  * The cloud launch's transport for a Session: over the running client, or
- * refusing everything while there is none (starting, or closed).
+ * refusing everything while there is none (starting, or closed). `local` is
+ * this Mac's own create and attach, for Sessions that start here.
  */
-export function cloudChatTransport(session: CloudSession | null): ChatSessionTransport {
+export function cloudChatTransport(
+  session: CloudSession | null,
+  local?: Pick<ChatSessionTransport, "createSession" | "attachSession">,
+): ChatSessionTransport {
   const scheduler = racingFlushScheduler(window);
   if (session === null) return disconnectedCloudTransport(scheduler);
   return createCloudSessionTransport({
@@ -739,6 +954,7 @@ export function cloudChatTransport(session: CloudSession | null): ChatSessionTra
     newCommandId: () => crypto.randomUUID(),
     clock: SYSTEM_CLOCK,
     warn,
+    ...(local === undefined ? {} : { local }),
   });
 }
 

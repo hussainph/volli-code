@@ -89,11 +89,151 @@ describe("the runner's cloud sync", () => {
     listener({ state: "connecting" });
     listener({ state: "connected" });
     await new Promise((done) => setTimeout(done, 0));
-    expect(order).toEqual(["drain.resumeAll", "inbox.renew", "inbox.claim"]);
+    expect(order).toEqual(["inbox.renew", "inbox.claim", "drain.resumeAll"]);
     order.length = 0;
     await sync.stop();
     expect(off).toHaveBeenCalled();
     expect(order).toEqual(["presence.stop", "inbox.stop", "drain.stop", "link.close"]);
+  });
+});
+
+describe("a failed reconnect recovery", () => {
+  it("does not lift a sleep fence that landed while lease renewal was awaiting its answer", async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((done) => {
+      finish = done;
+    });
+    const renew = vi.fn(() => pending);
+    const resume = vi.fn();
+    const claim = vi.fn(async () => {});
+    const drain = vi.fn();
+    const sync = startRunnerSync({
+      link: { status: { state: "connected" }, onStatus: () => () => {}, close: async () => {} },
+      drain: { start: () => {}, stop: () => {}, resumeAll: drain } as never,
+      inbox: {
+        start: async () => {},
+        stop: () => {},
+        pauseClaims: () => {},
+        resumeClaims: resume,
+        renewInFlight: renew,
+        claimNow: claim,
+      } as never,
+      presence: { start: async () => {}, stop: async () => {} } as never,
+    });
+    await Promise.resolve();
+    expect(renew).toHaveBeenCalledOnce();
+    sync.suspend();
+    finish();
+    await sync.catchUp();
+    expect(resume).not.toHaveBeenCalled();
+    expect(claim).not.toHaveBeenCalled();
+    expect(drain).not.toHaveBeenCalled();
+    await sync.resume();
+    expect(renew).toHaveBeenCalledTimes(2);
+    expect(resume).toHaveBeenCalledOnce();
+    expect(claim).toHaveBeenCalledOnce();
+    expect(drain).toHaveBeenCalledOnce();
+    await sync.stop();
+  });
+
+  it("keeps claims fenced on a failed renewal and lets the next recovery try again", async () => {
+    let listener!: (status: LinkStatus) => void;
+    const renew = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("renewal unavailable"))
+      .mockResolvedValue(undefined);
+    const pause = vi.fn();
+    const resume = vi.fn();
+    const claim = vi.fn(async () => {});
+    const drain = vi.fn();
+    const sync = startRunnerSync({
+      link: {
+        status: { state: "connecting" },
+        onStatus: (next) => {
+          listener = next;
+          return () => {};
+        },
+        close: async () => {},
+      },
+      drain: { start: () => {}, stop: () => {}, resumeAll: drain } as never,
+      inbox: {
+        start: async () => {},
+        stop: () => {},
+        pauseClaims: pause,
+        resumeClaims: resume,
+        renewInFlight: renew,
+        claimNow: claim,
+      } as never,
+      presence: { start: async () => {}, stop: async () => {} } as never,
+    });
+    listener({ state: "connected" });
+    await new Promise((done) => setTimeout(done, 0));
+    expect(renew).toHaveBeenCalledOnce();
+    expect(pause).toHaveBeenCalled();
+    expect(resume).not.toHaveBeenCalled();
+    expect(claim).not.toHaveBeenCalled();
+    expect(drain).not.toHaveBeenCalled();
+    await sync.catchUp();
+    expect(renew).toHaveBeenCalledTimes(2);
+    expect(resume).toHaveBeenCalledOnce();
+    expect(claim).toHaveBeenCalledOnce();
+    expect(drain).toHaveBeenCalledOnce();
+    await sync.stop();
+  });
+});
+
+describe("a sleep fence that lands while the claim is in flight", () => {
+  it("drops the answer it no longer owns, and renews before claiming on the next wake", async () => {
+    // Both ends of the claim are held open by hand, so the sleep lands exactly
+    // between the ask and its answer however the scheduler runs: no timer, and
+    // no wall clock, decides which side of the fence the answer arrives on.
+    let asked!: () => void;
+    const claiming = new Promise<void>((done) => {
+      asked = done;
+    });
+    let answer!: () => void;
+    const claimAnswer = new Promise<void>((done) => {
+      answer = done;
+    });
+    const renew = vi.fn(async () => {});
+    const resume = vi.fn();
+    const claim = vi.fn(() => {
+      asked();
+      return claimAnswer;
+    });
+    const drain = vi.fn();
+    const sync = startRunnerSync({
+      link: { status: { state: "connected" }, onStatus: () => () => {}, close: async () => {} },
+      drain: { start: () => {}, stop: () => {}, resumeAll: drain } as never,
+      inbox: {
+        start: async () => {},
+        stop: () => {},
+        pauseClaims: () => {},
+        resumeClaims: resume,
+        renewInFlight: renew,
+        claimNow: claim,
+      } as never,
+      presence: { start: async () => {}, stop: async () => {} } as never,
+    });
+    // Reconnect recovery renewed the leases, re-opened claims, and asked for work.
+    await claiming;
+    expect(renew).toHaveBeenCalledOnce();
+    expect(resume).toHaveBeenCalledOnce();
+    // The Mac sleeps with that claim's answer still on the wire.
+    sync.suspend();
+    answer();
+    // The lane runs in order, so the link added here settles only after the
+    // fenced attempt that was already queued has returned.
+    await sync.catchUp();
+    // That answer belongs to work the fence outlived: the drain stays paused.
+    expect(claim).toHaveBeenCalledOnce();
+    expect(drain).not.toHaveBeenCalled();
+    // The next wake renews before it claims, and only then resumes the drain.
+    await sync.resume();
+    expect(renew).toHaveBeenCalledTimes(2);
+    expect(claim).toHaveBeenCalledTimes(2);
+    expect(drain).toHaveBeenCalledOnce();
+    await sync.stop();
   });
 });
 

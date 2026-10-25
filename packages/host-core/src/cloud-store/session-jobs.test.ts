@@ -1,6 +1,20 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import type { HostedSessionRuntime, TranscriptArtifactStore } from "@volli/session-engine";
-import { encodeSessionJson, LOCAL_RUNNER } from "@volli/shared";
+import {
+  sessionMainBranchId,
+  sessionRootThreadId,
+  TRANSCRIPT_ARTIFACT_MEDIA_TYPE,
+  type HostedSessionRuntime,
+  type TranscriptArtifactStore,
+} from "@volli/session-engine";
+import {
+  CLOUD_MESSAGE_MEDIA_TYPE,
+  cloudMessageSubmit,
+  encodeSessionJson,
+  LOCAL_RUNNER,
+} from "@volli/shared";
 import {
   SESSION_COMMAND_FORMAT,
   SESSION_INTERRUPT_FORMAT,
@@ -13,7 +27,12 @@ import { insertTicket } from "../db/tickets-repo";
 import { createTestSessionEngine } from "../testing/session-engine";
 import type { JobContext, JobExecutor } from "../cloud-runner/inbox";
 import { sqliteDrainCursorStore } from "../cloud-runner/sqlite-stores";
-import { ownerGuardedInbox, registerSessionCommandJob } from "./session-jobs";
+import { SpoolTranscriptArtifactStore } from "../transcript-spool/artifact-spool";
+import {
+  ownerGuardedInbox,
+  registerSessionCommandJob,
+  type CommandArtifactSource,
+} from "./session-jobs";
 
 let opened: TestDb | undefined;
 afterEach(() => {
@@ -394,4 +413,164 @@ it("keeps local exception paths out of journaled Session outcomes", async () => 
   const outcome = await f.execute(job({ kind: "message.submit", reference }));
   expect(outcome).toMatchObject({ status: "failed", code: "executor_error" });
   expect(JSON.stringify(outcome)).not.toContain("/runner/private");
+});
+
+describe("a message staged with its command", () => {
+  const spools: string[] = [];
+  afterEach(() => {
+    for (const directory of spools.splice(0)) rmSync(directory, { recursive: true, force: true });
+  });
+
+  async function staged(commandArtifact?: CommandArtifactSource) {
+    const f = await fixture();
+    const directory = mkdtempSync(join(tmpdir(), "volli-staged-message-"));
+    spools.push(directory);
+    const store = new SpoolTranscriptArtifactStore(directory);
+    const executors = new Map<string, JobExecutor>();
+    const command = vi.fn(async (_input: unknown) => ({ receipt: null }));
+    registerSessionCommandJob(
+      { register: (kind, executor) => void executors.set(kind, executor) },
+      {
+        engine: f.engine,
+        runtime: () => ({ command }) as unknown as HostedSessionRuntime,
+        artifacts: () => store,
+        ...(commandArtifact === undefined ? {} : { commandArtifact }),
+      },
+    );
+    const send = (built: { intent: string }, edit?: (claimed: ClaimedJob) => void) => {
+      const claimed = job(JSON.parse(built.intent));
+      edit?.(claimed);
+      return executors.get("session.command")!(claimed, jobContext);
+    };
+    return { store, command, send };
+  }
+
+  const sent = (commandId = "delivery-command") =>
+    cloudMessageSubmit({ sessionId: "a-session", commandId, message });
+
+  it("names the reference the runtime's own transcript store writes for the command", async () => {
+    const { store } = await staged();
+    const built = sent();
+    expect(CLOUD_MESSAGE_MEDIA_TYPE).toBe(TRANSCRIPT_ARTIFACT_MEDIA_TYPE);
+    const written = await store.write({
+      version: 1,
+      threadId: sessionRootThreadId("a-session"),
+      branchId: sessionMainBranchId("a-session"),
+      attemptId: "attempt:delivery-command",
+      turnId: "turn:delivery-command",
+      message,
+    });
+    expect(written).toEqual(built.reference);
+    expect((await store.readCanonicalBytes(written)).toString("utf8")).toBe(built.body);
+  });
+
+  it("hydrates a person's body by its digest through the spool, then delivers it", async () => {
+    const built = sent();
+    const commandArtifact = vi.fn(async () => built.body);
+    const { store, command, send } = await staged(commandArtifact);
+    expect(await send(built)).toEqual({ status: "done", result: null });
+    expect(commandArtifact).toHaveBeenCalledWith({
+      sessionId: "a-session",
+      digest: built.reference.digest,
+    });
+    expect((await store.read(built.reference)).message).toEqual(message);
+    expect(command).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandId: "delivery-command",
+        origin: { kind: "user" },
+        command: { kind: "message.submit", message, settle: "opened" },
+      }),
+    );
+    // Held now: a redelivery reads it locally.
+    expect(await send(built)).toEqual({ status: "done", result: null });
+    expect(commandArtifact).toHaveBeenCalledTimes(1);
+  });
+
+  it("hydrates an agent's body under its composite operation id and delivers it as a steer", async () => {
+    const operation = "parent-session:tool-call-1";
+    const built = sent(operation);
+    const commandArtifact = vi.fn(async () => built.body);
+    const { store, command, send } = await staged(commandArtifact);
+    const asAgent = (claimed: ClaimedJob) => {
+      claimed.job.commandId = operation as typeof claimed.job.commandId;
+      claimed.job.createdBy = {
+        kind: "agent",
+        userId: "a",
+        sessionId: "parent-session",
+      } as typeof claimed.job.createdBy;
+    };
+    expect(await send(built, asAgent)).toEqual({ status: "done", result: null });
+    // The read is by digest: the operation id never reaches it.
+    expect(commandArtifact).toHaveBeenCalledWith({
+      sessionId: "a-session",
+      digest: built.reference.digest,
+    });
+    await expect(store.read(built.reference)).resolves.toMatchObject({ message });
+    expect(command).toHaveBeenCalledWith({
+      sessionId: "a-session",
+      commandId: operation,
+      origin: { kind: "session", sessionId: "parent-session" },
+      command: { kind: "message.submit", message, settle: "opened", delivery: "steer" },
+    });
+  });
+
+  it("refuses a staged body that is not the reference's, without delivering", async () => {
+    const built = sent();
+    let body: string | null = null;
+    const { command, send } = await staged(async () => body);
+    for (const [next, code] of [
+      [sent("another-command").body, "artifact_mismatch"],
+      [built.body.replace("Message", "Massage"), "artifact_mismatch"],
+      ["{", "invalid_artifact"],
+    ] as const) {
+      body = next;
+      expect(await send(built)).toMatchObject({ status: "failed", code, retryable: false });
+    }
+    expect(command).not.toHaveBeenCalled();
+  });
+
+  it("retries when nothing is staged or the backend cannot answer", async () => {
+    const read = vi
+      .fn<() => Promise<string | null>>()
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(new Error("offline"));
+    const { command, send } = await staged(read);
+    await expect(send(sent())).rejects.toThrow();
+    await expect(send(sent())).rejects.toThrow("offline");
+    expect(command).not.toHaveBeenCalled();
+  });
+
+  it("ends on the backend's typed refusals with its own path-free sentence", async () => {
+    let refusal: unknown = null;
+    const { command, send } = await staged(async () => {
+      throw refusal;
+    });
+    for (const [code, retryable] of [
+      ["not_claimed", false],
+      ["invalid_argument", false],
+      ["revoked", false],
+      ["not_a_runner", false],
+      // The claim may be this runner's under a generation its drain has not learnt yet.
+      ["stale_claim", true],
+    ] as const) {
+      refusal = Object.assign(new Error("/Users/someone/secret"), {
+        data: { code, message: "/Users/someone/secret" },
+      });
+      const outcome = await send(sent());
+      expect(outcome).toMatchObject({ status: "failed", code, retryable });
+      expect(JSON.stringify(outcome)).not.toContain("/Users");
+    }
+    // A refreshing token, a transport failure, or an untyped one may recover.
+    for (const retried of [{ data: { code: "unauthenticated" } }, { data: null }, null]) {
+      refusal = retried;
+      await expect(send(sent())).rejects.toBe(retried);
+    }
+    expect(command).not.toHaveBeenCalled();
+  });
+
+  it("keeps the local miss when no backend read is wired", async () => {
+    const unwired = await staged();
+    await expect(unwired.send(sent())).rejects.toThrow();
+    expect(unwired.command).not.toHaveBeenCalled();
+  });
 });

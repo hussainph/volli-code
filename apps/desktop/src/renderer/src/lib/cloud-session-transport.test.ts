@@ -6,6 +6,7 @@
  * streamed text are checked where the chat actually draws them.
  */
 import { isResnapshotRequired } from "@volli/host-protocol";
+import { cloudInteractionResolve, cloudMessageSubmit } from "@volli/shared";
 import {
   ChatSessionClient,
   createSurfaceStore,
@@ -18,6 +19,8 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { CloudApi, CloudClient, CloudSession } from "./cloud-client";
 import {
+  CLOUD_ATTACHMENTS_UNAVAILABLE,
+  CLOUD_NO_LIVE_RUN,
   CLOUD_NOT_CONNECTED,
   cloudChatTransport,
   cloudSessionPort,
@@ -94,10 +97,24 @@ class FakePort implements CloudSessionPort {
   });
   beat: () => Promise<unknown> = async () => ({ open: true, heartbeatMs: 5_000 });
   shut: () => Promise<unknown> = async () => null;
+  readonly commands: { sessionId: string; commandId: string; intent: unknown; body?: string }[] =
+    [];
+  commandAnswer: () => Promise<unknown> = async () => ({ status: "queued", receipt: null });
+
+  async command(args: { sessionId: string; commandId: string; intent: string; body?: string }) {
+    this.commands.push({ ...args, intent: JSON.parse(args.intent) as unknown });
+    return this.commandAnswer();
+  }
+
+  /** Thrown by the next one-shot snapshot read instead of answering, once. */
+  snapshotFailure: unknown = null;
 
   async snapshot(sessionId: string) {
     expect(sessionId).toBe(SESSION_ID);
     this.snapshots += 1;
+    const failure = this.snapshotFailure;
+    this.snapshotFailure = null;
+    if (failure !== null) throw failure;
     return this.snapshotAnswer;
   }
 
@@ -215,7 +232,7 @@ const everyBody: CloudTranscriptReader = async (_sessionId, requests) =>
     ]),
   );
 
-function harness() {
+function harness(extra: Partial<CloudSessionTransportDeps> = {}) {
   const port = new FakePort();
   const clock = new FakeClock();
   const scheduler = new ManualScheduler();
@@ -233,6 +250,7 @@ function harness() {
     newCommandId: () => "command-1",
     clock,
     warn: (message) => warnings.push(message),
+    ...extra,
   };
   return {
     port,
@@ -272,6 +290,11 @@ function value(answer: unknown): CloudWatchResult {
 }
 
 /* ------------------------------------------------------------------ reads */
+
+/** The backend's `not_found`, as the client throws it. */
+function unknown(): Error {
+  return Object.assign(new Error("That session does not exist."), { data: { code: "not_found" } });
+}
 
 describe("the cloud Session reads", () => {
   it("answers a snapshot with the fold and the newest window, bodies inlined", async () => {
@@ -408,6 +431,39 @@ describe("the cloud Session reads", () => {
     await expect(broken).rejects.toThrow(/malformed/u);
   });
 
+  it("waits for a Session this Mac just started to reach Volli Cloud before reading it", async () => {
+    const { port, clock, transport } = harness();
+    port.snapshotFailure = unknown();
+    const reading = transport.rpc.session.snapshot.query({ sessionId: SESSION_ID });
+    await settle();
+    const watch = port.snapshotWatches[0]!;
+    expect(clock.pending()).toEqual([15_000]);
+    // Still unknown while its runner's first accept is on the way.
+    watch.push({ kind: "error", error: unknown() });
+    watch.push(value(snapshotAnswer(0, null)));
+    port.historyAnswer = () => historyAnswer(rows(1));
+    watch.push(value(snapshotAnswer(1)));
+    expect((await reading).throughSequence).toBe(1);
+    expect(clock.pending()).toEqual([]);
+
+    // Never registered: refused, past the wait, in the backend's own words.
+    const never = harness();
+    never.port.snapshotFailure = unknown();
+    const refused = never.transport.rpc.session.snapshot.query({ sessionId: SESSION_ID });
+    await settle();
+    never.port.snapshotWatches[0]!.push({ kind: "error", error: unknown() });
+    never.clock.fire();
+    await expect(refused).rejects.toThrow("That session does not exist.");
+
+    // Any other failure of the first read stands at once.
+    const other = harness();
+    other.port.snapshotFailure = new Error("offline");
+    await expect(
+      other.transport.rpc.session.snapshot.query({ sessionId: SESSION_ID }),
+    ).rejects.toThrow("offline");
+    expect(other.port.snapshotWatches).toEqual([]);
+  });
+
   it("pages older history by its cursor", async () => {
     const { port, transport } = harness();
     port.historyAnswer = ({ beforeSequence }) =>
@@ -474,15 +530,10 @@ describe("the cloud Session reads", () => {
     expect(port.historyCalls).toEqual([]);
   });
 
-  it("refuses every write, create and attach", async () => {
-    const { transport } = harness();
+  it("refuses the writes that have no cloud command, and create and attach with nothing local", async () => {
+    const { port, transport } = harness();
     const session = transport.rpc.session;
     const refused = [
-      session.command.mutate({
-        commandId: "c",
-        sessionId: SESSION_ID,
-        command: { kind: "executor.interrupt" },
-      }),
       session.cancelQueued.mutate({ commandId: "c", sessionId: SESSION_ID, messageId: "m" }),
       session.editQueued.mutate({
         commandId: "c",
@@ -501,9 +552,207 @@ describe("the cloud Session reads", () => {
       transport.attachSession({ operationId: "o", sessionId: SESSION_ID }),
     ];
     for (const call of refused) await expect(call).rejects.toThrow(CLOUD_SESSION_UNAVAILABLE);
+    expect(port.commands).toEqual([]);
     expect(transport.streamRecovery).toBe("host-link");
     expect(transport.newCommandId()).toBe("command-1");
     expect(session.subscribeQueue).toBeUndefined();
+  });
+
+  it("queues a message with its canonical body, and an answer by its derived reference", async () => {
+    const { port, transport } = harness();
+    port.snapshotAnswer = snapshotAnswer(3, viewJson({ liveAttachment: { id: "att-live" } }));
+    const session = transport.rpc.session;
+    const message = {
+      ...messageOf("m", "hi there", "user"),
+      metadata: { autoTitleBaseline: "Chat 3", attachments: undefined },
+    };
+    expect(
+      await session.command.mutate({
+        commandId: "c-message",
+        sessionId: SESSION_ID,
+        command: { kind: "message.submit", message, settle: "opened" },
+      }),
+    ).toEqual({ sessionId: SESSION_ID });
+    const expected = cloudMessageSubmit({
+      sessionId: SESSION_ID,
+      commandId: "c-message",
+      message: { ...messageOf("m", "hi there", "user"), metadata: { autoTitleBaseline: "Chat 3" } },
+    });
+    expect(port.commands[0]).toEqual({
+      sessionId: SESSION_ID,
+      commandId: "c-message",
+      intent: JSON.parse(expected.intent),
+      body: expected.body,
+    });
+    const resolution = { optionIds: ["yes"], response: null };
+    await session.command.mutate({
+      commandId: "c-answer",
+      sessionId: SESSION_ID,
+      command: { kind: "interaction.resolve", interactionId: "i", resolution },
+    });
+    const answer = cloudInteractionResolve({
+      sessionId: SESSION_ID,
+      commandId: "c-answer",
+      attachmentId: "att-live",
+      interactionId: "i",
+      resolution,
+    });
+    expect(port.commands[1]).toEqual({
+      sessionId: SESSION_ID,
+      commandId: "c-answer",
+      intent: JSON.parse(answer.intent),
+    });
+  });
+
+  it("refuses files and skills, which live on this Mac and not on the Session's runner", async () => {
+    const { port, transport } = harness();
+    const send = (parts: UIMessage["parts"]) =>
+      transport.rpc.session.command.mutate({
+        commandId: "c",
+        sessionId: SESSION_ID,
+        command: { kind: "message.submit", message: { id: "m", role: "user", parts } },
+      });
+    await expect(
+      send([
+        { type: "text", text: "look" },
+        { type: "file", url: "volli-blob://abc", mediaType: "image/png" },
+      ]),
+    ).rejects.toThrow(CLOUD_ATTACHMENTS_UNAVAILABLE);
+    await expect(
+      send([{ type: "text", text: "use it" }, { type: "data-resource", data: {} } as never]),
+    ).rejects.toThrow(CLOUD_ATTACHMENTS_UNAVAILABLE);
+    // Past the inline limit, the shared builder refuses before anything is sent.
+    await expect(send([{ type: "text", text: "x".repeat(70 * 1024) }])).rejects.toThrow(
+      "A message is limited to",
+    );
+    expect(port.commands).toEqual([]);
+  });
+
+  it("queues each command as its durable intent for the Session's runner", async () => {
+    const { port, transport } = harness();
+    port.snapshotAnswer = snapshotAnswer(3, viewJson({ liveAttachment: { id: "att-live" } }));
+    const send = (command: Parameters<typeof transport.rpc.session.command.mutate>[0]["command"]) =>
+      transport.rpc.session.command.mutate({ commandId: "c", sessionId: SESSION_ID, command });
+    const selection = { providerId: "anthropic", modelId: "opus", reasoningLevel: "high" } as const;
+    expect(await send({ kind: "model.select", selection })).toEqual({ sessionId: SESSION_ID });
+    await send({ kind: "executor.interrupt" });
+    await send({ kind: "executor.retry", attachmentId: "att-given" });
+    await send({ kind: "context.compact" });
+    await send({ kind: "context.compact", attachmentId: "att-given", instructions: "keep tests" });
+    await send({ kind: "resume.schedule", attentionId: "a", attachmentId: "att", resumeAt: 9 });
+    await send({ kind: "resume.cancel", scheduleId: "s" });
+    expect(port.commands.map(({ intent }) => intent)).toEqual([
+      { kind: "model.select", selection },
+      { kind: "executor.interrupt", attachmentId: "att-live" },
+      { kind: "executor.retry", attachmentId: "att-given" },
+      { kind: "context.compact", attachmentId: "att-live", instructions: null },
+      { kind: "context.compact", attachmentId: "att-given", instructions: "keep tests" },
+      { kind: "resume.schedule", attentionId: "a", attachmentId: "att", resumeAt: 9 },
+      { kind: "resume.cancel", scheduleId: "s" },
+    ]);
+    expect(port.commands.every((sent) => sent.sessionId === SESSION_ID && !("body" in sent))).toBe(
+      true,
+    );
+  });
+
+  it("refuses a run's command when the Session has no live run, and reports a refused queue", async () => {
+    const { port, transport } = harness();
+    const interrupt = () =>
+      transport.rpc.session.command.mutate({
+        commandId: "c",
+        sessionId: SESSION_ID,
+        command: { kind: "executor.interrupt" },
+      });
+    port.snapshotAnswer = snapshotAnswer(2);
+    await expect(interrupt()).rejects.toThrow(CLOUD_NO_LIVE_RUN);
+    // No fold yet: no run either.
+    port.snapshotAnswer = snapshotAnswer(0, null);
+    await expect(interrupt()).rejects.toThrow(CLOUD_NO_LIVE_RUN);
+    port.snapshotAnswer = "not a snapshot";
+    await expect(interrupt()).rejects.toThrow("malformed");
+    port.snapshotAnswer = snapshotAnswer(2, viewJson({ liveAttachment: { id: "att" } }));
+    port.commandAnswer = async () => {
+      throw new Error("forbidden");
+    };
+    await expect(interrupt()).rejects.toThrow("forbidden");
+    // An answer needs the run too.
+    port.snapshotAnswer = snapshotAnswer(2);
+    await expect(
+      transport.rpc.session.command.mutate({
+        commandId: "c",
+        sessionId: SESSION_ID,
+        command: {
+          kind: "interaction.resolve",
+          interactionId: "i",
+          resolution: { optionIds: [], response: "ok" },
+        },
+      }),
+    ).rejects.toThrow(CLOUD_NO_LIVE_RUN);
+  });
+
+  it("retries a command while its new Session is not registered yet, then lets the refusal stand", async () => {
+    const { port, clock, transport } = harness();
+    const missing = unknown();
+    let calls = 0;
+    port.commandAnswer = async () => {
+      calls += 1;
+      if (calls < 3) throw missing;
+      return { status: "queued" };
+    };
+    const selection = { providerId: "anthropic", modelId: "opus", reasoningLevel: "high" } as const;
+    const select = () =>
+      transport.rpc.session.command.mutate({
+        commandId: "c",
+        sessionId: SESSION_ID,
+        command: { kind: "model.select", selection },
+      });
+    const first = select();
+    for (let fired = 0; fired < 2; fired += 1) {
+      await settle();
+      expect(clock.pending()).toEqual([500]);
+      clock.fire();
+    }
+    await expect(first).resolves.toEqual({ sessionId: SESSION_ID });
+    expect(calls).toBe(3);
+    // The same command id each time: the backend's idempotence makes it one job.
+    expect(new Set(port.commands.map((sent) => sent.commandId))).toEqual(new Set(["c"]));
+
+    // Never registered: it gives up once a first fold would have been waited for.
+    port.commandAnswer = async () => {
+      throw missing;
+    };
+    const second = select();
+    let failure: unknown = null;
+    void second.catch((error: unknown) => (failure = error));
+    let fires = 0;
+    for (let round = 0; round < 200; round += 1) {
+      await settle();
+      if (failure !== null) break;
+      if (clock.pending().length === 0) continue;
+      clock.fire();
+      fires += 1;
+    }
+    expect(failure).toBe(missing);
+    expect(fires).toBe(30);
+    // Any other refusal is not retried.
+    port.commandAnswer = async () => {
+      throw Object.assign(new Error("Only the owner"), { data: { code: "forbidden" } });
+    };
+    await expect(select()).rejects.toThrow("Only the owner");
+    expect(clock.pending()).toEqual([]);
+  });
+
+  it("creates and attaches through this Mac when the launch supplies it", async () => {
+    const local = {
+      createSession: vi.fn(async () => ({ sessionId: "new" })),
+      attachSession: vi.fn(async () => ({ ok: true }) as never),
+    };
+    const { transport } = harness({ local });
+    const create = { operationId: "o", projectId: "p", ticketId: null, title: null };
+    expect(await transport.createSession(create)).toEqual({ sessionId: "new" });
+    await transport.attachSession({ operationId: "o", sessionId: "new" });
+    expect(local.createSession).toHaveBeenCalledWith(create);
+    expect(local.attachSession).toHaveBeenCalledWith({ operationId: "o", sessionId: "new" });
   });
 });
 
@@ -973,6 +1222,42 @@ function viewerOf(port: FakePort) {
 }
 
 describe("createCloudViewer", () => {
+  it("retries a runner-originated birth promptly, bounds that wait, then uses the lease cadence", async () => {
+    const port = new FakePort();
+    const { clock, warnings, show } = viewerOf(port);
+    const absent = Object.assign(new Error("not yet accepted"), { data: { code: "not_found" } });
+    port.open = async () => {
+      throw absent;
+    };
+    port.beat = async () => ({ open: false });
+    const hide = show();
+    await settle();
+    expect(clock.pending()).toEqual([500]);
+    expect(warnings).toEqual([]);
+    // An absent/private Session does not get an unbounded fast retry loop.
+    for (let retry = 0; retry < 30; retry += 1) {
+      clock.fire();
+      await settle();
+    }
+    expect(clock.pending()).toEqual([20_000]);
+    expect(warnings).toHaveLength(1);
+    port.open = async () => ({ heartbeatMs: 5_000 });
+    clock.fire();
+    await settle();
+    expect(clock.pending()).toEqual([5_000]);
+    // Once opened, losing access never re-enters the fast arrival window.
+    port.beat = async () => {
+      throw absent;
+    };
+    clock.fire();
+    await settle();
+    expect(clock.pending()).toEqual([20_000]);
+    expect(warnings).toHaveLength(2);
+    hide();
+    await settle();
+    expect(clock.pending()).toEqual([]);
+  });
+
   it("opens, renews on the lease's heartbeat, and closes once", async () => {
     const port = new FakePort();
     const { clock, warnings, show } = viewerOf(port);
@@ -1177,7 +1462,7 @@ function fakeClient() {
     },
   };
   const api = {
-    sessions: names("sessions", "snapshot", "history"),
+    sessions: names("sessions", "snapshot", "history", "command"),
     streamChunks: names("streamChunks", "since"),
     sessionViewers: names("sessionViewers", "open", "heartbeat", "close"),
     sessionTranscript: names("sessionTranscript", "artifacts", "segments", "presignGet"),
@@ -1199,6 +1484,7 @@ describe("over the Convex client", () => {
     await port.openViewer({ viewerId: "v", sessionId: SESSION_ID, clientSessionId: "w" });
     await port.heartbeatViewer("v");
     await port.closeViewer("v");
+    await port.command({ sessionId: SESSION_ID, commandId: "c", intent: "{}" });
     port.watchHistory({ sessionId: SESSION_ID, afterSequence: 1, limit: 100 }, () => undefined)();
     port.watchChunks({ sessionId: SESSION_ID, cursors: [] }, () => undefined)();
     expect(calls).toEqual([
@@ -1216,6 +1502,11 @@ describe("over the Convex client", () => {
       },
       { kind: "mutation", ref: "sessionViewers.heartbeat", args: { viewerId: "v" } },
       { kind: "mutation", ref: "sessionViewers.close", args: { viewerId: "v" } },
+      {
+        kind: "mutation",
+        ref: "sessions.command",
+        args: { sessionId: SESSION_ID, commandId: "c", intent: "{}" },
+      },
       {
         kind: "watch",
         ref: "sessions.history",
@@ -1334,6 +1625,25 @@ describe("cloudChatTransport", () => {
     expect(quiet.log.errors).toEqual([]);
     expect(transport.streamRecovery).toBe("host-link");
     expect(transport.newCommandId()).toMatch(/^[0-9a-f-]{36}$/u);
+  });
+
+  it("passes explicit runner-local starts through the window factory, without sending local reads", async () => {
+    vi.stubGlobal("window", {});
+    const { session, calls } = fakeClient();
+    const local = {
+      createSession: vi.fn(async () => ({ sessionId: "new" })),
+      attachSession: vi.fn(async () => ({ ok: true }) as never),
+    };
+    const transport = cloudChatTransport(session, local);
+    const create = { operationId: "o", projectId: "p", ticketId: null, title: null };
+    expect(await transport.createSession(create)).toEqual({ sessionId: "new" });
+    await transport.attachSession({ operationId: "o", sessionId: "new" });
+    expect(local.createSession).toHaveBeenCalledExactlyOnceWith(create);
+    expect(local.attachSession).toHaveBeenCalledExactlyOnceWith({
+      operationId: "o",
+      sessionId: "new",
+    });
+    expect(calls).toEqual([]);
   });
 
   it("runs over the client, one body cache per client", async () => {

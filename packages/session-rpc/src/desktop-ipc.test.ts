@@ -142,6 +142,8 @@ describe("the desktop's IPC exposure", () => {
       "runners.subscribeThisMac",
       "runners.addThisMac",
       "runners.removeThisMac",
+      "checkouts.status",
+      "checkouts.chooseFolder",
     ]);
   });
 

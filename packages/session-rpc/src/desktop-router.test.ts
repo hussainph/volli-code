@@ -408,6 +408,11 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "runners.subscribeThisMac": stream("runners.subscribeThisMac", THIS_MAC),
     "runners.addThisMac": record("runners.addThisMac", null),
     "runners.removeThisMac": record("runners.removeThisMac", null),
+    "checkouts.status": record("checkouts.status", { state: "missing" }),
+    "checkouts.chooseFolder": record("checkouts.chooseFolder", {
+      outcome: "chosen",
+      projectRepoId: "repo-1",
+    }),
     ...fixture.overrides,
   };
 }
@@ -1456,6 +1461,36 @@ describeContract<Host, DesktopRouter>(
       expect(await client.runners.thisMac.query()).toEqual(THIS_MAC);
     });
 
+    // A cloud project's folder on this Mac (VC-895 N2-3): the window's alone, never a path.
+    it("serves a cloud project's folder status and choice without a path", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER, {
+        "checkouts.chooseFolder": () =>
+          ({ outcome: "chosen", projectRepoId: "repo-1", absPath: "/Users/dana/code" }) as never,
+      });
+      const client = await connect(fixture);
+      expect(await client.checkouts.status.query({ projectId: "project-1" })).toEqual({
+        state: "missing",
+      });
+      expect(await client.checkouts.chooseFolder.mutate({ projectId: "project-1" })).toEqual({
+        outcome: "chosen",
+        projectRepoId: "repo-1",
+      });
+      await expect(
+        client.checkouts.status.query({ projectId: "project-1", path: "/tmp" } as never),
+      ).rejects.toBeDefined();
+      for (const answer of [{ state: "somewhere" }, { outcome: "chosen" }]) {
+        const refused = host(LOCAL_DESKTOP_CALLER, {
+          "checkouts.status": () => answer as never,
+          "checkouts.chooseFolder": () => answer as never,
+        });
+        const refusing = await connect(refused);
+        await expect(refusing.checkouts.status.query({ projectId: "p" })).rejects.toBeDefined();
+        await expect(
+          refusing.checkouts.chooseFolder.mutate({ projectId: "p" }),
+        ).rejects.toBeDefined();
+      }
+    });
+
     it("refuses an account snapshot that would carry anything but the profile", async () => {
       const fixture = host(LOCAL_DESKTOP_CALLER, {
         "account.snapshot": () => ({ ...ACCOUNT, state: "signed-in-ish" }) as never,
@@ -1799,6 +1834,8 @@ describe("the desktop router's grammar", () => {
         "runners.subscribeThisMac",
         "runners.addThisMac",
         "runners.removeThisMac",
+        "checkouts.status",
+        "checkouts.chooseFolder",
       ].toSorted(),
     );
     expect(schemas["worktree.trimSettings"]).toMatchObject({

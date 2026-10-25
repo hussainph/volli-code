@@ -230,6 +230,9 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "runners.subscribeThisMac": "ipc",
   "runners.addThisMac": "ipc",
   "runners.removeThisMac": "ipc",
+  // A Volli Cloud project's folder on this Mac (VC-895 N2-3).
+  "checkouts.status": "ipc",
+  "checkouts.chooseFolder": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

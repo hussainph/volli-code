@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import { isCommandIntentConflict } from "@volli/shared";
+import {
+  cloudInteractionArtifact,
+  cloudInteractionResolve,
+  cloudMessageSubmit,
+  isCommandIntentConflict,
+} from "@volli/shared";
 import type {
   ObservabilityEvent,
   ObservabilitySink,
@@ -41,6 +46,9 @@ import {
   type SessionStreamFrame,
   type SessionStreamOverlay,
   type SubscribeCommittedSessionEvents,
+  canonicalJson,
+  TRANSCRIPT_ARTIFACT_MEDIA_TYPE,
+  type SessionTranscriptArtifact,
   type TranscriptArtifactStore,
   type TranscriptDelta,
 } from "./index";
@@ -6860,5 +6868,87 @@ describe("SessionRuntime executor slot (VC-916)", () => {
     expect(replayed.receipt?.status).not.toBe("completed");
     expect(fake.attaches).toBe(0);
     expect(other.attaches).toBe(0);
+  });
+});
+
+async function sha256(text: string): Promise<string> {
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return `sha256:${Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+describe("the cloud client's transcript artifacts", () => {
+  it("are byte for byte what this runtime writes for the same command", async () => {
+    const inner = createInMemoryTranscriptArtifactStore();
+    const written: SessionTranscriptArtifact[] = [];
+    const artifacts: TranscriptArtifactStore = {
+      write: async (artifact) => {
+        written.push(artifact);
+        return inner.write(artifact);
+      },
+      read: (reference) => inner.read(reference),
+    };
+    const { runtime, adapter } = composition({ artifacts });
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    const writtenFor = (commandId: string) =>
+      written.find(({ attemptId }) => attemptId === `attempt:${commandId}`);
+
+    const message = userMessage("parity-message", "Hello ✓ — with a { brace");
+    await runtime.command({
+      commandId: "parity-message-command",
+      sessionId,
+      command: { kind: "message.submit", message, settle: "opened" },
+    });
+    const sent = cloudMessageSubmit({ sessionId, commandId: "parity-message-command", message });
+    expect(canonicalJson(writtenFor("parity-message-command"))).toBe(sent.body);
+    expect(sent.reference).toEqual({
+      id: await sha256(sent.body),
+      digest: await sha256(sent.body),
+      mediaType: TRANSCRIPT_ARTIFACT_MEDIA_TYPE,
+    });
+
+    await adapter.emit({
+      kind: "interaction",
+      state: "opened",
+      occurredAt: 300,
+      interaction: {
+        id: "parity-permission",
+        kind: "permission",
+        title: "Write file",
+        detail: null,
+        options: [{ id: "allow", label: "Allow", description: null }],
+        multiple: false,
+        native: { id: "native-parity-permission", detail: null },
+      },
+    });
+    const resolution = { optionIds: ["allow"], response: null };
+    await runtime.command({
+      commandId: "parity-resolve",
+      sessionId,
+      command: { kind: "interaction.resolve", interactionId: "parity-permission", resolution },
+    });
+    const answered = cloudInteractionResolve({
+      sessionId,
+      commandId: "parity-resolve",
+      attachmentId,
+      interactionId: "parity-permission",
+      resolution,
+    });
+    const runtimeBytes = canonicalJson(writtenFor("parity-resolve"));
+    expect(runtimeBytes).toBe(
+      canonicalJson(
+        cloudInteractionArtifact({
+          sessionId,
+          commandId: "parity-resolve",
+          interactionId: "parity-permission",
+          resolution,
+        }),
+      ),
+    );
+    expect(answered.reference).toEqual({
+      id: await sha256(runtimeBytes),
+      digest: await sha256(runtimeBytes),
+      mediaType: TRANSCRIPT_ARTIFACT_MEDIA_TYPE,
+    });
   });
 });

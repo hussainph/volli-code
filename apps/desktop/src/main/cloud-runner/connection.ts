@@ -135,7 +135,16 @@ export function runnerConnector(deps: RunnerConnectionDeps): ConnectRunner {
       get waitingFacts() {
         return sync?.waiting() ?? 0;
       },
-      power,
+      power: {
+        async suspend() {
+          sync?.suspend?.();
+          await power.suspend();
+        },
+        async resume() {
+          await power.resume();
+          await sync?.resume?.();
+        },
+      },
       start() {
         offStatus = link.onStatus(() => input.onChange());
         if (sync === null) void presence.start();

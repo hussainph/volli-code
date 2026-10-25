@@ -25,6 +25,8 @@ test("the cloud entry point exposes each module", () => {
     "migrationDocument",
     "foldCloudSessionState",
     "extractGithubEvent",
+    "sessionPlaceState",
+    "runnerPlaceAvailability",
   ]) {
     expect(typeof (cloud as Record<string, unknown>)[name]).toBe("function");
   }

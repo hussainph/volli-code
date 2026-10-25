@@ -27,6 +27,8 @@ export * from "./desktop-entries";
 export * from "./environment-recipe";
 export * from "./account";
 export * from "./this-mac-runner";
+export * from "./cloud-checkout";
+export * from "./runner-preferences";
 export {
   PREVIEW_WAITLIST_MESSAGE,
   PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
@@ -139,6 +141,8 @@ export * from "./session-usage-report";
 export * from "./session-streak";
 export * from "./working-copy";
 export * from "./session-event-codec";
+export * from "./cloud-message-artifact";
+export * from "./transcript-canonical-json";
 export * from "./native-observation-id";
 export * from "./session-rpc-wire";
 export * from "./park";

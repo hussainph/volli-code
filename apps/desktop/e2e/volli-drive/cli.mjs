@@ -41,6 +41,12 @@ import {
 } from "./lib/core.mjs";
 import { request } from "./lib/protocol.mjs";
 import { assertAcceptanceRunner, acceptanceTarballs } from "./lib/remote-acceptance.mjs";
+import {
+  cloudFixtureFromEnv,
+  cloudSubject,
+  cloudSupervisorEnv,
+  rendererAllowsLoopback,
+} from "./lib/cloud-acceptance.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -50,6 +56,16 @@ const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
          [--no-build] [--json]     start an instance (dev build only; packed
                                    apps are refused until VC-705); prints its
                                    id + evidence dir
+         [--cloud --cloud-subject s]
+                                   a Volli Cloud instance against the loopback
+                                   fixture backend in this environment
+                                   (convex/fixture/with-backend.ts --deploy):
+                                   the cloud flag, the dev sign-in as subject s
+                                   and the power smoke seam. Needs a build with
+                                   VOLLI_CLOUD_LOOPBACK=1. Adds the commands
+                                   restart, cloud-sign-in-browser, runner-power,
+                                   cloud-checkout-folder and cloud-state (the
+                                   journey drives them over the drive socket)
   list [--json]                    instances on this machine (max 3 live)
   doctor [<id>] [--json]           no id: is the build about to launch guarded? (static)
                                    with id: up? right build? guard active? isolated?
@@ -163,11 +179,31 @@ async function launch(flags) {
     remoteAcceptance = { tarballs: acceptanceTarballs(process.env.VOLLI_HOSTD_DEV_TARBALLS) };
   }
   if (!["fake", "env"].includes(model)) fail("--model is fake or env");
+  let cloud = null;
+  let cloudEnv = {};
+  if (flags.cloud) {
+    if (flags.remoteAcceptance) fail("--cloud and --remote-acceptance are separate journeys");
+    if (model !== "fake") fail("--cloud requires --model fake");
+    let fixtureEnv;
+    try {
+      fixtureEnv = cloudFixtureFromEnv(process.env);
+      cloud = { subject: cloudSubject(flags.cloudSubject) };
+    } catch (error) {
+      fail(error.message);
+    }
+    // The URLs are evidence; the test issuer key goes through the environment only.
+    cloud.convexUrl = fixtureEnv.convexUrl;
+    cloudEnv = cloudSupervisorEnv(fixtureEnv);
+  }
   // Packed mode is disabled: a packaged app's bundle cannot be validated
   // before it runs, so it could start without the guard (VC-705).
   if (build !== "dev" || flags.app)
     fail(`--build ${build}${flags.app ? " --app" : ""}: not yet safe; dev builds only`);
   await ensureBuilt(flags);
+  if (cloud !== null && !(await rendererAllowsLoopback()))
+    fail(
+      "--cloud needs a renderer built with VOLLI_CLOUD_LOOPBACK=1 (its CSP must reach the loopback backend)",
+    );
   if (!existsSync(ELECTRON))
     fail(`Electron is not installed at ${ELECTRON}; run \`pnpm run ensure:electron\``);
   const started = performance.now();
@@ -192,6 +228,7 @@ async function launch(flags) {
     build,
     appBinary: null,
     remoteAcceptance,
+    cloud,
     bundle: BUILT_MAIN,
     idleMs,
     ...(await gitFacts()),
@@ -230,7 +267,7 @@ async function launch(flags) {
     {
       detached: true,
       stdio: ["ignore", log, log],
-      env: supervisorEnv(process.env, { model }),
+      env: { ...supervisorEnv(process.env, { model }), ...cloudEnv },
       cwd: REPO,
     },
   );

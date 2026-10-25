@@ -11,7 +11,7 @@
  */
 import { errorMessage, type HarnessId, type ModelSelection, type Project } from "@volli/shared";
 
-import { guardSessionWrite } from "@renderer/lib/cloud-session-read-only";
+import { guardSessionSend, guardSessionWrite } from "@renderer/lib/cloud-session-read-only";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
@@ -32,6 +32,7 @@ import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { disposeEngine, getOrCreateEngine } from "@renderer/terminal/registry";
 import { refuseRemote, remoteHostNow } from "@renderer/stores/remote-project";
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
+import { launchStore } from "@renderer/stores/launch";
 
 /** Initial PTY grid; the engine re-measures and resizes the shell within a frame. */
 const INITIAL_COLS = 80;
@@ -540,11 +541,16 @@ export async function bootChatSession(
 ): Promise<string | null> {
   // Every chat door — the strips, an empty pane, ⌘T, a kickoff — comes through
   // here. A project whose host cannot serve (VC-576) starts none, and says why.
-  if (!guardSessionWrite(scope.projectId)) return null;
+  // A chat is a send, not a generic Session write: in a cloud launch this Mac's
+  // runner starts it (VC-895), so the cloud link and its client decide.
+  if (!guardSessionSend(scope.projectId)) return null;
   // VC-713 owns create/attach/send on the box, including draft promotion.
-  // Only this project's validated Workspace grant opens these chat doors:
-  // HOST health, another project's welcome, and unknown old DTOs grant nothing.
+  // Only this project's validated Workspace grant opens the legacy remote
+  // chat doors: HOST health, another project's welcome, and unknown old DTOs
+  // grant nothing. A cloud launch has no legacy grant: its authenticated link
+  // was checked above, and this Mac's runner authorizes create and attach.
   if (
+    launchStore() !== "cloud" &&
     remoteHostNow(scope.projectId) !== null &&
     !useHostConnectionStore.getState().projects[scope.projectId]?.granted?.includes("sessions")
   ) {

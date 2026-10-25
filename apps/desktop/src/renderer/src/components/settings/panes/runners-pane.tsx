@@ -8,7 +8,8 @@
  * blocked (removed, or its registration failed) the pane shows why and the
  * one action that recovers it; while it is being added or connected, a
  * quiet label says so. Every other runner is read and written through the
- * window's own Volli Cloud client.
+ * window's own Volli Cloud client. Below the list, whether this Mac stays
+ * available when Volli is closed (`runner-availability.tsx`).
  *
  * Shown only in a Volli Cloud launch: the category does not exist otherwise.
  */
@@ -47,6 +48,7 @@ import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { toastError } from "@renderer/lib/toast";
 
+import { RunnerAvailability } from "./runner-availability";
 import {
   runnerStatus,
   thisMacRecovery,
@@ -115,6 +117,7 @@ export function RunnersPane(props: Parameters<typeof useRunners>[0] = {}) {
           </>
         )}
       </PrefSection>
+      <RunnerAvailability />
       <AlertDialog open={confirming} onOpenChange={setConfirming}>
         <AlertDialogContent>
           <AlertDialogHeader>

@@ -717,6 +717,30 @@ describe("the inbox worker", () => {
     worker.stop();
   });
 
+  it.each(["stop", "pause"] as const)(
+    "cancels a coalesced retry when an executor synchronously asks to %s",
+    async (action) => {
+      const inbox = fakeInbox([[job("notice", "session.notice")]]);
+      const worker = createInboxWorker({
+        backend: inbox.backend,
+        journal: memoryJournal().store,
+        bootId: BOOT,
+        ...manualTimers(),
+        wake: () => () => {},
+      });
+      worker.register("session.notice", async () => {
+        void worker.claimNow();
+        if (action === "stop") worker.stop();
+        else worker.pauseClaims!();
+        return DONE;
+      });
+      await worker.start();
+      await flush();
+      expect(inbox.backend.claim).toHaveBeenCalledOnce();
+      worker.stop();
+    },
+  );
+
   it("does not claim again for a mid-claim wake once it has stopped", async () => {
     const inbox = fakeInbox();
     let answer!: (jobs: ClaimedJob[]) => void;
@@ -760,4 +784,52 @@ describe("the inbox worker", () => {
       vi.useRealTimers();
     }
   });
+});
+
+it("fences wake/poll claims during sleep and ignores a claim answer crossing the fence", async () => {
+  const backend = fakeInbox();
+  const journal = memoryJournal();
+  const timers = manualTimers();
+  let wake: ((value: { ready: number; nextAvailableAt: number | null }) => void) | undefined;
+  const worker = createInboxWorker({
+    backend: backend.backend,
+    journal: journal.store,
+    bootId: BOOT,
+    wake: (listener) => {
+      wake = listener;
+      return () => {};
+    },
+    ...timers,
+  });
+  const execute = vi.fn(async () => DONE);
+  worker.register("workingCopy.refresh", execute);
+  worker.pauseClaims!();
+  await worker.start();
+  wake!({ ready: 1, nextAvailableAt: 0 });
+  timers.fireAll();
+  await flush();
+  expect(backend.backend.claim).not.toHaveBeenCalled();
+  worker.resumeClaims!();
+  let answer: ((jobs: ClaimedJob[]) => void) | undefined;
+  backend.backend.claim = vi.fn(
+    () =>
+      new Promise<ClaimedJob[]>((done) => {
+        answer = done;
+      }),
+  );
+  const pending = worker.claimNow();
+  // Upstream coalesces a mid-claim inbox wake into one more claim. A sleep
+  // fence must also cancel that queued retry, not just the current answer.
+  wake!({ ready: 1, nextAvailableAt: 0 });
+  worker.pauseClaims!();
+  answer!([job("crossed")]);
+  await pending;
+  expect(backend.backend.claim).toHaveBeenCalledOnce();
+  expect(execute).not.toHaveBeenCalled();
+  expect(journal.rows.size).toBe(0);
+  worker.resumeClaims!();
+  backend.backend.claim = vi.fn(async () => []);
+  await worker.claimNow();
+  expect(backend.backend.claim).toHaveBeenCalledOnce();
+  worker.stop();
 });

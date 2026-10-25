@@ -171,25 +171,19 @@ export function createCloudContext(options: {
       }
       const runnerId =
         options.runnerId === undefined ? options.registry().runnerId : options.runnerId();
+      // The registry's read-only lookup names the folder. A frozen local
+      // project needs no read here: the INSERT below runs only when no row
+      // exists and the UPDATE touches only a shadow row, so its path and
+      // prefix were never written.
       const checkout =
-        runnerId === null
-          ? undefined
-          : (prepared(
-              db,
-              "SELECT abs_path FROM project_checkout_paths WHERE project_id = ? AND runner_id = ? ORDER BY project_repo_id LIMIT 1",
-            ).get(input.projectId, runnerId) as { abs_path: string } | undefined);
-      const frozen = prepared(
-        db,
-        `SELECT path,ticket_prefix FROM projects WHERE id = ? AND NOT EXISTS
-        (SELECT 1 FROM cloud_shadow_rows WHERE kind='project' AND id=projects.id)`,
-      ).get(input.projectId) as { path: string; ticket_prefix: string } | undefined;
+        runnerId === null ? null : options.registry().checkouts.ofProject(input.projectId);
       // An unlocated identity gets an inert, unique machine path, never a
       // guessed checkout. Location preparation still requires the real registry.
       const placeholder = join(
         identityRoot,
         createHash("sha256").update(`${ownerUserId}\0${input.projectId}`).digest("hex"),
       );
-      const checkoutPath = checkout?.abs_path ?? frozen?.path ?? placeholder;
+      const checkoutPath = checkout?.absPath ?? placeholder;
       withTransaction(db, () => {
         const project = prepared(db, "SELECT id FROM projects WHERE id = ?").get(input.projectId);
         if (project === undefined) {
@@ -200,7 +194,7 @@ export function createCloudContext(options: {
           ).run(
             input.projectId,
             checkoutPath,
-            facts?.ticketPrefix ?? frozen?.ticket_prefix ?? "CLOUD",
+            facts?.ticketPrefix ?? "CLOUD",
             Date.now(),
             Date.now(),
           );

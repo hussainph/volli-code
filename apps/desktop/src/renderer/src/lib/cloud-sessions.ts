@@ -1,6 +1,8 @@
 /** The Session-side twin of the cloud board binding. Installed only in a cloud launch. */
-import type { CloudListingRow } from "./cloud-session-listing";
+import type { CloudListingRow, CloudSessionRow } from "./cloud-session-listing";
 import { followCloudSession } from "./cloud-client";
+import { bindCloudPlaces, forgetProjectPlaces, noteProjectPlaces } from "./cloud-places";
+import { sessionRpcClient } from "./session-rpc-ipc-link";
 import { CloudSessionSource } from "./cloud-session-source";
 import type { SessionListingReader } from "./session-listing-reader";
 import { useProjectsStore } from "@renderer/stores/projects";
@@ -10,7 +12,13 @@ import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 
 let source: CloudSessionSource | null = null;
 
-function paint(projectId: string, rows: CloudListingRow[]): void {
+function paint(
+  projectId: string,
+  rows: CloudListingRow[],
+  sent: readonly CloudSessionRow[] | null = null,
+): void {
+  if (sent === null) forgetProjectPlaces(projectId);
+  else noteProjectPlaces(projectId, sent);
   const chat = rows.map((row) => row.record);
   const provenance = Object.fromEntries(
     rows.flatMap((row) =>
@@ -80,6 +88,12 @@ export function bindCloudSessions(): () => void {
     for (const id of projects) void source?.open(id).catch(() => {});
   };
   const stopProjects = useProjectsStore.subscribe(sync);
+  // Where each listed Session runs, for "Waiting for <Mac>".
+  const stopPlaces = bindCloudPlaces({
+    follow: followCloudSession,
+    thisMac: sessionRpcClient().runners.subscribeThisMac,
+    warn: (message, error) => console.warn(message, error),
+  });
   const stopSession = followCloudSession((session) => {
     source?.closeAll();
     for (const id of followed) paint(id, []);
@@ -95,6 +109,7 @@ export function bindCloudSessions(): () => void {
   sync();
   return () => {
     stopProjects();
+    stopPlaces();
     stopSession();
     source?.closeAll();
     source = null;

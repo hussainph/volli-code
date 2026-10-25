@@ -42,6 +42,8 @@ describe("the shared Mac runner connection", () => {
     const start = vi.fn(() => {
       void shared!.presence.start();
     });
+    const suspend = vi.fn();
+    const resume = vi.fn(async () => {});
     const stop = vi.fn(async () => {
       await shared!.presence.stop();
       await shared!.link.close();
@@ -57,6 +59,8 @@ describe("the shared Mac runner connection", () => {
           await parts.presence.stop();
         },
         waiting: () => 12,
+        suspend,
+        resume,
       };
     };
     connection = runnerConnector({
@@ -108,9 +112,14 @@ describe("the shared Mac runner connection", () => {
       expect.objectContaining({ bootId: "boot-id" }),
     );
     expect(connection.waitingFacts).toBe(12);
+    await connection.power.suspend();
+    expect(suspend).toHaveBeenCalledOnce();
+    await connection.power.resume();
+    expect(resume).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledTimes(1); // Wake replaced the sleeping connection.
     await connection.stop();
     expect(stop).toHaveBeenCalledTimes(1);
-    expect(close).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(2);
     connection = undefined;
   });
 });

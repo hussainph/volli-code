@@ -125,6 +125,17 @@ describe("NewSessionControl", () => {
     ]);
   });
 
+  it("offers chat alone where terminals and Browser Tabs have nowhere to run (a cloud launch)", () => {
+    for (const [menu, type] of [
+      ["dropdown", DropdownMenuItem],
+      ["context", ContextMenuItem],
+    ] as const) {
+      expect(collect(newSessionMenuRows(menu, { onNewChat: noop }), type).map(labelOf)).toEqual([
+        "Chat",
+      ]);
+    }
+  });
+
   it("announces ⌘T only where the chord starts what the control starts", () => {
     const quiet = renderToStaticMarkup(
       <NewSessionControl projectId="p1" disabled={false} onNewChat={noop} onNewTerminal={noop} />,

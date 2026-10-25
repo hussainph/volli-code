@@ -19,6 +19,7 @@ import type {
   JobRenewAnswer,
 } from "./inbox";
 import type { RunnerPresence } from "./presence";
+import { hostLogger } from "../log/root";
 import type { ClaimedJob } from "@volli/shared/cloud";
 
 /** The backend's runner functions, by name. */
@@ -55,31 +56,71 @@ export function wakeOverLink(link: Pick<BackendLink, "subscribe">) {
 export interface RunnerSync {
   /** The wake sequence after the link is back: resend facts, renew leases, then claim. */
   catchUp(): Promise<void>;
+  /** Pause only new claims while the Mac sleeps; running jobs retain their leases and journal. */
+  suspend(): void;
+  /** Called after wake has refreshed the token and published online. */
+  resume(): Promise<void>;
   stop(): Promise<void>;
 }
 
 export function startRunnerSync(parts: {
-  link: Pick<BackendLink, "onStatus" | "close">;
+  link: Pick<BackendLink, "onStatus" | "close"> & Partial<Pick<BackendLink, "status">>;
   drain: FactDrain;
   inbox: InboxWorker;
   presence: RunnerPresence;
 }): RunnerSync {
   const { link, drain, inbox, presence } = parts;
-  async function catchUp() {
-    drain.resumeAll();
-    await inbox.renewInFlight();
-    await inbox.claimNow();
+  let connected = link.status === undefined || link.status.state === "connected";
+  let suspended = false;
+  let stopped = false;
+  let epoch = 0;
+  let tail = Promise.resolve();
+  function catchUp(): Promise<void> {
+    const mine = epoch;
+    // Reconnects and an explicit wake share one control lane. No wake query,
+    // poll or finishing job may race its new claim ahead of lease renewal.
+    const next = tail.then(async () => {
+      if (stopped || suspended || !connected || mine !== epoch) return;
+      inbox.pauseClaims?.();
+      await inbox.renewInFlight();
+      if (stopped || suspended || !connected || mine !== epoch) return;
+      inbox.resumeClaims?.();
+      await inbox.claimNow();
+      if (stopped || suspended || !connected || mine !== epoch) return;
+      drain.resumeAll();
+    });
+    tail = next.catch((error: unknown) => {
+      hostLogger("runner-sync").warn("Runner reconnect recovery failed", { error });
+    });
+    return next;
   }
+  inbox.pauseClaims?.();
+  const off = link.onStatus((status) => {
+    connected = status.state === "connected";
+    epoch += 1;
+    inbox.pauseClaims?.();
+    if (connected) void catchUp();
+  });
   drain.start();
   void inbox.start();
   void presence.start();
-  const off = link.onStatus((status) => {
-    if (status.state === "connected") void catchUp();
-  });
+  if (connected) void catchUp();
   return {
     catchUp,
+    suspend() {
+      suspended = true;
+      epoch += 1;
+      inbox.pauseClaims?.();
+    },
+    async resume() {
+      suspended = false;
+      await catchUp();
+    },
     async stop() {
+      stopped = true;
+      epoch += 1;
       off();
+      inbox.pauseClaims?.();
       await presence.stop();
       inbox.stop();
       drain.stop();

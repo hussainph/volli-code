@@ -37,6 +37,7 @@ import {
   ticketBranchName,
   NEW_TICKET_DRAFT_APP_STATE_KEY,
   OperationUnavailableError,
+  RUNNER_RESIDENT_APP_STATE_KEY,
   VOLLI_USER_ZDOTDIR_ENV,
   workspaceInstallCommand,
 } from "@volli/shared";
@@ -187,6 +188,10 @@ import { previewAtLaunch } from "./preview-gate";
 import { CLOUD_SNAPSHOT_DIRECTORY, cloudSnapshotFiles } from "./cloud-snapshot";
 import { createCloudProductStore } from "@volli/host-core/cloud-runner";
 import { decodeRunnerRecords } from "./cloud-runner/record";
+import { runnerTrayStatus } from "./cloud-runner/tray-status";
+import { keepCloudRunnerAvailable } from "./cloud-runner/residency";
+import { runnerSleepSimulation } from "./cloud-runner/smoke-power";
+import { createCloudCheckoutPort, folderPicker } from "./cloud-checkout";
 import {
   CLOUD_RUNNER_APP_STATE_KEY,
   createDesktopMacRunner,
@@ -1045,10 +1050,30 @@ const appStartup = app.whenReady().then(async () => {
     signInConfigured: accountConfig.provider !== null,
   });
   // Signing in or out restarts into the other store, through every quit gate.
-  const relaunch = createRelaunchController({
-    quit: () => app.quit(),
-    relaunch: () => app.relaunch(),
-  });
+  const relaunch = createRelaunchController(
+    { quit: () => app.quit(), relaunch: () => app.relaunch() },
+    liveHost === undefined
+      ? undefined
+      : {
+          turns: () => (isExperimentEnabled("cloud") ? liveHost.liveWork.current().turns : 0),
+          subscribe: (listener) => liveHost.liveWork.subscribe(listener),
+          choose: (turns) => {
+            const options = {
+              type: "question" as const,
+              message: `Volli will switch when ${turns === 1 ? "the running turn finishes" : `the ${turns} running turns finish`}`,
+              buttons: ["Switch When Finished", "Switch Now", "Cancel"],
+              defaultId: 0,
+              cancelId: 2,
+            };
+            const owner = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+            const answer =
+              owner === undefined
+                ? dialog.showMessageBoxSync(options)
+                : dialog.showMessageBoxSync(owner, options);
+            return answer === 0 ? "wait" : answer === 1 ? "now" : "cancel";
+          },
+        },
+  );
   // This Mac as one of the signed-in person's runners (VC-895): only in a
   // Volli Cloud launch, which reads the sealed runner link at boot (a runner
   // connects without a window). A local launch, and every flag-off one,
@@ -1090,12 +1115,23 @@ const appStartup = app.whenReady().then(async () => {
           environmentRecipes: () => isExperimentEnabled("cloud"),
         })
       : null;
+  const smokeRunnerPower =
+    launch.store === "cloud"
+      ? runnerSleepSimulation({
+          dev: isDev,
+          env: process.env,
+          emit: (event) => {
+            powerMonitor.emit(event);
+          },
+        })
+      : null;
   const macRunner: MacRunner | null =
     runnerLaunch !== null && liveHost !== undefined && convexClient !== null
       ? createDesktopMacRunner({
           ...runnerLaunch,
           convex: convexClient,
           ...(cloudStore === null ? {} : { sync: cloudStore.connect }),
+          ...(smokeRunnerPower === null ? {} : { connectionTransform: smokeRunnerPower.wrap }),
           account: {
             subscribe: (listener) => account.subscribe(listener),
             accessToken: () => account.accessToken(),
@@ -1122,6 +1158,14 @@ const appStartup = app.whenReady().then(async () => {
           log: hostLogger("cloud-runner"),
         })
       : null;
+  if (macRunner !== null && smokeRunnerPower !== null) {
+    Object.assign(globalThis, {
+      volliCloudRunnerPower: {
+        suspend: () => smokeRunnerPower.suspend(),
+        resume: () => smokeRunnerPower.resume(),
+      },
+    });
+  }
   if (launch.store === "cloud" && macRunner === null) {
     hostLogger("cloud-runner").warn("this Mac is not a runner in this launch", {
       siteUrl: runnerLaunch !== null,
@@ -1421,8 +1465,8 @@ const appStartup = app.whenReady().then(async () => {
     env: process.env,
     packaged: !isDev,
     cloudEnabled: () => isExperimentEnabled("cloud"),
-    // A launch showing Volli Cloud leaves this Mac's interrupted turns for a
-    // launch that shows them (VC-889, B4 D9).
+    // The cloud store supplies its owner-scoped recovery and sibling source;
+    // only the frozen local store keeps B4's cloud-launch suppression.
     cloudLaunch: () => launch.store === "cloud",
     ...codeModeSandbox,
     secrets,
@@ -1560,6 +1604,16 @@ const appStartup = app.whenReady().then(async () => {
    * the Agent Tool Surface door (`runner.handlers`). The map is sealed: no
    * door can call it without one.
    */
+  const cloudCheckouts = createCloudCheckoutPort({
+    enabled: () => isExperimentEnabled("cloud"),
+    store: cloudStore,
+    pickFolder: folderPicker((options) => {
+      const owner = BrowserWindow.getFocusedWindow();
+      return owner === null
+        ? dialog.showOpenDialog(options)
+        : dialog.showOpenDialog(owner, options);
+    }),
+  });
   const desktopDoors = (): RunnerDoorCapabilities => {
     const projectLiveWork = hostProjectLiveWork({
       runtime: () => sessionRuntime,
@@ -1619,6 +1673,7 @@ const appStartup = app.whenReady().then(async () => {
       },
       // This Mac as a Volli Cloud runner (VC-895); `off` outside a cloud launch.
       runners: runnerAccountPort(macRunner, () => isExperimentEnabled("cloud")),
+      checkouts: cloudCheckouts,
       // The Volli Cloud account (VC-884).
       account: accountPort(
         account,
@@ -1736,6 +1791,9 @@ const appStartup = app.whenReady().then(async () => {
   );
   // The host adopts the runner: recovery, Automations, the Session RPC edge
   // over the handler map, then the tool door. The socket drains beside it.
+  // Recovery waits for this owner's first backend connection, so begin
+  // connecting before asking the lifecycle to judge interrupted cloud turns.
+  macRunner?.start();
   await hostCore.start(runnerEdge.ownerFor(runner));
   const readyRuntimeServices = await runner.ready();
   // Reclaim attachment bytes nothing points at any more (VC-50) — a detached
@@ -2426,6 +2484,16 @@ const appStartup = app.whenReady().then(async () => {
   // is exactly "open a window if none exists".
   const smokeSettleMs = menuBarSmokeSettleMs(isDev, process.env);
   const menuBar = createMenuBarHost({
+    ...(launch.store === "cloud" && liveHost !== undefined && macRunner !== null
+      ? {
+          residentRunner: () =>
+            keepCloudRunnerAvailable(
+              macRunner.snapshot(),
+              getAppState(liveHost.database.db, RUNNER_RESIDENT_APP_STATE_KEY),
+            ),
+          runnerLine: () => runnerTrayStatus(macRunner.snapshot()),
+        }
+      : {}),
     // The mechanics smoke's longer settle (VC-709); a release never has one.
     ...(smokeSettleMs === undefined ? {} : { settleMs: smokeSettleMs }),
     // Read from the host, never a renderer. A degraded host runs nothing.
@@ -2484,8 +2552,8 @@ const appStartup = app.whenReady().then(async () => {
   runnerEdge.bind({ menuBar });
   if (macRunner !== null && liveHost !== undefined) {
     residentMenuBar = menuBar;
+    macRunner.subscribe(() => menuBar.refresh());
     releaseTurnPower = holdWhileTurnsRun(liveHost.liveWork, electronMenuBarPower());
-    macRunner.start();
   }
   // The quit path is whole from here: a dropped binding fails the launch.
   runnerEdge.assertBound();

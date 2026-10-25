@@ -34,6 +34,7 @@ import {
   TicketGroupRow,
 } from "./session-band-row";
 import { SidebarProvider } from "@renderer/components/ui/sidebar";
+import { useCloudPlacesStore } from "@renderer/lib/cloud-places";
 
 const ticket: Ticket = {
   id: "ticket-7",
@@ -223,6 +224,67 @@ describe("the Active row's second line", () => {
     // used for it.
     expect(occurrences(markup, "Waiting for you")).toBe(1);
     expect(markNames(markup)).toContain("Claude Code · Waiting for you");
+  });
+
+  it("says what a cloud Session waits for in its age's place, and nothing else changes", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const chat = row({ target: { kind: "chat", tabId: "t1", sessionId: "s1" } });
+    const line = () => container.querySelector(".session-row-meta")?.textContent ?? "";
+    const draw = () =>
+      act(async () => {
+        root.render(
+          <SidebarProvider>
+            <ActiveBandRow
+              row={chat}
+              projectId="project-1"
+              ticketPrefix="VC"
+              now={180_000}
+              selected={false}
+              onSelect={() => {}}
+            />
+          </SidebarProvider>,
+        );
+      });
+    const runner = {
+      id: "r1",
+      name: "hp-mac",
+      kind: "mac",
+      status: "stopped",
+      statusChangedAt: 0,
+      statusReason: null,
+      owned: true,
+    };
+    try {
+      await draw();
+      expect(line()).toBe("VC-7 · 2m ago");
+      await act(async () => {
+        useCloudPlacesStore.setState({
+          sessions: { s1: { placeRunnerId: "r1", turnActive: false } },
+          runners: { r1: runner },
+        });
+      });
+      expect(line()).toBe("VC-7 · Waiting for hp-mac — Volli is closed");
+      await act(async () => {
+        useCloudPlacesStore.setState({ runners: { r1: { ...runner, status: "online" } } });
+      });
+      expect(line()).toBe("VC-7 · 2m ago");
+      // This Mac runs it: nothing to wait for, whatever the backend last heard.
+      await act(async () => {
+        useCloudPlacesStore.setState({
+          thisRunnerId: "r1",
+          runners: { r1: { ...runner, status: "offline" } },
+        });
+      });
+      expect(line()).toBe("VC-7 · 2m ago");
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      useCloudPlacesStore.setState({ sessions: {}, runners: {}, thisRunnerId: null });
+      vi.unstubAllGlobals();
+    }
   });
 });
 
