@@ -197,6 +197,8 @@ async function path(features: readonly string[] = FEATURES) {
   type Sessions = NonNullable<Parameters<typeof createHostHandlers>[1]["sessions"]>;
   const creates: Parameters<Sessions["create"]>[0][] = [];
   const sessions: Sessions = {
+    // The agent doors' start (VC-923) is not what this suite drives.
+    start: () => Promise.reject(new Error("This suite starts no Ticket Session.")),
     async create(input) {
       creates.push(structuredClone(input));
       const created = await runtime.command({

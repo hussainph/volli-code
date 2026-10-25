@@ -848,11 +848,25 @@ composition root calls it once with the recovered services (database, runtime,
 Sessions facade, Model Access, Automations, busy-worktree guard, and
 desktop's experiments and interrupts) and hands the same object to every door:
 the routers' `ctx.handlers`, the socket's `handlers` option (whose
-`AGENT_VERB_TABLE` binds a catalog key only through `projectHandler`), and
+`AGENT_VERB_TABLE` binds every verb only as a projection of the map), and
 any legacy IPC channel that still serves a catalog command. `HostHandlers` is
-total over both tiers' keys, so a missing handler fails `pnpm typecheck`; a
-service a host lacks makes its handlers throw `OperationUnavailableError`
-rather than leaving a hole.
+total over both tiers' keys and the agent doors' own (`AgentHandlerKey`,
+VC-923), so a missing handler fails `pnpm typecheck`; a service a host lacks
+makes its handlers throw `OperationUnavailableError` rather than leaving a
+hole.
+
+The agent doors' keys are the socket's own verbs (`identify`, `hook`,
+`worktree.sync`, `session.done`, …) and the Agent Tool Surface's
+(`session.send`, `mcp.*`, `watch`, …). Their handlers need the door's ports,
+which a root composes after the map, so the map is sealed without them:
+`createAgentCommandService` (`agent-dispatch/verbs.ts`) and
+`createAgentToolDoor` each serve theirs into the map they are handed, once.
+Until then they answer unavailable, and no catalog policy admits them.
+`session.start`, on both agent doors, is the map's own start command, built
+from the Sessions facade and the kickoff and title ports a root passes
+(`submitSessionMessage`, `refineAutoTitle`). The Session runtime's agent
+staging builds the tool door over the root's map (`handlers`, read per
+recovered services).
 
 Desktop main also passes `remoteHosts` (`RemoteHostsPort`,
 `handlers/remote-hosts-port.ts`, VC-700): its registry of hosts added over
@@ -866,8 +880,9 @@ and the door's `HandlerPolicy` runs first; a refusal throws
 `HandlerRefusedError` and the handler never runs. The policies:
 `ROUTER_POLICY` for a router's context, `DESKTOP_WINDOW_POLICY` for a legacy
 desktop IPC channel (`handlers/policies.ts`), and the socket's per-request
-`socketHandlerPolicy`, its coordination policy judged again at the map
-(`agent-dispatch/admission.ts`). Tests build the real map over a test
+`socketHandlerPolicy`, its coordination policy judged again at the map for
+a key another door also reaches (`agent-dispatch/admission.ts`), and the tool
+door's per-call `agent-tool` policy (`agent-tool-door.ts`). Tests build the real map over a test
 database with `testHostHandlers`, or seal their own entries with
 `sealTestHandlers` (`./testing`). The contract: HP § Command catalog, "One
 handler map".

@@ -19,7 +19,11 @@ import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { RetentionReclaimSeams } from "@volli/host-core/maintenance";
 import { getProjectById, getTicket } from "@volli/host-core/db";
 import type { BoardChangeFeed } from "@volli/host-core/board";
-import { createHostHandlers, type SessionReadPort } from "@volli/host-core/handlers";
+import {
+  createHostHandlers,
+  type HostHandlerMap,
+  type SessionReadPort,
+} from "@volli/host-core/handlers";
 import type { LogRing } from "@volli/host-core/log";
 import { SecretService } from "@volli/host-core/secrets";
 import { AgentObservability, hostMcpDispatch, hostCodeMode } from "@volli/host-core/integrations";
@@ -247,6 +251,10 @@ export function createHeadlessSessionRuntime(input: {
     decisions,
     delegation,
   });
+  /** The host's one handler map: `handlersFor`'s, once built. */
+  let hostHandlers: HostHandlerMap | undefined;
+  /** The agent command service's Session reads, which the map forwards to once served. */
+  let sessionReads: SessionReadPort | undefined;
   const agents = facade.agents({
     host,
     delegation,
@@ -254,6 +262,8 @@ export function createHeadlessSessionRuntime(input: {
     mcpSettings,
     events: ports.events,
     log: ports.log,
+    // The tool door projects the same one map as the socket (VC-923).
+    handlers: (ready) => handlersFor(ready),
   });
   const lifecycle = createSessionRuntimeLifecycle({
     venue: options.venue,
@@ -300,6 +310,105 @@ export function createHeadlessSessionRuntime(input: {
     },
   };
   let workspaces: ReturnType<typeof createHostWorkspaces> | undefined;
+  /**
+   * The host's one handler map over the recovered services, built once (by
+   * `ready()`, or by the tool door if a recovered Session calls a tool
+   * first) and handed to every door that projects it.
+   */
+  function handlersFor(ready: Awaited<ReturnType<typeof lifecycle.ready>>): HostHandlerMap {
+    if (hostHandlers !== undefined) return hostHandlers;
+    const { sessions, runtime, piRuntimeHost } = recoveredRuntimeSessionServices(ready);
+    if (sessions === null || runtime === null)
+      throw new Error("The headless Session runtime is unavailable.");
+    const busyWorktreeSites: BusyWorktreeSites = async (target) => {
+      // No terminals are composed on this host. When a terminal port lands,
+      // its live cwds must join this supplier rather than bypassing the guard.
+      const sites = liveShellWorktreeSites(shells);
+      for (const binding of agentSitesWithin(runtime, target)) {
+        // An unreadable Session refuses automatic trim; no fail-open deletion.
+        if ((await runtime.projection({ sessionId: binding.sessionId })).projection.turnActive) {
+          sites.push({ directory: binding.directory, surface: "agent" });
+        }
+      }
+      return sites;
+    };
+    recovered = { busyWorktreeSites, runtime };
+    // Sign-ins on this host (VC-702): keys and push credentials a Client
+    // sends land in the host's own stores (Pi's auth storage; the
+    // push-credential file under the data directory), and subscription
+    // logins run here, over the same Pi collection the runtime reads.
+    const signIns =
+      modelAccess === null || piRuntimeHost === null
+        ? null
+        : new HostSignIns({
+            pi: piSignIn(modelAccess.models, {
+              // Sign in with ChatGPT names the installation to OpenAI: on
+              // a host, its persisted host id, a UUID.
+              deviceId: () => options.venue.id,
+            }),
+            inspect: () => piRuntimeHost.inspectModelAccess({}),
+            keys: {
+              models: piHostCredentials(modelAccess.credentials),
+              git: fileGitCredentialStore(join(host.dataDir, GIT_CREDENTIALS_FILE)),
+            },
+          });
+    workspaces ??=
+      options.projectsRoot == null
+        ? undefined
+        : createHostWorkspaces({
+            db,
+            projectsRoot: options.projectsRoot,
+            userInstall: options.userInstall ?? true,
+            env: input.env,
+            gitCredentialHelper: options.gitCredentialHelper ?? "",
+            detachedWork: host.detachedWork,
+            onCreated: (project) => ports.events.publish("data-changed", { projectId: project.id }),
+          });
+    const commandPorts = recoveredSessionCommandPorts(ready);
+    // The host's one handler map (VC-668): every door this host serves
+    // projects it. hostd keeps no experiments and composes no terminals,
+    // so those handlers answer unavailable and a backward move interrupts
+    // nothing a terminal holds.
+    hostHandlers = createHostHandlers(ports, {
+      db,
+      dataDir: host.dataDir,
+      runtime,
+      sessions,
+      // The start both agent doors reach (VC-923): its kickoff and its title.
+      ...(commandPorts.submitSessionMessage === undefined
+        ? {}
+        : { submitSessionMessage: commandPorts.submitSessionMessage }),
+      ...(commandPorts.refineAutoTitle === undefined
+        ? {}
+        : { refineAutoTitle: commandPorts.refineAutoTitle }),
+      pictures: assembly.pictures,
+      modelAccess: piRuntimeHost,
+      experiments: null,
+      automations,
+      busyWorktreeSites,
+      // The host's one worktree read service (VC-788): a scope switch's
+      // materialization and a Done trim retire the answers it holds.
+      worktreeReads: host.worktreeReads,
+      detachedWork: host.detachedWork,
+      // Served before any door opens: hostd hands it over before it
+      // settles the socket or starts the listener.
+      sessionReads: (verb, workspaceId, args) => sessionReads!(verb, workspaceId, args),
+      signIns,
+      workspaces,
+      logs: input.logs ?? null,
+      // The listing rows (VC-713): the same rows the desktop's own
+      // listing builds, live-ness from this process's executor bindings.
+      sessionListing: {
+        db,
+        listSessions: (query) => sessionEngine.listSessions(query),
+        liveAttachmentIds: () =>
+          new Set(runtime.openNativeBindings().map((binding) => binding.attachmentId)),
+      },
+      ...(input.boardFeed === undefined ? {} : { boardFeed: input.boardFeed }),
+      ticketSignals: (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
+    });
+    return hostHandlers;
+  }
   return {
     close: async () => {
       try {
@@ -322,57 +431,13 @@ export function createHeadlessSessionRuntime(input: {
     reclaim,
     async ready() {
       const ready = await lifecycle.ready();
-      const { sessions, runtime, piRuntimeHost } = recoveredRuntimeSessionServices(ready);
+      const { sessions, runtime } = recoveredRuntimeSessionServices(ready);
       if (sessions === null || runtime === null)
         throw new Error("The headless Session runtime is unavailable.");
       automations.start(recoveredSessionAutomationPorts(ready));
+      const handlers = handlersFor(ready);
+      // Its verbs are served into the map just built (VC-923).
       agents.toolDoor(ready);
-      const busyWorktreeSites: BusyWorktreeSites = async (target) => {
-        // No terminals are composed on this host. When a terminal port lands,
-        // its live cwds must join this supplier rather than bypassing the guard.
-        const sites = liveShellWorktreeSites(shells);
-        for (const binding of agentSitesWithin(runtime, target)) {
-          // An unreadable Session refuses automatic trim; no fail-open deletion.
-          if ((await runtime.projection({ sessionId: binding.sessionId })).projection.turnActive) {
-            sites.push({ directory: binding.directory, surface: "agent" });
-          }
-        }
-        return sites;
-      };
-      recovered = { busyWorktreeSites, runtime };
-      // Sign-ins on this host (VC-702): keys and push credentials a Client
-      // sends land in the host's own stores (Pi's auth storage; the
-      // push-credential file under the data directory), and subscription
-      // logins run here, over the same Pi collection the runtime reads.
-      const signIns =
-        modelAccess === null || piRuntimeHost === null
-          ? null
-          : new HostSignIns({
-              pi: piSignIn(modelAccess.models, {
-                // Sign in with ChatGPT names the installation to OpenAI: on
-                // a host, its persisted host id, a UUID.
-                deviceId: () => options.venue.id,
-              }),
-              inspect: () => piRuntimeHost.inspectModelAccess({}),
-              keys: {
-                models: piHostCredentials(modelAccess.credentials),
-                git: fileGitCredentialStore(join(host.dataDir, GIT_CREDENTIALS_FILE)),
-              },
-            });
-      workspaces ??=
-        options.projectsRoot == null
-          ? undefined
-          : createHostWorkspaces({
-              db,
-              projectsRoot: options.projectsRoot,
-              userInstall: options.userInstall ?? true,
-              env: input.env,
-              gitCredentialHelper: options.gitCredentialHelper ?? "",
-              detachedWork: host.detachedWork,
-              onCreated: (project) =>
-                ports.events.publish("data-changed", { projectId: project.id }),
-            });
-      let sessionReads: SessionReadPort | undefined;
       return {
         ...recoveredSessionCommandPorts(ready),
         /**
@@ -386,41 +451,7 @@ export function createHeadlessSessionRuntime(input: {
         venue: options.venue,
         verifySessionToken: tokens.verify,
         automationsAvailable: automations.kind === "live" && automations.execution.kind === "ready",
-        // The host's one handler map (VC-668): every door this host serves
-        // projects it. hostd keeps no experiments and composes no terminals,
-        // so those handlers answer unavailable and a backward move interrupts
-        // nothing a terminal holds.
-        handlers: createHostHandlers(ports, {
-          db,
-          dataDir: host.dataDir,
-          runtime,
-          sessions,
-          pictures: assembly.pictures,
-          modelAccess: piRuntimeHost,
-          experiments: null,
-          automations,
-          busyWorktreeSites,
-          // The host's one worktree read service (VC-788): a scope switch's
-          // materialization and a Done trim retire the answers it holds.
-          worktreeReads: host.worktreeReads,
-          detachedWork: host.detachedWork,
-          // Served before any door opens: hostd hands it over before it
-          // settles the socket or starts the listener.
-          sessionReads: (verb, workspaceId, args) => sessionReads!(verb, workspaceId, args),
-          signIns,
-          workspaces,
-          logs: input.logs ?? null,
-          // The listing rows (VC-713): the same rows the desktop's own
-          // listing builds, live-ness from this process's executor bindings.
-          sessionListing: {
-            db,
-            listSessions: (query) => sessionEngine.listSessions(query),
-            liveAttachmentIds: () =>
-              new Set(runtime.openNativeBindings().map((binding) => binding.attachmentId)),
-          },
-          ...(input.boardFeed === undefined ? {} : { boardFeed: input.boardFeed }),
-          ticketSignals: (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
-        }),
+        handlers,
       };
     },
   };

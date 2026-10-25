@@ -39,7 +39,7 @@ import { readModelAccessDefaults } from "../session-runtime/model-access-prefere
 import { PI_TOOLS } from "../session-runtime/pi-adapter";
 import { composeProjectBrief, composeTicketBrief } from "./briefs";
 import { failure } from "./context";
-import type { AgentCommandContext } from "./context";
+import type { AgentVerbContext } from "./context";
 import { dryRunResponse } from "./preview";
 import { projectForCreate, ticketForDisplayId } from "./resolution";
 
@@ -153,7 +153,7 @@ function parseDoctorObservation(request: AgentRequest): DoctorObservation | null
  * carries no target — there is nothing here to open that would not be invented.
  */
 export async function notifyVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options } = context;
@@ -222,7 +222,7 @@ function notifyRefusal(reason: "muted" | "unsupported" | "focused-target" | "fai
 
 /** `volli doctor` — what the harness integration is actually doing here. */
 export async function doctorVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, authenticatedSessionId } = context;
@@ -274,7 +274,7 @@ export async function doctorVerb(
 
 /** `volli model list` — available providers, model ids, reasoning levels, and the tier table. */
 export async function modelListVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   _request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options } = context;
@@ -397,7 +397,7 @@ export async function modelListVerb(
 
 /** `volli prompt baseline` — what a fresh Session's prompt costs, per section. */
 export async function promptBaselineVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, envSession } = context;

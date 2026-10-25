@@ -46,7 +46,7 @@ import {
   terminalSessionRecord,
 } from "../session-control";
 import { failure } from "./context";
-import type { AgentCommandContext, PendingHarnessLaunch } from "./context";
+import type { AgentVerbContext, PendingHarnessLaunch } from "./context";
 import { dryRunResponse } from "./preview";
 
 /**
@@ -241,7 +241,7 @@ function rememberPendingLaunch(
 
 /** `volli session link` — the harness's own resume id for this Volli session. */
 export async function sessionLinkVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { sessionEngine, terminalUpdateLocks, now } = context;
@@ -291,7 +291,7 @@ export async function sessionLinkVerb(
 
 /** `volli session harness` — which harness is now running in this session. */
 export async function sessionHarnessVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, sessionEngine, terminalUpdateLocks, pendingLaunches, now } = context;
@@ -444,7 +444,7 @@ export async function sessionHarnessVerb(
 
 /** `volli hook` — one canonical harness event for the current session. */
 export async function hookVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const {

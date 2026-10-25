@@ -154,51 +154,36 @@ it("owns no shutdown step for the verb door: the socket lifecycle drains request
   expect(Object.keys(commands)).toEqual(["execute", "executeInWorkspace"]);
 });
 
-it("publishes Session starts and harness notices from the verb door on the host bus", () => {
+it("publishes harness notices from the verb door on the host bus", () => {
   const publish = vi.fn();
   createHostAgentCommands({ events: { publish }, attention: HEADLESS_ATTENTION }, {
     handlers: sealTestHandlers({ "ticket.move": vi.fn() }),
   } as unknown as HostAgentCommandOptions);
   const ports = vi.mocked(createAgentCommandService).mock.lastCall![0];
-  const started = { sessionId: "s" } as unknown as Parameters<
-    NonNullable<typeof ports.onSessionStarted>
-  >[0];
   const harness = { sessionId: "s" } as unknown as Parameters<
     NonNullable<typeof ports.onHarnessEvent>
   >[0];
   const attached = { sessionId: "s" } as unknown as Parameters<
     NonNullable<typeof ports.onSessionHarness>
   >[0];
-  ports.onSessionStarted!(started);
   ports.onHarnessEvent!(harness);
   ports.onSessionHarness!(attached);
   expect(publish.mock.calls).toEqual([
-    ["session-started", started],
     ["harness-event", harness],
     ["session-harness", attached],
   ]);
 });
 
-it("routes tool-door mutations and Session starts to the host event bus", () => {
-  const publish = vi.fn();
-  const rogue = { onMutation: vi.fn(), onSessionStarted: vi.fn() };
-  const options = { now: () => 1, ...rogue } as unknown as HostAgentToolDoorOptions;
-  const door = createHostAgentToolDoor({ events: { publish } }, options);
+// A Session start's mutation and notice are the handler map's own start
+// command's (VC-923), so the tool door is built over its options as given.
+it("builds the tool door over its options, whose start is the handler map's", () => {
+  const options = {
+    now: () => 1,
+    handlers: sealTestHandlers({}),
+  } as unknown as HostAgentToolDoorOptions;
+  const door = createHostAgentToolDoor(options);
   expect(door).toBeTypeOf("function");
-  const ports = vi.mocked(createAgentToolDoor).mock.lastCall![0];
-  expect(ports.now!()).toBe(1);
-  const change = { projectId: "p", ticketId: "t", kind: "session" } as const;
-  ports.onMutation!(change);
-  const notice = { sessionId: "s" } as unknown as Parameters<
-    NonNullable<typeof ports.onSessionStarted>
-  >[0];
-  ports.onSessionStarted!(notice);
-  expect(publish.mock.calls).toEqual([
-    ["data-changed", change],
-    ["session-started", notice],
-  ]);
-  expect(rogue.onMutation).not.toHaveBeenCalled();
-  expect(rogue.onSessionStarted).not.toHaveBeenCalled();
+  expect(vi.mocked(createAgentToolDoor).mock.lastCall![0]).toBe(options);
 });
 
 it("builds watches over the process ticket-wake bus and releases both buses on dispose", () => {

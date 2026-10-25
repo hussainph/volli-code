@@ -239,7 +239,8 @@ try {
 
   // ── Arm 2: a load verb through the CLI door ─────────────────────────────
   const service = commandsModule.createAgentCommandService({
-    // The host's handler map (VC-668); `ticket.list` never reaches it.
+    // The host's handler map (VC-668, VC-923): `ticket.list` is its entry,
+    // which this service serves into it.
     handlers: handlersModule.testHostHandlers({ db }),
     db,
     appVersion: "bench",

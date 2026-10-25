@@ -5,8 +5,8 @@ import type { HostEventBus } from "../ports/events";
 import { getProjectAuthorityPolicy, listProjects } from "../db/projects-repo";
 import { listAutomationsForProject } from "../db/automations-repo";
 import { getComment } from "../db/comments-repo";
-import { actorSessionTicketDisplay } from "../agent-dispatch/resolution";
 import type { AgentToolDoor } from "../agent-tool-door";
+import type { HostHandlerMap } from "../handlers/handler-map";
 import { createHostAgentToolDoor, createHostAgentWatches } from "../agent-services";
 import type { Watches } from "../watches";
 import { commandOriginOf, createDelegations, type Delegations } from "./delegate-session";
@@ -25,6 +25,12 @@ export interface RuntimeSessionAgentOptions {
   mcpSettings: McpSettingsService | null;
   events: HostEventBus;
   log: Pick<Logger, "error">;
+  /**
+   * The host's handler map for these recovered services (VC-923), which the
+   * tool door projects and serves its own verbs into: the root's one map,
+   * built on first ask, so a tool call never waits on another door to build it.
+   */
+  handlers: (ready: RecoveredSessionServices<RuntimeSessionFacade>) => HostHandlerMap;
 }
 
 export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) {
@@ -42,7 +48,6 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
     sessions,
     runtime: sessionRuntime,
     submitKickoffMessage,
-    autoTitler,
     transcriptArtifacts,
   } = options.services;
   let delegations: Delegations | null = null;
@@ -128,45 +133,35 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
     if (readRecoveredSessionServices(ready) !== options.facade)
       throw new Error("The recovered facade belongs to a different runtime.");
     if (agentToolDoor !== undefined) return agentToolDoor;
-    agentToolDoor =
-      sessionDb === null || sessionDelegation === null
-        ? null
-        : createHostAgentToolDoor(
-            { events: options.events },
-            {
-              db: sessionDb,
-              projects: () => listProjects(sessionDb),
-              sessions: () => sessions,
-              delegation: sessionDelegation,
-              automations: () => {
-                if (runtimeAutomations.kind === "degraded") return null;
-                const execution = runtimeAutomations.execution;
-                return execution.kind !== "ready"
-                  ? null
-                  : {
-                      list: (projectId) => listAutomationsForProject(sessionDb, projectId),
-                      run: (input) => execution.runner.run(input),
-                    };
-              },
-              authorityPolicy: (projectId) => getProjectAuthorityPolicy(sessionDb, projectId),
-              watches: watchesFor,
-              supervise: () =>
-                sessionEngine !== null && sessionRuntime !== null
-                  ? { sessionEngine, runtime: sessionRuntime }
-                  : null,
-              delegate: delegationsFor,
-              mcp: () => mcpSettings,
-              ...(submitKickoffMessage === undefined
-                ? {}
-                : { submitSessionMessage: submitKickoffMessage }),
-              ...(autoTitler === null
-                ? {}
-                : { refineAutoTitle: (input) => void autoTitler.refine(input) }),
-              actorTicketDisplay: (ticketId) =>
-                actorSessionTicketDisplay(sessionDb, listProjects(sessionDb), ticketId),
-              now: () => Date.now(),
-            },
-          );
+    if (sessionDb === null || sessionDelegation === null) {
+      agentToolDoor = null;
+      return agentToolDoor;
+    }
+    agentToolDoor = createHostAgentToolDoor({
+      db: sessionDb,
+      projects: () => listProjects(sessionDb),
+      handlers: options.handlers(ready),
+      delegation: sessionDelegation,
+      automations: () => {
+        if (runtimeAutomations.kind === "degraded") return null;
+        const execution = runtimeAutomations.execution;
+        return execution.kind !== "ready"
+          ? null
+          : {
+              list: (projectId) => listAutomationsForProject(sessionDb, projectId),
+              run: (input) => execution.runner.run(input),
+            };
+      },
+      authorityPolicy: (projectId) => getProjectAuthorityPolicy(sessionDb, projectId),
+      watches: watchesFor,
+      supervise: () =>
+        sessionEngine !== null && sessionRuntime !== null
+          ? { sessionEngine, runtime: sessionRuntime }
+          : null,
+      delegate: delegationsFor,
+      mcp: () => mcpSettings,
+      now: () => Date.now(),
+    });
     return agentToolDoor;
   }
   return {

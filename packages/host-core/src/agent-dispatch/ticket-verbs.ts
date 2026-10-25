@@ -36,7 +36,7 @@ import { getRegisteredHarness } from "../db/harness-registry-repo";
 import { createTicketSignalCommand } from "../ticket-commands";
 import { withTicketWake } from "../ticket-wake";
 import { failure } from "./context";
-import type { AgentCommandContext } from "./context";
+import type { AgentVerbContext } from "./context";
 import { dryRunResponse } from "./preview";
 import type { SocketDecode } from "./projection";
 import {
@@ -392,7 +392,7 @@ export const ticketCommentDecode: SocketDecode<"board.createComment"> = (context
  * borrowed across projects.
  */
 export async function ticketSignalVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, envSession, now, actor: attribution } = context;

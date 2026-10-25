@@ -4,7 +4,7 @@ import type {
   HostWorkspaceList,
 } from "@volli/shared";
 /**
- * The host's one handler map: catalog key → the whole command (VC-668; HP §
+ * The host's one handler map: key → the whole command (VC-668; HP §
  * Command catalog, "One handler map").
  *
  * Every door is a projection of this object, and every projection runs the
@@ -12,9 +12,11 @@ import type {
  * ({@link HostHandlerMap}), and its only invocation path takes a policy
  * (`./handler-map`). The tRPC routers (IPC and WebSocket) call
  * `ctx.handlers[key]` on the router policy's view; the agent socket's
- * `AGENT_VERB_TABLE` binds a both-door key, and the ticket writes whose
- * command is a board key (VC-794), only as a projection of `handlers[key]`
- * under its coordination policy (`agent-dispatch/table.ts`);
+ * `AGENT_VERB_TABLE` binds every verb (a both-door key, a ticket write whose
+ * command is a board key, VC-794, and each of its own verbs' keys, VC-923)
+ * only as a projection of `handlers[key]` under its coordination policy
+ * (`agent-dispatch/table.ts`), bar the four Session reads the map delegates
+ * the other way;
  * a legacy per-channel IPC handler that still serves a catalog command
  * invokes the same entry under the desktop window's policy until its area
  * moves. So "both doors reach the same function, admitted" is a fact of the
@@ -31,7 +33,8 @@ import type {
  * {@link HostHandlerKey}, so a catalog key with no handler does not compile,
  * and neither does a handler with no catalog key. What a host lacks this
  * launch is a handler's answer ({@link OperationUnavailableError}), never a
- * missing entry.
+ * missing entry; an agent door's own verb (VC-923) is sealed empty and served
+ * by that door, and answers unavailable until it is (`HandlerNotServedError`).
  */
 import type Database from "better-sqlite3";
 import type {
@@ -46,6 +49,8 @@ import type {
   SessionStreamEmission,
 } from "@volli/session-engine";
 import {
+  autoTitleFromKickoff,
+  DEFAULT_KICKOFF_MESSAGE,
   isOperationUnavailable,
   OperationUnavailableError,
   roleImpliedByTicket,
@@ -82,7 +87,10 @@ import {
   type HostSignInUpdate,
   type HostLogsBatch,
   type HostLogsRead,
+  type AgentCommandBindingId,
   type HostHandlerKey,
+  type RuntimeVerbResult,
+  type ServedAgentHandlerKey,
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
   type ModelPickerView,
@@ -102,6 +110,8 @@ import {
   type WorktreeTrimSettings,
 } from "@volli/shared";
 
+import type { AgentVerbInput } from "../agent-dispatch/context";
+import type { ToolVerbInput } from "../agent-tool-door";
 import type { DetachedWorkPort } from "../detached-work";
 import type { BrowserShortcutsPort } from "./browser-shortcuts-port";
 import type { BrowserPictureStore } from "../browser/picture-store";
@@ -135,10 +145,23 @@ import {
   writeModelPickerView,
 } from "../session-runtime/model-access-preferences";
 import type { PiRuntimeHost } from "../session-runtime/pi-adapter";
-import type { SessionAttachInput, SessionStartInput, Sessions } from "../session-runtime/sessions";
+import type {
+  SessionAttachInput,
+  SessionModelOverride,
+  SessionStartInput,
+  Sessions,
+} from "../session-runtime/sessions";
+import {
+  startSessionOperation,
+  type StartSessionPorts,
+  type StartSessionResult,
+} from "../session-runtime/start-session";
+import type { TicketSessionDelegation } from "../session-runtime/delegation-policy";
+import { actorSessionTicketDisplay } from "../agent-dispatch/resolution";
+import { getTicket } from "../db/tickets-repo";
 import { createBoardHandlers, type BoardHandlerSignatures } from "../board/commands";
 import { createBoardChangeFeed, type BoardChangeFeed } from "../board/change-feed";
-import { reorderProjects } from "../db/projects-repo";
+import { listProjects, reorderProjects } from "../db/projects-repo";
 import { removeProject, type ProjectLiveWork } from "../project-remove";
 import {
   executeTicketMove,
@@ -168,12 +191,12 @@ export type HostSubscriptionHandler<Input, Emission> = (
 export type SessionCreateHandlerInput = Omit<SessionStartInput, "role" | "parentSessionId">;
 
 /**
- * Every handler's signature, by catalog key. A door's projection reads its
+ * Every handler's signature, by key. A door's projection reads its
  * input and output types from here; the router package declares the slice it
  * projects structurally (it cannot import host-core, D2), and a composition
  * root's assignment of this map to that slice is the check that they agree.
  */
-export interface HostHandlerSignatures extends BoardHandlerSignatures {
+export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHandlerSignatures {
   readonly "workspaces.list": HostHandler<void, HostWorkspaceList>;
   readonly "workspaces.create": HostHandler<HostWorkspaceCreateInput, HostWorkspaceCreateResult>;
   readonly "sessions.create": HostHandler<SessionCreateHandlerInput, { sessionId: string }>;
@@ -392,6 +415,52 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
   readonly "browserShortcuts.focusPage": HostHandler<{ tabId: string }, null>;
 }
 
+/** The agent keys the socket serves: its own verbs, less the start both agent doors share. */
+export type SocketServedKey = Extract<ServedAgentHandlerKey, AgentCommandBindingId>;
+
+/** The agent keys the tool door serves: the Agent Tool Surface's own verbs, less the start. */
+export type ToolServedKey = Exclude<ServedAgentHandlerKey, AgentCommandBindingId>;
+
+/**
+ * What the map's start is asked (VC-923): one Ticket Session's start, whichever
+ * agent door asked. Each door resolves the Ticket, validates its own envelope
+ * and mints the operation id under its own rule (random on the socket, the
+ * caller plus its tool call id on the tool surface); the actor is the call's.
+ */
+export interface SessionStartCommandInput {
+  readonly operationId: string;
+  readonly projectId: string;
+  readonly ticketId: string;
+  readonly message?: string;
+  readonly title?: string;
+  readonly modelOverride?: SessionModelOverride;
+  /** A claimed Ticket caller's frozen ancestry: the tool door's, after its claim. */
+  readonly delegation?: TicketSessionDelegation;
+}
+
+/**
+ * The agent doors' entries (VC-923). Each socket verb that is neither a
+ * catalog command nor a board write, and each tool verb, is its own key.
+ *
+ * - A socket verb is answered by its handler with the socket's wire answer.
+ *   The input is the request as the door resolved it ({@link AgentVerbInput}).
+ * - A tool verb is answered by its handler with the result the model reads.
+ *   The input is the bound caller, the call, and the attachment's
+ *   capabilities for it ({@link ToolVerbInput}).
+ * - `session.start`, on both doors, is one command: the map builds it from
+ *   its own services, as it builds a catalog command.
+ *
+ * The call is who the door authenticated. The two doors serve their own
+ * verbs' entries (`./handler-map`); the map is sealed without them.
+ */
+export type AgentHandlerSignatures = {
+  readonly [Key in SocketServedKey]: HostHandler<AgentVerbInput, AgentResponse>;
+} & {
+  readonly [Key in ToolServedKey]: HostHandler<ToolVerbInput, RuntimeVerbResult>;
+} & {
+  readonly "session.start": HostHandler<SessionStartCommandInput, StartSessionResult>;
+};
+
 /** What a Session read's handler is asked: its Workspace, and the socket verb's args. */
 export interface SessionReadHandlerInput {
   readonly workspaceId: string;
@@ -407,6 +476,9 @@ export type SessionReadPort = (
 
 /** The one map: every {@link HostHandlerKey}, and nothing else. */
 export type HostHandlers = { readonly [Key in HostHandlerKey]: HostHandlerSignatures[Key] };
+
+/** What {@link createHostHandlers} seals: every entry but the agent doors' own, which are served. */
+export type SealedHostHandlers = Omit<HostHandlers, ServedAgentHandlerKey>;
 
 type AssertNever<Type extends never> = Type;
 /**
@@ -442,7 +514,14 @@ export interface HostHandlerOptions {
   /** The recovered Session runtime, or null when this launch has none. */
   readonly runtime: SessionRuntime | null;
   /** The recovered Sessions facade, or null when this launch has none. */
-  readonly sessions: Pick<Sessions, "create" | "attach"> | null;
+  readonly sessions: Pick<Sessions, "create" | "attach" | "start"> | null;
+  /**
+   * Delivers a started Session's kickoff turn (`session.start`, VC-923).
+   * Absent means a start lands with no kickoff, as on a socket with none.
+   */
+  readonly submitSessionMessage?: StartSessionPorts["submitSessionMessage"];
+  /** Refines a started Session's heuristic title with a model call. Absent: heuristic only. */
+  readonly refineAutoTitle?: StartSessionPorts["refineAutoTitle"];
   /** Model Access, or null when the Pi runtime did not come up. */
   readonly modelAccess: Pick<PiRuntimeHost, "inspectModelAccess"> | null;
   /** Experimental flags, or null on a host that keeps none. */
@@ -603,6 +682,18 @@ function withoutSecret(error: unknown, secret: string): unknown {
 }
 
 /**
+ * The start's own unavailable (VC-923): this launch has no Sessions facade.
+ * Each agent door words it in its own vocabulary, which it can do only for
+ * this cause; any other unavailable (no database) keeps its own message.
+ */
+export class SessionRuntimeUnavailableError extends OperationUnavailableError {
+  constructor() {
+    super(SESSIONS_UNAVAILABLE);
+    this.name = "SessionRuntimeUnavailableError";
+  }
+}
+
+/**
  * Builds the host's handler map, sealed behind policy. Call it once per
  * composition root, with the recovered services, and hand the same object to
  * every door; each door invokes it through its own policy.
@@ -617,7 +708,7 @@ export function createHostHandlers(
 function hostHandlerEntries(
   ports: Pick<HostSessionPorts, "events" | "attention">,
   options: HostHandlerOptions,
-): HostHandlers {
+): SealedHostHandlers {
   // JS callers must fail closed too: a Done trim without activity evidence
   // could remove a directory a live process is standing in.
   if (typeof options.busyWorktreeSites !== "function") {
@@ -706,6 +797,48 @@ function hostHandlerEntries(
     }),
     "sessions.create": (input) =>
       sessions().create({ ...input, role: roleImpliedByTicket(input.ticketId) }),
+    // One Ticket Session's start, whichever agent door asked (VC-923): the
+    // person's operator CLI and the named tool resolve their own Ticket and
+    // envelope, and both reach this. The facade, the kickoff, the auto-title
+    // refinement, the mutation and the start notice are its, once.
+    "session.start": (input, call) => {
+      if (options.sessions === null) throw new SessionRuntimeUnavailableError();
+      const facade = options.sessions;
+      const database = board();
+      const projects = listProjects(database);
+      const ticket = getTicket(database, input.ticketId);
+      const project = projects.find(({ id }) => id === input.projectId);
+      if (ticket === undefined || project === undefined || ticket.projectId !== project.id) {
+        throw new Error(`No ticket ${input.ticketId} in project ${input.projectId}.`);
+      }
+      return joined({ ticketId: ticket.id, projectId: project.id }, () =>
+        startSessionOperation(
+          {
+            db: database,
+            projects,
+            sessions: facade,
+            submitSessionMessage: options.submitSessionMessage,
+            refineAutoTitle: options.refineAutoTitle,
+            onMutation: (change) => ports.events.publish("data-changed", change),
+            onSessionStarted: (notice) => ports.events.publish("session-started", notice),
+            actorTicketDisplay: (ticketId) =>
+              actorSessionTicketDisplay(database, projects, ticketId),
+            now,
+          },
+          {
+            operationId: input.operationId,
+            project,
+            ticket,
+            message: input.message,
+            title: input.title,
+            modelOverride: input.modelOverride,
+            delegation: input.delegation,
+            actor: call.actor,
+          },
+          { defaultKickoff: DEFAULT_KICKOFF_MESSAGE, autoTitle: autoTitleFromKickoff },
+        ),
+      );
+    },
     // Every Retry rides this. A ready attachment is the recovery point for an
     // Automation's durable first-message intent; the runner's fixed Session
     // command id reconciles rather than duplicates after a crash.

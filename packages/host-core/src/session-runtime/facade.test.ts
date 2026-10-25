@@ -24,6 +24,7 @@ import {
   type RuntimeSessionFacade,
 } from "./facade";
 import type { RuntimeSessionAgents } from "./agents";
+import type { HostHandlerMap } from "../handlers/handler-map";
 import { createSessionRuntimeLifecycle } from "./lifecycle";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { createRuntimeAutomations } from "./automations";
@@ -177,6 +178,18 @@ async function fixture() {
 }
 
 describe("lifted Session facade and recovered agent staging", () => {
+  it("builds the tool door once, over the root's map for its recovered services", async () => {
+    const f = await fixture();
+    const handlers = vi.fn(() => HANDLERS);
+    const agents = stage(f, { handlers });
+    const door = agents.toolDoor(f.ready);
+    expect(door).not.toBeNull();
+    expect(agents.toolDoor(f.ready)).toBe(door);
+    expect(handlers).toHaveBeenCalledExactlyOnceWith(f.ready);
+    expect(f.agentServices.createToolDoor).toHaveBeenCalledOnce();
+    expect(f.agentServices.createToolDoor.mock.lastCall![0].handlers).toBe(HANDLERS);
+  });
+
   it("stops constructed agent watches and delegation subscriptions exactly once", async () => {
     const f = await fixture();
     const unsubscribe = vi.fn();
@@ -184,20 +197,20 @@ describe("lifted Session facade and recovered agent staging", () => {
     const agents = stage(f);
     agents.recoveryDelegationsFor();
     agents.toolDoor(f.ready);
-    f.agentServices.createToolDoor.mock.lastCall![1].watches!();
+    f.agentServices.createToolDoor.mock.lastCall![0].watches!();
     agents.stop();
     agents.stop();
     expect(f.watch.dispose).toHaveBeenCalledOnce();
     expect(unsubscribe).toHaveBeenCalledOnce();
 
     expect(agents.recoveryDelegationsFor()).toBeNull();
-    expect(f.agentServices.createToolDoor.mock.lastCall![1].watches!()).toBeNull();
-    expect(f.agentServices.createToolDoor.mock.lastCall![1].delegate!()).toBeNull();
+    expect(f.agentServices.createToolDoor.mock.lastCall![0].watches!()).toBeNull();
+    expect(f.agentServices.createToolDoor.mock.lastCall![0].delegate!()).toBeNull();
 
     const idle = await fixture();
     const idleAgents = stage(idle);
     idleAgents.toolDoor(idle.ready);
-    const idlePorts = idle.agentServices.createToolDoor.mock.lastCall![1];
+    const idlePorts = idle.agentServices.createToolDoor.mock.lastCall![0];
     idleAgents.stop();
     // An in-flight tool must not lazily create fresh subscriptions after stop.
     expect(idlePorts.watches!()).toBeNull();
@@ -379,6 +392,7 @@ describe("lifted Session facade and recovered agent staging", () => {
       mcpSettings: null,
       events: f.events,
       log: console,
+      handlers: () => HANDLERS,
     });
     expect(() =>
       f.facade.agents({
@@ -388,6 +402,7 @@ describe("lifted Session facade and recovered agent staging", () => {
         mcpSettings: null,
         events: f.events,
         log: console,
+        handlers: () => HANDLERS,
       }),
     ).toThrow("already been staged");
     expect(f.agentServices.createToolDoor).not.toHaveBeenCalled();
@@ -439,13 +454,10 @@ describe("lifted Session facade and recovered agent staging", () => {
       },
     } as never);
     expect(delegated.rearmJoined).toHaveBeenCalledOnce();
-    // The door's mutations reach the staging's own event bus.
-    expect(f.agentServices.createToolDoor.mock.calls[0]![0]).toEqual({ events: f.events });
-    const toolPorts = f.agentServices.createToolDoor.mock.calls[0]![1];
-    expect(toolPorts.submitSessionMessage).toBe(
-      recoveredRuntimeSessionServices(f.ready).submitKickoffMessage,
-    );
-    expect(toolPorts.sessions()).toBe(f.sessions);
+    // The door projects the root's one map (VC-923), whose start owns the
+    // facade, the kickoff and the start notice.
+    const toolPorts = f.agentServices.createToolDoor.mock.calls[0]![0];
+    expect(toolPorts.handlers).toBe(HANDLERS);
     expect(toolPorts.delegate!()).toBe(delegated);
     expect(toolPorts.supervise!()).toEqual({
       sessionEngine: f.host.sessionEngine,
@@ -506,6 +518,8 @@ describe("lifted Session facade and recovered agent staging", () => {
   });
 });
 
+/** The root's map, opaque here: the tool door that projects it is a mock. */
+const HANDLERS = { map: "host" } as unknown as HostHandlerMap;
 const SKILL = {
   name: "a",
   description: "a",
@@ -523,6 +537,7 @@ function stage(f: Awaited<ReturnType<typeof fixture>>, overrides = {}) {
     mcpSettings: null,
     events: f.events,
     log: console,
+    handlers: () => HANDLERS,
     ...overrides,
   });
 }
@@ -703,7 +718,7 @@ describe("agent staging ports", () => {
     const f = await fixture();
     const agents = stage(f, { automations: { kind: "degraded" } as never });
     agents.toolDoor(f.ready);
-    const tool = f.agentServices.createToolDoor.mock.lastCall![1];
+    const tool = f.agentServices.createToolDoor.mock.lastCall![0];
     expect(tool.automations!()).toBeNull();
   });
 
@@ -724,14 +739,12 @@ describe("agent staging ports", () => {
       log,
     });
     agents.toolDoor(f.ready);
-    const tool = f.agentServices.createToolDoor.mock.lastCall![1];
+    const tool = f.agentServices.createToolDoor.mock.lastCall![0];
     tool.projects();
     tool.authorityPolicy!("p");
-    tool.actorTicketDisplay!(null);
     tool.now!();
     expect(listProjects).toHaveBeenCalled();
     expect(getProjectAuthorityPolicy).toHaveBeenCalled();
-    tool.refineAutoTitle!({} as never);
     const automation = tool.automations!()!;
     automation.list("p");
     await automation.run({} as never);
@@ -799,6 +812,7 @@ describe("agent staging ports", () => {
         mcpSettings: null,
         events: f.events,
         log: console,
+        handlers: () => HANDLERS,
       });
       const recovery = agents.recoveryDelegationsFor();
       if (["database", "runtime", "engine", "delegation"].includes(missing))
@@ -806,7 +820,7 @@ describe("agent staging ports", () => {
       const door = agents.toolDoor(alternateFacade.ready);
       if (["database", "delegation"].includes(missing)) expect(door).toBeNull();
       else {
-        const tool = f.agentServices.createToolDoor.mock.lastCall![1];
+        const tool = f.agentServices.createToolDoor.mock.lastCall![0];
         expect(tool.automations!()).toBeNull();
         expect(tool.watches!()).toBeNull();
         if (["runtime", "engine"].includes(missing)) expect(tool.supervise!()).toBeNull();

@@ -25,7 +25,7 @@ import { findLabelByName, findLabelRetirement, listLabelsByProject } from "../db
 import { mergeLabelsCommand, planLabelMerge, type LabelMergePlan } from "../ticket-commands";
 import { emitTicketWakesSince, markTicketWake } from "../ticket-wake";
 import { failure } from "./context";
-import type { AgentCommandContext } from "./context";
+import type { AgentVerbContext } from "./context";
 import { attributedActor, projectForCreate } from "./resolution";
 
 /** The two names a merge needs, or the refusal that says which one was wrong. */
@@ -67,7 +67,7 @@ function publicMergeTickets(plan: LabelMergePlan, ticketPrefix: string) {
 
 /** `volli label merge` — fold one label into another, previewing unless told to apply. */
 export async function labelMergeVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, envSession, now } = context;

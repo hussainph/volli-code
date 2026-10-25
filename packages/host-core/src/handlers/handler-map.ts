@@ -21,12 +21,29 @@
  * A synchronous policy over a synchronous handler answers synchronously, so
  * the desktop window's legacy channels keep their synchronous replies.
  *
- * `sealHostHandlers` is for {@link createHostHandlers} and test support only;
+ * The agent doors' own verbs (`ServedAgentHandlerKey`, VC-923) are entries of
+ * the same map, sealed empty: their ports are the composition of the door
+ * that answers them (the agent command service for the socket's, the tool
+ * door for the Agent Tool Surface's) rather than the map's, so each door
+ * serves its own into the map it was handed ({@link serveHostHandlers}).
+ * Served or not, a door reaches them exactly as it reaches any other entry,
+ * through {@link invokeHandler} and its policy; an entry nothing has served
+ * answers {@link HandlerNotServedError}.
+ *
+ * `sealHostHandlers` is for {@link createHostHandlers} and test support only,
+ * and `serveHostHandlers` for the two agent doors and test support;
  * `package-interface.test.ts` refuses any other production importer.
  */
-import { HandlerRefusedError, type HandlerCall, type HostHandlerKey } from "@volli/shared";
+import {
+  HandlerRefusedError,
+  OperationUnavailableError,
+  SERVED_AGENT_HANDLER_KEYS,
+  type HandlerCall,
+  type HostHandlerKey,
+  type ServedAgentHandlerKey,
+} from "@volli/shared";
 
-import type { HostHandlers } from "./host-handlers";
+import type { HostHandlers, SealedHostHandlers } from "./host-handlers";
 
 /** What a door's policy answers about one call, before its handler runs. */
 export type AdmissionVerdict = HandlerAdmitted | HandlerRefusal;
@@ -86,20 +103,57 @@ export interface HostHandlerMap {
 }
 
 interface Sealed {
-  readonly entries: HostHandlers;
+  readonly entries: Partial<HostHandlers>;
+  /** What {@link serveHostHandlers} added since: agent-door keys the seal left empty. */
+  readonly served: Partial<Record<HostHandlerKey, unknown>>;
   readonly observe: AdmissionObserver | undefined;
 }
 
 const sealedMaps = new WeakMap<HostHandlerMap, Sealed>();
 
-/** Seals a map's entries behind policy. For `createHostHandlers` and test support only. */
+/**
+ * Seals a map's entries behind policy. For `createHostHandlers` and test
+ * support only. The agent doors' keys may be left out, for
+ * {@link serveHostHandlers} to fill.
+ */
 export function sealHostHandlers(
-  entries: HostHandlers,
+  entries: SealedHostHandlers & Partial<Pick<HostHandlers, ServedAgentHandlerKey>>,
   observe?: AdmissionObserver,
 ): HostHandlerMap {
   const map = Object.freeze(Object.create(null) as object) as HostHandlerMap;
-  sealedMaps.set(map, { entries, observe });
+  sealedMaps.set(map, { entries, served: {}, observe });
   return map;
+}
+
+/**
+ * An agent-door entry no door has served on this map: its host composes no
+ * such door, or has not built it yet. Unavailable, never a
+ * missing entry: the map is total, and this host cannot answer it now.
+ */
+export class HandlerNotServedError extends OperationUnavailableError {
+  constructor(readonly key: HostHandlerKey) {
+    super(`${key} is not served on this host.`);
+    this.name = "HandlerNotServedError";
+  }
+}
+
+/**
+ * Serves agent-door entries into a sealed map (VC-923): one door's own verbs,
+ * built from the ports only it composes. Each key is served
+ * once, and never over an entry the map was sealed with, so a second door
+ * cannot silently re-point one that already projects the first's.
+ */
+export function serveHostHandlers<Key extends ServedAgentHandlerKey>(
+  map: HostHandlerMap,
+  entries: Pick<HostHandlers, Key>,
+): void {
+  const sealed = opened(map);
+  for (const key of Object.keys(entries) as Key[]) {
+    if (key in sealed.entries || key in sealed.served) {
+      throw new Error(`The handler map already serves ${key}.`);
+    }
+  }
+  Object.assign(sealed.served, entries);
 }
 
 /** Whether `value` is a map {@link sealHostHandlers} sealed: what a door checks it was handed. */
@@ -112,6 +166,12 @@ function opened(map: HostHandlerMap): Sealed {
   if (sealed === undefined)
     throw new Error("Not a host handler map: build one with createHostHandlers.");
   return sealed;
+}
+
+const servedKeys: ReadonlySet<string> = new Set(SERVED_AGENT_HANDLER_KEYS);
+
+function isServedKey(key: HostHandlerKey): key is ServedAgentHandlerKey {
+  return servedKeys.has(key);
 }
 
 function isPromiseLike<Value>(value: Value | PromiseLike<Value>): value is PromiseLike<Value> {
@@ -132,14 +192,21 @@ export function invokeHandler<Key extends HostHandlerKey>(
   key: Key,
   ...args: EntryArgs<Key>
 ): EntryResult<Key> {
-  const { entries, observe } = opened(map);
-  const handler = entries[key] as unknown as (...args: EntryArgs<Key>) => EntryResult<Key>;
-  if (typeof handler !== "function") throw new Error(`The handler map has no ${key}.`);
+  const { entries, served, observe } = opened(map);
+  const handler = (entries[key] ?? served[key]) as
+    | ((...args: EntryArgs<Key>) => EntryResult<Key>)
+    | undefined;
+  if (typeof handler !== "function" && !isServedKey(key)) {
+    throw new Error(`The handler map has no ${key}.`);
+  }
   const [input, call] = args as unknown as [unknown, HandlerCall];
   const proceed = (verdict: AdmissionVerdict): EntryResult<Key> => {
     observe?.({ door: policy.door, key, admitted: verdict.admitted });
     if (!verdict.admitted) throw new HandlerRefusedError(verdict.message, verdict.hint ?? null);
-    return handler(...args);
+    // Read again: a door's policy may settle after the service serves.
+    const reached = (entries[key] ?? served[key]) as typeof handler;
+    if (typeof reached !== "function") throw new HandlerNotServedError(key);
+    return reached(...args);
   };
   const verdict = policy.admit(key, input, call);
   if (!isPromiseLike(verdict)) return proceed(verdict);
@@ -154,7 +221,10 @@ export function invokeHandler<Key extends HostHandlerKey>(
 export function admittedHandlers(map: HostHandlerMap, policy: HandlerPolicy): HostHandlers {
   const { entries } = opened(map);
   const view: Record<string, unknown> = {};
-  for (const key of Object.keys(entries) as HostHandlerKey[]) {
+  for (const key of new Set([
+    ...(Object.keys(entries) as HostHandlerKey[]),
+    ...SERVED_AGENT_HANDLER_KEYS,
+  ])) {
     view[key] = (...args: EntryArgs<typeof key>) => invokeHandler(map, policy, key, ...args);
   }
   return Object.freeze(view) as unknown as HostHandlers;

@@ -1515,7 +1515,8 @@ const appStartup = app.whenReady().then(async () => {
   /**
    * The host's one handler map (VC-668), built once from the recovered
    * services and handed to every door: the Session RPC bridge, the
-   * `volli:ticket-move` channel and the agent socket each project it, under
+   * `volli:ticket-move` channel, the agent socket and the Agent Tool Surface
+   * door each project it, under
    * that door's own policy (the map is sealed: no door can call it without
    * one). What
    * this root used to write around each call (reconciling preferences on a
@@ -1527,7 +1528,8 @@ const appStartup = app.whenReady().then(async () => {
   const createHandlers = (
     ready: RecoveredSessionServices<RuntimeSessionFacade>,
   ): HostHandlerMap => {
-    const { runtime, sessions } = recoveredRuntimeSessionServices(ready);
+    const { runtime, sessions, submitKickoffMessage, autoTitler } =
+      recoveredRuntimeSessionServices(ready);
     const projectLiveWork = hostProjectLiveWork({
       runtime: () => sessionRuntime,
       shells: backgroundShells,
@@ -1544,6 +1546,9 @@ const appStartup = app.whenReady().then(async () => {
       dataDir: hostCore.dataDir,
       runtime,
       sessions,
+      // The start both agent doors reach (VC-923): its kickoff and its title.
+      ...(submitKickoffMessage === undefined ? {} : { submitSessionMessage: submitKickoffMessage }),
+      ...(autoTitler === null ? {} : { refineAutoTitle: (input) => void autoTitler.refine(input) }),
       pictures: assembledRuntime.pictures,
       modelAccess: piRuntimeHost,
       backgroundShells,
@@ -1621,6 +1626,8 @@ const appStartup = app.whenReady().then(async () => {
     mcpSettings,
     events: hostPorts.events,
     log: hostLogger("session-agents"),
+    // The tool door projects the same one map as every other door (VC-923).
+    handlers: handlersFor,
   });
   // No runtime, no bridge — but the channels are still claimed, answering
   // every request with the reason the runtime is down (in practice: the

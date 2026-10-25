@@ -17,7 +17,7 @@ import { basename, resolve } from "node:path";
 import type { AgentRequest, AgentResponse, Project } from "@volli/shared";
 
 import { planProjectCreate } from "../project-create";
-import type { AgentCommandContext } from "./context";
+import type { AgentVerbContext } from "./context";
 import { failure } from "./context";
 import { dryRunResponse } from "./preview";
 
@@ -32,7 +32,7 @@ function projectSummary(project: Project): Record<string, unknown> {
 }
 
 export async function projectAddVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const typed = request.args["id"];

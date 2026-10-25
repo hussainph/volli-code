@@ -16,7 +16,7 @@ import {
   DOOR_LOCAL_CATALOG_KEYS,
   HANDLER_PROJECTION_KEYS,
   HandlerRefusedError,
-  HOST_HANDLER_KEYS,
+  CATALOG_HANDLER_KEYS,
   OperationUnavailableError,
   type HandlerCall,
   type Ticket,
@@ -276,7 +276,7 @@ describe("every router procedure projects one declared handler (VC-668, VC-729)"
     expectTypeOf<DesktopRouterHandlersCoverage>().toEqualTypeOf<never>();
   });
 
-  it.each(HOST_HANDLER_KEYS)("%s reaches handlers[%s] and nothing else", async (key) => {
+  it.each(CATALOG_HANDLER_KEYS)("%s reaches handlers[%s] and nothing else", async (key) => {
     const { handlers, reached } = recordingHandlers();
     const callers = routerCallers(handlers);
     // Both tiers (D-A1 = (c)): a desktop-only key is projected by the

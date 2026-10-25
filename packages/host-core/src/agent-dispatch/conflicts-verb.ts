@@ -19,7 +19,7 @@ import type { AgentRequest, AgentResponse, Project } from "@volli/shared";
 
 import { scanCollisions } from "../worktree/collisions";
 import { failure } from "./context";
-import type { AgentCommandContext } from "./context";
+import type { AgentVerbContext } from "./context";
 
 /** The projects this sweep covers: the one named, or all of them. */
 function scopedProjects(
@@ -48,7 +48,7 @@ function scopedProjects(
 
 /** `volli conflicts` — which active ticket worktrees touch the same files. */
 export async function conflictsVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, gitAsync, worktreeExists } = context;

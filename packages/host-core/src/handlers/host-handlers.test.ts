@@ -26,9 +26,9 @@ import {
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
 
 import { insertProject } from "../db/projects-repo";
-import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
+import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { listProjects } from "../db/projects-repo";
-import { getTicketRow } from "../db/tickets-repo";
+import { getTicketRow, insertTicket } from "../db/tickets-repo";
 import { BrowserPictureStore } from "../browser/picture-store";
 import { createBoardChangeFeed } from "../board/change-feed";
 import type { ProjectLiveWork } from "../project-remove";
@@ -39,6 +39,7 @@ import { createWorktreeReadService } from "../worktree-reads";
 import { ADMITTED, admittedHandlers, type HandlerPolicy } from "./handler-map";
 import {
   createHostHandlers,
+  SessionRuntimeUnavailableError,
   type HostHandlerCoverage,
   type HostHandlerOptions,
   type HostHandlers,
@@ -169,7 +170,9 @@ function ticket(id: string, status: "todo" | "doing" | "done" = "todo") {
 }
 
 describe("the map", () => {
-  it("has a handler for every catalog key, and no other", () => {
+  // The view lists every key, the agent doors' own included: those are
+  // served by the doors (VC-923) and answer unavailable here, unserved.
+  it("has a handler for every key, and no other", () => {
     expectTypeOf<HostHandlerCoverage>().toEqualTypeOf<never>();
     expect(Object.keys(handlers()).toSorted()).toEqual([...HOST_HANDLER_KEYS].toSorted());
   });
@@ -671,12 +674,104 @@ describe("Session commands", () => {
     ]);
   });
 
+  // The one start both agent doors reach (VC-923): the facade, the kickoff,
+  // the title and the start notice are the map's, and the actor is the call's.
+  describe("session.start", () => {
+    const READY = {
+      sessionId: "abcdef12-started",
+      state: "ready" as const,
+      receipt: null,
+      throughSequence: 2,
+      model: { providerId: "test", modelId: "m", reasoningLevel: "off" as const },
+    };
+
+    function ticketed() {
+      insertTicket(ctx.db, testTicket(PROJECT, { id: "ticket-one", ticketNumber: 1 }));
+    }
+
+    it("starts the Session, sends its kickoff and announces it, as the call's actor", async () => {
+      ticketed();
+      const start = vi.fn(async () => READY);
+      const submitSessionMessage = vi.fn(async () => {});
+      const refineAutoTitle = vi.fn();
+      const map = handlers({
+        sessions: { create: vi.fn(), attach: vi.fn(), start },
+        submitSessionMessage,
+        refineAutoTitle,
+      });
+      const caller = {
+        actor: { kind: "session", sessionId: "caller", ticketId: "ticket-one" },
+      } as const;
+      const started = await map["session.start"](
+        { operationId: "op", projectId: PROJECT, ticketId: "ticket-one", message: "Fix it" },
+        caller,
+      );
+      expect(started).toMatchObject({
+        sessionId: READY.sessionId,
+        ticketDisplayId: "VC-1",
+        state: "ready",
+        title: "Fix it",
+      });
+      expect(start).toHaveBeenCalledWith(
+        expect.objectContaining({
+          operationId: "op",
+          projectId: PROJECT,
+          ticketId: "ticket-one",
+          role: "ticket",
+          actor: caller.actor,
+        }),
+      );
+      expect(submitSessionMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: READY.sessionId, text: "Fix it" }),
+      );
+      expect(refineAutoTitle).toHaveBeenCalled();
+      expect(publish).toHaveBeenCalledWith("data-changed", {
+        ticketId: "ticket-one",
+        projectId: PROJECT,
+        kind: "session",
+      });
+      expect(publish).toHaveBeenCalledWith(
+        "session-started",
+        expect.objectContaining({ sessionId: READY.sessionId, actorTicket: "VC-1" }),
+      );
+      // Once each: the map's start is the only one that announces.
+      expect(publish.mock.calls.map(([topic]) => topic)).toEqual([
+        "data-changed",
+        "session-started",
+      ]);
+    });
+
+    it("answers unavailable with no Sessions facade, and refuses a ticket outside its project", async () => {
+      ticketed();
+      insertProject(ctx.db, testProject({ id: "elsewhere", ticketPrefix: "EL" }));
+      const input = { operationId: "op", projectId: PROJECT, ticketId: "ticket-one" };
+      const error = await Promise.resolve()
+        .then(() => handlers()["session.start"](input, USER))
+        .catch((thrown: unknown) => thrown);
+      expect(isOperationUnavailable(error)).toBe(true);
+      // The start's own unavailable, which each agent door words in its own vocabulary.
+      expect(error).toBeInstanceOf(SessionRuntimeUnavailableError);
+      const start = vi.fn(async () => READY);
+      const map = handlers({ sessions: { create: vi.fn(), attach: vi.fn(), start } });
+      for (const wrong of [
+        { ...input, ticketId: "no-such-ticket" },
+        { ...input, projectId: "no-such-project" },
+        { ...input, projectId: "elsewhere" },
+      ]) {
+        await expect(
+          Promise.resolve().then(() => map["session.start"](wrong, USER)),
+        ).rejects.toThrow(`No ticket ${wrong.ticketId} in project ${wrong.projectId}.`);
+      }
+      expect(start).not.toHaveBeenCalled();
+    });
+  });
+
   it("states the Role a person's choice of ticket implies", async () => {
     const create = vi.fn(async (_input: { role: string }) => ({
       sessionId: "s",
       model: {} as never,
     }));
-    const map = handlers({ sessions: { create, attach: vi.fn() } });
+    const map = handlers({ sessions: { create, attach: vi.fn(), start: vi.fn() } });
     const input = { operationId: "op", projectId: PROJECT, title: null };
     await map["sessions.create"]({ ...input, ticketId: "t" }, USER);
     await map["sessions.create"]({ ...input, ticketId: null }, USER);
@@ -685,15 +780,16 @@ describe("Session commands", () => {
 
   it("resumes an Automation's delivery after a ready attach, and only then", async () => {
     const attach = vi.fn(async () => ({ state: "ready" }) as never);
-    const ready = handlers({ sessions: { create: vi.fn(), attach } });
+    const ready = handlers({ sessions: { create: vi.fn(), attach, start: vi.fn() } });
     await ready["sessions.attach"]({ operationId: "op", sessionId: "s" }, USER);
     expect(resumeDeliveryForSession).toHaveBeenCalledExactlyOnceWith("s");
 
     resumeDeliveryForSession.mockClear();
     for (const kind of ["idle", "degraded"] as const) {
-      await handlers({ sessions: { create: vi.fn(), attach }, automations: automations(kind) })[
-        "sessions.attach"
-      ]({ operationId: "op", sessionId: "s" }, USER);
+      await handlers({
+        sessions: { create: vi.fn(), attach, start: vi.fn() },
+        automations: automations(kind),
+      })["sessions.attach"]({ operationId: "op", sessionId: "s" }, USER);
     }
     attach.mockResolvedValueOnce({ state: "starting" } as never);
     await ready["sessions.attach"]({ operationId: "op", sessionId: "s" }, USER);
