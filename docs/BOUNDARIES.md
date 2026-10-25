@@ -204,6 +204,12 @@ local backend runs on in a dev build; a deployment's exact origin joins that
 list when one exists.
 A launch's product store (this Mac's SQLite, or the backend) is chosen once
 by main before the window opens, and never changes in a live window.
+The last board a cloud launch saw live (projects, cards and labels; no
+bodies, no transcripts) is cached on this Mac for that account only, and is
+cleared whenever the account ends up signed out. A cloud launch that cannot
+reach the backend shows that cache read-only, says how old it is, and swaps
+to the live board when the backend answers. It is a cache, never a source:
+nothing in it is ever sent back.
 
 **Machine-bound resources stay on their machine.** Working copies, terminals and
 browser tabs are supervised by their runner and streamed to clients over a

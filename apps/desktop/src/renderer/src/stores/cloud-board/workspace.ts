@@ -11,17 +11,23 @@
  * - **The selection.** The persisted cloud selection waits for the first
  *   answer, then falls back to the first project; later answers keep the
  *   selection while its project stays.
+ * - **Offline at launch (D3).** When no live list has answered within
+ *   `offline.afterMs`, the last-seen board on disk is shown read-only
+ *   (`snapshot.ts`); the first live answer replaces it, with no relaunch and
+ *   no "isn't available" lines for what the snapshot held.
  * - **The end.** When the client closes (the sign-in ended), every board and
  *   project goes: there is no half-cloud board.
  */
-import type { Project } from "@volli/shared";
+import type { Label, Project, Ticket } from "@volli/shared";
 import { newId } from "@volli/shared/cloud";
 import { create } from "zustand";
 
 import type { CloudSession } from "@renderer/lib/cloud-client";
 
 import type { CloudSelection } from "../projects";
+import { useCloudLinkInputs } from "../cloud-link";
 import { CLOUD_READ_ONLY, cloudFailure, type Watched } from "./source";
+import type { BoardSnapshot } from "./snapshot";
 import { projectRows, type CloudProjectRow } from "./projection";
 
 /** What the rail's head and foot read in a cloud launch. */
@@ -56,14 +62,39 @@ export interface CloudWorkspaceDeps {
         selectedProjectId: string | null,
       ): void;
       clearCloud(): void;
+      showCloudSnapshot(
+        workspaceId: string,
+        projects: Project[],
+        selectedProjectId: string | null,
+      ): void;
     };
   };
-  board: { seedProject(projectId: string): void; forget(projectId: string): void };
+  board: {
+    seedProject(projectId: string): void;
+    forget(projectId: string): void;
+    paintBoard(
+      projectId: string,
+      tickets: Ticket[],
+      labels: Label[],
+      unloadedBodies: ReadonlySet<string>,
+    ): void;
+  };
   workspace: { setState(state: Partial<CloudWorkspaceState>): void };
   /** The selection the last cloud launch left, or `null`. */
   persisted: CloudSelection | null;
   failed(message: string): void;
   notice(message: string): void;
+  /** The last-seen board, for a launch no live list answers in time (D3). */
+  offline?: {
+    readonly afterMs: number;
+    snapshot(): Promise<BoardSnapshot | null>;
+    /** The snapshot on screen since (its `savedAt`), or the live board again (`null`). */
+    shown(savedAt: number | null): void;
+    /** Follows a board the snapshot painted: its live board paints over it. */
+    follow(projectId: string): void;
+    setTimeout(run: () => void, ms: number): unknown;
+    clearTimeout(handle: unknown): void;
+  };
 }
 
 /** The selection after an answer: the current one while it stays, else the persisted one, else the first. */
@@ -87,17 +118,49 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
   let workspaceId: string | null = null;
   let answered = false;
   let failing = false;
+  // The offline snapshot (D3): whether a live list has answered yet, whether
+  // the wait for one ran out, the Workspace the snapshot on screen shows
+  // (null: none on screen), and the live Workspace chosen meanwhile.
+  let liveAnswered = false;
+  let timedOut = false;
+  let snapshotWorkspace: string | null = null;
+  let liveWorkspace: { id: string; name: string } | null = null;
+  let current: CloudSession | null = null;
+  let offlineTimer: unknown = null;
 
   const stopAll = () => {
     for (const stop of stops.splice(0)) stop();
   };
 
-  function clear(): void {
+  function forgetAll(): void {
+    for (const project of deps.projects.getState().projects) deps.board.forget(project.id);
+  }
+
+  function dropSnapshot(): void {
+    if (snapshotWorkspace === null) return;
+    snapshotWorkspace = null;
+    deps.offline!.shown(null);
+  }
+
+  /** A live answer arrived: the wait for one is over. */
+  function settle(): void {
+    liveAnswered = true;
+    if (offlineTimer !== null) {
+      deps.offline!.clearTimeout(offlineTimer);
+      offlineTimer = null;
+    }
+  }
+
+  /** A new client keeps the offline snapshot on screen; a closed one takes everything. */
+  function clear(closed: boolean): void {
     stopAll();
-    const { projects } = deps.projects.getState();
-    for (const project of projects) deps.board.forget(project.id);
-    // Never persisted: the next cloud launch returns to the selection it had.
-    if (workspaceId !== null) deps.projects.getState().clearCloud();
+    if (snapshotWorkspace === null || closed) {
+      forgetAll();
+      // Never persisted: the next cloud launch returns to the selection it had.
+      if (workspaceId !== null || snapshotWorkspace !== null) deps.projects.getState().clearCloud();
+      dropSnapshot();
+    }
+    if (closed) liveWorkspace = null;
     workspaceId = null;
     answered = false;
   }
@@ -118,13 +181,25 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
     }
     if (rows === undefined || id !== workspaceId) return;
     failing = false;
+    settle();
     const next = projectRows(rows);
     const state = deps.projects.getState();
     const nextIds = new Set(next.map((project) => project.id));
+    // The live board replaces the snapshot's, unannounced: a project it
+    // still lists keeps its cards on screen until its live board paints.
+    const fromSnapshot = snapshotWorkspace !== null;
+    if (fromSnapshot) {
+      dropSnapshot();
+      // Its own Workspace answered first (`openWorkspace`): name it again.
+      deps.workspace.setState({ workspace: liveWorkspace });
+      for (const project of state.projects) {
+        if (nextIds.has(project.id)) deps.offline!.follow(project.id);
+      }
+    }
     for (const project of state.projects) {
       if (nextIds.has(project.id)) continue;
       deps.board.forget(project.id);
-      deps.notice(`${project.name} isn’t available any more`);
+      if (!fromSnapshot) deps.notice(`${project.name} isn’t available any more`);
     }
     for (const project of next) deps.board.seedProject(project.id);
     const wanted =
@@ -134,11 +209,14 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
   }
 
   function openWorkspace(session: CloudSession, row: WorkspaceRow): void {
-    deps.workspace.setState({ workspace: { id: row.workspaceId, name: row.name } });
+    liveWorkspace = { id: row.workspaceId, name: row.name };
+    // The snapshot's Workspace stays named while its board is on screen.
+    if (snapshotWorkspace === null) deps.workspace.setState({ workspace: liveWorkspace });
     if (row.workspaceId === workspaceId) return;
-    // Another Workspace (the last one left): its projects replace these.
+    // Another Workspace (the last one left): its projects replace these. The
+    // offline snapshot stays on screen until a live list answers.
     for (const stop of stops.splice(1)) stop();
-    for (const project of deps.projects.getState().projects) deps.board.forget(project.id);
+    if (snapshotWorkspace === null) forgetAll();
     workspaceId = row.workspaceId;
     answered = false;
     const watch = session.client.watchQuery(session.api.projects.list, {
@@ -161,12 +239,67 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
     failing = false;
     const wanted = workspaceId ?? deps.persisted?.workspaceId ?? null;
     const row = rows.find((candidate) => candidate.workspaceId === wanted) ?? rows[0];
-    if (row !== undefined) openWorkspace(session, row);
+    if (row !== undefined) {
+      openWorkspace(session, row);
+      return;
+    }
+    // No Workspace at all: the live answer is that there is nothing to show.
+    settle();
+    if (snapshotWorkspace !== null) {
+      forgetAll();
+      deps.projects.getState().clearCloud();
+      deps.workspace.setState({ workspace: null });
+      dropSnapshot();
+    }
+  }
+
+  /** Puts the last-seen board on screen, read-only, if no live list has answered meanwhile. */
+  async function showSnapshot(): Promise<void> {
+    const offline = deps.offline!;
+    if (liveAnswered || current === null) return;
+    const snapshot = await offline.snapshot();
+    if (snapshot === null || liveAnswered || current === null) return;
+    deps.workspace.setState({ workspace: snapshot.workspace });
+    const projects = [...snapshot.projects];
+    const wanted =
+      deps.persisted?.workspaceId === snapshot.workspace.id ? deps.persisted.projectId : null;
+    for (const project of projects) {
+      const board = snapshot.boards[project.id] ?? { tickets: [], labels: [] };
+      deps.board.paintBoard(
+        project.id,
+        [...board.tickets],
+        [...board.labels],
+        // No body was kept: each is read when its ticket opens.
+        new Set(board.tickets.map((ticket) => ticket.id)),
+      );
+    }
+    deps.projects
+      .getState()
+      .showCloudSnapshot(snapshot.workspace.id, projects, resolveSelection(projects, null, wanted));
+    snapshotWorkspace = snapshot.workspace.id;
+    offline.shown(snapshot.savedAt);
+  }
+
+  function trySnapshot(): void {
+    showSnapshot().catch((error: unknown) => {
+      deps.failed(`Couldn’t show the last-seen board: ${cloudFailure(error).message}`);
+    });
+  }
+
+  if (deps.offline !== undefined) {
+    offlineTimer = deps.offline.setTimeout(() => {
+      offlineTimer = null;
+      timedOut = true;
+      trySnapshot();
+    }, deps.offline.afterMs);
   }
 
   const stopFollowing = deps.follow((session) => {
-    clear();
+    current = session;
+    clear(session === null);
     if (session === null) return;
+    // A client that arrived after the wait ran out still shows the snapshot.
+    if (timedOut && snapshotWorkspace === null) trySnapshot();
     const watch = session.client.watchQuery(session.api.workspaces.listMine, {}) as Watched<
       WorkspaceRow[]
     >;
@@ -175,6 +308,9 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
   });
 
   return () => {
+    current = null;
+    if (offlineTimer !== null) deps.offline!.clearTimeout(offlineTimer);
+    offlineTimer = null;
     stopFollowing();
     stopAll();
   };
@@ -195,7 +331,9 @@ export async function createCloudProject(
   if (
     session === null ||
     workspaceId === null ||
-    !session.client.connectionState().isWebSocketConnected
+    !session.client.connectionState().isWebSocketConnected ||
+    // The offline snapshot is on screen: nothing is written until the live board is.
+    useCloudLinkInputs.getState().input.snapshotAt !== null
   ) {
     return { ok: false, error: CLOUD_READ_ONLY };
   }

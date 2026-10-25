@@ -419,3 +419,18 @@ describe("Volli Cloud's words", () => {
     expect(hostBadge(cloud(chosen))).toBe("fail");
   });
 });
+
+// VC-889 (D3): the offline snapshot says how old it is.
+describe("Volli Cloud's offline snapshot", () => {
+  it("says the board on screen is the one last seen, and when", () => {
+    const asOf = new Date(2026, 9, 7, 9, 5).getTime();
+    expect(
+      hostSurface(cloud({ status: "offline", since: asOf, retryAt: null, asOf }), NOW),
+    ).toEqual({
+      tone: "quiet",
+      icon: "offline",
+      line: `Offline — showing the board as of ${formatSince(asOf, NOW)}`,
+      graced: false,
+    });
+  });
+});

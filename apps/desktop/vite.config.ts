@@ -768,6 +768,8 @@ export default defineConfig(({ mode, command }) => ({
         // Which product store a launch uses, its marker, and the restart into
         // the other one through the quit gates (VC-889).
         "**/src/main/cloud-launch.ts",
+        // The last-seen cloud board on disk, per account (VC-889, D3).
+        "**/src/main/cloud-snapshot.ts",
         "**/src/main/renderer-csp.ts",
         "**/src/main/host-runtime.ts",
         // Menu-bar mode's whole decision and lifecycle (VC-577).

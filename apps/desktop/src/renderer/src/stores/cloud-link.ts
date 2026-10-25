@@ -92,6 +92,11 @@ export interface CloudLinkInput {
   readonly online: boolean;
   /** When the machine last woke (epoch ms), `null` if it has not this launch. */
   readonly resumedAt: number | null;
+  /**
+   * When the board on screen was last seen live, while it is the offline
+   * snapshot (VC-889, D3); `null` while the board is the live one.
+   */
+  readonly snapshotAt: number | null;
 }
 
 export const INITIAL_CLOUD_LINK_INPUT: CloudLinkInput = Object.freeze({
@@ -101,6 +106,7 @@ export const INITIAL_CLOUD_LINK_INPUT: CloudLinkInput = Object.freeze({
   account: null,
   online: true,
   resumedAt: null,
+  snapshotAt: null,
 });
 
 /** Why the link cannot serve right now, before any grace; `null` while it can. */
@@ -144,6 +150,10 @@ export function cloudLinkView(
   }
   if (input.authenticated === false || input.account?.backend === "refused") {
     return { status: "incompatible", reason: "sign-in-refused" };
+  }
+  // The offline snapshot is on screen: read-only, saying how old it is.
+  if (input.snapshotAt !== null) {
+    return { status: "offline", since: input.snapshotAt, retryAt: null, asOf: input.snapshotAt };
   }
   if (input.client === "starting" || input.connection === null) return { status: "connecting" };
   const problem = trouble(input, context.now);

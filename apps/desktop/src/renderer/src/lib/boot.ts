@@ -32,12 +32,18 @@ import {
 } from "@renderer/stores/projects";
 import { useBoardStore } from "@renderer/stores/board";
 import { cloudBoardSource, installCloudBoardSource } from "@renderer/stores/board-source";
-import { ConvexBoardSource } from "@renderer/stores/cloud-board/source";
+import { CLOUD_READ_ONLY, ConvexBoardSource } from "@renderer/stores/cloud-board/source";
+import {
+  BOARD_SNAPSHOT_AFTER_MS,
+  createSnapshotWriter,
+  decodeBoardSnapshot,
+  liveBoardSnapshot,
+} from "@renderer/stores/cloud-board/snapshot";
 import {
   followCloudWorkspace,
   useCloudWorkspaceStore,
 } from "@renderer/stores/cloud-board/workspace";
-import { createCloudHostSource } from "@renderer/stores/cloud-link";
+import { createCloudHostSource, useCloudLinkInputs } from "@renderer/stores/cloud-link";
 import {
   canWriteProject,
   hostOfProject,
@@ -314,6 +320,86 @@ export interface CloudBoardDeps {
 }
 
 /**
+ * The last-seen board, kept on this Mac for a launch that cannot reach
+ * Volli Cloud (VC-889, D3): read once, shown by the Workspace follower if no
+ * live list answers in time, and written again whenever the live board
+ * settles.
+ */
+let stopKeepingBoard: () => void = () => {};
+
+function cloudBoardSnapshot(userId: string, source: ConvexBoardSource) {
+  // One writer per window: a second start replaces the first's.
+  stopKeepingBoard();
+  const timers = {
+    setTimeout: (run: () => void, ms: number): unknown => setTimeout(run, ms),
+    clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  };
+  const writer = createSnapshotWriter({
+    read: (savedAt) =>
+      liveBoardSnapshot({
+        userId,
+        savedAt,
+        link: useCloudLinkInputs.getState().input,
+        workspace: useCloudWorkspaceStore.getState().workspace,
+        projects: useProjectsStore.getState().projects,
+        ticketsByProject: useBoardStore.getState().ticketsByProject,
+        labelsByProject: useBoardStore.getState().labelsByProject,
+        painted: (projectId) => source.painted(projectId),
+      }),
+    save: (text) => sessionRpcClient().cloud.saveSnapshot.mutate({ text }),
+    clock: { now: () => Date.now(), ...timers },
+    warn: (message, error) => console.warn(message, error),
+  });
+  const stops = [
+    useBoardStore.subscribe((state, previous) => {
+      if (
+        state.ticketsByProject !== previous.ticketsByProject ||
+        state.labelsByProject !== previous.labelsByProject
+      ) {
+        writer.schedule();
+      }
+    }),
+    useProjectsStore.subscribe((state, previous) => {
+      if (state.projects !== previous.projects) writer.schedule();
+    }),
+    // The board kept waits for this window's writes to be answered.
+    useCloudLinkInputs.subscribe((state, previous) => {
+      const now = state.input.connection?.inflightMutations ?? 0;
+      const before = previous.input.connection?.inflightMutations ?? 0;
+      if (now === 0 && before > 0) writer.schedule();
+    }),
+  ];
+  stopKeepingBoard = () => {
+    for (const stop of stops) stop();
+  };
+  return {
+    afterMs: BOARD_SNAPSHOT_AFTER_MS,
+    snapshot: async () => {
+      try {
+        const { text } = await sessionRpcClient().cloud.readSnapshot.query();
+        const snapshot = decodeBoardSnapshot(text, userId);
+        if (text !== null && snapshot === null)
+          console.warn("the kept board snapshot is unreadable");
+        return snapshot;
+      } catch (error) {
+        console.warn("couldn't read the board snapshot", error);
+        return null;
+      }
+    },
+    shown: (savedAt: number | null) =>
+      useCloudLinkInputs.getState().update({ snapshotAt: savedAt }),
+    follow: (projectId: string) => {
+      source.open(projectId).catch((error: unknown) => {
+        toastError(
+          `Couldn’t open the board: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+    },
+    ...timers,
+  };
+}
+
+/**
  * A cloud launch's board (VC-889): the board source over the window's Volli
  * Cloud client, Volli Cloud's link in the host-connection store, the current
  * Workspace's projects, and then the client itself. Does nothing in a local
@@ -336,6 +422,7 @@ export async function startCloudBoard(
     persisted: bootCloudSelection,
     failed: (message) => toastError(message),
     notice: (message) => toast.warning(message),
+    offline: cloudBoardSnapshot(launch.userId, source),
   });
   try {
     await deps.start(launch);
@@ -659,7 +746,12 @@ async function bootCloudLaunch(
       failed: (message) => toastError(message),
       refused: (message) => toast(message, { id: "host-read-only" }),
       unconfirmed: (message) => toast.warning(message, { id: "cloud-unconfirmed" }),
-      readOnly: (projectId) => cloudReadOnlyReason(projectId),
+      readOnly: (projectId) =>
+        projectId !== undefined
+          ? cloudReadOnlyReason(projectId)
+          : useCloudLinkInputs.getState().input.snapshotAt !== null
+            ? CLOUD_READ_ONLY
+            : null,
       dropped: (projectId, message) => {
         const project = useProjectsStore.getState().projects.find(({ id }) => id === projectId);
         useBoardStore.getState().forget(projectId);

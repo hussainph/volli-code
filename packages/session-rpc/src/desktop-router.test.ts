@@ -366,6 +366,8 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "cloud.launch": record("cloud.launch", CLOUD_LAUNCH),
     "cloud.relaunch": record("cloud.relaunch", null),
     "cloud.reportUnsavedWrites": record("cloud.reportUnsavedWrites", null),
+    "cloud.saveSnapshot": record("cloud.saveSnapshot", null),
+    "cloud.readSnapshot": record("cloud.readSnapshot", { text: null }),
     ...fixture.overrides,
   };
 }
@@ -1261,12 +1263,19 @@ describeContract<Host, DesktopRouter>(
       expect(await client.cloud.launch.query()).toEqual(CLOUD_LAUNCH);
       expect(await client.cloud.relaunch.mutate()).toBeNull();
       expect(await client.cloud.reportUnsavedWrites.mutate({ count: 3 })).toBeNull();
+      expect(await client.cloud.saveSnapshot.mutate({ text: "{}" })).toBeNull();
+      expect(await client.cloud.readSnapshot.query()).toEqual({ text: null });
       expect(fixture.calls.map(({ key, input, call }) => [key, input, call])).toEqual([
         ["account.accessToken", { force: true }, WINDOW_CALL],
         ["cloud.launch", undefined, WINDOW_CALL],
         ["cloud.relaunch", undefined, WINDOW_CALL],
         ["cloud.reportUnsavedWrites", { count: 3 }, WINDOW_CALL],
+        ["cloud.saveSnapshot", { text: "{}" }, WINDOW_CALL],
+        ["cloud.readSnapshot", undefined, WINDOW_CALL],
       ]);
+      expect(await expectHostError(client.cloud.saveSnapshot.mutate({ text: "" }))).toMatchObject({
+        code: "BAD_REQUEST",
+      });
       for (const input of [{ count: -1 }, { count: 1.5 }, {}]) {
         expect(
           await expectHostError(client.cloud.reportUnsavedWrites.mutate(input as never)),
@@ -1277,7 +1286,7 @@ describeContract<Host, DesktopRouter>(
           await expectHostError(client.account.accessToken.query(input as never)),
         ).toMatchObject({ code: "BAD_REQUEST" });
       }
-      expect(fixture.calls).toHaveLength(4);
+      expect(fixture.calls).toHaveLength(6);
     });
 
     it("refuses a token answer or a launch that is not one of their shapes", async () => {
@@ -1641,6 +1650,8 @@ describe("the desktop router's grammar", () => {
         "cloud.launch",
         "cloud.relaunch",
         "cloud.reportUnsavedWrites",
+        "cloud.saveSnapshot",
+        "cloud.readSnapshot",
       ].toSorted(),
     );
     expect(schemas["worktree.trimSettings"]).toMatchObject({

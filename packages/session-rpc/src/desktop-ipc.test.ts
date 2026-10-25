@@ -131,6 +131,8 @@ describe("the desktop's IPC exposure", () => {
       "cloud.launch",
       "cloud.relaunch",
       "cloud.reportUnsavedWrites",
+      "cloud.saveSnapshot",
+      "cloud.readSnapshot",
     ]);
   });
 

@@ -94,6 +94,8 @@ export type HostLinkView =
       readonly since: number;
       readonly retryAt: number | null;
       readonly detail?: string;
+      /** What is on screen is a snapshot of the board as of this moment (VC-889, D3). */
+      readonly asOf?: number;
     }
   /** Served, but the host is older than this app and a compatible update is available. */
   | { readonly status: "version-skewed"; readonly availableVersion: string }

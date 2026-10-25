@@ -324,8 +324,15 @@ describe("the cloud board's writes (VC-889)", () => {
       ok: false,
       error: CLOUD_READ_ONLY,
     });
-    // A comment on a ticket of no followed board is still gated by the socket alone.
+    // A comment on a ticket of no followed board (one the offline snapshot
+    // painted) asks about Volli Cloud itself.
     cloud.connected = true;
+    screen.readOnly.mockReturnValueOnce(CLOUD_READ_ONLY);
+    expect(await source.createComment("unknown", "x")).toEqual({
+      ok: false,
+      error: CLOUD_READ_ONLY,
+    });
+    expect(screen.readOnly).toHaveBeenLastCalledWith(undefined);
     const orphan = source.createComment("unknown", "x");
     cloud.mutations[5]!.resolve({});
     expect(await orphan).toMatchObject({ ok: true });

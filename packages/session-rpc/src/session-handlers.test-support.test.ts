@@ -99,6 +99,8 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
     () => handlers["cloud.launch"](undefined, CALL),
     () => handlers["cloud.relaunch"](undefined, CALL),
     () => handlers["cloud.reportUnsavedWrites"]({ count: 1 }, CALL),
+    () => handlers["cloud.saveSnapshot"]({ text: "{}" }, CALL),
+    () => handlers["cloud.readSnapshot"](undefined, CALL),
     () => handlers["hostLink.query"]({ workspaceId: HOST, path: "board.snapshot" }, CALL),
     () => handlers["hostLink.mutate"]({ workspaceId: HOST, path: "board.setPriority" }, CALL),
     () => handlers["hostLink.subscribe"]({ workspaceId: HOST, path: "board.changes" }, CALL, sink),
@@ -229,10 +231,12 @@ describe("sessionHandlersFrom", () => {
         "cloud.launch": port as never,
         "cloud.relaunch": port as never,
         "cloud.reportUnsavedWrites": port as never,
+        "cloud.saveSnapshot": port as never,
+        "cloud.readSnapshot": port as never,
       },
     };
     for (const call of callAll(sessionHandlersFrom(ports))) await call();
-    expect(port).toHaveBeenCalledTimes(57);
+    expect(port).toHaveBeenCalledTimes(59);
     expect(port).toHaveBeenCalledWith({ flowId: "f", questionId: "q1", password: "p" }, CALL);
     expect(runtime.command).toHaveBeenCalledWith({
       commandId: "cancel",
@@ -281,7 +285,7 @@ describe("sessionHandlersFrom", () => {
     // and moving a running command to the background (VC-757), a
     // working copy's setup status and answer (VC-584), and the
     // Volli Cloud account's seven (VC-884), and the window's Cloud client's
-    // token, the launch's store and restart, and its unanswered board writes (VC-889).
-    expect(Object.keys(context.handlers)).toHaveLength(100);
+    // token, the launch's store and restart, its unanswered board writes, and its last-seen board (VC-889).
+    expect(Object.keys(context.handlers)).toHaveLength(102);
   });
 });

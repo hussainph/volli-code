@@ -50,4 +50,8 @@ export interface AccountPort {
   relaunch(): Answer<void>;
   /** The window's board writes still unanswered, for the quit gate to ask about. */
   reportUnsavedWrites(count: number): Answer<void>;
+  /** Keeps the window's last-seen board for an offline launch of this account (VC-889, D3). */
+  saveSnapshot(text: string): Answer<void>;
+  /** The last-seen board kept for this launch's account, or `null`. */
+  readSnapshot(): Answer<string | null>;
 }

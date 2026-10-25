@@ -450,6 +450,8 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
   readonly "cloud.launch": HostHandler<void, CloudLaunch>;
   readonly "cloud.relaunch": HostHandler<void, null>;
   readonly "cloud.reportUnsavedWrites": HostHandler<{ count: number }, null>;
+  readonly "cloud.saveSnapshot": HostHandler<{ text: string }, null>;
+  readonly "cloud.readSnapshot": HostHandler<void, { text: string | null }>;
 }
 
 /** The agent keys the socket serves: its own verbs, less the start both agent doors share. */
@@ -1212,5 +1214,7 @@ function hostHandlerEntries(
     "cloud.launch": () => account().launch(),
     "cloud.relaunch": () => done(() => account().relaunch()),
     "cloud.reportUnsavedWrites": ({ count }) => done(() => account().reportUnsavedWrites(count)),
+    "cloud.saveSnapshot": ({ text }) => done(() => account().saveSnapshot(text)),
+    "cloud.readSnapshot": async () => ({ text: await account().readSnapshot() }),
   };
 }

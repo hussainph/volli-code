@@ -85,6 +85,14 @@ export function hostSurface(host: HostRecord, now: number): HostSurface | null {
         graced: true,
       };
     case "offline": {
+      if (link.asOf !== undefined) {
+        return {
+          tone: "quiet",
+          icon: "offline",
+          line: `Offline — showing the board as of ${formatSince(link.asOf, now)}`,
+          graced: false,
+        };
+      }
       const seconds = link.retryAt === null ? null : retryCountdown(link.retryAt, now);
       return {
         tone: "quiet",
