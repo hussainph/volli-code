@@ -86,7 +86,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-function chatStore() {
+function chatStore(turnActive = false) {
   const projection: ChatSessionProjection = {
     session: {
       id: SESSION,
@@ -101,7 +101,7 @@ function chatStore() {
     signal: null,
     modelSelection: { providerId: "anthropic", modelId: "opus", reasoningLevel: "high" },
     modelTier: null,
-    turnActive: false,
+    turnActive,
     lastActivityAt: 0,
     bornTicketless: true,
     scheduledResume: null,
@@ -129,9 +129,9 @@ function chatStore() {
   return { store, holdMessage };
 }
 
-async function mountPlane(cloud = true) {
+async function mountPlane(cloud = true, turnActive = false) {
   world = hostWorld({ cloud });
-  const { store, holdMessage } = chatStore();
+  const { store, holdMessage } = chatStore(turnActive);
   const container = await world.render(
     <TooltipProvider delayDuration={0}>
       <ChatPlane
@@ -163,7 +163,7 @@ it("keeps the composer in a cloud launch, with where the Session runs above it",
     },
   });
   try {
-    const { container, holdMessage } = await mountPlane();
+    const { container, holdMessage } = await mountPlane(true, true);
     // The header's corner names the Place, in place of the host pill.
     const pill = container.querySelector('[data-slot="cloud-place"]');
     expect(pill?.textContent).toBe("Paused — Volli is closed on hp-mac");
