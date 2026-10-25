@@ -604,7 +604,7 @@ export function TicketTabStrip({
 
 /**
  * A pane's strip without actions. The session-start control and rail toggle
- * stay at the main bar's right edge rather than following the primary pane.
+ * stay at the top strip's right edge rather than following any pane.
  */
 export function TicketPaneTabStrip({ label, ...list }: TicketTabListProps & { label: string }) {
   return (

@@ -223,9 +223,9 @@ export function SplitDnd({
       setActiveTabId(null);
       setGhostLabel(null);
       clearPairPreview();
-      const pair = pairDrop(event);
-      if (pair !== null && onGroupDrop !== undefined) {
-        onGroupDrop(pair.id, String(active.id), pair.edge);
+      const edgeDrop = pairDrop(event);
+      if (edgeDrop !== null && onGroupDrop !== undefined) {
+        onGroupDrop(edgeDrop.id, String(active.id), edgeDrop.edge);
         return;
       }
       const operation = splitTabDropOperation({

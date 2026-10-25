@@ -1,13 +1,13 @@
 /**
- * WHICH TABS EACH PANE DRAWS — the surface's one strip, cut into per-pane
- * strips (VC-202).
+ * WHICH TABS EACH PANE DRAWS — a shown tab group's panes, each its own strip
+ * (VC-202, VC-614).
  *
- * A split surface still composes and arranges ONE list of tabs: the same
- * descriptors, built the same way, whether or not anything is split. All the
- * split view adds is which pane each of them is drawn in, and
- * `resolveSplitView` has already answered that in ids. This module is the last
- * step — ids back to the descriptors the strip actually draws, in the order the
- * pane draws them.
+ * A surface still composes and arranges ONE list of tabs: the same
+ * descriptors, built the same way, whether or not a group is shown. All the
+ * split view adds is which pane's stack each of them sits in, and
+ * `projectSplitView` has already answered that in ids. This module is the last
+ * step — ids back to the descriptors a pane strip actually draws, in the order
+ * the pane draws them.
  *
  * Pure and generic over the descriptor, because the two surfaces have different
  * ones (`HomeTabDescriptor`, `TicketTabDescriptor`) and the cut is the same
@@ -35,7 +35,7 @@ export function paneTabs<T extends { id: string }>(
   });
 }
 
-/** Every pane's strip, in reading order — `[0]` is the primary pane's. */
+/** Every shown pane's strip, in reading order. */
 export function partitionPaneTabs<T extends { id: string }>(
   view: ResolvedSplitView,
   tabs: readonly T[],
@@ -49,7 +49,7 @@ export function partitionPaneTabs<T extends { id: string }>(
  * `TabStrip` requires one because a surface can draw several tablists at once —
  * which a split surface now does by construction, so "Pane 2 tabs" is what
  * tells them apart for AT and for a `getByRole("tablist")` query alike. Counted
- * from 1: the primary pane is pane 1, at the start of the main tab bar.
+ * from 1, in reading order: the top-left pane is pane 1.
  */
 export function paneStripLabel(pane: ResolvedSplitViewPane): string {
   return `Pane ${pane.index + 1} tabs`;

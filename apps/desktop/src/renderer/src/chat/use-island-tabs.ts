@@ -20,7 +20,7 @@
  *  • TITLE FIRST. The page title leads each row, with host:port/path beneath
  *    it. Compact announcements retain the hostname. A waiting driver or load
  *    failure raises the tab ahead of ordinary rows; presentation never makes
- *    a row inert. The mount decides how to focus or pair the requested tab.
+ *    a row inert. The mount decides how to show or group the requested tab.
  *
  * THE NOW CHANNEL IS A DIFF. The store is a live push cache with no history,
  * so "opened", "loaded", "failed" and "closed" are not events it carries —
@@ -261,7 +261,7 @@ export function useIslandTabs(
   deps: {
     /** Where `replayTab` opens the Browser replay (VC-453); omitted, it opens nowhere. */
     openTrace?: ((request: BrowserTraceRequest) => void) | undefined;
-    /** Focus an existing pair or open beside its owning chat. The mount owns layout. */
+    /** Show the tab, or open it beside its owning chat. The mount owns layout. */
     openBrowserBeside?: ((tabId: string, ownerSessionId: string) => Promise<void>) | undefined;
   } = {},
 ): IslandTabsFeed {

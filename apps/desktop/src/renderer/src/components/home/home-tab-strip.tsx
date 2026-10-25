@@ -255,8 +255,8 @@ export function HomeTabStrip({
 }
 
 /**
- * A pane's strip without actions. The surface's controls stay on the main
- * bar's trailing strip, even when the primary pane no longer reaches that edge.
+ * A pane's strip without actions. The surface's controls stay on the
+ * top strip's trailing edge, whichever pane is focused.
  */
 export function HomePaneTabStrip({ label, ...list }: HomeTabListProps & { label: string }) {
   return (

@@ -24,11 +24,11 @@
  *   Board      | set          | TicketDetail, full-bleed, NO Home strip
  *   a work tab | either       | Home strip + that Session/File/Browser plane
  *
- * "Active tab" reads as the FOCUSED PANE's front tab since VC-202, which is the
- * same sentence while nothing is split — the plane below the strip is a split
- * grid, and an unsplit Home resolves to one pane holding the whole strip. The
- * Board rides inside that grid now (it is the primary pane's permanent tab)
- * rather than beside it; a Ticket view still takes the whole page over.
+ * "Active tab" reads as the FOCUSED PANE's front tab, which is the same sentence
+ * while no tab group is shown — the plane below the strip is a split grid, and
+ * an ordinary tab resolves to one full-width pane (VC-614). The Board rides
+ * inside that grid like any tab, in a group or full width; a Ticket view still
+ * takes the whole page over.
  *
  * A Home SESSION additionally gets the right rail (VC-55) — the ticket
  * workspace's panel at this scope, on the same ⌥⌘B and the same persisted

@@ -42,7 +42,7 @@ export function BrowserPaneAnchor({
 /**
  * Mount once beside HomeSurface's switching content, not inside either area.
  * All projects' strip tabs remain keyed by opaque tab id here, preserving native
- * page controllers and unfinished address edits across navigation and pairing.
+ * page controllers and unfinished address edits across navigation and grouping.
  * Only a published visible anchor lends a resident pane an on-screen rectangle.
  */
 export function ResidentBrowserPanes({ api }: { api: BrowserApi }) {

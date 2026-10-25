@@ -457,8 +457,8 @@ function orderAfterFileTabs(
  *
  * Both fields are keyed by tab id, so both have to be told when a preview slot
  * is replaced or a file renamed. Left alone the pane would simply stop naming
- * that tab, and it would be drawn in the primary pane the next time — the
- * teleport the substitution exists to avoid.
+ * that tab, and it would fall out of its group the next time it was drawn —
+ * the teleport the substitution exists to avoid.
  */
 function splitAfterFileTabs(
   split: SplitViewState,
@@ -1967,8 +1967,8 @@ export function createProjectUiStore(
               homeActiveTab: HOME_BOARD_TAB_ID,
               homeTabHistory: homeHistoryAfterVisit(current, HOME_BOARD_TAB_ID),
               openTicketId: null,
-              // The Board lives in the primary pane, so this is a focus move
-              // too: the split view follows the tab, not the other way round.
+              // Selecting the Board shows its group when it has one: the split
+              // view follows the tab, not the other way round.
               ...homeSplitWrite(activatedHomeSplit(current, HOME_BOARD_TAB_ID)),
             });
           });
