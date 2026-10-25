@@ -1,5 +1,5 @@
 /**
- * The migration exporter (L3b): a consistent snapshot of `volli.db`, streamed
+ * The migration exporter: a consistent snapshot of `volli.db`, streamed
  * out as Volli Cloud records into a directory of NDJSON chunks and a manifest,
  * resumable after a crash or a cancel and atomic on completion.
  *
@@ -18,22 +18,26 @@
  * **Off the interactive path.** Run it through `worker.ts`, which hosts this
  * function in a worker thread with progress and cancellation over messages.
  * Called directly it still yields to the event loop every few hundred rows,
- * but the snapshot statement itself cannot yield.
+ * but a single SQLite statement (the snapshot, the integrity check, a
+ * source's first sorted row) cannot yield or be interrupted.
  *
  * **Resumable.** Each source checkpoints whenever its buffered output reaches
  * a chunk's size; a resumed run verifies every journaled chunk, deletes
  * whatever no journal line names, and continues each source from its last
- * checkpoint (`staging.ts`).
+ * checkpoint (`staging.ts`). A staging area from another source path, build
+ * or mapper version is not resumed: it is snapshotted again. One run at a
+ * time holds `<outDir>.lock`.
  *
- * **Atomic.** Work happens under `<outDir>.partial`; the manifest is written
- * last, the snapshot and journal removed, and the directory renamed to
- * `outDir` in one step. A cancelled, failed or interrupted export never sits
+ * **Atomic.** Work happens under `<outDir>.partial`. Before anything is
+ * published, every source must have checkpointed all its rows and the staged
+ * chunks must verify against the manifest; then the snapshot and journal are
+ * removed and the directory renamed to `outDir` in one step. A cancelled, failed or interrupted export never sits
  * at `outDir`.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, rm } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { MIGRATION_DISK_HEADROOM_BYTES, nodeDiskProbe, type DiskProbe } from "../db/disk-preflight";
 import { SCHEMA_HEAD } from "../db/migrations";
@@ -52,8 +56,10 @@ import {
 import {
   JOURNAL_FILE,
   MANIFEST_FILE,
+  MAPPER_VERSION,
   SNAPSHOT_FILE,
   STATE_FILE,
+  acquireExportLock,
   appendLineDurably,
   chunkFileName,
   chunkIntact,
@@ -68,6 +74,7 @@ import {
   type StagingState,
 } from "./staging";
 import { MIGRATION_TABLE_DECISIONS, type MigrationTableDecision } from "./tables";
+import { verifyMigrationExport } from "./verify";
 
 /** The oldest schema the sources are written against. */
 export const MIGRATION_EXPORT_MIN_SCHEMA = 64;
@@ -118,6 +125,8 @@ export interface MigrationExportOptions {
   diskProbe?: DiskProbe;
   /** Whether a Working copy directory exists here. Default `fs.existsSync`. */
   pathExists?: (path: string) => boolean;
+  /** The home directory redacted from git output in board events. Default `os.homedir()`. */
+  homeDir?: string;
 }
 
 /** Facts the importer's preflight reads. Counts, not a verdict. */
@@ -130,6 +139,10 @@ export interface MigrationPreflightFacts {
   undeliveredRunMessages: number;
   /** Worktree cleanups with no receipt. */
   openCleanupCommands: number;
+  /** Executor attachments with no close recorded: a turn may still be running. */
+  openAttachments: number;
+  /** Board commands inside their seven-day replay window. */
+  recentBoardCommands: number;
 }
 
 export interface MigrationExportManifest {
@@ -169,10 +182,10 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new MigrationExportError("cancelled", "The export was cancelled.");
 }
 
-const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+const yieldToEventLoop = () => new Promise<void>((done) => setImmediate(done));
 
-/** Maps an IO failure to the code that names its recovery; anything else passes through. */
-function classify(error: unknown): unknown {
+/** Maps any failure to the code that names its recovery. */
+function classify(error: unknown): MigrationExportError {
   if (error instanceof MigrationExportError) return error;
   if (isDiskFullError(error)) {
     return new MigrationExportError("disk_full", "The disk is full.", { cause: error });
@@ -180,7 +193,16 @@ function classify(error: unknown): unknown {
   if (error instanceof SourceCorruptError) {
     return new MigrationExportError("source_corrupt", error.message, { cause: error });
   }
-  return error;
+  const code = (error as { code?: unknown } | null)?.code;
+  const message = error instanceof Error ? error.message : String(error);
+  if (typeof code === "string" && code.startsWith("SQLITE_")) {
+    return new MigrationExportError("source_corrupt", message, { cause: error });
+  }
+  // A system call's errno (EACCES, EROFS, ENOTDIR, EISDIR, …).
+  if (typeof code === "string" && /^E[A-Z]+$/.test(code)) {
+    return new MigrationExportError("io_failed", message, { cause: error });
+  }
+  return new MigrationExportError("internal", message, { cause: error });
 }
 
 /**
@@ -204,29 +226,36 @@ export async function exportMigrationSnapshot(
 }
 
 async function runExport(options: MigrationExportOptions): Promise<MigrationExportResult> {
-  const now = options.now ?? Date.now;
-  const staging = stagingDirOf(options.outDir);
   if (existsSync(options.outDir)) {
     throw new MigrationExportError(
       "output_exists",
-      `A complete export already exists at ${options.outDir}.`,
+      `Something already exists at ${options.outDir}; an export never overwrites it.`,
     );
   }
+  const release = await acquireExportLock(options.outDir);
+  try {
+    return await runLocked(options);
+  } finally {
+    await release();
+  }
+}
+
+async function runLocked(options: MigrationExportOptions): Promise<MigrationExportResult> {
+  const now = options.now ?? Date.now;
+  const staging = stagingDirOf(options.outDir);
   if (options.fresh === true) await rm(staging, { recursive: true, force: true });
   throwIfAborted(options.signal);
 
   const reporter = progressReporter(options.onProgress);
   if (existsSync(join(staging, MANIFEST_FILE))) {
     // A previous run wrote the manifest and stopped before the rename.
-    const manifest = JSON.parse(
-      await readFile(join(staging, MANIFEST_FILE), "utf8"),
-    ) as MigrationExportManifest;
+    const { manifest } = await verifyMigrationExport(staging);
     await publish(staging, options.outDir);
     reporter.report({ phase: "done", resumed: true }, true);
     return { outDir: options.outDir, manifest, resumed: true };
   }
 
-  let state = await readState(staging);
+  let state = await readState(staging, options);
   const resumed = state !== null;
   reporter.set({ resumed });
   if (state === null) {
@@ -242,10 +271,12 @@ async function runExport(options: MigrationExportOptions): Promise<MigrationExpo
   try {
     reporter.report({ phase: "verifying" }, true);
     const checkpoints = await recoverJournal(staging);
+    const onCheckpoint = (checkpoint: Checkpoint) => checkpoints.push(checkpoint);
     throwIfAborted(options.signal);
     const lookups = buildLookups(snapshot, {
       snapshotAt: state.snapshotAt,
       pathExists: options.pathExists,
+      homeDir: options.homeDir,
     });
     const counts = EXPORT_SOURCES.map((source) => countRows(snapshot, source));
     reporter.set({
@@ -285,6 +316,7 @@ async function runExport(options: MigrationExportOptions): Promise<MigrationExpo
         maxBytes: options.chunkMaxBytes ?? DEFAULT_CHUNK_MAX_BYTES,
         maxRecords: options.chunkMaxRecords ?? DEFAULT_CHUNK_MAX_RECORDS,
         signal: options.signal,
+        onCheckpoint,
         onRows: (rows) => reporter.report({ phase: "exporting", rowsDone: rowsBefore + rows }),
         onChunk: (bytes) => {
           reporter.add({ bytesWritten: bytes });
@@ -295,9 +327,11 @@ async function runExport(options: MigrationExportOptions): Promise<MigrationExpo
     }
 
     reporter.report({ phase: "finalizing", source: null }, true);
-    const manifest = buildManifest(snapshot, state, await readJournal(staging), counts, now());
+    assertComplete(checkpoints, counts);
+    const manifest = buildManifest(snapshot, state, checkpoints, counts, now());
     snapshot.close();
     await writeFileDurably(join(staging, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`);
+    await verifyMigrationExport(staging);
     await publish(staging, options.outDir);
     reporter.report({ phase: "done" }, true);
     return { outDir: options.outDir, manifest, resumed };
@@ -308,12 +342,24 @@ async function runExport(options: MigrationExportOptions): Promise<MigrationExpo
 
 // ---- snapshot ---------------------------------------------------------------
 
-async function readState(staging: string): Promise<StagingState | null> {
+/**
+ * The staged snapshot's state, when it is this export's to resume: the same
+ * format, mapper, build and source, with its snapshot on disk. Anything else is
+ * snapshotted again, so chunks from two mappings or two databases never mix.
+ */
+async function readState(
+  staging: string,
+  options: MigrationExportOptions,
+): Promise<StagingState | null> {
   try {
     const state = JSON.parse(await readFile(join(staging, STATE_FILE), "utf8")) as StagingState;
-    if (state.format !== MIGRATION_EXPORT_FORMAT || !existsSync(join(staging, SNAPSHOT_FILE))) {
-      return null;
-    }
+    const ours =
+      state.format === MIGRATION_EXPORT_FORMAT &&
+      state.mapperVersion === MAPPER_VERSION &&
+      state.appVersion === options.appVersion &&
+      state.sourcePath === resolve(options.sourcePath) &&
+      state.schemaVersion <= SCHEMA_HEAD;
+    if (!ours || !existsSync(join(staging, SNAPSHOT_FILE))) return null;
     return state;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError) {
@@ -378,10 +424,12 @@ async function takeSnapshot(
   }
   const snapshotAt = now();
   try {
+    // Refuse a schema this build cannot read before copying a large file for nothing.
+    assertSchema(source.pragma("user_version", { simple: true }) as number);
     source.prepare("VACUUM INTO ?").run(target);
   } catch (error) {
     /* v8 ignore next -- SQLITE_FULL from VACUUM INTO needs a full volume; the mapping itself is covered by the chunk-write test. */
-    if (isDiskFullError(error)) throw error;
+    if (isDiskFullError(error) || error instanceof MigrationExportError) throw error;
     throw new MigrationExportError("source_unreadable", `Cannot snapshot ${options.sourcePath}.`, {
       cause: error,
     });
@@ -393,12 +441,6 @@ async function takeSnapshot(
   let schemaVersion: number;
   try {
     schemaVersion = copy.pragma("user_version", { simple: true }) as number;
-    if (schemaVersion < MIGRATION_EXPORT_MIN_SCHEMA || schemaVersion > SCHEMA_HEAD) {
-      throw new MigrationExportError(
-        "schema_unsupported",
-        `The database is at schema ${schemaVersion}; this build exports ${MIGRATION_EXPORT_MIN_SCHEMA}–${SCHEMA_HEAD}.`,
-      );
-    }
     if (options.integrityCheck !== false) {
       const result = copy.pragma("quick_check", { simple: true });
       /* v8 ignore next 6 -- a fresh VACUUM INTO output fails this only when the disk corrupted what was just written; a malformed source fails the VACUUM itself. */
@@ -412,10 +454,20 @@ async function takeSnapshot(
   } finally {
     copy.close();
   }
+  // SQLite does not fsync what VACUUM INTO writes; a durable state.json must
+  // never point at a snapshot a power loss could tear.
+  const handle = await open(target, "r+");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
   await rename(target, join(staging, SNAPSHOT_FILE));
   const state: StagingState = {
     format: MIGRATION_EXPORT_FORMAT,
+    mapperVersion: MAPPER_VERSION,
     exportId: randomUUID(),
+    sourcePath: resolve(options.sourcePath),
     appVersion: options.appVersion,
     snapshotAt,
     schemaVersion,
@@ -425,6 +477,15 @@ async function takeSnapshot(
   return state;
 }
 
+function assertSchema(version: number): void {
+  if (version < MIGRATION_EXPORT_MIN_SCHEMA || version > SCHEMA_HEAD) {
+    throw new MigrationExportError(
+      "schema_unsupported",
+      `The database is at schema ${version}; this build exports ${MIGRATION_EXPORT_MIN_SCHEMA}–${SCHEMA_HEAD}.`,
+    );
+  }
+}
+
 // ---- journal recovery -------------------------------------------------------
 
 function chunkIndex(chunk: ChunkEntry): number {
@@ -432,9 +493,14 @@ function chunkIndex(chunk: ChunkEntry): number {
 }
 
 /**
- * Keeps the longest prefix of the journal whose chunks are all intact, then
- * deletes every stream file that prefix does not name. A source whose
- * checkpoints were cut is redone from its last surviving one.
+ * Keeps the longest prefix of the journal whose chunks are all intact, writes
+ * the journal back as exactly that prefix, then deletes every stream file the
+ * prefix does not name. A source whose checkpoints were cut is redone from its
+ * last surviving one.
+ *
+ * The rewrite is unconditional: a torn final line (a crash or a full disk
+ * mid-append) must not stay in the file, or the next append would be glued to
+ * it and every later checkpoint would become unreadable.
  */
 async function recoverJournal(staging: string): Promise<Checkpoint[]> {
   const journal = await readJournal(staging);
@@ -444,11 +510,23 @@ async function recoverJournal(staging: string): Promise<Checkpoint[]> {
     if (!intact.every(Boolean)) break;
     kept.push(checkpoint);
   }
-  if (kept.length !== journal.length || !existsSync(join(staging, JOURNAL_FILE))) {
-    await rewriteJournal(staging, kept);
-  }
+  await rewriteJournal(staging, kept);
   await removeUnjournaledFiles(staging, kept);
   return kept;
+}
+
+/** Refuses to publish unless every source checkpointed all of its rows. */
+function assertComplete(checkpoints: readonly Checkpoint[], counts: readonly number[]): void {
+  for (const [index, source] of EXPORT_SOURCES.entries()) {
+    const last = checkpoints.findLast((checkpoint) => checkpoint.source === source.id);
+    /* v8 ignore next 6 -- the loop above finishes every source; this guards the publish against a future change that does not. */
+    if (last?.done !== true || last.rowsThrough !== counts[index]) {
+      throw new MigrationExportError(
+        "integrity_failed",
+        `Source ${source.id} is incomplete; the export was not published.`,
+      );
+    }
+  }
 }
 
 // ---- one source -------------------------------------------------------------
@@ -465,6 +543,7 @@ interface SourceRun {
   maxBytes: number;
   maxRecords: number;
   signal: AbortSignal | undefined;
+  onCheckpoint(checkpoint: Checkpoint): void;
   onRows(rows: number): void;
   onChunk(bytes: number): void;
 }
@@ -510,24 +589,21 @@ async function exportSource(
     }
     const entry: Checkpoint = { source: source.id, rowsThrough, done, chunks };
     await appendLineDurably(join(run.staging, JOURNAL_FILE), JSON.stringify(entry));
+    run.onCheckpoint(entry);
     buffers.clear();
     bufferedBytes = 0;
     bufferedRecords = 0;
   };
 
-  const iterator = db.prepare(source.sql).iterate()[Symbol.iterator]();
-  let row = 0;
+  // A resumed source starts past the rows already written. The snapshot is
+  // immutable and the query totally ordered, so OFFSET names the same rows on
+  // every run, and SQLite skips them without handing each one to JavaScript.
+  const rows = db.prepare(`${source.sql} LIMIT -1 OFFSET ?`).iterate(run.startAfter);
+  const iterator = rows[Symbol.iterator]();
+  let row = run.startAfter;
   try {
     for (let next = iterator.next(); next.done !== true; next = iterator.next()) {
       row += 1;
-      if (row <= run.startAfter) {
-        if (row % (YIELD_EVERY_ROWS * 16) === 0) {
-          run.onRows(row);
-          await yieldToEventLoop();
-          throwIfAborted(run.signal);
-        }
-        continue;
-      }
       source.map(next.value, prepared, run.lookups, emit);
       if (bufferedBytes >= run.maxBytes || bufferedRecords >= run.maxRecords) {
         await checkpoint(row, false);
@@ -548,7 +624,10 @@ async function exportSource(
 
 // ---- manifest and publish ---------------------------------------------------
 
-function preflightFacts(db: Database.Database): MigrationPreflightFacts {
+/** The board command replay window (seven days), as receipts are kept. */
+const BOARD_RECEIPT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+function preflightFacts(db: Database.Database, snapshotAt: number): MigrationPreflightFacts {
   const count = (sql: string) => (db.prepare(sql).get() as { n: number }).n;
   return {
     pendingFollowUps: count(
@@ -562,6 +641,14 @@ function preflightFacts(db: Database.Database): MigrationPreflightFacts {
       `SELECT COUNT(*) AS n FROM worktree_cleanup_commands c
         WHERE NOT EXISTS (SELECT 1 FROM worktree_cleanup_receipts r WHERE r.command_id = c.id)`,
     ),
+    openAttachments: count(
+      "SELECT COUNT(*) AS n FROM session_attachments WHERE closed_sequence IS NULL",
+    ),
+    recentBoardCommands: (
+      db
+        .prepare("SELECT COUNT(*) AS n FROM board_command_receipts WHERE created_at > ?")
+        .get(snapshotAt - BOARD_RECEIPT_WINDOW_MS) as { n: number }
+    ).n,
   };
 }
 
@@ -603,7 +690,7 @@ function buildManifest(
       tableRows,
     },
     placeholders: MIGRATION_PLACEHOLDERS,
-    preflight: preflightFacts(db),
+    preflight: preflightFacts(db, state.snapshotAt),
     tables: MIGRATION_TABLE_DECISIONS,
     sources: EXPORT_SOURCES.map((source, index) => ({ id: source.id, rows: counts[index]! })),
     streams: (Object.keys(STREAM_DESTINATIONS) as StreamName[]).map((name) => {
@@ -624,9 +711,11 @@ function buildManifest(
 
 /** Removes the working files and moves the staged export into place in one rename. */
 async function publish(staging: string, outDir: string): Promise<void> {
-  for (const file of [SNAPSHOT_FILE, `${SNAPSHOT_FILE}.tmp`, STATE_FILE, JOURNAL_FILE]) {
+  for (const file of [SNAPSHOT_FILE, STATE_FILE, JOURNAL_FILE]) {
+    await rm(join(staging, `${file}.tmp`), { force: true });
     await rm(join(staging, file), { force: true });
   }
+  await rm(join(staging, `${MANIFEST_FILE}.tmp`), { force: true });
   await syncDirectory(staging);
   await mkdir(dirname(outDir), { recursive: true });
   await rename(staging, outDir);

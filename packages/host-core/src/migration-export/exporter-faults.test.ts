@@ -16,6 +16,9 @@ import {
 import { JOURNAL_FILE, SNAPSHOT_FILE, STATE_FILE, stagingDirOf } from "./staging";
 import { verifyMigrationExport } from "./verify";
 
+// Each test exports a whole profile through real files; a cold shared CI box is slow.
+vi.setConfig({ testTimeout: 30_000 });
+
 const disk = vi.hoisted(() => ({ full: false }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -138,23 +141,35 @@ describe("a damaged staging area", () => {
     const chunkDir = join(staging, firstChunk, "..");
     rmSync(chunkDir, { recursive: true });
     writeFileSync(chunkDir, "not a directory");
-    await expect(exportMigrationSnapshot(options())).rejects.toMatchObject({ code: "ENOTDIR" });
+    await expect(exportMigrationSnapshot(options())).rejects.toMatchObject({
+      code: "io_failed",
+      message: expect.stringContaining("ENOTDIR"),
+    });
 
     // The streams directory replaced by a file: listing fails with ENOTDIR.
     rmSync(join(staging, "streams"), { recursive: true, force: true });
     writeFileSync(join(staging, "streams"), "not a directory");
     writeFileSync(join(staging, JOURNAL_FILE), "");
-    await expect(exportMigrationSnapshot(options())).rejects.toMatchObject({ code: "ENOTDIR" });
+    await expect(exportMigrationSnapshot(options())).rejects.toMatchObject({
+      code: "io_failed",
+      message: expect.stringContaining("ENOTDIR"),
+    });
 
     // The journal replaced by a directory.
     rmSync(join(staging, JOURNAL_FILE));
     mkdirSync(join(staging, JOURNAL_FILE));
-    await expect(exportMigrationSnapshot(options())).rejects.toMatchObject({ code: "EISDIR" });
+    await expect(exportMigrationSnapshot(options())).rejects.toMatchObject({
+      code: "io_failed",
+      message: expect.stringContaining("EISDIR"),
+    });
 
     // state.json replaced by a directory.
     rmSync(join(staging, STATE_FILE));
     mkdirSync(join(staging, STATE_FILE));
-    await expect(exportMigrationSnapshot(options())).rejects.toMatchObject({ code: "EISDIR" });
+    await expect(exportMigrationSnapshot(options())).rejects.toMatchObject({
+      code: "io_failed",
+      message: expect.stringContaining("EISDIR"),
+    });
   });
 
   it("redoes a journaled chunk that went missing", async () => {

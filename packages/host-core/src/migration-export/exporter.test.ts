@@ -5,6 +5,7 @@
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -16,7 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createFixtureProfile, type FixtureProfile } from "../backup/test-fixture";
 import { MigrationExportError } from "./errors";
 import {
@@ -27,9 +28,12 @@ import {
   type MigrationExportOptions,
   type MigrationExportProgress,
 } from "./exporter";
-import type { StreamName, StreamRecords } from "./sources";
 import { JOURNAL_FILE, MANIFEST_FILE, SNAPSHOT_FILE, STATE_FILE, stagingDirOf } from "./staging";
 import { verifyMigrationExport } from "./verify";
+import { streamRecords as records, streamTexts as contentOf } from "./test-support/export-files";
+
+// Each test exports a whole profile through real files; a cold shared CI box is slow.
+vi.setConfig({ testTimeout: 30_000 });
 
 let profile: FixtureProfile;
 let work: string;
@@ -52,30 +56,6 @@ function options(overrides: Partial<MigrationExportOptions> = {}): MigrationExpo
     now: () => 1_800_000_000_000,
     ...overrides,
   };
-}
-
-function records<S extends StreamName>(
-  dir: string,
-  manifest: MigrationExportManifest,
-  name: S,
-): StreamRecords[S][] {
-  const stream = manifest.streams.find((entry) => entry.name === name)!;
-  return stream.chunks.flatMap((chunk) =>
-    readFileSync(join(dir, chunk.file), "utf8")
-      .split("\n")
-      .filter((line) => line !== "")
-      .map((line) => JSON.parse(line) as StreamRecords[S]),
-  );
-}
-
-/** Every stream's records, concatenated in order: what two equivalent exports share. */
-function contentOf(dir: string, manifest: MigrationExportManifest): Record<string, string> {
-  return Object.fromEntries(
-    manifest.streams.map((stream) => [
-      stream.name,
-      stream.chunks.map((chunk) => readFileSync(join(dir, chunk.file), "utf8")).join(""),
-    ]),
-  );
 }
 
 function digest(path: string): string | null {
@@ -135,6 +115,8 @@ describe("a full export", () => {
       undeliveredNotices: 0,
       undeliveredRunMessages: 0,
       openCleanupCommands: 0,
+      openAttachments: 1,
+      recentBoardCommands: 0,
     });
     expect(manifest.tables.length).toBe(Object.keys(manifest.source.tableRows).length);
 
@@ -227,7 +209,8 @@ describe("a full export", () => {
       branch: "volli/AL-12-live",
       baseBranch: null,
       pullRequests: [],
-      placeRunnerId: "$local-runner",
+      // Its worktree directory is not on this machine.
+      placeRunnerId: null,
       createdBy: { kind: "person", userId: "$local-user" },
       archivedAt: null,
     });
@@ -272,6 +255,10 @@ describe("a full export", () => {
       (entry) => entry.ticketId === "ticket-live",
     )!;
     expect(copy.state).toBe("ready");
+    const ticket = records(outDir, manifest, "tickets").find(
+      (entry) => entry.id === "ticket-live",
+    )!;
+    expect(ticket.placeRunnerId).toBe("$local-runner");
   });
 
   it("orders board events by the durable sequence and keeps paths out of them", async () => {
@@ -512,11 +499,11 @@ describe("a full export", () => {
       ["personal", "automation", "Loose", "on"],
       ["project", "mcp_server", "github", "off"],
       ["personal", "decision_model", "default", "on"],
-      ["personal", "harness", "pi", "on"],
     ]);
     expect(entries[2]!.id).toBe("auto-unbound");
     expect(entries[3]!.id).toBe("mcp-1");
-    expect(entries[5]!.definition).toBe("not json");
+    // A retired key nothing reads is not carried.
+    expect(entries.some((entry) => entry.name === "pi")).toBe(false);
     expect(records(outDir, manifest, "automations").map((entry) => entry.id)).toEqual([
       "automation-1",
     ]);
@@ -680,6 +667,170 @@ describe("resume, cancel and atomicity", () => {
     expect(contentOf(target, resumed.manifest)).toEqual(
       contentOf(reference.outDir, reference.manifest),
     );
+  });
+
+  it("drops a torn final journal line for good, so later checkpoints stay readable", async () => {
+    const reference = await exportMigrationSnapshot(options({ outDir: join(work, "reference") }));
+    const target = join(work, "export");
+    const cancelAfter = async (checkpoints: number) => {
+      const controller = new AbortController();
+      let seen = 0;
+      let bytes = -1;
+      await expect(
+        exportMigrationSnapshot(
+          options({
+            outDir: target,
+            chunkMaxRecords: 1,
+            signal: controller.signal,
+            onProgress: (report) => {
+              if (report.bytesWritten > bytes && bytes >= 0 && ++seen === checkpoints) {
+                controller.abort();
+              }
+              bytes = report.bytesWritten;
+            },
+          }),
+        ),
+      ).rejects.toMatchObject({ code: "cancelled" });
+    };
+    await cancelAfter(3);
+    const staging = stagingDirOf(target);
+    // A crash or a full disk mid-append: half a line, nothing else damaged.
+    appendFileSync(join(staging, JOURNAL_FILE), '{"source":"labels","rowsThrough":1,"do');
+    await cancelAfter(3);
+    expect(
+      readFileSync(join(staging, JOURNAL_FILE), "utf8")
+        .trim()
+        .split("\n")
+        .every((line) => JSON.parse(line) !== null),
+    ).toBe(true);
+    const resumed = await exportMigrationSnapshot(options({ outDir: target, chunkMaxRecords: 1 }));
+    await verifyMigrationExport(target);
+    expect(contentOf(target, resumed.manifest)).toEqual(
+      contentOf(reference.outDir, reference.manifest),
+    );
+  });
+
+  it("snapshots again rather than resume another source's or another build's staging", async () => {
+    const target = join(work, "export");
+    const stop = async (overrides: Partial<MigrationExportOptions>) => {
+      const controller = new AbortController();
+      await expect(
+        exportMigrationSnapshot(
+          options({
+            outDir: target,
+            signal: controller.signal,
+            onProgress: (report) => {
+              if (report.phase === "exporting") controller.abort();
+            },
+            ...overrides,
+          }),
+        ),
+      ).rejects.toMatchObject({ code: "cancelled" });
+    };
+    await stop({});
+    const other = createFixtureProfile();
+    try {
+      other.db.prepare("DELETE FROM labels").run();
+      const fromOther = await exportMigrationSnapshot(
+        options({ outDir: target, sourcePath: other.dbPath }),
+      );
+      expect(fromOther.resumed).toBe(false);
+      expect(records(target, fromOther.manifest, "labels")).toEqual([]);
+    } finally {
+      other.cleanup();
+    }
+    const second = join(work, "second");
+    await stop({ outDir: second });
+    const newer = await exportMigrationSnapshot(options({ outDir: second, appVersion: "0.3.1" }));
+    expect(newer.resumed).toBe(false);
+    expect(newer.manifest.appVersion).toBe("0.3.1");
+  });
+
+  it("lets one run at a time export into a target", async () => {
+    const target = join(work, "export");
+    const first = exportMigrationSnapshot(options({ outDir: target }));
+    const second = exportMigrationSnapshot(options({ outDir: target }));
+    const [a, b] = await Promise.allSettled([first, second]);
+    expect([a.status, b.status].toSorted()).toEqual(["fulfilled", "rejected"]);
+    const refusal = (a.status === "rejected" ? a.reason : (b as PromiseRejectedResult).reason) as {
+      code: string;
+    };
+    expect(refusal.code).toBe("in_progress");
+    expect(existsSync(`${target}.lock`)).toBe(false);
+  });
+
+  it("takes over the lock a crashed run left behind", async () => {
+    const target = join(work, "export");
+    writeFileSync(`${target}.lock`, "2147483646\n");
+    const result = await exportMigrationSnapshot(options({ outDir: target }));
+    expect(result.resumed).toBe(false);
+    writeFileSync(join(work, "busy.lock"), `${process.pid}\n`);
+    await expect(
+      exportMigrationSnapshot(options({ outDir: join(work, "busy") })),
+    ).rejects.toMatchObject({ code: "in_progress" });
+  });
+
+  it("names an unexpected failure internal, with its message", async () => {
+    await expect(
+      exportMigrationSnapshot(
+        options({
+          onProgress: () => {
+            throw new Error("a listener bug");
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "internal", message: "a listener bug" });
+    await expect(
+      exportMigrationSnapshot(
+        options({
+          outDir: join(work, "thrown-string"),
+          onProgress: () => {
+            // oxlint-disable-next-line no-throw-literal -- the case under test
+            throw "not an Error";
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "internal", message: "not an Error" });
+  });
+
+  it("refuses to resume a snapshot SQLite cannot read", async () => {
+    const target = join(work, "export");
+    const controller = new AbortController();
+    await expect(
+      exportMigrationSnapshot(
+        options({
+          outDir: target,
+          signal: controller.signal,
+          onProgress: (report) => {
+            if (report.phase === "exporting") controller.abort();
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "cancelled" });
+    writeFileSync(join(stagingDirOf(target), SNAPSHOT_FILE), "x".repeat(8192));
+    await expect(exportMigrationSnapshot(options({ outDir: target }))).rejects.toMatchObject({
+      code: "source_corrupt",
+    });
+  });
+
+  it("reports a lock it cannot read or write as a filesystem failure", async () => {
+    mkdirSync(join(work, "dir.lock"));
+    await expect(
+      exportMigrationSnapshot(options({ outDir: join(work, "dir") })),
+    ).rejects.toMatchObject({ code: "io_failed" });
+    writeFileSync(join(work, "garbage.lock"), "not a pid\n");
+    const taken = await exportMigrationSnapshot(options({ outDir: join(work, "garbage") }));
+    expect(taken.resumed).toBe(false);
+    const locked = join(work, "locked");
+    mkdirSync(locked);
+    chmodSync(locked, 0o500);
+    try {
+      await expect(
+        exportMigrationSnapshot(options({ outDir: join(locked, "export") })),
+      ).rejects.toMatchObject({ code: "io_failed" });
+    } finally {
+      chmodSync(locked, 0o700);
+    }
   });
 
   it("finishes a run that stopped between the manifest and the rename", async () => {

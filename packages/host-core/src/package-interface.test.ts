@@ -59,6 +59,7 @@ const TEST_SUPPORT = [
   "secrets/test-support/**",
   "web/test-support/**",
   "browser/test-support/**",
+  "migration-export/test-support/**",
 ];
 /** Built once, by `createHostCore`; a second one is a second Session writer. */
 const SESSION_WRITER_CONSTRUCTORS = new Set([

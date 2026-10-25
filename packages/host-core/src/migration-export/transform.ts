@@ -20,7 +20,7 @@ export interface LocalActor {
 
 /**
  * Reads a `ticket_events.actor` / `labels.merged_by` value: a bare token, or
- * JSON for the kinds that carry a Session. Mirrors `events-repo.ts`'s
+ * JSON for the kinds that carry a Session. Follows `events-repo.ts`'s
  * `parseActor`, including its one asymmetry: an unreadable value reads as the
  * user, because that is how today's app has always shown it.
  */
@@ -135,7 +135,7 @@ const DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
  * The `index`-th (0-based) key of `generateNKeysBetween(null, null, n)` from
  * `fractional-indexing` (Greenspan's algorithm): `a0`, `a1`, … `az`,
  * `b00`, `b01`, … Successive integer keys, each sorting after the last, so a
- * column's old integer order becomes key order and B1's own generator can
+ * column's old integer order becomes key order and the board's own generator can
  * insert between any two of them.
  *
  * Kept here rather than taking the dependency because migration only ever

@@ -10,10 +10,15 @@
  * - `source_unreadable` — the database could not be opened or snapshotted.
  * - `schema_unsupported` — the database was written by a build this exporter
  *   does not know (newer than this build, or older than its floor).
- * - `source_corrupt` — the snapshot failed its integrity check, or holds a
- *   fact the cloud format cannot carry without a gap.
+ * - `source_corrupt` — the snapshot failed its integrity check, SQLite
+ *   reported it damaged, or it holds a fact the cloud format cannot carry
+ *   without a gap.
  * - `integrity_failed` — a written export does not match its manifest.
+ * - `in_progress` — another run is exporting into the same target.
+ * - `io_failed` — the filesystem refused something the export needed
+ *   (permissions, a read-only volume, a path in the way).
  * - `worker_failed` — the worker thread died without answering.
+ * - `internal` — anything else: a bug, with its message kept.
  */
 export type MigrationExportErrorCode =
   | "cancelled"
@@ -23,7 +28,10 @@ export type MigrationExportErrorCode =
   | "schema_unsupported"
   | "source_corrupt"
   | "integrity_failed"
-  | "worker_failed";
+  | "in_progress"
+  | "io_failed"
+  | "worker_failed"
+  | "internal";
 
 export const MIGRATION_EXPORT_ERROR_CODES: readonly MigrationExportErrorCode[] = [
   "cancelled",
@@ -33,7 +41,10 @@ export const MIGRATION_EXPORT_ERROR_CODES: readonly MigrationExportErrorCode[] =
   "schema_unsupported",
   "source_corrupt",
   "integrity_failed",
+  "in_progress",
+  "io_failed",
   "worker_failed",
+  "internal",
 ];
 
 export class MigrationExportError extends Error {

@@ -12,7 +12,7 @@
  *   event id and sequence are never regenerated. The few records that have no
  *   source row of their own (a project's primary repo, a ticket's Working
  *   copy, a config entry made from a column) get a DERIVED id
- *   (`derived-ids.ts`), so a re-run of the export names them identically.
+ *   (`derivedId` in `transform.ts`), so a re-run of the export names them identically.
  * - **No machine path enters a Convex-bound record.** Absolute paths go to the
  *   runner-local streams (`projectCheckoutPaths`, `workingCopyPaths`) and
  *   nowhere else. Session event payloads and transcripts are content, not
@@ -83,7 +83,7 @@ export interface ProjectRecord {
   colorIndex: number;
   ticketPrefix: string;
   origin: "migrated";
-  /** Migrated projects never count toward the free-tier cap. */
+  /** A migrated project never counts toward a project limit. */
   countsTowardCap: false;
   createdByUserId: UserRef;
   createdAt: number;
@@ -219,7 +219,7 @@ export interface TicketRecord {
   baseBranch: string | null;
   pullRequests: PullRequestRecord[];
   retentionKeep: boolean;
-  /** The migrating Mac when the ticket has a worktree there. */
+  /** The migrating Mac when the ticket's worktree is still on disk there. */
   placeRunnerId: RunnerRef | null;
   createdBy: Actor;
   createdAt: number;
@@ -418,6 +418,8 @@ export interface AutomationRunRecord {
   model?: { providerId: string; modelId: string; reasoningLevel: string };
   /** A failed arrival attempt's error, kept for the Retry it offered. */
   error?: string;
+  /** The failed attempt's command id: the key a Retry replays under. */
+  retryCommandId?: string;
   attendance: string | null;
   armedByUserId: UserRef | null;
   runnerId: RunnerRef | null;
@@ -471,6 +473,18 @@ export interface AuditLogRecord {
   targetId: string;
   at: number;
   detail: JsonValue;
+}
+
+/**
+ * How far this Mac's scheduler has evaluated one schedule: the occurrence
+ * (epoch ms) it has evaluated through. The importer derives the schedule's
+ * next fire time from it and the Automation's trigger spec.
+ */
+export interface AutomationScheduleCursorRecord {
+  automationId: string;
+  evaluatedThrough: number;
+  armedByUserId: UserRef;
+  runnerId: RunnerRef;
 }
 
 /** Runner-local cache of an MCP server's tool catalog (stdio servers run on the runner). */

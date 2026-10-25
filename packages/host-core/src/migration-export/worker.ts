@@ -5,10 +5,16 @@
  *
  * The protocol is three messages out (`progress`, `done`, `failed`) and one
  * in (`cancel`), all JSON-safe. A cancel asks the worker to stop at its next
- * yield, which leaves a resumable staging area; if the worker is inside the
- * one statement that cannot yield (`VACUUM INTO`), the parent terminates it
- * after a grace period. Either way the export is never published, and a
- * snapshot cut short has no `state.json`, so the next run takes it again.
+ * yield, which leaves a resumable staging area, and the worker answers
+ * `failed: cancelled` once it has stopped writing. A single SQLite statement
+ * cannot yield and cannot be interrupted, not even by `Worker.terminate()`:
+ * the snapshot (`VACUUM INTO`, seconds per gigabyte), the integrity check and
+ * a source's first sorted row each run to completion first. So after a grace
+ * period the parent terminates the worker and settles only on its `exit`,
+ * which comes when that statement returns; nothing is still writing to the
+ * staging area when the caller hears "cancelled". The export is never
+ * published, and a snapshot cut short has no `state.json`, so the next run
+ * takes it again.
  *
  * Wiring: a host bundles `worker-entry.ts` as its own entry and passes that
  * file's URL to {@link runMigrationExportInWorker}. Bundlers each spell that
@@ -146,13 +152,9 @@ export function serveMigrationExportWorker(
   })
     .then(
       (result) => post({ type: "done", result }),
-      (error: unknown) =>
-        post({
-          type: "failed",
-          code: error instanceof MigrationExportError ? error.code : "worker_failed",
-          /* v8 ignore next -- the exporter throws only Error instances; this keeps a stray throw readable. */
-          message: error instanceof Error ? error.message : String(error),
-        }),
+      // `exportMigrationSnapshot` classifies every failure it throws.
+      (error: MigrationExportError) =>
+        post({ type: "failed", code: error.code, message: error.message }),
     )
     .finally(() => {
       // Nothing else is coming; let the thread exit once the answer is delivered.

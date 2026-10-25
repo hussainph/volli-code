@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createFixtureProfile, type FixtureProfile } from "../backup/test-fixture";
 import { exportMigrationSnapshot, type MigrationExportProgress } from "./exporter";
 import { STATE_FILE, stagingDirOf } from "./staging";
@@ -18,6 +18,9 @@ import {
   serveMigrationExportWorker,
   type MigrationExportWorkerMessage,
 } from "./worker";
+
+// Each test exports a whole profile through real files; a cold shared CI box is slow.
+vi.setConfig({ testTimeout: 30_000 });
 
 const ENTRY = new URL("./test-support/worker-under-node.mjs", import.meta.url);
 const EXEC_ARGV = ["--experimental-transform-types", "--disable-warning=ExperimentalWarning"];
@@ -195,10 +198,10 @@ describe("serveMigrationExportWorker", () => {
     expect(answer).toMatchObject({ type: "failed", code: "cancelled" });
   });
 
-  it("answers an unexplained failure as worker_failed", async () => {
+  it("answers a failure with the code the exporter classified it under", async () => {
     mkdirSync(join(stagingDirOf(join(work, "export")), STATE_FILE), { recursive: true });
     const { answer } = await serve(request());
-    expect(answer).toMatchObject({ type: "failed", code: "worker_failed" });
+    expect(answer).toMatchObject({ type: "failed", code: "io_failed" });
   });
 });
 

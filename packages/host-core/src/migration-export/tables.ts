@@ -54,7 +54,7 @@ export const MIGRATION_TABLE_DECISIONS: readonly MigrationTableDecision[] = [
     table: "app_state",
     disposition: "export",
     reason:
-      "Personal settings keys become config entries; client, runner and retired keys stay local.",
+      "Personal settings keys become config entries and schedule cursors are carried; client, runner and retired keys stay local.",
   },
   // ---- blobs ------------------------------------------------------
   {
@@ -79,7 +79,8 @@ export const MIGRATION_TABLE_DECISIONS: readonly MigrationTableDecision[] = [
   {
     table: "session_attachments",
     disposition: "runner",
-    reason: "Its facts are `attachment.*` events; the rows stay in the runner ledger.",
+    reason:
+      "Its facts are `attachment.*` events; rows stay in the runner ledger. Open ones are a manifest preflight fact.",
   },
   {
     table: "session_commands",
@@ -283,6 +284,7 @@ export const MIGRATION_TABLE_DECISIONS: readonly MigrationTableDecision[] = [
   {
     table: "board_command_receipts",
     disposition: "drop",
-    reason: "Seven-day replay receipts; preflight waits for in-flight board commands.",
+    reason:
+      "Seven-day replay receipts; the manifest counts those still in their window for the preflight.",
   },
 ];

@@ -22,6 +22,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { MigrationExportError } from "./errors";
 import type { StreamName } from "./sources";
 
 export const STATE_FILE = "state.json";
@@ -35,10 +36,20 @@ export function stagingDirOf(outDir: string): string {
   return `${outDir}.partial`;
 }
 
+/**
+ * The version of the row → record mapping. Bump it whenever `sources.ts` or
+ * `transform.ts` changes what a row becomes, so a staging area written by the
+ * old mapping is snapshotted again instead of resumed into a mixed export.
+ */
+export const MAPPER_VERSION = 1;
+
 /** What `state.json` records about the snapshot. */
 export interface StagingState {
   format: string;
+  mapperVersion: number;
   exportId: string;
+  /** The database it was taken from, resolved. */
+  sourcePath: string;
   appVersion: string;
   snapshotAt: number;
   schemaVersion: number;
@@ -192,4 +203,49 @@ export async function removeUnjournaledFiles(
   for (const file of await listStreamFiles(root)) {
     if (!kept.has(file)) await rm(join(root, file), { force: true });
   }
+}
+
+/** Whether a process id is alive (EPERM: alive, just not ours). */
+function processAlive(pid: number): boolean {
+  if (!(pid > 0)) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function writeLock(path: string): Promise<void> {
+  const handle = await open(path, "wx");
+  try {
+    await handle.writeFile(`${process.pid}\n`);
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Takes `<outDir>.lock` for one run. A lock whose process is gone is taken
+ * over (a crashed run leaves one); a live holder, this process included,
+ * refuses with `in_progress`. Answers the release.
+ */
+export async function acquireExportLock(outDir: string): Promise<() => Promise<void>> {
+  const path = `${outDir}.lock`;
+  await mkdir(dirname(path), { recursive: true });
+  try {
+    await writeLock(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const holder = Number.parseInt(await readFile(path, "utf8"), 10);
+    if (processAlive(holder)) {
+      throw new MigrationExportError(
+        "in_progress",
+        `Another export into ${outDir} is running (process ${holder}).`,
+      );
+    }
+    await rm(path, { force: true });
+    await writeLock(path);
+  }
+  return () => rm(path, { force: true });
 }

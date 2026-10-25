@@ -57,8 +57,10 @@ describe("the migration table register", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("orders every source query by a unique key, so a resume re-reads the same rows", () => {
+  it("ends every source query in an ORDER BY that prepares against the live schema", () => {
     for (const source of EXPORT_SOURCES) {
+      // Uniqueness of each key is checked by hand against the schema; this
+      // holds the shape a resume's OFFSET depends on.
       expect(source.sql, source.id).toMatch(/ORDER BY [^)]*$/);
       // The query must at least prepare against the live schema.
       expect(() => db.prepare(source.sql), source.id).not.toThrow();

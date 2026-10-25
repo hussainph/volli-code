@@ -18,6 +18,7 @@
  * manifest sees the projects before their tickets.
  */
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import type Database from "better-sqlite3";
 import {
   MIGRATION_PLACEHOLDERS,
@@ -28,6 +29,7 @@ import {
   type AutomationRecord,
   type AutomationRunJobRecord,
   type AutomationRunRecord,
+  type AutomationScheduleCursorRecord,
   type BlobLinkRecord,
   type BlobRecord,
   type BoardEventRecord,
@@ -105,6 +107,7 @@ export interface StreamRecords {
   automationRuns: AutomationRunRecord;
   automationArmings: AutomationArmingRecord;
   automationColumnOrder: AutomationColumnOrderRecord;
+  automationScheduleCursors: AutomationScheduleCursorRecord;
   runnerJobs: AutomationRunJobRecord;
   auditLog: AuditLogRecord;
   projectCheckoutPaths: ProjectCheckoutPathRecord;
@@ -141,6 +144,7 @@ export const STREAM_DESTINATIONS: Readonly<Record<StreamName, StreamDestination>
   automationRuns: "convex",
   automationArmings: "convex",
   automationColumnOrder: "convex",
+  automationScheduleCursors: "convex",
   runnerJobs: "convex",
   auditLog: "convex",
   projectCheckoutPaths: "runner",
@@ -161,11 +165,18 @@ export class SourceCorruptError extends Error {
 export interface ExportLookups extends ActorContext {
   /** When the snapshot was taken; stamped as `reportedAt` on runner reports. */
   readonly snapshotAt: number;
-  readonly projects: ReadonlyMap<string, { baseBranch: string | null; ticketPrefix: string }>;
+  readonly projects: ReadonlyMap<
+    string,
+    { baseBranch: string | null; ticketPrefix: string; path: string }
+  >;
+  /** Each ticket's worktree path, for the tickets that have one. */
+  readonly worktrees: ReadonlyMap<string, string>;
   readonly sessions: ReadonlyMap<
     string,
-    { role: string; parentSessionId: string | null; projectId: string }
+    { role: string; parentSessionId: string | null; ticketId: string | null }
   >;
+  /** This machine's home directory, redacted from git output. */
+  readonly homeDir: string;
   /** Whether an absolute path exists on this machine. */
   pathExists(path: string): boolean;
 }
@@ -207,28 +218,39 @@ function source<Row, Prepared = undefined>(definition: {
 /** Builds the lookups every source shares. Reads only. */
 export function buildLookups(
   db: Database.Database,
-  options: { snapshotAt: number; pathExists?: (path: string) => boolean },
+  options: { snapshotAt: number; pathExists?: (path: string) => boolean; homeDir?: string },
 ): ExportLookups {
   const projects = new Map(
     (
-      db.prepare("SELECT id, base_branch, ticket_prefix FROM projects").all() as Array<{
+      db.prepare("SELECT id, base_branch, ticket_prefix, path FROM projects").all() as Array<{
         id: string;
         base_branch: string | null;
         ticket_prefix: string;
-      }>
-    ).map((row) => [row.id, { baseBranch: row.base_branch, ticketPrefix: row.ticket_prefix }]),
-  );
-  const sessions = new Map(
-    (
-      db.prepare("SELECT id, role, parent_session_id, project_id FROM sessions").all() as Array<{
-        id: string;
-        role: string;
-        parent_session_id: string | null;
-        project_id: string;
+        path: string;
       }>
     ).map((row) => [
       row.id,
-      { role: row.role, parentSessionId: row.parent_session_id, projectId: row.project_id },
+      { baseBranch: row.base_branch, ticketPrefix: row.ticket_prefix, path: row.path },
+    ]),
+  );
+  const worktrees = new Map(
+    (
+      db
+        .prepare("SELECT id, worktree_path FROM tickets WHERE worktree_path IS NOT NULL")
+        .all() as Array<{ id: string; worktree_path: string }>
+    ).map((row) => [row.id, row.worktree_path]),
+  );
+  const sessions = new Map(
+    (
+      db.prepare("SELECT id, role, parent_session_id, ticket_id FROM sessions").all() as Array<{
+        id: string;
+        role: string;
+        parent_session_id: string | null;
+        ticket_id: string | null;
+      }>
+    ).map((row) => [
+      row.id,
+      { role: row.role, parentSessionId: row.parent_session_id, ticketId: row.ticket_id },
     ]),
   );
   const runs = new Map(
@@ -241,7 +263,9 @@ export function buildLookups(
   return {
     snapshotAt: options.snapshotAt,
     projects,
+    worktrees,
     sessions,
+    homeDir: options.homeDir ?? homedir(),
     automationRunOf: (sessionId) => runs.get(sessionId),
     pathExists: options.pathExists ?? existsSync,
   };
@@ -258,6 +282,16 @@ function strictJson(text: string, where: string): JsonValue {
   const value = parseJsonColumn(text);
   if (value === undefined) throw new SourceCorruptError(`${where} is not valid JSON`);
   return value;
+}
+
+/**
+ * The project of a ticket-owned row. Its ticket's foreign key cascades, so a
+ * row whose ticket is gone is corruption, and it stops the export rather than
+ * vanishing from it.
+ */
+function ownerProject(projectId: string | null, what: string): string {
+  if (projectId === null) throw new SourceCorruptError(`${what} names a missing ticket`);
+  return projectId;
 }
 
 /** Parses a free-text JSON column, keeping the raw text when it does not parse. */
@@ -541,6 +575,7 @@ const ticketsSource = source<TicketRow, TicketLookups>({
     const createdActor = prepared.createdBy.get(row.id);
     const merge = prepared.merges.get(row.id);
     const merged = merge !== undefined && (merge.url === null || merge.url === row.pr_url);
+    const worktreeOnDisk = row.worktree_path !== null && lookups.pathExists(row.worktree_path);
     emit("tickets", {
       id: row.id,
       projectId: row.project_id,
@@ -568,7 +603,7 @@ const ticketsSource = source<TicketRow, TicketLookups>({
               },
             ],
       retentionKeep: row.retention_keep !== 0,
-      placeRunnerId: row.worktree_path === null ? null : RUNNER,
+      placeRunnerId: worktreeOnDisk ? RUNNER : null,
       createdBy:
         createdActor === undefined
           ? PERSON
@@ -593,7 +628,7 @@ const ticketsSource = source<TicketRow, TicketLookups>({
         runnerId: RUNNER,
         projectRepoId: repoId,
         kind: "worktree",
-        state: lookups.pathExists(row.worktree_path) ? "ready" : "reclaimed",
+        state: worktreeOnDisk ? "ready" : "reclaimed",
         branch: row.branch,
         baseBranch: row.base_branch,
         reportedAt: lookups.snapshotAt,
@@ -618,7 +653,7 @@ interface TicketEventRow {
   actor: string;
   payload: string;
   created_at: number;
-  project_id: string;
+  project_id: string | null;
   seq: number;
 }
 
@@ -645,8 +680,30 @@ function redactWorktreeIdentity(identity: JsonValue): JsonValue {
   };
 }
 
-/** A board event payload with every machine path taken out. Exported for its tests. */
-export function cloudBoardPayload(kind: string, ticketId: string, payload: JsonValue): JsonValue {
+/** Replaces every occurrence of each path with its stand-in, longest path first. */
+function redactPaths(text: string, paths: ReadonlyArray<readonly [string, string]>): string {
+  let result = text;
+  // A one-character "path" (a home of `/`) would replace every slash.
+  const real = paths.filter(([path]) => path.length > 1);
+  for (const [path, standIn] of real.toSorted((a, b) => b[0].length - a[0].length)) {
+    result = result.replaceAll(path, standIn);
+  }
+  return result;
+}
+
+/**
+ * A board event payload with every machine path taken out: `worktree_changed`
+ * keeps the worktree's runner and basename, and git output in `stderr` has the
+ * worktree, the project checkout and the home directory replaced. Worktree
+ * events also name the runner and, when the ticket has one, its Working copy.
+ */
+function cloudBoardPayload(
+  kind: string,
+  ticketId: string,
+  projectId: string,
+  payload: JsonValue,
+  lookups: ExportLookups,
+): JsonValue {
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return payload;
   const record = payload as Record<string, JsonValue>;
   if (kind === "worktree_changed") {
@@ -656,10 +713,23 @@ export function cloudBoardPayload(kind: string, ticketId: string, payload: JsonV
       to: redactWorktreeIdentity(record.to ?? null),
     };
   }
-  if (WORKING_COPY_EVENT_KINDS.has(kind)) {
-    return { ...record, runnerId: RUNNER, workingCopyId: workingCopyId(ticketId) };
-  }
-  return payload;
+  if (!WORKING_COPY_EVENT_KINDS.has(kind)) return payload;
+  const worktree = lookups.worktrees.get(ticketId);
+  const project = lookups.projects.get(projectId)!;
+  return {
+    ...record,
+    ...(typeof record.stderr === "string"
+      ? {
+          stderr: redactPaths(record.stderr, [
+            ...(worktree === undefined ? [] : [[worktree, "<worktree>"] as const]),
+            [project.path, "<project>"],
+            [lookups.homeDir, "~"],
+          ]),
+        }
+      : {}),
+    runnerId: RUNNER,
+    ...(worktree === undefined ? {} : { workingCopyId: workingCopyId(ticketId) }),
+  };
 }
 
 const boardEventsSource = source<TicketEventRow>({
@@ -669,21 +739,22 @@ const boardEventsSource = source<TicketEventRow>({
   sql: `SELECT e.id, e.ticket_id, e.kind, e.actor, e.payload, e.created_at, t.project_id,
                ROW_NUMBER() OVER (PARTITION BY t.project_id ORDER BY ${TICKET_EVENT_ORDER}) AS seq
           FROM ticket_events e
-          JOIN tickets t ON t.id = e.ticket_id
+          LEFT JOIN tickets t ON t.id = e.ticket_id
           LEFT JOIN ticket_event_sequence s ON s.event_id = e.id
          WHERE json_valid(e.payload)
          ORDER BY t.project_id, seq`,
   map(row, _prepared, lookups, emit) {
+    const projectId = ownerProject(row.project_id, `ticket event ${row.id}`);
     const payload = strictJson(row.payload, `ticket event ${row.id}`);
     emit("boardEvents", {
       id: row.id,
-      projectId: row.project_id,
+      projectId,
       ticketId: row.ticket_id,
       seq: row.seq,
       kind: row.kind,
       actor: actorOf(parseLocalActor(row.actor), lookups, row.kind),
       occurredAt: row.created_at,
-      payload: cloudBoardPayload(row.kind, row.ticket_id, payload),
+      payload: cloudBoardPayload(row.kind, row.ticket_id, projectId, payload, lookups),
     });
   },
 });
@@ -695,13 +766,13 @@ const unparseableTicketEventsSource = source<Omit<TicketEventRow, "seq">>({
   streams: ["legacyRows"],
   sql: `SELECT e.id, e.ticket_id, e.kind, e.actor, e.payload, e.created_at, t.project_id
           FROM ticket_events e
-          JOIN tickets t ON t.id = e.ticket_id
+          LEFT JOIN tickets t ON t.id = e.ticket_id
          WHERE NOT json_valid(e.payload)
          ORDER BY e.id`,
   map(row, _prepared, _lookups, emit) {
     emit("legacyRows", {
       table: "ticket_events",
-      projectId: row.project_id,
+      projectId: ownerProject(row.project_id, `ticket event ${row.id}`),
       reason: "payload is not JSON",
       row: {
         id: row.id,
@@ -725,7 +796,7 @@ interface CommentRow {
   body: string;
   created_at: number;
   updated_at: number;
-  project_id: string;
+  project_id: string | null;
 }
 
 const commentsSource = source<CommentRow>({
@@ -733,13 +804,13 @@ const commentsSource = source<CommentRow>({
   tables: ["ticket_comments", "tickets"],
   streams: ["ticketComments"],
   sql: `SELECT c.*, t.project_id FROM ticket_comments c
-          JOIN tickets t ON t.id = c.ticket_id
+          LEFT JOIN tickets t ON t.id = c.ticket_id
          ORDER BY c.id`,
   map(row, _prepared, lookups, emit) {
     emit("ticketComments", {
       id: row.id,
       ticketId: row.ticket_id,
-      projectId: row.project_id,
+      projectId: ownerProject(row.project_id, `comment ${row.id}`),
       sessionId: row.session_id,
       author: actorOf(parseColumnActor(row.actor, row.session_id), lookups),
       body: row.body,
@@ -759,7 +830,7 @@ interface SignalRow {
   verdict: string;
   detail: string | null;
   created_at: number;
-  project_id: string;
+  project_id: string | null;
 }
 
 const signalsSource = source<SignalRow>({
@@ -767,13 +838,13 @@ const signalsSource = source<SignalRow>({
   tables: ["ticket_signals", "tickets"],
   streams: ["ticketSignals"],
   sql: `SELECT g.*, t.project_id FROM ticket_signals g
-          JOIN tickets t ON t.id = g.ticket_id
+          LEFT JOIN tickets t ON t.id = g.ticket_id
          ORDER BY g.id`,
   map(row, _prepared, lookups, emit) {
     emit("ticketSignals", {
       id: row.id,
       ticketId: row.ticket_id,
-      projectId: row.project_id,
+      projectId: ownerProject(row.project_id, `signal ${row.id}`),
       sessionId: row.session_id,
       actor: actorOf(parseColumnActor(row.actor, row.session_id), lookups),
       kind: row.kind,
@@ -881,26 +952,40 @@ interface SessionRow {
 }
 
 /**
- * A ticket Session is shared, a Board Session or ad-hoc chat is
- * private, and a subagent inherits its parent's visibility. Exported for its
- * tests.
+ * A ticket Session is shared, a Board Session or ad-hoc chat is private, and a
+ * subagent inherits its root's visibility. A subagent whose chain cannot be
+ * followed to a root (a deleted parent, a cycle) falls back on its own ticket:
+ * ticket work is shared, anything else private, so an unreadable chain never
+ * widens who can see a chat.
  */
-export function sessionVisibility(
+function sessionVisibility(
   sessionId: string,
   sessions: ExportLookups["sessions"],
 ): { visibility: "shared" | "private"; visibilityReason: "ticket" | "adhoc" | "inherited" } {
-  const seen = new Set<string>();
-  let current = sessions.get(sessionId);
-  let inherited = false;
-  while (current !== undefined && current.role === "subagent" && current.parentSessionId) {
-    if (seen.has(current.parentSessionId)) break;
-    seen.add(current.parentSessionId);
-    inherited = true;
-    current = sessions.get(current.parentSessionId);
+  const self = sessions.get(sessionId)!;
+  if (self.role !== "subagent") {
+    return self.role === "project"
+      ? { visibility: "private", visibilityReason: "adhoc" }
+      : { visibility: "shared", visibilityReason: "ticket" };
   }
-  const visibility = current?.role === "project" ? "private" : "shared";
-  if (inherited) return { visibility, visibilityReason: "inherited" };
-  return { visibility, visibilityReason: visibility === "private" ? "adhoc" : "ticket" };
+  const seen = new Set<string>([sessionId]);
+  let current = self;
+  while (current.role === "subagent") {
+    const parentId = current.parentSessionId;
+    const parent = parentId === null ? undefined : sessions.get(parentId);
+    if (parentId === null || parent === undefined || seen.has(parentId)) {
+      return {
+        visibility: self.ticketId === null ? "private" : "shared",
+        visibilityReason: "inherited",
+      };
+    }
+    seen.add(parentId);
+    current = parent;
+  }
+  return {
+    visibility: current.role === "project" ? "private" : "shared",
+    visibilityReason: "inherited",
+  };
 }
 
 const sessionsSource = source<SessionRow>({
@@ -1005,8 +1090,8 @@ interface DelegationRow {
 
 /**
  * Delegated Sessions (depth ≥ 1), merged with the claim that minted each
- *. A root row (no parent) restates `sessions.ticket_id` and is not
- * a delegation, so it is not carried.
+ * one. A root row (no parent) restates `sessions.ticket_id` and is not a
+ * delegation, so it is not carried.
  */
 const delegationsSource = source<DelegationRow>({
   id: "delegations",
@@ -1294,6 +1379,7 @@ const failedAttemptsSource = source<FailedAttemptRow>({
       missedCount: null,
       dueAt: row.start_at,
       error: row.error,
+      retryCommandId: row.command_id,
       attendance: null,
       armedByUserId: USER,
       runnerId: RUNNER,
@@ -1541,7 +1627,8 @@ const mcpOperationsSource = source<McpOperationRow>({
 /**
  * The `app_state` keys that become personal config entries, as
  * `key → [kind, name]`. Every other key stays on this machine: client layout,
- * runner policy, or retired.
+ * runner policy, or retired (`volli:runtime-preferences:*` among them; nothing
+ * reads it).
  */
 export const PERSONAL_SETTING_KEYS: Readonly<Record<string, readonly [string, string]>> = {
   "volli:model-access-defaults": ["model_default", "defaults"],
@@ -1551,8 +1638,6 @@ export const PERSONAL_SETTING_KEYS: Readonly<Record<string, readonly [string, st
   "volli:compaction-policy": ["compaction_policy", "default"],
   "volli:code-mode-policy": ["code_mode_policy", "default"],
 };
-const RUNTIME_PREFERENCES_PREFIX = "volli:runtime-preferences:";
-
 const settingsSource = source<{ key: string; value: string; updated_at: number }>({
   id: "personalSettings",
   tables: ["app_state"],
@@ -1561,13 +1646,9 @@ const settingsSource = source<{ key: string; value: string; updated_at: number }
          WHERE key IN (${Object.keys(PERSONAL_SETTING_KEYS)
            .map((key) => `'${key}'`)
            .join(", ")})
-            OR substr(key, 1, ${RUNTIME_PREFERENCES_PREFIX.length}) = '${RUNTIME_PREFERENCES_PREFIX}'
          ORDER BY key`,
   map(row, _prepared, _lookups, emit) {
-    const [kind, name] = PERSONAL_SETTING_KEYS[row.key] ?? [
-      "harness",
-      row.key.slice(RUNTIME_PREFERENCES_PREFIX.length),
-    ];
+    const [kind, name] = PERSONAL_SETTING_KEYS[row.key]!;
     emit("configEntries", {
       id: configEntryId("personal", kind, name),
       level: "personal",
@@ -1582,6 +1663,32 @@ const settingsSource = source<{ key: string; value: string; updated_at: number }
       updatedBy: PERSON,
       updatedAt: row.updated_at,
     });
+  },
+});
+
+/**
+ * The scheduler's per-Automation cursors (one `app_state` row, keyed by
+ * Automation id). An entry this build cannot read is dropped, as
+ * `schedule-cursor.ts` drops it: a missing cursor only restarts that one
+ * schedule's clock.
+ */
+const scheduleCursorsSource = source<{ value: string }>({
+  id: "automationScheduleCursors",
+  tables: ["app_state"],
+  streams: ["automationScheduleCursors"],
+  sql: "SELECT value FROM app_state WHERE key = 'volli:automation-schedule-cursors' ORDER BY key",
+  map(row, _prepared, _lookups, emit) {
+    const parsed = parseJsonColumn(row.value);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return;
+    for (const [automationId, at] of Object.entries(parsed)) {
+      if (typeof at !== "number" || !Number.isFinite(at)) continue;
+      emit("automationScheduleCursors", {
+        automationId,
+        evaluatedThrough: at,
+        armedByUserId: USER,
+        runnerId: RUNNER,
+      });
+    }
   },
 });
 
@@ -1603,6 +1710,7 @@ export const EXPORT_SOURCES: readonly ExportSource[] = [
   pendingRunsSource,
   armingsSource,
   columnOrderSource,
+  scheduleCursorsSource,
   sessionsSource,
   sessionEventsSource,
   readMarkersSource,

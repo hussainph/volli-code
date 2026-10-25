@@ -2,19 +2,17 @@
  * Every mapping rule in `sources.ts`, driven through the real exporter over a
  * fixture profile extended with the rows each rule exists for.
  */
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createFixtureProfile, type FixtureProfile } from "../backup/test-fixture";
-import { exportMigrationSnapshot, type MigrationExportManifest } from "./exporter";
-import {
-  cloudBoardPayload,
-  sessionVisibility,
-  type StreamName,
-  type StreamRecords,
-} from "./sources";
+import { exportMigrationSnapshot } from "./exporter";
+import { streamRecords as records } from "./test-support/export-files";
 import { workingCopyId } from "./transform";
+
+// Each test exports a whole profile through real files; a cold shared CI box is slow.
+vi.setConfig({ testTimeout: 30_000 });
 
 let profile: FixtureProfile;
 let work: string;
@@ -38,22 +36,8 @@ async function exportProfile(name = "export") {
     outDir: join(work, name),
     appVersion: "test",
     now: () => 5,
+    homeDir: "/Users/source",
   });
-}
-
-function records<S extends StreamName>(
-  dir: string,
-  manifest: MigrationExportManifest,
-  name: S,
-): StreamRecords[S][] {
-  return manifest.streams
-    .find((stream) => stream.name === name)!
-    .chunks.flatMap((chunk) =>
-      readFileSync(join(dir, chunk.file), "utf8")
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => JSON.parse(line) as StreamRecords[S]),
-    );
 }
 
 const SESSION_ACTOR = JSON.stringify({
@@ -118,6 +102,7 @@ describe("mapping rules", () => {
   it("covers projects, labels, tickets and board events", async () => {
     run("UPDATE projects SET theme_canvas = ? WHERE id = 'proj-beta'", '{"stops":[]}');
     run("UPDATE projects SET theme_canvas = 'not json' WHERE id = 'proj-alpha'");
+    run("UPDATE projects SET session_harness = 'claude-code' WHERE id = 'proj-alpha'");
     run(
       `INSERT INTO labels (id, project_id, name, color, row_version, created_at, updated_at,
                            merged_into_id, merged_at, merged_by)
@@ -154,8 +139,29 @@ describe("mapping rules", () => {
       "ticket-live",
       "worktree_failed",
       "automation",
-      '{"kind":"worktree_failed","stage":"create","stderr":"fatal"}',
+      JSON.stringify({
+        kind: "worktree_failed",
+        stage: "create",
+        stderr:
+          "fatal: '/Users/source/.volli/worktrees/alpha/AL-12' exists; see /Users/source/code/alpha and /Users/source/.gitconfig",
+      }),
     );
+    ticketEvent(
+      "e-committed",
+      "ticket-main",
+      "worktree_committed",
+      "user",
+      '{"kind":"worktree_committed"}',
+    );
+    ticketEvent("e-null", "ticket-main", "worktree_changed", "user", "null");
+    ticketEvent(
+      "e-main-failed",
+      "ticket-main",
+      "worktree_failed",
+      "automation",
+      '{"kind":"worktree_failed","stderr":"no /Users/source/code/beta"}',
+    );
+    ticketEvent("e-array", "ticket-main", "worktree_failed", "user", "[1]");
 
     const { outDir, manifest } = await exportProfile();
     const prefs = records(outDir, manifest, "memberProjectPrefs");
@@ -208,13 +214,29 @@ describe("mapping rules", () => {
     expect(byId.get("e-failed")!.payload).toEqual({
       kind: "worktree_failed",
       stage: "create",
-      stderr: "fatal",
+      stderr: "fatal: '<worktree>' exists; see <project> and ~/.gitconfig",
       runnerId: "$local-runner",
       workingCopyId: workingCopyId("ticket-live"),
     });
+    // No worktree, so no Working copy to name.
+    expect(byId.get("e-committed")!.payload).toEqual({
+      kind: "worktree_committed",
+      runnerId: "$local-runner",
+    });
+    expect(byId.get("e-null")!.payload).toBeNull();
+    expect(byId.get("e-main-failed")!.payload).toEqual({
+      kind: "worktree_failed",
+      stderr: "no <project>",
+      runnerId: "$local-runner",
+    });
+    expect(
+      records(outDir, manifest, "configEntries").find((entry) => entry.kind === "harness")!
+        .definition,
+    ).toBe("claude-code");
+    expect(byId.get("e-array")!.payload).toEqual([1]);
     expect(
       events.filter((event) => event.projectId === "proj-beta").map((event) => event.seq),
-    ).toEqual([1, 2, 3]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7]);
   });
 
   it("covers comments, Sessions, delegations, runs, MCP and the ledger", async () => {
@@ -250,6 +272,17 @@ describe("mapping rules", () => {
                'session-root', 'ticket-live', 2)`,
     );
     run("DELETE FROM session_usage_coverage");
+    profile.db.pragma("foreign_keys = OFF");
+    session("session-loop-a", "subagent", "session-loop-b", null);
+    session("session-loop-b", "subagent", "session-loop-a", null);
+    session("session-orphan", "subagent", "session-deleted", "ticket-live");
+    session("session-sub-of-ticket", "subagent", "session-root", null);
+    session("session-parentless", "subagent", null, null);
+    profile.db.pragma("foreign_keys = ON");
+    run(
+      "INSERT INTO app_state (key, value, updated_at) VALUES ('volli:automation-schedule-cursors', ?, 1)",
+      JSON.stringify({ "automation-1": 1234, broken: "soon" }),
+    );
 
     const { outDir, manifest } = await exportProfile();
     expect(records(outDir, manifest, "ticketComments")[0]!.editedAt).toBe(999);
@@ -268,6 +301,31 @@ describe("mapping rules", () => {
       visibility: "private",
       visibilityReason: "inherited",
     });
+    expect(sessions.get("session-loop-a")).toMatchObject({
+      visibility: "private",
+      visibilityReason: "inherited",
+    });
+    expect(sessions.get("session-orphan")).toMatchObject({
+      visibility: "shared",
+      visibilityReason: "inherited",
+    });
+    expect(sessions.get("session-parentless")!.visibility).toBe("private");
+    expect(sessions.get("session-sub-of-ticket")).toMatchObject({
+      visibility: "shared",
+      visibilityReason: "inherited",
+    });
+    expect(records(outDir, manifest, "automationScheduleCursors")).toEqual([
+      {
+        automationId: "automation-1",
+        evaluatedThrough: 1234,
+        armedByUserId: "$local-user",
+        runnerId: "$local-runner",
+      },
+    ]);
+    expect(
+      records(outDir, manifest, "automationRuns").find((entry) => entry.id === "attempt-1")!
+        .retryCommandId,
+    ).toBe("acommand-retry");
     expect(records(outDir, manifest, "readMarkers")).toEqual([
       {
         userId: "$local-user",
@@ -325,6 +383,15 @@ describe("corrupt sources stop the export", () => {
     await expectCorrupt(/ticket ticket-ghost names missing project/);
   });
 
+  it("a comment whose ticket is gone", async () => {
+    profile.db.pragma("foreign_keys = OFF");
+    run(
+      `INSERT INTO ticket_comments (id, ticket_id, session_id, actor, body, created_at, updated_at)
+       VALUES ('comment-ghost', 'ticket-ghost', NULL, 'user', 'x', 1, 1)`,
+    );
+    await expectCorrupt(/comment comment-ghost names a missing ticket/);
+  });
+
   it("a blob link with no owner", async () => {
     profile.db.pragma("foreign_keys = OFF");
     run(
@@ -358,36 +425,12 @@ describe("corrupt sources stop the export", () => {
   });
 });
 
-describe("pure helpers", () => {
-  it("resolves a subagent's visibility through its ancestors, and survives a cycle", () => {
-    const sessions = new Map([
-      ["a", { role: "subagent", parentSessionId: "b", projectId: "p" }],
-      ["b", { role: "subagent", parentSessionId: "a", projectId: "p" }],
-      ["c", { role: "subagent", parentSessionId: "missing", projectId: "p" }],
-      ["d", { role: "ticket", parentSessionId: null, projectId: "p" }],
-    ]);
-    expect(sessionVisibility("a", sessions)).toEqual({
-      visibility: "shared",
-      visibilityReason: "inherited",
-    });
-    expect(sessionVisibility("c", sessions)).toEqual({
-      visibility: "shared",
-      visibilityReason: "inherited",
-    });
-    expect(sessionVisibility("d", sessions)).toEqual({
-      visibility: "shared",
-      visibilityReason: "ticket",
-    });
-    expect(sessionVisibility("unknown", sessions)).toEqual({
-      visibility: "shared",
-      visibilityReason: "ticket",
-    });
-  });
-
-  it("leaves a board payload without paths untouched", () => {
-    const payload = { kind: "retitled", from: "a", to: "b" };
-    expect(cloudBoardPayload("retitled", "t", payload)).toBe(payload);
-    expect(cloudBoardPayload("worktree_changed", "t", [1])).toEqual([1]);
-    expect(cloudBoardPayload("worktree_changed", "t", null)).toBeNull();
+describe("tolerated rows", () => {
+  it("skips an unreadable schedule cursor row", async () => {
+    run(
+      "INSERT INTO app_state (key, value, updated_at) VALUES ('volli:automation-schedule-cursors', '[1]', 1)",
+    );
+    const { outDir, manifest } = await exportProfile();
+    expect(records(outDir, manifest, "automationScheduleCursors")).toEqual([]);
   });
 });
