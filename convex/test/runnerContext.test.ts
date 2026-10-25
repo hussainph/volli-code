@@ -3,7 +3,7 @@ import { describe, expect, test } from "vite-plus/test";
 import { newId } from "@volli/shared/cloud";
 
 import { api, internal } from "../functions/_generated/api";
-import type { Doc } from "../functions/_generated/dataModel";
+import type { Doc } from "../functions/_generated/dataModel.js";
 import { seedTestWorld } from "../functions/lib/testWorld";
 import { asRunner, clearMembership, code, context, runnerWorld } from "./runnerContextFixtures";
 import { wire, writeSession } from "./sessionFixtures";
