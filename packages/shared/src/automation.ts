@@ -19,11 +19,14 @@
  * catalog is desktop-owned (docs/BOUNDARIES.md), so nothing here names IPC.
  */
 
+import { ARMED_RUN_DELAY_MS, type DeliberateMoveChoice } from "./armed-arrival";
 import type { ModelAccessSnapshot, ModelSelection } from "./agent-runtime";
 import { parseAutomationSchedule, type AutomationSchedule } from "./automation-schedule";
 import { isAgentModelTier, type AgentModelTier } from "./model-access-policy";
 import { parseSessionModel } from "./project-identity";
 import { isTicketStatus, TICKET_STATUSES, type TicketStatus } from "./ticket";
+
+export { ARMED_RUN_DELAY_MS, type DeliberateMoveChoice } from "./armed-arrival";
 
 /**
  * Where an Automation is listed: every project, or exactly one (VC-112,
@@ -1022,24 +1025,6 @@ export function effectiveArmedAutomationFor(input: {
   if (armed === null) return null;
   return input.enabledAutomationIds.includes(armed.id) ? armed : null;
 }
-
-/**
- * How long an armed column waits before it starts its Run, in milliseconds
- * (VC-112, "Board interaction").
- *
- * 3500 ms is the whole safety story for an act nobody confirmed: long enough to
- * read the sentence and reach the one control, short enough that a deliberate
- * move does not feel held up. Exactly one control lives in this window —
- * Cancel, which keeps the move and starts nothing. Sending the Ticket back is
- * the board's ordinary undo and is deliberately not offered here: two buttons
- * inside 3.5 seconds is a choice nobody can make in time.
- */
-export const ARMED_RUN_DELAY_MS = 3500;
-
-/** What a Deliberate move carries when the Option-drag picker named a target. */
-export type DeliberateMoveChoice =
-  | { kind: "automation"; automationId: string }
-  | { kind: "move-only" };
 
 /** Which door opened an armed Run window: the column's arming or a person's pick. */
 export type PendingArmedRunOrigin = "armed" | "chosen";

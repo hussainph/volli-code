@@ -32,6 +32,7 @@ export type IdKind =
   | "ticket"
   | "label"
   | "comment"
+  | "signal"
   | "boardEvent"
   | "session"
   | "runner"
@@ -58,6 +59,7 @@ export type ProjectRepoId = Id<"projectRepo">;
 export type TicketId = Id<"ticket">;
 export type LabelId = Id<"label">;
 export type CommentId = Id<"comment">;
+export type SignalId = Id<"signal">;
 export type BoardEventId = Id<"boardEvent">;
 export type SessionId = Id<"session">;
 export type RunnerId = Id<"runner">;
