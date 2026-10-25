@@ -44,7 +44,9 @@ export type IdKind =
   | "export"
   | "migration"
   | "deletionRequest"
-  | "auditEntry";
+  | "auditEntry"
+  | "secret"
+  | "secretKey";
 
 declare const ID_KIND: unique symbol;
 

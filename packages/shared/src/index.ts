@@ -43,6 +43,7 @@ export * from "./decision-model";
 export * from "./secret-redaction";
 export * from "./credential-stream-redaction";
 export * from "./json-redaction";
+export * from "./secret-name";
 export * from "./structured-log";
 export * from "./model-auto-select";
 export * from "./model-mark-color";

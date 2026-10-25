@@ -519,6 +519,8 @@ async function deployFunctions(
  * `/runner/token` works and its tokens are trusted), push `functions/`, and
  * return the environment `fixture/testing.ts` reads. The JWKS variables are
  * set before the push because the auth config is evaluated at push time.
+ * The backend also gets a fresh secrets root key for the run
+ * (`functions/lib/sealing.ts`), made here and never written anywhere else.
  */
 export async function deployForTests(
   backend: Pick<RunningBackend, "url" | "siteUrl" | "adminKey" | "cliEnv">,
@@ -529,6 +531,7 @@ export async function deployForTests(
     VOLLI_TEST_JWKS: issuer.jwksDataUri,
     VOLLI_RUNNER_JWKS: runnerIssuer.jwksDataUri,
     VOLLI_RUNNER_SIGNING_KEY: runnerIssuer.signingKey,
+    VOLLI_SECRETS_ROOT_KEYS: `test:${randomBytes(32).toString("base64")}`,
   });
   await deployFunctions(backend);
   return {

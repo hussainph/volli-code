@@ -210,6 +210,28 @@ Each was a decision made while turning the design into code.
     `runnerJobs.result` is checked as plain JSON of at most 64 KiB
     (`jobResultProblem`); its kind-specific shape is checked by the work that
     reads it, once a kind has a typed result.
+29. Team secrets: `secrets.sealed.kid` names the **data key** a value is
+    sealed under (a `secretKeys` row), not the root key; the data key row
+    names its root key (`rootKid`). `secretKeys` is added for this: one data
+    key per Workspace (`w:{workspaceId}`, for Workspace and project secrets)
+    and per person (`u:{userId}`), stored only wrapped, never returned by a
+    query. A project that moves Workspace keeps opening its secrets (the data
+    key is found by id); a value written after the move is sealed under the
+    new Workspace's key. A data key is therefore never deleted while a row
+    still names it: a Workspace purge must re-seal or delete a moved
+    project's values before it drops the old key, or delivery for that
+    project fails closed (the runner refuses to run a command without the
+    set rather than run it without its secrets).
+30. A secret is keyed by `(scopeKey, name)`, so `secrets.set` upserts and the
+    backend mints the id of a new row (the name is the natural key a client
+    retries with). Writes carry no `commandId`, like Workspace writes (15).
+31. `secrets.plain` (env vars only) is returned to readers: an env var is
+    plain by kind and shown in the Secrets tab. A `secret`'s value and
+    ciphertext are never returned; `last4` is written only for secrets of 16
+    or more characters. `requestedBySessionId` stays `null` until an agent
+    can request a secret by name. A scope holds at most 100 secrets and
+    64 KiB of names and values (`MAX_SECRETS_PER_SCOPE`, `MAX_SCOPE_BYTES`),
+    so a resolved set stays far inside a process's environment limit.
 
 ## Migrated rows
 

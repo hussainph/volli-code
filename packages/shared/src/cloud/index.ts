@@ -23,6 +23,7 @@ export * from "./r2-keys";
 export * from "./s3-presign";
 export * from "./session-signal";
 export * from "./runners";
+export * from "./secrets";
 export * from "./ticket-key";
 export * from "./transcript-pack";
 export * from "./visibility";

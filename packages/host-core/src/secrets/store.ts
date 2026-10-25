@@ -39,10 +39,13 @@ import {
   type CredentialStreamStep,
   resolveConfigEntries,
   type ConfigPlan,
+  isSecretName,
   type SecretMetadata,
   type SecretScope,
 } from "@volli/shared";
 export type { SecretMetadata, SecretScope } from "@volli/shared";
+/** The name rule lives in `@volli/shared` (`secret-name.ts`): cloud-delivered secrets obey it too. */
+export { isSecretName } from "@volli/shared";
 
 /**
  * Nearest scope wins: session > project > always, by name. These are the
@@ -64,81 +67,6 @@ export interface SecretInput {
 
 interface SecretRecord extends SecretMetadata {
   value: string;
-}
-
-const CONTROL_NAMES = new Set([
-  "PATH",
-  "HOME",
-  "ENV",
-  "BASH_ENV",
-  "SHELL",
-  "IFS",
-  "CDPATH",
-  "GLOBIGNORE",
-  "SHELLOPTS",
-  "BASHOPTS",
-  "ZDOTDIR",
-  "FPATH",
-  "NODE_OPTIONS",
-  "NODE_PATH",
-  "NODE_EXTRA_CA_CERTS",
-  "NODE_TLS_REJECT_UNAUTHORIZED",
-  "USER",
-  "LOGNAME",
-  "PWD",
-  "OLDPWD",
-  "TMPDIR",
-  "TMP",
-  "TEMP",
-  "COMSPEC",
-  "PATHEXT",
-  "PROMPT_COMMAND",
-  "PS0",
-  "PS1",
-  "PS2",
-  "PS4",
-  "HISTFILE",
-  "PYTHONPATH",
-  "PYTHONHOME",
-  "PYTHONSTARTUP",
-  "PYTHONINSPECT",
-  "RUBYOPT",
-  "RUBYLIB",
-  "PERL5OPT",
-  "PERL5LIB",
-  "PERLLIB",
-  "JAVA_TOOL_OPTIONS",
-  "JDK_JAVA_OPTIONS",
-  "_JAVA_OPTIONS",
-  "GIT_EXEC_PATH",
-  "GIT_SSH",
-  "GIT_SSH_COMMAND",
-  "GIT_ASKPASS",
-  "GIT_PROXY_COMMAND",
-  "GIT_TEMPLATE_DIR",
-  "GIT_PAGER",
-  "SSH_ASKPASS",
-  "SSH_AUTH_SOCK",
-  "PAGER",
-  "EDITOR",
-  "VISUAL",
-  "LESSOPEN",
-  "LESSCLOSE",
-  "XDG_CONFIG_HOME",
-  "XDG_DATA_HOME",
-  "XDG_CACHE_HOME",
-  "XDG_RUNTIME_DIR",
-]);
-const CONTROL_PREFIXES = /^(?:LD_|DYLD_|VOLLI_|ELECTRON_|BASH_FUNC_|NPM_CONFIG_|GIT_CONFIG_)/;
-
-/** Credentials are data, never controls over executable lookup or process startup. */
-export function isSecretName(name: unknown): name is string {
-  return (
-    typeof name === "string" &&
-    /^[A-Z][A-Z0-9_]{0,127}$/.test(name) &&
-    !CONTROL_NAMES.has(name) &&
-    !CONTROL_PREFIXES.test(name)
-  );
 }
 
 function validId(value: unknown): value is string {
@@ -427,6 +355,18 @@ export class SecretStore {
       used.has(item.id) ? Object.assign({}, item, { lastUsedAt: at }) : item,
     );
     return Object.fromEntries([...selected].map(([name, item]) => [name, item.value]));
+  }
+
+  /**
+   * Values this store never holds but a process may be given: Volli Cloud
+   * team secrets a runner received for a Session (`cloud-secrets.ts`). They
+   * join the redaction history under their names before the caller injects
+   * them, and stay in it for this launch like every value seen here, so
+   * output, tool results, shell spills and anything uploaded from them is
+   * scrubbed exactly as a stored secret's would be.
+   */
+  adoptDelivered(entries: Iterable<{ readonly name: string; readonly value: string }>): void {
+    for (const { name, value } of entries) this.#remember(value, name);
   }
 
   /** Includes revoked/replaced values that may remain in process output this launch. */
