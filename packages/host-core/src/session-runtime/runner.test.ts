@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { ALWAYS_ONLINE, piOwnedModelAccess } from "@volli/agent-runtime";
-import { LOCAL_RUNNER, sessionHostNoticeMetadata } from "@volli/shared";
+import { DEFAULT_AUTHORITY_POLICY, LOCAL_RUNNER, sessionHostNoticeMetadata } from "@volli/shared";
 import { SESSION_NOTICE_FORMAT, type ClaimedJob } from "@volli/shared/cloud";
 import {
   createHostCore,
@@ -266,20 +266,28 @@ describe("runner composition", () => {
     const bindEnvironment = vi.spyOn(cloud, "bindEnvironment");
     const bindNotices = vi.spyOn(cloud, "bindNotices");
     const dispose = vi.spyOn(cloud, "dispose");
-    const [assemblyModule, facadeModule, agentsModule, lifecycleModule, contextModule] =
-      await Promise.all([
-        import("./assembly"),
-        import("./facade"),
-        import("./agents"),
-        import("./lifecycle"),
-        import("./context"),
-      ]);
+    const [
+      assemblyModule,
+      facadeModule,
+      agentsModule,
+      lifecycleModule,
+      contextModule,
+      agentServiceModule,
+    ] = await Promise.all([
+      import("./assembly"),
+      import("./facade"),
+      import("./agents"),
+      import("./lifecycle"),
+      import("./context"),
+      import("../agent-services"),
+    ]);
     const buildAssembly = vi.spyOn(assemblyModule, "createRuntimeAssembly");
     const buildFacade = vi.spyOn(facadeModule, "createRuntimeSessionFacade");
     const buildAgents = vi.spyOn(agentsModule, "createRuntimeSessionAgents");
     const buildLifecycle = vi.spyOn(lifecycleModule, "createSessionRuntimeLifecycle");
     const buildContext = vi.spyOn(contextModule, "createRuntimeContextResolver");
     const buildHandlers = vi.spyOn(handlerModule, "createHostHandlers");
+    const buildToolDoor = vi.spyOn(agentServiceModule, "createHostAgentToolDoor");
     const f = compose(fixture, { kind: "cloud", host, cloud });
     const assembly = buildAssembly.mock.lastCall![0];
     expect(assembly.sessionEngine).toBe(cloud.engine);
@@ -314,6 +322,10 @@ describe("runner composition", () => {
     expect(bindNotices).toHaveBeenCalledExactlyOnceWith({ enqueue: expect.any(Function) });
     const notices = bindNotices.mock.lastCall![0];
     await host.start(f.runner.owner());
+    expect(buildToolDoor.mock.lastCall![0].cloudSessionVerbs).toBe(cloud.cloudSessionVerbs);
+    expect(buildToolDoor.mock.lastCall![0].authorityPolicy(cloudProject.id)).toBe(
+      DEFAULT_AUTHORITY_POLICY,
+    );
     const ready = await f.runner.ready();
     expect(facadeModule.recoveredRuntimeSessionServices(ready).sessionEngine).toBe(cloud.engine);
     const stored = notice(owned.session.id, `watch:${owned.session.id}:one`);
