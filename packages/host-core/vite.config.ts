@@ -75,6 +75,11 @@ export default defineConfig({
         // what a headless host answers with: a refusal that reads wrong is
         // what a person on a server sees instead of their link opening.
         "src/ports/*.ts",
+        // A runner's Volli Cloud registration (VC-580): the credential
+        // rotation, the token refresh and the reconnect re-publish are the
+        // branches nobody can watch happen; one missed is a box that quietly
+        // stops being able to sign in.
+        "src/cloud-runner/*.ts",
         // The structured log (VC-699): its redaction is a merge gate, and a
         // branch nobody drove is a field that reaches a line unredacted or a
         // line that loses its trace. The file sink's disk-failure callbacks

@@ -13,6 +13,7 @@ import {
   quitConfirmDetail,
   recordUnsavedDocuments,
   registerAcceptedQuitCoordinator,
+  recordUnsavedBoardWrites,
   refuseQuit,
   unsavedDocumentNames,
   updateInstallQuitInFlight,
@@ -146,6 +147,34 @@ describe("refuseQuit", () => {
     refuseQuit({ preventDefault: vi.fn() });
 
     expect(quitAlreadyRefused({ preventDefault: vi.fn() })).toBe(false);
+  });
+});
+
+// VC-889: unanswered Volli Cloud board writes are unsaved work too.
+describe("recordUnsavedBoardWrites", () => {
+  afterEach(() => {
+    recordUnsavedBoardWrites(0);
+    recordUnsavedDocuments({ names: [] });
+  });
+
+  it("names the Volli Cloud board beside the documents while writes are unanswered", () => {
+    recordUnsavedDocuments({ names: ["draft.md"] });
+    recordUnsavedBoardWrites(1);
+    expect(unsavedDocumentNames()).toEqual(["draft.md", "Volli Cloud board (1 change)"]);
+    recordUnsavedBoardWrites(3);
+    expect(unsavedDocumentNames()).toEqual(["draft.md", "Volli Cloud board (3 changes)"]);
+    for (const bad of [0, -1, 1.5, "2", null]) {
+      recordUnsavedBoardWrites(bad);
+      expect(unsavedDocumentNames()).toEqual(["draft.md"]);
+    }
+  });
+
+  it("forgets them with the window", () => {
+    let closed!: () => void;
+    clearUnsavedDocumentsOnWindowClosed({ on: (_event, listener) => (closed = listener) });
+    recordUnsavedBoardWrites(2);
+    closed();
+    expect(unsavedDocumentNames()).toEqual([]);
   });
 });
 
@@ -356,6 +385,77 @@ describe("registerAcceptedQuitCoordinator", () => {
       expect(exit).toHaveBeenCalledExactlyOnceWith(0);
     },
   );
+
+  // VC-889: a restart into another product store relaunches only on an accepted quit.
+  it("tells the relaunch whether the quit was accepted or a gate refused it", async () => {
+    vi.useFakeTimers();
+    let quit!: (event: { preventDefault(): void }) => void;
+    const onQuitAccepted = vi.fn();
+    const onQuitRefused = vi.fn();
+    let refuse = true;
+    registerAcceptedQuitCoordinator({
+      lifecycle: {
+        on: (_event, listener) => {
+          quit = listener;
+        },
+        exit: vi.fn(),
+      },
+      shutdownNativeSessions: async () => {},
+      shutdownAgentSocket: async () => {},
+      reportFailure: vi.fn(),
+      prepareQuit: (event) => {
+        if (refuse) refuseQuit(event);
+      },
+      onQuitAccepted,
+      onQuitRefused,
+    });
+    // Refused by a gate behind the coordinator, in the same dispatch.
+    quit({ preventDefault: vi.fn() });
+    await Promise.resolve();
+    // Refused by a gate ahead of it.
+    const refusedAhead = { preventDefault: vi.fn() };
+    refuseQuit(refusedAhead);
+    quit(refusedAhead);
+    expect(onQuitRefused).toHaveBeenCalledTimes(2);
+    expect(onQuitAccepted).not.toHaveBeenCalled();
+    refuse = false;
+    // Two attempts in one tick (⌘Q twice): one accepted quit, told once.
+    quit({ preventDefault: vi.fn() });
+    quit({ preventDefault: vi.fn() });
+    await Promise.resolve();
+    expect(onQuitAccepted).toHaveBeenCalledOnce();
+    await vi.runAllTimersAsync();
+  });
+
+  it("reports a relaunch hook that throws, and the accepted quit goes on", async () => {
+    vi.useFakeTimers();
+    let quit!: (event: { preventDefault(): void }) => void;
+    const exit = vi.fn();
+    const failure = new Error("relaunch failed");
+    for (const reporterThrows of [false, true]) {
+      const reportFailure = vi.fn(() => {
+        if (reporterThrows) throw new Error("reporter failed");
+      });
+      registerAcceptedQuitCoordinator({
+        lifecycle: {
+          on: (_event, listener) => {
+            quit = listener;
+          },
+          exit,
+        },
+        shutdownNativeSessions: async () => {},
+        shutdownAgentSocket: async () => {},
+        reportFailure,
+        onQuitAccepted: () => {
+          throw failure;
+        },
+      });
+      quit({ preventDefault: vi.fn() });
+      await vi.runAllTimersAsync();
+      expect(reportFailure).toHaveBeenCalledWith(failure);
+    }
+    expect(exit).toHaveBeenCalledTimes(2);
+  });
 
   it("still forces an accepted quit when deadline failure reporting throws", async () => {
     vi.useFakeTimers();

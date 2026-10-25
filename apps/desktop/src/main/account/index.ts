@@ -5,6 +5,7 @@
  * hands the result to the handler map as its `AccountPort`.
  */
 import type { AccountPort } from "@volli/host-core/handlers";
+import type { CloudLaunch } from "@volli/shared";
 
 import { convexAccountBackend } from "./backend";
 import type { AccountConfig } from "./config";
@@ -38,6 +39,8 @@ export function createDesktopAccount(input: {
   readonly unlockInventory: () => Promise<void>;
   readonly openBrowser: (url: string) => void | Promise<void>;
   readonly log: AccountLogger;
+  /** The next launch's product store marker (`../cloud-launch.ts`). */
+  readonly marker?: { write(userId: string): void; clear(): void };
 }): AccountService {
   if (input.config.problem !== null) {
     input.log.warn("account configuration ignored", { problem: input.config.problem });
@@ -52,11 +55,24 @@ export function createDesktopAccount(input: {
     store: inventoryAccountSessionStore(input.inventory, input.unlockInventory),
     openBrowser: input.openBrowser,
     log: input.log,
+    ...(input.marker === undefined ? {} : { marker: input.marker }),
   });
 }
 
-/** The service as the handler map's port: the same object, its main-only methods hidden by type. */
-export function accountPort(service: AccountService): AccountPort {
+/**
+ * The service as the handler map's port: the same object, its main-only
+ * methods hidden by type, beside the launch it chose (VC-889).
+ */
+export function accountPort(
+  service: AccountService,
+  launch: {
+    launch(): CloudLaunch;
+    relaunch(): void;
+    reportUnsavedWrites(count: number): void;
+    saveSnapshot(text: string): void;
+    readSnapshot(): string | null;
+  },
+): AccountPort {
   return {
     snapshot: () => service.snapshot(),
     subscribe: (listener) => service.subscribe(listener),
@@ -65,5 +81,11 @@ export function accountPort(service: AccountService): AccountPort {
     signOut: () => service.signOut(),
     requestDeletion: () => service.requestDeletion(),
     cancelDeletion: () => service.cancelDeletion(),
+    accessToken: (force) => service.windowToken(force),
+    launch: () => launch.launch(),
+    relaunch: () => launch.relaunch(),
+    reportUnsavedWrites: (count) => launch.reportUnsavedWrites(count),
+    saveSnapshot: (text) => launch.saveSnapshot(text),
+    readSnapshot: () => launch.readSnapshot(),
   };
 }

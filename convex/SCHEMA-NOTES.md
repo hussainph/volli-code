@@ -47,8 +47,10 @@ that writes one.
   `@volli/shared/cloud`; a type-level test holds them equal and a runtime test
   proves every arm is storable and an unknown arm is refused. Closed on write;
   clients read it with `readActor`, which turns an unknown arm into "Unknown".
-- **Every public function requires an identity.** Start with the helpers in
-  `lib/auth.ts`; the decisions are the pure predicates in
+- **Every public function requires an identity.** The exceptions are the
+  `/runner/*` HTTP routes a box calls before it has one; each proves itself
+  with a one-time secret instead. Start with the helpers in `lib/auth.ts`
+  (`lib/runnerAuth.ts` for a runner caller); the decisions are the pure predicates in
   `@volli/shared/cloud` (`canSeeProject`, `canSeeSession`, `canManage`, …).
 - **Session visibility is decided in one place.** A Session-creating write takes
   `visibility`, `visibilityReason` and `sharedAt` from `visibilityForNewSession`
@@ -85,7 +87,8 @@ Each was a decision made while turning the design into code.
 5. Extra indexes for lookups the design describes: `workspaceInvites.by_email`
    (matching invites at sign-in), `clientSessions.by_provider_session`,
    `memberProjectPrefs.by_project` (project purge),
-   `runnerCredentials.by_current_hash` / `by_previous_hash` (token exchange),
+   `runnerCredentials.by_current_hash` / `by_previous_hash` (unused: the
+   token exchange names its runner and reads `by_runner`),
    `runnerLinkRequests.by_poll_secret`, `runnerEvents.by_at` and
    `stripeEvents.by_received` (TTL sweeps), `billingAccounts.by_stripe_customer`
    and `subscriptions.by_stripe_subscription` (webhooks), and `by_uuid` on
@@ -152,9 +155,9 @@ Each was a decision made while turning the design into code.
 20. The board's `json` fields are typed at compile time rather than by a
     runtime codec: `boardEvents.payload` is a `BoardEventPayload` built by
     the shared rules, `boardReceipts.reply` is the function's own reply, and
-    `runnerJobs.payload` is provisional until the runner work types each kind
-    in `JobPayloads` (an arrival's `automation.run` carries
-    `trigger: "arrival"`, which is what a later move replaces).
+    `runnerJobs.payload` is checked by `parseJobPayload` inside `enqueueJob`
+    (an arrival's `automation.run` carries `trigger: "arrival"`, which is what
+    a later move replaces).
 21. After a create's receipt has expired (seven days), retrying it answers
     `id_taken` rather than comparing the stored row with the intent: board
     commands from an offline runner fail fast instead of buffering, so a
@@ -186,3 +189,63 @@ Each was a decision made while turning the design into code.
     (`share_parent`); sharing its root carries down. `sessions.sharedAt` is
     when a Session became shared: its creation time when born shared, the
     flip's time otherwise.
+25. Runner vocabularies (kind, status, install mode, link method, local
+    credential kind) come from `@volli/shared/cloud` (`runners.ts`), which
+    the runner-side client reads too.
+26. `runnerLinkAttempts` (one row per person: a fixed window of failed
+    device-code entries) is added so a code cannot be guessed, and
+    `runnerLinkRequests.installMode` (optional, added with the link flow) so
+    a runner linked by a device code starts with the right install mode.
+27. A runner cut off for credential reuse is recorded as a `token_reuse`
+    runner event and shown in the owner's runner list
+    (`statusReason: credential_reuse`). It raises no Needs-you item yet:
+    `attentionItems.projectId` is required, and a runner belongs to no
+    project. The attention work decides how person-level items are stored.
+28. `runnerJobs.failure` (optional, added after the first version) holds the
+    job's last failure: what the runner reported, or a lease that ran out
+    (`by: "backend"`). A retry keeps it, so a waiting job and a dead letter both
+    say why, and a repeated failure report is recognised as a duplicate.
+    `runnerJobs.lease` is kept after the lease ends: it names the lease that
+    completed the job, which is what makes `complete` idempotent and fenced.
+    `runnerJobs.result` is checked as plain JSON of at most 64 KiB
+    (`jobResultProblem`); its kind-specific shape is checked by the work that
+    reads it, once a kind has a typed result.
+29. Team secrets: `secrets.sealed.kid` names the **data key** a value is
+    sealed under (a `secretKeys` row), not the root key; the data key row
+    names its root key (`rootKid`). `secretKeys` is added for this: one data
+    key per Workspace (`w:{workspaceId}`, for Workspace and project secrets)
+    and per person (`u:{userId}`), stored only wrapped, never returned by a
+    query. A project that moves Workspace keeps opening its secrets (the data
+    key is found by id); a value written after the move is sealed under the
+    new Workspace's key. A data key is therefore never deleted while a row
+    still names it: a Workspace purge must re-seal or delete a moved
+    project's values before it drops the old key, or delivery for that
+    project fails closed (the runner refuses to run a command without the
+    set rather than run it without its secrets).
+30. A secret is keyed by `(scopeKey, name)`, so `secrets.set` upserts and the
+    backend mints the id of a new row (the name is the natural key a client
+    retries with). Writes carry no `commandId`, like Workspace writes (15).
+31. `secrets.plain` (env vars only) is returned to readers: an env var is
+    plain by kind and shown in the Secrets tab. A `secret`'s value and
+    ciphertext are never returned; `last4` is written only for secrets of 16
+    or more characters. `requestedBySessionId` stays `null` until an agent
+    can request a secret by name. A scope holds at most 100 secrets and
+    64 KiB of names and values (`MAX_SECRETS_PER_SCOPE`, `MAX_SCOPE_BYTES`),
+    so a resolved set stays far inside a process's environment limit.
+
+## Migrated rows
+
+- `automationRuns` has optional `error` and `retryCommandId`: a migrated
+  failed arrival attempt keeps its error and the command id its Retry replays
+  under.
+- Migrated rows are mapped by `migrationDocument` (`@volli/shared/cloud`),
+  which supplies every field local history does not decide (project ship
+  behaviour, a Session's open status and unfolded `usageTotals: null`, a
+  Working copy's clean diff, a pre-claim delegation's `legacy:<child>` tool
+  call). `test/migration.test.ts` inserts one record of every stream.
+- Two known gaps, both owned by the Session intake work: a migrated root
+  Session's `origin` is `user` even when an Automation started it, and the
+  migration stores Session event payloads, config definitions and job
+  payloads after a storability check only, not through the per-kind codecs
+  the intake will apply (it classifies `kindKnown`/`quarantine` with the
+  shared Session event codec before sending).

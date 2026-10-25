@@ -8,6 +8,10 @@
  *
  * Always `null` with the `cloud` flag off, without reading the host store,
  * so the flag-off app behaves exactly as before.
+ *
+ * **A cloud launch (VC-889)** is the same guard for every project: this Mac's
+ * main holds none of Volli Cloud's projects, so every local-only surface
+ * stands down and says "Not available on Volli Cloud yet".
  */
 import { useSyncExternalStore } from "react";
 import { toast } from "sonner";
@@ -16,15 +20,18 @@ import { boardProtocol } from "@renderer/lib/board-protocol";
 
 import { isExperimentOn, useExperimentsStore } from "./experiments";
 import {
+  CLOUD_HOST,
   hostOfProject,
   isRemoteProject,
   useHostConnectionStore,
   type HostRecord,
 } from "./host-connection";
+import { launchStore } from "./launch";
 
 /** The remote host serving the project now, or `null` for This Mac's (and with the flag off). */
 export function remoteHostNow(projectId: string | null | undefined): HostRecord | null {
   if (projectId === null || projectId === undefined) return null;
+  if (launchStore() === "cloud") return CLOUD_HOST;
   if (!isExperimentOn(useExperimentsStore.getState().snapshot, "cloud")) return null;
   const state = useHostConnectionStore.getState();
   return isRemoteProject(state, projectId) ? hostOfProject(state, projectId) : null;
@@ -37,6 +44,8 @@ export function remoteHostNow(projectId: string | null | undefined): HostRecord 
  */
 export function remoteHostOfTicketNow(ticketId: string | null | undefined): HostRecord | null {
   if (ticketId === null || ticketId === undefined) return null;
+  // Every ticket a cloud launch shows is Volli Cloud's.
+  if (launchStore() === "cloud") return CLOUD_HOST;
   return remoteHostNow(boardProtocol()?.sync.projectOf(ticketId));
 }
 
@@ -60,7 +69,7 @@ const readCloud = (): boolean => isExperimentOn(useExperimentsStore.getState().s
  */
 export function useRemoteProjectHost(projectId: string | null): HostRecord | null {
   const cloud = useSyncExternalStore(useExperimentsStore.subscribe, readCloud, readCloud);
-  const read = () => (cloud ? remoteHostNow(projectId) : null);
+  const read = () => (cloud || launchStore() === "cloud" ? remoteHostNow(projectId) : null);
   return useSyncExternalStore(
     cloud ? useHostConnectionStore.subscribe : NO_SUBSCRIPTION,
     read,

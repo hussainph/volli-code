@@ -192,6 +192,25 @@ the local SQLite mode keeps fully working; from 0.3 GA it is frozen (no new
 features) until it is retired after migration; an embedded local backend may bring offline work
 back later with the same functions.
 
+**The window's own client (VC-889).** In a cloud launch the desktop window
+reads and writes its board with its own Convex client; main never proxies
+board data. A write paints at once through Convex's optimistic update (the
+shared `decide…` rules over the client's own rows, never durable) and is
+refused, not queued, while the window cannot reach the backend. That client authenticates with a short-lived access
+token main hands it on demand (`account.accessToken`, a desktop-only entry),
+held in memory only and never logged; the refresh token never leaves main.
+The window's CSP lets it connect only to its own origin, plus the loopback a
+local backend runs on in a dev build; a deployment's exact origin joins that
+list when one exists.
+A launch's product store (this Mac's SQLite, or the backend) is chosen once
+by main before the window opens, and never changes in a live window.
+The last board a cloud launch saw live (projects, cards and labels; no
+bodies, no transcripts) is cached on this Mac for that account only, and is
+cleared whenever the account ends up signed out. A cloud launch that cannot
+reach the backend shows that cache read-only, says how old it is, and swaps
+to the live board when the backend answers. It is a cache, never a source:
+nothing in it is ever sent back.
+
 **Machine-bound resources stay on their machine.** Working copies, terminals and
 browser tabs are supervised by their runner and streamed to clients over a
 relay, never shared by replaying filesystem paths on the viewing device. In the

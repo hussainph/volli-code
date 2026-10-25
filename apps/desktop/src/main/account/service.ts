@@ -22,7 +22,13 @@
  * the refresh), rotating the sealed refresh token. A refusal (a revoked or
  * expired grant) signs out; any other failure (offline) keeps the sign-in and
  * marks the backend unreachable, so the board can stay a read-only cache.
- * Nothing here ever hands a token to the window.
+ * The window's own Volli Cloud client gets a short-lived access token on
+ * demand ({@link AccountService.windowToken}, VC-889); the refresh token
+ * never leaves main.
+ *
+ * **The launch marker** (VC-889, `../cloud-launch.ts`): written when the
+ * backend answers for a sign-in, cleared whenever the account ends up signed
+ * out, so the next launch opens the store the account now chooses.
  *
  * **Restore.** The saved sign-in is read when it is first asked for: the
  * window's first snapshot, or the first {@link AccountService.accessToken}.
@@ -37,9 +43,11 @@
  */
 import {
   ACCOUNT_TEXT_MAX,
+  ACCOUNT_TOKEN_RETRY_MS,
   OperationUnavailableError,
   UNCONFIGURED_ACCOUNT,
   isAccountConnection,
+  type AccountAccessToken,
   type AccountBackendState,
   type AccountConnection,
   type AccountSnapshot,
@@ -61,6 +69,19 @@ import {
 const SIGN_IN_TIMEOUT_MS = 10 * 60 * 1000;
 /** An access token with less than this left is refreshed before use. */
 const ACCESS_TOKEN_MARGIN_MS = 60 * 1000;
+/**
+ * A forced token request within this long of the last refresh answers the
+ * token that refresh issued: the window's client asks for a cached token and
+ * then at once a forced one whenever it starts, and each forced refresh
+ * rotates the provider's refresh token.
+ */
+const FORCED_REFRESH_FLOOR_MS = 30 * 1000;
+
+const SIGNED_OUT_TOKEN: AccountAccessToken = Object.freeze({ kind: "signed-out" });
+const UNAVAILABLE_TOKEN: AccountAccessToken = Object.freeze({
+  kind: "unavailable",
+  retryAfterMs: ACCOUNT_TOKEN_RETRY_MS,
+});
 
 export const ACCOUNT_CLOUD_OFF = "Volli Cloud is off. Turn it on in Settings → Experimental.";
 
@@ -86,6 +107,8 @@ export interface AccountServiceOptions {
   readonly signInTimeoutMs?: number;
   readonly now?: () => number;
   readonly log?: AccountLogger;
+  /** The next launch's product store (`../cloud-launch.ts`): who is signed in, or nobody. */
+  readonly marker?: { write(userId: string): void; clear(): void };
 }
 
 export interface AccountService {
@@ -99,10 +122,17 @@ export interface AccountService {
   /**
    * A current access token for a backend call, refreshed when it is about to
    * expire; `null` while signed out or with `cloud` off. Reads the saved
-   * sign-in first if nothing has yet. Main only: never sent to the window.
-   * The board's Convex client (B4) calls this as its `fetchToken`.
+   * sign-in first if nothing has yet. Main's own backend calls use it.
    */
   accessToken(): Promise<string | null>;
+  /**
+   * {@link accessToken} for the window's own Volli Cloud client (VC-889):
+   * sent to the window only as this short-lived access token, never the
+   * refresh token. `force` refreshes first, unless the last refresh was a
+   * moment ago. A transient failure is `unavailable`, never `signed-out`, so
+   * the client keeps the board it holds rather than clearing its auth.
+   */
+  windowToken(force: boolean): Promise<AccountAccessToken>;
   /** Waits for the work in flight (a restore, a sign-in) to settle. */
   settled(): Promise<void>;
   /** Ends a sign-in in flight and stops the dev issuer. At quit. */
@@ -114,6 +144,8 @@ interface Session {
   ref: SavedSessionRef;
   accessToken: string | null;
   accessExpiresAt: number;
+  /** When main last received an access token for this sign-in; 0 for none yet. */
+  accessIssuedAt: number;
 }
 
 interface Flow {
@@ -232,6 +264,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
   };
 
   const signedOut = (reason: string | null): void => {
+    options.marker?.clear();
     session = null;
     viewer = null;
     backendState = disconnected;
@@ -268,6 +301,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
       ref,
       accessToken: tokens.accessToken,
       accessExpiresAt: tokens.accessExpiresAt,
+      accessIssuedAt: now(),
     };
   };
 
@@ -335,6 +369,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
         viewer = answered;
         backendState = "synced";
         failure = null;
+        options.marker?.write(answered.userId);
       } catch (error) {
         if (epoch !== startedIn) return;
         if (error instanceof BackendRefusedError && error.code === "account_deleted") {
@@ -385,7 +420,13 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
           await forget(null, startedIn);
           return;
         }
-        session = { saved: loaded.session, ref: loaded.ref, accessToken: null, accessExpiresAt: 0 };
+        session = {
+          saved: loaded.session,
+          ref: loaded.ref,
+          accessToken: null,
+          accessExpiresAt: 0,
+          accessIssuedAt: 0,
+        };
         state = "signed-in";
         emit();
         try {
@@ -607,6 +648,25 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
       if (!options.enabled() || provider === null) return null;
       await ensureRestored();
       return freshToken();
+    },
+    async windowToken(force) {
+      if (!options.enabled() || provider === null) return SIGNED_OUT_TOKEN;
+      await ensureRestored();
+      const live = session;
+      if (live === null || state !== "signed-in") return SIGNED_OUT_TOKEN;
+      const recent =
+        live.accessToken !== null &&
+        now() - live.accessIssuedAt < FORCED_REFRESH_FLOOR_MS &&
+        live.accessExpiresAt - ACCESS_TOKEN_MARGIN_MS > now();
+      try {
+        const token = force && !recent ? await refreshAccess(provider) : await freshToken();
+        if (token !== null && session !== null) {
+          return { kind: "token", token, expiresAt: session.accessExpiresAt };
+        }
+      } catch {
+        // In transit (offline): the sign-in is kept, and the window asks again.
+      }
+      return session === null ? SIGNED_OUT_TOKEN : UNAVAILABLE_TOKEN;
     },
     async settled() {
       let seen: Promise<unknown>;

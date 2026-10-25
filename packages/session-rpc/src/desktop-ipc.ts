@@ -156,7 +156,7 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   // host commands (`project.reorder`, `worktree.trimSettings`) are
   // additive-only across supported skew, while the client-local families
   // (`hosts.*`, `hostAdd.*`, `hostSignIns.*`, `hostLink.*`, `hostScope.*`,
-  // `browserShortcuts.*`, `worktree.setupStatus`/`answerSetup`, `account.*`) ship with this
+  // `browserShortcuts.*`, `worktree.setupStatus`/`answerSetup`, `account.*`, `cloud.*`) ship with this
   // renderer and main in one bundle and are not cross-version promises.
   "shells.moveToBackground": "ipc",
   "project.reorder": "ipc",
@@ -212,6 +212,13 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "account.signOut": "ipc",
   "account.requestDeletion": "ipc",
   "account.cancelDeletion": "ipc",
+  // The window's Volli Cloud client and the launch's store (VC-889).
+  "account.accessToken": "ipc",
+  "cloud.launch": "ipc",
+  "cloud.relaunch": "ipc",
+  "cloud.reportUnsavedWrites": "ipc",
+  "cloud.saveSnapshot": "ipc",
+  "cloud.readSnapshot": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

@@ -33,6 +33,13 @@ import {
   JOB_STATUSES,
   MEMBER_ROLES,
   MEMBER_STATUSES,
+  RUNNER_INSTALL_MODES,
+  RUNNER_KINDS,
+  RUNNER_LINK_METHODS,
+  RUNNER_LOCAL_CREDENTIAL_KINDS,
+  RUNNER_STATUSES,
+  SECRET_EXPOSURES,
+  SECRET_KINDS,
   SESSION_VISIBILITIES,
   SESSION_VISIBILITY_REASONS,
   TICKET_LINK_KINDS,
@@ -211,7 +218,8 @@ export default defineSchema({
     colorIndex: v.number(),
     // Fixed for the project's life (ticket keys survive moves).
     ticketPrefix: v.string(),
-    origin: literals(["github", "promoted_local", "migrated"]),
+    // `blank`: made empty in a Workspace, before it has a repository (VC-889).
+    origin: literals(["github", "promoted_local", "migrated", "blank"]),
     shipBehaviour: literals(["commit", "push", "pr", "custom"]),
     customShipPrompt: nullable(v.string()),
     coAuthorDefault: v.boolean(),
@@ -437,18 +445,9 @@ export default defineSchema({
   runners: defineTable({
     id: uuid,
     ownerUserId: uuid,
-    kind: literals(["mac", "linux", "cloud"]),
+    kind: literals(RUNNER_KINDS),
     name: v.string(),
-    status: literals([
-      "online",
-      "offline",
-      "draining",
-      "updating",
-      "degraded",
-      "upgrade_required",
-      "stopped",
-      "revoked",
-    ]),
+    status: literals(RUNNER_STATUSES),
     statusReason: nullable(v.string()),
     statusChangedAt: time,
     version: v.string(),
@@ -461,8 +460,8 @@ export default defineSchema({
     }),
     // Versioned capability report (git, docker, terminals, browser, maxConcurrentSessions, …).
     capabilities: json,
-    installMode: literals(["system", "user", "app", "cloud"]),
-    linkedVia: literals(["desktop", "install_token", "device_code", "provider"]),
+    installMode: literals(RUNNER_INSTALL_MODES),
+    linkedVia: literals(RUNNER_LINK_METHODS),
     linkedAt: time,
     autoUpdate: v.object({
       enabled: v.boolean(),
@@ -535,11 +534,19 @@ export default defineSchema({
     runnerId: nullable(uuid),
     expiresAt: time,
     createdAt: time,
+    // How the box was installed, so the runner row starts right (added with the link flow).
+    installMode: v.optional(literals(RUNNER_INSTALL_MODES)),
   })
     .index("by_uuid", ["id"])
     .index("by_code", ["userCodeHash", "status"])
     .index("by_poll_secret", ["pollSecretHash"])
     .index("by_expiry", ["expiresAt"]),
+  // Failed device-code entries per person in a fixed window, so a code cannot be guessed.
+  runnerLinkAttempts: defineTable({
+    userId: uuid,
+    windowStartedAt: time,
+    failures: v.number(),
+  }).index("by_user", ["userId"]),
   runnerEvents: defineTable({
     runnerId: uuid,
     // Open set: linked, token_reuse, revoked, ip_changed, update_*, rolled_back.
@@ -560,7 +567,7 @@ export default defineSchema({
   runnerLocalCredentials: defineTable({
     runnerId: uuid,
     providerId: v.string(),
-    kind: literals(["subscription", "api_key"]),
+    kind: literals(RUNNER_LOCAL_CREDENTIAL_KINDS),
     expiresAt: nullable(time),
   }).index("by_runner", ["runnerId"]),
   runnerPrefs: defineTable({
@@ -884,12 +891,28 @@ export default defineSchema({
     createdAt: time,
     completedAt: nullable(time),
     expiresAt: nullable(time),
+    // The last failure: reported by the runner, or a lease that ran out (`by: "backend"`).
+    // A retry keeps it, so "retrying after <code>" and the dead letter both say why.
+    failure: v.optional(
+      nullable(
+        v.object({
+          attempt: v.number(),
+          code: v.string(),
+          detail: nullable(v.string()),
+          retryable: v.boolean(),
+          by: literals(["runner", "backend"]),
+          at: time,
+        }),
+      ),
+    ),
   })
     .index("by_uuid", ["id"])
     .index("by_runner_ready", ["runnerId", "status", "rank", "availableAt"])
     .index("by_session", ["sessionId", "createdAt"])
     .index("by_ticket", ["ticketId", "createdAt"])
-    .index("by_expiry", ["expiresAt"]),
+    .index("by_expiry", ["expiresAt"])
+    // Queued work of one kind by age (the notice expiry sweep).
+    .index("by_kind_status", ["kind", "status", "createdAt"]),
 
   // ── attention / Needs-you ──────────────────────────────────────────────────
   attentionItems: defineTable({
@@ -950,10 +973,11 @@ export default defineSchema({
     scope: configLevel,
     scopeKey: v.string(),
     name: v.string(),
-    kind: literals(["env", "secret"]),
+    kind: literals(SECRET_KINDS),
     plain: nullable(v.string()),
+    // `kid` names the `secretKeys` row the value is sealed under (SCHEMA-NOTES).
     sealed: nullable(sealed),
-    exposure: literals(["setup", "session"]),
+    exposure: literals(SECRET_EXPOSURES),
     requestedBySessionId: nullable(uuid),
     last4: nullable(v.string()),
     createdBy: actor,
@@ -963,6 +987,20 @@ export default defineSchema({
   })
     .index("by_uuid", ["id"])
     .index("by_scope_name", ["scopeKey", "name"]),
+  // The data keys `secrets` values are sealed under: one per Workspace
+  // (`w:{workspaceId}`) and one per person (`u:{userId}`), each wrapped by the
+  // root key named `rootKid`. Never returned by a query (`lib/sealing.ts`).
+  secretKeys: defineTable({
+    id: uuid,
+    owner: v.string(),
+    rootKid: v.string(),
+    wrapped: v.bytes(),
+    createdAt: time,
+    rewrappedAt: nullable(time),
+  })
+    .index("by_uuid", ["id"])
+    .index("by_owner", ["owner"])
+    .index("by_root_kid", ["rootKid"]),
   // Sealed client-side to the gateway: the backend cannot open `sealedKey`.
   modelConnections: defineTable({
     id: uuid,
@@ -1215,6 +1253,9 @@ export default defineSchema({
     armedByUserId: nullable(uuid),
     runnerId: nullable(uuid),
     createdAt: time,
+    // A failed arrival attempt's error, and the command id its Retry replays under.
+    error: v.optional(v.string()),
+    retryCommandId: v.optional(v.string()),
   })
     .index("by_uuid", ["id"])
     .index("by_automation", ["automationId", "createdAt"])

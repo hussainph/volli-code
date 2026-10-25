@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { createFixtureProfile, type FixtureProfile } from "../backup/test-fixture";
 import { exportMigrationSnapshot } from "./exporter";
 import { streamRecords as records } from "./test-support/export-files";
-import { workingCopyId } from "./transform";
+import { mcpOperationId, mcpServerEntryId, workingCopyId } from "./transform";
 
 // Each test exports a whole profile through real files; a cold shared CI box is slow.
 vi.setConfig({ testTimeout: 30_000 });
@@ -162,6 +162,14 @@ describe("mapping rules", () => {
       '{"kind":"worktree_failed","stderr":"no /Users/source/code/beta"}',
     );
     ticketEvent("e-array", "ticket-main", "worktree_failed", "user", "[1]");
+    ticketEvent(
+      "e-scope",
+      "ticket-main",
+      "worktree_scope_changed",
+      "user",
+      '{"kind":"worktree_scope_changed","from":true,"to":false}',
+    );
+    ticketEvent("e-retired", "ticket-main", "retired_kind", "user", '{"kind":"retired_kind"}');
 
     const { outDir, manifest } = await exportProfile();
     const prefs = records(outDir, manifest, "memberProjectPrefs");
@@ -236,7 +244,25 @@ describe("mapping rules", () => {
     expect(byId.get("e-array")!.payload).toEqual([1]);
     expect(
       events.filter((event) => event.projectId === "proj-beta").map((event) => event.seq),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    // A scope flip is the cloud's checkout mode change; a kind the cloud has no use for is kept.
+    expect(byId.get("e-scope")).toMatchObject({
+      kind: "checkout_mode_changed",
+      payload: { kind: "checkout_mode_changed", from: "worktree", to: "main_checkout" },
+    });
+    expect(byId.has("e-retired")).toBe(false);
+    expect(records(outDir, manifest, "legacyRows")).toContainEqual(
+      expect.objectContaining({
+        table: "ticket_events",
+        projectId: "proj-beta",
+        reason: "kind has no board event equivalent",
+        row: expect.objectContaining({ id: "e-retired" }),
+      }),
+    );
+    expect(
+      records(outDir, manifest, "projectCounters").find((entry) => entry.projectId === "proj-beta")!
+        .boardSeq,
+    ).toBe(8);
   });
 
   it("covers comments, Sessions, delegations, runs, MCP and the ledger", async () => {
@@ -262,14 +288,21 @@ describe("mapping rules", () => {
     run(
       `INSERT INTO mcp_servers (id, project_id, name, enabled, transport, catalog, stale,
                                 created_at, updated_at)
-       VALUES ('mcp-on', 'proj-alpha', 'docs', 1, '{}', '[]', 0, 1, 1)`,
+       VALUES ('mcp-on', 'proj-alpha', 'docs', 1, ?, '[]', 0, 1, 1)`,
+      JSON.stringify({
+        kind: "stdio",
+        command: "/Users/source/bin/docs-mcp",
+        args: ["--root", "/Users/source/code"],
+        env: { DEPTH: 2, EMPTY: null },
+      }),
     );
     run(
       `INSERT INTO mcp_operations (id, project_id, server_id, server_name, operation, outcome,
-                                   summary, session_id, ticket_id, created_at)
-       VALUES ('op-person', 'proj-alpha', 'mcp-on', 'docs', 'remove', 'applied', 's', NULL, NULL, 1),
+                                   summary, detail, session_id, ticket_id, created_at)
+       VALUES ('op-person', 'proj-alpha', 'mcp-on', 'docs', 'remove', 'applied',
+               'removed /Users/source/bin/docs-mcp', 'ran /Users/source/bin/docs-mcp', NULL, NULL, 1),
               ('op-agent', 'proj-alpha', 'mcp-on', 'docs', 'install', 'applied', 's',
-               'session-root', 'ticket-live', 2)`,
+               NULL, 'session-root', 'ticket-live', 2)`,
     );
     run("DELETE FROM session_usage_coverage");
     profile.db.pragma("foreign_keys = OFF");
@@ -355,11 +388,40 @@ describe("mapping rules", () => {
       records(outDir, manifest, "legacyRows").find((row) => row.row.id === "acommand-2")!.projectId,
     ).toBe("proj-alpha");
     expect(
-      records(outDir, manifest, "configEntries").find((entry) => entry.id === "mcp-on")!.state,
+      records(outDir, manifest, "configEntries").find(
+        (entry) => entry.id === mcpServerEntryId("mcp-on"),
+      )!.state,
     ).toBe("on");
     const audit = new Map(records(outDir, manifest, "auditLog").map((entry) => [entry.id, entry]));
-    expect(audit.get("op-person")!.actor).toEqual({ kind: "person", userId: "$local-user" });
-    expect(audit.get("op-agent")!.actor).toEqual({
+    // Local MCP ids are slugs: the cloud rows take derived UUIDs and keep the slug.
+    // The home directory is `~` in an MCP definition and its audit trail.
+    expect(audit.get(mcpOperationId("op-person"))).toMatchObject({
+      targetId: mcpServerEntryId("mcp-on"),
+      detail: {
+        localServerId: "mcp-on",
+        summary: "removed ~/bin/docs-mcp",
+        detail: "ran ~/bin/docs-mcp",
+      },
+    });
+    expect(audit.get(mcpOperationId("op-agent"))!.detail).toMatchObject({ detail: null });
+    expect(
+      records(outDir, manifest, "configEntries").find(
+        (entry) => entry.id === mcpServerEntryId("mcp-on"),
+      )!.definition,
+    ).toMatchObject({
+      localId: "mcp-on",
+      transport: {
+        kind: "stdio",
+        command: "~/bin/docs-mcp",
+        args: ["--root", "~/code"],
+        env: { DEPTH: 2, EMPTY: null },
+      },
+    });
+    expect(audit.get(mcpOperationId("op-person"))!.actor).toEqual({
+      kind: "person",
+      userId: "$local-user",
+    });
+    expect(audit.get(mcpOperationId("op-agent"))!.actor).toEqual({
       kind: "agent",
       userId: "$local-user",
       sessionId: "session-root",
@@ -412,6 +474,22 @@ describe("corrupt sources stop the export", () => {
     await expectCorrupt(/Automation Run run-ghost names a missing Session/);
   });
 
+  it("a worktree scope change whose sides are not booleans", async () => {
+    ticketEvent(
+      "e-bad-scope",
+      "ticket-live",
+      "worktree_scope_changed",
+      "user",
+      '{"kind":"worktree_scope_changed","from":1,"to":false}',
+    );
+    await expectCorrupt(/scope change of ticket ticket-live has a worktree scope/);
+  });
+
+  it("a worktree scope change whose payload is not an object", async () => {
+    ticketEvent("e-bare-scope", "ticket-live", "worktree_scope_changed", "user", "[1]");
+    await expectCorrupt(/scope change of ticket ticket-live has a worktree scope/);
+  });
+
   it("a provenance that is not JSON", async () => {
     profile.db.pragma("ignore_check_constraints = ON");
     run("INSERT INTO session_provenances (id, provenance) VALUES (50, 'not json')");
@@ -432,5 +510,24 @@ describe("tolerated rows", () => {
     );
     const { outDir, manifest } = await exportProfile();
     expect(records(outDir, manifest, "automationScheduleCursors")).toEqual([]);
+  });
+
+  it("keeps a column order whose ranked ids are not a list of ids", async () => {
+    run(
+      `INSERT INTO automation_column_order (project_id, status, ranked_ids, ordered_at)
+       VALUES ('proj-beta', 'todo', '{"a":1}', 3)`,
+    );
+    const { outDir, manifest } = await exportProfile();
+    expect(
+      records(outDir, manifest, "automationColumnOrder").some(
+        (row) => row.projectId === "proj-beta",
+      ),
+    ).toBe(false);
+    expect(records(outDir, manifest, "legacyRows")).toContainEqual({
+      table: "automation_column_order",
+      projectId: "proj-beta",
+      reason: "ranked ids are not a list of ids",
+      row: { project_id: "proj-beta", status: "todo", ranked_ids: '{"a":1}', ordered_at: 3 },
+    });
   });
 });

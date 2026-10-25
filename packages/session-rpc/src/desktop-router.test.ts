@@ -280,6 +280,19 @@ const ACCOUNT = {
   failure: null,
 } as const;
 
+/** The window's Volli Cloud client's token (VC-889): an access JWT, never the refresh token. */
+const TOKEN = {
+  kind: "token",
+  token: "header.payload.signature",
+  expiresAt: 1_900_000_000_000,
+} as const;
+
+const CLOUD_LAUNCH = {
+  store: "cloud",
+  userId: "6b4c3a1e-2a9f-4c3e-9d1b-0f8e7d6c5b4a",
+  backendUrl: "http://127.0.0.1:3210",
+} as const;
+
 function recordingHandlers(fixture: Host): DesktopRouterHandlers {
   const record =
     <Output>(key: string, output: Output) =>
@@ -349,6 +362,12 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "account.signOut": record("account.signOut", null),
     "account.requestDeletion": record("account.requestDeletion", null),
     "account.cancelDeletion": record("account.cancelDeletion", null),
+    "account.accessToken": record("account.accessToken", TOKEN),
+    "cloud.launch": record("cloud.launch", CLOUD_LAUNCH),
+    "cloud.relaunch": record("cloud.relaunch", null),
+    "cloud.reportUnsavedWrites": record("cloud.reportUnsavedWrites", null),
+    "cloud.saveSnapshot": record("cloud.saveSnapshot", null),
+    "cloud.readSnapshot": record("cloud.readSnapshot", { text: null }),
     ...fixture.overrides,
   };
 }
@@ -1236,6 +1255,69 @@ describeContract<Host, DesktopRouter>(
       expect(fixture.calls).toHaveLength(7);
     });
 
+    // VC-889: the window's own Volli Cloud client and the launch's store.
+    it("serves the window's access token, the launch's store and the restart", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      expect(await client.account.accessToken.query({ force: true })).toEqual(TOKEN);
+      expect(await client.cloud.launch.query()).toEqual(CLOUD_LAUNCH);
+      expect(await client.cloud.relaunch.mutate()).toBeNull();
+      expect(await client.cloud.reportUnsavedWrites.mutate({ count: 3 })).toBeNull();
+      expect(await client.cloud.saveSnapshot.mutate({ text: "{}" })).toBeNull();
+      expect(await client.cloud.readSnapshot.query()).toEqual({ text: null });
+      expect(fixture.calls.map(({ key, input, call }) => [key, input, call])).toEqual([
+        ["account.accessToken", { force: true }, WINDOW_CALL],
+        ["cloud.launch", undefined, WINDOW_CALL],
+        ["cloud.relaunch", undefined, WINDOW_CALL],
+        ["cloud.reportUnsavedWrites", { count: 3 }, WINDOW_CALL],
+        ["cloud.saveSnapshot", { text: "{}" }, WINDOW_CALL],
+        ["cloud.readSnapshot", undefined, WINDOW_CALL],
+      ]);
+      expect(await expectHostError(client.cloud.saveSnapshot.mutate({ text: "" }))).toMatchObject({
+        code: "BAD_REQUEST",
+      });
+      for (const input of [{ count: -1 }, { count: 1.5 }, {}]) {
+        expect(
+          await expectHostError(client.cloud.reportUnsavedWrites.mutate(input as never)),
+        ).toMatchObject({ code: "BAD_REQUEST" });
+      }
+      for (const input of [{}, { force: "yes" }, { force: true, refreshToken: "x" }]) {
+        expect(
+          await expectHostError(client.account.accessToken.query(input as never)),
+        ).toMatchObject({ code: "BAD_REQUEST" });
+      }
+      expect(fixture.calls).toHaveLength(6);
+    });
+
+    it("refuses a token answer or a launch that is not one of their shapes", async () => {
+      for (const answer of [
+        { kind: "token", token: "", expiresAt: 1 },
+        { kind: "token", token: "t".repeat(16_385), expiresAt: 1 },
+        { kind: "refresh", token: "r" },
+        { kind: "unavailable", retryAfterMs: -1 },
+      ]) {
+        const fixture = host(LOCAL_DESKTOP_CALLER, {
+          "account.accessToken": () => answer as never,
+        });
+        const client = await connect(fixture);
+        await expect(client.account.accessToken.query({ force: false })).rejects.toBeDefined();
+      }
+      for (const answer of [{ store: "cloud", userId: "", backendUrl: "x" }, { store: "both" }]) {
+        const fixture = host(LOCAL_DESKTOP_CALLER, { "cloud.launch": () => answer as never });
+        const client = await connect(fixture);
+        await expect(client.cloud.launch.query()).rejects.toBeDefined();
+      }
+      const signedOut = host(LOCAL_DESKTOP_CALLER, {
+        "account.accessToken": () => ({ kind: "signed-out" }),
+        "cloud.launch": () => ({ store: "local" }),
+      });
+      const client = await connect(signedOut);
+      expect(await client.account.accessToken.query({ force: false })).toEqual({
+        kind: "signed-out",
+      });
+      expect(await client.cloud.launch.query()).toEqual({ store: "local" });
+    });
+
     it("refuses an account snapshot that would carry anything but the profile", async () => {
       const fixture = host(LOCAL_DESKTOP_CALLER, {
         "account.snapshot": () => ({ ...ACCOUNT, state: "signed-in-ish" }) as never,
@@ -1564,6 +1646,12 @@ describe("the desktop router's grammar", () => {
         "account.signOut",
         "account.requestDeletion",
         "account.cancelDeletion",
+        "account.accessToken",
+        "cloud.launch",
+        "cloud.relaunch",
+        "cloud.reportUnsavedWrites",
+        "cloud.saveSnapshot",
+        "cloud.readSnapshot",
       ].toSorted(),
     );
     expect(schemas["worktree.trimSettings"]).toMatchObject({

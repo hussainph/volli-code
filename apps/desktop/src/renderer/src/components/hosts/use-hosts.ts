@@ -21,6 +21,8 @@ import {
 } from "@renderer/stores/host-connection";
 import { readdHostToUpdate, remoteHosts } from "@renderer/stores/remote-hosts";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
+import { toastError } from "@renderer/lib/toast";
 import { useUiStore } from "@renderer/stores/ui";
 
 import {
@@ -305,6 +307,16 @@ export function runHostAction(action: HostSurfaceAction, host: HostRecord): void
       return;
     case "manage-hosts":
       openManageHosts();
+      return;
+    case "sign-in-again":
+      useUiStore.getState().setSettingsOpen(true, "account");
+      return;
+    case "relaunch":
+      void sessionRpcClient()
+        .cloud.relaunch.mutate()
+        .catch((error: unknown) => {
+          toastError(error instanceof Error ? error.message : "Couldn’t restart Volli.");
+        });
       return;
     case "forget-project":
       void remoteHosts()

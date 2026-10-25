@@ -141,6 +141,12 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   stopProducers(): void;
   /** Tests only: {@link FOLLOW_UP_RECOVERY_READY_WAIT_MS}. */
   followUpRecoveryWaitMs?: number;
+  /**
+   * Whether this launch shows Volli Cloud's board rather than this host's
+   * (VC-889): a turn the last process cut short then waits for a launch that
+   * shows it, and is not resumed on its own. Absent is a local launch.
+   */
+  cloudLaunch?(): boolean;
 }): SessionRuntimeLifecycle<Services> {
   const { host, ports, runtime, rpc, observability, delegation } = options;
   const { database } = host;
@@ -408,6 +414,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
         pendingTurnStarts: () => hosted.pendingTurnStarts(),
         command: (request) => hosted.command(request),
         shouldStop: () => closing,
+        ...(options.cloudLaunch === undefined ? {} : { cloudLaunch: options.cloudLaunch }),
       },
       recovered,
     );

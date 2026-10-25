@@ -10,6 +10,7 @@
  */
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
 import {
+  CLOUD_HOST_ID,
   isBlocking,
   type HostIncompatibility,
   type HostLinkView,
@@ -29,6 +30,8 @@ export type HostSurfaceAction =
   | { readonly kind: "update-host"; readonly label: "Re-add to update" }
   | { readonly kind: "update-app"; readonly label: "Update Volli" }
   | { readonly kind: "manage-hosts"; readonly label: "Manage hosts…" }
+  | { readonly kind: "sign-in-again"; readonly label: "Sign in again" }
+  | { readonly kind: "relaunch"; readonly label: "Restart Volli" }
   | { readonly kind: "forget-project"; readonly label: "Forget"; readonly workspaceId: string };
 
 /** One line, at most one action: what the Island says for a state that needs saying. */
@@ -53,6 +56,8 @@ const RETRY: HostSurfaceAction = { kind: "retry", label: "Retry now" };
 const UPDATE_HOST: HostSurfaceAction = { kind: "update-host", label: "Re-add to update" };
 const UPDATE_APP: HostSurfaceAction = { kind: "update-app", label: "Update Volli" };
 const MANAGE_HOSTS: HostSurfaceAction = { kind: "manage-hosts", label: "Manage hosts…" };
+const SIGN_IN_AGAIN: HostSurfaceAction = { kind: "sign-in-again", label: "Sign in again" };
+const RELAUNCH: HostSurfaceAction = { kind: "relaunch", label: "Restart Volli" };
 
 /** Whole seconds until `retryAt`, never below zero. */
 export function retryCountdown(retryAt: number, now: number): number {
@@ -80,13 +85,22 @@ export function hostSurface(host: HostRecord, now: number): HostSurface | null {
         graced: true,
       };
     case "offline": {
+      if (link.asOf !== undefined) {
+        return {
+          tone: "quiet",
+          icon: "offline",
+          line: `Offline — showing the board as of ${formatSince(link.asOf, now)}`,
+          graced: false,
+        };
+      }
       const seconds = link.retryAt === null ? null : retryCountdown(link.retryAt, now);
       return {
         tone: "quiet",
         icon: "offline",
         line: `Can’t reach ${host.name} · Read-only`,
         ...(seconds === null ? {} : { meta: seconds > 0 ? `Retrying in ${seconds}s` : "Retrying" }),
-        action: RETRY,
+        // Volli Cloud's client reconnects on its own, and has no "now" to offer.
+        ...(host.id === CLOUD_HOST_ID ? {} : { action: RETRY }),
         graced: false,
       };
     }
@@ -117,6 +131,15 @@ export function hostSurface(host: HostRecord, now: number): HostSurface | null {
           graced: false,
         };
       }
+      if (link.reason === "signed-out") {
+        return {
+          tone: "error",
+          icon: "warning",
+          line: `Signed out of ${host.name}`,
+          action: link.recovery === "sign-in" ? SIGN_IN_AGAIN : RELAUNCH,
+          graced: false,
+        };
+      }
       return incompatibleSurface(host, link.reason, link.requiredVersion);
     case "open":
     case "version-skewed":
@@ -126,10 +149,18 @@ export function hostSurface(host: HostRecord, now: number): HostSurface | null {
 
 function incompatibleSurface(
   host: HostRecord,
-  reason: HostIncompatibility,
+  reason: Exclude<HostIncompatibility, "signed-out">,
   requiredVersion: string | undefined,
 ): HostSurface {
   switch (reason) {
+    case "sign-in-refused":
+      return {
+        tone: "error",
+        icon: "warning",
+        line: `${host.name} didn’t accept this sign-in · Read-only`,
+        action: SIGN_IN_AGAIN,
+        graced: false,
+      };
     case "host-too-old":
       return {
         tone: "attention",
@@ -297,6 +328,13 @@ export function hostDetail(host: HostRecord): HostDetail | null {
         action: MANAGE_HOSTS,
       };
     }
+    if (link.reason === "signed-out") {
+      return {
+        kind: "incompatible",
+        text: "Signed out",
+        action: link.recovery === "sign-in" ? SIGN_IN_AGAIN : RELAUNCH,
+      };
+    }
     return incompatibleDetail(link.reason);
   }
   const signIn = host.expiredSignIns[0];
@@ -309,8 +347,10 @@ export function hostDetail(host: HostRecord): HostDetail | null {
   return null;
 }
 
-function incompatibleDetail(reason: HostIncompatibility): HostDetail {
+function incompatibleDetail(reason: Exclude<HostIncompatibility, "signed-out">): HostDetail {
   switch (reason) {
+    case "sign-in-refused":
+      return { kind: "incompatible", text: "Didn’t accept this sign-in", action: SIGN_IN_AGAIN };
     case "host-too-old":
       return { kind: "incompatible", text: "Too old for this app", action: UPDATE_HOST };
     case "database-too-new":

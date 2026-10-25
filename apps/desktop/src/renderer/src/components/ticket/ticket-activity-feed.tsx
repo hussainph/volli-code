@@ -64,7 +64,7 @@ import { cn } from "@renderer/lib/utils";
 import { planningChangeAffects, useBoardStore } from "@renderer/stores/board";
 import { useTicketActivityStore } from "@renderer/stores/ticket-activity";
 import { writeThrough } from "@renderer/stores/mutate";
-import { boardApi } from "@renderer/lib/board-protocol";
+import { boardApi } from "@renderer/lib/board-api";
 
 type PhosphorIcon = typeof ChatCircleIcon;
 

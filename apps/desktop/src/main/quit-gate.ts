@@ -32,6 +32,13 @@ const MAX_NAMED_FILES = 4;
  */
 let unsavedNames: readonly string[] = [];
 
+/**
+ * How many board writes the window has sent Volli Cloud and not had answered
+ * (VC-889). They are not the backend's yet: quitting loses them, so the
+ * unsaved-work confirm names them beside the documents.
+ */
+let unsavedBoardWrites = 0;
+
 interface WindowClosedLifecycle {
   on(event: "closed", listener: () => void): void;
 }
@@ -40,6 +47,7 @@ interface WindowClosedLifecycle {
 export function clearUnsavedDocumentsOnWindowClosed(window: WindowClosedLifecycle): void {
   window.on("closed", () => {
     unsavedNames = [];
+    unsavedBoardWrites = 0;
   });
 }
 
@@ -70,9 +78,20 @@ export function recordUnsavedDocuments(report: unknown): void {
   unsavedNames = names as readonly string[];
 }
 
-/** The documents the renderer last reported as holding unsaved drafts. */
+/** Accepts the window's count of unanswered Volli Cloud board writes; anything else counts none. */
+export function recordUnsavedBoardWrites(count: unknown): void {
+  unsavedBoardWrites =
+    typeof count === "number" && Number.isInteger(count) && count > 0 ? count : 0;
+}
+
+/**
+ * The documents the renderer last reported as holding unsaved drafts, and the
+ * Volli Cloud board when writes to it are still unanswered (VC-889).
+ */
 export function unsavedDocumentNames(): readonly string[] {
-  return unsavedNames;
+  if (unsavedBoardWrites === 0) return unsavedNames;
+  const board = `Volli Cloud board (${unsavedBoardWrites} ${unsavedBoardWrites === 1 ? "change" : "changes"})`;
+  return [...unsavedNames, board];
 }
 
 /** What a quit request should do about the unsaved work main knows about. */
@@ -193,10 +212,20 @@ export function registerAcceptedQuitCoordinator(options: {
   reportFailure(error: unknown): void;
   /** Former synchronous quit listeners, called in their original order. */
   prepareQuit?(event: { preventDefault(): void }): void;
+  /**
+   * Told once a quit is accepted, before teardown starts, and once a gate
+   * refused one: the restart into another product store (VC-889) relaunches
+   * only on the first, and stands down on the second.
+   */
+  onQuitAccepted?(): void;
+  onQuitRefused?(): void;
 }): void {
   let shutdownInFlight = false;
   options.lifecycle.on("before-quit", (event) => {
-    if (quitAlreadyRefused(event)) return;
+    if (quitAlreadyRefused(event)) {
+      options.onQuitRefused?.();
+      return;
+    }
     event.preventDefault();
     if (shutdownInFlight) {
       options.prepareQuit?.(event);
@@ -206,8 +235,21 @@ export function registerAcceptedQuitCoordinator(options: {
     // gates so it can cover startup. Hold the quit now, then let every listener
     // for this event record its verdict before interpreting it as accepted.
     void Promise.resolve().then(() => {
-      if (quitAlreadyRefused(event) || shutdownInFlight) return;
+      if (shutdownInFlight) return;
+      if (quitAlreadyRefused(event)) {
+        options.onQuitRefused?.();
+        return;
+      }
       shutdownInFlight = true;
+      try {
+        options.onQuitAccepted?.();
+      } catch (error) {
+        try {
+          options.reportFailure(error);
+        } catch {
+          // A reporter that throws cannot hold the quit open either.
+        }
+      }
       try {
         options.stopBackgroundWork?.();
       } catch (error) {

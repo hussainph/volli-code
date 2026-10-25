@@ -352,13 +352,19 @@ export const updateTicket = mutation({
         await patchTicket(ctx, ticket, decision.patch, now);
         if (decision.body !== null) await writeBody(ctx, ticket.id, decision.body, actor, now);
         await recordBoardEvents(ctx, project.id, actor, now, decision.events);
-        await enqueueSideEffects(
+        const effects = await enqueueSideEffects(
           { ctx, tickets: new Map([[ticket.id, ticket]]), actor, now },
           decision.sideEffects,
         );
         return {
           projectId: project.id,
-          reply: { ticketId: ticket.id, changed: decision.events.length > 0 },
+          reply: {
+            ticketId: ticket.id,
+            changed: decision.events.length > 0,
+            // Switched to a worktree on a Place that is not the caller's runner:
+            // the worktree is made when its owner next works on the ticket there.
+            worktreeDeferred: effects.deferredWorktrees.length > 0,
+          },
         };
       },
     ),
@@ -507,7 +513,7 @@ export const moveTickets = mutation({
         await patchTicket(ctx, docs.get(change.ticketId)!, change.patch, now);
       }
       await recordBoardEvents(ctx, project.id, actor, now, decision.events);
-      const unstarted = await enqueueSideEffects(
+      const { unstartedRuns } = await enqueueSideEffects(
         { ctx, tickets: docs, actor, now },
         decision.sideEffects,
       );
@@ -521,8 +527,8 @@ export const moveTickets = mutation({
         projectId: project.id,
         reply: {
           moved: decision.changes.map((change) => change.ticketId),
-          // Picked Automation runs with nowhere to run yet (no Place).
-          unstartedRuns: unstarted,
+          // Picked Automation runs that could not start, and why.
+          unstartedRuns,
         },
       };
     }),

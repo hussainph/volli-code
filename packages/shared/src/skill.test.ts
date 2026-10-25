@@ -85,7 +85,7 @@ describe("globalSkillsDir", () => {
 });
 
 describe("mergeSkills", () => {
-  it("lets a project skill replace the personal skill of the same slug", () => {
+  it("keeps the project skill against a personal skill of the same slug", () => {
     const project = skill({ name: "shared", description: "vendored" });
     const global = skill({
       name: "shared",
@@ -93,38 +93,25 @@ describe("mergeSkills", () => {
       root: "/home/.agents/skills/shared",
     });
 
-    expect(mergeSkills({ project: [project], global: [global], cloud: false })).toEqual([project]);
-  });
-
-  it("lets the personal skill win a shared slug with the cloud flag on", () => {
-    const project = skill({ name: "shared", description: "vendored" });
-    const global = skill({
-      name: "shared",
-      description: "personal",
-      root: "/home/.agents/skills/shared",
-    });
-
-    expect(mergeSkills({ project: [project], global: [global], cloud: true })).toEqual([global]);
+    expect(mergeSkills({ project: [project], global: [global] })).toEqual([project]);
   });
 
   it("keeps both tiers when their slugs differ, name-sorted", () => {
     const project = skill({ name: "vendored" });
     const global = skill({ name: "personal", root: "/home/.agents/skills/personal" });
 
-    for (const cloud of [false, true]) {
-      expect(mergeSkills({ project: [project], global: [global], cloud })).toEqual([
-        global,
-        project,
-      ]);
-    }
+    expect(mergeSkills({ project: [project], global: [global] })).toEqual([global, project]);
   });
 
   it("uses one locale-independent order for valid mixed-case names", () => {
     const mixed = ["i", "J", "I", "j"].map((name) => skill({ name }));
 
-    expect(
-      mergeSkills({ project: mixed, global: [], cloud: false }).map((candidate) => candidate.name),
-    ).toEqual(["I", "J", "i", "j"]);
+    expect(mergeSkills({ project: mixed, global: [] }).map((candidate) => candidate.name)).toEqual([
+      "I",
+      "J",
+      "i",
+      "j",
+    ]);
   });
 });
 

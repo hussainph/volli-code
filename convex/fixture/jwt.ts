@@ -47,6 +47,22 @@ export function createTestIssuer(): TestIssuer {
   };
 }
 
+/**
+ * The runner-token issuer's key pair, as a deployment holds it: the private
+ * JWK for `VOLLI_RUNNER_SIGNING_KEY` (signing happens inside the backend, at
+ * `/runner/token`) and the public JWKS for `VOLLI_RUNNER_JWKS`. Fresh per run.
+ */
+export type RunnerIssuerKeys = { signingKey: string; jwksDataUri: string };
+
+export function createRunnerIssuerKeys(kid = "volli-runner-test-1"): RunnerIssuerKeys {
+  const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const jwk = { ...publicKey.export({ format: "jwk" }), kid, alg: "ES256", use: "sig" };
+  return {
+    signingKey: JSON.stringify({ ...privateKey.export({ format: "jwk" }), kid }),
+    jwksDataUri: `data:text/plain;charset=utf-8;base64,${Buffer.from(JSON.stringify({ keys: [jwk] })).toString("base64")}`,
+  };
+}
+
 /** Sign a token for `subject` that the fixture's backend accepts. */
 export function mintTestToken(
   privateKeyPem: string,

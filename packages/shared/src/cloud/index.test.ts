@@ -18,6 +18,8 @@ test("the cloud entry point exposes each module", () => {
     "decideMoveTickets",
     "decideCreateProject",
     "boardIntentDigest",
+    "parseRunnerCapabilities",
+    "migrationDocument",
   ]) {
     expect(typeof (cloud as Record<string, unknown>)[name]).toBe("function");
   }

@@ -16,5 +16,15 @@ crons.interval(
   internal.transcripts.sweepPacked,
   {},
 );
+// A runner silent for 90 s becomes `offline` (runners.ts). Every minute, so
+// "waiting for <runner>" shows within 2.5 minutes of a box going away.
+crons.interval("runners: offline sweep", { minutes: 1 }, internal.runners.sweepOffline, {
+  statusIndex: 0,
+  cursor: null,
+});
+// Expired install tokens and device codes, and runner audit events past 90 days.
+crons.interval("runners: expiry cleanup", { hours: 1 }, internal.runners.sweepExpired, {});
+// Runner inbox: delete finished jobs once their keep time has passed.
+crons.interval("purge finished runner jobs", { hours: 1 }, internal.runnerJobs.sweep, {});
 
 export default crons;

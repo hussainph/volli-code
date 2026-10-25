@@ -127,6 +127,12 @@ describe("the desktop's IPC exposure", () => {
       "account.signOut",
       "account.requestDeletion",
       "account.cancelDeletion",
+      "account.accessToken",
+      "cloud.launch",
+      "cloud.relaunch",
+      "cloud.reportUnsavedWrites",
+      "cloud.saveSnapshot",
+      "cloud.readSnapshot",
     ]);
   });
 

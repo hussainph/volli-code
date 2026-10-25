@@ -2,6 +2,7 @@ import type { IpcEvent, IpcRequest, IpcResponse } from "@volli/host-protocol/ipc
 import type { BootstrapPayload } from "../../../ipc/contract";
 import {
   CHAT_DRAFTS_APP_STATE_KEY,
+  LOCAL_LAUNCH,
   type Project,
   type Ticket,
   type WorkingCopyMeasurement,
@@ -18,8 +19,17 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkingCopyStore, workingCopyKey } from "@renderer/stores/working-copy";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
+import { adoptLaunch, launchStore } from "@renderer/stores/launch";
+import { cloudBoardSource } from "@renderer/stores/board-source";
+import { useCloudWorkspaceStore } from "@renderer/stores/cloud-board/workspace";
+import { decodeBoardSnapshot } from "@renderer/stores/cloud-board/snapshot";
+import {
+  INITIAL_CLOUD_LINK_INPUT,
+  readConnection,
+  useCloudLinkInputs,
+} from "@renderer/stores/cloud-link";
 
-import { BoardSync, type BoardSyncTransport } from "@renderer/stores/board-sync";
+import type { BoardSyncTransport } from "@renderer/stores/board-sync";
 
 import { boardProtocol, startBoardProtocol, stopBoardProtocol } from "./board-protocol";
 import { remoteSessionListingRegistrations } from "./session-listing-reader";
@@ -29,6 +39,7 @@ import {
   followRemoteProjects,
   refreshPlanningData,
   startBoardProtocolIfEnabled,
+  startCloudBoard,
   type BootGateway,
   type BootStorage,
 } from "./boot";
@@ -1113,7 +1124,7 @@ describe("startBoardProtocolIfEnabled", () => {
     expect(boardProtocol()).toBeNull();
   });
 
-  it("with the flag on, opens every Workspace from its snapshot and paints the board store", async () => {
+  it("with the flag on, starts the engine but opens none of this Mac's projects (VC-889)", async () => {
     const { request } = stubBoardBridge({
       p1: [boardTicket("a", "p1")],
       p2: [boardTicket("b", "p2")],
@@ -1121,20 +1132,10 @@ describe("startBoardProtocolIfEnabled", () => {
 
     expect(await startBoardProtocolIfEnabled(async () => true)).toBe(true);
 
-    expect(boardProtocol()?.sync.follows("p1")).toBe(true);
-    expect(boardProtocol()?.sync.follows("p2")).toBe(true);
-    expect(request.mock.calls.map(([call]) => [call.path, call.input])).toEqual(
-      expect.arrayContaining([
-        ["board.snapshot", { projectId: "p1" }],
-        ["board.snapshot", { projectId: "p2" }],
-        ["board.changes", { projectId: "p1", lastEventId: "p1:0" }],
-        ["board.changes", { projectId: "p2", lastEventId: "p2:0" }],
-      ]),
-    );
-    expect(useBoardStore.getState().ticketsByProject).toEqual({
-      p1: [boardTicket("a", "p1")],
-      p2: [boardTicket("b", "p2")],
-    });
+    expect(boardProtocol()).not.toBeNull();
+    expect(boardProtocol()?.sync.follows("p1")).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    expect(useBoardStore.getState().ticketsByProject).toEqual({});
   });
 
   // VC-713: the remote-Sessions binding is the one owner of the remote listing.
@@ -1144,33 +1145,16 @@ describe("startBoardProtocolIfEnabled", () => {
     expect(remoteSessionListingRegistrations()).toBe(0);
   });
 
-  it("says which Workspace it could not open, and opens the rest", async () => {
-    stubBoardBridge({ p1: [boardTicket("a", "p1")] });
-    const error = vi.spyOn(toast, "error");
-
-    expect(await startBoardProtocolIfEnabled(async () => true)).toBe(true);
-
-    expect(useBoardStore.getState().ticketsByProject.p1).toEqual([boardTicket("a", "p1")]);
-    expect(error).toHaveBeenCalledWith("Couldn't open the board: no board for p2", {
-      duration: 8000,
-      closeButton: true,
-    });
-  });
-
-  it("says what a failed open threw when it is not an Error", async () => {
-    stubBoardBridge({});
-    vi.spyOn(BoardSync.prototype, "open").mockRejectedValue("refused");
-    const error = vi.spyOn(toast, "error");
-
-    await startBoardProtocolIfEnabled(async () => true);
-
-    expect(error).toHaveBeenCalledWith("Couldn't open the board: refused", expect.anything());
-  });
-
   it("routes the feed's project rows, ticket changes and moved checkouts to their stores", async () => {
-    const { push } = stubBoardBridge({ p1: [boardTicket("a", "p1")], p2: [] });
+    const { push, request } = stubBoardBridge({ p1: [boardTicket("a", "p1")], p2: [] });
     const invalidate = vi.spyOn(useWorkingCopyStore.getState(), "invalidateTickets");
     await startBoardProtocolIfEnabled(async () => true);
+    // A board the engine follows (a remote host's, in production).
+    await boardProtocol()!.sync.open("p1");
+    await vi.waitFor(() =>
+      expect(request.mock.calls.some(([call]) => call.path === "board.changes")).toBe(true),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const renamed = { ...workspace("p1"), name: "Renamed" };
     const version = useBoardStore.getState().lastPlanningChange.version;
 
@@ -1205,6 +1189,7 @@ describe("startBoardProtocolIfEnabled", () => {
     );
     const error = vi.spyOn(toast, "error");
     await startBoardProtocolIfEnabled(async () => true);
+    await boardProtocol()!.sync.open("p1");
 
     await useBoardStore.getState().moveTicket("p1", "a", "doing", 0);
 
@@ -1222,6 +1207,7 @@ describe("startBoardProtocolIfEnabled", () => {
       const error = vi.spyOn(toast, "error");
       const warning = vi.spyOn(toast, "warning");
       await startBoardProtocolIfEnabled(async () => true);
+      await boardProtocol()!.sync.open("p1");
 
       void useBoardStore.getState().moveTicket("p1", "a", "doing", 0);
       await vi.advanceTimersByTimeAsync(60_000);
@@ -1289,93 +1275,36 @@ describe("refreshPlanningData with the protocol on", () => {
     vi.restoreAllMocks();
   });
 
-  it("reads nothing for a change to a Workspace the board follows: its feed carries it", async () => {
-    startProtocol(["p1"]);
-    const gateway = fakeGateway();
-
-    expect(await refreshPlanningData({ projectId: "p1", ticketId: "t1" }, gateway)).toEqual({
-      ok: true,
-    });
-
-    expect(gateway.bootstrap).not.toHaveBeenCalled();
-    expect(gateway.projectRoster).not.toHaveBeenCalled();
-  });
-
-  it("re-reads only the Workspace list for an untargeted change: forgets the removed, opens the new", async () => {
-    const { open, close } = startProtocol(["p1", "p2"]);
-    useProjectsStore.getState().hydrate([workspace("p1"), workspace("p2")], "p2");
-    const held = [boardTicket("a", "p1")];
-    useBoardStore
-      .getState()
-      .hydrate({ p1: held, p2: [boardTicket("b", "p2")] }, { p1: [], p2: [] });
-    const version = useBoardStore.getState().lastPlanningChange.version;
-    const gateway = fakeGateway({
-      bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({
-        ok: true,
-        data: payload({
-          projects: [workspace("p1"), workspace("p3")],
-          // The bootstrap's board slices are the feed's business now.
-          ticketsByProject: { p1: [], p3: [] },
-        }),
-      })),
-    });
-
-    expect(await refreshPlanningData({}, gateway)).toEqual({ ok: true });
-
-    expect(gateway.projectRoster).not.toHaveBeenCalled();
-    expect(useProjectsStore.getState().projects.map(({ id }) => id)).toEqual(["p1", "p3"]);
-    // The selected Workspace was removed: the first one is selected.
-    expect(useProjectsStore.getState().selectedProjectId).toBe("p1");
-    expect(close).toHaveBeenCalledWith("p2");
-    expect(useBoardStore.getState().ticketsByProject.p2).toBeUndefined();
-    expect(useBoardStore.getState().ticketsByProject.p1).toBe(held);
-    expect(useBoardStore.getState().ticketsByProject.p3).toEqual([]);
-    expect(open.mock.calls).toEqual([["p3"]]);
-    expect(useBoardStore.getState().lastPlanningChange).toMatchObject({
-      version: version + 1,
-      ticketId: null,
-      projectId: null,
-    });
-  });
-
-  it("re-reads the list for a change naming a Workspace it does not follow, keeping the selection", async () => {
-    startProtocol(["p1"]);
+  it("reads this Mac's database for its own projects, keeping a followed board (VC-889)", async () => {
+    startProtocol(["r1"]);
     useProjectsStore.getState().hydrate([workspace("p1")], "p1");
+    const remote = [boardTicket("r", "r1")];
     useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
+    useBoardStore.getState().paintBoard("r1", remote, [], new Set());
     const gateway = fakeGateway({
-      bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({
+      projectRoster: vi.fn<BootGateway["projectRoster"]>(async () => ({
         ok: true,
-        data: payload({ projects: [workspace("p1"), workspace("p9")] }),
+        tickets: [boardTicket("a", "p1")],
+        labels: [],
       })),
     });
 
-    expect(await refreshPlanningData({ projectId: "p9" }, gateway)).toEqual({ ok: true });
-
-    expect(gateway.bootstrap).toHaveBeenCalledOnce();
-    expect(useProjectsStore.getState().selectedProjectId).toBe("p1");
-    expect(useBoardStore.getState().lastPlanningChange).toMatchObject({ projectId: "p9" });
-  });
-
-  it("selects nothing when no Workspace is left", async () => {
-    startProtocol([]);
-    useProjectsStore.getState().hydrate([workspace("p1")], "p1");
-    const gateway = fakeGateway();
-
+    expect(await refreshPlanningData({ projectId: "p1" }, gateway)).toEqual({ ok: true });
+    expect(gateway.projectRoster).toHaveBeenCalledWith({ projectId: "p1" });
     expect(await refreshPlanningData({}, gateway)).toEqual({ ok: true });
-
-    expect(useProjectsStore.getState().selectedProjectId).toBeNull();
+    expect(gateway.bootstrap).toHaveBeenCalledOnce();
+    expect(useBoardStore.getState().ticketsByProject.r1).toEqual(remote);
   });
+});
 
-  it("answers a failed list read untouched, changing nothing", async () => {
-    startProtocol([]);
-    useProjectsStore.getState().hydrate([workspace("p1")], "p1");
-    const gateway = fakeGateway({
-      bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({ ok: false, error: "db locked" })),
-    });
+describe("refreshPlanningData in a cloud launch (VC-889)", () => {
+  afterEach(() => adoptLaunch(LOCAL_LAUNCH));
 
-    expect(await refreshPlanningData({}, gateway)).toEqual({ ok: false, error: "db locked" });
-
-    expect(useProjectsStore.getState().projects.map(({ id }) => id)).toEqual(["p1"]);
+  it("reads nothing: the board is Volli Cloud's, current on its own", async () => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    const gateway = fakeGateway();
+    expect(await refreshPlanningData({}, gateway)).toEqual({ ok: true });
+    expect(gateway.bootstrap).not.toHaveBeenCalled();
   });
 });
 
@@ -1418,7 +1347,7 @@ describe("remote projects", () => {
         opened.push(projectId);
         // Its snapshot's project is its row.
         useProjectsStore.getState().adoptProject(workspace(projectId));
-        useBoardStore.getState().paintProtocolBoard(projectId, [], [], new Set());
+        useBoardStore.getState().paintBoard(projectId, [], [], new Set());
         if (projectId === "r2") throw new Error("the box is away");
       }),
       close: vi.fn((projectId: string) => void closed.push(projectId)),
@@ -1471,10 +1400,11 @@ describe("remote projects", () => {
       sync: { transport: unusedTransport() },
     });
     vi.spyOn(boardProtocol()!.sync, "open").mockResolvedValue();
+    vi.spyOn(boardProtocol()!.sync, "follows").mockImplementation((id) => id === "r1");
     claim("r1");
     useProjectsStore.getState().adoptProject(workspace("r1"));
     const remoteBoard = [boardTicket("rt", "r1")];
-    useBoardStore.getState().paintProtocolBoard("r1", remoteBoard, [], new Set());
+    useBoardStore.getState().paintBoard("r1", remoteBoard, [], new Set());
     useProjectsStore.getState().select("r1");
     const gateway = fakeGateway({
       bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({
@@ -1636,5 +1566,152 @@ describe("boot remote selection", () => {
     expect(useProjectsStore.getState().selectedProjectId).toBe("local");
     expect(useProjectsStore.getState().pendingRemoteSelection).toBeNull();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("a cloud launch's boot (VC-889)", () => {
+  const CLOUD = { store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" } as const;
+  const saved = {
+    "volli:projects-ui": JSON.stringify({
+      selectedProjectId: "local",
+      cloudSelection: { workspaceId: "w1", projectId: "c2" },
+    }),
+  };
+  beforeEach(() => {
+    vi.stubGlobal("window", {
+      api: { appState: { set: vi.fn(async () => ({ ok: true })) } },
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    useBoardStore.getState().hydrate({}, {});
+    useProjectsStore.setState({ projects: [], selectedProjectId: null });
+  });
+  afterEach(() => {
+    adoptLaunch(LOCAL_LAUNCH);
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("never asks which store with the flag off: a flag-off boot makes no new call", async () => {
+    const readLaunch = vi.fn(async () => CLOUD);
+    await boot(fakeGateway(), fakeStorage(), async () => false, readLaunch);
+    expect(readLaunch).not.toHaveBeenCalled();
+    expect(launchStore()).toBe("local");
+    expect(await startCloudBoard({ start: vi.fn() })).toBe(false);
+  });
+
+  it("launches local when the store cannot be read in time", async () => {
+    await boot(
+      fakeGateway(),
+      fakeStorage(),
+      async () => true,
+      async () => {
+        throw new Error("no main");
+      },
+    );
+    expect(launchStore()).toBe("local");
+  });
+
+  it("hydrates none of this Mac's projects or boards, and keeps only their count", async () => {
+    const gateway = fakeGateway({
+      bootstrap: vi.fn(async () => ({
+        ok: true as const,
+        data: payload({
+          projects: [workspace("local"), workspace("other")],
+          ticketsByProject: { local: [boardTicket("a", "local")], other: [] },
+          appState: saved,
+        }),
+      })),
+    });
+    const restore = vi.spyOn(useChatSessionsStore.getState(), "restoreProvisionalChatTabs");
+    expect(
+      await boot(
+        gateway,
+        fakeStorage(),
+        async () => true,
+        async () => CLOUD,
+      ),
+    ).toEqual({
+      ok: true,
+    });
+    expect(launchStore()).toBe("cloud");
+    // Every board write goes to Volli Cloud's source from the first frame.
+    expect(cloudBoardSource()).not.toBeNull();
+    // This Mac's provisional Drafts are neither reopened nor discarded.
+    expect(restore).not.toHaveBeenCalled();
+    expect(useProjectsStore.getState().projects).toEqual([]);
+    expect(useBoardStore.getState().ticketsByProject).toEqual({});
+    expect(useCloudWorkspaceStore.getState().localProjects).toBe(2);
+  });
+
+  it("starts the board source, Volli Cloud's link and the client, saying when it cannot", async () => {
+    await boot(
+      fakeGateway(),
+      fakeStorage(),
+      async () => true,
+      async () => CLOUD,
+    );
+    const attach = vi.spyOn(useHostConnectionStore.getState(), "attach");
+    const start = vi.fn(async () => {
+      throw new Error("no backend");
+    });
+    const error = vi.spyOn(toast, "error");
+    expect(await startCloudBoard({ start: start as never })).toBe(true);
+    expect(start).toHaveBeenCalledWith(CLOUD);
+    expect(attach).toHaveBeenCalledOnce();
+    expect(cloudBoardSource()).not.toBeNull();
+    expect(error).toHaveBeenCalledWith("Couldn’t start Volli Cloud: no backend", expect.anything());
+    // A thrown non-Error says what it was.
+    start.mockRejectedValueOnce("refused" as never);
+    await startCloudBoard({ start: start as never });
+    expect(error).toHaveBeenCalledWith("Couldn’t start Volli Cloud: refused", expect.anything());
+  });
+
+  it("keeps the live board on this Mac once it settles, and logs a keep that fails (D3)", async () => {
+    vi.useFakeTimers();
+    try {
+      await boot(
+        fakeGateway(),
+        fakeStorage(),
+        async () => true,
+        async () => CLOUD,
+      );
+      const mutate = vi.fn(async (_input: { text: string }) => null);
+      vi.mocked(sessionRpcClient).mockReturnValue({
+        cloud: { saveSnapshot: { mutate } },
+      } as never);
+      await startCloudBoard({ start: vi.fn() as never });
+      useCloudLinkInputs.getState().update({ client: "running", authenticated: true });
+      useCloudWorkspaceStore.setState({ workspace: { id: "w1", name: "Team" } });
+      // A board change and a project-list change are one write, once quiet.
+      useBoardStore.getState().paintBoard("nothing-listed", [], [], new Set());
+      useProjectsStore.setState({ projects: [] });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(mutate).toHaveBeenCalledOnce();
+      expect(decodeBoardSnapshot(mutate.mock.calls[0]![0].text, "u")).toMatchObject({
+        workspace: { id: "w1", name: "Team" },
+        projects: [],
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      mutate.mockRejectedValueOnce(new Error("disk full"));
+      useProjectsStore.setState({ projects: [] });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.any(Error));
+      // A write of this window's still unanswered holds the keep until it is.
+      mutate.mockClear();
+      const inputs = useCloudLinkInputs.getState();
+      inputs.update({ connection: readConnection({ inflightMutations: 1 }) });
+      useProjectsStore.setState({ projects: [] });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(mutate).not.toHaveBeenCalled();
+      inputs.update({ connection: readConnection({ inflightMutations: 0 }) });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(mutate).toHaveBeenCalledOnce();
+    } finally {
+      useCloudLinkInputs.setState({ input: INITIAL_CLOUD_LINK_INPUT });
+      useCloudWorkspaceStore.setState({ workspace: null });
+      vi.mocked(sessionRpcClient).mockReset();
+      vi.useRealTimers();
+    }
   });
 });

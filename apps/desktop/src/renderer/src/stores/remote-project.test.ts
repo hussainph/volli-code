@@ -9,6 +9,9 @@ vi.mock("@renderer/lib/board-protocol", () => ({
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({ toast }));
 
+import { LOCAL_LAUNCH } from "@volli/shared";
+
+import { adoptLaunch } from "./launch";
 import { remoteProject } from "./remote-project.test-support";
 import {
   notAvailableOn,
@@ -62,5 +65,21 @@ describe("a remote project, read outside React (VC-711)", () => {
       ["Not available on box yet", { id: "host-local-only" }],
     ]);
     expect(notAvailableOn({ name: "hetzner-1" })).toBe("Not available on hetzner-1 yet");
+  });
+});
+
+describe("a cloud launch's projects (VC-889)", () => {
+  afterEach(() => adoptLaunch(LOCAL_LAUNCH));
+
+  it("stands every local-only surface down for every project and ticket, in Volli Cloud's name", () => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    expect(remoteHostNow("any")?.name).toBe("Volli Cloud");
+    expect(remoteHostNow(null)).toBeNull();
+    expect(remoteHostOfTicketNow("t")?.name).toBe("Volli Cloud");
+    expect(refuseRemote("any")).toBe(true);
+    expect(refuseRemoteTicket("t")).toBe(true);
+    expect(toast).toHaveBeenCalledWith("Not available on Volli Cloud yet", {
+      id: "host-local-only",
+    });
   });
 });

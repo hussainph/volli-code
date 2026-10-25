@@ -75,8 +75,15 @@ _Avoid_: proxy, key store (it does not hand out raw keys)
 
 **Runner token**:
 A short-lived, scoped credential a Runner presents to the backend or the Model
-gateway on behalf of one Session or job, never a long-lived key.
+gateway, never a long-lived key: the Runner's own sign-in (minutes long, for its
+runner-wide calls), or one scoped to a single Session or job.
 _Avoid_: API key, device credential
+
+**Refresh credential**:
+The one long-lived secret a linked Runner holds, exchanged for a Runner token
+and replaced by a new one at every exchange. A copy used after its replacement
+disconnects the Runner.
+_Avoid_: runner key, API key
 
 **Environment recipe**:
 A project's description of how to set up a Runner for it: size, setup and
@@ -90,7 +97,8 @@ One of the four places configuration is defined: personal, Workspace, project,
 and repo files (`AGENTS.md`, `.agents/*`, `.mcp.json`), which always apply.
 Define at the widest level that is true, switch on at the narrowest level that
 is needed. Precedence is personal > project > Workspace; admin policy overrides
-all.
+all. Other levels may add entries beside a repo file's but never replace one of
+the same name; only admin policy can deny a repo entry.
 _Avoid_: scope (overloaded), profile
 
 **Needs-you inbox**:

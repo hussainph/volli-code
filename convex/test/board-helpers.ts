@@ -147,7 +147,12 @@ export async function seedWorkingCopy(
 ) {
   return t.run(async (ctx) => {
     const id = newId("workingCopy");
-    const runnerId = fields.runnerId ?? newId("runner");
+    // By default the copy sits on a runner of the project's creator (a Member).
+    const project = await ctx.db
+      .query("projects")
+      .withIndex("by_uuid", (q) => q.eq("id", ticket.projectId))
+      .unique();
+    const runnerId = fields.runnerId ?? (await insertRunner(ctx, project!.createdByUserId));
     await ctx.db.insert("workingCopies", {
       id,
       ticketId: ticket.ticketId,
@@ -185,7 +190,7 @@ export async function seedSession(
 ) {
   return t.run(async (ctx) => {
     const id = newId("session");
-    const runnerId = newId("runner");
+    const runnerId = await insertRunner(ctx, ownerUserId);
     await ctx.db.insert("sessions", {
       id,
       projectId: ticket.projectId,
@@ -239,7 +244,7 @@ export async function seedAutomation(
 ) {
   return t.run(async (ctx) => {
     const automationId = newId("automation");
-    const runnerId = newId("runner");
+    const runnerId = await insertRunner(ctx, armedByUserId);
     await ctx.db.insert("automations", {
       id: automationId,
       projectId,
@@ -268,7 +273,11 @@ export async function seedAutomation(
 
 /** A runner row owned by `ownerUserId`. */
 export async function seedRunner(t: Tester, ownerUserId: string) {
-  return t.run(async (ctx) => {
+  return t.run((ctx) => insertRunner(ctx, ownerUserId));
+}
+
+async function insertRunner(ctx: Pick<Ctx, "db">, ownerUserId: string) {
+  {
     const id = newId("runner");
     await ctx.db.insert("runners", {
       id,
@@ -290,5 +299,5 @@ export async function seedRunner(t: Tester, ownerUserId: string) {
       createdAt: 0,
     });
     return id;
-  });
+  }
 }

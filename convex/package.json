@@ -5,6 +5,12 @@
   "description": "The Volli Cloud backend: Convex schema and server functions, plus the pinned local-backend test fixture.",
   "license": "Apache-2.0",
   "type": "module",
+  "exports": {
+    "./api": {
+      "types": "./functions/_generated/api.d.ts",
+      "import": "./functions/_generated/api.js"
+    }
+  },
   "scripts": {
     "backend:fetch": "node fixture/fetch-backend.ts",
     "codegen": "node fixture/with-backend.ts -- convex codegen --typecheck disable",
@@ -19,6 +25,7 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@volli/host-core": "workspace:*",
     "convex-test": "0.0.65",
     "typescript": "catalog:",
     "vite-plus": "catalog:"

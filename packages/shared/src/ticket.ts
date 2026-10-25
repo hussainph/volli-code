@@ -229,6 +229,16 @@ export function displayTicketId(prefix: string, ticketNumber: number): string {
   return `${prefix}-${ticketNumber}`;
 }
 
+/**
+ * The key a board card shows: {@link displayTicketId}, or nothing for a
+ * ticket whose number is not allocated yet (`0`: a card painted before the
+ * backend answered its create, VC-889). A number is the backend's, never
+ * guessed.
+ */
+export function cardTicketKey(prefix: string, ticketNumber: number): string {
+  return ticketNumber === 0 ? "" : displayTicketId(prefix, ticketNumber);
+}
+
 export interface CreateTicketInput {
   /** Opaque UUID supplied by the caller — kept out of this function so it stays pure/deterministic. */
   id: string;

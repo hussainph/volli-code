@@ -7,11 +7,12 @@ name: CI
 # billed minutes, the push-to-main lane was deleted as a duplicate bill, and
 # Dependabot was throttled to monthly. None of that is true any more.
 #
-# The budget that replaced it is WALL CLOCK, plus GitHub's cap on concurrent
-# macOS jobs (5 on Free/Pro/Team). So this file spends minutes freely and
-# guards latency instead. The number it is tuned against is the time an agent
-# waits on a PR (VC-461): before this layout, a median of ~10 min, and a
-# second push costs the whole of it again.
+# The budget that replaced it is WALL CLOCK, plus GitHub's caps on concurrent
+# jobs (20 at once, 5 of them macOS, on Free/Pro/Team). Minutes are free, but a
+# job waiting behind the cap is latency for every other PR, so this file
+# guards latency AND job slots. The number it is tuned against is the time an
+# agent waits on a PR (VC-461, VC-934), and a second push costs the whole of
+# it again.
 #
 #   - Tests are SHARDED across Linux jobs. The old critical path was one job
 #     that ran every check and build and THEN `vp run -r test:coverage`, which
@@ -23,8 +24,8 @@ name: CI
 #   - The 100% protected-coverage gate is judged ONCE, over the MERGED
 #     coverage of every desktop shard, by `Coverage (desktop)` — with the
 #     thresholds read from apps/desktop/vite.config.ts exactly as an unsharded
-#     run reads them. A shard ran a quarter of the tests, so its own coverage
-#     is a quarter of the truth; each shard zeroes the thresholds on its
+#     run reads them. A shard ran a third of the tests, so its own coverage
+#     is a third of the truth; each shard zeroes the thresholds on its
 #     command line and hands its coverage on in a vitest blob report instead.
 #     The other packages are small enough to stay unsharded, so they keep
 #     judging their own thresholds in place.
@@ -34,33 +35,38 @@ name: CI
 #     once. They are safely parallel because lib/smoke-kit.mjs mkdtemp's a
 #     fresh scratch dir, database and --user-data-dir per run, and the agent
 #     socket resolves under that user-data dir.
+#   - This file is the GATE, and it is deliberately small (VC-934). The capacity
+#     that binds is GitHub's concurrency cap on a public repo: 20 jobs at once,
+#     5 of them macOS. Before VC-934 one PR run was ~20 jobs including 5 macOS
+#     (core e2e, three rest shards, cloud acceptance) — all of it — so a second
+#     PR queued behind the first, and agents' PRs merged one or two at a time.
+#     A PR now asks three questions: does it build, do the unit suites (and
+#     their coverage gates) pass, does the core dogfood path work. That is
+#     Check + Build, the test shards, Convex, N-1 against the PR's base, the
+#     host container when host inputs change, and ONE macOS job: core e2e.
 #   - CORE E2E (run-smokes.mjs --tier core) gates every desktop PR and main
 #     merge: board, composer-basics, terminal, worktree, agent-socket,
 #     session-rpc-transport, agent-cli-roundtrip, database-recovery, canvas-theming.
-#     Extended journeys still gate in 3 rest shards. New probes join by default.
-#     Four measured repeat flakers run instead in smoke-quarantine.yml (nightly,
-#     non-gating, visibly reported): browser-recovery (VC-523), automations-picker
-#     (VC-524), bare-path-env (VC-525), browser-tab (VC-526). No smoke is deleted.
-#     Quarantine policy: AGENTS.md (Smoke quarantine requirements). Core coverage is
-#     never blanket-quarantined; cheap contrast/animation/readiness fixes stay
-#     gating. Every failed smoke retries ONCE in a fresh profile. Retry-green
-#     is FLAKY in the job summary; both attempts/exit/signal/timing/native-window
-#     evidence are uploaded on success or failure with 30-day retention.
-#   - CORE E2E runs BESIDE the smoke shards, not before them. It used to
-#     gate them, so that an app that cannot start was reported in a minute and
-#     the shards never spent their time proving it again. That ordering put
-#     the boot tier's whole job (a median 3.6 min, most of it checkout,
-#     install and build) in front of every green run to save time on the rare
-#     red one, so it was dropped. What it costs, stated plainly: (1) a PR now
-#     holds 4 of the 5 concurrent macOS slots at once (boot + 3 shards)
-#     instead of 1 and then 3, so two PRs pushed together queue one of them
-#     a little sooner; (2) an app that cannot boot now fails in all four jobs,
-#     and the three shards hold their slots until their own probes give up.
-#     The boot tier is still its own job: it is the fastest readable answer
-#     to "does the app start", it is what runs on main, and it carries the
-#     macOS-only licence assertions.
-#   - A COARSE path gate skips the desktop lanes entirely for changes that
-#     provably cannot reach the Electron app (website, docs site, prose).
+#     It is also the macOS lane for the platform-only licence assertions and the
+#     unsigned-packaging check.
+#   - The EXTENDED lanes moved, not deleted: the rest smoke tier (every other
+#     non-quarantined journey) and flag-on cloud acceptance run in
+#     ci-extended.yml on every main push, nightly, and on demand for any branch
+#     (`gh workflow run ci-extended.yml --ref <branch>`). Their results are
+#     visible on the commit, they do not gate PRs, and the release workflow
+#     requires them green on the commit it releases. N-1's fixed and rolling
+#     tags (release, latest-canary, v0.2.1, v0.2.2-canary.1) run here on main
+#     pushes and nightly, and on a PR only when it touches the data layer the
+#     older builds read back (migrations, backup/restore, ledger, blobs) or the
+#     N-1 harness — where a change can break an older build yet pass against
+#     the base. Anything else is caught on the merge. Measured repeat flakers stay in
+#     smoke-quarantine.yml (nightly, non-gating). Quarantine policy: AGENTS.md.
+#     Every failed smoke retries ONCE in a fresh profile; retry-green is FLAKY
+#     in the job summary, and both attempts' evidence is uploaded for 30 days.
+#   - A COARSE path gate skips the macOS lane for changes that provably cannot
+#     reach the Electron app (website, docs site, prose, convex/, apps/gateway/)
+#     or that the unit suites own (packages/shared sources). A shared change
+#     still runs the full desktop unit suite here and core e2e after it merges.
 #   - ONE job, `CI gate`, is the required check. It waits on every lane and
 #     fails unless each one passed or was skipped by its own condition. The
 #     condition is re-derived there, not trusted: a smoke lane that skipped
@@ -74,7 +80,8 @@ name: CI
 # module load on EVERY launch path, and a filter keyed on renderer paths would
 # have skipped the board smoke on that lockfile-shaped change. A path map is
 # also the same failure class as the allow-list this file used to carry —
-# silent, and green while wrong.
+# silent, and green while wrong. The path gate above is the opposite shape: an
+# exclusion list, so anything it cannot name runs core e2e.
 
 on:
   pull_request:
@@ -88,17 +95,21 @@ on:
 permissions:
   contents: read
 
-# Supersede in-flight PR runs (agents push often), but never cancel a main run:
-# a post-merge result nobody sees is worse than a duplicate one.
+# Supersede in-flight runs: a PR's newer push, and on main a newer merge. A
+# main run covers everything merged before it, so the superseded one would
+# only report on a tree nobody can ship any more; during a merge burst the
+# cancelled runs were holding runners the next PR needed. The release guard
+# reads the run for the exact commit it releases, so a release waits for the
+# head's run rather than trusting a cancelled one.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 jobs:
-  # Coarse, provable gate: are the desktop lanes relevant to this change at all?
-  # It answers "did anything OUTSIDE the prose/website set change", defaulting
-  # to YES on anything it cannot classify — including workflow edits, so a
-  # change to this file is validated by the lanes it defines.
+  # Coarse, provable gate: which conditional lanes are relevant to this change?
+  # Each answer defaults to YES on anything it cannot classify — including
+  # workflow edits, so a change to this file is validated by the lanes it
+  # defines. Anything that is not a PR runs everything.
   changes:
     name: Scope
     runs-on: ubuntu-24.04
@@ -106,7 +117,7 @@ jobs:
     outputs:
       desktop: ${{ steps.filter.outputs.desktop }}
       host-container: ${{ steps.filter.outputs.host-container }}
-      cloud-smoke: ${{ steps.filter.outputs.cloud-smoke }}
+      n1-lanes: ${{ steps.filter.outputs.n1-lanes }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -124,20 +135,27 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Every N-1 lane, and the one a PR always runs. The matrix reads its
+          # list from here, so this is the one place a lane is added.
+          n1_all='["release","latest-canary","base","v0.2.1","v0.2.2-canary.1"]'
+          n1_pr='["base"]'
+
           # Anything not a PR (main push, nightly, manual dispatch) runs the lanes.
           if [[ "$EVENT" != "pull_request" ]]; then
             echo "desktop=true" >> "$GITHUB_OUTPUT"
             echo "host-container=true" >> "$GITHUB_OUTPUT"
-            echo "cloud-smoke=true" >> "$GITHUB_OUTPUT"
+            echo "n1-lanes=$n1_all" >> "$GITHUB_OUTPUT"
             echo "event is $EVENT — running all conditional lanes"
             exit 0
           fi
 
-          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          # --no-renames: a move lists BOTH paths, so code moved out of the app
+          # into a skipped directory still counts as an app change.
+          changed="$(git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA")"
           if [[ -z "$changed" ]]; then
             echo "desktop=true" >> "$GITHUB_OUTPUT"
             echo "host-container=true" >> "$GITHUB_OUTPUT"
-            echo "cloud-smoke=true" >> "$GITHUB_OUTPUT"
+            echo "n1-lanes=$n1_all" >> "$GITHUB_OUTPUT"
             echo "no diff resolved — running all conditional lanes (fail safe)"
             exit 0
           fi
@@ -147,36 +165,55 @@ jobs:
 
           # Paths that CANNOT affect the Electron app. Everything else — source,
           # packages, lockfile, patches, vite config, workflows — implies the
-          # desktop lanes. The list is an exclusion, so a new top-level
+          # macOS lane. The list is an exclusion, so a new top-level
           # directory is treated as desktop-affecting until someone says
           # otherwise, which is the safe direction to be wrong in.
           inert='^(docs/|reference/|lessons/|assets/|apps/website/|apps/docs/|\.github/ISSUE_TEMPLATE/|[^/]*\.md$|LICENSE$)'
+          # Paths whose PR-time proof is the unit suites, which always run:
+          # convex/ and apps/gateway/ (the desktop imports neither; convex's
+          # sign-in seam is tested in the Convex lane) and packages/shared/src.
+          # Not a manifest — a dependency change is never skipped.
+          unit_owned='^(convex/|apps/gateway/|packages/shared/src/)'
+          manifest='(^|/)package\.json$'
 
-          if echo "$changed" | grep -qvE "$inert"; then
+          # Never `producer | grep -q` under pipefail: grep -q exits at its first
+          # match, a producer still writing (a diff past the 64 KB pipe buffer)
+          # dies of SIGPIPE, and the `if` reads that as "nothing matched" — a
+          # skip in the unsafe direction. Full greps into variables, or here-
+          # strings (no producer process) for the -q tests below.
+          app="$(echo "$changed" | grep -vE "$inert" | grep -vE "$unit_owned" || true)"
+          manifests="$(echo "$changed" | grep -E "$unit_owned" | grep -E "$manifest" || true)"
+          if [[ -n "$app" || -n "$manifests" ]]; then
             echo "desktop=true" >> "$GITHUB_OUTPUT"
             echo "-> desktop-affecting changes present"
           else
             echo "desktop=false" >> "$GITHUB_OUTPUT"
-            echo "-> prose/website only; skipping desktop smoke lanes"
+            echo "-> prose/website/convex/gateway/shared only; skipping core e2e"
           fi
 
           # Container inputs and host code. Workflow edits run it too, so the
           # job and gate are exercised on the PR changing their own definition.
           host='^(packages/|apps/hostd/|\.devcontainer/host/|\.nvmrc$|package\.json$|pnpm-(lock\.yaml|workspace\.yaml)$|\.github/workflows/ci\.yml$|scripts/(check-host-electron-imports|ci-host-lane)[./])'
-          if echo "$changed" | grep -qE "$host"; then
+          if grep -qE "$host" <<<"$changed"; then
             echo "host-container=true" >> "$GITHUB_OUTPUT"
           else
             echo "host-container=false" >> "$GITHUB_OUTPUT"
           fi
 
-          # Flag-on remote acceptance is a separate lane: never turn cloud on
-          # for core e2e. Include the harness and its CI definition, as well as
-          # shared install/build inputs, so it tests its own changes too.
-          cloud='^(packages/host-[^/]+/|packages/session-rpc/|apps/hostd/|apps/desktop/src/main/remote-hosts[^/]*|apps/desktop/src/main/host-sign-ins/|apps/desktop/src/renderer/src/components/hosts/|apps/desktop/src/renderer/src/stores/[^/]*host[^/]*|apps/desktop/src/renderer/src/lib/board-protocol\.ts$|apps/desktop/e2e/volli-drive/|apps/desktop/e2e/lib/|apps/desktop/src/main/harness/|\.github/workflows/ci\.yml$|scripts/ci-host-lane\.test\.mjs$|\.nvmrc$|package\.json$|apps/desktop/package\.json$|pnpm-(lock\.yaml|workspace\.yaml)$)'
-          if echo "$changed" | grep -qE "$cloud"; then
-            echo "cloud-smoke=true" >> "$GITHUB_OUTPUT"
+          # N-1 breadth: every lane runs this build against an older one, so a
+          # PR most plausibly passes `base` yet breaks an OLDER build through
+          # what this build writes for it or reads back from it — migrations,
+          # backup bundles and restore, the Session ledger, transcripts, blobs,
+          # ticket commands (what src/db/n1-compatibility.test.ts drives) — or
+          # through the harness. Those PRs run every lane, which also holds the
+          # release policy (no floor raise while the latest release predates
+          # the guard) at PR time. The merge runs every lane regardless.
+          n1='^(packages/host-core/src/(db|backup|session-control|session-runtime)/|packages/host-core/src/(blob-store|ticket-commands)|packages/host-core/scripts/n1/|\.github/workflows/ci\.yml$|scripts/ci-host-lane\.test\.mjs$)'
+          if grep -qE "$n1" <<<"$changed"; then
+            echo "n1-lanes=$n1_all" >> "$GITHUB_OUTPUT"
+            echo "-> migration or N-1 inputs changed; running every N-1 lane"
           else
-            echo "cloud-smoke=false" >> "$GITHUB_OUTPUT"
+            echo "n1-lanes=$n1_pr" >> "$GITHUB_OUTPUT"
           fi
 
   # Every gate that is not a test suite: format/lint, the licence and
@@ -414,8 +451,10 @@ jobs:
   # reads it back as `strategy.job-total`, the blob filename records it, and
   # the merge job checks every index up to it arrived — so changing the list
   # is the whole edit. Vitest assigns files to shards by hashing their paths,
-  # so a shard's share moves a little as files are added; 4 keeps each one
-  # comfortably under the macOS smoke shards that are the other long pole.
+  # so a shard's share moves a little as files are added. 3, not 4 (VC-934):
+  # a shard's tests took a median 3.3 min of its 4.0 at 4 shards, so 3 keeps
+  # each one (~5 min) inside `Test (packages)`, the PR's longer pole, and
+  # hands one job slot back to the next PR in the queue.
   #
   # `fail-fast: false`, deliberately: when a change breaks tests in two
   # shards, the person fixing it should see both failures from one push, not
@@ -427,7 +466,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -741,13 +780,26 @@ jobs:
           node fixture/with-backend.ts --deploy --
           sh -c 'cd ../apps/desktop && vp test run src/main/account/convex.live.test.ts --maxWorkers=2'
 
+      # The cloud board through the real transport (VC-889): two windows on the
+      # same live board, and one cut off goes read-only with its board intact.
+      # Required here, like the sign-in test above: it fails rather than skips.
+      - name: Desktop cloud board against the pinned backend
+        env:
+          VOLLI_CLOUD_BOARD_LIVE_REQUIRED: "1"
+        working-directory: convex
+        run: >-
+          node fixture/with-backend.ts --deploy --
+          sh -c 'cd ../apps/desktop && vp test run src/renderer/src/stores/cloud-board/convex.live.test.ts --maxWorkers=2'
+
   # N-1 compatibility (VC-633). A previous build, run from its own shipped
   # sources, against a profile THIS build migrated to its head: it must write
   # to the profile if the head's migrations are compatible (and this build must
   # then read what it left), or refuse it byte-identically if they raised the
   # floor. That is the author rule above MIGRATIONS in
   # packages/host-core/src/db/migrations.ts, checked against a real older
-  # build instead of only the author's word. Rolling and fixed N-1s, in parallel:
+  # build instead of only the author's word. Rolling and fixed N-1s, in
+  # parallel — all of them on main pushes and nightly, and on a PR only when
+  # Scope sees migration or N-1 harness inputs change (else `base` alone):
   #   - release: the newest vX.Y.Z tag, the build external users run and drop
   #     back to. Also holds the release policy: no floor raise may land while
   #     that release predates the downgrade guard (VC-602), since it could
@@ -765,12 +817,13 @@ jobs:
   # from this checkout. fetch-depth 0 brings the tags and the base commit.
   n1-compat:
     name: N-1 compatibility (${{ matrix.lane }})
+    needs: changes
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        lane: [release, latest-canary, base, v0.2.1, v0.2.2-canary.1]
+        lane: ${{ fromJSON(needs.changes.outputs.n1-lanes) }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -889,10 +942,9 @@ jobs:
           retention-days: 14
 
   # Core e2e: boot/board, session/composer, CLI round-trip, DB recovery and
-  # theming, plus the macOS-only licence assertions. It runs BESIDE the shard
-  # matrix rather than gating it — see
-  # the header for why and for what that costs — so it is no longer what
-  # stops the shards on a broken boot, only the quickest place to read one.
+  # theming, plus the macOS-only licence assertions and the unsigned-packaging
+  # check. The ONE macOS job a PR runs (VC-934); the rest smoke tier and cloud
+  # acceptance run in ci-extended.yml after merge.
   smoke-boot:
     name: Smoke (core e2e)
     needs: changes
@@ -931,9 +983,9 @@ jobs:
       # are seconds. It is BEFORE the smokes so a compliance failure is not
       # buried under a boot-tier timeout.
       #
-      # Gated with the rest of the desktop lanes: `changes` classifies the
-      # lockfile and every manifest as desktop-affecting, so any change that
-      # could move the dependency tree reaches this step.
+      # Gated by Scope's desktop flag: the lockfile and every manifest always
+      # set it, so any change that could move the dependency tree reaches
+      # this step.
       - name: Check platform-specific license assertions
         run: |
           vp run --filter @volli/desktop check:licenses
@@ -980,143 +1032,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  # Extended gating journeys, sharded three ways and four-at-a-time inside
-  # each shard. The runner globs apps/desktop/e2e/*-smoke.mjs and subtracts core,
-  # credential/legacy exclusions and measured nightly quarantine. A new smoke
-  # joins the gate in the same PR — no registration step to forget.
-  #
-  # Only on pull_request: a push to main has already been gated by its PR, and
-  # holding three more macOS jobs against the 5-job concurrency cap would queue
-  # the next PR behind a run whose answer is already known. The boot tier still
-  # runs on main to catch semantic merge breakage.
-  #
-  # Needs only `changes`, not `smoke-boot`: the two start together (VC-461).
-  smoke-rest:
-    name: Smoke (shard ${{ matrix.shard }}/3)
-    needs: changes
-    if: needs.changes.outputs.desktop == 'true' && github.event_name == 'pull_request'
-    runs-on: macos-15
-    timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-
-      - name: Build and fetch Electron
-        run: |
-          vp run --filter @volli/desktop build
-          vp run --filter @volli/desktop ensure:electron
-
-      - name: Run shard ${{ matrix.shard }} of 3 and verify quiet native windows
-        env:
-          VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/smoke-results
-        run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier rest --shard ${{ matrix.shard }}/3 --jobs 4
-
-      - name: Upload shard smoke attempts and native-window evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: smoke-results-rest-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/smoke-results
-          if-no-files-found: warn
-          retention-days: 30
-
-  # Production add-host wiring over volli-drive's loopback sshd fixture.
-  # CI-only: install/start use the disposable macOS runner's launchd and home.
-  # Package hostd BEFORE the desktop install can rebuild native dependencies
-  # for Electron; the delivered archive must contain the exact .nvmrc Node.
-  smoke-cloud:
-    name: Smoke (cloud acceptance)
-    needs: changes
-    if: needs.changes.outputs.cloud-smoke == 'true'
-    runs-on: macos-15
-    timeout-minutes: 45
-    env:
-      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-          # acceptance.json must name the PR head, not GitHub's synthetic merge.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
-        with:
-          node-version-file: .nvmrc
-          run-install: false
-
-      # setup-vp manages pnpm internally; package.mjs calls it by name.
-      - name: Enable pinned pnpm
-        run: |
-          set -euo pipefail
-          node_bin="$(dirname "$(node -p process.execPath)")"
-          mkdir -p "$RUNNER_TEMP/pnpm-bin"
-          "$node_bin/corepack" enable --install-directory "$RUNNER_TEMP/pnpm-bin" pnpm
-          echo "$RUNNER_TEMP/pnpm-bin" >> "$GITHUB_PATH"
-          export PATH="$RUNNER_TEMP/pnpm-bin:$PATH"
-          expected="$(node -p 'require("./package.json").packageManager.split("@")[1]')"
-          test "$(pnpm --version)" = "$expected"
-
-      - name: Check hostd target and desktop version
-        run: |
-          set -euo pipefail
-          test "$(node -p process.platform)" = darwin
-          test "$(node -p process.arch)" = arm64
-          test "$(node -p process.versions.node)" = "$(cat .nvmrc)"
-          test "$(node -p 'require("./package.json").version')" = "$(node -p 'require("./apps/desktop/package.json").version')"
-
-      - name: Host-only install
-        run: pnpm --filter volli-code --filter './packages/*' --filter './apps/hostd' install --frozen-lockfile
-
-      - name: Package hostd and export production install artifact
-        run: |
-          set -euo pipefail
-          node apps/hostd/scripts/package.mjs --out "$RUNNER_TEMP/hostd"
-          version="$(node -p 'require("./apps/desktop/package.json").version')"
-          tarball="$RUNNER_TEMP/hostd/volli-hostd-$version-darwin-arm64.tar.gz"
-          test -f "$tarball"
-          test -f "$tarball.sha256"
-          echo "VOLLI_HOSTD_DEV_TARBALLS=$tarball" >> "$GITHUB_ENV"
-
-      - name: Install desktop dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build and fetch Electron
-        run: |
-          vp run --filter @volli/desktop build
-          vp run --filter @volli/desktop ensure:electron
-
-      - name: Run flag-on remote acceptance
-        env:
-          VOLLI_EXPERIMENTAL: cloud
-          VOLLI_DRIVE_HOME: ${{ runner.temp }}/cloud-drive
-          VOLLI_DRIVE_EVIDENCE: ${{ runner.temp }}/cloud-acceptance
-          VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/cloud-acceptance
-        run: node apps/desktop/e2e/volli-drive/remote-acceptance-smoke.mjs
-
-      - name: Upload cloud acceptance evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: smoke-results-cloud-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/cloud-acceptance
-          if-no-files-found: warn
-          retention-days: 30
-
   # The one check a ruleset should require. It waits on every lane, including
   # ones that failed or were cancelled (`always()`), and passes only when each
   # lane either succeeded or was skipped by its OWN condition — the smoke
@@ -1144,8 +1059,6 @@ jobs:
         n1-compat,
         host-container,
         smoke-boot,
-        smoke-rest,
-        smoke-cloud,
       ]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -1157,7 +1070,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           DESKTOP: ${{ needs.changes.outputs.desktop }}
           HOST_CONTAINER_REQUIRED: ${{ needs.changes.outputs.host-container }}
-          CLOUD_SMOKE_REQUIRED: ${{ needs.changes.outputs.cloud-smoke }}
+          N1_LANES: ${{ needs.changes.outputs.n1-lanes }}
           SCOPE: ${{ needs.changes.result }}
           CHECK: ${{ needs.check.result }}
           TEST_DESKTOP: ${{ needs.test-desktop.result }}
@@ -1167,8 +1080,6 @@ jobs:
           N1_COMPAT: ${{ needs.n1-compat.result }}
           HOST_CONTAINER: ${{ needs.host-container.result }}
           SMOKE_BOOT: ${{ needs.smoke-boot.result }}
-          SMOKE_REST: ${{ needs.smoke-rest.result }}
-          SMOKE_CLOUD: ${{ needs.smoke-cloud.result }}
         run: |
           set -euo pipefail
           status=0
@@ -1183,25 +1094,32 @@ jobs:
 
           # Only literal false permits a path-filtered skip. Missing/invalid
           # outputs fail closed, even if every conditional lane was skipped.
-          for flag in "$DESKTOP" "$HOST_CONTAINER_REQUIRED" "$CLOUD_SMOKE_REQUIRED"; do
+          for flag in "$DESKTOP" "$HOST_CONTAINER_REQUIRED"; do
             if [[ "$flag" != "true" && "$flag" != "false" ]]; then
               echo "::error::invalid Scope output '$flag'"
               status=1
             fi
           done
+          # Every run proves N-1 against at least the base build.
+          if [[ "$N1_LANES" != \[*\] || "$N1_LANES" != *'"base"'* ]]; then
+            echo "::error::invalid Scope n1-lanes '$N1_LANES'"
+            status=1
+          fi
+          # Path scoping is for PRs only: anything else must run every lane.
+          if [[ "$EVENT" != "pull_request" ]]; then
+            n1_all='["release","latest-canary","base","v0.2.1","v0.2.2-canary.1"]'
+            if [[ "$DESKTOP" != true || "$HOST_CONTAINER_REQUIRED" != true || "$N1_LANES" != "$n1_all" ]]; then
+              echo "::error::a $EVENT run must run every lane (desktop=$DESKTOP host-container=$HOST_CONTAINER_REQUIRED n1-lanes=$N1_LANES)"
+              status=1
+            fi
+          fi
 
           # Mirrors each conditional job's `if:`. Failed and cancelled are
           # NEVER acceptable, including when a lane should have skipped.
           boot=skipped
-          rest=skipped
           container=skipped
-          cloud=skipped
           if [[ "$HOST_CONTAINER_REQUIRED" == "true" ]]; then container=success; fi
-          if [[ "$CLOUD_SMOKE_REQUIRED" == "true" ]]; then cloud=success; fi
-          if [[ "$DESKTOP" == "true" ]]; then
-            boot=success
-            if [[ "$EVENT" == "pull_request" ]]; then rest=success; fi
-          fi
+          if [[ "$DESKTOP" == "true" ]]; then boot=success; fi
 
           expect "Scope" "$SCOPE" success
           expect "Check + Build" "$CHECK" success
@@ -1212,6 +1130,4 @@ jobs:
           expect "N-1 compatibility" "$N1_COMPAT" success
           expect "Build (host container)" "$HOST_CONTAINER" "$container"
           expect "Smoke (core e2e)" "$SMOKE_BOOT" "$boot"
-          expect "Smoke (shards)" "$SMOKE_REST" "$rest"
-          expect "Smoke (cloud acceptance)" "$SMOKE_CLOUD" "$cloud"
           exit "$status"

@@ -337,6 +337,18 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
       "Which host held authority over each workspace at each epoch. The counter must never restart, or a restored workspace could reissue an epoch the old host already used.",
   },
   {
+    table: "session_drain_cursors",
+    decision: "exclude",
+    reason:
+      "This runner's accepted cursor per claimed Session, valid only for this runner's claim on the backend. A restore is a new runner whose claims and cursors start from the backend.",
+  },
+  {
+    table: "job_journal",
+    decision: "exclude",
+    reason:
+      "Job outcomes owed under this boot's leases. A restored host holds no lease, and the backend re-queues the jobs.",
+  },
+  {
     table: "board_command_receipts",
     decision: "exclude",
     reason:
@@ -698,6 +710,12 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
     decision: "exclude",
     reason:
       "This desktop's remote-host links and device enrollment state; a restored machine enrolls its own links.",
+  },
+  {
+    area: "cloud-board-snapshots",
+    decision: "exclude",
+    reason:
+      "A cache of the last Volli Cloud board each account saw live (VC-889); the backend holds the board, and the cache is per sign-in.",
   },
   {
     area: "credentials",

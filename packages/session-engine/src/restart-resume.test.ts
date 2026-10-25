@@ -98,6 +98,14 @@ describe("restartResumeVerdict (VC-450)", () => {
     ).toMatchObject({ kind: "resume" });
   });
 
+  // VC-889 (B4 D9): a launch showing Volli Cloud leaves this Mac's Sessions be.
+  it("leaves every turn for a launch that shows this Mac's board", () => {
+    expect(restartResumeVerdict(input({}, { cloudLaunch: true }))).toEqual(skip("cloud-launch"));
+    expect(restartResumeVerdict(input({}, { cloudLaunch: false }))).toMatchObject({
+      kind: "resume",
+    });
+  });
+
   it("has nothing to resume into once the Session ended or moved off the attachment", () => {
     expect(restartResumeVerdict(input({ status: "archived" }))).toEqual(skip("ended"));
     expect(

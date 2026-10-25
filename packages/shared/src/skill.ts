@@ -212,8 +212,8 @@ export function compareSkillNames(left: string, right: string): number {
 /**
  * The two tiers merged into the one list every surface sees, by the `skills`
  * surface's precedence ({@link configPlan}): the project's vendored skill wins
- * a slug the personal tier also defines — unless the `cloud` flag is on, where
- * the personal skill wins (Volli Cloud's personal > project order).
+ * a slug the personal tier also defines — repo files always apply, so a
+ * personal skill adds a slug but never replaces the repo's.
  *
  * Precedence is by name and it replaces outright, `mergePromptTemplates`'
  * rule for `mergePromptTemplates`' reason — two rows spelled `/review` are
@@ -223,10 +223,9 @@ export function compareSkillNames(left: string, right: string): number {
 export function mergeSkills(input: {
   project: readonly SkillReference[];
   global: readonly SkillReference[];
-  cloud: boolean;
 }): readonly SkillReference[] {
   return resolveConfigEntries(
-    configPlan("skills", input.cloud),
+    configPlan("skills"),
     { repo: input.project, personal: input.global },
     (skill) => skill.name,
   )

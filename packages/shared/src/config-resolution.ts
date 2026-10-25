@@ -4,11 +4,11 @@
  * Configuration comes in levels. Volli Cloud's target order is
  * **personal > project > workspace**, admin **policy** over all of them, and
  * **repo** files — `AGENTS.md`, `.agents/*`, `.mcp.json`, read from the
- * Working copy and never stored — always apply: no configured level can switch
- * a repo entry off (only a surface's declared deny levels, i.e. policy, can),
- * and a repo entry whose name no level defines is always in effect. Where a
- * configured level defines the same name, the configured entry replaces it, so
- * repo sits last in the order.
+ * Working copy and never stored — always apply: a configured level may add
+ * entries beside a repo's, but it can neither switch a repo entry off (only a
+ * surface's declared deny levels, i.e. policy, can) nor replace one by defining
+ * the same name — the repo's entry keeps that name. So repo sits directly
+ * under policy, above every configured level.
  *
  * Each configuration surface declares, in the table below:
  *
@@ -21,11 +21,12 @@
  *    overrides all. A deny level must be in the order (policy first, so it
  *    is present before its rows exist); a deny list from any other level is
  *    ignored.
- *  - its **order**: the levels it reads, highest first. A surface that still
- *    resolves in its pre-cloud order declares that order literally and says
- *    why; a surface that moves to the target order under the `cloud` flag
- *    declares both (`flagOff` and `cloud`), so flag-off behaviour stays
- *    byte-identical.
+ *  - its **order**: the levels it reads, highest first. A surface whose
+ *    current order already is the target order declares it through
+ *    `targetOrder`; a surface that still resolves in its pre-cloud order
+ *    declares that order literally and says why; a surface that moves to the
+ *    target order under the `cloud` flag declares both (`flagOff` and
+ *    `cloud`), so flag-off behaviour stays byte-identical.
  *
  * Today only local levels exist: `personal` (this person's machine-wide
  * settings, `~/.agents/skills`, `<userData>/commands`), `project` (the
@@ -37,7 +38,7 @@
  */
 
 /** Every configuration level, in Volli Cloud's target precedence, highest first. */
-const CONFIG_PRECEDENCE = ["policy", "personal", "project", "workspace", "repo"] as const;
+const CONFIG_PRECEDENCE = ["policy", "repo", "personal", "project", "workspace"] as const;
 
 /** One configuration level. */
 export type ConfigLevel = (typeof CONFIG_PRECEDENCE)[number];
@@ -74,19 +75,19 @@ function targetOrder(...levels: readonly ConfigLevel[]): readonly ConfigLevel[] 
 const CONFIG_SURFACES = {
   /**
    * Skills: `<project>/.agents/skills` (repo) and `~/.agents/skills`
-   * (personal), by slug. Today the repo's copy wins; under `cloud` the
-   * personal one does (the target order).
+   * (personal), by slug. The repo's copy wins a slug both define, with the
+   * `cloud` flag on or off: the target order already puts repo first.
    */
   skills: {
     merge: "union",
     deny: ["policy"],
-    flagOff: ["policy", "repo", "personal"],
-    cloud: targetOrder("policy", "personal", "repo"),
+    order: targetOrder("policy", "repo", "personal"),
   },
   /**
    * Prompt templates: `<project>/.volli/commands` (project — `.volli` is
    * self-gitignored, so these are the project's local assets, not repo files)
-   * and `<userData>/commands` (personal), by name. Same flip as skills.
+   * and `<userData>/commands` (personal), by name. Today the project's copy
+   * wins; under `cloud` the personal one does (the target order).
    */
   promptTemplates: {
     merge: "union",

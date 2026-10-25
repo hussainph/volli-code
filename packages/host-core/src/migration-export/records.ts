@@ -2,9 +2,12 @@
  * The record shapes the migration exporter writes: today's `volli.db` rows
  * already mapped onto the Volli Cloud data model, one NDJSON line each.
  *
- * TODO(VC-925): the cloud model types (`Actor`, the branded ids, the table shapes) move
- * into `@volli/shared`; switch these local copies to them then. They are kept
- * here, private to the exporter, so the exporter does not wait on that move.
+ * These are the export's own record shapes, faithful to the source; the
+ * backend document each one becomes (defaults, renames, export-only fields
+ * dropped) is `migrationDocument` in `@volli/shared/cloud`, and the backend's
+ * `test/migration.test.ts` holds every stream to the real schema.
+ * TODO(VC-927 follow-up): type `Actor` and the ids from `@volli/shared/cloud`
+ * instead of the local subset below.
  *
  * Three rules hold for every record:
  *
@@ -27,18 +30,17 @@
  * absent: the importer or the backend fold supplies them.
  */
 
+import { MIGRATION_PLACEHOLDERS } from "@volli/shared/cloud";
+
 /** The manifest's format marker; a reader checks it before anything else. */
 export const MIGRATION_EXPORT_FORMAT = "volli.migration-export/1";
 
-/** Stand-ins the importer replaces with the identities the migration lands under. */
-export const MIGRATION_PLACEHOLDERS = Object.freeze({
-  /** The migrating person's cloud user id. */
-  userId: "$local-user",
-  /** The runner id this Mac is registered as. */
-  runnerId: "$local-runner",
-  /** The Workspace the projects are imported into. */
-  workspaceId: "$target-workspace",
-} as const);
+/**
+ * Stand-ins the importer replaces with the identities the migration lands
+ * under. Defined beside the importer's mapping in `@volli/shared/cloud`, so
+ * the two sides cannot spell them differently.
+ */
+export { MIGRATION_PLACEHOLDERS };
 
 export type UserRef = typeof MIGRATION_PLACEHOLDERS.userId;
 export type RunnerRef = typeof MIGRATION_PLACEHOLDERS.runnerId;
@@ -409,8 +411,8 @@ export interface AutomationRunRecord {
   projectId: string;
   ticketId: string | null;
   sessionId: string | null;
-  /** `unknown` when local history does not say what started the Run. */
-  trigger: "schedule" | "manual" | "unknown" | "arrival";
+  /** `manual` when local history does not say what started the Run. */
+  trigger: "schedule" | "manual" | "arrival";
   status: "started" | "skipped" | "failed";
   skipReason?: JsonValue;
   missedCount: number | null;
@@ -438,7 +440,7 @@ export interface AutomationArmingRecord {
 export interface AutomationColumnOrderRecord {
   projectId: string;
   status: string;
-  rankedIds: JsonValue;
+  rankedIds: string[];
   orderedAt: number;
 }
 

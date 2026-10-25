@@ -914,6 +914,8 @@ describe("restart resume after recovery (VC-450)", () => {
     await ports.command({ commandId: "c", sessionId: "s", command: { kind: "executor.retry" } });
     expect(f.runtime.command).toHaveBeenCalledOnce();
     expect(ports.shouldStop()).toBe(false);
+    // A local launch names no cloud-launch port: the verdict reads it as local.
+    expect(ports.cloudLaunch).toBeUndefined();
     // A resumed run outlives readiness; close waits for it.
     let closed = false;
     const closing = owner.close().then(() => {
@@ -926,6 +928,19 @@ describe("restart resume after recovery (VC-450)", () => {
     runs.resolve();
     await closing;
     expect(closed).toBe(true);
+  });
+
+  it("hands the launch's store to the verdict (VC-889)", async () => {
+    const f = fixture();
+    armed(f);
+    let given: Parameters<typeof restart.resumeRecoveredTurns>[0] | undefined;
+    vi.mocked(restart.resumeRecoveredTurns).mockImplementation(async (ports) => {
+      given = ports;
+    });
+    const owner = createSessionRuntimeLifecycle({ ...f.options, cloudLaunch: () => true });
+    await owner.ready();
+    expect(given!.cloudLaunch?.()).toBe(true);
+    await owner.close();
   });
 
   it("arms nothing without a runtime", async () => {

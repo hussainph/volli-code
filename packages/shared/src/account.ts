@@ -86,3 +86,46 @@ export const UNCONFIGURED_ACCOUNT: AccountSnapshot = Object.freeze({
   account: null,
   failure: null,
 });
+
+/**
+ * A short-lived access token for the window's own Volli Cloud client
+ * (`account.accessToken`, VC-889). The window's Convex client asks for one
+ * whenever it connects or its token is about to expire; main answers from its
+ * in-memory token, refreshing first when it must. The refresh token never
+ * leaves main.
+ *
+ * - `token`: a current access JWT and when it expires (epoch ms).
+ * - `signed-out`: there is no sign-in to answer for (also with `cloud` off, or
+ *   a build with no sign-in configured). The client clears its auth.
+ * - `unavailable`: a transient failure (offline, or a refresh that failed in
+ *   transit). The sign-in is kept; ask again after `retryAfterMs`. Never a
+ *   reason to clear auth: that would blank a board the window can still show.
+ */
+export type AccountAccessToken =
+  | { readonly kind: "token"; readonly token: string; readonly expiresAt: number }
+  | { readonly kind: "signed-out" }
+  | { readonly kind: "unavailable"; readonly retryAfterMs: number };
+
+/** How long `unavailable` asks the window to wait before asking again. */
+export const ACCOUNT_TOKEN_RETRY_MS = 5_000;
+
+/** Bound on a token the router passes through: a JWT, never anything bigger. */
+export const ACCOUNT_TOKEN_MAX = 16_384;
+
+/**
+ * Which product store this launch of the app uses (`cloud.launch`, VC-889),
+ * chosen once by main before the window opens and fixed for the life of the
+ * process: `local` is this Mac's own database, exactly as without Volli
+ * Cloud; `cloud` is the signed-in person's Workspaces on the backend at
+ * `backendUrl`. Signing in or out relaunches the app into the other one.
+ * Never a secret: a user id and a URL.
+ */
+export type CloudLaunch =
+  | { readonly store: "local" }
+  | { readonly store: "cloud"; readonly userId: string; readonly backendUrl: string };
+
+/** The largest last-seen board snapshot the window may keep (VC-889, D3), in characters. */
+export const CLOUD_SNAPSHOT_TEXT_MAX = 16 * 1024 * 1024;
+
+/** The launch every flag-off, signed-out or unconfigured app makes. */
+export const LOCAL_LAUNCH: CloudLaunch = Object.freeze({ store: "local" });

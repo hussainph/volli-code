@@ -20,7 +20,12 @@ import { activateNotificationTarget } from "./lib/notification-activation";
 import { desktopNotificationSurface } from "./lib/notification-surface";
 import { sessionStartToastModel } from "./components/sessions/session-start-toast";
 import { chatTabId } from "./components/ticket/ticket-chat-tab";
-import { boot, refreshPlanningData, startBoardProtocolIfEnabled } from "./lib/boot";
+import {
+  boot,
+  refreshPlanningData,
+  startBoardProtocolIfEnabled,
+  startCloudBoard,
+} from "./lib/boot";
 import { installRendererLogForwarding } from "./lib/renderer-log";
 import { bindRemoteSessionsWhileCloud } from "@renderer/lib/remote-sessions";
 import { toastError } from "./lib/toast";
@@ -29,6 +34,7 @@ import { useChatSessionsStore } from "./stores/chat-sessions";
 import { useProjectsStore } from "./stores/projects";
 import { useThemeStore } from "./stores/theme";
 import { useExperimentsStore } from "./stores/experiments";
+import { launchStore } from "./stores/launch";
 import { attachThisMacWhileCloud } from "./stores/host-sources";
 import { attachRemoteHostsWhileCloud } from "./stores/remote-host-source";
 import { attachRemoteLogSourcesForPage } from "./components/logs/remote-log-sources";
@@ -94,12 +100,13 @@ async function main() {
     </StrictMode>,
   );
 
-  // With the `cloud` flag on, the board moves onto the host protocol: the
-  // board router over this window's IPC bridge, its change feed, and the
-  // pending layer (VC-565). The board boot painted stays on screen until each
-  // Workspace's snapshot lands. With the flag off this reads the flag and
-  // does nothing else.
-  void startBoardProtocolIfEnabled();
+  // A cloud launch (VC-889): the board is Volli Cloud's, read by this
+  // window's own client. A local launch with the `cloud` flag on follows a
+  // remote host's projects over the board protocol (VC-711); with the flag
+  // off this reads the flag and does nothing else.
+  const cloudLaunch = launchStore() === "cloud";
+  if (cloudLaunch) void startCloudBoard();
+  else void startBoardProtocolIfEnabled();
 
   // Backward-move interrupt announcements (issue #78, CONCEPT #20): automation
   // only ever de-escalates, and never silently — the move that Esc'd live
@@ -201,16 +208,20 @@ async function main() {
   // This Mac, the in-process host, feeds the host-connection store while
   // `cloud` is on, and nothing is attached while it is off; VC-700's registry
   // attaches remote hosts beside it. Only flagged surfaces read it.
-  attachThisMacWhileCloud();
-  attachRemoteHostsWhileCloud();
-  // Sessions on a remote host (VC-713): their chat, listing and re-reads go
-  // over each project's Workspace link while `cloud` is on; off, nothing is
-  // registered and every Session is This Mac's.
-  bindRemoteSessionsWhileCloud();
-  // Each connected remote host's log, in the one log viewer (VC-712): only
-  // hosts that store lists, so nothing registers while `cloud` is off. The
-  // page owns it: pagehide unregisters every source and stops its readings.
-  attachRemoteLogSourcesForPage({ shown: () => useProjectsStore.getState().selectedProjectId });
+  // A cloud launch shows Volli Cloud's projects only: its one host is Volli
+  // Cloud (attached by `startCloudBoard`), and no remote host's is shown.
+  if (!cloudLaunch) {
+    attachThisMacWhileCloud();
+    attachRemoteHostsWhileCloud();
+    // Sessions on a remote host (VC-713): their chat, listing and re-reads go
+    // over each project's Workspace link while `cloud` is on; off, nothing is
+    // registered and every Session is This Mac's.
+    bindRemoteSessionsWhileCloud();
+    // Each connected remote host's log, in the one log viewer (VC-712): only
+    // hosts that store lists, so nothing registers while `cloud` is off. The
+    // page owns it: pagehide unregisters every source and stops its readings.
+    attachRemoteLogSourcesForPage({ shown: () => useProjectsStore.getState().selectedProjectId });
+  }
 
   // Main owns one durable armed-column countdown per move (VC-226). Subscribe
   // before priming so a window opened mid-countdown cannot miss a replacement

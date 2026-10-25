@@ -35,7 +35,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 
-import type { TestIssuer } from "./jwt.ts";
+import { createRunnerIssuerKeys, type TestIssuer } from "./jwt.ts";
 
 export const PACKAGE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -515,19 +515,30 @@ async function deployFunctions(
 }
 
 /**
- * Trust `issuer` on `backend`, push `functions/`, and return the environment
- * `fixture/testing.ts` reads. The JWKS variable is set before the push because
- * the auth config is evaluated at push time.
+ * Trust `issuer` on `backend`, give it a fresh runner-token signing key (so
+ * `/runner/token` works and its tokens are trusted), push `functions/`, and
+ * return the environment `fixture/testing.ts` reads. The JWKS variables are
+ * set before the push because the auth config is evaluated at push time.
+ * The backend also gets a fresh secrets root key for the run
+ * (`functions/lib/sealing.ts`), made here and never written anywhere else.
  */
 export async function deployForTests(
   backend: Pick<RunningBackend, "url" | "siteUrl" | "adminKey" | "cliEnv">,
   issuer: TestIssuer,
 ): Promise<Record<string, string>> {
-  await setDeploymentEnv(backend, { VOLLI_TEST_JWKS: issuer.jwksDataUri });
+  const runnerIssuer = createRunnerIssuerKeys();
+  await setDeploymentEnv(backend, {
+    VOLLI_TEST_JWKS: issuer.jwksDataUri,
+    VOLLI_RUNNER_JWKS: runnerIssuer.jwksDataUri,
+    VOLLI_RUNNER_SIGNING_KEY: runnerIssuer.signingKey,
+    VOLLI_SECRETS_ROOT_KEYS: `test:${randomBytes(32).toString("base64")}`,
+  });
   await deployFunctions(backend);
   return {
     VOLLI_CONVEX_URL: backend.url,
     VOLLI_CONVEX_SITE_URL: backend.siteUrl,
     VOLLI_CONVEX_TEST_PRIVATE_KEY: issuer.privateKeyPem,
+    // For tests that drive internal functions the way an operator tool does.
+    VOLLI_CONVEX_ADMIN_KEY: backend.adminKey,
   };
 }

@@ -34,6 +34,7 @@ import {
 } from "@volli/shared/cloud";
 
 import type { DataModel, Doc } from "../_generated/dataModel.js";
+import { isRunnerIdentity } from "./runnerAuth";
 
 export type AuthErrorCode =
   | "unauthenticated"
@@ -41,6 +42,7 @@ export type AuthErrorCode =
   | "account_deleted"
   | "account_deletion_pending"
   | "identity_conflict"
+  | "not_a_person"
   | "not_found"
   | "not_a_member"
   | "forbidden";
@@ -172,6 +174,10 @@ export async function ensureViewer(
   profileOf: ProfileFromIdentity = profileFromIdentity,
 ): Promise<Viewer & { created: boolean }> {
   const identity = await requireIdentity(ctx);
+  // A runner token is a machine, never a person: it must not mint a `users` row.
+  if (isRunnerIdentity(identity)) {
+    throw authError("not_a_person", "A runner cannot sign in as a person.");
+  }
   const now = Date.now();
   const existing = await userOf(ctx, identity);
   if (existing !== null) {

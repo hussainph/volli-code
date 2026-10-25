@@ -82,8 +82,11 @@ jobs:
           fetch-depth: 0
 
       # Refuse to release a red or unproven commit. This is the guard that
-      # replaces "build it locally first": the evidence is the CI run that
-      # already went over this exact SHA, not a developer's machine.
+      # replaces "build it locally first": the evidence is the CI runs that
+      # already went over this exact SHA, not a developer's machine. Both
+      # workflows: ci.yml is the PR gate, and ci-extended.yml carries the
+      # smoke journeys and cloud acceptance that left that gate (VC-934), so a
+      # release still needs every journey green on the commit it ships.
       - name: "Guard: CI is green on this commit"
         if: inputs.require_green
         env:
@@ -92,18 +95,20 @@ jobs:
           set -euo pipefail
           sha="$(git rev-parse HEAD)"
           echo "releasing $sha"
-          conclusions=$(gh api \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${sha}&status=completed" \
-            -q '.workflow_runs[].conclusion' || true)
-          if [ -z "$conclusions" ]; then
-            echo "::error::No completed CI run for $sha. Wait for CI to finish on main, or re-run with require_green=false if you know why it is missing."
-            exit 1
-          fi
-          if ! grep -qx success <<<"$conclusions"; then
-            echo "::error::CI did not succeed on $sha (saw: $(tr '\n' ' ' <<<"$conclusions")). Fix main before releasing."
-            exit 1
-          fi
-          echo "CI is green on $sha"
+          for workflow in ci.yml ci-extended.yml; do
+            conclusions=$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?head_sha=${sha}&status=completed" \
+              -q '.workflow_runs[].conclusion' || true)
+            if [ -z "$conclusions" ]; then
+              echo "::error::No completed $workflow run for $sha. Wait for it to finish on main (or start one: gh workflow run $workflow --ref main), or re-run with require_green=false if you know why it is missing."
+              exit 1
+            fi
+            if ! grep -qx success <<<"$conclusions"; then
+              echo "::error::$workflow did not succeed on $sha (saw: $(tr '\n' ' ' <<<"$conclusions")). Fix main before releasing."
+              exit 1
+            fi
+            echo "$workflow is green on $sha"
+          done
 
       - name: Resolve version
         id: resolve

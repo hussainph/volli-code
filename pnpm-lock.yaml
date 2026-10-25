@@ -142,6 +142,9 @@ importers:
       '@volli/agent-runtime':
         specifier: workspace:*
         version: link:../../packages/agent-runtime
+      '@volli/convex':
+        specifier: workspace:*
+        version: link:../../convex
       '@volli/host-core':
         specifier: workspace:*
         version: link:../../packages/host-core
@@ -190,6 +193,9 @@ importers:
       cmdk:
         specifier: ^1.1.1
         version: 1.1.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      convex:
+        specifier: 1.48.0
+        version: 1.48.0(react@19.3.1)
       dompurify:
         specifier: ^3.4.17
         version: 3.4.17
@@ -497,6 +503,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.5
+      '@volli/host-core':
+        specifier: workspace:*
+        version: link:../packages/host-core
       convex-test:
         specifier: 0.0.65
         version: 0.0.65(convex@1.48.0(react@19.3.1))
@@ -671,6 +680,9 @@ importers:
       ai:
         specifier: ^7.0.142
         version: 7.0.142(zod@4.6.7)
+      convex:
+        specifier: 1.48.0
+        version: 1.48.0(react@19.3.1)
       playwright-core:
         specifier: ^1.64.1
         version: 1.64.1

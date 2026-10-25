@@ -17,6 +17,10 @@
       "types": "./src/entries/automations.ts",
       "import": "./src/entries/automations.ts"
     },
+    "./cloud-runner": {
+      "types": "./src/entries/cloud-runner.ts",
+      "import": "./src/entries/cloud-runner.ts"
+    },
     "./board": {
       "types": "./src/entries/board.ts",
       "import": "./src/entries/board.ts"
@@ -82,7 +86,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vp test run",
     "test:coverage": "vp test run --coverage",
-    "migrations:lock": "node scripts/lock-migrations.mjs"
+    "migrations:lock": "node scripts/lock-migrations.mjs",
+    "migration:dry-run": "node --experimental-transform-types scripts/migration-dry-run.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-mcp": "0.99.2",
@@ -106,6 +111,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "catalog:",
     "ai": "^7.0.142",
+    "convex": "1.48.0",
     "playwright-core": "^1.64.1",
     "typescript": "catalog:",
     "vite": "catalog:",

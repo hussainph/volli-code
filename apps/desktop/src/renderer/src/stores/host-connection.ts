@@ -37,6 +37,13 @@ export type HostId = string;
 /** The in-process host (Electron main; VC-577). Reserved: no remote host is ever given it. */
 export const THIS_MAC_HOST_ID = "this-mac";
 
+/**
+ * Volli Cloud, as a launch that shows its board names it (VC-889,
+ * `cloud-link.ts`): one host record that serves every project of the
+ * launch. Reserved, like {@link THIS_MAC_HOST_ID}.
+ */
+export const CLOUD_HOST_ID = "volli-cloud";
+
 export type HostOs = "macos" | "linux";
 
 /**
@@ -53,6 +60,11 @@ export type HostOs = "macos" | "linux";
  * - `too-many-projects`: this Mac opens at most `REMOTE_HOST_LINK_CAP` links
  *   to one host, and this project is past it (VC-700). Never the host's
  *   fault, so a host's own link never reads it. Manage hosts.
+ * - `sign-in-refused`: Volli Cloud did not accept this Mac's sign-in (VC-889).
+ *   Sign in again.
+ * - `signed-out`: the Volli Cloud sign-in ended in a launch that shows its
+ *   board (VC-889). Restart Volli after a sign-out the person chose, or sign
+ *   in again after one that expired ({@link HostLinkView}'s `recovery`).
  */
 export type HostIncompatibility =
   | "host-too-old"
@@ -60,7 +72,9 @@ export type HostIncompatibility =
   | "database-too-new"
   | "refused"
   | "fenced"
-  | "too-many-projects";
+  | "too-many-projects"
+  | "sign-in-refused"
+  | "signed-out";
 
 /**
  * A host's link as the UI reads it — a projection of the client host link's
@@ -80,6 +94,8 @@ export type HostLinkView =
       readonly since: number;
       readonly retryAt: number | null;
       readonly detail?: string;
+      /** What is on screen is a snapshot of the board as of this moment (VC-889, D3). */
+      readonly asOf?: number;
     }
   /** Served, but the host is older than this app and a compatible update is available. */
   | { readonly status: "version-skewed"; readonly availableVersion: string }
@@ -93,6 +109,8 @@ export type HostLinkView =
       readonly refusalCode?: string;
       /** Only the refused project's recovery may forget it. */
       readonly workspaceId?: string;
+      /** `signed-out`'s one recovery: restart into this Mac's projects, or sign in again. */
+      readonly recovery?: "relaunch" | "sign-in";
     };
 
 export type HostLinkStatus = HostLinkView["status"];
@@ -206,6 +224,23 @@ export const THIS_MAC_HOST: HostRecord = Object.freeze({
   os: "macos",
   version: null,
   link: OPEN_LINK,
+  liveSessions: null,
+  update: null,
+  expiredSignIns: Object.freeze([]),
+});
+
+/**
+ * Volli Cloud's record as the local-only guard names it (`remote-project.ts`,
+ * VC-889) before, or apart from, its source's live record: only its name is
+ * read there. The live record, with its link, is `cloud-link.ts`'s.
+ */
+export const CLOUD_HOST: HostRecord = Object.freeze({
+  id: CLOUD_HOST_ID,
+  name: "Volli Cloud",
+  local: false,
+  os: null,
+  version: null,
+  link: UNKNOWN_HOST_LINK,
   liveSessions: null,
   update: null,
   expiredSignIns: Object.freeze([]),
@@ -453,12 +488,14 @@ export function isBlocking(link: HostLinkView): boolean {
  * failures (red) outrank the version mismatches (amber).
  */
 const INCOMPATIBILITY_RANK: Readonly<Record<HostIncompatibility, number>> = {
-  "database-too-new": 0,
-  refused: 1,
-  fenced: 2,
-  "host-too-new": 3,
-  "host-too-old": 4,
-  "too-many-projects": 5,
+  "signed-out": 0,
+  "sign-in-refused": 1,
+  "database-too-new": 2,
+  refused: 3,
+  fenced: 4,
+  "host-too-new": 5,
+  "host-too-old": 6,
+  "too-many-projects": 7,
 };
 const STATUS_RANK: Readonly<Record<HostLinkStatus, number>> = {
   incompatible: 0,

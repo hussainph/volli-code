@@ -29,6 +29,7 @@ import {
   type MigrationExportProgress,
 } from "./exporter";
 import { JOURNAL_FILE, MANIFEST_FILE, SNAPSHOT_FILE, STATE_FILE, stagingDirOf } from "./staging";
+import { mcpOperationId, mcpServerEntryId } from "./transform";
 import { verifyMigrationExport } from "./verify";
 import { streamRecords as records, streamTexts as contentOf } from "./test-support/export-files";
 
@@ -429,7 +430,7 @@ describe("a full export", () => {
     });
     const runs = records(outDir, manifest, "automationRuns");
     expect(runs.map((run) => [run.id, run.status, run.trigger])).toEqual([
-      ["arun-1", "started", "unknown"],
+      ["arun-1", "started", "manual"],
       ["skip-1", "skipped", "schedule"],
       ["attempt-1", "failed", "arrival"],
     ]);
@@ -501,7 +502,7 @@ describe("a full export", () => {
       ["personal", "decision_model", "default", "on"],
     ]);
     expect(entries[2]!.id).toBe("auto-unbound");
-    expect(entries[3]!.id).toBe("mcp-1");
+    expect(entries[3]!.id).toBe(mcpServerEntryId("mcp-1"));
     // A retired key nothing reads is not carried.
     expect(entries.some((entry) => entry.name === "pi")).toBe(false);
     expect(records(outDir, manifest, "automations").map((entry) => entry.id)).toEqual([
@@ -509,7 +510,7 @@ describe("a full export", () => {
     ]);
     expect(records(outDir, manifest, "mcpCatalogCache")).toEqual([
       {
-        configEntryId: "mcp-1",
+        configEntryId: mcpServerEntryId("mcp-1"),
         projectId: "proj-alpha",
         catalog: [],
         stale: true,
@@ -518,9 +519,9 @@ describe("a full export", () => {
       },
     ]);
     expect(records(outDir, manifest, "auditLog")[0]).toMatchObject({
-      id: "op-1",
+      id: mcpOperationId("op-1"),
       kind: "mcp_install",
-      targetId: "mcp-1",
+      targetId: mcpServerEntryId("mcp-1"),
       actor: { kind: "agent", sessionId: "session-root" },
     });
   });

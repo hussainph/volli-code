@@ -97,7 +97,7 @@ import { projectBandOrderKey, useHeldSessionOrder } from "@renderer/stores/sessi
 import { type SessionContainer, useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { DEFAULT_PROJECT_UI, useProjectUiStore } from "@renderer/stores/project-ui";
-import { boardApi } from "@renderer/lib/board-protocol";
+import { boardApi } from "@renderer/lib/board-api";
 
 const EMPTY_TICKETS: readonly Ticket[] = [];
 const EMPTY_TICKET_TABS: Record<string, { files: string[]; active: string }> = {};

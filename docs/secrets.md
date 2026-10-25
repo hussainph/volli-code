@@ -474,6 +474,35 @@ Remote sign-in uses the dedicated [host protocol](host-protocol.md#sign-ins-on-a
 service. API keys may be sent write-only; subscription login runs on the host.
 Never automatically copy rotating OAuth grants between machines.
 
+## Volli Cloud team secrets (behind `cloud`)
+
+With the `cloud` flag on, a Workspace, a project or one person can set env
+vars and secrets once in the backend (`convex/functions/secrets.ts`); the
+runner holding a Session's claim receives the resolved set. Precedence is
+personal-for-this-project > personal > project > Workspace; the highest level
+that sets a name wins, then its exposure applies (`setup`: recipe scripts
+only; `session`: also the agent's tool processes). Owners and admins write
+Workspace secrets, any Member writes project ones, personal ones are the
+person's alone, and every change is audited without its value. No client read
+returns a secret's value; the backend seals values under per-Workspace and
+per-person data keys (`convex/README.md`, "Secrets root key").
+
+On the runner, `SecretService` takes the cloud product store's
+`CloudSecretSource` (`secrets/cloud-secrets.ts`). It fetches a Session's set
+once per attachment, refuses a set that does not parse or does not answer
+that Session's claim, adds every sealed value to this launch's redaction
+history **before** injecting it (env vars are plain by kind and stay readable),
+holds the set in memory only, and asks again after five minutes so a rotation
+or removal reaches a long-running Session. Team secret names also refuse names
+that steer someone else's processes (`*_PROXY`, certificate bundles, git's
+editor and directory variables, …), since a Member's project value runs in
+every Member's Sessions. Values stored on
+this machine win over team values with the same name, and the runner's own
+process environment stays underneath both. Subagents receive neither, as
+today. The local product store has no source, so signed-out and flag-off
+behaviour is unchanged. Model API keys are never here: they are sealed to the
+model gateway and never reach a runner; subscriptions never leave the machine.
+
 ## What redaction promises
 
 Exact occurrences become `‹secret:NAME›` in tool results and updates, errors,

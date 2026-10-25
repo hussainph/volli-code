@@ -6,7 +6,7 @@
  * host-core's own files import the module itself, never this entry. See
  * the cluster map in the package README.
  */
-export { getAllAppState, getAppState, setAppState } from "../db/app-state-repo";
+export { deleteAppState, getAllAppState, getAppState, setAppState } from "../db/app-state-repo";
 export {
   createAutomation,
   deleteAutomation,
