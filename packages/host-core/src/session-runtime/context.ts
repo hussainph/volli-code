@@ -88,9 +88,9 @@ export function createRuntimeContextResolver(options: {
     const projection = await sessionEngine.getSession({ sessionId });
     const attaching = projection?.session;
     if (!attaching || projection.modelSelection === null) return null;
-    const project =
+    const localProject =
       options.brief === undefined ? getProjectById(db, attaching.projectId) : undefined;
-    if (options.brief === undefined && project === undefined) return null;
+    if (options.brief === undefined && localProject === undefined) return null;
     const provenance = {
       source: { kind: "system", id: "pi-runtime", detail: null },
       venue: options.venue,
@@ -194,7 +194,9 @@ export function createRuntimeContextResolver(options: {
         return { ...frozen, role: "ticket", ticketId: attaching.ticketId };
       return { ...frozen, role: "project", ticketId: null };
     }
-    if (!project) return null;
+    // The local-store guard above refused missing projects before recording
+    // any inputs; the cloud-store branch has already returned.
+    const project = localProject!;
     // The Role is the Session's own statement (VC-9), never read off
     // the Ticket: a subagent may carry its parent's Ticket, and a
     // Ticket Session whose Ticket was deleted is still not a project

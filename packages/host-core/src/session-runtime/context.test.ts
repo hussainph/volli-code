@@ -273,6 +273,8 @@ it("refuses unavailable project/model, orphan tickets and malformed subagent anc
   const f = fixture();
   f.getSession.mockResolvedValueOnce({ session: { projectId: "missing" }, modelSelection: {} });
   expect(await f.context("s")).toBeNull();
+  expect(f.listEvents).not.toHaveBeenCalled();
+  expect(f.getOrRecordSessionInput).not.toHaveBeenCalled();
   f.getSession.mockResolvedValueOnce({ session: { projectId: "p" }, modelSelection: null });
   expect(await f.context("s")).toBeNull();
   f.getSession.mockResolvedValueOnce({
