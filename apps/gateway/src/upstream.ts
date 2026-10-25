@@ -25,7 +25,8 @@ export function parseUpstreamBase(up: string): URL | null {
   }
   if (url.protocol !== "https:" || url.username !== "" || url.password !== "") return null;
   if (url.search !== "" || url.hash !== "") return null;
-  const host = url.hostname.toLowerCase();
+  // A trailing dot names the same host ("localhost." is localhost).
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
   if (host.startsWith("[") || /^[\d.]+$/.test(host) || !host.includes(".")) return null;
   if (host === "localhost" || PRIVATE_SUFFIXES.some((suffix) => host.endsWith(suffix))) return null;
   return url;
@@ -63,13 +64,33 @@ const STRIPPED_REQUEST_HEADERS = new Set([
 
 const STRIPPED_REQUEST_PREFIXES = ["cf-", "x-forwarded-", "x-volli-"];
 
-/** The request headers that cross to the provider, before the real key is added. */
+/**
+ * Which organization or project a key bills is the connection's choice, never
+ * the runner's. A connection that needs one sets it in its own headers.
+ */
+const CONNECTION_CHOSEN_HEADERS = new Set(["openai-organization", "openai-project"]);
+
+function crosses(name: string): boolean {
+  return (
+    !STRIPPED_REQUEST_HEADERS.has(name) &&
+    !STRIPPED_REQUEST_PREFIXES.some((prefix) => name.startsWith(prefix))
+  );
+}
+
+/** The runner's request headers that cross to the provider, before the real key is added. */
 export function forwardedRequestHeaders(incoming: Headers): Headers {
   const out = new Headers();
   for (const [name, value] of incoming) {
-    if (STRIPPED_REQUEST_HEADERS.has(name)) continue;
-    if (STRIPPED_REQUEST_PREFIXES.some((prefix) => name.startsWith(prefix))) continue;
-    out.append(name, value);
+    if (crosses(name) && !CONNECTION_CHOSEN_HEADERS.has(name)) out.append(name, value);
+  }
+  return out;
+}
+
+/** The connection's own extra headers that cross, from the grant route's `hdr`. */
+export function connectionHeaders(hdr: Record<string, string> | undefined): Headers {
+  const out = new Headers();
+  for (const [name, value] of new Headers(hdr)) {
+    if (crosses(name)) out.append(name, value);
   }
   return out;
 }
@@ -89,10 +110,12 @@ const STRIPPED_RESPONSE_HEADERS = new Set([
   "upgrade",
 ]);
 
+/** The provider's response headers that reach the runner. `x-volli-*` is the gateway's alone to set. */
 export function relayedResponseHeaders(upstream: Headers): Headers {
   const out = new Headers();
   for (const [name, value] of upstream) {
-    if (!STRIPPED_RESPONSE_HEADERS.has(name)) out.append(name, value);
+    if (!STRIPPED_RESPONSE_HEADERS.has(name) && !name.startsWith("x-volli-"))
+      out.append(name, value);
   }
   return out;
 }

@@ -9,9 +9,12 @@
  * backend's (the same one that mints runner tokens), and the real sealer is
  * the client a person pastes a key into.
  *
- * WebCrypto only, and `.ts` imports with no runtime import of `@volli/shared`,
- * so Node runs this file directly with its type stripper.
+ * WebCrypto only, and `.ts` imports with no runtime import of `@volli/shared`
+ * (type imports are erased), so Node runs this file directly with its type
+ * stripper.
  */
+import type { GatewayApi } from "@volli/shared/cloud";
+
 import { toBase64Url, utf8 } from "../src/bytes.ts";
 import type { X25519PrivateJwk } from "../src/hpke.ts";
 import { sealProviderKey, type SealingPublicKey } from "../src/sealed-key.ts";
@@ -88,7 +91,7 @@ export interface DevRoute {
   connectionId: string;
   keyVersion?: number;
   upstream: string;
-  api: "anthropic-messages" | "openai-responses" | "openai-completions";
+  api: GatewayApi;
   /** The real provider key, sealed into the grant. */
   key: string;
   headers?: Record<string, string>;

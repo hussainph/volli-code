@@ -8,10 +8,12 @@
  * What the gateway keeps is metadata only (ids, model, token counts, status,
  * timing). It never logs or stores a request body, a response body or a key.
  *
- * Every refusal happens before anything is forwarded, so a refused call was
- * never produced or billed and the runner may retry it once with a fresh grant.
- * There is no fallback to another connection: another connection is another
- * payer, and switching is the person's explicit choice.
+ * Every refusal of the gateway's own happens before anything is forwarded, so
+ * the call was never produced or billed and the runner may retry it once with
+ * a fresh grant. Two codes translate a provider answer instead: an upstream 401
+ * (`volli_upstream_auth`) and a redirect (`volli_upstream_redirect`). There is
+ * no fallback to another connection: another connection is another payer, and
+ * switching is the person's explicit choice.
  */
 import {
   GATEWAY_CALL_ID_HEADER,
@@ -25,21 +27,26 @@ import {
   isUuid,
 } from "@volli/shared/cloud";
 
-import { DEFAULT_MAX_BODY_BYTES, type GatewayEnv, type UsageBatch, type WaitUntil } from "./env.ts";
+import {
+  DEFAULT_MAX_BODY_BYTES,
+  type FetchFn,
+  type GatewayEnv,
+  type UsageBatch,
+  type WaitUntil,
+} from "./env.ts";
 import { gatewayError } from "./errors.ts";
 import { IssuerKeys, verifyGrant } from "./grant.ts";
 import { meteredBody } from "./metered-body.ts";
 import { PROVIDER_ADAPTERS } from "./providers.ts";
 import { SealingKeyring } from "./sealed-key.ts";
 import {
+  connectionHeaders,
   forwardedRequestHeaders,
   parseUpstreamBase,
   relayedResponseHeaders,
   upstreamUrl,
 } from "./upstream.ts";
 import { consumeUsage } from "./usage-consumer.ts";
-
-type FetchFn = (input: string | Request, init?: RequestInit) => Promise<Response>;
 
 export interface GatewayDeps {
   /** Outbound fetch: the provider, the issuer's JWKS, the usage ingest endpoint. */
@@ -78,12 +85,10 @@ export function createGateway(deps: GatewayDeps): Gateway {
   const keyrings = new Map<string, SealingKeyring | null>();
 
   function keysFor(env: GatewayEnv): IssuerKeys | null {
-    const source = env.GATEWAY_JWKS
-      ? { inline: env.GATEWAY_JWKS }
-      : env.GATEWAY_JWKS_URL
-        ? { url: env.GATEWAY_JWKS_URL }
-        : null;
-    if (!source) return null;
+    // Exactly one source. Both set means a development JWKS was left beside
+    // the real one, and grants minted by that dev issuer must not pass.
+    if (Boolean(env.GATEWAY_JWKS) === Boolean(env.GATEWAY_JWKS_URL)) return null;
+    const source = env.GATEWAY_JWKS ? { inline: env.GATEWAY_JWKS } : { url: env.GATEWAY_JWKS_URL! };
     const cacheKey = JSON.stringify(source);
     let keys = issuerKeys.get(cacheKey);
     if (!keys) {
@@ -99,7 +104,11 @@ export function createGateway(deps: GatewayDeps): Gateway {
     return keyrings.get(raw)!;
   }
 
-  async function authorize(request: Request, env: GatewayEnv): Promise<GatewayGrantClaims> {
+  async function authorize(
+    request: Request,
+    env: GatewayEnv,
+    ctx: WaitUntil,
+  ): Promise<GatewayGrantClaims> {
     const token = presentedGrant(request.headers);
     if (!token) throw new Refusal("volli_grant_missing");
     const keys = keysFor(env);
@@ -108,6 +117,7 @@ export function createGateway(deps: GatewayDeps): Gateway {
       issuer: env.GATEWAY_ISSUER,
       keys,
       nowMs: deps.now(),
+      waitUntil: ctx,
     });
     if (!verification.ok) throw new Refusal(verification.code);
     return verification.claims;
@@ -119,9 +129,15 @@ export function createGateway(deps: GatewayDeps): Gateway {
     route: GatewayGrantRoute,
   ) {
     if (!env.REVOCATIONS) return;
-    const keys = [`grant:${claims.jti}`, `conn:${route.conn}`, `conn:${route.conn}:kv:${route.kv}`];
-    const hits = await Promise.all(keys.map((key) => env.REVOCATIONS!.get(key)));
-    if (hits.some((hit) => hit !== null)) throw new Refusal("volli_grant_revoked");
+    const [grant, connection, keyVersion] = await Promise.all(
+      [`grant:${claims.jti}`, `conn:${route.conn}`, `conn:${route.conn}:kv:${route.kv}`].map(
+        (key) => env.REVOCATIONS!.get(key),
+      ),
+    );
+    if (grant !== null || connection !== null) throw new Refusal("volli_grant_revoked");
+    // A retired key version is a rotation, not a revocation: a fresh grant
+    // carries the current version.
+    if (keyVersion !== null) throw new Refusal("volli_grant_stale");
   }
 
   async function relay(request: Request, env: GatewayEnv, ctx: WaitUntil): Promise<Response> {
@@ -138,20 +154,24 @@ export function createGateway(deps: GatewayDeps): Gateway {
     if (!isUuid(connectionId)) throw new Refusal("volli_route_not_found");
     if (!RELAYED_METHODS.has(request.method)) throw new Refusal("volli_method_not_allowed");
 
-    const claims = await authorize(request, env);
+    const claims = await authorize(request, env, ctx);
     const callId = request.headers.get(GATEWAY_CALL_ID_HEADER);
     if (!isUuid(callId)) throw new Refusal("volli_call_id_missing");
     const granted = Object.entries(claims.routes).find(([, route]) => route.conn === connectionId);
     if (!granted) throw new Refusal("volli_route_not_granted");
     const [providerId, route] = granted;
+    const adapter = PROVIDER_ADAPTERS[route.api];
+    const endpointMethod = adapter.endpoints[rest];
+    if (!endpointMethod) throw new Refusal("volli_route_not_found");
+    if (endpointMethod !== request.method) throw new Refusal("volli_method_not_allowed");
     await assertNotRevoked(env, claims, route);
 
     const base = parseUpstreamBase(route.up);
     if (!base) throw new Refusal("volli_upstream_forbidden");
     const target = upstreamUrl(base, rest, url.search);
-    // The incoming URL is already normalized, so `rest` holds no dot segment
-    // that could climb out of the base; the check stays as the last word.
-    /* v8 ignore next -- unreachable through a parsed request URL; upstream.test.ts covers the check. */
+    // `rest` is one of the adapter's fixed endpoint paths, so it cannot climb
+    // out of the base; the check stays as the last word.
+    /* v8 ignore next -- unreachable with a fixed endpoint path; upstream.test.ts covers the check. */
     if (!target) throw new Refusal("volli_route_not_found");
 
     const maxBody = Number(env.GATEWAY_MAX_BODY_BYTES) || DEFAULT_MAX_BODY_BYTES;
@@ -163,32 +183,30 @@ export function createGateway(deps: GatewayDeps): Gateway {
     const opened = await keyring.open(route.sk, route.conn, route.kv);
     if (!opened.ok) throw new Refusal(opened.code);
 
-    const adapter = PROVIDER_ADAPTERS[route.api];
     let body: ArrayBuffer | string | undefined;
     let requestedModel: string | undefined;
     if (request.method === "POST") {
       const bytes = await request.arrayBuffer();
       if (bytes.byteLength > maxBody) throw new Refusal("volli_body_too_large");
       body = bytes;
-      if (
-        route.api === "openai-completions" &&
-        request.headers.get("content-type")?.includes("json")
-      ) {
+      // Parsed whatever the declared content type: many compatible servers
+      // read JSON regardless, so a mislabelled body must not skip the edit.
+      if (adapter.editBody) {
+        let parsed: unknown;
         try {
-          const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
-          const model = (parsed as { model?: unknown } | null)?.model;
-          if (typeof model === "string") requestedModel = model;
-          const edited = adapter.editBody(parsed);
-          if (edited !== null) body = JSON.stringify(edited);
+          parsed = JSON.parse(new TextDecoder().decode(bytes));
         } catch {
-          // Not JSON: forward it as it came and let the provider say so.
+          parsed = undefined;
         }
+        const model = (parsed as { model?: unknown } | null | undefined)?.model;
+        if (typeof model === "string") requestedModel = model;
+        const edited = parsed === undefined ? null : adapter.editBody(parsed);
+        if (edited !== null) body = JSON.stringify(edited);
       }
     }
 
     const headers = forwardedRequestHeaders(request.headers);
-    for (const [name, value] of forwardedRequestHeaders(new Headers(route.hdr)))
-      headers.set(name, value);
+    for (const [name, value] of connectionHeaders(route.hdr)) headers.set(name, value);
     for (const [name, value] of Object.entries(adapter.authHeaders(opened.key)))
       headers.set(name, value);
 
@@ -207,6 +225,7 @@ export function createGateway(deps: GatewayDeps): Gateway {
     }
 
     const meter = adapter.meter();
+    const recordId = crypto.randomUUID();
     const usageRecord = (
       status: GatewayUsageStatus,
       durationMs: number,
@@ -214,6 +233,7 @@ export function createGateway(deps: GatewayDeps): Gateway {
     ): GatewayUsageRecord => {
       const modelId = meter.modelId ?? requestedModel;
       return {
+        recordId,
         callId,
         grantJti: claims.jti,
         workspaceId: claims.ws,
@@ -238,7 +258,9 @@ export function createGateway(deps: GatewayDeps): Gateway {
       ctx.waitUntil(record.then((value) => sendUsage(env, value)));
 
     const redirected = upstream.status >= 300 && upstream.status < 400;
-    const rejectedKey = upstream.status === 401 || upstream.status === 403;
+    // Only a 401 says the key itself was refused. A 403 can mean many things
+    // (moderation, region, one model's permission) and passes through as is.
+    const rejectedKey = upstream.status === 401;
     if (redirected || rejectedKey || !upstream.body) {
       await upstream.body?.cancel();
       const status = upstream.ok && !redirected ? "partial" : "upstream-error";

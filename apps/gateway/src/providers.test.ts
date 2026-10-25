@@ -5,9 +5,14 @@ import { PROVIDER_ADAPTERS } from "./providers.ts";
 describe("anthropic-messages", () => {
   const adapter = PROVIDER_ADAPTERS["anthropic-messages"];
 
-  test("sends the key as x-api-key and leaves the body alone", () => {
+  test("sends the key as x-api-key, relays only model endpoints and leaves the body alone", () => {
     expect(adapter.authHeaders("k")).toEqual({ "x-api-key": "k" });
-    expect(adapter.editBody({ stream: true })).toBeNull();
+    expect(adapter.endpoints).toEqual({
+      "/v1/messages": "POST",
+      "/v1/messages/count_tokens": "POST",
+      "/v1/models": "GET",
+    });
+    expect(adapter.editBody).toBeUndefined();
   });
 
   test("reads message_start, then the cumulative message_delta", () => {
@@ -69,9 +74,10 @@ describe("anthropic-messages", () => {
 describe("openai-responses", () => {
   const adapter = PROVIDER_ADAPTERS["openai-responses"];
 
-  test("sends a bearer key and leaves the body alone", () => {
+  test("sends a bearer key, relays only model endpoints and leaves the body alone", () => {
     expect(adapter.authHeaders("k")).toEqual({ authorization: "Bearer k" });
-    expect(adapter.editBody({ stream: true })).toBeNull();
+    expect(adapter.endpoints).toEqual({ "/responses": "POST", "/models": "GET" });
+    expect(adapter.editBody).toBeUndefined();
   });
 
   test.each(["response.completed", "response.incomplete", "response.failed"])(
@@ -114,29 +120,29 @@ describe("openai-responses", () => {
 
 describe("openai-completions", () => {
   const adapter = PROVIDER_ADAPTERS["openai-completions"];
+  const editBody = (body: unknown) => adapter.editBody!(body);
 
-  test("sends a bearer key", () => {
+  test("sends a bearer key and relays only model endpoints", () => {
     expect(adapter.authHeaders("k")).toEqual({ authorization: "Bearer k" });
+    expect(adapter.endpoints).toEqual({ "/chat/completions": "POST", "/models": "GET" });
   });
 
   test("asks a stream for its usage, keeping other stream options", () => {
-    expect(adapter.editBody({ model: "m", stream: true })).toEqual({
+    expect(editBody({ model: "m", stream: true })).toEqual({
       model: "m",
       stream: true,
       stream_options: { include_usage: true },
     });
-    expect(
-      adapter.editBody({ stream: true, stream_options: { include_obfuscation: false } }),
-    ).toEqual({
+    expect(editBody({ stream: true, stream_options: { include_obfuscation: false } })).toEqual({
       stream: true,
       stream_options: { include_obfuscation: false, include_usage: true },
     });
   });
 
   test("leaves a body alone when it already asks, or does not stream", () => {
-    expect(adapter.editBody({ stream: true, stream_options: { include_usage: true } })).toBeNull();
-    expect(adapter.editBody({ stream: false })).toBeNull();
-    expect(adapter.editBody("not an object")).toBeNull();
+    expect(editBody({ stream: true, stream_options: { include_usage: true } })).toBeNull();
+    expect(editBody({ stream: false })).toBeNull();
+    expect(editBody("not an object")).toBeNull();
   });
 
   test("reads the final usage chunk, OpenRouter's cost and cache writes included", () => {

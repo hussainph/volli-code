@@ -2,7 +2,7 @@
 /**
  * Mint a gateway grant for running the Worker locally under `wrangler dev`.
  *
- *   VOLLI_DEV_PROVIDER_KEY=sk-ant-… pnpm --filter @volli/gateway dev:grant -- \
+ *   VOLLI_DEV_PROVIDER_KEY=sk-ant-… pnpm --filter @volli/gateway dev:grant \
  *     --provider anthropic --api anthropic-messages --upstream https://api.anthropic.com
  *
  * The first run writes `.dev.vars` (the Worker's local issuer JWKS and sealing
@@ -19,6 +19,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+import type { GatewayApi } from "@volli/shared/cloud";
+
 import {
   createDevIssuer,
   createDevSealingKey,
@@ -31,9 +33,17 @@ import {
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const varsPath = resolve(root, ".dev.vars");
 const statePath = resolve(root, ".dev-issuer.json");
-const APIS = ["anthropic-messages", "openai-responses", "openai-completions"] as const;
+// GATEWAY_APIS, spelled here because this script imports no runtime value from
+// @volli/shared (Node's type stripper cannot resolve its extensionless imports).
+const APIS = [
+  "anthropic-messages",
+  "openai-responses",
+  "openai-completions",
+] as const satisfies readonly GatewayApi[];
 
 const { values } = parseArgs({
+  // `pnpm run x -- --flag` forwards the `--` itself; accept it either way.
+  args: process.argv.slice(2).filter((arg, index) => index > 0 || arg !== "--"),
   options: {
     provider: { type: "string", default: "anthropic" },
     api: { type: "string", default: "anthropic-messages" },

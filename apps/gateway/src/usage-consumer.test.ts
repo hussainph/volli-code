@@ -34,14 +34,15 @@ test("posts the batch to the ingest endpoint with its token and acknowledges on 
   });
 });
 
-test("posts without a token when none is configured", async () => {
-  const fetchFn = vi.fn(
-    async (_url: string, _init?: RequestInit) => new Response(null, { status: 204 }),
-  );
+test("never posts unauthenticated: an ingest URL without a token holds the batch", async () => {
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const fetchFn = vi.fn();
   const delivered = batch([{ callId: "a" }]);
   await consumeUsage(delivered, { USAGE_INGEST_URL: "https://backend.example/usage" }, fetchFn);
-  expect(delivered.acked).toBe(true);
-  expect(fetchFn.mock.calls[0]![1]!.headers).toEqual({ "content-type": "application/json" });
+  expect(fetchFn).not.toHaveBeenCalled();
+  expect(delivered.acked).toBe(false);
+  expect(delivered.retried).toEqual({ delaySeconds: 30 });
+  expect(error).toHaveBeenCalledWith(expect.stringContaining("without a token"));
 });
 
 test("retries the whole batch when the backend refuses or is unreachable", async () => {
@@ -49,7 +50,7 @@ test("retries the whole batch when the backend refuses or is unreachable", async
   const refused = batch([{ callId: "a" }]);
   await consumeUsage(
     refused,
-    { USAGE_INGEST_URL: "https://backend.example/usage" },
+    { USAGE_INGEST_URL: "https://backend.example/usage", USAGE_INGEST_TOKEN: "t" },
     async () => new Response("no", { status: 503 }),
   );
   expect(refused.acked).toBe(false);
@@ -58,7 +59,7 @@ test("retries the whole batch when the backend refuses or is unreachable", async
   const unreachable = batch([{ callId: "a" }]);
   await consumeUsage(
     unreachable,
-    { USAGE_INGEST_URL: "https://backend.example/usage" },
+    { USAGE_INGEST_URL: "https://backend.example/usage", USAGE_INGEST_TOKEN: "t" },
     async () => {
       throw new TypeError("fetch failed");
     },

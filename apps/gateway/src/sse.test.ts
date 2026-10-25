@@ -47,3 +47,19 @@ test("a line beyond the bound stops parsing without throwing", () => {
   expect(parser.push(bytes("\n\ndata: later\n\n"))).toEqual([]);
   expect(parser.end()).toEqual([]);
 });
+
+test("an overlong line after a line end in the same chunk also stops parsing", () => {
+  const parser = new SseParser();
+  expect(parser.push(bytes(`data: a\n\ndata: ${"x".repeat(MAX_SSE_LINE_LENGTH)}`))).toEqual([
+    { data: "a" },
+  ]);
+  expect(parser.overflowed).toBe(true);
+});
+
+test("one long line in many chunks is assembled once", () => {
+  const parser = new SseParser();
+  parser.push(bytes("data: "));
+  for (let index = 0; index < 100; index += 1)
+    expect(parser.push(bytes("x".repeat(1000)))).toEqual([]);
+  expect(parser.push(bytes("\n\n"))).toEqual([{ data: "x".repeat(100_000) }]);
+});

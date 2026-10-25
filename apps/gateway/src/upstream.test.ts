@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vite-plus/test";
 
 import {
+  connectionHeaders,
   forwardedRequestHeaders,
   parseUpstreamBase,
   relayedResponseHeaders,
@@ -31,6 +32,9 @@ describe("parseUpstreamBase", () => {
     "https://litellm.internal",
     "https://box.local",
     "https://router.home.arpa",
+    "https://localhost./",
+    "https://box.local./",
+    "https://metadata.google.internal./",
   ])("refuses %s", (up) => {
     expect(parseUpstreamBase(up)).toBeNull();
   });
@@ -76,6 +80,8 @@ test("forwarded request headers drop every grant carrier, hop-by-hop and edge he
       "cf-connecting-ip": "1.2.3.4",
       "x-forwarded-for": "1.2.3.4",
       "x-volli-call-id": "id",
+      "openai-organization": "org-runner-picked",
+      "openai-project": "proj-runner-picked",
       "anthropic-version": "2023-06-01",
       "anthropic-beta": "prompt-caching",
       "content-type": "application/json",
@@ -99,6 +105,7 @@ test("relayed response headers drop encoding, length, cookies and hop-by-hop hea
       "set-cookie": "a=b",
       "retry-after": "3",
       "request-id": "req_1",
+      "x-volli-error": "forged",
     }),
   );
   expect(Object.fromEntries(out)).toEqual({
@@ -106,4 +113,18 @@ test("relayed response headers drop encoding, length, cookies and hop-by-hop hea
     "retry-after": "3",
     "request-id": "req_1",
   });
+});
+
+test("a connection's own headers may choose the organization, but never carry a key", () => {
+  expect(
+    Object.fromEntries(
+      connectionHeaders({
+        "openai-organization": "org-team",
+        "x-title": "Volli",
+        authorization: "Bearer smuggled",
+        "x-volli-error": "forged",
+      }),
+    ),
+  ).toEqual({ "openai-organization": "org-team", "x-title": "Volli" });
+  expect(Object.fromEntries(connectionHeaders(undefined))).toEqual({});
 });

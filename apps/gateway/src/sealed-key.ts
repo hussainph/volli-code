@@ -23,7 +23,7 @@ const INFO = utf8("volli-gateway sealed provider key v1");
 const KID = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** The associated data a sealed key is bound to. */
-export function sealedKeyAad(connectionId: string, keyVersion: number): Uint8Array<ArrayBuffer> {
+function sealedKeyAad(connectionId: string, keyVersion: number): Uint8Array<ArrayBuffer> {
   return utf8(`conn:${connectionId}\nkv:${keyVersion}`);
 }
 
@@ -60,11 +60,6 @@ export async function sealProviderKey(input: {
 
 export type OpenResult = { ok: true; key: string } | { ok: false; code: GatewayErrorCode };
 
-interface Recipient {
-  privateKey: CryptoKey;
-  publicKey: Uint8Array;
-}
-
 function isPrivateJwk(value: unknown): value is X25519PrivateJwk {
   if (typeof value !== "object" || value === null) return false;
   const { kty, crv, d, x } = value as Record<string, unknown>;
@@ -82,12 +77,16 @@ function isPrivateJwk(value: unknown): value is X25519PrivateJwk {
  * The gateway's sealing private keys by `kid`: the current one and, during a
  * rotation, the previous one. Parsed from the `GATEWAY_SEALING_KEYS` secret,
  * a JSON object of `kid` to X25519 private JWK.
+ *
+ * It holds the JWKs and imports the one a grant names on each open, rather
+ * than caching an import promise: on workerd a promise begun in one request
+ * must not be awaited by another, and an X25519 import costs microseconds.
  */
 export class SealingKeyring {
-  private readonly recipients: Map<string, Promise<Recipient>>;
+  private readonly keys: Map<string, X25519PrivateJwk>;
 
-  private constructor(recipients: Map<string, Promise<Recipient>>) {
-    this.recipients = recipients;
+  private constructor(keys: Map<string, X25519PrivateJwk>) {
+    this.keys = keys;
   }
 
   /** The keyring in `json`, or `null` when it is missing, empty or malformed. */
@@ -100,27 +99,21 @@ export class SealingKeyring {
       return null;
     }
     if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-    const recipients = new Map<string, Promise<Recipient>>();
+    const keys = new Map<string, X25519PrivateJwk>();
     for (const [kid, jwk] of Object.entries(value)) {
       if (!KID.test(kid) || !isPrivateJwk(jwk)) return null;
       const { kty, crv, d, x } = jwk;
-      const recipient = importX25519Private({ kty, crv, d, x }).then((privateKey) => ({
-        privateKey,
-        publicKey: fromBase64Url(x)!,
-      }));
-      // A key WebCrypto refuses surfaces when a grant needs it, not as an
-      // unhandled rejection at parse time.
-      recipient.catch(() => {});
-      recipients.set(kid, recipient);
+      keys.set(kid, { kty, crv, d, x });
     }
-    return recipients.size === 0 ? null : new SealingKeyring(recipients);
+    return keys.size === 0 ? null : new SealingKeyring(keys);
   }
 
   /**
    * Opens a route's sealed key. A `kid` this deployment does not hold means the
    * grant predates a completed rotation: the runner refreshes it. A key that
-   * does not open means the ciphertext was not sealed for this connection and
-   * version, or the keyring is wrong; neither is the runner's to fix.
+   * does not open was not sealed for this connection and version: the
+   * connection's key must be entered again. A keyring key WebCrypto refuses is
+   * the gateway's own misconfiguration.
    */
   async open(sealed: string, connectionId: string, keyVersion: number): Promise<OpenResult> {
     const parts = sealed.split(".");
@@ -130,14 +123,19 @@ export class SealingKeyring {
     const enc = fromBase64Url(encText);
     const ciphertext = fromBase64Url(ciphertextText);
     if (enc?.length !== 32 || !ciphertext) return { ok: false, code: "volli_grant_invalid" };
-    const recipient = this.recipients.get(kid);
-    if (!recipient) return { ok: false, code: "volli_grant_stale" };
+    const jwk = this.keys.get(kid);
+    if (!jwk) return { ok: false, code: "volli_grant_stale" };
+    let privateKey: CryptoKey;
     try {
-      const { privateKey, publicKey } = await recipient;
+      privateKey = await importX25519Private(jwk);
+    } catch {
+      return { ok: false, code: "volli_gateway_misconfigured" };
+    }
+    try {
       const plaintext = await hpkeOpen({
         aead: "aes-256-gcm",
         recipientPrivateKey: privateKey,
-        recipientPublicKey: publicKey,
+        recipientPublicKey: fromBase64Url(jwk.x)!,
         enc,
         info: INFO,
         aad: sealedKeyAad(connectionId, keyVersion),
@@ -145,7 +143,7 @@ export class SealingKeyring {
       });
       return { ok: true, key: new TextDecoder("utf-8", { fatal: true }).decode(plaintext) };
     } catch {
-      return { ok: false, code: "volli_gateway_misconfigured" };
+      return { ok: false, code: "volli_connection_key_unreadable" };
     }
   }
 }

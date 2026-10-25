@@ -29,11 +29,11 @@ describe("sealed provider keys", () => {
     const { sk, keyring } = await sealed();
     expect(await keyring.open(sk, OTHER, 2)).toEqual({
       ok: false,
-      code: "volli_gateway_misconfigured",
+      code: "volli_connection_key_unreadable",
     });
     expect(await keyring.open(sk, CONN, 3)).toEqual({
       ok: false,
-      code: "volli_gateway_misconfigured",
+      code: "volli_connection_key_unreadable",
     });
   });
 

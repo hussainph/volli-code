@@ -15,6 +15,7 @@ import {
 } from "@volli/shared/cloud";
 
 import { fromBase64Url, utf8 } from "./bytes.ts";
+import type { FetchFn, WaitUntil } from "./env.ts";
 
 /** Clock skew tolerated on `exp` and `iat`, either way. */
 export const CLOCK_SKEW_SECONDS = 60;
@@ -25,10 +26,11 @@ export const JWKS_TTL_MS = 10 * 60_000;
 /** The shortest gap between two fetches prompted by an unknown `kid`. */
 export const JWKS_REFETCH_INTERVAL_MS = 30_000;
 
+/** How long a JWKS fetch may take before it is abandoned. */
+export const JWKS_FETCH_TIMEOUT_MS = 5_000;
+
 /** A grant may not claim to live longer than this, whatever the issuer signed. */
 const MAX_LIFETIME_SECONDS = 2 * GATEWAY_GRANT_LIFETIME_SECONDS;
-
-type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
 
 export type KeyLookup = { ok: true; key: CryptoKey } | { ok: false; code: GatewayErrorCode };
 
@@ -62,13 +64,22 @@ async function importJwks(jwks: unknown): Promise<Map<string, CryptoKey>> {
 /**
  * The issuer's verification keys by `kid`. Either inline (a JWKS JSON string,
  * for local development and tests) or fetched from the issuer's JWKS URL and
- * cached, refetched on expiry and, at a bounded rate, on an unknown `kid` so a
- * signing key rotation is picked up without a deploy.
+ * cached.
+ *
+ * Requests are never held up by a routine refresh: once keys are held, an
+ * expired cache is refreshed in the background (through the request's
+ * `waitUntil`) while the held keys keep answering. A request waits on a fetch
+ * only when no keys are held yet, or for an unknown `kid` (at a bounded rate),
+ * so a signing-key rotation is picked up without a deploy. No request ever
+ * awaits a fetch another request started: on workerd, I/O belongs to the
+ * request that began it.
  */
 export class IssuerKeys {
   private keys: Map<string, CryptoKey> | null = null;
+  /** When the held keys were fetched. */
   private fetchedAt = Number.NEGATIVE_INFINITY;
-  private loading: Promise<void> | null = null;
+  /** When a fetch was last started or finished, successful or not. */
+  private attemptedAt = Number.NEGATIVE_INFINITY;
   private readonly source: { inline: string } | { url: string };
   private readonly fetchFn: FetchFn;
   private readonly now: () => number;
@@ -79,10 +90,20 @@ export class IssuerKeys {
     this.now = now;
   }
 
-  async lookup(kid: string): Promise<KeyLookup> {
-    if (this.now() - this.fetchedAt >= JWKS_TTL_MS) await this.load();
+  async lookup(kid: string, ctx: WaitUntil): Promise<KeyLookup> {
+    const mayFetch = this.now() - this.attemptedAt >= JWKS_REFETCH_INTERVAL_MS;
+    if (!this.keys) {
+      if (mayFetch) await this.load();
+    } else if (mayFetch && this.now() - this.fetchedAt >= JWKS_TTL_MS) {
+      ctx.waitUntil(this.load());
+    }
     let key = this.keys?.get(kid);
-    if (!key && "url" in this.source && this.now() - this.fetchedAt >= JWKS_REFETCH_INTERVAL_MS) {
+    if (
+      !key &&
+      this.keys &&
+      "url" in this.source &&
+      this.now() - this.attemptedAt >= JWKS_REFETCH_INTERVAL_MS
+    ) {
       await this.load();
       key = this.keys?.get(kid);
     }
@@ -94,29 +115,24 @@ export class IssuerKeys {
     };
   }
 
-  private load(): Promise<void> {
-    this.loading ??= this.fetchKeys()
-      .then(
-        (keys) => {
-          this.keys = keys;
-          this.fetchedAt = this.now();
-        },
-        (error: unknown) => {
-          // Keep serving keys already held; try again after the refetch interval.
-          console.error(`[volli-gateway] issuer JWKS unavailable: ${String(error)}`);
-          this.fetchedAt = this.now() - JWKS_TTL_MS + JWKS_REFETCH_INTERVAL_MS;
-        },
-      )
-      .finally(() => {
-        this.loading = null;
-      });
-    return this.loading;
+  private async load(): Promise<void> {
+    this.attemptedAt = this.now();
+    try {
+      const keys = await this.fetchKeys();
+      this.keys = keys;
+      this.fetchedAt = this.now();
+    } catch (error) {
+      // Keep serving keys already held; try again after the refetch interval.
+      console.error(`[volli-gateway] issuer JWKS unavailable: ${String(error)}`);
+    }
+    this.attemptedAt = this.now();
   }
 
   private async fetchKeys(): Promise<Map<string, CryptoKey>> {
     if ("inline" in this.source) return importJwks(JSON.parse(this.source.inline));
     const response = await this.fetchFn(this.source.url, {
       headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(JWKS_FETCH_TIMEOUT_MS),
     });
     if (!response.ok) throw new Error(`JWKS answered ${response.status}`);
     return importJwks(await response.json());
@@ -143,7 +159,7 @@ function decodeJson(segment: string): unknown {
  */
 export async function verifyGrant(
   token: string,
-  options: { issuer: string; keys: IssuerKeys; nowMs: number },
+  options: { issuer: string; keys: IssuerKeys; nowMs: number; waitUntil: WaitUntil },
 ): Promise<GrantVerification> {
   const invalid = { ok: false, code: "volli_grant_invalid" } as const;
   const parts = token.split(".");
@@ -155,7 +171,7 @@ export async function verifyGrant(
   const signature = fromBase64Url(signatureText);
   if (signature?.length !== 64) return invalid;
 
-  const lookup = await options.keys.lookup(header.kid);
+  const lookup = await options.keys.lookup(header.kid, options.waitUntil);
   if (!lookup.ok) return lookup;
   const verified = await crypto.subtle.verify(
     { name: "ECDSA", hash: "SHA-256" },
@@ -168,7 +184,8 @@ export async function verifyGrant(
   const claims = parseGatewayGrantClaims(decodeJson(payloadText));
   if (!claims || claims.iss !== options.issuer) return invalid;
   const now = Math.floor(options.nowMs / 1000);
-  if (claims.iat > now + CLOCK_SKEW_SECONDS || claims.exp - claims.iat > MAX_LIFETIME_SECONDS)
+  const lifetime = claims.exp - claims.iat;
+  if (claims.iat > now + CLOCK_SKEW_SECONDS || lifetime <= 0 || lifetime > MAX_LIFETIME_SECONDS)
     return invalid;
   if (now - CLOCK_SKEW_SECONDS >= claims.exp) return { ok: false, code: "volli_grant_expired" };
   return { ok: true, claims };

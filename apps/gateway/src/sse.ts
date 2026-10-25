@@ -19,7 +19,8 @@ export const MAX_SSE_LINE_LENGTH = 4 * 1024 * 1024;
 
 export class SseParser {
   private readonly decoder = new TextDecoder();
-  private buffer = "";
+  private tail: string[] = [];
+  private tailLength = 0;
   private event: string | undefined;
   private data: string[] = [];
   private pendingCarriageReturn = false;
@@ -34,43 +35,66 @@ export class SseParser {
   end(): SseEvent[] {
     const events = this.feed(this.decoder.decode());
     if (this.overflowed) return events;
-    if (this.buffer !== "") this.line(this.buffer, events);
-    this.buffer = "";
+    if (this.tailLength > 0) this.line(this.tail.join(""), events);
+    this.tail = [];
+    this.tailLength = 0;
     this.dispatch(events);
     return events;
   }
 
-  private feed(text: string): SseEvent[] {
+  private feed(input: string): SseEvent[] {
     const events: SseEvent[] = [];
     if (this.overflowed) return events;
-    let start = 0;
-    if (this.pendingCarriageReturn && text.startsWith("\n")) start = 1;
-    this.pendingCarriageReturn = false;
-    let buffer = this.buffer + text.slice(start);
-    let index: number;
-    while ((index = buffer.search(/[\r\n]/)) !== -1) {
-      const line = buffer.slice(0, index);
-      if (buffer[index] === "\r") {
-        if (index + 1 === buffer.length) {
-          // A CR at the end of a chunk may be the first half of CRLF.
-          this.pendingCarriageReturn = true;
-          buffer = buffer.slice(index + 1);
-          this.line(line, events);
-          continue;
-        }
-        buffer = buffer.slice(buffer[index + 1] === "\n" ? index + 2 : index + 1);
-      } else {
-        buffer = buffer.slice(index + 1);
-      }
-      this.line(line, events);
+    let text = input;
+    if (this.pendingCarriageReturn && text !== "") {
+      this.pendingCarriageReturn = false;
+      if (text.startsWith("\n")) text = text.slice(1);
     }
-    if (buffer.length > MAX_SSE_LINE_LENGTH) {
-      this.overflowed = true;
-      this.buffer = "";
+    // A chunk with no line end only extends the held tail. The tail is kept as
+    // a list and joined once a line ends, so one long line arriving in many
+    // chunks costs one copy, not one per chunk.
+    if (!/[\r\n]/.test(text)) {
+      this.tail.push(text);
+      this.tailLength += text.length;
+      if (this.tailLength > MAX_SSE_LINE_LENGTH) this.overflow();
       return events;
     }
-    this.buffer = buffer;
+    const held = this.tailLength;
+    const buffer = this.tail.join("") + text;
+    this.tail = [];
+    this.tailLength = 0;
+    let lineStart = 0;
+    let nextLf = buffer.indexOf("\n", held);
+    let nextCr = buffer.indexOf("\r", held);
+    while (nextLf !== -1 || nextCr !== -1) {
+      const end = nextLf === -1 ? nextCr : nextCr === -1 ? nextLf : Math.min(nextLf, nextCr);
+      this.line(buffer.slice(lineStart, end), events);
+      if (end === nextCr && end + 1 === buffer.length) {
+        // A CR at the end of a chunk may be the first half of CRLF.
+        this.pendingCarriageReturn = true;
+        lineStart = end + 1;
+        break;
+      }
+      lineStart = end === nextCr && buffer[end + 1] === "\n" ? end + 2 : end + 1;
+      if (nextLf !== -1 && nextLf < lineStart) nextLf = buffer.indexOf("\n", lineStart);
+      if (nextCr !== -1 && nextCr < lineStart) nextCr = buffer.indexOf("\r", lineStart);
+    }
+    const rest = buffer.slice(lineStart);
+    if (rest.length > MAX_SSE_LINE_LENGTH) {
+      this.overflow();
+      return events;
+    }
+    if (rest !== "") {
+      this.tail.push(rest);
+      this.tailLength = rest.length;
+    }
     return events;
+  }
+
+  private overflow(): void {
+    this.overflowed = true;
+    this.tail = [];
+    this.tailLength = 0;
   }
 
   private line(line: string, events: SseEvent[]): void {

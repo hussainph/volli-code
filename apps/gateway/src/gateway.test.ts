@@ -1,7 +1,7 @@
 import type { GatewayUsageRecord } from "@volli/shared/cloud";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
-import { createDevSealingKey } from "../scripts/dev-credentials.ts";
+import { createDevSealingKey, signJws } from "../scripts/dev-credentials.ts";
 import {
   CALL_ID,
   CONN,
@@ -16,6 +16,7 @@ import {
   streamOf,
   type Fixture,
 } from "../test/support.ts";
+import { fromBase64Url } from "./bytes.ts";
 import type { GatewayEnv } from "./env.ts";
 import { createGateway } from "./gateway.ts";
 
@@ -157,6 +158,7 @@ describe("relaying", () => {
     await h.settled();
     expect(h.records).toEqual([
       {
+        recordId: expect.stringMatching(/^[0-9a-f-]{36}$/),
         callId: CALL_ID,
         grantJti: expect.any(String),
         workspaceId: "9e2b5d8a-4c7f-4b13-a6e9-0f3c8d1b5a27",
@@ -283,11 +285,29 @@ describe("relaying", () => {
     expect(h.calls[0]!.body).toBe("{");
     await send({ headers: { "content-type": "application/json" }, body: '{"stream":false}' });
     expect(h.calls[1]!.body).toBe('{"stream":false}');
-    await send({ body: '{"stream":true}' });
-    expect(h.calls[2]!.body).toBe('{"stream":true}');
     await h.settled();
-    expect(h.records.map((record) => record.modelId)).toEqual([undefined, undefined, undefined]);
-    expect(h.records.map((record) => record.status)).toEqual(["partial", "partial", "partial"]);
+    expect(h.records.map((record) => record.modelId)).toEqual([undefined, undefined]);
+    expect(h.records.map((record) => record.status)).toEqual(["partial", "partial"]);
+    expect(new Set(h.records.map((record) => record.recordId)).size).toBe(2);
+  });
+
+  test("a mislabelled chat stream is still asked for its usage", async () => {
+    const h = await harness(() => Response.json({}));
+    const token = await grant(await fixture(), {
+      routes: [route({ api: "openai-completions", upstream: "https://api.openai.com/v1" })],
+    });
+    await (
+      await h.call(`/v1/c/${CONN}/chat/completions`, {
+        grant: token,
+        headers: { "content-type": "text/plain" },
+        body: '{"model":"m","stream":true}',
+      })
+    ).text();
+    expect(JSON.parse(h.calls[0]!.body!)).toEqual({
+      model: "m",
+      stream: true,
+      stream_options: { include_usage: true },
+    });
   });
 
   test("a non-streaming JSON answer is metered at its end", async () => {
@@ -308,15 +328,15 @@ describe("relaying", () => {
     expect(h.calls[0]!.body).toBeUndefined();
   });
 
-  test("the bare connection path maps to the upstream base, and a grant without a project omits it", async () => {
+  test("an untyped body under a base path relays, and a grant without a project omits it", async () => {
     const h = await harness(() => new Response(streamOf(["raw"])));
     const token = await grant(await fixture(), {
-      routes: [route({ upstream: "https://llm.team.example/v1" })],
+      routes: [route({ upstream: "https://llm.team.example/anthropic" })],
       claims: { prj: undefined },
     });
-    const response = await h.call(`/v1/c/${CONN}`, { method: "GET", grant: token });
+    const response = await h.call(`/v1/c/${CONN}/v1/models`, { method: "GET", grant: token });
     expect(await response.text()).toBe("raw");
-    expect(h.calls[0]!.url).toBe("https://llm.team.example/v1");
+    expect(h.calls[0]!.url).toBe("https://llm.team.example/anthropic/v1/models");
     await h.settled();
     expect(h.records[0]).not.toHaveProperty("projectId");
     expect(h.records[0]).toMatchObject({ status: "partial", usage: {} });
@@ -408,13 +428,23 @@ describe("refusals", () => {
     ["/healthz", "POST"],
     ["/v1/c/not-a-uuid/v1/messages", "POST"],
     [`/v1/c/${CONN.toUpperCase()}/v1/messages`, "POST"],
+    // Endpoints a key reaches beyond model calls are never relayed.
+    [`/v1/c/${CONN}`, "GET"],
+    [`/v1/c/${CONN}/v1/files`, "GET"],
+    [`/v1/c/${CONN}/v1/messages/batches`, "POST"],
+    [`/v1/c/${CONN}/v1/messages/`, "POST"],
   ])("volli_route_not_found for %s", async (path, method) => {
     const h = await harness(never);
     await expectRefusal(await h.call(path, { method }), "volli_route_not_found", 404);
   });
 
-  test("volli_method_not_allowed", async () => {
+  test("volli_method_not_allowed, for an unrelayed method or the wrong one for the endpoint", async () => {
     const h = await harness(never);
+    await expectRefusal(
+      await h.call(`/v1/c/${CONN}/v1/messages`, { method: "GET" }),
+      "volli_method_not_allowed",
+      405,
+    );
     await expectRefusal(
       await h.call(`/v1/c/${CONN}/v1/messages`, { method: "DELETE" }),
       "volli_method_not_allowed",
@@ -468,18 +498,22 @@ describe("refusals", () => {
     await expectRefusal(await h.call(`/v1/c/${CONN}/v1/messages`), "volli_grant_stale", 401);
   });
 
-  test.each([["grant:"], [`conn:${CONN}`], [`conn:${CONN}:kv:3`]])(
-    "volli_grant_revoked by a %s entry",
-    async (prefix) => {
-      const h = await harness(never, {
-        REVOCATIONS: {
-          get: async (key) =>
-            key.startsWith(prefix) && (prefix !== `conn:${CONN}` || key === prefix) ? "1" : null,
-        },
-      });
-      await expectRefusal(await h.call(`/v1/c/${CONN}/v1/messages`), "volli_grant_revoked", 403);
-    },
-  );
+  test("volli_grant_stale when the grant's key version was retired", async () => {
+    const h = await harness(never, {
+      REVOCATIONS: { get: async (key) => (key === `conn:${CONN}:kv:3` ? "rotated" : null) },
+    });
+    await expectRefusal(await h.call(`/v1/c/${CONN}/v1/messages`), "volli_grant_stale", 401);
+  });
+
+  test.each([["grant:"], [`conn:${CONN}`]])("volli_grant_revoked by a %s entry", async (prefix) => {
+    const h = await harness(never, {
+      REVOCATIONS: {
+        get: async (key) =>
+          key.startsWith(prefix) && (prefix !== `conn:${CONN}` || key === prefix) ? "1" : null,
+      },
+    });
+    await expectRefusal(await h.call(`/v1/c/${CONN}/v1/messages`), "volli_grant_revoked", 403);
+  });
 
   test("an empty revocation set lets the call through", async () => {
     const h = await harness(() => Response.json({}), { REVOCATIONS: { get: async () => null } });
@@ -531,6 +565,45 @@ describe("refusals", () => {
     );
   });
 
+  test("a provider 403 is the provider's to explain, and passes through", async () => {
+    const h = await harness(
+      () => new Response('{"error":{"type":"permission_error"}}', { status: 403 }),
+    );
+    const response = await h.call(`/v1/c/${CONN}/v1/messages`, { body: "{}" });
+    expect(response.status).toBe(403);
+    expect(response.headers.has("x-volli-error")).toBe(false);
+    expect(await response.text()).toContain("permission_error");
+  });
+
+  test("volli_connection_key_unreadable when the sealed key was not sealed for this connection", async () => {
+    const h = await harness(never);
+    // Sealed for key version 3, presented as version 4: the AAD differs.
+    const f = h.f;
+    const token = await grant(f);
+    const claims = JSON.parse(new TextDecoder().decode(fromBase64Url(token.split(".")[1]!)!)) as {
+      routes: { anthropic: Record<string, unknown> };
+    };
+    const moved = await signJws(f.issuer, {
+      ...claims,
+      routes: { anthropic: { ...claims.routes.anthropic, kv: 4 } },
+    });
+    await expectRefusal(
+      await h.call(`/v1/c/${CONN}/v1/messages`, { grant: moved }),
+      "volli_connection_key_unreadable",
+      500,
+    );
+  });
+
+  test("errors tell the SDK whether to retry", async () => {
+    const h = await harness(() => {
+      throw new TypeError("fetch failed");
+    });
+    const transient = await h.call(`/v1/c/${CONN}/v1/messages`, { body: "{}" });
+    expect(transient.headers.get("x-should-retry")).toBe("true");
+    const refresh = await h.call(`/v1/c/${CONN}/v1/messages`, { grant: "a.b.c" });
+    expect(refresh.headers.get("x-should-retry")).toBe("false");
+  });
+
   test("volli_upstream_auth when the provider rejects the key, without its body", async () => {
     const h = await harness(() => new Response('{"error":"invalid x-api-key"}', { status: 401 }));
     await expectRefusal(
@@ -568,6 +641,7 @@ describe("refusals", () => {
   test.each([
     ["no issuer", { GATEWAY_ISSUER: undefined }],
     ["no issuer keys", { GATEWAY_JWKS: undefined }],
+    ["both an inline JWKS and a JWKS URL", { GATEWAY_JWKS_URL: "https://issuer.example/jwks" }],
     ["no sealing keys", { GATEWAY_SEALING_KEYS: undefined }],
   ])("volli_gateway_misconfigured with %s", async (_label, env) => {
     const h = await harness(never, env);

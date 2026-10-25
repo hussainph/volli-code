@@ -21,13 +21,21 @@ export interface UsageMeter {
 }
 
 export interface ProviderAdapter {
+  /**
+   * The only endpoints relayed, by path under the route's base URL, with their
+   * method. A key reaches far more than model calls (files, batches, stored
+   * completions, fine-tuning); none of that is metered or the runner's to use.
+   */
+  endpoints: Readonly<Record<string, "GET" | "POST">>;
   /** The provider's native auth header for the real key. */
   authHeaders(key: string): Record<string, string>;
   /**
-   * The edited request body, or `null` to forward the original bytes. Chat
-   * Completions streams report usage only when asked, so the gateway asks.
+   * When set, the gateway parses the JSON request body (whatever its declared
+   * content type) and forwards the result instead of the original bytes when
+   * it is not `null`. Chat Completions streams report usage only when asked, so
+   * the gateway asks.
    */
-  editBody(body: unknown): unknown;
+  editBody?(body: unknown): unknown;
   meter(): UsageMeter;
 }
 
@@ -179,20 +187,20 @@ class ChatCompletionsMeter extends BaseMeter {
 }
 
 const bearer = (key: string) => ({ authorization: `Bearer ${key}` });
-const unchanged = () => null;
 
 export const PROVIDER_ADAPTERS: Record<GatewayApi, ProviderAdapter> = {
   "anthropic-messages": {
+    endpoints: { "/v1/messages": "POST", "/v1/messages/count_tokens": "POST", "/v1/models": "GET" },
     authHeaders: (key) => ({ "x-api-key": key }),
-    editBody: unchanged,
     meter: () => new AnthropicMeter(),
   },
   "openai-responses": {
+    endpoints: { "/responses": "POST", "/models": "GET" },
     authHeaders: bearer,
-    editBody: unchanged,
     meter: () => new OpenAiResponsesMeter(),
   },
   "openai-completions": {
+    endpoints: { "/chat/completions": "POST", "/models": "GET" },
     authHeaders: bearer,
     editBody(body) {
       const request = record(body);

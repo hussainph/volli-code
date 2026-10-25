@@ -169,7 +169,12 @@ export type GatewayErrorRecovery = "transient" | "refresh-grant" | "auth" | "con
 
 /** Every error the gateway produces itself, with its HTTP status and recovery class. */
 export const GATEWAY_ERRORS = {
-  /** The path is not `/v1/c/<connection>/…` (or a known gateway endpoint). */
+  /**
+   * The path is not `/v1/c/<connection>/<a relayed endpoint>`. Only the model
+   * endpoints of the route's API family are relayed (messages, responses, chat
+   * completions, token counting, model lists), never files, batches or other
+   * account endpoints a key could reach.
+   */
   volli_route_not_found: { status: 404, recovery: "config" },
   volli_method_not_allowed: { status: 405, recovery: "config" },
   /** No grant in `authorization`, `x-api-key` or `x-goog-api-key`. */
@@ -177,9 +182,13 @@ export const GATEWAY_ERRORS = {
   /** Malformed, wrongly signed, or for another issuer or audience. */
   volli_grant_invalid: { status: 401, recovery: "refresh-grant" },
   volli_grant_expired: { status: 401, recovery: "refresh-grant" },
-  /** Sealed under a gateway key this deployment no longer holds. */
+  /**
+   * The grant carries a key version that has since been retired, or was sealed
+   * under a gateway key this deployment no longer holds. A fresh grant carries
+   * the current one.
+   */
   volli_grant_stale: { status: 401, recovery: "refresh-grant" },
-  /** The grant or its connection key version was revoked (kill switch). */
+  /** The grant, or the whole connection, was revoked (kill switch). */
   volli_grant_revoked: { status: 403, recovery: "auth" },
   /** The grant does not name the connection in the path. */
   volli_route_not_granted: { status: 403, recovery: "auth" },
@@ -188,12 +197,14 @@ export const GATEWAY_ERRORS = {
   volli_body_too_large: { status: 413, recovery: "config" },
   /** The route's upstream is not https on a public host. */
   volli_upstream_forbidden: { status: 400, recovery: "config" },
-  /** The provider rejected the connection's key. Ask whoever owns the key to update it. */
+  /** The connection's sealed key does not open: it was not sealed for this connection and version. */
+  volli_connection_key_unreadable: { status: 500, recovery: "config" },
+  /** The provider rejected the connection's key (HTTP 401). Ask whoever owns the key to update it. */
   volli_upstream_auth: { status: 401, recovery: "config" },
-  /** The provider answered with a redirect; the gateway never follows one. */
-  volli_upstream_redirect: { status: 502, recovery: "transient" },
+  /** The provider answered with a redirect, which the gateway never follows: the endpoint is misconfigured. */
+  volli_upstream_redirect: { status: 502, recovery: "config" },
   volli_upstream_unreachable: { status: 502, recovery: "transient" },
-  /** The gateway itself is misconfigured: no issuer keys, or none of its sealing keys open the grant. */
+  /** The gateway itself is misconfigured or failed unexpectedly. Not the runner's to fix; retry later. */
   volli_gateway_misconfigured: { status: 500, recovery: "transient" },
 } as const satisfies Record<string, { status: number; recovery: GatewayErrorRecovery }>;
 
@@ -223,10 +234,16 @@ export const GATEWAY_USAGE_STATUSES = ["completed", "partial", "upstream-error"]
 export type GatewayUsageStatus = (typeof GATEWAY_USAGE_STATUSES)[number];
 
 /**
- * One relayed call, metered by the gateway. The backend ingests these
- * idempotently on `callId`. Only metadata: never a prompt, a response or a key.
+ * One relayed call, metered by the gateway. Only metadata: never a prompt, a
+ * response or a key.
+ *
+ * The backend ingests these idempotently on `recordId`, which the gateway mints
+ * per call, so a queue redelivery repeats nothing and a runner cannot make one
+ * call's usage disappear by reusing another's call id. `callId` is the runner's
+ * id, kept only to join the record with the Session's own usage fact.
  */
 export interface GatewayUsageRecord {
+  recordId: string;
   callId: string;
   grantJti: string;
   workspaceId: string;

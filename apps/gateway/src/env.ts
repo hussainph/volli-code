@@ -7,6 +7,9 @@
  */
 import type { GatewayUsageRecord } from "@volli/shared/cloud";
 
+/** Outbound fetch, as the gateway calls it. */
+export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
+
 /** A Cloudflare Queue producer binding. */
 export interface QueueProducer<Body> {
   send(body: Body): Promise<void>;
@@ -34,7 +37,7 @@ export interface GatewayEnv {
   GATEWAY_ISSUER?: string;
   /** The issuer's JWKS URL. Production. */
   GATEWAY_JWKS_URL?: string;
-  /** The issuer's JWKS inline, as JSON. Local development and tests; wins over the URL. */
+  /** The issuer's JWKS inline, as JSON. Local development and tests; never set beside the URL. */
   GATEWAY_JWKS?: string;
   /** Secret: JSON of `kid` to X25519 private JWK (the current key, and the previous one mid-rotation). */
   GATEWAY_SEALING_KEYS?: string;
@@ -42,7 +45,7 @@ export interface GatewayEnv {
   GATEWAY_MAX_BODY_BYTES?: string;
   /** Metered usage goes here, one record per relayed call. */
   USAGE_QUEUE?: QueueProducer<GatewayUsageRecord>;
-  /** Kill switch: `grant:<jti>`, `conn:<id>` or `conn:<id>:kv:<n>` present means revoked. */
+  /** Kill switch: `grant:<jti>` or `conn:<id>` present revokes; `conn:<id>:kv:<n>` retires a key version. */
   REVOCATIONS?: KvReader;
   /** Where the queue consumer posts usage batches (the backend's ingest endpoint). Unset: a local stub that logs counts. */
   USAGE_INGEST_URL?: string;

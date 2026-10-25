@@ -7,6 +7,7 @@
  * upstream read is cancelled at once (the provider stops generating) and the
  * call settles as partial with whatever usage had been reported.
  */
+import { concatBytes } from "./bytes.ts";
 import { SseParser } from "./sse.ts";
 import type { UsageMeter } from "./providers.ts";
 
@@ -51,7 +52,7 @@ function sinkFor(contentType: string, meter: UsageMeter): Sink {
         if (size > MAX_METERED_JSON_BYTES) return;
         let parsed: unknown;
         try {
-          parsed = JSON.parse(new TextDecoder().decode(concat(chunks, size)));
+          parsed = JSON.parse(new TextDecoder().decode(concatBytes(...chunks)));
         } catch {
           // Not JSON after all: no usage to read.
           return;
@@ -61,16 +62,6 @@ function sinkFor(contentType: string, meter: UsageMeter): Sink {
     };
   }
   return { push() {}, end() {} };
-}
-
-function concat(chunks: Uint8Array[], size: number): Uint8Array {
-  const out = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return out;
 }
 
 /**

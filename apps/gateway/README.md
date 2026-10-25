@@ -34,16 +34,23 @@ runner ── POST /v1/c/<connection>/v1/messages ──▶ gateway ── POST 
    carries the provider key **sealed to the gateway** (`sk`). The Worker verifies
    the grant offline against the issuer's JWKS. The backend is not on the request
    path.
-3. The Worker strips every place a grant can travel (`authorization`,
-   `x-api-key`, `x-goog-api-key`), hop-by-hop and edge headers, and `x-volli-*`.
-   It opens the sealed key and sends it in the provider's own header.
+3. Only the route family's model endpoints are relayed (table below). Files,
+   batches, stored completions and other account endpoints the key could reach
+   are refused, because none of them is metered or the runner's to use. The
+   Worker strips every place a grant can travel (`authorization`, `x-api-key`,
+   `x-goog-api-key`), hop-by-hop and edge headers, `x-volli-*`, and
+   `openai-organization` / `openai-project`, since the connection chooses
+   which org a key bills, not the runner. It opens the sealed key and sends it
+   in the provider's own header.
 4. The response streams back unchanged. A copy of each chunk feeds the usage
    meter, which reads the provider's own usage report. When the runner
    disconnects, the upstream read is cancelled, so the provider stops
    generating.
 5. One usage record per relayed call goes onto the `USAGE_QUEUE` queue. Its
    consumer posts batches to the backend's ingest endpoint, which is idempotent
-   on `callId`. Records hold metadata only: ids, model, token counts, status and
+   on the gateway-minted `recordId`. The runner's `callId` only joins the record
+   with the Session's own usage fact, so reusing a call id cannot make usage
+   disappear. Records hold metadata only: ids, model, token counts, status and
    timing. **No body or key is ever logged or stored**, and invocation logs are
    off because request headers carry grants.
 
@@ -53,49 +60,59 @@ backend, the runner and this Worker read the same definitions.
 
 ## API families
 
-| `route.api`          | Providers                                | Key header              | Usage read from                                         |
-| -------------------- | ---------------------------------------- | ----------------------- | ------------------------------------------------------- |
-| `anthropic-messages` | Anthropic, Anthropic-compatible gateways | `x-api-key`             | `message_start` + `message_delta` (or the JSON `usage`) |
-| `openai-responses`   | OpenAI Responses                         | `authorization: Bearer` | `response.completed` / `incomplete` / `failed`          |
-| `openai-completions` | OpenAI-compatible endpoints, OpenRouter  | `authorization: Bearer` | the final usage chunk (OpenRouter's `cost` included)    |
+| `route.api`          | Providers                                | Relayed endpoints                                                       | Key header              | Usage read from                                         |
+| -------------------- | ---------------------------------------- | ----------------------------------------------------------------------- | ----------------------- | ------------------------------------------------------- |
+| `anthropic-messages` | Anthropic, Anthropic-compatible gateways | `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models` | `x-api-key`             | `message_start` + `message_delta` (or the JSON `usage`) |
+| `openai-responses`   | OpenAI Responses                         | `POST /responses`, `GET /models`                                        | `authorization: Bearer` | `response.completed` / `incomplete` / `failed`          |
+| `openai-completions` | OpenAI-compatible endpoints, OpenRouter  | `POST /chat/completions`, `GET /models`                                 | `authorization: Bearer` | the final usage chunk (OpenRouter's `cost` included)    |
+
+Endpoint paths are relative to the route's upstream base (`https://api.anthropic.com`,
+`https://api.openai.com/v1`, `https://openrouter.ai/api/v1`).
 
 The gateway makes one change to a request body. A Chat Completions stream that
-does not ask for usage gets `stream_options.include_usage: true`.
+does not ask for usage gets `stream_options.include_usage: true`. Chat bodies
+are parsed whatever their declared content type, so mislabelling one does not
+skip the edit.
 
 ## Errors
 
-Every refusal happens **before** anything is forwarded, so the provider never
-saw the call and nothing was billed. Each one carries `x-volli-error: <code>`
-and a body that fits both SDK families' error envelopes:
+The gateway's own refusals all happen **before** anything is forwarded, so the
+provider never saw the call and nothing was billed. Each one carries
+`x-volli-error: <code>`, `x-should-retry` (true only for the `transient`
+class, so the SDK leaves grant refreshes to the runner and the rest to a
+person) and a body that fits both SDK families' error envelopes:
 `{"type":"error","error":{"type":code,"code":code,"message":…}}`. The codes,
 their statuses and their recovery classes (`transient`, `refresh-grant`,
 `auth`, `config`, `quota`) are `GATEWAY_ERRORS` in `@volli/shared/cloud`. The
 gateway never falls back to another connection, because another connection is
-another payer. Provider errors (429, 5xx, 400) pass through unchanged, except
-for two cases. An upstream 401 or 403 becomes `volli_upstream_auth`, because the
-connection's key was rejected. A redirect becomes `volli_upstream_redirect`,
-because the gateway never follows one.
+another payer.
+
+Provider answers pass through unchanged (429, 5xx, 400 and 403 included), with
+two exceptions that translate what the provider said. An upstream 401 becomes
+`volli_upstream_auth`, because the connection's key was rejected. A redirect
+becomes `volli_upstream_redirect`, because the gateway never follows one.
 
 ## Configuration
 
-| Name                     | Kind   | Purpose                                                                                                        |
-| ------------------------ | ------ | -------------------------------------------------------------------------------------------------------------- |
-| `GATEWAY_ISSUER`         | var    | The issuer's `iss` (the backend's site URL).                                                                   |
-| `GATEWAY_JWKS_URL`       | var    | The issuer's JWKS URL. Cached for 10 minutes, and refetched on an unknown `kid` at most every 30 s.            |
-| `GATEWAY_JWKS`           | var    | Inline JWKS JSON for local development. Takes precedence over the URL.                                         |
-| `GATEWAY_SEALING_KEYS`   | secret | JSON of `kid` → X25519 private JWK: the current key, plus the previous one during a rotation.                  |
-| `GATEWAY_MAX_BODY_BYTES` | var    | Largest request body relayed. Default 32 MiB.                                                                  |
-| `USAGE_INGEST_URL`       | var    | The backend's usage ingest endpoint. When it is unset, the consumer is a local stub that logs counts and acks. |
-| `USAGE_INGEST_TOKEN`     | secret | Bearer token for the ingest endpoint.                                                                          |
-| `USAGE_QUEUE`            | queue  | Producer for usage records. The same Worker consumes it (`max_retries` 10, then a dead-letter queue).          |
-| `REVOCATIONS`            | KV     | Kill switch. If `grant:<jti>`, `conn:<id>` or `conn:<id>:kv:<n>` is present, the call is refused.              |
+| Name                     | Kind   | Purpose                                                                                                                                                                                                |
+| ------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GATEWAY_ISSUER`         | var    | The issuer's `iss` (the backend's site URL).                                                                                                                                                           |
+| `GATEWAY_JWKS_URL`       | var    | The issuer's JWKS URL. Cached for 10 minutes and refreshed in the background; refetched on an unknown `kid` at most every 30 s.                                                                        |
+| `GATEWAY_JWKS`           | var    | Inline JWKS JSON for local development. Setting it beside the URL is a misconfiguration that refuses every call.                                                                                       |
+| `GATEWAY_SEALING_KEYS`   | secret | JSON of `kid` → X25519 private JWK: the current key, plus the previous one during a rotation.                                                                                                          |
+| `GATEWAY_MAX_BODY_BYTES` | var    | Largest request body relayed. Default 32 MiB.                                                                                                                                                          |
+| `USAGE_INGEST_URL`       | var    | The backend's usage ingest endpoint. When it is unset, the consumer is a local stub that logs counts and acks.                                                                                         |
+| `USAGE_INGEST_TOKEN`     | secret | Bearer token for the ingest endpoint. Required with the URL: usage is never posted unauthenticated.                                                                                                    |
+| `USAGE_QUEUE`            | queue  | Producer for usage records. The same Worker consumes it (`max_retries` 10, then a dead-letter queue).                                                                                                  |
+| `REVOCATIONS`            | KV     | Kill switch. `grant:<jti>` or `conn:<id>` revokes (`volli_grant_revoked`). `conn:<id>:kv:<n>` retires a rotated key version (`volli_grant_stale`, so the runner fetches a grant with the current one). |
 
 ### Sealed keys
 
 `sk` is `v1.<kid>.<enc>.<ciphertext>`. It is HPKE (RFC 9180) base mode with
 DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and AES-256-GCM, sealed to the gateway's
 public key `kid`. The AAD is `conn:<connectionId>\nkv:<keyVersion>`. A key moved
-to another connection, or an old version replayed as a new one, does not open.
+to another connection, or an old version replayed as a new one, does not open
+(`volli_connection_key_unreadable`: the key must be entered again).
 `src/hpke.ts` is pinned by the RFC's own test vector. The client a person pastes
 a key into does the sealing, so the backend stores only ciphertext. The runner
 carries the ciphertext inside the grant and cannot open it.
@@ -107,7 +124,7 @@ No Cloudflare account and no login are needed.
 ```sh
 pnpm --filter @volli/gateway dev                 # wrangler dev --local on :8787
 
-VOLLI_DEV_PROVIDER_KEY=sk-ant-… pnpm --filter @volli/gateway dev:grant -- \
+VOLLI_DEV_PROVIDER_KEY=sk-ant-… pnpm --filter @volli/gateway dev:grant \
   --provider anthropic --api anthropic-messages --upstream https://api.anthropic.com
 ```
 
@@ -130,9 +147,7 @@ consumer is the stub, so each relayed call logs
 - **The contract test** (`test/worker.test.ts`) bundles the Worker with
   `wrangler deploy --dry-run`, exactly as it would deploy, and runs that bundle
   in workerd through Miniflare. It uses the real queue and KV bindings, with a
-  fake provider and backend behind Miniflare's outbound service. It covers one
-  call per API family end to end through the queue to the ingest endpoint, the
-  typed refusals, and the KV kill switch. Miniflare's entry proxy does not pass
+  It covers one call per API family end to end through the queue to the ingest endpoint (one with a provider that holds back its stream until the runner has read the first event, which proves nothing is buffered), the endpoint allowlist, the typed refusals and the KV kill switch. Miniflare's entry proxy does not pass
   a client disconnect on to the Worker, so cancellation is covered by the unit
   tests. Confirm it on a real deployment as well.
 
@@ -158,15 +173,21 @@ The Worker is complete on its own side. These items wire it into the product:
       `parseGatewayGrantClaims` reads them, 10-minute lifetime).
 - [ ] **Backend: usage ingest.** An HTTP action at `USAGE_INGEST_URL` that takes
       `{records: GatewayUsageRecord[]}`, checks `USAGE_INGEST_TOKEN`, writes
-      idempotently on `callId` (validators built from `GATEWAY_APIS` and
-      `GATEWAY_USAGE_STATUSES`), prices records from the model catalog
+      idempotently on `recordId` (validators built from `GATEWAY_APIS` and
+      `GATEWAY_USAGE_STATUSES`), accepts a batch even when it rejects single
+      records (the consumer retries whole batches), prices records from the model catalog
       (`costBasis: "gateway-metered"`) and rolls up `usageDaily`.
 - [ ] **Backend: the kill switch.** Writes `grant:` / `conn:` entries to the
       `REVOCATIONS` KV namespace when a member is removed, a connection is
-      disabled or a key leaks.
+      disabled or a key leaks, and a `conn:<id>:kv:<n>` entry when a key
+      rotation retires version `n`.
 - [ ] **Client: sealing.** Seal pasted keys to the gateway's published public key
       with the `src/sealed-key.ts` format. Move `hpke.ts` + `sealed-key.ts` into
       a shared package when the client takes it up (they are WebCrypto-only).
+- [ ] **Runner types.** The runner-side `Route`, `GrantSource` and
+      `withConnectionRoutes` types land with their first caller (AGENTS.md:
+      every export has a production caller). The shared wire types are already
+      in `@volli/shared/cloud`.
 - [ ] **Runner: the route table and `GrantSource`.** Cache the grant and refresh
       it at about ⅔ of its lifetime. On `refresh-grant` codes, refresh and retry
       the call once.
@@ -185,5 +206,8 @@ The Worker is complete on its own side. These items wire it into the product:
       a route (`gateway.<domain>`). Measure relay latency and confirm
       disconnect cancellation there.
 - [ ] **Later.** Google (`x-goog-api-key`, `usageMetadata`), Bedrock (SigV4
-      re-signing or STS), per-member rate limits via the rate-limit binding,
+      re-signing or STS), Anthropic 1-hour cache writes as their own count
+      (`cache_creation.ephemeral_1h_input_tokens`, priced differently), streaming
+      non-chat request bodies through instead of buffering them, per-member rate
+      limits via the rate-limit binding,
       budgets (`402 volli_budget_exceeded`), DPoP-bound grants, and direct mode.

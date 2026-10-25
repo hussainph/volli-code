@@ -2,11 +2,12 @@ import { GATEWAY_AUDIENCE } from "@volli/shared/cloud";
 import { describe, expect, test, vi } from "vite-plus/test";
 
 import { createDevIssuer, signJws } from "../scripts/dev-credentials.ts";
-import { fixture, grant } from "../test/support.ts";
+import { context, fixture, grant } from "../test/support.ts";
 import { toBase64Url, utf8 } from "./bytes.ts";
 import {
   CLOCK_SKEW_SECONDS,
   IssuerKeys,
+  JWKS_FETCH_TIMEOUT_MS,
   JWKS_REFETCH_INTERVAL_MS,
   JWKS_TTL_MS,
   verifyGrant,
@@ -22,7 +23,7 @@ async function setup() {
     f,
     keys,
     verify: (token: string, nowMs = NOW) =>
-      verifyGrant(token, { issuer: f.issuer.issuer, keys, nowMs }),
+      verifyGrant(token, { issuer: f.issuer.issuer, keys, nowMs, waitUntil: context() }),
   };
 }
 
@@ -50,6 +51,11 @@ describe("verifyGrant", () => {
       code: "volli_grant_invalid",
     });
     expect(await verify(await grant(f, { issuedAt: NOW_S, lifetimeSeconds: 1201 }))).toEqual({
+      ok: false,
+      code: "volli_grant_invalid",
+    });
+    // Expiring before it was issued, even inside the skew window.
+    expect(await verify(await grant(f, { issuedAt: NOW_S + 30, lifetimeSeconds: -10 }))).toEqual({
       ok: false,
       code: "volli_grant_invalid",
     });
@@ -129,6 +135,8 @@ describe("verifyGrant", () => {
 });
 
 describe("IssuerKeys", () => {
+  const URL_SOURCE = { url: "https://issuer.example/jwks" };
+
   test("a JWKS with no usable keys is the gateway's misconfiguration", async () => {
     const skip = JSON.stringify({
       keys: [
@@ -140,29 +148,58 @@ describe("IssuerKeys", () => {
       ],
     });
     const keys = new IssuerKeys({ inline: skip }, vi.fn(), () => NOW);
-    expect(await keys.lookup("k")).toEqual({ ok: false, code: "volli_gateway_misconfigured" });
+    expect(await keys.lookup("k", context())).toEqual({
+      ok: false,
+      code: "volli_gateway_misconfigured",
+    });
   });
 
   test("an inline JWKS that does not parse is the gateway's misconfiguration", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     for (const inline of ["{", "{}"]) {
       const keys = new IssuerKeys({ inline }, vi.fn(), () => NOW);
-      expect(await keys.lookup("k")).toEqual({ ok: false, code: "volli_gateway_misconfigured" });
+      expect(await keys.lookup("k", context())).toEqual({
+        ok: false,
+        code: "volli_gateway_misconfigured",
+      });
     }
     error.mockRestore();
   });
 
-  test("a JWKS URL is fetched once, cached, and refetched after its TTL", async () => {
+  test("a JWKS URL is fetched with a timeout, cached, and refreshed in the background after its TTL", async () => {
     const issuer = await createDevIssuer();
     let now = NOW;
-    const fetchFn = vi.fn(async () => new Response(issuer.jwks));
-    const keys = new IssuerKeys({ url: "https://issuer.example/jwks" }, fetchFn, () => now);
-    expect((await keys.lookup(issuer.kid)).ok).toBe(true);
-    expect((await keys.lookup(issuer.kid)).ok).toBe(true);
+    const fetchFn = vi.fn(async (_url: string, _init?: RequestInit) => new Response(issuer.jwks));
+    const keys = new IssuerKeys(URL_SOURCE, fetchFn, () => now);
+    expect((await keys.lookup(issuer.kid, context())).ok).toBe(true);
+    expect(fetchFn.mock.calls[0]![1]!.signal).toBeInstanceOf(AbortSignal);
+    expect((await keys.lookup(issuer.kid, context())).ok).toBe(true);
     expect(fetchFn).toHaveBeenCalledTimes(1);
+
     now += JWKS_TTL_MS;
-    expect((await keys.lookup(issuer.kid)).ok).toBe(true);
+    const ctx = context();
+    // The held key answers at once; the refresh runs through waitUntil.
+    expect((await keys.lookup(issuer.kid, ctx)).ok).toBe(true);
     expect(fetchFn).toHaveBeenCalledTimes(2);
+    await ctx.settled();
+    // One refresh at a time: a request during it does not start another.
+    expect((await keys.lookup(issuer.kid, context())).ok).toBe(true);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  test("a hanging JWKS endpoint never holds up a request once keys are held", async () => {
+    const issuer = await createDevIssuer();
+    let now = NOW;
+    let hang = false;
+    const fetchFn = vi.fn(async () =>
+      hang ? new Promise<Response>(() => {}) : new Response(issuer.jwks),
+    );
+    const keys = new IssuerKeys(URL_SOURCE, fetchFn, () => now);
+    await keys.lookup(issuer.kid, context());
+    hang = true;
+    now += JWKS_TTL_MS;
+    expect((await keys.lookup(issuer.kid, context())).ok).toBe(true);
+    expect(JWKS_FETCH_TIMEOUT_MS).toBeLessThan(JWKS_REFETCH_INTERVAL_MS);
   });
 
   test("an unknown kid refetches at a bounded rate, so a rotation is picked up", async () => {
@@ -171,14 +208,26 @@ describe("IssuerKeys", () => {
     let now = NOW;
     let served = before.jwks;
     const fetchFn = vi.fn(async () => new Response(served));
-    const keys = new IssuerKeys({ url: "https://issuer.example/jwks" }, fetchFn, () => now);
-    expect((await keys.lookup("old")).ok).toBe(true);
+    const keys = new IssuerKeys(URL_SOURCE, fetchFn, () => now);
+    expect((await keys.lookup("old", context())).ok).toBe(true);
     served = after.jwks;
-    expect(await keys.lookup("new")).toEqual({ ok: false, code: "volli_grant_invalid" });
+    expect(await keys.lookup("new", context())).toEqual({ ok: false, code: "volli_grant_invalid" });
     expect(fetchFn).toHaveBeenCalledTimes(1);
     now += JWKS_REFETCH_INTERVAL_MS;
-    expect((await keys.lookup("new")).ok).toBe(true);
+    expect((await keys.lookup("new", context())).ok).toBe(true);
     expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  test("an inline JWKS never refetches for an unknown kid", async () => {
+    const issuer = await createDevIssuer();
+    let now = NOW;
+    const keys = new IssuerKeys({ inline: issuer.jwks }, vi.fn(), () => now);
+    await keys.lookup(issuer.kid, context());
+    now += JWKS_REFETCH_INTERVAL_MS;
+    expect(await keys.lookup("other", context())).toEqual({
+      ok: false,
+      code: "volli_grant_invalid",
+    });
   });
 
   test("a failing JWKS endpoint keeps the keys already held and retries after the refetch interval", async () => {
@@ -189,42 +238,46 @@ describe("IssuerKeys", () => {
     const fetchFn = vi.fn(async () =>
       healthy ? new Response(issuer.jwks) : new Response("down", { status: 503 }),
     );
-    const keys = new IssuerKeys({ url: "https://issuer.example/jwks" }, fetchFn, () => now);
-    expect((await keys.lookup(issuer.kid)).ok).toBe(true);
+    const keys = new IssuerKeys(URL_SOURCE, fetchFn, () => now);
+    expect((await keys.lookup(issuer.kid, context())).ok).toBe(true);
     healthy = false;
     now += JWKS_TTL_MS;
-    expect((await keys.lookup(issuer.kid)).ok).toBe(true);
+    const ctx = context();
+    expect((await keys.lookup(issuer.kid, ctx)).ok).toBe(true);
+    await ctx.settled();
     expect(error).toHaveBeenCalledWith(expect.stringContaining("JWKS answered 503"));
     expect(fetchFn).toHaveBeenCalledTimes(2);
-    // Within the refetch interval the endpoint is left alone.
     now += JWKS_REFETCH_INTERVAL_MS - 1;
-    await keys.lookup(issuer.kid);
+    await keys.lookup(issuer.kid, context());
     expect(fetchFn).toHaveBeenCalledTimes(2);
     healthy = true;
     now += 1;
-    await keys.lookup(issuer.kid);
+    const again = context();
+    await keys.lookup(issuer.kid, again);
+    await again.settled();
     expect(fetchFn).toHaveBeenCalledTimes(3);
     error.mockRestore();
   });
 
-  test("concurrent lookups share one fetch", async () => {
-    const issuer = await createDevIssuer();
-    const fetchFn = vi.fn(async () => new Response(issuer.jwks));
-    const keys = new IssuerKeys({ url: "https://issuer.example/jwks" }, fetchFn, () => NOW);
-    await Promise.all([keys.lookup(issuer.kid), keys.lookup(issuer.kid)]);
-    expect(fetchFn).toHaveBeenCalledTimes(1);
-  });
-
-  test("an unreachable JWKS endpoint with no keys held is the gateway's misconfiguration", async () => {
+  test("with no keys held, an unreachable endpoint is retried only after the refetch interval", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const keys = new IssuerKeys(
-      { url: "https://issuer.example/jwks" },
-      async () => {
-        throw new TypeError("fetch failed");
-      },
-      () => NOW,
-    );
-    expect(await keys.lookup("k")).toEqual({ ok: false, code: "volli_gateway_misconfigured" });
+    let now = NOW;
+    const fetchFn = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    });
+    const keys = new IssuerKeys(URL_SOURCE, fetchFn, () => now);
+    expect(await keys.lookup("k", context())).toEqual({
+      ok: false,
+      code: "volli_gateway_misconfigured",
+    });
+    expect(await keys.lookup("k", context())).toEqual({
+      ok: false,
+      code: "volli_gateway_misconfigured",
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    now += JWKS_REFETCH_INTERVAL_MS;
+    await keys.lookup("k", context());
+    expect(fetchFn).toHaveBeenCalledTimes(2);
     error.mockRestore();
   });
 });
