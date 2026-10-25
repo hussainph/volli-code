@@ -13,9 +13,12 @@
  * details — corrupt rows, prepared-statement reuse, migrations, whether the
  * slim fold read really omits provenance — stay in each adapter's own tests.
  *
- * Deliberate pins beyond the port's prose, because every caller today reads
- * them and a second adapter that answered differently would reorder what a
- * person sees: equal `listSessions` stamps tie-break on the id's UTF-8 bytes
+ * Deliberate pins beyond the port's prose. Referential integrity: a write
+ * naming a command, attachment or Session the store does not hold — or another
+ * Session's — is refused, and a receipt commits only with its receipt event,
+ * because every reader of receipts and attachments trusts those links. Orders,
+ * because every caller today reads them and a second adapter that answered
+ * differently would reorder what a person sees: equal `listSessions` stamps tie-break on the id's UTF-8 bytes
  * (SQLite's BINARY collation), `listAttachedSessions` uses the `listSessions`
  * order, and `listLatestTicketSignals` is sorted by ticket id in the same byte
  * order.
@@ -206,7 +209,8 @@ export function describeSessionLedgerContract(
           ]),
         ).resolves.toEqual([parent, child, null]);
 
-        // One id space across Sessions, events, commands, receipts and attachments.
+        // One id space across Sessions, events, commands and receipts; no new record
+        // may take an id an attachment already holds.
         const created = await engine.createSession(contractCreateRequest("session-ids", PROJECT));
         const sessionId = created.session.id;
         const next = created.receipt.sequence + 1;
@@ -435,15 +439,6 @@ export function describeSessionLedgerContract(
               ...archived(session.id, next),
               commandId: command.id,
               payload: { kind: "command.receipt.recorded", receipt },
-            });
-          },
-          "a receipt event in another Session than its command's": (transaction) => {
-            transaction.saveCommand(command);
-            const elsewhere = { ...receipt, sequence: otherHead + 2 };
-            transaction.appendReceipt(elsewhere);
-            transaction.appendEvent({
-              ...archived(other.session.id, otherHead + 2),
-              payload: { kind: "command.receipt.recorded", receipt: elsewhere },
             });
           },
           "a receipt for no command": (transaction) =>

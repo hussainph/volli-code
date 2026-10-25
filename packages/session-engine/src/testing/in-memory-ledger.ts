@@ -570,8 +570,11 @@ interface LedgerCheckpoint {
 export interface InMemorySessionLedgerOptions {
   /**
    * `false` stores what the SQLite ledger's foreign keys and receipt pairing
-   * would refuse — a receipt with no receipt event, a fact naming a command or
-   * attachment nobody stored, a command for no Session. Only for tests of how a
+   * would refuse — a receipt with no receipt event or a receipt event that
+   * does not match it, a fact naming a command or attachment nobody stored or
+   * another Session's, an attachment opened twice or for another Session, a
+   * command for no Session — and records no attachment ids in the shared id
+   * space. Only for tests of how a
    * reader copes with a store that already holds such history; the contract
    * runs the checked default.
    */
