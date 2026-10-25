@@ -584,14 +584,14 @@ async function openHeroTicket() {
     await card.dblclick();
   }
   const opened = await waitUntil(
-    "ticket workspace",
+    "Ticket view",
     async () =>
       (await page.getByRole("tablist", { name: "Ticket tabs", exact: true }).count()) === 1,
     { timeout: 20_000 },
   )
     .then(() => true)
     .catch(() => false);
-  return { ok: opened, detail: opened ? "VLT-14 open" : "ticket workspace never mounted" };
+  return { ok: opened, detail: opened ? "VLT-14 open" : "Ticket view never mounted" };
 }
 
 // ---- seeding ---------------------------------------------------------------

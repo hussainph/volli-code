@@ -18,23 +18,23 @@ import { Switch } from "@renderer/components/ui/switch";
 import { useUiStore } from "@renderer/stores/ui";
 
 export function GeneralPane() {
-  const workspaceRailHidden = useUiStore((store) => store.workspaceRailHidden);
-  const setWorkspaceRailHidden = useUiStore((store) => store.setWorkspaceRailHidden);
+  const projectRailHidden = useUiStore((store) => store.projectRailHidden);
+  const setProjectRailHidden = useUiStore((store) => store.setProjectRailHidden);
   const sidebarPinned = useUiStore((store) => store.sidebarPinned);
   const setSidebarPinned = useUiStore((store) => store.setSidebarPinned);
 
   return (
     <PrefSection title="Window" icon={GearSixIcon}>
       {/*
-       * Stated as the POSITIVE. The flag is `workspaceRailHidden`, but a switch
+       * Stated as the POSITIVE. The flag is `projectRailHidden`, but a switch
        * labelled "Hide the project switcher" that is ON when the thing is
        * absent is a double negative every reader has to unpick.
        */}
       <PrefRow label="Show the project switcher" htmlFor="project-switcher">
         <Switch
           id="project-switcher"
-          checked={!workspaceRailHidden}
-          onCheckedChange={(shown) => setWorkspaceRailHidden(!shown)}
+          checked={!projectRailHidden}
+          onCheckedChange={(shown) => setProjectRailHidden(!shown)}
         />
       </PrefRow>
       <PrefRow

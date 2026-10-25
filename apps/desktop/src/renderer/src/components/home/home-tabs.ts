@@ -2,7 +2,7 @@
  * Which Home tab is in front, and what the record owes a tab that names nothing
  * on screen.
  *
- * Home is the ticket workspace's own grammar one level up: a permanent first
+ * Home is the Ticket view's own grammar one level up: a permanent first
  * tab that cannot be closed (the Board, exactly as a ticket's Body tab), with
  * the project's Sessions, Project Files, and Browser Tabs beside it. Two
  * surfaces need the same answer and cannot read it the same way —
@@ -101,7 +101,7 @@ export function closeHomeTabHistory(input: {
 }
 
 /**
- * What the caller owes the workspace record after rendering {@link
+ * What the caller owes the project UI record after rendering {@link
  * HomeTabResolution.active}.
  *
  *  - `settled` — nothing is left to restore, and the record is either right or
@@ -135,7 +135,7 @@ export interface HomeTabResolution {
 export interface HomeTabsInput {
   /** The project's open Session tabs, in strip order. The Board is not among them. */
   tabIds: readonly string[];
-  /** `homeActiveTab` off the workspace record. */
+  /** `homeActiveTab` off the project UI record. */
   recorded: string;
   /**
    * The strip a relaunch puts back: `homeTabOrder` as this run first read it

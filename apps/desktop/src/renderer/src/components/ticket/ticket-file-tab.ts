@@ -1,5 +1,5 @@
 /**
- * File-tab identity for ticket workspace File tabs (CONCEPT #48/#56).
+ * File-tab identity for Ticket view File tabs (CONCEPT #48/#56).
  *
  * Tab id is path-stable: `file:<relPath>`. Preview/pin state lives on the
  * tab record itself (`FileWorkspaceTab.pinned`), not in the id.

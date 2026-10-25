@@ -531,7 +531,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
     /**
      * Merges a change into the project's filter record (initializing from
      * {@link EMPTY_TICKET_FILTER}) — the one write path behind the four
-     * facet actions, mirroring workspace.ts's `patchWorkspace`.
+     * facet actions, mirroring project-ui.ts's `patchProjectUi`.
      */
     function patchFilter(
       projectId: string,

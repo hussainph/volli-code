@@ -344,7 +344,7 @@ function surfaceOverride(
 }
 
 /**
- * Factory so tests can inject headless deps. Unlike the ui/workspace stores
+ * Factory so tests can inject headless deps. Unlike the ui/project-ui stores
  * there is no `persist` middleware and so no `skipHydration`: every value here
  * comes from SQLite through the bootstrap payload or `volli:theme-state`.
  */

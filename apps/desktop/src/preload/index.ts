@@ -1218,7 +1218,7 @@ const api = {
     },
   },
   appState: {
-    /** Upserts one `app_state` key — the async write-through the ui/workspace persist stores' storage adapter uses. */
+    /** Upserts one `app_state` key — the async write-through the ui/project-ui persist stores' storage adapter uses. */
     set: (key: string, value: string): Promise<AppStateSetResult> =>
       invoke("volli:app-state-set", key, value),
     /**

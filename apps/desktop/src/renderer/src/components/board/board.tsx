@@ -93,11 +93,7 @@ import {
   useAutomationsStore,
 } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
-import {
-  DEFAULT_WORKSPACE_UI,
-  useWorkspaceStore,
-  type BoardView,
-} from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, useProjectUiStore, type BoardView } from "@renderer/stores/project-ui";
 
 /**
  * Everything alive only while a card is mid-drag. The ticket snapshot and
@@ -447,19 +443,15 @@ export const Board = React.memo(function Board({
   const projectLabels = useBoardStore(
     (state) => frozen.current?.labels ?? state.labelsByProject[projectId] ?? EMPTY_LABELS,
   );
-  // View mode and sort are per-workspace, session-only (same pattern as
+  // View mode and sort are per-project, session-only (same pattern as
   // use-active-nav.ts): fall back to the shared default for never-visited projects.
-  const boardView = useWorkspaceStore(
+  const boardView = useProjectUiStore(
     (state) =>
-      frozen.current?.view ??
-      state.byProject[projectId]?.boardView ??
-      DEFAULT_WORKSPACE_UI.boardView,
+      frozen.current?.view ?? state.byProject[projectId]?.boardView ?? DEFAULT_PROJECT_UI.boardView,
   );
-  const boardSort = useWorkspaceStore(
+  const boardSort = useProjectUiStore(
     (state) =>
-      frozen.current?.sort ??
-      state.byProject[projectId]?.boardSort ??
-      DEFAULT_WORKSPACE_UI.boardSort,
+      frozen.current?.sort ?? state.byProject[projectId]?.boardSort ?? DEFAULT_PROJECT_UI.boardSort,
   );
   const [drag, setDrag] = React.useState<DragState | null>(null);
   const pendingSlotAnimation = React.useRef<Map<string, DOMRect> | null>(null);
@@ -872,7 +864,7 @@ export const Board = React.memo(function Board({
   );
   // Double-click open (ticket-detail-mvp step 3): `openTicket` is a stable
   // zustand action reference, same stability contract as `selectTicket` above.
-  const openTicket = useWorkspaceStore((state) => state.openTicket);
+  const openTicket = useProjectUiStore((state) => state.openTicket);
   const handleOpen = React.useCallback(
     (ticketId: string) => openTicket(projectId, ticketId),
     [openTicket, projectId],

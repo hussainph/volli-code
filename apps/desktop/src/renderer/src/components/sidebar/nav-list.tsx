@@ -11,7 +11,7 @@ import {
 } from "@renderer/components/ui/sidebar";
 import { useActiveNav } from "@renderer/hooks/use-active-nav";
 import { useUiStore } from "@renderer/stores/ui";
-import type { NavKey } from "@renderer/stores/workspace";
+import type { NavKey } from "@renderer/stores/project-ui";
 
 const NAV_ITEMS: ReadonlyArray<{ key: NavKey; label: string; icon: PhosphorIcon }> = [
   // Not Kanban any more. The row used to name a board and now names a tabbed

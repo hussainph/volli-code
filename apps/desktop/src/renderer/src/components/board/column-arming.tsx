@@ -56,7 +56,7 @@ import {
   selectColumnRank,
   useAutomationsStore,
 } from "@renderer/stores/automations";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 /** The `No Automation` row's value. Not an empty string: a radio group needs a real token. */
 const DISARMED = "none";
@@ -196,7 +196,7 @@ export function ColumnArmingButton({
             what a column offers is decided by an Automation's Trigger there. */}
         <DropdownMenuItem
           data-column-arming-page
-          onSelect={() => useWorkspaceStore.getState().setNav(projectId, "automations")}
+          onSelect={() => useProjectUiStore.getState().setNav(projectId, "automations")}
         >
           <LightningIcon />
           Automations

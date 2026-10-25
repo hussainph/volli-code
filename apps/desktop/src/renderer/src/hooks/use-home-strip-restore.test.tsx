@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * Home's whole-strip relaunch (VC-105), wired the way `home-surface.tsx` wires
- * it: the real workspace store rehydrating a persisted record, the real chat
+ * it: the real project UI store rehydrating a persisted record, the real chat
  * tab store the restore opens tabs in, and the active-tab receipt beside it.
  * Only the Session client is stubbed — adopting attaches to main, and what is
  * under test is which Sessions are adopted, in what order, and when.
@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { HOME_BOARD_TAB_ID, browserTabId } from "@renderer/components/home/home-tabs";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
-import { createWorkspaceStore } from "@renderer/stores/workspace";
+import { createProjectUiStore } from "@renderer/stores/project-ui";
 import { useHomeStripRestore } from "./use-home-strip-restore";
 import { useHomeTabReceipt } from "./use-home-tab-receipt";
 
@@ -26,7 +26,7 @@ const NOTHING_TRANSIENT: ReadonlySet<string> = new Set();
 const [A, B, C] = [chatTabId("sess-a"), chatTabId("sess-b"), chatTabId("sess-c")];
 const adoptChatSession = useChatSessionsStore.getState().adoptChatSession;
 
-type WorkspaceStore = ReturnType<typeof createWorkspaceStore>;
+type ProjectUiStore = ReturnType<typeof createProjectUiStore>;
 
 let container: HTMLDivElement;
 let root: Root;
@@ -48,7 +48,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/** A workspace store booted from what the last run persisted for {@link PROJECT}. */
+/** A project UI store booted from what the last run persisted for {@link PROJECT}. */
 function relaunch(record?: Record<string, unknown>) {
   const data = new Map<string, string>();
   if (record !== undefined) {
@@ -62,7 +62,7 @@ function relaunch(record?: Record<string, unknown>) {
     setItem: (name: string, value: string) => void data.set(name, value),
     removeItem: (name: string) => void data.delete(name),
   };
-  const store = createWorkspaceStore(storage);
+  const store = createProjectUiStore(storage);
   /** The project's record as it would be written to disk now. */
   const persisted = () => {
     const raw = data.get("volli:workspace");
@@ -73,7 +73,7 @@ function relaunch(record?: Record<string, unknown>) {
 }
 
 interface HarnessProps {
-  store: WorkspaceStore;
+  store: ProjectUiStore;
   /** The project's durable ticketless chats, or `undefined` before the listing answers. */
   durable: readonly string[] | undefined;
   /** Non-chat tabs on the strip: files, browsers. */

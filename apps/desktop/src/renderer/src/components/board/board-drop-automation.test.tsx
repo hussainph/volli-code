@@ -50,7 +50,7 @@ import { useBoardStore } from "@renderer/stores/board";
 import { useExperimentsStore } from "@renderer/stores/experiments";
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
 import { createFakeHostSource, hostSnapshot, remoteHost } from "@renderer/stores/host-sources";
-import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, useProjectUiStore } from "@renderer/stores/project-ui";
 
 import { Board } from "./board";
 import { BoardBoundary } from "./board-boundary";
@@ -731,7 +731,7 @@ beforeEach(() => {
   });
   // The board reads view and sort from here, so a test that writes them
   // mid-gesture needs a known starting point.
-  useWorkspaceStore.setState({ byProject: { p1: { ...DEFAULT_WORKSPACE_UI } } });
+  useProjectUiStore.setState({ byProject: { p1: { ...DEFAULT_PROJECT_UI } } });
   restoreLayout = installLayout();
 });
 
@@ -1038,9 +1038,9 @@ describe("a store write that lands while a card is in the air", () => {
       expect(ticketSlots("doing")).not.toEqual([]);
 
       await act(async () => {
-        useWorkspaceStore.setState({
+        useProjectUiStore.setState({
           byProject: {
-            p1: { ...DEFAULT_WORKSPACE_UI, boardSort: { key: "title", direction: "asc" } },
+            p1: { ...DEFAULT_PROJECT_UI, boardSort: { key: "title", direction: "asc" } },
           },
         });
       });
@@ -1050,8 +1050,8 @@ describe("a store write that lands while a card is in the air", () => {
       // the active sortable under dnd-kit. A keyboard drag leaves the pointer
       // free to press the toggle, so it is reachable rather than theoretical.
       await act(async () => {
-        useWorkspaceStore.setState({
-          byProject: { p1: { ...DEFAULT_WORKSPACE_UI, boardView: "list" } },
+        useProjectUiStore.setState({
+          byProject: { p1: { ...DEFAULT_PROJECT_UI, boardView: "list" } },
         });
       });
       expect(churn()).toEqual(NO_CHURN);

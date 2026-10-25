@@ -2,7 +2,7 @@ import { paneForTab, SPLIT_VIEW_ROOT_PANE_ID, type SplitViewState } from "@volli
 
 // Selection is intent, not a change in the saved active ID: the same durable
 // tab may currently be covered by an empty Draft. Keep this resident event seam
-// outside persisted workspace state and emit only from user activation doors.
+// outside persisted project UI state and emit only from user activation doors.
 const listeners = new Map<string, Set<(paneId: string) => void>>();
 
 export function subscribeWorkspaceTabSelection(

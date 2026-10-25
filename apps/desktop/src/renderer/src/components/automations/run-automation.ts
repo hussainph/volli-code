@@ -24,7 +24,7 @@ import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useUiStore } from "@renderer/stores/ui";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { refuseRemote, refuseRemoteTicket } from "@renderer/stores/remote-project";
 
 /** A click whose IPC reply was lost keeps its durable command id for Retry. */
@@ -289,11 +289,11 @@ export function openRunSession(input: {
   chat.adoptChatSession(input.sessionId);
   if (input.ticketId === null) {
     chat.openChatTab(input.projectId, input.sessionId);
-    useWorkspaceStore.getState().openHome(input.projectId, chatTabId(input.sessionId));
+    useProjectUiStore.getState().openHome(input.projectId, chatTabId(input.sessionId));
     return;
   }
   chat.openChatTab(input.ticketId, input.sessionId);
-  useWorkspaceStore.getState().openTicketWorkspace(input.projectId, input.ticketId, {
+  useProjectUiStore.getState().openTicketView(input.projectId, input.ticketId, {
     tabId: chatTabId(input.sessionId),
   });
   // The rail's row for this Session is already on its way — the Run created

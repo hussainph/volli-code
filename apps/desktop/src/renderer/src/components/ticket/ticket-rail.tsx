@@ -63,7 +63,7 @@
  * Page-content seam for the navigators:
  *   - Pass `filesContent` / `changesContent` to replace the empty placeholders.
  *   - On row select, call the host's open/focus helpers — typically
- *     `useWorkspaceStore.getState().previewTicketFile(projectId, ticketId, relPath)`
+ *     `useProjectUiStore.getState().previewTicketFile(projectId, ticketId, relPath)`
  *     (click) / `pinTicketFile` (dblclick) for Files and `openTicketDiff` for
  *     Diffs. Sessions already call `onActivateSession(sessionId)` →
  *     `setTicketActiveTab`.

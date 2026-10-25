@@ -132,10 +132,10 @@ describe("what the page sends", () => {
     expect(search).toHaveBeenCalledWith({ projectId: "p1", query: "needle" });
   });
 
-  // The scope pair is the whole safety property: a Ticket workspace must not be
+  // The scope pair is the whole safety property: a Ticket view must not be
   // answered about the main checkout, because the click that follows opens the
   // ticket's own copy of that path.
-  it("searches the ticket's worktree from a Ticket workspace", async () => {
+  it("searches the ticket's worktree from a Ticket view", async () => {
     const { search } = await mount({ kind: "ticket", projectId: "p1", ticketId: "t1" });
 
     await type("needle");

@@ -2,7 +2,7 @@
 /**
  * Who started the Session a Home tab names (VC-131).
  *
- * Home and a ticket workspace are the same object at two scopes, and this strip
+ * Home and a Ticket view are the same object at two scopes, and this strip
  * is the same header — so a Session that gained or lost its mark by being
  * opened from Home rather than from a Ticket would be the rule "everywhere a
  * Session appears" failing at exactly the seam it was written for. A Project

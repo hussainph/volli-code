@@ -17,12 +17,12 @@ import { ticketScope, useSessionsStore, type SessionLaunch } from "./sessions";
 
 import {
   applyTicketFileTransition,
-  createWorkspaceStore,
-  DEFAULT_WORKSPACE_UI,
+  createProjectUiStore,
+  DEFAULT_PROJECT_UI,
   resolvePersistedNav,
   type NavKey,
   type TicketTabsState,
-} from "./workspace";
+} from "./project-ui";
 
 /** A bare shell launch: no harness command line was written, so no expectation. */
 const shellLaunch = (title: string): SessionLaunch => ({
@@ -47,17 +47,17 @@ function createMemoryStorage() {
 
 describe("setNav", () => {
   it("tracks nav independently per project", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setNav("project-a", "configure");
 
     // project-b was never touched: if setNav leaked across projects instead of
     // scoping to the one it was called with, this would read "configure" too.
     expect(store.getState().byProject["project-a"]?.nav).toBe("configure");
-    expect(store.getState().byProject["project-b"]?.nav ?? DEFAULT_WORKSPACE_UI.nav).toBe("home");
+    expect(store.getState().byProject["project-b"]?.nav ?? DEFAULT_PROJECT_UI.nav).toBe("home");
   });
 
   it("keeps a project's nav across changes to other projects", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setNav("project-a", "configure");
     store.getState().setNav("project-b", "home");
     store.getState().setNav("project-b", "configure");
@@ -68,7 +68,7 @@ describe("setNav", () => {
   it("shows the plain board when Home is selected from inside a ticket", () => {
     // Inside a ticket the nav is ALREADY "home", so clicking Home can only mean
     // one thing — show me Home, which is the board (VC-54 decision 1).
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicket("project-a", "ticket-1");
 
     store.getState().setNav("project-a", "home");
@@ -83,7 +83,7 @@ describe("setNav", () => {
     // The clear belongs to the BOARD tab, not to the nav item. With a Session
     // tab in front the ticket is not on screen to be left, and the round trip
     // Home → Configure → Home must not quietly discard it.
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicket("project-a", "ticket-1");
     store.getState().setHomeActiveTab("project-a", "chat:c1");
     store.getState().setNav("project-a", "configure");
@@ -98,7 +98,7 @@ describe("setNav", () => {
   });
 
   it("switches to Configure without clearing the open ticket (only Home does)", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicket("project-a", "ticket-1");
 
     store.getState().setNav("project-a", "configure");
@@ -112,7 +112,7 @@ describe("setNav", () => {
 
 /**
  * `nav` is session-only — no shipped build ever persisted one (see the
- * `NavKey` doc in workspace.ts) — so these are pure insurance against a foreign
+ * `NavKey` doc in project-ui.ts) — so these are pure insurance against a foreign
  * or hand-edited blob, exercised directly rather than through a round trip
  * because nothing in this store's own `partialize` output could ever carry a
  * `nav` field to rehydrate. Deliberately NOT the whole of the tolerant-read
@@ -135,16 +135,16 @@ describe("resolvePersistedNav", () => {
   });
 
   it("falls back to the default for anything absent, malformed, or unrecognized", () => {
-    expect(resolvePersistedNav({})).toBe(DEFAULT_WORKSPACE_UI.nav);
-    expect(resolvePersistedNav({ nav: "bogus" })).toBe(DEFAULT_WORKSPACE_UI.nav);
-    expect(resolvePersistedNav({ nav: 7 })).toBe(DEFAULT_WORKSPACE_UI.nav);
-    expect(resolvePersistedNav({ nav: null })).toBe(DEFAULT_WORKSPACE_UI.nav);
+    expect(resolvePersistedNav({})).toBe(DEFAULT_PROJECT_UI.nav);
+    expect(resolvePersistedNav({ nav: "bogus" })).toBe(DEFAULT_PROJECT_UI.nav);
+    expect(resolvePersistedNav({ nav: 7 })).toBe(DEFAULT_PROJECT_UI.nav);
+    expect(resolvePersistedNav({ nav: null })).toBe(DEFAULT_PROJECT_UI.nav);
   });
 
   it('cannot be tricked by a persisted "toString" key', () => {
     // Why RETIRED_NAV_KEYS is a Map rather than an object literal: an object
     // would answer this lookup with a function off the prototype chain.
-    expect(resolvePersistedNav({ nav: "toString" })).toBe(DEFAULT_WORKSPACE_UI.nav);
+    expect(resolvePersistedNav({ nav: "toString" })).toBe(DEFAULT_PROJECT_UI.nav);
   });
 
   it("rehydrates a project record whose persisted JSON carries a retired nav key", () => {
@@ -157,7 +157,7 @@ describe("resolvePersistedNav", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
 
     expect(store.getState().byProject["project-a"]).toMatchObject({
       nav: "home",
@@ -176,7 +176,7 @@ describe("resolvePersistedNav", () => {
  */
 describe("setSessionGroupExpanded", () => {
   it("tracks open groups independently per project", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setSessionGroupExpanded("project-a", "ticket-1", true);
     store.getState().setSessionGroupExpanded("project-a", "ticket-2", true);
     store.getState().setSessionGroupExpanded("project-b", "ticket-9", true);
@@ -189,7 +189,7 @@ describe("setSessionGroupExpanded", () => {
   });
 
   it("collapsing removes only that ticket", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setSessionGroupExpanded("project-a", "ticket-1", true);
     store.getState().setSessionGroupExpanded("project-a", "ticket-2", true);
     store.getState().setSessionGroupExpanded("project-a", "ticket-1", false);
@@ -198,7 +198,7 @@ describe("setSessionGroupExpanded", () => {
   });
 
   it("is a no-op when the state already matches", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setSessionGroupExpanded("project-a", "ticket-1", true);
 
     // The band re-renders on every chat-activity refresh, so a `set` that
@@ -211,11 +211,11 @@ describe("setSessionGroupExpanded", () => {
 
   it("starts collapsed after a relaunch — open groups are this sitting's state only", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().setSessionGroupExpanded("project-a", "ticket-1", true);
     store.getState().setBoardView("project-a", "list");
 
-    const relaunched = createWorkspaceStore(storage);
+    const relaunched = createProjectUiStore(storage);
 
     expect(relaunched.getState().byProject["project-a"]?.expandedSessionGroups).toEqual([]);
     // The persisted neighbour still survives, so this is the partialize rule
@@ -226,7 +226,7 @@ describe("setSessionGroupExpanded", () => {
 
 describe("setBoardView", () => {
   it("tracks the board/list view independently per project", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setBoardView("project-a", "list");
     store.getState().setBoardView("project-b", "board");
 
@@ -235,7 +235,7 @@ describe("setBoardView", () => {
   });
 
   it("leaves nav and sort untouched", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setNav("project-a", "configure");
     store.getState().setBoardView("project-a", "list");
 
@@ -249,10 +249,10 @@ describe("setBoardView", () => {
 // component-state dismissal this replaces did.
 describe("dismissDependencyOffer", () => {
   it("waves the offer off for one project and leaves its neighbours offering", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     expect(
       store.getState().byProject["project-a"]?.dependencyOfferDismissed ??
-        DEFAULT_WORKSPACE_UI.dependencyOfferDismissed,
+        DEFAULT_PROJECT_UI.dependencyOfferDismissed,
     ).toBe(false);
 
     store.getState().dismissDependencyOffer("project-a");
@@ -262,7 +262,7 @@ describe("dismissDependencyOffer", () => {
   });
 
   it("is a no-op once dismissed, so a second click notifies nobody", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().dismissDependencyOffer("project-a");
 
     const before = store.getState().byProject;
@@ -272,10 +272,10 @@ describe("dismissDependencyOffer", () => {
 
   it("survives relaunch", () => {
     const storage = createMemoryStorage();
-    createWorkspaceStore(storage).getState().dismissDependencyOffer("project-a");
+    createProjectUiStore(storage).getState().dismissDependencyOffer("project-a");
 
     expect(
-      createWorkspaceStore(storage).getState().byProject["project-a"]?.dependencyOfferDismissed,
+      createProjectUiStore(storage).getState().byProject["project-a"]?.dependencyOfferDismissed,
     ).toBe(true);
   });
 
@@ -290,15 +290,15 @@ describe("dismissDependencyOffer", () => {
     );
 
     expect(
-      createWorkspaceStore(storage).getState().byProject["project-a"]?.dependencyOfferDismissed ??
-        DEFAULT_WORKSPACE_UI.dependencyOfferDismissed,
+      createProjectUiStore(storage).getState().byProject["project-a"]?.dependencyOfferDismissed ??
+        DEFAULT_PROJECT_UI.dependencyOfferDismissed,
     ).toBe(false);
   });
 });
 
 describe("setMarkdownFileView", () => {
   it("remembers Document view per file, per project", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setMarkdownFileView("project-a", "docs/DESIGN.md", "document");
 
     expect(store.getState().byProject["project-a"]?.markdownDocumentFiles).toEqual([
@@ -308,7 +308,7 @@ describe("setMarkdownFileView", () => {
   });
 
   it("records Source by FORGETTING the file — the default is not worth storing", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setMarkdownFileView("project-a", "docs/DESIGN.md", "document");
     store.getState().setMarkdownFileView("project-a", "README.md", "document");
     store.getState().setMarkdownFileView("project-a", "docs/DESIGN.md", "source");
@@ -317,7 +317,7 @@ describe("setMarkdownFileView", () => {
   });
 
   it("is a no-op when the file is already in that view", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setMarkdownFileView("project-a", "docs/DESIGN.md", "document");
 
     const before = store.getState().byProject;
@@ -331,14 +331,14 @@ describe("setMarkdownFileView", () => {
 
   it("survives relaunch, and outlives the tab that made the choice", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().previewHomeFile("project-a", "docs/DESIGN.md");
     store.getState().setMarkdownFileView("project-a", "docs/DESIGN.md", "document");
     // The tab goes; the choice does not. Unlike the view-state map beside it,
     // this is remembered for the FILE.
     store.getState().closeHomeFile("project-a", "docs/DESIGN.md", []);
 
-    const relaunched = createWorkspaceStore(storage).getState().byProject["project-a"];
+    const relaunched = createProjectUiStore(storage).getState().byProject["project-a"];
     expect(relaunched?.projectFiles.tabs).toEqual([]);
     expect(relaunched?.markdownDocumentFiles).toEqual(["docs/DESIGN.md"]);
   });
@@ -360,7 +360,7 @@ describe("setMarkdownFileView", () => {
       }),
     );
 
-    const relaunched = createWorkspaceStore(storage);
+    const relaunched = createProjectUiStore(storage);
     expect(relaunched.getState().byProject["project-a"]?.markdownDocumentFiles).toEqual([
       "docs/DESIGN.md",
       "README.md",
@@ -369,7 +369,7 @@ describe("setMarkdownFileView", () => {
   });
 
   it("remembers the read-only Preview choice in a list of its own (VC-307)", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setMarkdownFileView("project-a", "README.md", "preview");
 
     expect(store.getState().byProject["project-a"]?.markdownPreviewFiles).toEqual(["README.md"]);
@@ -377,7 +377,7 @@ describe("setMarkdownFileView", () => {
   });
 
   it("keeps the two rendered views exclusive — a file reads in one or the other", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setMarkdownFileView("project-a", "README.md", "document");
     store.getState().setMarkdownFileView("project-a", "README.md", "preview");
 
@@ -390,7 +390,7 @@ describe("setMarkdownFileView", () => {
   });
 
   it("records Source by forgetting a Preview choice too, and stays a no-op when nothing moves", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setMarkdownFileView("project-a", "README.md", "preview");
     store.getState().setMarkdownFileView("project-a", "README.md", "source");
     expect(store.getState().byProject["project-a"]?.markdownPreviewFiles).toEqual([]);
@@ -406,11 +406,11 @@ describe("setMarkdownFileView", () => {
 
   it("survives relaunch, and reads a stored Preview list as tolerantly as the other", () => {
     const storage = createMemoryStorage();
-    createWorkspaceStore(storage)
+    createProjectUiStore(storage)
       .getState()
       .setMarkdownFileView("project-a", "README.md", "preview");
     expect(
-      createWorkspaceStore(storage).getState().byProject["project-a"]?.markdownPreviewFiles,
+      createProjectUiStore(storage).getState().byProject["project-a"]?.markdownPreviewFiles,
     ).toEqual(["README.md"]);
 
     const corrupt = createMemoryStorage();
@@ -424,14 +424,14 @@ describe("setMarkdownFileView", () => {
       }),
     );
     expect(
-      createWorkspaceStore(corrupt).getState().byProject["project-a"]?.markdownPreviewFiles,
+      createProjectUiStore(corrupt).getState().byProject["project-a"]?.markdownPreviewFiles,
     ).toEqual(["README.md"]);
   });
 });
 
 describe("setBoardSort", () => {
   it("tracks the sort independently per project", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setBoardSort("project-a", { key: "priority", direction: "desc" });
     store.getState().setBoardSort("project-b", { key: "title", direction: "asc" });
 
@@ -446,7 +446,7 @@ describe("setBoardSort", () => {
   });
 
   it("leaves the view untouched", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setBoardView("project-a", "list");
     store.getState().setBoardSort("project-a", { key: "updated", direction: "desc" });
 
@@ -456,7 +456,7 @@ describe("setBoardSort", () => {
 
 describe("recordResolvedHomeTab", () => {
   it("records a fallback without selecting its pane or changing front tabs", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setHomeActiveTab("project-a", "chat:old");
     store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
       surfaceTabIds: ["chat:old"],
@@ -471,7 +471,7 @@ describe("recordResolvedHomeTab", () => {
   });
 
   it("keeps the default receipt a no-op and records an unsplit non-default", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     const empty = store.getState();
     store.getState().recordResolvedHomeTab("project-a", HOME_BOARD_TAB_ID);
     expect(store.getState()).toBe(empty);
@@ -483,7 +483,7 @@ describe("recordResolvedHomeTab", () => {
 
 describe("recordResolvedTicketTab", () => {
   it("records an automatic fallback without selecting a pane or announcing intent", () => {
-    const store = createWorkspaceStore(createMemoryStorage(), paneMinter());
+    const store = createProjectUiStore(createMemoryStorage(), paneMinter());
     store.getState().setTicketActiveTab("project-a", "ticket-1", "missing-terminal");
     store.getState().splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "right");
     const split = store.getState().byProject["project-a"]!.ticketTabs["ticket-1"]!.splitView;
@@ -500,7 +500,7 @@ describe("recordResolvedTicketTab", () => {
   });
 
   it("keeps a default receipt a no-op and records an unsplit fallback", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     const empty = store.getState();
     store.getState().recordResolvedTicketTab("project-a", "ticket-1", TICKET_BODY_TAB_ID);
     expect(store.getState()).toBe(empty);
@@ -515,15 +515,15 @@ describe("recordResolvedTicketTab", () => {
 
 describe("setHomeActiveTab", () => {
   it("defaults to the Board tab for an untouched project", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
 
     expect(
-      store.getState().byProject["project-a"]?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab,
+      store.getState().byProject["project-a"]?.homeActiveTab ?? DEFAULT_PROJECT_UI.homeActiveTab,
     ).toBe(HOME_BOARD_TAB_ID);
   });
 
   it("tracks the active tab independently per project", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setHomeActiveTab("project-a", "s1");
     store.getState().setHomeActiveTab("project-b", "chat:c1");
 
@@ -532,7 +532,7 @@ describe("setHomeActiveTab", () => {
   });
 
   it("returns to the Board tab", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setHomeActiveTab("project-a", "s1");
 
     store.getState().setHomeActiveTab("project-a", HOME_BOARD_TAB_ID);
@@ -545,7 +545,7 @@ describe("setHomeActiveTab", () => {
     // last Session tab closing derives the Board. If recording that also closed
     // the ticket remembered behind it, closing a chat would silently discard
     // the ticket the person was going back to.
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicket("project-a", "ticket-1");
     store.getState().setHomeActiveTab("project-a", "chat:c1");
 
@@ -555,7 +555,7 @@ describe("setHomeActiveTab", () => {
   });
 
   it("is a no-op (unchanged identity) when re-setting the same tab", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setHomeActiveTab("project-a", "s1");
     const before = store.getState();
 
@@ -565,7 +565,7 @@ describe("setHomeActiveTab", () => {
   });
 
   it("is a no-op (unchanged identity) re-recording the Board on an untouched project", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     const before = store.getState();
 
     store.getState().setHomeActiveTab("project-a", HOME_BOARD_TAB_ID);
@@ -574,12 +574,12 @@ describe("setHomeActiveTab", () => {
   });
 
   it("survives a relaunch, so Home reopens the Session that was in front", () => {
-    // The asymmetry this closes: a Ticket workspace kept its active Session
+    // The asymmetry this closes: a Ticket view kept its active Session
     // across a relaunch and Home forgot every one of them.
     const storage = createMemoryStorage();
-    createWorkspaceStore(storage).getState().setHomeActiveTab("project-a", "chat:c1");
+    createProjectUiStore(storage).getState().setHomeActiveTab("project-a", "chat:c1");
 
-    const relaunched = createWorkspaceStore(storage);
+    const relaunched = createProjectUiStore(storage);
     void relaunched.persist.rehydrate();
 
     expect(relaunched.getState().byProject["project-a"]?.homeActiveTab).toBe("chat:c1");
@@ -591,7 +591,7 @@ describe("setHomeActiveTab", () => {
       "volli:workspace",
       JSON.stringify({ state: { byProject: { "project-a": { homeActiveTab: 7 } } }, version: 1 }),
     );
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     void store.persist.rehydrate();
 
     expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe(HOME_BOARD_TAB_ID);
@@ -599,7 +599,7 @@ describe("setHomeActiveTab", () => {
 
   it("earns a project no persisted record while it still names the Board", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().setBoardView("project-a", "list"); // earns project-a a spot in persisted output
     store.getState().setHomeActiveTab("project-b", HOME_BOARD_TAB_ID); // nothing worth persisting
 
@@ -615,7 +615,7 @@ describe("openHome", () => {
   it("puts Home in front with a Session tab, leaving the remembered ticket alone", () => {
     // Decision 1: a Home Session tab is its own place, and the ticket stays
     // remembered behind it — the sidebar band, ⌘K and ⌘T all land here.
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicket("project-a", "ticket-1");
     store.getState().setNav("project-a", "configure");
 
@@ -629,7 +629,7 @@ describe("openHome", () => {
   });
 
   it("puts Home in front without an opinion about the tab", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setHomeActiveTab("project-a", "chat:c1");
     store.getState().setNav("project-a", "configure");
 
@@ -644,7 +644,7 @@ describe("openHome", () => {
 
 describe("openHomeBoard", () => {
   it("means the plain board \u2014 exactly what the Board nav item meant", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicket("project-a", "ticket-1");
     store.getState().setHomeActiveTab("project-a", "chat:c1");
     store.getState().setNav("project-a", "configure");
@@ -658,8 +658,8 @@ describe("openHomeBoard", () => {
     });
   });
 
-  it("creates the plain Board state for a project with no prior workspace record", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+  it("creates the plain Board state for a project with no prior project UI record", () => {
+    const store = createProjectUiStore(createMemoryStorage());
 
     store.getState().openHomeBoard("project-a");
 
@@ -674,7 +674,7 @@ describe("openHomeBoard", () => {
 
 describe("openTicket", () => {
   // openTicket also selects the ticket in the REAL board-store singleton (see
-  // workspace.ts's module doc: cross-store orchestration lives in the action,
+  // project-ui.ts's module doc: cross-store orchestration lives in the action,
   // same precedent as projects.ts's removeProject) — reset it so a write here
   // never leaks into another test.
   afterEach(() => {
@@ -682,21 +682,21 @@ describe("openTicket", () => {
   });
 
   it("sets the project's openTicketId", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicket("project-a", "ticket-1");
 
     expect(store.getState().byProject["project-a"]?.openTicketId).toBe("ticket-1");
   });
 
   it("selects the same ticket in the board store", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicket("project-a", "ticket-1");
 
     expect(useBoardStore.getState().selectedByProject["project-a"]).toEqual(["ticket-1"]);
   });
 
   it("tracks the open ticket independently per project", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicket("project-a", "ticket-1");
     store.getState().openTicket("project-b", "ticket-2");
 
@@ -705,7 +705,7 @@ describe("openTicket", () => {
   });
 
   it("leaves nav, boardView, and boardSort untouched", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setNav("project-a", "configure");
     store.getState().setBoardView("project-a", "list");
     store.getState().openTicket("project-a", "ticket-1");
@@ -715,20 +715,20 @@ describe("openTicket", () => {
   });
 });
 
-describe("openTicketWorkspace", () => {
+describe("openTicketView", () => {
   afterEach(() => {
     useBoardStore.setState({ selectedByProject: {} });
   });
 
   it("switches nav to Home even when the project's nav was elsewhere (composer kickoff from Files regression)", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     // Simulate invoking Create-&-start (or any ticket-open action) while the
     // user is on another page — the app-wide "c" shortcut and the command
     // palette both allow this. `openTicket` alone never touched nav, so the
     // ticket detail it promises never rendered.
     store.getState().setNav("project-a", "configure");
 
-    store.getState().openTicketWorkspace("project-a", "ticket-1");
+    store.getState().openTicketView("project-a", "ticket-1");
 
     expect(store.getState().byProject["project-a"]).toMatchObject({
       nav: "home",
@@ -740,10 +740,10 @@ describe("openTicketWorkspace", () => {
     // The VC-54 twin of the kickoff bug above: under Home, ticket detail renders
     // only from the Board tab, so landing nav alone would leave the promised
     // workspace behind the Session tab that was in front.
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openHome("project-a", "chat:c1");
 
-    store.getState().openTicketWorkspace("project-a", "ticket-1");
+    store.getState().openTicketView("project-a", "ticket-1");
 
     expect(store.getState().byProject["project-a"]).toMatchObject({
       nav: "home",
@@ -753,15 +753,15 @@ describe("openTicketWorkspace", () => {
   });
 
   it("selects the same ticket in the board store", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().openTicketWorkspace("project-a", "ticket-1");
+    const store = createProjectUiStore(createMemoryStorage());
+    store.getState().openTicketView("project-a", "ticket-1");
 
     expect(useBoardStore.getState().selectedByProject["project-a"]).toEqual(["ticket-1"]);
   });
 
   it("activates the given tab", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().openTicketWorkspace("project-a", "ticket-1", { tabId: "doc" });
+    const store = createProjectUiStore(createMemoryStorage());
+    store.getState().openTicketView("project-a", "ticket-1", { tabId: "doc" });
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
       files: [],
@@ -773,9 +773,9 @@ describe("openTicketWorkspace", () => {
   });
 
   it("leaves the ticket's existing tab untouched when no tabId is given", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "a.md"); // active: file:a.md
-    store.getState().openTicketWorkspace("project-a", "ticket-1");
+    store.getState().openTicketView("project-a", "ticket-1");
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active).toBe(
       "file:a.md",
@@ -783,8 +783,8 @@ describe("openTicketWorkspace", () => {
   });
 
   it("creates no ticketTabs record when no tabId is given and none existed", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
-    store.getState().openTicketWorkspace("project-a", "ticket-1");
+    const store = createProjectUiStore(createMemoryStorage());
+    store.getState().openTicketView("project-a", "ticket-1");
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toBeUndefined();
   });
@@ -808,7 +808,7 @@ describe("openTicketSession", () => {
       .addSession(ticketScope("project-a", "ticket-1"), "session-3", shellLaunch("Checks"));
     useSessionsStore.getState().setActivePane("ticket-1", "session-1", "session-1");
 
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setNav("project-a", "configure");
     store.getState().openTicketSession("project-a", "ticket-1", "session-1", "session-2");
 
@@ -829,7 +829,7 @@ describe("openTicketSession", () => {
       .getState()
       .addSession(ticketScope("project-a", "ticket-1"), "session-1", shellLaunch("Agent"));
 
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketSession("project-a", "ticket-1", "session-1");
 
     expect(store.getState().byProject["project-a"]).toMatchObject({
@@ -845,7 +845,7 @@ describe("openTicketSession", () => {
 
 describe("closeTicket", () => {
   it("clears the project's openTicketId", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicket("project-a", "ticket-1");
     store.getState().closeTicket("project-a");
 
@@ -853,7 +853,7 @@ describe("closeTicket", () => {
   });
 
   it("is safe to call on a project with no record yet", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().closeTicket("never-opened");
 
     expect(store.getState().byProject["never-opened"]?.openTicketId ?? null).toBeNull();
@@ -862,7 +862,7 @@ describe("closeTicket", () => {
 
 describe("ticket diff tabs", () => {
   it("openTicketDiff appends a persistent diff and makes it active", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketDiff("project-a", "ticket-1", "src/app.ts", {
       previousPath: "src/old.ts",
       status: "renamed",
@@ -889,7 +889,7 @@ describe("ticket diff tabs", () => {
   });
 
   it("openTicketDiff persists the Change Set binary flag on diffMeta", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketDiff("project-a", "ticket-1", "logo.png", {
       status: "added",
       binary: true,
@@ -901,7 +901,7 @@ describe("ticket diff tabs", () => {
   });
 
   it("openTicketDiff accepts binary-only metadata without inventing a status", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketDiff("project-a", "ticket-1", "logo.png", {
       binary: true,
     });
@@ -912,7 +912,7 @@ describe("ticket diff tabs", () => {
   });
 
   it("openTicketDiff keeps runtime diffMeta on a null prototype", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketDiff("project-a", "ticket-1", "__proto__", {
       status: "modified",
     });
@@ -932,7 +932,7 @@ describe("ticket diff tabs", () => {
   });
 
   it("closeTicketDiff removes the diff and falls back to Doc when it was active", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "notes.md");
     store.getState().openTicketDiff("project-a", "ticket-1", "src/app.ts", {
       status: "modified",
@@ -949,7 +949,7 @@ describe("ticket diff tabs", () => {
   });
 
   it("closeTicketDiff is a no-op for a ticket with no record", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     const before = store.getState().byProject;
 
     store.getState().closeTicketDiff("project-a", "ticket-1", "src/app.ts");
@@ -958,7 +958,7 @@ describe("ticket diff tabs", () => {
   });
 
   it("keeps files and diffs as independent ordered lists with a shared active id", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "a.md");
     store.getState().openTicketDiff("project-a", "ticket-1", "b.ts");
     store.getState().openTicketFile("project-a", "ticket-1", "c.md");
@@ -1002,7 +1002,7 @@ describe("ticket file tabs", () => {
   });
 
   it("openTicketFile appends a pinned file and makes it active", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "docs/plan.md");
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
@@ -1015,7 +1015,7 @@ describe("ticket file tabs", () => {
   });
 
   it("opening the same file twice keeps one entry but re-activates it", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "a.md");
     store.getState().openTicketFile("project-a", "ticket-1", "b.md");
     store.getState().openTicketFile("project-a", "ticket-1", "a.md");
@@ -1037,7 +1037,7 @@ describe("ticket file tabs", () => {
   });
 
   it("tracks open files independently per ticket and per project", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "a.md");
     store.getState().openTicketFile("project-a", "ticket-2", "b.md");
     store.getState().openTicketFile("project-b", "ticket-1", "c.md");
@@ -1054,7 +1054,7 @@ describe("ticket file tabs", () => {
   });
 
   it("closeTicketFile removes the file and falls back to Doc when it was active", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "a.md");
     store.getState().openTicketFile("project-a", "ticket-1", "b.md");
     store.getState().closeTicketFile("project-a", "ticket-1", "b.md"); // b was active
@@ -1069,7 +1069,7 @@ describe("ticket file tabs", () => {
   });
 
   it("closeTicketFile keeps the active tab when a non-active file closes", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "a.md");
     store.getState().openTicketFile("project-a", "ticket-1", "b.md"); // b active
     store.getState().closeTicketFile("project-a", "ticket-1", "a.md");
@@ -1084,7 +1084,7 @@ describe("ticket file tabs", () => {
   });
 
   it("closing the last file with Doc active prunes the ticket record", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "a.md");
     store.getState().closeTicketFile("project-a", "ticket-1", "a.md");
 
@@ -1092,14 +1092,14 @@ describe("ticket file tabs", () => {
   });
 
   it("closeTicketFile is a no-op for a ticket with no record", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     const before = store.getState().byProject;
     store.getState().closeTicketFile("project-a", "ticket-1", "a.md");
     expect(store.getState().byProject).toBe(before);
   });
 
   it("closeTicketFile is a no-op when the ticket exists but the path is not open", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "a.md");
     const before = store.getState().byProject;
 
@@ -1109,7 +1109,7 @@ describe("ticket file tabs", () => {
   });
 
   it("setTicketActiveTab switches the active tab, including to a session id", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "a.md");
     store.getState().setTicketActiveTab("project-a", "ticket-1", "session-9");
 
@@ -1123,14 +1123,14 @@ describe("ticket file tabs", () => {
   });
 
   it("setTicketActiveTab to Doc on an empty ticket creates no record", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setTicketActiveTab("project-a", "ticket-1", "doc");
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toBeUndefined();
   });
 
   it("leaves board view/sort/open ticket untouched", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setBoardView("project-a", "list");
     store.getState().openTicketFile("project-a", "ticket-1", "a.md");
 
@@ -1141,7 +1141,7 @@ describe("ticket file tabs", () => {
 
 describe("ticket file preview/pin (decision #56)", () => {
   it("pinTicketFile opens a pinned tab while markTicketFileEdited ignores an unknown ticket", () => {
-    const pinStore = createWorkspaceStore(createMemoryStorage());
+    const pinStore = createProjectUiStore(createMemoryStorage());
     pinStore.getState().pinTicketFile("missing-project", "missing-ticket", "src/app.ts");
     expect(
       pinStore.getState().byProject["missing-project"]?.ticketTabs["missing-ticket"],
@@ -1150,14 +1150,14 @@ describe("ticket file preview/pin (decision #56)", () => {
       active: "file:src/app.ts",
     });
 
-    const markStore = createWorkspaceStore(createMemoryStorage());
+    const markStore = createProjectUiStore(createMemoryStorage());
     const before = markStore.getState().byProject;
     markStore.getState().markTicketFileEdited("missing-project", "missing-ticket", "src/app.ts");
     expect(markStore.getState().byProject).toBe(before);
   });
 
   it("previewTicketFile opens a replaceable preview tab", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().previewTicketFile("project-a", "ticket-1", "src/app.ts");
 
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
@@ -1174,7 +1174,7 @@ describe("ticket file preview/pin (decision #56)", () => {
   });
 
   it("a second preview replaces the preview slot in place", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "pinned.md");
     store.getState().previewTicketFile("project-a", "ticket-1", "one.ts");
     store.getState().previewTicketFile("project-a", "ticket-1", "two.ts");
@@ -1189,7 +1189,7 @@ describe("ticket file preview/pin (decision #56)", () => {
   });
 
   it("pinTicketFile / markTicketFileEdited promote the preview so the next glance appends", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().previewTicketFile("project-a", "ticket-1", "one.ts");
     store.getState().markTicketFileEdited("project-a", "ticket-1", "one.ts");
     store.getState().previewTicketFile("project-a", "ticket-1", "two.ts");
@@ -1212,7 +1212,7 @@ describe("ticket file preview/pin (decision #56)", () => {
   });
 
   it("openTicketDiff stays always-persistent and does not use the File preview slot", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().previewTicketFile("project-a", "ticket-1", "glance.ts");
     store.getState().openTicketDiff("project-a", "ticket-1", "changed.ts");
     store.getState().previewTicketFile("project-a", "ticket-1", "other.ts");
@@ -1250,7 +1250,7 @@ describe("ticket file preview/pin (decision #56)", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-legacy"]?.files).toEqual([
       { relPath: "old.md", pinned: true },
       { relPath: "also.ts", pinned: true },
@@ -1282,7 +1282,7 @@ describe("ticket file tab persistence", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     const tabs = store.getState().byProject["project-a"]?.ticketTabs["ticket-1"];
     expect(tabs).toEqual({
       files: [{ relPath: "notes.md", pinned: true }],
@@ -1296,11 +1296,11 @@ describe("ticket file tab persistence", () => {
 
   it("persists ticketTabs and rehydrates them", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().openTicketFile("project-a", "ticket-1", "docs/plan.md");
     store.getState().setTicketActiveTab("project-a", "ticket-1", "session-9");
 
-    const rehydrated = createWorkspaceStore(storage);
+    const rehydrated = createProjectUiStore(storage);
     expect(rehydrated.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
       files: [{ relPath: "docs/plan.md", pinned: true }],
       diffs: [],
@@ -1312,7 +1312,7 @@ describe("ticket file tab persistence", () => {
 
   it("persists a record that carries only open files (default board view)", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().openTicketFile("project-a", "ticket-1", "a.md");
 
     const parsed = JSON.parse(storage.getItem("volli:workspace")!) as {
@@ -1344,7 +1344,7 @@ describe("ticket file tab persistence", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     const tabs = store.getState().byProject["project-a"]?.ticketTabs;
     expect(tabs?.["ticket-1"]).toEqual({
       files: [{ relPath: "ok.md", pinned: true }],
@@ -1378,7 +1378,7 @@ describe("ticket file tab persistence", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toEqual({
       files: [{ relPath: "notes.md", pinned: true }],
       diffs: [],
@@ -1410,7 +1410,7 @@ describe("ticket file tab persistence", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.diffs).toEqual([
       "ok.ts",
       "also.ts",
@@ -1445,7 +1445,7 @@ describe("ticket file tab persistence", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.diffMeta).toEqual({
       "ok.ts": { previousPath: "was.ts", status: "renamed" },
     });
@@ -1476,7 +1476,7 @@ describe("ticket file tab persistence", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     const diffMeta = store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.diffMeta;
     expect(Object.keys(diffMeta ?? {})).toEqual(["__proto__"]);
     expect(Object.getPrototypeOf(diffMeta)).toBeNull();
@@ -1513,7 +1513,7 @@ describe("ticket file tab persistence", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.diffMeta).toEqual({
       "logo.png": { status: "added", binary: true },
       "notes.md": { status: "modified" },
@@ -1545,7 +1545,7 @@ describe("ticket file tab persistence", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active).toBe("doc");
   });
 
@@ -1573,7 +1573,7 @@ describe("ticket file tab persistence", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active).toBe("doc");
   });
 
@@ -1599,7 +1599,7 @@ describe("ticket file tab persistence", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.diffs).toEqual([
       "z.ts",
       "a.ts",
@@ -1617,14 +1617,14 @@ describe("ticket file tab persistence", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     expect(store.getState().byProject["project-a"]?.ticketTabs).toEqual({});
   });
 });
 
 describe("ticket diff view-state persistence", () => {
   it("setTicketDiffViewState keeps opaque Monaco state keyed by ticketId + relPath", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketDiff("project-a", "ticket-1", "src/a.ts");
     store.getState().openTicketDiff("project-a", "ticket-1", "src/b.ts");
     store.getState().openTicketDiff("project-a", "ticket-2", "src/a.ts");
@@ -1648,7 +1648,7 @@ describe("ticket diff view-state persistence", () => {
   });
 
   it("closeTicketDiff drops the path's view state with the tab", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketDiff("project-a", "ticket-1", "src/a.ts");
     store.getState().openTicketDiff("project-a", "ticket-1", "src/b.ts");
     store.getState().setTicketDiffViewState("project-a", "ticket-1", "src/a.ts", {
@@ -1666,7 +1666,7 @@ describe("ticket diff view-state persistence", () => {
   });
 
   it("setTicketDiffViewState ignores a path with no open diff tab", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketDiff("project-a", "ticket-1", "src/a.ts");
     store.getState().setTicketDiffViewState("project-a", "ticket-1", "src/a.ts", {
       scrollTop: 12,
@@ -1688,7 +1688,7 @@ describe("ticket diff view-state persistence", () => {
 
   it("round-trips ticket diff view state through persistence without storing contents", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().openTicketDiff("project-a", "ticket-1", "src/a.ts");
     store.getState().setTicketDiffViewState("project-a", "ticket-1", "src/a.ts", {
       cursorState: [{ position: { lineNumber: 4, column: 1 } }],
@@ -1700,7 +1700,7 @@ describe("ticket diff view-state persistence", () => {
       expect(raw).not.toContain(`"${contentKey}"`);
     }
 
-    const rehydrated = createWorkspaceStore(storage);
+    const rehydrated = createProjectUiStore(storage);
     expect(rehydrated.getState().byProject["project-a"]?.ticketDiffViewStates).toEqual({
       "ticket-1": {
         "src/a.ts": {
@@ -1760,15 +1760,15 @@ describe("ticket diff view-state persistence", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     expect(store.getState().byProject["project-a"]?.ticketDiffViewStates).toEqual({
       "ticket-1": { "src/open.ts": { scrollTop: 10 } },
     });
     expect(store.getState().byProject["project-b"]?.ticketDiffViewStates).toEqual({});
   });
 
-  it("setTicketDiffViewState is a no-op when the project has no workspace record", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+  it("setTicketDiffViewState is a no-op when the project has no project UI record", () => {
+    const store = createProjectUiStore(createMemoryStorage());
     const before = store.getState().byProject;
 
     store
@@ -1781,7 +1781,7 @@ describe("ticket diff view-state persistence", () => {
 
 describe("Home Browser Tab workspace", () => {
   it("closes the active Browser Tab through surviving MRU tabs", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setHomeActiveTab("project-a", "chat:one");
     store.getState().setHomeActiveTab("project-a", "browser:one");
     store.getState().setHomeActiveTab("project-a", "browser:two");
@@ -1801,7 +1801,7 @@ describe("Home Browser Tab workspace", () => {
   });
 
   it("drops an inactive closed Browser Tab without moving the active tab", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setHomeActiveTab("project-a", "browser:one");
     store.getState().setHomeActiveTab("project-a", "chat:one");
 
@@ -1815,8 +1815,8 @@ describe("Home Browser Tab workspace", () => {
     });
   });
 
-  it("does not conjure a workspace record for a close racing project removal", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+  it("does not conjure a project UI record for a close racing project removal", () => {
+    const store = createProjectUiStore(createMemoryStorage());
     const before = store.getState();
 
     store.getState().closeHomeBrowserTab("missing-project", "browser:gone", []);
@@ -1828,7 +1828,7 @@ describe("Home Browser Tab workspace", () => {
 
 describe("Home file workspace", () => {
   it("previews a file as an active Home tab and records the tab it came from", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setHomeActiveTab("project-a", "chat:one");
     store.getState().setNav("project-a", "configure");
 
@@ -1846,7 +1846,7 @@ describe("Home file workspace", () => {
   });
 
   it("pins and activates Home files without duplicating their tabs", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().previewHomeFile("project-a", "one.ts");
     store.getState().previewHomeFile("project-a", "two.ts");
     store.getState().pinHomeFile("project-a", "two.ts");
@@ -1865,7 +1865,7 @@ describe("Home file workspace", () => {
   });
 
   it("closes active files back through surviving MRU tabs", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setHomeActiveTab("project-a", "chat:one");
     store.getState().pinHomeFile("project-a", "one.ts");
     store.getState().pinHomeFile("project-a", "two.ts");
@@ -1884,7 +1884,7 @@ describe("Home file workspace", () => {
   });
 
   it("closes an inactive file without moving the Home tab in front", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().pinHomeFile("project-a", "one.ts");
     store.getState().pinHomeFile("project-a", "two.ts");
     store.getState().activateHomeFile("project-a", "one.ts");
@@ -1904,7 +1904,7 @@ describe("Home file workspace", () => {
   });
 
   it("ignores activation and close requests for files that are not open", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().pinHomeFile("project-a", "one.ts");
     const before = store.getState().byProject;
 
@@ -1919,11 +1919,11 @@ describe("Home file workspace", () => {
 
   it("restores the active Home File tab but not session-local visit history", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().setHomeActiveTab("project-a", "chat:one");
     store.getState().previewHomeFile("project-a", "src/app.ts");
 
-    const restored = createWorkspaceStore(storage).getState().byProject["project-a"];
+    const restored = createProjectUiStore(storage).getState().byProject["project-a"];
 
     expect(restored).toMatchObject({
       homeActiveTab: "file:src/app.ts",
@@ -1940,7 +1940,7 @@ describe("Home file workspace", () => {
   });
 
   it("falls back to Board when a restored file has no surviving visit history", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().previewHomeFile("project-a", "one.ts");
     store.getState().setHomeActiveTab("project-a", "file:one.ts");
     // Model the session-only history being absent after a relaunch.
@@ -1959,7 +1959,7 @@ describe("Home file workspace", () => {
 
 describe("Home file workspace (browse/pin/activate)", () => {
   it("previewHomeFile opens a preview tab for that project only", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().previewHomeFile("project-a", "src/app.ts");
 
     expect(store.getState().byProject["project-a"]?.projectFiles).toEqual({
@@ -1970,7 +1970,7 @@ describe("Home file workspace (browse/pin/activate)", () => {
   });
 
   it("preview replaces the preview slot in place while a pinned tab is appended past", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().previewHomeFile("project-a", "one.ts");
     store.getState().pinHomeFile("project-a", "one.ts");
     store.getState().previewHomeFile("project-a", "two.ts");
@@ -1986,7 +1986,7 @@ describe("Home file workspace (browse/pin/activate)", () => {
   });
 
   it("markProjectFileEdited promotes the preview tab so the next preview appends", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().previewHomeFile("project-a", "one.ts");
     store.getState().markProjectFileEdited("project-a", "one.ts");
     store.getState().previewHomeFile("project-a", "two.ts");
@@ -1998,7 +1998,7 @@ describe("Home file workspace (browse/pin/activate)", () => {
   });
 
   it("markProjectFileEdited is a no-op once the tab is already pinned (safe on every keystroke)", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().pinHomeFile("project-a", "one.ts");
     const before = store.getState().byProject["project-a"];
 
@@ -2007,8 +2007,8 @@ describe("Home file workspace (browse/pin/activate)", () => {
     expect(store.getState().byProject["project-a"]).toBe(before);
   });
 
-  it("markProjectFileEdited does nothing for a project with no workspace record and no open tab", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+  it("markProjectFileEdited does nothing for a project with no project UI record and no open tab", () => {
+    const store = createProjectUiStore(createMemoryStorage());
 
     store.getState().markProjectFileEdited("project-never-seen", "one.ts");
 
@@ -2018,7 +2018,7 @@ describe("Home file workspace (browse/pin/activate)", () => {
   });
 
   it("activateHomeFile focuses an open tab and ignores a path that is not open", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().pinHomeFile("project-a", "one.ts");
     store.getState().pinHomeFile("project-a", "two.ts");
 
@@ -2030,7 +2030,7 @@ describe("Home file workspace (browse/pin/activate)", () => {
   });
 
   it("setProjectFileViewState keeps one opaque view state per relPath, per project", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().pinHomeFile("project-a", "one.ts");
     store.getState().pinHomeFile("project-a", "two.ts");
     store.getState().pinHomeFile("project-b", "one.ts");
@@ -2049,7 +2049,7 @@ describe("Home file workspace (browse/pin/activate)", () => {
   });
 
   it("closeHomeFile closes the tab and drops its persisted view state", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().pinHomeFile("project-a", "one.ts");
     store.getState().pinHomeFile("project-a", "two.ts");
     store.getState().setProjectFileViewState("project-a", "one.ts", { cursor: 3 });
@@ -2069,7 +2069,7 @@ describe("Home file workspace (browse/pin/activate)", () => {
   });
 
   it("setProjectFileViewState ignores a path with no open tab, so a close cannot be undone", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().pinHomeFile("project-a", "one.ts");
     store.getState().pinHomeFile("project-a", "two.ts");
     store.getState().setProjectFileViewState("project-a", "one.ts", { cursor: 3 });
@@ -2089,14 +2089,14 @@ describe("Home file workspace (browse/pin/activate)", () => {
     store.getState().setProjectFileViewState("project-a", "never-opened.ts", { cursor: 1 });
     expect(store.getState().byProject["project-a"]?.projectFileViewStates).toEqual({});
 
-    // And a project with no workspace record at all: there is no open tab to
+    // And a project with no project UI record at all: there is no open tab to
     // attach to, so this must not conjure the record into existence.
     store.getState().setProjectFileViewState("unknown-project", "one.ts", { cursor: 1 });
     expect(store.getState().byProject["unknown-project"]).toBeUndefined();
   });
 
   it("closeHomeFile leaves the record untouched for a file that is not open", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().pinHomeFile("project-a", "one.ts");
     store.getState().setProjectFileViewState("project-a", "one.ts", { cursor: 3 });
     const before = store.getState().byProject["project-a"];
@@ -2117,7 +2117,7 @@ describe("Home file workspace (browse/pin/activate)", () => {
 
 describe("renaming a file the navigator just renamed (VC-191)", () => {
   it("moves the Home tab, its pin, its focus and its remembered cursor onto the new path", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().pinHomeFile("project-a", "one.ts");
     store.getState().pinHomeFile("project-a", "two.ts");
     store.getState().setProjectFileViewState("project-a", "two.ts", { cursor: 9 });
@@ -2137,7 +2137,7 @@ describe("renaming a file the navigator just renamed (VC-191)", () => {
   });
 
   it("keeps the renamed tab's place in the close-return history", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().pinHomeFile("project-a", "one.ts");
     store.getState().pinHomeFile("project-a", "two.ts");
 
@@ -2150,7 +2150,7 @@ describe("renaming a file the navigator just renamed (VC-191)", () => {
   });
 
   it("drops a stale view state left under the destination path", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().pinHomeFile("project-a", "one.ts");
     store.getState().pinHomeFile("project-a", "two.ts");
     store.getState().setProjectFileViewState("project-a", "two.ts", { cursor: 9 });
@@ -2166,7 +2166,7 @@ describe("renaming a file the navigator just renamed (VC-191)", () => {
   });
 
   it("leaves everything alone for a Home file that is not open", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().pinHomeFile("project-a", "one.ts");
     const before = store.getState().byProject["project-a"];
 
@@ -2178,7 +2178,7 @@ describe("renaming a file the navigator just renamed (VC-191)", () => {
   });
 
   it("moves a ticket File tab and follows it with the ticket's active tab", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "src/one.ts");
     store.getState().previewTicketFile("project-a", "ticket-1", "src/two.ts");
 
@@ -2193,7 +2193,7 @@ describe("renaming a file the navigator just renamed (VC-191)", () => {
   });
 
   it("leaves a ticket alone when the file is not open, or the ticket has no tabs at all", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "src/one.ts");
     const before = store.getState().byProject["project-a"];
 
@@ -2213,12 +2213,12 @@ describe("renaming a file the navigator just renamed (VC-191)", () => {
 describe("Home file workspace persistence", () => {
   it("rehydrates tabs, order, pinned flags, and the active tab across a relaunch", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().pinHomeFile("project-a", "src/one.ts");
     store.getState().previewHomeFile("project-a", "src/two.ts");
     store.getState().activateHomeFile("project-a", "src/one.ts");
 
-    const rehydrated = createWorkspaceStore(storage);
+    const rehydrated = createProjectUiStore(storage);
     expect(rehydrated.getState().byProject["project-a"]?.projectFiles).toEqual({
       tabs: [
         { relPath: "src/one.ts", pinned: true },
@@ -2230,14 +2230,14 @@ describe("Home file workspace persistence", () => {
 
   it("round-trips a tab's Monaco view state through persistence", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().pinHomeFile("project-a", "src/one.ts");
     store.getState().setProjectFileViewState("project-a", "src/one.ts", {
       cursorState: [{ position: { lineNumber: 12, column: 3 } }],
       viewState: { scrollTop: 240 },
     });
 
-    const rehydrated = createWorkspaceStore(storage);
+    const rehydrated = createProjectUiStore(storage);
     expect(rehydrated.getState().byProject["project-a"]?.projectFileViewStates).toEqual({
       "src/one.ts": {
         cursorState: [{ position: { lineNumber: 12, column: 3 } }],
@@ -2248,7 +2248,7 @@ describe("Home file workspace persistence", () => {
 
   it("persists tab identities and view state only — never file contents", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().pinHomeFile("project-a", "src/one.ts");
     store.getState().previewHomeFile("project-a", "src/two.ts");
     store.getState().setProjectFileViewState("project-a", "src/one.ts", { scrollTop: 40 });
@@ -2274,7 +2274,7 @@ describe("Home file workspace persistence", () => {
 
   it("drops the project's record again once its last file tab is closed", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().previewHomeFile("project-a", "src/one.ts");
     store.getState().setProjectFileViewState("project-a", "src/one.ts", { scrollTop: 40 });
     store.getState().closeHomeFile("project-a", "src/one.ts", []);
@@ -2304,7 +2304,7 @@ describe("Home file workspace persistence", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     for (const projectId of ["project-a", "project-b", "project-c", "project-d"]) {
       expect(store.getState().byProject[projectId]?.projectFiles).toEqual(EMPTY_FILE_WORKSPACE);
     }
@@ -2340,7 +2340,7 @@ describe("Home file workspace persistence", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     expect(store.getState().byProject["project-a"]?.projectFileViewStates).toEqual({
       "src/one.ts": { scrollTop: 40 },
     });
@@ -2371,7 +2371,7 @@ describe("Home file workspace persistence", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     const { byProject } = store.getState();
     expect(Object.keys(byProject)).toContain("__proto__");
     expect(Object.getPrototypeOf(byProject)).toBeNull();
@@ -2386,7 +2386,7 @@ describe("Home file workspace persistence", () => {
 
 describe("tab arrangement — Home (VC-189)", () => {
   it("records the strip's new order for that project only", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().moveHomeTab("project-a", "chat:c1", ["chat:c1", "terminal-1"]);
 
     expect(store.getState().byProject["project-a"]?.homeTabOrder).toEqual([
@@ -2399,7 +2399,7 @@ describe("tab arrangement — Home (VC-189)", () => {
   it("PINS a preview File tab that was dragged, and moves it in the File list too", () => {
     // The decision: arranging a tab is deliberate, so the tab the person just
     // placed must not be replaced by the next glance from the navigator.
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().pinHomeFile("project-a", "src/one.ts");
     store.getState().previewHomeFile("project-a", "src/glance.ts");
     store
@@ -2416,7 +2416,7 @@ describe("tab arrangement — Home (VC-189)", () => {
   });
 
   it("leaves the File workspace by identity when the tab dragged was a Session", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().previewHomeFile("project-a", "src/glance.ts");
     const before = store.getState().byProject["project-a"]?.projectFiles;
     store.getState().moveHomeTab("project-a", "chat:c1", ["chat:c1", "file:src/glance.ts"]);
@@ -2425,7 +2425,7 @@ describe("tab arrangement — Home (VC-189)", () => {
   });
 
   it("leaves the File list alone when the arrangement does not name the moved tab", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().previewHomeFile("project-a", "src/glance.ts");
     const before = store.getState().byProject["project-a"]?.projectFiles;
     store.getState().moveHomeTab("project-a", "file:src/glance.ts", ["chat:c1"]);
@@ -2435,7 +2435,7 @@ describe("tab arrangement — Home (VC-189)", () => {
   });
 
   it("sanitizes the order it is handed", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().moveHomeTab("project-a", "chat:c1", ["chat:c1", "chat:c1", "", "terminal-1"]);
 
     expect(store.getState().byProject["project-a"]?.homeTabOrder).toEqual([
@@ -2446,11 +2446,11 @@ describe("tab arrangement — Home (VC-189)", () => {
 
   it("survives a relaunch, naming Sessions the strip has not put back yet", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().moveHomeTab("project-a", "chat:c2", ["chat:c2", "chat:c1"]);
 
     // An arrangement alone is worth persisting — the record is not "default".
-    const rehydrated = createWorkspaceStore(storage);
+    const rehydrated = createProjectUiStore(storage);
     expect(rehydrated.getState().byProject["project-a"]?.homeTabOrder).toEqual([
       "chat:c2",
       "chat:c1",
@@ -2461,7 +2461,7 @@ describe("tab arrangement — Home (VC-189)", () => {
     // Decision #56 replaces the preview slot in place precisely so a walk
     // through the navigator does not reshuffle the strip. The tab's id carries
     // its path, so the arrangement has to follow it to its new one.
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().previewHomeFile("project-a", "a.ts");
     store.getState().pinHomeFile("project-a", "b.ts");
     store.getState().moveHomeTab("project-a", "chat:c1", ["file:a.ts", "file:b.ts", "chat:c1"]);
@@ -2476,7 +2476,7 @@ describe("tab arrangement — Home (VC-189)", () => {
   });
 
   it("keeps a renamed tab's PLACE, as it keeps its slot", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().pinHomeFile("project-a", "a.ts");
     store.getState().pinHomeFile("project-a", "b.ts");
     store.getState().moveHomeTab("project-a", "chat:c1", ["file:a.ts", "file:b.ts", "chat:c1"]);
@@ -2505,7 +2505,7 @@ describe("tab arrangement — Home (VC-189)", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     expect(store.getState().byProject["project-a"]?.homeTabOrder).toEqual([
       "chat:not-hydrated-yet",
       "chat:c1",
@@ -2518,7 +2518,7 @@ describe("the strip's record — Home (VC-105)", () => {
   const strip = ["chat:c1", "terminal-1", "chat:c2", "file:src/app.ts", "chat:c3"];
 
   it("records the strip as drawn for that project only, and nothing else", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().previewHomeFile("project-a", "src/app.ts");
     const files = store.getState().byProject["project-a"]?.projectFiles;
     store.getState().recordHomeTabOrder("project-a", strip);
@@ -2530,7 +2530,7 @@ describe("the strip's record — Home (VC-105)", () => {
   });
 
   it("leaves the store by identity when the record already says it", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     const empty = store.getState();
     store.getState().recordHomeTabOrder("project-a", []);
     expect(store.getState()).toBe(empty);
@@ -2542,7 +2542,7 @@ describe("the strip's record — Home (VC-105)", () => {
   });
 
   it("sanitizes what it is handed", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().recordHomeTabOrder("project-a", ["chat:c1", "", "chat:c1", "chat:c2"]);
 
     expect(store.getState().byProject["project-a"]?.homeTabOrder).toEqual(["chat:c1", "chat:c2"]);
@@ -2550,11 +2550,11 @@ describe("the strip's record — Home (VC-105)", () => {
 
   it("brings the whole strip back across a relaunch, with the same tab in front", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().setHomeActiveTab("project-a", "chat:c2");
     store.getState().recordHomeTabOrder("project-a", strip);
 
-    const rehydrated = createWorkspaceStore(storage).getState().byProject["project-a"];
+    const rehydrated = createProjectUiStore(storage).getState().byProject["project-a"];
     // Verbatim, dead terminal included: whether an id still names anything is
     // asked live against the listing (`home-tabs.ts`), never at rehydrate.
     expect(rehydrated?.homeTabOrder).toEqual(strip);
@@ -2563,7 +2563,7 @@ describe("the strip's record — Home (VC-105)", () => {
 
   it("prunes a record whose strip emptied with the Board in front", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().recordHomeTabOrder("project-a", strip);
     store.getState().recordHomeTabOrder("project-a", []);
 
@@ -2574,9 +2574,9 @@ describe("the strip's record — Home (VC-105)", () => {
   });
 });
 
-describe("tab arrangement — the ticket workspace (VC-189)", () => {
+describe("tab arrangement — the Ticket view (VC-189)", () => {
   it("records the strip's new order on that ticket's record", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store
       .getState()
       .moveTicketTab("project-a", "ticket-1", "session-9", ["session-9", "file:docs/plan.md"]);
@@ -2591,7 +2591,7 @@ describe("tab arrangement — the ticket workspace (VC-189)", () => {
   });
 
   it("PINS a preview File tab that was dragged, and moves it in the File list too", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "docs/plan.md");
     store.getState().previewTicketFile("project-a", "ticket-1", "src/glance.ts");
     store
@@ -2611,7 +2611,7 @@ describe("tab arrangement — the ticket workspace (VC-189)", () => {
   });
 
   it("writes the arrangement even when the File list has nothing to say", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().openTicketFile("project-a", "ticket-1", "docs/plan.md");
     // A pinned file dropped back on its own slot: the File reducer returns by
     // identity, and the overlay still records what the strip now shows.
@@ -2633,10 +2633,10 @@ describe("tab arrangement — the ticket workspace (VC-189)", () => {
     // Chat Sessions DO come back after a relaunch, so the order they come back
     // in is worth keeping even though no file or diff tab is open.
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().moveTicketTab("project-a", "ticket-1", "chat:c2", ["chat:c2", "chat:c1"]);
 
-    const rehydrated = createWorkspaceStore(storage);
+    const rehydrated = createProjectUiStore(storage);
     expect(rehydrated.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.tabOrder).toEqual([
       "chat:c2",
       "chat:c1",
@@ -2644,7 +2644,7 @@ describe("tab arrangement — the ticket workspace (VC-189)", () => {
   });
 
   it("keeps a preview tab's PLACE when a glance replaces it, and a renamed tab's", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().previewTicketFile("project-a", "ticket-1", "a.ts");
     store.getState().openTicketFile("project-a", "ticket-1", "b.ts");
     store
@@ -2685,7 +2685,7 @@ describe("tab arrangement — the ticket workspace (VC-189)", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     const tabs = store.getState().byProject["project-a"]?.ticketTabs;
     expect(tabs?.["ticket-1"]?.tabOrder).toEqual(["chat:c1"]);
     expect(tabs?.["ticket-2"]).toBeUndefined();
@@ -2702,10 +2702,10 @@ function paneMinter(): () => string {
 }
 
 function splitStore() {
-  return createWorkspaceStore(createMemoryStorage(), paneMinter());
+  return createProjectUiStore(createMemoryStorage(), paneMinter());
 }
 
-type Store = ReturnType<typeof createWorkspaceStore>;
+type Store = ReturnType<typeof createProjectUiStore>;
 
 const homeSplit = (store: Store, projectId = "project-a"): SplitViewState | null =>
   store.getState().byProject[projectId]?.homeSplitView ?? null;
@@ -2874,7 +2874,7 @@ describe("split view — Home (VC-202)", () => {
   });
 
   it("mints a pane id of its own when nobody injected one", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right");
 
     const opened = splitViewPanes(homeSplit(store)!)[1];
@@ -2971,7 +2971,7 @@ describe("split view — Home (VC-202)", () => {
     store.getState().openHome("project-a", "chat:c1");
     expect(homeSplit(store)?.focusedPaneId).toBe("n1");
 
-    store.getState().openTicketWorkspace("project-a", "ticket-1");
+    store.getState().openTicketView("project-a", "ticket-1");
     expect(homeSplit(store)?.focusedPaneId).toBe(SPLIT_VIEW_ROOT_PANE_ID);
   });
 
@@ -3272,7 +3272,7 @@ describe("split view — Home (VC-202)", () => {
 });
 
 /** The same grammar one scope down, on a ticket's own record. */
-describe("split view — the ticket workspace (VC-202)", () => {
+describe("split view — the Ticket view (VC-202)", () => {
   it("splits a ticket's main area, claiming the strip it was handed", () => {
     const store = splitStore();
     store.getState().openTicketFile("project-a", "ticket-1", "docs/plan.md");
@@ -3561,7 +3561,7 @@ describe("split view persistence (VC-202)", () => {
     // The whole compatibility promise: a workspace that has not split persists
     // exactly the blob a build before panes wrote.
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().setBoardView("project-a", "list");
 
     const parsed = JSON.parse(storage.getItem("volli:workspace")!) as {
@@ -3572,7 +3572,7 @@ describe("split view persistence (VC-202)", () => {
 
   it("restores a split — a layout is a deliberate act, so it outlives the sitting", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage, paneMinter());
+    const store = createProjectUiStore(storage, paneMinter());
     store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
       tabId: "chat:c1",
       surfaceTabIds: ["terminal-1", "chat:c1"],
@@ -3581,7 +3581,7 @@ describe("split view persistence (VC-202)", () => {
       surfaceTabIds: ["session-9"],
     });
 
-    const rehydrated = createWorkspaceStore(storage);
+    const rehydrated = createProjectUiStore(storage);
     expect(panesOf(homeSplit(rehydrated))).toEqual([
       [SPLIT_VIEW_ROOT_PANE_ID, [HOME_BOARD_TAB_ID, "terminal-1"], HOME_BOARD_TAB_ID],
       ["n1", ["chat:c1"], "chat:c1"],
@@ -3594,11 +3594,11 @@ describe("split view persistence (VC-202)", () => {
 
   it("keeps a record whose only news is a split, at either scope", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage, paneMinter());
+    const store = createProjectUiStore(storage, paneMinter());
     store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right");
     store.getState().splitTicketPane("project-b", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "right");
 
-    const rehydrated = createWorkspaceStore(storage);
+    const rehydrated = createProjectUiStore(storage);
     expect(homeSplit(rehydrated)).not.toBeNull();
     expect(ticketSplit(rehydrated, "ticket-1")).toBeNull();
     expect(
@@ -3642,7 +3642,7 @@ describe("split view persistence (VC-202)", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     // A single pane is not a split; neither is a number, a string, or null.
     expect(homeSplit(store)).toBeNull();
     expect(homeSplit(store, "project-b")).toBeNull();
@@ -3662,7 +3662,7 @@ describe("split view persistence (VC-202)", () => {
 
 describe("forget", () => {
   it("drops the project's record so a re-add starts at the defaults", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setNav("project-a", "configure");
     store.getState().setSessionGroupExpanded("project-a", "ticket-1", true);
     store.getState().setBoardView("project-a", "list");
@@ -3673,7 +3673,7 @@ describe("forget", () => {
     store.getState().forget("project-a");
 
     expect(store.getState().byProject["project-a"]).toBeUndefined();
-    expect(store.getState().byProject["project-a"] ?? DEFAULT_WORKSPACE_UI).toEqual({
+    expect(store.getState().byProject["project-a"] ?? DEFAULT_PROJECT_UI).toEqual({
       nav: "home",
       expandedSessionGroups: [],
       boardView: "board",
@@ -3693,7 +3693,7 @@ describe("forget", () => {
   });
 
   it("leaves other projects untouched and is a no-op for unknown ids", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().setNav("project-a", "configure");
 
     const before = store.getState().byProject;
@@ -3708,7 +3708,7 @@ describe("forget", () => {
 describe("persistence", () => {
   it("persists only non-default boardView/boardSort/openTicketId records under 'volli:workspace'", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().setBoardView("project-a", "list");
     store.getState().setNav("project-b", "configure"); // session-only change → record stays default-valued
 
@@ -3736,7 +3736,7 @@ describe("persistence", () => {
 
   it("rehydrates view + sort + open ticket while nav resets to the default", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().setBoardView("project-a", "list");
     store.getState().setBoardSort("project-a", { key: "priority", direction: "desc" });
     store.getState().setNav("project-a", "configure");
@@ -3744,7 +3744,7 @@ describe("persistence", () => {
     store.getState().openTicket("project-a", "ticket-1");
     useBoardStore.setState({ selectedByProject: {} });
 
-    const rehydrated = createWorkspaceStore(storage);
+    const rehydrated = createProjectUiStore(storage);
     const ui = rehydrated.getState().byProject["project-a"];
     expect(ui?.boardView).toBe("list");
     expect(ui?.boardSort).toEqual({ key: "priority", direction: "desc" });
@@ -3754,11 +3754,11 @@ describe("persistence", () => {
 
   it("restores the open ticket across a restart (openTicket → reload)", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().openTicket("project-a", "ticket-1");
     useBoardStore.setState({ selectedByProject: {} });
 
-    const rehydrated = createWorkspaceStore(storage);
+    const rehydrated = createProjectUiStore(storage);
     expect(rehydrated.getState().byProject["project-a"]?.openTicketId).toBe("ticket-1");
   });
 
@@ -3776,7 +3776,7 @@ describe("persistence", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     const ui = store.getState().byProject["project-a"];
     expect(ui?.boardView).toBe("board");
     expect(ui?.boardSort).toEqual(DEFAULT_TICKET_SORT);
@@ -3792,17 +3792,17 @@ describe("persistence", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     expect(store.getState().byProject["project-a"]?.openTicketId).toBeNull();
   });
 
   it("a forgotten project's persisted prefs do not survive the next write", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().setBoardView("project-a", "list");
     store.getState().forget("project-a");
 
-    const rehydrated = createWorkspaceStore(storage);
+    const rehydrated = createProjectUiStore(storage);
     expect(rehydrated.getState().byProject["project-a"]).toBeUndefined();
   });
 });
@@ -3825,11 +3825,11 @@ describe("rehydration sanitization (corrupt JSON)", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     expect(store.getState().byProject["project-a"]?.boardView).toBe("list");
     expect(store.getState().byProject["project-a"]?.boardSort).toEqual(DEFAULT_TICKET_SORT);
     expect(store.getState().byProject["project-a"]?.openTicketId).toBeNull();
-    expect(store.getState().byProject["project-b"]).toEqual(DEFAULT_WORKSPACE_UI);
+    expect(store.getState().byProject["project-b"]).toEqual(DEFAULT_PROJECT_UI);
   });
 
   it("falls back to the default sort when only the direction is invalid", () => {
@@ -3842,7 +3842,7 @@ describe("rehydration sanitization (corrupt JSON)", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     expect(store.getState().byProject["project-a"]?.boardSort).toEqual(DEFAULT_TICKET_SORT);
   });
 
@@ -3860,7 +3860,7 @@ describe("rehydration sanitization (corrupt JSON)", () => {
       }),
     );
 
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     expect(store.getState().byProject["project-a"]?.boardSort).toEqual({
       key: "title",
       direction: "asc",
@@ -3913,7 +3913,7 @@ describe.each(["Home", "Ticket"] as const)("placement-only claims — %s (VC-483
 
   it("persists a contentful draft's claim without stealing unrelated browser focus", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage, paneMinter());
+    const store = createProjectUiStore(storage, paneMinter());
     activate(store, "browser:foreground");
     split(store);
     focus(store, "root");
@@ -3925,7 +3925,7 @@ describe.each(["Home", "Ticket"] as const)("placement-only claims — %s (VC-483
     expect(rootBranch(readSplit(store)).first).toBe(before);
     expect(panesOf(readSplit(store))[1]).toEqual(["n1", ["chat:draft"], "chat:draft"]);
     expect(readActive(store)).toBe("browser:foreground");
-    const restored = createWorkspaceStore(storage);
+    const restored = createProjectUiStore(storage);
     expect(readSplit(restored)).toEqual(readSplit(store));
     expect(readActive(restored)).toBe("browser:foreground");
   });
@@ -4012,7 +4012,7 @@ describe.each(["Home", "Ticket"] as const)("placement-only claims — %s (VC-483
  * its tab landed in — even when the saved active id does not change, because an
  * empty Draft may still be covering that very tab — and nothing that is not a
  * selection announces at all. The owner is the surface's: the project for
- * Home, the ticket for a ticket workspace.
+ * Home, the ticket for a Ticket view.
  */
 const selectionStops: (() => void)[] = [];
 
@@ -4250,7 +4250,7 @@ describe("tab selection intent — the activation doors (VC-483)", () => {
     expect(ticket).toHaveLength(7);
   });
 
-  it("announces a ticket workspace's Home Board, and its own tab only when one is named", () => {
+  it("announces a Ticket view's Home Board, and its own tab only when one is named", () => {
     const store = splitStore();
     const home = listenForSelections("project-a");
     const ticket = listenForSelections("ticket-1");
@@ -4259,15 +4259,15 @@ describe("tab selection intent — the activation doors (VC-483)", () => {
       surfaceTabIds: ["chat:c1"],
     });
 
-    ws.openTicketWorkspace("project-a", "ticket-1");
+    ws.openTicketView("project-a", "ticket-1");
     expect(home).toEqual([SPLIT_VIEW_ROOT_PANE_ID]);
     expect(ticket).toEqual([]);
 
     // A tab the ticket already holds is announced in its own pane; one nothing
     // holds yet opens into the focused pane.
-    ws.openTicketWorkspace("project-a", "ticket-1", { tabId: "chat:c1" });
+    ws.openTicketView("project-a", "ticket-1", { tabId: "chat:c1" });
     ws.focusTicketPane("project-a", "ticket-1", "n1");
-    ws.openTicketWorkspace("project-a", "ticket-1", { tabId: "chat:c2" });
+    ws.openTicketView("project-a", "ticket-1", { tabId: "chat:c2" });
     expect(home).toEqual(Array(3).fill(SPLIT_VIEW_ROOT_PANE_ID));
     expect(ticket).toEqual([SPLIT_VIEW_ROOT_PANE_ID, "n1"]);
   });
@@ -4275,12 +4275,12 @@ describe("tab selection intent — the activation doors (VC-483)", () => {
 
 describe("navHistory", () => {
   it("starts empty", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     expect(store.getState().navHistory).toEqual({ back: [], current: null, forward: [] });
   });
 
   it("records organic navigations and steps back/forward over them", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().recordNav(snap("a"));
     store.getState().recordNav(snap("a", "configure"));
     store.getState().recordNav(snap("b"));
@@ -4292,7 +4292,7 @@ describe("navHistory", () => {
   });
 
   it("stepNavForward returns null and leaves history unchanged when the forward stack is empty", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     const before = store.getState().navHistory;
 
     expect(store.getState().stepNavForward()).toBeNull();
@@ -4300,7 +4300,7 @@ describe("navHistory", () => {
   });
 
   it("dedupes a consecutive identical snapshot without notifying", () => {
-    const store = createWorkspaceStore(createMemoryStorage());
+    const store = createProjectUiStore(createMemoryStorage());
     store.getState().recordNav(snap("a"));
     const before = store.getState().navHistory;
     store.getState().recordNav(snap("a"));
@@ -4309,7 +4309,7 @@ describe("navHistory", () => {
 
   it("is never persisted (in-memory only)", () => {
     const storage = createMemoryStorage();
-    const store = createWorkspaceStore(storage);
+    const store = createProjectUiStore(storage);
     store.getState().recordNav(snap("a"));
     store.getState().recordNav(snap("b"));
 
@@ -4319,7 +4319,7 @@ describe("navHistory", () => {
     expect(parsed.state?.navHistory).toBeUndefined();
 
     // And a fresh (rehydrated) store starts with empty history.
-    expect(createWorkspaceStore(storage).getState().navHistory).toEqual({
+    expect(createProjectUiStore(storage).getState().navHistory).toEqual({
       back: [],
       current: null,
       forward: [],

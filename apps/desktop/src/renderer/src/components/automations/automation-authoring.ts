@@ -7,7 +7,7 @@ import { bootChatSession } from "@renderer/components/sessions/session-create";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { projectScope } from "@renderer/stores/sessions";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 export interface AutomationAuthoringContext {
   name: string;
@@ -51,6 +51,6 @@ export async function startAutomationAuthoring(
     id: crypto.randomUUID(),
     text: automationAuthoringPrompt(context),
   });
-  useWorkspaceStore.getState().openHome(projectId, chatTabId(sessionId));
+  useProjectUiStore.getState().openHome(projectId, chatTabId(sessionId));
   return sessionId;
 }

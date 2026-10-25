@@ -46,7 +46,7 @@ const INTERACTIONS = Object.freeze([
   ["new_chat", "+ Chat to usable composer"],
   ["new_terminal", "New terminal session"],
   ["sidebar_toggle", "Sidebar open/close frame times"],
-  ["ticket_switch", "Switch between ticket workspaces"],
+  ["ticket_switch", "Switch between Ticket views"],
   ["board_render", "Board render"],
   ["board_scroll", "Board column scroll"],
   ["board_filter", "Board filter apply"],
@@ -223,7 +223,7 @@ export function aggregateInteraction(id, label, samples) {
     // each one gets the same percentile treatment as the latency it divides.
     "paletteOpenMs",
     "paletteResolveMs",
-    "workspaceRebuildMs",
+    "ticketViewRebuildMs",
     "descriptionEditorMs",
     "settleMs",
     "sessionsListMs",
@@ -730,7 +730,7 @@ async function selectTicketFromPalette(page, targetTitle, targetDisplayId) {
   await row.click();
 }
 
-async function waitForTicketWorkspace(page, targetTitle, targetDisplayId) {
+async function waitForTicketView(page, targetTitle, targetDisplayId) {
   const bodyTab = tabStrip(page, TICKET_TAB_STRIP).getByRole("tab", {
     name: targetDisplayId,
     exact: true,
@@ -771,13 +771,13 @@ async function waitForTicketWorkspace(page, targetTitle, targetDisplayId) {
     (node) => node === document.activeElement || node.contains(document.activeElement),
   );
   if (!acceptedFocus) {
-    throw new Error(`${targetDisplayId} ticket workspace content did not accept focus`);
+    throw new Error(`${targetDisplayId} Ticket view content did not accept focus`);
   }
 }
 
-async function openTicketWorkspaceFromPalette(page, targetTitle, targetDisplayId) {
+async function openTicketViewFromPalette(page, targetTitle, targetDisplayId) {
   await selectTicketFromPalette(page, targetTitle, targetDisplayId);
-  await waitForTicketWorkspace(page, targetTitle, targetDisplayId);
+  await waitForTicketView(page, targetTitle, targetDisplayId);
 }
 
 /**
@@ -823,7 +823,7 @@ async function measureTicketSwitch(page, app, targetTitle, targetDisplayId) {
       await page.evaluate((name) => performance.mark(name), TICKET_SWITCH_MARKS.start);
       await selectTicketFromPalette(page, targetTitle, targetDisplayId);
     },
-    () => waitForTicketWorkspace(page, targetTitle, targetDisplayId),
+    () => waitForTicketView(page, targetTitle, targetDisplayId),
   );
   const breakdown = ticketSwitchBreakdown({
     marks: await phaseMarks(page, Object.values(TICKET_SWITCH_MARKS)),
@@ -1100,13 +1100,13 @@ async function fullAppIteration({
     if (wanted.has("ticket_switch")) {
       console.log("  preparing ticket switch");
       const { displayId: switchDisplayId, title: switchTitle } = manifest.switchTarget;
-      await openTicketWorkspaceFromPalette(
+      await openTicketViewFromPalette(
         page,
         manifest.longChat.ticketTitle,
         manifest.longChat.displayId,
       );
-      await openTicketWorkspaceFromPalette(page, switchTitle, switchDisplayId);
-      await openTicketWorkspaceFromPalette(
+      await openTicketViewFromPalette(page, switchTitle, switchDisplayId);
+      await openTicketViewFromPalette(
         page,
         manifest.longChat.ticketTitle,
         manifest.longChat.displayId,
@@ -1725,7 +1725,7 @@ export function markdown(report) {
         for (const [key, label] of [
           ["paletteOpenMs", "open palette"],
           ["paletteResolveMs", "find row"],
-          ["workspaceRebuildMs", "rebuild workspace"],
+          ["ticketViewRebuildMs", "rebuild Ticket view"],
           ["descriptionEditorMs", "description editor"],
           ["settleMs", "settle"],
           ["sessionsListMs", "(of which sessions.list)"],

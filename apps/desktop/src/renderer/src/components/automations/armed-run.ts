@@ -17,7 +17,7 @@ import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { toastError } from "@renderer/lib/toast";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useUiStore } from "@renderer/stores/ui";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 interface ArmedRunState {
   /** Exact arrival id → main's durable pending record. */
@@ -120,7 +120,7 @@ export function announcePendingArmedRunSettlement(notice: PendingArmedRunSettled
             label: "Open session",
             onClick: () => {
               chat.openChatTab(pending.ticketId, action.sessionId);
-              useWorkspaceStore.getState().openTicketWorkspace(action.projectId, pending.ticketId, {
+              useProjectUiStore.getState().openTicketView(action.projectId, pending.ticketId, {
                 tabId: chatTabId(action.sessionId),
               });
             },

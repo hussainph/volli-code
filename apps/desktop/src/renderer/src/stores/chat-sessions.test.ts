@@ -1360,7 +1360,7 @@ describe("promoteChatSession", () => {
     expect(store.getState().openTabs).toEqual({ t1: [DRAFT_ID] });
     // Restoring makes a Draft REACHABLE; it does not decide what comes
     // forward. `provisionalActive` is the overlay that lets an EMPTY Draft be
-    // focused without writing the workspace record, and an empty Draft is
+    // focused without writing the project UI record, and an empty Draft is
     // never persisted — so nothing restored here may claim it. Were it set,
     // the commit effect would overwrite the tab the person actually left on.
     expect(store.getState().provisionalActive).toEqual({});

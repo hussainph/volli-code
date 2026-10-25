@@ -21,7 +21,7 @@ import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { findTerminalPlacement, useSessionsStore } from "@renderer/stores/sessions";
 import { useUpdateStore } from "@renderer/stores/update";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 /** Sonner's default is tuned for glanceable news; this is an explanation. */
 const STALE_TOAST_MS = 6000;
@@ -34,13 +34,13 @@ export const desktopNotificationSurface: NotificationSurface = {
     findTerminalPlacement(useSessionsStore.getState().byOwner, sessionId),
   selectProject: (projectId) => useProjectsStore.getState().select(projectId),
   openTicket: (projectId, ticketId) =>
-    useWorkspaceStore.getState().openTicketWorkspace(projectId, ticketId),
+    useProjectUiStore.getState().openTicketView(projectId, ticketId),
   openChatSession: (route) => {
     const chat = useChatSessionsStore.getState();
     chat.adoptChatSession(route.sessionId);
     if (route.kind === "ticket-session") {
       chat.openChatTab(route.ticketId, route.sessionId);
-      useWorkspaceStore.getState().openTicketWorkspace(route.projectId, route.ticketId, {
+      useProjectUiStore.getState().openTicketView(route.projectId, route.ticketId, {
         tabId: route.tabId,
       });
       return;
@@ -48,19 +48,19 @@ export const desktopNotificationSurface: NotificationSurface = {
     // A Board Session has no ticket to open behind it; its tab lives on Home
     // under the project's own id.
     chat.openChatTab(route.projectId, route.sessionId);
-    useWorkspaceStore.getState().openHome(route.projectId, chatTabId(route.sessionId));
+    useProjectUiStore.getState().openHome(route.projectId, chatTabId(route.sessionId));
   },
   openTerminal: (route) => {
     const sessions = useSessionsStore.getState();
     if (route.kind === "ticket-terminal") {
       // One seam, because these three writes are one act: the workspace has to
       // be on the ticket, the strip on that tab, and the split on that pane.
-      useWorkspaceStore
+      useProjectUiStore
         .getState()
         .openTicketSession(route.projectId, route.ticketId, route.tabId, route.paneId);
       return;
     }
-    useWorkspaceStore.getState().openHome(route.projectId, route.tabId);
+    useProjectUiStore.getState().openHome(route.projectId, route.tabId);
     sessions.setActiveSession(route.projectId, route.tabId);
     sessions.setActivePane(route.projectId, route.tabId, route.paneId);
   },

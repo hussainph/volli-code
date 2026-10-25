@@ -1,12 +1,12 @@
 /**
- * Home's right rail — the ticket workspace's Calm Stack one scope up (VC-55).
+ * Home's right rail — the Ticket view's Calm Stack one scope up (VC-55).
  *
  * WHY IT EXISTS. The empty chat answers "where does this Session run" only
  * while it is empty, which is exactly as long as it takes to type one message.
  * Everything after that is a transcript, and nothing on the surface said which
  * directory the agent was writing to. This is the mid-session answer, and it is
- * the same ⌥⌘B panel the ticket workspace has — parity rather than a new idea,
- * because Home and a ticket workspace are the same object at two scopes.
+ * the same ⌥⌘B panel the Ticket view has — parity rather than a new idea,
+ * because Home and a Ticket view are the same object at two scopes.
  *
  * THREE PAGES, scoped to the Main checkout and the project's own work:
  *
@@ -115,7 +115,7 @@ import {
 import { useRemoteSessionsUnavailable } from "@renderer/stores/remote-session-availability";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { RAIL_NARROW_MAX_WIDTH, useUiStore } from "@renderer/stores/ui";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { LocalOnly } from "@renderer/components/hosts/local-only";
 
 /**
@@ -212,9 +212,9 @@ export function HomeRail({
             <HomeFilesPanel
               project={project}
               onPreviewFile={(relPath) =>
-                useWorkspaceStore.getState().previewHomeFile(project.id, relPath)
+                useProjectUiStore.getState().previewHomeFile(project.id, relPath)
               }
-              onPinFile={(relPath) => useWorkspaceStore.getState().pinHomeFile(project.id, relPath)}
+              onPinFile={(relPath) => useProjectUiStore.getState().pinHomeFile(project.id, relPath)}
             />
           </LocalOnly>
         ) : null}
@@ -227,7 +227,7 @@ export function HomeRail({
               scope={{ kind: "home", projectId: project.id }}
               root={project.name}
               onOpenMatch={(relPath) =>
-                useWorkspaceStore.getState().previewHomeFile(project.id, relPath)
+                useProjectUiStore.getState().previewHomeFile(project.id, relPath)
               }
             />
           </LocalOnly>
@@ -608,12 +608,12 @@ function homeSessionDragPayload(projectId: string, row: HomeSessionRow): SplitDr
  * target at all rather than by being one that lands nowhere.
  */
 function openSession(projectId: string, row: HomeSessionRow): void {
-  const workspace = useWorkspaceStore.getState();
+  const projectUi = useProjectUiStore.getState();
   if (row.kind === "chat") {
     const chat = useChatSessionsStore.getState();
     chat.adoptChatSession(row.id);
     chat.openChatTab(projectId, row.id);
-    workspace.openHome(projectId, chatTabId(row.id));
+    projectUi.openHome(projectId, chatTabId(row.id));
     return;
   }
   // The TAB the pane belongs to, then the pane inside it: a durable terminal
@@ -623,5 +623,5 @@ function openSession(projectId: string, row: HomeSessionRow): void {
   const sessions = useSessionsStore.getState();
   sessions.setActiveSession(projectId, tabId);
   sessions.setActivePane(projectId, tabId, row.id);
-  workspace.openHome(projectId, tabId);
+  projectUi.openHome(projectId, tabId);
 }

@@ -259,7 +259,7 @@ async function waitForColumnCount(page, label, timeoutMs = 10_000) {
   return last;
 }
 
-/** Land on Home's Board tab (nav and tab are both remembered per-workspace and
+/** Land on Home's Board tab (nav and tab are both remembered per-project and
  *  both default to it, but re-assert after every reload to be robust). */
 async function goToBoard(page) {
   const homeNav = page.getByRole("button", { name: "Home", exact: true });
@@ -1347,7 +1347,7 @@ async function main() {
     // === 18. Global create: plain "c" opens the New-ticket composer, and
     // ⌘+Enter commits plain creation — the unmodified chord for the unmodified
     // action, matching the Create button beside the primary. Starting a chat is
-    // ⇧⌘+Enter and intentionally leaves the board for the new Ticket workspace,
+    // ⇧⌘+Enter and intentionally leaves the board for the new Ticket view,
     // so this board-level check stays on the non-navigating one to keep the
     // "c" → create → card lands wiring honest; the full action menu and kickoff
     // contracts live in composer-basics-smoke.mjs.
@@ -1470,17 +1470,17 @@ async function main() {
       21,
       "Project switcher toggle returns its full 60px to the canvas and persists across reload",
       async () => {
-        const workspaceRail = page.locator("[data-workspace-rail]");
+        const projectRail = page.locator("[data-project-rail]");
         const mainCanvas = page.locator('[data-slot="sidebar-inset"]');
-        const railBefore = await workspaceRail.boundingBox();
+        const railBefore = await projectRail.boundingBox();
         const canvasBefore = await mainCanvas.boundingBox();
-        if (!railBefore || !canvasBefore) throw new Error("workspace rail or main canvas missing");
+        if (!railBefore || !canvasBefore) throw new Error("project rail or main canvas missing");
 
-        // VC-57 renamed the user-facing word to "project" (CONTEXT.md keeps
-        // "workspace" internal-only; the data-workspace-rail hook is unchanged).
+        // VC-57 renamed the user-facing word to "project"; the rail's
+        // internal names followed (data-project-rail).
         await page.getByRole("button", { name: "Hide project switcher" }).click();
         await sleep(400);
-        const railHidden = await workspaceRail.boundingBox();
+        const railHidden = await projectRail.boundingBox();
         const canvasExpanded = await mainCanvas.boundingBox();
         if (!railHidden || !canvasExpanded)
           throw new Error("hidden rail or expanded canvas missing");
@@ -1490,13 +1490,13 @@ async function main() {
         await page.waitForLoadState("domcontentloaded");
         await sleep(1500);
         await goToBoard(page);
-        const hiddenPersisted = await page.locator("[data-workspace-rail]").boundingBox();
+        const hiddenPersisted = await page.locator("[data-project-rail]").boundingBox();
         const showToggle = page.getByRole("button", { name: "Show project switcher" });
         const persisted = hiddenPersisted !== null && hiddenPersisted.width < 1;
 
         await showToggle.click();
         await sleep(400);
-        const railRestored = await page.locator("[data-workspace-rail]").boundingBox();
+        const railRestored = await page.locator("[data-project-rail]").boundingBox();
         const canvasRestored = await page.locator('[data-slot="sidebar-inset"]').boundingBox();
         if (!railRestored || !canvasRestored) throw new Error("restored layout missing");
 

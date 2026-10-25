@@ -20,7 +20,7 @@
  *  2. An ABSOLUTE path is resolved by containment: a known ticket worktree
  *     wins first (most specific root), then the project's main checkout.
  *     Worktree hits carry their ticket, so the caller can land the tab in that
- *     ticket's workspace — the transcript pointed there by name.
+ *     ticket's Ticket view — the transcript pointed there by name.
  *  3. Anything else is `outside`: a path this project cannot open. The caller
  *     says so and navigates nowhere, instead of opening a pane whose only
  *     content is an error.
@@ -151,7 +151,7 @@ export function resolveChatOpenTarget(input: {
 
   const relPath = toProjectRelPath(projectPath, path);
   if (relPath !== null && relPath.length > 0) {
-    // In a ticket workspace the honest copy of a repo path is the worktree's —
+    // In a Ticket view the honest copy of a repo path is the worktree's —
     // exactly how the same relPath already behaves when spelled relatively.
     return scope.kind === "ticket"
       ? { kind: "ticket-file", ticketId: scope.ticketId, relPath }

@@ -760,8 +760,8 @@ export default function SidebarNestingScratch() {
   const [filter, setFilter] = React.useState<SessionBandFilter>(DEFAULT_SESSION_BAND_FILTER);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   // Ticket ids whose group is open. The app keeps the same set per project in
-  // `workspace.ts` (`expandedSessionGroups`); local state here because a
-  // scratch has no workspace to belong to.
+  // `project-ui.ts` (`expandedSessionGroups`); local state here because a
+  // scratch has no project to belong to.
   const [openIds, setOpenIds] = React.useState<ReadonlySet<string>>(new Set());
 
   const now = NOW;

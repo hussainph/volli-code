@@ -5,7 +5,7 @@
  * dependency-light core:
  *
  *  - the global Done-TTL setting, stored in `app_state` (the existing kv the
- *    ui/workspace persist stores already use);
+ *    ui/project-ui persist stores already use);
  *  - `doneEntryTimestamp`, the event-log read that dates a ticket's LATEST entry
  *    into the Done column — the anchor the TTL counts from;
  *  - `computeArchiveReadiness` (re-exported from `@volli/shared` — it's pure

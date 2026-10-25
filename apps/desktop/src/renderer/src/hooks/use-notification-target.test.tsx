@@ -23,7 +23,7 @@ import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
-import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, useProjectUiStore } from "@renderer/stores/project-ui";
 
 import { useNotificationTargetReport } from "./use-notification-target";
 
@@ -51,16 +51,16 @@ function Probe(): null {
   return null;
 }
 
-/** The window: a ticket workspace with this Session's chat tab in front. */
+/** The window: a Ticket view with this Session's chat tab in front. */
 function seedStores(): void {
   useProjectsStore.setState({
     projects: [{ id: PROJECT, name: "Volli" } as Project],
     selectedProjectId: PROJECT,
   });
-  useWorkspaceStore.setState({
+  useProjectUiStore.setState({
     byProject: {
       [PROJECT]: {
-        ...DEFAULT_WORKSPACE_UI,
+        ...DEFAULT_PROJECT_UI,
         nav: "home",
         openTicketId: TICKET,
         ticketTabs: { [TICKET]: { active: `chat:${SESSION}` } },
@@ -102,7 +102,7 @@ afterEach(() => {
   releaseSessionItemReveal(SESSION);
   takeSessionItemReveal(SESSION);
   useChatSessionsStore.setState({ sessions: {} } as never);
-  useWorkspaceStore.setState({ byProject: {} } as never);
+  useProjectUiStore.setState({ byProject: {} } as never);
   useProjectsStore.setState({ projects: [], selectedProjectId: null });
   useSessionsStore.setState({ byOwner: {} } as never);
   useUiStore.setState({ settingsOpen: false });
@@ -117,7 +117,7 @@ const terminalTab = (tabId: string, paneId: string) => ({
 
 /** Home's own tab in front, with the ticket still remembered behind it. */
 function showHomeTab(tabId: string): void {
-  useWorkspaceStore.setState((state) => ({
+  useProjectUiStore.setState((state) => ({
     byProject: {
       ...state.byProject,
       [PROJECT]: { ...state.byProject[PROJECT]!, homeActiveTab: tabId },

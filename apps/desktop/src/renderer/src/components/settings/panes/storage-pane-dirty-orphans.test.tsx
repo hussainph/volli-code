@@ -35,16 +35,16 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), warning: vi.fn() } }));
 const navigation = vi.hoisted(() => ({
   projects: [{ id: "p1" }] as { id: string }[],
   select: vi.fn(),
-  openTicketWorkspace: vi.fn(),
+  openTicketView: vi.fn(),
 }));
 vi.mock("@renderer/stores/projects", () => ({
   useProjectsStore: {
     getState: () => ({ projects: navigation.projects, select: navigation.select }),
   },
 }));
-vi.mock("@renderer/stores/workspace", () => ({
-  useWorkspaceStore: {
-    getState: () => ({ openTicketWorkspace: navigation.openTicketWorkspace }),
+vi.mock("@renderer/stores/project-ui", () => ({
+  useProjectUiStore: {
+    getState: () => ({ openTicketView: navigation.openTicketView }),
   },
 }));
 
@@ -116,7 +116,7 @@ beforeEach(() => {
   writeText.mockReset().mockResolvedValue(undefined);
   navigation.projects = [{ id: "p1" }];
   navigation.select.mockReset();
-  navigation.openTicketWorkspace.mockReset();
+  navigation.openTicketView.mockReset();
   useUiStore.getState().setSettingsOpen(true, "storage");
   Object.defineProperty(window, "api", {
     configurable: true,
@@ -213,7 +213,7 @@ describe("Storage → dirty orphan rows (VC-292)", () => {
     await click(button("Open ticket"));
 
     expect(navigation.select).toHaveBeenCalledWith("p1");
-    expect(navigation.openTicketWorkspace).toHaveBeenCalledWith("p1", "t82", { tabId: "doc" });
+    expect(navigation.openTicketView).toHaveBeenCalledWith("p1", "t82", { tabId: "doc" });
     expect(useUiStore.getState().settingsOpen).toBe(false);
   });
 
@@ -226,12 +226,12 @@ describe("Storage → dirty orphan rows (VC-292)", () => {
     const [failure] = rows("orphan-failure");
     expect(failure?.textContent).toContain("Couldn't open the ticket");
     expect(failure?.textContent).toContain("Its project isn't open in Volli.");
-    expect(navigation.openTicketWorkspace).not.toHaveBeenCalled();
+    expect(navigation.openTicketView).not.toHaveBeenCalled();
 
     navigation.projects = [{ id: "p1" }];
     await click(button("Retry", failure));
 
-    expect(navigation.openTicketWorkspace).toHaveBeenCalledWith("p1", "t82", { tabId: "doc" });
+    expect(navigation.openTicketView).toHaveBeenCalledWith("p1", "t82", { tabId: "doc" });
     expect(rows("orphan-failure")).toEqual([]);
   });
 
@@ -282,7 +282,7 @@ describe("Storage → dirty orphan rows (VC-292)", () => {
     await click(button("Open ticket"));
 
     expect(navigation.select).toHaveBeenCalledWith("p2");
-    expect(navigation.openTicketWorkspace).toHaveBeenCalledWith("p2", "t9", { tabId: "doc" });
+    expect(navigation.openTicketView).toHaveBeenCalledWith("p2", "t9", { tabId: "doc" });
   });
 
   it("keeps a failed copy on the row, and a successful retry clears it", async () => {

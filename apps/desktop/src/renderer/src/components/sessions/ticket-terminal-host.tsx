@@ -12,7 +12,7 @@ import {
   resumeTicketSession,
 } from "@renderer/components/sessions/session-create";
 import { useSessionsStore, type SessionContainer } from "@renderer/stores/sessions";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { closeTerminalPane } from "@renderer/terminal/session-lifecycle";
 
@@ -24,7 +24,7 @@ import { closeTerminalPane } from "@renderer/terminal/session-lifecycle";
  * published an anchor are shown and positioned over it. The rest stay mounted
  * and paused (their engines outlive their being off-screen).
  *
- * SEVERAL AT ONCE, since VC-202: a ticket workspace can hold two terminals side
+ * SEVERAL AT ONCE, since VC-202: a Ticket view can hold two terminals side
  * by side, so "which one is on screen" is no longer a single published slot but
  * a map keyed by tab id (`split/terminal-viewport-registry.ts`). The `ownerId`
  * check is what keeps this host to its own scope — Home's Session terminals
@@ -63,7 +63,7 @@ export function TicketTerminalOverlay({
                   if (scope.kind !== "ticket") return;
                   const paneId = paneIdForElement(anchor);
                   if (paneId !== null) {
-                    useWorkspaceStore
+                    useProjectUiStore
                       .getState()
                       .focusTicketPane(scope.projectId, scope.ticketId, paneId);
                   }
@@ -96,7 +96,7 @@ export function TicketTerminalOverlay({
                       if (scope.kind !== "ticket") return;
                       void resumeTicketSession(scope, resumeOfSessionId).then((sessionId) => {
                         if (sessionId !== null) {
-                          useWorkspaceStore
+                          useProjectUiStore
                             .getState()
                             .setTicketActiveTab(scope.projectId, scope.ticketId, sessionId);
                         }

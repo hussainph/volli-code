@@ -97,7 +97,7 @@ The main content area is a **floating card**: `rounded-xl`, hairline `border-bor
 (8px) on the theme-derived rail backdrop (`--rail`), applied once on `SidebarInset` in
 `app-shell.tsx`. Every page — the always-mounted sessions layer included — renders inside it, so
 the workspace reads as an object with edges instead of an edge-to-edge slab. The chrome bar
-and workspace rail form the surrounding "L", whose color and contrast come from the active theme.
+and project rail form the surrounding "L", whose color and contrast come from the active theme.
 
 ## Composer stack
 

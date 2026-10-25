@@ -68,7 +68,7 @@ interface ActiveTargetReading {
   settingsOpen: boolean;
   /** The REMEMBERED ticket — on screen only behind Home's Board tab. */
   openTicketId: string | null;
-  /** The ticket workspace's active tab id, when a ticket is open. */
+  /** The Ticket view's active tab id, when a ticket is open. */
   activeTicketTabId: string | null;
   /** Home's active tab id — `board`, or a Session/file/browser tab. */
   homeActiveTab: string;

@@ -128,7 +128,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui
 import { cn } from "@renderer/lib/utils";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 /** The same block shape the rail's other sections use, at the rail's own inset. */
 const SECTION = cn("flex flex-col gap-1", RAIL_PANEL_INSET);
@@ -398,7 +398,7 @@ function AutomationsPageDoor({ projectId }: { projectId: string }) {
           variant="ghost"
           aria-label="Open Automations"
           data-testid="ticket-rail-automations-page"
-          onClick={() => useWorkspaceStore.getState().setNav(projectId, "automations")}
+          onClick={() => useProjectUiStore.getState().setNav(projectId, "automations")}
         >
           <ArrowSquareOutIcon weight="bold" />
         </Button>

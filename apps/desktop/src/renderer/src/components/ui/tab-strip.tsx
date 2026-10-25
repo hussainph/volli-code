@@ -38,7 +38,7 @@
  * grows a horizontal dnd-kit sortable over its `role="tab"` elements. A strip
  * that passes neither mounts no `DndContext` at all and is byte-for-byte the
  * fixed strip it was. What order a drop MEANS is `tab-reorder.ts`; where that
- * order is kept is the workspace store's `tabOrder` overlay.
+ * order is kept is the project UI store's `tabOrder` overlay.
  *
  * SINCE VC-202 a strip may also arrange inside a SURFACE that owns several of
  * them ({@link TabStripSurface}): a split plane draws one strip per pane, and a

@@ -8,7 +8,7 @@ import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { Button } from "@renderer/components/ui/button";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 import { project, tickets } from "../fixtures";
 import { appApi, seedApp } from "../seed";
@@ -57,11 +57,11 @@ function arrange(ticket: boolean, layout: Layout) {
     byId: Object.fromEntries(browserTabs.map((tab) => [tab.tabId, tab])),
     hydratedProjects: new Set([project.id]),
   });
-  const store = useWorkspaceStore.getState();
+  const store = useProjectUiStore.getState();
   const owner = ticket ? ticketId : "home";
   const primary = ticket ? TICKET_BODY_TAB_ID : HOME_BOARD_TAB_ID;
   const ids = [primary, `browser:${owner}-1`, `browser:${owner}-2`];
-  if (ticket) store.openTicketWorkspace(project.id, ticketId);
+  if (ticket) store.openTicketView(project.id, ticketId);
   if (layout === "Unsplit") return;
   const split = (paneId: string, edge: "right" | "down", tabId: string) => {
     const opts = { tabId, surfaceTabIds: ids };
@@ -70,7 +70,7 @@ function arrange(ticket: boolean, layout: Layout) {
   };
   split(SPLIT_VIEW_ROOT_PANE_ID, layout === "Down" ? "down" : "right", ids[1]!);
   if (layout === "Mixed") {
-    const ui = useWorkspaceStore.getState().byProject[project.id]!;
+    const ui = useProjectUiStore.getState().byProject[project.id]!;
     const view = ticket ? ui.ticketTabs[ticketId]?.splitView : ui.homeSplitView;
     split(view!.focusedPaneId, "down", ids[2]!);
   }

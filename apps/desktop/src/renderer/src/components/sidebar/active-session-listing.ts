@@ -96,7 +96,7 @@ export { ACTIVE_QUIET_WINDOW_MS, DONE_LINGER_MS, PREVIOUS_MAX_AGE_MS };
  *
  * `session-detail` is the door for a terminal whose tab is GONE (VC-290). Such a
  * row used to carry no target at all, and the view answered a targetless row
- * with the row's ticket workspace — or with Home when it had no ticket — so
+ * with the row's Ticket view — or with Home when it had no ticket — so
  * clicking a saved-looking "Session 2" opened whatever chat happened to be in
  * front of that ticket, with nothing on screen admitting the substitution. The
  * Session is still durable and still addressable: project plus Session id names
@@ -235,7 +235,7 @@ export interface ActiveSessionRow {
  *
  * A terminal target additionally has to name the split pane in front, since a
  * tab can hold several; a chat target is one surface, so naming its tab
- * (`homeActiveTab`, the workspace store's record of which Home tab is in front)
+ * (`homeActiveTab`, the project UI store's record of which Home tab is in front)
  * is the whole answer.
  *
  * BOTH kinds are decided by `homeActiveTab` alone — which is what VC-54 changed
@@ -520,7 +520,7 @@ export function capPreviousEntries(
  *
  * A separate, pure step because the sidebar's answer to "what does this row
  * open" is a product rule with a history of being wrong: a row that named no
- * surface used to fall through to its ticket's workspace or to Home, which is
+ * surface used to fall through to its ticket's Ticket view or to Home, which is
  * how a closed terminal's history entry came to open an unrelated chat
  * (VC-290). Stated as data, the rule is checkable without a store, a window or
  * a click — the view's job is reduced to performing the writes each case names.
@@ -529,7 +529,7 @@ export type SessionRowRoute =
   | { kind: "session-detail"; projectId: string; sessionId: string }
   | { kind: "ticket-terminal"; ticketId: string; tabId: string; paneId: string }
   | { kind: "ticket-chat"; ticketId: string; tabId: string; sessionId: string }
-  | { kind: "ticket-workspace"; ticketId: string }
+  | { kind: "ticket-view"; ticketId: string }
   | { kind: "home-terminal"; tabId: string; paneId: string }
   | { kind: "home-chat"; tabId: string; sessionId: string }
   | { kind: "home" };
@@ -539,7 +539,7 @@ export type SessionRowRoute =
  *
  * The saved-record door is answered FIRST and for every row, ticketed or not:
  * its whole point is that it does not degrade into a neighbouring surface. The
- * two remaining fallbacks — a ticket's workspace, and Home — belong only to a
+ * two remaining fallbacks — a ticket's Ticket view, and Home — belong only to a
  * row that names no surface at all, which after VC-290 is a Session with
  * nothing reachable behind it rather than an ordinary ended terminal.
  */
@@ -550,7 +550,7 @@ export function sessionRowRoute(row: ActiveSessionRow | PreviousSessionRow): Ses
   }
   const ticket = row.ticket;
   if (ticket !== null) {
-    if (target === null) return { kind: "ticket-workspace", ticketId: ticket.id };
+    if (target === null) return { kind: "ticket-view", ticketId: ticket.id };
     return target.kind === "chat"
       ? {
           kind: "ticket-chat",
@@ -888,7 +888,7 @@ export function isCleanupExempt(
  * row. Four rules, in the order they can be decided:
  *
  * (a) its ticket is gone from the board (archived), so Session 4 preserves it
- * only behind Cleaned up and cannot reopen a ticket workspace; (b) the ticket
+ * only behind Cleaned up and cannot reopen a Ticket view; (b) the ticket
  * has been in Done for {@link DONE_LINGER_MS}; (c) the Session predates the
  * ticket's entry into its CURRENT column, so it traces some earlier stretch of
  * work rather than this one; (d) it is

@@ -3,7 +3,7 @@ import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
 
 import { bootChatSession, type ChatBoot } from "@renderer/components/sessions/session-create";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 import {
   automationAuthoringPrompt,
   startAutomationAuthoring,
@@ -41,7 +41,7 @@ describe("automation authoring assistance", () => {
     const enqueue = vi
       .spyOn(useChatSessionsStore.getState(), "enqueue")
       .mockResolvedValue("delivered");
-    const home = vi.spyOn(useWorkspaceStore.getState(), "openHome").mockImplementation(() => {});
+    const home = vi.spyOn(useProjectUiStore.getState(), "openHome").mockImplementation(() => {});
     vi.mocked(bootChatSession).mockImplementation(async (_scope, options: ChatBoot) => {
       expect(enqueue).not.toHaveBeenCalled();
       expect(options.title).toBe("Draft automation");
@@ -67,7 +67,7 @@ describe("automation authoring assistance", () => {
     const enqueue = vi
       .spyOn(useChatSessionsStore.getState(), "enqueue")
       .mockResolvedValue("delivered");
-    const home = vi.spyOn(useWorkspaceStore.getState(), "openHome").mockImplementation(() => {});
+    const home = vi.spyOn(useProjectUiStore.getState(), "openHome").mockImplementation(() => {});
     expect(await startAutomationAuthoring("p1", DRAFT)).toBeNull();
     expect(enqueue).not.toHaveBeenCalled();
     expect(home).not.toHaveBeenCalled();

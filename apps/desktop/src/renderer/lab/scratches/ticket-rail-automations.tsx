@@ -31,7 +31,7 @@ import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 import type { ApiOverrides } from "../fake-api";
 import { NOW, project, tickets } from "../fixtures";
@@ -131,7 +131,7 @@ export function seed(): void {
     projects: [EMPTY, ARMED, READING, MANY],
     selectedProjectId: ARMED.id,
   });
-  useWorkspaceStore.setState({ byProject: {} });
+  useProjectUiStore.setState({ byProject: {} });
   // SEEDED AS ALREADY-READ, for every project but the cold-cache one. The rail
   // refuses to draw a row from a cache it has not confirmed at the current
   // planning version (VC-112/VC-373), and a scratch that left all four slices
@@ -283,7 +283,7 @@ function Intro() {
 
 /** Where the last door press went — read live off the store the door writes. */
 function Where() {
-  const navs = useWorkspaceStore((state) =>
+  const navs = useProjectUiStore((state) =>
     [EMPTY, ARMED, READING, MANY]
       .map((owner) => `${owner.name}: ${state.byProject[owner.id]?.nav ?? "home"}`)
       .join(" · "),

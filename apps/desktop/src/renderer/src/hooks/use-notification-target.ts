@@ -56,26 +56,26 @@ import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
-import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, useProjectUiStore } from "@renderer/stores/project-ui";
 
 export function useNotificationTargetReport(): void {
   const projectId = useProjectsStore((state) => state.selectedProjectId);
-  const nav = useWorkspaceStore((state) =>
+  const nav = useProjectUiStore((state) =>
     projectId === null
-      ? DEFAULT_WORKSPACE_UI.nav
-      : (state.byProject[projectId]?.nav ?? DEFAULT_WORKSPACE_UI.nav),
+      ? DEFAULT_PROJECT_UI.nav
+      : (state.byProject[projectId]?.nav ?? DEFAULT_PROJECT_UI.nav),
   );
-  const openTicketId = useWorkspaceStore((state) =>
+  const openTicketId = useProjectUiStore((state) =>
     projectId === null ? null : (state.byProject[projectId]?.openTicketId ?? null),
   );
-  const activeTicketTabId = useWorkspaceStore((state) => {
+  const activeTicketTabId = useProjectUiStore((state) => {
     if (projectId === null || openTicketId === null) return null;
     return state.byProject[projectId]?.ticketTabs[openTicketId]?.active ?? null;
   });
-  const homeActiveTab = useWorkspaceStore((state) =>
+  const homeActiveTab = useProjectUiStore((state) =>
     projectId === null
-      ? DEFAULT_WORKSPACE_UI.homeActiveTab
-      : (state.byProject[projectId]?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab),
+      ? DEFAULT_PROJECT_UI.homeActiveTab
+      : (state.byProject[projectId]?.homeActiveTab ?? DEFAULT_PROJECT_UI.homeActiveTab),
   );
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   // Memoized so the report below re-sends when the surface changes, not on

@@ -24,7 +24,7 @@ import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { displayTicketId } from "@volli/shared";
 
 /**
@@ -80,7 +80,7 @@ export function ChromeBar() {
           half their ~13px diameter), just below the band's 18px flex center —
           nudge the trigger down to meet them. */}
             <div className="app-region-no-drag flex translate-y-px items-center">
-              <WorkspaceRailToggle />
+              <ProjectRailToggle />
               <SidebarTrigger
                 aria-label="Toggle navigation sidebar"
                 title="Toggle navigation sidebar (⌘B)"
@@ -182,9 +182,9 @@ function TerminalFocusBreadcrumb() {
  * immediately before the primary nav's existing SidebarTrigger so the
  * controls follow the same outside-to-inside order as the panes they affect.
  */
-function WorkspaceRailToggle() {
-  const workspaceRailHidden = useUiStore((state) => state.workspaceRailHidden);
-  const toggleWorkspaceRailHidden = useUiStore((state) => state.toggleWorkspaceRailHidden);
+function ProjectRailToggle() {
+  const projectRailHidden = useUiStore((state) => state.projectRailHidden);
+  const toggleProjectRailHidden = useUiStore((state) => state.toggleProjectRailHidden);
 
   return (
     <Button
@@ -194,9 +194,9 @@ function WorkspaceRailToggle() {
       // button has no pressed appearance for it to describe. Both together
       // announce "Show project switcher, pressed" while the switcher is
       // hidden, which reads as its own opposite.
-      onClick={() => toggleWorkspaceRailHidden()}
-      aria-label={workspaceRailHidden ? "Show project switcher" : "Hide project switcher"}
-      title={`${workspaceRailHidden ? "Show" : "Hide"} project switcher`}
+      onClick={() => toggleProjectRailHidden()}
+      aria-label={projectRailHidden ? "Show project switcher" : "Hide project switcher"}
+      title={`${projectRailHidden ? "Show" : "Hide"} project switcher`}
     >
       <SidebarIcon />
       <span className="sr-only">Toggle project switcher</span>
@@ -206,13 +206,13 @@ function WorkspaceRailToggle() {
 
 /**
  * Slack-style ←/→ project navigation. Reads the back/forward stack depth from
- * the workspace store's in-memory history; each button is disabled (muted,
+ * the project UI store's in-memory history; each button is disabled (muted,
  * non-interactive) when its stack is empty. `navBack` / `navForward` apply the
  * step to the live stores — see hooks/use-nav-history.ts.
  */
 function NavHistoryButtons() {
-  const backEnabled = useWorkspaceStore((state) => canGoBack(state.navHistory));
-  const forwardEnabled = useWorkspaceStore((state) => canGoForward(state.navHistory));
+  const backEnabled = useProjectUiStore((state) => canGoBack(state.navHistory));
+  const forwardEnabled = useProjectUiStore((state) => canGoForward(state.navHistory));
 
   return (
     <div className="app-region-no-drag flex translate-y-px items-center">
@@ -276,7 +276,7 @@ function TerminalFocusExit() {
       // mr-1 keeps it off the window's right edge; translate-y-px meets the
       // traffic lights, like every other icon button on this band.
       className="app-region-no-drag mr-1 translate-y-px"
-      // No `aria-pressed`, for the same reason as WorkspaceRailToggle above:
+      // No `aria-pressed`, for the same reason as ProjectRailToggle above:
       // the label already carries the state, and "Exit terminal focus, pressed"
       // reads as if exiting were the thing already done.
       onClick={() => useUiStore.getState().setTerminalFocusTarget(null)}

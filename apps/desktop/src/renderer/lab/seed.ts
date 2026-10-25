@@ -35,7 +35,7 @@ import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useThemeStore } from "@renderer/stores/theme";
 import { useUiStore } from "@renderer/stores/ui";
-import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, useProjectUiStore } from "@renderer/stores/project-ui";
 
 import type { ApiOverrides } from "./fake-api";
 import { chatSessions, labels, project, projects, sessions, signals, tickets } from "./fixtures";
@@ -224,14 +224,14 @@ export function seedApp(): void {
     projectId: project.id,
     projectOverride: null,
   });
-  useWorkspaceStore.setState({
-    byProject: { [project.id]: { ...DEFAULT_WORKSPACE_UI, nav: "home" } },
+  useProjectUiStore.setState({
+    byProject: { [project.id]: { ...DEFAULT_PROJECT_UI, nav: "home" } },
     navHistory: EMPTY_NAV_HISTORY,
   });
   useUiStore.setState({
     settingsOpen: false,
     newTicketOpen: false,
-    workspaceRailHidden: false,
+    projectRailHidden: false,
     railCollapsed: false,
     terminalFocusTarget: null,
     uiScale: 1,

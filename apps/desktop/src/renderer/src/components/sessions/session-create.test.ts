@@ -20,11 +20,11 @@ import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { projectScope, ticketScope } from "@renderer/stores/sessions";
 import {
-  createWorkspaceStore,
-  DEFAULT_WORKSPACE_UI,
-  useWorkspaceStore,
-  type WorkspaceUiState,
-} from "@renderer/stores/workspace";
+  createProjectUiStore,
+  DEFAULT_PROJECT_UI,
+  useProjectUiStore,
+  type ProjectUiState,
+} from "@renderer/stores/project-ui";
 import { useNavHistory } from "@renderer/hooks/use-nav-history";
 import { runKickoff } from "@renderer/components/board/new-ticket/submit";
 import { bootChatSession, startTicketChat, terminalCreateRequest } from "./session-create";
@@ -94,13 +94,13 @@ beforeEach(() => {
   useProjectsStore.setState({ ...originalProjectsState, projects: [PROJECT] }, true);
   useBoardStore.setState({ ...originalBoardState, ticketsByProject: { p1: [TICKET] } }, true);
   useChatDraftsStore.setState({ drafts: {} });
-  const workspace = createWorkspaceStore({
+  const projectUi = createProjectUiStore({
     getItem: () => null,
     setItem: () => {},
     removeItem: () => {},
   });
-  vi.spyOn(useWorkspaceStore, "getState").mockImplementation(workspace.getState);
-  vi.spyOn(useWorkspaceStore, "subscribe").mockImplementation(workspace.subscribe);
+  vi.spyOn(useProjectUiStore, "getState").mockImplementation(projectUi.getState);
+  vi.spyOn(useProjectUiStore, "subscribe").mockImplementation(projectUi.subscribe);
 });
 
 afterEach(() => {
@@ -383,7 +383,7 @@ describe("startTicketChat", () => {
   });
 });
 
-describe("Create & start keeps the current workspace (VC-491)", () => {
+describe("Create & start keeps the current project view (VC-491)", () => {
   it.each([
     ["board", "home", "board", null, "p1"],
     ["project file", "home", "file:README.md", null, "p1"],
@@ -394,13 +394,13 @@ describe("Create & start keeps the current workspace (VC-491)", () => {
   ] as const)(
     "starts from %s without changing selection",
     async (_name, nav, homeActiveTab, openTicketId, selectedProjectId) => {
-      const workspace = createWorkspaceStore({
+      const projectUi = createProjectUiStore({
         getItem: () => null,
         setItem: () => {},
         removeItem: () => {},
       });
-      const current: WorkspaceUiState = {
-        ...DEFAULT_WORKSPACE_UI,
+      const current: ProjectUiState = {
+        ...DEFAULT_PROJECT_UI,
         nav,
         homeActiveTab,
         openTicketId,
@@ -421,8 +421,8 @@ describe("Create & start keeps the current workspace (VC-491)", () => {
           },
         },
       };
-      const otherProject: WorkspaceUiState = {
-        ...DEFAULT_WORKSPACE_UI,
+      const otherProject: ProjectUiState = {
+        ...DEFAULT_PROJECT_UI,
         homeActiveTab: "chat:other-project-chat",
         homeTabOrder: ["chat:other-project-chat", "file:CONTRIBUTING.md"],
         homeTabHistory: ["board", "file:CONTRIBUTING.md", "chat:other-project-chat"],
@@ -431,9 +431,9 @@ describe("Create & start keeps the current workspace (VC-491)", () => {
           activeRelPath: "CONTRIBUTING.md",
         },
       };
-      workspace.setState({ byProject: { p1: current, p2: otherProject } });
-      vi.spyOn(useWorkspaceStore, "getState").mockImplementation(workspace.getState);
-      vi.spyOn(useWorkspaceStore, "subscribe").mockImplementation(workspace.subscribe);
+      projectUi.setState({ byProject: { p1: current, p2: otherProject } });
+      vi.spyOn(useProjectUiStore, "getState").mockImplementation(projectUi.getState);
+      vi.spyOn(useProjectUiStore, "subscribe").mockImplementation(projectUi.subscribe);
       useProjectsStore.setState({
         projects: [PROJECT, { ...PROJECT, id: "p2" }],
         selectedProjectId,
@@ -472,12 +472,12 @@ describe("Create & start keeps the current workspace (VC-491)", () => {
         nav: selectedProjectId === "p1" ? nav : "home",
         openTicketId: selectedProjectId === "p1" ? openTicketId : null,
       } as const;
-      workspace.getState().recordNav({ projectId: "p2", nav: "configure", openTicketId: null });
-      workspace.getState().recordNav(location);
+      projectUi.getState().recordNav({ projectId: "p2", nav: "configure", openTicketId: null });
+      projectUi.getState().recordNav(location);
       const forward = { projectId: "p1", nav: "automations", openTicketId: null } as const;
-      workspace.getState().recordNav(forward);
-      expect(workspace.getState().stepNavBack()).toEqual(location);
-      const history = workspace.getState().navHistory;
+      projectUi.getState().recordNav(forward);
+      expect(projectUi.getState().stepNavBack()).toEqual(location);
+      const history = projectUi.getState().navHistory;
       expect(history.back.length).toBeGreaterThan(0);
       expect(history.forward).toEqual([forward]);
 
@@ -507,7 +507,7 @@ describe("Create & start keeps the current workspace (VC-491)", () => {
           ).resolves.toEqual({ created: true });
         });
 
-        const after = workspace.getState();
+        const after = projectUi.getState();
         // Only the NEW ticket's dormant tab is prepared. Every visible selection
         // and the navigation history stay exactly where the person left them.
         expect(after.byProject.p1).toEqual({
@@ -541,9 +541,9 @@ describe("Create & start keeps the current workspace (VC-491)", () => {
         // Positive control: the same mounted recorder DOES observe an actual
         // navigation and invalidate Forward. Dormant-tab preparation must not.
         const nextNav = location.nav === "home" ? "configure" : "home";
-        workspace.getState().setNav(selectedProjectId, nextNav);
-        expect(workspace.getState().navHistory.current).toEqual({ ...location, nav: nextNav });
-        expect(workspace.getState().navHistory.forward).toEqual([]);
+        projectUi.getState().setNav(selectedProjectId, nextNav);
+        expect(projectUi.getState().navHistory.current).toEqual({ ...location, nav: nextNav });
+        expect(projectUi.getState().navHistory.forward).toEqual([]);
       } finally {
         await act(async () => root.unmount());
         host.remove();

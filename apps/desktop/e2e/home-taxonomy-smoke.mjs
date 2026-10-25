@@ -1,7 +1,7 @@
 /**
  * Acceptance smoke for the tabbed Home (VC-54), against the BUILT app.
  *
- * Home is the ticket workspace's grammar one scope up: a permanent Board tab
+ * Home is the Ticket view's grammar one scope up: a permanent Board tab
  * that cannot be closed, with the project's own Sessions opening beside it, and
  * a ticket that TAKES HOME OVER rather than nesting under its strip. Every
  * check below is one line of that acceptance list, and each is the kind of
@@ -320,7 +320,7 @@ try {
     async () => {
       await page.locator("article").first().dblclick();
       await waitUntil(
-        "the ticket workspace to open",
+        "the Ticket view to open",
         async () => (await tabStrip(page, "Ticket tabs").count()) > 0,
         { timeout: 20000 },
       );
@@ -384,7 +384,7 @@ try {
           .getAttribute("aria-label");
         const board = await boardVisible(page);
         // Terminals deliberately do NOT restore (VC-54 scope 4): a PTY dies with
-        // the app, exactly as for a Ticket workspace. What must not happen is a
+        // the app, exactly as for a Ticket view. What must not happen is a
         // stranded empty surface — the sanitizer falls back to the Board tab.
         return {
           ok: labels.length === 1 && labels[0] === "Board" && active === "Board" && board,

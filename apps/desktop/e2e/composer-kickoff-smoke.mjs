@@ -56,7 +56,7 @@ import {
   kickoffTurnEvidence,
   openTicketCard,
   preparedChatSelected,
-  ticketWorkspaceOpen,
+  ticketViewOpen,
 } from "./lib/kickoff-support.mjs";
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch(
@@ -140,7 +140,7 @@ async function composerOpen(page) {
 /**
  * VC-491's stay-put half, read after a settle window (a late navigation would
  * still be one worth catching): the board is still the surface in front and no
- * ticket workspace has mounted over it.
+ * Ticket view has mounted over it.
  */
 async function boardStillInFront(page) {
   await sleep(500);
@@ -148,7 +148,7 @@ async function boardStillInFront(page) {
     // Create-more leaves a modal over the Board: aria-hidden is not navigation.
     .getByRole("button", { name: "New ticket", exact: true, includeHidden: true })
     .isVisible();
-  return { boardInFront, noDetail: !(await ticketWorkspaceOpen(page)) };
+  return { boardInFront, noDetail: !(await ticketViewOpen(page)) };
 }
 
 /** Track the created chat's identity, not just the existence of any Session row. */
@@ -179,7 +179,7 @@ async function backgroundOpening(page, ticketId, { since = Date.now(), marker } 
         includeHidden: true,
       })
       .isVisible();
-    stayedOnBoard &&= visible && !(await ticketWorkspaceOpen(page));
+    stayedOnBoard &&= visible && !(await ticketViewOpen(page));
   };
   const remaining = () => Math.max(1, PI_TURN_BUDGET_MS - (Date.now() - since));
   const sessionId = await waitUntil(

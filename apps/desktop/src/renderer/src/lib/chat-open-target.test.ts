@@ -97,7 +97,7 @@ describe("resolveChatOpenTarget", () => {
   });
 
   it("maps a main-checkout-absolute path to the scope ticket for a ticket chat", () => {
-    // Same semantics as the relative spelling: in a ticket workspace, a repo
+    // Same semantics as the relative spelling: in a Ticket view, a repo
     // path means the worktree's copy.
     expect(
       resolveChatOpenTarget({

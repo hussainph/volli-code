@@ -129,7 +129,7 @@ import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 import { useVenueStore, venueKey } from "@renderer/stores/venue";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 import type {
   FileSearchFile,
@@ -659,7 +659,7 @@ function inScope(entry: SessionUsageEntry, scope: SessionUsageScope): boolean {
 export function seed(): void {
   useProjectsStore.setState({ projects: [project], selectedProjectId: project.id });
   seedBoard();
-  useWorkspaceStore.setState({ byProject: {} });
+  useProjectUiStore.setState({ byProject: {} });
   useUiStore.setState({
     railMode: "now",
     homeRailMode: "now",

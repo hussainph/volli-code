@@ -26,7 +26,7 @@ import { useExperimentsStore } from "./experiments";
 import { THIS_MAC_HOST, useHostConnectionStore } from "./host-connection";
 
 import { useThemeStore } from "./theme";
-import { useWorkspaceStore } from "./workspace";
+import { useProjectUiStore } from "./project-ui";
 
 /** A bare shell launch: no harness command line was written, so no expectation. */
 const shellLaunch = (title: string): SessionLaunch => ({
@@ -40,7 +40,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 // removeProject's cascade touches the REAL board/workspace/sessions
 // singletons directly (by design — see stores/projects.ts's module doc), and
-// useWorkspaceStore's persist middleware now writes through the app_state
+// useProjectUiStore's persist middleware now writes through the app_state
 // bridge (window.api.appState.set) on every real state change. Stub `window`
 // every test so that write never throws on an undefined bridge, and reset the
 // singletons so no test's writes leak into the next.
@@ -54,7 +54,7 @@ beforeEach(() => {
   useExperimentsStore.setState({ snapshot: null });
   useHostConnectionStore.setState({ hosts: [], projects: {} });
   useBoardStore.setState({ ticketsByProject: {}, labelsByProject: {} });
-  useWorkspaceStore.setState({ byProject: {} });
+  useProjectUiStore.setState({ byProject: {} });
   useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {}, starting: {} });
   useChatSessionsStore.setState({ sessions: {}, openTabs: {} });
 });
@@ -472,15 +472,15 @@ describe("removeProject", () => {
     expect(gateway.setSelection).not.toHaveBeenCalled();
   });
 
-  it("forgets the removed project's per-workspace UI record", async () => {
+  it("forgets the removed project's per-project UI record", async () => {
     const only = project({ id: "only", path: "/a" });
     const { store } = freshStore();
     store.getState().hydrate([only], only.id);
-    useWorkspaceStore.getState().setNav(only.id, "configure");
+    useProjectUiStore.getState().setNav(only.id, "configure");
 
     await store.getState().removeProject(only.id);
 
-    expect(useWorkspaceStore.getState().byProject[only.id]).toBeUndefined();
+    expect(useProjectUiStore.getState().byProject[only.id]).toBeUndefined();
   });
 
   it("forgets the removed project's board state", async () => {
@@ -500,7 +500,7 @@ describe("removeProject", () => {
     // with no terminal view mounted to do it as an unmount side effect.
     // Keeps `appState` in the stub too: zustand's `persist` middleware writes
     // through on EVERY action call, even a logical no-op (see the module doc
-    // above) — removeProject's cascade always touches useWorkspaceStore.
+    // above) — removeProject's cascade always touches useProjectUiStore.
     const kill = vi
       .fn<(sessionId: string) => Promise<{ ok: boolean }>>()
       .mockResolvedValue({ ok: true });

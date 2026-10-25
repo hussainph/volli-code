@@ -118,7 +118,7 @@ import { sessionPanes, ticketScope, useSessionsStore } from "@renderer/stores/se
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { closeTicketSession, renameTerminalSession } from "@renderer/terminal/session-lifecycle";
 import { getEngine } from "@renderer/terminal/registry";
@@ -224,39 +224,39 @@ export function TicketDetail({
   //
   // Guarded by ticket id rather than by a bare `once` flag so it stays correct
   // if this view ever stops being remounted per ticket: a re-render is not a
-  // new workspace, and stamping one would shorten the editor phase by exactly
+  // new Ticket view, and stamping one would shorten the editor phase by exactly
   // the time it was late.
-  const markedWorkspaceForRef = React.useRef<string | null>(null);
+  const markedViewForRef = React.useRef<string | null>(null);
   React.useLayoutEffect(() => {
-    if (markedWorkspaceForRef.current === ticket.id) return;
-    markedWorkspaceForRef.current = ticket.id;
-    markPerfPhase(PERF_PHASE.ticketWorkspaceMount);
+    if (markedViewForRef.current === ticket.id) return;
+    markedViewForRef.current = ticket.id;
+    markPerfPhase(PERF_PHASE.ticketViewMount);
   }, [ticket.id]);
 
   const ticketBody = useTicketBody(ticket);
-  const closeTicket = useWorkspaceStore((state) => state.closeTicket);
-  const openTicketFile = useWorkspaceStore((state) => state.openTicketFile);
-  const previewTicketFile = useWorkspaceStore((state) => state.previewTicketFile);
-  const pinTicketFile = useWorkspaceStore((state) => state.pinTicketFile);
-  const markTicketFileEdited = useWorkspaceStore((state) => state.markTicketFileEdited);
-  const closeTicketFile = useWorkspaceStore((state) => state.closeTicketFile);
-  const renameTicketFile = useWorkspaceStore((state) => state.renameTicketFile);
-  const openTicketDiff = useWorkspaceStore((state) => state.openTicketDiff);
-  const closeTicketDiff = useWorkspaceStore((state) => state.closeTicketDiff);
-  const setTicketActiveTab = useWorkspaceStore((state) => state.setTicketActiveTab);
-  const recordResolvedTicketTab = useWorkspaceStore((state) => state.recordResolvedTicketTab);
-  const moveTicketTab = useWorkspaceStore((state) => state.moveTicketTab);
+  const closeTicket = useProjectUiStore((state) => state.closeTicket);
+  const openTicketFile = useProjectUiStore((state) => state.openTicketFile);
+  const previewTicketFile = useProjectUiStore((state) => state.previewTicketFile);
+  const pinTicketFile = useProjectUiStore((state) => state.pinTicketFile);
+  const markTicketFileEdited = useProjectUiStore((state) => state.markTicketFileEdited);
+  const closeTicketFile = useProjectUiStore((state) => state.closeTicketFile);
+  const renameTicketFile = useProjectUiStore((state) => state.renameTicketFile);
+  const openTicketDiff = useProjectUiStore((state) => state.openTicketDiff);
+  const closeTicketDiff = useProjectUiStore((state) => state.closeTicketDiff);
+  const setTicketActiveTab = useProjectUiStore((state) => state.setTicketActiveTab);
+  const recordResolvedTicketTab = useProjectUiStore((state) => state.recordResolvedTicketTab);
+  const moveTicketTab = useProjectUiStore((state) => state.moveTicketTab);
   // The split view's own writers (VC-202). Every one of them is a no-op while
   // this workspace is unsplit, which is what keeps the unsplit path untouched.
-  const moveTicketTabInPane = useWorkspaceStore((state) => state.moveTicketTabInPane);
-  const splitTicketPane = useWorkspaceStore((state) => state.splitTicketPane);
-  const moveTicketTabToPane = useWorkspaceStore((state) => state.moveTicketTabToPane);
-  const focusTicketPane = useWorkspaceStore((state) => state.focusTicketPane);
-  const setTicketSplitRatio = useWorkspaceStore((state) => state.setTicketSplitRatio);
-  const closeTicketPane = useWorkspaceStore((state) => state.closeTicketPane);
-  const removeTicketTabFromSplit = useWorkspaceStore((state) => state.removeTicketTabFromSplit);
-  const setTicketDiffViewState = useWorkspaceStore((state) => state.setTicketDiffViewState);
-  const ticketTabsState = useWorkspaceStore(
+  const moveTicketTabInPane = useProjectUiStore((state) => state.moveTicketTabInPane);
+  const splitTicketPane = useProjectUiStore((state) => state.splitTicketPane);
+  const moveTicketTabToPane = useProjectUiStore((state) => state.moveTicketTabToPane);
+  const focusTicketPane = useProjectUiStore((state) => state.focusTicketPane);
+  const setTicketSplitRatio = useProjectUiStore((state) => state.setTicketSplitRatio);
+  const closeTicketPane = useProjectUiStore((state) => state.closeTicketPane);
+  const removeTicketTabFromSplit = useProjectUiStore((state) => state.removeTicketTabFromSplit);
+  const setTicketDiffViewState = useProjectUiStore((state) => state.setTicketDiffViewState);
+  const ticketTabsState = useProjectUiStore(
     (state) => state.byProject[projectId]?.ticketTabs?.[ticket.id],
   );
   const browserApi = window.api.browser;
@@ -273,7 +273,7 @@ export function TicketDetail({
     ),
   );
   const browserTabsHydrated = useBrowserTabsStore((state) => state.hydratedProjects.has(projectId));
-  const ticketDiffViewStates = useWorkspaceStore(
+  const ticketDiffViewStates = useProjectUiStore(
     (state) => state.byProject[projectId]?.ticketDiffViewStates?.[ticket.id],
   );
   const sessionTabs = useSessionsStore((state) => state.byOwner[ticket.id]?.tabs);
@@ -304,16 +304,16 @@ export function TicketDetail({
   );
   const readSplitView = React.useCallback(
     () =>
-      useWorkspaceStore.getState().byProject[projectId]?.ticketTabs[ticket.id]?.splitView ?? null,
+      useProjectUiStore.getState().byProject[projectId]?.ticketTabs[ticket.id]?.splitView ?? null,
     [projectId, ticket.id],
   );
   const claimProvisionalTab = React.useCallback(
     (tabId: string, paneId: string, front: boolean) =>
-      useWorkspaceStore.getState().claimTicketTabInPane(projectId, ticket.id, tabId, paneId, front),
+      useProjectUiStore.getState().claimTicketTabInPane(projectId, ticket.id, tabId, paneId, front),
     [projectId, ticket.id],
   );
   const activateClaimedDraft = React.useCallback(
-    (tabId: string) => useWorkspaceStore.getState().setTicketActiveTab(projectId, ticket.id, tabId),
+    (tabId: string) => useProjectUiStore.getState().setTicketActiveTab(projectId, ticket.id, tabId),
     [projectId, ticket.id],
   );
   // Everything this workspace needs to know about its Chat Drafts, and the
@@ -668,7 +668,7 @@ export function TicketDetail({
       // Diff tab for the same path may still be open — only clear dirty when
       // neither surface remains.
       const diffsStillOpen = (
-        useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.diffs ?? []
+        useProjectUiStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.diffs ?? []
       ).includes(relPath);
       if (!diffsStillOpen) markFileDirty(relPath, false);
       // Otherwise a reopened tab can briefly show the last-known worktree/main
@@ -688,7 +688,7 @@ export function TicketDetail({
     (relPath: string) => {
       closeTicketDiff(projectId, ticket.id, relPath);
       const filesStillOpen = ticketFilesInclude(
-        useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.files ?? [],
+        useProjectUiStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.files ?? [],
         relPath,
       );
       if (!filesStillOpen) markFileDirty(relPath, false);
@@ -699,7 +699,7 @@ export function TicketDetail({
   const requestCloseFileTab = React.useCallback(
     (relPath: string) => {
       const siblingOpen = (
-        useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.diffs ?? []
+        useProjectUiStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.diffs ?? []
       ).includes(relPath);
       if (planTabClose({ dirty: dirtyFiles.has(relPath), siblingOpen }) === "close") {
         closeFileTab(relPath);
@@ -713,7 +713,7 @@ export function TicketDetail({
   const requestCloseDiffTab = React.useCallback(
     (relPath: string) => {
       const siblingOpen = ticketFilesInclude(
-        useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.files ?? [],
+        useProjectUiStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.files ?? [],
         relPath,
       );
       if (planTabClose({ dirty: dirtyFiles.has(relPath), siblingOpen }) === "close") {
@@ -739,7 +739,7 @@ export function TicketDetail({
       const { relPath, kind } = pendingClose;
       const resolution: TabCloseResolution =
         choice === "save" ? { choice: "save", saved: await saveFileDocument(relPath) } : { choice };
-      const tabs = useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id];
+      const tabs = useProjectUiStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id];
       const siblingOpen =
         kind === "file"
           ? (tabs?.diffs ?? []).includes(relPath)
@@ -861,7 +861,7 @@ export function TicketDetail({
    * RAW — absolute when a tool spelled them that way — so they are translated
    * first (`resolveChatOpenTarget`): this ticket's worktree (or a repo path
    * spelled absolutely) stays here as a file tab; another ticket's worktree
-   * opens THAT ticket's workspace with the tab in place; a path no checkout
+   * opens THAT ticket's Ticket view with the tab in place; a path no checkout
    * contains toasts instead of opening a pane whose only content is an error.
    * `@file` chips pass through unchanged (already venue-relative). Worktrees
    * and the project path are read at click time so this callback — handed to
@@ -894,7 +894,7 @@ export function TicketDetail({
       const targetTicketId = target.kind === "ticket-file" ? target.ticketId : ticket.id;
       openTicketFile(projectId, targetTicketId, target.relPath);
       if (targetTicketId !== ticket.id) {
-        useWorkspaceStore.getState().openTicketWorkspace(projectId, targetTicketId);
+        useProjectUiStore.getState().openTicketView(projectId, targetTicketId);
       }
     },
     [openTicketFile, projectId, ticket.id],
@@ -1084,7 +1084,7 @@ export function TicketDetail({
   // The fallback above is purely visual — it renders the Ticket Body without
   // writing the store, so a persisted `active` naming a session that's since
   // closed (or one restored from a previous launch, which never repopulates:
-  // terminal sessions don't survive an app restart) stays wedged in workspace.ts
+  // terminal sessions don't survive an app restart) stays wedged in project-ui.ts
   // forever (`sanitizeTicketTabs` keeps any record whose `active` isn't the body
   // tab). Reset it to the Ticket Body for real once we're sure it's actually
   // stale rather than just not hydrated yet — `creating` covers the one
@@ -1294,7 +1294,7 @@ export function TicketDetail({
             return;
           }
           const active =
-            useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.active ??
+            useProjectUiStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.active ??
             BODY_TAB_ID;
           if (active === tab.id) setActiveTab(BODY_TAB_ID);
         })

@@ -52,7 +52,7 @@ import {
   useSessionsStore,
 } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 /** Stable empty array so the per-card session-records selector never forces a
  *  re-render of every OTHER card's menu when one ticket's cache is touched. */
@@ -196,7 +196,7 @@ export function TicketContextMenu({
         // from any nav — it switches to the Board, opens the ticket detail, and
         // syncs the sessions store's active session — inheriting the nav→board
         // fix instead of hand-rolling openTicket + setTicketActiveTab.
-        useWorkspaceStore.getState().openTicketSession(projectId, ticket.id, sessionId);
+        useProjectUiStore.getState().openTicketSession(projectId, ticket.id, sessionId);
       },
     );
   };

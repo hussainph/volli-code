@@ -17,7 +17,7 @@ import { useExperimentsStore } from "@renderer/stores/experiments";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 import { useVenueStore, venueKey } from "@renderer/stores/venue";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 import { BoardSync, type BoardSyncTransport } from "@renderer/stores/board-sync";
 
@@ -202,7 +202,7 @@ describe("boot", () => {
     expect(gateway.importLegacy).toHaveBeenCalledTimes(1);
   });
 
-  it("migrates ui/workspace prefs even when volli:projects is absent (prefs-only user)", async () => {
+  it("migrates ui/project-ui prefs even when volli:projects is absent (prefs-only user)", async () => {
     const uiJson = JSON.stringify({ state: { sidebarWidth: 480 }, version: 1 });
     const importLegacy = vi.fn<BootGateway["importLegacy"]>(async () => ({
       ok: true,
@@ -244,7 +244,7 @@ describe("boot", () => {
     expect(takeBootNotice()).toContain("couldn't read");
   });
 
-  it("imports on first run: unwraps the persist envelope, sanitizes projects, synthesizes volli:projects-ui, passes through ui/workspace, and clears localStorage after", async () => {
+  it("imports on first run: unwraps the persist envelope, sanitizes projects, synthesizes volli:projects-ui, passes through ui/project-ui, and clears localStorage after", async () => {
     const legacyProjects = [
       { id: "p1", name: "P1", path: "/p1", ticketPrefix: "P1", colorIndex: 0, createdAt: 1 },
       { id: 2, name: "bad-id-type" }, // fails sanitizeLegacyProjects — dropped
@@ -410,7 +410,7 @@ describe("boot", () => {
     expect(useBoardStore.getState().labelsByProject.p1).toEqual([label]);
   });
 
-  it("rehydrates the ui/workspace stores from the seeded app_state cache", async () => {
+  it("rehydrates the ui/project-ui stores from the seeded app_state cache", async () => {
     const gateway = fakeGateway({
       bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({
         ok: true,
@@ -434,7 +434,7 @@ describe("boot", () => {
 
     expect(useUiStore.getState().sidebarWidth).toBe(500);
     expect(useUiStore.getState().uiScale).toBe(1.25);
-    expect(useWorkspaceStore.getState().byProject.p1?.boardView).toBe("list");
+    expect(useProjectUiStore.getState().byProject.p1?.boardView).toBe("list");
   });
 
   it("reopens a persisted unsent chat Draft without creating a resident Session", async () => {
@@ -519,7 +519,7 @@ describe("boot", () => {
       // renderer-only focus overlay here would make the surface's commit
       // effect overwrite the tab the person actually quit on.
       expect(useChatSessionsStore.getState().provisionalActive).toEqual({});
-      expect(useWorkspaceStore.getState().byProject.p1?.ticketTabs?.t1?.active).toBeUndefined();
+      expect(useProjectUiStore.getState().byProject.p1?.ticketTabs?.t1?.active).toBeUndefined();
     } finally {
       useChatDraftsStore.setState({ drafts: {} });
       useChatSessionsStore.setState({ sessions: {}, openTabs: {}, provisionalActive: {} });

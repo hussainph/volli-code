@@ -1,7 +1,7 @@
 import * as React from "react";
 
 import { useProjectsStore } from "@renderer/stores/projects";
-import { DEFAULT_WORKSPACE_UI, useWorkspaceStore, type NavKey } from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, useProjectUiStore, type NavKey } from "@renderer/stores/project-ui";
 
 /**
  * The selected project's nav page and its setter. Each project remembers its
@@ -11,12 +11,12 @@ import { DEFAULT_WORKSPACE_UI, useWorkspaceStore, type NavKey } from "@renderer/
  */
 export function useActiveNav(): [NavKey, (nav: NavKey) => void] {
   const selectedProjectId = useProjectsStore((state) => state.selectedProjectId);
-  const activeNav = useWorkspaceStore(
+  const activeNav = useProjectUiStore(
     (state) =>
       (selectedProjectId ? state.byProject[selectedProjectId]?.nav : undefined) ??
-      DEFAULT_WORKSPACE_UI.nav,
+      DEFAULT_PROJECT_UI.nav,
   );
-  const setNav = useWorkspaceStore((state) => state.setNav);
+  const setNav = useProjectUiStore((state) => state.setNav);
 
   const setActiveNav = React.useCallback(
     (nav: NavKey) => {

@@ -1,9 +1,9 @@
 /**
  * `StateStorage` backed by an in-memory cache + the preload bridge — replaces
- * localStorage for the ui/workspace zustand `persist` stores now that UI
+ * localStorage for the ui/project-ui zustand `persist` stores now that UI
  * prefs live in SQLite's `app_state` table.
  *
- * `getItem` reads the cache synchronously so the ui/workspace stores can
+ * `getItem` reads the cache synchronously so the ui/project-ui stores can
  * rehydrate the moment `lib/boot.ts` seeds it from the bootstrap payload — no
  * store construction here ever waits on an IPC round trip. `setItem`/
  * `removeItem` update the cache immediately (so a read-after-write in the
@@ -190,7 +190,7 @@ export interface SyncStateStorage {
 }
 
 /**
- * The persist stores' storage adapter (see stores/ui.ts, stores/workspace.ts,
+ * The persist stores' storage adapter (see stores/ui.ts, stores/project-ui.ts,
  * stores/chat-drafts.ts).
  */
 export const appStateStorage: StateStorage & SyncStateStorage = {

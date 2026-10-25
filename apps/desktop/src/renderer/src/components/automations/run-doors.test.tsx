@@ -62,7 +62,7 @@ import { useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 // Most landing toasts are noise here; the skipped-row rename case inspects one.
 // Mocking `sonner` also avoids needing a real DOM host for the rest.
@@ -360,7 +360,7 @@ beforeEach(() => {
   installApi();
   useProjectsStore.setState({ projects: [PROJECT], selectedProjectId: "p1" });
   useBoardStore.getState().hydrate({ p1: [TICKET] }, { p1: [] });
-  useWorkspaceStore.setState({ byProject: {} });
+  useProjectUiStore.setState({ byProject: {} });
   useAutomationsStore.setState({
     byProject: {},
     armingByProject: {},
@@ -390,7 +390,7 @@ afterEach(async () => {
 
 describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () => {
   it("the Ticket rail's Armed row toasts in place with the Session door", async () => {
-    useWorkspaceStore.getState().openTicket("p1", "t1");
+    useProjectUiStore.getState().openTicket("p1", "t1");
     await render(<TicketAutomationsPanel projectId="p1" ticket={TICKET} />);
 
     // The row INSPECTS (VC-406); the Run inside the inspection is
@@ -413,7 +413,7 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
     );
     // Adopting the Session keeps it resident, but VC-234 leaves the rail's
     // current tab alone until the person presses the toast action.
-    expect(useWorkspaceStore.getState().byProject.p1?.ticketTabs.t1).toBeUndefined();
+    expect(useProjectUiStore.getState().byProject.p1?.ticketTabs.t1).toBeUndefined();
   });
 
   it("the rail's per-invocation Runtime, spent on this one Run", async () => {
@@ -500,7 +500,7 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
         ticketId: "t1",
       }),
     );
-    useWorkspaceStore.getState().openTicket("p1", "t1");
+    useProjectUiStore.getState().openTicket("p1", "t1");
     await render(<CommandPalette open onOpenChange={() => {}} />);
 
     await act(async () => {
@@ -518,7 +518,7 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
       "Renamed review sweep started on VC-12",
       expect.objectContaining({ action: expect.objectContaining({ label: "Open session" }) }),
     );
-    expect(useWorkspaceStore.getState().byProject.p1?.ticketTabs.t1).toBeUndefined();
+    expect(useProjectUiStore.getState().byProject.p1?.ticketTabs.t1).toBeUndefined();
   });
 
   it("the page's Play on a scheduled record, at the Project", async () => {

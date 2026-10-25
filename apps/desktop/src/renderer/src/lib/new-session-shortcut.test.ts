@@ -161,7 +161,7 @@ describe("newSessionLandingForChrome", () => {
   });
 
   it("mints on the OPEN TICKET, without moving the page under it", () => {
-    // Ticket detail is a state of Home's BOARD TAB (`openTicketWorkspace`
+    // Ticket detail is a state of Home's BOARD TAB (`openTicketView`
     // patches `{ nav: "home", homeActiveTab: board, openTicketId }`), so this IS
     // the in-a-ticket chrome — and the ticket is already the surface in front,
     // so there is nowhere to go.

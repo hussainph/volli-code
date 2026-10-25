@@ -11,7 +11,7 @@ import { fileDocumentIdentity } from "@renderer/editor/document-identity";
 import type { DocumentSnapshot } from "@renderer/editor/document-registry";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { toastError } from "@renderer/lib/toast";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 const NO_VIEW_STATES: Record<string, unknown> = {};
 const NO_DIRTY_PATHS: ReadonlySet<string> = new Set();
@@ -52,18 +52,18 @@ export function useProjectFileWorkspace(
   projectId: string | null,
   onCloseFile: (relPath: string) => void,
 ) {
-  const files = useWorkspaceStore((state) =>
+  const files = useProjectUiStore((state) =>
     projectId === null
       ? EMPTY_FILE_WORKSPACE
       : (state.byProject[projectId]?.projectFiles ?? EMPTY_FILE_WORKSPACE),
   );
-  const viewStates = useWorkspaceStore((state) =>
+  const viewStates = useProjectUiStore((state) =>
     projectId === null
       ? NO_VIEW_STATES
       : (state.byProject[projectId]?.projectFileViewStates ?? NO_VIEW_STATES),
   );
-  const markProjectFileEdited = useWorkspaceStore((state) => state.markProjectFileEdited);
-  const setProjectFileViewState = useWorkspaceStore((state) => state.setProjectFileViewState);
+  const markProjectFileEdited = useProjectUiStore((state) => state.markProjectFileEdited);
+  const setProjectFileViewState = useProjectUiStore((state) => state.setProjectFileViewState);
   const [dirtyState, setDirtyState] = React.useState<DirtyPathsState>(() => ({
     projectId,
     paths: new Set(),

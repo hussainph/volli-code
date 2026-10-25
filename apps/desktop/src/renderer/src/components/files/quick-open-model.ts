@@ -25,7 +25,7 @@ import {
 
 import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
 import { parseFileTabId } from "@renderer/components/ticket/ticket-file-tab";
-import type { NavKey, WorkspaceUiState } from "@renderer/stores/workspace";
+import type { NavKey, ProjectUiState } from "@renderer/stores/project-ui";
 
 /**
  * Which checkout ⌘P searches, and therefore which surface a pick lands in.
@@ -77,17 +77,17 @@ export interface QuickOpenSurfaceFiles {
 }
 
 /**
- * The scope's own File tabs, read out of the project's workspace record.
+ * The scope's own File tabs, read out of the project's UI record.
  *
- * Home and a Ticket workspace keep their tabs in different fields for a
+ * Home and a Ticket view keep their tabs in different fields for a
  * durable reason (decision #54: the same relPath in two checkouts is two
  * different documents), and this is the one place that mapping is made — so
  * the scope that chose which index to search also chooses which strip is
- * consulted, and a Ticket workspace can never be answered about Home's tabs.
+ * consulted, and a Ticket view can never be answered about Home's tabs.
  */
 export function quickOpenSurfaceFiles(
   scope: QuickOpenScope,
-  ui: WorkspaceUiState,
+  ui: ProjectUiState,
 ): QuickOpenSurfaceFiles {
   if (scope.kind === "ticket") {
     const tabs = ui.ticketTabs[scope.ticketId];

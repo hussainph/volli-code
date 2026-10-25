@@ -1872,7 +1872,7 @@ describe("projectFileScope", () => {
     ).toEqual({ projectId: "p1", relPath: "src/app.ts" });
   });
 
-  /** A ticket workspace reads the tsconfig.json in ITS worktree (decision #6). */
+  /** A Ticket view reads the tsconfig.json in ITS worktree (decision #6). */
   it("reads a ticket file from that ticket's worktree", () => {
     expect(
       projectFileScope({

@@ -44,7 +44,7 @@
  *
  * MOTION. The reveal is transform alone, {@link OPEN_MS} in and {@link CLOSE_MS}
  * out on `--ease-swift`, which IS the iOS drawer curve and this is a drawer.
- * Where it travels — and what stops it travelling across the workspace rail —
+ * Where it travels — and what stops it travelling across the project rail —
  * is the panel's own clip, described in app-shell.tsx; the same two constants
  * time the content's half of a pinned journey, which is why they are exported.
  *
@@ -88,7 +88,7 @@ const MIN_REVEAL_MS = 90;
 const REDUCED_REVEAL_MS = 120;
 
 /** The arming strip, on the canvas gutter the framed card already leaves bare.
- * The shell widens it by one shell inset when the workspace rail is down
+ * The shell widens it by one shell inset when the project rail is down
  * (app-shell.tsx) — the bare window edge at 8px is a target nobody can find. */
 export const ZONE_WIDTH = 8;
 /** Dead band under the chrome bar — see the pointer-intent note in the header. */

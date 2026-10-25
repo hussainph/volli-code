@@ -4,7 +4,7 @@
  * the stores, and binds the ⌘[ / ⌘] / ⌥⌘B shortcuts.
  *
  * A "location" is derived from two stores — the selected project (projects
- * store) and that project's nav page + open ticket (workspace store). Rather
+ * store) and that project's nav page + open ticket (project UI store). Rather
  * than instrument every navigating action across both stores, we subscribe to
  * both and record whenever the derived location changes. That catches every
  * path uniformly: project switch, sidebar nav change, ticket open, and
@@ -47,7 +47,7 @@ function toNavKeyEvent(event: KeyboardEvent): NavKeyEvent {
 import { railToggleTargetForChrome } from "@renderer/lib/rail-toggle";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
-import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, useProjectUiStore } from "@renderer/stores/project-ui";
 
 /**
  * True while a history step is being applied to the stores, so the recorder
@@ -67,16 +67,16 @@ let lastSnapshot: NavSnapshot | null = null;
 /** Derive the current location from the live stores. */
 function currentSnapshot(): NavSnapshot {
   const projectId = useProjectsStore.getState().selectedProjectId;
-  const workspace = projectId ? useWorkspaceStore.getState().byProject[projectId] : undefined;
+  const projectUi = projectId ? useProjectUiStore.getState().byProject[projectId] : undefined;
   return {
     projectId,
-    nav: workspace?.nav ?? DEFAULT_WORKSPACE_UI.nav,
-    openTicketId: workspace?.openTicketId ?? DEFAULT_WORKSPACE_UI.openTicketId,
+    nav: projectUi?.nav ?? DEFAULT_PROJECT_UI.nav,
+    openTicketId: projectUi?.openTicketId ?? DEFAULT_PROJECT_UI.openTicketId,
   };
 }
 
 /**
- * Whether a rail is on screen for ⌥⌘B to collapse — the ticket workspace's or
+ * Whether a rail is on screen for ⌥⌘B to collapse — the Ticket view's or
  * Home's own (VC-55).
  *
  * The decision itself is pure and lives in `lib/rail-toggle.ts` with this
@@ -86,15 +86,15 @@ function currentSnapshot(): NavSnapshot {
  */
 function hasRailOnScreen(): boolean {
   const projectId = useProjectsStore.getState().selectedProjectId;
-  const workspace =
-    projectId === null ? undefined : useWorkspaceStore.getState().byProject[projectId];
+  const projectUi =
+    projectId === null ? undefined : useProjectUiStore.getState().byProject[projectId];
   return (
     railToggleTargetForChrome({
       selectedProjectId: projectId,
-      nav: workspace?.nav ?? DEFAULT_WORKSPACE_UI.nav,
-      homeActiveTab: workspace?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab,
+      nav: projectUi?.nav ?? DEFAULT_PROJECT_UI.nav,
+      homeActiveTab: projectUi?.homeActiveTab ?? DEFAULT_PROJECT_UI.homeActiveTab,
       settingsOpen: useUiStore.getState().settingsOpen,
-      openTicketId: workspace?.openTicketId ?? DEFAULT_WORKSPACE_UI.openTicketId,
+      openTicketId: projectUi?.openTicketId ?? DEFAULT_PROJECT_UI.openTicketId,
       terminalFocusActive: useUiStore.getState().terminalFocusTarget !== null,
     }) !== null
   );
@@ -111,7 +111,7 @@ function recordCurrentLocation(): void {
   // synchronous, and each recordNav write re-enters this callback. The nested
   // call must see the live snapshot as already handled.
   lastSnapshot = snapshot;
-  const workspace = useWorkspaceStore.getState();
+  const projectUi = useProjectUiStore.getState();
 
   // `openTicketId` persists across relaunch but nav history intentionally does
   // not. If the first observed location is a restored ticket detail, rebuild
@@ -119,8 +119,8 @@ function recordCurrentLocation(): void {
   // The same guard covers any detail reached before the recorder observed its
   // board without duplicating the normal board → ticket path.
   const parent = ticketParentSnapshot(snapshot);
-  if (parent !== null && !sameSnapshot(previous, parent)) workspace.recordNav(parent);
-  workspace.recordNav(snapshot);
+  if (parent !== null && !sameSnapshot(previous, parent)) projectUi.recordNav(parent);
+  projectUi.recordNav(snapshot);
 }
 
 /**
@@ -137,10 +137,10 @@ function applySnapshot(snapshot: NavSnapshot): void {
     const exists = projectId !== null && projects.projects.some((p) => p.id === projectId);
     if (projectId !== null && exists) {
       if (projects.selectedProjectId !== projectId) projects.select(projectId);
-      const workspace = useWorkspaceStore.getState();
-      workspace.setNav(projectId, snapshot.nav);
-      if (snapshot.openTicketId !== null) workspace.openTicket(projectId, snapshot.openTicketId);
-      else workspace.closeTicket(projectId);
+      const projectUi = useProjectUiStore.getState();
+      projectUi.setNav(projectId, snapshot.nav);
+      if (snapshot.openTicketId !== null) projectUi.openTicket(projectId, snapshot.openTicketId);
+      else projectUi.closeTicket(projectId);
     }
   } finally {
     applying = false;
@@ -152,13 +152,13 @@ function applySnapshot(snapshot: NavSnapshot): void {
 
 /** Step back one location (chrome-bar ← / ⌘[). No-op when the stack is empty. */
 export function navBack(): void {
-  const snapshot = useWorkspaceStore.getState().stepNavBack();
+  const snapshot = useProjectUiStore.getState().stepNavBack();
   if (snapshot !== null) applySnapshot(snapshot);
 }
 
 /** Step forward one location (chrome-bar → / ⌘]). No-op when the stack is empty. */
 export function navForward(): void {
-  const snapshot = useWorkspaceStore.getState().stepNavForward();
+  const snapshot = useProjectUiStore.getState().stepNavForward();
   if (snapshot !== null) applySnapshot(snapshot);
 }
 
@@ -167,7 +167,7 @@ export function navForward(): void {
  * navigation via store subscriptions, and binds the nav shortcuts:
  *   - ⌘[ / ⌘] → back / forward, suppressed inside inputs / Monaco (where
  *     ⌘[ means outdent).
- *   - ⌥⌘B → toggle the right rail — the ticket workspace's or Home's, whichever
+ *   - ⌥⌘B → toggle the right rail — the Ticket view's or Home's, whichever
  *     is on screen — and only while one is. Bound in the CAPTURE phase and stops
  *     propagation so it preempts the left-sidebar ⌘B handler in ui/sidebar.tsx
  *     (a plain window listener we don't own).
@@ -176,10 +176,10 @@ export function useNavHistory(): void {
   React.useEffect(() => {
     recordCurrentLocation();
     const unsubProjects = useProjectsStore.subscribe(recordCurrentLocation);
-    const unsubWorkspace = useWorkspaceStore.subscribe(recordCurrentLocation);
+    const unsubProjectUi = useProjectUiStore.subscribe(recordCurrentLocation);
     return () => {
       unsubProjects();
-      unsubWorkspace();
+      unsubProjectUi();
     };
   }, []);
 
