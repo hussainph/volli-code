@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { piExecutionEnv } from "./execution-env";
 import { BACKGROUND_CONTEXT, type ExecutionEnv } from "./harness-env";
 import { privateSecretExecution, type SecretPort } from "./secrets";
-import { ShellSpillBudget, ShellSpillRedactor } from "./shell-spill";
+import { ShellSpillBudget } from "./shell-spill";
 import { createSessionTools } from "./tools";
 import { applyShellOutputUpdate } from "./vendor/pi-harness/execution/output-capture";
 import type {
@@ -247,11 +247,10 @@ describe("shell spill redaction", () => {
     try {
       const { result } = await run(env, "unused", true);
       const saved = await readFile(spillOf(result), "utf8");
-      // The first occurrence was written before the value was known: its
-      // prefix had already been decided; the rest, and every later byte, use it.
-      expect(saved).toBe(
-        `${FILLER}\nbefore ${late.slice(0, 5)}${late.slice(5)} and ‹secret:LATE›\n`,
-      );
+      // The first occurrence began before the value was known: its first bytes
+      // were already written, but the rest of it and every later byte use it.
+      expect(saved).toBe(`${FILLER}\nbefore ${late.slice(0, 5)} and ‹secret:LATE›\n`);
+      expect(saved).not.toContain(late.slice(5));
     } finally {
       await env.cleanup(BACKGROUND_CONTEXT);
     }
@@ -291,7 +290,7 @@ describe("shell spill redaction", () => {
             ok: false,
             error: {
               code: "unknown",
-              message: `Failed to preserve complete shell output: ${ShellSpillRedactor.failure}`,
+              message: "Failed to preserve complete shell output: Credential redaction failed.",
             },
           });
           expect(JSON.stringify(result)).not.toContain("redactor broke");

@@ -482,6 +482,28 @@ describe("streaming redaction", () => {
     expect(streamed(input, singles)).toBe(expected);
   });
 
+  it("agrees with redact() for random values, text and cuts", () => {
+    const alphabet = ["a", "b", "é", "😀", "\n"];
+    let state = 865;
+    const next = () => {
+      state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+      return state / 4294967296;
+    };
+    const pick = (length: number) =>
+      Array.from({ length }, () => alphabet[Math.floor(next() * alphabet.length)]).join("");
+    for (let round = 0; round < 150; round += 1) {
+      store = new SecretStore(join(dir, `round-${round}.enc`), encryption);
+      for (let index = 0; index < 1 + Math.floor(next() * 4); index += 1) {
+        const value = pick(1 + Math.floor(next() * 4));
+        store.put({ name: `V${index}`, value, scope: "session", sessionId: "s" });
+      }
+      const input = pick(Math.floor(next() * 50));
+      const length = utf8.encode(input).length;
+      const cuts = Array.from({ length }, (_, at) => at).filter(() => next() < 0.3);
+      expect({ round, out: streamed(input, cuts) }).toEqual({ round, out: store.redact(input) });
+    }
+  });
+
   it("passes bytes through untouched while nothing is held", () => {
     const window = new Uint8Array([0xff, 0x00, 0x41]);
     expect(store.redactStreamStep(window, 0, false)).toEqual({

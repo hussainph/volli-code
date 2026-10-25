@@ -15,10 +15,21 @@
  * same markers); invalid UTF-8 and binary output pass through byte for byte
  * instead of becoming U+FFFD, and no decoder boundary can split a value.
  *
- * The split keeps values out of callers: {@link ExactValueByteRedactor} is built
- * where values live (the host's secret store) and is reached only through its
- * {@link CredentialStreamStepper}; {@link CredentialRedactionStream} carries the
- * per-stream state wherever the bytes flow and never sees a value.
+ * The split: {@link ExactValueByteRedactor} is built where values live (the
+ * host's secret store) and is reached through its {@link CredentialStreamStepper};
+ * {@link CredentialRedactionStream} carries the per-stream state wherever the
+ * bytes flow and is never handed a value. The stepper is NOT a confidentiality
+ * boundary, though: whether a step holds bytes back says whether they begin a
+ * value, so a caller that can choose its own input can recover a whole value
+ * byte by byte. Give a stepper only to code already trusted with the values
+ * themselves (the runtime that injects them into its commands), never to less
+ * trusted code.
+ *
+ * A value added between steps applies to every byte not yet decided. The
+ * stream also keeps up to {@link WRITTEN_LOOKBEHIND_BYTES} already-written
+ * bytes as context, so the rest of an occurrence whose first bytes were
+ * written before the value existed is withheld too; only those first bytes,
+ * already out, stay as they were.
  */
 
 /** One step's answer. All offsets are in `window` bytes. */
@@ -147,7 +158,9 @@ export class ExactValueByteRedactor {
       let end = at + lengths[at]!;
       for (let next = at + 1; next < end; next += 1) end = Math.max(end, next + lengths[next]!);
       if (end > from) {
-        // A span that started in the context already had its marker emitted.
+        // A span that started in the context is not marked again: either its
+        // marker is already out, or it began with bytes written before the
+        // value existed. Either way the rest of it stays hidden.
         if (at >= from) parts.push(window.subarray(cursor, at), this.#values[owner[at]!]!.marker);
         cursor = Math.min(end, consumed);
       }
@@ -168,17 +181,15 @@ export class ExactValueByteRedactor {
   }
 }
 
-export interface CredentialRedactionStreamOptions {
-  /**
-   * Fail closed rather than retain more than this many bytes between steps.
-   * Retention is normally at most twice the longest value; this bounds a
-   * pathological one.
-   */
-  readonly maxRetainedBytes?: number;
-}
+/**
+ * Retained context and undecided prefix between steps, before failing closed.
+ * Retention is normally at most twice the longest value plus
+ * {@link WRITTEN_LOOKBEHIND_BYTES}; this bounds a pathological value.
+ */
+const MAX_RETAINED_BYTES = 8 * 1024 * 1024;
 
-/** Retained context and undecided prefix between steps, before failing closed. */
-export const CREDENTIAL_STREAM_MAX_RETAINED_BYTES = 8 * 1024 * 1024;
+/** Written bytes kept as read-only context for values added mid-stream. */
+const WRITTEN_LOOKBEHIND_BYTES = 1024;
 
 /**
  * One stream's state over a {@link CredentialStreamStepper}. `push` returns
@@ -194,9 +205,10 @@ export class CredentialRedactionStream {
   #from = 0;
   #state: "open" | "ended" | "failed" = "open";
 
-  constructor(step: CredentialStreamStepper, options: CredentialRedactionStreamOptions = {}) {
+  /** `maxRetainedBytes` lowers the fail-closed retention ceiling (8 MiB). */
+  constructor(step: CredentialStreamStepper, options: { maxRetainedBytes?: number } = {}) {
     this.#step = step;
-    this.#maxRetainedBytes = options.maxRetainedBytes ?? CREDENTIAL_STREAM_MAX_RETAINED_BYTES;
+    this.#maxRetainedBytes = options.maxRetainedBytes ?? MAX_RETAINED_BYTES;
   }
 
   push(chunk: Uint8Array): Uint8Array {
@@ -233,14 +245,17 @@ export class CredentialRedactionStream {
       consumed > window.length ||
       (final && consumed !== window.length) ||
       context < 0 ||
-      context > consumed ||
-      window.length - consumed + context > this.#maxRetainedBytes
+      context > consumed
     ) {
       throw this.#fail();
     }
+    // At least the step's context; more is always safe, since the next step
+    // never emits from it.
+    const keep = Math.max(context, Math.min(WRITTEN_LOOKBEHIND_BYTES, consumed));
+    if (window.length - consumed + keep > this.#maxRetainedBytes) throw this.#fail();
     // Copy what is retained so a large chunk is not kept alive by a view.
-    this.#window = consumed - context === window.length ? EMPTY : window.slice(consumed - context);
-    this.#from = context;
+    this.#window = consumed - keep === window.length ? EMPTY : window.slice(consumed - keep);
+    this.#from = keep;
     return bytes;
   }
 

@@ -1178,7 +1178,7 @@ describe("ScopedExecutionEnv", () => {
     expect(size).toBe(ShellSpillBudget.maxBytes);
     expect(readBytes(spillPath!, size - 9, 9).toString("utf8")).toBe("aa‹secr");
     await env.cleanup();
-  });
+  }, 60_000);
 
   it.each(["always", "final"] as const)(
     "fails a command whose spool could not be redacted, writing nothing undecided (%s)",

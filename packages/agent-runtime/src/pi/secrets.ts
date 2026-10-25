@@ -129,8 +129,9 @@ function scrub(value: unknown, port: RedactionPort): unknown {
  * result scrubber. With a streaming step on the port, every spill is redacted
  * on its way to disk: the same exact values and markers as tool results,
  * read from the live history at each step (a credential saved while the
- * command runs applies to every byte not yet written), with an undecided
- * credential prefix held back in memory rather than written. It is attached
+ * command runs applies to every byte not yet written, including the rest of
+ * an occurrence already begun), with an undecided credential prefix held
+ * back in memory rather than written. It is attached
  * whether or not values are held now. Any redaction failure fails the spill
  * closed. A port without the step keeps the older guard: no spill while
  * credentials are held, decided at command start (and on a failing check).

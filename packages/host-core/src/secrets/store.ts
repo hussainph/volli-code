@@ -445,7 +445,9 @@ export class SecretStore {
    * that cannot hold a whole output (`CredentialRedactionStream` in
    * `@volli/shared`). Exactly the values and markers {@link redact} uses, read
    * from the history as it stands at each step, so a value saved mid-stream
-   * applies to every byte not yet decided.
+   * applies to every byte not yet decided. Whether a step holds bytes back
+   * reveals whether they begin a value: hand it only to code already trusted
+   * with the values (the runtime they are injected into).
    */
   redactStreamStep(window: Uint8Array, from: number, final: boolean): CredentialStreamStep {
     this.#settle();

@@ -636,7 +636,6 @@ export class NodeExecutionEnv implements ExecutionEnv {
       const spillBudget = new ShellSpillBudget();
       // Volli (VC-865): every spilled byte passes this first, in stream order.
       const spillRedactor = new ShellSpillRedactor(options?.capture?.spillRedaction);
-      let spillFed = false;
       const spillQueue: SpillChunk[] = [];
       let spillStart: Promise<void> | undefined;
       let spillStream: WriteStream | undefined;
@@ -745,7 +744,6 @@ export class NodeExecutionEnv implements ExecutionEnv {
       // replaced whole and only its marker can be cut; stop once it is full.
       const spill = (chunk: SpillChunk): void => {
         if (spillError !== undefined || spillBudget.truncatedAt !== undefined) return;
-        spillFed = true;
         let safe: SpillChunk;
         try {
           safe = spillRedactor.push(chunk);
@@ -756,14 +754,12 @@ export class NodeExecutionEnv implements ExecutionEnv {
         startSpill(safe);
       };
       const finishSpill = async (): Promise<void> => {
-        if (spillFed) {
-          spillFed = false;
-          if (spillError === undefined && spillBudget.truncatedAt === undefined) {
-            try {
-              startSpill(spillRedactor.end());
-            } catch (error) {
-              failSpill(error);
-            }
+        // Held bytes are released once; nothing was held if nothing spilled.
+        if (spillError === undefined && spillBudget.truncatedAt === undefined) {
+          try {
+            startSpill(spillRedactor.end());
+          } catch (error) {
+            failSpill(error);
           }
         }
         await spillStart;

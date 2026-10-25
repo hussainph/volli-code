@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
-  CREDENTIAL_STREAM_MAX_RETAINED_BYTES,
   CredentialRedactionError,
   CredentialRedactionStream,
   ExactValueByteRedactor,
@@ -213,6 +212,23 @@ describe("ExactValueByteRedactor", () => {
     }
   });
 
+  it("hides the rest of a value added after its first bytes were written", () => {
+    let redactor = redactorFor(new Map());
+    const stream = new CredentialRedactionStream((w, f, final) => redactor.step(w, f, final));
+    const parts = [decoder.decode(stream.push(bytes("x".repeat(2000) + "tok-")))];
+    redactor = redactorFor(new Map([["tok-value", "NEW"]]));
+    parts.push(decoder.decode(stream.push(bytes("value done"))));
+    parts.push(decoder.decode(stream.end()));
+    expect(parts).toEqual(["x".repeat(2000) + "tok-", " done", ""]);
+    // Beyond the bounded lookbehind, a value begun earlier cannot be recognised.
+    redactor = redactorFor(new Map());
+    const far = new CredentialRedactionStream((w, f, final) => redactor.step(w, f, final));
+    const long = "long-" + "y".repeat(1100);
+    far.push(bytes(long));
+    redactor = redactorFor(new Map([[`${long}-tail`, "FAR"]]));
+    expect(decoder.decode(far.push(bytes("-tail"))) + decoder.decode(far.end())).toBe("-tail");
+  });
+
   it("applies a value added mid-stream to every byte not yet decided", () => {
     let redactor = redactorFor(new Map([["nexus", "OLD"]]));
     const stream = new CredentialRedactionStream((w, f, final) => redactor.step(w, f, final));
@@ -326,7 +342,6 @@ describe("CredentialRedactionStream", () => {
     expect(() => streamed(bytes("x".repeat(40)), [], step, { maxRetainedBytes: 32 })).toThrow(
       CredentialRedactionError,
     );
-    expect(CREDENTIAL_STREAM_MAX_RETAINED_BYTES).toBe(8 * 1024 * 1024);
   });
 
   it("refuses use after the stream has ended", () => {
@@ -340,8 +355,8 @@ describe("CredentialRedactionStream", () => {
     const calls: Array<{ window: string; from: number; final: boolean }> = [];
     const answers: CredentialStreamStep[] = [
       { bytes: bytes("abc"), consumed: 3, context: 1 },
-      { bytes: bytes("d"), consumed: 2, context: 0 },
-      { bytes: new Uint8Array(0), consumed: 0, context: 0 },
+      { bytes: bytes("d"), consumed: 4, context: 0 },
+      { bytes: new Uint8Array(0), consumed: 4, context: 0 },
     ];
     const stream = new CredentialRedactionStream((window, from, final) => {
       calls.push({ window: decoder.decode(window), from, final });
@@ -352,8 +367,9 @@ describe("CredentialRedactionStream", () => {
     stream.end();
     expect(calls).toEqual([
       { window: "abc", from: 0, final: false },
-      { window: "cd", from: 1, final: false },
-      { window: "", from: 0, final: true },
+      // The step's one byte of context, widened to the bounded written lookbehind.
+      { window: "abcd", from: 3, final: false },
+      { window: "abcd", from: 4, final: true },
     ]);
   });
 });

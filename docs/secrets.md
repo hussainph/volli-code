@@ -487,7 +487,8 @@ starts: the bytes are matched as they stream, a credential split across output
 chunks, a UTF-8 character or the log's 64 MiB cap is replaced whole, and an
 undecided credential prefix is held in memory (at most about twice the longest value)
 rather than written. A value saved while a command runs applies to every byte
-not yet written; bytes written before it existed are not rewritten. If
+not yet written, including the rest of an occurrence that began in the last
+1 KiB already written; bytes written before it existed are not rewritten. If
 redaction fails, the log stops and the command fails with "Failed to preserve
 complete shell output"; nothing unredacted is written. The inline tail is
 unchanged. Image data in tool-result content is

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { CredentialRedactionError } from "@volli/shared";
 import { ShellSpillBudget, ShellSpillRedactor } from "./shell-spill";
 
 it("caps queued bytes, distinguishes the exact boundary, and keeps draining after the cap", () => {
@@ -69,8 +70,8 @@ describe("ShellSpillRedactor", () => {
     } catch (error) {
       thrown = error;
     }
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toBe(ShellSpillRedactor.failure);
+    expect(thrown).toBeInstanceOf(CredentialRedactionError);
+    expect((thrown as Error).message).toBe("Credential redaction failed.");
     expect((thrown as Error).cause).toBeUndefined();
     expect(String((thrown as Error).stack)).not.toContain("secret-example-123");
   });
