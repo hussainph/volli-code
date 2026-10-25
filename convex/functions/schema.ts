@@ -30,6 +30,8 @@ import {
   ATTENTION_SOURCES,
   BOARD_EVENT_KINDS,
   CHECKOUT_MODES,
+  CHAT_SESSION_ACTIVITIES,
+  CHAT_WAITING_REASONS,
   GITHUB_ACCOUNT_TYPES,
   GITHUB_CONNECTION_STATUSES,
   GITHUB_DELIVERY_OUTCOMES,
@@ -758,8 +760,8 @@ export default defineSchema({
     // before it have none until their next listing sync.
     listing: v.optional(
       v.object({
-        activity: literals(["working", "waiting", "idle", "stopped", "interrupted"]),
-        waitingOn: nullable(literals(["question", "permission", "auth"])),
+        activity: literals(CHAT_SESSION_ACTIVITIES),
+        waitingOn: nullable(literals(CHAT_WAITING_REASONS)),
         live: v.boolean(),
         bornTicketless: v.boolean(),
       }),

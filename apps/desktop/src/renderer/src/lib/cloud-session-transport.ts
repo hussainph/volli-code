@@ -399,13 +399,18 @@ class CloudSessionStream {
     }
     this.#cursor = fresh.at(-1)!.sequence;
     this.#watchHistory();
-    // What the delivered facts end: their turns' streams, and streams whose
-    // replacing fact has now been delivered.
+    // What the delivered facts end: their turns' streams, every stream of an
+    // ended attachment, and streams whose replacing fact has now been delivered.
     let moved = false;
     const overlays: SessionStreamOverlay[] = [];
     for (const entry of fresh) {
-      if (entry.endsTurn === null) continue;
-      const ended = this.#chunks.turnEnded(entry.endsTurn, entry.sequence);
+      const ended =
+        entry.endsTurn !== null
+          ? this.#chunks.turnEnded(entry.endsTurn, entry.sequence)
+          : entry.endsAttachment
+            ? this.#chunks.allEnded(entry.sequence)
+            : null;
+      if (ended === null) continue;
       moved ||= ended.moved;
       overlays.push(...ended.overlays);
     }

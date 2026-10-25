@@ -17,6 +17,7 @@ import {
 import {
   SESSION_ID,
   appendOp,
+  attachmentEndedEvent,
   artifactOf,
   chunksAnswer,
   digestOf,
@@ -365,11 +366,25 @@ describe("the cloud reads' remaining shapes", () => {
       event: future,
       reference: null,
       endsTurn: null,
+      endsAttachment: false,
     });
     const broken = { ...turnEvent(2, "turn.started"), payload: { kind: "turn.started" } };
     expect(() => readCloudHistory(historyAnswer([{ sequence: 2, event: broken }]))).toThrow(
       /Session event 2 is malformed/u,
     );
+  });
+
+  it("marks the facts that end the attachment", () => {
+    const read = readCloudHistory(
+      historyAnswer([
+        { sequence: 1, event: turnEvent(1, "turn.started") },
+        { sequence: 2, event: attachmentEndedEvent(2, "attachment.closed") },
+        { sequence: 3, event: attachmentEndedEvent(3, "attachment.failed") },
+        { sequence: 4, status: "unknown_kind", event: null },
+      ]),
+    );
+    expect(read.entries.map((entry) => entry.endsAttachment)).toEqual([false, true, true, false]);
+    expect(read.entries.map((entry) => entry.endsTurn)).toEqual([null, null, null, null]);
   });
 
   it("names the turn a fact ends", () => {
@@ -613,6 +628,19 @@ describe("CloudChunkFold ends streams", () => {
     // r0's watermark was forgotten: its delayed baseline draws; r1's is still remembered.
     expect(fold.read(baselineAnswer("r0", 0, 1), 9).moved).toBe(true);
     expect(fold.read(baselineAnswer("r1", 0, 1), 9).moved).toBe(false);
+  });
+
+  it("removes every stream when the attachment ends, and suppresses their delayed baselines", () => {
+    const fold = started();
+    expect(fold.allEnded(9)).toEqual({
+      overlays: [removal("s1", 9), removal("s2", 9)],
+      moved: true,
+    });
+    expect(fold.cursors()).toEqual([]);
+    expect(fold.read(baselineAnswer("s2", 5, 4), 9)).toEqual({ overlays: [], moved: false });
+    expect(fold.allEnded(10)).toEqual({ overlays: [], moved: false });
+    // A stream started by a later attachment is drawn.
+    expect(fold.read(baselineAnswer("s2", 6, 10), 10).moved).toBe(true);
   });
 
   it("remembers only the most recent ended turns", () => {

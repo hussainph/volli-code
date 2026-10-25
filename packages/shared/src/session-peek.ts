@@ -21,6 +21,8 @@ import type { RendererSessionInteraction } from "./session-event-codec";
  * glance at what a Session is doing, and the conversation is one press away.
  */
 export const SESSION_PEEK_ENTRIES = 6;
+/** Maximum prose per local or cloud hover excerpt. */
+export const PEEK_EXCERPT_CHARS = 2_000;
 
 /** A later glance may refresh a throttled/refused summary; never a background timer. */
 export const SESSION_PEEK_REFRESH_MS = 60_000;

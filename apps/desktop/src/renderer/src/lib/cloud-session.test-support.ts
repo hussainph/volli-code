@@ -92,6 +92,28 @@ export function turnEvent(sequence: number, kind: "turn.started" | "turn.complet
   return envelope(sequence, { kind, attachmentId: "attach-1", turnId: "turn-1" });
 }
 
+/** The two facts that end an attachment without a turn end. */
+export function attachmentEndedEvent(
+  sequence: number,
+  kind: "attachment.closed" | "attachment.failed",
+): Record<string, unknown> {
+  return envelope(
+    sequence,
+    kind === "attachment.closed"
+      ? { kind, attachmentId: "attach-1", outcome: "failed" }
+      : {
+          kind,
+          attachment: {
+            id: "attach-1",
+            sessionId: SESSION_ID,
+            venue: { id: "runner-1", kind: "local" },
+            continuity: "fresh",
+          },
+          failure: { code: "adapter_unavailable", detail: null, diagnostic: null },
+        },
+  );
+}
+
 export interface HistoryRow {
   sequence: number;
   status?: "ok" | "unknown_kind" | "quarantined" | "unreadable";

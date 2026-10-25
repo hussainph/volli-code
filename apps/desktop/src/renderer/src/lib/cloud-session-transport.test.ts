@@ -34,6 +34,7 @@ import type { CloudTranscriptReader, CloudTranscriptRequest } from "./cloud-tran
 import {
   SESSION_ID,
   appendOp,
+  attachmentEndedEvent,
   chunksAnswer,
   digestOf,
   historyAnswer,
@@ -819,6 +820,42 @@ describe("the cloud Session stream", () => {
     expect(watching.stopped).toBe(true);
     expect(port.chunkWatch.args.cursors).toEqual([]);
   });
+
+  it.each(["attachment.closed", "attachment.failed"] as const)(
+    "removes every stream once %s is delivered, with no turn end",
+    async (kind) => {
+      const { port, transport } = harness();
+      const { log, handlers } = recorder();
+      transport.rpc.session.subscribe.subscribe(
+        { sessionId: SESSION_ID, afterSequence: 4 },
+        handlers,
+      );
+      port.chunkWatch.push(
+        value({ streams: [baselineOf("s1", "turn-1"), baselineOf("s2", "turn-2")] }),
+      );
+      const watching = port.chunkWatch;
+      port.historyWatch.push(
+        value(historyAnswer([{ sequence: 5, event: attachmentEndedEvent(5, kind) }])),
+      );
+      await settle();
+      const overlays = () =>
+        log.data
+          .map(
+            (event) => event.data as { kind?: string; messageId?: string; delta?: { op: string } },
+          )
+          .filter((data) => data.kind === "overlay");
+      expect(
+        overlays()
+          .filter((data) => data.delta?.op === "message.remove")
+          .map((data) => data.messageId),
+      ).toEqual(["s1", "s2"]);
+      expect(watching.stopped).toBe(true);
+      expect(port.chunkWatch.args.cursors).toEqual([]);
+      // A delayed baseline of an ended stream is not drawn again.
+      port.chunkWatch.push(value({ streams: [baselineOf("s1", "turn-3")] }));
+      expect(overlays()).toHaveLength(4);
+    },
+  );
 
   it("stops at once when its subscriber lets go from inside a removal", async () => {
     const { port, transport } = harness();

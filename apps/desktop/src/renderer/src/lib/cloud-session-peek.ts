@@ -1,7 +1,7 @@
 /** A hover peek reads the same bounded cloud history as a chat, without adopting or watching it. */
 import { chatSessionFrame } from "@volli/session-presentation";
 import { transcriptTailEntry } from "@volli/session-engine";
-import { SESSION_PEEK_ENTRIES, type SessionPeekContent } from "@volli/shared";
+import { SESSION_PEEK_ENTRIES, PEEK_EXCERPT_CHARS, type SessionPeekContent } from "@volli/shared";
 import type { ChatSessionRpc } from "@volli/session-presentation";
 import { transcriptReferenceOf } from "./cloud-session-view";
 
@@ -22,7 +22,7 @@ export async function readCloudSessionPeek(
             transcriptTailEntry(
               frame.event?.occurredAt ?? answer.projection.lastActivityAt,
               frame.transcript.message,
-              2_000,
+              PEEK_EXCERPT_CHARS,
             ),
           ],
     )

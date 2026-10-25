@@ -203,6 +203,11 @@ export interface CloudHistoryEntry {
   reference: TranscriptReference | null;
   /** The turn this fact ends (`turn.completed`, `turn.interrupted`), when it ends one. */
   endsTurn: string | null;
+  /**
+   * The fact ends the Session's attachment (`attachment.closed`,
+   * `attachment.failed`): no stream outlives it, whatever turn it named.
+   */
+  endsAttachment: boolean;
 }
 
 export interface CloudHistoryRead {
@@ -219,7 +224,13 @@ export function readCloudHistory(value: unknown): CloudHistoryRead {
     if (!isRecord(row) || !isSequence(row.sequence) || row.sequence === 0)
       throw malformed("Session history");
     if (row.status !== "ok" || typeof row.event !== "string") {
-      return { sequence: row.sequence, event: null, reference: null, endsTurn: null };
+      return {
+        sequence: row.sequence,
+        event: null,
+        reference: null,
+        endsTurn: null,
+        endsAttachment: false,
+      };
     }
     let event: unknown;
     try {
@@ -238,6 +249,7 @@ export function readCloudHistory(value: unknown): CloudHistoryRead {
       event,
       reference: parsed.ok ? transcriptReferenceOf(parsed.event) : null,
       endsTurn: parsed.ok ? endedTurnOf(parsed.event) : null,
+      endsAttachment: parsed.ok && endsAttachment(parsed.event),
     };
   });
   entries.sort((left, right) => left.sequence - right.sequence);
@@ -268,6 +280,11 @@ export function endedTurnOf(event: RendererSessionEvent): string | null {
   return payload.kind === "turn.completed" || payload.kind === "turn.interrupted"
     ? payload.turnId
     : null;
+}
+
+/** Whether a renderer-safe event ends the attachment that streams text. */
+export function endsAttachment(event: RendererSessionEvent): boolean {
+  return event.payload.kind === "attachment.closed" || event.payload.kind === "attachment.failed";
 }
 
 /**
@@ -376,10 +393,12 @@ function removesMessage(ops: string): boolean {
  *   drawn before the stream is taken away;
  * - when its turn ends ({@link CloudChunkFold.turnEnded}); a late chunk of
  *   that turn is ignored;
+ * - when the attachment that streamed it ends ({@link CloudChunkFold.allEnded}),
+ *   which can happen without a turn end;
  * - when its cursor is dropped to stay within the backend's limit (the least
  *   recently moved stream goes first).
  *
- * An ended stream (retired, or its turn ended) keeps a watermark: a delayed
+ * An ended stream (retired, its turn or its attachment ended) keeps a watermark: a delayed
  * chunk of it written before that point — a stale baseline a late read still
  * serves — is ignored rather than drawn again. A baseline written at or after
  * it is a stream that legitimately started again.
@@ -482,6 +501,20 @@ export class CloudChunkFold {
     const overlays: SessionStreamOverlay[] = [];
     for (const [messageId, cursor] of this.#streams) {
       if (cursor.turnId !== turnId) continue;
+      this.#streams.delete(messageId);
+      this.#ended(messageId, throughSequence);
+      overlays.push(this.#removal(messageId, throughSequence));
+    }
+    return { overlays, moved: overlays.length > 0 };
+  }
+
+  /**
+   * The attachment ended: every stream is over. Their removals, and whether
+   * the cursors moved.
+   */
+  allEnded(throughSequence: number): { overlays: SessionStreamOverlay[]; moved: boolean } {
+    const overlays: SessionStreamOverlay[] = [];
+    for (const messageId of this.#streams.keys()) {
       this.#streams.delete(messageId);
       this.#ended(messageId, throughSequence);
       overlays.push(this.#removal(messageId, throughSequence));
