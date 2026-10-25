@@ -238,16 +238,16 @@ const AUTH_CODES: ReadonlySet<string> = new Set([
   "unauthenticated",
 ]);
 
-function refusalOf(error: CloudFunctionError): AgentResponse {
+export function cloudSessionRefusal(error: CloudFunctionError): AgentResponse {
   if (error.code === "not_found") return failure("SESSION_NOT_FOUND", error.message);
-  if (error.code === "invalid_request" || error.code === "invalid_argument") {
+  if (["invalid_request", "invalid_argument", "id_taken"].includes(error.code)) {
     return failure("INVALID_REQUEST", error.message);
   }
   if (AUTH_CODES.has(error.code)) {
     return failure(
       "FORBIDDEN_ACTOR",
       error.message,
-      "This Session can no longer read for its owner in Volli Cloud from this runner.",
+      "This Session can no longer act for its owner in Volli Cloud from this runner.",
     );
   }
   return failure("MUTATION_FAILED", error.message);
@@ -646,7 +646,7 @@ export function createCloudSessionReads(options: CloudSessionReadsOptions): Clou
       // A read wrote nothing, whether or not it was answered.
       if (error instanceof CloudOfflineError) return offline();
       if (error instanceof NotYetSyncedError) return failure("NOT_YET_SYNCED", error.message);
-      if (error instanceof CloudFunctionError) return refusalOf(error);
+      if (error instanceof CloudFunctionError) return cloudSessionRefusal(error);
       if (error instanceof CloudReadMalformed) return failure("MUTATION_FAILED", error.message);
       throw error;
     }

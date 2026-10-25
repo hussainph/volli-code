@@ -253,11 +253,9 @@ export interface AgentCommandServiceOptions {
    * the agent the backend acts for. Absent (every local launch), the
    * dispatch is exactly as before.
    *
-   * Receiving wiring (no production caller yet): the cloud product store's
-   * composition (VC-895) passes `createCloudBoardVerbs` over
-   * `createAgentBackend` (the backend link's status, the runner token
-   * source, the fact drain's nudge) when it builds this service, and calls
-   * the backend's `forget` when a Session's last attachment here closes.
+   * Production: desktop main spreads the cloud product store's `agentCommands`
+   * into `createHostAgentCommands`. The store composes `createCloudBoardVerbs`
+   * over its Agent backend and forgets cached grants on attachment close/failure.
    */
   cloudBoardVerbs?: import("../cloud-agent/board-verbs").CloudBoardVerbs;
   /**
@@ -271,8 +269,9 @@ export interface AgentCommandServiceOptions {
    * it to this host's board. Absent (every local launch), the dispatch is
    * exactly as before.
    *
-   * Receiving wiring (no production caller yet): the cloud product store's
-   * composition passes `createCloudSessionVerbs` when it builds this service.
+   * Production: desktop main passes the store's `agentCommands` to this socket
+   * service; `createRunnerComposition` also passes its Session overlay to the
+   * runtime's tool door. Session listing is always a backend read.
    */
   cloudSessionVerbs?: import("../cloud-agent/session-verbs").CloudSessionVerbs;
   /**
@@ -282,8 +281,8 @@ export interface AgentCommandServiceOptions {
    * current owner's projects, whose shadow identities `listProjects` leaves
    * out.
    *
-   * Receiving wiring (no production caller yet): the cloud product store maps
-   * the owner's `projectIds` through `getProjectById`.
+   * Production: the cloud product store's `agentCommands.projects` maps the
+   * owner's `projectIds` through `getProjectById`; desktop main passes it here.
    */
   projects?: () => readonly Project[];
   /**

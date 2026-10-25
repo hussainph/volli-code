@@ -27,6 +27,7 @@ import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared/cloud";
 import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
 import { wire, writeSession } from "./sessionFixtures";
+import { createCloudSessionVerbs } from "../../packages/host-core/src/cloud-agent/session-verbs";
 
 const backend = connectBackend();
 const linkClient = createRunnerLinkClient({ siteUrl: backend.siteUrl });
@@ -88,7 +89,7 @@ describe("agent verbs through the runner", () => {
     const next = await linkRunner(person);
 
     // The Session reaches the backend the way the drain sends it.
-    const { sessionId, events } = await writeSession({ projectId });
+    const { sessionId, events, engine } = await writeSession({ projectId });
     await runner.client.mutation(api.sessions.accept, {
       sessionId,
       generation: 1,
@@ -142,6 +143,70 @@ describe("agent verbs through the runner", () => {
     await expect(runner.client.query(api.board.roster, { projectId })).rejects.toMatchObject({
       data: { code: "not_a_person" },
     });
+
+    // A real remote Session, and the actual tool producer through the HTTP
+    // functions API: its canonical body must pass the backend's own checker.
+    const remote = await writeSession({ projectId });
+    await next.client.mutation(api.sessions.accept, {
+      sessionId: remote.sessionId,
+      generation: 1,
+      events: remote.events.map(wire),
+    });
+    const sessionVerbs = createCloudSessionVerbs({
+      backend: agentBackend,
+      engine,
+      projectIds: () => [projectId],
+      claimedHere: (id) => id === sessionId,
+      notify: async () => ({ displayName: "unused" }),
+    });
+    const call = {
+      verb: "session.send" as const,
+      toolCallId: "remote-send-1",
+      input: {
+        session: remote.sessionId.slice(0, 8),
+        message: "Owner direction: inspect the new command.",
+      },
+    };
+    const caller = {
+      sessionId,
+      projectId,
+      ticketId: null,
+      role: "project" as const,
+      rootThreadId: "fixture-root",
+      attachmentId: "fixture-attachment",
+    };
+    expect((await sessionVerbs.tool(caller, call))?.text).toContain("Queued steering");
+    expect((await sessionVerbs.tool(caller, call))?.text).toContain("Queued steering");
+    const jobs = await next.client.mutation(api.runnerJobs.claim, {
+      bootId: randomUUID(),
+      max: 32,
+    });
+    const queued = jobs.filter((job) => job.job.commandId === `${sessionId}:remote-send-1`);
+    expect(queued).toHaveLength(1);
+    const intent = JSON.parse((queued[0]!.job.payload as { intent: string }).intent) as {
+      reference: { digest: string };
+    };
+    const staged = await next.client.query(api.transcripts.commandArtifact, {
+      sessionId: remote.sessionId,
+      generation: 1,
+      digest: intent.reference.digest,
+    });
+    expect(staged?.body).toContain("Steering from supervising Session");
+    await expect(
+      runner.client.query(api.transcripts.commandArtifact, {
+        sessionId: remote.sessionId,
+        generation: 1,
+        digest: intent.reference.digest,
+      }),
+    ).rejects.toMatchObject({ data: { code: "stale_claim" } });
+    await expect(
+      next.client.mutation(api.runnerJobs.complete, {
+        jobId: queued[0]!.job.id,
+        bootId: queued[0]!.lease.bootId,
+        attempt: queued[0]!.lease.attempt,
+        outcome: { status: "done", result: null },
+      }),
+    ).resolves.toMatchObject({ ack: "recorded" });
 
     // A clean handoff to the other runner: the agent token minted here is fenced.
     await backend.admin(internal.sessions.transferClaim, {

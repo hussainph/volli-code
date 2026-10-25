@@ -76,6 +76,8 @@ async function fixture() {
     lastActivityAt: 100,
     listing: { activity: "idle", waitingOn: null, liveness: "detached", bornTicketless: true },
   };
+  let commandStatus = "queued";
+  let dropCommand = false;
   server = createServer(async (req, res) => {
     let body = "";
     for await (const chunk of req) body += chunk;
@@ -93,14 +95,18 @@ async function fixture() {
       value = { page: [remote], isDone: true, continueCursor: "" };
     else if (wire.path === "sessions:snapshot")
       value = { session: remote, state: null, foldedThrough: 0, catchingUp: false };
-    else if (wire.path === "sessions:command")
+    else if (wire.path === "sessions:command") {
+      if (dropCommand) {
+        res.destroy();
+        return;
+      }
       value = {
         commandId: wire.args["commandId"],
-        status: "queued",
+        status: commandStatus,
         receipt: null,
         runner: { name: "Other Mac" },
       };
-    else if (wire.path === "board:resolveTicketKey")
+    } else if (wire.path === "board:resolveTicketKey")
       value = { ticketId: "ticket", projectId: PROJECT };
     else throw new Error(`Unexpected ${wire.path}`);
     res.writeHead(200, { "content-type": "application/json" });
@@ -135,6 +141,12 @@ async function fixture() {
     calls,
     notify,
     engine,
+    commandStatus: (value: string) => {
+      commandStatus = value;
+    },
+    dropCommand: () => {
+      dropCommand = true;
+    },
     offline: () => {
       connected = false;
     },
@@ -218,8 +230,28 @@ describe("cloud Session target routing", () => {
           ticketId: "t",
         })
       )?.text,
-    ).toContain("only its own subagents");
-    expect(f.calls.filter((c) => c.path === "sessions:command")).toHaveLength(3);
+    ).toContain("Queued steering"); // Durable caller role is project, despite the stale runtime label.
+    expect(f.calls.filter((c) => c.path === "sessions:command")).toHaveLength(4);
+  });
+  it("reports a terminal replay and a lost stop reply honestly", async () => {
+    const f = await fixture();
+    f.commandStatus("failed");
+    expect((await f.tool("session.stop", { session: shortSessionId(REMOTE) }))?.text).toContain(
+      "is failed",
+    );
+    f.commandStatus("done");
+    expect((await f.tool("session.stop", { session: shortSessionId(REMOTE) }))?.text).toContain(
+      "no second command was queued",
+    );
+    f.dropCommand();
+    expect(
+      (await f.tool("session.stop", { session: shortSessionId(REMOTE) }, "lost-stop"))?.text,
+    ).toContain("may have landed");
+    expect(
+      f.calls.filter(
+        (c) => c.path === "sessions:command" && c.args["commandId"] === `${CALLER}:lost-stop`,
+      ),
+    ).toHaveLength(1);
   });
   it("refuses unavailable cloud workflows instead of substituting local behavior", async () => {
     const f = await fixture();
@@ -240,7 +272,7 @@ describe("cloud Session target routing", () => {
     };
     expect(await f.verbs.socket({ sessionId: CALLER, request })).toMatchObject({
       ok: true,
-      data: { notified: true, queuedFor: "Alice" },
+      data: { queued: true, queuedFor: "Alice" },
     });
     expect(f.notify).toHaveBeenCalledWith(CALLER, {
       notifyId: expect.any(String),

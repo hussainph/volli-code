@@ -1,4 +1,4 @@
-/** Session verbs in a cloud launch. A local claim uses the ordered runner ledger, even offline. */
+/** Session verbs in a cloud launch. Local targets use the ordered ledger offline; listing always reads Convex. */
 import { randomUUID, createHash } from "node:crypto";
 import {
   canonicalJson,
@@ -8,17 +8,19 @@ import {
 } from "@volli/session-engine";
 import {
   shortSessionId,
+  SESSION_READ_VERBS,
   type AgentResponse,
   type RuntimeSessionIdentity,
   type RuntimeVerbCall,
   type RuntimeVerbResult,
 } from "@volli/shared";
+import { INLINE_ARTIFACT_MAX_BYTES } from "@volli/shared/cloud";
 import type { AgentBackend } from "./agent-backend";
 import { NotYetSyncedError } from "./agent-backend";
 import type { CloudVerbCall } from "./board-verbs";
 import { CLOUD_VERB_BUDGET_MS } from "./board-verbs";
 import { CloudFunctionError, CloudOfflineError } from "./functions-client";
-import { createCloudSessionReads } from "./session-reads";
+import { createCloudSessionReads, cloudSessionRefusal } from "./session-reads";
 import { failure } from "../agent-dispatch/context";
 import { dryRunResponse } from "../agent-dispatch/preview";
 import { supervisionMarker } from "../session-runtime/supervise-session";
@@ -48,31 +50,14 @@ function responseFor(error: unknown): AgentResponse {
     );
   }
   if (error instanceof NotYetSyncedError) return failure("NOT_YET_SYNCED", error.message);
-  if (error instanceof CloudFunctionError) {
-    const code =
-      error.code === "not_found"
-        ? "SESSION_NOT_FOUND"
-        : ["invalid_argument", "invalid_request", "id_taken"].includes(error.code)
-          ? "INVALID_REQUEST"
-          : [
-                "fenced",
-                "revoked",
-                "not_claimed",
-                "forbidden",
-                "unauthenticated",
-                "not_a_member",
-              ].includes(error.code)
-            ? "FORBIDDEN_ACTOR"
-            : "MUTATION_FAILED";
-    return failure(code, error.message);
-  }
+  if (error instanceof CloudFunctionError) return cloudSessionRefusal(error);
   return failure(
     "INVALID_REQUEST",
     error instanceof Error ? error.message : "This Session command could not be read.",
   );
 }
 const refused = (text: string): RuntimeVerbResult => ({ text: `Volli refused: ${text}` });
-const readKeys = new Set(["session.list", "session.show", "session.peek", "session.answer"]);
+const readKeys: ReadonlySet<string> = new Set(SESSION_READ_VERBS);
 
 export function createCloudSessionVerbs(options: CloudSessionVerbsOptions) {
   const { backend, engine } = options;
@@ -131,7 +116,7 @@ export function createCloudSessionVerbs(options: CloudSessionVerbsOptions) {
             title: title.trim(),
             detail: message,
           });
-          return { v: 1, ok: true, data: { notified: true, queuedFor: result.displayName } };
+          return { v: 1, ok: true, data: { queued: true, queuedFor: result.displayName } };
         }
         const caller = await engine.getBaseSession({ sessionId });
         const handle = request.args["id"];
@@ -193,9 +178,12 @@ export function createCloudSessionVerbs(options: CloudSessionVerbsOptions) {
         const target = resolved.target;
         if (target.id === session.sessionId)
           return refused("That handle is this Session. Signal done or blocked instead.");
+        const caller = await engine.getBaseSession({ sessionId: session.sessionId });
+        if (caller === null || caller.projectId !== session.projectId)
+          return refused("The calling Session is unavailable in this project.");
         if (
-          session.role === "subagent" ||
-          (session.role === "ticket" &&
+          caller.role === "subagent" ||
+          (caller.role === "ticket" &&
             (target.role !== "subagent" || target.parentSessionId !== session.sessionId))
         )
           return refused("A Ticket Session may steer or stop only its own subagents.");
@@ -233,7 +221,7 @@ export function createCloudSessionVerbs(options: CloudSessionVerbsOptions) {
             },
           };
           artifact = canonicalJson(body);
-          if (Buffer.byteLength(artifact) > 64 * 1024)
+          if (Buffer.byteLength(artifact) > INLINE_ARTIFACT_MAX_BYTES)
             return refused("Remote steering messages are limited to 64 KB.");
           const digest = `sha256:${createHash("sha256").update(artifact).digest("hex")}`;
           intent = {
@@ -254,9 +242,25 @@ export function createCloudSessionVerbs(options: CloudSessionVerbsOptions) {
             ...(artifact === undefined ? {} : { artifact }),
           },
           { deadline },
-        )) as { status: string; runner: { name: string } | null };
+        )) as {
+          status: string;
+          receipt: { status: string; code?: string | null; detail?: string | null } | null;
+          runner: { name: string } | null;
+        };
+        const action = request.verb === "session.stop" ? "stop" : "steering";
+        if (
+          ["failed", "cancelled", "expired"].includes(result.status) ||
+          result.receipt?.status === "rejected"
+        )
+          return refused(
+            `The recorded ${action} for Session ${shortSessionId(target.id)} is ${result.receipt?.status === "rejected" ? "rejected" : result.status}${result.receipt?.code ? ` (${result.receipt.code})` : ""}. Inspect the Session before making a new call.`,
+          );
+        if (result.status === "done")
+          return {
+            text: `The runner completed the recorded ${action} job for Session ${shortSessionId(target.id)}. Read its history for the execution outcome; no second command was queued.`,
+          };
         return {
-          text: `Queued ${request.verb === "session.stop" ? "stop" : "steering"} for Session ${shortSessionId(target.id)}${result.runner === null ? "" : ` on ${result.runner.name}`}. This is the inbox receipt, not confirmation that its runner executed it. Read the Session to confirm delivery.`,
+          text: `${result.status === "leased" ? "The runner has claimed" : "Queued"} ${action} for Session ${shortSessionId(target.id)}${result.runner === null ? "" : ` on ${result.runner.name}`}. This is the inbox receipt, not confirmation that its runner executed it. Read the Session to confirm delivery.`,
         };
       } catch (error) {
         const response = responseFor(

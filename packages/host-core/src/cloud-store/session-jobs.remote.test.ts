@@ -170,6 +170,35 @@ describe("a message sent from another runner", () => {
     expect(commandArtifact).toHaveBeenCalledTimes(1);
   });
 
+  it.each([false, true])(
+    "ends a send refused by the real target ledger without retrying (stopped: %s)",
+    async (stopped) => {
+      const { body, reference } = sent();
+      const f = await fixture({ commandArtifact: async () => body });
+      if (stopped)
+        await f.engine.submit({
+          sessionId: TARGET,
+          commandId: "stop-before-send",
+          intent: { kind: "session.stop", by: { kind: "user" }, reason: null },
+          provenance: { source: { kind: "user", id: "test", detail: null }, venue: LOCAL_RUNNER },
+        });
+      f.command.mockImplementation(async () => {
+        const result = await f.engine.submit({
+          sessionId: TARGET,
+          commandId: OPERATION,
+          intent: { kind: "message.submit", reference },
+          provenance: { source: { kind: "system", id: "test", detail: null }, venue: LOCAL_RUNNER },
+        });
+        return { receipt: result.receipt! };
+      });
+      expect(await f.execute(job({ kind: "message.submit", reference }))).toMatchObject({
+        status: "failed",
+        code: "command_refused",
+        retryable: false,
+      });
+    },
+  );
+
   it("keeps a person's message on the runtime's default delivery", async () => {
     const { artifact, body, reference } = sent("Plain message");
     const f = await fixture({ commandArtifact: async () => body });

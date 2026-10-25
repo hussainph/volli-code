@@ -35,8 +35,12 @@ import { computeWorktreeReclaim, isTicketStatus, DEFAULT_AUTHORITY_POLICY } from
 import { retentionTtlMs } from "../worktree/retention";
 import { createCloudReportPublisher } from "./reports";
 import { createAgentBackend, runnerTokenBefore } from "../cloud-agent/agent-backend";
-import { createCloudFunctionsClient, CloudOfflineError } from "../cloud-agent/functions-client";
-import { createCloudBoardVerbs } from "../cloud-agent/board-verbs";
+import {
+  createCloudFunctionsClient,
+  CloudOfflineError,
+  CloudFunctionError,
+} from "../cloud-agent/functions-client";
+import { createCloudBoardVerbs, CLOUD_VERB_BUDGET_MS } from "../cloud-agent/board-verbs";
 import { createCloudSessionVerbs } from "../cloud-agent/session-verbs";
 import { getProjectById } from "../db/projects-repo";
 
@@ -153,8 +157,8 @@ export function createCloudProductStore(options: {
         throw new CloudOfflineError("link_down", "This runner is offline.", "not_sent");
       const cursor = sqliteDrainCursorStore(db).get(sessionId);
       if (!owner.owns(sessionId) || cursor === null)
-        throw new Error("This Session is not claimed by this runner.");
-      const deadline = Date.now() + 8_000;
+        throw new CloudFunctionError("forbidden", "This Session is not claimed by this runner.");
+      const deadline = Date.now() + CLOUD_VERB_BUDGET_MS;
       const token = await runnerTokenBefore(
         () => current.runnerToken?.() ?? Promise.resolve(null),
         deadline,

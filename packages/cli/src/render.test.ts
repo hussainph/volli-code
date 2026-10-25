@@ -683,6 +683,9 @@ describe("renderCliSuccess", () => {
     expect(renderCliSuccess("notify", { notified: true, queuedFor: "Alice" }, options)).toBe(
       "queued for Alice\n",
     );
+    expect(
+      renderCliSuccess("notify", { notified: true, queuedFor: "Alice\u001b[2J" }, options),
+    ).toBe("queued for Alice\\x1b[2J\n");
     expect(renderCliSuccess("app.launch", { alreadyRunning: true }, options)).toBe(
       "Volli is already running\n",
     );

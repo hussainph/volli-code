@@ -1622,7 +1622,8 @@ function renderStableLines(command: string, data: unknown, full: boolean): strin
     return typeof harnessSessionId === "string" ? terminalSafeInline(harnessSessionId) : "";
   }
   if (command === "notify") {
-    if (typeof data["queuedFor"] === "string") return `queued for ${data["queuedFor"]}`;
+    if (typeof data["queuedFor"] === "string")
+      return `queued for ${terminalSafeInline(data["queuedFor"])}`;
     return data["notified"] === true ? "notified" : null;
   }
   if (command === "app.launch") {
