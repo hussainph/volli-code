@@ -343,6 +343,21 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
       "This runner's accepted cursor per claimed Session, valid only for this runner's claim on the backend. A restore is a new runner whose claims and cursors start from the backend.",
   },
   {
+    table: "project_checkout_paths",
+    decision: "exclude",
+    reason: "Absolute checkout folders belong to this runner, never a restored machine.",
+  },
+  {
+    table: "working_copy_paths",
+    decision: "exclude",
+    reason: "Working-copy paths and observed git metadata belong to this runner's filesystem.",
+  },
+  {
+    table: "cloud_shadow_rows",
+    decision: "exclude",
+    reason: "Runner-local FK identity provenance, not a second copy of the cloud board.",
+  },
+  {
     table: "job_journal",
     decision: "exclude",
     reason:
