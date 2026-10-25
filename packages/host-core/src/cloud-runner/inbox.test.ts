@@ -717,6 +717,30 @@ describe("the inbox worker", () => {
     worker.stop();
   });
 
+  it.each(["stop", "pause"] as const)(
+    "cancels a coalesced retry when an executor synchronously asks to %s",
+    async (action) => {
+      const inbox = fakeInbox([[job("notice", "session.notice")]]);
+      const worker = createInboxWorker({
+        backend: inbox.backend,
+        journal: memoryJournal().store,
+        bootId: BOOT,
+        ...manualTimers(),
+        wake: () => () => {},
+      });
+      worker.register("session.notice", async () => {
+        void worker.claimNow();
+        if (action === "stop") worker.stop();
+        else worker.pauseClaims!();
+        return DONE;
+      });
+      await worker.start();
+      await flush();
+      expect(inbox.backend.claim).toHaveBeenCalledOnce();
+      worker.stop();
+    },
+  );
+
   it("does not claim again for a mid-claim wake once it has stopped", async () => {
     const inbox = fakeInbox();
     let answer!: (jobs: ClaimedJob[]) => void;

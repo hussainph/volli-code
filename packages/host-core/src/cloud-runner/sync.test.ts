@@ -97,6 +97,91 @@ describe("the runner's cloud sync", () => {
   });
 });
 
+describe("a failed reconnect recovery", () => {
+  it("does not lift a sleep fence that landed while lease renewal was awaiting its answer", async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((done) => {
+      finish = done;
+    });
+    const renew = vi.fn(() => pending);
+    const resume = vi.fn();
+    const claim = vi.fn(async () => {});
+    const drain = vi.fn();
+    const sync = startRunnerSync({
+      link: { status: { state: "connected" }, onStatus: () => () => {}, close: async () => {} },
+      drain: { start: () => {}, stop: () => {}, resumeAll: drain } as never,
+      inbox: {
+        start: async () => {},
+        stop: () => {},
+        pauseClaims: () => {},
+        resumeClaims: resume,
+        renewInFlight: renew,
+        claimNow: claim,
+      } as never,
+      presence: { start: async () => {}, stop: async () => {} } as never,
+    });
+    await Promise.resolve();
+    expect(renew).toHaveBeenCalledOnce();
+    sync.suspend();
+    finish();
+    await sync.catchUp();
+    expect(resume).not.toHaveBeenCalled();
+    expect(claim).not.toHaveBeenCalled();
+    expect(drain).not.toHaveBeenCalled();
+    await sync.resume();
+    expect(renew).toHaveBeenCalledTimes(2);
+    expect(resume).toHaveBeenCalledOnce();
+    expect(claim).toHaveBeenCalledOnce();
+    expect(drain).toHaveBeenCalledOnce();
+    await sync.stop();
+  });
+
+  it("keeps claims fenced on a failed renewal and lets the next recovery try again", async () => {
+    let listener!: (status: LinkStatus) => void;
+    const renew = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("renewal unavailable"))
+      .mockResolvedValue(undefined);
+    const pause = vi.fn();
+    const resume = vi.fn();
+    const claim = vi.fn(async () => {});
+    const drain = vi.fn();
+    const sync = startRunnerSync({
+      link: {
+        status: { state: "connecting" },
+        onStatus: (next) => {
+          listener = next;
+          return () => {};
+        },
+        close: async () => {},
+      },
+      drain: { start: () => {}, stop: () => {}, resumeAll: drain } as never,
+      inbox: {
+        start: async () => {},
+        stop: () => {},
+        pauseClaims: pause,
+        resumeClaims: resume,
+        renewInFlight: renew,
+        claimNow: claim,
+      } as never,
+      presence: { start: async () => {}, stop: async () => {} } as never,
+    });
+    listener({ state: "connected" });
+    await new Promise((done) => setTimeout(done, 0));
+    expect(renew).toHaveBeenCalledOnce();
+    expect(pause).toHaveBeenCalled();
+    expect(resume).not.toHaveBeenCalled();
+    expect(claim).not.toHaveBeenCalled();
+    expect(drain).not.toHaveBeenCalled();
+    await sync.catchUp();
+    expect(renew).toHaveBeenCalledTimes(2);
+    expect(resume).toHaveBeenCalledOnce();
+    expect(claim).toHaveBeenCalledOnce();
+    expect(drain).toHaveBeenCalledOnce();
+    await sync.stop();
+  });
+});
+
 describe("the composed sync over one gate", () => {
   it("drains big facts and a backlog and reports jobs through one link without deadlocking", async () => {
     const heads = new Map<string, number>();
