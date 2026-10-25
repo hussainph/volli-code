@@ -9,9 +9,9 @@ const worktrees = [
 ];
 
 describe("resolveChatOpenTarget", () => {
-  // ---- relative paths: the scope's venue decides -----------------------------
+  // ---- relative paths: the scope's working copy decides -----------------------------
 
-  it("keeps a relative path in the project venue for a Board chat", () => {
+  it("keeps a relative path in the project working copy for a Board chat", () => {
     expect(
       resolveChatOpenTarget({
         path: "src/x.ts",
@@ -22,7 +22,7 @@ describe("resolveChatOpenTarget", () => {
     ).toEqual({ kind: "project-file", relPath: "src/x.ts" });
   });
 
-  it("keeps a relative path in the ticket venue for a ticket chat", () => {
+  it("keeps a relative path in the ticket working copy for a ticket chat", () => {
     expect(
       resolveChatOpenTarget({
         path: "src/x.ts",
@@ -33,7 +33,7 @@ describe("resolveChatOpenTarget", () => {
     ).toEqual({ kind: "ticket-file", ticketId: "t-12", relPath: "src/x.ts" });
   });
 
-  it("strips a single leading ./ from a venue-relative path", () => {
+  it("strips a single leading ./ from a working-copy-relative path", () => {
     expect(
       resolveChatOpenTarget({
         path: "./src/x.ts",
@@ -44,11 +44,14 @@ describe("resolveChatOpenTarget", () => {
     ).toEqual({ kind: "project-file", relPath: "src/x.ts" });
   });
 
-  it.each([["."], ["./"]])("treats the bare venue root %j as outside (a directory)", (path) => {
-    expect(
-      resolveChatOpenTarget({ path, projectPath, worktrees, scope: { kind: "project" } }),
-    ).toEqual({ kind: "outside", path });
-  });
+  it.each([["."], ["./"]])(
+    "treats the bare working copy root %j as outside (a directory)",
+    (path) => {
+      expect(
+        resolveChatOpenTarget({ path, projectPath, worktrees, scope: { kind: "project" } }),
+      ).toEqual({ kind: "outside", path });
+    },
+  );
 
   it.each([[".."], ["../sibling.ts"]])(
     "treats the venue-escaping relative path %j as outside",

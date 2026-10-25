@@ -26,7 +26,7 @@ import {
   type ObservabilitySink,
   type SessionEvent,
   type SessionToolId,
-  type SessionExecutionVenue,
+  type RunnerIdentity,
 } from "@volli/shared";
 import type { DbHandle, HostCorePorts } from "../index";
 import { getProjectById } from "../db/projects-repo";
@@ -78,7 +78,7 @@ export interface RuntimeAssemblyOptions {
   sessionWake: SubscribeSessionWake | null;
   dataDir: string;
   binDir: string;
-  venue: SessionExecutionVenue;
+  venue: RunnerIdentity;
   hostPorts: Pick<HostCorePorts, "events" | "connectivity" | "log">;
   modelAccess: PiModelAccess | null;
   decisions: HostDecisions | null;

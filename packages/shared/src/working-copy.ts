@@ -1,5 +1,5 @@
 /**
- * The VENUE: the checkout a Session runs in, measured (VC-55).
+ * The WORKING COPY: the checkout a Session runs in, measured (VC-55).
  *
  * A Board Session runs in the project's own main checkout — the user's
  * working tree — and a Ticket Session runs in a throwaway worktree. That
@@ -7,12 +7,13 @@
  * and nothing on a chat surface used to say which one you were looking at. The
  * answer is not a label: it is this measurement, drawn.
  *
- * NOT {@link import("./session-ledger").SessionLocation}'s `venue`, which names
- * the HOST a Session executes on (`{ id: "local", kind: "local" }`) and will
- * one day distinguish this machine from a remote runner. This is that
- * location's `directory` — the tree on disk — plus what git says is in it. The
- * two words sit beside each other in the domain and answer different questions:
- * WHERE the process runs, versus WHAT it is standing in.
+ * NOT the Runner a Session executes on — a `SessionLocation`'s `venue`, a
+ * {@link import("./session-ledger").RunnerIdentity} such as
+ * {@link import("./session-ledger").LOCAL_RUNNER}. This is that location's
+ * `directory` — the tree on disk — plus what git says is in it. The two sit
+ * beside each other in the domain and answer different questions: WHERE the
+ * process runs, versus WHAT it is standing in. (Formerly the "venue" types;
+ * the IPC door was `volli:venue-snapshot`.)
  *
  * Crosses the IPC boundary (main computes it from git; the empty chat and the
  * Home rail consume it), so the shapes live here — the same argument
@@ -27,10 +28,10 @@
  * Board Session is, and it must draw the same way. That is what lets one
  * visual serve both scopes honestly.
  */
-export type VenueKind = "main-checkout" | "worktree";
+export type WorkingCopyKind = "main-checkout" | "worktree";
 
 /**
- * A file's state in the venue, and the four are DISJOINT by construction —
+ * A file's state in the working copy, and the four are DISJOINT by construction —
  * `committed` means changed on this branch and now clean in the tree.
  *
  * That disjointness is load-bearing rather than tidiness. A segmented bar is a
@@ -43,10 +44,10 @@ export type VenueKind = "main-checkout" | "worktree";
  * addition — edited, deleted, renamed, type-changed, or conflicted. The bar
  * answers "how much of this tree is in play", and each of those is in play.
  */
-export type VenueFileState = "committed" | "modified" | "added" | "untracked";
+export type WorkingCopyFileState = "committed" | "modified" | "added" | "untracked";
 
-/** The four states' counts. Every changed file in the venue is in exactly one. */
-export interface VenueFileCounts {
+/** The four states' counts. Every changed file in the working copy is in exactly one. */
+export interface WorkingCopyFileCounts {
   committed: number;
   modified: number;
   added: number;
@@ -54,7 +55,7 @@ export interface VenueFileCounts {
 }
 
 /** Lines this branch has moved against its base — the hairline track's two numbers. */
-export interface VenueLineDiff {
+export interface WorkingCopyLineDiff {
   added: number;
   removed: number;
   /** The base branch the lines are measured against; the caption's `vs <base>`. */
@@ -62,7 +63,7 @@ export interface VenueLineDiff {
 }
 
 /**
- * One venue, as of one reading.
+ * One working copy, as of one reading.
  *
  * `diff` is `null` whenever there is no base to measure against — every main
  * checkout, and a worktree whose base branch is unknown. The visual then DROPS
@@ -70,18 +71,18 @@ export interface VenueLineDiff {
  * "no work", which is the opposite of what a dirty main checkout means, and the
  * missing hairline does identity work for free.
  */
-export interface VenueSnapshot {
-  kind: VenueKind;
+export interface WorkingCopySnapshot {
+  kind: WorkingCopyKind;
   /** Absolute path of the checkout. */
   path: string;
   /** The branch checked out there; `null` when HEAD is detached. */
   branch: string | null;
-  files: VenueFileCounts;
-  diff: VenueLineDiff | null;
+  files: WorkingCopyFileCounts;
+  diff: WorkingCopyLineDiff | null;
 }
 
 /**
- * What one venue read ANSWERS: a measurement, or the fact that there is not yet
+ * What one working copy read ANSWERS: a measurement, or the fact that there is not yet
  * a checkout to measure (VC-286).
  *
  * `pending` is the state a ticket is in between "runs in an isolated worktree"
@@ -94,44 +95,46 @@ export interface VenueSnapshot {
  * type exists to make unrepresentable.
  *
  * A ticket that runs in the main checkout BY CONFIGURATION is `measured` like
- * any other: that venue is true, and it is where its Session really binds.
+ * any other: that working copy is true, and it is where its Session really binds.
  */
-export type VenueReading = { state: "measured"; venue: VenueSnapshot } | { state: "pending" };
+export type WorkingCopyReading =
+  | { state: "measured"; workingCopy: WorkingCopySnapshot }
+  | { state: "pending" };
 
 /** The order segments are drawn in, committed first: progress before exposure. */
-export const VENUE_FILE_STATES: readonly VenueFileState[] = [
+export const WORKING_COPY_FILE_STATES: readonly WorkingCopyFileState[] = [
   "committed",
   "modified",
   "added",
   "untracked",
 ];
 
-/** Every file this venue has touched, committed or not — the bar's stated total. */
-export function venueFileTotal(files: VenueFileCounts): number {
+/** Every file this working copy has touched, committed or not — the bar's stated total. */
+export function workingCopyFileTotal(files: WorkingCopyFileCounts): number {
   return files.committed + files.modified + files.added + files.untracked;
 }
 
 /** Dirty right now: everything the tree would lose. The rail's loose count. */
-export function venueLooseCount(files: VenueFileCounts): number {
+export function workingCopyLooseCount(files: WorkingCopyFileCounts): number {
   return files.modified + files.added + files.untracked;
 }
 
 /** One drawn segment of the file bar. */
-export interface VenueSegment {
-  state: VenueFileState;
+export interface WorkingCopySegment {
+  state: WorkingCopyFileState;
   count: number;
 }
 
 /**
  * The bar's segments in draw order, empty states omitted.
  *
- * Omitting the zeroes is what keeps a one-state venue a single solid bar
+ * Omitting the zeroes is what keeps a one-state working copy a single solid bar
  * instead of a bar with three invisible neighbours it still has to lay out; the
- * counts that survive still sum to {@link venueFileTotal}, which is the claim
+ * counts that survive still sum to {@link workingCopyFileTotal}, which is the claim
  * the drawing makes.
  */
-export function venueSegments(files: VenueFileCounts): readonly VenueSegment[] {
-  return VENUE_FILE_STATES.map((state) => ({ state, count: files[state] })).filter(
+export function workingCopySegments(files: WorkingCopyFileCounts): readonly WorkingCopySegment[] {
+  return WORKING_COPY_FILE_STATES.map((state) => ({ state, count: files[state] })).filter(
     (segment) => segment.count > 0,
   );
 }

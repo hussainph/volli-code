@@ -1,4 +1,5 @@
 /** Transport-independent stop semantics shared by the host runtime and supervision tools. */
+import { LOCAL_RUNNER } from "@volli/shared";
 import { shortSessionId } from "@volli/shared";
 import type {
   CommandReceipt,
@@ -126,7 +127,7 @@ export async function stopResolvedSession(
       intent: { kind: "session.stop", reason: acts.reason, by: acts.by },
       provenance: {
         source: acts.provenance,
-        venue: { id: "local", kind: "local" },
+        venue: LOCAL_RUNNER,
       },
     });
     if (submitted.receipt?.status !== "completed") {

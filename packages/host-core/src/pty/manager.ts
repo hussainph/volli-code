@@ -1,4 +1,4 @@
-import type { SessionOrigin, SessionExecutionVenue } from "@volli/shared";
+import { LOCAL_RUNNER, type RunnerIdentity, type SessionOrigin } from "@volli/shared";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
@@ -228,8 +228,8 @@ export interface HarnessWorkspaceFilesInput {
  * passes its own bus, `host.worktrees.deps`, and the same writer once it moves.
  */
 export interface PtyManagerPorts {
-  /** Provenance only; desktop callers retain the local default. */
-  readonly venue?: SessionExecutionVenue;
+  /** The Runner terminal provenance names; desktop callers retain {@link LOCAL_RUNNER}. */
+  readonly venue?: RunnerIdentity;
   /** Announces planning changes (`data-changed`) to every client. */
   readonly events: HostEventBus;
   /** The host's worktree bundle (`host.worktrees.deps`). */
@@ -249,8 +249,6 @@ const NO_SPAWN_LEDGER: TerminalSpawnLedger = {
   markExited: () => {},
   markParked: () => {},
 };
-
-const TERMINAL_VENUE = { id: "local", kind: "local" as const };
 
 /**
  * What a {@link PtyManager} is built from (VC-627: one options object in place
@@ -307,27 +305,27 @@ export interface PtyManagerOptions {
    */
   readonly concurrencyEnvReader?: SessionConcurrencyEnvReader | null;
   /**
-   * The venue terminal provenance records. Wins over {@link PtyManagerPorts.venue};
-   * absent, the host's venue applies, else desktop's `local`/`local`.
+   * The Runner terminal provenance records. Wins over {@link PtyManagerPorts.venue};
+   * absent, the host's Runner applies, else {@link LOCAL_RUNNER}.
    */
-  readonly venue?: SessionExecutionVenue;
+  readonly venue?: RunnerIdentity;
 }
 
-function terminalSystemProvenance(venue: SessionExecutionVenue, origin?: SessionOrigin) {
+function terminalSystemProvenance(runner: RunnerIdentity, origin?: SessionOrigin) {
   return {
     source: {
       kind: "system" as const,
       id: "desktop-terminal",
       detail: origin === undefined ? null : { sessionOrigin: origin },
     },
-    venue,
+    venue: runner,
   };
 }
 
-function terminalAdapterProvenance(venue: SessionExecutionVenue) {
+function terminalAdapterProvenance(runner: RunnerIdentity) {
   return {
     source: { kind: "adapter" as const, id: "terminal", detail: null },
-    venue,
+    venue: runner,
   };
 }
 
@@ -392,7 +390,7 @@ export class PtyManager {
   private readonly blobsRootPath: string;
   private readonly spawnLedger: TerminalSpawnLedger;
   /** The explicit {@link PtyManagerOptions.venue}, when one was given. */
-  private readonly venueOverride: SessionExecutionVenue | undefined;
+  private readonly runnerOverride: RunnerIdentity | undefined;
 
   /** What this supervisor is built from: see {@link PtyManagerOptions}. */
   constructor(options: PtyManagerOptions) {
@@ -406,7 +404,7 @@ export class PtyManager {
     this.blobsRootPath = options.blobsRootPath ?? "";
     this.spawnLedger = options.spawnLedger ?? NO_SPAWN_LEDGER;
     this.concurrencyEnvReader = options.concurrencyEnvReader ?? null;
-    this.venueOverride = options.venue;
+    this.runnerOverride = options.venue;
     // The controller shares this manager's live session map and mutates each
     // session's park fields in place. `flush` and `pushParkState` stay here —
     // they touch the output pipeline and the client — and every current
@@ -426,12 +424,12 @@ export class PtyManager {
   }
 
   /**
-   * The venue this supervisor's terminals record in their provenance: the
-   * explicit option, else the host's, else desktop's `local`/`local`. Read at
-   * call time, as `host.venue` always was.
+   * The Runner this supervisor's terminals record in their provenance: the
+   * explicit option, else the host's, else {@link LOCAL_RUNNER}. Read at call
+   * time, as `host.venue` always was.
    */
-  private get venue(): SessionExecutionVenue {
-    return this.venueOverride ?? this.host.venue ?? TERMINAL_VENUE;
+  private get runner(): RunnerIdentity {
+    return this.runnerOverride ?? this.host.venue ?? LOCAL_RUNNER;
   }
 
   /**
@@ -561,7 +559,7 @@ export class PtyManager {
           role: roleImpliedByTicket(scope.ticketId),
           parentSessionId: null,
           title: scope.title,
-          provenance: terminalSystemProvenance(this.venue, { kind: "user" }),
+          provenance: terminalSystemProvenance(this.runner, { kind: "user" }),
         });
         sessionId = created.session.id;
         if (
@@ -596,12 +594,12 @@ export class PtyManager {
           sessionId,
           ...(startCommandId === undefined ? {} : { commandId: startCommandId }),
           occurredAt: Date.now(),
-          provenance: terminalSystemProvenance(this.venue),
+          provenance: terminalSystemProvenance(this.runner),
           attachment: {
             id: attachmentId,
             sessionId,
             adapterId: "terminal",
-            venue: this.venue,
+            venue: this.runner,
             continuity: scope.resume === null ? "fresh" : "native_resume",
             native: terminalNativeReference(detail),
             // A terminal companion carries no Authority Snapshot, and never
@@ -634,7 +632,7 @@ export class PtyManager {
           adapterId: "terminal",
           continuity: scope.resume === null ? "fresh" : "native_resume",
         },
-        provenance: terminalSystemProvenance(this.venue, { kind: "user" }),
+        provenance: terminalSystemProvenance(this.runner, { kind: "user" }),
       });
       startCommandId = start.command.id;
     } catch (error) {
@@ -895,12 +893,12 @@ export class PtyManager {
           sessionId,
           commandId: start.command.id,
           occurredAt: now,
-          provenance: terminalSystemProvenance(this.venue),
+          provenance: terminalSystemProvenance(this.runner),
           attachment: {
             id: attachmentId,
             sessionId,
             adapterId: "terminal",
-            venue: this.venue,
+            venue: this.runner,
             continuity: scope.resume === null ? "fresh" : "native_resume",
             native: terminalNativeReference(terminalDetail),
             // No Snapshot, for the reason spelled out on the failure path above:
@@ -1128,7 +1126,7 @@ export class PtyManager {
         sessionId,
         attachmentId: session.attachmentId,
         occurredAt,
-        provenance: terminalSystemProvenance(this.venue),
+        provenance: terminalSystemProvenance(this.runner),
         outcome: session.killedByVolli || exitCode === 0 ? "completed" : "failed",
       });
     } catch (error) {
@@ -1173,7 +1171,7 @@ export class PtyManager {
         sessionId,
         attachmentId: session.attachmentId,
         occurredAt,
-        provenance: terminalAdapterProvenance(this.venue),
+        provenance: terminalAdapterProvenance(this.runner),
         exitCode,
       });
     } catch (error) {
@@ -1491,7 +1489,7 @@ export class PtyManager {
           commandId: randomUUID(),
           sessionId,
           intent: { kind: "executor.interrupt", attachmentId: session.attachmentId },
-          provenance: terminalSystemProvenance(this.venue, {
+          provenance: terminalSystemProvenance(this.runner, {
             kind: "volli",
             reason: "supervision",
           }),
@@ -1502,7 +1500,7 @@ export class PtyManager {
           id: randomUUID(),
           sessionId,
           occurredAt: Date.now(),
-          provenance: terminalAdapterProvenance(this.venue),
+          provenance: terminalAdapterProvenance(this.runner),
           kind: "command.receipt",
           attachmentId: session.attachmentId,
           receipt: {
@@ -1523,7 +1521,7 @@ export class PtyManager {
               id: randomUUID(),
               sessionId,
               occurredAt: Date.now(),
-              provenance: terminalAdapterProvenance(this.venue),
+              provenance: terminalAdapterProvenance(this.runner),
               kind: "command.receipt",
               attachmentId: session.attachmentId,
               receipt: {

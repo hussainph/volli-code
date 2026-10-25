@@ -3,16 +3,16 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import type { VenueReading, VenueSnapshot } from "@volli/shared";
+import type { WorkingCopyReading, WorkingCopySnapshot } from "@volli/shared";
 
 import { ChatEmptyState } from "./chat-empty-state";
-import { VenueChips } from "./venue-chips";
-import { VenueVisual } from "./venue-visual";
+import { WorkingCopyChips } from "./working-copy-chips";
+import { WorkingCopyVisual } from "./working-copy-visual";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useUiStore } from "@renderer/stores/ui";
-import { useVenueStore, venueKey } from "@renderer/stores/venue";
+import { useWorkingCopyStore, workingCopyKey } from "@renderer/stores/working-copy";
 
-function venue(over: Partial<VenueSnapshot> = {}): VenueSnapshot {
+function workingCopy(over: Partial<WorkingCopySnapshot> = {}): WorkingCopySnapshot {
   return {
     kind: "worktree",
     path: "/worktrees/volli-code-abc/VC-81",
@@ -30,15 +30,15 @@ function draw(node: React.ReactElement): string {
 /**
  * A live mount, for the cases that read a store state set by the test: a
  * static render reads zustand's initial snapshot and would draw the empty
- * store whatever was seeded. The venue door answers the mount-time refresh
+ * store whatever was seeded. The working copy door answers the mount-time refresh
  * with `reading` — the same answer the seeded entry came from — so the read
  * settles (nothing is left in flight on the singleton for a later test to
  * inherit) and lands on the state the test drew.
  */
 let mounted: { root: Root; host: HTMLElement } | null = null;
-function mount(node: React.ReactElement, reading: VenueReading): string {
+function mount(node: React.ReactElement, reading: WorkingCopyReading): string {
   Object.assign(window, {
-    api: { venue: { snapshot: vi.fn().mockResolvedValue({ ok: true, reading }) } },
+    api: { workingCopy: { snapshot: vi.fn().mockResolvedValue({ ok: true, reading }) } },
   });
   const host = document.createElement("div");
   document.body.append(host);
@@ -60,13 +60,13 @@ afterEach(async () => {
     mounted = null;
   }
   Reflect.deleteProperty(window, "api");
-  useVenueStore.setState({ byScope: {} });
+  useWorkingCopyStore.setState({ byScope: {} });
   useUiStore.setState({ homeEmptyVisual: "streak" });
 });
 
-describe("VenueVisual", () => {
+describe("WorkingCopyVisual", () => {
   it("draws one segment per non-empty state, summing to the total it prints", () => {
-    const markup = draw(<VenueVisual venue={venue()} />);
+    const markup = draw(<WorkingCopyVisual workingCopy={workingCopy()} />);
     // 4 + 2 + 1 + 3 = 10, and the widths are that partition.
     expect(markup).toContain("10");
     expect(markup).toContain("width:40%"); // committed
@@ -76,16 +76,16 @@ describe("VenueVisual", () => {
   });
 
   it("draws the hairline and names the base when there is one", () => {
-    const markup = draw(<VenueVisual venue={venue()} />);
+    const markup = draw(<WorkingCopyVisual workingCopy={workingCopy()} />);
     expect(markup).toContain("+214");
     expect(markup).toContain("−63");
     expect(markup).toContain("vs main");
   });
 
-  it("drops the hairline entirely for a venue with no base", () => {
+  it("drops the hairline entirely for a working copy with no base", () => {
     const markup = draw(
-      <VenueVisual
-        venue={venue({
+      <WorkingCopyVisual
+        workingCopy={workingCopy({
           kind: "main-checkout",
           diff: null,
           files: { committed: 0, modified: 2, added: 0, untracked: 1 },
@@ -100,9 +100,9 @@ describe("VenueVisual", () => {
   });
 });
 
-describe("VenueChips", () => {
-  it("names the venue kind and the branch, and nothing else", () => {
-    const markup = draw(<VenueChips venue={venue()} />);
+describe("WorkingCopyChips", () => {
+  it("names the working copy kind and the branch, and nothing else", () => {
+    const markup = draw(<WorkingCopyChips workingCopy={workingCopy()} />);
     expect(markup).toContain("Worktree");
     expect(markup).toContain("volli/VC-81-auto-title");
     // No sentences: if a fact matters, it is drawn.
@@ -110,13 +110,13 @@ describe("VenueChips", () => {
   });
 
   it("calls a project's own checkout by its own name", () => {
-    expect(draw(<VenueChips venue={venue({ kind: "main-checkout" })} />)).toContain(
-      "Main checkout",
-    );
+    expect(
+      draw(<WorkingCopyChips workingCopy={workingCopy({ kind: "main-checkout" })} />),
+    ).toContain("Main checkout");
   });
 
   it("names no branch on a detached HEAD rather than inventing one", () => {
-    const markup = draw(<VenueChips venue={venue({ branch: null })} />);
+    const markup = draw(<WorkingCopyChips workingCopy={workingCopy({ branch: null })} />);
     expect(markup).toContain("Worktree");
     expect(markup).not.toContain("HEAD");
   });
@@ -126,7 +126,7 @@ describe("VenueChips", () => {
     // caption wider than the drawing above it is what made the two read as
     // thrown together. What was wrong is where the whole value lived: a
     // tooltip on a `<span>`, which a pointer can reach and a keyboard cannot.
-    const markup = draw(<VenueChips venue={venue()} />);
+    const markup = draw(<WorkingCopyChips workingCopy={workingCopy()} />);
     const chips = markup.split("<button").slice(1);
     expect(chips).toHaveLength(2);
     for (const chip of chips) {
@@ -171,7 +171,7 @@ describe("ChatEmptyState", () => {
     expect(markup).not.toContain('data-empty-visual="board"');
   });
 
-  it("says nothing about a venue it has not read — no chips, no zeroed bar", () => {
+  it("says nothing about a working copy it has not read — no chips, no zeroed bar", () => {
     const markup = draw(<ChatEmptyState projectId="p1" ticketId="t1" />);
 
     expect(markup).not.toContain("Worktree");
@@ -179,38 +179,38 @@ describe("ChatEmptyState", () => {
   });
 
   it("draws the waiting shape, not the main checkout, for a ticket still resolving its worktree (VC-286)", () => {
-    useVenueStore.setState({
+    useWorkingCopyStore.setState({
       byScope: {
         // The project's own reading exists and is the main checkout — the
         // one thing this ticket's chat must not borrow while it waits.
-        [venueKey("p1", null)]: {
+        [workingCopyKey("p1", null)]: {
           status: "ready",
-          venue: venue({ kind: "main-checkout", diff: null }),
+          workingCopy: workingCopy({ kind: "main-checkout", diff: null }),
         },
-        [venueKey("p1", "t1")]: { status: "resolving" },
+        [workingCopyKey("p1", "t1")]: { status: "resolving" },
       },
     });
 
     const markup = mount(<ChatEmptyState projectId="p1" ticketId="t1" />, { state: "pending" });
 
-    expect(markup).toContain('data-venue-state="resolving"');
+    expect(markup).toContain('data-working-copy-state="resolving"');
     expect(markup).not.toContain("Main checkout");
     expect(markup).not.toContain("Worktree");
     expect(markup).not.toContain('data-empty-visual="venue"');
   });
 
-  it("draws the venue once the ticket's checkout is measured", () => {
-    useVenueStore.setState({
-      byScope: { [venueKey("p1", "t1")]: { status: "ready", venue: venue() } },
+  it("draws the working copy once the ticket's checkout is measured", () => {
+    useWorkingCopyStore.setState({
+      byScope: { [workingCopyKey("p1", "t1")]: { status: "ready", workingCopy: workingCopy() } },
     });
 
     const markup = mount(<ChatEmptyState projectId="p1" ticketId="t1" />, {
       state: "measured",
-      venue: venue(),
+      workingCopy: workingCopy(),
     });
 
     expect(markup).toContain('data-empty-visual="venue"');
     expect(markup).toContain("Worktree");
-    expect(markup).not.toContain("data-venue-state");
+    expect(markup).not.toContain("data-working-copy-state");
   });
 });

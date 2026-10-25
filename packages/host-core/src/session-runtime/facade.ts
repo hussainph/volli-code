@@ -14,7 +14,7 @@ import {
   skillPromptResource,
   skillsIndexResource,
   userInvokableSkills,
-  type SessionExecutionVenue,
+  type RunnerIdentity,
 } from "@volli/shared";
 import { isLiveHost, type HostCore } from "../index";
 import { getProjectById } from "../db/projects-repo";
@@ -47,7 +47,7 @@ function assembleSessionServices(options: {
   homeDir: string;
   /** Whether the `cloud` flag is on now; read at every skills load (its precedence). */
   cloudEnabled: () => boolean;
-  venue: SessionExecutionVenue;
+  venue: RunnerIdentity;
   decisions: HostDecisions | null;
   delegation: TicketSessionDelegationStore | null;
 }) {

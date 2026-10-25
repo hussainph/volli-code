@@ -4,7 +4,7 @@
  * Opening a Session that has lived a while takes one `session.snapshot` round
  * trip — the whole log, folded on main, one artifact read per turn — and until
  * it lands the plane holds no messages. It used to answer that with the same
- * branch a brand-new chat takes: the empty state's venue drawing, a picture
+ * branch a brand-new chat takes: the empty state's working copy drawing, a picture
  * that says "nothing has ever been said here". For a Session with a thousand
  * turns that is not a wait, it is a false statement, and the person reading it
  * has no way to tell which of the two they are looking at.

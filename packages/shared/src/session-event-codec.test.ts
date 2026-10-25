@@ -21,7 +21,11 @@ import {
 } from "./session-event-codec";
 import type { RendererSessionEventPayload } from "./session-event-codec";
 import { DEFAULT_CODE_MODE_LIMITS } from "./code-mode";
-import { readInteractionPrompts, SESSION_PROJECTION_EVENT_KINDS } from "./session-ledger";
+import {
+  LOCAL_RUNNER,
+  readInteractionPrompts,
+  SESSION_PROJECTION_EVENT_KINDS,
+} from "./session-ledger";
 import type {
   CommandReceipt,
   Session,
@@ -1509,6 +1513,40 @@ describe("decodeCommandReceipt", () => {
         "receipt",
       ),
     ).toThrow("receipt.result.kind has an unsupported value");
+  });
+});
+
+describe("LOCAL_RUNNER, the frozen historical desktop identity", () => {
+  // Every shipped build wrote the desktop's Runner as exactly these bytes, and
+  // boot recovery matches attachments by exact id/kind. The constant is a name
+  // for that literal, never a new value: if this changes, history forks.
+  const SHIPPED = '{"id":"local","kind":"local"}';
+
+  it("is the shipped literal, byte for byte, through the persistence encoder", () => {
+    expect(LOCAL_RUNNER).toEqual({ id: "local", kind: "local" });
+    expect(Object.keys(LOCAL_RUNNER)).toEqual(["id", "kind"]);
+    expect(encodeSessionJson(LOCAL_RUNNER)).toBe(SHIPPED);
+    expect(
+      encodeSessionJson({ source: { kind: "system", id: "s", detail: null }, venue: LOCAL_RUNNER }),
+    ).toBe(`{"source":{"kind":"system","id":"s","detail":null},"venue":${SHIPPED}}`);
+  });
+
+  it("decodes history written before the constant existed to an equal, unshared value", () => {
+    const decoded = decodeSessionEventProvenance(
+      JSON.parse(`{"source":{"kind":"user","id":"renderer","detail":null},"venue":${SHIPPED}}`),
+      "prov",
+    );
+    expect(decoded.venue).toEqual(LOCAL_RUNNER);
+    // A decoded row owns its own object; only callers that name the constant share it.
+    expect(decoded.venue).not.toBe(LOCAL_RUNNER);
+  });
+
+  it("is one frozen object no caller can rewrite", () => {
+    expect(Object.isFrozen(LOCAL_RUNNER)).toBe(true);
+    expect(() => {
+      (LOCAL_RUNNER as { id: string }).id = "00000000-0000-4000-8000-000000000000";
+    }).toThrow(TypeError);
+    expect(LOCAL_RUNNER.id).toBe("local");
   });
 });
 

@@ -122,7 +122,7 @@ export * from "./performance-observer";
 export * from "./session-usage";
 export * from "./session-usage-report";
 export * from "./session-streak";
-export * from "./session-venue";
+export * from "./working-copy";
 export * from "./session-event-codec";
 export * from "./native-observation-id";
 export * from "./session-rpc-wire";

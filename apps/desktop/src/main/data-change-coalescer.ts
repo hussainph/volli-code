@@ -61,8 +61,8 @@ export interface DataChangeCoalescer {
  * Merge two invalidations without ever claiming a scope narrower than either
  * input. A missing or different ticket/project becomes untargeted, so every
  * relevant surface refreshes. `worktree` is the one load-bearing kind: it
- * invalidates cached venue readings, so it survives a mixed-kind batch even at
- * the cost of one harmless extra venue refresh. Other mixed kinds may collapse
+ * invalidates cached working copy readings, so it survives a mixed-kind batch even at
+ * the cost of one harmless extra working copy refresh. Other mixed kinds may collapse
  * to no hint, because every reader already re-hydrates the board wholesale.
  */
 export function mergeDataChange(current: DataChangeScope, next: DataChangeScope): DataChangeScope {

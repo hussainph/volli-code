@@ -699,7 +699,7 @@ export default defineConfig(({ mode }) => ({
         "src/terminal/output-dispatch.ts",
         // How a burst of invalidations becomes one (VC-359). Enrolled because
         // the merge is a SAFETY rule, not an optimisation: it may only ever
-        // widen, and the one kind a venue cache depends on has to survive a
+        // widen, and the one kind a working copy cache depends on has to survive a
         // mixed batch. A branch that quietly narrowed a scope would leave a
         // surface showing yesterday's data with nothing on screen saying so.
         "**/src/main/data-change-coalescer.ts",

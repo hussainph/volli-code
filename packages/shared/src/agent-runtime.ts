@@ -254,8 +254,8 @@ export type RuntimeSessionIdentity =
   | ProjectRuntimeIdentity
   | SubagentRuntimeIdentity;
 
-/** Where execution happens. Local is the only venue built today. */
-export type ExecutionVenue = "local";
+/** Where execution happens. Local is the only runner built today. */
+export type RuntimeRunnerKind = "local";
 
 /**
  * The named half of a Session's Agent Tool Surface: what its Role handed it,
@@ -276,7 +276,7 @@ export type ExecutionVenue = "local";
 export interface RuntimeToolBundle {
   /** Compatible versioned verb copy; absent preserves historical description bytes. */
   refreshDescriptions?: true;
-  /** Coding tools, in the order this venue offers them. */
+  /** Coding tools, in the order this runner offers them. */
   tools: readonly CodingToolId[];
   /**
    * Product verbs from `bundle(Role) ∪ grants(session)`, in canonical registry
@@ -1150,7 +1150,7 @@ export interface SessionRuntimeSpec {
    * while allowing task-anchored reads elsewhere on the machine.
    */
   workspacePath: string;
-  venue: ExecutionVenue;
+  venue: RuntimeRunnerKind;
   model: ModelSelection;
   brief: RuntimeBrief;
   /**

@@ -23,6 +23,7 @@
  * order, and `listLatestTicketSignals` is sorted by ticket id in the same byte
  * order.
  */
+import { LOCAL_RUNNER } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import {
   createSessionProjectionCheckpoint,
@@ -966,7 +967,7 @@ function attachment(sessionId: string, attachmentId: string): SessionAttachment 
     id: attachmentId,
     sessionId,
     adapterId: "terminal",
-    venue: { id: "local", kind: "local" },
+    venue: LOCAL_RUNNER,
     continuity: "fresh",
     native: null,
     authority: null,

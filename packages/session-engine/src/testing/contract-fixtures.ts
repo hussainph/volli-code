@@ -1,3 +1,4 @@
+import { LOCAL_RUNNER } from "@volli/shared";
 import { afterEach } from "vite-plus/test";
 import type {
   Session,
@@ -16,7 +17,7 @@ import {
 /** The audit door every contract fact comes through. */
 export const contractProvenance: SessionEventProvenance = {
   source: { kind: "system", id: "contract", detail: null },
-  venue: { id: "local", kind: "local" },
+  venue: LOCAL_RUNNER,
 };
 
 /** {@link contractProvenance}, naming the origin a trusted door records for a command. */

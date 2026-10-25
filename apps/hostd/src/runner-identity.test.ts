@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type Database from "better-sqlite3";
-import type { SessionEventProvenance, SessionExecutionVenue } from "@volli/shared";
+import type { SessionEventProvenance, RunnerIdentity } from "@volli/shared";
 import { openVolliDb, insertProject, throwTransactionViolation } from "@volli/host-core/db";
 import {
   openTestDb,
@@ -20,11 +20,11 @@ import {
 } from "../../../packages/session-engine/src/index";
 import {
   ensureHostId,
-  HOSTD_VENUE_KIND,
-  hostdVenue,
-  ownsLegacyHostdVenue,
+  HOSTD_RUNNER_KIND,
+  hostdRunner,
+  ownsLegacyHostdRunner,
   readHostId,
-} from "./venue";
+} from "./runner-identity";
 
 const HOST_ID = "6f1c2b8e-4d3a-4f6b-9c2d-1e0f3a4b5c6d";
 const dbs: TestDb[] = [];
@@ -44,11 +44,11 @@ function identityRows(db: Database.Database) {
 
 describe("hostd's host id", () => {
   it("owns legacy remote socket paths, never UUID workers or desktop venues", () => {
-    expect(ownsLegacyHostdVenue({ id: "/run/old/volli.sock", kind: "remote" })).toBe(true);
-    expect(ownsLegacyHostdVenue({ id: HOST_ID, kind: "remote" })).toBe(false);
-    expect(ownsLegacyHostdVenue({ id: "future-worker", kind: "remote" })).toBe(false);
-    expect(ownsLegacyHostdVenue({ id: "/run/old/volli.sock", kind: "local" })).toBe(false);
-    expect(ownsLegacyHostdVenue({ id: "local", kind: "local" })).toBe(false);
+    expect(ownsLegacyHostdRunner({ id: "/run/old/volli.sock", kind: "remote" })).toBe(true);
+    expect(ownsLegacyHostdRunner({ id: HOST_ID, kind: "remote" })).toBe(false);
+    expect(ownsLegacyHostdRunner({ id: "future-worker", kind: "remote" })).toBe(false);
+    expect(ownsLegacyHostdRunner({ id: "/run/old/volli.sock", kind: "local" })).toBe(false);
+    expect(ownsLegacyHostdRunner({ id: "local", kind: "local" })).toBe(false);
   });
 
   it("mints a UUID v4 once on first use and never rewrites it", () => {
@@ -69,7 +69,7 @@ describe("hostd's host id", () => {
     expect(hostId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     const [row] = identityRows(db) as Array<{ created_at: number }>;
     expect(row!.created_at).toBeGreaterThanOrEqual(before);
-    expect(hostdVenue(db)).toEqual({ id: hostId, kind: "remote" });
+    expect(hostdRunner(db)).toEqual({ id: hostId, kind: "remote" });
   });
 
   it("fails closed on a stored id that is not a UUID v4, without replacing it", () => {
@@ -78,7 +78,7 @@ describe("hostd's host id", () => {
       "/run/volli/volli.sock",
     );
     expect(() => readHostId(db)).toThrow("not a UUID v4");
-    expect(() => hostdVenue(db, { newId: () => HOST_ID })).toThrow("not a UUID v4");
+    expect(() => hostdRunner(db, { newId: () => HOST_ID })).toThrow("not a UUID v4");
     expect(identityRows(db)).toEqual([{ id: 1, host_id: "/run/volli/volli.sock", created_at: 0 }]);
   });
 
@@ -93,8 +93,8 @@ describe("hostd's host id", () => {
 
   it("names the venue by the host id, never by an address, with hostd's kind", () => {
     const db = migrated();
-    expect(HOSTD_VENUE_KIND).toBe("remote");
-    expect(hostdVenue(db, { newId: () => HOST_ID })).toEqual({ id: HOST_ID, kind: "remote" });
+    expect(HOSTD_RUNNER_KIND).toBe("remote");
+    expect(hostdRunner(db, { newId: () => HOST_ID })).toEqual({ id: HOST_ID, kind: "remote" });
   });
 });
 
@@ -116,7 +116,7 @@ function stop({ db }: Booted): void {
   db.pragma("wal_checkpoint(TRUNCATE)");
   db.close();
 }
-async function sweep({ engine }: Booted, venue: SessionExecutionVenue, projectId: string) {
+async function sweep({ engine }: Booted, venue: RunnerIdentity, projectId: string) {
   const onError = vi.fn();
   let n = 0;
   const closed = await closeStaleAttachments({
@@ -153,13 +153,13 @@ describe("boot recovery across a socket move", () => {
     // Boot 1, serving /run/a/volli.sock: a terminal companion attaches, and
     // the process dies without closing it.
     const first = boot(dbPath);
-    let firstVenue: SessionExecutionVenue;
+    let firstRunner: RunnerIdentity;
     try {
       insertProject(first.db, project);
-      firstVenue = hostdVenue(first.db);
+      firstRunner = hostdRunner(first.db);
       const provenance: SessionEventProvenance = {
         source: { kind: "system", id: "hostd", detail: null },
-        venue: firstVenue,
+        venue: firstRunner,
       };
       const created = await first.engine.createSession({
         commandId: "create",
@@ -180,7 +180,7 @@ describe("boot recovery across a socket move", () => {
           id: "attachment-1",
           sessionId: created.session.id,
           adapterId: "terminal",
-          venue: firstVenue,
+          venue: firstRunner,
           continuity: "fresh",
           native: null,
           authority: null,
@@ -193,17 +193,17 @@ describe("boot recovery across a socket move", () => {
     // Boot 2, serving /run/b/volli.sock.
     const second = boot(dbPath);
     try {
-      const secondVenue = hostdVenue(second.db);
-      expect(secondVenue).toEqual(firstVenue);
+      const secondRunner = hostdRunner(second.db);
+      expect(secondRunner).toEqual(firstRunner);
       // The pre-VC-627 derivation is the mutation this proof kills: a venue
       // named by the moved socket owns nothing, and the attachment stays open.
       expect(await sweep(second, { id: "/run/b/volli.sock", kind: "remote" }, project.id)).toBe(0);
       expect(await attachments(second, project.id)).toEqual([
-        { id: "attachment-1", status: "open", venue: firstVenue },
+        { id: "attachment-1", status: "open", venue: firstRunner },
       ]);
-      expect(await sweep(second, secondVenue, project.id)).toBe(1);
+      expect(await sweep(second, secondRunner, project.id)).toBe(1);
       expect(await attachments(second, project.id)).toEqual([
-        { id: "attachment-1", status: "closed", venue: firstVenue },
+        { id: "attachment-1", status: "closed", venue: firstRunner },
       ]);
     } finally {
       stop(second);

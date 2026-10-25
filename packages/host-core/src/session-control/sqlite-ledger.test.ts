@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createSessionEngine } from "@volli/session-engine";
-import { createSessionProjectionCheckpoint, roleImpliedByTicket } from "@volli/shared";
+import {
+  createSessionProjectionCheckpoint,
+  LOCAL_RUNNER,
+  roleImpliedByTicket,
+} from "@volli/shared";
 import type { SessionEvent, SessionLedger, SessionObservation, SessionUsage } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { internSessionEventProvenance } from "../db/session-event-provenance";
@@ -569,6 +573,66 @@ describe("SqliteSessionLedger", () => {
       );
 
     await expect(control.listLatestTicketSignals({ projectId })).resolves.toEqual([]);
+  });
+
+  it("writes LOCAL_RUNNER as the shipped local/local columns and provenance bytes", async () => {
+    // The frozen desktop identity: older builds and boot recovery read these
+    // exact values, so naming the literal must not move a byte on disk.
+    const { control, projectId } = setup();
+    const local = {
+      source: { kind: "system" as const, id: "desktop", detail: null },
+      venue: LOCAL_RUNNER,
+    };
+    const created = await control.createSession({
+      commandId: "create",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "One",
+      provenance: local,
+    });
+    const start = await control.submit({
+      commandId: "start",
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId: "terminal", continuity: "fresh" },
+      provenance: local,
+    });
+    await control.observe({
+      id: "opened",
+      kind: "attachment.opened",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 200,
+      provenance: local,
+      attachment: {
+        id: "attachment",
+        sessionId: created.session.id,
+        adapterId: "terminal",
+        venue: LOCAL_RUNNER,
+        continuity: "fresh",
+        native: { id: null, detail: { kind: "volli.terminal.v1", cwd: "/repo" } },
+        authority: null,
+      },
+    });
+    expect(ctx.db.prepare("SELECT venue_id, venue_kind FROM session_attachments").get()).toEqual({
+      venue_id: "local",
+      venue_kind: "local",
+    });
+    expect(
+      ctx.db
+        .prepare(
+          `SELECT DISTINCT p.provenance FROM session_events e
+             JOIN session_provenances p ON p.id = e.provenance_id
+            WHERE e.session_id = ?`,
+        )
+        .all(created.session.id),
+    ).toEqual([
+      {
+        provenance:
+          '{"source":{"kind":"system","id":"desktop","detail":null},"venue":{"id":"local","kind":"local"}}',
+      },
+    ]);
   });
 
   it("persists attachment evidence atomically and refuses a corrupt JSON row on read", async () => {

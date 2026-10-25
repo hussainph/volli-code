@@ -2,8 +2,8 @@ import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
 import type { SessionLocation, SessionLocationResolver } from "@volli/session-engine";
-import { harnessAdapters, scrubInheritedSessionEnv } from "@volli/shared";
-import type { Session, SessionExecutionVenue } from "@volli/shared";
+import { harnessAdapters, LOCAL_RUNNER, scrubInheritedSessionEnv } from "@volli/shared";
+import type { Session, RunnerIdentity } from "@volli/shared";
 
 import type { HostEventBus } from "../ports";
 import { getProjectById, isProjectAttached } from "../db/projects-repo";
@@ -15,8 +15,6 @@ import {
   UNDER_DELETION_REFUSAL,
 } from "../worktree";
 import { worktreeDeps } from "../worktree-runtime";
-
-const LOCAL: SessionLocation["venue"] = { id: "local", kind: "local" };
 
 /** Where a worktree's setup command runs: `<shellPath> -c <command>` under `env`. */
 export interface WorktreeSetupEnvironment {
@@ -92,11 +90,11 @@ export function createSessionLocationResolver(
   ports: { events: HostEventBus },
   options: {
     dataDir: string;
-    venue?: SessionExecutionVenue;
+    venue?: RunnerIdentity;
     setupEnvironment?: (sessionId: string) => Promise<WorktreeSetupEnvironment>;
   },
 ): SessionLocationResolver {
-  const venue = options.venue ?? LOCAL;
+  const venue = options.venue ?? LOCAL_RUNNER;
   const setupEnvironment = options.setupEnvironment ?? hostSetupEnvironment;
   const site = (session: Session) => {
     const project = getProjectById(db, session.projectId);

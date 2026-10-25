@@ -90,7 +90,7 @@ import type {
   SessionEvent,
   SessionEventPayload,
   SessionEventProvenance,
-  SessionExecutionVenue,
+  RunnerIdentity,
   SessionInteraction,
   SessionInteractionAnswer,
   SessionInteractionOption,
@@ -107,7 +107,7 @@ import type {
 
 type JsonRecord = Record<string, unknown>;
 
-const VENUE_KINDS = ["local", "cloud", "remote", "unknown"] as const;
+const RUNNER_KINDS = ["local", "cloud", "remote", "unknown"] as const;
 
 /**
  * Thrown when durable history carries a payload kind this build does not know.
@@ -586,7 +586,7 @@ export type RendererSessionCommand = Omit<SessionCommand, "intent" | "route"> & 
 /** Provenance with the adapter arm gone: the scrub rewrites it to a system source. */
 export interface RendererSessionEventProvenance {
   source: { kind: "user" | "system"; id: string; detail: SessionNativeDetail | null };
-  venue: SessionExecutionVenue | null;
+  venue: RunnerIdentity | null;
 }
 
 /**
@@ -828,7 +828,7 @@ function decodeRendererAttachment(value: unknown, context: string): RendererSess
     sessionId: readString(row.sessionId, `${context}.sessionId`),
     venue: {
       id: readString(venue.id, `${context}.venue.id`),
-      kind: enumValue(venue.kind, VENUE_KINDS, `${context}.venue.kind`),
+      kind: enumValue(venue.kind, RUNNER_KINDS, `${context}.venue.kind`),
     },
     continuity: enumValue(row.continuity, SESSION_ATTACHMENT_CONTINUITIES, `${context}.continuity`),
   };
@@ -970,7 +970,7 @@ export function decodeSessionEventProvenance(
         ? null
         : {
             id: readString(venue.id, `${context}.venue.id`),
-            kind: enumValue(venue.kind, VENUE_KINDS, `${context}.venue.kind`),
+            kind: enumValue(venue.kind, RUNNER_KINDS, `${context}.venue.kind`),
           },
   };
 }
@@ -1640,7 +1640,7 @@ function decodeAttachment(value: unknown, context: string): SessionAttachment {
     adapterId: readString(row.adapterId, `${context}.adapterId`),
     venue: {
       id: readString(venue.id, `${context}.venue.id`),
-      kind: enumValue(venue.kind, VENUE_KINDS, `${context}.venue.kind`),
+      kind: enumValue(venue.kind, RUNNER_KINDS, `${context}.venue.kind`),
     },
     continuity: enumValue(row.continuity, SESSION_ATTACHMENT_CONTINUITIES, `${context}.continuity`),
     native: row.native === null ? null : decodeNative(row.native, `${context}.native`),

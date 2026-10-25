@@ -9,11 +9,7 @@ import {
   type PiModelAccess,
   type CodeModeSandboxAssets,
 } from "@volli/agent-runtime";
-import {
-  parseExperimentEnvironment,
-  VOLLI_SOCKET_ENV,
-  type SessionExecutionVenue,
-} from "@volli/shared";
+import { parseExperimentEnvironment, VOLLI_SOCKET_ENV, type RunnerIdentity } from "@volli/shared";
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { RetentionReclaimSeams } from "@volli/host-core/maintenance";
 import type { BoardChangeFeed } from "@volli/host-core/board";
@@ -38,13 +34,13 @@ import {
   type AgentSiteRuntime,
 } from "@volli/host-core/worktree";
 import type { HeadlessSecrets } from "./secrets";
-import { ownsLegacyHostdVenue } from "./venue";
+import { ownsLegacyHostdRunner } from "./runner-identity";
 import { sessionGitEnv } from "./agent-git-env";
 import { createHostWorkspaces } from "./host-workspaces";
 
 export interface HeadlessRuntimeOptions {
   binDir: string;
-  venue: SessionExecutionVenue;
+  venue: RunnerIdentity;
   codeModeSandbox?: CodeModeSandboxAssets;
   /** A scripted provider replaces only the wire in host-container and integration proofs. */
   modelAccess?: PiModelAccess;
@@ -129,7 +125,7 @@ export function createHeadlessSessionRuntime(input: {
     ports,
     version: input.version,
     venue: options.venue,
-    ownsLegacyVenue: ownsLegacyHostdVenue,
+    ownsLegacyRunner: ownsLegacyHostdRunner,
     homeDir,
     binDir: options.binDir,
     env,

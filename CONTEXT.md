@@ -771,7 +771,8 @@ _Avoid_: Session, provider session, terminal pane
 **Session Attachment**:
 One historical association between an existing Session and an executor or
 transport: its runtime identity, native recovery reference where available,
-Working copy kind (`venue`, a `VenueKind`), and attach/detach outcome. A Session keeps many historical attachments
+the Runner it ran on (`venue`, a `RunnerIdentity`; the desktop's is the frozen
+`LOCAL_RUNNER`, `{ id: "local", kind: "local" }`), and attach/detach outcome. A Session keeps many historical attachments
 but has at most one live executor attachment. A terminal companion is a workspace
 view, not an alternate structured attachment.
 _Avoid_: Session, terminal, harness state

@@ -240,9 +240,9 @@ export default function UsageSurfaces() {
                 effort: "high",
                 activity: "working",
               }}
-              venue={{
+              workingCopy={{
                 status: "ready",
-                venue: {
+                workingCopy: {
                   kind: "main-checkout",
                   path: "/Users/someone/code/volli-code",
                   branch: "main",
@@ -250,7 +250,7 @@ export default function UsageSurfaces() {
                   diff: { added: 214, removed: 31, base: "main" },
                 },
               }}
-              onRetryVenue={() => {}}
+              onRetryWorkingCopy={() => {}}
             />
             <HomeUsageBlock
               summary={PROJECT}

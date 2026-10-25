@@ -1,9 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
-import type { VenueSnapshot } from "@volli/shared";
+import type { WorkingCopySnapshot } from "@volli/shared";
 
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
-import type { VenueEntry } from "@renderer/stores/venue";
+import type { WorkingCopyEntry } from "@renderer/stores/working-copy";
 
 import { HomeSessionCard, modelMetaLine, type HomeSessionFacts } from "./home-session-card";
 
@@ -15,7 +15,7 @@ import { HomeSessionCard, modelMetaLine, type HomeSessionFacts } from "./home-se
  * reach — and all of it is settled on the first paint. The card is pure, so
  * nothing has to be seeded to mount it.
  */
-const VENUE: VenueSnapshot = {
+const WORKING_COPY: WorkingCopySnapshot = {
   kind: "worktree",
   path: "/Users/someone/.volli/worktrees/volli-code-f3732f45/VC-288-narrow-pane",
   branch: "volli/VC-288-narrow-pane-follow-ups-beyond-vc-264",
@@ -23,7 +23,7 @@ const VENUE: VenueSnapshot = {
   diff: { added: 12, removed: 3, base: "main" },
 };
 
-const READY: VenueEntry = { status: "ready", venue: VENUE };
+const READY: WorkingCopyEntry = { status: "ready", workingCopy: WORKING_COPY };
 
 /** Typed as the chat MEMBER: the cases below spread it and vary one field. */
 const CHAT: Extract<HomeSessionFacts, { kind: "chat" }> = {
@@ -37,10 +37,10 @@ const CHAT: Extract<HomeSessionFacts, { kind: "chat" }> = {
   activity: "working",
 };
 
-function draw(facts: HomeSessionFacts, venue: VenueEntry | undefined = READY): string {
+function draw(facts: HomeSessionFacts, workingCopy: WorkingCopyEntry | undefined = READY): string {
   return renderToStaticMarkup(
     <TooltipProvider>
-      <HomeSessionCard facts={facts} venue={venue} onRetryVenue={() => {}} />
+      <HomeSessionCard facts={facts} workingCopy={workingCopy} onRetryWorkingCopy={() => {}} />
     </TooltipProvider>,
   );
 }
@@ -153,10 +153,10 @@ describe("HomeSessionCard", () => {
     expect(markup).toContain("No session in front");
     expect(markup).not.toContain('data-testid="home-session-identity"');
     // The tree is still on screen: it is the project's, not the front tab's.
-    expect(markup).toContain('data-testid="home-venue-path"');
+    expect(markup).toContain('data-testid="home-working-copy-path"');
   });
 
-  it("puts the whole venue path and branch within a keyboard's reach (VC-288)", () => {
+  it("puts the whole working copy path and branch within a keyboard's reach (VC-288)", () => {
     const markup = draw(CHAT);
 
     expect(markup).toContain(
@@ -167,7 +167,7 @@ describe("HomeSessionCard", () => {
     );
     // Both reveals are focus stops — buttons Radix opens on focus as well as on
     // hover — rather than the text elements a pointer alone could ask.
-    expect(markup.slice(markup.indexOf("home-venue-path"))).toContain("<button");
+    expect(markup.slice(markup.indexOf("home-working-copy-path"))).toContain("<button");
   });
 
   it("reports what is loose in the tree, and is silent at zero", () => {
@@ -175,30 +175,33 @@ describe("HomeSessionCard", () => {
     // on a tooltip, which Radix only renders once opened — so what a static
     // render can check is the mark and the figure.
     const markup = draw(CHAT);
-    const branchRow = markup.slice(markup.indexOf("home-venue-branch"));
+    const branchRow = markup.slice(markup.indexOf("home-working-copy-branch"));
 
     expect(branchRow).toContain("text-attention");
     expect(branchRow).toContain(">3<");
 
-    const clean: VenueEntry = {
+    const clean: WorkingCopyEntry = {
       status: "ready",
-      venue: { ...VENUE, files: { committed: 4, modified: 0, added: 0, untracked: 0 } },
+      workingCopy: {
+        ...WORKING_COPY,
+        files: { committed: 4, modified: 0, added: 0, untracked: 0 },
+      },
     };
     // "0 loose" is a number where there is no news.
     expect(draw(CHAT, clean)).not.toContain("text-attention");
   });
 
-  it("holds the card's resting height while the venue reads", () => {
+  it("holds the card's resting height while the working copy reads", () => {
     // Two skeleton rows, because the card at rest is the identity row plus two
     // — a placeholder of a different shape is what makes the usage card below
     // jump up and back as the read lands.
     const markup = draw(CHAT, { status: "loading" });
 
-    expect(markup).toContain('data-testid="home-venue-loading"');
-    expect(markup).not.toContain('data-testid="home-venue-path"');
+    expect(markup).toContain('data-testid="home-working-copy-loading"');
+    expect(markup).not.toContain('data-testid="home-working-copy-path"');
   });
 
-  it("names a venue fault in one sentence, keeps the diagnostic off the row, and offers the fix", () => {
+  it("names a working copy fault in one sentence, keeps the diagnostic off the row, and offers the fix", () => {
     // The rail's fault rule: the sentence a person needs on the row, the raw
     // error on `title` (at this width it is an ellipsis that pushes Retry off
     // the end), and the one action that fixes it beside them.
@@ -210,7 +213,10 @@ describe("HomeSessionCard", () => {
   });
 
   it("keeps a detached HEAD a plain row rather than a reveal repeating itself", () => {
-    const detached: VenueEntry = { status: "ready", venue: { ...VENUE, branch: null } };
+    const detached: WorkingCopyEntry = {
+      status: "ready",
+      workingCopy: { ...WORKING_COPY, branch: null },
+    };
     const markup = draw(CHAT, detached);
 
     expect(text(markup)).toContain("detached");

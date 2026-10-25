@@ -34,14 +34,14 @@ import type {
 } from "@volli/shared";
 import { createInMemorySessionLedger } from "./testing";
 
-const localVenue = { id: "machine-1", kind: "local" as const };
+const localRunner = { id: "machine-1", kind: "local" as const };
 const userProvenance: SessionEventProvenance = {
   source: { kind: "user", id: "host-user", detail: null },
-  venue: localVenue,
+  venue: localRunner,
 };
 const adapterProvenance: SessionEventProvenance = {
   source: { kind: "adapter", id: "opencode", detail: { channel: "plugin" } },
-  venue: localVenue,
+  venue: localRunner,
 };
 
 function ids(): SessionLedgerIds {
@@ -73,7 +73,7 @@ function attachment(sessionId: string, id = "attachment-1"): SessionAttachment {
     id,
     sessionId,
     adapterId: "opencode",
-    venue: localVenue,
+    venue: localRunner,
     continuity: "fresh",
     native: { id: "native-1", detail: { native: true } },
     authority: null,
@@ -1318,7 +1318,7 @@ describe("SessionEngine creation and explicit commands", () => {
     const RESET = 50_000;
     const systemProvenance: SessionEventProvenance = {
       source: { kind: "system", id: "scheduled-resume", detail: null },
-      venue: localVenue,
+      venue: localRunner,
     };
 
     /** A Session whose run stopped on a spent allowance that stated its reset. */
@@ -2108,7 +2108,7 @@ describe("SessionEngine creation and explicit commands", () => {
         occurredAt: 202,
         provenance: {
           source: { kind: "system", id: "host-system", detail: null },
-          venue: localVenue,
+          venue: localRunner,
         },
         kind: "attachment.native_referenced",
         attachmentId: opened.id,
@@ -2146,7 +2146,7 @@ describe("SessionEngine creation and explicit commands", () => {
         occurredAt: 201,
         provenance: {
           source: { kind: "adapter", id: "codex", detail: null },
-          venue: localVenue,
+          venue: localRunner,
         },
         kind: "attachment.native_referenced",
         attachmentId: opened.id,

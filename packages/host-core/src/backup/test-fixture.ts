@@ -16,6 +16,7 @@
  * attempt behind it) and to write machine-local rows — credentials, harness
  * trust — that must be shown to be ABSENT from a bundle.
  */
+import { LOCAL_RUNNER } from "@volli/shared";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -346,18 +347,18 @@ function seed(db: Database.Database, artifacts: Artifacts, nativeEventIds: boole
   const provenances = [
     JSON.stringify({
       source: { kind: "adapter", id: "terminal", detail: { cwd: "/Users/source/code/alpha" } },
-      venue: { id: "local", kind: "local" },
+      venue: LOCAL_RUNNER,
     }),
     // Distinct on disk, identical to the first after backup strips `cwd`.
     // Keeping both proves the intentionally non-unique value index restores
     // every integer reference rather than coalescing redacted rows.
     JSON.stringify({
       source: { kind: "adapter", id: "terminal", detail: { cwd: "/Users/source/code/beta" } },
-      venue: { id: "local", kind: "local" },
+      venue: LOCAL_RUNNER,
     }),
     JSON.stringify({
       source: { kind: "system", id: "backup-fixture", detail: null },
-      venue: { id: "local", kind: "local" },
+      venue: LOCAL_RUNNER,
     }),
   ] as const;
   // v42 stores these once and events carry the integers; older fixture

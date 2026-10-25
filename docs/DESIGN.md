@@ -644,7 +644,7 @@ checkout** (`home-rail-footer.tsx`) is under all three: one 42px row, edge-to-ed
 rail's own gutters, the branch opening the identity and the fact opening the reading, folding
 **upward** into the room the scroller gives back, on the Ticket rail's own `railFolds.worktree`
 preference. Checkout identity remains visible on every rail page. It draws two read states rather than the grammar's four,
-because the venue store keeps no pending flag beside its last-good reading: a first read, and a
+because the working copy store keeps no pending flag beside its last-good reading: a first read, and a
 read that failed.
 
 **Do not duplicate Session identity in the rail.** The tab and composer's pill

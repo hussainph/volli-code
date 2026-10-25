@@ -10,7 +10,7 @@
  * never a Blob, and nothing in it is ever handed back to a model.
  *
  * PORTABLE BY CONSTRUCTION. This is the shape any host writes and any client
- * renders — the desktop today, a cloud venue (VC-198) or a mobile client
+ * renders — the desktop today, a cloud runner (VC-198) or a mobile client
  * (VC-199) tomorrow — so it carries JSON and nothing a host owns: no file
  * paths, no Electron handle, no bytes. A frame is named by its picture id and
  * a client asks its host for the pixels, the way the transcript card does.

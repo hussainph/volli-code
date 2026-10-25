@@ -198,7 +198,7 @@ import type {
   TicketStatusEntry,
   TicketSummary,
   ValidAutomationRuntime,
-  VenueReading,
+  WorkingCopyReading,
   WorkspaceDependenciesStatus,
   AutomationRunStartResult,
   DataChangeKind,
@@ -563,11 +563,11 @@ export interface UsageReportInput {
 }
 
 /**
- * Whose venue to measure. The pair is the Session's own scope, not a path — a
+ * Whose Working copy to measure. The pair is the Session's own scope, not a path — a
  * renderer never names a directory main will run git in; main resolves it from
  * its own rows, by the rule the Session runtime binds a directory with.
  */
-export interface VenueSnapshotInput {
+export interface WorkingCopySnapshotInput {
   projectId: string;
   /** `null` for a Board Session, which runs in the project's main checkout. */
   ticketId: string | null;
@@ -952,12 +952,15 @@ export interface VolliDataIpcContract {
    */
   "volli:usage-report": { args: [input: UsageReportInput]; result: UsageReportResult };
   /**
-   * The venue a Session of this scope runs in, measured (VC-55): the checkout,
+   * The Working copy a Session of this scope runs in, measured (VC-55): the checkout,
    * its branch, the four-state file partition, and the lines moved against the
    * base. `ticketId: null` is a Board Session, which stands in the project's
    * main checkout.
    */
-  "volli:venue-snapshot": { args: [input: VenueSnapshotInput]; result: VenueSnapshotResult };
+  "volli:working-copy-snapshot": {
+    args: [input: WorkingCopySnapshotInput];
+    result: WorkingCopySnapshotResult;
+  };
   "volli:label-set-color": { args: [input: LabelSetColorInput]; result: LabelResult };
   "volli:app-state-set": { args: [key: string, value: string]; result: AppStateSetResult };
 
@@ -3113,14 +3116,14 @@ export type SessionStartsResult = Result<{ startedAt: number[] }>;
 export type UsageReportResult = Result<{ report: SessionUsageReport }>;
 
 /**
- * One venue reading (`venue-snapshot`); the error arm carries git's own message.
+ * One Working copy reading (`working-copy-snapshot`); the error arm carries git's own message.
  *
- * The success arm is a {@link VenueReading} rather than a snapshot because
+ * The success arm is a {@link WorkingCopyReading} rather than a snapshot because
  * "there is no checkout to measure yet" is an ANSWER, not a failure (VC-286):
- * a ticket whose isolated worktree has not materialised has no venue, and
+ * a ticket whose isolated worktree has not materialised has no Working copy, and
  * saying so is what stops a surface from drawing the main checkout in its place.
  */
-export type VenueSnapshotResult = Result<{ reading: VenueReading }>;
+export type WorkingCopySnapshotResult = Result<{ reading: WorkingCopyReading }>;
 
 // ---- global artifacts + @file refs -----------------------------------------
 

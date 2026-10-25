@@ -1,4 +1,5 @@
 /** TEST-ONLY: actual Pi adapter, engine, SQLite and transcript artifacts. */
+import { LOCAL_RUNNER } from "@volli/shared";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
@@ -113,8 +114,8 @@ export async function silentEndsFixture(
     artifacts,
     followUps: createSqliteSessionFollowUpLedger(db.db),
     locations: {
-      resolve: async () => ({ directory, venue: { id: "local", kind: "local" } }),
-      prepare: async () => ({ directory, venue: { id: "local", kind: "local" } }),
+      resolve: async () => ({ directory, venue: LOCAL_RUNNER }),
+      prepare: async () => ({ directory, venue: LOCAL_RUNNER }),
       reaffirm: async () => undefined,
     },
     clock: { now },

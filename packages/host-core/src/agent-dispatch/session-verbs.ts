@@ -13,6 +13,7 @@
  * process-per-event hot path, and live in `harness-verbs.ts`.
  */
 
+import { LOCAL_RUNNER } from "@volli/shared";
 import {
   displayTicketId,
   effectiveHarnessId,
@@ -903,7 +904,7 @@ async function recordSessionSignal(
         id: "terminal",
         detail: { sessionOrigin: { kind: "session", sessionId: envSession.id } },
       },
-      venue: options.venue ?? { id: "local", kind: "local" },
+      venue: options.venue ?? LOCAL_RUNNER,
     },
   });
   if (submitted.receipt?.status !== "completed") {

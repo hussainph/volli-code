@@ -7,7 +7,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { HostedSessionRuntime } from "@volli/session-engine";
-import type { SessionProjection, SessionExecutionVenue } from "@volli/shared";
+import type { SessionProjection, RunnerIdentity } from "@volli/shared";
 import { isLiveHost, type HostCore, type HostCorePorts } from "../index";
 import { shutdownNativeSessions } from "../host-shutdown";
 import { SESSION_RUNTIME } from "../session-services";
@@ -92,9 +92,9 @@ export interface SessionRuntimeLifecycle<Services> {
 
 export function createSessionRuntimeLifecycle<Services>(options: {
   host: HostCore;
-  venue?: SessionExecutionVenue;
+  venue?: RunnerIdentity;
   /** Upgrade-only ownership supplied by the host, not the executor. */
-  ownsLegacyVenue?(venue: SessionExecutionVenue): boolean;
+  ownsLegacyRunner?(venue: RunnerIdentity): boolean;
   ports: Pick<HostCorePorts, "power" | "attention" | "events" | "log">;
   runtime: HostedSessionRuntime | null;
   /** A transport constructed from ready services may bind after recovery. */
@@ -221,9 +221,9 @@ export function createSessionRuntimeLifecycle<Services>(options: {
         await closeStaleAttachments({
           engine: sessionEngine,
           ...(options.venue === undefined ? {} : { venue: options.venue }),
-          ...(options.ownsLegacyVenue === undefined
+          ...(options.ownsLegacyRunner === undefined
             ? {}
-            : { ownsLegacyVenue: options.ownsLegacyVenue }),
+            : { ownsLegacyRunner: options.ownsLegacyRunner }),
           shouldStop: () => closing,
           reconcile: (input) =>
             runtime === null

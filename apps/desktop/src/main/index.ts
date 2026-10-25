@@ -1,3 +1,4 @@
+import { LOCAL_RUNNER } from "@volli/shared";
 import {
   app,
   BaseWindow,
@@ -1187,7 +1188,7 @@ const appStartup = app.whenReady().then(async () => {
     store: { kind: "local", host: hostCore },
     ports: hostPorts,
     version: app.getVersion(),
-    venue: { id: "local", kind: "local" },
+    venue: LOCAL_RUNNER,
     homeDir: fsDeps.homeDir,
     binDir: runtimePaths.binDir,
     env: process.env,

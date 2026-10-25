@@ -148,7 +148,7 @@ the lease is not per Session or attachment. Attach/resume/publication must be
 bound to the grant recorded for that execution, not whatever grant is current
 when a message arrives. Closing a stale attachment retains Session history.
 
-`SessionExecutionVenue {id, kind: local | remote | cloud}` identifies the worker.
+`RunnerIdentity {id, kind: local | remote | cloud}` (formerly `SessionExecutionVenue`) identifies the worker.
 Historical `unknown` is a read representation, not a valid new target.
 Replacement execution has a new attachment UUID; historical venues are immutable.
 With `cloud` off, `{id:"local", kind:"local"}` stays frozen in historical records.

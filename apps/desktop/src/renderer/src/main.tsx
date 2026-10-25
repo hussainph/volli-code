@@ -239,7 +239,7 @@ async function main() {
     // Forward the payload's scope (affected ticket/project, or untargeted) so
     // per-ticket surfaces can skip a refetch that's provably for another ticket.
     // `kind` rides along for the one reader that acts on it: a `worktree` change
-    // moved a ticket's CHECKOUT, and its cached venue reading belongs to the
+    // moved a ticket's CHECKOUT, and its cached working copy reading belongs to the
     // checkout it was taken in (VC-286).
     void refreshPlanningData({
       ticketId: event.ticketId,

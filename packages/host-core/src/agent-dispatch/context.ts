@@ -52,8 +52,8 @@ import type { WorktreeReadService } from "../worktree-reads";
 import type { VerifyOperatorToken } from "./resolution";
 
 export interface AgentCommandServiceOptions {
-  /** Execution venue for host-issued Session facts; desktop keeps local. */
-  venue?: import("@volli/shared").SessionExecutionVenue;
+  /** Runner for host-issued Session facts; desktop keeps local. */
+  venue?: import("@volli/shared").RunnerIdentity;
   db: Database.Database;
   /** The app composition root's one durable Session Engine. */
   sessionEngine: SessionEngine;

@@ -16,7 +16,7 @@
  * Everything below is the reasoning as it stood when the card WAS the page,
  * kept because it is what the lab galleries are read against.
  *
- * WHAT IT REPLACES. The page drew this in three drawings. A hand-rolled venue
+ * WHAT IT REPLACES. The page drew this in three drawings. A hand-rolled working copy
  * card (`rounded-row border-border bg-card p-4`, its own radius and its own
  * inset), then an uppercase eyebrow, then a `<dl>` of key/value lines — Model,
  * Effort, Activity, each label parked at the left with its value right-aligned
@@ -85,7 +85,7 @@
  * PURE, AND STORE-FREE, for the reason `home-usage-block.tsx` is: the UI lab
  * mounts the real component over fixtures (`lab/scratches/home-rail-now.tsx`),
  * so what is reviewed is what ships rather than a reimplementation of it. The
- * store reads and the venue's `ensure` stay in `home-rail.tsx`.
+ * store reads and the working copy's `ensure` stay in `home-rail.tsx`.
  */
 import * as React from "react";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
@@ -95,10 +95,10 @@ import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindo
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 
 import { effortLabel } from "@volli/session-presentation";
-import { venueLooseCount, type ModelAccessModel } from "@volli/shared";
+import { workingCopyLooseCount, type ModelAccessModel } from "@volli/shared";
 
-import { venueKindLabel } from "@renderer/components/chat/empty/venue-chips";
-import { venuePathTail } from "@renderer/components/home/home-rail-model";
+import { workingCopyKindLabel } from "@renderer/components/chat/empty/working-copy-chips";
+import { workingCopyPathTail } from "@renderer/components/home/home-rail-model";
 import { ModelMark } from "@renderer/components/models/model-identity";
 import {
   RAIL_CARD_FRAME,
@@ -113,7 +113,7 @@ import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-d
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { ValueReveal } from "@renderer/components/ui/value-reveal";
 import { cn } from "@renderer/lib/utils";
-import type { VenueEntry } from "@renderer/stores/venue";
+import type { WorkingCopyEntry } from "@renderer/stores/working-copy";
 
 /**
  * What the Session in front IS — three kinds of thing, not one kind with
@@ -183,13 +183,13 @@ const CARD_ROW = cn(RAIL_CARD_ROW, "min-h-8 py-2");
 
 export function HomeSessionCard({
   facts,
-  venue,
-  onRetryVenue,
+  workingCopy,
+  onRetryWorkingCopy,
 }: {
   facts: HomeSessionFacts;
   /** `undefined` before the first read — the same state as `loading` here. */
-  venue: VenueEntry | undefined;
-  onRetryVenue(): void;
+  workingCopy: WorkingCopyEntry | undefined;
+  onRetryWorkingCopy(): void;
 }) {
   return (
     <section
@@ -198,7 +198,7 @@ export function HomeSessionCard({
       className={cn(RAIL_CARD_FRAME, RAIL_PANEL_MARGIN, "flex flex-col")}
     >
       <IdentityRow facts={facts} />
-      <VenueRows venue={venue} onRetry={onRetryVenue} />
+      <WorkingCopyRows workingCopy={workingCopy} onRetry={onRetryWorkingCopy} />
     </section>
   );
 }
@@ -229,7 +229,7 @@ function IdentityRow({ facts }: { facts: HomeSessionFacts }) {
       {/* The vendor's mark leads, exactly as it does on the composer's pill: a
           Session pinned to a model is told apart by WHICH model far more often
           than by the fact that it is a chat. `size-4` rather than the mark's
-          own 3.5, so it sits on the same left axis as the venue rows' glyphs
+          own 3.5, so it sits on the same left axis as the working copy rows' glyphs
           under it. */}
       {model === null ? (
         <Glyph facts={facts} />
@@ -266,7 +266,7 @@ function IdentityRow({ facts }: { facts: HomeSessionFacts }) {
  *
  * `ModelName`, which every roomier model surface uses, wraps instead, and its
  * run would put the mark beside the middle of a three-line block and push the
- * venue rows down. A rail clips and hands the value back on hover AND on
+ * working copy rows down. A rail clips and hands the value back on hover AND on
  * focus; that is what the path and the branch under this row already do.
  */
 function ModelNameLine({ model }: { model: HomeSessionModel }) {
@@ -322,10 +322,20 @@ export function modelMetaLine(tier: string | null, effort: string | null): strin
  * same shape is what keeps the usage card below from jumping up and back as
  * the read lands.
  */
-function VenueRows({ venue, onRetry }: { venue: VenueEntry | undefined; onRetry(): void }) {
-  if (venue === undefined || venue.status === "loading" || venue.status === "resolving") {
+function WorkingCopyRows({
+  workingCopy,
+  onRetry,
+}: {
+  workingCopy: WorkingCopyEntry | undefined;
+  onRetry(): void;
+}) {
+  if (
+    workingCopy === undefined ||
+    workingCopy.status === "loading" ||
+    workingCopy.status === "resolving"
+  ) {
     return (
-      <div aria-hidden data-testid="home-venue-loading">
+      <div aria-hidden data-testid="home-working-copy-loading">
         {["w-3/5", "w-2/5"].map((width) => (
           <div key={width} className={cn(CARD_ROW, RAIL_CARD_SEAM)}>
             <Skeleton className={cn("h-3", width)} />
@@ -334,7 +344,7 @@ function VenueRows({ venue, onRetry }: { venue: VenueEntry | undefined; onRetry(
       </div>
     );
   }
-  if (venue.status === "error") {
+  if (workingCopy.status === "error") {
     // The rail's fault rule (`rail-panel-parts.tsx`): the sentence a person
     // needs on the row, the diagnostic on `title`, and the one action that
     // fixes it beside them. The raw read error at this width is an ellipsis
@@ -342,8 +352,8 @@ function VenueRows({ venue, onRetry }: { venue: VenueEntry | undefined; onRetry(
     return (
       <div
         className={cn(CARD_ROW, RAIL_CARD_SEAM)}
-        title={venue.error}
-        data-testid="home-venue-error"
+        title={workingCopy.error}
+        data-testid="home-working-copy-error"
       >
         <WarningIcon weight="bold" className="size-4 shrink-0 text-destructive" />
         <span className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
@@ -356,21 +366,21 @@ function VenueRows({ venue, onRetry }: { venue: VenueEntry | undefined; onRetry(
     );
   }
 
-  const loose = venueLooseCount(venue.venue.files);
+  const loose = workingCopyLooseCount(workingCopy.workingCopy.files);
   return (
     <>
-      <VenueRow
+      <WorkingCopyRow
         icon={FolderOpenIcon}
-        term={venueKindLabel(venue.venue)}
-        full={venue.venue.path}
-        value={venuePathTail(venue.venue.path)}
-        testId="home-venue-path"
+        term={workingCopyKindLabel(workingCopy.workingCopy)}
+        full={workingCopy.workingCopy.path}
+        value={workingCopyPathTail(workingCopy.workingCopy.path)}
+        testId="home-working-copy-path"
       />
       {/* A detached HEAD has no branch to reveal — `detached` IS the whole
           value — so it stays a plain row rather than becoming a focus stop
           that opens a bubble repeating the word under it. */}
-      {venue.venue.branch === null ? (
-        <div className={cn(CARD_ROW, RAIL_CARD_SEAM)} data-testid="home-venue-branch">
+      {workingCopy.workingCopy.branch === null ? (
+        <div className={cn(CARD_ROW, RAIL_CARD_SEAM)} data-testid="home-working-copy-branch">
           <GitBranchIcon weight="bold" className="size-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate font-mono text-ui text-muted-foreground">
             detached
@@ -378,13 +388,13 @@ function VenueRows({ venue, onRetry }: { venue: VenueEntry | undefined; onRetry(
           <LooseCount loose={loose} />
         </div>
       ) : (
-        <VenueRow
+        <WorkingCopyRow
           icon={GitBranchIcon}
           term="Branch"
-          full={venue.venue.branch}
-          value={venue.venue.branch}
+          full={workingCopy.workingCopy.branch}
+          value={workingCopy.workingCopy.branch}
           trailing={<LooseCount loose={loose} />}
-          testId="home-venue-branch"
+          testId="home-working-copy-branch"
         />
       )}
     </>
@@ -392,7 +402,7 @@ function VenueRows({ venue, onRetry }: { venue: VenueEntry | undefined; onRetry(
 }
 
 /**
- * One venue fact as a card row: glyph, the truncating value, whatever the row
+ * One working copy fact as a card row: glyph, the truncating value, whatever the row
  * trails.
  *
  * BOTH VALUES TRUNCATE AND BOTH HAVE A WAY OUT OF IT (VC-288). A rail is
@@ -403,7 +413,7 @@ function VenueRows({ venue, onRetry }: { venue: VenueEntry | undefined; onRetry(
  * change something in; "hover to find out" is the wrong last word on that
  * question.
  */
-function VenueRow({
+function WorkingCopyRow({
   icon: Icon,
   term,
   full,

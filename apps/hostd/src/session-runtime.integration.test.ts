@@ -39,7 +39,7 @@ import {
 import { resetRetentionWatcherForTest, testProject, testTicket } from "@volli/host-core/testing";
 import { startHostd, type RunningHostd } from "./hostd";
 import { headlessRuntimePaths } from "./runtime-paths";
-import { hostdVenue } from "./venue";
+import { hostdRunner } from "./runner-identity";
 
 /** The live host a fixture booted; every proof here needs its database. */
 function live(running: RunningHostd): LiveHostCore {
@@ -203,13 +203,13 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
     async (socket) => {
       const f = await fixture();
       const originalSocket = f.host.status().socketPath;
-      const legacyVenue = { id: originalSocket, kind: "remote" as const };
-      const workerVenue = { id: "12926fc7-0d26-4f1b-aad9-19acd3ecb55c", kind: "remote" as const };
+      const legacyRunner = { id: originalSocket, kind: "remote" as const };
+      const workerRunner = { id: "12926fc7-0d26-4f1b-aad9-19acd3ecb55c", kind: "remote" as const };
       const seeded: Array<{ sessionId: string; attachmentId: string; adapterId: string }> = [];
       for (const [name, adapterId, venue] of [
-        ["legacy-terminal", "terminal", legacyVenue],
-        ["legacy-pi", "pi", legacyVenue],
-        ["worker", "terminal", workerVenue],
+        ["legacy-terminal", "terminal", legacyRunner],
+        ["legacy-pi", "pi", legacyRunner],
+        ["worker", "terminal", workerRunner],
       ] as const) {
         const provenance = {
           source: { kind: "system" as const, id: "hostd", detail: null },
@@ -279,7 +279,7 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
       expect(rebooted.status().socketPath).toBe(
         socket === "same" ? originalSocket : `${originalSocket}.moved`,
       );
-      expect(hostdVenue(recovered.database.db).id).not.toBe(originalSocket);
+      expect(hostdRunner(recovered.database.db).id).not.toBe(originalSocket);
       for (const { sessionId, attachmentId, adapterId } of seeded) {
         const projection = await recovered.sessionEngine.getSession({ sessionId });
         const worker = attachmentId === "worker-attachment";
@@ -287,7 +287,7 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
           expect.objectContaining({
             id: attachmentId,
             status: worker ? "open" : "closed",
-            venue: worker ? workerVenue : legacyVenue,
+            venue: worker ? workerRunner : legacyRunner,
           }),
         ]);
         if (adapterId === "pi") {
@@ -310,7 +310,7 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
   it("recovers its own durable attachment when the agent socket moves", async () => {
     const f = await fixture();
     const originalSocket = f.host.status().socketPath;
-    const venue = hostdVenue(f.core.database.db);
+    const venue = hostdRunner(f.core.database.db);
     const provenance = { source: { kind: "system" as const, id: "hostd", detail: null }, venue };
     const created = await f.core.sessionEngine.createSession({
       commandId: "socket-move-create",
@@ -340,7 +340,7 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
     const rebooted = await f.restart(`${originalSocket}.moved`);
     const recovered = live(rebooted);
     expect(rebooted.status().socketPath).not.toBe(originalSocket);
-    expect(hostdVenue(recovered.database.db)).toEqual(venue);
+    expect(hostdRunner(recovered.database.db)).toEqual(venue);
     const projection = await recovered.sessionEngine.getSession({ sessionId: created.session.id });
     expect(projection!.attachments).toEqual([
       expect.objectContaining({
@@ -401,7 +401,7 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
       expect(surface.input.tools).not.toContain("request_secret");
       expect(surface.input.tools.some((name) => name.startsWith("browser_"))).toBe(false);
       expect(surface.input.tools).toContain("shell_start");
-      expect(projection!.attachments[0]!.venue).toEqual(hostdVenue(f.core.database.db));
+      expect(projection!.attachments[0]!.venue).toEqual(hostdRunner(f.core.database.db));
       console.log(
         "VC-622 Linux CLI proof: Session birth, actual write tool, turn.completed, CLI answer",
       );
@@ -936,9 +936,9 @@ describe("M1 headless smoke (VC-563)", () => {
     const opened = ledger.find((event) => event.kind === "attachment.opened");
     // The venue is this host's persisted identity (VC-627), not its socket path.
     expect(opened).toMatchObject({
-      attachment: { venue: hostdVenue(live(host).database.db) },
+      attachment: { venue: hostdRunner(live(host).database.db) },
     });
-    expect(hostdVenue(live(host).database.db).kind).toBe("remote");
+    expect(hostdRunner(live(host).database.db).kind).toBe("remote");
 
     // VC-661: the operator reads the latest signal back over the CLI, in both
     // formats, without an operator token — reads need only the socket; only

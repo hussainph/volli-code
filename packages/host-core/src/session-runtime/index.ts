@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import type { ObservabilitySink, SessionExecutionVenue } from "@volli/shared";
+import type { ObservabilitySink, RunnerIdentity } from "@volli/shared";
 import {
   createSessionRuntime,
   type HostedSessionRuntime,
@@ -19,7 +19,7 @@ import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 
 export interface HostSessionRuntimeOptions {
   db: Database.Database;
-  venue?: SessionExecutionVenue;
+  venue?: RunnerIdentity;
   events: HostEventBus;
   /**
    * The host's log port. hostd turns it into structured records; a failed

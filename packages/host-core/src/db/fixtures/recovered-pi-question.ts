@@ -1,3 +1,4 @@
+import { LOCAL_RUNNER } from "@volli/shared";
 import { copyFileSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -101,8 +102,8 @@ export async function recoveredPiQuestion(input: {
       // Deliberately leave the retained queue to N−1's host; this fixture sends
       // the explicit next message, including on releases predating that queue.
       locations: {
-        resolve: async () => ({ directory, venue: { id: "local", kind: "local" } }),
-        prepare: async () => ({ directory, venue: { id: "local", kind: "local" } }),
+        resolve: async () => ({ directory, venue: LOCAL_RUNNER }),
+        prepare: async () => ({ directory, venue: LOCAL_RUNNER }),
         reaffirm: async () => undefined,
       },
       clock: { now: () => clock++ },

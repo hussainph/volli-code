@@ -1,3 +1,4 @@
+import { LOCAL_RUNNER } from "@volli/shared";
 import { pageClientEventSink } from "./client-event-sink";
 import { assertRendererAppStateKey } from "./app-state-key-guard";
 import { randomUUID } from "node:crypto";
@@ -158,8 +159,8 @@ import type {
   WorktreeTrimScanResult,
   WorktreeTrimSettingsInput,
   WorktreeTrimSettingsResult,
-  VenueSnapshotInput,
-  VenueSnapshotResult,
+  WorkingCopySnapshotInput,
+  WorkingCopySnapshotResult,
 } from "../ipc/contract";
 /**
  * Both listing channels build their rows through one roster-shaped read
@@ -193,7 +194,7 @@ import {
   listBranches,
   OrphanCleanupRefused,
   publishTicketBranch,
-  readVenue,
+  readWorkingCopy,
   remove as removeWorktree,
   runNet,
   scanTrimTargets,
@@ -1050,11 +1051,13 @@ export function registerDataIpcHandlers(
       return { ok: true, report };
     },
 
-    "volli:venue-snapshot": async (input: VenueSnapshotInput): Promise<VenueSnapshotResult> => {
-      // `readVenue` owns which directory this is — the same rule the Session
+    "volli:working-copy-snapshot": async (
+      input: WorkingCopySnapshotInput,
+    ): Promise<WorkingCopySnapshotResult> => {
+      // `readWorkingCopy` owns which directory this is — the same rule the Session
       // runtime binds one by — so a renderer never names a path for main to run
       // git in, and the drawing can never be of a tree the agent is not in.
-      const read = await readVenue(worktreeDeps(db), input);
+      const read = await readWorkingCopy(worktreeDeps(db), input);
       if (!read.ok) return { ok: false, error: read.error };
       return { ok: true, reading: read.value };
     },
@@ -1068,7 +1071,7 @@ export function registerDataIpcHandlers(
         intent: { kind: "session.retitle", title: input.title.trim() },
         provenance: {
           source: { kind: "user", id: "renderer", detail: { sessionOrigin: { kind: "user" } } },
-          venue: { id: "local", kind: "local" },
+          venue: LOCAL_RUNNER,
         },
       });
       if (submitted.receipt?.status !== "completed") {

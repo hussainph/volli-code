@@ -334,19 +334,46 @@ export interface SessionAttachment {
   id: string;
   sessionId: string;
   adapterId: string;
-  /** Where this executor ran, independent of the adapter that spoke to it. */
-  venue: SessionExecutionVenue;
+  /**
+   * The Runner this executor ran on, independent of the adapter that spoke to
+   * it. The field keeps its shipped name `venue`: ledger rows (`venue_id`,
+   * `venue_kind`), the committed protocol schema and N-1 builds all read it.
+   */
+  venue: RunnerIdentity;
   continuity: SessionAttachmentContinuity;
   native: SessionNativeReference | null;
   /** Retired snapshot slot. Legacy input is decoded to null and never reactivated. */
   authority: null;
 }
 
-/** A local machine, cloud sandbox, or other execution venue. */
-export interface SessionExecutionVenue {
-  id: string;
-  kind: "local" | "cloud" | "remote" | "unknown";
+/** What sort of Runner a {@link RunnerIdentity} names. Durable: every value ships in ledger rows. */
+export type RunnerKind = "local" | "cloud" | "remote" | "unknown";
+
+/**
+ * Which Runner a Session fact was produced on: this Mac's desktop, a hostd
+ * install (named by its stable host id), or later a Linux or Volli Cloud
+ * runner. Durable and compared by exact `id`/`kind` match — boot recovery
+ * closes only the attachments its own Runner owns — so a shipped value is
+ * never rewritten. Readonly because the shared constant below is one frozen
+ * object handed to every caller.
+ *
+ * Formerly `SessionExecutionVenue`; fields that hold it are still named
+ * `venue` wherever they are persisted or on a wire.
+ */
+export interface RunnerIdentity {
+  readonly id: string;
+  readonly kind: RunnerKind;
 }
+
+/**
+ * The desktop's own Runner, exactly as every shipped build has written it:
+ * `{ id: "local", kind: "local" }`. FROZEN AND DURABLE — attachment rows,
+ * event provenance and boot recovery's ownership match all compare this
+ * literal, so it must never become a minted runner id or gain a field. A
+ * registered Mac runner gets an identity of its own beside it; history written
+ * under this one keeps it.
+ */
+export const LOCAL_RUNNER: RunnerIdentity = Object.freeze({ id: "local", kind: "local" });
 
 /** Explicit provenance for audit and future cloud replay. */
 export interface SessionEventProvenance {
@@ -355,7 +382,8 @@ export interface SessionEventProvenance {
     id: string;
     detail: SessionNativeDetail | null;
   };
-  venue: SessionExecutionVenue | null;
+  /** The Runner that produced the fact; `null` when none did. Persisted as `venue`. */
+  venue: RunnerIdentity | null;
 }
 
 /** Content is stored elsewhere; the ledger records only its durable reference. */
@@ -896,7 +924,7 @@ export type CompleteProjectionEventVocabulary = AssertProjectionEventVocabulary<
 /** A deterministic marker for the exact event vocabulary captured by a checkpoint. */
 export const SESSION_PROJECTION_CHECKPOINT_COMPATIBILITY = `session-event-kinds:${SESSION_PROJECTION_EVENT_KINDS.join("|")}`;
 
-/** A failed attachment preserves adapter and venue metadata without pretending it ever opened. */
+/** A failed attachment preserves adapter and runner metadata without pretending it ever opened. */
 export interface SessionAttachmentFailure {
   code: string;
   detail: string | null;

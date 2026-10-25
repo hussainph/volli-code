@@ -710,8 +710,8 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
 it("passes the host venue into recovery and watchdog and rejects cast/copied proofs", async () => {
   const f = fixture();
   const venue = { id: "headless", kind: "remote" as const };
-  const ownsLegacyVenue = vi.fn(() => true);
-  const owner = createSessionRuntimeLifecycle({ ...f.options, venue, ownsLegacyVenue });
+  const ownsLegacyRunner = vi.fn(() => true);
+  const owner = createSessionRuntimeLifecycle({ ...f.options, venue, ownsLegacyRunner });
   const ready = await owner.ready();
   const { readRecoveredSessionServices, mapRecoveredSessionServices } = await import("./lifecycle");
   expect(readRecoveredSessionServices(ready)).toBe(ready.services);
@@ -725,8 +725,8 @@ it("passes the host venue into recovery and watchdog and rejects cast/copied pro
   );
   expect(() => readRecoveredSessionServices({ ...ready })).toThrow("no recovery proof");
   expect(vi.mocked(recovery.closeStaleAttachments).mock.lastCall![0].venue).toBe(venue);
-  expect(vi.mocked(recovery.closeStaleAttachments).mock.lastCall![0].ownsLegacyVenue).toBe(
-    ownsLegacyVenue,
+  expect(vi.mocked(recovery.closeStaleAttachments).mock.lastCall![0].ownsLegacyRunner).toBe(
+    ownsLegacyRunner,
   );
   expect(vi.mocked(control.createSessionWatchdog).mock.lastCall![0].venue).toBe(venue);
   await owner.close();

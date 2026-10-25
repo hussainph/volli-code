@@ -18,11 +18,7 @@
  */
 import type { CodeModeSandboxAssets } from "@volli/agent-runtime";
 import type { HostedSessionRuntime } from "@volli/session-engine";
-import {
-  DEFAULT_CODE_MODE_POLICY,
-  displayTicketId,
-  type SessionExecutionVenue,
-} from "@volli/shared";
+import { DEFAULT_CODE_MODE_POLICY, displayTicketId, type RunnerIdentity } from "@volli/shared";
 import { isLiveHost, type HostCore, type HostCorePorts, type HostRuntimeOwner } from "../index";
 import { getProjectById } from "../db/projects-repo";
 import { getTicket } from "../db/tickets-repo";
@@ -93,9 +89,9 @@ export interface RunnerCompositionInput {
   ports: Pick<HostCorePorts, "events" | "attention" | "power" | "connectivity" | "log">;
   /** The build, as the observability exporter names its service. */
   version: string;
-  venue: SessionExecutionVenue;
-  /** Upgrade-only ownership of a venue an older build recorded (`boot-recovery.ts`). */
-  ownsLegacyVenue?(venue: SessionExecutionVenue): boolean;
+  venue: RunnerIdentity;
+  /** Upgrade-only ownership of a runner an older build recorded (`boot-recovery.ts`). */
+  ownsLegacyRunner?(venue: RunnerIdentity): boolean;
   homeDir: string;
   /** Prepended to every Session command's PATH: where `volli` resolves. */
   binDir: string;
@@ -384,7 +380,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
   const fullDrain = host.stopPolicy === "drain-and-close";
   lifecycle = createSessionRuntimeLifecycle<RuntimeSessionFacade>({
     venue,
-    ...(input.ownsLegacyVenue === undefined ? {} : { ownsLegacyVenue: input.ownsLegacyVenue }),
+    ...(input.ownsLegacyRunner === undefined ? {} : { ownsLegacyRunner: input.ownsLegacyRunner }),
     host,
     ports,
     runtime: assembly.sessionRuntime,
