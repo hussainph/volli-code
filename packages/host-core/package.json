@@ -86,7 +86,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vp test run",
     "test:coverage": "vp test run --coverage",
-    "migrations:lock": "node scripts/lock-migrations.mjs"
+    "migrations:lock": "node scripts/lock-migrations.mjs",
+    "migration:dry-run": "node --experimental-transform-types scripts/migration-dry-run.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-mcp": "0.99.2",

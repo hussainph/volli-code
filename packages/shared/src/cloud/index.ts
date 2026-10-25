@@ -14,6 +14,7 @@ export * from "./gateway";
 export * from "./ids";
 export * from "./jobs";
 export * from "./members";
+export * from "./migration-import";
 export * from "./positions";
 export * from "./project-rules";
 export * from "./r2-keys";

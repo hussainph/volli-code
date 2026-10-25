@@ -75,8 +75,12 @@ Everything else is an implementation detail.
 | `@volli/host-core/maintenance`     | `backup/`, `migration-export/`, `process/`, `maintenance-services.ts`, `database-recovery.ts`, `retention-runtime.ts`, `orphan-scan.ts`, `quiet-windows.ts`, `login-*.ts`, `host-shutdown.ts`, `shutdown-deadline.ts`                                                                                                                                                                               | Backup documents, the Volli Cloud migration export, database recovery, process reaping, retention, quiet windows, login PATH, the shutdown deadline                                                           |
 | `@volli/host-core/testing`         | `testing/`, `db/test-helpers.ts`, `session-control/test-support.ts`, `backup/test-fixture.ts`, `secrets/test-support/`; it also re-exports test-only names of production modules: `db/recovery-pending.ts`, `session-control/sqlite-ledger.ts`, `session-control/checkpoint-diagnostics.ts`, and the `*ForTest` resets of `worktree/deletion-lease.ts`, `orphan-scan.ts` and `retention-runtime.ts` | Test fixtures, the standalone Session ledger and test engine, the database-recovery marker, the checkpoint failure reporter, module-state resets. **Tests only**                                              |
 
-`scripts/` holds `pnpm --filter @volli/host-core migrations:lock` and the N-1
-compatibility driver.
+`scripts/` holds `pnpm --filter @volli/host-core migrations:lock`, the N-1
+compatibility driver, and the Volli Cloud migration dry run
+(`migration-dry-run.mjs`, over `src/migration-dry-run/`; usage and safety rules
+in [its README](src/migration-dry-run/README.md)). The dry run is an operator
+tool, not part of any entry: it rehearses a profile's import into a throwaway
+local backend, read-only on the profile.
 
 **The interface rules** (`src/package-interface.test.ts` enforces each). Every
 import guard here, and desktop's and hostd's, finds module edges with

@@ -20,6 +20,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import type Database from "better-sqlite3";
+import { BOARD_EVENT_KINDS, type CheckoutMode } from "@volli/shared/cloud";
 import {
   MIGRATION_PLACEHOLDERS,
   type Actor,
@@ -61,6 +62,8 @@ import {
 import {
   configEntryId,
   lastPathSegment,
+  mcpOperationId,
+  mcpServerEntryId,
   parseColumnActor,
   parseJsonColumn,
   parseLocalActor,
@@ -301,6 +304,21 @@ function lenientJson(text: string | null): JsonValue {
   return value === undefined ? text : value;
 }
 
+/**
+ * The local ticket event kinds that become board events: every kind the cloud
+ * reads, plus `worktree_scope_changed`, which becomes `checkout_mode_changed`
+ * (its cloud name). A row of any other kind goes to the legacy archive, so a board
+ * event never carries a kind the backend's schema refuses.
+ */
+const PORTED_TICKET_EVENT_KINDS: readonly string[] = [
+  ...BOARD_EVENT_KINDS,
+  "worktree_scope_changed",
+];
+// Literals from a constant, never input: safe to inline in SQL.
+const PORTED_KIND_SQL = PORTED_TICKET_EVENT_KINDS.map((kind) => `'${kind}'`).join(", ");
+/** Which `ticket_events` rows become board events (the rest are kept as legacy rows). */
+const PORTED_TICKET_EVENT = `json_valid(e.payload) AND e.kind IN (${PORTED_KIND_SQL})`;
+
 // ---- projects ---------------------------------------------------------------
 
 interface ProjectRow {
@@ -354,7 +372,7 @@ const projectsSource = source<ProjectRow>({
                (SELECT MAX(t.ticket_number) FROM tickets t WHERE t.project_id = p.id)
                  AS max_ticket_number,
                (SELECT COUNT(*) FROM ticket_events e JOIN tickets t ON t.id = e.ticket_id
-                 WHERE t.project_id = p.id AND json_valid(e.payload)) AS board_events
+                 WHERE t.project_id = p.id AND ${PORTED_TICKET_EVENT}) AS board_events
           FROM projects p
          ORDER BY p.id`,
   map(row, _prepared, lookups, emit) {
@@ -646,6 +664,19 @@ const ticketsSource = source<TicketRow, TicketLookups>({
 
 // ---- board events -----------------------------------------------------------
 
+/** The board event kind a local kind becomes. */
+function cloudBoardKind(kind: string): string {
+  return kind === "worktree_scope_changed" ? "checkout_mode_changed" : kind;
+}
+
+/** A `worktree_scope_changed` side (`usesWorktree`) as the checkout mode it chose. */
+function checkoutMode(usesWorktree: JsonValue | undefined, context: string): CheckoutMode {
+  if (typeof usesWorktree !== "boolean") {
+    throw new SourceCorruptError(`${context} has a worktree scope that is not a boolean`);
+  }
+  return usesWorktree ? "worktree" : "main_checkout";
+}
+
 interface TicketEventRow {
   id: string;
   ticket_id: string;
@@ -704,7 +735,18 @@ function cloudBoardPayload(
   payload: JsonValue,
   lookups: ExportLookups,
 ): JsonValue {
-  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return payload;
+  const isObject = payload !== null && typeof payload === "object" && !Array.isArray(payload);
+  if (kind === "worktree_scope_changed") {
+    // Converted whatever its shape: a scope change that names no scope is corrupt.
+    const sides = isObject ? (payload as Record<string, JsonValue>) : {};
+    const context = `the scope change of ticket ${ticketId}`;
+    return {
+      kind: "checkout_mode_changed",
+      from: checkoutMode(sides.from, context),
+      to: checkoutMode(sides.to, context),
+    };
+  }
+  if (!isObject) return payload;
   const record = payload as Record<string, JsonValue>;
   if (kind === "worktree_changed") {
     return {
@@ -741,7 +783,7 @@ const boardEventsSource = source<TicketEventRow>({
           FROM ticket_events e
           LEFT JOIN tickets t ON t.id = e.ticket_id
           LEFT JOIN ticket_event_sequence s ON s.event_id = e.id
-         WHERE json_valid(e.payload)
+         WHERE ${PORTED_TICKET_EVENT}
          ORDER BY t.project_id, seq`,
   map(row, _prepared, lookups, emit) {
     const projectId = ownerProject(row.project_id, `ticket event ${row.id}`);
@@ -751,7 +793,7 @@ const boardEventsSource = source<TicketEventRow>({
       projectId,
       ticketId: row.ticket_id,
       seq: row.seq,
-      kind: row.kind,
+      kind: cloudBoardKind(row.kind),
       actor: actorOf(parseLocalActor(row.actor), lookups, row.kind),
       occurredAt: row.created_at,
       payload: cloudBoardPayload(row.kind, row.ticket_id, projectId, payload, lookups),
@@ -759,7 +801,7 @@ const boardEventsSource = source<TicketEventRow>({
   },
 });
 
-/** Ticket events whose payload is not JSON: kept, never ported as rows. */
+/** Ticket events with no board event to become (unparseable, or a kind the cloud has no use for): kept, never ported as rows. */
 const unparseableTicketEventsSource = source<Omit<TicketEventRow, "seq">>({
   id: "unparseableTicketEvents",
   tables: ["ticket_events", "tickets"],
@@ -767,13 +809,15 @@ const unparseableTicketEventsSource = source<Omit<TicketEventRow, "seq">>({
   sql: `SELECT e.id, e.ticket_id, e.kind, e.actor, e.payload, e.created_at, t.project_id
           FROM ticket_events e
           LEFT JOIN tickets t ON t.id = e.ticket_id
-         WHERE NOT json_valid(e.payload)
+         WHERE NOT (${PORTED_TICKET_EVENT})
          ORDER BY e.id`,
   map(row, _prepared, _lookups, emit) {
     emit("legacyRows", {
       table: "ticket_events",
       projectId: ownerProject(row.project_id, `ticket event ${row.id}`),
-      reason: "payload is not JSON",
+      reason: PORTED_TICKET_EVENT_KINDS.includes(row.kind)
+        ? "payload is not JSON"
+        : "kind has no board event equivalent",
       row: {
         id: row.id,
         ticket_id: row.ticket_id,
@@ -1260,12 +1304,12 @@ interface AutomationRunRow {
  * What started a Run, where local history can say: an Unbound Run is one-time
  * work a person started by hand, and only a schedule targets the project
  * rather than a ticket. A ticket Run may have been a column arrival or a
- * by-hand Run, and nothing local records which.
+ * by-hand Run, and nothing local records which (neither the Run row nor its
+ * `automation.run` command names an origin), so it is `manual`: a Run is an
+ * `arrival` only where a pending or armed origin is known.
  */
 function runTrigger(row: AutomationRunRow): AutomationRunRecord["trigger"] {
-  if (row.automation_id === null) return "manual";
-  if (row.ticket_id === null) return "schedule";
-  return "unknown";
+  return row.automation_id !== null && row.ticket_id === null ? "schedule" : "manual";
 }
 
 const automationRunsSource = source<AutomationRunRow>({
@@ -1448,13 +1492,24 @@ const columnOrderSource = source<{
 }>({
   id: "automationColumnOrder",
   tables: ["automation_column_order"],
-  streams: ["automationColumnOrder"],
+  streams: ["automationColumnOrder", "legacyRows"],
   sql: "SELECT * FROM automation_column_order ORDER BY project_id, status",
   map(row, _prepared, _lookups, emit) {
+    const rankedIds = lenientJson(row.ranked_ids);
+    // The table only checks `json_valid`; the cloud column holds a list of ids.
+    if (!Array.isArray(rankedIds) || !rankedIds.every((id) => typeof id === "string")) {
+      emit("legacyRows", {
+        table: "automation_column_order",
+        projectId: row.project_id,
+        reason: "ranked ids are not a list of ids",
+        row,
+      });
+      return;
+    }
     emit("automationColumnOrder", {
       projectId: row.project_id,
       status: row.status,
-      rankedIds: lenientJson(row.ranked_ids),
+      rankedIds: rankedIds as string[],
       orderedAt: row.ordered_at,
     });
   },
@@ -1530,14 +1585,31 @@ interface McpServerRow {
  * in this Mac's credential file and are re-entered. The tool
  * catalog is a runner-local cache, since stdio servers run on the runner.
  */
+/**
+ * `value` with this machine's home directory written as `~` in every string.
+ * A stdio MCP server is often launched from a binary under the home directory;
+ * as `~/…` the definition names no machine and resolves on each of the
+ * person's runners.
+ */
+function homeRelative(value: JsonValue, homeDir: string): JsonValue {
+  if (typeof value === "string") return redactPaths(value, [[homeDir, "~"]]);
+  if (Array.isArray(value)) return value.map((item) => homeRelative(item, homeDir));
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, homeRelative(item, homeDir)]),
+    );
+  }
+  return value;
+}
+
 const mcpServersSource = source<McpServerRow>({
   id: "mcpServers",
   tables: ["mcp_servers"],
   streams: ["configEntries", "mcpCatalogCache"],
   sql: "SELECT * FROM mcp_servers ORDER BY id",
-  map(row, _prepared, _lookups, emit) {
+  map(row, _prepared, lookups, emit) {
     emit("configEntries", {
-      id: row.id,
+      id: mcpServerEntryId(row.id),
       level: "project",
       userId: null,
       workspaceId: null,
@@ -1546,7 +1618,8 @@ const mcpServersSource = source<McpServerRow>({
       name: row.name,
       state: row.enabled === 0 ? "off" : "on",
       definition: {
-        transport: lenientJson(row.transport),
+        localId: row.id,
+        transport: homeRelative(lenientJson(row.transport), lookups.homeDir),
         source: row.source,
         registryType: row.registry_type,
         version: row.version,
@@ -1557,7 +1630,7 @@ const mcpServersSource = source<McpServerRow>({
       updatedAt: row.updated_at,
     });
     emit("mcpCatalogCache", {
-      configEntryId: row.id,
+      configEntryId: mcpServerEntryId(row.id),
       projectId: row.project_id,
       catalog: lenientJson(row.catalog),
       stale: row.stale !== 0,
@@ -1590,9 +1663,9 @@ const mcpOperationsSource = source<McpOperationRow>({
   tables: ["mcp_operations"],
   streams: ["auditLog"],
   sql: "SELECT * FROM mcp_operations ORDER BY id",
-  map(row, _prepared, _lookups, emit) {
+  map(row, _prepared, lookups, emit) {
     emit("auditLog", {
-      id: row.id,
+      id: mcpOperationId(row.id),
       workspaceId: WORKSPACE,
       actor:
         row.session_id === null
@@ -1605,14 +1678,15 @@ const mcpOperationsSource = source<McpOperationRow>({
             },
       kind: `mcp_${row.operation}`,
       targetKind: "mcp_server",
-      targetId: row.server_id,
+      targetId: mcpServerEntryId(row.server_id),
       at: row.created_at,
       detail: {
         projectId: row.project_id,
+        localServerId: row.server_id,
         serverName: row.server_name,
         outcome: row.outcome,
-        summary: row.summary,
-        detail: row.detail,
+        summary: redactPaths(row.summary, [[lookups.homeDir, "~"]]),
+        detail: row.detail === null ? null : redactPaths(row.detail, [[lookups.homeDir, "~"]]),
         source: row.source,
         registryType: row.registry_type,
         version: row.version,

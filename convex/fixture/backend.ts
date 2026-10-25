@@ -535,5 +535,7 @@ export async function deployForTests(
     VOLLI_CONVEX_URL: backend.url,
     VOLLI_CONVEX_SITE_URL: backend.siteUrl,
     VOLLI_CONVEX_TEST_PRIVATE_KEY: issuer.privateKeyPem,
+    // For tests that drive internal functions the way an operator tool does.
+    VOLLI_CONVEX_ADMIN_KEY: backend.adminKey,
   };
 }

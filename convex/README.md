@@ -57,6 +57,17 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 | `test/*.test.ts`                                   | Unit tests: functions run in-process under [`convex-test`](https://docs.convex.dev/testing/convex-test). No backend.                                                                                                                               |
 | `test/*.backend.test.ts`                           | Integration tests against the real pinned backend.                                                                                                                                                                                                 |
 
+## The migration import
+
+`functions/migration.ts` is the SQLite → Volli Cloud import: internal
+functions the dry run (`packages/host-core/src/migration-dry-run`) calls with
+the admin key, never a client. `begin` checks the import target (and creates
+one only on a test deployment); `importRows` writes a batch of one stream,
+idempotent by each table's key, reporting conflicts and rows already migrated
+into another Workspace and never overwriting them; `readPage` and
+`readSessionEvents` read back for the verifier. Each record is mapped by
+`migrationDocument` from `@volli/shared/cloud`.
+
 ## Running it locally
 
 ```sh
