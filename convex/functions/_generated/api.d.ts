@@ -9,12 +9,14 @@
  */
 
 import type * as accounts from "../accounts.js";
+import type * as activity from "../activity.js";
 import type * as board from "../board.js";
 import type * as boardReceipts from "../boardReceipts.js";
 import type * as crons from "../crons.js";
 import type * as files from "../files.js";
 import type * as health from "../health.js";
 import type * as invites from "../invites.js";
+import type * as lib_activity from "../lib/activity.js";
 import type * as lib_audit from "../lib/audit.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_board from "../lib/board.js";
@@ -37,12 +39,14 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   accounts: typeof accounts;
+  activity: typeof activity;
   board: typeof board;
   boardReceipts: typeof boardReceipts;
   crons: typeof crons;
   files: typeof files;
   health: typeof health;
   invites: typeof invites;
+  "lib/activity": typeof lib_activity;
   "lib/audit": typeof lib_audit;
   "lib/auth": typeof lib_auth;
   "lib/board": typeof lib_board;
