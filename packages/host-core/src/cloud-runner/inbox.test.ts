@@ -794,9 +794,13 @@ it("fences wake/poll claims during sleep and ignores a claim answer crossing the
       }),
   );
   const pending = worker.claimNow();
+  // Upstream coalesces a mid-claim inbox wake into one more claim. A sleep
+  // fence must also cancel that queued retry, not just the current answer.
+  wake!({ ready: 1, nextAvailableAt: 0 });
   worker.pauseClaims!();
   answer!([job("crossed")]);
   await pending;
+  expect(backend.backend.claim).toHaveBeenCalledOnce();
   expect(execute).not.toHaveBeenCalled();
   expect(journal.rows.size).toBe(0);
   worker.resumeClaims!();

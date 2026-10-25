@@ -7,7 +7,7 @@ import {
   newId,
   parseJobPayload,
 } from "@volli/shared/cloud";
-import type { SessionEvent } from "@volli/shared";
+import { cloudMessageSubmit, type SessionEvent } from "@volli/shared";
 import { api, internal } from "../functions/_generated/api";
 import { onSessionFact } from "../functions/lib/watches";
 import {
@@ -437,6 +437,48 @@ describe("durable watches", () => {
     expect((await watchRows(w.t, w.watcher.sessionId))[0]?.turnArmed).toBe(false);
     await w.as.mutation(api.sessions.command, args);
     expect((await watchRows(w.t, w.watcher.sessionId))[0]?.turnArmed).toBe(false);
+  });
+
+  test("an inline steering body and its automatic watch commit together, with exact retries", async () => {
+    const w = await world();
+    const commandId = newId("command");
+    const built = cloudMessageSubmit({
+      sessionId: w.target.sessionId,
+      commandId,
+      message: {
+        id: newId("command"),
+        role: "user",
+        parts: [{ type: "text", text: "Continue here" }],
+      },
+    });
+    const args = {
+      sessionId: w.target.sessionId,
+      commandId,
+      intent: built.intent,
+      body: built.body,
+    };
+    await expect(w.as.mutation(api.sessions.command, { ...args, body: "corrupt" })).rejects.toThrow(
+      code("invalid_request"),
+    );
+    expect(await watchRows(w.t, w.watcher.sessionId)).toHaveLength(0);
+    const first = await w.as.mutation(api.sessions.command, args);
+    expect((await watchRows(w.t, w.watcher.sessionId))[0]).toMatchObject({
+      origin: "steered",
+      turnArmed: true,
+    });
+    expect(
+      await w.t.run(async (ctx) => {
+        const bodies = await ctx.db
+          .query("transcriptArtifacts")
+          .withIndex("by_session_digest", (q) =>
+            q.eq("sessionId", w.target.sessionId).eq("digest", built.reference.digest!),
+          )
+          .collect();
+        return bodies.map(({ body }) => body);
+      }),
+    ).toEqual([built.body]);
+    expect(await w.as.mutation(api.sessions.command, args)).toEqual(first);
+    expect(await watchRows(w.t, w.watcher.sessionId)).toHaveLength(1);
   });
 
   test("quotes a bounded staged last reply as untrusted prose", async () => {
