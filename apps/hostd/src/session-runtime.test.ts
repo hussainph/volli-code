@@ -338,7 +338,15 @@ describe("headless runtime ownership", () => {
     expect(identity.ticketDisplayIdOf("t")).toBeNull();
     seam.project.mockReturnValue({ ticketPrefix: "VC" });
     expect(identity.ticketDisplayIdOf("t")).toBe("VC-1");
+    // The tool door projects the one map (VC-923): none before `ready()` built it.
+    const [agentOptions] = f.facade.agents.mock.lastCall as unknown as [
+      { handlers: () => unknown },
+    ];
+    expect(agentOptions.handlers()).toBeNull();
+    const map = { map: "host" };
+    seam.handlers.mockReturnValueOnce(map as never);
     const ready = await owner.ready();
+    expect(agentOptions.handlers()).toBe(map);
     expect(seam.commands).toHaveBeenCalledWith(f.proof);
     expect(ready).toMatchObject({
       sessionEngine: "recovered-engine",
