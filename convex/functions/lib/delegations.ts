@@ -370,48 +370,26 @@ async function onParentAnswer(ctx: MutationCtx, parent: Doc<"sessions">, fact: S
   if (answer !== null) await reconcileOriginalAnswer(ctx, slot, answer);
 }
 
+/** Reconcile before classifying work, including a whole parent-first child batch. */
+async function reconcileRecordedOriginalAnswer(ctx: MutationCtx, slot: Slot): Promise<Slot> {
+  const watch = watchOf(slot);
+  const originalId = subagentNoticeIds(`${slot.parentSessionId}:${slot.toolCallId}`).commandId;
+  if (!watch.originalSettled || !watch.originalOutcome || watch.active?.commandId === originalId) {
+    const answer = await recordedOriginalAnswer(ctx, slot);
+    if (answer !== null) {
+      await reconcileOriginalAnswer(ctx, slot, answer);
+      return (await ctx.db.get(slot._id))!;
+    }
+  }
+  return slot;
+}
+
 /** A delayed original kickoff is not a new resumption after its parent was told. */
-async function isOriginalKickoffTurn(ctx: Reader, slot: Slot, turnId: string): Promise<boolean> {
-  const kickoff = await ctx.db
-    .query("sessionEvents")
-    .withIndex("by_session_command", (q) =>
-      q
-        .eq("sessionId", slot.childSessionId)
-        .eq("commandId", `${slot.parentSessionId}:${slot.toolCallId}:kickoff`)
-        .eq("kind", "command.recorded"),
-    )
-    .first();
-  if (kickoff === null || !kickoff.kindKnown || kickoff.quarantine !== null) return false;
-  const turn = await ctx.db
-    .query("sessionEvents")
-    .withIndex("by_session_kind", (q) =>
-      q
-        .eq("sessionId", slot.childSessionId)
-        .eq("kind", "turn.started")
-        .gt("sequence", kickoff.sequence),
-    )
-    .filter((q) => q.and(q.eq(q.field("kindKnown"), true), q.eq(q.field("quarantine"), null)))
-    .first();
-  if (turn === null) return false;
-  // A rejected/unrun kickoff can have its first later turn opened by a NEW
-  // message. Only consume the turn when the frozen kickoff is still its
-  // immediate command predecessor; ambiguity must not hide resumed work.
-  const opener = await ctx.db
-    .query("sessionEvents")
-    .withIndex("by_session_kind", (q) =>
-      q
-        .eq("sessionId", slot.childSessionId)
-        .eq("kind", "command.recorded")
-        .lt("sequence", turn.sequence),
-    )
-    .order("desc")
-    .first();
-  if (opener?.sequence !== kickoff.sequence) return false;
-  const payload = decodeSessionEventPayload(
-    typeof turn.payload === "string" ? JSON.parse(turn.payload) : turn.payload,
-    "delegation kickoff turn",
-  );
-  return payload.kind === "turn.started" && payload.turnId === turnId;
+function isOriginalKickoffTurn(slot: Slot, turnId: string, commandId?: string | null): boolean {
+  const kickoffId = `${slot.parentSessionId}:${slot.toolCallId}:kickoff`;
+  // Explicit correlation wins. DURABLE fallback, not adjacency: Runtime's
+  // #submitMessage writes turn:${commandId}; follow-up delivery uses it too.
+  return commandId != null ? commandId === kickoffId : turnId === `turn:${kickoffId}`;
 }
 
 async function settleChild(
@@ -421,11 +399,12 @@ async function settleChild(
   view: CloudSessionView,
 ) {
   if (child.role !== "subagent") return;
-  const slot = await ctx.db
+  const projected = await ctx.db
     .query("delegations")
     .withIndex("by_child", (q) => q.eq("childSessionId", child.id))
     .unique();
-  if (slot === null) return;
+  if (projected === null) return;
+  const slot = await reconcileRecordedOriginalAnswer(ctx, projected);
   const watch = { ...watchOf(slot) };
   if (fact.sequence <= watch.throughSequence) return;
   watch.throughSequence = fact.sequence;
@@ -460,7 +439,7 @@ async function settleChild(
       if (
         !watch.originalSettled ||
         (!isSubagentHostNoticeOrigin(view.latestTurnOrigin) &&
-          !(await isOriginalKickoffTurn(ctx, slot, payload.turnId)))
+          !isOriginalKickoffTurn(slot, payload.turnId, fact.commandId))
       ) {
         watch.active = {
           afterSequence: fact.sequence,
@@ -478,11 +457,12 @@ async function settleChild(
       view.turnActive &&
       view.latestTurnId !== null &&
       !isSubagentHostNoticeOrigin(subagentCommandOrigin(fact)) &&
-      !(await isOriginalKickoffTurn(ctx, slot, view.latestTurnId))
+      payload.command.id !== `${operationId}:kickoff`
     ) {
       watch.originalSettled = await originalWasSettled(ctx, slot, watch);
       if (watch.originalSettled) {
-        // A person/Session joining a host-notice turn is a resumption too.
+        // A genuine non-kickoff join resumes work even when the still-active
+        // turn was originally opened by the now-settled kickoff.
         watch.active = {
           afterSequence: fact.sequence,
           resumed: true,
@@ -674,18 +654,7 @@ export async function onDelegationHead(
       .query("delegations")
       .withIndex("by_child", (q) => q.eq("childSessionId", session.id))
       .unique();
-    if (slot !== null) {
-      const watch = watchOf(slot);
-      const originalId = subagentNoticeIds(`${slot.parentSessionId}:${slot.toolCallId}`).commandId;
-      if (
-        !watch.originalSettled ||
-        !watch.originalOutcome ||
-        watch.active?.commandId === originalId
-      ) {
-        const answer = await recordedOriginalAnswer(ctx, slot);
-        if (answer !== null) await reconcileOriginalAnswer(ctx, slot, answer);
-      }
-    }
+    if (slot !== null) await reconcileRecordedOriginalAnswer(ctx, slot);
     const parent = await sessionRow(ctx, session.parentSessionId);
     if (parent?.stopped != null) await stopOtherRunnerChildren(ctx, parent);
   }

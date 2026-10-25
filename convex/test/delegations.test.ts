@@ -136,6 +136,8 @@ async function world() {
             },
           },
         };
+      if (payload.kind === "turn.started")
+        return { ...event, commandId: `${parent.sessionId}:${toolCallId}:kickoff` };
       return { ...event, commandId };
     });
     // writeSession drives Engine observations, not Runtime's ready-attach
@@ -770,6 +772,116 @@ describe("delegation projection and settlement", () => {
     },
   );
 
+  test("a single child batch after parent-first pre-intent failure reports genuine work under resume ids", async () => {
+    const w = await world();
+    const c = await w.child("pre-intent-one-batch");
+    const ready = c.events.slice(
+      0,
+      c.events.findIndex(
+        (event) =>
+          event.payload.kind === "command.recorded" &&
+          event.payload.command.id === `${c.operationId}:kickoff`,
+      ),
+    );
+    const told = await parentAnswerFact(w.t, w.parent.events.slice(0, w.end), c, "failed");
+    await accept(w.t, w.runnerId, w.parent.sessionId, [told]);
+    const command = messageFact(ready);
+    const turnId = `turn:${command.commandId}`;
+    const start = {
+      ...nextFact([...ready, command], { kind: "turn.started", attachmentId: "a", turnId }),
+      commandId: command.commandId,
+    };
+    const end = nextFact([...ready, command, start], {
+      kind: "turn.completed",
+      attachmentId: "a",
+      turnId,
+    });
+    await accept(w.t, w.runnerId, c.sessionId, [...ready, command, start, end]);
+    expect((await jobs(w.t, w.parent.sessionId)).map((job) => job.commandId)).toEqual([
+      `${c.operationId}:resume:${turnId}:answer`,
+    ]);
+    expect((await slots(w.t))[0]).toMatchObject({
+      status: "answered",
+      watch: { active: null, originalSettled: true, originalOutcome: true },
+    });
+  });
+
+  test.each(["explicit", "frozen"] as const)(
+    "delayed kickoff correlation survives interleaved bookkeeping (%s)",
+    async (correlation) => {
+      const w = await world();
+      const c = await w.child("bookkeeping");
+      const told = await parentAnswerFact(w.t, w.parent.events.slice(0, w.end), c, "completed");
+      await accept(w.t, w.runnerId, w.parent.sessionId, [told]);
+      const turnAt = c.events.findIndex((event) => event.payload.kind === "turn.started");
+      const original = c.events[turnAt]!.payload;
+      if (original.kind !== "turn.started") throw new Error("No turn");
+      const history = c.events.slice(0, turnAt);
+      for (const intent of [
+        { kind: "session.retitle", title: "Renamed" },
+        { kind: "session.signal", signal: "done", reason: null },
+      ] as const) {
+        const commandId = randomUUID();
+        history.push({
+          ...nextFact(history, {
+            kind: "command.recorded",
+            command: {
+              id: commandId,
+              sessionId: c.sessionId,
+              createdAt: history.at(-1)!.occurredAt + 1,
+              route: null,
+              intent,
+            },
+          }),
+          commandId,
+        });
+      }
+      const turnId = correlation === "explicit" ? original.turnId : `turn:${c.operationId}:kickoff`;
+      const start = {
+        ...nextFact(history, { ...original, turnId }),
+        commandId: correlation === "explicit" ? `${c.operationId}:kickoff` : undefined,
+      };
+      history.push(start);
+      await accept(w.t, w.runnerId, c.sessionId, history);
+      expect((await slots(w.t))[0]?.watch?.active).toBeNull();
+      const end = nextFact(history, {
+        kind: "turn.completed",
+        attachmentId: original.attachmentId,
+        turnId,
+      });
+      await accept(w.t, w.runnerId, c.sessionId, [end]);
+      expect(await jobs(w.t, w.parent.sessionId)).toEqual([]);
+    },
+  );
+
+  test("a genuine join to the still-active original turn reports after local failure", async () => {
+    const w = await world();
+    const c = await w.child("joined-original");
+    const history = c.events.slice(0, c.end);
+    const original = history.find((event) => event.payload.kind === "turn.started")!.payload;
+    if (original.kind !== "turn.started") throw new Error("No turn");
+    await accept(w.t, w.runnerId, c.sessionId, history);
+    const told = await parentAnswerFact(w.t, w.parent.events.slice(0, w.end), c, "failed");
+    await accept(w.t, w.runnerId, w.parent.sessionId, [told]);
+    expect((await slots(w.t))[0]).toMatchObject({ status: "failed", watch: { active: null } });
+    const joined = messageFact(history);
+    history.push(joined);
+    await accept(w.t, w.runnerId, c.sessionId, [joined]);
+    expect((await slots(w.t))[0]?.watch?.active).toMatchObject({
+      resumed: true,
+      commandId: `${c.operationId}:resume:${original.turnId}:answer`,
+    });
+    const end = nextFact(history, {
+      kind: "turn.completed",
+      attachmentId: original.attachmentId,
+      turnId: original.turnId,
+    });
+    await accept(w.t, w.runnerId, c.sessionId, [end]);
+    expect((await jobs(w.t, w.parent.sessionId)).map((job) => job.commandId)).toEqual([
+      `${c.operationId}:resume:${original.turnId}:answer`,
+    ]);
+  });
+
   test.each([false, true])(
     "parent-before-birth delivery does not turn delayed original work into a resumption (split=%s)",
     async (split) => {
@@ -791,9 +903,7 @@ describe("delegation projection and settlement", () => {
         status: "answered",
         watch: { active: null, originalSettled: true },
       });
-      expect((await jobs(w.t, w.parent.sessionId)).map((job) => job.commandId)).toEqual(
-        split ? [] : [`${c.operationId}:answer`],
-      );
+      expect(await jobs(w.t, w.parent.sessionId)).toEqual([]);
       const command = messageFact(c.events);
       const start = nextFact([...c.events, command], {
         kind: "turn.started",
@@ -815,7 +925,7 @@ describe("delegation projection and settlement", () => {
     },
   );
 
-  test("a delayed batch keeps the original outcome and real resume ids after parent-first delivery", async () => {
+  test("a delayed batch keeps the original spent and uses real resume ids after parent-first delivery", async () => {
     const w = await world();
     const c = await w.child("two-turn-batch");
     const told = await parentAnswerFact(w.t, w.parent.events.slice(0, w.end), c, "completed");
@@ -833,7 +943,6 @@ describe("delegation projection and settlement", () => {
     });
     await accept(w.t, w.runnerId, c.sessionId, [...c.events, command, start, end]);
     expect((await jobs(w.t, w.parent.sessionId)).map((job) => job.commandId)).toEqual([
-      `${c.operationId}:answer`,
       `${c.operationId}:resume:batched-resumption:answer`,
     ]);
     expect((await slots(w.t))[0]).toMatchObject({
@@ -842,48 +951,51 @@ describe("delegation projection and settlement", () => {
     });
   });
 
-  test("a rejected kickoff does not hide a genuine first resumption after its local answer", async () => {
-    const w = await world();
-    const c = await w.child("rejected-before-turn");
-    const history = c.events.slice(
-      0,
-      c.events.findIndex((event) => event.payload.kind === "turn.started"),
-    );
-    const rejected = nextFact(history, {
-      kind: "command.receipt.recorded",
-      receipt: {
-        id: randomUUID(),
-        commandId: `${c.operationId}:kickoff`,
-        status: "rejected",
-        code: "not_attached",
-        detail: null,
-        recordedAt: 1,
-        sequence: 1,
-      },
-    });
-    history.push(rejected);
-    await accept(w.t, w.runnerId, c.sessionId, history);
-    const told = await parentAnswerFact(w.t, w.parent.events.slice(0, w.end), c, "failed");
-    await accept(w.t, w.runnerId, w.parent.sessionId, [told]);
-    const command = messageFact(history);
-    history.push(command);
-    const start = nextFact(history, {
-      kind: "turn.started",
-      attachmentId: "a",
-      turnId: "first-real-resumption",
-    });
-    history.push(start);
-    const end = nextFact(history, {
-      kind: "turn.completed",
-      attachmentId: "a",
-      turnId: "first-real-resumption",
-    });
-    await accept(w.t, w.runnerId, c.sessionId, [command, start, end]);
-    expect((await jobs(w.t, w.parent.sessionId)).map((job) => job.commandId)).toEqual([
-      `${c.operationId}:answer`,
-      `${c.operationId}:resume:first-real-resumption:answer`,
-    ]);
-  });
+  test.each([false, true])(
+    "a rejected kickoff does not hide a genuine first resumption (frozen-looking id=%s)",
+    async (frozenLooking) => {
+      const w = await world();
+      const c = await w.child("rejected-before-turn");
+      const history = c.events.slice(
+        0,
+        c.events.findIndex((event) => event.payload.kind === "turn.started"),
+      );
+      const rejected = nextFact(history, {
+        kind: "command.receipt.recorded",
+        receipt: {
+          id: randomUUID(),
+          commandId: `${c.operationId}:kickoff`,
+          status: "rejected",
+          code: "not_attached",
+          detail: null,
+          recordedAt: 1,
+          sequence: 1,
+        },
+      });
+      history.push(rejected);
+      await accept(w.t, w.runnerId, c.sessionId, history);
+      const told = await parentAnswerFact(w.t, w.parent.events.slice(0, w.end), c, "failed");
+      await accept(w.t, w.runnerId, w.parent.sessionId, [told]);
+      const command = messageFact(history);
+      history.push(command);
+      const turnId = frozenLooking ? `turn:${c.operationId}:kickoff` : "first-real-resumption";
+      const start = {
+        ...nextFact(history, {
+          kind: "turn.started",
+          attachmentId: "a",
+          turnId,
+        }),
+        commandId: frozenLooking ? command.commandId : null,
+      };
+      history.push(start);
+      const end = nextFact(history, { kind: "turn.completed", attachmentId: "a", turnId });
+      await accept(w.t, w.runnerId, c.sessionId, [command, start, end]);
+      expect((await jobs(w.t, w.parent.sessionId)).map((job) => job.commandId)).toEqual([
+        `${c.operationId}:answer`,
+        `${c.operationId}:resume:${turnId}:answer`,
+      ]);
+    },
+  );
 
   test("a local answer never overwrites an already chosen child-ledger outcome", async () => {
     const w = await world();
@@ -1067,7 +1179,7 @@ describe("delegation projection and settlement", () => {
     }
     expect(
       (await jobs(w.t, w.parent.sessionId)).filter((job) => job.kind === "session.notice"),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     const command = messageFact(history, randomUUID(), { kind: "volli", reason: "shell-notice" });
     history.push(command);
     const start = nextFact(history, { kind: "turn.started", attachmentId: "a", turnId: "joined" });
@@ -1087,10 +1199,7 @@ describe("delegation projection and settlement", () => {
     const notices = (await jobs(w.t, w.parent.sessionId)).filter(
       (job) => job.kind === "session.notice",
     );
-    expect(notices.map((job) => job.commandId)).toEqual([
-      `${c.operationId}:answer`,
-      `${c.operationId}:resume:joined:answer`,
-    ]);
+    expect(notices.map((job) => job.commandId)).toEqual([`${c.operationId}:resume:joined:answer`]);
   });
 
   test("an original parent-stop settles without an answer command and later work uses resume ids", async () => {
