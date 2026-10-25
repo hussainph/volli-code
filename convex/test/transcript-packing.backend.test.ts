@@ -478,21 +478,33 @@ describe("transcript packing through the production cloud store", () => {
     expect((await w.cloud.engine.getSession({ sessionId }))?.turnActive).toBe(true);
     await end(w, attachment, long.turnId);
     await accepted(w, sessionId);
-    const large = await reply(w, attachment, `Four MB ${CANARY} ${"x".repeat(4 * 1024 * 1024)}`);
-    const largeThrough = await accepted(w, sessionId);
+    // Create AFTER connect, with no terminal fact in this Session: neither
+    // startup recovery nor the earlier Session's turn-end passes can pack it.
+    const largeSessionId = await birth(w);
+    const largePath = join(w.piDirectory, `large-${randomUUID()}.jsonl`);
+    await writeFile(largePath, "");
+    const largeAttachment = await attach(w, largeSessionId, largePath);
+    const large = await reply(
+      w,
+      largeAttachment,
+      `Four MB ${CANARY} ${"x".repeat(4 * 1024 * 1024)}`,
+    );
+    const largeThrough = await accepted(w, largeSessionId);
     // No turn end and no interval callback: accepted artifact bytes alone
     // must invoke the production worker through FileTranscriptArtifactStore.byteLength.
-    await packed(w, sessionId, largeThrough);
-    expect((await w.cloud.engine.getSession({ sessionId }))?.turnActive).toBe(true);
-    await end(w, attachment, large.turnId);
-    await accepted(w, sessionId);
+    await packed(w, largeSessionId, largeThrough);
+    expect((await w.cloud.engine.getSession({ sessionId: largeSessionId }))?.turnActive).toBe(true);
+    const largePacks = await readPacks(w, largeSessionId);
+    expect(largePacks.decoded.flatMap((pack) => pack.entries).map(({ digest }) => digest)).toEqual([
+      large.reference.id,
+    ]);
     const tail = Buffer.from(`${JSON.stringify({ type: "close", text: CANARY })}\n`);
     await appendFile(path, tail);
     const closed = await closeAttachment(w, attachment);
     await accepted(w, sessionId);
     await packed(w, sessionId, closed.sequence, piFileId, tail.length);
     const { decoded } = await readPacks(w, sessionId);
-    expect(decoded.flatMap((pack) => pack.entries)).toHaveLength(4);
+    expect(decoded.flatMap((pack) => pack.entries)).toHaveLength(3);
     expect(piObjects(w, sessionId, attachment.id, piFileId)).toHaveLength(1);
     expect(s3.failures).toEqual([]);
   }, 60_000);
