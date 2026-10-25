@@ -36,6 +36,7 @@ import {
 import { describe, expect, it, vi } from "vite-plus/test";
 import { z } from "zod";
 
+import { accountGithubSnapshotSchema } from "./account-schema";
 import { LOCAL_DESKTOP_CALLER, type RouterCaller } from "./catalog";
 import {
   createDesktopRouter,
@@ -293,6 +294,25 @@ const CLOUD_LAUNCH = {
   backendUrl: "http://127.0.0.1:3210",
 } as const;
 
+/** The account's GitHub half (VC-897): a connection and its installations, never a token. */
+const GITHUB = {
+  state: "ready",
+  connection: { status: "active", login: "dana", name: "Dana" },
+  installations: [
+    {
+      installationId: "42",
+      accountLogin: "acme",
+      accountType: "org",
+      repositorySelection: "selected",
+      suspended: false,
+      configureUrl: "https://github.com/organizations/acme/settings/installations/42",
+    },
+  ],
+  waiting: null,
+  requested: false,
+  failure: null,
+} as const;
+
 function recordingHandlers(fixture: Host): DesktopRouterHandlers {
   const record =
     <Output>(key: string, output: Output) =>
@@ -368,6 +388,11 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "cloud.reportUnsavedWrites": record("cloud.reportUnsavedWrites", null),
     "cloud.saveSnapshot": record("cloud.saveSnapshot", null),
     "cloud.readSnapshot": record("cloud.readSnapshot", { text: null }),
+    "account.githubSubscribe": stream("account.githubSubscribe", GITHUB),
+    "account.githubConnect": record("account.githubConnect", null),
+    "account.githubInstall": record("account.githubInstall", null),
+    "account.githubCancel": record("account.githubCancel", null),
+    "account.githubDisconnect": record("account.githubDisconnect", null),
     ...fixture.overrides,
   };
 }
@@ -1318,6 +1343,45 @@ describeContract<Host, DesktopRouter>(
       expect(await client.cloud.launch.query()).toEqual({ store: "local" });
     });
 
+    it("streams the account's GitHub snapshot and sends its four commands", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      const stream = collect((handlers) =>
+        client.account.githubSubscribe.subscribe(undefined, handlers),
+      );
+      await vi.waitFor(() => expect(stream.values).toEqual([GITHUB]));
+      const waiting = { ...GITHUB, waiting: "install", requested: true } as const;
+      await fixture.sinks.get("account.githubSubscribe")!.emit(waiting);
+      await vi.waitFor(() => expect(stream.values).toEqual([GITHUB, waiting]));
+      stream.unsubscribe();
+      await vi.waitFor(() => expect(fixture.unsubscribed).toEqual(["account.githubSubscribe"]));
+
+      expect(await client.account.githubConnect.mutate()).toBeNull();
+      expect(await client.account.githubInstall.mutate()).toBeNull();
+      expect(await client.account.githubCancel.mutate()).toBeNull();
+      expect(await client.account.githubDisconnect.mutate()).toBeNull();
+      expect(fixture.calls.map(({ key, input, call }) => [key, input, call])).toEqual([
+        ["account.githubSubscribe", undefined, WINDOW_CALL],
+        ["account.githubConnect", undefined, WINDOW_CALL],
+        ["account.githubInstall", undefined, WINDOW_CALL],
+        ["account.githubCancel", undefined, WINDOW_CALL],
+        ["account.githubDisconnect", undefined, WINDOW_CALL],
+      ]);
+    });
+
+    it("refuses a GitHub snapshot whose configure link is not a web page", async () => {
+      const installation = GITHUB.installations[0];
+      expect(accountGithubSnapshotSchema.safeParse(GITHUB).success).toBe(true);
+      for (const configureUrl of ["javascript:alert(1)", "file:///etc/passwd", ""]) {
+        expect(
+          accountGithubSnapshotSchema.safeParse({
+            ...GITHUB,
+            installations: [{ ...installation, configureUrl }],
+          }).success,
+        ).toBe(false);
+      }
+    });
+
     it("refuses an account snapshot that would carry anything but the profile", async () => {
       const fixture = host(LOCAL_DESKTOP_CALLER, {
         "account.snapshot": () => ({ ...ACCOUNT, state: "signed-in-ish" }) as never,
@@ -1652,6 +1716,11 @@ describe("the desktop router's grammar", () => {
         "cloud.reportUnsavedWrites",
         "cloud.saveSnapshot",
         "cloud.readSnapshot",
+        "account.githubSubscribe",
+        "account.githubConnect",
+        "account.githubInstall",
+        "account.githubCancel",
+        "account.githubDisconnect",
       ].toSorted(),
     );
     expect(schemas["worktree.trimSettings"]).toMatchObject({

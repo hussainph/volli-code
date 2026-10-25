@@ -62,6 +62,7 @@ import {
   type AddHostStepId,
   type AccountAccessToken,
   type AccountConnection,
+  type AccountGithubSnapshot,
   type AccountSnapshot,
   type AgentResponse,
   type CloudLaunch,
@@ -452,6 +453,12 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
   readonly "cloud.reportUnsavedWrites": HostHandler<{ count: number }, null>;
   readonly "cloud.saveSnapshot": HostHandler<{ text: string }, null>;
   readonly "cloud.readSnapshot": HostHandler<void, { text: string | null }>;
+  /** The account's GitHub connection and the App's installations (VC-897), through {@link AccountPort.github}. */
+  readonly "account.githubSubscribe": HostSubscriptionHandler<void, AccountGithubSnapshot>;
+  readonly "account.githubConnect": HostHandler<void, null>;
+  readonly "account.githubInstall": HostHandler<void, null>;
+  readonly "account.githubCancel": HostHandler<void, null>;
+  readonly "account.githubDisconnect": HostHandler<void, null>;
 }
 
 /** The agent keys the socket serves: its own verbs, less the start both agent doors share. */
@@ -1216,5 +1223,11 @@ function hostHandlerEntries(
     "cloud.reportUnsavedWrites": ({ count }) => done(() => account().reportUnsavedWrites(count)),
     "cloud.saveSnapshot": ({ text }) => done(() => account().saveSnapshot(text)),
     "cloud.readSnapshot": async () => ({ text: await account().readSnapshot() }),
+    "account.githubSubscribe": async (_input, _call, sink) =>
+      account().github.subscribe((snapshot) => void sink.emit(snapshot)),
+    "account.githubConnect": () => done(() => account().github.connect()),
+    "account.githubInstall": () => done(() => account().github.install()),
+    "account.githubCancel": () => done(() => account().github.cancel()),
+    "account.githubDisconnect": () => done(() => account().github.disconnect()),
   };
 }

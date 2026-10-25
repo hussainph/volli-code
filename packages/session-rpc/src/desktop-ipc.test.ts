@@ -133,6 +133,11 @@ describe("the desktop's IPC exposure", () => {
       "cloud.reportUnsavedWrites",
       "cloud.saveSnapshot",
       "cloud.readSnapshot",
+      "account.githubSubscribe",
+      "account.githubConnect",
+      "account.githubInstall",
+      "account.githubCancel",
+      "account.githubDisconnect",
     ]);
   });
 

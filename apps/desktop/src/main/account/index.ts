@@ -1,15 +1,18 @@
 /**
  * Desktop main's Volli Cloud account (VC-884), composed from its config: the
  * provider adapter, the backend client and the sealed session store around
- * the service. `index.ts` (main) calls {@link createDesktopAccount} once and
- * hands the result to the handler map as its `AccountPort`.
+ * the service, and the account's GitHub half (VC-897) over the same backend.
+ * `index.ts` (main) calls {@link createDesktopAccount} and
+ * {@link createDesktopGithub} once and hands both to the handler map as its
+ * `AccountPort`.
  */
 import type { AccountPort } from "@volli/host-core/handlers";
 import type { CloudLaunch } from "@volli/shared";
 
-import { convexAccountBackend } from "./backend";
+import { convexAccountBackend, convexCaller } from "./backend";
 import type { AccountConfig } from "./config";
 import { devIssuerProvider } from "./dev-issuer";
+import { convexGithubBackend, createGithubService, type GithubService } from "./github";
 import type { AccountProvider } from "./provider";
 import { createAccountService, type AccountLogger, type AccountService } from "./service";
 import { inventoryAccountSessionStore, type AccountSessionInventory } from "./session-store";
@@ -60,7 +63,32 @@ export function createDesktopAccount(input: {
 }
 
 /**
- * The service as the handler map's port: the same object, its main-only
+ * The account's GitHub half (VC-897): the backend's GitHub functions with the
+ * account's access token, following the account so a sign-out, a deletion or
+ * another person ends what was shown. Every call refuses while `cloud` is off.
+ */
+export function createDesktopGithub(input: {
+  readonly config: AccountConfig;
+  readonly enabled: () => boolean;
+  readonly account: Pick<AccountService, "accessToken" | "subscribe">;
+  readonly openBrowser: (url: string) => void | Promise<void>;
+  readonly log: AccountLogger;
+}): GithubService {
+  return createGithubService({
+    enabled: input.enabled,
+    backend:
+      input.config.backendUrl === null
+        ? null
+        : convexGithubBackend(convexCaller({ url: input.config.backendUrl }), input.log),
+    accessToken: () => input.account.accessToken(),
+    account: { subscribe: (listener) => input.account.subscribe(listener) },
+    openBrowser: input.openBrowser,
+    log: input.log,
+  });
+}
+
+/**
+ * The services as the handler map's port: the same objects, their main-only
  * methods hidden by type, beside the launch it chose (VC-889).
  */
 export function accountPort(
@@ -72,6 +100,7 @@ export function accountPort(
     saveSnapshot(text: string): void;
     readSnapshot(): string | null;
   },
+  github: GithubService,
 ): AccountPort {
   return {
     snapshot: () => service.snapshot(),
@@ -87,5 +116,12 @@ export function accountPort(
     reportUnsavedWrites: (count) => launch.reportUnsavedWrites(count),
     saveSnapshot: (text) => launch.saveSnapshot(text),
     readSnapshot: () => launch.readSnapshot(),
+    github: {
+      subscribe: (listener) => github.subscribe(listener),
+      connect: () => github.connect(),
+      install: () => github.install(),
+      cancel: () => github.cancel(),
+      disconnect: () => github.disconnect(),
+    },
   };
 }

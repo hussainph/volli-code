@@ -525,6 +525,7 @@ async function deployFunctions(
 export async function deployForTests(
   backend: Pick<RunningBackend, "url" | "siteUrl" | "adminKey" | "cliEnv">,
   issuer: TestIssuer,
+  env: Record<string, string> = {},
 ): Promise<Record<string, string>> {
   const runnerIssuer = createRunnerIssuerKeys();
   await setDeploymentEnv(backend, {
@@ -532,6 +533,7 @@ export async function deployForTests(
     VOLLI_RUNNER_JWKS: runnerIssuer.jwksDataUri,
     VOLLI_RUNNER_SIGNING_KEY: runnerIssuer.signingKey,
     VOLLI_SECRETS_ROOT_KEYS: `test:${randomBytes(32).toString("base64")}`,
+    ...env,
   });
   await deployFunctions(backend);
   return {

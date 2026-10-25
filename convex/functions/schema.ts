@@ -28,6 +28,14 @@ import { v } from "convex/values";
 import {
   BOARD_EVENT_KINDS,
   CHECKOUT_MODES,
+  GITHUB_ACCOUNT_TYPES,
+  GITHUB_CONNECTION_STATUSES,
+  GITHUB_DELIVERY_OUTCOMES,
+  GITHUB_ERROR_CODES,
+  GITHUB_FLOW_PURPOSES,
+  GITHUB_FLOW_STATUSES,
+  GITHUB_REPO_ACCESS,
+  GITHUB_REPOSITORY_SELECTIONS,
   JOB_KINDS,
   JOB_PRIORITIES,
   JOB_STATUSES,
@@ -115,15 +123,67 @@ export default defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_provider_session", ["providerSessionId"]),
+  // A person's GitHub App user authorization (`githubTokens.ts`). The tokens
+  // are sealed under the person's data key and never returned by a query;
+  // `null` once revoked or disconnected. One Volli account per GitHub account.
   githubConnections: defineTable({
     userId: uuid,
     githubUserId: v.string(),
-    accessToken: sealed,
-    refreshToken: sealed,
+    accessToken: nullable(sealed),
+    refreshToken: nullable(sealed),
     accessExpiresAt: time,
     refreshExpiresAt: time,
     revokedAt: nullable(time),
-  }).index("by_user", ["userId"]),
+    login: v.string(),
+    name: nullable(v.string()),
+    // Verified addresses only, cached at connect and on reconnect.
+    emails: v.array(
+      v.object({
+        email: v.string(),
+        primary: v.boolean(),
+        verified: v.boolean(),
+        visibility: nullable(v.string()),
+      }),
+    ),
+    status: literals(GITHUB_CONNECTION_STATUSES),
+    // Held by the one caller refreshing the tokens (a refresh token is single use).
+    refreshLease: nullable(v.object({ nonce: v.string(), until: time })),
+    updatedAt: time,
+  })
+    .index("by_user", ["userId"])
+    .index("by_github_user", ["githubUserId"]),
+  // A browser round trip to GitHub (connect, or install the App), single use.
+  // The client follows its own row; `codeVerifier` is never returned.
+  githubFlows: defineTable({
+    id: uuid,
+    userId: uuid,
+    purpose: literals(GITHUB_FLOW_PURPOSES),
+    workspaceId: nullable(uuid),
+    stateHash: v.string(),
+    codeVerifier: nullable(v.string()),
+    status: literals(GITHUB_FLOW_STATUSES),
+    error: nullable(literals(GITHUB_ERROR_CODES)),
+    installationId: nullable(v.string()),
+    accountLogin: nullable(v.string()),
+    // Held by the one confirm exchanging the connect code (a double click posts twice).
+    claim: nullable(v.object({ nonce: v.string(), until: time })),
+    createdAt: time,
+    expiresAt: time,
+  })
+    .index("by_uuid", ["id"])
+    .index("by_user_status", ["userId", "status"])
+    .index("by_expiry", ["expiresAt"]),
+  // Webhook deliveries already applied: a redelivery or duplicate is a no-op.
+  githubWebhookDeliveries: defineTable({
+    deliveryId: v.string(),
+    event: v.string(),
+    action: nullable(v.string()),
+    installationId: nullable(v.string()),
+    receivedAt: time,
+    outcome: literals(GITHUB_DELIVERY_OUTCOMES),
+  })
+    .index("by_delivery", ["deliveryId"])
+    .index("by_received", ["receivedAt"]),
   userPrefs: defineTable({
     userId: uuid,
     defaultRunnerId: nullable(uuid),
@@ -193,19 +253,26 @@ export default defineSchema({
     // 1.0 slots: allow-lists, model policy, commit-author policy, retention.
     slots: v.optional(json),
   }).index("by_workspace", ["workspaceId"]),
+  // Global, not owned by a Workspace: a GitHub account installs the App once,
+  // and its repositories serve every Workspace (SCHEMA-NOTES). Unique by
+  // `installationId`, held by the writing mutation.
   githubInstallations: defineTable({
     id: uuid,
-    workspaceId: uuid,
     installationId: v.string(),
+    accountId: v.string(),
     accountLogin: v.string(),
-    accountType: literals(["user", "org"]),
-    repositorySelection: literals(["all", "selected"]),
-    installedByUserId: uuid,
+    accountType: literals(GITHUB_ACCOUNT_TYPES),
+    repositorySelection: literals(GITHUB_REPOSITORY_SELECTIONS),
+    // `null` for an install started on GitHub's own page.
+    installedByUserId: nullable(uuid),
+    permissions: v.record(v.string(), v.string()),
+    events: v.array(v.string()),
     suspendedAt: nullable(time),
+    deletedAt: nullable(time),
+    reconciledAt: nullable(time),
   })
     .index("by_uuid", ["id"])
-    .index("by_installation", ["installationId"])
-    .index("by_workspace", ["workspaceId"]),
+    .index("by_installation", ["installationId"]),
 
   // ── projects ───────────────────────────────────────────────────────────────
   projects: defineTable({
@@ -253,9 +320,14 @@ export default defineSchema({
     baseBranch: nullable(v.string()),
     defaultBranchCache: nullable(v.string()),
     dirName: v.string(),
+    // Whether the App still reaches the repository (`provider: github` rows).
+    githubAccess: v.optional(literals(GITHUB_REPO_ACCESS)),
+    accessCheckedAt: v.optional(time),
   })
     .index("by_uuid", ["id"])
-    .index("by_project", ["projectId", "position"]),
+    .index("by_project", ["projectId", "position"])
+    .index("by_github_repo", ["githubRepoId"])
+    .index("by_installation", ["installationId"]),
   projectMoves: defineTable({
     id: uuid,
     projectId: uuid,

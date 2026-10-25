@@ -12,6 +12,7 @@ export * from "./board-events";
 export * from "./board-receipts";
 export * from "./board-rules";
 export * from "./gateway";
+export * from "./github";
 export * from "./ids";
 export * from "./job-payloads";
 export * from "./jobs";

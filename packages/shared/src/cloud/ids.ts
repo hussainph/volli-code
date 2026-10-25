@@ -46,7 +46,9 @@ export type IdKind =
   | "deletionRequest"
   | "auditEntry"
   | "secret"
-  | "secretKey";
+  | "secretKey"
+  | "githubFlow"
+  | "githubInstallation";
 
 declare const ID_KIND: unique symbol;
 
@@ -74,6 +76,8 @@ export type ExportId = Id<"export">;
 export type MigrationId = Id<"migration">;
 export type DeletionRequestId = Id<"deletionRequest">;
 export type AuditEntryId = Id<"auditEntry">;
+export type GithubFlowId = Id<"githubFlow">;
+export type GithubInstallationId = Id<"githubInstallation">;
 
 /** Whether `value` is a lowercase canonical UUID string (any version). */
 export function isUuid(value: unknown): value is string {

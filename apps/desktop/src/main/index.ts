@@ -176,7 +176,12 @@ import {
 } from "@volli/host-core/secrets";
 import { observeKeychainUse, webSealingLifecycle } from "./web/sealing-lifecycle";
 import { createDesktopRemoteHosts, remoteHostsPort } from "./remote-hosts";
-import { accountPort, createDesktopAccount, resolveAccountConfig } from "./account";
+import {
+  accountPort,
+  createDesktopAccount,
+  createDesktopGithub,
+  resolveAccountConfig,
+} from "./account";
 import { ACCOUNT_CLOUD_OFF } from "./account/service";
 import { CLOUD_SNAPSHOT_DIRECTORY, cloudSnapshotFiles } from "./cloud-snapshot";
 import {
@@ -471,6 +476,18 @@ function publishBrowserTabEvent(event: BrowserTabStateEvent): void {
     if (window.isDestroyed()) continue;
     window.webContents.send("volli:browser-tab-state" satisfies VolliIpcEvent, event);
   }
+}
+
+/**
+ * The Volli Cloud account's browser door (sign-in, and the GitHub half's
+ * connect and install): http(s) only, like the window's links, and a launch
+ * that fails says so (the flow then ends with that, not ten minutes of
+ * waiting). Harness mode's shell recorder answers instead of a browser.
+ */
+function openAccountBrowser(url: string): Promise<void> {
+  return url.startsWith("https:") || url.startsWith("http:")
+    ? shell.openExternal(url)
+    : Promise.reject(new Error("Only a web page can be opened for sign-in."));
 }
 
 /** Sends an http(s) URL to the user's default browser; ignores anything else. */
@@ -878,14 +895,19 @@ const appStartup = app.whenReady().then(async () => {
     enabled: () => isExperimentEnabled("cloud"),
     inventory: hostPrivateInventory,
     unlockInventory: unlockHostPrivate,
-    // http(s) only, like the window's links, and a launch that fails says so
-    // (the sign-in then ends with that, not ten minutes of waiting). Harness
-    // mode's shell recorder answers instead of a browser.
-    openBrowser: (url) =>
-      url.startsWith("https:") || url.startsWith("http:")
-        ? shell.openExternal(url)
-        : Promise.reject(new Error("Only a web page can be opened for sign-in.")),
+    openBrowser: openAccountBrowser,
     log: hostLogger("account"),
+  });
+  // The account's GitHub connection and the GitHub App's installations
+  // (VC-897): the same backend and browser door, the account's access token.
+  // It follows the account from the window's first GitHub subscription, so a
+  // sign-out, a deletion or another person ends the flow and reads in flight.
+  const accountGithub = createDesktopGithub({
+    config: accountConfig,
+    enabled: () => isExperimentEnabled("cloud"),
+    account,
+    openBrowser: openAccountBrowser,
+    log: hostLogger("account-github"),
   });
   // Sign-ins on a remote host (VC-702 PR 2): the host's `sign-ins` operations
   // over the engine's links, and this Mac's own Pi credentials, read only for
@@ -1258,7 +1280,9 @@ const appStartup = app.whenReady().then(async () => {
     remoteHosts,
     stopBackgroundWork: () => {
       webSealing.stop();
-      // A sign-in waiting on the browser ends; the dev issuer stops listening.
+      // A GitHub flow being polled ends and stops following the account, then a
+      // sign-in waiting on the browser ends and the dev issuer stops listening.
+      accountGithub.dispose();
       account.dispose();
     },
     cloudEnabled: () => isExperimentEnabled("cloud"),
@@ -1481,26 +1505,33 @@ const appStartup = app.whenReady().then(async () => {
         focusPage: (tabId) => browserTabs.focusPage(tabId),
       },
       // The Volli Cloud account (VC-884).
-      account: accountPort(account, {
-        launch: () => launch,
-        relaunch: () => {
-          // Like every other account entry, nothing with `cloud` off.
-          if (!isExperimentEnabled("cloud")) throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
-          relaunch.request();
+      account: accountPort(
+        account,
+        {
+          launch: () => launch,
+          relaunch: () => {
+            // Like every other account entry, nothing with `cloud` off.
+            if (!isExperimentEnabled("cloud"))
+              throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
+            relaunch.request();
+          },
+          reportUnsavedWrites: (count) => {
+            if (!isExperimentEnabled("cloud"))
+              throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
+            recordUnsavedBoardWrites(count);
+          },
+          // Only a cloud launch has a board to keep, and only its own account's.
+          saveSnapshot: (text) => {
+            if (launch.store !== "cloud") {
+              throw new OperationUnavailableError("Only a Volli Cloud launch keeps its board.");
+            }
+            cloudSnapshots.write(launch.userId, text);
+          },
+          readSnapshot: () =>
+            launch.store === "cloud" ? cloudSnapshots.read(launch.userId) : null,
         },
-        reportUnsavedWrites: (count) => {
-          if (!isExperimentEnabled("cloud")) throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
-          recordUnsavedBoardWrites(count);
-        },
-        // Only a cloud launch has a board to keep, and only its own account's.
-        saveSnapshot: (text) => {
-          if (launch.store !== "cloud") {
-            throw new OperationUnavailableError("Only a Volli Cloud launch keeps its board.");
-          }
-          cloudSnapshots.write(launch.userId, text);
-        },
-        readSnapshot: () => (launch.store === "cloud" ? cloudSnapshots.read(launch.userId) : null),
-      }),
+        accountGithub,
+      ),
     };
   };
   // No runtime, no bridge — but the channels are still claimed, answering
