@@ -168,7 +168,8 @@ export function quitAlreadyRefused(event: object): boolean {
   return refusedQuits.has(event);
 }
 
-interface AcceptedQuitLifecycle {
+/** `app` as the accepted-quit coordinator holds and ends a quit through it. */
+export interface AcceptedQuitLifecycle {
   on(event: "before-quit", listener: (event: { preventDefault(): void }) => void): void;
   exit(code: number): void;
 }

@@ -7,6 +7,7 @@ import {
   closeAgentTabsCopy,
   createMenuBarHost,
   liveWorkPhrase,
+  menuBarBrowserTabs,
   MENU_BAR_POLL_MS,
   MENU_BAR_SETTLE_MS,
   MENU_BAR_SMOKE_SETTLE_MAX_MS,
@@ -703,6 +704,21 @@ describe("createMenuBarHost (VC-577)", () => {
       expect(BROWSER_CLOSED_FOR_MENU_BAR).toContain(
         "The browser was closed when Volli moved to the menu bar",
       );
+    });
+
+    it("closes the tab host's agent tabs with that reason, and reopens them on reveal", () => {
+      const tabs = {
+        sessionTabCount: vi.fn(() => 3),
+        closeAllForAgents: vi.fn(),
+        reopenForAgents: vi.fn(),
+      };
+      const port = menuBarBrowserTabs(tabs);
+      expect(port.sessionTabCount()).toBe(3);
+      expect(tabs.closeAllForAgents).not.toHaveBeenCalled();
+      port.closeForMenuBar();
+      expect(tabs.closeAllForAgents).toHaveBeenCalledExactlyOnceWith(BROWSER_CLOSED_FOR_MENU_BAR);
+      port.reopen();
+      expect(tabs.reopenForAgents).toHaveBeenCalledOnce();
     });
   });
 });
