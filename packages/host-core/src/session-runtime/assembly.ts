@@ -15,7 +15,7 @@ import { BrowserPictureStore } from "../browser/picture-store";
 import { browserPictureDisk, browserPicturesRoot } from "../browser/picture-disk";
 import type { PiModelAccess, CodeModeSandboxAssets } from "@volli/agent-runtime";
 import { piExecutionEnv, refusingCredentialReads } from "@volli/agent-runtime";
-import type { SessionEngine } from "@volli/session-engine";
+import { createSessionExecutorSlot, type SessionEngine } from "@volli/session-engine";
 import {
   harnessAdapters,
   scrubInheritedSessionEnv,
@@ -566,7 +566,9 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           log: options.hostPorts.log,
           dataDir,
           transcriptDirectory,
-          executor: piRuntimeHost.adapter,
+          // The executor slot (VC-916): Pi is its one runtime and the default.
+          // A second runtime registers here, beside it, never instead of it.
+          executors: createSessionExecutorSlot(piRuntimeHost.adapter),
           sessionEngine,
           ...(sessionWake === null
             ? {}

@@ -21,6 +21,7 @@ import {
   type TranscriptArtifactStore,
 } from "./index";
 import { createInMemorySessionLedger, createInMemoryTranscriptArtifactStore } from "./testing";
+import { createSessionExecutorSlot } from "./executor-slot";
 
 /**
  * Persistence probe for the delta-frames work (proof checked in before the
@@ -211,7 +212,7 @@ function buildRuntime(): {
   const counting = countingArtifactStore(createInMemoryTranscriptArtifactStore());
   const runtime = createSessionRuntime({
     engine,
-    executor: adapter,
+    executors: createSessionExecutorSlot(adapter),
     artifacts: counting.store,
     locations: fixedLocation("/projects/fake"),
     clock,

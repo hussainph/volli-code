@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { dirname, join } from "node:path";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   sessionRootThreadId,
@@ -159,7 +160,7 @@ async function fixture(input: object = { questions }, batch = true) {
   const venue = { id: "local", kind: "local" as const };
   const host = createSessionRuntime({
     engine,
-    executor: adapter,
+    executors: createSessionExecutorSlot(adapter),
     artifacts: createInMemoryTranscriptArtifactStore(),
     locations: {
       resolve: async () => ({ directory: dirname(db.dbPath), venue }),

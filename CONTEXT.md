@@ -359,6 +359,14 @@ depend on Node but never Electron or DOM APIs, so Electron main can host it
 locally and a future worker can host the same package elsewhere.
 _Avoid_: harness adapter, provider runtime, Electron service, renderer client
 
+**Executor Slot**:
+The structured runtimes a Session runtime can attach, keyed by each runtime's
+durable adapter id, with one default. A Session runs on the runtime its newest
+attachment by a registered runtime recorded, else on the default; no person or
+caller chooses one. Pi is the only registered runtime; the slot exists so a later
+runtime (a Claude Agent SDK mode) can register beside it.
+_Avoid_: adapter registry, harness profile, runtime picker
+
 **Model Access**:
 One sanitized view of the provider accounts, subscriptions, API credentials,
 gateways, local inference, and models the Agent Runtime can truthfully use. The

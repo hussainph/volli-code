@@ -18,6 +18,7 @@
  */
 import { describe, expect, it } from "vite-plus/test";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   type NativeHarnessAdapter,
@@ -78,7 +79,7 @@ async function attachedRuntime() {
   });
   const runtime = createSessionRuntime({
     engine,
-    executor: adapter,
+    executors: createSessionExecutorSlot(adapter),
     artifacts: createInMemoryTranscriptArtifactStore(),
     locations: {
       resolve: async () => ({ directory: "/fake/project", venue }),

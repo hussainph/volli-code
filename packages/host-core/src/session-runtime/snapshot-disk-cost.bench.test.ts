@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   SESSION_HISTORY_WINDOW,
@@ -102,7 +103,7 @@ async function seedSession(events: number) {
   const locations = { resolve: location, prepare: location, reaffirm: async () => undefined };
   const recorder = createSessionRuntime({
     engine,
-    executor: adapter,
+    executors: createSessionExecutorSlot(adapter),
     artifacts: files,
     locations,
     clock,
@@ -204,7 +205,7 @@ async function seedSession(events: number) {
     };
     const runtime = createSessionRuntime({
       engine: reader,
-      executor: new TemplateAdapter(),
+      executors: createSessionExecutorSlot(new TemplateAdapter()),
       artifacts,
       locations,
       clock,

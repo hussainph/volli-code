@@ -21,7 +21,7 @@ import {
   testProject,
   testTicket,
 } from "@volli/host-core/testing";
-import { createSessionRuntime } from "@volli/session-engine";
+import { createSessionExecutorSlot, createSessionRuntime } from "@volli/session-engine";
 import type { FlushHost } from "@volli/session-presentation";
 import { createHostRouter, RpcDiagnosticLog } from "@volli/session-rpc";
 import { startHostProtocolListener } from "@volli/session-rpc/websocket";
@@ -183,7 +183,7 @@ async function path(features: readonly string[] = FEATURES) {
   let sequence = 0;
   const runtime = createSessionRuntime({
     engine,
-    executor,
+    executors: createSessionExecutorSlot(executor),
     artifacts: createInMemoryTranscriptArtifactStore(),
     followUps: createSqliteSessionFollowUpLedger(ctx.db),
     locations: {

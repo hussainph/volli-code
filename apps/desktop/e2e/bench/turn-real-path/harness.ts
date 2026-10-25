@@ -41,6 +41,7 @@ import {
   type RealPathRequestKind,
 } from "@volli/agent-runtime/bench/turn-to-completion";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamFrame,
@@ -497,7 +498,7 @@ async function compose(
   //   ledger class, clock, ids, reporter and host yield as the desktop's.
   const runtime = createSessionRuntime({
     engine,
-    executor: host.adapter,
+    executors: createSessionExecutorSlot(host.adapter),
     artifacts,
     locations: fixedLocations(workspace),
     clock: { now },

@@ -15,6 +15,7 @@ import {
   type SessionTodoList,
 } from "@volli/shared";
 import {
+  createSessionExecutorSlot,
   createSessionRuntime,
   type BindingHandle,
   type NativeHarnessAdapter,
@@ -127,7 +128,7 @@ export async function openLegacySession(
   const adapter = new TemplateAdapter();
   const live = createSessionRuntime({
     engine,
-    executor: adapter,
+    executors: createSessionExecutorSlot(adapter),
     artifacts,
     locations,
     clock,
@@ -170,7 +171,7 @@ export async function openLegacySession(
   };
   const host = createSessionRuntime({
     engine: legacy,
-    executor: new TemplateAdapter(),
+    executors: createSessionExecutorSlot(new TemplateAdapter()),
     artifacts: memory,
     locations,
     clock,

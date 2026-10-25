@@ -9,6 +9,7 @@ import {
   type SessionToolId,
 } from "@volli/shared";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   readSessionAnswer,
@@ -291,7 +292,7 @@ function fixture(role: "project" | "ticket", options: { shells?: BackgroundShell
   const venue = { id: "local", kind: "local" as const };
   const host = (runtime = createSessionRuntime({
     engine,
-    executor: adapter,
+    executors: createSessionExecutorSlot(adapter),
     artifacts,
     locations: {
       resolve: async () => ({ directory, venue }),

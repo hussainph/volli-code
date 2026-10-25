@@ -14,6 +14,7 @@ import {
   type SessionRuntime,
 } from "./index";
 import { createInMemorySessionLedger, createInMemoryTranscriptArtifactStore } from "./testing";
+import { createSessionExecutorSlot } from "./executor-slot";
 
 const venue = { id: "invariant-machine", kind: "local" as const };
 
@@ -117,7 +118,7 @@ function composition(
     engine,
     runtime: createSessionRuntime({
       engine,
-      executor: adapter,
+      executors: createSessionExecutorSlot(adapter),
       artifacts: createInMemoryTranscriptArtifactStore(),
       locations: fixedLocation(() => input.directory?.() ?? "/ticket/original", input.reaffirm),
       clock: { now: () => now++ },

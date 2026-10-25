@@ -4,6 +4,7 @@
  */
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   type BindingHandle,
@@ -186,7 +187,7 @@ async function runtimeHarness(behaviour: {
   const location = async () => ({ directory: "/fixture", venue });
   const runtime = createSessionRuntime({
     engine: createSessionEngine({ ledger: createSqliteSessionLedger(ctx.db), clock, ids }),
-    executor: correlatedExecutor(inner),
+    executors: createSessionExecutorSlot(correlatedExecutor(inner)),
     artifacts: createInMemoryTranscriptArtifactStore(),
     locations: { resolve: location, prepare: location, reaffirm: async () => {} },
     clock,

@@ -65,11 +65,14 @@ export function sessionCreateCommandId(operationId: string): string {
 }
 
 /**
- * The one adapter id the structured product attaches under.
+ * The adapter id the structured product attaches under: Pi's, the one runtime
+ * in the executor slot (VC-916).
  *
  * The runtime supplies it to the command itself; this constant is what every
  * *other* reader of a durable attachment compares against — including the boot
- * sweep, which retires every local open attachment that does not match. It is
+ * sweep, which retires every local open attachment that does not match. A
+ * second registered runtime must turn those comparisons into slot membership
+ * first, or the sweep would retire that runtime's live attachments. It is
  * declared in this module, which carries no runtime dependency, so those
  * readers can name the id without importing Pi; `PI_ADAPTER_ID` aliases it so
  * the two cannot drift.

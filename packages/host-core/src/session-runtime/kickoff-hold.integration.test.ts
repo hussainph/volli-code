@@ -17,6 +17,7 @@
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   type BindingHandle,
@@ -159,7 +160,7 @@ function fixture() {
   };
   const runtime = createSessionRuntime({
     engine,
-    executor,
+    executors: createSessionExecutorSlot(executor),
     artifacts: createInMemoryTranscriptArtifactStore(),
     followUps: createSqliteSessionFollowUpLedger(db.db),
     followUpRetryDelaysMs: [],

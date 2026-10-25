@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { mkdirSync } from "node:fs";
 import type Database from "better-sqlite3";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   sessionRootThreadId,
@@ -93,7 +94,7 @@ function launch(handle: Database.Database, directory: string, options: LaunchOpt
   const venue = { id: "local", kind: "local" as const };
   const runtime = createSessionRuntime({
     engine,
-    executor:
+    executors: createSessionExecutorSlot(
       beforeAttach === undefined
         ? executor
         : {
@@ -103,6 +104,7 @@ function launch(handle: Database.Database, directory: string, options: LaunchOpt
               return executor.attach(...args);
             },
           },
+    ),
     artifacts: createFileTranscriptArtifactStore(join(dirname(directory), "transcripts")),
     locations: {
       resolve: async () => ({ directory, venue }),

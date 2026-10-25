@@ -2,7 +2,11 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { createSessionRuntime, sessionRootThreadId } from "@volli/session-engine";
+import {
+  createSessionExecutorSlot,
+  createSessionRuntime,
+  sessionRootThreadId,
+} from "@volli/session-engine";
 import {
   DEFAULT_AUTHORITY_POLICY,
   sessionAwaitsUser,
@@ -243,7 +247,7 @@ describe("secure credential through the real Pi / SQLite Session path", () => {
         engine,
         clock: { now: Date.now },
         ids: { next: () => randomUUID() },
-        executor: host.adapter,
+        executors: createSessionExecutorSlot(host.adapter),
         artifacts: createInMemoryTranscriptArtifactStore(),
         locations: {
           resolve: async () => ({ directory: worktree, venue: { id: "local", kind: "local" } }),
@@ -450,7 +454,7 @@ describe("secure credential through the real Pi / SQLite Session path", () => {
         engine,
         clock: { now: Date.now },
         ids: { next: () => randomUUID() },
-        executor: host.adapter,
+        executors: createSessionExecutorSlot(host.adapter),
         artifacts: createInMemoryTranscriptArtifactStore(),
         locations: {
           resolve: async () => ({ directory: worktree, venue: { id: "local", kind: "local" } }),

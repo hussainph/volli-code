@@ -16,7 +16,11 @@ import {
   type HostHelloInput,
 } from "@volli/host-protocol";
 import { expectHostError, ipcContractLink, recordSubscription } from "@volli/host-protocol/testing";
-import { createSessionEngine, createSessionRuntime } from "@volli/session-engine";
+import {
+  createSessionExecutorSlot,
+  createSessionEngine,
+  createSessionRuntime,
+} from "@volli/session-engine";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import {
@@ -85,7 +89,7 @@ async function heldRuntime() {
     ids,
     artifacts: createInMemoryTranscriptArtifactStore(),
     followUps: createInMemorySessionFollowUpLedger(),
-    executor: {
+    executors: createSessionExecutorSlot({
       id: "test",
       durableIdNamespace: "test",
       adapterVersion: "1",
@@ -93,7 +97,7 @@ async function heldRuntime() {
       attach: async () => {
         throw new Error("Attention must hold this queue");
       },
-    },
+    }),
     locations: {
       resolve: async () => ({ directory: "/test", venue: { id: "local", kind: "local" } }),
       prepare: async () => ({ directory: "/test", venue: { id: "local", kind: "local" } }),
