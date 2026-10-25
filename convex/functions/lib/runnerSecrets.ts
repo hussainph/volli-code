@@ -1,5 +1,5 @@
 /**
- * Minting runner secrets and signing runner tokens. ACTIONS ONLY: queries and
+ * Minting runner secrets and signing runner and Agent tokens. ACTIONS ONLY: queries and
  * mutations run on a seeded generator so a retry repeats them, which is the
  * wrong property for a secret. An action mints the secret, hands only its
  * hash (`secretHash` from `@volli/shared/cloud`) to an internal mutation, and
@@ -13,13 +13,18 @@
  */
 
 import {
+  AGENT_TOKEN_AUDIENCE,
+  AGENT_TOKEN_ISSUER,
+  agentSubject,
   RUNNER_TOKEN_AUDIENCE,
   RUNNER_TOKEN_ISSUER,
   USER_CODE_ALPHABET,
   USER_CODE_LENGTH,
   runnerSubject,
+  type AgentTokenClaims,
   type RunnerId,
   type RunnerTokenClaims,
+  type SessionId,
 } from "@volli/shared/cloud";
 
 function base64url(bytes: Uint8Array): string {
@@ -79,6 +84,19 @@ export async function runnerSigningKey(): Promise<SigningKey | null> {
   return { key, kid };
 }
 
+/** An ES256 JWT over `body`, signed with the deployment key. */
+async function signJwt(signing: SigningKey, body: Record<string, unknown>): Promise<string> {
+  const encode = (value: object) => base64url(new TextEncoder().encode(JSON.stringify(value)));
+  const header = encode({ alg: "ES256", typ: "JWT", kid: signing.kid });
+  const payload = encode(body);
+  const signature = await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    signing.key,
+    new TextEncoder().encode(`${header}.${payload}`),
+  );
+  return `${header}.${payload}.${base64url(new Uint8Array(signature))}`;
+}
+
 /** A runner token for `runnerId`, valid from `issuedAtMs` to `expiresAtMs`. */
 export async function signRunnerToken(
   signing: SigningKey,
@@ -87,9 +105,7 @@ export async function signRunnerToken(
   issuedAtMs: number,
   expiresAtMs: number,
 ): Promise<string> {
-  const encode = (value: object) => base64url(new TextEncoder().encode(JSON.stringify(value)));
-  const header = encode({ alg: "ES256", typ: "JWT", kid: signing.kid });
-  const body = encode({
+  return signJwt(signing, {
     ...claims,
     iss: RUNNER_TOKEN_ISSUER,
     aud: RUNNER_TOKEN_AUDIENCE,
@@ -97,10 +113,26 @@ export async function signRunnerToken(
     iat: Math.floor(issuedAtMs / 1000),
     exp: Math.floor(expiresAtMs / 1000),
   });
-  const signature = await crypto.subtle.sign(
-    { name: "ECDSA", hash: "SHA-256" },
-    signing.key,
-    new TextEncoder().encode(`${header}.${body}`),
-  );
-  return `${header}.${body}.${base64url(new Uint8Array(signature))}`;
+}
+
+/**
+ * An Agent token for one Session (`agent:<sessionId>`), signed with the same
+ * key as runner tokens but under the agent issuer and audience, so neither
+ * can pass for the other.
+ */
+export async function signAgentToken(
+  signing: SigningKey,
+  sessionId: SessionId,
+  claims: AgentTokenClaims,
+  issuedAtMs: number,
+  expiresAtMs: number,
+): Promise<string> {
+  return signJwt(signing, {
+    ...claims,
+    iss: AGENT_TOKEN_ISSUER,
+    aud: AGENT_TOKEN_AUDIENCE,
+    sub: agentSubject(sessionId),
+    iat: Math.floor(issuedAtMs / 1000),
+    exp: Math.floor(expiresAtMs / 1000),
+  });
 }

@@ -454,6 +454,18 @@ export const ERROR_RECOVERY: Readonly<Record<AgentErrorCode, ErrorRecoveryGuidan
     why: "The app accepted the connection but did not produce an outcome within the command's bound.",
     next: "Inspect the current Ticket or Session state before deciding whether one retry is safe.",
   },
+  OFFLINE: {
+    why: "This runner cannot reach Volli Cloud, so board changes and reads are refused at once rather than queued. Session updates are kept and sent when the connection is back.",
+    next: "Wait for the connection to return, then retry the same command once; nothing was written.",
+  },
+  NOT_YET_SYNCED: {
+    why: "Volli Cloud has not received this Session's start yet, so it cannot act for it.",
+    next: "Wait a few seconds and retry the same command once.",
+  },
+  SIGN_IN_REQUIRED: {
+    why: "Board and Session verbs in Volli Cloud act for a Session's owner, and this caller is not a Volli Session; the CLI holds no sign-in of its own.",
+    next: "Run the command from inside a Volli Session, or use the app.",
+  },
 };
 
 // Compile-time exhaustiveness beside the runtime test. A code added without

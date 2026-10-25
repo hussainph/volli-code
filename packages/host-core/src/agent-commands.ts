@@ -37,6 +37,7 @@ import type {
 
 import { doorCallActor, projectedHandlerKey } from "./agent-dispatch/projection";
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
+import { cloudBoardVerbOf } from "./cloud-agent/board-verbs";
 import { coordinationRefusal, socketHandlerPolicy } from "./agent-dispatch/admission";
 import { isHostHandlerMap, serveHostHandlers } from "./handlers/handler-map";
 import { agentVerbEntries, rosterLoaders } from "./agent-dispatch/verbs";
@@ -238,6 +239,19 @@ export function createAgentCommandService(
       // declares rather than by whether someone remembered to list it.
       const refusal = coordinationRefusal(readPolicy, projects, envSession, request, door);
       if (refusal !== null) return auditOperatorWrite(door, request, refusal);
+      // A cloud launch's board (VC-894): the backend answers, acting for the
+      // Session this door verified, never for a claim it could not.
+      const cloudVerb = cloudBoardVerbOf(
+        options.cloudBoardVerbs,
+        AGENT_COMMAND_BINDINGS[request.cmd],
+      );
+      if (cloudVerb !== null) {
+        return auditOperatorWrite(
+          door,
+          request,
+          await cloudVerb({ sessionId: door.kind === "session" ? door.sessionId : null, request }),
+        );
+      }
       // Attribution is resolved only for a verb that will WRITE attributed
       // history — a coordination verb whose table entry also resolved the
       // identity. Both halves of that condition are load-bearing:

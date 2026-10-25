@@ -10,6 +10,7 @@ import {
   decideCreateSignal,
   decideCreateTicket,
   decideEditComment,
+  decideMergeLabels,
   decideMoveTickets,
   decideUnarchiveTicket,
   decideUpdateTicket,
@@ -799,5 +800,53 @@ describe("decideCreateSignal", () => {
         ),
       ).code,
     ).toBe("archived");
+  });
+});
+
+describe("decideMergeLabels", () => {
+  test("makes the retired label an alias of the one it folds into, with one project event", () => {
+    const labels = [
+      label(1, "front-end"),
+      label(2, "frontend"),
+      label(3, "fe", { mergedIntoId: lid(1) }),
+      label(4, "backend"),
+    ];
+    const decision = decideMergeLabels(labels, { from: " Front-End ", into: "FRONTEND" });
+    expect(decision.from.id).toBe(lid(1));
+    expect(decision.into.id).toBe(lid(2));
+    // The alias already merged into `from` is worn as `from` today, so it moves too.
+    expect(decision.fromIds).toEqual([lid(1), lid(3)]);
+    expect(decision.patch).toEqual({ mergedIntoId: lid(2) });
+    expect(decision.events).toEqual([
+      { ticketId: null, payload: { kind: "label_merged", labelId: lid(1), intoLabelId: lid(2) } },
+    ]);
+    // Applied, a ticket that wore both wears the survivor once.
+    const after = [...labels.slice(1), { ...labels[0]!, ...decision.patch }];
+    expect(labelNamesOf([lid(3), lid(2), lid(4)], after)).toEqual(["frontend", "backend"]);
+  });
+
+  test("a retired name resolves through its merge", () => {
+    const labels = [label(1, "ui"), label(2, "web", { mergedIntoId: lid(1) }), label(3, "design")];
+    const decision = decideMergeLabels(labels, { from: "web", into: "design" });
+    expect(decision.from.id).toBe(lid(1));
+    expect(decision.fromIds).toEqual([lid(1), lid(2)]);
+  });
+
+  test("refuses an unknown name, naming the project's labels, and a merge into itself", () => {
+    const labels = [label(1, "ui"), label(2, "web", { mergedIntoId: lid(1) }), label(3, "api")];
+    const unknown = refusal(() => decideMergeLabels(labels, { from: "uxx", into: "ui" }));
+    expect(unknown.code).toBe("invalid_argument");
+    expect(unknown.message).toBe("This project has no label named uxx. Its labels are: api, ui.");
+    expect(
+      refusal(() => decideMergeLabels(labels, { from: "ui", into: "nope" })).message,
+    ).toContain("no label named nope");
+    expect(refusal(() => decideMergeLabels([], { from: "a", into: "b" })).message).toBe(
+      "This project has no label named a. It has no labels yet.",
+    );
+    const same = refusal(() => decideMergeLabels(labels, { from: "web", into: "UI" }));
+    expect(same).toEqual({
+      code: "invalid_argument",
+      message: "web and UI are already the same label.",
+    });
   });
 });

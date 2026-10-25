@@ -13,13 +13,21 @@
  * Every function requires a signed-in Member of the ticket's project's
  * current Workspace: an id that names nothing is `not_found`, and one in a
  * project the viewer is not a Member of is `not_a_member`, as for projects
- * (ids are not secrets). A move naming a ticket or neighbour of another
+ * (ids are not secrets).
+ *
+ * The reads and the writes an agent verb makes (`volli ticket create`,
+ * `update`, `move`, `comment`, `signal`, `label merge`, and the reads behind
+ * `board`, `ticket list|show|events|brief`, `label list`) also take an agent,
+ * through its runner, under an Agent token (`lib/actorAuth.ts`): it acts with
+ * its Session owner's membership and is recorded as the `agent` Actor. The
+ * rest (archive, restore, comment edits, label colours) stay person-only, as
+ * the agent doors have no verb for them. A move naming a ticket or neighbour of another
  * project reads it as `not_found`. An archived project's board takes no
  * writes.
  */
 
 import { paginationOptsValidator } from "convex/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 
 import {
   CHECKOUT_MODES,
@@ -28,15 +36,18 @@ import {
   decideCreateSignal,
   decideCreateTicket,
   decideEditComment,
+  decideMergeLabels,
   decideMoveTickets,
   decideUnarchiveTicket,
   decideUpdateTicket,
+  labelNamesOf,
   movingTicketIds,
   BOARD_LIMITS,
   needsRebalance,
   newId,
   normalizeLabelColor,
   parseId,
+  parseTicketKey,
   rebalancedPositions,
   renderTicketKey,
   requireCommentEditable,
@@ -52,10 +63,17 @@ import {
 
 import { internal } from "./_generated/api.js";
 import type { Doc } from "./_generated/dataModel.js";
-import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server.js";
-import { authError, requireProject, requireSessionScope } from "./lib/auth";
 import {
-  boardActor,
+  internalMutation,
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server.js";
+import { PERSON_OR_AGENT, requireActor } from "./lib/actorAuth";
+import { authError, requireProject, requireSessionScope, type Viewer } from "./lib/auth";
+import {
+  asBoardErrors,
   boardError,
   BoardWrite,
   recordBoardEvents,
@@ -96,7 +114,8 @@ const moveChoice = v.union(
 export const roster = query({
   args: { projectId: v.string() },
   handler: async (ctx, { projectId }) => {
-    await requireProject(ctx, projectId);
+    const { viewer } = await requireActor(ctx, PERSON_OR_AGENT);
+    await requireProject(ctx, projectId, viewer);
     const tickets = await ctx.db
       .query("tickets")
       .withIndex("by_board", (q) => q.eq("projectId", projectId).eq("archivedAt", null))
@@ -108,16 +127,25 @@ export const roster = query({
   },
 });
 
-/** One ticket and its body (read separately from the roster, so body edits do not re-run it). */
+/**
+ * One ticket and its body (read separately from the roster, so body edits do
+ * not re-run it), with the label names it wears now (merges followed).
+ */
 export const getTicket = query({
   args: { ticketId: v.string() },
   handler: async (ctx, { ticketId }) => {
-    const { ticket } = await requireTicket(ctx, ticketId);
+    const { viewer } = await requireActor(ctx, PERSON_OR_AGENT);
+    const { ticket } = await requireTicket(ctx, ticketId, viewer);
     const body = await ctx.db
       .query("ticketBodies")
       .withIndex("by_ticket", (q) => q.eq("ticketId", ticketId))
       .unique();
-    return { ticket: publicRow(ticket), body: body?.body ?? "", bodyRevision: body?.revision ?? 0 };
+    return {
+      ticket: publicRow(ticket),
+      body: body?.body ?? "",
+      bodyRevision: body?.revision ?? 0,
+      labels: labelNamesOf(ticket.labelIds, await projectLabels(ctx, ticket.projectId)),
+    };
   },
 });
 
@@ -125,7 +153,8 @@ export const getTicket = query({
 export const archivedTickets = query({
   args: { projectId: v.string(), paginationOpts: paginationOptsValidator },
   handler: async (ctx, { projectId, paginationOpts }) => {
-    await requireProject(ctx, projectId);
+    const { viewer } = await requireActor(ctx, PERSON_OR_AGENT);
+    await requireProject(ctx, projectId, viewer);
     const page = await ctx.db
       .query("tickets")
       .withIndex("by_project_archived", (q) => q.eq("projectId", projectId).gte("archivedAt", 0))
@@ -146,12 +175,13 @@ export const archivedTickets = query({
 export const ticketEvents = query({
   args: { ticketId: v.string() },
   handler: async (ctx, { ticketId }) => {
-    const { project } = await requireTicket(ctx, ticketId);
+    const { viewer } = await requireActor(ctx, PERSON_OR_AGENT);
+    const { project } = await requireTicket(ctx, ticketId, viewer);
     const events = await ctx.db
       .query("boardEvents")
       .withIndex("by_ticket_seq", (q) => q.eq("ticketId", ticketId))
       .collect();
-    const scope = await requireSessionScope(ctx, project.id);
+    const scope = await requireSessionScope(ctx, project.id, viewer);
     return (await visibleBoardEvents(ctx, scope, events)).map(publicRow);
   },
 });
@@ -160,7 +190,8 @@ export const ticketEvents = query({
 export const comments = query({
   args: { ticketId: v.string() },
   handler: async (ctx, { ticketId }) => {
-    await requireTicket(ctx, ticketId);
+    const { viewer } = await requireActor(ctx, PERSON_OR_AGENT);
+    await requireTicket(ctx, ticketId, viewer);
     const rows = await ctx.db
       .query("ticketComments")
       .withIndex("by_ticket", (q) => q.eq("ticketId", ticketId))
@@ -173,7 +204,8 @@ export const comments = query({
 export const signals = query({
   args: { ticketId: v.string() },
   handler: async (ctx, { ticketId }) => {
-    await requireTicket(ctx, ticketId);
+    const { viewer } = await requireActor(ctx, PERSON_OR_AGENT);
+    await requireTicket(ctx, ticketId, viewer);
     const rows = await ctx.db
       .query("ticketSignals")
       .withIndex("by_ticket_kind", (q) => q.eq("ticketId", ticketId))
@@ -185,8 +217,8 @@ export const signals = query({
 // ── tickets ──────────────────────────────────────────────────────────────────
 
 /** A ticket for a writable project the viewer can see, refused with the shared codes otherwise. */
-async function writableTicket(ctx: MutationCtx, ticketId: string) {
-  const access = await requireTicket(ctx, ticketId);
+async function writableTicket(ctx: MutationCtx, ticketId: string, viewer: Viewer) {
+  const access = await requireTicket(ctx, ticketId, viewer);
   requireWritableProject(access.project);
   return access;
 }
@@ -239,9 +271,9 @@ export const createTicket = mutation({
   handler: async (ctx, { commandId, ...intent }) =>
     withBoardReceipt(
       ctx,
-      { commandId, operation: "board.createTicket", intent },
-      async (viewer) => {
-        const { project } = await requireProject(ctx, intent.projectId);
+      { commandId, operation: "board.createTicket", intent, allow: PERSON_OR_AGENT },
+      async ({ viewer, actor }) => {
+        const { project } = await requireProject(ctx, intent.projectId, viewer);
         requireWritableProject(project);
         const ticketId = parseId("ticket", intent.ticketId);
         const taken = await ctx.db
@@ -249,7 +281,6 @@ export const createTicket = mutation({
           .withIndex("by_uuid", (q) => q.eq("id", ticketId))
           .unique();
         if (taken !== null) throw boardError("id_taken", "That ticket id is already in use.");
-        const actor = boardActor(viewer);
         const now = Date.now();
         const write = await BoardWrite.open(ctx, project.id, actor, now);
         const decision = decideCreateTicket(
@@ -327,11 +358,10 @@ export const updateTicket = mutation({
   handler: async (ctx, { commandId, ...intent }) =>
     withBoardReceipt(
       ctx,
-      { commandId, operation: "board.updateTicket", intent },
-      async (viewer) => {
+      { commandId, operation: "board.updateTicket", intent, allow: PERSON_OR_AGENT },
+      async ({ viewer, actor }) => {
         const { ticketId, ...command } = intent;
-        const { project, ticket } = await writableTicket(ctx, ticketId);
-        const actor = boardActor(viewer);
+        const { project, ticket } = await writableTicket(ctx, ticketId, viewer);
         const now = Date.now();
         const body = await ctx.db
           .query("ticketBodies")
@@ -460,78 +490,81 @@ export const moveTickets = mutation({
     choice: v.optional(nullable(moveChoice)),
   },
   handler: async (ctx, { commandId, ...intent }) =>
-    withBoardReceipt(ctx, { commandId, operation: "board.moveTickets", intent }, async (viewer) => {
-      const { project } = await requireProject(ctx, intent.projectId);
-      requireWritableProject(project);
-      const actor = boardActor(viewer);
-      const now = Date.now();
-      const ids = [...new Set(intent.ticketIds.map((id) => parseId("ticket", id)))];
-      // Bounded before anything is read.
-      if (ids.length > BOARD_LIMITS.ticketsPerMove) {
-        throw boardError(
-          "invalid_argument",
-          `A move takes at most ${BOARD_LIMITS.ticketsPerMove} tickets.`,
-        );
-      }
-      const docs = new Map<string, Doc<"tickets">>();
-      for (const id of ids) {
-        const ticket = await findTicket(ctx, id);
-        // A ticket of another project is not on this board: it reads as absent.
-        if (ticket === null || ticket.projectId !== project.id) {
-          throw authError("not_found", "A move names a ticket that is not on this board.");
+    withBoardReceipt(
+      ctx,
+      { commandId, operation: "board.moveTickets", intent, allow: PERSON_OR_AGENT },
+      async ({ viewer, actor }) => {
+        const { project } = await requireProject(ctx, intent.projectId, viewer);
+        requireWritableProject(project);
+        const now = Date.now();
+        const ids = [...new Set(intent.ticketIds.map((id) => parseId("ticket", id)))];
+        // Bounded before anything is read.
+        if (ids.length > BOARD_LIMITS.ticketsPerMove) {
+          throw boardError(
+            "invalid_argument",
+            `A move takes at most ${BOARD_LIMITS.ticketsPerMove} tickets.`,
+          );
         }
-        docs.set(id, ticket);
-      }
-      const command = {
-        ticketIds: ids as TicketId[],
-        toStatus: intent.toStatus,
-        afterTicketId: (intent.afterTicketId ?? null) as TicketId | null,
-        beforeTicketId: (intent.beforeTicketId ?? null) as TicketId | null,
-        choice: intent.choice ?? null,
-      };
-      const facts = [...docs.values()].map(ticketFacts);
-      // The gap is read around the tickets that actually move: one a
-      // column-only move leaves where it is, is a neighbour like any other.
-      const gap = await moveGap(
-        ctx,
-        project.id,
-        intent.toStatus,
-        new Set(movingTicketIds(command, facts)),
-        command.afterTicketId,
-        command.beforeTicketId,
-      );
-      const decision = decideMoveTickets(
-        {
-          tickets: facts,
-          after: gap.after === null ? null : ticketFacts(gap.after),
-          before: gap.before === null ? null : ticketFacts(gap.before),
-          now,
-        },
-        command,
-      );
-      for (const change of decision.changes) {
-        await patchTicket(ctx, docs.get(change.ticketId)!, change.patch, now);
-      }
-      await recordBoardEvents(ctx, project.id, actor, now, decision.events);
-      const { unstartedRuns } = await enqueueSideEffects(
-        { ctx, tickets: docs, actor, now },
-        decision.sideEffects,
-      );
-      if (decision.changes.some((change) => needsRebalance(change.patch.position!))) {
-        await ctx.scheduler.runAfter(0, internal.board.rebalanceColumn, {
+        const docs = new Map<string, Doc<"tickets">>();
+        for (const id of ids) {
+          const ticket = await findTicket(ctx, id);
+          // A ticket of another project is not on this board: it reads as absent.
+          if (ticket === null || ticket.projectId !== project.id) {
+            throw authError("not_found", "A move names a ticket that is not on this board.");
+          }
+          docs.set(id, ticket);
+        }
+        const command = {
+          ticketIds: ids as TicketId[],
+          toStatus: intent.toStatus,
+          afterTicketId: (intent.afterTicketId ?? null) as TicketId | null,
+          beforeTicketId: (intent.beforeTicketId ?? null) as TicketId | null,
+          choice: intent.choice ?? null,
+        };
+        const facts = [...docs.values()].map(ticketFacts);
+        // The gap is read around the tickets that actually move: one a
+        // column-only move leaves where it is, is a neighbour like any other.
+        const gap = await moveGap(
+          ctx,
+          project.id,
+          intent.toStatus,
+          new Set(movingTicketIds(command, facts)),
+          command.afterTicketId,
+          command.beforeTicketId,
+        );
+        const decision = decideMoveTickets(
+          {
+            tickets: facts,
+            after: gap.after === null ? null : ticketFacts(gap.after),
+            before: gap.before === null ? null : ticketFacts(gap.before),
+            now,
+          },
+          command,
+        );
+        for (const change of decision.changes) {
+          await patchTicket(ctx, docs.get(change.ticketId)!, change.patch, now);
+        }
+        await recordBoardEvents(ctx, project.id, actor, now, decision.events);
+        const { unstartedRuns } = await enqueueSideEffects(
+          { ctx, tickets: docs, actor, now },
+          decision.sideEffects,
+        );
+        if (decision.changes.some((change) => needsRebalance(change.patch.position!))) {
+          await ctx.scheduler.runAfter(0, internal.board.rebalanceColumn, {
+            projectId: project.id,
+            status: intent.toStatus,
+          });
+        }
+        return {
           projectId: project.id,
-          status: intent.toStatus,
-        });
-      }
-      return {
-        projectId: project.id,
-        reply: {
-          moved: decision.changes.map((change) => change.ticketId),
-          // Picked Automation runs that could not start, and why.
-          unstartedRuns,
-        },
-      };
-    }),
+          reply: {
+            moved: decision.changes.map((change) => change.ticketId),
+            // Picked Automation runs that could not start, and why.
+            unstartedRuns,
+          },
+        };
+      },
+    ),
 });
 
 /**
@@ -555,10 +588,10 @@ export const rebalanceColumn = internalMutation({
 async function archiveWrite(
   ctx: MutationCtx,
   ticketId: string,
-  viewerActor: Actor,
+  { viewer, actor: viewerActor }: { viewer: Viewer; actor: Actor },
   decide: (ticket: Doc<"tickets">, now: number) => Promise<ReturnType<typeof decideArchiveTicket>>,
 ) {
-  const { project, ticket } = await writableTicket(ctx, ticketId);
+  const { project, ticket } = await writableTicket(ctx, ticketId, viewer);
   const now = Date.now();
   const decision = await decide(ticket, now);
   await patchTicket(ctx, ticket, decision.patch, now);
@@ -577,8 +610,8 @@ async function archiveWrite(
 export const archiveTicket = mutation({
   args: { commandId: v.string(), ticketId: v.string() },
   handler: async (ctx, { commandId, ...intent }) =>
-    withBoardReceipt(ctx, { commandId, operation: "board.archiveTicket", intent }, (viewer) =>
-      archiveWrite(ctx, intent.ticketId, boardActor(viewer), async (ticket, now) =>
+    withBoardReceipt(ctx, { commandId, operation: "board.archiveTicket", intent }, (caller) =>
+      archiveWrite(ctx, intent.ticketId, caller, async (ticket, now) =>
         decideArchiveTicket(ticketFacts(ticket), now),
       ),
     ),
@@ -588,8 +621,8 @@ export const archiveTicket = mutation({
 export const unarchiveTicket = mutation({
   args: { commandId: v.string(), ticketId: v.string() },
   handler: async (ctx, { commandId, ...intent }) =>
-    withBoardReceipt(ctx, { commandId, operation: "board.unarchiveTicket", intent }, (viewer) =>
-      archiveWrite(ctx, intent.ticketId, boardActor(viewer), async (ticket) =>
+    withBoardReceipt(ctx, { commandId, operation: "board.unarchiveTicket", intent }, (caller) =>
+      archiveWrite(ctx, intent.ticketId, caller, async (ticket) =>
         decideUnarchiveTicket(
           ticketFacts(ticket),
           await columnEnd(ctx, ticket.projectId, ticket.status),
@@ -606,16 +639,15 @@ export const createComment = mutation({
   handler: async (ctx, { commandId, ...intent }) =>
     withBoardReceipt(
       ctx,
-      { commandId, operation: "board.createComment", intent },
-      async (viewer) => {
-        const { project, ticket } = await writableTicket(ctx, intent.ticketId);
+      { commandId, operation: "board.createComment", intent, allow: PERSON_OR_AGENT },
+      async ({ viewer, actor }) => {
+        const { project, ticket } = await writableTicket(ctx, intent.ticketId, viewer);
         const commentId = parseId("comment", intent.commentId);
         const taken = await ctx.db
           .query("ticketComments")
           .withIndex("by_uuid", (q) => q.eq("id", commentId))
           .unique();
         if (taken !== null) throw boardError("id_taken", "That comment id is already in use.");
-        const actor = boardActor(viewer);
         const now = Date.now();
         const decision = decideCreateComment(
           ticketFacts(ticket),
@@ -630,18 +662,18 @@ export const createComment = mutation({
           deletedAt: null,
         });
         await recordBoardEvents(ctx, project.id, actor, now, decision.events);
-        return { projectId: project.id, reply: { commentId } };
+        return { projectId: project.id, reply: { commentId, createdAt: now } };
       },
     ),
 });
 
-async function ownComment(ctx: MutationCtx, commentId: string) {
+async function ownComment(ctx: MutationCtx, commentId: string, viewer: Viewer) {
   const comment = await ctx.db
     .query("ticketComments")
     .withIndex("by_uuid", (q) => q.eq("id", parseId("comment", commentId)))
     .unique();
   if (comment === null) throw authError("not_found", "That comment does not exist.");
-  const { project } = await requireProject(ctx, comment.projectId);
+  const { project } = await requireProject(ctx, comment.projectId, viewer);
   requireWritableProject(project);
   return comment;
 }
@@ -653,12 +685,12 @@ export const updateComment = mutation({
     withBoardReceipt(
       ctx,
       { commandId, operation: "board.updateComment", intent },
-      async (viewer) => {
-        const comment = await ownComment(ctx, intent.commentId);
+      async ({ viewer, actor }) => {
+        const comment = await ownComment(ctx, intent.commentId, viewer);
         const body = decideEditComment(
           { author: storedActor(comment.author), deletedAt: comment.deletedAt },
           intent.body,
-          boardActor(viewer),
+          actor,
         );
         if (body !== comment.body) await ctx.db.patch(comment._id, { body, editedAt: Date.now() });
         return { projectId: comment.projectId, reply: { commentId: comment.id } };
@@ -673,11 +705,11 @@ export const removeComment = mutation({
     withBoardReceipt(
       ctx,
       { commandId, operation: "board.removeComment", intent },
-      async (viewer) => {
-        const comment = await ownComment(ctx, intent.commentId);
+      async ({ viewer, actor }) => {
+        const comment = await ownComment(ctx, intent.commentId, viewer);
         requireCommentEditable(
           { author: storedActor(comment.author), deletedAt: comment.deletedAt },
-          boardActor(viewer),
+          actor,
         );
         await ctx.db.patch(comment._id, { deletedAt: Date.now() });
         return { projectId: comment.projectId, reply: { commentId: comment.id } };
@@ -698,21 +730,20 @@ export const createSignal = mutation({
   handler: async (ctx, { commandId, ...intent }) =>
     withBoardReceipt(
       ctx,
-      { commandId, operation: "board.createSignal", intent },
-      async (viewer) => {
-        const { project, ticket } = await writableTicket(ctx, intent.ticketId);
+      { commandId, operation: "board.createSignal", intent, allow: PERSON_OR_AGENT },
+      async ({ viewer, actor }) => {
+        const { project, ticket } = await writableTicket(ctx, intent.ticketId, viewer);
         const signalId = parseId("signal", intent.signalId);
         const taken = await ctx.db
           .query("ticketSignals")
           .withIndex("by_uuid", (q) => q.eq("id", signalId))
           .unique();
         if (taken !== null) throw boardError("id_taken", "That signal id is already in use.");
-        const actor = boardActor(viewer);
         const now = Date.now();
         const decision = decideCreateSignal(ticketFacts(ticket), { ...intent, signalId }, actor);
         await ctx.db.insert("ticketSignals", { ...decision.signal, actor, createdAt: now });
         await recordBoardEvents(ctx, project.id, actor, now, decision.events);
-        return { projectId: project.id, reply: { signalId } };
+        return { projectId: project.id, reply: { signalId, createdAt: now } };
       },
     ),
 });
@@ -723,16 +754,283 @@ export const createSignal = mutation({
 export const setLabelColor = mutation({
   args: { commandId: v.string(), labelId: v.string(), color: nullable(v.string()) },
   handler: async (ctx, { commandId, ...intent }) =>
-    withBoardReceipt(ctx, { commandId, operation: "board.setLabelColor", intent }, async () => {
-      const label = await ctx.db
-        .query("labels")
-        .withIndex("by_uuid", (q) => q.eq("id", parseId("label", intent.labelId)))
+    withBoardReceipt(
+      ctx,
+      { commandId, operation: "board.setLabelColor", intent },
+      async ({ viewer }) => {
+        const label = await ctx.db
+          .query("labels")
+          .withIndex("by_uuid", (q) => q.eq("id", parseId("label", intent.labelId)))
+          .unique();
+        if (label === null) throw authError("not_found", "That label does not exist.");
+        const { project } = await requireProject(ctx, label.projectId, viewer);
+        requireWritableProject(project);
+        const color = normalizeLabelColor(intent.color);
+        if (color !== label.color) await ctx.db.patch(label._id, { color, updatedAt: Date.now() });
+        return { projectId: project.id, reply: { labelId: label.id } };
+      },
+    ),
+});
+
+/** A project's live labels (aliases left out), each with how many board tickets wear it. */
+export const labels = query({
+  args: { projectId: v.string() },
+  handler: async (ctx, { projectId }) => {
+    const { viewer } = await requireActor(ctx, PERSON_OR_AGENT);
+    await requireProject(ctx, projectId, viewer);
+    const rows = await projectLabels(ctx, projectId);
+    const tickets = await ctx.db
+      .query("tickets")
+      .withIndex("by_board", (q) => q.eq("projectId", projectId).eq("archivedAt", null))
+      .collect();
+    const worn = new Map<string, number>();
+    for (const ticket of tickets) {
+      if (ticket.deletedAt !== null) continue;
+      for (const name of labelNamesOf(ticket.labelIds, rows)) {
+        worn.set(name, (worn.get(name) ?? 0) + 1);
+      }
+    }
+    return rows
+      .filter((label) => label.mergedIntoId === null)
+      .map((label) => ({
+        labelId: label.id,
+        name: label.name,
+        color: label.color,
+        tickets: worn.get(label.name) ?? 0,
+      }));
+  },
+});
+
+/** At most this many tickets are named in a label merge preview; `ticketCount` counts them all. */
+const LABEL_MERGE_LISTED_TICKETS = 200;
+
+/** Loads and decides a label merge (the labels only: the merge writes one label row). */
+async function decideLabelMerge(
+  ctx: QueryCtx | MutationCtx,
+  project: Doc<"projects">,
+  command: { from: string; into: string },
+) {
+  const rows = await projectLabels(ctx, project.id);
+  const decision = await asBoardErrors(() => decideMergeLabels(rows.map(labelFacts), command));
+  return { decision, fromRow: rows.find((row) => row.id === decision.from.id)! };
+}
+
+/**
+ * A label merge's preview: the tickets it relabels, live and archived, so the
+ * whole blast radius shows. Reads every ticket of the project, so it is a
+ * query, never part of the write.
+ */
+async function previewLabelMerge(
+  ctx: QueryCtx,
+  project: Doc<"projects">,
+  command: { from: string; into: string },
+) {
+  const { decision } = await decideLabelMerge(ctx, project, command);
+  const fromIds = new Set<string>(decision.fromIds);
+  const tickets = [];
+  for await (const ticket of ctx.db
+    .query("tickets")
+    .withIndex("by_project_number", (q) => q.eq("projectId", project.id))) {
+    if (ticket.deletedAt !== null || !ticket.labelIds.some((id) => fromIds.has(id))) continue;
+    tickets.push({
+      ticketId: ticket.id,
+      key: renderTicketKey(project, ticket.number),
+      title: ticket.title,
+      archived: ticket.archivedAt !== null,
+    });
+  }
+  return {
+    from: decision.from.name,
+    into: decision.into.name,
+    ticketCount: tickets.length,
+    tickets: tickets.slice(0, LABEL_MERGE_LISTED_TICKETS),
+  };
+}
+
+/**
+ * What folding `from` into `into` would change, without changing it: `volli
+ * label merge` previews by default, because the merge rewrites how tickets
+ * nobody is looking at are organised.
+ */
+export const labelMergePreview = query({
+  args: { projectId: v.string(), from: v.string(), into: v.string() },
+  handler: async (ctx, { projectId, from, into }) => {
+    const { viewer } = await requireActor(ctx, PERSON_OR_AGENT);
+    const { project } = await requireProject(ctx, projectId, viewer);
+    return { ...(await previewLabelMerge(ctx, project, { from, into })), applied: false };
+  },
+});
+
+/**
+ * Folds one label into another (`decideMergeLabels`): `from` becomes an
+ * alias of `into`, so every ticket that wore it wears `into` and the retired
+ * name keeps resolving there. Records one project-level `label_merged` event.
+ * Writes one label row and reads no ticket: `labelMergePreview` lists them.
+ */
+export const mergeLabels = mutation({
+  args: { commandId: v.string(), projectId: v.string(), from: v.string(), into: v.string() },
+  handler: async (ctx, { commandId, ...intent }) =>
+    withBoardReceipt(
+      ctx,
+      { commandId, operation: "board.mergeLabels", intent, allow: PERSON_OR_AGENT },
+      async ({ viewer, actor }) => {
+        const { project } = await requireProject(ctx, intent.projectId, viewer);
+        requireWritableProject(project);
+        const { decision, fromRow } = await decideLabelMerge(ctx, project, intent);
+        const now = Date.now();
+        await ctx.db.patch(fromRow._id, {
+          ...decision.patch,
+          mergedAt: now,
+          mergedBy: actor,
+          updatedAt: now,
+        });
+        await recordBoardEvents(ctx, project.id, actor, now, decision.events);
+        return {
+          projectId: project.id,
+          reply: { from: decision.from.name, into: decision.into.name, applied: true },
+        };
+      },
+    ),
+});
+
+// ── ticket keys ──────────────────────────────────────────────────────────────
+
+/** At most this many candidates are named in an ambiguous key's refusal. */
+const KEY_CANDIDATES = 20;
+
+function occursOnce(keys: readonly string[], key: string): boolean {
+  return keys.filter((other) => other === key).length === 1;
+}
+
+/**
+ * The ambiguous matches, each with a key qualified as narrowly as it takes to
+ * name it alone: by project name, else by Workspace slug, else not at all
+ * (`null`: only its ticket id names it, two projects of one Workspace sharing
+ * a name and a prefix).
+ */
+function qualifiedCandidates(
+  matches: readonly {
+    ticket: Doc<"tickets">;
+    project: Doc<"projects">;
+    workspace: Doc<"workspaces">;
+  }[],
+) {
+  const byName = matches.map(
+    ({ ticket, project }) =>
+      `${qualifierOf(project.name)}/${renderTicketKey(project, ticket.number)}`,
+  );
+  const bySlug = matches.map(
+    ({ ticket, project, workspace }) =>
+      `${workspace.slug}/${renderTicketKey(project, ticket.number)}`,
+  );
+  return matches.map(({ ticket, project, workspace }, index) => ({
+    ticketId: ticket.id,
+    projectId: project.id,
+    projectName: project.name,
+    workspaceSlug: workspace.slug,
+    qualifiedKey: occursOnce(byName, byName[index]!)
+      ? byName[index]!
+      : occursOnce(bySlug, bySlug[index]!)
+        ? bySlug[index]!
+        : null,
+  }));
+}
+
+/** A project name as a key qualifier matches it: lower case, runs of other characters as `-`. */
+function qualifierOf(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+/**
+ * The ticket a typed display key (`VC-12`, or qualified `volli-code/VC-12`)
+ * names among the projects the caller can see, without guessing.
+ *
+ * The prefix is looked up in every Workspace the caller (an agent: its
+ * Session's owner) is an active Member of. An agent's own Session is
+ * preferred: its project, then its Workspace. A qualifier names a project
+ * (its name, lower case and dashed) or a Workspace (its slug). When more than
+ * one ticket still matches, the answer is `ambiguous_key` with the candidates
+ * (their ids, projects and Workspaces) so the caller can qualify the key or
+ * use the ticket's id; `not_found` when none does.
+ */
+export const resolveTicketKey = query({
+  args: { key: v.string() },
+  handler: async (ctx, { key }) => {
+    const caller = await requireActor(ctx, PERSON_OR_AGENT);
+    const parsed = parseTicketKey(key);
+    if (parsed === null || (parsed.qualifier !== null && qualifierOf(parsed.qualifier) === "")) {
+      throw boardError("invalid_argument", `${key} is not a ticket key (like VC-12).`);
+    }
+    const memberships = await ctx.db
+      .query("workspaceMembers")
+      .withIndex("by_user", (q) => q.eq("userId", caller.viewer.userId))
+      .collect();
+    type Candidate = {
+      ticket: Doc<"tickets">;
+      project: Doc<"projects">;
+      workspace: Doc<"workspaces">;
+    };
+    const candidates: Candidate[] = [];
+    for (const membership of memberships) {
+      if (membership.status !== "active") continue;
+      const workspace = await ctx.db
+        .query("workspaces")
+        .withIndex("by_uuid", (q) => q.eq("id", membership.workspaceId))
         .unique();
-      if (label === null) throw authError("not_found", "That label does not exist.");
-      const { project } = await requireProject(ctx, label.projectId);
-      requireWritableProject(project);
-      const color = normalizeLabelColor(intent.color);
-      if (color !== label.color) await ctx.db.patch(label._id, { color, updatedAt: Date.now() });
-      return { projectId: project.id, reply: { labelId: label.id } };
-    }),
+      if (workspace === null || workspace.deletedAt !== null) continue;
+      const projects = await ctx.db
+        .query("projects")
+        .withIndex("by_workspace_prefix", (q) =>
+          q.eq("workspaceId", workspace.id).eq("ticketPrefix", parsed.prefix),
+        )
+        .collect();
+      for (const project of projects) {
+        if (project.deletedAt !== null) continue;
+        if (
+          parsed.qualifier !== null &&
+          parsed.qualifier.toLowerCase() !== workspace.slug.toLowerCase() &&
+          qualifierOf(parsed.qualifier) !== qualifierOf(project.name)
+        ) {
+          continue;
+        }
+        const ticket = await ctx.db
+          .query("tickets")
+          .withIndex("by_project_number", (q) =>
+            q.eq("projectId", project.id).eq("number", parsed.number),
+          )
+          .unique();
+        if (ticket !== null && ticket.deletedAt === null) {
+          candidates.push({ ticket, project, workspace });
+        }
+      }
+    }
+    let matches = candidates;
+    if (matches.length > 1 && caller.agent !== null) {
+      const sessionProjectId = caller.agent.session.projectId;
+      const sessionProject = await ctx.db
+        .query("projects")
+        .withIndex("by_uuid", (q) => q.eq("id", sessionProjectId))
+        .unique();
+      const inProject = matches.filter((c) => c.project.id === sessionProjectId);
+      const inWorkspace = matches.filter((c) => c.workspace.id === sessionProject?.workspaceId);
+      matches = inProject.length > 0 ? inProject : inWorkspace.length > 0 ? inWorkspace : matches;
+    }
+    if (matches.length === 0) throw authError("not_found", `No ticket ${key} that you can see.`);
+    if (matches.length > 1) {
+      throw new ConvexError({
+        code: "ambiguous_key",
+        message: `${key} names a ticket in more than one project. Qualify it (project/${parsed.prefix}-${parsed.number}) or use the ticket's id.`,
+        candidates: qualifiedCandidates(matches.slice(0, KEY_CANDIDATES)),
+      });
+    }
+    const [{ ticket, project }] = matches as [Candidate];
+    return {
+      ticketId: ticket.id,
+      projectId: project.id,
+      key: renderTicketKey(project, ticket.number),
+    };
+  },
 });

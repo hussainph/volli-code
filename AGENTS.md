@@ -135,7 +135,7 @@ Target: no host process. Convex is the single authority for Workspaces, Members,
 - **Each durable fact is its own mutation**, sent through the runner's ordered Retry buffer: crash-safe, idempotent by `commandId`, never awaited by the agent. The backend assigns final order. Streamed text goes in short chunks; terminals and the browser screencast go over a separate relay, never through database documents. Measure before optimizing.
 - **Ids stay ours.** UUIDs, the event format and the object-storage key layout are independent of Convex `_id`s.
 - **No `electron` imports in runner code**, or in any package the runner composes.
-- **Credentials:** API keys and Workspace keys stay in the backend Model gateway; runners get short-lived Runner tokens. Subscriptions never leave the person's machine.
+- **Credentials:** API keys and Workspace keys stay in the backend Model gateway; runners get short-lived Runner tokens. Subscriptions never leave the person's machine. Credentials follow the caller and are never borrowed: a person's sign-in token stays in their client, a runner's tokens call runner functions only, and an agent holds no backend credential: its runner calls for it under a short-lived, Session-scoped Agent token (`docs/BOUNDARIES.md`, "Credentials follow the caller").
 - **Don't extend superseded surfaces**: the host protocol, host identity/enrollment, SSH host install, checkout leases/epochs, checkpoint refs and hostd operator surfaces. Fixes only; they are deleted in their own tickets.
 - **Vocabulary**: Workspace, Member, Runner, Volli Cloud runner, Place, Working copy (`CONTEXT.md`).
 
