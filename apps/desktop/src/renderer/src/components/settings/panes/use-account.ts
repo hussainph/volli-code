@@ -24,6 +24,8 @@ export interface AccountRpc {
     readonly requestDeletion: { mutate(): Promise<unknown> };
     readonly cancelDeletion: { mutate(): Promise<unknown> };
   };
+  /** The restart into the store the account now chooses (VC-889). */
+  readonly cloud: { readonly relaunch: { mutate(): Promise<unknown> } };
 }
 
 type AccountView =
@@ -37,6 +39,7 @@ export interface AccountCommands {
   signOut(): Promise<unknown>;
   requestDeletion(): Promise<unknown>;
   cancelDeletion(): Promise<unknown>;
+  relaunch(): Promise<unknown>;
 }
 
 function accountCommands(rpc: AccountRpc): AccountCommands {
@@ -46,6 +49,7 @@ function accountCommands(rpc: AccountRpc): AccountCommands {
     signOut: () => rpc.account.signOut.mutate(),
     requestDeletion: () => rpc.account.requestDeletion.mutate(),
     cancelDeletion: () => rpc.account.cancelDeletion.mutate(),
+    relaunch: () => rpc.cloud.relaunch.mutate(),
   };
 }
 

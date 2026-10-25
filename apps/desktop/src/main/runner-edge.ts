@@ -66,6 +66,15 @@ export interface DesktopRunnerEdgePorts<T extends QuitTerminals> {
   createSessionRpc(ready: RunnerReady, handlers: HostHandlerMap): SessionRpcTransport | null;
   /** The agent socket's shutdown, drained beside the Session runtime by the host's stop. */
   closeSocket(): Promise<boolean | void>;
+  /**
+   * The restart into another product store (VC-889): a quit it asked for is
+   * never offered menu-bar mode, and it hears whether the gates accepted it.
+   */
+  relaunch?: {
+    pending(): boolean;
+    quitAccepted(): void;
+    quitRefused(): void;
+  };
 }
 
 /** What boot binds as it builds each gate's subject. Binding again replaces. */
@@ -167,6 +176,25 @@ export function createDesktopRunnerEdge<T extends QuitTerminals>(
     // stops on a refused attempt. Flag on: the menu-bar branch decides after
     // the confirms, and a host already stopping is never offered it.
     const menuBar = bound.menuBar;
+    // A restart into another product store (VC-889) keeps the flag-on order
+    // (every confirm first, so a Cancel stops nothing) but is a quit, never
+    // menu-bar mode.
+    if (ports.relaunch?.pending() === true) {
+      prepareDesktopQuit(event, {
+        stopAutomations,
+        unsavedQuit,
+        terminalQuit,
+        abortRepack,
+        menuBar: {
+          branch: () => "quit",
+          confirmEnter: () => true,
+          enter: () => {},
+          systemShuttingDown: () => menuBar?.systemShuttingDown() ?? false,
+        },
+        systemShutdownTeardown,
+      });
+      return;
+    }
     prepareDesktopQuit(event, {
       stopAutomations,
       unsavedQuit,
@@ -198,6 +226,12 @@ export function createDesktopRunnerEdge<T extends QuitTerminals>(
             `quit: shutdown deadline expired after ${deadlineMs}ms`,
           ),
         reportFailure: (error) => log.error("failed to coordinate app shutdown", { error }),
+        ...(ports.relaunch === undefined
+          ? {}
+          : {
+              onQuitAccepted: ports.relaunch.quitAccepted,
+              onQuitRefused: ports.relaunch.quitRefused,
+            }),
       }),
     stopProducers: () => {
       hostClosing = true;

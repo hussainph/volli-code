@@ -51,6 +51,11 @@ import {
 const RESTART_RESUME_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 
 export type RestartResumeSkipReason =
+  /**
+   * This launch shows Volli Cloud's board, not this Mac's: a local Session's
+   * turn waits for a launch that shows it, where a person can see it run.
+   */
+  | "cloud-launch"
   /** Archived, stopped, or the recovered attachment is no longer the live one. */
   | "ended"
   /** A turn is running, or about to: something already continued it. */
@@ -107,6 +112,11 @@ export interface RestartResumeVerdictInput {
   boundary: RuntimeResumeBoundary | null;
   /** Every Session on the Ticket (it may include this one); empty without one. */
   ticketSessions: readonly ScheduledResumeSibling[];
+  /**
+   * Whether this launch shows Volli Cloud's board rather than this Mac's
+   * (VC-889). Absent is a local launch.
+   */
+  cloudLaunch?: boolean;
 }
 
 function skip(reason: RestartResumeSkipReason): RestartResumeVerdict {
@@ -116,6 +126,7 @@ function skip(reason: RestartResumeSkipReason): RestartResumeVerdict {
 /** What the host owes one recovered, interrupted turn. */
 export function restartResumeVerdict(input: RestartResumeVerdictInput): RestartResumeVerdict {
   const { projection, attachmentId } = input;
+  if (input.cloudLaunch === true) return skip("cloud-launch");
   if (
     projection.status !== "open" ||
     projection.stopped !== null ||

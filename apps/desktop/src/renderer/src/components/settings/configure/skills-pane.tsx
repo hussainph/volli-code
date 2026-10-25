@@ -75,7 +75,7 @@ import {
 } from "@renderer/components/ui/select";
 import { writeThrough } from "@renderer/stores/mutate";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { boardApi } from "@renderer/lib/board-protocol";
+import { boardApi } from "@renderer/lib/board-api";
 
 /** What each mode is called, and the one line explaining what it costs. */
 const MODE_LABEL: Record<SkillMode, string> = {

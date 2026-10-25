@@ -55,7 +55,7 @@ import { ModelName } from "@renderer/components/models/model-identity";
 import { writeThrough } from "@renderer/stores/mutate";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
-import { boardApi } from "@renderer/lib/board-protocol";
+import { boardApi } from "@renderer/lib/board-api";
 import { useLatestAsync, type LatestAsyncGuard } from "@renderer/hooks/use-latest-async";
 
 import { ContentPreviewDialog, type PreviewState } from "./content-preview-dialog";

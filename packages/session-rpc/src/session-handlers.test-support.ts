@@ -280,6 +280,9 @@ export function sessionHandlersFrom(
     "account.signOut": remote("account.signOut"),
     "account.requestDeletion": remote("account.requestDeletion"),
     "account.cancelDeletion": remote("account.cancelDeletion"),
+    "account.accessToken": remote("account.accessToken"),
+    "cloud.launch": remote("cloud.launch"),
+    "cloud.relaunch": remote("cloud.relaunch"),
   };
   return {
     ...handlers,

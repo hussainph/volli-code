@@ -94,6 +94,7 @@ describe("app_state key registry", () => {
       "volli:update-allow-prerelease": "client-local stays",
       "volli:update-last-check": "client-local stays",
       "volli:notification-preferences": "client-local VC-578",
+      "volli:cloud-launch": "client-local stays",
       "volli:model-picker-view": "client-local VC-572",
       "volli:vc354-perf:": "client-local stays",
       "volli:experimental-flags": "split VC-577",

@@ -16,7 +16,7 @@
 import { appendFileRef } from "@renderer/editor/file-refs";
 import { toastError } from "@renderer/lib/toast";
 import { isTicketBodyLoaded, useBoardStore } from "@renderer/stores/board";
-import { boardApi } from "@renderer/lib/board-protocol";
+import { boardApi } from "@renderer/lib/board-api";
 
 /** The reads and writes this append needs — narrow and fake-able in tests. */
 export interface TicketBodyRefGateway {

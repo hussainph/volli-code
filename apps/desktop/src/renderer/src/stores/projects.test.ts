@@ -9,11 +9,14 @@ import {
   PROJECTS_UI_APP_STATE_KEY,
   type ProjectsGateway,
   createProjectsStore,
+  decodeCloudSelection,
   decodeProjectsUiState,
   decodeRemoteSelection,
   encodeProjectsUiState,
   useProjectsStore,
 } from "./projects";
+import { LOCAL_LAUNCH } from "@volli/shared";
+import { adoptLaunch } from "./launch";
 import { projectScope, ticketScope, useSessionsStore, type SessionLaunch } from "./sessions";
 
 // The default gateway's desktop-only command rides the Session RPC client (VC-608).
@@ -1913,5 +1916,135 @@ describe("remote selection intent", () => {
     store.getState().settleRemoteRestore(remote, true);
     expect(store.getState().pendingRemoteSelection).toBeNull();
     expect(store.getState().selectedProjectId).toBe("id-/new");
+  });
+});
+
+describe("a cloud launch's projects (VC-889)", () => {
+  afterEach(() => adoptLaunch(LOCAL_LAUNCH));
+
+  const remote = { hostId: "box-id", projectId: "remote", hostName: "box" };
+
+  it("lists the Workspace's projects, persisting the cloud selection beside the local one", async () => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    const gateway = fakeGateway();
+    const announced = vi.fn();
+    const store = createProjectsStore(gateway, announced);
+    store.getState().beginCloudLaunch({ local: "mine", remote });
+    const a = project({ id: "a", path: "" });
+    const b = project({ id: "b", path: "" });
+    store.getState().hydrateCloud("w1", [a, b], "b");
+    expect(store.getState().projects).toEqual([a, b]);
+    expect(store.getState().selectedProjectId).toBe("b");
+    expect(announced).toHaveBeenCalledWith("b");
+    expect(gateway.setSelection).toHaveBeenLastCalledWith("mine", remote, {
+      workspaceId: "w1",
+      projectId: "b",
+    });
+    // The same answer again writes nothing.
+    store.getState().hydrateCloud("w1", [a, b], "b");
+    expect(gateway.setSelection).toHaveBeenCalledOnce();
+    store.getState().select("a");
+    expect(gateway.setSelection).toHaveBeenLastCalledWith("mine", remote, {
+      workspaceId: "w1",
+      projectId: "a",
+    });
+    // No remote selection kept: none written.
+    store.getState().beginCloudLaunch({ local: null, remote: null });
+    store.getState().hydrateCloud("w2", [a], "a");
+    expect(gateway.setSelection).toHaveBeenLastCalledWith(null, undefined, {
+      workspaceId: "w2",
+      projectId: "a",
+    });
+  });
+
+  it("says when the cloud selection could not be saved", async () => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    const gateway = fakeGateway({
+      setSelection: vi
+        .fn<ProjectsGateway["setSelection"]>()
+        .mockResolvedValueOnce({ ok: false, error: "db locked" })
+        .mockRejectedValueOnce(new Error("bridge gone")),
+    });
+    const store = createProjectsStore(gateway, vi.fn());
+    store.getState().hydrateCloud("w1", [project({ id: "a", path: "" })], "a");
+    store.getState().hydrateCloud("w1", [project({ id: "a", path: "" })], null);
+    await flush();
+    expect(vi.mocked(toast.error).mock.calls.map(([message]) => message)).toEqual([
+      "Couldn't save selected project: db locked",
+      "Couldn't save selected project: bridge gone",
+    ]);
+  });
+
+  it("refuses this Mac's own writes for every cloud project, in Volli Cloud's words", async () => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    const gateway = fakeGateway();
+    const store = createProjectsStore(gateway, vi.fn());
+    const a = project({ id: "a", path: "" });
+    const b = project({ id: "b", path: "" });
+    store.getState().hydrateCloud("w1", [a, b], "a");
+    await store.getState().removeProject("a");
+    expect(await store.getState().relink("a", "/x")).toEqual({ ok: false, refusal: null });
+    expect(vi.mocked(toast.error).mock.calls.map(([message]) => message)).toEqual([
+      "Couldn't remove project: Not available for Volli Cloud projects yet.",
+      "Couldn't relink project: Not available for Volli Cloud projects yet.",
+    ]);
+    // The rail's order is this window's: nothing is written to this Mac.
+    store.getState().reorder("b", "a");
+    await store.getState().commitReorder([a, b]);
+    expect(gateway.reorder).not.toHaveBeenCalled();
+    expect(gateway.remove).not.toHaveBeenCalled();
+  });
+
+  it("clears the rail when the client closes without persisting anything", () => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    const gateway = fakeGateway();
+    const announced = vi.fn();
+    const store = createProjectsStore(gateway, announced);
+    store.getState().hydrateCloud("w1", [project({ id: "a", path: "" })], "a");
+    store.getState().clearCloud();
+    expect(store.getState().projects).toEqual([]);
+    expect(store.getState().selectedProjectId).toBeNull();
+    expect(announced).toHaveBeenLastCalledWith(null);
+    expect(gateway.setSelection).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the cloud selection through a local launch's own selection changes", () => {
+    const gateway = fakeGateway();
+    const store = createProjectsStore(
+      gateway,
+      vi.fn(),
+      (id) => id === "remote",
+      (id) => (id === "remote" ? remote : null),
+    );
+    const cloud = { workspaceId: "w1", projectId: "c" };
+    store.getState().keepCloudSelection(cloud);
+    store.getState().hydrate([project({ id: "mine", path: "/m" })], "mine");
+    store.getState().adoptProject(project({ id: "remote", path: "" }));
+    store.getState().select("remote");
+    expect(gateway.setSelection).toHaveBeenLastCalledWith("mine", remote, cloud);
+    store.getState().select("mine");
+    expect(gateway.setSelection).toHaveBeenLastCalledWith("mine", undefined, cloud);
+  });
+
+  it("encodes and decodes the cloud selection beside the others", () => {
+    const raw = encodeProjectsUiState("mine", remote, { workspaceId: "w1", projectId: null });
+    expect(decodeProjectsUiState(raw)).toBe("mine");
+    expect(decodeRemoteSelection(raw)).toEqual(remote);
+    expect(decodeCloudSelection(raw)).toEqual({ workspaceId: "w1", projectId: null });
+    expect(
+      decodeCloudSelection(
+        encodeProjectsUiState(null, undefined, { workspaceId: "w1", projectId: "p" }),
+      ),
+    ).toEqual({ workspaceId: "w1", projectId: "p" });
+    for (const bad of [
+      undefined,
+      "{",
+      "null",
+      JSON.stringify({ cloudSelection: { workspaceId: "", projectId: null } }),
+      JSON.stringify({ cloudSelection: { workspaceId: "w", projectId: 3 } }),
+      JSON.stringify({ selectedProjectId: "x" }),
+    ]) {
+      expect(decodeCloudSelection(bad), String(bad)).toBeNull();
+    }
   });
 });

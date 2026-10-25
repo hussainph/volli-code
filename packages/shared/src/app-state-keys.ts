@@ -170,6 +170,12 @@ const EXACT = {
     reason:
       "Notification preferences of this device (main/notification-preferences.ts). Each client filters what it shows; the host delivers attention to clients per VC-578.",
   },
+  "volli:cloud-launch": {
+    placement: "client-local",
+    owner: "stays",
+    reason:
+      "Which product store this device's next launch uses (main/cloud-launch.ts, VC-889): the signed-in person's user id, written when a Volli Cloud sign-in completes and removed when it ends. A non-secret marker, never a token; main reads it before the window opens.",
+  },
   "volli:model-picker-view": {
     placement: "client-local",
     owner: "VC-572",

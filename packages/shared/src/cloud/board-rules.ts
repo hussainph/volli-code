@@ -222,9 +222,11 @@ function normalizeLabelName(name: string): string {
 }
 
 /** The live label a stored one stands for: itself, or the end of its merge chain. */
-function canonicalLabel(labels: ReadonlyMap<LabelId, BoardLabel>, label: BoardLabel): BoardLabel {
+function canonicalLabel<
+  Label extends { readonly id: string; readonly mergedIntoId: string | null },
+>(labels: ReadonlyMap<string, Label>, label: Label): Label {
   let current = label;
-  const seen = new Set<LabelId>([current.id]);
+  const seen = new Set<string>([current.id]);
   while (current.mergedIntoId !== null) {
     const next = labels.get(current.mergedIntoId);
     if (next === undefined || seen.has(next.id)) break;
@@ -232,6 +234,33 @@ function canonicalLabel(labels: ReadonlyMap<LabelId, BoardLabel>, label: BoardLa
     current = next;
   }
   return current;
+}
+
+/**
+ * The names a ticket's stored label ids are worn under now: each followed to
+ * the live label it was merged into, unknown ids dropped, each label once, in
+ * stored order. What a client shows on a card (VC-889).
+ */
+export function labelNamesOf(
+  labelIds: readonly string[],
+  labels: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly mergedIntoId: string | null;
+  }[],
+): string[] {
+  const byId = new Map(labels.map((label) => [label.id, label]));
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const id of labelIds) {
+    const label = byId.get(id);
+    if (label === undefined) continue;
+    const live = canonicalLabel(byId, label);
+    if (seen.has(live.id)) continue;
+    seen.add(live.id);
+    names.push(live.name);
+  }
+  return names;
 }
 
 /** Resolves label names against a project's labels, minting the ones that do not exist. */
@@ -642,8 +671,14 @@ export function movingTicketIds(
   return tickets.filter((ticket) => isMoving(command, ticket)).map((ticket) => ticket.id);
 }
 
-/** Board order: column left to right, then position, then number. */
-function compareBoardOrder(a: BoardTicket, b: BoardTicket): number {
+/**
+ * Board order: column left to right, then position, then number. A client
+ * orders its board by the same comparison (VC-889).
+ */
+export function compareBoardOrder(
+  a: Pick<BoardTicket, "status" | "position" | "number">,
+  b: Pick<BoardTicket, "status" | "position" | "number">,
+): number {
   return (
     TICKET_STATUSES.indexOf(a.status) - TICKET_STATUSES.indexOf(b.status) ||
     comparePositions(a.position, b.position) ||

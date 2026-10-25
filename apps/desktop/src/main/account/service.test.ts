@@ -6,7 +6,12 @@
  */
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { UNCONFIGURED_ACCOUNT, isOperationUnavailable, type AccountSnapshot } from "@volli/shared";
+import {
+  ACCOUNT_TOKEN_RETRY_MS,
+  UNCONFIGURED_ACCOUNT,
+  isOperationUnavailable,
+  type AccountSnapshot,
+} from "@volli/shared";
 
 import { BackendRefusedError, type AccountBackend, type BackendViewer } from "./backend";
 import { devIssuerProvider } from "./dev-issuer";
@@ -62,6 +67,7 @@ function harness(
     accessTtlSeconds?: number;
     enabled?: () => boolean;
     temp?: ReturnType<typeof tempInventory>;
+    marker?: AccountServiceOptions["marker"];
   } = {},
 ) {
   const temp = options.temp ?? tempInventory();
@@ -84,6 +90,7 @@ function harness(
     backend,
     store: inventoryAccountSessionStore(temp.inventory, async () => {}),
     openBrowser: options.openBrowser ?? web.open,
+    ...(options.marker === undefined ? {} : { marker: options.marker }),
   });
   cleanups.push(() => service.dispose());
   const seen: AccountSnapshot[] = [];
@@ -292,6 +299,121 @@ describe("the account service", () => {
     ) as { refreshToken: string; sessionId: string };
     // Rotated, and the provider session kept from the sign-in.
     expect(sealed).toMatchObject({ refreshToken: "refresh-next", sessionId: "session_01" });
+  });
+
+  // VC-889: the window's own Volli Cloud client asks for short-lived tokens.
+  describe("the window's token", () => {
+    it("answers signed-out with cloud off, unconfigured, or nobody signed in", async () => {
+      const off = harness({ enabled: () => false });
+      await expect(off.service.windowToken(false)).resolves.toEqual({ kind: "signed-out" });
+      const unconfigured = createAccountService({
+        enabled: () => true,
+        provider: null,
+        backend: null,
+        store: inventoryAccountSessionStore(off.temp.inventory, async () => {}),
+        openBrowser: () => {},
+      });
+      await expect(unconfigured.windowToken(true)).resolves.toEqual({ kind: "signed-out" });
+      const nobody = harness({ provider: scriptedProvider(), openBrowser: scriptedBrowser });
+      await expect(nobody.service.windowToken(false)).resolves.toEqual({ kind: "signed-out" });
+    });
+
+    it("answers the access token, and refreshes on force unless it just did", async () => {
+      let now = 1_000_000;
+      const refresh = vi.fn(async () => ({
+        accessToken: `fresh-${refresh.mock.calls.length}`,
+        refreshToken: `refresh-${refresh.mock.calls.length + 1}`,
+        accessExpiresAt: now + 10 * 60_000,
+        sessionId: null,
+        profile: { displayName: null, email: null },
+      }));
+      const provider = scriptedProvider({
+        exchangeCode: async () => ({
+          accessToken: "first",
+          refreshToken: "refresh-1",
+          accessExpiresAt: now + 10 * 60_000,
+          sessionId: null,
+          profile: { displayName: "Dana", email: null },
+        }),
+        refresh,
+      });
+      const temp = tempInventory();
+      cleanups.push(temp.dispose);
+      const service = createAccountService({
+        enabled: () => true,
+        provider,
+        backend: null,
+        store: inventoryAccountSessionStore(temp.inventory, async () => {}),
+        openBrowser: scriptedBrowser,
+        now: () => now,
+      });
+      cleanups.push(() => service.dispose());
+      service.snapshot();
+      await service.settled();
+      await service.signIn("github");
+      await service.settled();
+
+      const expiresAt = now + 10 * 60_000;
+      await expect(service.windowToken(false)).resolves.toEqual({
+        kind: "token",
+        token: "first",
+        expiresAt,
+      });
+      // The client's start asks cached then forced: the token just issued serves both.
+      await expect(service.windowToken(true)).resolves.toMatchObject({ token: "first" });
+      expect(refresh).not.toHaveBeenCalled();
+      now += 31_000;
+      await expect(service.windowToken(true)).resolves.toMatchObject({
+        kind: "token",
+        token: "fresh-1",
+      });
+      expect(refresh).toHaveBeenCalledOnce();
+      await expect(service.windowToken(false)).resolves.toMatchObject({ token: "fresh-1" });
+      expect(refresh).toHaveBeenCalledOnce();
+    });
+
+    it("answers unavailable offline, keeping the sign-in, and signed-out once it is refused", async () => {
+      let refreshFails: Error = new Error("offline");
+      const provider = scriptedProvider({
+        exchangeCode: async () => ({
+          accessToken: "expired",
+          refreshToken: "refresh-1",
+          accessExpiresAt: Date.now() - 1,
+          sessionId: null,
+          profile: { displayName: "Dana", email: null },
+        }),
+        refresh: async () => {
+          throw refreshFails;
+        },
+      });
+      const { service } = harness({ provider, openBrowser: scriptedBrowser });
+      service.snapshot();
+      await service.settled();
+      await service.signIn("github");
+      await service.settled();
+      await expect(service.windowToken(false)).resolves.toEqual({
+        kind: "unavailable",
+        retryAfterMs: ACCOUNT_TOKEN_RETRY_MS,
+      });
+      await expect(service.windowToken(true)).resolves.toMatchObject({ kind: "unavailable" });
+      expect(service.snapshot().state).toBe("signed-in");
+      refreshFails = new ProviderRefusedError("Session has already ended.");
+      await expect(service.windowToken(true)).resolves.toEqual({ kind: "signed-out" });
+      expect(service.snapshot().state).toBe("signed-out");
+    });
+  });
+
+  it("writes the launch marker once the backend answers, and clears it when signed out", async () => {
+    const marker = { write: vi.fn(), clear: vi.fn() };
+    const { service } = harness({ marker });
+    service.snapshot();
+    await service.settled();
+    marker.clear.mockClear();
+    await service.signIn("github");
+    await service.settled();
+    expect(marker.write).toHaveBeenCalledWith(VIEWER.userId);
+    await service.signOut();
+    expect(marker.clear).toHaveBeenCalled();
   });
 
   it("signs out when the provider refuses the refresh, and keeps the sign-in when offline", async () => {

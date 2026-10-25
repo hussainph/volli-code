@@ -131,6 +131,12 @@ same gap conflict and retry instead of colliding (`board.backend.test.ts`).
 The local SQLite board (signed-out mode) keeps its own commands; it was not
 rewritten onto these decisions, because its dense integer positions differ.
 
+**Public function arguments are a cross-version contract.** A shipped
+desktop calls these functions directly from its window (VC-889), through the
+generated references this package exports as `@volli/convex/api` (the only
+import a client takes from here). Change a public function's arguments
+additively only: a new optional argument, never a removed or retyped one.
+
 **No cloud deployment may ever set `VOLLI_TEST_JWKS`.** Without it, the
 deployment trusts no test issuer.
 
@@ -155,6 +161,8 @@ key:
 VOLLI_ACCOUNT_PROVIDER=dev pnpm -C convex with-backend --deploy -- pnpm -C .. dev
 ```
 
+The dev server lets the window connect to the loopback backend; a built app
+needs `VOLLI_CLOUD_LOOPBACK=1` at build time for the same (VC-889).
 `with-backend` hands the app `VOLLI_CONVEX_URL` and
 `VOLLI_CONVEX_TEST_PRIVATE_KEY`; Settings → Account (with `cloud` on) then
 signs in through the browser and `accounts.ensureViewer` runs on the

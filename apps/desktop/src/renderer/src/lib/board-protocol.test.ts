@@ -1,6 +1,6 @@
 /**
  * The board's protocol door (VC-565): the sync engine's transport over a
- * board client, the start/stop of the protocol path, and `boardApi()` — the
+ * board client, the start/stop of the protocol path, and `facade()` — the
  * legacy `window.api` functions with `cloud` off, the protocol facade (each
  * write under one `commandId`, retried while its outcome is unknown) with it
  * on. The board client here is a real `createTRPCClient<BoardRouter>` over a
@@ -13,7 +13,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import type { IpcRequest, IpcResponse } from "@volli/host-protocol/ipc";
 import {
-  boardApi,
   boardProtocol,
   boardSyncTransport,
   commentTickets,
@@ -34,6 +33,12 @@ vi.mock("./session-rpc-ipc-link", async (importOriginal) => {
     sessionRpcClient: vi.fn(() => actual.createSessionRpcClient(window.api.sessionRpc)),
   };
 });
+
+/** The running protocol path's per-surface facade. */
+function facade() {
+  const active = boardProtocol()!;
+  return protocolBoardApi(active.clientFor, active.sync, active.commentTickets);
+}
 
 /** The router's error, as either board link delivers it: the envelope on `data.hostError`. */
 function hostError(code: string, message: string, reason?: string): TRPCClientError<BoardRouter> {
@@ -377,76 +382,7 @@ describe("startBoardProtocol / stopBoardProtocol", () => {
 
 // ---- boardApi -------------------------------------------------------------------------------
 
-describe("boardApi with the protocol off", () => {
-  it("answers with window.api's own functions, untouched", async () => {
-    const api = {
-      tickets: {
-        events: vi.fn(async () => "events"),
-        body: vi.fn(async () => "body"),
-        latestSignals: vi.fn(async () => "signals"),
-        statusEntries: vi.fn(async () => "entries"),
-      },
-      comments: {
-        list: vi.fn(async () => "list"),
-        create: vi.fn(async () => "create"),
-        update: vi.fn(async () => "update"),
-        remove: vi.fn(async () => "remove"),
-      },
-      projects: {
-        update: vi.fn(async () => "project"),
-        setSkillModes: vi.fn(async () => "modes"),
-        setSessionDefaults: vi.fn(async () => "defaults"),
-        checkFolder: vi.fn(async () => "folder"),
-      },
-    };
-    vi.stubGlobal("window", { api });
-    const door = boardApi();
-
-    const answers = await Promise.all([
-      door.tickets.events({ ticketId: "a" }),
-      door.tickets.body({ ticketId: "a" }),
-      door.tickets.latestSignals({ projectId: "p1" }),
-      door.tickets.statusEntries({ projectId: "p1" }),
-      door.comments.list({ ticketId: "a" }),
-      door.comments.create({ ticketId: "a", body: "hi" }),
-      door.comments.update({ commentId: "c", body: "edit" }),
-      door.comments.remove({ commentId: "c" }),
-      door.projects.update({ id: "p1", baseBranch: "main" }),
-      door.projects.setSkillModes({ id: "p1", modes: {} }),
-      door.projects.setSessionDefaults({ id: "p1", model: null }),
-      door.projects.checkFolder("p1"),
-    ]);
-
-    expect(answers).toEqual([
-      "events",
-      "body",
-      "signals",
-      "entries",
-      "list",
-      "create",
-      "update",
-      "remove",
-      "project",
-      "modes",
-      "defaults",
-      "folder",
-    ]);
-    expect(api.tickets.events).toHaveBeenCalledWith({ ticketId: "a" });
-    expect(api.tickets.body).toHaveBeenCalledWith({ ticketId: "a" });
-    expect(api.tickets.latestSignals).toHaveBeenCalledWith({ projectId: "p1" });
-    expect(api.tickets.statusEntries).toHaveBeenCalledWith({ projectId: "p1" });
-    expect(api.comments.list).toHaveBeenCalledWith({ ticketId: "a" });
-    expect(api.comments.create).toHaveBeenCalledWith({ ticketId: "a", body: "hi" });
-    expect(api.comments.update).toHaveBeenCalledWith({ commentId: "c", body: "edit" });
-    expect(api.comments.remove).toHaveBeenCalledWith({ commentId: "c" });
-    expect(api.projects.update).toHaveBeenCalledWith({ id: "p1", baseBranch: "main" });
-    expect(api.projects.setSkillModes).toHaveBeenCalledWith({ id: "p1", modes: {} });
-    expect(api.projects.setSessionDefaults).toHaveBeenCalledWith({ id: "p1", model: null });
-    expect(api.projects.checkFolder).toHaveBeenCalledWith("p1");
-  });
-});
-
-describe("boardApi with the protocol on", () => {
+describe("the protocol facade", () => {
   beforeEach(() => {
     // Nothing on window.api may be reached with the protocol on.
     vi.stubGlobal("window", { api: {} });
@@ -456,7 +392,7 @@ describe("boardApi with the protocol on", () => {
     const { client, calls } = fakeBoard({ "board.ticketBody": () => ({ body: "# Body" }) });
     startBoardProtocol({ view: silentView(), client });
 
-    expect(await boardApi().tickets.body({ ticketId: "a" })).toEqual({ ok: true, body: "# Body" });
+    expect(await facade().tickets.body({ ticketId: "a" })).toEqual({ ok: true, body: "# Body" });
     expect(calls).toEqual([{ path: "board.ticketBody", type: "query", input: { ticketId: "a" } }]);
   });
 
@@ -782,21 +718,21 @@ describe("each project's board client", () => {
       { projectId: "r1", lastEventId: "0:r:0" },
     ]);
 
-    const api = boardApi();
+    const api = facade();
     expect(await api.tickets.body({ ticketId: "rt" })).toEqual({ ok: true, body: "remote body" });
     expect(await api.comments.list({ ticketId: "rt" })).toMatchObject({ ok: true });
     // A comment the facade has seen goes to its ticket's host, through any later facade.
-    expect(await boardApi().comments.update({ commentId: "rc", body: "x" })).toMatchObject({
+    expect(await facade().comments.update({ commentId: "rc", body: "x" })).toMatchObject({
       ok: true,
     });
-    expect(await boardApi().comments.create({ ticketId: "rt", body: "y" })).toMatchObject({
+    expect(await facade().comments.create({ ticketId: "rt", body: "y" })).toMatchObject({
       ok: true,
     });
-    expect(await boardApi().comments.remove({ commentId: "rc2" })).toEqual({ ok: true });
+    expect(await facade().comments.remove({ commentId: "rc2" })).toEqual({ ok: true });
     expect(await api.tickets.latestSignals({ projectId: "r1" })).toEqual({ ok: true, signals: [] });
     expect(await api.projects.checkFolder("r1")).toMatchObject({ ok: true, state: "present" });
     // A comment it has never seen is this Mac's, as every call was before.
-    await boardApi().comments.remove({ commentId: "unknown" });
+    await facade().comments.remove({ commentId: "unknown" });
 
     expect(paths(remote.calls)).toEqual([
       "board.snapshot",

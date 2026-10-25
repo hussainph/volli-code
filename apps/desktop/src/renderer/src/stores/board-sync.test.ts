@@ -2389,7 +2389,7 @@ describe("an archive's side effects run once, on its first proof", () => {
     useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {}, starting: {} });
     const store = createBoardStore();
     const { view } = recorder();
-    view.paint.mockImplementation((...args) => store.getState().paintProtocolBoard(...args));
+    view.paint.mockImplementation((...args) => store.getState().paintBoard(...args));
     const started = startBoardProtocol({
       client: {} as never,
       view,

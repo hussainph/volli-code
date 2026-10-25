@@ -32,7 +32,7 @@ import { create } from "zustand";
 import { errorMessage, type TicketComment, type TicketEvent } from "@volli/shared";
 
 import { toastError } from "@renderer/lib/toast";
-import { boardApi } from "@renderer/lib/board-protocol";
+import { boardApi } from "@renderer/lib/board-api";
 
 /** One ticket's last landed activity, and the planning version it was read at. */
 export interface TicketActivity {

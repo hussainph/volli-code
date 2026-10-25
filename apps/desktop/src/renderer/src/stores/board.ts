@@ -37,10 +37,10 @@ import type {
 } from "../../../ipc/contract";
 import { create } from "zustand";
 
-import { boardProtocol } from "@renderer/lib/board-protocol";
 import { toastError } from "@renderer/lib/toast";
 import { killTicketSessions } from "@renderer/terminal/session-lifecycle";
 
+import { boardSourceFor } from "./board-source";
 import { useChatSessionsStore } from "./chat-sessions";
 import { writeThrough } from "./mutate";
 
@@ -266,14 +266,15 @@ export interface BoardState {
    */
   adoptTicketBody(projectId: string, ticketId: string, body: string): void;
   /**
-   * Paints one Workspace's board as the protocol path holds it (VC-565,
-   * `cloud` on): the host's confirmed rows with this window's pending writes
-   * replayed over them (`board-sync.ts`). Every ticket and label that did not
+   * Paints one project's board as its board source holds it
+   * (`board-source.ts`): Volli Cloud's rows in a cloud launch (VC-889), or a
+   * remote host's confirmed rows with this window's pending writes replayed
+   * over them (`board-sync.ts`, VC-711). Every ticket and label that did not
    * change keeps its object identity, so a repaint re-renders only the cards
    * it moved. `unloadedBodies` are the rows whose body this window has not
    * read (VC-387).
    */
-  paintProtocolBoard(
+  paintBoard(
     projectId: string,
     tickets: Ticket[],
     labels: Label[],
@@ -824,9 +825,9 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       },
 
       adoptTicketBody(projectId, ticketId, body) {
-        // The protocol path keeps the bodies it has read beside its base, so
-        // its next repaint keeps this one.
-        boardProtocol()?.sync.adoptBody(ticketId, body);
+        // A board source keeps the bodies it has read beside its rows, so its
+        // next repaint keeps this one.
+        boardSourceFor(projectId)?.adoptBody(ticketId, body);
         const slice = get().ticketsByProject[projectId];
         if (slice === undefined) return;
         const index = slice.findIndex((ticket) => ticket.id === ticketId);
@@ -851,7 +852,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         });
       },
 
-      paintProtocolBoard(projectId, tickets, labels, unloadedBodies) {
+      paintBoard(projectId, tickets, labels, unloadedBodies) {
         const previous = get().ticketsByProject[projectId] ?? [];
         const next = preserveIdentities(previous, tickets, sameTicket);
         const previousLabels = get().labelsByProject[projectId] ?? [];
@@ -881,16 +882,44 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         if (sliceChanged) reconcileTicketChatTabOwners(projectId, previous, next);
       },
 
-      hydrate(ticketsByProject, labelsByProject) {
+      hydrate(bootTickets, bootLabels) {
         const previous = get().ticketsByProject;
+        // This Mac's bootstrap knows nothing of a board a source follows (a
+        // remote host's, VC-711): each such slice stays as its source painted it.
+        const followed = Object.keys(previous).filter(
+          (projectId) => !(projectId in bootTickets) && boardSourceFor(projectId) !== null,
+        );
+        const ticketsByProject =
+          followed.length === 0
+            ? bootTickets
+            : {
+                ...bootTickets,
+                ...Object.fromEntries(followed.map((id) => [id, previous[id]!])),
+              };
+        const labelsByProject =
+          followed.length === 0
+            ? bootLabels
+            : {
+                ...bootLabels,
+                ...Object.fromEntries(followed.map((id) => [id, get().labelsByProject[id] ?? []])),
+              };
         // The boot payload carries every live ticket's body, so nothing is a
         // placeholder after a wholesale hydrate — and this read is also the one
         // that heals a board a failed refresh may have left stale, which is what
         // retires `planningRecoveryNeeded`.
+        // A followed board's placeholder bodies are still placeholders: its
+        // marks stay, or a "" would read as a body a person wrote.
+        const marks = get().unloadedTicketBodies;
+        const kept: Record<string, true> = {};
+        for (const projectId of followed) {
+          for (const ticket of previous[projectId]!) {
+            if (marks[ticket.id] !== undefined) kept[ticket.id] = true;
+          }
+        }
         set({
           ticketsByProject,
           labelsByProject,
-          unloadedTicketBodies: {},
+          unloadedTicketBodies: kept,
           planningRecoveryNeeded: false,
         });
         // The removal path `reconcileSlice` cannot see: a CLI archive, a
@@ -913,10 +942,10 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
           ticketsByProject: { ...ticketsByProject, [projectId]: [] },
           labelsByProject: { ...labelsByProject, [projectId]: [] },
         });
-        // The protocol path follows the new Workspace's board and feed.
-        const protocol = boardProtocol();
-        if (protocol !== null && !protocol.sync.follows(projectId)) {
-          void protocol.sync.open(projectId).catch((error: unknown) => {
+        // A board source follows the new project's board.
+        const source = boardSourceFor(projectId);
+        if (source !== null && !source.follows(projectId)) {
+          void source.open(projectId).catch((error: unknown) => {
             toastError(`Couldn't open the board: ${errorMessage(error)}`);
           });
         }
@@ -925,10 +954,10 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       async addTicket(projectId, status, title, options) {
         const trimmed = title.trim();
         if (trimmed === "") return null;
-        const protocol = boardProtocol();
-        if (protocol !== null) {
+        const source = boardSourceFor(projectId);
+        if (source !== null) {
           // A placeholder shows at once; the confirmed row replaces it (T5).
-          return protocol.sync.createTicket(projectId, {
+          return source.createTicket(projectId, {
             status,
             title: trimmed,
             ...definedOptions(options),
@@ -958,9 +987,9 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       },
 
       async moveTicket(projectId, ticketId, toStatus, toIndex, choice) {
-        const protocol = boardProtocol();
-        if (protocol !== null) {
-          await protocol.sync.moveTickets(projectId, [ticketId], toStatus, toIndex, choice);
+        const source = boardSourceFor(projectId);
+        if (source !== null) {
+          await source.moveTickets(projectId, [ticketId], toStatus, toIndex, choice);
           return;
         }
         await persistMove(
@@ -980,9 +1009,9 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
 
       async moveTickets(projectId, ticketIds, toStatus, toIndex, choice) {
         const ids = uniqueIds(ticketIds);
-        const protocol = boardProtocol();
-        if (protocol !== null) {
-          await protocol.sync.moveTickets(projectId, ids, toStatus, toIndex, choice);
+        const source = boardSourceFor(projectId);
+        if (source !== null) {
+          await source.moveTickets(projectId, ids, toStatus, toIndex, choice);
           return;
         }
         await persistMove(
@@ -1005,9 +1034,9 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         const original = previous.find((ticket) => ticket.id === ticketId);
         const optimistic = setTicketPriorityOp(previous, ticketId, priority, Date.now());
         if (!original || optimistic === previous) return; // unknown id or unchanged priority (the shared op's no-op guard)
-        const protocol = boardProtocol();
-        if (protocol !== null) {
-          await protocol.sync.setPriority(projectId, ticketId, priority);
+        const source = boardSourceFor(projectId);
+        if (source !== null) {
+          await source.setPriority(projectId, ticketId, priority);
           return;
         }
         set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: optimistic } });
@@ -1045,13 +1074,12 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         if (changes.usesWorktree !== undefined)
           optimisticFields.usesWorktree = changes.usesWorktree;
 
-        const protocol = boardProtocol();
-        if (protocol !== null) {
-          const found = findTicketProject(ticketId);
-          if (!found) return;
+        const found = findTicketProject(ticketId);
+        const source = boardSourceFor(found?.projectId);
+        if (found !== undefined && source !== null) {
           // A host path is the host's to stamp: the board router takes no worktreePath.
           const { worktreePath: _worktreePath, ...fields } = input;
-          const updated = await protocol.sync.updateTicket(found.projectId, fields);
+          const updated = await source.updateTicket(found.projectId, fields);
           if (updated !== null) {
             const loaded = markTicketBodyLoaded(ticketId);
             if (loaded !== undefined) set({ unloadedTicketBodies: loaded });
@@ -1064,10 +1092,10 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       },
 
       async setLabels(ticketId, labels) {
-        const protocol = boardProtocol();
-        if (protocol !== null) {
-          const found = findTicketProject(ticketId);
-          if (found) await protocol.sync.setLabels(found.projectId, ticketId, labels);
+        const found = findTicketProject(ticketId);
+        const source = boardSourceFor(found?.projectId);
+        if (found !== undefined && source !== null) {
+          await source.setLabels(found.projectId, ticketId, labels);
           return;
         }
         await optimisticTicketPatch(ticketId, { labels }, "update labels", () =>
@@ -1079,9 +1107,9 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         const previous = get().labelsByProject[projectId] ?? [];
         const original = previous.find((label) => label.id === labelId);
         if (!original || original.color === color) return; // unknown id or unchanged color
-        const protocol = boardProtocol();
-        if (protocol !== null) {
-          await protocol.sync.setLabelColor(projectId, labelId, color);
+        const source = boardSourceFor(projectId);
+        if (source !== null) {
+          await source.setLabelColor(projectId, labelId, color);
           return;
         }
 
@@ -1102,10 +1130,10 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       },
 
       async loadArchived(projectId) {
-        const protocol = boardProtocol();
+        const source = boardSourceFor(projectId);
         const result =
-          protocol !== null
-            ? await protocol.sync
+          source !== null
+            ? await source
                 .archivedTickets(projectId)
                 .then((tickets) => (tickets === null ? null : { ok: true as const, tickets }))
             : await writeThrough("load archive", (): Promise<ArchivedTicketsResult> =>
@@ -1130,11 +1158,11 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         const previous = get().ticketsByProject[projectId] ?? [];
         const target = previous.find((ticket) => ticket.id === ticketId);
         if (!target) return; // unknown id — nothing to archive
-        const protocol = boardProtocol();
-        if (protocol !== null) {
-          // The pending layer drops the card at once and holds it off the
-          // board until the feed confirms (T5); a refusal puts it back.
-          if (!(await protocol.sync.archiveTicket(projectId, ticketId))) return;
+        const source = boardSourceFor(projectId);
+        if (source !== null) {
+          // The source drops the card at once and holds it off the board
+          // until its confirmation (T5); a refusal puts it back.
+          if (!(await source.archiveTicket(projectId, ticketId))) return;
           killTicketSessions(ticketId);
           afterArchived(projectId, ticketId);
           return;
@@ -1177,10 +1205,10 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         // Optimistically drop it from the Archive slice.
         reconcileArchived(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
 
-        const protocol = boardProtocol();
-        if (protocol !== null) {
+        const source = boardSourceFor(projectId);
+        if (source !== null) {
           // The board shows it at once, appended to its column (T5).
-          const revived = await protocol.sync.unarchiveTicket(projectId, target);
+          const revived = await source.unarchiveTicket(projectId, target);
           if (revived === null) {
             reconcileArchived(projectId, (slice) => restoreAt(slice, target, index));
             return;
@@ -1221,10 +1249,10 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         // Optimistically drop it from the Archive slice.
         reconcileArchived(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
 
-        const protocol = boardProtocol();
+        const source = boardSourceFor(projectId);
         const result =
-          protocol !== null
-            ? (await protocol.sync.deleteTicket(projectId, ticketId))
+          source !== null
+            ? (await source.deleteTicket(projectId, ticketId))
               ? { ok: true as const }
               : null
             : await writeThrough("delete ticket", (): Promise<Result> =>
@@ -1328,7 +1356,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
           return;
 
         teardownProjectChatTabs(projectId, ticketsByProject[projectId] ?? []);
-        boardProtocol()?.sync.close(projectId);
+        boardSourceFor(projectId)?.close(projectId);
 
         const nextTickets = { ...ticketsByProject };
         delete nextTickets[projectId];

@@ -192,6 +192,17 @@ the local SQLite mode keeps fully working; from 0.3 GA it is frozen (no new
 features) until it is retired after migration; an embedded local backend may bring offline work
 back later with the same functions.
 
+**The window's own client (VC-889).** In a cloud launch the desktop window
+reads its board from the backend with its own Convex client; main never
+proxies board data. That client authenticates with a short-lived access
+token main hands it on demand (`account.accessToken`, a desktop-only entry),
+held in memory only and never logged; the refresh token never leaves main.
+The window's CSP lets it connect only to its own origin, plus the loopback a
+local backend runs on in a dev build; a deployment's exact origin joins that
+list when one exists.
+A launch's product store (this Mac's SQLite, or the backend) is chosen once
+by main before the window opens, and never changes in a live window.
+
 **Machine-bound resources stay on their machine.** Working copies, terminals and
 browser tabs are supervised by their runner and streamed to clients over a
 relay, never shared by replaying filesystem paths on the viewing device. In the

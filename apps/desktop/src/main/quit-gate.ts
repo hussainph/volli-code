@@ -193,10 +193,20 @@ export function registerAcceptedQuitCoordinator(options: {
   reportFailure(error: unknown): void;
   /** Former synchronous quit listeners, called in their original order. */
   prepareQuit?(event: { preventDefault(): void }): void;
+  /**
+   * Told once a quit is accepted, before teardown starts, and once a gate
+   * refused one: the restart into another product store (VC-889) relaunches
+   * only on the first, and stands down on the second.
+   */
+  onQuitAccepted?(): void;
+  onQuitRefused?(): void;
 }): void {
   let shutdownInFlight = false;
   options.lifecycle.on("before-quit", (event) => {
-    if (quitAlreadyRefused(event)) return;
+    if (quitAlreadyRefused(event)) {
+      options.onQuitRefused?.();
+      return;
+    }
     event.preventDefault();
     if (shutdownInFlight) {
       options.prepareQuit?.(event);
@@ -206,8 +216,21 @@ export function registerAcceptedQuitCoordinator(options: {
     // gates so it can cover startup. Hold the quit now, then let every listener
     // for this event record its verdict before interpreting it as accepted.
     void Promise.resolve().then(() => {
-      if (quitAlreadyRefused(event) || shutdownInFlight) return;
+      if (shutdownInFlight) return;
+      if (quitAlreadyRefused(event)) {
+        options.onQuitRefused?.();
+        return;
+      }
       shutdownInFlight = true;
+      try {
+        options.onQuitAccepted?.();
+      } catch (error) {
+        try {
+          options.reportFailure(error);
+        } catch {
+          // A reporter that throws cannot hold the quit open either.
+        }
+      }
       try {
         options.stopBackgroundWork?.();
       } catch (error) {
