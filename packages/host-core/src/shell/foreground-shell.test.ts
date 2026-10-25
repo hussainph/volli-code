@@ -496,7 +496,9 @@ describe("foreground shell lifecycle", () => {
           return true;
         }
       });
-      await pause(200);
+      // Long enough to span several process-group polls (VC-666): a member of
+      // the group still holds the pipe, so the shell must stay running.
+      await pause(800);
       expect(host.read(owner, shellId).shell.state).toBe("running");
       expect(exits).toEqual([]);
       killPipeHolders();

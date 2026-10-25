@@ -79,7 +79,9 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    # release/* maintenance branches too: release.yml's require_green guard
+    # needs a completed CI run on the exact head it releases (VC-935).
+    branches: [main, "release/**"]
   workflow_dispatch:
   # Scheduled workflows run on the default branch (main).
   schedule:

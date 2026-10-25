@@ -17,6 +17,8 @@ import type { PiModelAccess, CodeModeSandboxAssets } from "@volli/agent-runtime"
 import { piExecutionEnv, refusingCredentialReads } from "@volli/agent-runtime";
 import type { SessionEngine } from "@volli/session-engine";
 import {
+  harnessAdapters,
+  scrubInheritedSessionEnv,
   shortSessionId,
   verbToolsOf,
   verbEntry,
@@ -559,6 +561,23 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           executor: piRuntimeHost.adapter,
           sessionEngine,
           artifacts: transcriptArtifacts,
+          // A worktree's setup command, run before a structured Session's
+          // first turn (VC-835), runs in the environment that Session's own
+          // commands get: after login-PATH adoption has landed, with Volli's bin
+          // dir first and this Session's concurrency budget.
+          setupEnvironment: async (sessionId) => {
+            await options.beforeExecution();
+            const inherited = scrubInheritedSessionEnv(process.env, harnessAdapters);
+            const path = inherited["PATH"];
+            return {
+              shellPath: process.env["SHELL"] || "/bin/sh",
+              env: {
+                ...inherited,
+                ...(await options.concurrencyEnvFor(sessionId)),
+                PATH: path === undefined || path.length === 0 ? binDir : `${binDir}:${path}`,
+              },
+            };
+          },
           ...(agentObservability === null ? {} : { observability: agentObservability }),
         })
       : null;

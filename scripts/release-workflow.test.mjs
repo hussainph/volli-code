@@ -418,3 +418,27 @@ test("manifest version validation is build-only, not pnpm dev or CI test lanes",
     assert.doesNotMatch(commands, /copy-hostd-manifest|hostd-release-manifest|releaseVersion/);
   }
 });
+
+test("button release bumps and pushes its dispatched branch: main or release/*", () => {
+  const steps = workflow.jobs.prepare.steps;
+  const branchGuard = steps[0];
+  assert.equal(branchGuard.name, "Guard: dispatched on main or a release branch");
+  const accepts = (ref) => {
+    const env = { ...process.env, GITHUB_REF: ref, GITHUB_REF_NAME: ref };
+    return spawnSync("bash", ["-c", branchGuard.run], { encoding: "utf8", env }).status === 0;
+  };
+  assert.equal(accepts("refs/heads/main"), true);
+  assert.equal(accepts("refs/heads/release/0.2.3"), true);
+  assert.equal(accepts("refs/heads/volli/VC-1-feature"), false);
+  assert.equal(accepts("refs/tags/v0.2.3"), false);
+  const checkout = steps.find((step) => step.uses?.startsWith("actions/checkout@"));
+  assert.ok(steps.indexOf(branchGuard) < steps.indexOf(checkout));
+  assert.equal(checkout.with.ref, "${{ github.ref_name }}");
+  const push = steps.find((step) => step.name === "Bump versions, commit, tag, push").run;
+  assert.match(push, /git push origin "HEAD:refs\/heads\/\$GITHUB_REF_NAME"/);
+  assert.doesNotMatch(push, /HEAD:main/);
+  const onLine = workflow.jobs.release.steps.find(
+    (step) => step.name === "Guard: tag is on main or a release branch",
+  ).run;
+  assert.match(onLine, /refs\/remotes\/origin\/main 'refs\/remotes\/origin\/release\/\*'/);
+});

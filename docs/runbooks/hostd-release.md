@@ -48,6 +48,10 @@ tag. The exact CLI equivalent for a patch release is:
 gh workflow run release.yml --ref main -f bump=patch -f dry_run=false
 ```
 
+To ship a patch line without what main has landed since, dispatch on a
+`release/X.Y.Z` branch cut from main instead (`--ref release/0.2.3`). The bump
+commit and tag land on that branch, and CI must be green on its head first.
+
 The button's `prepare` job writes the resolved version into both root and
 desktop `package.json` files in the same commit before tagging. Stable tags
 still create drafts; canaries still publish as

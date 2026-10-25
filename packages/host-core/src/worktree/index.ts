@@ -227,8 +227,16 @@ export { buildSetupSentinelLine, parseSetupSentinel } from "./setup";
 // The stateful sentinel-gated setup-command machine (§6): pty.ts drives it
 // through a narrow handle (feed output, notify exit) instead of owning the
 // tail-scan / phase-transition / worktree_failed(setup) emission inline.
-export { createSetupRun } from "./setup-run";
+export { createSetupRun, recordSetupFailure } from "./setup-run";
 export type { SetupRun, SetupRunPorts, SetupRunParams, SetupFeedResult } from "./setup-run";
+
+// Whether a worktree still owes its setup run is a durable fact of the worktree
+// (VC-835), not of one `ensure` call: a door claims the run before starting it,
+// so exactly one door runs it. The terminal claims and types it into its shell;
+// a structured Session claims and runs it as a child process before its first
+// turn.
+export { claimFirstRunSetup } from "./first-run";
+export { runPendingWorktreeSetup } from "./setup-exec";
 
 // The default git runners (both capture stderr) — callers build `deps.git` /
 // `deps.gitAsync` from these. The async one exists because the Change Set reads

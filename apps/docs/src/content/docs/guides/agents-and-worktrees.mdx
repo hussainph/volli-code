@@ -39,9 +39,14 @@ The base branch comes from the ticket's setting, the project's
 worktree uses the refs already on your machine; it does not fetch first.
 
 In **Configure → Worktrees**, **Branch from** sets the default base branch.
-**Then run** sets a setup command, such as `pnpm install`. The setup runs in the
-new worktree before the agent starts, and it does not run again when Volli
-reuses an existing worktree.
+**Then run** sets a setup command, such as `pnpm install`. The setup runs once
+in each new worktree, before the agent starts, whether the first Session there
+is a chat or a terminal. A terminal runs it in its shell, where you can watch
+it. A chat runs it in the background and starts once it finishes; if it fails
+or runs longer than nine minutes, the chat does not start, and the ticket's
+activity shows the exit code and the end of the output. The setup does not run
+again when Volli reuses an existing worktree, including after a failed setup,
+so a retry starts the agent without it.
 
 Git brings tracked files into a new worktree. Volli also copies selected local
 files from the main checkout. By default, these are `.env*` and
