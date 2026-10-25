@@ -12,7 +12,7 @@
  */
 import * as React from "react";
 
-import { useExperimentsStore } from "@renderer/stores/experiments";
+import { hasAccountEnrollment, useExperimentsStore } from "@renderer/stores/experiments";
 import { launchStore } from "@renderer/stores/launch";
 
 import { useCloudEnabled } from "@renderer/components/hosts/use-hosts";
@@ -29,11 +29,11 @@ export function SettingsPage({
 }: { initialCategoryKey?: string; initialSignInProviderId?: string } = {}) {
   const logs = useLogViewerEnabled();
   const hosts = useCloudEnabled();
-  // Volli Cloud's Account rides the same flag as Hosts (VC-884).
-  const account = hosts;
   // Runners exist only in a Volli Cloud launch, fixed for the process (VC-895).
   const runners = launchStore() === "cloud";
   const experiments = useExperimentsStore((state) => state.snapshot);
+  // Stable hides the experiment, but retains enrollment into the invite-only preview.
+  const account = hosts || hasAccountEnrollment(experiments);
   React.useEffect(() => {
     void useExperimentsStore.getState().ensure();
   }, []);

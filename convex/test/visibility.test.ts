@@ -2,9 +2,14 @@ import { convexTest } from "convex-test";
 import type { GenericMutationCtx } from "convex/server";
 import { describe, expect, test } from "vite-plus/test";
 
-import { newId, type SessionRole, type SessionVisibility } from "@volli/shared/cloud";
+import {
+  PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+  newId,
+  type SessionRole,
+  type SessionVisibility,
+} from "@volli/shared/cloud";
 
-import { api } from "../functions/_generated/api";
+import { api, internal } from "../functions/_generated/api";
 import type { DataModel } from "../functions/_generated/dataModel.js";
 import { requireSessionScope } from "../functions/lib/auth";
 import {
@@ -51,8 +56,18 @@ function code(value: string) {
 }
 
 async function signIn(t: T, name: string) {
-  const client = t.withIdentity(person(name));
-  const { userId } = await client.mutation(api.accounts.ensureViewer, {});
+  const identity = person(name);
+  // VC-936: the preview admits only allowlisted accounts, by verified email,
+  // and the sign-in accepts the current Preview Agreement on their behalf.
+  await t.mutation(internal.previewAccess.set, {
+    kind: "email",
+    value: identity.email,
+    enabled: true,
+  });
+  const client = t.withIdentity(identity);
+  const { userId } = await client.mutation(api.accounts.ensureViewer, {
+    acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+  });
   return { client, userId };
 }
 

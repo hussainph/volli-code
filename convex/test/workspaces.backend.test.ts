@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 
-import { newId } from "@volli/shared/cloud";
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION, newId } from "@volli/shared/cloud";
 
 import { describe, expect, test } from "vite-plus/test";
 
-import { api } from "../functions/_generated/api";
+import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
 
 const backend = connectBackend();
@@ -23,14 +23,23 @@ function code(value: string) {
   return expect.objectContaining({ data: expect.objectContaining({ code: value }) });
 }
 
+/** VC-936: deployment-admin allowlisting, the way an operator invites someone to the preview. */
+async function allow(email: string) {
+  await backend.admin(internal.previewAccess.set, { kind: "email", value: email, enabled: true });
+}
+
 describe("workspaces on the pinned local backend", () => {
   test("sign-up, invite, join, manage and leave, end to end", async () => {
     const ana = person("Ana");
     const ben = person("Ben");
     const cy = person("Cy");
-    const { userId: anaId } = await ana.client.mutation(api.accounts.ensureViewer, {});
-    const { userId: benId } = await ben.client.mutation(api.accounts.ensureViewer, {});
-    await cy.client.mutation(api.accounts.ensureViewer, {});
+    // VC-936: only allowlisted accounts get a personal Workspace and may accept an invite,
+    // and signing up accepts the current Preview Agreement.
+    for (const someone of [ana, ben, cy]) await allow(someone.email);
+    const acceptance = { acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION };
+    const { userId: anaId } = await ana.client.mutation(api.accounts.ensureViewer, acceptance);
+    const { userId: benId } = await ben.client.mutation(api.accounts.ensureViewer, acceptance);
+    await cy.client.mutation(api.accounts.ensureViewer, acceptance);
 
     // Every account starts with its own Workspace, named after the person.
     const [personal] = await ana.client.query(api.workspaces.listMine, {});

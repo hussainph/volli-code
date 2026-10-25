@@ -491,11 +491,21 @@
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
           "properties": {
+            "acceptedAgreementVersion": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
             "connection": {
               "enum": [
                 "github",
                 "google"
               ],
+              "type": "string"
+            },
+            "inviteCode": {
+              "maxLength": 128,
+              "minLength": 16,
               "type": "string"
             }
           },
@@ -39181,6 +39191,9 @@
                 "enabled": {
                   "type": "boolean"
                 },
+                "enrollment": {
+                  "type": "boolean"
+                },
                 "source": {
                   "enum": [
                     "default",
@@ -39238,6 +39251,9 @@
               "additionalProperties": false,
               "properties": {
                 "enabled": {
+                  "type": "boolean"
+                },
+                "enrollment": {
                   "type": "boolean"
                 },
                 "source": {

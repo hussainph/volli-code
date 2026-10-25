@@ -77,3 +77,8 @@ export function hasVisibleExperiments(snapshot: ExperimentSnapshot | null): bool
 export function isExperimentOn(snapshot: ExperimentSnapshot | null, id: ExperimentId): boolean {
   return snapshot?.[id].enabled === true;
 }
+
+/** Stable enrollment is advertised explicitly, never inferred from a hidden experimental switch. */
+export function hasAccountEnrollment(snapshot: ExperimentSnapshot | null): boolean {
+  return snapshot?.cloud.enrollment === true;
+}

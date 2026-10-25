@@ -11,7 +11,7 @@
  * pending (requesting one revokes GitHub); main follows each browser round
  * trip and this pane follows main's snapshot.
  *
- * Shown only with `cloud` on: the category does not exist otherwise. Main
+ * Shown with cloud on or for configured stable preview enrollment. Main
  * owns the sign-in; this pane reads its snapshot and never sees a token.
  *
  * **The launch (VC-889).** Signing in or out restarts Volli into the other
@@ -28,6 +28,8 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { SignOutIcon } from "@phosphor-icons/react/dist/csr/SignOut";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { UserCircleIcon } from "@phosphor-icons/react/dist/csr/UserCircle";
+// TODO: use #1014’s shared legal URLs and keep this checkbox as the only sign-in disclosure.
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared";
 import type {
   AccountConnection,
   AccountGithubInstallation,
@@ -57,8 +59,11 @@ import {
 import { toast } from "sonner";
 
 import { SignOutRestartDialog } from "@renderer/components/cloud/sign-out-restart";
+import { Checkbox } from "@renderer/components/ui/checkbox";
+import { Input } from "@renderer/components/ui/input";
 import { Button } from "@renderer/components/ui/button";
 import { toastError } from "@renderer/lib/toast";
+import { isExperimentOn, useExperimentsStore } from "@renderer/stores/experiments";
 import { launchStore } from "@renderer/stores/launch";
 
 import {
@@ -94,6 +99,8 @@ function Failure({ text }: { text: string | null }) {
 }
 
 function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: AccountCommands }) {
+  const [inviteCode, setInviteCode] = React.useState("");
+  const [agreementAccepted, setAgreementAccepted] = React.useState(false);
   const waiting = snapshot.state === "signing-in";
   return (
     <PrefSection
@@ -106,12 +113,54 @@ function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: A
       }
     >
       <div className="flex flex-col gap-2" data-testid="account-sign-in">
+        <Input
+          aria-label="Preview invite code"
+          placeholder="Invite code (optional)"
+          value={inviteCode}
+          onChange={(event) => setInviteCode(event.target.value)}
+          disabled={waiting}
+          maxLength={128}
+        />
+        <label className="text-ui flex items-center gap-2">
+          <Checkbox
+            aria-label="Accept Preview Agreement"
+            checked={agreementAccepted}
+            onCheckedChange={(checked) => setAgreementAccepted(checked === true)}
+            disabled={waiting}
+          />
+          <span>
+            I agree to the{" "}
+            <a href="https://volli.app/legal/preview/" target="_blank" rel="noreferrer">
+              Preview Agreement
+            </a>{" "}
+            and acknowledge the{" "}
+            <a href="https://volli.app/legal/privacy/" target="_blank" rel="noreferrer">
+              Privacy notice
+            </a>
+            .
+          </span>
+        </label>
         {BUTTONS.map(({ connection, label, icon: Icon }) => (
           <Button
             key={connection}
             variant="outline"
-            disabled={waiting || snapshot.state === "restoring"}
-            onClick={() => act(() => commands.signIn(connection), "Sign-in")}
+            disabled={waiting || snapshot.state === "restoring" || !agreementAccepted}
+            onClick={() => {
+              const code = inviteCode.trim();
+              if (code !== "" && code.length < 16) {
+                toastError("Invite codes are at least 16 characters.");
+                return;
+              }
+              act(
+                () =>
+                  commands.signIn(
+                    connection,
+                    code || undefined,
+                    PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+                  ),
+                "Sign-in",
+              );
+            }}
           >
             <Icon />
             {waiting && snapshot.signingInWith === connection ? "Waiting for the browser…" : label}
@@ -138,7 +187,12 @@ function purgeDate(at: number): string {
 
 /** Whether this signed-in account opens Volli Cloud on the next launch, from a local one. */
 function restartOffered(account: AccountSummary): boolean {
-  return launchStore() === "local" && account.backend === "synced" && account.userId !== null;
+  return (
+    launchStore() === "local" &&
+    account.backend === "synced" &&
+    account.userId !== null &&
+    account.deletionPurgeAfter === null
+  );
 }
 
 const SELECTION = {
@@ -315,6 +369,7 @@ function SignedIn({
   const [confirming, setConfirming] = React.useState(false);
   const [signingOut, setSigningOut] = React.useState(false);
   const cloudLaunch = launchStore() === "cloud";
+  const cloudEnabled = useExperimentsStore((state) => isExperimentOn(state.snapshot, "cloud"));
   return (
     <>
       <PrefSection
@@ -354,7 +409,8 @@ function SignedIn({
       </PrefSection>
       {/* Keyed by the person: another sign-in reads its own connection. A
           pending deletion has revoked GitHub; a restore reads it afresh. */}
-      {account.backend === "synced" &&
+      {(cloudLaunch || cloudEnabled) &&
+      account.backend === "synced" &&
       account.userId !== null &&
       account.deletionPurgeAfter === null ? (
         <Github key={account.userId} rpc={rpc} />

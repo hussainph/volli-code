@@ -361,3 +361,86 @@ Where `streamChunks` and `sessionViewers` depart from the data-model design:
   `accept`, and then calls the same cleanup through
   `scheduleStreamCleanup` — by the accept fold at turn end, and by a
   15-minute sweep.
+
+## Invite-only preview
+
+`previewAccess` is deployment-admin managed, not Workspace-admin managed.
+Its natural key is `(kind, key)`: a normalized email, a Volli user UUID, or
+an invite code's SHA-256. Only a verified email matches an email grant. Codes
+are single-use and bind atomically to one account; retrying on that account
+is harmless. No query returns codes or the allowlist. Revocation and expiry
+are checked from the original grant, including after code redemption.
+
+Deployment operators use the internal function with the Convex CLI (select
+the intended deployment explicitly; these examples omit that selection):
+
+```sh
+pnpm exec convex run previewAccess:set '{"kind":"email","value":"person@example.com","enabled":true}'
+pnpm exec convex run previewAccess:set '{"kind":"user","value":"<volli-user-uuid>","enabled":false}'
+pnpm exec convex run previewAccess:set '{"kind":"code","value":"<random-code-at-least-16-characters>","enabled":true,"expiresAt":1900000000000}'
+```
+
+Run from `convex/`. Only deployment-admin credentials can invoke this
+internal function; ordinary authenticated clients and Workspace owners
+cannot. Supply codes through a trusted operator environment, not tickets or
+chat. Store and share the original code securely; only its hash is retained.
+Setting `enabled: false` revokes that grant; if a person holds several grants,
+revoke all of them to remove access. Re-enabling a code never resets its
+account binding. Expiry is optional, in epoch milliseconds; an omitted expiry
+on an existing grant leaves it unchanged.
+
+`accounts.ensureViewer` returns `previewAccess: granted | waitlisted` and
+accepts an optional `inviteCode` (the desktop's sign-in pane sends it).
+Waitlisted sign-ins create an account but no Workspace. The first granted
+sign-in creates the personal Workspace once; optional
+`users.previewWorkspaceCreated` records that setup, while older accounts
+with memberships keep their existing Workspaces. Every Workspace create and
+both invite-accept paths recheck the allowlist, even on idempotent replays.
+Workspace invites alone do not grant preview access.
+
+On stable desktop launches, stored flags and environment opt-ins cannot
+bypass preview access. A deliberate sign-in marker permits restoring the
+sealed account and checking the backend before choosing the product store;
+only a fresh grant for that marker's user enables `cloud` for this launch.
+The check has a two-second deadline so unreachable account I/O cannot block
+the local app from opening.
+Missing, waitlisted, expired, deleted, mismatched, or unreachable accounts
+leave every cloud product surface off and the local board unchanged. Offline
+stable launches fail closed (canary's cached-board behavior is unchanged).
+The Account sign-in pane is the sole stable pre-enrollment exception on a
+build with a configured provider and backend: it
+shows the waitlist message without enabling cloud. Signing in or out still
+requires a restart to change stores; a running window never hot-swaps.
+Dev/canary flag-off launches do not read the account or launch marker.
+Canary sign-ins also require invitation; already invited canary accounts
+retain their existing offline cached-board launch. Invite codes are retained
+only in memory during transient retries, not across app restarts.
+
+An invitation is not acceptance of the agreement. Enrollment requires an
+explicit checkbox action acknowledging the linked Preview Agreement and
+Privacy notice; only that action sends `acceptedAgreementVersion` through
+the desktop RPC to `accounts.ensureViewer`. For an invited active account,
+a current-version submission records optional `users.previewAgreementVersion`
+and `users.previewAgreementAcceptedAt` using server time, before Workspace
+setup in the same transaction. Retry and token refresh preserve the original
+receipt; missing, stale or incomplete receipts are never auto-backfilled.
+Waitlisted accounts do not record acceptance. Every Workspace create/accept
+requires the current receipt as well as invitation. Account replies include
+`previewAgreementAccepted`; missing/unknown acceptance fails the desktop gate
+closed and offers sign-out/reacceptance. The temporary enrollment version
+constant has a one-line TODO to switch to the legal pages' shared constant
+once that change lands. Waitlisted people must accept again after invitation;
+no receipt is stored before they are invited. Only the current receipt is
+kept on the person row. Legal text still requires owner approval before the
+preview ships.
+
+Deploy the backend before a desktop that sends the new optional agreement
+argument: an older backend rejects unknown arguments. Older canaries cannot
+submit agreement acceptance, so they must update before setting up, creating
+or accepting Workspaces. A stale submitted agreement version explicitly asks
+the person to update Volli; sign-out alone cannot update a compiled version.
+
+CI holds the backend preview gate and the desktop launch gate at 100%
+statements, branches, functions and lines. Backend transport tests also
+prove that clients cannot call the internal admin mutation and concurrent
+code redemption admits only one account.

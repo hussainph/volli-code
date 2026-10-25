@@ -241,7 +241,10 @@ export interface DesktopRouterHandlers {
   /** The Volli Cloud account on this Mac (VC-884): desktop main's account service. */
   readonly "account.snapshot": HostHandler<void, AccountSnapshot>;
   readonly "account.subscribe": DesktopSubscriptionHandler<void, AccountSnapshot>;
-  readonly "account.signIn": HostHandler<{ connection: AccountConnection }, null>;
+  readonly "account.signIn": HostHandler<
+    { connection: AccountConnection; inviteCode?: string; acceptedAgreementVersion?: string },
+    null
+  >;
   readonly "account.cancelSignIn": HostHandler<void, null>;
   readonly "account.signOut": HostHandler<void, null>;
   readonly "account.requestDeletion": HostHandler<void, null>;

@@ -20,11 +20,13 @@
  *   pnpm -C convex with-backend --deploy -- \
  *     sh -c 'cd ../apps/desktop && vp test run src/renderer/src/stores/cloud-board/convex.live.test.ts'
  */
+import { inviteTestEmail } from "../../../../main/test-helpers/preview";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { ConvexHttpClient } from "convex/browser";
 import { ConvexReactClient } from "convex/react";
 import { api } from "@volli/convex/api";
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared";
 import type { AccountAccessToken, Label, Project, Ticket } from "@volli/shared";
 
 import { DEV_AUDIENCE, DEV_ISSUER, DEV_KEY_ID } from "../../../../main/account/dev-issuer";
@@ -250,7 +252,10 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
       // Setup, as the person: their account, their Workspace, a project and a ticket.
       const http = new ConvexHttpClient(url!);
       http.setAuth(token(subject));
-      await http.mutation(api.accounts.ensureViewer, {});
+      await inviteTestEmail(url!, `${subject}@example.com`);
+      await http.mutation(api.accounts.ensureViewer, {
+        acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+      });
       const [workspace] = await http.query(api.workspaces.listMine, {});
       const projectId = randomUUID();
       await http.mutation(api.projects.create, {
@@ -473,7 +478,10 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
       const subject = `live-snapshot-${randomUUID()}`;
       const http = new ConvexHttpClient(url!);
       http.setAuth(token(subject));
-      await http.mutation(api.accounts.ensureViewer, {});
+      await inviteTestEmail(url!, `${subject}@example.com`);
+      await http.mutation(api.accounts.ensureViewer, {
+        acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+      });
       const [workspace] = await http.query(api.workspaces.listMine, {});
       const projectId = randomUUID();
       await http.mutation(api.projects.create, {

@@ -58,15 +58,19 @@ describe.each(["dev", "canary", "stable"] as const)("%s experimental settings", 
     }
   });
 
-  it("keeps environment opt-ins visible, enabled and locked on every build", async () => {
+  it("keeps environment opt-ins locked, without bypassing the stable preview gate", async () => {
     ctx = openTestDb();
     setAppState(ctx.db, EXPERIMENTS_APP_STATE_KEY, '{"cloud":false}', 1);
     vi.stubEnv("VOLLI_EXPERIMENTAL", "cloud");
     restore = installExperimentalSettings(
       new ExperimentalSettings(ctx.db, process.env["VOLLI_EXPERIMENTAL"], kind),
     );
-    expect(isExperimentEnabled("cloud")).toBe(true);
-    expect(readExperiments()).toEqual({ cloud: { enabled: true, source: "environment" } });
+    expect(isExperimentEnabled("cloud")).toBe(kind !== "stable");
+    expect(readExperiments()).toEqual(
+      kind === "stable"
+        ? { cloud: { enabled: false, source: "default", visible: false } }
+        : { cloud: { enabled: true, source: "environment" } },
+    );
     await expect(setExperiment("cloud", false)).rejects.toThrow("set by environment");
     expect(getAppState(ctx.db, EXPERIMENTS_APP_STATE_KEY)).toBe('{"cloud":false}');
   });
@@ -247,4 +251,26 @@ describe("after the flag-on suite", () => {
   it("restores the default reader so existing tests stay dark", () => {
     expect(isExperimentEnabled("cloud")).toBe(false);
   });
+});
+
+describe("stable preview grants", () => {
+  it("enables only the launch-granted account, without changing persisted intent", () => {
+    const settings = new ExperimentalSettings(null, undefined, "stable", Date.now, {
+      granted: true,
+    });
+    expect(settings.snapshot()).toEqual({
+      cloud: { enabled: true, source: "default", visible: false },
+    });
+    expect(new ExperimentalSettings(null, "cloud", "stable").isEnabled("cloud")).toBe(false);
+  });
+});
+
+it("exposes enrollment only when the host has configured it", () => {
+  expect(
+    new ExperimentalSettings(null, undefined, "stable").snapshot().cloud.enrollment,
+  ).toBeUndefined();
+  expect(
+    new ExperimentalSettings(null, undefined, "stable", Date.now, { enrollment: true }).snapshot()
+      .cloud,
+  ).toEqual({ enabled: false, source: "default", visible: false, enrollment: true });
 });

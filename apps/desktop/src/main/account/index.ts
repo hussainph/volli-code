@@ -105,7 +105,8 @@ export function accountPort(
   return {
     snapshot: () => service.snapshot(),
     subscribe: (listener) => service.subscribe(listener),
-    signIn: (connection) => service.signIn(connection),
+    signIn: (connection, inviteCode, acceptedAgreementVersion) =>
+      service.signIn(connection, inviteCode, acceptedAgreementVersion),
     cancelSignIn: () => service.cancelSignIn(),
     signOut: () => service.signOut(),
     requestDeletion: () => service.requestDeletion(),

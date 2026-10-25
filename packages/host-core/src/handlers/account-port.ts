@@ -34,7 +34,11 @@ export interface AccountPort {
   /** Calls `listener` with the snapshot now, then on every change, until the answer is called. */
   subscribe(listener: (snapshot: AccountSnapshot) => void): Answer<() => void>;
   /** Opens the browser on the provider's page for `connection`; the snapshot follows the flow. */
-  signIn(connection: AccountConnection): Answer<void>;
+  signIn(
+    connection: AccountConnection,
+    inviteCode?: string,
+    acceptedAgreementVersion?: string,
+  ): Answer<void>;
   /** Stops waiting for the browser; quiet when no sign-in is in flight. */
   cancelSignIn(): Answer<void>;
   /** Forgets the sign-in on this Mac; quiet when signed out. */

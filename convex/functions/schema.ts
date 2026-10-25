@@ -80,9 +80,22 @@ const blobRow = {
 
 export default defineSchema({
   // ── identity ───────────────────────────────────────────────────────────────
+  previewAccess: defineTable({
+    kind: literals(["email", "user", "code"]),
+    key: v.string(), // Normalized email, user UUID, or invite-code SHA-256.
+    redeemedByUserId: nullable(uuid),
+    expiresAt: nullable(time),
+    revokedAt: nullable(time),
+    createdAt: time,
+  })
+    .index("by_kind_key", ["kind", "key"])
+    .index("by_redeemed_user", ["redeemedByUserId"]),
   users: defineTable({
     id: uuid,
     // Nullable because a purge nulls PII and keeps the row as a tombstone.
+    previewWorkspaceCreated: v.optional(v.boolean()),
+    previewAgreementVersion: v.optional(v.string()),
+    previewAgreementAcceptedAt: v.optional(time),
     primaryEmail: nullable(v.string()),
     emailVerified: v.boolean(),
     displayName: v.string(),

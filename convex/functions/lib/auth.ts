@@ -199,7 +199,19 @@ export async function ensureViewer(
   const now = Date.now();
   const existing = await userOf(ctx, identity);
   if (existing !== null) {
-    const viewer = liveViewer(existing);
+    let viewer = liveViewer(existing);
+    const profile = profileOf(identity);
+    // Email grants follow today's verified identity, never a stale stored address.
+    if (
+      profile.primaryEmail !== existing.primaryEmail ||
+      profile.emailVerified !== existing.emailVerified
+    ) {
+      await ctx.db.patch(existing._id, {
+        primaryEmail: profile.primaryEmail,
+        emailVerified: profile.emailVerified,
+      });
+      viewer = liveViewer((await ctx.db.get(existing._id))!);
+    }
     if (now - existing.lastSeenAt >= LAST_SEEN_RESOLUTION_MS) {
       await ctx.db.patch(existing._id, { lastSeenAt: now });
     }
