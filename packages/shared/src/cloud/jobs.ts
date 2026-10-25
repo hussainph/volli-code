@@ -88,6 +88,13 @@ export const JOB_CLAIM_MAX = 32;
 /** How long a terminal job is kept before it expires. */
 export const TERMINAL_JOB_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * How long a `session.notice` waits for a runner that never claims it before
+ * it expires. A notice is a delivery, not a fact: what it reported stays in the
+ * history it came from.
+ */
+export const NOTICE_MAX_WAIT_MS = TERMINAL_JOB_TTL_MS;
+
 export interface JobLease {
   bootId: string;
   expiresAt: number;

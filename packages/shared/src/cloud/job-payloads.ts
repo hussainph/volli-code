@@ -100,16 +100,41 @@ export interface SessionFollowUpJobPayload {
   intent: string;
 }
 
-/** Start a subagent Session for a parent Session's tool call (the job's `sessionId` is the parent). */
+/**
+ * Start a subagent Session for a parent Session's tool call. The job's
+ * `sessionId` is the CHILD, claimed on the runner that will run it (which may
+ * not be the parent's), so the job routes like every other Session job.
+ */
 export interface SessionDelegatePayload {
+  parentSessionId: SessionId;
   /** The parent's tool call: a frozen derived id, unique within the parent. */
   toolCallId: string;
-  childSessionId: SessionId;
   /** The child's `session.create` command id, so a re-delivered job creates it once. */
   createCommandId: string;
   /** How deep the child is (1 for a child of a root Session). */
   depth: number;
+  /** The brief, as a transcript artifact reference (the body stays in the artifact store). */
+  kickoff: JobArtifactReference;
+  title: string | null;
+  /** The model the child runs on; `null` takes the runner's default for a subagent. */
+  model: JobModelChoice | null;
 }
+
+/** A transcript artifact reference, as `TranscriptReference` in the Session ledger. */
+export interface JobArtifactReference {
+  id: string;
+  mediaType: string | null;
+  digest: string | null;
+}
+
+export interface JobModelChoice {
+  providerId: string;
+  modelId: string;
+  reasoningLevel: string | null;
+}
+
+/** The longest Session title a job carries. */
+export const JOB_TITLE_MAX_CHARS = 200;
 
 /** How an Automation came to run here. Arrivals today; schedule occurrences join with their producer. */
 export interface AutomationArrivalRunPayload {
@@ -173,10 +198,11 @@ class Reader {
   constructor(
     private readonly kind: JobKind,
     readonly row: Row,
+    private readonly prefix = "",
   ) {}
 
   fail(detail: string): never {
-    throw new InvalidJobPayloadError(this.kind, detail);
+    throw new InvalidJobPayloadError(this.kind, `${this.prefix}${detail}`);
   }
 
   /** Refuses any field the payload does not define: writers are closed. */
@@ -209,6 +235,26 @@ class Reader {
       this.fail(`${name} is not one of ${values.join(", ")}`);
     }
     return value;
+  }
+
+  text(name: string, max: number): string {
+    const value = this.row[name];
+    if (typeof value !== "string" || value.length === 0 || value.length > max) {
+      this.fail(`${name} is not text of 1 to ${max} characters`);
+    }
+    return value;
+  }
+
+  nullableText(name: string, max: number): string | null {
+    return this.row[name] === null ? null : this.text(name, max);
+  }
+
+  nested<T>(name: string, read: (reader: Reader) => T): T {
+    const value = this.row[name];
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      this.fail(`${name} is not an object`);
+    }
+    return read(new Reader(this.kind, value as Row, `${this.prefix}${name}.`));
   }
 
   positiveInteger(name: string): number {
@@ -295,12 +341,40 @@ function parseTyped(kind: JobKind, r: Reader): JobPayloads[JobKind] {
         ),
       } satisfies SessionFollowUpJobPayload;
     case "session.delegate":
-      r.only("toolCallId", "childSessionId", "createCommandId", "depth");
+      r.only(
+        "parentSessionId",
+        "toolCallId",
+        "createCommandId",
+        "depth",
+        "kickoff",
+        "title",
+        "model",
+      );
       return {
+        parentSessionId: r.uuid<SessionId>("parentSessionId"),
         toolCallId: r.derived("toolCallId"),
-        childSessionId: r.uuid<SessionId>("childSessionId"),
         createCommandId: r.derived("createCommandId"),
         depth: r.positiveInteger("depth"),
+        kickoff: r.nested("kickoff", (k) => {
+          k.only("id", "mediaType", "digest");
+          return {
+            id: k.derived("id"),
+            mediaType: k.nullableText("mediaType", 200),
+            digest: k.nullableText("digest", 200),
+          };
+        }),
+        title: r.nullableText("title", JOB_TITLE_MAX_CHARS),
+        model:
+          r.row.model === null
+            ? null
+            : r.nested("model", (m) => {
+                m.only("providerId", "modelId", "reasoningLevel");
+                return {
+                  providerId: m.text("providerId", 200),
+                  modelId: m.text("modelId", 200),
+                  reasoningLevel: m.nullableText("reasoningLevel", 50),
+                };
+              }),
       } satisfies SessionDelegatePayload;
     case "automation.run":
       r.only("trigger", "automationId", "ticketId", "from", "status", "origin", "armedByUserId");

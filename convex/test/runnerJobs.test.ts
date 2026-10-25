@@ -7,6 +7,8 @@ import {
   JOB_LEASE_MAX_MS,
   JOB_LEASE_MS,
   JOB_RESULT_MAX_CHARS,
+  NOTICE_MAX_WAIT_MS,
+  SESSION_FOLLOW_UP_FORMAT,
   RUNNER_TOKEN_ISSUER,
   SESSION_INTERRUPT_FORMAT,
   TERMINAL_JOB_TTL_MS,
@@ -21,6 +23,8 @@ import {
   JOB_MAX_ATTEMPTS,
   cancelJob,
   enqueueJob,
+  patchQueuedJob,
+  recordSettledCommand,
   retryDelayMs,
   tryEnqueueJob,
   type JobDraft,
@@ -1106,10 +1110,16 @@ describe("runnerJobs.sweep", () => {
         .unique())!;
       await ctx.db.patch(row._id, { expiresAt: T0 });
     });
-    await expect(w.t.mutation(internal.runnerJobs.sweep, {})).resolves.toEqual({ deleted: 0 });
+    await expect(w.t.mutation(internal.runnerJobs.sweep, {})).resolves.toEqual({
+      deleted: 0,
+      expired: 0,
+    });
     expect((await job(w, open.jobId))!.expiresAt).toBeNull();
     vi.setSystemTime((await job(w, finished.jobId))!.expiresAt!);
-    await expect(w.t.mutation(internal.runnerJobs.sweep, {})).resolves.toEqual({ deleted: 1 });
+    await expect(w.t.mutation(internal.runnerJobs.sweep, {})).resolves.toEqual({
+      deleted: 1,
+      expired: 0,
+    });
     expect(await job(w, finished.jobId)).toBeNull();
     expect(await job(w, open.jobId)).not.toBeNull();
   });
@@ -1129,7 +1139,10 @@ describe("runnerJobs.sweep", () => {
         kinds.push(row.kind);
       }
     });
-    await expect(w.t.mutation(internal.runnerJobs.sweep, {})).resolves.toEqual({ deleted: 256 });
+    await expect(w.t.mutation(internal.runnerJobs.sweep, {})).resolves.toEqual({
+      deleted: 256,
+      expired: 0,
+    });
     await w.t.finishAllScheduledFunctions(vi.runAllTimers);
     const left = await w.t.run((ctx) => ctx.db.query("runnerJobs").collect());
     expect(left).toHaveLength(0);
@@ -1141,4 +1154,212 @@ test("retry delays grow and cap", () => {
   expect([0, 1, 2, 3, 4, 5, 6].map(retryDelayMs)).toEqual([
     5_000, 5_000, 20_000, 80_000, 320_000, 600_000, 600_000,
   ]);
+});
+
+function message(id: string): string {
+  return JSON.stringify({
+    kind: "message.submit",
+    reference: { id, mediaType: null, digest: null },
+  });
+}
+
+describe("inbox helpers for in-place edits and settled commands", () => {
+  function followUp(w: World, sessionId: string, commandId: string): JobDraft {
+    return {
+      runnerId: w.runnerId,
+      kind: "session.followUp",
+      projectId: w.projectId,
+      sessionId,
+      commandId,
+      payload: { format: SESSION_FOLLOW_UP_FORMAT, intent: message("m-1") },
+      createdBy: person(w.ownerUserId),
+      onBehalfOf: w.ownerUserId,
+    } as JobDraft;
+  }
+
+  test("patchQueuedJob rewrites a payload no runner has seen, and nothing after", async () => {
+    const w = await world();
+    const sessionId = newId("session");
+    const { jobId } = await enqueue(w, followUp(w, sessionId, newId("command")));
+    const patch = (payload: unknown) =>
+      w.t.run(async (ctx) => {
+        const row = (await ctx.db
+          .query("runnerJobs")
+          .withIndex("by_uuid", (q) => q.eq("id", jobId))
+          .unique())!;
+        return patchQueuedJob(ctx, row, payload);
+      });
+    const edited = { format: SESSION_FOLLOW_UP_FORMAT, intent: message("m-2") };
+    await expect(patch(edited)).resolves.toBe(true);
+    expect((await job(w, jobId))!.payload).toEqual(edited);
+    await expect(patch({ format: SESSION_FOLLOW_UP_FORMAT, intent: "{}" })).rejects.toThrow(
+      code("invalid_job"),
+    );
+    await claim(w);
+    await expect(patch({ format: SESSION_FOLLOW_UP_FORMAT, intent: message("m-3") })).resolves.toBe(
+      false,
+    );
+    expect((await job(w, jobId))!.payload).toEqual(edited);
+  });
+
+  test("patchQueuedJob keeps the ids a payload names", async () => {
+    const w = await world();
+    const { jobId } = await enqueue(w, materialize(w));
+    await expect(
+      w.t.run(async (ctx) => {
+        const row = (await ctx.db
+          .query("runnerJobs")
+          .withIndex("by_uuid", (q) => q.eq("id", jobId))
+          .unique())!;
+        return patchQueuedJob(ctx, row, { ticketId: newId("ticket"), reason: "session_start" });
+      }),
+    ).rejects.toThrow(code("invalid_job"));
+  });
+
+  test("recordSettledCommand files a command the backend answered as a finished job, once", async () => {
+    const w = await world();
+    const sessionId = newId("session");
+    const commandId = newId("command");
+    const draft = { ...followUp(w, sessionId, commandId), commandId };
+    const receipt = { status: "completed" as const, code: null, detail: null };
+    await expect(w.t.run((ctx) => recordSettledCommand(ctx, draft, receipt))).resolves.toEqual({
+      jobId: commandId,
+      created: true,
+    });
+    const row = (await job(w, commandId))!;
+    expect(row).toMatchObject({ status: "done", receipt: { status: "completed", code: null } });
+    expect(row.expiresAt).toBe(row.completedAt! + TERMINAL_JOB_TTL_MS);
+    await expect(w.t.run((ctx) => recordSettledCommand(ctx, draft, receipt))).resolves.toEqual({
+      jobId: commandId,
+      created: false,
+    });
+    // Never handed out.
+    await expect(claim(w)).resolves.toEqual([]);
+    // A queued job under the same id is another job.
+    const queued = newId("command");
+    await enqueue(w, followUp(w, sessionId, queued));
+    await expect(
+      w.t.run((ctx) =>
+        recordSettledCommand(
+          ctx,
+          { ...followUp(w, sessionId, queued), commandId: queued },
+          receipt,
+        ),
+      ),
+    ).rejects.toThrow(code("id_taken"));
+  });
+
+  test("a notice no runner claims expires after NOTICE_MAX_WAIT_MS", async () => {
+    const w = await world();
+    const notice = (sessionId: string) =>
+      ({
+        runnerId: w.runnerId,
+        kind: "session.notice",
+        projectId: w.projectId,
+        sessionId,
+        payload: { text: "the build finished" },
+        createdBy: person(w.ownerUserId),
+        onBehalfOf: w.ownerUserId,
+      }) as JobDraft;
+    const old = await enqueue(w, notice(newId("session")));
+    vi.setSystemTime(T0 + 1_000);
+    const fresh = await enqueue(w, notice(newId("session")));
+    vi.setSystemTime((await job(w, old.jobId))!.createdAt + NOTICE_MAX_WAIT_MS);
+    await expect(w.t.mutation(internal.runnerJobs.sweep, {})).resolves.toEqual({
+      deleted: 0,
+      expired: 1,
+    });
+    expect(await job(w, old.jobId)).toMatchObject({
+      status: "expired",
+      failure: expect.objectContaining({ code: "notice_expired", by: "backend" }),
+    });
+    expect((await job(w, fresh.jobId))!.status).toBe("queued");
+  });
+
+  test("a delegation's job names the child, claimed on its runner; the parent is in the payload", async () => {
+    const w = await world();
+    const parentSessionId = newId("session");
+    const childSessionId = newId("session");
+    await w.t.run(async (ctx) => {
+      await ctx.db.insert("sessions", {
+        id: parentSessionId,
+        projectId: w.projectId,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        ownerUserId: w.ownerUserId,
+        origin: { kind: "user" },
+        title: null,
+        visibility: "private",
+        visibilityReason: "adhoc",
+        sharedAt: null,
+        status: "open",
+        turnActive: true,
+        lastTurnOutcome: null,
+        signal: null,
+        stopped: null,
+        needsUser: false,
+        attentionCount: 0,
+        placeRunnerId: w.runnerId,
+        model: null,
+        usageTotals: {},
+        createdAt: 0,
+        lastActivityAt: 0,
+        deletedAt: null,
+        purgeAfter: null,
+      });
+      // The parent is claimed elsewhere; the child here.
+      await ctx.db.insert("sessionIntake", {
+        sessionId: parentSessionId,
+        claim: { runnerId: w.otherRunnerId, generation: 1 },
+        acceptedThrough: 0,
+        lastEventId: null,
+        lastAcceptedAt: null,
+        state: "active",
+      });
+    });
+    const delegate = (sessionId: string, parent: string) =>
+      ({
+        runnerId: w.runnerId,
+        kind: "session.delegate",
+        projectId: w.projectId,
+        sessionId,
+        payload: {
+          parentSessionId: parent,
+          toolCallId: "call-1",
+          createCommandId: `${parent}:call-1:create`,
+          depth: 1,
+          kickoff: { id: "brief-1", mediaType: "text/markdown", digest: null },
+          title: null,
+          model: null,
+        },
+        createdBy: person(w.ownerUserId),
+        onBehalfOf: w.ownerUserId,
+      }) as JobDraft;
+    await expect(enqueue(w, delegate(childSessionId, parentSessionId))).resolves.toMatchObject({
+      created: true,
+    });
+    await expect(enqueue(w, delegate(parentSessionId, parentSessionId))).rejects.toThrow(
+      code("invalid_job"),
+    );
+    await expect(enqueue(w, delegate(newId("session"), newId("session")))).rejects.toThrow(
+      code("invalid_job"),
+    );
+  });
+});
+
+describe("runnerJobs.wake", () => {
+  test("counts the ready jobs and names when the next one is due", async () => {
+    const w = await world();
+    const wake = () => runner(w).query(api.runnerJobs.wake, {});
+    await expect(wake()).resolves.toEqual({ ready: 0, nextAvailableAt: null });
+    await enqueue(w, materialize(w));
+    await enqueue(w, materialize(w, { priority: "urgent", availableAt: T0 + 9_000 }));
+    await enqueue(w, materialize(w, { availableAt: T0 + 5_000 }));
+    await expect(wake()).resolves.toEqual({ ready: 1, nextAvailableAt: T0 + 5_000 });
+    vi.setSystemTime(T0 + 9_000);
+    await expect(wake()).resolves.toEqual({ ready: 3, nextAvailableAt: null });
+    for (let index = 0; index < JOB_CLAIM_MAX; index += 1) await enqueue(w, materialize(w));
+    await expect(wake()).resolves.toEqual({ ready: JOB_CLAIM_MAX, nextAvailableAt: null });
+  });
 });

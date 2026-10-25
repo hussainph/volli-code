@@ -34,10 +34,13 @@ const VALID: Partial<Record<JobKind, Record<string, unknown>>> = {
   },
   "session.followUp": { format: SESSION_FOLLOW_UP_FORMAT, intent: message },
   "session.delegate": {
+    parentSessionId: SESSION,
     toolCallId: "call-1",
-    childSessionId: SESSION,
     createCommandId: "op-1:create",
     depth: 1,
+    kickoff: { id: "message-1", mediaType: "text/markdown", digest: null },
+    title: "Review the diff",
+    model: { providerId: "anthropic", modelId: "claude", reasoningLevel: null },
   },
   "automation.run": {
     trigger: "arrival",
@@ -114,6 +117,29 @@ describe("parseJobPayload", () => {
     const delegate = VALID["session.delegate"]!;
     expect(refusal("session.delegate", { ...delegate, toolCallId: "" })).toMatch(
       /toolCallId is not a non-empty id/,
+    );
+    expect(parseJobPayload("session.delegate", { ...delegate, title: null, model: null })).toEqual({
+      ...delegate,
+      title: null,
+      model: null,
+    });
+    expect(refusal("session.delegate", { ...delegate, kickoff: "message-1" })).toMatch(
+      /kickoff is not an object/,
+    );
+    expect(
+      refusal("session.delegate", {
+        ...delegate,
+        kickoff: { id: "", mediaType: null, digest: null },
+      }),
+    ).toMatch(/kickoff\.id is not a non-empty id/);
+    expect(
+      refusal("session.delegate", {
+        ...delegate,
+        model: { providerId: "", modelId: "m", reasoningLevel: null },
+      }),
+    ).toMatch(/model\.providerId is not text of 1 to 200 characters/);
+    expect(refusal("session.delegate", { ...delegate, title: "x".repeat(201) })).toMatch(
+      /title is not text/,
     );
     for (const depth of [0, 1.5, "1"]) {
       expect(refusal("session.delegate", { ...delegate, depth })).toMatch(

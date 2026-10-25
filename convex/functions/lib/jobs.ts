@@ -244,6 +244,12 @@ function draftRow(draft: JobDraft, now: number): JobRow {
   if (row.kind.startsWith("session.") && row.sessionId === null) {
     throw defect("invalid_job", `A ${row.kind} job names its session.`);
   }
+  if (row.kind === "session.delegate" && payload.parentSessionId === row.sessionId) {
+    throw defect(
+      "invalid_job",
+      "A delegation's job names the child; the parent is in the payload.",
+    );
+  }
   if (draft.onBehalfOf === null && !WORKING_COPY_KINDS.has(row.kind)) {
     throw defect("invalid_job", `A ${row.kind} job names whose work it is.`);
   }
@@ -313,12 +319,98 @@ async function checkRouting(
       throw new JobRefusal("wrong_runner", "A session's jobs go to the runner holding its claim.");
     }
   }
+  if (row.kind === "session.delegate") {
+    const parentId = (row.payload as { parentSessionId: string }).parentSessionId;
+    const parent = await ctx.db
+      .query("sessions")
+      .withIndex("by_uuid", (q) => q.eq("id", parentId))
+      .unique();
+    if (parent === null || parent.projectId !== row.projectId) {
+      throw defect("invalid_job", "A delegation's parent is a session in the job's project.");
+    }
+  }
   if (!(await ownerMayWorkOn(ctx, runner.ownerUserId, row.projectId))) {
     throw new JobRefusal(
       "not_a_member",
       "The runner's owner is not a member of this project's workspace.",
     );
   }
+}
+
+/**
+ * Rewrites the payload of a job no runner has seen yet (queued, never
+ * leased): notice coalescing, a follow-up edited in place. The payload is
+ * checked again, and must still name the job's own ticket and Working copy.
+ * Returns `false`, changing nothing, once any runner has held the job, so the
+ * backend and a runner never both hold one payload.
+ */
+export async function patchQueuedJob(
+  ctx: Pick<MutationCtx, "db">,
+  job: Doc<"runnerJobs">,
+  payload: unknown,
+): Promise<boolean> {
+  if (job.status !== "queued" || job.lease !== null) return false;
+  let checked: Doc<"runnerJobs">["payload"];
+  try {
+    checked = parseJobPayload(job.kind, payload);
+  } catch (error) {
+    if (error instanceof InvalidJobPayloadError) throw defect("invalid_job", error.message);
+    throw error;
+  }
+  const named = checked as Record<string, unknown>;
+  if (
+    (typeof named.ticketId === "string" && named.ticketId !== job.ticketId) ||
+    (typeof named.workingCopyId === "string" && named.workingCopyId !== job.workingCopyId) ||
+    (job.kind === "session.delegate" && named.parentSessionId === job.sessionId)
+  ) {
+    throw defect("invalid_job", "A patched payload names what its job names.");
+  }
+  await ctx.db.patch(job._id, { payload: checked });
+  return true;
+}
+
+/** A command the backend answered itself, as the engine's receipt would read. */
+export interface SettledReceipt {
+  status: "accepted" | "rejected" | "completed";
+  code: string | null;
+  detail: string | null;
+}
+
+/**
+ * Records a Session command the backend settled without a runner (an
+ * in-place follow-up edit or cancel) as a finished job, so the command id
+ * finds one row with one receipt like every other Session command. The row is
+ * never handed out; the sweep deletes it with the other finished jobs.
+ * Idempotent by the command id.
+ */
+export async function recordSettledCommand<K extends JobKind>(
+  ctx: Pick<MutationCtx, "db">,
+  draft: JobDraft<K> & { commandId: string },
+  receipt: SettledReceipt,
+): Promise<Enqueued> {
+  const now = Date.now();
+  const row = draftRow(draft, now);
+  const existing = await ctx.db
+    .query("runnerJobs")
+    .withIndex("by_uuid", (q) => q.eq("id", row.id))
+    .unique();
+  if (existing !== null) {
+    if (
+      existing.kind !== row.kind ||
+      existing.sessionId !== row.sessionId ||
+      existing.status !== "done"
+    ) {
+      throw defect("id_taken", "That command id was used for another job.");
+    }
+    return { jobId: row.id as JobId, created: false };
+  }
+  await ctx.db.insert("runnerJobs", {
+    ...row,
+    status: "done",
+    receipt: { ...receipt, at: now },
+    ...terminal(now),
+  });
+  return { jobId: row.id as JobId, created: true };
 }
 
 /** Whether a runner's owner may still be handed work in a project: it is live and they are an active Member. */

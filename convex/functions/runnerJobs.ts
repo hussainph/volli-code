@@ -35,6 +35,7 @@ import {
   JOB_LEASE_MAX_MS,
   JOB_LEASE_MS,
   JOB_PRIORITIES,
+  NOTICE_MAX_WAIT_MS,
   isTerminalJobStatus,
   isUuid,
   jobRank,
@@ -47,7 +48,7 @@ import {
 
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel.js";
-import { internalMutation, mutation, type MutationCtx } from "./_generated/server";
+import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
 import {
   JOB_MAX_ATTEMPTS,
   alreadyReported,
@@ -60,7 +61,7 @@ import {
   terminal,
   type LeaseRef,
 } from "./lib/jobs";
-import { requireRunnerForWrite } from "./lib/runnerAuth";
+import { requireRunner, requireRunnerForWrite } from "./lib/runnerAuth";
 
 /** How many of its own leased jobs a claim looks at to take back. A runner holds far fewer. */
 const LEASED_SCAN = 256;
@@ -324,11 +325,79 @@ export const expireLease = internalMutation({
   },
 });
 
-/** Deletes terminal jobs past their keep time, a batch at a time. */
+/**
+ * What the calling runner should claim, for a subscription that wakes its
+ * inbox worker: how many jobs are ready now (up to a claim's worth), and when
+ * the next waiting one becomes ready. A job that becomes ready by time alone
+ * changes no row, so the runner sets a timer for `nextAvailableAt`.
+ */
+export const wake = query({
+  args: {},
+  handler: async (ctx): Promise<{ ready: number; nextAvailableAt: number | null }> => {
+    const { runnerId } = await requireRunner(ctx);
+    const now = Date.now();
+    let ready = 0;
+    let nextAvailableAt: number | null = null;
+    for (const priority of JOB_PRIORITIES) {
+      const rank = jobRank(priority);
+      const due = await ctx.db
+        .query("runnerJobs")
+        .withIndex("by_runner_ready", (q) =>
+          q
+            .eq("runnerId", runnerId)
+            .eq("status", "queued")
+            .eq("rank", rank)
+            .lte("availableAt", now),
+        )
+        .take(JOB_CLAIM_MAX - ready);
+      ready += due.length;
+      const next = await ctx.db
+        .query("runnerJobs")
+        .withIndex("by_runner_ready", (q) =>
+          q.eq("runnerId", runnerId).eq("status", "queued").eq("rank", rank).gt("availableAt", now),
+        )
+        .first();
+      if (next !== null && (nextAvailableAt === null || next.availableAt < nextAvailableAt)) {
+        nextAvailableAt = next.availableAt;
+      }
+      if (ready >= JOB_CLAIM_MAX) break;
+    }
+    return { ready, nextAvailableAt };
+  },
+});
+
+/**
+ * Deletes terminal jobs past their keep time, and expires notices that waited
+ * {@link NOTICE_MAX_WAIT_MS} for a runner that never claimed them, a batch at
+ * a time.
+ */
 export const sweep = internalMutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
+    const stale = await ctx.db
+      .query("runnerJobs")
+      .withIndex("by_kind_status", (q) =>
+        q
+          .eq("kind", "session.notice")
+          .eq("status", "queued")
+          .lte("createdAt", now - NOTICE_MAX_WAIT_MS),
+      )
+      .take(SWEEP_BATCH);
+    for (const notice of stale) {
+      await ctx.db.patch(notice._id, {
+        status: "expired",
+        ...terminal(now),
+        failure: {
+          attempt: notice.lease?.attempt ?? 0,
+          code: "notice_expired",
+          detail: "No runner claimed this notice in time.",
+          retryable: false,
+          by: "backend",
+          at: now,
+        },
+      });
+    }
     const due = await ctx.db
       .query("runnerJobs")
       .withIndex("by_expiry", (q) => q.gte("expiresAt", 0).lte("expiresAt", now))
@@ -343,7 +412,9 @@ export const sweep = internalMutation({
         await ctx.db.patch(job._id, { expiresAt: null });
       }
     }
-    if (due.length === SWEEP_BATCH) await ctx.scheduler.runAfter(0, internal.runnerJobs.sweep, {});
-    return { deleted };
+    if (due.length === SWEEP_BATCH || stale.length === SWEEP_BATCH) {
+      await ctx.scheduler.runAfter(0, internal.runnerJobs.sweep, {});
+    }
+    return { deleted, expired: stale.length };
   },
 });
