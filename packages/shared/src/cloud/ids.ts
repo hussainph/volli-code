@@ -40,7 +40,8 @@ export type IdKind =
   | "command"
   | "automation"
   | "export"
-  | "migration";
+  | "migration"
+  | "audit";
 
 declare const ID_KIND: unique symbol;
 

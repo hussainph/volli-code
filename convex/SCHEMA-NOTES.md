@@ -103,8 +103,17 @@ Each was a decision made while turning the design into code.
 10. Besides `ensureViewer`, `accounts.viewer` is a read-only query for the
     signed-in person's own account (or `null` before the first
     `ensureViewer`), so a client can tell "signed in, not set up" from "set up".
-11. `ensureViewer` creates the person only. Creating their first Workspace
-    belongs to the Workspaces work, which calls it.
+11. `ensureViewer` creates the person and, in the same transaction, their
+    personal Workspace (named after them, Free plan, default policy row, the
+    person its one owner). Later calls create nothing.
+12. `workspaceInvites.email` is nullable: `null` is a single-use link invite,
+    accepted only with its token. An email invite is accepted only by a
+    person whose verified email matches, by id or by token.
+13. Workspace and Member writes record an Actor in `auditLog` (`workspace.*`,
+    `policy.updated`, `invite.*`, `member.*`) with an `audit` id. Detail
+    never holds an invite token; only the token's sha256 is stored.
+14. `workspaces.activeMemberCount` is recounted from the active Member rows in
+    every Member transaction rather than incremented, so it cannot drift.
 
 ## Auth hook
 

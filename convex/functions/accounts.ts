@@ -6,6 +6,7 @@
 
 import { mutation, query } from "./_generated/server";
 import { ensureViewer as ensureViewerRow, findViewer } from "./lib/auth";
+import { createPersonalWorkspace } from "./lib/workspaces";
 
 export type ViewerSummary = {
   userId: string;
@@ -13,11 +14,17 @@ export type ViewerSummary = {
   primaryEmail: string | null;
 };
 
-/** Creates the caller's `users` row on first sign-in; afterwards returns it. Idempotent. */
+/**
+ * Creates the caller's `users` row and personal Workspace on first sign-in;
+ * afterwards returns the row. Idempotent.
+ */
 export const ensureViewer = mutation({
   args: {},
   handler: async (ctx): Promise<ViewerSummary & { created: boolean }> => {
-    const { userId, user, created } = await ensureViewerRow(ctx);
+    const viewer = await ensureViewerRow(ctx);
+    const { userId, user, created } = viewer;
+    // Every account gets a Workspace of its own at sign-up, in the same transaction.
+    if (created) await createPersonalWorkspace(ctx, viewer);
     return { userId, displayName: user.displayName, primaryEmail: user.primaryEmail, created };
   },
 });
