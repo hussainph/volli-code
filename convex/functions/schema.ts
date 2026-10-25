@@ -1025,8 +1025,8 @@ export default defineSchema({
     .index("by_uuid", ["id"])
     .index("by_user_open", ["userId", "clearedAt", "raisedAt"])
     .index("by_session", ["sessionId", "clearedAt"])
-    // A ticket's open items (its review requests, re-targeted on each board write).
-    .index("by_ticket", ["ticketId", "clearedAt"]),
+    // A ticket's open items of one source (its review requests, re-targeted on each board write).
+    .index("by_ticket", ["ticketId", "source", "clearedAt"]),
 
   // ── config, secrets, model connections ─────────────────────────────────────
   configEntries: defineTable({

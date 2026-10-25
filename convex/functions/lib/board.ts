@@ -245,8 +245,9 @@ export class BoardWrite {
 
   /**
    * Appends board events in order, each with the next `seq`. This is the one
-   * place board events are written, so what they derive is called from here:
-   * the review requests in Needs you (`attention.ts`).
+   * place a board write appends events (the migration import copies history
+   * and derives nothing), so what they derive is called from here: the review
+   * requests in Needs you (`attention.ts`).
    */
   async append(drafts: readonly BoardEventDraft[]): Promise<void> {
     for (const draft of drafts) {

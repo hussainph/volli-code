@@ -828,6 +828,10 @@ _Avoid_: Electron main, Agent Runtime, renderer store
 A reconstructible projection of committed Session facts that tells the user
 whether recovery or input is needed. It is not a source of truth and never
 turns silence alone into an agent lifecycle fact.
+Under Volli Cloud, Needs-you **attention items** belong to one person: the
+Session's items (derived from these facts), plus review requests from the
+board, runner alerts and `volli notify`. An item answered or cleared on one
+device is gone on every device.
 _Avoid_: waiting flag, notification state
 
 **Unread**:

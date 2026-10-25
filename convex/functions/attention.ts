@@ -3,9 +3,9 @@
  * their own items), `raiseFromRunner` (`volli notify`: the runner holding a
  * Session raises an item for the Session's owner) and the internal
  * `sweepAccess` (a Member who lost access to a Workspace has their items
- * there cleared). Every write goes through `lib/attention.ts`, the one writer;
- * the cross-Workspace Needs-you reads are `needsYou.ts` (B8), and a Session's
- * own items are `sessions.attention`.
+ * there cleared). Every write goes through `lib/attention.ts`, the one writer.
+ * A Session's own items are read with `sessions.attention`; the cross-Workspace
+ * Needs-you reads are not built yet (VC-90).
  */
 
 import { ConvexError, v } from "convex/values";
@@ -23,7 +23,7 @@ import {
 import { internal } from "./_generated/api";
 import { internalMutation, mutation } from "./_generated/server";
 import {
-  clearForLostAccess,
+  clearAttentionItem,
   findAttention,
   inWorkspace,
   markAttentionSeen,
@@ -33,7 +33,7 @@ import { findMembership, findVisibleProject, requireViewer } from "./lib/auth";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
 import { nullable } from "./lib/validators";
 
-export type AttentionErrorCode = "invalid_argument" | "not_found" | "fenced";
+export type AttentionErrorCode = "invalid_argument" | "not_found" | "fenced" | "limit_reached";
 
 export type AttentionErrorData = { code: AttentionErrorCode; message: string };
 
@@ -75,18 +75,21 @@ export const markSeen = mutation({
  * `volli notify`: the runner holding a Session tells the Session's owner
  * something in Needs you. Idempotent by `notifyId` (the runner's retry of one
  * call lands on the same item and never reopens one already seen). A runner
- * that does not hold the Session's claim is refused, so a runner cannot raise
- * an item through a Session it is not running.
+ * that does not hold the Session's claim at `generation` is refused
+ * (`fenced`), so a runner cannot raise an item through a Session it is not
+ * running. A Session holds at most `ATTENTION_LIMITS.notifyOpenPerSession`
+ * open notify items (`limit_reached`), so a chatty agent cannot bury the rest.
  *
- * Receiving wiring (no production caller yet): S6-3 (VC-894) routes the
- * agent's `notify` verb here on a cloud Session, with the runner's token, and
- * answers the agent with "queued for {displayName}"; the unattended
- * Automation-run alert (`run-attention.ts`) uses the same call once
- * Automations run on runners.
+ * Receiving wiring (no production caller yet): VC-894 routes the agent's
+ * `notify` verb here on a cloud Session, with the runner's token, and answers
+ * the agent with "queued for {displayName}"; the unattended Automation-run
+ * alert (`run-attention.ts`) uses the same call once Automations run on
+ * runners.
  */
 export const raiseFromRunner = mutation({
   args: {
     sessionId: v.string(),
+    generation: v.number(),
     notifyId: v.string(),
     title: v.string(),
     detail: nullable(v.string()),
@@ -132,7 +135,8 @@ export const raiseFromRunner = mutation({
     if (
       intake === null ||
       intake.state === "released" ||
-      intake.claim.runnerId !== caller.runnerId
+      intake.claim.runnerId !== caller.runnerId ||
+      intake.claim.generation !== args.generation
     ) {
       throw attentionError("fenced", "This runner does not hold the session's claim.");
     }
@@ -147,6 +151,19 @@ export const raiseFromRunner = mutation({
     const attentionId = sessionAttentionId(session.id, sourceId);
     const duplicate = (await findAttention(ctx, attentionId)) !== null;
     if (!duplicate) {
+      const open = await ctx.db
+        .query("attentionItems")
+        .withIndex("by_session", (q) => q.eq("sessionId", session.id).eq("clearedAt", null))
+        .collect();
+      if (
+        open.filter((item) => item.source === "notify").length >=
+        ATTENTION_LIMITS.notifyOpenPerSession
+      ) {
+        throw attentionError(
+          "limit_reached",
+          `This session already has ${ATTENTION_LIMITS.notifyOpenPerSession} notifications its owner has not seen.`,
+        );
+      }
       await raiseSessionAttention(ctx, session, {
         source: "notify",
         sourceId,
@@ -188,7 +205,9 @@ export const sweepAccess = internalMutation({
     const now = Date.now();
     let cleared = 0;
     for (const item of page.page) {
-      if ((await there(item)) && (await clearForLostAccess(ctx, item, now))) cleared += 1;
+      if ((await there(item)) && (await clearAttentionItem(ctx, item, "access_lost", now))) {
+        cleared += 1;
+      }
     }
     if (!page.isDone) {
       await ctx.scheduler.runAfter(0, internal.attention.sweepAccess, {

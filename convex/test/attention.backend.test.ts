@@ -66,7 +66,13 @@ describe("volli notify on the real backend", () => {
       events: events.slice(0, 1).map(wire),
     });
 
-    const call = { sessionId, notifyId: randomUUID(), title: "Deploy finished", detail: null };
+    const call = {
+      sessionId,
+      generation: 1,
+      notifyId: randomUUID(),
+      title: "Deploy finished",
+      detail: null,
+    };
     await expect(other.mutation(api.attention.raiseFromRunner, call)).rejects.toMatchObject({
       data: { code: "fenced" },
     });

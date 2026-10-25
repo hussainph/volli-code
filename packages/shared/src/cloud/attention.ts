@@ -5,8 +5,8 @@
  * An attention item belongs to the one person it names. The backend's
  * `lib/attention.ts` is the only writer of `attentionItems`; every producer
  * (the Session fold, board events, runners, `volli notify`) goes through it,
- * which is also where 0.5's push fan-out hooks in. Who may see an item is
- * `canSeeAttention` (`visibility.ts`).
+ * which is also where push notifications (not built yet) will hook in. Who
+ * may see an item is `canSeeAttention` (`visibility.ts`).
  */
 
 import type { Actor } from "./actor";
@@ -44,6 +44,8 @@ export const ATTENTION_LIMITS = {
   notifyTitleLength: 200,
   /** A `volli notify` detail, in characters. */
   notifyDetailLength: 2_000,
+  /** Open `volli notify` items one Session may hold, so a chatty agent cannot bury the rest. */
+  notifyOpenPerSession: 32,
 } as const;
 
 // ── frozen ids ────────────────────────────────────────────────────────────────
@@ -57,7 +59,18 @@ export function sessionAttentionId(sessionId: SessionId | string, sourceId: stri
   return `s:${sessionId}:${sourceId}`;
 }
 
-/** Frozen: the source id of one `volli notify` call, in the backend's `volli:` namespace. */
+/**
+ * Frozen source ids of the Session items the backend raises itself, in a
+ * `volli:` namespace no Engine attention or interaction id uses.
+ */
+export const SESSION_BLOCKED_SOURCE_ID = "volli:blocked";
+
+/** Frozen: the source id of a fact the backend could not read or fold, by its sequence. */
+export function quarantineSourceId(sequence: number): string {
+  return `volli:quarantine:${sequence}`;
+}
+
+/** Frozen: the source id of one `volli notify` call. */
 export function notifySourceId(notifyId: string): string {
   return `volli:notify:${notifyId}`;
 }

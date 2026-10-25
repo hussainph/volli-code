@@ -10,12 +10,15 @@
  * environment failures, billing) call {@link raiseAttention} and
  * {@link clearAttention} too.
  *
- * PUSH HOOK (0.5): {@link raiseAttention} and `clearRow` (behind every
- * clear) are where the push fan-out gets scheduled, and nowhere else. A raise that
- * inserts a row or reopens a cleared one is an edge; a raise that rewrites an
- * item that is already open is not; a clear is the retraction every device
- * follows (an item answered on one device disappears everywhere). Nothing is
- * scheduled yet: no push table or function ships before its caller.
+ * PUSH HOOK (push notifications, not built yet): {@link raiseAttention} and
+ * {@link clearAttentionItem} (behind every clear) are where the push fan-out
+ * gets scheduled, and nowhere else. A raise that inserts a row or reopens a
+ * cleared one is an edge; a raise that rewrites an item that is already open
+ * is not; a clear is the retraction every device follows (an item answered on
+ * one device disappears everywhere). The fan-out must re-check
+ * {@link attentionVisibility} before it sends: a producer that raises for a
+ * Session's owner does not re-check their membership. Nothing is scheduled
+ * yet: no push table or function ships before its caller.
  *
  * Reads go through {@link attentionVisibility}: an item is shown to the
  * person it names while they are an active Member of its project's CURRENT
@@ -38,11 +41,15 @@ import {
   type AttentionClearedReason,
   type AttentionSource,
   type BoardEventDraft,
+  isActiveMember,
+  quarantineSourceId,
   type MembershipFacts,
   type RunnerAlert,
   type UserId,
   type WorkspaceId,
 } from "@volli/shared/cloud";
+
+export { SESSION_BLOCKED_SOURCE_ID } from "@volli/shared/cloud";
 
 import type { DataModel, Doc } from "../_generated/dataModel.js";
 import { findMembership } from "./auth";
@@ -125,10 +132,11 @@ export async function clearAttention(
   reason: AttentionClearedReason,
   at: number,
 ): Promise<boolean> {
-  return clearRow(ctx, await findAttention(ctx, id), reason, at);
+  return clearAttentionItem(ctx, await findAttention(ctx, id), reason, at);
 }
 
-async function clearRow(
+/** Clears an item already read; every clear ends here. */
+export async function clearAttentionItem(
   ctx: Writer,
   item: Doc<"attentionItems"> | null,
   reason: AttentionClearedReason,
@@ -146,21 +154,13 @@ export async function markAttentionSeen(
   at: number,
 ): Promise<boolean> {
   if (item.clearedAt !== null) return false;
-  if (item.source === "notify") return clearRow(ctx, item, "resolved", at);
+  if (item.source === "notify") return clearAttentionItem(ctx, item, "resolved", at);
   if (item.seenAt !== null) return false;
   await ctx.db.patch(item._id, { seenAt: at });
   return true;
 }
 
 // ── Session items ──────────────────────────────────────────────────────────────
-
-/**
- * The frozen source ids of the items the backend itself raises for a
- * Session, in a `volli:` namespace no Engine attention or interaction id
- * uses. Durable: never rename them.
- */
-export const BLOCKED_SOURCE_ID = "volli:blocked";
-const quarantineSourceId = (sequence: number) => `volli:quarantine:${sequence}`;
 
 /** A Session's item, for its owner, in its project and ticket. */
 export async function raiseSessionAttention(
@@ -222,11 +222,12 @@ export async function raiseQuarantine(
 /**
  * Re-derives the review requests of every ticket a board write's events
  * touched (`reviewTicketIds`): the ticket's requested person (its assignee,
- * while it sits in Needs Review, unless they made the change) has one open
+ * while it sits in Needs Review, unless they made the change, and only while
+ * they are an active Member of the project's Workspace) has one open
  * `review_requested` item and nobody else does. Leaving the column clears it
  * as `resolved`; a new assignee or an archive clears the old one as
- * `superseded`. Called by `BoardWrite.append`, the one place board events
- * are written.
+ * `superseded`. Called by `BoardWrite.append`, the one place a board write
+ * appends events (the migration import copies history and derives nothing).
  */
 export async function onBoardEvents(
   ctx: Writer,
@@ -238,6 +239,18 @@ export async function onBoardEvents(
     .query("projects")
     .withIndex("by_uuid", (q) => q.eq("id", write.projectId))
     .unique();
+  if (project === null) return;
+  const members = new Map<string, boolean>();
+  const isMember = async (userId: UserId): Promise<boolean> => {
+    if (!members.has(userId)) {
+      const membership = await findMembership(ctx, project.workspaceId, userId);
+      members.set(
+        userId,
+        isActiveMember({ userId }, project.workspaceId as WorkspaceId, membership),
+      );
+    }
+    return members.get(userId)!;
+  };
   for (const ticketId of ticketIds) {
     const ticket = await ctx.db
       .query("tickets")
@@ -253,14 +266,18 @@ export async function onBoardEvents(
       ticketId,
       write.events,
     );
-    const requestee = reviewRequestee(facts, write.actor);
+    const asked = reviewRequestee(facts, write.actor);
+    // Nobody who cannot see the ticket is asked to review it.
+    const requestee = asked !== null && (await isMember(asked)) ? asked : null;
     const open = await ctx.db
       .query("attentionItems")
-      .withIndex("by_ticket", (q) => q.eq("ticketId", ticketId).eq("clearedAt", null))
+      .withIndex("by_ticket", (q) =>
+        q.eq("ticketId", ticketId).eq("source", "review_requested").eq("clearedAt", null),
+      )
       .collect();
     for (const item of open) {
-      if (item.source !== "review_requested" || item.userId === requestee) continue;
-      await clearRow(
+      if (item.userId === requestee) continue;
+      await clearAttentionItem(
         ctx,
         item,
         facts.status === "needs_review" ? "superseded" : "resolved",
@@ -270,7 +287,6 @@ export async function onBoardEvents(
     if (requestee === null) continue;
     const id = reviewAttentionId(ticketId, requestee);
     if (open.some((item) => item.id === id)) continue;
-    const key = project === null ? null : renderTicketKey(project, ticket.number);
     await raiseAttention(ctx, {
       id,
       userId: requestee,
@@ -280,7 +296,7 @@ export async function onBoardEvents(
       source: "review_requested",
       sourceId: ticketId,
       kind: "review_requested",
-      title: key === null ? "Review requested" : `${key} needs your review`,
+      title: `${renderTicketKey(project, ticket.number)} needs your review`,
       detail: ticket.title,
       raisedAt: write.at,
     });
@@ -334,18 +350,13 @@ export async function clearRunnerAlert(
 type ItemScope = { workspaceId: WorkspaceId } | null;
 
 /**
- * Who sees what, for one person over many items: projects, Workspaces and
- * memberships are each looked up once. An item whose project or Workspace is
- * gone is shown to nobody.
+ * Where items live, for many items in one transaction: each project and
+ * Workspace is read once. `gone` is an item whose project or Workspace was
+ * deleted (or never existed).
  */
-export function attentionVisibility(
-  ctx: Reader,
-  viewer: { userId: UserId },
-): (item: Doc<"attentionItems">) => Promise<boolean> {
-  const scopes = new Map<string, ItemScope | "gone">();
+function itemScopes(ctx: Reader): (item: Doc<"attentionItems">) => Promise<ItemScope | "gone"> {
+  const projects = new Map<string, ItemScope | "gone">();
   const workspaces = new Map<string, boolean>();
-  const memberships = new Map<string, MembershipFacts | null>();
-
   const liveWorkspace = async (workspaceId: string): Promise<boolean> => {
     let live = workspaces.get(workspaceId);
     if (live === undefined) {
@@ -358,7 +369,7 @@ export function attentionVisibility(
     }
     return live;
   };
-  const scopeOf = async (item: Doc<"attentionItems">): Promise<ItemScope | "gone"> => {
+  return async (item) => {
     const projectId = item.projectId;
     const workspaceId = item.workspaceId ?? null;
     if (projectId === null) {
@@ -367,7 +378,7 @@ export function attentionVisibility(
         ? { workspaceId: workspaceId as WorkspaceId }
         : "gone";
     }
-    let scope = scopes.get(projectId);
+    let scope = projects.get(projectId);
     if (scope === undefined) {
       const project = await ctx.db
         .query("projects")
@@ -379,17 +390,29 @@ export function attentionVisibility(
         !(await liveWorkspace(project.workspaceId))
           ? "gone"
           : { workspaceId: project.workspaceId as WorkspaceId };
-      scopes.set(projectId, scope);
+      projects.set(projectId, scope);
     }
     return scope;
   };
+}
+
+/**
+ * Who sees what, for one person over many items: projects, Workspaces and
+ * memberships are each looked up once. An item whose project or Workspace is
+ * gone is shown to nobody.
+ */
+export function attentionVisibility(
+  ctx: Reader,
+  viewer: { userId: UserId },
+): (item: Doc<"attentionItems">) => Promise<boolean> {
+  const scopeOf = itemScopes(ctx);
+  const memberships = new Map<string, MembershipFacts | null>();
   const membershipOf = async (workspaceId: string): Promise<MembershipFacts | null> => {
     if (!memberships.has(workspaceId)) {
       memberships.set(workspaceId, await findMembership(ctx, workspaceId, viewer.userId));
     }
     return memberships.get(workspaceId)!;
   };
-
   return async (item) => {
     if (item.userId !== viewer.userId) return false;
     const scope = await scopeOf(item);
@@ -404,28 +427,9 @@ export function inWorkspace(
   ctx: Reader,
   workspaceId: string,
 ): (item: Doc<"attentionItems">) => Promise<boolean> {
-  const projects = new Map<string, string | null>();
+  const scopeOf = itemScopes(ctx);
   return async (item) => {
-    if (item.projectId === null) return (item.workspaceId ?? null) === workspaceId;
-    let projectWorkspace = projects.get(item.projectId);
-    if (projectWorkspace === undefined) {
-      const projectId = item.projectId;
-      const project = await ctx.db
-        .query("projects")
-        .withIndex("by_uuid", (q) => q.eq("id", projectId))
-        .unique();
-      projectWorkspace = project?.workspaceId ?? null;
-      projects.set(item.projectId, projectWorkspace);
-    }
-    return projectWorkspace === workspaceId;
+    const scope = await scopeOf(item);
+    return scope !== null && scope !== "gone" && scope.workspaceId === workspaceId;
   };
-}
-
-/** Clears an item its person can no longer see. */
-export async function clearForLostAccess(
-  ctx: Writer,
-  item: Doc<"attentionItems">,
-  at: number,
-): Promise<boolean> {
-  return clearRow(ctx, item, "access_lost", at);
 }

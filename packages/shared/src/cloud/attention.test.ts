@@ -5,6 +5,8 @@ import {
   ATTENTION_CLEARED_REASONS,
   ATTENTION_SOURCES,
   notifySourceId,
+  quarantineSourceId,
+  SESSION_BLOCKED_SOURCE_ID,
   reviewAttentionId,
   reviewFactsAfter,
   reviewRequestee,
@@ -39,6 +41,10 @@ describe("frozen ids", () => {
     expect(sessionAttentionId(SESSION, notifySourceId("n-1"))).toBe(
       `s:${SESSION}:volli:notify:n-1`,
     );
+    expect(sessionAttentionId(SESSION, SESSION_BLOCKED_SOURCE_ID)).toBe(
+      `s:${SESSION}:volli:blocked`,
+    );
+    expect(quarantineSourceId(7)).toBe("volli:quarantine:7");
     expect(reviewAttentionId(TICKET, BOB)).toBe(`t:${TICKET}:review:${BOB}`);
     expect(runnerAlertAttentionId(RUNNER, "credential_reuse")).toBe(`r:${RUNNER}:credential_reuse`);
   });

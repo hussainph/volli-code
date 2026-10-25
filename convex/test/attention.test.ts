@@ -233,6 +233,41 @@ describe("review requests", () => {
   });
 });
 
+describe("review requests and membership", () => {
+  test("a person who is not an active Member is never asked", async () => {
+    vi.useFakeTimers();
+    const { t, alice, bob, workspaceId, projectId, ticketId } = await world();
+    await assign(t, ticketId, bob, { kind: "person", userId: alice });
+    await move(t, "alice", projectId, ticketId, "needs_review");
+    await asUser(t, "alice").mutation(api.members.suspend, { workspaceId, userId: bob });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await item(t, reviewId(ticketId, bob))).toMatchObject({ clearedReason: "access_lost" });
+    await move(t, "alice", projectId, ticketId, "doing");
+    await move(t, "alice", projectId, ticketId, "needs_review");
+    expect(await item(t, reviewId(ticketId, bob))).toMatchObject({ clearedReason: "access_lost" });
+    await asUser(t, "alice").mutation(api.members.unsuspend, { workspaceId, userId: bob });
+    await move(t, "alice", projectId, ticketId, "doing");
+    await move(t, "alice", projectId, ticketId, "needs_review");
+    expect(await item(t, reviewId(ticketId, bob))).toMatchObject({ clearedAt: null });
+  });
+
+  test("unarchiving a ticket in Needs Review asks again", async () => {
+    const { t, alice, bob, projectId, ticketId } = await world();
+    await assign(t, ticketId, bob, { kind: "person", userId: alice });
+    await move(t, "alice", projectId, ticketId, "needs_review");
+    await asUser(t, "alice").mutation(api.board.archiveTicket, {
+      commandId: randomUUID(),
+      ticketId,
+    });
+    expect(await item(t, reviewId(ticketId, bob))).toMatchObject({ clearedReason: "superseded" });
+    await asUser(t, "alice").mutation(api.board.unarchiveTicket, {
+      commandId: randomUUID(),
+      ticketId,
+    });
+    expect(await item(t, reviewId(ticketId, bob))).toMatchObject({ clearedAt: null, seenAt: null });
+  });
+});
+
 describe("attention.markSeen", () => {
   test("marks the viewer's own items only, idempotently, within the bound", async () => {
     const { t, bob, projectId, ticketId } = await world();
@@ -389,15 +424,34 @@ describe("access_lost sweeps", () => {
     expect(await item(t, reviewId(ticketId, bob))).toMatchObject({ clearedReason: "access_lost" });
   });
 
-  test("pages through many items", async () => {
+  test("pages through many items, some of which stay, and sweeps billing items too", async () => {
     vi.useFakeTimers();
     const { t, bob, workspaceId, projectId } = await world();
+    const otherProjectId = await t.run(async (ctx) => {
+      const other = await seedTestWorld(ctx, { ownerUserId: bob, runners: 0 });
+      await raiseAttention(ctx, {
+        id: "billing",
+        userId: bob,
+        projectId: null,
+        workspaceId,
+        ticketId: null,
+        sessionId: null,
+        source: "billing",
+        sourceId: "b",
+        kind: "billing",
+        title: "B",
+        detail: null,
+        raisedAt: 0,
+      });
+      return other.projectId;
+    });
     await t.run(async (ctx) => {
       for (let index = 0; index < 450; index += 1) {
         await raiseAttention(ctx, {
           id: `m:${index}`,
           userId: bob,
-          projectId,
+          // Every third item is in Bob's own Workspace and stays.
+          projectId: index % 3 === 0 ? otherProjectId : projectId,
           ticketId: null,
           sessionId: null,
           source: "mention",
@@ -411,7 +465,10 @@ describe("access_lost sweeps", () => {
     });
     await asUser(t, "alice").mutation(api.members.remove, { workspaceId, userId: bob });
     await t.finishAllScheduledFunctions(vi.runAllTimers);
-    expect((await items(t)).filter((row) => row.clearedAt === null)).toEqual([]);
+    const open = (await items(t)).filter((row) => row.clearedAt === null);
+    expect(open).toHaveLength(150);
+    expect(open.every((row) => row.projectId === otherProjectId)).toBe(true);
+    expect(await item(t, "billing")).toMatchObject({ clearedReason: "access_lost" });
   });
 });
 
@@ -431,7 +488,13 @@ describe("attention.raiseFromRunner (volli notify)", () => {
   test("the runner holding the Session raises an item for its owner, once per call", async () => {
     const { t, alice, projectId, runnerIds, sessionId } = await claimedSession();
     const notifyId = randomUUID();
-    const call = { sessionId, notifyId, title: " Deploy finished ", detail: "All green." };
+    const call = {
+      sessionId,
+      generation: 1,
+      notifyId,
+      title: " Deploy finished ",
+      detail: "All green.",
+    };
     const runner = asRunner(t, runnerIds[0]!);
     await expect(runner.mutation(api.attention.raiseFromRunner, call)).resolves.toEqual({
       attentionId: `s:${sessionId}:volli:notify:${notifyId}`,
@@ -465,7 +528,7 @@ describe("attention.raiseFromRunner (volli notify)", () => {
 
   test("a runner that does not hold the Session, or another person's runner, is refused", async () => {
     const { t, bob, runnerIds, sessionId } = await claimedSession();
-    const call = { sessionId, notifyId: randomUUID(), title: "Hi", detail: null };
+    const call = { sessionId, generation: 1, notifyId: randomUUID(), title: "Hi", detail: null };
     await expect(
       asRunner(t, runnerIds[1]!).mutation(api.attention.raiseFromRunner, call),
     ).rejects.toThrow(code("fenced"));
@@ -479,6 +542,25 @@ describe("attention.raiseFromRunner (volli notify)", () => {
         sessionId: randomUUID(),
       }),
     ).rejects.toThrow(code("not_found"));
+    // The claim at another generation, a released claim, a deleted Session.
+    const holder = asRunner(t, runnerIds[0]!);
+    await expect(
+      holder.mutation(api.attention.raiseFromRunner, { ...call, generation: 2 }),
+    ).rejects.toThrow(code("fenced"));
+    const patchRow = (table: "sessionIntake" | "sessions", fields: Record<string, unknown>) =>
+      t.run(async (ctx) => {
+        const row = (await ctx.db.query(table).first())!;
+        await ctx.db.patch(row._id, fields);
+      });
+    await patchRow("sessionIntake", { state: "released" });
+    await expect(holder.mutation(api.attention.raiseFromRunner, call)).rejects.toThrow(
+      code("fenced"),
+    );
+    await patchRow("sessionIntake", { state: "active" });
+    await patchRow("sessions", { deletedAt: 1 });
+    await expect(holder.mutation(api.attention.raiseFromRunner, call)).rejects.toThrow(
+      code("not_found"),
+    );
     // A person is not a runner.
     await expect(asUser(t, "alice").mutation(api.attention.raiseFromRunner, call)).rejects.toThrow(
       code("not_a_runner"),
@@ -489,7 +571,7 @@ describe("attention.raiseFromRunner (volli notify)", () => {
   test("checks its arguments", async () => {
     const { t, runnerIds, sessionId } = await claimedSession();
     const runner = asRunner(t, runnerIds[0]!);
-    const call = { sessionId, notifyId: randomUUID(), title: "Hi", detail: null };
+    const call = { sessionId, generation: 1, notifyId: randomUUID(), title: "Hi", detail: null };
     for (const bad of [
       { ...call, sessionId: "nope" },
       { ...call, notifyId: "nope" },
@@ -506,6 +588,31 @@ describe("attention.raiseFromRunner (volli notify)", () => {
     ).resolves.toMatchObject({ duplicate: false });
   });
 
+  test("a Session holds a bounded number of unseen notifications", async () => {
+    const { t, runnerIds, sessionId } = await claimedSession();
+    const runner = asRunner(t, runnerIds[0]!);
+    const notify = (notifyId: string) =>
+      runner.mutation(api.attention.raiseFromRunner, {
+        sessionId,
+        generation: 1,
+        notifyId,
+        title: "Hi",
+        detail: null,
+      });
+    const first = randomUUID();
+    await notify(first);
+    for (let index = 1; index < ATTENTION_LIMITS.notifyOpenPerSession; index += 1) {
+      await notify(randomUUID());
+    }
+    await expect(notify(randomUUID())).rejects.toThrow(code("limit_reached"));
+    // A retry of one already raised still answers; seeing one makes room.
+    await expect(notify(first)).resolves.toMatchObject({ duplicate: true });
+    await asUser(t, "alice").mutation(api.attention.markSeen, {
+      ids: [`s:${sessionId}:volli:notify:${first}`],
+    });
+    await expect(notify(randomUUID())).resolves.toMatchObject({ duplicate: false });
+  });
+
   test("an owner who left the project's Workspace is not notified there", async () => {
     const { t, alice, workspaceId, runnerIds, sessionId } = await claimedSession();
     await t.run(async (ctx) => {
@@ -518,6 +625,7 @@ describe("attention.raiseFromRunner (volli notify)", () => {
     await expect(
       asRunner(t, runnerIds[0]!).mutation(api.attention.raiseFromRunner, {
         sessionId,
+        generation: 1,
         notifyId: randomUUID(),
         title: "Hi",
         detail: null,

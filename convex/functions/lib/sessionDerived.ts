@@ -11,7 +11,11 @@ import type { CloudSessionView } from "@volli/shared/cloud";
 
 import type { Doc } from "../_generated/dataModel.js";
 import type { MutationCtx } from "../_generated/server";
-import { BLOCKED_SOURCE_ID, clearSessionAttention, raiseSessionAttention } from "./attention";
+import {
+  SESSION_BLOCKED_SOURCE_ID,
+  clearSessionAttention,
+  raiseSessionAttention,
+} from "./attention";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -91,7 +95,7 @@ export async function deriveFromFact(
       if (payload.signal === "blocked") {
         await raiseSessionAttention(ctx, session, {
           source: "session_blocked",
-          sourceId: BLOCKED_SOURCE_ID,
+          sourceId: SESSION_BLOCKED_SOURCE_ID,
           kind: "blocked",
           title: "Blocked",
           detail: payload.reason,
@@ -101,7 +105,7 @@ export async function deriveFromFact(
         await clearSessionAttention(
           ctx,
           session.id,
-          BLOCKED_SOURCE_ID,
+          SESSION_BLOCKED_SOURCE_ID,
           "resolved",
           fact.occurredAt,
         );

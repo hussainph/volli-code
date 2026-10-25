@@ -278,14 +278,16 @@ Each was a decision made while turning the design into code.
     routing) and `by_installation` (an installation's removal or reconcile).
 39. `attentionItems` is written only by `lib/attention.ts`. Its ids are each
     producer's frozen derivation (`attention.ts` in `@volli/shared/cloud`):
-    `s:{sessionId}:{sourceId}` (Session items, `volli notify` as
+    `s:{sessionId}:{sourceId}` (Session items; the backend's own source ids
+    are `volli:blocked`, `volli:quarantine:{sequence}` and
     `volli:notify:{notifyId}`), `t:{ticketId}:review:{userId}` (review
     requests) and `r:{runnerId}:{alert}` (runner alerts), so a refold, a
     retry or a later board write finds the same row. Widened (expand only):
     `projectId` is `nullable` (a runner alert belongs to no project, and is
     visible to its person only); `workspaceId` (optional, nullable) is set
     only on a billing item, the same exception usage rows make; `source`
-    gains `notify`; `by_ticket` finds a ticket's open review requests.
+    gains `notify`; `by_ticket` (ticket, source, cleared) finds a ticket's
+    open review requests.
     Visibility is decided at read time (`canSeeAttention`, membership through
     the project's current Workspace); an `access_lost` sweep after a Member is
     suspended, removed or leaves keeps stored rows honest for counts and
