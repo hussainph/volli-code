@@ -142,6 +142,35 @@ describe("durable watches", () => {
     );
     expect(await notices(w.t, w.watcher.sessionId)).toHaveLength(0);
   });
+  test("selective awaits add interest without narrowing an existing watch; unwatch resets it", async () => {
+    const w = await world();
+    const first = await w.arm();
+    const fullKinds = (await watchRows(w.t, w.watcher.sessionId))[0]!.kinds!;
+    const args = {
+      watcherSessionId: w.watcher.sessionId,
+      target: { kind: "session" as const, id: w.target.sessionId },
+      commandId: newId("command"),
+      kinds: ["verdict"],
+    };
+    expect(await w.as.mutation(api.watches.watch, args)).toEqual(first);
+    expect((await watchRows(w.t, w.watcher.sessionId))[0]!.kinds).toEqual(fullKinds);
+    expect(await w.as.mutation(api.watches.watch, args)).toEqual(first);
+    await expect(
+      w.as.mutation(api.watches.watch, { ...args, kinds: fullKinds }),
+    ).rejects.toMatchObject(code("id_taken"));
+    await w.as.mutation(api.watches.unwatch, { watcherSessionId: w.watcher.sessionId });
+    await w.as.mutation(api.watches.watch, { ...args, commandId: newId("command") });
+    let active = (await watchRows(w.t, w.watcher.sessionId)).find((row) => row.endedAt === null)!;
+    expect(active.kinds).toEqual(["verdict"]);
+    await w.as.mutation(api.watches.watch, {
+      ...args,
+      commandId: newId("command"),
+      kinds: ["turn"],
+    });
+    active = (await watchRows(w.t, w.watcher.sessionId)).find((row) => row.endedAt === null)!;
+    expect(active.kinds).toEqual(fullKinds.filter((kind) => kind === "verdict" || kind === "turn"));
+  });
+
   test("arm retries do not re-arm a fired turn; new commands do, and unwatch ends intent", async () => {
     const w = await world();
     const commandId = newId("command");

@@ -321,7 +321,9 @@ Each was a decision made while turning the design into code.
     second-stage receipts keep the pre-cloud watch/subagent identity. A watch
     command's optional `kinds` preserves frozen awaits' selective `for` requests;
     the receipt stores that subset additively, so changed-kind retries conflict.
-    Older receipts without it mean the full target vocabulary.
+    Older receipts without it mean the full target vocabulary. New arms union
+    their requested kinds with an existing open watch, so a selective await
+    cannot remove interest from an automatic or explicit watch; unwatch resets it.
 
 ## Runner-routed agent Session commands
 

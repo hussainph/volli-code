@@ -169,7 +169,11 @@ export async function armWatch(
     await ctx.db.patch(existing._id, {
       origin: input.origin,
       turnArmed: true,
-      kinds,
+      // A selective retired await adds interest; it must not silently remove
+      // notices from an existing explicit or automatic watch. Unwatch resets it.
+      kinds: allowed.filter(
+        (kind) => (existing.kinds ?? allowed).includes(kind) || kinds.includes(kind),
+      ),
       armedThroughSequence,
       lastArmedAt: now,
     });

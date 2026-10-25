@@ -516,7 +516,7 @@ async function startSessionTool(
       started.state === "ready" || started.kickoff === "held"
         ? options.cloudSessionVerbs === undefined
           ? ` ${await watchOpenedSession(watchPorts(options), session, { sessionId: started.sessionId, title: started.title }, "started")}`
-          : " Volli Cloud arms its watch when the start facts are accepted; notices wait in this runner's inbox while it is offline."
+          : " Volli Cloud attempts to arm its watch when the start facts are accepted, subject to access and watch limits; any resulting notices wait in this runner's inbox while it is offline."
         : "";
     return {
       // The same facts as the prose, as data (VC-471), in the shape the
@@ -688,7 +688,7 @@ async function sendSessionTool(
                 { sessionId: outcome.sessionId, title: outcome.title },
                 "steered",
               )
-            : "Volli Cloud arms its watch when the steering facts are accepted; notices wait in this runner's inbox while it is offline.",
+            : "Volli Cloud attempts to arm its watch when the steering facts are accepted, subject to access and watch limits; any resulting notices wait in this runner's inbox while it is offline.",
       ].join(" "),
     };
   } catch (error) {
