@@ -133,6 +133,7 @@ import {
   holdList,
   lastAssistantText,
   liveTurnHasProgress,
+  mayBeWorktreeSetupGate,
   messageCopyText,
   messageRoute,
   resolvingWith,
@@ -261,6 +262,8 @@ const ACTS: SessionBlockerActs = {
   dismiss: NO_OP,
   scheduleResume: NO_OP,
   cancelScheduledResume: NO_OP,
+  answerSetup: NO_OP,
+  fixSetup: NO_OP,
 };
 
 function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBlockerInput {
@@ -516,6 +519,106 @@ describe("sessionBlocker", () => {
       tone: "error",
       action: { label: "Open settings", act: NO_OP },
       dismiss: { label: "Dismiss" },
+    });
+  });
+
+  // VC-584: a working copy's failed environment setup holds every start.
+  describe("a failed environment setup", () => {
+    const PREPARATION_FAILED =
+      "Couldn't prepare the worktree at /w — .agents/setup exited with code 1: boom";
+    const RUN = {
+      source: "repo" as const,
+      summary: ".agents/setup exited with code 1: boom",
+      exitCode: 1,
+      endedAt: 1_000,
+      tail: "boom",
+    };
+
+    it("is suspected only from the configuration failure a worktree preparation raised", () => {
+      expect(mayBeWorktreeSetupGate(attention("configuration_invalid", PREPARATION_FAILED))).toBe(
+        true,
+      );
+      expect(mayBeWorktreeSetupGate(attention("configuration_invalid", "Bad model"))).toBe(false);
+      // The same preparation failing in git is not the setup's to answer.
+      expect(
+        mayBeWorktreeSetupGate(
+          attention(
+            "configuration_invalid",
+            "Couldn't prepare the worktree at /w — fatal: bad ref",
+          ),
+        ),
+      ).toBe(false);
+      for (const clause of [
+        "Environment setup failed: it broke. Retry setup, or start anyway.",
+        "The project's setup command exited with code 2.",
+      ]) {
+        expect(
+          mayBeWorktreeSetupGate(
+            attention("configuration_invalid", `Couldn't prepare the worktree at /w — ${clause}`),
+          ),
+        ).toBe(true);
+      }
+      expect(mayBeWorktreeSetupGate(attention("configuration_invalid"))).toBe(false);
+      expect(mayBeWorktreeSetupGate(attention("auth_required", PREPARATION_FAILED))).toBe(false);
+      expect(mayBeWorktreeSetupGate(null)).toBe(false);
+    });
+
+    it("replaces the settings row with the setup's three answers", () => {
+      const acted: string[] = [];
+      const dismissed: string[] = [];
+      const acts: SessionBlockerActs = {
+        ...ACTS,
+        answerSetup: (answer) => acted.push(answer),
+        fixSetup: () => acted.push("fix"),
+        dismiss: (key) => dismissed.push(key),
+      };
+      const raisedSetup = attention("configuration_invalid", PREPARATION_FAILED);
+      const blocker = sessionBlocker({ ...raised(raisedSetup), failedSetup: RUN }, acts, false);
+
+      expect(blocker).toMatchObject({
+        message: "Environment setup failed",
+        detail: RUN.summary,
+        tone: "error",
+        placement: "timeline",
+        action: { label: "Retry setup" },
+        secondaryAction: { label: "Start anyway" },
+        tertiaryAction: { label: "Fix with an agent" },
+        dismiss: { label: "Dismiss" },
+      });
+      blocker?.action?.act();
+      blocker?.secondaryAction?.act();
+      blocker?.tertiaryAction?.act();
+      blocker?.dismiss?.act();
+      expect(acted).toEqual(["retry", "start-anyway", "fix"]);
+      expect(dismissed).toEqual([blocker?.dismissKey]);
+      // The same report the plain row would have been: one dismissal hides either.
+      expect(blocker?.dismissKey).toBe(
+        sessionBlocker(raised(raisedSetup), ACTS, false)?.dismissKey,
+      );
+    });
+
+    it("leaves every other row as it was", () => {
+      const plain = sessionBlocker(
+        raised(attention("configuration_invalid", PREPARATION_FAILED)),
+        ACTS,
+        false,
+      );
+      expect(plain).toMatchObject({
+        message: "Configuration invalid",
+        action: { label: "Open settings" },
+      });
+      expect(plain?.tertiaryAction).toBeUndefined();
+      expect(
+        sessionBlocker(
+          { ...raised(attention("configuration_invalid")), failedSetup: null },
+          ACTS,
+          false,
+        ),
+      ).toMatchObject({ message: "Configuration invalid" });
+      // A setup read beside another failure does not speak for it.
+      expect(
+        sessionBlocker({ ...raised(attention("auth_required")), failedSetup: RUN }, ACTS, false),
+      ).toMatchObject({ message: "Sign-in required", action: { label: "Open settings" } });
     });
   });
 

@@ -5131,6 +5131,476 @@
         "outputValidation": "network-and-tests",
         "voidOutput": false
       },
+      "worktree.answerSetup": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "answer": {
+              "enum": [
+                "retry",
+                "start-anyway"
+              ],
+              "type": "string"
+            },
+            "ticketId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ticketId",
+            "answer"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "none",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "pending",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "running",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "succeeded",
+                  "type": "string"
+                },
+                "run": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "endedAt": {
+                      "type": "number"
+                    },
+                    "exitCode": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "source": {
+                      "enum": [
+                        "repo",
+                        "legacyCommand"
+                      ],
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "string"
+                    },
+                    "tail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "summary",
+                    "exitCode",
+                    "endedAt",
+                    "tail"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "run"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "failed",
+                  "type": "string"
+                },
+                "run": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "endedAt": {
+                      "type": "number"
+                    },
+                    "exitCode": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "source": {
+                      "enum": [
+                        "repo",
+                        "legacyCommand"
+                      ],
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "string"
+                    },
+                    "tail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "summary",
+                    "exitCode",
+                    "endedAt",
+                    "tail"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "run"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "started-anyway",
+                  "type": "string"
+                },
+                "run": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "endedAt": {
+                      "type": "number"
+                    },
+                    "exitCode": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "source": {
+                      "enum": [
+                        "repo",
+                        "legacyCommand"
+                      ],
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "string"
+                    },
+                    "tail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "summary",
+                    "exitCode",
+                    "endedAt",
+                    "tail"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "run"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "worktree.setupStatus": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "ticketId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ticketId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "none",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "pending",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "running",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "succeeded",
+                  "type": "string"
+                },
+                "run": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "endedAt": {
+                      "type": "number"
+                    },
+                    "exitCode": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "source": {
+                      "enum": [
+                        "repo",
+                        "legacyCommand"
+                      ],
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "string"
+                    },
+                    "tail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "summary",
+                    "exitCode",
+                    "endedAt",
+                    "tail"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "run"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "failed",
+                  "type": "string"
+                },
+                "run": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "endedAt": {
+                      "type": "number"
+                    },
+                    "exitCode": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "source": {
+                      "enum": [
+                        "repo",
+                        "legacyCommand"
+                      ],
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "string"
+                    },
+                    "tail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "summary",
+                    "exitCode",
+                    "endedAt",
+                    "tail"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "run"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "started-anyway",
+                  "type": "string"
+                },
+                "run": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "endedAt": {
+                      "type": "number"
+                    },
+                    "exitCode": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "source": {
+                      "enum": [
+                        "repo",
+                        "legacyCommand"
+                      ],
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "string"
+                    },
+                    "tail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "summary",
+                    "exitCode",
+                    "endedAt",
+                    "tail"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "run"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "worktree.trimSettings": {
         "compatibility": "host-command",
         "input": {

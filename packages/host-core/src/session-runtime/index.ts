@@ -11,7 +11,7 @@ import {
   type TranscriptArtifactStore,
 } from "@volli/session-engine";
 import { createCheckpointFailureReporter } from "../session-control";
-import type { HostEventBus } from "../ports";
+import type { HostEventBus, PowerPort } from "../ports";
 import type { Logger } from "../log/logger";
 import { correlatedExecutor } from "./correlated-executor";
 import { createSessionLocationResolver, type WorktreeSetupEnvironment } from "./location";
@@ -56,6 +56,10 @@ export interface HostSessionRuntimeOptions {
    * environment as is.
    */
   setupEnvironment?: (sessionId: string) => Promise<WorktreeSetupEnvironment>;
+  /** Whether a working copy's environment recipe runs (VC-584, the `cloud` flag). */
+  environmentRecipes?: () => boolean;
+  /** The machine's wakes, which owe each working copy its `.agents/resume` again. */
+  power?: PowerPort;
   /**
    * The same opt-in VC-119 sink the Pi runtime holds, for the one measurement
    * only the Session runtime can make: time a message queued before its turn
@@ -90,6 +94,10 @@ export function createHostSessionRuntime(options: HostSessionRuntimeOptions): Ho
         ...(options.setupEnvironment === undefined
           ? {}
           : { setupEnvironment: options.setupEnvironment }),
+        ...(options.environmentRecipes === undefined
+          ? {}
+          : { environmentRecipes: options.environmentRecipes }),
+        ...(options.power === undefined ? {} : { power: options.power }),
       },
     ),
     clock: { now },

@@ -232,6 +232,10 @@ export function sessionHandlersFrom(
     "project.remove": (input, call) => need(ports.desktop?.["project.remove"], BOARD)(input, call),
     "worktree.trimSettings": (input, call) =>
       need(ports.desktop?.["worktree.trimSettings"], BOARD)(input, call),
+    "worktree.setupStatus": (input, call) =>
+      need(ports.desktop?.["worktree.setupStatus"], BOARD)(input, call),
+    "worktree.answerSetup": (input, call) =>
+      need(ports.desktop?.["worktree.answerSetup"], BOARD)(input, call),
     "hosts.snapshot": remote("hosts.snapshot"),
     "hosts.subscribe": remote("hosts.subscribe"),
     "hosts.retry": remote("hosts.retry"),

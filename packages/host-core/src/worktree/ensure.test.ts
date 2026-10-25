@@ -445,6 +445,22 @@ describe("ensure — first-run steps are a durable fact of the worktree (VC-835)
     expect(result).toMatchObject({ ok: true, value: { created: true, setupPending: false } });
   });
 
+  // VC-584: the repository's `.agents/setup` arrives with the checkout, so
+  // with recipes on a creation owes the run whatever the stored command says.
+  it("owes the setup run on every creation while environment recipes are on", async () => {
+    const projectPath = tempDir("proj");
+    seedWithSetup(projectPath, "  ");
+    const home = tempDir("home");
+    const { gitAsync } = addingGit(projectPath, (path) => mkdirSync(path, { recursive: true }));
+
+    const result = await ensure(
+      { db: ctx.db, gitAsync, home, blobsRoot: "unused", environmentRecipes: () => true },
+      "ticket-1",
+    );
+
+    expect(result).toMatchObject({ ok: true, value: { created: true, setupPending: true } });
+  });
+
   it("still owes both steps after a `worktree add` that failed past leaving the checkout registered", async () => {
     // The add outlived its deadline but git had already registered the
     // worktree (VC-785's state): the pending record was written before it.

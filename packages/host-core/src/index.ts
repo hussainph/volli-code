@@ -90,6 +90,11 @@ export interface HostCoreOptions {
     PtyManagerOptions,
     "host" | "agentRuntime" | "concurrencyEnvReader"
   >;
+  /**
+   * Whether a working copy's environment recipe (`.agents/setup`, VC-584)
+   * runs: the `cloud` experimental flag, read per call. Absent is off.
+   */
+  readonly environmentRecipes?: () => boolean;
 }
 
 interface HostLifecycleOwner {

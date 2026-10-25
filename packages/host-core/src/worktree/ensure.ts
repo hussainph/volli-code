@@ -195,9 +195,13 @@ async function runEnsure(
     // dies anywhere past this point — the add outliving its deadline included —
     // still owes them to the next start (`first-run.ts`). Setup is owed only
     // when the project has a command now: one configured later belongs to the
-    // next worktree, not to this one's next boot.
+    // next worktree, not to this one's next boot. With environment recipes on
+    // it is always owed: whether the checkout carries `.agents/setup` is known
+    // only once it exists, and the door that claims the run resolves it.
     const steps: FirstRunStep[] =
-      (project.setupCommand?.trim() ?? "").length > 0 ? ["copy", "setup"] : ["copy"];
+      deps.environmentRecipes?.() === true || (project.setupCommand?.trim() ?? "").length > 0
+        ? ["copy", "setup"]
+        : ["copy"];
     try {
       markFirstRunPending(deps, identity.path, ticketId, steps);
     } catch (caught) {

@@ -258,6 +258,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     binDir: input.binDir,
     venue,
     hostPorts: ports,
+    environmentRecipes: { enabled: () => input.cloudEnabled(), power: ports.power },
     modelAccess: runtimeServices?.modelAccess ?? null,
     decisions: runtimeServices?.decisions ?? null,
     webAccess: runtimeServices?.webAccess ?? null,
@@ -349,6 +350,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
         : { refineAutoTitle: (request) => void autoTitler.refine(request) }),
       pictures: assembly.pictures,
       modelAccess: assembly.piRuntimeHost,
+      environmentRecipes: () => input.cloudEnabled(),
       automations,
       // The host's one worktree read service (VC-788): a scope switch's
       // materialization and a Done trim retire the answers it holds.

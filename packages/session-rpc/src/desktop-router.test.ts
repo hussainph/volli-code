@@ -30,6 +30,7 @@ import {
   type HandlerCall,
   type RemoteHostDevices,
   type RemoteHostsSnapshot,
+  type WorktreeSetupStatusView,
   type WorktreeTrimSettings,
 } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -67,6 +68,16 @@ const SIGN_IN_STATUS = {
   git: [],
 } as const;
 const TRIM: WorktreeTrimSettings = { keepPatterns: [".env"], trimOnFinish: true };
+const SETUP_FAILED: WorktreeSetupStatusView = {
+  kind: "failed",
+  run: {
+    source: "repo",
+    summary: "`.agents/setup` exited with code 1: pnpm: command not found",
+    exitCode: 1,
+    endedAt: 1_000,
+    tail: "pnpm: command not found",
+  },
+};
 const HOST = "0b9e6c1a-2d3f-4a5b-8c7d-6e5f4a3b2c1d";
 const FLOW = "flow-1";
 /** A password no diagnostic, error or log may ever carry. */
@@ -274,6 +285,8 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "project.reorder": record("project.reorder", null),
     "project.remove": record("project.remove", null),
     "worktree.trimSettings": record("worktree.trimSettings", TRIM),
+    "worktree.setupStatus": record("worktree.setupStatus", SETUP_FAILED),
+    "worktree.answerSetup": record("worktree.answerSetup", { kind: "pending" }),
     "hosts.snapshot": record("hosts.snapshot", SNAPSHOT),
     "hosts.subscribe": stream("hosts.subscribe", SNAPSHOT),
     "hosts.retry": record("hosts.retry", null),
@@ -437,6 +450,53 @@ describeContract<Host, DesktopRouter>(
       expect(
         await expectHostError(client.shells.moveToBackground.mutate({ ...input, toolCallId: "" })),
       ).toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    // VC-584: workspace-placed on the ticket whose working copy it is.
+    it("reads and answers a working copy's setup, validating the answer before the handler", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      expect(await client.worktree.setupStatus.query({ ticketId: "ticket-1" })).toEqual(
+        SETUP_FAILED,
+      );
+      expect(
+        await client.worktree.answerSetup.mutate({ ticketId: "ticket-1", answer: "start-anyway" }),
+      ).toEqual({ kind: "pending" });
+      expect(fixture.calls).toEqual([
+        { key: "worktree.setupStatus", input: { ticketId: "ticket-1" }, call: WINDOW_CALL },
+        {
+          key: "worktree.answerSetup",
+          input: { ticketId: "ticket-1", answer: "start-anyway" },
+          call: WINDOW_CALL,
+        },
+      ]);
+      fixture.calls.length = 0;
+      for (const input of [
+        { ticketId: "ticket-1", answer: "skip" },
+        { ticketId: "", answer: "retry" },
+        { ticketId: "ticket-1", answer: "retry", path: "/tmp" },
+      ]) {
+        expect(
+          await expectHostError(client.worktree.answerSetup.mutate(input as never)),
+        ).toMatchObject({ code: "BAD_REQUEST" });
+      }
+      expect(fixture.calls).toEqual([]);
+    });
+
+    it("refuses a setup answer from a network caller before the handler", async () => {
+      for (const caller of [device, session]) {
+        const fixture = host(caller);
+        const client = await connect(fixture);
+        expect(
+          await expectHostError(client.worktree.setupStatus.query({ ticketId: "ticket-1" })),
+        ).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
+        expect(
+          await expectHostError(
+            client.worktree.answerSetup.mutate({ ticketId: "ticket-1", answer: "retry" }),
+          ),
+        ).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
+        expect(fixture.calls).toEqual([]);
+      }
     });
 
     // Placement-derived policy: host-placed, so device-as-user, and on no
@@ -1387,6 +1447,8 @@ describe("the desktop router's grammar", () => {
         "project.reorder",
         "project.remove",
         "worktree.trimSettings",
+        "worktree.setupStatus",
+        "worktree.answerSetup",
         "hosts.snapshot",
         "hosts.subscribe",
         "hosts.retry",

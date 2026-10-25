@@ -33,6 +33,7 @@ function worktreeScope(
 ): NonNullable<SessionScope["worktree"]> {
   return {
     ticketId: "tk1",
+    displayId: "VC-1",
     projectPath: "/repo/project-1",
     setupCommand: null,
     kickoff: null,

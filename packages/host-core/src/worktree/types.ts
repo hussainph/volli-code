@@ -67,6 +67,13 @@ export interface WorktreePorts {
   now?: () => number;
   onPhase?: (ticketId: string, phase: WorktreePhase) => void;
   blobsRoot: string;
+  /**
+   * Whether environment recipes are on (VC-584; the `cloud` experimental
+   * flag): a new worktree then always owes its setup run, because the
+   * repository's `.agents/setup` arrives with the checkout. Absent or false
+   * keeps VC-835's rule — setup is owed only when a stored command exists.
+   */
+  environmentRecipes?: () => boolean;
 }
 
 /**
