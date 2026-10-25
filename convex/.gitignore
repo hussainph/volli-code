@@ -1,0 +1,5 @@
+# The convex CLI writes deployment pointers here; this package is aimed at one
+# only through the fixture or an explicit deploy job.
+.env.local
+.env.*.local
+.convex/

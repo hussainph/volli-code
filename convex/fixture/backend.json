@@ -1,0 +1,23 @@
+{
+  "release": "precompiled-2026-10-24-bb31399",
+  "convexNpm": "1.48.0",
+  "downloadBase": "https://github.com/convex/convex-backend/releases/download",
+  "assets": {
+    "darwin-arm64": {
+      "file": "convex-local-backend-aarch64-apple-darwin.zip",
+      "sha256": "295a43fbd24443ab8c5a6eb60df9161b7a40e088e5fecb47084391cc3727ecca"
+    },
+    "darwin-x64": {
+      "file": "convex-local-backend-x86_64-apple-darwin.zip",
+      "sha256": "46c76318d8ec9047e4f6e8a62a8af2f70c40510a024f1866fbc0d69fac6630fb"
+    },
+    "linux-arm64": {
+      "file": "convex-local-backend-aarch64-unknown-linux-gnu.zip",
+      "sha256": "b8d5aba679de340aee1f1871c484ba80b6d08da3726cf378541e575416c69700"
+    },
+    "linux-x64": {
+      "file": "convex-local-backend-x86_64-unknown-linux-gnu.zip",
+      "sha256": "1f77f4bf331710a6b02d71fded91907d46d4286622acfebe195c4b44653cf4c3"
+    }
+  }
+}

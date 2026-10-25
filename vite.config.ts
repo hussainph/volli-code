@@ -27,6 +27,9 @@ const toolingIgnorePatterns = [
   // The Document-view markdown corpus keeps the exact variants (`*` vs `_`,
   // Setext underlines, tilde fences) a formatter exists to normalise away.
   "apps/desktop/src/renderer/src/editor/__fixtures__",
+  // Written by `convex codegen`; CI regenerates it and fails on any drift, so
+  // it must stay byte-for-byte what the pinned CLI emits.
+  "convex/functions/_generated",
 ];
 
 export default defineConfig({

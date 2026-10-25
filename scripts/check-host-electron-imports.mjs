@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Keep Electron out of workspace packages and the Linux host app.
+ * Keep Electron out of workspace packages, the Linux host app and convex/.
  *
- *   node scripts/check-host-electron-imports.mjs             # gate packages/* and apps/hostd
+ *   node scripts/check-host-electron-imports.mjs             # gate packages/*, apps/hostd and convex/
  *   node scripts/check-host-electron-imports.mjs --self-test # scanner + failing CLI fixture
  *   node scripts/check-host-electron-imports.mjs --report    # inventory main-process reachability
  *
@@ -121,9 +121,12 @@ function enumerateGuardFiles(repoRoot) {
     // The headless host (VC-562). Required: deleting or moving it must fail
     // the guard rather than silently shrink what it checks.
     ...sourceFilesBelow(repoRoot, "apps/hostd"),
+    // The Convex backend (VC-882): its functions run on Convex and its test
+    // fixture under plain Node, so neither may reach Electron. Required too.
+    ...sourceFilesBelow(repoRoot, "convex"),
   ];
   const unique = [...new Set(files)].toSorted();
-  if (unique.length === 0) fail("no source files found under packages/ or apps/hostd");
+  if (unique.length === 0) fail("no source files found under packages/, apps/hostd or convex/");
   return unique;
 }
 
@@ -663,7 +666,7 @@ function runGuard(repoRoot) {
     return 1;
   }
   console.log(
-    `[host-electron-imports] passed: ${entries.length} packages/host source modules and their relative dependencies do not reach electron.`,
+    `[host-electron-imports] passed: ${entries.length} packages/host/convex source modules and their relative dependencies do not reach electron.`,
   );
   return 0;
 }
@@ -881,6 +884,7 @@ function selfTest() {
     "apps/hostd/src/session-runtime/location.ts",
     "apps/desktop/src/main/broadcast.ts",
     "apps/desktop/src/main/worktree-runtime.ts",
+    "convex/functions/leak.ts",
   ]) {
     if (!cliOutput.includes(expected)) failures.push(`fixture CLI output omitted ${expected}`);
   }

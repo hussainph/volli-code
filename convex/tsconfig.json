@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.base.json",
+  "include": ["functions", "fixture", "test", "*.ts"],
+  "compilerOptions": {
+    "types": ["node", "vite-plus/client"],
+    // The fixture runs under Node's type stripper, which needs real `.ts` paths.
+    "allowImportingTsExtensions": true
+  }
+}
