@@ -32,6 +32,12 @@ import { useProvisionalChatTabs, type ProvisionalChatTabs } from "./use-provisio
 vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
 const NO_CHATS: readonly string[] = [];
 const DRAFT_TAB = "chat:draft-1";
+/**
+ * The pair's first member — the Board/Body the pending partner opened beside.
+ * Never `root`: that id names the full-width pane (VC-614), so the member is
+ * named under its pair (`n2`, the second id minted after the partner `n1`).
+ */
+const OWNER_PANE = "n2:first";
 let container: HTMLDivElement;
 let root: Root;
 
@@ -362,7 +368,7 @@ for (const ticket of [false, true]) {
           '[aria-label="Draft composer"]',
         )!;
         composer.focus();
-        act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
+        act(() => s.focusPane(OWNER_PANE));
         expect(document.activeElement).toBe(composer);
         expect(s.provisional().activeOverride).toBeNull();
         const recorded = s.recordedActive();
@@ -375,7 +381,7 @@ for (const ticket of [false, true]) {
           } else useChatDraftsStore.getState().completePromotion("draft-1");
         });
         expect(pairForTab(s.restoredSplit(), DRAFT_TAB)?.second.id).toBe("n1");
-        expect(s.readSplitView()?.focusedPaneId).toBe(SPLIT_VIEW_ROOT_PANE_ID);
+        expect(s.readSplitView()?.focusedPaneId).toBe(OWNER_PANE);
         expect(s.recordedActive()).toBe(recorded);
       });
     }
@@ -383,7 +389,7 @@ for (const ticket of [false, true]) {
     it("does not split a pending pair into an arbitrary third pane or move its Draft on refusal", () => {
       const s = surface(ticket);
       const before = s.readSplitView();
-      act(() => s.guarded().splitPane(SPLIT_VIEW_ROOT_PANE_ID, "down", DRAFT_TAB, [DRAFT_TAB]));
+      act(() => s.guarded().splitPane(OWNER_PANE, "down", DRAFT_TAB, [DRAFT_TAB]));
       act(() => s.writes.splitPane("n1", "down", null, []));
       expect(s.readSplitView()).toBe(before);
       expect(s.view().panes).toHaveLength(2);
@@ -393,7 +399,7 @@ for (const ticket of [false, true]) {
 
     it("refuses a centre move into an occupied member without moving the empty Draft", () => {
       const s = surface(ticket);
-      act(() => s.guarded().moveTabToPane(DRAFT_TAB, SPLIT_VIEW_ROOT_PANE_ID));
+      act(() => s.guarded().moveTabToPane(DRAFT_TAB, OWNER_PANE));
       expect(s.view().panes[0]?.activeTabId).toBe(ticket ? "doc" : "board");
       expect(s.view().panes[1]?.activeTabId).toBe(DRAFT_TAB);
       expect(s.provisional().activeOverridePaneId).toBe("n1");
@@ -414,7 +420,7 @@ for (const ticket of [false, true]) {
 
     it("retains a hidden pending destination when an unrelated browser is selected", async () => {
       const s = surface(ticket);
-      act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
+      act(() => s.focusPane(OWNER_PANE));
       await act(async () => {
         await s.createBrowser();
       });
@@ -434,7 +440,7 @@ for (const ticket of [false, true]) {
 
     it("saves a late attachment to a hidden pending pair after the surface unmounts", async () => {
       const s = surface(ticket);
-      act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
+      act(() => s.focusPane(OWNER_PANE));
       await act(async () => {
         await s.createBrowser();
       });
@@ -483,7 +489,7 @@ for (const ticket of [false, true]) {
       const s = surface(ticket);
       act(() => useChatDraftsStore.getState().setDraft("draft-1", "x"));
       act(() => useChatDraftsStore.getState().setDraft("draft-1", ""));
-      act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
+      act(() => s.focusPane(OWNER_PANE));
       await act(async () => {
         await s.createBrowser();
       });
@@ -630,7 +636,7 @@ for (const ticket of [false, true]) {
     it("stale-tab receipt cannot persist a background empty Draft or change pane focus", () => {
       const s = surface(ticket, { oldChat: true });
       act(() => s.provisional().releaseActive());
-      act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
+      act(() => s.focusPane(OWNER_PANE));
       act(() => s.closeChat("old"));
       expect(s.provisional().activeOverride).toBeNull();
       expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
@@ -643,7 +649,7 @@ for (const ticket of [false, true]) {
 for (const ticket of [false, true]) {
   it(`${ticket ? "Ticket" : "Home"} reselects a hidden empty Draft in its retained pending partner`, async () => {
     const s = surface(ticket);
-    act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
+    act(() => s.focusPane(OWNER_PANE));
     await act(async () => {
       await s.createBrowser();
     });
@@ -652,7 +658,7 @@ for (const ticket of [false, true]) {
     expect(s.view().focusedPaneId).toBe("n1");
     expect(s.view().panes[1]?.activeTabId).toBe(DRAFT_TAB);
     expect([...s.data.values()].join()).not.toContain(DRAFT_TAB);
-    act(() => s.focusPane(SPLIT_VIEW_ROOT_PANE_ID));
+    act(() => s.focusPane(OWNER_PANE));
     expect(s.provisional().activeOverride).toBeNull();
   });
 }

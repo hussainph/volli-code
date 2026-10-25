@@ -386,7 +386,7 @@ function TicketTab({
             state={tab.status ?? null}
             kind="chat"
             name={`${providerId ?? "Chat"}, ${tab.status ?? "idle"}`}
-            size="row"
+            size="tab"
           />
         ) : tab.kind === "browser" ? (
           <BrowserTabMark driven={tab.driven === true} />

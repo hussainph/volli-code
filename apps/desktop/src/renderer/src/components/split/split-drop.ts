@@ -36,11 +36,13 @@ import { tabDropOrder } from "@renderer/components/ui/tab-reorder";
 // Zones
 
 /**
- * The three targets a pane's content box is tiled by. `right`/`bottom` are the
- * two edges a split may open on (the in-app terminal grammar: right and down
- * only); `center` is "put it in this pane".
+ * The five targets a pane's content box is tiled by: four edges a split may
+ * open on (VC-614 added left and top — a tab dropped over a Browser page could
+ * otherwise never land on its left), and `center`, "put it in this pane".
  */
-export type SplitDropZone = "center" | "right" | "bottom";
+export type SplitDropZone = "center" | "left" | "right" | "top" | "bottom";
+
+const SPLIT_DROP_ZONES: ReadonlySet<string> = new Set(["center", "left", "right", "top", "bottom"]);
 
 /**
  * How much of a pane its edge bands claim. A quarter makes the gesture
@@ -69,12 +71,13 @@ export interface SplitDropPoint {
 /**
  * How deep one edge band reaches into a box of `size`.
  *
- * Clamped to half the box so the two bands can never overlap: at 96px and
- * below the minimum would otherwise eat the centre, and a pane with no centre
- * is a pane you cannot drop a tab INTO.
+ * Clamped to a third of the box: with a band on BOTH sides of each axis, that
+ * is what keeps a centre between them. At 144px and below the minimum would
+ * otherwise eat the centre, and a pane with no centre is a pane you cannot drop
+ * a tab INTO.
  */
 function edgeBand(size: number): number {
-  return Math.min(Math.max(size * SPLIT_DROP_EDGE_FRACTION, SPLIT_DROP_MIN_EDGE_PX), size / 2);
+  return Math.min(Math.max(size * SPLIT_DROP_EDGE_FRACTION, SPLIT_DROP_MIN_EDGE_PX), size / 3);
 }
 
 /**
@@ -86,7 +89,7 @@ function edgeBand(size: number): number {
  * eventually be two different numbers, and the symptom — a highlight that
  * disagrees with where the tab lands — would be blamed on the drop.
  */
-export const SPLIT_DROP_EDGE_BAND_CSS = `min(max(${SPLIT_DROP_EDGE_FRACTION * 100}%, ${SPLIT_DROP_MIN_EDGE_PX}px), 50%)`;
+export const SPLIT_DROP_EDGE_BAND_CSS = `min(max(${SPLIT_DROP_EDGE_FRACTION * 100}%, ${SPLIT_DROP_MIN_EDGE_PX}px), calc(100% / 3))`;
 
 /**
  * Which zone `point` is in.
@@ -105,8 +108,11 @@ export const SPLIT_DROP_EDGE_BAND_CSS = `min(max(${SPLIT_DROP_EDGE_FRACTION * 10
  */
 export function splitDropZoneAt(box: SplitDropBox, point: SplitDropPoint): SplitDropZone {
   if (box.width <= 0 || box.height <= 0) return "center";
+  // Side columns are full height, so both corners on a side belong to it.
   if (point.x >= box.width - edgeBand(box.width)) return "right";
+  if (point.x < edgeBand(box.width)) return "left";
   if (point.y >= box.height - edgeBand(box.height)) return "bottom";
+  if (point.y < edgeBand(box.height)) return "top";
   return "center";
 }
 
@@ -128,14 +134,18 @@ export interface SplitDropPreviewRect {
  */
 export function splitDropPreview(zone: SplitDropZone): SplitDropPreviewRect {
   if (zone === "right") return { left: "50%", top: "0%", width: "50%", height: "100%" };
+  if (zone === "left") return { left: "0%", top: "0%", width: "50%", height: "100%" };
   if (zone === "bottom") return { left: "0%", top: "50%", width: "100%", height: "50%" };
+  if (zone === "top") return { left: "0%", top: "0%", width: "100%", height: "50%" };
   return { left: "0%", top: "0%", width: "100%", height: "100%" };
 }
 
 /** The edge a zone splits on, or `null` for the centre, which splits nothing. */
 export function splitDropEdge(zone: SplitDropZone): SplitViewEdge | null {
   if (zone === "right") return "right";
+  if (zone === "left") return "left";
   if (zone === "bottom") return "down";
+  if (zone === "top") return "up";
   return null;
 }
 
@@ -146,7 +156,9 @@ export function splitDropEdge(zone: SplitDropZone): SplitViewEdge | null {
  */
 export function splitDropZoneLabel(zone: SplitDropZone): string {
   if (zone === "right") return "Split right";
+  if (zone === "left") return "Split left";
   if (zone === "bottom") return "Split down";
+  if (zone === "top") return "Split up";
   return "Move here";
 }
 
@@ -170,8 +182,8 @@ export function parseSplitZoneId(id: string): { paneId: string; zone: SplitDropZ
   const zone = rest.slice(0, separator);
   const paneId = rest.slice(separator + 1);
   if (paneId.length === 0) return null;
-  if (zone !== "center" && zone !== "right" && zone !== "bottom") return null;
-  return { paneId, zone };
+  if (!SPLIT_DROP_ZONES.has(zone)) return null;
+  return { paneId, zone: zone as SplitDropZone };
 }
 
 /** Whether a droppable id is a zone rather than a tab. */

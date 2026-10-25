@@ -1090,7 +1090,9 @@ function TabStateIcon({ state, badge = false }: { state: StatusDotState; badge?:
       data-state={state}
       className={cn(
         "flex shrink-0 items-center justify-center",
-        badge && "absolute -right-1 -bottom-1 rounded-full bg-background p-px",
+        // Tucked inside the 28px tab: hanging a full step below the 20px slot
+        // put the badge's lower edge on the scroller's clip line (VC-614).
+        badge && "absolute -right-0.5 -bottom-0.5 rounded-full bg-background p-px",
         failed
           ? "text-destructive"
           : state === "waiting"
@@ -1100,7 +1102,10 @@ function TabStateIcon({ state, badge = false }: { state: StatusDotState; badge?:
               : "text-muted-foreground",
       )}
     >
-      <Icon weight="bold" className={cn("size-3", busy && "motion-safe:animate-spin")} />
+      <Icon
+        weight="bold"
+        className={cn(badge ? "size-2.5" : "size-3", busy && "motion-safe:animate-spin")}
+      />
     </span>
   );
 }

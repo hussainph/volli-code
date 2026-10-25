@@ -63,21 +63,26 @@ describe("splitDropZoneAt", () => {
   });
 
   it("holds the bands to 48px on a pane too narrow for a quarter to reach", () => {
-    // 25% of 120 is 30, so the floor binds: the band starts at 72.
-    expect(splitDropZoneAt({ width: 120, height: 600 }, { x: 71, y: 300 })).toBe("center");
-    expect(splitDropZoneAt({ width: 120, height: 600 }, { x: 73, y: 300 })).toBe("right");
+    // 25% of 160 is 40, so the floor binds: the right band starts at 112 and
+    // the left one ends at 48.
+    expect(splitDropZoneAt({ width: 160, height: 600 }, { x: 111, y: 300 })).toBe("center");
+    expect(splitDropZoneAt({ width: 160, height: 600 }, { x: 113, y: 300 })).toBe("right");
+    expect(splitDropZoneAt({ width: 160, height: 600 }, { x: 47, y: 300 })).toBe("left");
+    expect(splitDropZoneAt({ width: 160, height: 600 }, { x: 49, y: 300 })).toBe("center");
   });
 
-  it("never lets the two bands eat the centre of a tiny pane", () => {
-    // 48px of band would cover the whole 60px pane; half is the clamp, so the
-    // left half is still a centre drop.
-    expect(splitDropZoneAt({ width: 60, height: 60 }, { x: 10, y: 10 })).toBe("center");
-    expect(splitDropZoneAt({ width: 60, height: 60 }, { x: 55, y: 10 })).toBe("right");
-    expect(splitDropZoneAt({ width: 60, height: 60 }, { x: 10, y: 55 })).toBe("bottom");
+  it("never lets the bands eat the centre of a tiny pane", () => {
+    // 48px of band would cover the whole 60px pane; a third is the clamp, so
+    // the middle third is still a centre drop.
+    expect(splitDropZoneAt({ width: 60, height: 60 }, { x: 30, y: 30 })).toBe("center");
+    expect(splitDropZoneAt({ width: 60, height: 60 }, { x: 45, y: 10 })).toBe("right");
+    expect(splitDropZoneAt({ width: 60, height: 60 }, { x: 10, y: 10 })).toBe("left");
+    expect(splitDropZoneAt({ width: 60, height: 60 }, { x: 30, y: 45 })).toBe("bottom");
+    expect(splitDropZoneAt({ width: 60, height: 60 }, { x: 30, y: 10 })).toBe("top");
   });
 
   it("states the band once, for the DOM and for the arithmetic", () => {
-    expect(SPLIT_DROP_EDGE_BAND_CSS).toBe("min(max(25%, 48px), 50%)");
+    expect(SPLIT_DROP_EDGE_BAND_CSS).toBe("min(max(25%, 48px), calc(100% / 3))");
   });
 
   it("answers centre for a box that has not been measured", () => {
@@ -100,6 +105,18 @@ describe("splitDropPreview", () => {
       width: "100%",
       height: "50%",
     });
+    expect(splitDropPreview("left")).toEqual({
+      left: "0%",
+      top: "0%",
+      width: "50%",
+      height: "100%",
+    });
+    expect(splitDropPreview("top")).toEqual({
+      left: "0%",
+      top: "0%",
+      width: "100%",
+      height: "50%",
+    });
     expect(splitDropPreview("center")).toEqual({
       left: "0%",
       top: "0%",
@@ -113,12 +130,16 @@ describe("splitDropEdge / splitDropZoneLabel", () => {
   it("maps the two edges onto the model's own vocabulary", () => {
     expect(splitDropEdge("right")).toBe("right");
     expect(splitDropEdge("bottom")).toBe("down");
+    expect(splitDropEdge("left")).toBe("left");
+    expect(splitDropEdge("top")).toBe("up");
     expect(splitDropEdge("center")).toBeNull();
   });
 
   it("names the act rather than the region", () => {
     expect(splitDropZoneLabel("right")).toBe("Split right");
     expect(splitDropZoneLabel("bottom")).toBe("Split down");
+    expect(splitDropZoneLabel("left")).toBe("Split left");
+    expect(splitDropZoneLabel("top")).toBe("Split up");
     expect(splitDropZoneLabel("center")).toBe("Move here");
   });
 });
@@ -127,6 +148,7 @@ describe("zone ids", () => {
   it("round-trips a pane id that contains the separator", () => {
     const id = splitZoneId("pane:1:2", "bottom");
     expect(parseSplitZoneId(id)).toEqual({ paneId: "pane:1:2", zone: "bottom" });
+    expect(parseSplitZoneId(splitZoneId("p", "left"))).toEqual({ paneId: "p", zone: "left" });
     expect(isSplitZoneId(id)).toBe(true);
   });
 

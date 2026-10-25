@@ -120,6 +120,16 @@ describe("splitPane", () => {
     expect(next.root.kind === "split" && next.root.direction).toBe("column");
   });
 
+  it("opens a left or up pane FIRST, beside the pane it was opened from (VC-614)", () => {
+    const left = splitPane(singlePaneSplitView(["a"], "a"), "root", "left", {}, minter());
+    expect(left.root.kind === "split" && left.root.direction).toBe("row");
+    expect(splitViewPanes(left).map((p) => p.id)).toEqual(["m1", "root"]);
+    expect(left.focusedPaneId).toBe("m1");
+    const up = splitPane(singlePaneSplitView(["a"], "a"), "root", "up", {}, minter());
+    expect(up.root.kind === "split" && up.root.direction).toBe("column");
+    expect(splitViewPanes(up).map((p) => p.id)).toEqual(["m1", "root"]);
+  });
+
   it("moves the dragged tab into the new pane and fronts it there", () => {
     const next = splitPane(twoPanes(), "p1", "right", { tabId: "b" }, minter());
 
@@ -1098,14 +1108,14 @@ describe("grouped tab pairs", () => {
     expect(removeTab(away, "b").selectedTabId).toBe("c");
     expect(removeTab(away, "c").selectedTabId).toBeNull();
     expect(unpairTab(state, "missing")).toBe(state);
-    expect(closePane(state, "root").pairs).toHaveLength(0);
+    expect(closePane(state, state.pairs![0]!.first.id).pairs).toHaveLength(0);
     expect(closePane(state, "m1").selectedTabId).toBe("a");
     expect(closePane(state, "gone")).toBe(state);
   });
 
   it("focuses empty menus, refuses third members and can explicitly fill the menu by move", () => {
     const empty = splitPane(groupedSplitView(live, "a"), "root", "right", {}, minter());
-    const first = focusPane(empty, "root");
+    const first = focusPane(empty, empty.pairs![0]!.first.id);
     expect(focusPane(first, "m1").focusedPaneId).toBe("m1");
     const filled = moveTabToPane(first, "b", "m1");
     expect(filled.selectedTabId).toBe("b");
@@ -1123,11 +1133,76 @@ describe("grouped tab pairs", () => {
     expect(claimTabInPane(state, "a", "m1", true)).toBe(state);
     expect(claimTabInPane(state, "b", "gone", true)).toBe(state);
     expect(claimTabInPane(state, "b", "m1", true).selectedTabId).toBe("b");
-    const unfocused = focusPane(state, "root");
+    const owner = state.pairs![0]!.first.id;
+    const unfocused = focusPane(state, owner);
     const claimed = claimTabInPane(unfocused, "b", "m1", true);
     expect(claimed.selectedTabId).toBe("a");
-    expect(claimed.focusedPaneId).toBe("root");
+    expect(claimed.focusedPaneId).toBe(owner);
     expect(claimed.pairs![0]!.second.activeTabId).toBe("b");
+  });
+
+  it("pairs a tab dropped on a left or top edge AHEAD of the tab it was dropped on (VC-614)", () => {
+    const base = groupedSplitView(live, "a");
+    const left = splitPane(base, "root", "left", { tabId: "b" }, minter());
+    const pair = pairForTab(left, "a")!;
+    expect([pair.first.activeTabId, pair.second.activeTabId]).toEqual(["b", "a"]);
+    expect(pair.direction).toBe("row");
+    // The incoming tab is the one in focus.
+    expect(left.focusedPaneId).toBe(pair.first.id);
+    expect(left.selectedTabId).toBe("b");
+    const up = splitPane(base, "root", "up", { tabId: "b" }, minter());
+    expect(pairForTab(up, "a")!.direction).toBe("column");
+    expect(pairForTab(up, "a")!.first.activeTabId).toBe("b");
+    // An empty partner opened on the left is the focused menu slot.
+    const menu = splitPane(base, "root", "left", {}, minter());
+    expect(pairForTab(menu, "a")!.first.activeTabId).toBeNull();
+    expect(menu.focusedPaneId).toBe(pairForTab(menu, "a")!.first.id);
+    // A refused left drop (the tab onto itself) changes nothing.
+    expect(splitPane(base, "root", "left", { tabId: "a" }, minter())).toBe(base);
+  });
+
+  it("never names a member after the full-width pane, so focusing it keeps an unpaired tab (VC-614)", () => {
+    // Splitting the full-width pane used to keep its id "root" for the owner.
+    // Any later press in a full-width tab focuses "root" and selected the pair.
+    const pair = make();
+    const ids = [pair.pairs![0]!.first.id, pair.pairs![0]!.second.id];
+    expect(ids).not.toContain(SPLIT_VIEW_ROOT_PANE_ID);
+    const away = activateTab(pair, "c");
+    expect(away.root.id).toBe(SPLIT_VIEW_ROOT_PANE_ID);
+    expect(focusPane(away, SPLIT_VIEW_ROOT_PANE_ID)).toBe(away);
+    const elsewhere = { ...away, focusedPaneId: ids[1]! };
+    expect(focusPane(elsewhere, SPLIT_VIEW_ROOT_PANE_ID).selectedTabId).toBe("c");
+  });
+
+  it("renames a persisted pair member called root on read (VC-614)", () => {
+    // The exact shape an earlier build of the grouped model wrote.
+    const stored = {
+      root: { kind: "pane", id: "root", tabIds: ["chat:new"], activeTabId: "chat:new" },
+      focusedPaneId: "p2",
+      pairs: [
+        {
+          kind: "split",
+          id: "pair",
+          direction: "row",
+          ratio: 0.5,
+          first: { kind: "pane", id: "root", tabIds: ["browser:x"], activeTabId: "browser:x" },
+          second: { kind: "pane", id: "p2", tabIds: ["chat:owner"], activeTabId: "chat:owner" },
+        },
+      ],
+      selectedTabId: "chat:new",
+    };
+    const state = sanitizeSplitView(JSON.parse(JSON.stringify(stored)))!;
+    expect(state.pairs![0]!.first).toEqual(pane("pair:first", ["browser:x"]));
+    expect(state.selectedTabId).toBe("chat:new");
+    expect(focusPane(state, SPLIT_VIEW_ROOT_PANE_ID).selectedTabId).toBe("chat:new");
+    expect(focusPane(state, "pair:first").selectedTabId).toBe("browser:x");
+  });
+
+  it("renames a legacy primary pane when it becomes a pair member (VC-614)", () => {
+    const old = view(branch("s", "row", pane("root", ["a"]), pane("p2", ["b"])), "p2");
+    const state = sanitizeSplitView(JSON.parse(JSON.stringify(old)))!;
+    expect(state.pairs![0]!.first.id).toBe("s:first");
+    expect(state.pairs![0]!.second.id).toBe("p2");
   });
 
   it("follows renamed members and absorbs existing destinations", () => {

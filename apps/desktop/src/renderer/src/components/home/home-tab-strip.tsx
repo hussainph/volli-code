@@ -692,7 +692,7 @@ function ChatTab({
               state={status}
               kind="chat"
               name={`${providerId ?? "Chat"}, ${status}`}
-              size="row"
+              size="tab"
             />
           }
         />

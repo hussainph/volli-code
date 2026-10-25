@@ -83,7 +83,7 @@ beforeEach(() => {
   });
   // The last pane clicked IN THE APP was the left one; the person then clicked
   // into the right member's native page, which the split view never heard.
-  workspace.focusHomePane(PROJECT, SPLIT_VIEW_ROOT_PANE_ID);
+  workspace.focusHomePane(PROJECT, paneOf(LEFT));
 
   container = document.createElement("div");
   document.body.append(container);

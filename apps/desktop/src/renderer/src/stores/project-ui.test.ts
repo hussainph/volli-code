@@ -2750,12 +2750,13 @@ describe("split view persistence (VC-202)", () => {
     });
 
     const rehydrated = createProjectUiStore(storage);
+    // A pair member is named under its pair, never `root` (VC-614).
     expect(panesOf(homeSplit(rehydrated))).toEqual([
-      [SPLIT_VIEW_ROOT_PANE_ID, [HOME_BOARD_TAB_ID], HOME_BOARD_TAB_ID],
+      ["n2:first", [HOME_BOARD_TAB_ID], HOME_BOARD_TAB_ID],
       ["n1", ["chat:c1"], "chat:c1"],
     ]);
     expect(panesOf(ticketSplit(rehydrated))).toEqual([
-      [SPLIT_VIEW_ROOT_PANE_ID, [TICKET_BODY_TAB_ID], TICKET_BODY_TAB_ID],
+      ["n4:first", [TICKET_BODY_TAB_ID], TICKET_BODY_TAB_ID],
       ["n3", [], null],
     ]);
   });
@@ -3080,12 +3081,12 @@ describe.each(["Home", "Ticket"] as const)("placement-only claims — %s (VC-483
     const store = createProjectUiStore(storage, paneMinter());
     activate(store, "browser:foreground");
     split(store);
-    focus(store, "root");
+    focus(store, "n2:first");
     const before = (readSplit(store)!.root as SplitViewBranch).first;
 
     claim(store, "chat:draft", "n1", true);
 
-    expect(readSplit(store)?.focusedPaneId).toBe("root");
+    expect(readSplit(store)?.focusedPaneId).toBe("n2:first");
     expect((readSplit(store)!.root as SplitViewBranch).first).toBe(before);
     expect(panesOf(readSplit(store))[1]).toEqual(["n1", ["chat:draft"], "chat:draft"]);
     expect(readActive(store)).toBe("browser:foreground");
@@ -3098,13 +3099,13 @@ describe.each(["Home", "Ticket"] as const)("placement-only claims — %s (VC-483
     const store = splitStore();
     split(store);
     claim(store, "browser:neighbor", "n1", true);
-    focus(store, "root");
+    focus(store, "n2:first");
     const beforeActive = readActive(store);
 
     claim(store, "chat:inactive", "n1", false);
 
     expect(panesOf(readSplit(store))[1]).toEqual(["n1", ["browser:neighbor"], "browser:neighbor"]);
-    expect(readSplit(store)?.focusedPaneId).toBe("root");
+    expect(readSplit(store)?.focusedPaneId).toBe("n2:first");
     expect(readActive(store)).toBe(beforeActive);
   });
 
@@ -3237,7 +3238,8 @@ describe.each(["Home", "Ticket"] as const)("tab selection intent — %s (VC-483)
     const focused = store.getState();
     activate(store, "chat:c1");
     expect(store.getState()).toBe(focused);
-    expect(selections.slice(3)).toEqual([SPLIT_VIEW_ROOT_PANE_ID, SPLIT_VIEW_ROOT_PANE_ID]);
+    // Now a pair member, named under its pair rather than `root` (VC-614).
+    expect(selections.slice(3)).toEqual(["n2:first", "n2:first"]);
   });
 
   it("announces a move once the tab has landed, including one it already fronts there", () => {
@@ -3370,11 +3372,15 @@ describe("tab selection intent — the activation doors (VC-483)", () => {
     ws.openHome("project-a", "chat:c1");
     ws.openTicket("project-a", "ticket-1");
     ws.openHomeBoard("project-a");
+    // chat:c1 is an ordinary tab, drawn full width; the Board is the pair's
+    // first member, named under its pair rather than `root` (VC-614).
     expect(home).toEqual([
       "n1",
       SPLIT_VIEW_ROOT_PANE_ID,
       "n1",
-      ...Array(3).fill(SPLIT_VIEW_ROOT_PANE_ID),
+      SPLIT_VIEW_ROOT_PANE_ID,
+      "n2:first",
+      "n2:first",
     ]);
     // Opening a ticket from Home selected Home's Board, not a ticket tab.
     expect(ticket).toEqual([]);

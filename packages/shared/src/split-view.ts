@@ -11,10 +11,25 @@
 export type SplitViewDirection = "row" | "column";
 
 /**
- * Where a split opens the new pane. Right/down only — the constraint the
- * terminal split already lives under, and what keeps the primary pane top-left.
+ * Where a split opens the new pane. `right`/`down` are what ⌘\ and ⇧⌘\ open;
+ * a drop may also open `left`/`up` (VC-614), which puts the new pane FIRST.
  */
-export type SplitViewEdge = "right" | "down";
+export type SplitViewEdge = "left" | "right" | "up" | "down";
+
+/** The branch direction an edge opens. */
+export function splitEdgeDirection(edge: SplitViewEdge): SplitViewDirection {
+  return edge === "left" || edge === "right" ? "row" : "column";
+}
+
+/** Whether the pane an edge opens comes before the pane it was opened beside. */
+export function splitEdgeLeads(edge: SplitViewEdge): edge is "left" | "up" {
+  return edge === "left" || edge === "up";
+}
+
+/** The trailing edge on a leading edge's axis: a leading split is a trailing one, mirrored. */
+function trailingEdge(edge: "left" | "up"): SplitViewEdge {
+  return edge === "left" ? "right" : "down";
+}
 
 /** Pane-to-pane focus movement, resolved geometrically. */
 export type SplitViewFocusDirection = "left" | "right" | "up" | "down";
@@ -447,7 +462,18 @@ export function splitPane(
   if (state.pairs !== undefined) {
     const target = findPane(state, paneId);
     if (target?.activeTabId == null || pairForTab(state, target.activeTabId) !== null) return state;
-    return pairTabs(state, target.activeTabId, opts.tabId ?? null, edge, mintId, paneId);
+    if (!splitEdgeLeads(edge))
+      return pairTabs(state, target.activeTabId, opts.tabId ?? null, edge, mintId, paneId);
+    // The incoming tab leads, and it is the one the person is now working in.
+    const paired = pairTabs(
+      state,
+      opts.tabId ?? null,
+      target.activeTabId,
+      trailingEdge(edge),
+      mintId,
+    );
+    const pair = pairForTab(paired, target.activeTabId);
+    return pair === null ? paired : focusPane(paired, pair.first.id);
   }
   const target = findPane(state, paneId);
   if (target === null) return state;
@@ -463,13 +489,14 @@ export function splitPane(
     tabIds: tabId === undefined ? [] : [tabId],
     activeTabId: tabId ?? null,
   };
+  const leads = splitEdgeLeads(edge);
   const split = replacePane(detached, paneId, (pane) => ({
     kind: "split",
     id: mintId(),
-    direction: edge === "right" ? "row" : "column",
+    direction: splitEdgeDirection(edge),
     ratio: SPLIT_VIEW_DEFAULT_RATIO,
-    first: pane,
-    second: opened,
+    first: leads ? opened : pane,
+    second: leads ? pane : opened,
   }));
   return { root: split.root, focusedPaneId: opened.id };
 }
@@ -885,6 +912,23 @@ function member(id: string, tabId: string | null): SplitViewPane {
   return { kind: "pane", id, tabIds: tabId === null ? [] : [tabId], activeTabId: tabId };
 }
 
+/**
+ * A pair member may never be called {@link SPLIT_VIEW_ROOT_PANE_ID}: that id
+ * already names the full-width pane every unpaired tab is drawn in, so a member
+ * wearing it would answer "focus root" — any click in a full-width tab — by
+ * selecting its pair (VC-614). Splitting the full-width pane, a legacy split's
+ * primary pane and pairs an earlier build of this branch persisted all arrive
+ * with it; each is renamed under its own pair here.
+ */
+function memberPaneId(pairId: string, paneId: string, slot: "first" | "second"): string {
+  return paneId === SPLIT_VIEW_ROOT_PANE_ID ? `${pairId}:${slot}` : paneId;
+}
+
+function pairMember(pairId: string, pane: SplitViewPane, slot: "first" | "second"): SplitViewPane {
+  const id = memberPaneId(pairId, pane.id, slot);
+  return id === pane.id ? pane : { ...pane, id };
+}
+
 function projectPairs(
   state: SplitViewState,
   pairs: readonly SplitViewPair[],
@@ -935,7 +979,7 @@ export function pairTabs(
   if (
     existing?.first.activeTabId === firstTabId &&
     existing.second.activeTabId === secondTabId &&
-    existing.direction === (edge === "right" ? "row" : "column")
+    existing.direction === splitEdgeDirection(edge)
   ) {
     return projectPairs(
       state,
@@ -954,11 +998,14 @@ export function pairTabs(
   const used = new Set(pairs.flatMap((pair) => [pair.first.id, pair.second.id]));
   const secondId = mintId();
   const id = mintId();
-  const firstId = firstPaneId !== undefined && !used.has(firstPaneId) ? firstPaneId : `${id}:first`;
+  const firstId =
+    firstPaneId !== undefined && !used.has(firstPaneId)
+      ? memberPaneId(id, firstPaneId, "first")
+      : `${id}:first`;
   const pair: SplitViewPair = {
     kind: "split",
     id,
-    direction: edge === "right" ? "row" : "column",
+    direction: splitEdgeDirection(edge),
     ratio: SPLIT_VIEW_DEFAULT_RATIO,
     first: member(firstId, firstTabId),
     second: member(secondId, secondTabId),
@@ -1047,8 +1094,8 @@ export function sanitizeSplitView(raw: unknown): SplitViewState | null {
     const branch = legacy.root as SplitViewBranch;
     const pair: SplitViewPair = {
       ...branch,
-      first: member(first!.id, first!.activeTabId),
-      second: member(second!.id, second!.activeTabId),
+      first: member(memberPaneId(branch.id, first!.id, "first"), first!.activeTabId),
+      second: member(memberPaneId(branch.id, second!.id, "second"), second!.activeTabId),
     };
     const selected = activeTabInSplitView(legacy) ?? first!.activeTabId;
     return projectPairs(groupedSplitView([], selected), [pair], selected);
@@ -1061,7 +1108,8 @@ export function sanitizeSplitView(raw: unknown): SplitViewState | null {
     const node = sanitizeNode(rawPair, new Set(), new Set(), 1);
     if (node?.kind !== "split" || node.first.kind !== "pane" || node.second.kind !== "pane")
       continue;
-    const { first, second } = node;
+    const first = pairMember(node.id, node.first, "first");
+    const second = pairMember(node.id, node.second, "second");
     if (
       (first.activeTabId === null && second.activeTabId === null) ||
       [first, second].some(
