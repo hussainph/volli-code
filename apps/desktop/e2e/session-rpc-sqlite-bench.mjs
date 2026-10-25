@@ -223,7 +223,7 @@ try {
   const makeRuntime = (runtimeEngine = engine) =>
     engineModule.createSessionRuntime({
       engine: runtimeEngine,
-      executor: {
+      executors: engineModule.createSessionExecutorSlot({
         id: "bench",
         durableIdNamespace: "bench",
         adapterVersion: "1",
@@ -231,7 +231,7 @@ try {
         attach: async () => {
           throw new Error("benchmark projection never attaches");
         },
-      },
+      }),
       artifacts: transcriptPath
         ? transcriptModule.createFileTranscriptArtifactStore(transcriptPath)
         : engineTestingModule.createInMemoryTranscriptArtifactStore(),
