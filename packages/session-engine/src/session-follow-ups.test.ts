@@ -10,6 +10,8 @@ import {
 } from "@volli/shared";
 import {
   FOLLOW_UP_COMMAND_RETENTION_MS,
+  emptySessionFollowUpState,
+  pruneSessionFollowUpState,
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamQueue,
@@ -23,6 +25,8 @@ import {
   type NativeHarnessAdapter,
   type ObservationSink,
   type SessionFollowUpLedger,
+  type SessionFollowUpState,
+  type SessionRuntimeCommandResult,
   type SessionStreamEmission,
 } from "./index";
 import {
@@ -242,6 +246,122 @@ async function releaseEvidence(f: ReturnType<typeof fixture>, sessionId: string,
     await f.engine.listEvents({ sessionId }),
   );
 }
+
+function retentionReply(
+  id: string,
+  timestamp: number,
+  receiptAt: number | null = timestamp,
+): SessionRuntimeCommandResult {
+  return {
+    sessionId: "retention",
+    command: {
+      id,
+      sessionId: "retention",
+      createdAt: timestamp,
+      route: null,
+      intent: { kind: "message.cancel", messageId: id },
+    },
+    receipt:
+      receiptAt === null
+        ? null
+        : {
+            id: `${id}:receipt`,
+            commandId: id,
+            recordedAt: receiptAt,
+            sequence: 0,
+            status: "accepted",
+            acceptedAt: receiptAt,
+            result: { kind: "message.submitted", sessionId: "retention" },
+          },
+    throughSequence: 0,
+    refusal: null,
+  };
+}
+
+describe("follow-up retention compatibility", () => {
+  const now = 10 * FOLLOW_UP_COMMAND_RETENTION_MS;
+  const old = now - FOLLOW_UP_COMMAND_RETENTION_MS - 1_000;
+
+  function recent(state: SessionFollowUpState): void {
+    for (let i = 0; i < 64; i++)
+      state.commands[`recent-${i}`] = {
+        signature: `recent-${i}`,
+        result: retentionReply(`recent-${i}`, now + i),
+      };
+  }
+
+  it("sorts missing receipts by createdAt on both sides and keeps unresolved replies beyond the recent floor", () => {
+    const state = emptySessionFollowUpState();
+    for (const [id, timestamp] of [
+      ["null-newest", now + 1],
+      ["null-second", now],
+      ["null-oldest", old - 1],
+    ] as const)
+      state.commands[id] = { signature: id, result: retentionReply(id, timestamp, null) };
+    for (let i = 0; i < 64; i++)
+      state.commands[`old-${i}`] = {
+        signature: `old-${i}`,
+        result: retentionReply(`old-${i}`, old + i),
+      };
+    pruneSessionFollowUpState(state, now);
+    expect(Object.keys(state.commands)).toHaveLength(65);
+    for (const id of ["null-newest", "null-second", "null-oldest", "old-2"])
+      expect(state.commands).toHaveProperty(id);
+    expect(state.commands).not.toHaveProperty("old-0");
+    expect(state.commands).not.toHaveProperty("old-1");
+  });
+
+  it("preserves old queue/edit/cancel replies selected by a pending message, not by the pending command ids", () => {
+    const state = emptySessionFollowUpState();
+    recent(state);
+    state.entries.push({
+      id: "pending-message",
+      commandId: "birth-command",
+      deliveryCommandId: "current-delivery",
+      state: "queued",
+      message: message("pending-message"),
+    });
+    const intents = [
+      { kind: "message.queue", message: message("pending-message", "keep queued body") },
+      {
+        kind: "message.edit",
+        messageId: "pending-message",
+        message: message("pending-message", "keep edited body"),
+      },
+      { kind: "message.cancel", messageId: "pending-message" },
+    ] as const;
+    const retained = intents.map((intent, i) => {
+      const result = retentionReply(`old-${i}`, old + i);
+      result.command = { ...result.command, route: null, intent };
+      const record = { signature: `original-${i}`, result };
+      state.commands[`old-${i}`] = record;
+      return record;
+    });
+    pruneSessionFollowUpState(state, now);
+    for (const [i, record] of retained.entries()) expect(state.commands[`old-${i}`]).toBe(record);
+  });
+
+  it("leaves an already compact identity tombstone unchanged on later writes", () => {
+    const state = emptySessionFollowUpState();
+    recent(state);
+    const result = retentionReply("old-queue", old);
+    result.command = {
+      ...result.command,
+      route: null,
+      intent: { kind: "message.queue", message: message("delivered", "discard body") },
+    };
+    state.commands["old-queue"] = { signature: "discard original request body", result };
+    pruneSessionFollowUpState(state, now);
+    const compact = state.commands["old-queue"]!;
+    expect(compact.result.command.intent).toEqual({
+      kind: "message.queue",
+      message: { id: "delivered", role: "user", parts: [] },
+    });
+    expect(compact.signature).not.toContain("discard");
+    pruneSessionFollowUpState(state, now + 1);
+    expect(state.commands["old-queue"]).toBe(compact);
+  });
+});
 
 describe("host follow-up commands", () => {
   it("retains replies for at least the backend terminal-job dedupe window", () => {
@@ -476,6 +596,41 @@ describe("host follow-up commands", () => {
       ).receipt?.status,
     ).toBe("accepted");
     expect(f.adapter.commands).toHaveLength(2);
+  });
+
+  it("uses queue identities safely with a legacy two-argument transaction adapter", async () => {
+    const storage = createInMemorySessionFollowUpLedger();
+    const legacy: SessionFollowUpLedger = {
+      pendingSessionIds: () => storage.pendingSessionIds(),
+      // Older adapters provide delivery proof, but no queued-message predicate.
+      transaction: (id, work, options) =>
+        storage.transaction(id, (state, proof) => work(state, proof), options),
+    };
+    const f = fixture({ followUps: legacy });
+    const { runtime, sessionId, steer } = await queuedActive(f);
+    await runtime.command({
+      commandId: "missing-cancel",
+      sessionId,
+      command: { kind: "message.cancel", messageId: "missing" },
+    });
+    // Scan a nonmatching queue reply and a nonqueue reply before falling through.
+    expect(
+      (
+        await runtime.command({
+          commandId: "ordinary-steer",
+          sessionId,
+          command: { kind: "message.submit", delivery: "steer", message: message("ordinary") },
+        })
+      ).receipt?.status,
+    ).toBe("accepted");
+    await runtime.command({
+      commandId: "withdraw-queued",
+      sessionId,
+      command: { kind: "message.cancel", messageId: "queued" },
+    });
+    await expect(runtime.command(steer)).rejects.toThrow("already been delivered or removed");
+    expect(f.adapter.commands).toHaveLength(2);
+    await runtime.close();
   });
 
   it("never resends when turn-end release wins the identity", async () => {
@@ -1267,6 +1422,10 @@ describe("host follow-up commands", () => {
     const f = fixture();
     const runtime = f.runtime(false);
     const sessionId = await create(runtime);
+    const projection = (await runtime.projection({ sessionId })).projection;
+    expect(projection.session.id).toBe(sessionId);
+    expect(projection).not.toHaveProperty("queue");
+    expect(projection).not.toHaveProperty("queueRevision");
     await expect(
       runtime.command({
         commandId: "queued",
@@ -2264,6 +2423,30 @@ describe("host follow-ups never strand a row", () => {
     ).toEqual([`${first}:attach:0`, `${first}:attach:1`]);
     // The original attach, the restart's rehydration to release it, the retry.
     expect(adapter.attaches).toBe(3);
+  });
+
+  it("reports a non-Error release failure without losing the unsent queued payload", async () => {
+    const failure: unknown = "workspace temporarily unavailable";
+    let failing = false;
+    const f = fixture({
+      retryDelays: [],
+      locate: () => {
+        if (failing) throw failure;
+      },
+    });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await attach(runtime, sessionId);
+    failing = true;
+    await queue(runtime, sessionId, "kept");
+    await runtime.recoverFollowUps();
+    expect(f.errors).toContain(failure);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([
+      "Queued message delivery failed: workspace temporarily unavailable",
+    ]);
+    expect(await queueStates(runtime, sessionId)).toEqual(["kept:queued"]);
+    expect(submits(f.adapter)).toEqual([]);
+    await runtime.close();
   });
 
   it("retries a release that failed before its intent was recorded, then delivers once", async () => {
