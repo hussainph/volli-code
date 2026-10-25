@@ -712,6 +712,12 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
       "This desktop's remote-host links and device enrollment state; a restored machine enrolls its own links.",
   },
   {
+    area: "cloud-board-snapshots",
+    decision: "exclude",
+    reason:
+      "A cache of the last Volli Cloud board each account saw live (VC-889); the backend holds the board, and the cache is per sign-in.",
+  },
+  {
     area: "credentials",
     decision: "exclude",
     reason: "Host Git sign-in credentials; credentials never travel in a backup.",
