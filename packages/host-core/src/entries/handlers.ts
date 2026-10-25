@@ -40,6 +40,7 @@ export {
 export type { HostLinkRelayPort, HostScopeRelayPort } from "../handlers/host-link-relay-port";
 export type { BrowserShortcutsPort } from "../handlers/browser-shortcuts-port";
 export type { AccountPort } from "../handlers/account-port";
+export type { RunnerAccountPort } from "../handlers/runner-account-port";
 export {
   ADMITTED,
   admittedHandlers,

@@ -98,6 +98,14 @@ describe("buildAboutReport — support metadata", () => {
     ]);
   });
 
+  it("adds this Mac's runner line only in a Volli Cloud launch", () => {
+    expect(report()).not.toContain("Runner:");
+    const lines = report({ support: support({ cloudRunner: "online · 0 updates waiting" }) }).split(
+      "\n",
+    );
+    expect(lines[9]).toBe("Runner: online · 0 updates waiting");
+  });
+
   it("puts the metadata ahead of the measurements it describes", () => {
     const text = report({
       rows: cliStatusRows(status()),
@@ -143,6 +151,7 @@ describe("buildAboutReport — support metadata", () => {
       "arch",
       "bootRecovery",
       "channel",
+      "cloudRunner",
       "lastUpdateCheck",
       "migrationHistory",
       "platform",

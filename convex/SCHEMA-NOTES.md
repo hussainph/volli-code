@@ -292,6 +292,25 @@ Each was a decision made while turning the design into code.
     the project's current Workspace); an `access_lost` sweep after a Member is
     suspended, removed or leaves keeps stored rows honest for counts and
     pushes, and a person active there again by the time it runs keeps theirs.
+40. `sessions.by_place_runner` (added with Mac re-registration) finds the
+    Sessions placed on a runner, so a Mac that lost its credential and
+    registers again as its successor (`registerThisMac` with
+    `replacesRunnerId`) moves them in the same transaction. The predecessor
+    is revoked with reason `replaced` and, like a removed runner, leaves the
+    owner's list and frees its name; its Session claims pass on at the next
+    generation. `runners.status` gains `asleep` (a Mac whose lid closed),
+    which the offline sweep does not watch. Working-copy jobs stay with the
+    replaced runner until Working copies move; that move is not part of this
+    handover.
+41. `runners.desktopRegistrationId` is an optional desktop registration retry
+    key (a client-minted lowercase UUID); older rows and other link methods
+    omit it. `registerThisMac` and `linkFromDesktop` accept optional nullable
+    `registrationId` (invalid values are ignored). A matching caller-owned,
+    non-gone runner with an unused generation-1 credential is returned with
+    its current hash replaced by the freshly minted credential's hash, without
+    creating another runner or moving work again. Used credentials and gone
+    runners take the normal registration path. A Mac still heartbeating in a
+    live status cannot be replaced, even when `replacesRunnerId` names it.
 
 ## Migrated rows
 

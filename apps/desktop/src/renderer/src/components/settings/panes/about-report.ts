@@ -33,7 +33,7 @@ export interface AboutReportInput {
  * place. What it must never grow is the other direction — no credential or
  * secret-store value, no environment, no database contents beyond the schema
  * number. `support` is an allowlist assembled in main for exactly that reason,
- * and this reader touches only its eight fields.
+ * and this reader touches only its nine fields.
  */
 export function buildAboutReport({
   generatedAt,
@@ -52,6 +52,8 @@ export function buildAboutReport({
     `Migration history: ${support.migrationHistory}`,
     `Last update check: ${support.lastUpdateCheck}`,
     `Boot recovery: ${support.bootRecovery}`,
+    // Only a Volli Cloud launch has a runner line.
+    ...(support.cloudRunner === undefined ? [] : [`Runner: ${support.cloudRunner}`]),
   ];
 
   if (rows.length > 0) {

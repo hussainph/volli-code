@@ -537,6 +537,8 @@ export default defineSchema({
     installMode: literals(RUNNER_INSTALL_MODES),
     linkedVia: literals(RUNNER_LINK_METHODS),
     linkedAt: time,
+    // Desktop registration retry key; absent on older rows and other link methods.
+    desktopRegistrationId: v.optional(uuid),
     autoUpdate: v.object({
       enabled: v.boolean(),
       channel: v.string(),
@@ -747,7 +749,9 @@ export default defineSchema({
     .index("by_project_activity", ["projectId", "lastActivityAt"])
     .index("by_ticket_activity", ["ticketId", "lastActivityAt"])
     .index("by_owner_activity", ["ownerUserId", "lastActivityAt"])
-    .index("by_parent", ["parentSessionId"]),
+    .index("by_parent", ["parentSessionId"])
+    // A replaced runner's Sessions move to its successor (`runners.linkFromDesktop`).
+    .index("by_place_runner", ["placeRunnerId"]),
   // The per-Session head document: the claim and the accepted cursor.
   sessionIntake: defineTable({
     sessionId: uuid,

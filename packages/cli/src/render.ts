@@ -1532,6 +1532,13 @@ function renderStableLines(command: string, data: unknown, full: boolean): strin
         const value = data[key];
         return `${key}  ${value === null || value === undefined ? "-" : terminalSafeInline(value)}`;
       });
+    // This machine as a Volli Cloud runner (VC-895): its name and state, when it is one.
+    if (isRecord(data["runner"])) {
+      const runner = data["runner"];
+      const name = typeof runner["name"] === "string" ? terminalSafeInline(runner["name"]) : "-";
+      const state = typeof runner["state"] === "string" ? terminalSafeInline(runner["state"]) : "-";
+      lines.push(`runner  ${name} (${state})`);
+    }
     // The env block (VC-94): the environment the session will run in, keyed
     // like every other line so an agent reads it in the same pass it reads
     // its identity. `-` means measured and not found; a missing block means

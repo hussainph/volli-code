@@ -291,6 +291,10 @@ export function sessionHandlersFrom(
     "account.githubInstall": remote("account.githubInstall"),
     "account.githubCancel": remote("account.githubCancel"),
     "account.githubDisconnect": remote("account.githubDisconnect"),
+    "runners.thisMac": remote("runners.thisMac"),
+    "runners.subscribeThisMac": remote("runners.subscribeThisMac"),
+    "runners.addThisMac": remote("runners.addThisMac"),
+    "runners.removeThisMac": remote("runners.removeThisMac"),
   };
   return {
     ...handlers,

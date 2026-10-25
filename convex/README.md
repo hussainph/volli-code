@@ -44,7 +44,7 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 | `functions/files.ts`                                                | `presignPut`: a SigV4 URL bound to one key, length and SHA-256 (signed by `presignS3Request` in `@volli/shared/cloud`).                                                                                                                                                             |
 | `functions/lib/objectStore.ts`                                      | The S3-compatible store the backend signs for (`VOLLI_S3_*` variables; unset refuses with `storage_unconfigured`).                                                                                                                                                                  |
 | `functions/lib/visibility.ts`                                       | The visibility writes and filters: `visibilityForNewSession` (every Session-creating write), `shareSession`, `visibleBoardEvents` (every read of board events that may name a Session). The decisions are the predicates in `@volli/shared/cloud`.                                  |
-| `functions/runners.ts`                                              | Runners: linking (desktop, install token, device code), the rotated credential with reuse detection, heartbeat and capabilities, the offline sweep, the Settings list.                                                                                                              |
+| `functions/runners.ts`                                              | Runners: linking (desktop, install token, device code), a Mac's successor taking over its work, the rotated credential with reuse detection, heartbeat, sleep and capabilities, the offline sweep, the Settings list.                                                               |
 | `functions/runnerHttp.ts`, `functions/http.ts`                      | `/runner/link`, `/runner/link/start`, `/runner/link/poll`, `/runner/token` (HTTP actions; secrets are minted here, mutations see hashes) and the deployment's HTTP router.                                                                                                          |
 | `functions/lib/runnerAuth.ts`                                       | `requireRunner`: the check every runner-called function starts with. A runner token is never a person.                                                                                                                                                                              |
 | `functions/streamChunks.ts`                                         | Streamed text: the chunk rows a runner appends while someone watches, the cursor read a viewer folds, and their cleanups (settle, turn end, sweep).                                                                                                                                 |
@@ -216,6 +216,19 @@ To rotate, add the next public key to `VOLLI_RUNNER_JWKS`, push, then switch
 `VOLLI_RUNNER_SIGNING_KEY`. Without a signing key, `/runner/token` answers
 `issuer_unconfigured` and spends no credential. The fixture gives each run
 a fresh pair; `connectBackend().siteUrl` is where `/runner/*` lives.
+
+### Desktop registration retries
+
+`runners.registerThisMac` accepts optional nullable `registrationId`, a
+client-minted lowercase UUID kept across retries of the same registration.
+Invalid values are ignored. Before its first credential is used (generation 1,
+`currentFirstUsedAt: null`), a matching caller-owned, non-gone runner is
+returned with a fresh credential instead of creating another runner or moving
+work again. Otherwise registration follows the normal path. A
+`replacesRunnerId` naming a Mac still heartbeating in a live status is ignored,
+so a restored profile cannot revoke an active Mac. Working-copy jobs stay with
+the replaced runner until Working copies move; that move is not part of this
+handover.
 
 ### Bumping the pin
 

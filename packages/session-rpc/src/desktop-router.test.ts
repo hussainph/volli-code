@@ -313,6 +313,17 @@ const GITHUB = {
   failure: null,
 } as const;
 
+/** This Mac's runner snapshot main hands the window (VC-895): never its credential. */
+const THIS_MAC = {
+  state: "online",
+  runnerId: "runner-1",
+  runnerName: "Dana's MacBook",
+  since: 1_900_000_000_000,
+  waitingFacts: 0,
+  problem: null,
+  message: null,
+} as const;
+
 function recordingHandlers(fixture: Host): DesktopRouterHandlers {
   const record =
     <Output>(key: string, output: Output) =>
@@ -393,6 +404,10 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "account.githubInstall": record("account.githubInstall", null),
     "account.githubCancel": record("account.githubCancel", null),
     "account.githubDisconnect": record("account.githubDisconnect", null),
+    "runners.thisMac": record("runners.thisMac", THIS_MAC),
+    "runners.subscribeThisMac": stream("runners.subscribeThisMac", THIS_MAC),
+    "runners.addThisMac": record("runners.addThisMac", null),
+    "runners.removeThisMac": record("runners.removeThisMac", null),
     ...fixture.overrides,
   };
 }
@@ -1382,6 +1397,55 @@ describeContract<Host, DesktopRouter>(
       }
     });
 
+    // This Mac as a runner (VC-895): desktop main's Mac runner, the window's alone.
+    it("serves this Mac's runner snapshot and its commands, and streams every change", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      expect(await client.runners.thisMac.query()).toEqual(THIS_MAC);
+      const stream = collect((handlers) =>
+        client.runners.subscribeThisMac.subscribe(undefined, handlers),
+      );
+      await vi.waitFor(() => expect(stream.values).toEqual([THIS_MAC]));
+      const removed = {
+        ...THIS_MAC,
+        state: "removed",
+        problem: "credential_reuse",
+        message: "This Mac's runner was used from two places.",
+      } as const;
+      await fixture.sinks.get("runners.subscribeThisMac")!.emit(removed);
+      await vi.waitFor(() => expect(stream.values).toEqual([THIS_MAC, removed]));
+      stream.unsubscribe();
+      await vi.waitFor(() => expect(fixture.unsubscribed).toEqual(["runners.subscribeThisMac"]));
+
+      expect(await client.runners.addThisMac.mutate()).toBeNull();
+      expect(await client.runners.removeThisMac.mutate()).toBeNull();
+      expect(fixture.calls.map(({ key, input, call }) => [key, input, call])).toEqual([
+        ["runners.thisMac", undefined, WINDOW_CALL],
+        ["runners.subscribeThisMac", undefined, WINDOW_CALL],
+        ["runners.addThisMac", undefined, WINDOW_CALL],
+        ["runners.removeThisMac", undefined, WINDOW_CALL],
+      ]);
+    });
+
+    it("refuses a runner snapshot outside its vocabulary or carrying more than it names", async () => {
+      for (const answer of [
+        { ...THIS_MAC, state: "online-ish" },
+        { ...THIS_MAC, problem: "stolen" },
+        { ...THIS_MAC, runnerId: "" },
+        { ...THIS_MAC, waitingFacts: -1 },
+        { ...THIS_MAC, message: "m".repeat(513) },
+      ]) {
+        const fixture = host(LOCAL_DESKTOP_CALLER, { "runners.thisMac": () => answer as never });
+        const client = await connect(fixture);
+        await expect(client.runners.thisMac.query()).rejects.toBeDefined();
+      }
+      const fixture = host(LOCAL_DESKTOP_CALLER, {
+        "runners.thisMac": () => ({ ...THIS_MAC, credential: "secret" }) as never,
+      });
+      const client = await connect(fixture);
+      expect(await client.runners.thisMac.query()).toEqual(THIS_MAC);
+    });
+
     it("refuses an account snapshot that would carry anything but the profile", async () => {
       const fixture = host(LOCAL_DESKTOP_CALLER, {
         "account.snapshot": () => ({ ...ACCOUNT, state: "signed-in-ish" }) as never,
@@ -1721,6 +1785,10 @@ describe("the desktop router's grammar", () => {
         "account.githubInstall",
         "account.githubCancel",
         "account.githubDisconnect",
+        "runners.thisMac",
+        "runners.subscribeThisMac",
+        "runners.addThisMac",
+        "runners.removeThisMac",
       ].toSorted(),
     );
     expect(schemas["worktree.trimSettings"]).toMatchObject({

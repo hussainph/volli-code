@@ -106,6 +106,10 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
     () => handlers["account.githubInstall"](undefined, CALL),
     () => handlers["account.githubCancel"](undefined, CALL),
     () => handlers["account.githubDisconnect"](undefined, CALL),
+    () => handlers["runners.thisMac"](undefined, CALL),
+    () => handlers["runners.subscribeThisMac"](undefined, CALL, sink),
+    () => handlers["runners.addThisMac"](undefined, CALL),
+    () => handlers["runners.removeThisMac"](undefined, CALL),
     () => handlers["hostLink.query"]({ workspaceId: HOST, path: "board.snapshot" }, CALL),
     () => handlers["hostLink.mutate"]({ workspaceId: HOST, path: "board.setPriority" }, CALL),
     () => handlers["hostLink.subscribe"]({ workspaceId: HOST, path: "board.changes" }, CALL, sink),
@@ -243,10 +247,14 @@ describe("sessionHandlersFrom", () => {
         "account.githubInstall": port as never,
         "account.githubCancel": port as never,
         "account.githubDisconnect": port as never,
+        "runners.thisMac": port as never,
+        "runners.subscribeThisMac": port as never,
+        "runners.addThisMac": port as never,
+        "runners.removeThisMac": port as never,
       },
     };
     for (const call of callAll(sessionHandlersFrom(ports))) await call();
-    expect(port).toHaveBeenCalledTimes(64);
+    expect(port).toHaveBeenCalledTimes(68);
     expect(port).toHaveBeenCalledWith({ flowId: "f", questionId: "q1", password: "p" }, CALL);
     expect(runtime.command).toHaveBeenCalledWith({
       commandId: "cancel",
@@ -296,7 +304,8 @@ describe("sessionHandlersFrom", () => {
     // working copy's setup status and answer (VC-584), and the
     // Volli Cloud account's seven (VC-884), the window's Cloud client's token,
     // the launch's store and restart, its unanswered board writes, and its
-    // last-seen board (VC-889), and the account's GitHub half's five (VC-897).
-    expect(Object.keys(context.handlers)).toHaveLength(107);
+    // last-seen board (VC-889), the account's GitHub half's five (VC-897),
+    // and this Mac's runner's four (VC-895).
+    expect(Object.keys(context.handlers)).toHaveLength(111);
   });
 });

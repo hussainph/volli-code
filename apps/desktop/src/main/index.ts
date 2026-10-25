@@ -185,6 +185,16 @@ import {
 import { ACCOUNT_CLOUD_OFF } from "./account/service";
 import { CLOUD_SNAPSHOT_DIRECTORY, cloudSnapshotFiles } from "./cloud-snapshot";
 import {
+  CLOUD_RUNNER_APP_STATE_KEY,
+  createDesktopMacRunner,
+  holdWhileTurnsRun,
+  NO_POWER_BLOCKER,
+  resolveRunnerSiteUrl,
+  runnerAccountPort,
+  thisMacRunnerLaunch,
+  type MacRunner,
+} from "./cloud-runner";
+import {
   CLOUD_LAUNCH_APP_STATE_KEY,
   chooseProductStore,
   createRelaunchController,
@@ -1019,6 +1029,67 @@ const appStartup = app.whenReady().then(async () => {
     quit: () => app.quit(),
     relaunch: () => app.relaunch(),
   });
+  // This Mac as one of the signed-in person's runners (VC-895): only in a
+  // Volli Cloud launch, which reads the sealed runner link at boot (a runner
+  // connects without a window). A local launch, and every flag-off one,
+  // composes nothing here.
+  const runnerLaunch = thisMacRunnerLaunch(
+    launch,
+    resolveRunnerSiteUrl({
+      env: process.env,
+      packaged: app.isPackaged,
+      backendUrl: launch.store === "cloud" ? launch.backendUrl : null,
+    }),
+  );
+  // Bound once menu-bar mode exists below: its browser closes while resident.
+  let residentMenuBar: { isResident(): boolean } | null = null;
+  // The cloud launch's turn-time power assertion, released at teardown.
+  let releaseTurnPower: (() => void) | null = null;
+  // Loaded only for a cloud launch: a local one never loads the Convex client.
+  const convexClient =
+    runnerLaunch !== null && liveHost !== undefined
+      ? {
+          ConvexClient: (await import("convex/browser")).ConvexClient,
+          makeFunctionReference: (await import("convex/server")).makeFunctionReference,
+        }
+      : null;
+  const macRunner: MacRunner | null =
+    runnerLaunch !== null && liveHost !== undefined && convexClient !== null
+      ? createDesktopMacRunner({
+          ...runnerLaunch,
+          convex: convexClient,
+          account: {
+            subscribe: (listener) => account.subscribe(listener),
+            accessToken: () => account.accessToken(),
+          },
+          inventory: hostPrivateInventory,
+          unlockInventory: unlockHostPrivate,
+          recordRow: () =>
+            launchMarkerDb === null
+              ? null
+              : {
+                  read: () => getAppState(launchMarkerDb!, CLOUD_RUNNER_APP_STATE_KEY),
+                  write: (value) =>
+                    setAppState(launchMarkerDb!, CLOUD_RUNNER_APP_STATE_KEY, value, Date.now()),
+                },
+          power: powerMonitor,
+          liveWork: () => liveHost.liveWork.current(),
+          dataDir: app.getPath("userData"),
+          appVersion: app.getVersion(),
+          packaged: app.isPackaged,
+          browser: () =>
+            residentMenuBar?.isResident() === true
+              ? { state: "unavailable", reason: "menu_bar" }
+              : { state: "available", backend: "electron" },
+          log: hostLogger("cloud-runner"),
+        })
+      : null;
+  if (launch.store === "cloud" && macRunner === null) {
+    hostLogger("cloud-runner").warn("this Mac is not a runner in this launch", {
+      siteUrl: runnerLaunch !== null,
+      host: liveHost !== undefined,
+    });
+  }
   const sessionWakeBus = liveHost?.sessionWakeBus ?? null;
   const sessionReadWatch = liveHost?.sessionReadWatch ?? null;
   const sessionEngine = liveHost?.sessionEngine ?? null;
@@ -1278,12 +1349,14 @@ const appStartup = app.whenReady().then(async () => {
     lifecycle: quittingApp,
     host: hostCore,
     remoteHosts,
+    ...(macRunner === null ? {} : { cloudRunner: macRunner }),
     stopBackgroundWork: () => {
       webSealing.stop();
       // A GitHub flow being polled ends and stops following the account, then a
       // sign-in waiting on the browser ends and the dev issuer stops listening.
       accountGithub.dispose();
       account.dispose();
+      releaseTurnPower?.();
     },
     cloudEnabled: () => isExperimentEnabled("cloud"),
     terminalQuit: prepareTerminalQuit,
@@ -1504,6 +1577,8 @@ const appStartup = app.whenReady().then(async () => {
         subscribe: browserShortcutRelay.subscribe,
         focusPage: (tabId) => browserTabs.focusPage(tabId),
       },
+      // This Mac as a Volli Cloud runner (VC-895); `off` outside a cloud launch.
+      runners: runnerAccountPort(macRunner, () => isExperimentEnabled("cloud")),
       // The Volli Cloud account (VC-884).
       account: accountPort(
         account,
@@ -2322,7 +2397,18 @@ const appStartup = app.whenReady().then(async () => {
       tryBeginIdleExit: () => true,
       abandonIdleExit: () => {},
     },
-    browserTabs: menuBarBrowserTabs(browserTabs),
+    browserTabs: menuBarBrowserTabs({
+      sessionTabCount: () => browserTabs.sessionTabCount(),
+      closeAllForAgents: (reason) => {
+        browserTabs.closeAllForAgents(reason);
+        // The runner's capabilities now say the browser is closed (VC-895).
+        macRunner?.refreshCapabilities();
+      },
+      reopenForAgents: () => {
+        browserTabs.reopenForAgents();
+        macRunner?.refreshCapabilities();
+      },
+    }),
     confirmCloseAgentTabs,
     windows: appWindows.menuBarPort,
     dock: {
@@ -2334,7 +2420,8 @@ const appStartup = app.whenReady().then(async () => {
       else if (item === "quit") menuBar.quitFromTray();
       else if (item === "install-when-idle") menuBar.toggleInstallWhenIdle();
     }),
-    power: electronMenuBarPower(),
+    // A cloud launch holds the assertion whenever turns run, window or not (VC-895).
+    power: macRunner === null ? electronMenuBarPower() : NO_POWER_BLOCKER,
     update: {
       ready: () => autoUpdate.state().phase === "downloaded",
       installInFlight: updateInstallQuitInFlight,
@@ -2357,6 +2444,11 @@ const appStartup = app.whenReady().then(async () => {
     },
   });
   runnerEdge.bind({ menuBar });
+  if (macRunner !== null && liveHost !== undefined) {
+    residentMenuBar = menuBar;
+    releaseTurnPower = holdWhileTurnsRun(liveHost.liveWork, electronMenuBarPower());
+    macRunner.start();
+  }
   // The quit path is whole from here: a dropped binding fails the launch.
   runnerEdge.assertBound();
   revealWindowForLaunch = () => menuBar.reveal({ focus: true });
@@ -2719,6 +2811,7 @@ const appStartup = app.whenReady().then(async () => {
     lastUpdateCheck: () => autoUpdate.state().lastCheck,
     // Counts, reasons and error class names only (VC-926).
     bootRecovery: () => runner.bootRecovery(),
+    cloudRunner: () => macRunner?.snapshot() ?? null,
   });
 
   try {
@@ -2748,6 +2841,13 @@ const appStartup = app.whenReady().then(async () => {
             // so the report never describes a PATH from before adoption finished
             // and is read at CALL time, never captured.
             sessionEnv: (cwd, projectRoot) => readSessionEnvironment(cwd, projectRoot),
+            // This Mac as a Volli Cloud runner (VC-895): name and state only.
+            cloudRunner: () => {
+              const snapshot = macRunner?.snapshot() ?? null;
+              return snapshot === null
+                ? null
+                : { name: snapshot.runnerName, state: snapshot.state };
+            },
             // What `volli doctor` cannot see from inside the shell it runs in.
             // Read at CALL time, never captured: the wrappers are regenerated
             // after this service is constructed, and again by `--fix`.

@@ -8,8 +8,11 @@
  * host-core's own files import the module itself, never this entry. See
  * the cluster map in the package README.
  *
- * Receiving wiring (no production caller yet): the runner composition
- * (`apps/runner`, VC-896) and the Mac runner (VC-895) compose
+ * Production callers: the Mac runner (`apps/desktop/src/main/cloud-runner`,
+ * VC-895) composes the link client, token source, backend link, mutation
+ * gate, presence and power cycle. Receiving wiring still to land: the runner
+ * composition (`apps/runner`, VC-896) and the Mac runner's cloud store
+ * (VC-895 N2-2) compose
  * `startRunnerSync` over `createBackendLink(convexBackendConnection(url, convex))`
  * with `createRunnerTokenSource`, `createRunnerPresence`, `createFactDrain`
  * (cursor rows in `sqliteDrainCursorStore`, nudged from the Session
@@ -110,6 +113,7 @@ export {
   type RunnerPresenceTimers,
   runnerPresenceBackend,
 } from "../cloud-runner/presence";
+export { createRunnerPowerCycle, type RunnerPowerCycle, watchSleep } from "../cloud-runner/wake";
 export {
   createRunnerTokenSource,
   type RunnerLinkLoss,

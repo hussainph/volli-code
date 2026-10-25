@@ -770,15 +770,16 @@ jobs:
 
       # The desktop's Volli Cloud sign-in end to end (VC-884): its dev issuer,
       # loopback callback, sealed store and the accounts functions on the
-      # pinned backend. Required here, so a missing fixture env fails rather
-      # than skips.
+      # pinned backend; and this Mac as a runner over it (VC-895): register,
+      # token exchange, heartbeat, asleep and back, removal. Required here, so
+      # a missing fixture env fails rather than skips.
       - name: Desktop sign-in against the pinned backend
         env:
           VOLLI_ACCOUNT_LIVE_REQUIRED: "1"
         working-directory: convex
         run: >-
           node fixture/with-backend.ts --deploy --
-          sh -c 'cd ../apps/desktop && vp test run src/main/account/convex.live.test.ts --maxWorkers=2'
+          sh -c 'cd ../apps/desktop && vp test run src/main/account/convex.live.test.ts src/main/cloud-runner/convex.live.test.ts --maxWorkers=2'
 
       # The cloud board through the real transport (VC-889): two windows on the
       # same live board, and one cut off goes read-only with its board intact.

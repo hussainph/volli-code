@@ -566,6 +566,41 @@ export const DESKTOP_ENTRIES = [
     idempotency: "natural",
     summary: "Disconnect GitHub: revoke the App's authorization and forget the connection.",
   },
+  // This Mac as one of the person's runners (VC-895; wire types in
+  // `./this-mac-runner`). Host-placed: the registration is this device's, and
+  // only its own window drives it. Desktop main serves them through the map's
+  // `RunnerAccountPort` (`@volli/host-core/handlers`), and only with `cloud`
+  // on; hostd has none, so every one answers unavailable there. The person's
+  // other runners the window reads and writes through its own Volli Cloud client.
+  {
+    key: "runners.thisMac",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "Where this Mac stands as one of the person's runners: never a credential.",
+  },
+  {
+    key: "runners.subscribeThisMac",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "This Mac's runner snapshot now, then again on every change.",
+  },
+  {
+    // `natural`: a second request while one registration is in flight is the same request.
+    key: "runners.addThisMac",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Register this Mac as a runner again, or retry a failed registration.",
+  },
+  {
+    key: "runners.removeThisMac",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Remove this Mac from the person's runners until it is added again.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];
