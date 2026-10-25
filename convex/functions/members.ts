@@ -8,6 +8,8 @@
  * or departed one is `left`. Either way their rows stay attributed to them,
  * and a departed Member can be invited back. A suspended Member cannot leave
  * (they can do nothing in the Workspace); an owner or admin removes them.
+ * Losing access (suspend, remove, leave) clears the person's Needs-you items
+ * in the Workspace as `access_lost` (`attention.sweepAccess`).
  */
 
 import { v } from "convex/values";
@@ -20,6 +22,7 @@ import {
   type MemberStatus,
 } from "@volli/shared/cloud";
 
+import { internal } from "./_generated/api";
 import { mutation, query, type MutationCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel.js";
 import { audit, type AuditKind, type AuditValue } from "./lib/audit";
@@ -196,6 +199,14 @@ async function applyChange(
     at: now,
     detail: { userId: row.userId, ...write.detail },
   });
+  // Reads already hide what they can no longer see; the sweep keeps their
+  // stored Needs-you items (counts, pushes) honest.
+  if (change.kind === "suspend" || change.kind === "remove" || change.kind === "leave") {
+    await ctx.scheduler.runAfter(0, internal.attention.sweepAccess, {
+      userId: row.userId,
+      workspaceId: workspace.id,
+    });
+  }
   const after = (await ctx.db.get(row._id))!;
   return { userId: after.userId, role: after.role, status: after.status, changed: true };
 }

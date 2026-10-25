@@ -26,6 +26,8 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 import {
+  ATTENTION_CLEARED_REASONS,
+  ATTENTION_SOURCES,
   BOARD_EVENT_KINDS,
   CHECKOUT_MODES,
   GITHUB_ACCOUNT_TYPES,
@@ -998,35 +1000,33 @@ export default defineSchema({
     .index("by_kind_status", ["kind", "status", "createdAt"]),
 
   // ── attention / Needs-you ──────────────────────────────────────────────────
+  // Written only by `lib/attention.ts`.
   attentionItems: defineTable({
-    // Derived and frozen for Session items (`s:{sessionId}:{sourceId}`), a UUID otherwise.
+    // Frozen, derived by each producer (`attention.ts` in `@volli/shared/cloud`):
+    // `s:{sessionId}:{sourceId}`, `t:{ticketId}:review:{userId}`, `r:{runnerId}:{alert}`.
     id: v.string(),
     userId: uuid,
-    projectId: uuid,
+    // Null for an item that belongs to no project (a runner alert, billing).
+    projectId: nullable(uuid),
+    // A billing item's Workspace; every other item reaches its Workspace through its project.
+    workspaceId: v.optional(nullable(uuid)),
     ticketId: nullable(uuid),
     sessionId: nullable(uuid),
-    source: literals([
-      "session_attention",
-      "interaction",
-      "session_blocked",
-      "review_requested",
-      "mention",
-      "environment_failed",
-      "runner_alert",
-      "billing",
-    ]),
+    source: literals(ATTENTION_SOURCES),
     sourceId: v.string(),
     kind: v.string(),
     title: v.string(),
     detail: nullable(v.string()),
     raisedAt: time,
     clearedAt: nullable(time),
-    clearedReason: nullable(literals(["resolved", "access_lost", "superseded", "deleted"])),
+    clearedReason: nullable(literals(ATTENTION_CLEARED_REASONS)),
     seenAt: nullable(time),
   })
     .index("by_uuid", ["id"])
     .index("by_user_open", ["userId", "clearedAt", "raisedAt"])
-    .index("by_session", ["sessionId", "clearedAt"]),
+    .index("by_session", ["sessionId", "clearedAt"])
+    // A ticket's open items (its review requests, re-targeted on each board write).
+    .index("by_ticket", ["ticketId", "clearedAt"]),
 
   // ── config, secrets, model connections ─────────────────────────────────────
   configEntries: defineTable({

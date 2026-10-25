@@ -10,6 +10,7 @@
 
 import type * as accounts from "../accounts.js";
 import type * as activity from "../activity.js";
+import type * as attention from "../attention.js";
 import type * as board from "../board.js";
 import type * as boardReceipts from "../boardReceipts.js";
 import type * as crons from "../crons.js";
@@ -23,6 +24,7 @@ import type * as health from "../health.js";
 import type * as http from "../http.js";
 import type * as invites from "../invites.js";
 import type * as lib_activity from "../lib/activity.js";
+import type * as lib_attention from "../lib/attention.js";
 import type * as lib_audit from "../lib/audit.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_board from "../lib/board.js";
@@ -74,6 +76,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   accounts: typeof accounts;
   activity: typeof activity;
+  attention: typeof attention;
   board: typeof board;
   boardReceipts: typeof boardReceipts;
   crons: typeof crons;
@@ -87,6 +90,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   invites: typeof invites;
   "lib/activity": typeof lib_activity;
+  "lib/attention": typeof lib_attention;
   "lib/audit": typeof lib_audit;
   "lib/auth": typeof lib_auth;
   "lib/board": typeof lib_board;

@@ -54,16 +54,11 @@ import {
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel.js";
 import type { MutationCtx } from "../_generated/server";
+import { raiseQuarantine } from "./attention";
 import { findVisibleProject } from "./auth";
 import type { CallingRunner } from "./runnerAuth";
 import { visibilityForNewSession } from "./visibility";
-import {
-  EMPTY_USAGE_TOTALS,
-  deriveFromFact,
-  raiseQuarantine,
-  stableJson,
-  syncListing,
-} from "./sessionDerived";
+import { EMPTY_USAGE_TOTALS, deriveFromFact, stableJson, syncListing } from "./sessionDerived";
 import { endedTurnsOf, scheduleStreamCleanup } from "./streamChunks";
 
 // ── limits ──────────────────────────────────────────────────────────────────

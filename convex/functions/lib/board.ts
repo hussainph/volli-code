@@ -35,6 +35,7 @@ import {
 
 import type { DataModel, Doc } from "../_generated/dataModel.js";
 import type { MutationCtx, QueryCtx } from "../_generated/server.js";
+import { onBoardEvents } from "./attention";
 import { authError, requireProject, type Viewer } from "./auth";
 
 export type BoardErrorCode =
@@ -242,7 +243,11 @@ export class BoardWrite {
     return this.nextTicketNumber++;
   }
 
-  /** Appends board events in order, each with the next `seq`. */
+  /**
+   * Appends board events in order, each with the next `seq`. This is the one
+   * place board events are written, so what they derive is called from here:
+   * the review requests in Needs you (`attention.ts`).
+   */
   async append(drafts: readonly BoardEventDraft[]): Promise<void> {
     for (const draft of drafts) {
       this.boardSeq += 1;
@@ -257,6 +262,12 @@ export class BoardWrite {
         payload: draft.payload,
       });
     }
+    await onBoardEvents(this.ctx, {
+      projectId: this.projectId,
+      actor: this.actor,
+      at: this.now,
+      events: drafts,
+    });
   }
 
   /**

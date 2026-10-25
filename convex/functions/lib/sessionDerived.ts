@@ -1,6 +1,7 @@
 /**
  * What an accepted fact derives beyond the fold itself: the turn index, the
- * owner's attention items, the second job receipt, and the listing row. Each
+ * owner's attention items (written through `attention.ts`, their one writer),
+ * the second job receipt, and the listing row. Each
  * writer is idempotent (an upsert by a frozen id), so a refold that passes a
  * fact again lands on the same rows.
  */
@@ -10,6 +11,7 @@ import type { CloudSessionView } from "@volli/shared/cloud";
 
 import type { Doc } from "../_generated/dataModel.js";
 import type { MutationCtx } from "../_generated/server";
+import { BLOCKED_SOURCE_ID, clearSessionAttention, raiseSessionAttention } from "./attention";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -39,7 +41,7 @@ export async function deriveFromFact(
   const { payload } = fact;
   switch (payload.kind) {
     case "attention.raised":
-      await raiseAttention(ctx, session, {
+      await raiseSessionAttention(ctx, session, {
         source: "session_attention",
         sourceId: payload.attention.id,
         kind: payload.attention.kind,
@@ -49,10 +51,16 @@ export async function deriveFromFact(
       });
       break;
     case "attention.cleared":
-      await clearAttention(ctx, session.id, payload.attentionId, "resolved", fact.occurredAt);
+      await clearSessionAttention(
+        ctx,
+        session.id,
+        payload.attentionId,
+        "resolved",
+        fact.occurredAt,
+      );
       break;
     case "interaction.opened":
-      await raiseAttention(ctx, session, {
+      await raiseSessionAttention(ctx, session, {
         source: "interaction",
         sourceId: payload.interaction.id,
         kind: payload.interaction.kind,
@@ -62,14 +70,26 @@ export async function deriveFromFact(
       });
       break;
     case "interaction.resolved":
-      await clearAttention(ctx, session.id, payload.interactionId, "resolved", fact.occurredAt);
+      await clearSessionAttention(
+        ctx,
+        session.id,
+        payload.interactionId,
+        "resolved",
+        fact.occurredAt,
+      );
       break;
     case "interaction.cancelled":
-      await clearAttention(ctx, session.id, payload.interactionId, "superseded", fact.occurredAt);
+      await clearSessionAttention(
+        ctx,
+        session.id,
+        payload.interactionId,
+        "superseded",
+        fact.occurredAt,
+      );
       break;
     case "session.signaled":
       if (payload.signal === "blocked") {
-        await raiseAttention(ctx, session, {
+        await raiseSessionAttention(ctx, session, {
           source: "session_blocked",
           sourceId: BLOCKED_SOURCE_ID,
           kind: "blocked",
@@ -78,7 +98,13 @@ export async function deriveFromFact(
           raisedAt: fact.occurredAt,
         });
       } else {
-        await clearAttention(ctx, session.id, BLOCKED_SOURCE_ID, "resolved", fact.occurredAt);
+        await clearSessionAttention(
+          ctx,
+          session.id,
+          BLOCKED_SOURCE_ID,
+          "resolved",
+          fact.occurredAt,
+        );
       }
       break;
     case "command.receipt.recorded":
@@ -105,7 +131,8 @@ export async function deriveFromFact(
       ...after.interactions.active.map(({ id }) => id),
     ]);
     for (const { id } of [...before.attention.active, ...before.interactions.active]) {
-      if (!kept.has(id)) await clearAttention(ctx, session.id, id, "superseded", fact.occurredAt);
+      if (!kept.has(id))
+        await clearSessionAttention(ctx, session.id, id, "superseded", fact.occurredAt);
     }
   }
 }
@@ -124,95 +151,6 @@ const ATTENTION_TITLES: Record<string, string> = {
   adapter_disconnected: "Agent disconnected",
   adapter_unrecoverable: "Agent stopped",
 };
-
-/**
- * The frozen source ids of the items the backend itself raises for a
- * Session, in a `volli:` namespace no Engine attention or interaction id
- * uses. Durable: never rename them.
- */
-const BLOCKED_SOURCE_ID = "volli:blocked";
-const quarantineSourceId = (sequence: number) => `volli:quarantine:${sequence}`;
-
-/** Frozen: Session-derived attention ids are `s:{sessionId}:{sourceId}`, so a refold finds the same row. */
-function attentionId(sessionId: string, sourceId: string): string {
-  return `s:${sessionId}:${sourceId}`;
-}
-
-async function attentionRow(ctx: MutationCtx, id: string) {
-  return ctx.db
-    .query("attentionItems")
-    .withIndex("by_uuid", (q) => q.eq("id", id))
-    .unique();
-}
-
-async function raiseAttention(
-  ctx: MutationCtx,
-  session: Doc<"sessions">,
-  item: {
-    source: Doc<"attentionItems">["source"];
-    sourceId: string;
-    kind: string;
-    title: string | undefined;
-    detail: string | null;
-    raisedAt: number;
-  },
-): Promise<void> {
-  const id = attentionId(session.id, item.sourceId);
-  const fields = {
-    source: item.source,
-    sourceId: item.sourceId,
-    kind: item.kind,
-    title: item.title ?? item.kind,
-    detail: item.detail,
-    raisedAt: item.raisedAt,
-    clearedAt: null,
-    clearedReason: null,
-  };
-  const existing = await attentionRow(ctx, id);
-  if (existing === null) {
-    await ctx.db.insert("attentionItems", {
-      id,
-      userId: session.ownerUserId,
-      projectId: session.projectId,
-      ticketId: session.ticketId,
-      sessionId: session.id,
-      seenAt: null,
-      ...fields,
-    });
-  } else {
-    await ctx.db.patch(existing._id, fields);
-  }
-}
-
-async function clearAttention(
-  ctx: MutationCtx,
-  sessionId: string,
-  sourceId: string,
-  reason: "resolved" | "superseded",
-  at: number,
-): Promise<void> {
-  const existing = await attentionRow(ctx, attentionId(sessionId, sourceId));
-  if (existing !== null && existing.clearedAt === null) {
-    await ctx.db.patch(existing._id, { clearedAt: at, clearedReason: reason });
-  }
-}
-
-/** A fact the backend could not read or fold is loud: its owner sees it in Needs you. */
-export async function raiseQuarantine(
-  ctx: MutationCtx,
-  session: Doc<"sessions">,
-  envelope: { sequence: number; kind: string; occurredAt: number },
-  quarantine: { code: string; detail: string },
-): Promise<void> {
-  await raiseAttention(ctx, session, {
-    source: "runner_alert",
-    sourceId: quarantineSourceId(envelope.sequence),
-    kind: "event_quarantined",
-    title: "A session event could not be read",
-    detail: `${envelope.kind || "(no kind)"} at ${envelope.sequence}: ${quarantine.detail}`,
-    raisedAt: envelope.occurredAt,
-  });
-}
 
 /** The second receipt: the engine's verdict on a command, copied onto its job. */
 async function mirrorReceipt(

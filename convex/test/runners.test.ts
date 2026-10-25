@@ -682,6 +682,31 @@ describe("the token exchange", () => {
     // The owner still sees it, so the cut-off can be explained.
     const listed = await t.withIdentity(ALICE).query(api.runners.list, {});
     expect(listed).toEqual([expect.objectContaining({ id: grant.runnerId, status: "revoked" })]);
+    // And Needs you says so: an item for the owner that belongs to no project.
+    const alert = () =>
+      t.run((ctx) =>
+        ctx.db
+          .query("attentionItems")
+          .withIndex("by_uuid", (q) => q.eq("id", `r:${grant.runnerId}:credential_reuse`))
+          .unique(),
+      );
+    expect(await alert()).toMatchObject({
+      userId: runner!.ownerUserId,
+      projectId: null,
+      ticketId: null,
+      sessionId: null,
+      source: "runner_alert",
+      sourceId: grant.runnerId,
+      kind: "credential_reuse",
+      title: `${runner!.name} was disconnected`,
+      clearedAt: null,
+    });
+    // Removing the runner answers it.
+    await t.withIdentity(ALICE).mutation(api.runners.remove, { runnerId: grant.runnerId });
+    expect(await alert()).toMatchObject({
+      clearedReason: "resolved",
+      clearedAt: expect.any(Number),
+    });
   });
 
   test("a credential that matches nothing changes nothing: knowing a runner id is not enough to revoke it", async () => {
