@@ -355,7 +355,7 @@ describe("N-1 compatibility of the web keys' step E", { timeout: 120_000 }, () =
     db.close();
   });
 
-  it("refuses, cleanly, a bundle this build made: N-1 knows no follow-up queue table", async () => {
+  it("refuses, cleanly, a bundle this build made: N-1 knows neither follow-up table", async () => {
     const db = openDb();
     (await current(db)).settings.saveKey("brave", BRAVE);
     db.close();
@@ -378,8 +378,8 @@ describe("N-1 compatibility of the web keys' step E", { timeout: 120_000 }, () =
     const targetBefore = readFileSync(targetDb);
     const entriesBefore = readdirSync(target).toSorted();
     const run = await n1(targetDb, [{ kind: "restore", profileRoot: target, bundle: bundlePath }]);
-    // The pinned schema-58 backup decisions do not include migration 061's
-    // additive queue table. The reader rejects its shape before restore can
+    // The pinned schema-58 backup decisions include neither migration 061's
+    // queue nor migration 067's identity proofs. The reader rejects their shape before restore can
     // report the newer schema version, and before staging or mutating a target.
     expect(run.results).toEqual([
       {
@@ -389,6 +389,11 @@ describe("N-1 compatibility of the web keys' step E", { timeout: 120_000 }, () =
             kind: "shape",
             message:
               "Data document carries session_follow_up_queue, which no backup decision includes.",
+          },
+          {
+            kind: "shape",
+            message:
+              "Data document carries session_follow_up_identities, which no backup decision includes.",
           },
         ],
       },

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { UIMessage } from "ai";
+import { TERMINAL_JOB_TTL_MS } from "@volli/shared/cloud";
 import {
   RECOVERED_TURN_INTERRUPTED_DETAIL,
   restartResumeCommandId,
@@ -8,6 +9,9 @@ import {
   type SessionLedger,
 } from "@volli/shared";
 import {
+  FOLLOW_UP_COMMAND_RETENTION_MS,
+  emptySessionFollowUpState,
+  pruneSessionFollowUpState,
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamQueue,
@@ -21,6 +25,8 @@ import {
   type NativeHarnessAdapter,
   type ObservationSink,
   type SessionFollowUpLedger,
+  type SessionFollowUpState,
+  type SessionRuntimeCommandResult,
   type SessionStreamEmission,
 } from "./index";
 import {
@@ -228,8 +234,140 @@ async function attach(
 }
 
 const deliveryId = (sessionId: string, id: string) => `follow-up:${sessionId}:${id}`;
+async function releaseEvidence(f: ReturnType<typeof fixture>, sessionId: string, id: string) {
+  const projection = (await f.engine.getSession({ sessionId }))!;
+  const command = projection.commands.find(
+    ({ id: commandId }) => commandId === deliveryId(sessionId, id),
+  )!;
+  return sessionFollowUpDeliveryEvidence(
+    sessionId,
+    command,
+    projection.receipts,
+    await f.engine.listEvents({ sessionId }),
+  );
+}
+
+function retentionReply(
+  id: string,
+  timestamp: number,
+  receiptAt: number | null = timestamp,
+): SessionRuntimeCommandResult {
+  return {
+    sessionId: "retention",
+    command: {
+      id,
+      sessionId: "retention",
+      createdAt: timestamp,
+      route: null,
+      intent: { kind: "message.cancel", messageId: id },
+    },
+    receipt:
+      receiptAt === null
+        ? null
+        : {
+            id: `${id}:receipt`,
+            commandId: id,
+            recordedAt: receiptAt,
+            sequence: 0,
+            status: "accepted",
+            acceptedAt: receiptAt,
+            result: { kind: "message.submitted", sessionId: "retention" },
+          },
+    throughSequence: 0,
+    refusal: null,
+  };
+}
+
+describe("follow-up retention compatibility", () => {
+  const now = 10 * FOLLOW_UP_COMMAND_RETENTION_MS;
+  const old = now - FOLLOW_UP_COMMAND_RETENTION_MS - 1_000;
+
+  function recent(state: SessionFollowUpState): void {
+    for (let i = 0; i < 64; i++)
+      state.commands[`recent-${i}`] = {
+        signature: `recent-${i}`,
+        result: retentionReply(`recent-${i}`, now + i),
+      };
+  }
+
+  it("sorts missing receipts by createdAt on both sides and keeps unresolved replies beyond the recent floor", () => {
+    const state = emptySessionFollowUpState();
+    for (const [id, timestamp] of [
+      ["null-newest", now + 1],
+      ["null-second", now],
+      ["null-oldest", old - 1],
+    ] as const)
+      state.commands[id] = { signature: id, result: retentionReply(id, timestamp, null) };
+    for (let i = 0; i < 64; i++)
+      state.commands[`old-${i}`] = {
+        signature: `old-${i}`,
+        result: retentionReply(`old-${i}`, old + i),
+      };
+    pruneSessionFollowUpState(state, now);
+    expect(Object.keys(state.commands)).toHaveLength(65);
+    for (const id of ["null-newest", "null-second", "null-oldest", "old-2"])
+      expect(state.commands).toHaveProperty(id);
+    expect(state.commands).not.toHaveProperty("old-0");
+    expect(state.commands).not.toHaveProperty("old-1");
+  });
+
+  it("preserves old queue/edit/cancel replies selected by a pending message, not by the pending command ids", () => {
+    const state = emptySessionFollowUpState();
+    recent(state);
+    state.entries.push({
+      id: "pending-message",
+      commandId: "birth-command",
+      deliveryCommandId: "current-delivery",
+      state: "queued",
+      message: message("pending-message"),
+    });
+    const intents = [
+      { kind: "message.queue", message: message("pending-message", "keep queued body") },
+      {
+        kind: "message.edit",
+        messageId: "pending-message",
+        message: message("pending-message", "keep edited body"),
+      },
+      { kind: "message.cancel", messageId: "pending-message" },
+    ] as const;
+    const retained = intents.map((intent, i) => {
+      const result = retentionReply(`old-${i}`, old + i);
+      result.command = { ...result.command, route: null, intent };
+      const record = { signature: `original-${i}`, result };
+      state.commands[`old-${i}`] = record;
+      return record;
+    });
+    pruneSessionFollowUpState(state, now);
+    for (const [i, record] of retained.entries()) expect(state.commands[`old-${i}`]).toBe(record);
+  });
+
+  it("leaves an already compact identity tombstone unchanged on later writes", () => {
+    const state = emptySessionFollowUpState();
+    recent(state);
+    const result = retentionReply("old-queue", old);
+    result.command = {
+      ...result.command,
+      route: null,
+      intent: { kind: "message.queue", message: message("delivered", "discard body") },
+    };
+    state.commands["old-queue"] = { signature: "discard original request body", result };
+    pruneSessionFollowUpState(state, now);
+    const compact = state.commands["old-queue"]!;
+    expect(compact.result.command.intent).toEqual({
+      kind: "message.queue",
+      message: { id: "delivered", role: "user", parts: [] },
+    });
+    expect(compact.signature).not.toContain("discard");
+    pruneSessionFollowUpState(state, now + 1);
+    expect(state.commands["old-queue"]).toBe(compact);
+  });
+});
 
 describe("host follow-up commands", () => {
+  it("retains replies for at least the backend terminal-job dedupe window", () => {
+    expect(FOLLOW_UP_COMMAND_RETENTION_MS).toBeGreaterThanOrEqual(TERMINAL_JOB_TTL_MS);
+  });
+
   async function queuedActive(f: ReturnType<typeof fixture>) {
     const runtime = f.runtime();
     const sessionId = await create(runtime);
@@ -460,6 +598,41 @@ describe("host follow-up commands", () => {
     expect(f.adapter.commands).toHaveLength(2);
   });
 
+  it("uses queue identities safely with a legacy two-argument transaction adapter", async () => {
+    const storage = createInMemorySessionFollowUpLedger();
+    const legacy: SessionFollowUpLedger = {
+      pendingSessionIds: () => storage.pendingSessionIds(),
+      // Older adapters provide delivery proof, but no queued-message predicate.
+      transaction: (id, work, options) =>
+        storage.transaction(id, (state, proof) => work(state, proof), options),
+    };
+    const f = fixture({ followUps: legacy });
+    const { runtime, sessionId, steer } = await queuedActive(f);
+    await runtime.command({
+      commandId: "missing-cancel",
+      sessionId,
+      command: { kind: "message.cancel", messageId: "missing" },
+    });
+    // Scan a nonmatching queue reply and a nonqueue reply before falling through.
+    expect(
+      (
+        await runtime.command({
+          commandId: "ordinary-steer",
+          sessionId,
+          command: { kind: "message.submit", delivery: "steer", message: message("ordinary") },
+        })
+      ).receipt?.status,
+    ).toBe("accepted");
+    await runtime.command({
+      commandId: "withdraw-queued",
+      sessionId,
+      command: { kind: "message.cancel", messageId: "queued" },
+    });
+    await expect(runtime.command(steer)).rejects.toThrow("already been delivered or removed");
+    expect(f.adapter.commands).toHaveLength(2);
+    await runtime.close();
+  });
+
   it("never resends when turn-end release wins the identity", async () => {
     const f = fixture();
     const { runtime, steer } = await queuedActive(f);
@@ -469,6 +642,128 @@ describe("host follow-up commands", () => {
     expect(f.adapter.commands).toHaveLength(2);
   });
 
+  it.each(["idle", "arbitrary-steer"] as const)(
+    "retains compact identity proof for an old %s delivery across reply pruning and restart without artifact reads",
+    async (delivery) => {
+      const f = fixture();
+      const active = await queuedActive(f);
+      if (delivery === "idle") {
+        await f.adapter.complete("active");
+        await active.runtime.recoverFollowUps();
+      } else {
+        await active.runtime.command({ ...active.steer, commandId: "arbitrary-delivery-id" });
+      }
+      await active.runtime.close();
+      await f.followUps.transaction(active.sessionId, (state) => {
+        const old = Date.now() - 8 * 24 * 60 * 60_000;
+        state.commands.queued.result.receipt!.recordedAt = old;
+        for (let i = 0; i < 64; i++) {
+          const result = structuredClone(state.commands.queued.result);
+          result.command = {
+            ...result.command,
+            route: null,
+            intent: { kind: "message.cancel", messageId: `other-${i}` },
+          };
+          result.receipt!.recordedAt = old + i + 1;
+          state.commands[`newer-${i}`] = { signature: `newer-${i}`, result };
+        }
+      });
+      const retained = await f.followUps.transaction(active.sessionId, (state) => state.commands, {
+        mode: "read",
+      });
+      expect(retained.queued?.result.command.intent).toEqual({
+        kind: "message.queue",
+        message: { id: "queued", role: "user", parts: [] },
+      });
+      expect(retained.queued?.signature).not.toContain("message.submit");
+      expect(retained).not.toHaveProperty("arbitrary-delivery-id");
+      expect(
+        await f.followUps.transaction(
+          active.sessionId,
+          (_state, _proof, queued) => queued?.("queued"),
+          { mode: "read" },
+        ),
+      ).toBe(true);
+      let reads = 0;
+      f.artifacts.read = async () => {
+        reads++;
+        throw new Error("unrelated artifact unavailable");
+      };
+      const runtime = f.runtime();
+      await expect(runtime.command(active.steer)).rejects.toThrow(
+        "already been delivered or removed",
+      );
+      await expect(
+        runtime.command({
+          commandId: "queued",
+          sessionId: active.sessionId,
+          command: { kind: "message.submit", delivery: "queue", message: message("queued") },
+        }),
+      ).rejects.toBeInstanceOf(SessionRuntimeCommandConflictError);
+      expect(reads).toBe(0);
+      expect(f.adapter.commands).toHaveLength(2);
+      expect(
+        await f.followUps.transaction(active.sessionId, (state) => state.releases, {
+          mode: "read",
+        }),
+      ).toEqual({});
+      await runtime.close();
+    },
+  );
+
+  it.each([false, true])(
+    "ordinary steers hydrate no unrelated history, reply pruning=%s",
+    async (prune) => {
+      const f = fixture();
+      const { runtime, sessionId } = await queuedActive(f);
+      if (prune) {
+        await f.followUps.transaction(sessionId, (state) => {
+          const old = Date.now() - 8 * 24 * 60 * 60_000;
+          for (let i = 0; i < 70; i++) {
+            const result = structuredClone(state.commands.queued.result);
+            result.command = {
+              ...result.command,
+              route: null,
+              intent: { kind: "message.cancel", messageId: `old-${i}` },
+            };
+            result.receipt!.recordedAt = old + i;
+            state.commands[`old-${i}`] = { signature: `old-${i}`, result };
+          }
+        });
+        expect(
+          await f.followUps.transaction(
+            sessionId,
+            (state) => Object.hasOwn(state.commands, "old-0"),
+            { mode: "read" },
+          ),
+        ).toBe(false);
+      }
+      const history = (await f.engine.getSession({ sessionId }))!;
+      const unrelated = new Set(
+        history.commands.flatMap(({ intent }) =>
+          intent.kind === "message.submit" ? [intent.reference.id] : [],
+        ),
+      );
+      const read = f.artifacts.read.bind(f.artifacts);
+      let unrelatedReads = 0;
+      f.artifacts.read = async (reference) => {
+        if (unrelated.has(reference.id)) {
+          unrelatedReads++;
+          throw new Error("unrelated historical artifact missing");
+        }
+        return read(reference);
+      };
+      const result = await runtime.command({
+        commandId: "fresh-steer",
+        sessionId,
+        command: { kind: "message.submit", delivery: "steer", message: message("fresh-steer") },
+      });
+      expect(result.receipt?.status).toBe("accepted");
+      expect(unrelatedReads).toBe(0);
+      await runtime.close();
+    },
+  );
+
   it("continues at the next idle boundary after recovering a settled previous delivery", async () => {
     const storage = createInMemorySessionFollowUpLedger();
     let crash = true;
@@ -476,8 +771,11 @@ describe("host follow-up commands", () => {
       ...storage,
       transaction: (id, work) =>
         storage.transaction(id, (state) => {
+          const claimed = state.entries.some(
+            (entry) => entry.commandId === "first" && entry.state === "releasing",
+          );
           const result = work(state);
-          if (crash && Object.hasOwn(state.releases, "first"))
+          if (crash && claimed && !state.entries.some((entry) => entry.commandId === "first"))
             throw new Error("crash before settlement");
           return result;
         }),
@@ -681,9 +979,7 @@ describe("host follow-up commands", () => {
       deliveryId(sessionId, "queued"),
     ]);
     expect((await runtime.projection({ sessionId })).projection.queue).toEqual([]);
-    expect(
-      await f.followUps.transaction(sessionId, (state) => state.releases.queued.receipt.status),
-    ).toBe("accepted");
+    expect((await releaseEvidence(f, sessionId, "queued"))?.status).toBe("accepted");
   });
 
   it("releases two queued messages in order, only one per turn end, including duplicate end evidence", async () => {
@@ -827,9 +1123,7 @@ describe("host follow-up commands", () => {
     await runtime.recoverFollowUps();
     expect(adapter.commands).toHaveLength(1);
     expect((await runtime.projection({ sessionId })).projection.queue).toEqual([]);
-    expect(
-      await f.followUps.transaction(sessionId, (state) => state.releases.first.receipt.status),
-    ).toBe("accepted");
+    expect((await releaseEvidence(f, sessionId, "first"))?.status).toBe("accepted");
   });
 
   it("replays a crash after durable receipt but before queue settlement without losing or duplicating", async () => {
@@ -839,8 +1133,11 @@ describe("host follow-up commands", () => {
       ...storage,
       transaction: (id, work) =>
         storage.transaction(id, (state) => {
+          const claimed = state.entries.some(
+            (entry) => entry.commandId === "first" && entry.state === "releasing",
+          );
           const result = work(state);
-          if (crash && Object.hasOwn(state.releases, "first"))
+          if (crash && claimed && !state.entries.some((entry) => entry.commandId === "first"))
             throw new Error("crash before settling queue");
           return result;
         }),
@@ -1125,6 +1422,10 @@ describe("host follow-up commands", () => {
     const f = fixture();
     const runtime = f.runtime(false);
     const sessionId = await create(runtime);
+    const projection = (await runtime.projection({ sessionId })).projection;
+    expect(projection.session.id).toBe(sessionId);
+    expect(projection).not.toHaveProperty("queue");
+    expect(projection).not.toHaveProperty("queueRevision");
     await expect(
       runtime.command({
         commandId: "queued",
@@ -1719,9 +2020,10 @@ describe("host follow-ups never strand a row", () => {
     await runtime.recoverFollowUps();
     f.adapter.ambiguous = false;
     expect(await queueStates(runtime, sessionId)).toEqual(["second:queued"]);
-    expect(
-      await f.followUps.transaction(sessionId, (state) => state.releases.first.receipt),
-    ).toMatchObject({ status: "accepted", id: `${deliveryId(sessionId, "first")}:turn-evidence` });
+    expect(await releaseEvidence(f, sessionId, "first")).toMatchObject({
+      status: "accepted",
+      id: `${deliveryId(sessionId, "first")}:turn-evidence`,
+    });
     expect(await attentionDetails(runtime, sessionId)).toEqual([]);
     await f.adapter.complete(deliveryId(sessionId, "first"));
     await runtime.recoverFollowUps();
@@ -1961,8 +2263,11 @@ describe("host follow-ups never strand a row", () => {
       ...storage,
       transaction: (id, work) =>
         storage.transaction(id, (state, proof) => {
+          const claimed = state.entries.some(
+            (entry) => entry.commandId === "first" && entry.state === "releasing",
+          );
           const result = work(state, proof);
-          if (crash && Object.hasOwn(state.releases, "first"))
+          if (crash && claimed && !state.entries.some((entry) => entry.commandId === "first"))
             throw new Error("crash before settling queue");
           return result;
         }),
@@ -2118,6 +2423,30 @@ describe("host follow-ups never strand a row", () => {
     ).toEqual([`${first}:attach:0`, `${first}:attach:1`]);
     // The original attach, the restart's rehydration to release it, the retry.
     expect(adapter.attaches).toBe(3);
+  });
+
+  it("reports a non-Error release failure without losing the unsent queued payload", async () => {
+    const failure: unknown = "workspace temporarily unavailable";
+    let failing = false;
+    const f = fixture({
+      retryDelays: [],
+      locate: () => {
+        if (failing) throw failure;
+      },
+    });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await attach(runtime, sessionId);
+    failing = true;
+    await queue(runtime, sessionId, "kept");
+    await runtime.recoverFollowUps();
+    expect(f.errors).toContain(failure);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([
+      "Queued message delivery failed: workspace temporarily unavailable",
+    ]);
+    expect(await queueStates(runtime, sessionId)).toEqual(["kept:queued"]);
+    expect(submits(f.adapter)).toEqual([]);
+    await runtime.close();
   });
 
   it("retries a release that failed before its intent was recorded, then delivers once", async () => {

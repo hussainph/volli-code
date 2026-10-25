@@ -108,6 +108,12 @@ export const MIGRATION_TABLE_DECISIONS: readonly MigrationTableDecision[] = [
     reason: "Release stays a runner decision; preflight requires it settled.",
   },
   {
+    table: "session_follow_up_identities",
+    disposition: "runner",
+    reason:
+      "Exact follow-up replay proofs stay with the runner queue after its reply payloads are pruned.",
+  },
+  {
     table: "session_usage",
     disposition: "runner",
     reason: "A rebuildable index over `usage.recorded` events, which are exported.",

@@ -124,6 +124,7 @@ const KNOWN_HAZARDS: Readonly<Record<string, { release: string; bundle?: readonl
     bundle: [
       "Data document is missing table workspace_epochs.",
       "Data document is missing table session_follow_up_queue.",
+      "Data document is missing table session_follow_up_identities.",
     ],
   },
   // v0.2.1-canary.7 (schema 57) has v0.2.1's database and backup modules
@@ -133,6 +134,7 @@ const KNOWN_HAZARDS: Readonly<Record<string, { release: string; bundle?: readonl
     bundle: [
       "Data document is missing table workspace_epochs.",
       "Data document is missing table session_follow_up_queue.",
+      "Data document is missing table session_follow_up_identities.",
     ],
   },
 };
@@ -816,6 +818,94 @@ describe.skipIf(manifest === null)(
       } finally {
         db.close();
       }
+    });
+
+    it("refuses a stale steer and expired command replay through the previous runtime after reply compaction", async () => {
+      await headProfile();
+      const { head, guarded } = await probe();
+      if (guarded && headFloor() > head) return;
+      const db = openVolliDb(dbPath);
+      try {
+        const old = Date.now() - 8 * 24 * 60 * 60_000;
+        await createSqliteSessionFollowUpLedger(db).transaction("session-head", (state) => {
+          for (let i = 0; i < 70; i++) {
+            const id = `expired-queue-${i}`;
+            const message = {
+              id: `expired-message-${i}`,
+              role: "user" as const,
+              parts: [{ type: "text" as const, text: `Discard old body ${i}`.repeat(100) }],
+            };
+            state.commands[id] = {
+              signature: JSON.stringify(message),
+              result: {
+                sessionId: "session-head",
+                command: {
+                  id,
+                  sessionId: "session-head",
+                  createdAt: old + i,
+                  route: null,
+                  intent: { kind: "message.queue", message },
+                },
+                receipt: {
+                  id,
+                  commandId: id,
+                  status: "accepted",
+                  acceptedAt: old + i,
+                  recordedAt: old + i,
+                  sequence: 0,
+                  result: { kind: "message.submitted", sessionId: "session-head" },
+                },
+                throughSequence: 0,
+                refusal: null,
+              },
+            };
+          }
+          state.revision++;
+        });
+        expect(
+          await createSqliteSessionFollowUpLedger(db).transaction(
+            "session-head",
+            (state) => state.commands["expired-queue-0"]?.result.command.intent,
+            { mode: "read" },
+          ),
+        ).toEqual({
+          kind: "message.queue",
+          message: { id: "expired-message-0", role: "user", parts: [] },
+        });
+      } finally {
+        db.close();
+      }
+      const answer = value(
+        await n1(dbPath, [
+          {
+            kind: "followUpIdentityReplay",
+            sessionId: "session-head",
+            messageId: "expired-message-0",
+            queueCommandId: "expired-queue-0",
+            directory: root,
+          },
+        ]),
+        0,
+      );
+      if (head < 61) {
+        // These builds have no queued-message execution surface to replay.
+        expect(answer).toEqual({ unsupported: true });
+        return;
+      }
+      expect(answer).toMatchObject({
+        staleSteer: {
+          name: "SessionRuntimeConflictError",
+          message: expect.stringContaining("already been delivered or removed"),
+        },
+        expiredReplay: {
+          name: "SessionRuntimeCommandConflictError",
+          message: expect.stringContaining("different intent"),
+        },
+        artifactReads: 0,
+        artifactWrites: 0,
+        attaches: 0,
+      });
+      assertHeadReads(dbPath);
     });
 
     it("keeps the author rule: N-1 writes a compatible head profile, or refuses a breaking one", async () => {
