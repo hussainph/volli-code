@@ -210,6 +210,55 @@ describe("switching stores over running turns", () => {
     control.quitAccepted();
     expect(lifecycle.relaunch).toHaveBeenCalledOnce();
   });
+  it("releases a primed subscription that already observed the last turn finish", () => {
+    const lifecycle = app();
+    let turns = 1;
+    const off = vi.fn();
+    const timer = vi.fn();
+    const control = createRelaunchController(lifecycle, {
+      turns: () => turns,
+      choose: () => "wait",
+      subscribe: (listener) => {
+        turns = 0;
+        listener();
+        return off;
+      },
+      setInterval: timer,
+    });
+    control.request();
+    expect(lifecycle.quit).toHaveBeenCalledOnce();
+    expect(off).toHaveBeenCalledOnce();
+    expect(timer).not.toHaveBeenCalled();
+    expect(control.pending()).toBe(true);
+  });
+
+  it("clears the default polling timer on refusal and when turns finish without a fold", () => {
+    vi.useFakeTimers();
+    try {
+      const lifecycle = app();
+      let turns = 1;
+      const off = vi.fn();
+      const control = createRelaunchController(lifecycle, {
+        turns: () => turns,
+        choose: () => "wait",
+        subscribe: () => off,
+      });
+      control.request();
+      expect(vi.getTimerCount()).toBe(1);
+      control.quitRefused();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(lifecycle.quit).not.toHaveBeenCalled();
+      control.request();
+      turns = 0;
+      vi.advanceTimersByTime(1_000);
+      expect(lifecycle.quit).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(off).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("can switch now or cancel, without arming an eventual unrelated relaunch", () => {
     const lifecycle = app();
     const cancelled = createRelaunchController(lifecycle, turnFeed("cancel").ports);

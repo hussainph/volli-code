@@ -1591,6 +1591,25 @@ describe("cloudChatTransport", () => {
     expect(transport.newCommandId()).toMatch(/^[0-9a-f-]{36}$/u);
   });
 
+  it("passes explicit runner-local starts through the window factory, without sending local reads", async () => {
+    vi.stubGlobal("window", {});
+    const { session, calls } = fakeClient();
+    const local = {
+      createSession: vi.fn(async () => ({ sessionId: "new" })),
+      attachSession: vi.fn(async () => ({ ok: true }) as never),
+    };
+    const transport = cloudChatTransport(session, local);
+    const create = { operationId: "o", projectId: "p", ticketId: null, title: null };
+    expect(await transport.createSession(create)).toEqual({ sessionId: "new" });
+    await transport.attachSession({ operationId: "o", sessionId: "new" });
+    expect(local.createSession).toHaveBeenCalledExactlyOnceWith(create);
+    expect(local.attachSession).toHaveBeenCalledExactlyOnceWith({
+      operationId: "o",
+      sessionId: "new",
+    });
+    expect(calls).toEqual([]);
+  });
+
   it("runs over the client, one body cache per client", async () => {
     vi.stubGlobal("window", {});
     const { session, calls, answers } = fakeClient();
