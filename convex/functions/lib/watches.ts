@@ -24,6 +24,8 @@ import {
   type WatchId,
   TERMINAL_JOB_TTL_MS,
   parseJobPayload,
+  InvalidJobPayloadError,
+  type JobPayload,
   mergeWatchNotice,
   newWatchNotice,
   JOB_TITLE_MAX_CHARS,
@@ -460,10 +462,24 @@ async function deliveryFault(ctx: MutationCtx, watcher: Doc<"sessions">, code: s
     source: "session_attention",
     sourceId: WATCH_DELIVERY_SOURCE_ID,
     kind: "runner_alert",
-    title: "Watch notice could not reach this runner",
-    detail: `Delivery was refused (${code}). The watched facts remain in history; restore this Session's runner to receive future notices.`,
+    title: "Watch notice could not be delivered",
+    detail:
+      code === "access_changed_after_lease"
+        ? "A previously claimed notice was cancelled because access changed. Read the watched history for the remaining visible changes; future turn ends are re-armed."
+        : `Delivery was refused (${code}). The watched facts remain in history; restore this Session's runner to receive future notices.`,
     raisedAt: Date.now(),
   });
+}
+
+/** A corrupt/older notice is the runner's permanent-failure outcome, not a
+ * reason to reject a new fact or starve unrelated inbox work. */
+function readNoticePayload(value: unknown): JobPayload<"session.notice"> | null {
+  try {
+    return parseJobPayload("session.notice", value);
+  } catch (error) {
+    if (error instanceof InvalidJobPayloadError) return null;
+    throw error;
+  }
 }
 
 async function noticeFor(
@@ -473,12 +489,11 @@ async function noticeFor(
 ): Promise<boolean> {
   const jobs = await queuedNotices(ctx, watcher.id);
   const queued = jobs.find(
-    (job) =>
-      job.lease === null && parseJobPayload("session.notice", job.payload).notice === "watch",
+    (job) => job.lease === null && readNoticePayload(job.payload)?.notice === "watch",
   );
   if (queued !== undefined) {
-    const payload = parseJobPayload("session.notice", queued.payload);
-    if (payload.notice !== "watch") return false;
+    const payload = readNoticePayload(queued.payload);
+    if (payload?.notice !== "watch") return false;
     const patched = await patchQueuedJob(ctx, queued, mergeWatchNotice(payload, [change]));
     // A turn end merged into an already-due sleeping runner's job still
     // needs its own quiet window, in which an earlier child birth can retract it.
@@ -532,8 +547,8 @@ async function noticeFor(
 async function dropQueuedTarget(ctx: MutationCtx, watch: Doc<"watches">) {
   for (const job of await queuedNotices(ctx, watch.watcherSessionId)) {
     if (job.lease !== null) continue;
-    const payload = parseJobPayload("session.notice", job.payload);
-    if (payload.notice !== "watch") continue;
+    const payload = readNoticePayload(job.payload);
+    if (payload?.notice !== "watch") continue;
     const changes = payload.changes.filter(
       (change) =>
         !(
@@ -558,8 +573,8 @@ export async function noticeForClaim(
   job: Doc<"runnerJobs">,
 ): Promise<Doc<"runnerJobs"> | null> {
   if (job.kind !== "session.notice") return job;
-  const payload = parseJobPayload("session.notice", job.payload);
-  if (payload.notice !== "watch") return job;
+  const payload = readNoticePayload(job.payload);
+  if (payload?.notice !== "watch") return job;
   const watcher = job.sessionId === null ? null : await sessionRow(ctx, job.sessionId);
   const viewer = watcher === null ? null : await ownerViewer(ctx, watcher);
   const visibility = new Map<string, boolean>();
@@ -586,6 +601,24 @@ export async function noticeForClaim(
   }
   if (changes.length === payload.changes.length) return job;
   if ((changes.length === 0 && payload.overflow === 0) || job.lease !== null) {
+    if (job.lease !== null && watcher !== null && (changes.length > 0 || payload.overflow > 0)) {
+      await deliveryFault(ctx, watcher, "access_changed_after_lease");
+      const turns = new Set(
+        changes.flatMap((change) =>
+          change.subject === "session" &&
+          (change.fact === "turn-completed" || change.fact === "turn-interrupted")
+            ? [change.sessionId]
+            : [],
+        ),
+      );
+      const watches = await ctx.db
+        .query("watches")
+        .withIndex("by_watcher", (q) => q.eq("watcherSessionId", watcher.id).eq("endedAt", null))
+        .collect();
+      for (const watch of watches)
+        if (watch.target.kind === "session" && turns.has(watch.target.id))
+          await ctx.db.patch(watch._id, { turnArmed: true });
+    }
     await cancelJob(ctx, job, Date.now(), {
       code: "access_lost",
       detail: "Access to watched work changed before delivery.",
@@ -719,8 +752,8 @@ async function deferForLateChild(ctx: MutationCtx, child: Doc<"sessions">) {
       .collect();
     for (const job of jobs) {
       if (job.lease !== null || Date.now() > job.availableAt) continue;
-      const payload = parseJobPayload("session.notice", job.payload);
-      if (payload.notice !== "watch") continue;
+      const payload = readNoticePayload(job.payload);
+      if (payload?.notice !== "watch") continue;
       // The child is pending NOW. Defer only the parent's latest completion
       // still inside its quiet window; older completions remain independent
       // facts. This deliberately makes no cross-runner timestamp inference.

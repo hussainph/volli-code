@@ -656,23 +656,95 @@ describe("durable watches", () => {
       parentSessionId: w.target.sessionId,
     });
     const future = Date.now() + 365 * 24 * 60 * 60_000;
-    const birth = child.events.slice(0, 2).map((event) => {
+    const birth = child.events.slice(0, 2);
+    for (const event of birth) {
       const payload = event.payload;
-      return {
-        ...event,
-        occurredAt: future,
-        recordedAt: future,
-        payload:
-          payload.kind === "command.recorded"
-            ? { ...payload, command: { ...payload.command, createdAt: future } }
-            : payload.kind === "session.created"
-              ? { ...payload, session: { ...payload.session, createdAt: future } }
-              : payload,
-      };
-    });
+      event.occurredAt = future;
+      event.recordedAt = future;
+      if (payload.kind === "command.recorded")
+        event.payload = { ...payload, command: { ...payload.command, createdAt: future } };
+      else if (payload.kind === "session.created")
+        event.payload = { ...payload, session: { ...payload.session, createdAt: future } };
+    }
     await accept(w.t, w.watcher.runnerId, child.sessionId, birth);
     expect((await notices(w.t, w.watcher.sessionId))[0]?.status).toBe("cancelled");
     expect((await watchRows(w.t, w.watcher.sessionId))[0]?.turnArmed).toBe(true);
+  });
+  test("a crashed lease cancelled for changed access reports visible work and re-arms it", async () => {
+    const w = await world();
+    await w.arm();
+    const visible = await writeSession({ projectId: w.projectId, ticketId: w.ticket.ticketId });
+    await accept(w.t, w.watcher.runnerId, visible.sessionId, visible.events);
+    await w.arm(newId("command"), visible.sessionId);
+    await fire(w, { kind: "turn.completed", attachmentId: "a", turnId: "t" }, visible.sessionId);
+    await accept(w.t, w.watcher.runnerId, w.target.sessionId, w.target.events.slice(w.turnEnd));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 2_000);
+    expect(
+      await asRunner(w.t, w.watcher.runnerId).mutation(api.runnerJobs.claim, {
+        bootId: randomUUID(),
+      }),
+    ).toHaveLength(1);
+    const bob = await signIn(w.t, "reclaim-private-owner");
+    await w.t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("sessions")
+        .withIndex("by_uuid", (q) => q.eq("id", w.target.sessionId))
+        .unique();
+      await ctx.db.patch(row!._id, { ownerUserId: bob.userId, visibility: "private" });
+    });
+    expect(
+      await asRunner(w.t, w.watcher.runnerId).mutation(api.runnerJobs.claim, {
+        bootId: randomUUID(),
+      }),
+    ).toEqual([]);
+    expect((await notices(w.t, w.watcher.sessionId))[0]?.status).toBe("cancelled");
+    const attention = await w.t.run((ctx) =>
+      ctx.db
+        .query("attentionItems")
+        .withIndex("by_session", (q) => q.eq("sessionId", w.watcher.sessionId))
+        .collect(),
+    );
+    expect(attention).toEqual([
+      expect.objectContaining({ sourceId: "volli:watch-delivery", clearedAt: null }),
+    ]);
+    expect(
+      (await watchRows(w.t, w.watcher.sessionId)).find((row) => row.target.id === visible.sessionId)
+        ?.turnArmed,
+    ).toBe(true);
+  });
+  test("an unreadable notice is leased for permanent failure without starving other work", async () => {
+    const w = await world();
+    await w.arm();
+    await accept(w.t, w.watcher.runnerId, w.target.sessionId, w.target.events.slice(w.turnEnd));
+    await w.t.run(async (ctx) => {
+      const job = (
+        await ctx.db
+          .query("runnerJobs")
+          .withIndex("by_session", (q) => q.eq("sessionId", w.watcher.sessionId))
+          .collect()
+      ).find((j) => j.kind === "session.notice")!;
+      await ctx.db.patch(job._id, { payload: { format: "old-notice" } });
+    });
+    await fire(w, { kind: "session.signaled", signal: "blocked", reason: "new fact still drains" });
+    await w.person.mutation(api.sessions.command, {
+      sessionId: w.watcher.sessionId,
+      commandId: newId("command"),
+      intent: JSON.stringify({ kind: "session.retitle", title: "other work" }),
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 2_000);
+    const jobs = await asRunner(w.t, w.watcher.runnerId).mutation(api.runnerJobs.claim, {
+      bootId: randomUUID(),
+    });
+    expect(jobs.map((j) => j.job.kind).toSorted()).toEqual([
+      "session.command",
+      "session.notice",
+      "session.notice",
+    ]);
+    expect(
+      jobs.some((j) => JSON.stringify(j.job.payload) === JSON.stringify({ format: "old-notice" })),
+    ).toBe(true);
   });
 });
 
