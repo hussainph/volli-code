@@ -342,14 +342,32 @@ async function openTicketViaCard(page, displayId) {
 }
 
 /**
+ * The part of a tab a hand can actually press: its box clipped to its strip's
+ * scrollport. A tab wider than a narrow pane's strip overflows it, and the
+ * strip's "Later tabs" control then sits over the far end of the tab's full
+ * box — so the full box's centre can be that control, not the tab.
+ */
+function visibleTabBox(tab) {
+  return tab.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const port = element.closest('[data-slot="tab-scroll"]')?.getBoundingClientRect() ?? box;
+    const left = Math.max(box.left, port.left);
+    const right = Math.min(box.right, port.right);
+    return right - left < 8
+      ? null
+      : { x: left, y: box.top, width: right - left, height: box.height };
+  });
+}
+
+/**
  * Drag a tab onto a target point with enough intermediate moves for dnd-kit's
  * pointer sensor to activate (4px) and to measure a hover before the release.
  */
 async function dragTabTo(page, tabLabel, target, { drop = true } = {}) {
   const source = await draggableTab(page, tabLabel);
   await source.scrollIntoViewIfNeeded();
-  const from = await source.boundingBox();
-  if (from === null) throw new Error(`no bounding box for tab ${tabLabel}`);
+  const from = await visibleTabBox(source);
+  if (from === null) throw new Error(`no visible box for tab ${tabLabel}`);
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
   await page.mouse.down();
   // Three steps: past the activation constraint, into the pane, onto the mark.
