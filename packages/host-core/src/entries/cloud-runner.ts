@@ -21,6 +21,14 @@
  * `sqliteJobJournalStore`), with a sealed `RunnerLinkStore`, and beside it
  * `startStreamChunks({ link, runtime })` for streamed text;
  * `volli-runner link` calls `linkWithInstallToken` / `linkWithDeviceCode`.
+ *
+ * Receiving wiring for agent verbs in a cloud launch (VC-894; no production
+ * caller yet): the same compositions (VC-895, VC-896) will build
+ * `createCloudBoardVerbs` over `createAgentBackend` (the functions client on
+ * the deployment URL, the runner token source, the link's status, the
+ * drain's nudge), hand it to the agent command service as `cloudBoardVerbs`,
+ * and call the backend's `forget` when a Session's last attachment on this
+ * runner closes. `CLOUD_AGENT_ROUTES` says what every agent verb routes to.
  */
 export {
   type BackendConnection,
@@ -120,3 +128,36 @@ export {
   type RunnerTokenSource,
   type RunnerTokenSourceOptions,
 } from "../cloud-runner/token-source";
+export {
+  type AgentBackend,
+  type AgentCallOptions,
+  type AgentBackendOptions,
+  createAgentBackend,
+  NotYetSyncedError,
+} from "../cloud-agent/agent-backend";
+export {
+  type CloudBoardVerbs,
+  type CloudBoardVerbsOptions,
+  type CloudPlace,
+  type CloudVerb,
+  type CloudVerbCall,
+  createCloudBoardVerbs,
+} from "../cloud-agent/board-verbs";
+export {
+  CLOUD_FUNCTION_TIMEOUT_MS,
+  type CloudFetch,
+  CloudFunctionError,
+  type CloudFunctionKind,
+  type CloudFunctionsClient,
+  type CloudFunctionsClientOptions,
+  type CloudDelivery,
+  CloudOfflineError,
+  type CloudOfflineReason,
+  createCloudFunctionsClient,
+} from "../cloud-agent/functions-client";
+export {
+  type AgentDoorHandlerKey,
+  CLOUD_AGENT_ROUTES,
+  type CloudBoardKey,
+  type CloudRoute,
+} from "../cloud-agent/routes";

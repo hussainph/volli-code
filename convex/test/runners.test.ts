@@ -490,7 +490,7 @@ describe("the desktop's own Mac", () => {
         host: MAC_HOST,
         name: null,
       }),
-    ).rejects.toThrow(code("no_viewer"));
+    ).rejects.toThrow(code("not_a_person"));
   });
 });
 

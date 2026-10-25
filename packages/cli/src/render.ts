@@ -1786,8 +1786,11 @@ export function renderCliError(error: AgentError, options: RenderErrorOptions = 
   return `error[${error.code}] ${terminalSafeInline(reason)} ${terminalSafeInline(recovery)}\n`;
 }
 
-export function exitCodeForError(code: AgentErrorCode): 1 | 2 | 3 {
+export function exitCodeForError(code: AgentErrorCode): 1 | 2 | 3 | 75 {
   if (code === "APP_UNREACHABLE") return 3;
+  // EX_TEMPFAIL: Volli Cloud was unreachable (or not caught up) and nothing
+  // was written, so the same command is safe to retry.
+  if (code === "OFFLINE" || code === "NOT_YET_SYNCED") return 75;
   if (
     code === "USAGE" ||
     code === "INVALID_REQUEST" ||

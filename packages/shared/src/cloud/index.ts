@@ -7,6 +7,7 @@
  */
 export * from "./activity";
 export * from "./actor";
+export * from "./agent-tokens";
 export * from "./attention";
 export * from "./board-client";
 export * from "./board-events";

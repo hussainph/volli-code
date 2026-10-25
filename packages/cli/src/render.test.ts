@@ -142,6 +142,10 @@ describe("renderCliSuccess", () => {
     expect(exitCodeForError("APP_UNREACHABLE")).toBe(3);
     expect(exitCodeForError("INVALID_REQUEST")).toBe(2);
     expect(exitCodeForError("BODY_MATCH_FAILED")).toBe(1);
+    // Volli Cloud was unreachable or behind, and nothing was written (EX_TEMPFAIL).
+    expect(exitCodeForError("OFFLINE")).toBe(75);
+    expect(exitCodeForError("NOT_YET_SYNCED")).toBe(75);
+    expect(exitCodeForError("SIGN_IN_REQUIRED")).toBe(1);
   });
 
   it("renders Label merge previews with archived Tickets and applied receipts", () => {

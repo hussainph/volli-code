@@ -247,6 +247,21 @@ export interface AgentCommandServiceOptions {
    */
   readAuthorityPolicy?: (projectId: string) => AuthorityPolicy;
   /**
+   * The board in Volli Cloud (VC-894): in a cloud launch, every verb whose
+   * route is `cloud-board` (`cloud-agent/routes.ts`) is answered by the
+   * backend through these instead of this host's SQLite board, after the
+   * same identity and admission as today, with the token-verified Session as
+   * the agent the backend acts for. Absent (every local launch), the
+   * dispatch is exactly as before.
+   *
+   * Receiving wiring (no production caller yet): the cloud product store's
+   * composition (VC-895) passes `createCloudBoardVerbs` over
+   * `createAgentBackend` (the backend link's status, the runner token
+   * source, the fact drain's nudge) when it builds this service, and calls
+   * the backend's `forget` when a Session's last attachment here closes.
+   */
+  cloudBoardVerbs?: import("../cloud-agent/board-verbs").CloudBoardVerbs;
+  /**
    * The skills index a fresh Session with no explicit skills would carry — the
    * SAME port `session start` composes through (`SessionSkillPorts.index` with
    * nothing injected), threaded in so `prompt baseline` prices the index a real

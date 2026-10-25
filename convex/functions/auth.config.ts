@@ -20,6 +20,12 @@ import type { AuthConfig } from "convex/server";
  *   half of `VOLLI_RUNNER_SIGNING_KEY`, as a `data:` URI; every deployment
  *   that serves runners sets both. `lib/runnerAuth.ts` tells runners from
  *   people.
+ * - **Agents** reach the backend only through their runner, under Agent
+ *   tokens this deployment also issues itself (`agentTokens.mint`, for one
+ *   Session the runner claims). They are signed with the same key, so they are
+ *   checked against the same JWKS, but under their own issuer and audience:
+ *   `lib/actorAuth.ts` resolves them to an `agent` Actor, and nothing that
+ *   wants a runner or a person accepts one.
  *
  * A token's profile claims (`email`, `email_verified`, `name`) are read by
  * `profileFromIdentity` in `lib/auth.ts`. WorkOS adds them through the
@@ -33,6 +39,9 @@ export const TEST_AUDIENCE = "volli-test";
 // which cannot resolve the shared package. A unit test holds them equal.
 export const RUNNER_ISSUER = "https://runners.volli.app";
 export const RUNNER_AUDIENCE = "volli-runner";
+// `AGENT_TOKEN_ISSUER` / `AGENT_TOKEN_AUDIENCE`, repeated for the same reason.
+export const AGENT_ISSUER = "https://agents.volli.app";
+export const AGENT_AUDIENCE = "volli-agent";
 
 /** Where WorkOS's API and JWKS live. */
 const WORKOS_API_BASE = "https://api.workos.com";
@@ -94,6 +103,13 @@ export default {
             type: "customJwt",
             issuer: RUNNER_ISSUER,
             applicationID: RUNNER_AUDIENCE,
+            algorithm: "ES256",
+            jwks: runnerJwks,
+          } satisfies Provider,
+          {
+            type: "customJwt",
+            issuer: AGENT_ISSUER,
+            applicationID: AGENT_AUDIENCE,
             algorithm: "ES256",
             jwks: runnerJwks,
           } satisfies Provider,

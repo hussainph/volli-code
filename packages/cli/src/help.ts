@@ -29,6 +29,7 @@ const EXIT_CLASS_LABEL = {
   1: "1 failure",
   2: "2 usage",
   3: "3 app unreachable (retryable)",
+  75: "75 offline (retryable)",
 } as const;
 
 const STATIC_RUNTIME: AgentHelpRuntime = {
@@ -61,7 +62,7 @@ function exitCodesText(): string {
     ];
   });
   return (
-    "Exit codes: 0 ok; 1 failure; 2 usage; 3 app unreachable (retryable).\n\n" +
+    "Exit codes: 0 ok; 1 failure; 2 usage; 3 app unreachable (retryable); 75 offline (retryable).\n\n" +
     "Error codes:\n" +
     `${rows.join("\n")}\n`
   );

@@ -1,8 +1,18 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
-import { RUNNER_TOKEN_AUDIENCE, RUNNER_TOKEN_ISSUER } from "@volli/shared/cloud";
+import {
+  AGENT_TOKEN_AUDIENCE,
+  AGENT_TOKEN_ISSUER,
+  RUNNER_TOKEN_AUDIENCE,
+  RUNNER_TOKEN_ISSUER,
+} from "@volli/shared/cloud";
 
-import { RUNNER_AUDIENCE, RUNNER_ISSUER } from "../functions/auth.config";
+import {
+  AGENT_AUDIENCE,
+  AGENT_ISSUER,
+  RUNNER_AUDIENCE,
+  RUNNER_ISSUER,
+} from "../functions/auth.config";
 
 async function loadAuthConfig() {
   vi.resetModules();
@@ -67,7 +77,7 @@ describe("auth.config", () => {
     expect((await loadAuthConfig()).providers).toEqual([]);
   });
 
-  test("trusts the deployment's own runner tokens when VOLLI_RUNNER_JWKS is set", async () => {
+  test("trusts the deployment's own runner and agent tokens when VOLLI_RUNNER_JWKS is set", async () => {
     process.env = { ...originalEnv, VOLLI_RUNNER_JWKS: "data:application/json;base64,e30=" };
     delete process.env["VOLLI_TEST_JWKS"];
     delete process.env["WORKOS_CLIENT_ID"];
@@ -79,12 +89,22 @@ describe("auth.config", () => {
         algorithm: "ES256",
         jwks: "data:application/json;base64,e30=",
       },
+      // Same key, its own issuer and audience: an Agent token never passes for a runner's.
+      {
+        type: "customJwt",
+        issuer: AGENT_TOKEN_ISSUER,
+        applicationID: AGENT_TOKEN_AUDIENCE,
+        algorithm: "ES256",
+        jwks: "data:application/json;base64,e30=",
+      },
     ]);
   });
 
   test("names the runner issuer exactly as the shared vocabulary does", () => {
     expect(RUNNER_ISSUER).toBe(RUNNER_TOKEN_ISSUER);
     expect(RUNNER_AUDIENCE).toBe(RUNNER_TOKEN_AUDIENCE);
+    expect(AGENT_ISSUER).toBe(AGENT_TOKEN_ISSUER);
+    expect(AGENT_AUDIENCE).toBe(AGENT_TOKEN_AUDIENCE);
   });
 
   test("trusts nothing where reading an unset variable throws, as the backend does", async () => {

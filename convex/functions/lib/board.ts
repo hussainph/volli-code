@@ -68,15 +68,10 @@ export async function asBoardErrors<T>(run: () => T | Promise<T>): Promise<T> {
 }
 
 // ── the caller ─────────────────────────────────────────────────────────────
-
-/**
- * Who a board write is attributed to. Today every caller is a person through
- * a client; agent verbs (Session-scoped tokens) resolve to an `agent` Actor
- * here once they exist, and nothing else in the board changes.
- */
-export function boardActor(viewer: Viewer): Actor {
-  return { kind: "person", userId: viewer.userId };
-}
+//
+// Who a board write is attributed to is the caller's Actor (`lib/actorAuth.ts`
+// `requireActor`): a person through a client, or an agent acting for its
+// Session's owner. Nothing else in the board tells them apart.
 
 /** A project's board takes writes only while the project is live and not archived. */
 export function requireWritableProject(project: Doc<"projects">): void {
@@ -101,15 +96,17 @@ export async function findTicket(ctx: Reader, ticketId: string): Promise<Doc<"ti
 /**
  * A live ticket the viewer can see (an active Member of its project's
  * current Workspace), with its project. A ticket the viewer cannot see reads
- * as `not_found`, as a project does.
+ * as `not_found`, as a project does. `resolved` is a viewer the caller already
+ * resolved (an agent's Session owner); without it, only a person may read.
  */
 export async function requireTicket(
   ctx: QueryCtx | MutationCtx,
   ticketId: string,
+  resolved?: Viewer,
 ): Promise<{ viewer: Viewer; project: Doc<"projects">; ticket: Doc<"tickets"> }> {
   const ticket = await findTicket(ctx, ticketId);
   if (ticket === null) throw authError("not_found", "That ticket does not exist.");
-  const { viewer, project } = await requireProject(ctx, ticket.projectId);
+  const { viewer, project } = await requireProject(ctx, ticket.projectId, resolved);
   return { viewer, project, ticket };
 }
 

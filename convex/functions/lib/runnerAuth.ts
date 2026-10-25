@@ -25,6 +25,7 @@ import type { GenericDatabaseReader, GenericDatabaseWriter, UserIdentity } from 
 import { ConvexError } from "convex/values";
 
 import {
+  AGENT_TOKEN_ISSUER,
   RUNNER_TOKEN_ISSUER,
   runnerIdFromSubject,
   type RunnerId,
@@ -42,6 +43,11 @@ export function runnerAuthError(
   message: string,
 ): ConvexError<RunnerAuthErrorData> {
   return new ConvexError({ code, message });
+}
+
+/** Whether `identity` came from the Agent-token issuer (and so is neither a person nor a runner). */
+export function isAgentIdentity(identity: Pick<UserIdentity, "issuer">): boolean {
+  return identity.issuer === AGENT_TOKEN_ISSUER;
 }
 
 /** Whether `identity` came from the runner-token issuer (and so is not a person). */

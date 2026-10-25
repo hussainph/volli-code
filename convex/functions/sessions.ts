@@ -4,13 +4,16 @@
  *
  * - `accept` (runner): the claimed runner's facts, in order, idempotent. The
  *   rules are in `lib/sessionIntake.ts`.
- * - `command` (client): a person's intent for their Session, queued as a
+ * - `command` (client): a person's intent for their Session (or an agent's,
+ *   acting for the Session owner through its runner), queued as a
  *   `session.command` job for the Session's runner. The job row is the first
  *   receipt (`queued`); the engine's own receipt, folded on accept, is the
  *   second.
  * - `snapshot`, `history`, `list`, `attention` (client): the Session's
  *   bounded current state, a window of its history by sequence, the listing
- *   rows of a project or ticket, and the viewer's open attention items.
+ *   rows of a project or ticket, and the viewer's open attention items. An
+ *   agent (an Agent token, `lib/actorAuth.ts`) reads them as its Session's
+ *   owner would.
  * - `catchUp`, `refold`, `transferClaim` (internal): the paged fold over the
  *   accepted history, and the claim move a clean handoff ends with.
  *
@@ -50,9 +53,9 @@ import {
   requireProject,
   requireSessionActor,
   requireSessionVisible,
-  requireViewer,
 } from "./lib/auth";
 import { attentionVisibility } from "./lib/attention";
+import { PERSON_OR_AGENT, requireActor } from "./lib/actorAuth";
 import { enqueueJob } from "./lib/jobs";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
 import {
@@ -173,7 +176,8 @@ const MAX_INTENT_BYTES = 64 * 1024;
 export const command = mutation({
   args: { sessionId: v.string(), commandId: v.string(), intent: v.string() },
   handler: async (ctx, args) => {
-    const { viewer, session } = await requireSessionActor(ctx, args.sessionId);
+    const caller = await requireActor(ctx, PERSON_OR_AGENT);
+    const { viewer, session } = await requireSessionActor(ctx, args.sessionId, caller.viewer);
     if (!isUuid(args.commandId)) throw fail("invalid_request", "The command id is not a UUID.");
     if (new TextEncoder().encode(args.intent).length > MAX_INTENT_BYTES) {
       throw fail("invalid_request", `An intent is limited to ${MAX_INTENT_BYTES} bytes.`);
@@ -205,7 +209,7 @@ export const command = mutation({
       ticketId: session.ticketId,
       commandId: args.commandId,
       payload: { format: SESSION_COMMAND_FORMAT, intent: intentJson },
-      createdBy: { kind: "person", userId: viewer.userId },
+      createdBy: caller.actor,
       onBehalfOf: viewer.userId,
     });
     const job = (await ctx.db
@@ -274,7 +278,8 @@ function scrubLiveAttachment(attachment: SessionAttachmentProjection | null) {
 export const snapshot = query({
   args: { sessionId: v.string() },
   handler: async (ctx, { sessionId }) => {
-    const { session } = await requireSessionVisible(ctx, sessionId);
+    const { viewer } = await requireActor(ctx, PERSON_OR_AGENT);
+    const { session } = await requireSessionVisible(ctx, sessionId, viewer);
     const doc = await ctx.db
       .query("sessionStates")
       .withIndex("by_session", (q) => q.eq("sessionId", session.id))
@@ -338,7 +343,8 @@ export const history = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const { session } = await requireSessionVisible(ctx, args.sessionId);
+    const caller = await requireActor(ctx, PERSON_OR_AGENT);
+    const { session } = await requireSessionVisible(ctx, args.sessionId, caller.viewer);
     const after = cursorArg(args.afterSequence, "afterSequence");
     const before = cursorArg(args.beforeSequence, "beforeSequence");
     const limit = Math.min(
@@ -439,7 +445,12 @@ export const list = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    const { viewer, project, membership } = await requireProject(ctx, args.projectId);
+    const caller = await requireActor(ctx, PERSON_OR_AGENT);
+    const { viewer, project, membership } = await requireProject(
+      ctx,
+      args.projectId,
+      caller.viewer,
+    );
     const policy = await findPolicy(ctx, project.workspaceId);
     const ticketId = args.ticketId;
     const page =
@@ -479,10 +490,10 @@ const ATTENTION_SCAN_LIMIT = 500;
 export const attention = query({
   args: { sessionId: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const viewer = await requireViewer(ctx);
+    const { viewer } = await requireActor(ctx, PERSON_OR_AGENT);
     let items: Doc<"attentionItems">[];
     if (args.sessionId !== undefined) {
-      const { session } = await requireSessionVisible(ctx, args.sessionId);
+      const { session } = await requireSessionVisible(ctx, args.sessionId, viewer);
       items = (
         await ctx.db
           .query("attentionItems")

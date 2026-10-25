@@ -211,6 +211,36 @@ reach the backend shows that cache read-only, says how old it is, and swaps
 to the live board when the backend answers. It is a cache, never a source:
 nothing in it is ever sent back.
 
+**Credentials follow the caller, and are never borrowed.** Each caller class
+has one credential and calls only the functions meant for it:
+
+1. **A person's client** (a desktop window, the web and phone clients, and
+   later a signed-in `volli` CLI) holds the person's sign-in token. On the
+   desktop only main holds it. It never enters a runner's Session environment,
+   a job payload, a transcript or a log. It calls person functions.
+2. **A runner** holds its sealed, rotating refresh credential and short-lived
+   Runner tokens (`runner:<id>`), in memory. Runner tokens call runner functions
+   only: intake, the inbox, presence, uploads and Agent-token minting. They
+   never call board or person functions.
+3. **An agent** holds only its attachment's `VOLLI_SESSION_TOKEN`. That token
+   is good at its own runner's socket and nowhere else. The runner turns a
+   verified call into a backend call under an **Agent token**
+   (`agent:<sessionId>`, `agentTokens.mint`), which the backend mints for one
+   Session that this runner claims and its owner owns. The Agent token is held
+   in runner memory, lives about 15 minutes, and a claim move or a removed
+   runner ends it at once. Backend functions see an `agent` Actor acting for
+   the Session owner, with that owner's membership and no more. **An agent
+   never holds a backend credential.**
+4. **Backend-internal work and webhooks** use no client credential (internal
+   functions; signatures).
+
+A function admits agents only by asking for them (`requireActor` in
+`convex/functions/lib/actorAuth.ts`); everything else is person-only, and a
+runner or Agent token is `not_a_person` there. A caller at a runner's socket
+with no Session evidence is not a person: it gets machine verbs only, and board
+and Session verbs answer `sign_in_required` until the CLI has a sign-in of its
+own.
+
 **Machine-bound resources stay on their machine.** Working copies, terminals and
 browser tabs are supervised by their runner and streamed to clients over a
 relay, never shared by replaying filesystem paths on the viewing device. In the

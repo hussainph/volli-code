@@ -58,6 +58,16 @@ export const AGENT_ERROR_CODES = [
   "RESPONSE_TOO_LARGE",
   "SOCKET_PROTOCOL",
   "TIMEOUT",
+  // Volli Cloud (a cloud launch only). The runner could not reach the backend,
+  // so a board verb was refused at once rather than queued (board writes never
+  // wait offline); Session updates keep buffering. Retryable: exit 75.
+  "OFFLINE",
+  // The backend has not accepted this Session's creation yet (its runner's
+  // drain is behind): transient, retry shortly. Exit 75.
+  "NOT_YET_SYNCED",
+  // A board or Session verb from a caller with no Session evidence, in a cloud
+  // launch: the CLI holds no sign-in of its own, so only a Session may ask.
+  "SIGN_IN_REQUIRED",
 ] as const;
 
 export type AgentErrorCode = (typeof AGENT_ERROR_CODES)[number];
