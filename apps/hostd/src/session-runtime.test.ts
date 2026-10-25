@@ -173,6 +173,7 @@ function fixture() {
     kind: "live",
     database: { ok: true, db: {} },
     sessionEngine: { listAttachedSessions: vi.fn(async () => []) },
+    sessionWakeBus: { subscribe: vi.fn(() => () => {}) },
     dataDir: "/data",
     runtimeServices,
     maintenance: { spawnLedger },
@@ -295,6 +296,8 @@ describe("headless runtime ownership", () => {
     expect(input.decisions).toBe(f.runtimeServices.decisions);
     expect(input.mcpSettings).toBe(f.runtimeServices.mcp);
     expect(input.webAccess).toBe(f.runtimeServices.webAccess);
+    // The runtime hears every committed Session Event from the host's one wake bus (VC-790).
+    expect(input.sessionWake).toBe(f.host.sessionWakeBus.subscribe);
     expect(seam.shellOptions!.ledger).toBe(f.spawnLedger);
     // Automations take the host's metadata and its event port, never a host bag.
     expect(seam.automations).toHaveBeenCalledWith({
