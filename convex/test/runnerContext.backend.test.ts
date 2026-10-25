@@ -102,21 +102,19 @@ test("first accept registers a runner-originated Session; nonmember runners cann
     runner.client.mutation(api.sessions.accept, {
       sessionId,
       generation: 1,
-      events: events
-        .slice(0, 2)
-        .map((event) =>
-          wire(
-            event.payload.kind === "session.created"
-              ? {
-                  ...event,
-                  payload: {
-                    ...event.payload,
-                    session: { ...event.payload.session, ownerUserId: userId },
-                  },
-                }
-              : event,
-          ),
+      events: events.slice(0, 2).map((event) =>
+        wire(
+          event.payload.kind === "session.created"
+            ? {
+                ...event,
+                payload: {
+                  ...event.payload,
+                  session: { ...event.payload.session, ownerUserId: userId },
+                },
+              }
+            : event,
         ),
+      ),
     }),
   ).resolves.toMatchObject({ acceptedThrough: 2, quarantined: 0 });
   expect(await owner.query(api.sessions.snapshot, { sessionId })).toMatchObject({
