@@ -12,6 +12,11 @@
  * session log is committed the same way as byte ranges (`commitPiLogSegment`),
  * contiguous per Pi file from offset 0, and kept forever.
  *
+ * One body is staged by a client instead: a `message.submit` queued through
+ * `sessions.command` with its body inline (`uploadedBy: "client"`), so the
+ * Session's runner, which never wrote it, can read it back
+ * (`commandArtifact`, runner-only and claim-fenced) before delivery.
+ *
  * Every write is the Session's producer's: its owner's identity (0.3: the
  * owner's runner acts as them) presenting the current claim, so a runner that
  * lost the claim cannot commit. A Session being released (moving to another
@@ -57,6 +62,7 @@ import { internal } from "./_generated/api";
 import type { DataModel, Doc } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { requireSessionActor } from "./lib/auth";
+import { requireRunner } from "./lib/runnerAuth";
 import { nullable } from "./lib/validators";
 
 export type TranscriptErrorCode =
@@ -190,9 +196,10 @@ type StagedArtifactArgs = {
 /**
  * Stage bodies for one Session, idempotently by `(sessionId, digest)`. A body
  * whose referencing event a committed segment already covers is not staged:
- * it is in that pack. The caller has checked the producer fence.
+ * it is in that pack. The caller has checked the producer fence, or (for a
+ * command's inline body, `sessions.command`) that it may command the Session.
  */
-async function stageArtifactRows(
+export async function stageArtifactRows(
   ctx: { db: GenericDatabaseWriter<DataModel> },
   scope: { sessionId: string; projectId: string },
   artifacts: readonly StagedArtifactArgs[],
@@ -277,6 +284,54 @@ export const stageArtifacts = mutation({
       "runner",
       Date.now(),
     );
+  },
+});
+
+/** A staged body the claimed runner hydrates before it delivers the command that references it. */
+export type CommandArtifactBody = { digest: string; mediaType: string; body: string };
+
+/**
+ * A staged inline body, for the runner holding the Session's claim: how a
+ * command queued with its body (`sessions.command`'s `artifact`) reaches a
+ * runner that never wrote it. The runner writes it to its own artifact store
+ * (which re-verifies the digest) before delivery. `null` when nothing inline
+ * is staged under `digest` (never staged, spilled, or swept after a pack).
+ *
+ * Runner-only (a runner token), and fenced like an accept: the Session must
+ * be the runner owner's, and the claim this runner's at `generation`.
+ */
+export const commandArtifact = query({
+  args: { sessionId: v.string(), generation: v.number(), digest: v.string() },
+  handler: async (ctx, args): Promise<CommandArtifactBody | null> => {
+    const caller = await requireRunner(ctx);
+    if (!isUuid(args.sessionId)) throw invalid("sessionId must be a lowercase UUID");
+    if (!isArtifactDigest(args.digest)) throw invalid("digest must be sha256:<hex>");
+    const session = await ctx.db
+      .query("sessions")
+      .withIndex("by_uuid", (q) => q.eq("id", args.sessionId))
+      .unique();
+    const intake =
+      session === null || session.deletedAt !== null || session.ownerUserId !== caller.ownerUserId
+        ? null
+        : await ctx.db
+            .query("sessionIntake")
+            .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
+            .unique();
+    // Another person's Session reads as unclaimed: its existence is not this runner's to learn.
+    if (intake === null || intake.state === "released") {
+      throw transcriptError("not_claimed", "No runner holds this session.");
+    }
+    if (intake.claim.runnerId !== caller.runnerId || intake.claim.generation !== args.generation) {
+      throw transcriptError("stale_claim", "This runner no longer holds this session.");
+    }
+    const row = await ctx.db
+      .query("transcriptArtifacts")
+      .withIndex("by_session_digest", (q) =>
+        q.eq("sessionId", args.sessionId).eq("digest", args.digest),
+      )
+      .first();
+    if (row === null || row.body === null) return null;
+    return { digest: row.digest, mediaType: row.mediaType, body: row.body };
   },
 });
 

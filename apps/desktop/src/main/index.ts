@@ -1078,6 +1078,7 @@ const appStartup = app.whenReady().then(async () => {
       ? createCloudProductStore({
           host: liveHost,
           ownerUserId: launch.userId,
+          backendUrl: launch.backendUrl,
           runnerId: () =>
             macRunner?.snapshot().runnerId ??
             decodeRunnerRecords(getAppState(liveHost.database.db, CLOUD_RUNNER_APP_STATE_KEY))[
@@ -2866,6 +2867,7 @@ const appStartup = app.whenReady().then(async () => {
             verifySessionToken: sessionTokens.verify,
             observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
             ...recoveredSessionCommandPorts(readyRuntimeServices),
+            ...cloudStore?.agentCommands,
             // The same map the renderer's channel projects: an explicit
             // `volli ticket move` is the other Deliberate-move door, with the
             // same interrupt and the same main-owned pending arrival (VC-668).

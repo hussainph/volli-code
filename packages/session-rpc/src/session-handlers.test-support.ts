@@ -67,7 +67,7 @@ export interface LegacySessionPorts extends Omit<SessionRouterContext, "handlers
   ) => ExperimentSnapshot | Promise<ExperimentSnapshot>;
   createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
   attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
-  /** The socket's Session reads, Workspace-scoped (VC-663, D4): host-core's `executeInWorkspace`. */
+  /** The socket's Session reads, Workspace-scoped (VC-663, D4): host-core's map entry for each. */
   readSessionVerb?: (
     verb: SessionReadVerb,
     workspaceId: string,

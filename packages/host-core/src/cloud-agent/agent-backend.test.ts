@@ -5,7 +5,12 @@
  */
 import { describe, expect, it } from "vite-plus/test";
 
-import { AGENT_TOKEN_REFRESH_AT, createAgentBackend, NotYetSyncedError } from "./agent-backend";
+import {
+  AGENT_TOKEN_REFRESH_AT,
+  createAgentBackend,
+  NotYetSyncedError,
+  runnerTokenBefore,
+} from "./agent-backend";
 import {
   CloudFunctionError,
   CloudOfflineError,
@@ -49,6 +54,14 @@ const grant = (serverTime = 0) => ({
 });
 
 describe("the agent backend", () => {
+  it("bounds runner-token refresh before an agent request can be sent", async () => {
+    await expect(
+      runnerTokenBefore(() => new Promise(() => {}), Date.now() + 10),
+    ).rejects.toMatchObject({ code: "offline", reason: "timeout", delivery: "not_sent" });
+    await expect(runnerTokenBefore(async () => "unused", 0)).rejects.toMatchObject({
+      delivery: "not_sent",
+    });
+  });
   it("mints once per Session, reuses the token, and refreshes it at two thirds of its life", async () => {
     let now = 1_000_000;
     const { client, calls } = scripted((call) =>

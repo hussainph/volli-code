@@ -23,7 +23,7 @@
  *
  * An entry does not hold its verb's handler (VC-923). The handler is
  * the host handler map's entry for the verb's key (`./verbs.ts` for the
- * socket's own verbs), and the entry here is the door's projection of it:
+ * socket's own verbs and its Session reads), and the entry here is the door's projection of it:
  * what the dispatch resolves first, and how the request maps onto the
  * handler's input. One table of handlers, then, behind every door.
  *
@@ -36,12 +36,6 @@ import type { AgentCommandBindingId, SocketHandlerKey } from "@volli/shared";
 import type { SocketVerbHandle } from "./context";
 import { sessionStartDecode, sessionStartFailure } from "./operator-session-start";
 import {
-  sessionAnswerVerb,
-  sessionListVerb,
-  sessionPeekVerb,
-  sessionShowVerb,
-} from "./session-verbs";
-import {
   ticketCommentDecode,
   ticketCreateDecode,
   ticketMoveDecode,
@@ -49,6 +43,7 @@ import {
 } from "./ticket-verbs";
 import {
   projectHandler,
+  servedSessionRead,
   servedVerb,
   type ProjectedVerbBinding,
   type SocketBoardProjections,
@@ -81,8 +76,8 @@ import {
 type EnvSessionPolicy = "resolve" | "skip";
 
 /**
- * One verb's binding: the projection (or, for a delegated read, the handler)
- * that answers it, and what the dispatch resolves on its behalf first.
+ * One verb's binding: the projection that answers it, and what the dispatch
+ * resolves on its behalf first.
  *
  * The policy sits HERE, beside the handler, rather than in a condition inside
  * the dispatch. In the chain it was two `request.cmd` tests listing six verbs
@@ -99,15 +94,13 @@ export interface AgentVerbBinding {
 /**
  * Every socket binding, in the order the Verb Registry declares them.
  *
- * Every verb is a {@link ProjectedVerbBinding}, bar the four Session reads
- * the map delegates the other way (`SOCKET_DELEGATED_HANDLER_KEYS`): the
- * map's entry for each of those runs this socket's own handler, so a
- * projection of it would call itself. The table's type holds the rest:
+ * Every verb is a {@link ProjectedVerbBinding}. The table's type holds it:
  *
  * - A verb whose key the map holds ({@link SocketHandlerKey}: a both-door
- *   catalog command's, VC-668, and each of the socket's own verbs', VC-923)
- *   must be `projectHandler`'s or `servedVerb`'s projection of
- *   `handlers[key]`.
+ *   catalog command's, VC-668, each of the socket's own verbs', VC-923, and
+ *   the four Session reads the agent command service serves, VC-894) must be
+ *   `projectHandler`'s, `servedVerb`'s or `servedSessionRead`'s projection
+ *   of `handlers[key]`.
  * - A ticket write whose command is a board handler must project the board's
  *   key ({@link SocketBoardProjections}, VC-794).
  *
@@ -181,17 +174,18 @@ export const AGENT_VERB_TABLE: {
     failed: sessionStartFailure,
     envSession: "skip",
   }),
-  // The four Session reads the map delegates the other way (VC-663, D4): the
-  // WebSocket's `session.list` (and its siblings) runs THIS handler, Workspace-
-  // scoped, so the socket keeps it.
-  "session.list": { handle: sessionListVerb, envSession: "resolve" },
-  "session.show": { handle: sessionShowVerb, envSession: "resolve" },
+  // The four Session reads (VC-894): the map's one entry for each, which the
+  // agent command service serves and the WebSocket also reaches, Workspace-
+  // scoped (VC-663, D4). Each resolves the caller's identity, whose project
+  // is the default the read is scoped to.
+  "session.list": servedSessionRead("session.list"),
+  "session.show": servedSessionRead("session.show"),
   // The one verb that reads BOTH halves of the roster (VC-79), off one fold
   // rather than by listing the world twice.
-  "session.peek": { handle: sessionPeekVerb, envSession: "resolve" },
+  "session.peek": servedSessionRead("session.peek"),
   // The whole of a chat's last message (VC-9): resolves the handle against the
   // same fold a peek does, then reads one artifact.
-  "session.answer": { handle: sessionAnswerVerb, envSession: "resolve" },
+  "session.answer": servedSessionRead("session.answer"),
   // Identity is the whole requirement (VC-51): the signal needs no terminal
   // attachment, so it needs no roster to find one in.
   "session.done": servedVerb("session.done", "resolve"),

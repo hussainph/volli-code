@@ -61,6 +61,7 @@ export const AGENT_DOOR_HANDLER_KEYS: readonly AgentDoorHandlerKey[] = Object.fr
 export type CloudRoute =
   | { readonly route: "cloud-board"; readonly access: "read" | "write" }
   | { readonly route: "session-target" }
+  | { readonly route: "cloud-notify" }
   | { readonly route: "ledger" }
   | { readonly route: "machine" }
   | { readonly route: "person-only" }
@@ -136,11 +137,8 @@ const ROUTES = {
   "session.blocked": ledger,
   "session.link": ledger,
   "session.harness": ledger,
-  notify: {
-    route: "blocked",
-    until: "VC-578",
-    interim: "A native notification on a Mac; refused on Linux.",
-  },
+  // Runner-only, fenced by this Session's claim; queues attention for its owner.
+  notify: { route: "cloud-notify" },
   hook: ledger,
   doctor: machine,
   "prompt.baseline": machine,

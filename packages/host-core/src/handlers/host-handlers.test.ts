@@ -10,6 +10,7 @@ import {
   isOperationUnavailable,
   OperationUnavailableError,
   REMOTE_HOST_UPDATE_UNAVAILABLE,
+  SESSION_READ_VERBS,
   type ActiveAddHost,
   type AddHostEvent,
   type AddHostFacts,
@@ -218,7 +219,8 @@ describe("the map", () => {
     expect(await unavailable(() => empty["worktree.trimSettings"](undefined, WINDOW))).toBe(
       "The board is unavailable: the database did not open",
     );
-    // The desktop serves the socket's Session reads over no network door.
+    // The Session reads answer as before until the agent command service
+    // serves them (VC-894): the map is sealed without them.
     expect(
       await unavailable(() => empty["session.list"]({ workspaceId: PROJECT, args: {} }, USER)),
     ).toBe("Session reads are unavailable on this transport");
@@ -659,26 +661,17 @@ describe("Session commands", () => {
     );
   });
 
-  it("runs the socket's Session reads Workspace-scoped, through the port it was given (VC-663)", async () => {
-    const answer = { v: 1, ok: true, data: { sessions: [], hidden: 0 } } as const;
-    const sessionReads = vi.fn(async () => answer);
-    const map = handlers({ sessionReads });
-    for (const verb of [
-      "session.list",
-      "session.show",
-      "session.peek",
-      "session.answer",
-    ] as const) {
-      await expect(map[verb]({ workspaceId: PROJECT, args: { id: "a1" } }, USER)).resolves.toBe(
-        answer,
+  // The reads' ports are the agent command service's, which serves them
+  // (VC-894, `agent-dispatch/verbs.ts`): the map is sealed without them, and
+  // a router reaching one before the service exists hears the unavailable
+  // words the sealed entry always answered, unchanged on the wire.
+  it("leaves the Session reads for the agent command service to serve (VC-894)", async () => {
+    const map = handlers();
+    for (const verb of SESSION_READ_VERBS) {
+      expect(await unavailable(() => map[verb]({ workspaceId: PROJECT, args: {} }, USER))).toBe(
+        "Session reads are unavailable on this transport",
       );
     }
-    expect(sessionReads.mock.calls).toEqual([
-      ["session.list", PROJECT, { id: "a1" }],
-      ["session.show", PROJECT, { id: "a1" }],
-      ["session.peek", PROJECT, { id: "a1" }],
-      ["session.answer", PROJECT, { id: "a1" }],
-    ]);
   });
 
   // The one start both agent doors reach (VC-923): the facade, the kickoff,

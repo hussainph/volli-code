@@ -102,6 +102,7 @@ function fixture(busySites: BusyWorktreeSites = async () => []) {
     const cloud = createCloudProductStore({
       host,
       ownerUserId,
+      backendUrl: "http://127.0.0.1:1",
       runnerId: () => runnerId,
       home: root!,
       busySites,

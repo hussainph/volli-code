@@ -220,6 +220,30 @@ describe("a served entry", () => {
     );
   });
 
+  // The socket's Session reads are catalog keys sealed empty the same way
+  // (VC-894): the agent command service serves them, and every door's view
+  // of the map, a router's included, reaches the served entry.
+  it("includes the socket's Session reads, served into a map sealed without them", async () => {
+    const log: string[] = [];
+    const map = sealTestHandlers({});
+    const view = admittedHandlers(map, recordingPolicy(log));
+    const input = { workspaceId: "p", args: {} };
+    await expect(
+      Promise.resolve().then(() => view["session.list"](input, USER)),
+    ).rejects.toBeInstanceOf(HandlerNotServedError);
+    const list = vi.fn(async () => answer);
+    serveHostHandlers(map, { "session.list": list });
+    await expect(view["session.list"](input, USER)).resolves.toBe(answer);
+    expect(list.mock.calls).toEqual([[input, USER]]);
+    expect(log).toEqual([
+      'admit session.list {"workspaceId":"p","args":{}} user',
+      'admit session.list {"workspaceId":"p","args":{}} user',
+    ]);
+    expect(() => serveHostHandlers(map, { "session.list": list })).toThrow(
+      "The handler map already serves session.list.",
+    );
+  });
+
   it("is never reached past a refusing policy, a router's included", async () => {
     const identify = vi.fn(async () => answer);
     const map = sealTestHandlers({});

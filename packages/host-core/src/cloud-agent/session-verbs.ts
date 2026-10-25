@@ -1,0 +1,291 @@
+/** Session verbs in a cloud launch. A local claim uses the ordered runner ledger, even offline. */
+import { randomUUID, createHash } from "node:crypto";
+import {
+  canonicalJson,
+  TRANSCRIPT_ARTIFACT_MEDIA_TYPE,
+  type SessionEngine,
+  type SessionTranscriptArtifact,
+} from "@volli/session-engine";
+import {
+  shortSessionId,
+  type AgentResponse,
+  type RuntimeSessionIdentity,
+  type RuntimeVerbCall,
+  type RuntimeVerbResult,
+} from "@volli/shared";
+import type { AgentBackend } from "./agent-backend";
+import { NotYetSyncedError } from "./agent-backend";
+import type { CloudVerbCall } from "./board-verbs";
+import { CLOUD_VERB_BUDGET_MS } from "./board-verbs";
+import { CloudFunctionError, CloudOfflineError } from "./functions-client";
+import { createCloudSessionReads } from "./session-reads";
+import { failure } from "../agent-dispatch/context";
+import { dryRunResponse } from "../agent-dispatch/preview";
+import { supervisionMarker } from "../session-runtime/supervise-session";
+
+export interface CloudSessionVerbsOptions {
+  backend: AgentBackend;
+  engine: SessionEngine;
+  projectIds(): readonly string[];
+  /** A current-owner cursor not fenced by a moved claim. Never a frozen SQLite board row. */
+  claimedHere(sessionId: string): boolean;
+  notify(
+    sessionId: string,
+    args: { notifyId: string; title: string; detail: string },
+  ): Promise<{ displayName: string }>;
+  ticketDisplayIdOf?(ticketId: string): string | null;
+  newId?(): string;
+  now?(): number;
+}
+
+function responseFor(error: unknown): AgentResponse {
+  if (error instanceof CloudOfflineError) {
+    return failure(
+      error.delivery === "not_sent" ? "OFFLINE" : "TIMEOUT",
+      error.delivery === "not_sent"
+        ? "This runner is offline. Remote Session commands need a connection; local Session updates are kept and sent when it is back."
+        : "Volli Cloud did not confirm this command. It may have landed; inspect the Session before retrying.",
+    );
+  }
+  if (error instanceof NotYetSyncedError) return failure("NOT_YET_SYNCED", error.message);
+  if (error instanceof CloudFunctionError) {
+    const code =
+      error.code === "not_found"
+        ? "SESSION_NOT_FOUND"
+        : ["invalid_argument", "invalid_request", "id_taken"].includes(error.code)
+          ? "INVALID_REQUEST"
+          : [
+                "fenced",
+                "revoked",
+                "not_claimed",
+                "forbidden",
+                "unauthenticated",
+                "not_a_member",
+              ].includes(error.code)
+            ? "FORBIDDEN_ACTOR"
+            : "MUTATION_FAILED";
+    return failure(code, error.message);
+  }
+  return failure(
+    "INVALID_REQUEST",
+    error instanceof Error ? error.message : "This Session command could not be read.",
+  );
+}
+const refused = (text: string): RuntimeVerbResult => ({ text: `Volli refused: ${text}` });
+const readKeys = new Set(["session.list", "session.show", "session.peek", "session.answer"]);
+
+export function createCloudSessionVerbs(options: CloudSessionVerbsOptions) {
+  const { backend, engine } = options;
+  const newId = options.newId ?? randomUUID;
+  const now = options.now ?? Date.now;
+  const reads = createCloudSessionReads({ backend });
+  async function localTarget(handle: string, projectId?: string): Promise<boolean> {
+    const rows =
+      projectId === undefined
+        ? (
+            await Promise.all(
+              options
+                .projectIds()
+                .map((id) => engine.listSessions({ projectId: id, scope: "all" })),
+            )
+          ).flat()
+        : await engine.listSessions({ projectId, scope: "all" });
+    const matches = rows.filter(
+      (p) =>
+        (p.session.id === handle || shortSessionId(p.session.id) === handle) &&
+        options.claimedHere(p.session.id),
+    );
+    if (matches.length > 1)
+      throw new Error(`Session id ${handle} is ambiguous; nothing was touched.`);
+    return matches.length === 1;
+  }
+  return {
+    /** Null delegates to today's local handler; no network request occurs on that path. */
+    async socket(call: CloudVerbCall): Promise<AgentResponse | null> {
+      const { request, sessionId } = call;
+      if (!readKeys.has(request.cmd) && request.cmd !== "notify") return null;
+      if (sessionId === null)
+        return failure(
+          "SIGN_IN_REQUIRED",
+          "Volli Cloud Session verbs need an authenticated Session. A plain-terminal CLI cannot borrow your sign-in.",
+        );
+      try {
+        if (request.cmd === "notify") {
+          const message = request.args["message"];
+          const title = request.args["title"] ?? "Volli Code";
+          if (
+            typeof message !== "string" ||
+            !message.trim() ||
+            typeof title !== "string" ||
+            !title.trim()
+          )
+            return failure("INVALID_REQUEST", "notify requires a message and optional title.");
+          const preview = dryRunResponse(request, {
+            kind: "notification",
+            id: null,
+            label: `Notification for this Session's owner`,
+          });
+          if (preview !== null) return preview;
+          const result = await options.notify(sessionId, {
+            notifyId: newId(),
+            title: title.trim(),
+            detail: message,
+          });
+          return { v: 1, ok: true, data: { notified: true, queuedFor: result.displayName } };
+        }
+        const caller = await engine.getBaseSession({ sessionId });
+        const handle = request.args["id"];
+        if (
+          request.cmd !== "session.list" &&
+          typeof handle === "string" &&
+          (await localTarget(handle, caller?.projectId))
+        )
+          return null;
+        return await reads[
+          request.cmd as "session.list" | "session.show" | "session.peek" | "session.answer"
+        ](call);
+      } catch (error) {
+        return responseFor(error);
+      }
+    },
+    async tool(
+      session: RuntimeSessionIdentity,
+      request: RuntimeVerbCall,
+      signal?: AbortSignal,
+    ): Promise<RuntimeVerbResult | null> {
+      if (
+        (request.verb === "session.start" || request.verb === "session.delegate") &&
+        request.input["env"] !== undefined
+      )
+        return refused("Starting on another runner is not available yet. Omit env to start here.");
+      if (request.verb === "automation.run")
+        return refused(
+          "Automations cannot be run through Volli Cloud yet; no local Automation was substituted.",
+        );
+      if (
+        request.verb === "watch" ||
+        request.verb === "ticket.await" ||
+        request.verb === "session.await"
+      )
+        return refused(
+          "Volli Cloud watches are not available yet. Read the target's current state instead; no in-process watch was armed.",
+        );
+      if (request.verb !== "session.send" && request.verb !== "session.stop") return null;
+      const handle = request.input["session"];
+      if (typeof handle !== "string" || !handle.trim())
+        return refused("session must be a short Session id.");
+      const deadline = now() + CLOUD_VERB_BUDGET_MS;
+      let submitted = false;
+      try {
+        if (await localTarget(handle.trim(), session.projectId)) return null;
+        const resolved = await reads.resolveTarget(
+          session.sessionId,
+          handle.trim(),
+          session.projectId,
+          { deadline },
+        );
+        if (!resolved.ok)
+          return refused(
+            resolved.response.ok
+              ? "That Session could not be resolved."
+              : resolved.response.error.message,
+          );
+        const target = resolved.target;
+        if (target.id === session.sessionId)
+          return refused("That handle is this Session. Signal done or blocked instead.");
+        if (
+          session.role === "subagent" ||
+          (session.role === "ticket" &&
+            (target.role !== "subagent" || target.parentSessionId !== session.sessionId))
+        )
+          return refused("A Ticket Session may steer or stop only its own subagents.");
+        const operationId = `${session.sessionId}:${request.toolCallId}`;
+        let intent: Record<string, unknown>;
+        let artifact: string | undefined;
+        if (request.verb === "session.stop") {
+          const reason = request.input["reason"];
+          if (reason !== undefined && typeof reason !== "string")
+            return refused("reason must be text.");
+          intent = {
+            kind: "session.stop",
+            by: { kind: "session", sessionId: session.sessionId },
+            reason: reason ?? null,
+          };
+        } else {
+          const message = request.input["message"];
+          if (typeof message !== "string" || !message.trim())
+            return refused("message must be non-empty text.");
+          const body: SessionTranscriptArtifact = {
+            version: 1,
+            threadId: operationId,
+            branchId: operationId,
+            attemptId: operationId,
+            turnId: null,
+            message: {
+              id: `${operationId}:message`,
+              role: "user",
+              parts: [
+                {
+                  type: "text",
+                  text: `${supervisionMarker(session.sessionId)}\n\n${message.trim()}`,
+                },
+              ],
+            },
+          };
+          artifact = canonicalJson(body);
+          if (Buffer.byteLength(artifact) > 64 * 1024)
+            return refused("Remote steering messages are limited to 64 KB.");
+          const digest = `sha256:${createHash("sha256").update(artifact).digest("hex")}`;
+          intent = {
+            kind: "message.submit",
+            reference: { id: digest, digest, mediaType: TRANSCRIPT_ARTIFACT_MEDIA_TYPE },
+          };
+        }
+        if (signal?.aborted)
+          return refused("This turn stopped waiting before the remote command was sent.");
+        submitted = true;
+        const result = (await backend.mutation(
+          session.sessionId,
+          "sessions:command",
+          {
+            sessionId: target.id,
+            commandId: operationId,
+            intent: JSON.stringify(intent),
+            ...(artifact === undefined ? {} : { artifact }),
+          },
+          { deadline },
+        )) as { status: string; runner: { name: string } | null };
+        return {
+          text: `Queued ${request.verb === "session.stop" ? "stop" : "steering"} for Session ${shortSessionId(target.id)}${result.runner === null ? "" : ` on ${result.runner.name}`}. This is the inbox receipt, not confirmation that its runner executed it. Read the Session to confirm delivery.`,
+        };
+      } catch (error) {
+        const response = responseFor(
+          error instanceof CloudOfflineError && !submitted
+            ? new CloudOfflineError(error.reason, error.message, "not_sent")
+            : error,
+        );
+        return refused(response.ok ? "Unknown command result." : response.error.message);
+      }
+    },
+    async resolveStartTicket(
+      session: RuntimeSessionIdentity,
+      key: string,
+    ): Promise<{ project: { id: string }; ticket: { id: string } }> {
+      if (
+        session.ticketId !== null &&
+        options.ticketDisplayIdOf?.(session.ticketId)?.toLowerCase() === key.toLowerCase()
+      )
+        return { project: { id: session.projectId }, ticket: { id: session.ticketId } };
+      const found = (await backend.query(
+        session.sessionId,
+        "board:resolveTicketKey",
+        { key },
+        { deadline: now() + CLOUD_VERB_BUDGET_MS },
+      )) as { ticketId: string; projectId: string };
+      if (found.projectId !== session.projectId)
+        throw new Error("That Ticket is not in this Session's project.");
+      return { project: { id: found.projectId }, ticket: { id: found.ticketId } };
+    },
+  };
+}
+export type CloudSessionVerbs = ReturnType<typeof createCloudSessionVerbs>;

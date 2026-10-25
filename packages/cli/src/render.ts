@@ -836,9 +836,22 @@ function renderChatPeek(data: Record<string, unknown>, transcript: readonly unkn
     ...sessionStopLines(data),
     ...runtimePeekLines(data),
     ...pendingQuestionLines(data),
+    ...cloudReadLimitLines(data),
     ...unansweredMessageLines(data, transcript),
     ...transcript.filter(isRecord).map(transcriptLine),
   ].join("\n");
+}
+
+/** Missing cloud history or bodies must be visible in text, not only --json. */
+function cloudReadLimitLines(data: Record<string, unknown>): string[] {
+  return [
+    ...(data["historyComplete"] === false
+      ? ["Only recent accepted history was read; older messages are not shown."]
+      : []),
+    ...(typeof data["unreadableReason"] === "string"
+      ? [`Transcript unavailable: ${terminalSafeInline(data["unreadableReason"])}`]
+      : []),
+  ];
 }
 
 /** Origin cells shared by terminal and chat peek headers. */
@@ -885,6 +898,7 @@ function renderSessionAnswer(data: Record<string, unknown>): string {
       ? []
       : untrustedProseResponseLines({ response: "session answer response", blocks })),
     ...(hasSessionSignal(data["signal"]) ? [sessionSignalLine(data["signal"])] : []),
+    ...cloudReadLimitLines(data),
   ].join("\n");
 }
 
@@ -1477,9 +1491,13 @@ function renderStableLines(command: string, data: unknown, full: boolean): strin
         .join("\n") ?? null;
     if (rows === null) return null;
     const hidden = data["hidden"];
-    return typeof hidden === "number" && hidden > 0
-      ? `${rows}${rows.length > 0 ? "\n" : ""}${hidden} older sessions hidden; --all or --since shows them.`
-      : rows;
+    const shown =
+      typeof hidden === "number" && hidden > 0
+        ? `${rows}${rows.length > 0 ? "\n" : ""}${hidden} older sessions hidden; --all or --since shows them.`
+        : rows;
+    return data["truncated"] === true
+      ? `${shown}${shown.length > 0 ? "\n" : ""}Volli Cloud listing limit reached; older Sessions are not shown.`
+      : shown;
   }
   if (command === "session.answer") {
     if (typeof data["session"] !== "string" || typeof data["state"] !== "string") return null;
@@ -1603,7 +1621,10 @@ function renderStableLines(command: string, data: unknown, full: boolean): strin
     const harnessSessionId = data["harnessSessionId"];
     return typeof harnessSessionId === "string" ? terminalSafeInline(harnessSessionId) : "";
   }
-  if (command === "notify") return data["notified"] === true ? "notified" : null;
+  if (command === "notify") {
+    if (typeof data["queuedFor"] === "string") return `queued for ${data["queuedFor"]}`;
+    return data["notified"] === true ? "notified" : null;
+  }
   if (command === "app.launch") {
     return data["alreadyRunning"] === true ? "Volli is already running" : "Volli launched";
   }

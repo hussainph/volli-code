@@ -59,6 +59,7 @@ import {
   createAgentCommandService as createAgentCommandServiceBase,
   type AgentCommandServiceOptions,
 } from "./agent-commands";
+import type { CloudSessionVerbs } from "./cloud-agent/session-verbs";
 import { createTestSessionEngine } from "./testing/session-engine";
 import { testHostHandlers, type TestHandlerPorts } from "./testing/host-handlers";
 import { writeModelAccessDefault } from "./session-runtime/model-access-preferences";
@@ -3707,7 +3708,10 @@ describe("agent command service", () => {
       venue: { id: "local" as const, kind: "local" as const },
     };
 
-    async function ticketSession(messages: readonly UIMessage[]) {
+    async function ticketSession(
+      messages: readonly UIMessage[],
+      extra: Partial<Pick<AgentCommandServiceOptions, "cloudSessionVerbs">> = {},
+    ) {
       ctx = openTestDb();
       insertProject(
         ctx.db,
@@ -3751,6 +3755,7 @@ describe("agent command service", () => {
           sessionEngine,
           appVersion: "1.2.3",
           readTranscriptArtifact: (reference) => artifacts.read(reference),
+          ...extra,
         }),
       };
     }
@@ -3820,6 +3825,29 @@ describe("agent command service", () => {
           "- [ ] Get the credentials (in progress)",
         ].join("\n"),
       );
+    });
+
+    // VC-894 S6-3: in a cloud launch the backend's accept fold derives this
+    // comment from the signal fact, so the host writes none of its own: the
+    // signal still records, through the local ledger, like any local target.
+    it("leaves the comment to the cloud accept fold in a cloud launch", async () => {
+      const socket = vi.fn(async () => null);
+      const { service, sessionId } = await ticketSession(
+        [todoMessage("m1", [{ content: "Read the ticket", status: "completed" }])],
+        { cloudSessionVerbs: { socket } as unknown as CloudSessionVerbs },
+      );
+
+      const done = await service.execute({
+        v: 1,
+        cmd: "session.done",
+        args: { reason: "Tests pass" },
+        ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
+      });
+
+      expect(done).toMatchObject({ ok: true, data: { signal: "done", recorded: true } });
+      expect(socket).toHaveBeenCalledOnce();
+      expect(listComments(ctx.db, "ticket-one")).toHaveLength(0);
+      expect(ctx.db.prepare("SELECT operation FROM board_command_receipts").all()).toEqual([]);
     });
 
     it("leaves no comment for a Session that never kept a list", async () => {

@@ -257,6 +257,7 @@ describe("runner composition", () => {
     const cloud = createCloudProductStore({
       host,
       ownerUserId: "a",
+      backendUrl: "http://127.0.0.1:1",
       runnerId: () => "runner-a",
       home: root,
       busySites: async () => [],

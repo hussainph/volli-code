@@ -77,6 +77,7 @@ describe("the cloud route table", () => {
       backend: {
         query: async () => null,
         mutation: async () => null,
+        action: async () => null,
         forget: () => {},
       },
     });

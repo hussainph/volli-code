@@ -148,6 +148,8 @@ export interface AutomationToolPort {
 export interface AgentToolDoorOptions {
   db: Database.Database;
   projects: () => readonly Project[];
+  /** Cloud routing is composed only for a cloud product store; null answers retain the local path. */
+  cloudSessionVerbs?: import("./cloud-agent/session-verbs").CloudSessionVerbs;
   /**
    * The host's handler map (VC-923), which this door projects: every tool
    * verb is a key on it. This door serves its own verbs' entries into the
@@ -391,16 +393,28 @@ async function startSessionTool(
   // the authority bound, not a convenience: a Session cannot name a Ticket
   // outside the project its attachment belongs to, because no other project is
   // ever a candidate.
-  const project = options.projects().find(({ id }) => id === session.projectId);
-  if (project === undefined) {
-    return refusal("This Session's project is no longer registered, so nothing was started.");
-  }
-  const resolved = ticketForDisplayId(options.db, [project], ticketArg.trim());
-  if (!resolved.ok) {
-    const reason = resolved.response.ok ? "" : ` ${resolved.response.error.message}`;
-    return refusal(
-      `No Ticket ${ticketArg.trim()} in this project, so nothing was started.${reason}`,
-    );
+  let resolved: { project: { id: string }; ticket: { id: string } };
+  if (options.cloudSessionVerbs !== undefined) {
+    try {
+      resolved = await options.cloudSessionVerbs.resolveStartTicket(session, ticketArg.trim());
+    } catch (error) {
+      return refusal(
+        error instanceof Error ? error.message : "The cloud Ticket could not be resolved.",
+      );
+    }
+  } else {
+    const project = options.projects().find(({ id }) => id === session.projectId);
+    if (project === undefined) {
+      return refusal("This Session's project is no longer registered, so nothing was started.");
+    }
+    const local = ticketForDisplayId(options.db, [project], ticketArg.trim());
+    if (!local.ok) {
+      const reason = local.response.ok ? "" : ` ${local.response.error.message}`;
+      return refusal(
+        `No Ticket ${ticketArg.trim()} in this project, so nothing was started.${reason}`,
+      );
+    }
+    resolved = local;
   }
 
   // Trusted caller identity plus the runtime's own call id, and never a fresh
@@ -1021,8 +1035,14 @@ function toolVerbEntries(options: AgentToolDoorOptions): Pick<HostHandlers, Tool
   const entries: Partial<Record<ToolServedKey, HostHandlers[ToolServedKey]>> = {};
   for (const key of Object.keys(VERB_TOOL_HANDLERS) as ToolServedKey[]) {
     const handle = VERB_TOOL_HANDLERS[key];
-    entries[key] = (input) =>
-      handle(options, input.session, input.request, input.signal, input.budgetAsk);
+    entries[key] = async (input) => {
+      const cloud = await options.cloudSessionVerbs?.tool(
+        input.session,
+        input.request,
+        input.signal,
+      );
+      return cloud ?? handle(options, input.session, input.request, input.signal, input.budgetAsk);
+    };
   }
   return entries as Pick<HostHandlers, ToolServedKey>;
 }
@@ -1099,7 +1119,8 @@ export function createAgentToolDoor(options: AgentToolDoorOptions): AgentToolDoo
     }
     const policy = toolDoorPolicy(request.verb);
     if (request.verb === "session.start") {
-      return startSessionTool(options, policy, session, request, signal, budgetAsk);
+      const cloud = await options.cloudSessionVerbs?.tool(session, request, signal);
+      return cloud ?? startSessionTool(options, policy, session, request, signal, budgetAsk);
     }
     const input: ToolVerbInput = {
       session,

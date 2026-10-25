@@ -256,7 +256,8 @@ describe("Session command jobs", () => {
     expect(f.command).toHaveBeenCalledWith({
       sessionId: "a-session",
       commandId: "delivery-command",
-      command: { kind: "message.submit", message, settle: "opened" },
+      // An agent's send is a steer, as `session_send` is locally.
+      command: { kind: "message.submit", message, settle: "opened", delivery: "steer" },
       origin: { kind: "session", sessionId: "parent" },
     });
     expect(JSON.stringify(claimed.job.payload)).not.toContain(message.parts[0]!.text);

@@ -12,8 +12,25 @@
  * the Session's todo list. Nothing here reads a transcript or writes a row.
  */
 
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { todoListMarkdown, type SessionTodoList } from "../session-todo";
-import type { TicketId } from "./ids";
+import { parseId, type CommentId, type TicketId } from "./ids";
+
+/**
+ * DURABLE, not live: a signal comment's UUID-v8 derivation. Changing this
+ * segment or hash layout would duplicate comments on every refold.
+ */
+export function sessionSignalCommentId(sessionId: string, eventId: string): CommentId {
+  const bytes = sha256(utf8ToBytes(`session-signal-comment:${sessionId}:${eventId}`)).slice(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x80;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytesToHex(bytes);
+  return parseId(
+    "comment",
+    `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`,
+  );
+}
 
 export type SessionSignal = "done" | "blocked";
 

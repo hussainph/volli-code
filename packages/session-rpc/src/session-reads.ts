@@ -1,11 +1,11 @@
 /**
  * The socket's Session reads on the router (VC-663, D4): `session.list`,
  * `show`, `peek` and `answer`, Workspace-scoped. The door maps a name and an
- * envelope, nothing more: the handler is the map's `ctx.handlers[key]`, which
- * runs the socket verb's own handler with its roster forced to the named
- * project (`AgentCommandService.executeInWorkspace` in host-core; a
- * socket-delegated key, VC-668), and every input names that project, so the
- * catalog authorizes it before anything is read.
+ * envelope, nothing more: the handler is the map's `ctx.handlers[key]`, the
+ * one entry the agent socket projects too, which runs the read with its
+ * roster forced to the named project (served by host-core's agent command
+ * service, VC-894), and every input names that project, so the catalog
+ * authorizes it before anything is read.
  *
  * The answers are the socket's JSON, validated recursively as JSON before
  * they leave (`z.json()`): the shape is the socket verb's, which its own

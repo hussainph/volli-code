@@ -39,8 +39,8 @@ import {
   JOB_LEASE_MS,
   JOB_PRIORITIES,
   NOTICE_MAX_WAIT_MS,
-  isTerminalJobStatus,
   isDerivedId,
+  isTerminalJobStatus,
   isUuid,
   jobRank,
   jobResultProblem,
@@ -91,6 +91,7 @@ function bounded(value: number | undefined, fallback: number, min: number, max: 
   return Math.min(Math.max(Math.floor(chosen), min), max);
 }
 
+/** A job by id: a UUID, or a `session.command`'s frozen derived command id (`lib/jobs.ts`). */
 async function jobOf(ctx: MutationCtx, jobId: string): Promise<Doc<"runnerJobs"> | null> {
   if (!isDerivedId(jobId)) return null;
   return ctx.db

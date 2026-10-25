@@ -12,7 +12,8 @@
 import type Database from "better-sqlite3";
 import {
   CATALOG_HANDLER_KEYS,
-  SERVED_AGENT_HANDLER_KEYS,
+  SERVED_CATALOG_HANDLER_KEYS,
+  SERVED_HANDLER_KEYS,
   SHARED_AGENT_HANDLER_KEYS,
   type DataChangedEvent,
   type HandlerCall,
@@ -167,16 +168,19 @@ export function sealTestHandlers(
   onAdmission?: AdmissionObserver,
 ): HostHandlerMap {
   const total: Record<string, unknown> = {};
+  const served: ReadonlySet<string> = new Set(SERVED_CATALOG_HANDLER_KEYS);
   for (const key of [...CATALOG_HANDLER_KEYS, ...SHARED_AGENT_HANDLER_KEYS]) {
+    if (served.has(key)) continue;
     total[key] =
       entries[key] ??
       (() => {
         throw new Error(`This test states no ${key} handler.`);
       });
   }
-  // A door's own verb the test states is sealed; the rest stay empty for the
-  // agent doors to serve (VC-923), exactly as on a host's map.
-  for (const key of SERVED_AGENT_HANDLER_KEYS) {
+  // A served key the test states is sealed; the rest stay empty for the agent
+  // doors (VC-923) and the agent command service's Session reads (VC-894) to
+  // serve, exactly as on a host's map.
+  for (const key of SERVED_HANDLER_KEYS) {
     if (entries[key] !== undefined) total[key] = entries[key];
   }
   return sealHostHandlers(total as unknown as HostHandlers, onAdmission);
