@@ -622,13 +622,6 @@ export async function boot(
   return { ok: true };
 }
 
-/**
- * The rest of a cloud launch's boot (VC-889): this Mac's projects and boards
- * are not hydrated (Volli Cloud's arrive with the client, `startCloudBoard`);
- * only their count is kept, for the rail's footer, and the local and remote
- * selections stay as they were for the next local launch. The window's own
- * preferences restore as always.
- */
 /** Why a cloud project cannot be written to now, in its link's words, or `null` when it can. */
 function cloudReadOnlyReason(projectId: string): string | null {
   const state = useHostConnectionStore.getState();
@@ -637,6 +630,13 @@ function cloudReadOnlyReason(projectId: string): string | null {
   return hostSurface({ ...host, link: projectLinkOf(state, projectId) }, Date.now())!.line;
 }
 
+/**
+ * The rest of a cloud launch's boot (VC-889): this Mac's projects and boards
+ * are not hydrated (Volli Cloud's arrive with the client, `startCloudBoard`);
+ * only their count is kept, for the rail's footer, and the local and remote
+ * selections stay as they were for the next local launch. The window's own
+ * preferences restore as always.
+ */
 async function bootCloudLaunch(
   launch: Extract<CloudLaunch, { store: "cloud" }>,
   payload: BootstrapPayload,

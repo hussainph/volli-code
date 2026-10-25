@@ -172,10 +172,11 @@ describe("the cloud board's optimistic updates (VC-889)", () => {
     const created = next.tickets.at(-1)!;
     expect(created).toMatchObject({ id: id(9), number: 0, title: "New", createdAt: 7 });
     expect(created.position > "a1").toBe(true);
-    expect(created.labelIds).toEqual(["l1", "pending:0"]);
+    expect(created.labelIds[0]).toBe("l1");
+    expect(created.labelIds[1]).toMatch(/^pending:[0-9a-f-]{36}$/u);
     expect(next.labels.map((value) => [value.id, value.name])).toEqual([
       ["l1", "UI"],
-      ["pending:0", "Fresh"],
+      [created.labelIds[1], "Fresh"],
     ]);
     expect(store.read("getTicket", { ticketId: id(9) })).toMatchObject({
       body: "# Body",
@@ -217,13 +218,18 @@ describe("the cloud board's optimistic updates (VC-889)", () => {
       tickets: Record<string, unknown>[];
       labels: { id: string }[];
     };
-    expect(next.tickets[0]).toMatchObject({
-      title: "Renamed",
-      priority: "high",
-      labelIds: ["pending:0"],
-      updatedAt: 5,
+    expect(next.tickets[0]).toMatchObject({ title: "Renamed", priority: "high", updatedAt: 5 });
+    const [pending] = next.tickets[0]!.labelIds as string[];
+    expect(next.labels.map((value) => value.id)).toEqual([pending]);
+    // Another pending write's new label never shares its id.
+    optimisticUpdate(store, QUERIES, {
+      projectId: P,
+      ticketId: id(2),
+      command: { labels: ["other"] },
+      now: 5,
     });
-    expect(next.labels.map((value) => value.id)).toEqual(["pending:0"]);
+    const both = store.read("roster", { projectId: P }) as typeof next;
+    expect(new Set(both.labels.map((value) => value.id)).size).toBe(2);
     expect(store.read("getTicket", { ticketId: id(1) })).toMatchObject({
       body: "new",
       ticket: { title: "Renamed" },

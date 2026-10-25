@@ -2,6 +2,8 @@ import { describe, expect, test } from "vite-plus/test";
 
 import {
   applyTicketChanges,
+  columnEnd,
+  predictMove,
   boardLabelFromRow,
   boardTicketFromRow,
   dropNeighbours,
@@ -191,5 +193,32 @@ describe("applyTicketChanges", () => {
     expect(next[2]).toBe(frozen[2]);
     expect(next[1]).toEqual({ ...row(2), status: "doing", position: "b0" });
     expect(frozen[1]).toEqual(row(2));
+  });
+});
+
+describe("columnEnd and predictMove", () => {
+  test("names a column's last live position, or none", () => {
+    const board = [
+      ticket(1),
+      ticket(3),
+      ticket(2),
+      ticket(4, { status: "doing" }),
+      ticket(9, { archivedAt: 1, position: "z" }),
+    ];
+    expect(columnEnd(board, "todo")).toBe("a3");
+    expect(columnEnd(board, "done")).toBeNull();
+  });
+
+  test("decides a move over the board's own gap, refusing as the backend refuses", () => {
+    const board = [ticket(1), ticket(2), ticket(3, { status: "doing" })];
+    const decision = predictMove(
+      board,
+      { ticketIds: [board[2]!.id], toStatus: "todo", afterTicketId: board[0]!.id },
+      0,
+    );
+    expect(decision.changes).toHaveLength(1);
+    const position = decision.changes[0]!.patch.position!;
+    expect(position > "a1" && position < "a2").toBe(true);
+    expect(() => predictMove(board, { ticketIds: [], toStatus: "todo" }, 0)).toThrow();
   });
 });

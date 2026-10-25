@@ -12,13 +12,12 @@ import { describe, expect, test } from "vite-plus/test";
 import {
   boardLabelFromRow,
   boardTicketFromRow,
+  columnEnd,
   decideCreateTicket,
-  decideMoveTickets,
   decideUnarchiveTicket,
   dropNeighbours,
-  movingTicketIds,
   newId,
-  resolveMoveGap,
+  predictMove,
   type MoveTicketsCommand,
   type ProjectId,
   type TicketId,
@@ -50,13 +49,8 @@ async function facts(as: Client, projectId: string) {
 /** What the client paints for a move, and what the backend then holds, for the moved tickets. */
 async function parity(as: Client, projectId: string, command: MoveTicketsCommand) {
   const before = await facts(as, projectId);
-  const named = before.filter((ticket) => command.ticketIds.includes(ticket.id));
-  const moving = new Set<string>(movingTicketIds(command, named));
-  const gap = resolveMoveGap(before, command, moving);
-  const decision = decideMoveTickets(
-    { tickets: named, after: gap.after, before: gap.before, now: Date.now() },
-    command,
-  );
+  // Exactly what the desktop's optimistic move runs (`optimistic.ts`).
+  const decision = predictMove(before, command, Date.now());
   const optimistic = Object.fromEntries(
     decision.changes.map(({ ticketId, patch }) => {
       const ticket = before.find(({ id }) => id === ticketId)!;
@@ -189,16 +183,12 @@ describe("an optimistic create and unarchive land where the backend puts them", 
     const { as, projectId } = await boardFixture(setup());
     await seed(as, projectId, { todo: ["A", "B"] });
     const { tickets, labels } = await as.query(api.board.roster, { projectId });
-    const column = tickets
-      .filter(({ status }) => status === "todo")
-      .map(({ position }) => position)
-      .toSorted();
     const ticketId = newId("ticket");
     const decision = decideCreateTicket(
       {
         projectId: projectId as ProjectId,
         number: 0,
-        columnEnd: column.at(-1) ?? null,
+        columnEnd: columnEnd(tickets, "todo"),
         labels: labels.map(boardLabelFromRow),
         mintLabelId: () => newId("label"),
       },
@@ -224,13 +214,11 @@ describe("an optimistic create and unarchive land where the backend puts them", 
       ticketId: id.A!,
     });
     const before = await facts(as, projectId);
-    const end = before
-      .filter(({ status }) => status === "doing")
-      .map(({ position }) => position)
-      .toSorted()
-      .at(-1);
     const archived = (await as.query(api.board.getTicket, { ticketId: id.A! })).ticket;
-    const decision = decideUnarchiveTicket(boardTicketFromRow(archived), end ?? null);
+    const decision = decideUnarchiveTicket(
+      boardTicketFromRow(archived),
+      columnEnd(before, "doing"),
+    );
     await as.mutation(api.board.unarchiveTicket, {
       commandId: newId("command"),
       ticketId: id.A!,

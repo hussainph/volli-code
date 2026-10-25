@@ -9,10 +9,18 @@
  * point of computing it the same way is that, with no concurrent change, the
  * answer is identical and replaces nothing on screen (`board-optimistic.parity.test.ts`).
  */
-import type { BoardLabel, BoardTicket, TicketChange } from "./board-rules";
+import {
+  decideMoveTickets,
+  movingTicketIds,
+  type BoardLabel,
+  type BoardTicket,
+  type MoveTicketsCommand,
+  type MoveTicketsDecision,
+  type TicketChange,
+} from "./board-rules";
 import type { CheckoutMode } from "./board-events";
 import type { LabelId, ProjectId, RunnerId, TicketId, UserId } from "./ids";
-import { comparePositions } from "./positions";
+import { comparePositions, type PositionKey } from "./positions";
 import type { TicketStatus } from "../ticket";
 
 /** A stored ticket, as a document or a roster row: the fields the rules read. */
@@ -166,4 +174,36 @@ export function applyTicketChanges<Row extends { readonly id: string }>(
     const patch = patches.get(row.id);
     return patch === undefined ? row : { ...row, ...patch };
   });
+}
+
+/**
+ * The last position of a column's live tickets, or `null` when it is empty:
+ * where a create or an unarchive lands, as the backend reads it.
+ */
+export function columnEnd(
+  tickets: readonly Pick<BoardTicket, "status" | "position" | "archivedAt">[],
+  status: TicketStatus,
+): PositionKey | null {
+  let end: PositionKey | null = null;
+  for (const ticket of tickets) {
+    if (ticket.status !== status || ticket.archivedAt !== null) continue;
+    if (end === null || comparePositions(ticket.position, end) > 0) end = ticket.position;
+  }
+  return end;
+}
+
+/**
+ * A move as the backend will decide it over the same board: the moving
+ * tickets, the gap read around them ({@link resolveMoveGap}) and the shared
+ * rule. Throws the rule's refusal, as the backend will.
+ */
+export function predictMove(
+  tickets: readonly BoardTicket[],
+  command: MoveTicketsCommand,
+  now: number,
+): MoveTicketsDecision {
+  const named = tickets.filter((ticket) => command.ticketIds.includes(ticket.id));
+  const moving = new Set<string>(movingTicketIds(command, named));
+  const gap = resolveMoveGap(tickets, command, moving);
+  return decideMoveTickets({ tickets: named, after: gap.after, before: gap.before, now }, command);
 }

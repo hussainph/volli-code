@@ -15,7 +15,7 @@
  * - Paths are a runner's, never the backend's: `worktreePath` is always
  *   `null`, a project's `path` always `""`.
  */
-import { compareBoardOrder, labelNamesOf } from "@volli/shared/cloud";
+import { compareBoardOrder, labelNamesOf, type BoardTicketRow } from "@volli/shared/cloud";
 import { AGENT_ACTOR_PREFIX, USER_ACTOR } from "@volli/shared";
 import type {
   ArchivedTicket,
@@ -31,20 +31,10 @@ import type {
   TicketStatus,
 } from "@volli/shared";
 
-/** A roster ticket row: the fields of `board.roster`'s rows the board reads. */
-export interface CloudTicketRow {
-  readonly id: string;
-  readonly projectId: string;
-  readonly number: number;
-  readonly title: string;
+/** A roster ticket row: the rules' fields, and what else of `board.roster`'s rows the board reads. */
+export interface CloudTicketRow extends BoardTicketRow {
   readonly status: TicketStatus;
   readonly priority: TicketPriority;
-  readonly position: string;
-  readonly labelIds: readonly string[];
-  readonly checkoutMode: string;
-  readonly preferredHarnessId: string;
-  readonly branch: string | null;
-  readonly baseBranch: string | null;
   readonly pullRequests: readonly { readonly url: string }[];
   readonly createdAt: number;
   readonly updatedAt: number;

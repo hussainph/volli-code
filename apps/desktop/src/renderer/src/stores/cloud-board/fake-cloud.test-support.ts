@@ -79,20 +79,35 @@ export function fakeCloud(): FakeCloud {
     mutation(
       reference: unknown,
       args: Record<string, unknown>,
-      options: { optimisticUpdate(store: unknown): void },
+      options?: { optimisticUpdate(store: unknown): void },
     ) {
-      // The optimistic update runs over the watched results, as Convex runs it.
-      options.optimisticUpdate({
+      // The optimistic update runs over the watched results, as Convex runs it,
+      // and a refusal rolls it back (an answer keeps it: the backend agreed).
+      const before = new Map<Entry, unknown>();
+      options?.optimisticUpdate({
         getQuery: (query: unknown, queryArgs: Record<string, unknown>) =>
           entry(getFunctionName(query as never), queryArgs).result,
         setQuery: (query: unknown, queryArgs: Record<string, unknown>, value: unknown) => {
           const watched = entry(getFunctionName(query as never), queryArgs);
+          // Each update here sets a query at most once.
+          before.set(watched, watched.result);
           watched.result = value;
           notify(watched);
         },
       });
       return new Promise((resolve, reject) => {
-        mutations.push({ name: getFunctionName(reference as never), args, resolve, reject });
+        mutations.push({
+          name: getFunctionName(reference as never),
+          args,
+          resolve,
+          reject: (error) => {
+            for (const [watched, value] of before) {
+              watched.result = value;
+              notify(watched);
+            }
+            reject(error);
+          },
+        });
       });
     },
   };

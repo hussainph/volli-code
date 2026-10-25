@@ -5,8 +5,6 @@ import type { CloudSession } from "@renderer/lib/cloud-client";
 
 import { fakeCloud, refusal } from "./fake-cloud.test-support";
 import type { CloudProjectRow } from "./projection";
-import { api } from "@volli/convex/api";
-
 import {
   createCloudProject,
   followCloudWorkspace,
@@ -184,41 +182,24 @@ describe("a new project in the Workspace (VC-889)", () => {
     expect(cloud.mutations).toEqual([]);
   });
 
-  it("shows at once with the prefix the shared rule names, as a blank project", async () => {
+  it("creates a blank project with the client's id and the prefix asked for", async () => {
     const cloud = fakeCloud();
-    cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("a", { ticketPrefix: "VC" })]);
     const creating = createCloudProject({ name: "Site", ticketPrefix: "WEB" }, cloud.session, "w1");
     const [mutation] = cloud.mutations;
     expect(mutation).toMatchObject({
       name: "projects:create",
       args: { workspaceId: "w1", name: "Site", ticketPrefix: "WEB", origin: "blank" },
     });
-    expect(
-      (
-        cloud.session.client.watchQuery as never as (
-          r: unknown,
-          a: unknown,
-        ) => {
-          localQueryResult(): CloudProjectRow[];
-        }
-      )(api.projects.list, { workspaceId: "w1" })
-        .localQueryResult()
-        .map(({ name, ticketPrefix }) => [name, ticketPrefix]),
-    ).toEqual([
-      ["A", "VC"],
-      ["Site", "WEB"],
-    ]);
     mutation!.resolve({ projectId: mutation!.args["projectId"] });
     expect(await creating).toEqual({ ok: true, projectId: mutation!.args["projectId"] });
+    void createCloudProject({ name: "Plain" }, cloud.session, "w1");
+    expect(cloud.mutations[1]!.args).not.toHaveProperty("ticketPrefix");
   });
 
-  it("paints nothing for a list not loaded or a name the rule refuses, and says a refusal", async () => {
+  it("says a refusal in the backend's words", async () => {
     const cloud = fakeCloud();
-    const unloaded = createCloudProject({ name: "X" }, cloud.session, "w1");
+    const refused = createCloudProject({ name: "X" }, cloud.session, "w1");
     cloud.mutations[0]!.reject(refusal("prefix_taken", "Prefix taken."));
-    expect(await unloaded).toEqual({ ok: false, error: "Prefix taken." });
-    cloud.answer("projects:list", { workspaceId: "w1" }, []);
-    void createCloudProject({ name: "  " }, cloud.session, "w1");
-    expect(cloud.watchers("projects:list", { workspaceId: "w1" })).toBe(0);
+    expect(await refused).toEqual({ ok: false, error: "Prefix taken." });
   });
 });

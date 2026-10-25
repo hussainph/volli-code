@@ -1472,7 +1472,10 @@ const appStartup = app.whenReady().then(async () => {
           if (!isExperimentEnabled("cloud")) throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
           relaunch.request();
         },
-        reportUnsavedWrites: (count) => recordUnsavedBoardWrites(count),
+        reportUnsavedWrites: (count) => {
+          if (!isExperimentEnabled("cloud")) throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
+          recordUnsavedBoardWrites(count);
+        },
       }),
     };
   };

@@ -193,8 +193,10 @@ features) until it is retired after migration; an embedded local backend may bri
 back later with the same functions.
 
 **The window's own client (VC-889).** In a cloud launch the desktop window
-reads its board from the backend with its own Convex client; main never
-proxies board data. That client authenticates with a short-lived access
+reads and writes its board with its own Convex client; main never proxies
+board data. A write paints at once through Convex's optimistic update (the
+shared `decide…` rules over the client's own rows, never durable) and is
+refused, not queued, while the window cannot reach the backend. That client authenticates with a short-lived access
 token main hands it on demand (`account.accessToken`, a desktop-only entry),
 held in memory only and never logged; the refresh token never leaves main.
 The window's CSP lets it connect only to its own origin, plus the loopback a

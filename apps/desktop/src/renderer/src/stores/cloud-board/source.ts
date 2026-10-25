@@ -33,6 +33,7 @@ import type {
   TicketPriority,
   TicketStatus,
 } from "@volli/shared";
+import { DEFAULT_HARNESS_ID } from "@volli/shared";
 import {
   boardTicketFromRow,
   dropNeighbours,
@@ -79,6 +80,12 @@ export const CLOUD_WRITES_UNAVAILABLE = "Not available for Volli Cloud projects 
 
 /** What a write says while the client is not connected. */
 export const CLOUD_READ_ONLY = "Can’t reach Volli Cloud · Read-only";
+
+/** What a drop says before its board has loaded. */
+export const BOARD_NOT_LOADED = "The board hasn’t loaded yet.";
+
+/** What recoloring a label the backend has not named yet says. */
+export const LABEL_PENDING = "That label is still being saved.";
 
 /** The fields a cloud ticket's update sends. */
 type CloudUpdate = Pick<UpdateTicketCommand, "title" | "body" | "priority" | "checkoutMode"> & {
@@ -312,7 +319,8 @@ export class ConvexBoardSource implements BoardSource {
     const outcome = await this.#issue(projectId, issue);
     if (outcome.ok) return outcome.reply;
     if (outcome.refused) this.#view.refused(outcome.error);
-    else this.#view.failed(`Couldn’t ${verb}: ${outcome.error}`);
+    // A project dropped for it has said why already.
+    else if (!outcome.dropped) this.#view.failed(`Couldn’t ${verb}: ${outcome.error}`);
     return null;
   }
 
@@ -320,9 +328,11 @@ export class ConvexBoardSource implements BoardSource {
   async #issue<Reply>(
     projectId: string | undefined,
     issue: (session: CloudSession) => Promise<Reply>,
-  ): Promise<{ ok: true; reply: Reply } | { ok: false; error: string; refused: boolean }> {
+  ): Promise<
+    { ok: true; reply: Reply } | { ok: false; error: string; refused: boolean; dropped: boolean }
+  > {
     const refusal = this.#refusal(projectId);
-    if (refusal !== null) return { ok: false, error: refusal, refused: true };
+    if (refusal !== null) return { ok: false, error: refusal, refused: true, dropped: false };
     const session = this.#session!;
     const unconfirmed = setTimeout(() => {
       if (session.client.connectionState().isWebSocketConnected) {
@@ -333,11 +343,15 @@ export class ConvexBoardSource implements BoardSource {
       return { ok: true, reply: await issue(session) };
     } catch (error) {
       const failure = cloudFailure(error);
-      if (projectId !== undefined && gone(failure.code)) {
+      // Only a lost membership is about the project; a write's `not_found`
+      // names the ticket, neighbour or comment it named, and the roster's own
+      // watch notices a project that is really gone.
+      const dropped = projectId !== undefined && failure.code === "not_a_member";
+      if (dropped) {
         this.close(projectId);
         this.#view.dropped(projectId, failure.message);
       }
-      return { ok: false, error: failure.message, refused: false };
+      return { ok: false, error: failure.message, refused: false, dropped };
     } finally {
       clearTimeout(unconfirmed);
     }
@@ -390,6 +404,8 @@ export class ConvexBoardSource implements BoardSource {
       ...(fields.baseBranch === undefined ? {} : { baseBranch: fields.baseBranch }),
     };
     if (command.body !== undefined) this.#bodies.set(ticketId, command.body);
+    // Stamped once: Convex re-runs the update on every push until it settles.
+    const issuedAt = Date.now();
     const reply = await this.#write(projectId, "create ticket", ({ client, api }) =>
       client.mutation(
         api.board.createTicket,
@@ -400,7 +416,7 @@ export class ConvexBoardSource implements BoardSource {
               projectId,
               command,
               createdBy: this.#actor,
-              now: Date.now(),
+              now: issuedAt,
             }),
         },
       ),
@@ -410,7 +426,29 @@ export class ConvexBoardSource implements BoardSource {
       return null;
     }
     this.#ticketProject.set(ticketId, projectId);
-    return this.#ticket(projectId, ticketId);
+    // Accepted: the card as the board paints it, or as accepted when the
+    // board cannot be read right now (never "not created": a retry would duplicate it).
+    return (
+      this.#ticket(projectId, ticketId) ?? {
+        id: ticketId,
+        projectId,
+        ticketNumber: reply.number,
+        title: fields.title.trim(),
+        body: fields.body ?? "",
+        status: fields.status,
+        priority: fields.priority ?? "medium",
+        labels: [...(fields.labels ?? [])],
+        usesWorktree: fields.usesWorktree ?? true,
+        preferredHarnessId: fields.preferredHarnessId ?? DEFAULT_HARNESS_ID,
+        order: 0,
+        worktreePath: null,
+        branch: null,
+        baseBranch: fields.baseBranch ?? null,
+        prUrl: null,
+        createdAt: issuedAt,
+        updatedAt: issuedAt,
+      }
+    );
   }
 
   async moveTickets(
@@ -421,7 +459,13 @@ export class ConvexBoardSource implements BoardSource {
     choice?: DeliberateMoveChoice,
   ): Promise<void> {
     const roster = this.#liveRoster(projectId);
-    const facts = roster?.tickets.map((row) => boardTicketFromRow(row as never)) ?? [];
+    if (roster === null) {
+      // A drop's place is read off the board; without one it would land elsewhere.
+      this.#view.refused(BOARD_NOT_LOADED);
+      return;
+    }
+    const facts = roster.tickets.map(boardTicketFromRow);
+    const issuedAt = Date.now();
     const command = {
       ticketIds: ticketIds as TicketId[],
       toStatus,
@@ -440,7 +484,7 @@ export class ConvexBoardSource implements BoardSource {
               optimisticMove(store as unknown as LocalStore, api.board, {
                 projectId,
                 command,
-                now: Date.now(),
+                now: issuedAt,
               }),
           },
         ),
@@ -484,6 +528,7 @@ export class ConvexBoardSource implements BoardSource {
     verb: string,
     command: CloudUpdate,
   ): Promise<boolean> {
+    const issuedAt = Date.now();
     const reply = await this.#write(projectId, verb, ({ client, api }) =>
       client.mutation(
         api.board.updateTicket,
@@ -494,7 +539,7 @@ export class ConvexBoardSource implements BoardSource {
               projectId,
               ticketId,
               command,
-              now: Date.now(),
+              now: issuedAt,
             }),
         },
       ),
@@ -503,6 +548,10 @@ export class ConvexBoardSource implements BoardSource {
   }
 
   async setLabelColor(projectId: string, labelId: string, color: string | null) {
+    if (labelId.startsWith("pending:")) {
+      this.#view.refused(LABEL_PENDING);
+      return;
+    }
     await this.#write(projectId, "update label color", ({ client, api }) =>
       client.mutation(
         api.board.setLabelColor,
@@ -535,6 +584,7 @@ export class ConvexBoardSource implements BoardSource {
 
   async unarchiveTicket(projectId: string, archived: ArchivedTicket): Promise<Ticket | null> {
     const ticketId = archived.id;
+    const issuedAt = Date.now();
     const reply = await this.#write(projectId, "unarchive ticket", ({ client, api }) =>
       client.mutation(
         api.board.unarchiveTicket,
@@ -544,13 +594,14 @@ export class ConvexBoardSource implements BoardSource {
             optimisticUnarchive(store as unknown as LocalStore, api.board, {
               projectId,
               ticketId,
-              now: Date.now(),
+              now: issuedAt,
             }),
         },
       ),
     );
     if (reply === null) return null;
-    return this.#ticket(projectId, ticketId);
+    const { archivedAt: _archivedAt, ...live } = archived;
+    return this.#ticket(projectId, ticketId) ?? live;
   }
 
   /** Deletion is retention's (L5): a cloud ticket offers Archive only. */
@@ -606,6 +657,7 @@ export class ConvexBoardSource implements BoardSource {
     commentId: string,
     body: string,
   ): Promise<{ ok: true } | { ok: false; error: string }> {
+    const issuedAt = Date.now();
     const outcome = await this.#issue(this.projectOf(ticketId), ({ client, api }) =>
       client.mutation(
         api.board.updateComment,
@@ -617,7 +669,7 @@ export class ConvexBoardSource implements BoardSource {
               ticketId,
               commentId,
               body,
-              now: Date.now(),
+              now: issuedAt,
             }),
         },
       ),

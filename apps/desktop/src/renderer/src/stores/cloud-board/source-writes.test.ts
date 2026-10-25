@@ -4,8 +4,10 @@ import { fakeCloud, refusal } from "./fake-cloud.test-support";
 import type { CloudTicketRow } from "./projection";
 import {
   CLOUD_READ_ONLY,
+  BOARD_NOT_LOADED,
   CLOUD_WRITES_UNAVAILABLE,
   ConvexBoardSource,
+  LABEL_PENDING,
   UNCONFIRMED_AFTER_MS,
   type CloudBoardView,
 } from "./source";
@@ -124,20 +126,33 @@ describe("the cloud board's writes (VC-889)", () => {
   });
 
   it("says the backend's refusal, and leaves a project it can no longer write", async () => {
-    const { cloud, screen, source } = await setup();
+    const { cloud, screen, source, lastPaint } = await setup();
     const move = source.moveTickets(P, [tid(1)], "doing", 0);
+    expect(lastPaint().find(({ id }) => id === tid(1))?.status).toBe("doing");
     cloud.mutations[0]!.reject(refusal("invalid_position", "Out of order."));
     await move;
+    // Rolled back: the card is where it was.
+    expect(lastPaint().find(({ id }) => id === tid(1))?.status).toBe("todo");
     expect(screen.failed).toHaveBeenLastCalledWith("Couldn’t move ticket: Out of order.");
+    // A write's not_found names what it named, never the project: it stays.
+    const stale = source.moveTickets(P, [tid(1)], "doing", 0);
+    cloud.mutations[1]!.reject(
+      refusal("not_found", "A move names a neighbour that does not exist."),
+    );
+    await stale;
+    expect(source.follows(P)).toBe(true);
+    expect(screen.dropped).not.toHaveBeenCalled();
     const group = source.moveTickets(P, [tid(1), tid(2)], "done", 0);
-    cloud.mutations[1]!.reject(refusal("not_a_member", "Not a Member."));
+    cloud.mutations[2]!.reject(refusal("not_a_member", "Not a Member."));
     await group;
-    expect(screen.failed).toHaveBeenLastCalledWith("Couldn’t move tickets: Not a Member.");
+    // Said once: the drop says why, with no second "Couldn't" line.
     expect(screen.dropped).toHaveBeenCalledWith(P, "Not a Member.");
+    expect(screen.failed).toHaveBeenCalledTimes(2);
     expect(source.follows(P)).toBe(false);
-    // A board it no longer follows moves with no neighbours named.
-    void source.moveTickets(P, [tid(1)], "doing", 0);
-    expect(cloud.mutations[2]!.args).toMatchObject({ afterTicketId: null, beforeTicketId: null });
+    // A board it no longer follows has no place to drop into: refused, never issued.
+    await source.moveTickets(P, [tid(1)], "doing", 0);
+    expect(screen.refused).toHaveBeenLastCalledWith(BOARD_NOT_LOADED);
+    expect(cloud.mutations).toHaveLength(3);
   });
 
   it("creates with its own id and no key, answering the card as the board paints it", async () => {
@@ -175,22 +190,56 @@ describe("the cloud board's writes (VC-889)", () => {
     expect(await refused).toBeNull();
   });
 
-  it("answers no card when the board is not watched", async () => {
+  it("answers an accepted card even when the board cannot be read, never 'not created'", async () => {
     const cloud = fakeCloud();
     const source = new ConvexBoardSource(view(), "user-1");
     source.attach(cloud.session);
-    const creating = source.createTicket(P, { status: "todo", title: "New" });
-    cloud.mutations[0]!.resolve({});
-    expect(await creating).toBeNull();
-    // A watched board not answered yet, or whose roster read fails, answers none either.
+    const creating = source.createTicket(P, { status: "todo", title: " New " });
+    cloud.mutations[0]!.resolve({ number: 4 });
+    expect(await creating).toMatchObject({
+      title: "New",
+      ticketNumber: 4,
+      body: "",
+      priority: "medium",
+      labels: [],
+      usesWorktree: true,
+      preferredHarnessId: "claude-code",
+      baseBranch: null,
+    });
+    // A watched board not answered yet, or whose roster read fails, answers the same way.
     await source.open(P);
-    const unanswered = source.createTicket(P, { status: "todo", title: "Two" });
-    cloud.mutations[1]!.resolve({});
-    expect(await unanswered).toBeNull();
+    const unanswered = source.createTicket(P, {
+      status: "doing",
+      title: "Two",
+      body: "b",
+      priority: "low",
+      labels: ["x"],
+      usesWorktree: false,
+      preferredHarnessId: "codex",
+      baseBranch: "main",
+    });
+    cloud.mutations[1]!.resolve({ number: 5 });
+    expect(await unanswered).toMatchObject({
+      ticketNumber: 5,
+      status: "doing",
+      body: "b",
+      priority: "low",
+      labels: ["x"],
+      usesWorktree: false,
+      preferredHarnessId: "codex",
+      baseBranch: "main",
+    });
     cloud.fail("board:roster", { projectId: P }, new Error("down"));
     const second = source.createTicket(P, { status: "todo", title: "Three" });
-    cloud.mutations[2]!.resolve({});
-    expect(await second).toBeNull();
+    cloud.mutations[2]!.resolve({ number: 6 });
+    expect(await second).toMatchObject({ ticketNumber: 6 });
+    const restoring = source.unarchiveTicket(P, {
+      id: tid(9),
+      title: "Old",
+      archivedAt: 3,
+    } as never);
+    cloud.mutations[3]!.resolve({});
+    expect(await restoring).toEqual({ id: tid(9), title: "Old" });
   });
 
   it("updates a ticket's fields, priority and labels, and never a runner's branch", async () => {
@@ -229,12 +278,23 @@ describe("the cloud board's writes (VC-889)", () => {
     expect(lastPaint().map(({ id }) => id)).not.toContain(tid(2));
     cloud.mutations[1]!.resolve({});
     expect(await archiving).toBe(true);
-    const restoring = source.unarchiveTicket(P, { id: tid(9) } as never);
+    const restoring = source.unarchiveTicket(P, { ...lastPaint()[0]!, archivedAt: 1 });
     expect(cloud.mutations[2]).toMatchObject({ name: "board:unarchiveTicket" });
     cloud.mutations[2]!.resolve({});
-    expect(await restoring).toBeNull();
+    expect(await restoring).toMatchObject({ id: tid(1) });
+    // One the roster does not hold (yet) answers as accepted.
+    const offBoard = source.unarchiveTicket(P, {
+      id: tid(8),
+      title: "Gone",
+      archivedAt: 1,
+    } as never);
+    cloud.mutations.at(-1)!.resolve({});
+    expect(await offBoard).toEqual({ id: tid(8), title: "Gone" });
+    // A label the backend has not named yet cannot be recolored.
+    await source.setLabelColor(P, "pending:abc", null);
+    expect(screen.refused).toHaveBeenLastCalledWith(LABEL_PENDING);
     const refused = source.unarchiveTicket(P, { id: tid(9) } as never);
-    cloud.mutations[3]!.reject(new Error("gone"));
+    cloud.mutations.at(-1)!.reject(new Error("gone"));
     expect(await refused).toBeNull();
     expect(await source.deleteTicket(P, tid(1))).toBe(false);
     expect(screen.refused).toHaveBeenLastCalledWith(CLOUD_WRITES_UNAVAILABLE);

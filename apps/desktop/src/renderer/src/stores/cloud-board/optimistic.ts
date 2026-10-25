@@ -22,14 +22,13 @@ import {
   applyTicketChanges,
   boardLabelFromRow,
   boardTicketFromRow,
-  comparePositions,
+  columnEnd,
   decideCreateTicket,
-  decideMoveTickets,
   decideUnarchiveTicket,
   decideUpdateTicket,
-  movingTicketIds,
+  newId,
   normalizeLabelColor,
-  resolveMoveGap,
+  predictMove,
   type BoardLabel,
   type BoardLabelRow,
   type BoardTicketRow,
@@ -39,7 +38,6 @@ import {
   type ProjectId,
   type UpdateTicketCommand,
 } from "@volli/shared/cloud";
-import type { TicketStatus } from "@volli/shared";
 
 /** The slice of Convex's optimistic local store an update reads and writes. */
 export interface LocalStore {
@@ -98,21 +96,12 @@ function pendingLabels(created: readonly BoardLabel[], now: number): LabelRow[] 
   }));
 }
 
-/** A `pending:` label id: never sent, replaced by the backend's own. */
+/**
+ * A `pending:` label id: never sent, replaced by the backend's own. Unique
+ * across writes, so two pending writes' new labels never share one.
+ */
 function pendingLabelMinter(): () => LabelId {
-  let next = 0;
-  return () => `pending:${next++}` as LabelId;
-}
-
-/** The last position of a column on the roster, or `null` when it is empty. */
-function columnEnd(roster: Roster, status: TicketStatus): string | null {
-  return (
-    roster.tickets
-      .filter((ticket) => ticket.status === status)
-      .map((ticket) => ticket.position)
-      .toSorted(comparePositions)
-      .at(-1) ?? null
-  );
+  return () => `pending:${newId("label")}` as LabelId;
 }
 
 /** One deliberate move: §6.2's update, over the roster as it stands now. */
@@ -124,15 +113,7 @@ export function optimisticMove(
   const roster = get<Roster>(store, queries.roster, { projectId: input.projectId });
   if (roster === undefined) return;
   const facts = roster.tickets.map(boardTicketFromRow);
-  const named = facts.filter((ticket) => input.command.ticketIds.includes(ticket.id));
-  const moving = new Set<string>(movingTicketIds(input.command, named));
-  const gap = resolveMoveGap(facts, input.command, moving);
-  const decision = decided(() =>
-    decideMoveTickets(
-      { tickets: named, after: gap.after, before: gap.before, now: input.now },
-      input.command,
-    ),
-  );
+  const decision = decided(() => predictMove(facts, input.command, input.now));
   if (decision === null || decision.changes.length === 0) return;
   put(
     store,
@@ -163,7 +144,7 @@ export function optimisticCreate(
       {
         projectId: input.projectId as ProjectId,
         number: 0,
-        columnEnd: columnEnd(roster, input.command.status),
+        columnEnd: columnEnd(roster.tickets, input.command.status),
         labels: roster.labels.map(boardLabelFromRow),
         mintLabelId: pendingLabelMinter(),
       },
@@ -284,7 +265,7 @@ export function optimisticUnarchive(
   if (roster === undefined || read === undefined) return;
   if (roster.tickets.some((ticket) => ticket.id === input.ticketId)) return;
   const ticket = boardTicketFromRow(read.ticket);
-  const decision = decideUnarchiveTicket(ticket, columnEnd(roster, ticket.status));
+  const decision = decideUnarchiveTicket(ticket, columnEnd(roster.tickets, ticket.status));
   put(
     store,
     queries.roster,
