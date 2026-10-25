@@ -39,7 +39,7 @@ import {
   type TicketId,
   type Actor,
 } from "@volli/shared/cloud";
-import type { Doc } from "../_generated/dataModel";
+import type { Doc } from "../_generated/dataModel.js";
 import type { MutationCtx } from "../_generated/server";
 import { requireProject, requireSessionVisible, type Viewer } from "./auth";
 import { cancelJob, patchQueuedJob, tryEnqueueJob } from "./jobs";
