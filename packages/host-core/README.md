@@ -568,6 +568,26 @@ Keep, git-lock and unpushed-work checks without requiring a board row.
 these ports. Desktop main supplies the Mac runner's existing link/presence and
 per-boot UUID; another runner can compose the same Electron-free store.
 
+Transcript production keeps the durable `FileTranscriptArtifactStore` and its
+existing gzip/legacy-file format. `cloud-store/transcripts.ts` stages redacted
+bodies before accepting references. The drain's persisted `onAccepted` cursor
+then schedules settled/interrupted turns and attachment closes for
+`TranscriptSpool.packTurn`; one coalescing worker also packs continuing turns
+at four accepted artifact MB, tails Pi logs every ten minutes, and resumes on
+runtime binding and reconnect/restart.
+The backend's transcript head and original Pi-byte offsets are the only upload
+checkpoints. Packs and logs use runner-authorized presigned HTTP PUTs and
+claim-fenced commits, including while the holder is releasing its claim.
+Uploads stop when secret history is incomplete; earlier-launch ephemeral secret
+history remains a separate limitation (VC-930). Failed work stays local for
+retry, staging expires only after a covering pack commits, and stopping the
+connection aborts background work before SQLite can close. Permanent upload
+refusals are logged with their code and held until a new claim or store restart;
+a network reconnect alone does not retry a permission/configuration failure. No local artifact is
+rewritten or removed by packing. The backend's older person-token producer API
+remains additive-compatible; the only production producer found in the client
+and host packages is this runner-token adapter.
+
 Cloud Session birth stamps its owner and adopts its drain cursor atomically.
 Owner-scoped reads, recovery, follow-up queues and notices cannot borrow another
 account's Sessions; restored owner-stamped history stays hidden from local mode

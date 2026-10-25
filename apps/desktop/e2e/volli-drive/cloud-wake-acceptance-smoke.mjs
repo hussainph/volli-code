@@ -9,8 +9,9 @@
  *   1. Both sign in (Settings → Account, the dev sign-in).
  *   2. Both restart into Volli Cloud and become that person's runners.
  *   3. Mac A chooses the folder for the cloud project, starts a Session and
- *      gets the streamed reply.
- *   4. Mac B shows that Session live: its transcript, "Running on <Mac A>".
+ *      finishes two turns; production uploads transcript packs and Pi logs.
+ *   4. After packed staging expires (age SIMULATED), Mac B opens that Session:
+ *      its older finished replies load from packs over HTTP, "Running on <Mac A>".
  *   5. Mac A sleeps (SIMULATED: see below). Mac B reads "Waiting for
  *      <Mac A> — asleep since …".
  *   6. Mac B sends a message; it waits ("Sent — waiting for <Mac A>"), and
@@ -32,9 +33,13 @@
  * folder picker (it returns a scratch-only repo), the fake model provider,
  * and a supervised restart in place of `app.relaunch()` (which under the
  * harness would start an Electron nobody drives). Reads for evidence: the
- * person's runners list and each Mac's non-secret runner record.
+ * person's runners list and each Mac's non-secret runner record. A local
+ * S3-compatible HTTP fake verifies backend-signed uploads/downloads; all bodies
+ * come from the real runner. An expiry-only admin patch ages ALREADY PACKED
+ * staging, then the unchanged production sweep removes it before B opens.
+ * No bodies, segment commits, Pi files or renderer state are injected.
  *
- * Run it under the fixture, on a Mac, against a build with the loopback CSP:
+ * CI ONLY, on a disposable macOS GitHub runner, with the loopback CSP:
  *
  *   VOLLI_CLOUD_LOOPBACK=1 pnpm -C apps/desktop run build
  *   node convex/fixture/with-backend.ts --deploy -- \
@@ -61,6 +66,13 @@ import {
   projectSessions,
   seedCloudProject,
 } from "./lib/cloud-acceptance.mjs";
+import {
+  assertPackedDownloads,
+  startTranscriptStore,
+  sweepPackedStaging,
+  transcriptEvidence,
+  waitForTranscriptUploads,
+} from "./lib/cloud-transcript-acceptance.mjs";
 import { createRegistry, instanceLayout, REPO } from "./lib/core.mjs";
 import { request } from "./lib/protocol.mjs";
 import { hasActionableControl, visibleControls as controls } from "./lib/remote-acceptance.mjs";
@@ -69,13 +81,17 @@ const exec = promisify(execFile);
 const cli = fileURLToPath(new URL("./cli.mjs", import.meta.url));
 
 const FIRST = "Wake demo first message";
+const SECOND = "Wake demo second finished turn";
 const WHILE_ASLEEP = "Wake demo sent while asleep";
 const reply = (text) => `fake-agent: ${text}`;
 const STEPS = [
   [1, "Sign in on Mac A and Mac B (Settings → Account, dev sign-in)"],
   [2, "Restart both into Volli Cloud; both are the person's runners, online"],
-  [3, "Mac A: Choose the folder…, New chat, send; streamed reply"],
-  [4, "Mac B: Mac A's Session live, its reply, Running on <Mac A>"],
+  [3, "Mac A: Choose the folder…, New chat, send two turns; streamed replies"],
+  [
+    4,
+    "Mac A packs finished turns and Pi logs; Mac B loads replies over object-store HTTP, Running on <Mac A>",
+  ],
   [5, "SIMULATED sleep on Mac A: Mac B reads Waiting for <Mac A> — asleep since"],
   [6, "Mac B sends while Mac A sleeps: Sent — waiting for <Mac A>, no reply"],
   [7, "Mac A wakes: Running on <Mac A> again, the message runs, Mac B catches up"],
@@ -83,6 +99,7 @@ const STEPS = [
 
 const results = [];
 const instances = {};
+const transcriptProof = {};
 
 function record(number, status, assertion, detail = "") {
   results.push({ step: number, status, assertion, detail });
@@ -154,8 +171,13 @@ async function launch(label, subject) {
   );
   const launched = JSON.parse(stdout);
   const entry = await createRegistry().get(launched.id);
-  const socket = instanceLayout(entry.scratch, entry.evidence).driveSocket;
-  instances[label] = { id: launched.id, evidence: launched.evidence, drive: driver(label, socket) };
+  const layout = instanceLayout(entry.scratch, entry.evidence);
+  instances[label] = {
+    id: launched.id,
+    evidence: launched.evidence,
+    layout,
+    drive: driver(label, layout.driveSocket),
+  };
   return instances[label].drive;
 }
 
@@ -218,7 +240,7 @@ async function runnerStatus(fixture, token, runnerId) {
   return runners.find((runner) => runner.id === runnerId) ?? null;
 }
 
-async function journey(fixture) {
+async function journey(fixture, store) {
   const subject = `wake-${randomBytes(4).toString("hex")}`;
   const token = () => devAccessToken({ privateKeyPem: fixture.privateKeyPem, subject });
   // SETUP: preview enrollment for the dev profile, on the throwaway backend.
@@ -271,8 +293,13 @@ async function journey(fixture) {
     await macA.click("button", "New chat", { first: true });
     await macA.send(FIRST);
     await macA.wait(reply(FIRST), 60_000);
+    await macA.gone("Stop turn", 60_000);
+    await macA.send(SECOND);
+    await macA.wait(reply(SECOND), 60_000);
+    await macA.gone("Stop turn", 60_000);
   });
 
+  let sessionId;
   await step(4, async () => {
     // Which row to open comes from the backend's own listing (a read, not a
     // guess at the auto-title): Mac A's one Session in the project, by id.
@@ -290,6 +317,21 @@ async function journey(fixture) {
       },
       { timeout: 60_000, interval: 500 },
     );
+    sessionId = session.id;
+    const finishedReplies = [reply(FIRST), reply(SECOND)];
+    const uploads = await waitForTranscriptUploads({
+      fixture,
+      store,
+      sessionId,
+      layout: instances.A.layout,
+      expectedReplies: finishedReplies,
+    });
+    transcriptProof.beforeOpen = transcriptEvidence(uploads);
+    transcriptProof.stagingAgeSimulation = await sweepPackedStaging(fixture, uploads, token());
+    // B has never opened this Session: no warmed body cache can supply it.
+    // Take the HTTP watermark before any B navigation and never GET from
+    // the driver itself. With staging absent, only actual packs can hydrate it.
+    const downloadsSince = store.requests.length;
     // The listing names a Session by its title, "Chat" until it has one.
     const title = session.title ?? "Chat";
     await openProject(macB);
@@ -299,9 +341,33 @@ async function journey(fixture) {
       { timeout: 60_000, interval: 500 },
     );
     await macB.click("button", title, { contains: true, first: true });
-    await macB.wait(reply(FIRST), 60_000);
+    await macB.wait(reply(SECOND), 60_000);
+    // If the bounded open leaves the first turn above its window, page it
+    // through the real transcript control, never by calling the reader.
+    await waitUntil(
+      "Mac B loaded the older finished reply",
+      async () => {
+        const current = await macB.snap();
+        if (current.text.includes(reply(FIRST))) return true;
+        if (hasActionableControl(current.text, "button", "Show earlier"))
+          await macB.click("button", "Show earlier");
+        return false;
+      },
+      { timeout: 60_000, interval: 500 },
+    );
+    await macB.wait(reply(FIRST), 30_000);
+    if (await macB.has("button", "Scroll to latest"))
+      await macB.click("button", "Scroll to latest");
     await macB.wait(`Running on ${nameA}`, 30_000);
-    return { detail: `Session ${session.id.slice(0, 8)} "${title}"` };
+    transcriptProof.macBDownloads = assertPackedDownloads(
+      store,
+      uploads,
+      downloadsSince,
+      finishedReplies,
+    );
+    return {
+      detail: `Session ${session.id.slice(0, 8)} "${title}"; two finished turns, ${uploads.packs.length} packs, Pi complete-line EOF; staging age SIMULATED, B fetched packs`,
+    };
   });
 
   await step(5, async () => {
@@ -331,6 +397,17 @@ async function journey(fixture) {
     await macA.wait(reply(WHILE_ASLEEP), 30_000);
     const runner = await runnerStatus(fixture, token(), a.runnerId);
     assert.equal(runner?.status, "online", "the backend reads Mac A online");
+    // Resuming transport must continue the same committed ranges, not reset
+    // transcript or Pi progress to zero or silently stop uploading after wake.
+    transcriptProof.afterWake = transcriptEvidence(
+      await waitForTranscriptUploads({
+        fixture,
+        store,
+        sessionId,
+        layout: instances.A.layout,
+        expectedReplies: [reply(FIRST), reply(SECOND), reply(WHILE_ASLEEP)],
+      }),
+    );
   });
 
   for (const { drive } of Object.values(instances)) {
@@ -356,15 +433,27 @@ function cleanupProblems(manifest) {
   return problems;
 }
 
-if (process.platform !== "darwin") throw new Error("The cloud wake acceptance drives macOS apps");
+// Check before launching Electron or changing the fixture: never run this on
+// a local developer Mac, even when fixture environment variables are present.
+if (
+  process.platform !== "darwin" ||
+  process.env.CI !== "true" ||
+  process.env.GITHUB_ACTIONS !== "true" ||
+  process.env.RUNNER_OS !== "macOS"
+)
+  throw new Error("Cloud wake acceptance runs only on disposable macOS GitHub CI runners");
 const fixture = cloudFixtureFromEnv(process.env);
 const reportDir =
   process.env.VOLLI_SMOKE_REPORT_DIR ?? join(REPO, ".scratch", "cloud-wake-acceptance");
 await fs.mkdir(reportDir, { recursive: true });
 let failed = false;
 const cleanup = {};
+let store;
+let objectStoreCleanup = null;
 try {
-  await journey(fixture);
+  assert.ok(fixture.adminKey, "the throwaway backend's admin key is required");
+  store = await startTranscriptStore(fixture, reportDir);
+  await journey(fixture, store);
 } catch (error) {
   failed = true;
   console.error(error.stack);
@@ -391,8 +480,15 @@ try {
     };
     if (problems.length > 0) failed = true;
   }
+  if (store) {
+    objectStoreCleanup = await store
+      .close()
+      .catch((error) => ({ closed: false, problems: [error.message] }));
+    if (!objectStoreCleanup.closed || objectStoreCleanup.problems.length > 0) failed = true;
+  }
   const complete =
     !failed &&
+    objectStoreCleanup?.closed === true &&
     results.length === STEPS.length &&
     results.every((row) => row.status === "PASS") &&
     Object.keys(cleanup).length === 2;
@@ -406,6 +502,8 @@ try {
         complete,
         failed,
         results,
+        transcriptProof,
+        objectStore: { requests: store?.requests ?? [], cleanup: objectStoreCleanup },
         cleanup,
       },
       null,
@@ -425,7 +523,9 @@ try {
           ([label, c]) =>
             `Mac ${label} ${c.problems.length === 0 ? "PASS" : `FAIL (${c.problems.join("; ")})`}`,
         )
-        .join(", ")}. complete:${complete} in acceptance.json.\n`,
+        .join(
+          ", ",
+        )}. Object store: ${objectStoreCleanup?.closed && objectStoreCleanup.problems.length === 0 ? "PASS" : "FAIL"}. Staging age is SIMULATED (expiry only; production sweep). complete:${complete} in acceptance.json.\n`,
     );
 }
 process.exitCode = failed ? 1 : 0;

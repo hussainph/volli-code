@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http";
+import { mkdir, symlink } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
@@ -153,6 +154,8 @@ async function fixture(text = "Reply from the actual local artifact store") {
       current: () => live,
       artifacts: () => artifacts,
       engine: cloud!.engine,
+      ownerUserId: "owner",
+      piDirectory: () => join(dirname(db.dbPath), "pi-sessions"),
       ledger: sqliteDrainLedger(db.db),
       cursors: sqliteDrainCursorStore(db.db),
       redaction: {
@@ -263,6 +266,91 @@ describe("the runner's transcript producer composition", () => {
     await connection.close();
     connection = undefined;
     expect(f.offWatched).toHaveBeenCalled();
+  });
+
+  it("fails packing closed with incomplete redaction or a foreign local owner", async () => {
+    const f = await fixture();
+    const query = vi.spyOn(f.link, "query");
+    f.incomplete();
+    await expect(f.publish().pack(SESSION, new AbortController().signal)).rejects.toThrow(
+      "Secret storage is unavailable",
+    );
+    expect(query).not.toHaveBeenCalled();
+    f.complete();
+    const cursors = sqliteDrainCursorStore(db.db);
+    cursors.save({ ...cursors.get(SESSION)!, ownerUserId: "another-account" });
+    await expect(f.publish().pack(SESSION, new AbortController().signal)).rejects.toThrow(
+      "local claim",
+    );
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("reports missing Pi directories without blocking packs and refuses a symlinked history parent", async () => {
+    const f = await fixture();
+    const piDirectory = join(dirname(db.dbPath), "pi-sessions");
+    const path = join(piDirectory, "--workspace--", "pi-file.jsonl");
+    const session = await cloud!.engine.getSession({ sessionId: SESSION });
+    vi.spyOn(cloud!.engine, "getSession").mockResolvedValue({
+      ...session!,
+      attachments: [
+        {
+          id: "binding",
+          sessionId: SESSION,
+          adapterId: "pi",
+          venue: LOCAL_RUNNER,
+          continuity: "fresh",
+          authority: null,
+          status: "closed",
+          openedAt: 1,
+          closedAt: 2,
+          outcome: "completed",
+          failure: null,
+          exitCode: 0,
+          native: {
+            id: "pi-file",
+            detail: {
+              kind: "volli.native-binding.v1",
+              locator: {
+                runtime: "pi",
+                sessionId: "pi-file",
+                sessionFilePath: path,
+              },
+            },
+          },
+        },
+      ],
+    });
+    const cursors = sqliteDrainCursorStore(db.db);
+    cursors.save({ ...cursors.get(SESSION)!, acceptedThrough: f.events.length });
+    const query = vi
+      .spyOn(f.link, "query")
+      .mockResolvedValue({ transcriptThrough: f.events.length, piLogs: {} });
+    const report = await f.publish().pack(SESSION, new AbortController().signal);
+    expect(report.transcript).toEqual([]);
+    expect(report.piLogs.missing).toEqual(["pi-file"]);
+    query.mockClear();
+    await mkdir(piDirectory);
+    await symlink(dirname(db.dbPath), join(piDirectory, "--workspace--"), "dir");
+    await expect(f.publish().pack(SESSION, new AbortController().signal)).rejects.toThrow(
+      "symbolic link",
+    );
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("abandons a pending head read on close without reading artifacts or committing after its late answer", async () => {
+    const f = await fixture();
+    const head = Promise.withResolvers<unknown>();
+    const query = vi.spyOn(f.link, "query").mockReturnValue(head.promise);
+    const read = vi.spyOn(f.artifacts, "read");
+    const controller = new AbortController();
+    const packing = f.publish().pack(SESSION, controller.signal);
+    await vi.waitFor(() => expect(query).toHaveBeenCalledOnce());
+    controller.abort(new Error("closed"));
+    await expect(packing).rejects.toThrow("closed");
+    head.resolve({ transcriptThrough: 0, piLogs: {} });
+    await Promise.resolve();
+    expect(read).not.toHaveBeenCalled();
+    expect(f.calls).toEqual([]);
   });
 
   it("uploads bodies over 64KB through runner-authorized presigned storage before accepting their references", async () => {
