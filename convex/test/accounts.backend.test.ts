@@ -41,6 +41,8 @@ describe("accounts on the pinned local backend", () => {
       userId: first.userId,
       displayName: "Dana",
       primaryEmail: "dana@example.com",
+      status: "active",
+      purgeAfter: null,
     });
   });
 

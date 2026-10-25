@@ -88,6 +88,13 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
     () => handlers["hostScope.subscribe"]({ hostId: HOST, path: "logs.follow" }, CALL, sink),
     () => handlers["browserShortcuts.subscribe"](undefined, CALL, sink),
     () => handlers["browserShortcuts.focusPage"]({ tabId: "opaque-1" }, CALL),
+    () => handlers["account.snapshot"](undefined, CALL),
+    () => handlers["account.subscribe"](undefined, CALL, sink),
+    () => handlers["account.signIn"]({ connection: "google" }, CALL),
+    () => handlers["account.cancelSignIn"](undefined, CALL),
+    () => handlers["account.signOut"](undefined, CALL),
+    () => handlers["account.requestDeletion"](undefined, CALL),
+    () => handlers["account.cancelDeletion"](undefined, CALL),
     () => handlers["hostLink.query"]({ workspaceId: HOST, path: "board.snapshot" }, CALL),
     () => handlers["hostLink.mutate"]({ workspaceId: HOST, path: "board.setPriority" }, CALL),
     () => handlers["hostLink.subscribe"]({ workspaceId: HOST, path: "board.changes" }, CALL, sink),
@@ -207,10 +214,17 @@ describe("sessionHandlersFrom", () => {
         "hostScope.subscribe": port as never,
         "browserShortcuts.subscribe": port as never,
         "browserShortcuts.focusPage": port as never,
+        "account.snapshot": port as never,
+        "account.subscribe": port as never,
+        "account.signIn": port as never,
+        "account.cancelSignIn": port as never,
+        "account.signOut": port as never,
+        "account.requestDeletion": port as never,
+        "account.cancelDeletion": port as never,
       },
     };
     for (const call of callAll(sessionHandlersFrom(ports))) await call();
-    expect(port).toHaveBeenCalledTimes(46);
+    expect(port).toHaveBeenCalledTimes(53);
     expect(port).toHaveBeenCalledWith({ flowId: "f", questionId: "q1", password: "p" }, CALL);
     expect(runtime.command).toHaveBeenCalledWith({
       commandId: "cancel",
@@ -256,8 +270,9 @@ describe("sessionHandlersFrom", () => {
     // reads (VC-713), the Workspace link relay's three (VC-711), and a host's
     // projects' four (VC-710), the active add flows' one (VC-720), and
     // the host-scoped projects' two and HOST relay's three (VC-722),
-    // and moving a running command to the background (VC-757), and a
-    // working copy's setup status and answer (VC-584).
-    expect(Object.keys(context.handlers)).toHaveLength(89);
+    // and moving a running command to the background (VC-757), a
+    // working copy's setup status and answer (VC-584), and the
+    // Volli Cloud account's seven (VC-884).
+    expect(Object.keys(context.handlers)).toHaveLength(96);
   });
 });

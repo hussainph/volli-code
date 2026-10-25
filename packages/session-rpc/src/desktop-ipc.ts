@@ -156,7 +156,7 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   // host commands (`project.reorder`, `worktree.trimSettings`) are
   // additive-only across supported skew, while the client-local families
   // (`hosts.*`, `hostAdd.*`, `hostSignIns.*`, `hostLink.*`, `hostScope.*`,
-  // `browserShortcuts.*`, `worktree.setupStatus`/`answerSetup`) ship with this
+  // `browserShortcuts.*`, `worktree.setupStatus`/`answerSetup`, `account.*`) ship with this
   // renderer and main in one bundle and are not cross-version promises.
   "shells.moveToBackground": "ipc",
   "project.reorder": "ipc",
@@ -204,6 +204,14 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   // App shortcuts out of a focused Browser page (VC-301).
   "browserShortcuts.subscribe": "ipc",
   "browserShortcuts.focusPage": "ipc",
+  // The Volli Cloud account on this Mac (VC-884).
+  "account.snapshot": "ipc",
+  "account.subscribe": "ipc",
+  "account.signIn": "ipc",
+  "account.cancelSignIn": "ipc",
+  "account.signOut": "ipc",
+  "account.requestDeletion": "ipc",
+  "account.cancelDeletion": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

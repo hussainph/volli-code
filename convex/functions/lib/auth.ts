@@ -39,6 +39,7 @@ export type AuthErrorCode =
   | "unauthenticated"
   | "no_viewer"
   | "account_deleted"
+  | "account_deletion_pending"
   | "identity_conflict"
   | "not_found"
   | "not_a_member"
@@ -142,10 +143,22 @@ export async function findViewer(ctx: ReadCtx): Promise<Viewer | null> {
   return user === null ? null : liveViewer(user);
 }
 
-/** The viewer, or `no_viewer` (call `accounts.ensureViewer` first). For queries. */
+/**
+ * The viewer, or `no_viewer` (call `accounts.ensureViewer` first). For queries.
+ *
+ * An account whose deletion is pending is signed out of everything but the
+ * `accounts` functions that show it and restore it (`account_deletion_pending`):
+ * those use {@link findViewer}.
+ */
 export async function requireViewer(ctx: ReadCtx): Promise<Viewer> {
   const viewer = await findViewer(ctx);
   if (viewer === null) throw authError("no_viewer", "This account is not set up yet.");
+  if (viewer.user.status === "deletion_pending") {
+    throw authError(
+      "account_deletion_pending",
+      "This account is scheduled for deletion. Restore it to continue.",
+    );
+  }
   return viewer;
 }
 

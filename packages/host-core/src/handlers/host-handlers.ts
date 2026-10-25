@@ -60,6 +60,8 @@ import {
   type AddHostFacts,
   type AddHostStartInput,
   type AddHostStepId,
+  type AccountConnection,
+  type AccountSnapshot,
   type AgentResponse,
   type BrowserAppShortcutEvent,
   type CodeModePolicy,
@@ -115,6 +117,7 @@ import {
 import type { AgentVerbInput } from "../agent-dispatch/context";
 import type { ToolVerbInput } from "../agent-tool-door";
 import type { DetachedWorkPort } from "../detached-work";
+import type { AccountPort } from "./account-port";
 import type { BrowserShortcutsPort } from "./browser-shortcuts-port";
 import type { BrowserPictureStore } from "../browser/picture-store";
 import type { HostSignIns } from "../host-sign-ins";
@@ -428,6 +431,18 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
    */
   readonly "browserShortcuts.subscribe": HostSubscriptionHandler<void, BrowserAppShortcutEvent>;
   readonly "browserShortcuts.focusPage": HostHandler<{ tabId: string }, null>;
+  /**
+   * The Volli Cloud account on this Mac (VC-884): desktop main's account
+   * service, {@link HostHandlerOptions.account}'s, or unavailable.
+   */
+  readonly "account.snapshot": HostHandler<void, AccountSnapshot>;
+  /** The current snapshot first, then every change. */
+  readonly "account.subscribe": HostSubscriptionHandler<void, AccountSnapshot>;
+  readonly "account.signIn": HostHandler<{ connection: AccountConnection }, null>;
+  readonly "account.cancelSignIn": HostHandler<void, null>;
+  readonly "account.signOut": HostHandler<void, null>;
+  readonly "account.requestDeletion": HostHandler<void, null>;
+  readonly "account.cancelDeletion": HostHandler<void, null>;
 }
 
 /** The agent keys the socket serves: its own verbs, less the start both agent doors share. */
@@ -641,6 +656,11 @@ export interface HostHandlerOptions {
    * on hostd: `browserShortcuts.*` answer unavailable.
    */
   readonly browserShortcuts?: BrowserShortcutsPort | null;
+  /**
+   * Desktop main's Volli Cloud account service (VC-884); absent or null on
+   * hostd: `account.*` answer unavailable.
+   */
+  readonly account?: AccountPort | null;
 }
 
 /** Messages a client may show; unchanged from the router's own (VC-564). */
@@ -660,6 +680,7 @@ const SESSION_LISTING_UNAVAILABLE = "The Session listing is unavailable on this 
 const HOST_SCOPE_RELAY_UNAVAILABLE = "Remote host operations are unavailable on this host";
 const HOST_LINK_RELAY_UNAVAILABLE = "Remote projects are unavailable on this host";
 const BROWSER_SHORTCUTS_UNAVAILABLE = "Browser Tab shortcuts are unavailable on this host";
+const ACCOUNT_UNAVAILABLE = "Accounts are unavailable on this host";
 const PROJECT_REMOVAL_UNAVAILABLE = "Removing a project is unavailable on this host";
 
 /**
@@ -773,6 +794,7 @@ function hostHandlerEntries(
   const hostLinkRelay = () => present(options.hostLinkRelay ?? null, HOST_LINK_RELAY_UNAVAILABLE);
   const browserShortcuts = () =>
     present(options.browserShortcuts ?? null, BROWSER_SHORTCUTS_UNAVAILABLE);
+  const account = () => present(options.account ?? null, ACCOUNT_UNAVAILABLE);
   const feed = options.boardFeed ?? createBoardChangeFeed();
 
   const worktree = (database: Database.Database) =>
@@ -1170,5 +1192,14 @@ function hostHandlerEntries(
     "browserShortcuts.subscribe": async (_input, _call, sink) =>
       browserShortcuts().subscribe((event) => void sink.emit(event)),
     "browserShortcuts.focusPage": ({ tabId }) => done(() => browserShortcuts().focusPage(tabId)),
+    // The Volli Cloud account (VC-884): desktop main's account service, through its port.
+    "account.snapshot": () => account().snapshot(),
+    "account.subscribe": async (_input, _call, sink) =>
+      account().subscribe((snapshot) => void sink.emit(snapshot)),
+    "account.signIn": ({ connection }) => done(() => account().signIn(connection)),
+    "account.cancelSignIn": () => done(() => account().cancelSignIn()),
+    "account.signOut": () => done(() => account().signOut()),
+    "account.requestDeletion": () => done(() => account().requestDeletion()),
+    "account.cancelDeletion": () => done(() => account().cancelDeletion()),
   };
 }

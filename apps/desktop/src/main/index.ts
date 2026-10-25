@@ -171,6 +171,7 @@ import {
 } from "@volli/host-core/secrets";
 import { observeKeychainUse, webSealingLifecycle } from "./web/sealing-lifecycle";
 import { createDesktopRemoteHosts, remoteHostsPort } from "./remote-hosts";
+import { accountPort, createDesktopAccount, resolveAccountConfig } from "./account";
 import { engineSignInLinks, remoteSignInsPort, signInPreflight } from "./host-sign-ins/port";
 import {
   createHostLinkRelay,
@@ -797,6 +798,16 @@ const appStartup = app.whenReady().then(async () => {
       keychain: safeStorage,
       inventoryPath: credentialInventoryPath,
     });
+  // The `host-private` records: remote hosts' device keys and the Volli
+  // Cloud account's saved sign-in, under the same keychain-wrapped key.
+  const hostPrivateInventory = new SealedInventory({
+    path: credentialInventoryPath,
+    keyring: credentialKeyring,
+    families: ["host-private"],
+  });
+  const unlockHostPrivate = async (): Promise<void> => {
+    await credentialKeyring.unlock?.();
+  };
   // Hosts this Mac added over SSH (VC-700): every call refuses while `cloud` is off.
   const remoteHosts = createDesktopRemoteHosts({
     userData: app.getPath("userData"),
@@ -804,19 +815,26 @@ const appStartup = app.whenReady().then(async () => {
     packaged: app.isPackaged,
     manifestPath: join(__dirname, "hostd-release-manifest.json"),
     env: process.env,
-    inventory: new SealedInventory({
-      path: credentialInventoryPath,
-      keyring: credentialKeyring,
-      families: ["host-private"],
-    }),
-    unlockInventory: async () => {
-      await credentialKeyring.unlock?.();
-    },
+    inventory: hostPrivateInventory,
+    unlockInventory: unlockHostPrivate,
     enabled: () => isExperimentEnabled("cloud"),
     // The app's structured log (VC-699): redacted, its fields never a secret.
     logger: hostLogger("host-install"),
     // Lid open, screen unlocked, network back: every tunnel and link tries now.
     wake: { powerMonitor, net },
+  });
+  // The Volli Cloud account on this Mac (VC-884): browser sign-in, the sealed
+  // refresh token (the harness keyring in harness mode), the backend's
+  // `ensureViewer`. Every call refuses while `cloud` is off; nothing is read
+  // until the window first asks for the account.
+  const account = createDesktopAccount({
+    config: resolveAccountConfig({ env: process.env, packaged: app.isPackaged }),
+    enabled: () => isExperimentEnabled("cloud"),
+    inventory: hostPrivateInventory,
+    unlockInventory: unlockHostPrivate,
+    // The same http(s)-only gate as the window's links; harness mode records it.
+    openBrowser: (url) => openExternal(url),
+    log: hostLogger("account"),
   });
   // Sign-ins on a remote host (VC-702 PR 2): the host's `sign-ins` operations
   // over the engine's links, and this Mac's own Pi credentials, read only for
@@ -1388,6 +1406,8 @@ const appStartup = app.whenReady().then(async () => {
         subscribe: browserShortcutRelay.subscribe,
         focusPage: (tabId) => browserTabs.focusPage(tabId),
       },
+      // The Volli Cloud account (VC-884).
+      account: accountPort(account),
     };
   };
   // No runtime, no bridge — but the channels are still claimed, answering

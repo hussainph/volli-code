@@ -151,3 +151,34 @@ describe("retired review settings", () => {
     expect(terms).toContain("classify");
   });
 });
+
+const servicesKeys = (account?: boolean) =>
+  settingsGroups(undefined, account === undefined ? {} : { account })
+    .find((group) => group.key === "services")!
+    .categories.map((category) => category.key);
+
+describe("Settings → Account", () => {
+  it("exists only with the account option on, first under Services, findable by what it shows", () => {
+    const services = servicesKeys;
+    expect(services()).not.toContain("account");
+    expect(services(false)).not.toContain("account");
+    expect(services(true)[0]).toBe("account");
+
+    const account = settingsGroups(undefined, { account: true })
+      .flatMap((group) => group.categories)
+      .find((category) => category.key === "account")!;
+    const terms = [account.label, ...(account.keywords ?? [])].map((term) => term.toLowerCase());
+    for (const label of [
+      "continue with github",
+      "continue with google",
+      "sign out",
+      "delete account",
+      "restore account",
+      "name",
+      "email",
+      "volli cloud",
+    ]) {
+      expect(terms, label).toContain(label);
+    }
+  });
+});

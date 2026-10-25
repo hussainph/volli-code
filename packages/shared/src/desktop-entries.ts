@@ -417,6 +417,61 @@ export const DESKTOP_ENTRIES = [
     idempotency: "natural",
     summary: "Answer a failed environment setup: retry it, or start without it.",
   },
+  // The Volli Cloud account on this Mac (VC-884; wire types in `./account`).
+  // Host-placed: the sign-in is the person's on this device, across every
+  // Workspace, and only their own window drives it. Desktop main serves them
+  // through the map's `AccountPort` (`@volli/host-core/handlers`), and only
+  // with `cloud` on; hostd has none, so every one answers unavailable there.
+  {
+    key: "account.snapshot",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "Where the Volli account on this Mac stands: profile only, never a token.",
+  },
+  {
+    key: "account.subscribe",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "The account snapshot now, then again on every change.",
+  },
+  {
+    // `natural`: a second start while one is in flight replaces it.
+    key: "account.signIn",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Start signing in with GitHub or Google in the browser.",
+  },
+  {
+    key: "account.cancelSignIn",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Stop waiting for the browser sign-in.",
+  },
+  {
+    key: "account.signOut",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Sign out of Volli on this Mac and forget the saved sign-in.",
+  },
+  {
+    key: "account.requestDeletion",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Schedule the account for deletion in 30 days.",
+  },
+  {
+    key: "account.cancelDeletion",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Restore an account whose deletion is scheduled.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];
