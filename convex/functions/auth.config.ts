@@ -23,7 +23,7 @@ export const TEST_ISSUER = "https://test.volli.invalid";
 export const TEST_AUDIENCE = "volli-test";
 
 /** Where WorkOS's API and JWKS live. */
-export const WORKOS_API_BASE = "https://api.workos.com";
+const WORKOS_API_BASE = "https://api.workos.com";
 
 // The backend throws on reading an unset variable while it evaluates this
 // file (rather than returning `undefined`), so absence is caught, not tested.
@@ -39,7 +39,7 @@ function optionalEnv(name: string): string | undefined {
 type Provider = AuthConfig["providers"][number];
 
 /** The two issuers a WorkOS environment signs access tokens under. */
-export function workosProviders(clientId: string): Provider[] {
+function workosProviders(clientId: string): Provider[] {
   const jwks = `${WORKOS_API_BASE}/sso/jwks/${clientId}`;
   return [
     {

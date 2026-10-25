@@ -64,6 +64,8 @@ export interface AccountSessionStore {
   save(session: SavedAccountSession, expect: SavedSessionRef | null): Promise<SavedSessionRef>;
   /** Forgets the saved sign-in; quiet when there is none. */
   clear(): Promise<void>;
+  /** Forgets the saved sign-in only if it is still the record `ref` names; quiet otherwise. */
+  discard(ref: SavedSessionRef): Promise<void>;
 }
 
 /** The saved sign-in changed since it was read (a sign-out, or another sign-in). */
@@ -78,6 +80,17 @@ export class SavedSessionChangedError extends Error {
 function nullableString(value: unknown): string | null | undefined {
   if (value === null) return null;
   return typeof value === "string" ? value : undefined;
+}
+
+/** Whether `value` is a saved sign-in a newer build wrote: this build leaves it alone. */
+export function isNewerSavedSession(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  try {
+    const version = (JSON.parse(value) as { v?: unknown } | null)?.v;
+    return typeof version === "number" && version > SAVED_SESSION_VERSION;
+  } catch {
+    return false;
+  }
 }
 
 /** A saved value this build wrote, or `null` for anything else. */
@@ -139,8 +152,11 @@ export function inventoryAccountSessionStore(
       const session = parseSavedSession(record.value);
       const ref = { id: record.id, revision: record.revision };
       if (session === null) {
-        // Unreadable to this build: there is no sign-in to keep.
-        inventory.remove("host-private", SELECTOR, { expect: ref });
+        // A newer build's sign-in is that build's to read: kept for it. Anything
+        // else unreadable is no sign-in at all.
+        if (!isNewerSavedSession(record.value)) {
+          inventory.remove("host-private", SELECTOR, { expect: ref });
+        }
         return null;
       }
       return { session, ref };
@@ -158,6 +174,14 @@ export function inventoryAccountSessionStore(
     async clear() {
       await unlock();
       inventory.remove("host-private", SELECTOR);
+    },
+    async discard(ref) {
+      await unlock();
+      try {
+        inventory.remove("host-private", SELECTOR, { expect: ref });
+      } catch (error) {
+        if (!isRevisionConflict(error)) throw error;
+      }
     },
   };
 }

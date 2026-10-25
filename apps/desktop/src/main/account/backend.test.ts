@@ -53,12 +53,12 @@ describe("the account's backend calls", () => {
       {
         url: "/api/mutation",
         authorization: "Bearer tok-2",
-        body: { path: "accounts:requestDeletion", args: {}, format: "json" },
+        body: { path: "accounts:requestDeletion", args: { via: "desktop" }, format: "json" },
       },
       {
         url: "/api/mutation",
         authorization: "Bearer tok-3",
-        body: { path: "accounts:cancelDeletion", args: {}, format: "json" },
+        body: { path: "accounts:cancelDeletion", args: { via: "desktop" }, format: "json" },
       },
     ]);
   });
@@ -87,7 +87,12 @@ describe("the account's backend calls", () => {
       message: "Server Error",
     });
     reply = { status: 401, body: "not json" };
-    await expect(backend.ensureViewer("t")).rejects.toThrow("Volli Cloud answered 401.");
+    await expect(backend.ensureViewer("t")).rejects.toMatchObject({
+      code: "unauthenticated",
+      message: "Volli Cloud did not accept this sign-in.",
+    });
+    reply = { status: 502, body: "not json" };
+    await expect(backend.ensureViewer("t")).rejects.toThrow("Volli Cloud answered 502.");
     reply = { status: 200, body: { status: "success", value: { userId: 1 } } };
     await expect(backend.ensureViewer("t")).rejects.toThrow("cannot read");
   });

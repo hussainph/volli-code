@@ -177,6 +177,8 @@ describe("Settings → Account", () => {
       "name",
       "email",
       "volli cloud",
+      "deletion",
+      "scheduled",
     ]) {
       expect(terms, label).toContain(label);
     }

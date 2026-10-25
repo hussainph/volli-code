@@ -8,7 +8,7 @@ import { UserCircleIcon } from "@phosphor-icons/react/dist/csr/UserCircle";
 import type { PrefCategory } from "./kit";
 import { AccountPane } from "./panes/account-pane";
 
-export const ACCOUNT_CATEGORY_KEY = "account";
+const ACCOUNT_CATEGORY_KEY = "account";
 
 export function accountCategory(): PrefCategory {
   return {
@@ -31,7 +31,10 @@ export function accountCategory(): PrefCategory {
       "email",
       "delete account",
       "restore account",
-      "deletion scheduled",
+      "deletion",
+      "scheduled",
+      "connected",
+      "offline",
     ],
     content: <AccountPane />,
   };

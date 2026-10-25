@@ -15,6 +15,8 @@ describe("the loopback callback", () => {
     expect(wrongState.status).toBe(400);
     const wrongPath = await fetch(`${url.origin}/elsewhere?code=x&state=s1`);
     expect(wrongPath.status).toBe(400);
+    const wrongMethod = await fetch(`${callback.redirectUri}?code=x&state=s1`, { method: "POST" });
+    expect(wrongMethod.status).toBe(400);
 
     const answer = await fetch(`${callback.redirectUri}?code=the-code&state=s1`);
     expect(answer.status).toBe(200);

@@ -12,6 +12,11 @@
  * finds the person. One flow at a time: a new start, a cancel or a sign-out
  * ends the one in flight, and the browser has ten minutes.
  *
+ * **Epochs.** Every sign-in, cancel and sign-out starts a new epoch. Work
+ * begun under an older one (a restore, a refresh, a code exchange) drops its
+ * result when it lands, and a record it sealed meanwhile is removed again, so
+ * nothing the person ended comes back at the next launch.
+ *
  * **Tokens.** {@link AccountService.accessToken} answers the in-memory token
  * while it has a minute left, else refreshes once (concurrent callers share
  * the refresh), rotating the sealed refresh token. A refusal (a revoked or
@@ -19,8 +24,11 @@
  * marks the backend unreachable, so the board can stay a read-only cache.
  * Nothing here ever hands a token to the window.
  *
- * **Restore.** The saved sign-in is read the first time the window asks for
- * the snapshot, not at launch: no new unattended keychain access.
+ * **Restore.** The saved sign-in is read when it is first asked for: the
+ * window's first snapshot, or the first {@link AccountService.accessToken}.
+ * Nothing reads it at launch, so there is no new unattended keychain access;
+ * the caller that asks is the one that decided it may. While the backend is
+ * unreachable, each new window subscription tries it again.
  *
  * **Sign-out** forgets the tokens and the sealed record, then opens the
  * provider's logout page so its browser session ends too. **Deletion** asks
@@ -50,11 +58,14 @@ import {
 } from "./session-store";
 
 /** How long the browser has to come back. */
-export const SIGN_IN_TIMEOUT_MS = 10 * 60 * 1000;
+const SIGN_IN_TIMEOUT_MS = 10 * 60 * 1000;
 /** An access token with less than this left is refreshed before use. */
-export const ACCESS_TOKEN_MARGIN_MS = 60 * 1000;
+const ACCESS_TOKEN_MARGIN_MS = 60 * 1000;
 
 export const ACCOUNT_CLOUD_OFF = "Volli Cloud is off. Turn it on in Settings → Experimental.";
+
+const OFFLINE = "Couldn't reach Volli Cloud. Your sign-in is kept.";
+const NOT_ACCEPTED = "Volli Cloud didn't accept this sign-in. Sign out and sign in again.";
 
 export interface AccountLogger {
   info(message: string, fields?: Record<string, unknown>): void;
@@ -69,7 +80,7 @@ export interface AccountServiceOptions {
   /** `null`: this build names no backend; sign-in still works, nothing syncs. */
   readonly backend: AccountBackend | null;
   readonly store: AccountSessionStore;
-  /** Opens the system browser (harness mode records instead). */
+  /** Opens the system browser (harness mode records instead); rejects when it cannot. */
   readonly openBrowser: (url: string) => void | Promise<void>;
   readonly listen?: typeof listenForCallback;
   readonly signInTimeoutMs?: number;
@@ -87,11 +98,14 @@ export interface AccountService {
   cancelDeletion(): Promise<void>;
   /**
    * A current access token for a backend call, refreshed when it is about to
-   * expire; `null` while signed out. Main only: never sent to the window.
+   * expire; `null` while signed out or with `cloud` off. Reads the saved
+   * sign-in first if nothing has yet. Main only: never sent to the window.
+   * The board's Convex client (B4) calls this as its `fetchToken`.
    */
   accessToken(): Promise<string | null>;
-  /** Waits for a restore or a sign-in in flight to settle (tests, quit). */
+  /** Waits for the work in flight (a restore, a sign-in) to settle. */
   settled(): Promise<void>;
+  /** Ends a sign-in in flight and stops the dev issuer. At quit. */
   dispose(): void;
 }
 
@@ -143,17 +157,18 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
   const listen = options.listen ?? listenForCallback;
   const log = options.log ?? SILENT;
   const listeners = new Set<(snapshot: AccountSnapshot) => void>();
+  const disconnected: AccountBackendState = backend === null ? "none" : "unreachable";
 
   let state: Exclude<AccountState, "unconfigured"> = "signed-out";
   let session: Session | null = null;
   let viewer: BackendViewer | null = null;
-  let backendState: AccountBackendState = backend === null ? "none" : "unreachable";
+  let backendState: AccountBackendState = disconnected;
   let failure: string | null = null;
   let flow: Flow | null = null;
   let restore: Promise<void> | null = null;
+  let syncing: Promise<void> | null = null;
   let pending: Promise<unknown> = Promise.resolve();
-  let refreshing: Promise<string | null> | null = null;
-  // Bumped by every sign-in and sign-out: work begun under an older epoch drops its result.
+  let refreshing: { epoch: number; token: Promise<string | null> } | null = null;
   let epoch = 0;
 
   const current = (): AccountSnapshot => {
@@ -209,12 +224,42 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     return provider;
   };
 
+  /** A new epoch: whatever is in flight drops its result. */
+  const advance = (): number => {
+    epoch += 1;
+    refreshing = null;
+    return epoch;
+  };
+
   const signedOut = (reason: string | null): void => {
     session = null;
     viewer = null;
-    backendState = backend === null ? "none" : "unreachable";
+    backendState = disconnected;
     state = "signed-out";
     failure = reason;
+  };
+
+  /** Forgets the saved sign-in, then signs out with `reason`, unless the epoch moved meanwhile. */
+  const forget = async (reason: string | null, startedIn: number): Promise<void> => {
+    await store.clear().catch((error: unknown) => {
+      log.warn("could not forget the saved sign-in", { error });
+    });
+    if (epoch !== startedIn) return;
+    signedOut(reason);
+    emit();
+  };
+
+  /** Seals `saved` in place of `expect`; when the epoch moved meanwhile, removes it again. */
+  const seal = async (
+    saved: SavedAccountSession,
+    expect: SavedSessionRef | null,
+    startedIn: number,
+  ): Promise<SavedSessionRef | null> => {
+    const ref = await store.save(saved, expect);
+    if (epoch === startedIn) return ref;
+    // Signed out (or in again) while this was sealing: it must not outlive the epoch.
+    await store.discard(ref).catch(() => {});
+    return null;
   };
 
   const adopt = (tokens: ProviderTokens, saved: SavedAccountSession, ref: SavedSessionRef) => {
@@ -226,13 +271,13 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     };
   };
 
-  /** Refreshes the access token once; concurrent callers share it. */
+  /** Refreshes the access token once; concurrent callers in the same epoch share it. */
   const refreshAccess = (live: AccountProvider): Promise<string | null> => {
-    if (refreshing !== null) return refreshing;
+    if (refreshing !== null && refreshing.epoch === epoch) return refreshing.token;
     const startedIn = epoch;
     const base = session;
     if (base === null) return Promise.resolve(null);
-    refreshing = (async () => {
+    const token = (async () => {
       let tokens: ProviderTokens;
       try {
         tokens = await live.refresh(base.saved.refreshToken);
@@ -240,25 +285,21 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
         if (epoch !== startedIn) return null;
         if (isProviderRefused(error)) {
           log.info("account sign-in expired", { reason: "refresh-refused" });
-          await store.clear().catch((clearError: unknown) => {
-            log.warn("could not forget the expired sign-in", { error: clearError });
-          });
-          signedOut("Your sign-in expired. Sign in again.");
-          emit();
+          await forget("Your sign-in expired. Sign in again.", startedIn);
           return null;
         }
-        backendState = backend === null ? "none" : "unreachable";
+        backendState = disconnected;
         emit();
         throw error;
       }
       if (epoch !== startedIn) return null;
       const saved = savedFrom(live, tokens, base.saved);
       try {
-        const ref = await store.save(saved, base.ref);
-        if (epoch !== startedIn) return null;
+        const ref = await seal(saved, base.ref, startedIn);
+        if (ref === null) return null;
         adopt(tokens, saved, ref);
       } catch (error) {
-        if (error instanceof SavedSessionChangedError) return null;
+        if (error instanceof SavedSessionChangedError || epoch !== startedIn) return null;
         // The rotated token could not be sealed: the old one is spent, so the
         // sign-in survives only for this launch. Keep it in memory.
         log.warn("could not seal the refreshed sign-in", { error });
@@ -266,12 +307,13 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
       }
       return tokens.accessToken;
     })().finally(() => {
-      refreshing = null;
+      if (refreshing?.token === token) refreshing = null;
     });
-    return refreshing;
+    refreshing = { epoch: startedIn, token };
+    return token;
   };
 
-  const accessToken = async (): Promise<string | null> => {
+  const freshToken = async (): Promise<string | null> => {
     if (provider === null || session === null) return null;
     if (session.accessToken !== null && session.accessExpiresAt - ACCESS_TOKEN_MARGIN_MS > now()) {
       return session.accessToken;
@@ -279,34 +321,44 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     return refreshAccess(provider);
   };
 
-  /** Asks the backend for the person; on failure keeps the sign-in and says so. */
-  const syncViewer = async (): Promise<void> => {
-    if (backend === null) return;
+  /** Asks the backend for the person; on failure keeps the sign-in and says why. */
+  const syncViewer = (): Promise<void> => {
+    if (backend === null) return Promise.resolve();
+    if (syncing !== null) return syncing;
     const startedIn = epoch;
-    try {
-      const token = await accessToken();
-      if (token === null || epoch !== startedIn) return;
-      const answered = await backend.ensureViewer(token);
-      if (epoch !== startedIn) return;
-      viewer = answered;
-      backendState = "synced";
-      failure = null;
-    } catch (error) {
-      if (epoch !== startedIn) return;
-      if (error instanceof BackendRefusedError && error.code === "account_deleted") {
-        await store.clear().catch(() => {});
-        signedOut("This account has been deleted.");
-      } else if (session !== null) {
-        backendState = "unreachable";
-        failure = "Couldn't reach Volli Cloud. Your sign-in is kept.";
-        log.warn("account backend unreachable", { error: message(error, "unknown") });
+    const run = (async () => {
+      try {
+        const token = await freshToken();
+        if (token === null || epoch !== startedIn) return;
+        const answered = await backend.ensureViewer(token);
+        if (epoch !== startedIn) return;
+        viewer = answered;
+        backendState = "synced";
+        failure = null;
+      } catch (error) {
+        if (epoch !== startedIn) return;
+        if (error instanceof BackendRefusedError && error.code === "account_deleted") {
+          await forget("This account has been deleted.", startedIn);
+          return;
+        }
+        if (session !== null) {
+          const refused = error instanceof BackendRefusedError && error.code === "unauthenticated";
+          backendState = refused ? "refused" : "unreachable";
+          failure = refused ? NOT_ACCEPTED : OFFLINE;
+          log.warn("account backend unreachable", { error: message(error, "unknown") });
+        }
       }
-    }
-    emit();
+      emit();
+    })().finally(() => {
+      syncing = null;
+    });
+    syncing = run;
+    return run;
   };
 
-  const ensureRestored = (): void => {
-    if (restore !== null || provider === null) return;
+  const ensureRestored = (): Promise<void> => {
+    if (provider === null) return Promise.resolve();
+    if (restore !== null) return restore;
     const live = provider;
     const startedIn = epoch;
     state = "restoring";
@@ -330,9 +382,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
         }
         if (loaded.session.provider !== live.kind) {
           // Saved against another provider (a dev sign-in in a WorkOS build): not this one's.
-          await store.clear().catch(() => {});
-          signedOut(null);
-          emit();
+          await forget(null, startedIn);
           return;
         }
         session = { saved: loaded.session, ref: loaded.ref, accessToken: null, accessExpiresAt: 0 };
@@ -343,7 +393,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
         } catch {
           // Offline: signed in from the saved profile, backend unreachable.
           if (epoch === startedIn && session !== null) {
-            failure = "Couldn't reach Volli Cloud. Your sign-in is kept.";
+            failure = OFFLINE;
             emit();
           }
           return;
@@ -351,8 +401,10 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
         if (epoch === startedIn && session !== null) await syncViewer();
       })(),
     );
+    return restore;
   };
 
+  /** Ends the flow in flight, if any; it reports nothing (its epoch has passed). */
   const endFlow = (): void => {
     flow?.abort.abort();
     flow = null;
@@ -389,43 +441,56 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
       emit();
       return;
     }
+    let tokens: ProviderTokens;
     try {
-      const tokens = await live.exchangeCode({
+      tokens = await live.exchangeCode({
         code: result.code,
         codeVerifier: verifier,
         redirectUri: callback.redirectUri,
       });
-      if (epoch !== startedIn) return;
-      const saved = savedFrom(live, tokens);
-      const ref = await store.save(saved, session?.ref ?? null).catch(async (error: unknown) => {
-        if (!(error instanceof SavedSessionChangedError)) throw error;
-        // A record this service did not read (a sign-in from before a reset): replace it.
-        await store.clear();
-        return store.save(saved, null);
-      });
-      if (epoch !== startedIn) return;
-      flow = null;
-      viewer = null;
-      adopt(tokens, saved, ref);
-      state = "signed-in";
-      failure = null;
-      log.info("account signed in", { provider: live.kind });
-      emit();
-      await syncViewer();
     } catch (error) {
       if (epoch !== startedIn) return;
       flow = null;
       log.warn("account sign-in failed", { error: message(error, "unknown") });
-      signedOut(message(error, "Sign-in failed. Try again."));
+      signedOut(
+        isProviderRefused(error)
+          ? error.message
+          : "Couldn't reach the sign-in provider. Try again.",
+      );
       emit();
+      return;
     }
+    if (epoch !== startedIn) return;
+    const saved = savedFrom(live, tokens);
+    let ref: SavedSessionRef | null;
+    try {
+      // Whatever was saved before belongs to no one now: this sign-in replaces it.
+      await store.clear();
+      ref = await seal(saved, null, startedIn);
+    } catch (error) {
+      if (epoch !== startedIn) return;
+      flow = null;
+      log.warn("could not seal the sign-in", { error });
+      signedOut("Couldn't save the sign-in on this Mac. Try again.");
+      emit();
+      return;
+    }
+    if (ref === null) return;
+    flow = null;
+    viewer = null;
+    adopt(tokens, saved, ref);
+    state = "signed-in";
+    failure = null;
+    log.info("account signed in", { provider: live.kind });
+    emit();
+    await syncViewer();
   };
 
   const signedInBackend = async (): Promise<{ backend: AccountBackend; token: string }> => {
     requireEnabled();
     if (session === null || state !== "signed-in") throw new Error("Sign in to Volli first.");
     if (backend === null) throw new Error("This build has no Volli Cloud backend configured.");
-    const token = await accessToken();
+    const token = await freshToken();
     if (token === null) throw new Error("Sign in to Volli again.");
     return { backend, token };
   };
@@ -446,14 +511,16 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
   return {
     snapshot() {
       requireCloud();
-      ensureRestored();
+      void ensureRestored();
       return current();
     },
     subscribe(listener) {
       requireCloud();
-      ensureRestored();
+      void ensureRestored();
       listeners.add(listener);
       listener(current());
+      // A window opening while the backend is unreachable is the moment to try again.
+      if (state === "signed-in" && backendState === "unreachable") void track(syncViewer());
       return () => {
         listeners.delete(listener);
       };
@@ -468,8 +535,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
       endFlow();
       // Nothing to restore once the person has started a sign-in.
       restore ??= Promise.resolve();
-      epoch += 1;
-      const startedIn = epoch;
+      const startedIn = advance();
       const abort = new AbortController();
       flow = { connection, abort };
       state = "signing-in";
@@ -489,6 +555,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
           codeChallenge: pkce.challenge,
           connection,
         });
+        // Cancelled (or replaced) while the listener and URL were made: no browser.
         if (epoch !== startedIn) {
           callback.close();
           return;
@@ -497,30 +564,33 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
         await options.openBrowser(url);
       } catch (error) {
         if (epoch === startedIn) {
-          // A new epoch first, so the aborted flow does not report over this.
-          epoch += 1;
+          advance();
           endFlow();
-          signedOut(message(error, "Couldn't start the sign-in."));
+          log.warn("could not start the sign-in", { error: message(error, "unknown") });
+          signedOut("Couldn't open the browser to sign in. Try again.");
           emit();
         }
         throw error;
       }
     },
     cancelSignIn() {
-      requireEnabled();
+      requireCloud();
       if (flow === null) return;
-      // The flow's own end reports it (signed out, no failure).
-      flow.abort.abort();
+      advance();
+      endFlow();
+      signedOut(null);
+      emit();
     },
     async signOut() {
       const live = requireEnabled();
+      const startedIn = advance();
       endFlow();
-      epoch += 1;
       restore ??= Promise.resolve();
       const ended = session;
       signedOut(null);
       emit();
       await store.clear();
+      if (epoch !== startedIn) return;
       log.info("account signed out", { provider: live.kind });
       const logout = ended?.saved.sessionId ? live.logoutUrl(ended.saved.sessionId) : null;
       if (logout !== null) {
@@ -533,7 +603,11 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     },
     requestDeletion: () => deletionCall((live, token) => live.requestDeletion(token)),
     cancelDeletion: () => deletionCall((live, token) => live.cancelDeletion(token)),
-    accessToken,
+    async accessToken() {
+      if (!options.enabled() || provider === null) return null;
+      await ensureRestored();
+      return freshToken();
+    },
     async settled() {
       let seen: Promise<unknown>;
       do {
@@ -542,6 +616,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
       } while (seen !== pending);
     },
     dispose() {
+      advance();
       endFlow();
       listeners.clear();
       provider?.dispose?.();

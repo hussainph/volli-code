@@ -251,6 +251,7 @@
                       "enum": [
                         "synced",
                         "unreachable",
+                        "refused",
                         "none"
                       ],
                       "type": "string"
@@ -389,6 +390,7 @@
                       "enum": [
                         "synced",
                         "unreachable",
+                        "refused",
                         "none"
                       ],
                       "type": "string"

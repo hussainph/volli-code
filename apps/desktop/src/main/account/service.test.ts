@@ -444,8 +444,25 @@ describe("the account service", () => {
     await noBrowser.service.settled();
     expect(noBrowser.service.snapshot()).toMatchObject({
       state: "signed-out",
-      failure: "No browser.",
+      failure: "Couldn't open the browser to sign in. Try again.",
     });
+
+    const offline = harness({
+      provider: scriptedProvider({
+        exchangeCode: async () => {
+          throw new Error("ECONNRESET at /some/path");
+        },
+      }),
+      openBrowser: scriptedBrowser,
+    });
+    offline.service.snapshot();
+    await offline.service.settled();
+    await offline.service.signIn("github");
+    await offline.service.settled();
+    // A transport failure is named, not quoted.
+    expect(offline.service.snapshot().failure).toBe(
+      "Couldn't reach the sign-in provider. Try again.",
+    );
   });
 
   it("signs out: forgets the tokens and the sealed record, and ends the provider's session", async () => {
@@ -572,5 +589,181 @@ describe("the account service", () => {
     await expect(service.signIn("github")).rejects.toThrow("Still reading the saved sign-in");
     await service.settled();
     await expect(service.signIn("apple" as never)).rejects.toThrow("Unknown sign-in provider.");
+  });
+});
+
+async function refusedSignIn(): Promise<BackendViewer> {
+  throw new BackendRefusedError("Volli Cloud did not accept this sign-in.", "unauthenticated");
+}
+
+describe("the account service's epochs", () => {
+  it("opens no browser for a sign-in cancelled before its URL was made", async () => {
+    const url = Promise.withResolvers<string>();
+    const open = vi.fn();
+    const { service } = harness({
+      provider: scriptedProvider({ authorizationUrl: () => url.promise }),
+      openBrowser: open,
+    });
+    service.snapshot();
+    await service.settled();
+    const started = service.signIn("github");
+    await vi.waitFor(() => expect(service.snapshot().state).toBe("signing-in"));
+    service.cancelSignIn();
+    expect(service.snapshot()).toMatchObject({ state: "signed-out", failure: null });
+    url.resolve("http://127.0.0.1:1/never");
+    await started;
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("drops a sign-in cancelled after the browser came back, and keeps nothing sealed", async () => {
+    const exchange = Promise.withResolvers<ProviderTokens>();
+    const { service, temp } = harness({
+      provider: scriptedProvider({ exchangeCode: () => exchange.promise }),
+      openBrowser: scriptedBrowser,
+    });
+    service.snapshot();
+    await service.settled();
+    await service.signIn("github");
+    service.cancelSignIn();
+    exchange.resolve({
+      accessToken: "a",
+      refreshToken: "r",
+      accessExpiresAt: Date.now() + 600_000,
+      sessionId: null,
+      profile: { displayName: "Dana", email: null },
+    });
+    await service.settled();
+    expect(service.snapshot().state).toBe("signed-out");
+    expect(temp.inventory.list("host-private")).toEqual([]);
+  });
+
+  it("never leaves a sign-in sealed that a sign-out overtook while it was sealing", async () => {
+    const temp = tempInventory();
+    cleanups.push(temp.dispose);
+    const real = inventoryAccountSessionStore(temp.inventory, async () => {});
+    const sealing = Promise.withResolvers<void>();
+    const reached = Promise.withResolvers<void>();
+    const store = {
+      ...real,
+      save: async (...args: Parameters<typeof real.save>) => {
+        const ref = await real.save(...args);
+        reached.resolve();
+        await sealing.promise;
+        return ref;
+      },
+    };
+    const service = createAccountService({
+      enabled: () => true,
+      provider: scriptedProvider(),
+      backend: null,
+      store,
+      openBrowser: scriptedBrowser,
+    });
+    cleanups.push(() => service.dispose());
+    service.snapshot();
+    await service.settled();
+    await service.signIn("github");
+    await reached.promise;
+    await service.signOut();
+    sealing.resolve();
+    await service.settled();
+    expect(service.snapshot().state).toBe("signed-out");
+    expect(temp.inventory.list("host-private")).toEqual([]);
+  });
+
+  it("replaces a sign-in in flight with a new one", async () => {
+    const { service } = harness({ openBrowser: () => {} });
+    service.snapshot();
+    await service.settled();
+    await service.signIn("github");
+    await service.signIn("google");
+    expect(service.snapshot()).toMatchObject({ state: "signing-in", signingInWith: "google" });
+    service.cancelSignIn();
+    await service.settled();
+    expect(service.snapshot().state).toBe("signed-out");
+  });
+
+  it("says a refused sign-in is not accepted, apart from being offline, and retries on a new window", async () => {
+    let answer: () => Promise<BackendViewer> = refusedSignIn;
+    const { service } = harness({ backend: backendStandIn({ ensureViewer: () => answer() }) });
+    service.snapshot();
+    await service.settled();
+    await service.signIn("github");
+    await service.settled();
+    expect(service.snapshot()).toMatchObject({
+      account: { backend: "refused" },
+      failure: "Volli Cloud didn't accept this sign-in. Sign out and sign in again.",
+    });
+
+    answer = async () => {
+      throw new Error("offline");
+    };
+    service.subscribe(() => {});
+    await service.settled();
+    // Only an unreachable backend is retried on subscribe; refused waits for the person.
+    expect(service.snapshot().account).toMatchObject({ backend: "refused" });
+  });
+
+  it("retries an unreachable backend when a window subscribes", async () => {
+    let up = false;
+    const { service } = harness({
+      backend: backendStandIn({
+        ensureViewer: async () => {
+          if (!up) throw new Error("offline");
+          return VIEWER;
+        },
+      }),
+    });
+    service.snapshot();
+    await service.settled();
+    await service.signIn("github");
+    await service.settled();
+    expect(service.snapshot().account).toMatchObject({ backend: "unreachable" });
+    up = true;
+    service.subscribe(() => {});
+    await service.settled();
+    expect(service.snapshot()).toMatchObject({
+      account: { backend: "synced", userId: VIEWER.userId },
+      failure: null,
+    });
+  });
+
+  it("reads the saved sign-in for a main-side caller that asks for a token first", async () => {
+    const temp = tempInventory();
+    cleanups.push(temp.dispose);
+    const provider = scriptedProvider();
+    const first = harness({ provider, openBrowser: scriptedBrowser, temp });
+    first.service.snapshot();
+    await first.service.settled();
+    await first.service.signIn("github");
+    await first.service.settled();
+
+    const next = harness({ provider, temp });
+    await expect(next.service.accessToken()).resolves.toMatch(/^access-/u);
+    const off = harness({ provider, temp, enabled: () => false });
+    await expect(off.service.accessToken()).resolves.toBeNull();
+  });
+
+  it("keeps a dev sign-in across a relaunch of the app and its issuer", async () => {
+    const temp = tempInventory();
+    cleanups.push(temp.dispose);
+    const key = testKeyPair();
+    const before = devIssuerProvider({ privateKeyPem: key.privateKeyPem });
+    const first = harness({ provider: before, temp });
+    first.service.snapshot();
+    await first.service.settled();
+    await first.service.signIn("github");
+    await first.service.settled();
+    first.service.dispose();
+
+    const after = devIssuerProvider({ privateKeyPem: key.privateKeyPem });
+    const relaunched = harness({ provider: after, temp });
+    relaunched.service.snapshot();
+    await relaunched.service.settled();
+    expect(relaunched.service.snapshot()).toMatchObject({
+      state: "signed-in",
+      failure: null,
+      account: { backend: "synced" },
+    });
   });
 });

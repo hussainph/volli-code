@@ -1,10 +1,9 @@
 /**
  * Which sign-in provider and backend this build talks to.
  *
- * No WorkOS environment or Convex deployment exists yet, so a packaged build
- * names neither and its account is `unconfigured`; the release pipeline bakes
- * them in once they exist (the go-live checklist on VC-884). An unpackaged
- * build reads them from its environment:
+ * A packaged build names neither (its account is `unconfigured`) until its
+ * release names a WorkOS environment and a Convex deployment here. An
+ * unpackaged build reads them from its environment:
  *
  * - `VOLLI_ACCOUNT_PROVIDER=dev`: the local dev issuer (`./dev-issuer`),
  *   signing with `VOLLI_CONVEX_TEST_PRIVATE_KEY`, the fixture key

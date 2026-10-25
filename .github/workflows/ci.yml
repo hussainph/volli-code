@@ -729,6 +729,15 @@ jobs:
       - name: Backend tests (pinned local backend)
         run: vp run --filter @volli/convex test:backend
 
+      # The desktop's Volli Cloud sign-in end to end (VC-884): its dev issuer,
+      # loopback callback, sealed store and the accounts functions on the
+      # pinned backend. Required here, so a missing fixture env fails rather
+      # than skips.
+      - name: Desktop sign-in against the pinned backend
+        env:
+          VOLLI_ACCOUNT_LIVE_REQUIRED: "1"
+        run: pnpm -C convex with-backend --deploy -- pnpm -C ../apps/desktop exec vp test run src/main/account/convex.live.test.ts --maxWorkers=2
+
   # N-1 compatibility (VC-633). A previous build, run from its own shipped
   # sources, against a profile THIS build migrated to its head: it must write
   # to the profile if the head's migrations are compatible (and this build must

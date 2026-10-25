@@ -214,3 +214,59 @@ describe("the dev issuer provider adapter", () => {
     }
   });
 });
+
+describe("the dev issuer's refresh tokens", () => {
+  it("are good across a relaunch with the same key, once, and only from that key", async () => {
+    const key = testKeyPair();
+    const first = await startDevIssuer({ privateKeyPem: key.privateKeyPem });
+    const pkce = createPkcePair();
+    const code = new URL(
+      (await authorize(first.baseUrl, authorizeQuery(pkce.challenge))).headers.get("location")!,
+    ).searchParams.get("code")!;
+    const granted = (await (
+      await token(first.baseUrl, {
+        grant_type: "authorization_code",
+        code,
+        code_verifier: pkce.verifier,
+        redirect_uri: REDIRECT,
+      })
+    ).json()) as Record<string, string>;
+    await first.close();
+
+    const relaunched = await startDevIssuer({ privateKeyPem: key.privateKeyPem });
+    running.push(relaunched);
+    const refresh = { grant_type: "refresh_token", refresh_token: granted["refresh_token"]! };
+    const refreshed = await token(relaunched.baseUrl, refresh);
+    expect(refreshed.status).toBe(200);
+    const body = (await refreshed.json()) as Record<string, string>;
+    // The same person and provider session as before the relaunch.
+    expect(readJwtClaims(body["access_token"]!)).toMatchObject({
+      sub: readJwtClaims(granted["access_token"]!)!["sub"],
+      sid: readJwtClaims(granted["access_token"]!)!["sid"],
+    });
+    expect((await token(relaunched.baseUrl, refresh)).status).toBe(400);
+
+    const other = await startedIssuer();
+    expect(
+      (
+        await token(other.baseUrl, {
+          grant_type: "refresh_token",
+          refresh_token: body["refresh_token"]!,
+        })
+      ).status,
+    ).toBe(400);
+    // An access token is not a refresh token.
+    expect(
+      (
+        await token(relaunched.baseUrl, {
+          grant_type: "refresh_token",
+          refresh_token: body["access_token"]!,
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (await token(relaunched.baseUrl, { grant_type: "refresh_token", refresh_token: "a.b" }))
+        .status,
+    ).toBe(400);
+  });
+});

@@ -15,7 +15,6 @@ import { inventoryAccountSessionStore, type AccountSessionInventory } from "./se
 import { workosProvider } from "./workos";
 
 export { resolveAccountConfig } from "./config";
-export type { AccountService } from "./service";
 
 function providerFor(config: AccountConfig): AccountProvider | null {
   const chosen = config.provider;

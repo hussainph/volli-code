@@ -40,10 +40,12 @@ export type AccountState = (typeof ACCOUNT_STATES)[number];
 
 /**
  * Whether the backend has the account. `synced`: it answered for this
- * sign-in. `unreachable`: the last call failed (offline, or the backend
- * refused); the sign-in itself is kept. `none`: this build names no backend.
+ * sign-in. `unreachable`: the last call failed in transit (offline); the
+ * sign-in is kept. `refused`: the backend did not accept this sign-in (a
+ * configuration or sign-in problem: signing out and in again is the
+ * recovery). `none`: this build names no backend.
  */
-export const ACCOUNT_BACKEND_STATES = ["synced", "unreachable", "none"] as const;
+export const ACCOUNT_BACKEND_STATES = ["synced", "unreachable", "refused", "none"] as const;
 export type AccountBackendState = (typeof ACCOUNT_BACKEND_STATES)[number];
 
 /** The signed-in person: profile only, never a token or a provider subject. */

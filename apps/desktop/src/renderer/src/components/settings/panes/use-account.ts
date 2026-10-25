@@ -26,7 +26,7 @@ export interface AccountRpc {
   };
 }
 
-export type AccountView =
+type AccountView =
   | { readonly kind: "loading" }
   | { readonly kind: "ready"; readonly snapshot: AccountSnapshot }
   | { readonly kind: "failed"; readonly message: string };
@@ -39,7 +39,7 @@ export interface AccountCommands {
   cancelDeletion(): Promise<unknown>;
 }
 
-export function accountCommands(rpc: AccountRpc): AccountCommands {
+function accountCommands(rpc: AccountRpc): AccountCommands {
   return {
     signIn: (connection) => rpc.account.signIn.mutate({ connection }),
     cancelSignIn: () => rpc.account.cancelSignIn.mutate(),

@@ -15,15 +15,17 @@
  * one configured subject) and redirects to the loopback callback with a
  * code; it refuses any redirect that is not loopback `http`. `/token` speaks
  * standard form-encoded `authorization_code` (S256 checked, single use) and
- * rotating `refresh_token` grants.
+ * rotating `refresh_token` grants. A refresh token is itself signed with the
+ * key, so a saved sign-in survives the app relaunching (and with it this
+ * issuer); each is good once within a process.
  */
-import { randomBytes, randomUUID } from "node:crypto";
+import { createPublicKey, randomBytes, randomUUID, verify } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { isAccountConnection } from "@volli/shared";
 
-import { signEs256Jwt } from "./jwt";
+import { readJwtClaims, signEs256Jwt } from "./jwt";
 import { pkceChallenge } from "./pkce";
 import {
   postTokenRequest,
@@ -40,6 +42,8 @@ export const DEV_CLIENT_ID = "volli-desktop-dev";
 
 const CODE_TTL_MS = 60_000;
 const ACCESS_TTL_SECONDS = 300;
+const REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60;
+const REFRESH_TYPE = "volli-dev-refresh";
 
 export interface DevIssuerOptions {
   /** PKCS#8 PEM of the fixture's P-256 key. */
@@ -96,16 +100,43 @@ export async function startDevIssuer(options: DevIssuerOptions): Promise<DevIssu
   const subject = `dev:${options.subject ?? "dev-user"}`;
   const codes = new Map<string, PendingCode>();
   // A refresh token is good once: each refresh replaces it.
-  const refreshTokens = new Map<string, string>();
-  const sessionId = `dev_session_${randomUUID()}`;
+  const spent = new Set<string>();
+  const publicKey = createPublicKey(options.privateKeyPem);
 
-  const accessToken = (): string => {
+  /** The refresh token's grant, if this key signed it and it is unspent and unexpired. */
+  const redeem = (token: string): { sub: string; sid: string } | null => {
+    const [header, body, signature] = token.split(".");
+    if (header === undefined || body === undefined || signature === undefined) return null;
+    const signed = verify(
+      "sha256",
+      Buffer.from(`${header}.${body}`),
+      { key: publicKey, dsaEncoding: "ieee-p1363" },
+      Buffer.from(signature, "base64url"),
+    );
+    const claims = signed ? readJwtClaims(token) : null;
+    const { typ, sub, sid, jti, exp } = claims ?? {};
+    if (
+      typ !== REFRESH_TYPE ||
+      typeof sub !== "string" ||
+      typeof sid !== "string" ||
+      typeof jti !== "string" ||
+      typeof exp !== "number" ||
+      exp * 1000 <= now() ||
+      spent.has(jti)
+    ) {
+      return null;
+    }
+    spent.add(jti);
+    return { sub, sid };
+  };
+
+  const accessToken = (grant: { sub: string; sid: string }): string => {
     const issuedAt = Math.floor(now() / 1000);
     return signEs256Jwt(options.privateKeyPem, DEV_KEY_ID, {
       iss: DEV_ISSUER,
       aud: DEV_AUDIENCE,
-      sub: subject,
-      sid: sessionId,
+      sub: grant.sub,
+      sid: grant.sid,
       name: options.displayName ?? "Dev User",
       email: options.email ?? "dev-user@volli.invalid",
       email_verified: true,
@@ -113,12 +144,19 @@ export async function startDevIssuer(options: DevIssuerOptions): Promise<DevIssu
       exp: issuedAt + (options.accessTtlSeconds ?? ACCESS_TTL_SECONDS),
     });
   };
-  const grant = (response: ServerResponse): void => {
-    const refreshToken = randomBytes(32).toString("base64url");
-    refreshTokens.set(refreshToken, subject);
+  const grant = (response: ServerResponse, granted: { sub: string; sid: string }): void => {
+    const issuedAt = Math.floor(now() / 1000);
+    const refreshToken = signEs256Jwt(options.privateKeyPem, DEV_KEY_ID, {
+      typ: REFRESH_TYPE,
+      sub: granted.sub,
+      sid: granted.sid,
+      jti: randomUUID(),
+      iat: issuedAt,
+      exp: issuedAt + REFRESH_TTL_SECONDS,
+    });
     json(response, 200, {
       token_type: "Bearer",
-      access_token: accessToken(),
+      access_token: accessToken(granted),
       refresh_token: refreshToken,
       expires_in: options.accessTtlSeconds ?? ACCESS_TTL_SECONDS,
     });
@@ -171,16 +209,16 @@ export async function startDevIssuer(options: DevIssuerOptions): Promise<DevIssu
           refuse(response, "The code is unknown, used, expired or not this verifier's.");
           return;
         }
-        grant(response);
+        grant(response, { sub: subject, sid: `dev_session_${randomUUID()}` });
         return;
       }
       case "refresh_token": {
-        const refreshToken = form.get("refresh_token") ?? "";
-        if (!refreshTokens.delete(refreshToken)) {
-          refuse(response, "The refresh token is unknown or already used.");
+        const granted = redeem(form.get("refresh_token") ?? "");
+        if (granted === null) {
+          refuse(response, "The refresh token is unknown, expired or already used.");
           return;
         }
-        grant(response);
+        grant(response, granted);
         return;
       }
       default:

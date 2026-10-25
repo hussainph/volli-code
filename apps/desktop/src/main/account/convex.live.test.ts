@@ -4,8 +4,8 @@
  * `requestDeletion` / `cancelDeletion` on the pinned local Convex backend.
  *
  * Runs only under the fixture, which hands it the backend's URL and the test
- * issuer's key (skipped everywhere else, CI's desktop lanes included; the
- * `Convex (codegen + backend)` lane holds the functions themselves):
+ * issuer's key: CI's `Convex (codegen + backend)` lane runs it so (and
+ * requires it to run); it skips everywhere else, the desktop lanes included.
  *
  *   pnpm -C convex with-backend --deploy -- \
  *     pnpm -C apps/desktop exec vp test run src/main/account/convex.live.test.ts
@@ -21,6 +21,14 @@ import { tempInventory } from "./test-support";
 
 const url = process.env["VOLLI_CONVEX_URL"];
 const privateKeyPem = process.env["VOLLI_CONVEX_TEST_PRIVATE_KEY"];
+
+// CI's Convex lane sets this: there the test must run, never skip.
+if (
+  process.env["VOLLI_ACCOUNT_LIVE_REQUIRED"] === "1" &&
+  (url === undefined || privateKeyPem === undefined)
+) {
+  throw new Error("The live sign-in test needs the fixture: run it under `with-backend --deploy`.");
+}
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {

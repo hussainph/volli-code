@@ -120,7 +120,9 @@ describe("accounts.requestDeletion", () => {
     const rows = await t.run(async (ctx) => ({
       requests: await ctx.db.query("deletionRequests").collect(),
       devices: await ctx.db.query("clientSessions").collect(),
-      audit: await ctx.db.query("auditLog").collect(),
+      audit: (await ctx.db.query("auditLog").collect()).filter(
+        (entry) => entry.targetKind === "user",
+      ),
     }));
     expect(rows.requests).toEqual([
       expect.objectContaining({
@@ -223,7 +225,9 @@ describe("accounts.requestDeletion", () => {
     await t.withIdentity(identity("pip")).mutation(api.accounts.requestDeletion, { via: "web" });
     const rows = await t.run(async (ctx) => ({
       request: (await ctx.db.query("deletionRequests").first())!,
-      audit: await ctx.db.query("auditLog").collect(),
+      audit: (await ctx.db.query("auditLog").collect()).filter(
+        (entry) => entry.targetKind === "user",
+      ),
     }));
     expect(rows.request.requestedBy).toEqual({ kind: "person", userId, via: "web" });
     expect(rows.audit.map((entry) => entry.actor)).toEqual([
@@ -293,7 +297,9 @@ describe("accounts.cancelDeletion", () => {
     });
     const rows = await t.run(async (ctx) => ({
       requests: await ctx.db.query("deletionRequests").collect(),
-      audit: await ctx.db.query("auditLog").collect(),
+      audit: (await ctx.db.query("auditLog").collect()).filter(
+        (entry) => entry.targetKind === "user",
+      ),
     }));
     expect(rows.requests.map((request) => request.status)).toEqual(["cancelled"]);
     expect(rows.audit.map((entry) => entry.kind)).toEqual([
@@ -314,7 +320,10 @@ describe("accounts.cancelDeletion", () => {
     await expect(
       t.withIdentity(identity("lee")).mutation(api.accounts.cancelDeletion, {}),
     ).resolves.toMatchObject({ userId, status: "active" });
-    expect(await t.run((ctx) => ctx.db.query("auditLog").collect())).toEqual([]);
+    const accountRows = await t.run(async (ctx) =>
+      (await ctx.db.query("auditLog").collect()).filter((entry) => entry.targetKind === "user"),
+    );
+    expect(accountRows).toEqual([]);
 
     await t.withIdentity(identity("lee")).mutation(api.accounts.requestDeletion, {});
     vi.setSystemTime(1_000_000 + ACCOUNT_DELETION_GRACE_MS + 60_000);

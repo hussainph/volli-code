@@ -87,6 +87,15 @@ function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: A
   );
 }
 
+const CONNECTION = {
+  synced: { state: "ready", label: "Connected" },
+  unreachable: { state: "waiting", label: "Offline" },
+  refused: { state: "error", label: "Not accepted" },
+} as const satisfies Record<
+  Exclude<AccountSummary["backend"], "none">,
+  { state: "ready" | "waiting" | "error"; label: string }
+>;
+
 function purgeDate(at: number): string {
   return new Date(at).toLocaleDateString(undefined, { dateStyle: "long" });
 }
@@ -124,18 +133,22 @@ function SignedIn({
         ) : null}
         {account.backend !== "none" ? (
           <PrefRow label="Volli Cloud">
-            {account.backend === "synced" ? (
-              <Health state="ready">Connected</Health>
-            ) : (
-              <Health state="waiting">{failure ?? "Offline"}</Health>
-            )}
+            <Health state={CONNECTION[account.backend].state}>
+              {CONNECTION[account.backend].label}
+            </Health>
           </PrefRow>
+        ) : null}
+        {account.backend === "refused" && failure !== null ? (
+          <p role="alert" className="text-ui text-destructive">
+            {failure}
+          </p>
         ) : null}
       </PrefSection>
       {account.backend !== "none" ? (
-        <PrefSection title="Delete account" icon={TrashIcon}>
+        <PrefSection title="Deletion" icon={TrashIcon}>
           {account.deletionPurgeAfter !== null ? (
-            <PrefRow label={`Deletion scheduled for ${purgeDate(account.deletionPurgeAfter)}`}>
+            <PrefRow label="Scheduled">
+              <span className="text-ui">{purgeDate(account.deletionPurgeAfter)}</span>
               <Button
                 size="sm"
                 variant="outline"
@@ -145,7 +158,7 @@ function SignedIn({
               </Button>
             </PrefRow>
           ) : (
-            <PrefRow label="Delete account">
+            <PrefRow label="Account">
               <Button
                 size="sm"
                 variant="destructive"

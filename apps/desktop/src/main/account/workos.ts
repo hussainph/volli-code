@@ -9,9 +9,8 @@
  * - Sign-out: the browser visits `{api}/user_management/sessions/logout`,
  *   which ends the hosted session cookie.
  *
- * Config-driven (the environment's client id; its API base), and untested
- * against WorkOS itself until the account exists: the request shapes are
- * held by `workos.test.ts` against a stand-in server.
+ * Config-driven: the environment's client id and its API base. The request
+ * shapes are held by `workos.test.ts` against a stand-in server.
  */
 import type { AccountConnection } from "@volli/shared";
 
@@ -26,7 +25,7 @@ import {
 export const WORKOS_DEFAULT_API_BASE = "https://api.workos.com";
 
 /** WorkOS's names for the two buttons' identity providers. */
-export const WORKOS_PROVIDERS: Readonly<Record<AccountConnection, string>> = {
+const WORKOS_PROVIDERS: Readonly<Record<AccountConnection, string>> = {
   github: "GitHubOAuth",
   google: "GoogleOAuth",
 };

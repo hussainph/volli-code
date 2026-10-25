@@ -52,11 +52,15 @@ export function convexAccountBackend(options: {
 }): AccountBackend {
   const base = options.url.replace(/\/+$/u, "");
   const fetchImpl = options.fetch ?? fetch;
-  const mutation = async (path: string, accessToken: string): Promise<BackendViewer> => {
+  const mutation = async (
+    path: string,
+    accessToken: string,
+    args: Record<string, string> = {},
+  ): Promise<BackendViewer> => {
     const response = await fetchImpl(`${base}/api/mutation`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
-      body: JSON.stringify({ path, args: {}, format: "json" }),
+      body: JSON.stringify({ path, args, format: "json" }),
       signal: AbortSignal.timeout(30_000),
     });
     let body: Record<string, unknown> = {};
@@ -79,11 +83,17 @@ export function convexAccountBackend(options: {
         typeof data?.["code"] === "string" ? data["code"] : null,
       );
     }
+    if (response.status === 401 || response.status === 403) {
+      // The deployment did not accept the token: a configuration or sign-in
+      // problem the person must act on, not a network one.
+      throw new BackendRefusedError("Volli Cloud did not accept this sign-in.", "unauthenticated");
+    }
     throw new Error(`Volli Cloud answered ${response.status}.`);
   };
   return {
     ensureViewer: (token) => mutation("accounts:ensureViewer", token),
-    requestDeletion: (token) => mutation("accounts:requestDeletion", token),
-    cancelDeletion: (token) => mutation("accounts:cancelDeletion", token),
+    // The deletion's Actor names the client it came through.
+    requestDeletion: (token) => mutation("accounts:requestDeletion", token, { via: "desktop" }),
+    cancelDeletion: (token) => mutation("accounts:cancelDeletion", token, { via: "desktop" }),
   };
 }

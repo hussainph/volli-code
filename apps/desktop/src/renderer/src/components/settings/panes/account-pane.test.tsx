@@ -130,7 +130,10 @@ describe("Settings → Account", () => {
       ...SIGNED_IN,
       account: { ...SIGNED_IN.account!, deletionPurgeAfter: Date.UTC(2026, 10, 24) },
     });
-    expect(container.textContent).toContain("Deletion scheduled for");
+    expect(container.textContent).toContain("Scheduled");
+    expect(container.textContent).toContain(
+      new Date(Date.UTC(2026, 10, 24)).getFullYear().toString(),
+    );
     act(() => button("Restore account").click());
     expect(tier.rpc.account.cancelDeletion.mutate).toHaveBeenCalledOnce();
   });
@@ -143,11 +146,23 @@ describe("Settings → Account", () => {
       account: { ...SIGNED_IN.account!, backend: "unreachable", userId: null },
       failure: "Couldn't reach Volli Cloud. Your sign-in is kept.",
     });
-    expect(container.textContent).toContain("Couldn't reach Volli Cloud. Your sign-in is kept.");
+    expect(container.textContent).toContain("Offline");
+    expect(container.querySelector("[role=alert]")).toBeNull();
     expect(button("Delete account…").disabled).toBe(true);
+
+    tier.push({
+      ...SIGNED_IN,
+      account: { ...SIGNED_IN.account!, backend: "refused" },
+      failure: "Volli Cloud didn't accept this sign-in. Sign out and sign in again.",
+    });
+    expect(container.textContent).toContain("Not accepted");
+    expect(container.querySelector("[role=alert]")?.textContent).toBe(
+      "Volli Cloud didn't accept this sign-in. Sign out and sign in again.",
+    );
 
     tier.push({ ...SIGNED_IN, account: { ...SIGNED_IN.account!, backend: "none", email: null } });
     expect(container.textContent).not.toContain("Delete account");
+    expect(container.textContent).not.toContain("Deletion");
     expect(container.textContent).not.toContain("Email");
   });
 

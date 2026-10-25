@@ -105,3 +105,24 @@ describe("the saved sign-in", () => {
     }
   });
 });
+
+describe("the saved sign-in across builds", () => {
+  it("leaves a newer build's sign-in alone, and discards only the record it names", async () => {
+    const { store: saved, inventory } = store();
+    inventory.put(
+      "host-private",
+      { purpose: ACCOUNT_SESSION_PURPOSE },
+      JSON.stringify({ v: 2, anything: true }),
+    );
+    await expect(saved.load()).resolves.toBeNull();
+    expect(inventory.list("host-private")).toHaveLength(1);
+
+    await saved.clear();
+    const first = await saved.save(SESSION, null);
+    const second = await saved.save({ ...SESSION, refreshToken: "refresh-2" }, first);
+    await saved.discard(first);
+    await expect(saved.load()).resolves.toMatchObject({ ref: second });
+    await saved.discard(second);
+    await expect(saved.load()).resolves.toBeNull();
+  });
+});

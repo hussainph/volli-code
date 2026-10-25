@@ -832,8 +832,13 @@ const appStartup = app.whenReady().then(async () => {
     enabled: () => isExperimentEnabled("cloud"),
     inventory: hostPrivateInventory,
     unlockInventory: unlockHostPrivate,
-    // The same http(s)-only gate as the window's links; harness mode records it.
-    openBrowser: (url) => openExternal(url),
+    // http(s) only, like the window's links, and a launch that fails says so
+    // (the sign-in then ends with that, not ten minutes of waiting). Harness
+    // mode's shell recorder answers instead of a browser.
+    openBrowser: (url) =>
+      url.startsWith("https:") || url.startsWith("http:")
+        ? shell.openExternal(url)
+        : Promise.reject(new Error("Only a web page can be opened for sign-in.")),
     log: hostLogger("account"),
   });
   // Sign-ins on a remote host (VC-702 PR 2): the host's `sign-ins` operations
@@ -1190,7 +1195,11 @@ const appStartup = app.whenReady().then(async () => {
     lifecycle: quittingApp,
     host: hostCore,
     remoteHosts,
-    stopBackgroundWork: () => webSealing.stop(),
+    stopBackgroundWork: () => {
+      webSealing.stop();
+      // A sign-in waiting on the browser ends; the dev issuer stops listening.
+      account.dispose();
+    },
     cloudEnabled: () => isExperimentEnabled("cloud"),
     terminalQuit: prepareTerminalQuit,
     createSessionRpc,
