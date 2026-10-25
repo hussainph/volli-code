@@ -311,7 +311,6 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     host,
     assembly,
     homeDir: input.homeDir,
-    cloudEnabled: () => input.cloudEnabled(),
     venue,
     decisions: runtimeServices?.decisions ?? null,
     delegation,

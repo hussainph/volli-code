@@ -148,8 +148,6 @@ export async function readSkillDir(
 export async function loadSkills(input: {
   projectSkillsDir: string;
   globalSkillsDir: string;
-  /** Whether the `cloud` flag is on: it moves a shared slug to the personal tier (`mergeSkills`). */
-  cloud: boolean;
 }): Promise<{ ok: true; skills: readonly SkillReference[] } | { ok: false; error: string }> {
   const [project, global] = await Promise.all([
     readSkillDir(input.projectSkillsDir, skillRootDir),
@@ -157,10 +155,7 @@ export async function loadSkills(input: {
   ]);
   if (!project.ok) return project;
   if (!global.ok) return global;
-  return {
-    ok: true,
-    skills: mergeSkills({ project: project.skills, global: global.skills, cloud: input.cloud }),
-  };
+  return { ok: true, skills: mergeSkills({ project: project.skills, global: global.skills }) };
 }
 
 /** ENOENT/ENOTDIR — the directory is absent, which this surface treats as empty. */

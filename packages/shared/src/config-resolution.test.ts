@@ -8,12 +8,17 @@ import {
 } from "./config-resolution";
 
 describe("configPlan", () => {
-  it("keeps the repo tier first for skills and prompt templates with cloud off", () => {
-    expect(configPlan("skills", false)).toEqual({
+  it("keeps the repo tier first for skills, whatever the cloud flag", () => {
+    expect(configPlan("skills")).toEqual({
       merge: "union",
       order: ["policy", "repo", "personal"],
       deny: ["policy"],
     });
+    // @ts-expect-error -- the skills order does not move under the flag, so it takes none.
+    expect(configPlan("skills", true).order).toEqual(["policy", "repo", "personal"]);
+  });
+
+  it("keeps the project tier first for prompt templates with cloud off", () => {
     expect(configPlan("promptTemplates", false)).toEqual({
       merge: "union",
       order: ["policy", "project", "personal"],
@@ -21,12 +26,7 @@ describe("configPlan", () => {
     });
   });
 
-  it("puts personal over the repo tier for skills and prompt templates with cloud on", () => {
-    expect(configPlan("skills", true)).toEqual({
-      merge: "union",
-      order: ["policy", "personal", "repo"],
-      deny: ["policy"],
-    });
+  it("puts personal over the project tier for prompt templates with cloud on", () => {
     expect(configPlan("promptTemplates", true)).toEqual({
       merge: "union",
       order: ["policy", "personal", "project"],
@@ -47,13 +47,17 @@ describe("configPlan", () => {
 describe("resolveConfigValue", () => {
   const plan: ConfigPlan<"override"> = {
     merge: "override",
-    order: ["policy", "personal", "project", "workspace", "repo"],
+    order: ["policy", "repo", "personal", "project", "workspace"],
   };
 
   it("takes the highest level that sets a value, with its provenance", () => {
-    expect(resolveConfigValue(plan, { project: "p", workspace: "w", repo: "r" })).toEqual({
+    expect(resolveConfigValue(plan, { project: "p", workspace: "w" })).toEqual({
       value: "p",
       level: "project",
+    });
+    expect(resolveConfigValue(plan, { personal: "me", workspace: "w", repo: "r" })).toEqual({
+      value: "r",
+      level: "repo",
     });
     expect(resolveConfigValue(plan, { policy: "admin", personal: "me" })).toEqual({
       value: "admin",
@@ -100,7 +104,7 @@ const byName = (item: Entry): string => item.name;
 describe("resolveConfigEntries", () => {
   const plan: ConfigPlan<"union"> = {
     merge: "union",
-    order: ["policy", "personal", "project", "workspace", "repo"],
+    order: ["policy", "repo", "personal", "project", "workspace"],
     deny: ["policy", "project"],
   };
 
@@ -108,15 +112,31 @@ describe("resolveConfigEntries", () => {
     const resolved = resolveConfigEntries(
       plan,
       {
-        repo: [entry("review", "repo"), entry("lint", "repo")],
-        workspace: [entry("review", "workspace")],
+        workspace: [entry("review", "workspace"), entry("lint", "workspace")],
         personal: [entry("review", "personal"), entry("mine", "personal")],
       },
       byName,
     );
     expect(resolved).toEqual([
       { key: "review", value: entry("review", "personal"), level: "personal" },
-      { key: "lint", value: entry("lint", "repo"), level: "repo" },
+      { key: "lint", value: entry("lint", "workspace"), level: "workspace" },
+      { key: "mine", value: entry("mine", "personal"), level: "personal" },
+    ]);
+  });
+
+  it("keeps a repo entry against every configured level that defines its name", () => {
+    const resolved = resolveConfigEntries(
+      plan,
+      {
+        repo: [entry("review", "repo")],
+        workspace: [entry("review", "workspace")],
+        project: [entry("review", "project")],
+        personal: [entry("review", "personal"), entry("mine", "personal")],
+      },
+      byName,
+    );
+    expect(resolved).toEqual([
+      { key: "review", value: entry("review", "repo"), level: "repo" },
       { key: "mine", value: entry("mine", "personal"), level: "personal" },
     ]);
   });
@@ -138,13 +158,13 @@ describe("resolveConfigEntries", () => {
       byName,
       { policy: ["risky"] },
     );
-    expect(resolved.map(({ key }) => key)).toEqual(["safe", "other"]);
+    expect(resolved.map(({ key }) => key)).toEqual(["other", "safe"]);
   });
 
   it("lets a level above a deny define the denied key again", () => {
     const resolved = resolveConfigEntries(
       plan,
-      { repo: [entry("tool", "repo")], personal: [entry("tool", "personal")] },
+      { workspace: [entry("tool", "workspace")], personal: [entry("tool", "personal")] },
       byName,
       { project: ["tool"] },
     );
@@ -154,25 +174,43 @@ describe("resolveConfigEntries", () => {
   });
 
   it("ignores deny lists from levels the plan does not let deny", () => {
-    const resolved = resolveConfigEntries(plan, { repo: [entry("tool", "repo")] }, byName, {
-      personal: ["tool"],
-      workspace: ["tool"],
-    });
+    const resolved = resolveConfigEntries(
+      plan,
+      { workspace: [entry("tool", "workspace")] },
+      byName,
+      { repo: ["tool"], personal: ["tool"], workspace: ["tool"] },
+    );
     expect(resolved.map(({ key }) => key)).toEqual(["tool"]);
     expect(
       resolveConfigEntries(
-        { merge: "union", order: ["personal", "repo"] },
-        { repo: [entry("tool", "repo")] },
+        { merge: "union", order: ["personal", "workspace"] },
+        { workspace: [entry("tool", "workspace")] },
         byName,
         { personal: ["tool"] },
       ),
     ).toHaveLength(1);
   });
 
+  it("keeps a repo skill against a same-named personal one, beside the personal additions", () => {
+    expect(
+      resolveConfigEntries(
+        configPlan("skills"),
+        {
+          repo: [entry("review", "repo")],
+          personal: [entry("review", "personal"), entry("mine", "personal")],
+        },
+        byName,
+      ),
+    ).toEqual([
+      { key: "review", value: entry("review", "repo"), level: "repo" },
+      { key: "mine", value: entry("mine", "personal"), level: "personal" },
+    ]);
+  });
+
   it("lets policy deny a skill whatever level defines it", () => {
     expect(
       resolveConfigEntries(
-        configPlan("skills", true),
+        configPlan("skills"),
         { repo: [entry("risky", "repo")], personal: [entry("risky", "personal")] },
         byName,
         { policy: ["risky"] },
@@ -183,7 +221,7 @@ describe("resolveConfigEntries", () => {
   it("ignores levels outside the plan's order", () => {
     expect(
       resolveConfigEntries(
-        configPlan("skills", false),
+        configPlan("skills"),
         { project: [entry("x", "project")], repo: [entry("y", "repo")] },
         byName,
       ),

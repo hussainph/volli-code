@@ -77,14 +77,16 @@ flag-off suite alongside it; do not use concurrent tests with this global fixtur
 
 ## What `cloud` changes today
 
-- **Skills and Commands precedence.** A personal Skill (`~/.agents/skills`) or
-  Command (`<userData>/commands`) wins a name the project's
-  `.agents/skills` or `.volli/commands` also defines — Volli Cloud's
+- **Commands precedence.** A personal Command (`<userData>/commands`) wins a
+  name the project's `.volli/commands` also defines — Volli Cloud's
   personal > project > workspace order. Flag off, the project's copy wins, as
-  before. Every configuration surface declares its levels, merge and order in
-  one resolver, `packages/shared/src/config-resolution.ts`; these two are the
-  only surfaces whose order the flag moves so far. The flag is read at each load, so
-  a change applies to the next picker read or Session start.
+  before. Skills do not move: `.agents/skills` is a repo file, and repo files
+  always apply, so a personal Skill (`~/.agents/skills`) adds slugs but never
+  replaces the repo's, with the flag on or off; only admin policy can deny a
+  repo entry. Every configuration surface declares its levels, merge and order
+  in one resolver, `packages/shared/src/config-resolution.ts`; Commands are the
+  only surface whose order the flag moves so far. The flag is read at each
+  load, so a change applies to the next picker read or Session start.
 - **Environment recipe.** A new worktree's setup runs its own `.agents/setup`
   when the checkout has one, with the project's **Then run** command as the
   fallback (never both). It runs with nothing on stdin, under `VOLLI=1`,

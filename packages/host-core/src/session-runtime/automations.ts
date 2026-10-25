@@ -48,7 +48,7 @@ export interface RuntimeAutomationsInput {
   events: HostEventBus;
   piRuntimeHost: PiRuntimeHost | null;
   homeDir: string;
-  /** Whether the `cloud` flag is on now; read at every prompt supply (skills/templates precedence). */
+  /** Whether the `cloud` flag is on now; read at every prompt supply (prompt templates' precedence). */
   cloudEnabled: () => boolean;
   log: Pick<Logger, "error">;
 }
@@ -129,17 +129,15 @@ function automationSessionPorts(
     promptSupply: async (projectId) => {
       const project = getProjectById(db, projectId);
       if (!project) throw new Error("Unknown project");
-      const cloud = cloudEnabled();
       const [loaded, skills] = await Promise.all([
         loadPromptTemplates({
           projectCommandsDir: projectCommandsDir(project.path),
           globalCommandsDir: globalCommandsRoot(directories.dataDir),
-          cloud,
+          cloud: cloudEnabled(),
         }),
         loadSkills({
           projectSkillsDir: projectSkillsDir(project.path),
           globalSkillsDir: globalSkillsDir(directories.homeDir),
-          cloud,
         }),
       ]);
       if (!loaded.ok) throw new Error(loaded.error);
