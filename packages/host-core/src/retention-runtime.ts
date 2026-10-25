@@ -5,7 +5,8 @@
  * database, the async `gh`/git network runner, the wall clock, the one
  * notification delivery path for its three alerts (VC-295), and
  * the event bus so every client re-hydrates when the
- * watch's observed state moves. Held once PER DATABASE so `data-ipc.ts` (the
+ * watch's observed state moves, and the ticket wake bus that tells it a ticket
+ * changed. Held once PER DATABASE so `data-ipc.ts` (the
  * retention IPC handlers) and host maintenance (start/stop + focus) drive the same
  * watch without holding another host's handle — transient observation/notify-dedup/dismissal state is meaningless
  * if each entrypoint built its own.
@@ -13,6 +14,7 @@
 import type Database from "better-sqlite3";
 
 import type { AttentionDeliveryPort, HostEventBus } from "./ports";
+import { subscribeTicketWake } from "./ticket-wake";
 import {
   RetentionWatcher,
   retentionConfigFromEnv,
@@ -86,6 +88,9 @@ export function getRetentionWatcher(
       trim: reclaimSeams === undefined ? undefined : trimSeams(worktree, reclaimSeams),
     },
     retentionConfigFromEnv(process.env),
+    // Event-driven (VC-686): a committed ticket change wakes the watch, so it
+    // can sleep through a quiet board instead of re-reading it every minute.
+    (listener) => subscribeTicketWake(() => listener()),
   );
   watchers.set(db, watcher);
   return watcher;

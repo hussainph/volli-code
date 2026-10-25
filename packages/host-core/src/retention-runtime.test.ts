@@ -1,6 +1,9 @@
 import { dirname } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { getRetentionWatcher, resetRetentionWatcherForTest } from "./retention-runtime";
+import { emitTicketWake, type TicketWake } from "./ticket-wake";
+import { runNet } from "./worktree";
+import { RETENTION_CHANGE_DEBOUNCE_MS } from "./worktree/watch";
 import { HEADLESS_ATTENTION } from "./ports";
 import { worktreeDeps } from "./worktree-runtime";
 import { insertProject } from "./db/projects-repo";
@@ -22,6 +25,7 @@ vi.mock("./worktree", async (original) => ({
 
 let ctx: TestDb | undefined;
 afterEach(() => {
+  vi.useRealTimers();
   resetRetentionWatcherForTest();
   ctx?.cleanup();
 });
@@ -103,5 +107,22 @@ describe("retention runtime ports", () => {
     expect(getRetentionWatcher(db, { events, attention }, laterWorktree, {})).toBe(watch);
     expect(laterWorktree).not.toHaveBeenCalled();
     expect(watch.getState("t1")?.dismissed).toBe(true);
+  });
+
+  it("wakes on a committed ticket change instead of waiting out the interval (VC-686)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { db, events, attention, worktree } = fixture();
+    const watch = getRetentionWatcher(db, { events, attention }, worktree);
+    vi.mocked(runNet).mockClear();
+    watch.start();
+    emitTicketWake({ projectId: "p1", cursor: "1", event: {} as TicketWake["event"] });
+    await vi.advanceTimersByTimeAsync(RETENTION_CHANGE_DEBOUNCE_MS);
+    await watch.settled();
+    expect(runNet).toHaveBeenCalledTimes(1);
+    watch.stop();
+    // Stopped, it no longer listens.
+    emitTicketWake({ projectId: "p1", cursor: "2", event: {} as TicketWake["event"] });
+    await vi.advanceTimersByTimeAsync(RETENTION_CHANGE_DEBOUNCE_MS);
+    expect(runNet).toHaveBeenCalledTimes(1);
   });
 });

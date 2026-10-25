@@ -3,6 +3,7 @@ import { DEFAULT_SESSION_WATCHDOG_SILENCE_MS, EMPTY_SESSION_USAGE_SUMMARY } from
 import type { SessionInFlightTool, SessionProjection } from "@volli/shared";
 
 import type { NotificationRequest } from "@volli/shared";
+import { captureHostLog } from "../testing/log";
 import { createSessionWatchdog } from "./session-watchdog";
 import type { SessionWatchdogPorts } from "./session-watchdog";
 
@@ -306,6 +307,23 @@ describe("createSessionWatchdog", () => {
     await h.watchdog.scan();
     expect(h.submits).toHaveLength(1);
     expect(h.submits[0]).toMatchObject({ commandId: `watchdog:${SESSION}:0` });
+  });
+
+  it("times each scan at debug, and an idle host's scan reads nothing (VC-686)", async () => {
+    const log = captureHostLog();
+    try {
+      const busy = harness({ projections: [projection()] });
+      await busy.watchdog.scan();
+      expect(log.of("session-watchdog")).toEqual([
+        expect.objectContaining({ level: "debug", msg: "watchdog scan", sessions: 1 }),
+      ]);
+
+      const idle = harness({ projections: [] });
+      await idle.watchdog.scan();
+      expect(log.of("session-watchdog")).toHaveLength(1);
+    } finally {
+      log.restore();
+    }
   });
 
   describe("the interval", () => {
