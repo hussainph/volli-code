@@ -53,7 +53,10 @@ describe("the desktop-only tier", () => {
       const clientLocal =
         /^(hosts|hostAdd|hostSignIns|hostLink|hostScope|shells|browserShortcuts)\./u.test(
           entry.key,
-        );
+        ) ||
+        // The environment recipe's setup gate (VC-584), behind the `cloud` flag.
+        entry.key === "worktree.setupStatus" ||
+        entry.key === "worktree.answerSetup";
       expect(entry.compatibility, entry.key).toBe(clientLocal ? "client-local" : "host-command");
     }
   });
