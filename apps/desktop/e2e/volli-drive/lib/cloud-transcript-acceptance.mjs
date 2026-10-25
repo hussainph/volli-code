@@ -9,7 +9,7 @@ import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { createServer } from "node:http";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { gunzipSync, zstdDecompressSync } from "node:zlib";
 
@@ -110,8 +110,11 @@ export async function startTranscriptStore(fixture, reportDir) {
             );
             totalBytes += body.length - (objects.get(key)?.length ?? 0);
             assert.ok(totalBytes <= 2 * MAX_BYTES, "acceptance bucket is bounded");
-            await fs.mkdir(dirname(join(reportDir, "objects", key)), { recursive: true });
-            await fs.writeFile(join(reportDir, "objects", key), body);
+            // Wire keys may contain durable colons (runtime-attachment:<id>).
+            // GitHub artifacts require portable filenames; requests below keep
+            // the exact key -> checksum mapping for these content-addressed copies.
+            await fs.mkdir(join(reportDir, "objects"), { recursive: true });
+            await fs.writeFile(join(reportDir, "objects", `${sha256(body)}.zst`), body);
             objects.set(key, body);
           } else {
             body = objects.get(key);
