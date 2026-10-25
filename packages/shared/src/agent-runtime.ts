@@ -1665,6 +1665,19 @@ export function sessionToolIds(spec: SessionToolSpec): SessionToolId[] {
   return sessionToolBindings(spec).map((binding) => binding.tool);
 }
 
+/** {@link RuntimeFailure}'s closed reasons, as a list telemetry can tally by. */
+export const RUNTIME_FAILURE_REASONS = [
+  "auth",
+  "configuration",
+  "context",
+  "reasoning",
+  "model",
+  "aborted",
+  "unknown",
+] as const;
+
+export type RuntimeFailureReason = (typeof RUNTIME_FAILURE_REASONS)[number];
+
 /**
  * Sanitized failure surfaced through observations. Never contains secrets.
  *
@@ -1677,7 +1690,7 @@ export function sessionToolIds(spec: SessionToolSpec): SessionToolId[] {
  */
 export interface RuntimeFailure {
   stopDetail?: SessionStopDetail;
-  reason: "auth" | "configuration" | "context" | "reasoning" | "model" | "aborted" | "unknown";
+  reason: RuntimeFailureReason;
   message: string;
 }
 
@@ -1960,6 +1973,18 @@ export type RuntimeActivityObservation =
       error?: string;
     });
 
+/** {@link AttentionObservation}'s reasons, as a list; see the widening rule there. */
+export const RUNTIME_ATTENTION_REASONS = [
+  "auth",
+  "configuration",
+  "context",
+  "runtime-failure",
+  "partial-turn",
+  "transport",
+] as const;
+
+export type RuntimeAttentionReason = (typeof RUNTIME_ATTENTION_REASONS)[number];
+
 /**
  * Attention's `reason` may be widened, never narrowed or renamed.
  *
@@ -1982,7 +2007,7 @@ export interface AttentionObservation {
   stopDetail?: SessionStopDetail;
   kind: "attention";
   state: "raised" | "cleared";
-  reason: "auth" | "configuration" | "context" | "runtime-failure" | "partial-turn" | "transport";
+  reason: RuntimeAttentionReason;
   message: string;
   /**
    * On a raised `runtime-failure` only: the instant, epoch ms, at which the
