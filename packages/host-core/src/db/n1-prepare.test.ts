@@ -13,16 +13,23 @@ it("keeps the fixed 0.2.2 downgrade promises in the non-waived N−1 CI gate (VC
       {
         "continue-on-error"?: boolean;
         if?: string;
-        strategy?: { matrix: { lane: string[] } };
-        needs?: string[];
-        steps: { name: string; run?: string; env?: Record<string, string> }[];
+        strategy?: { matrix: { lane: string } };
+        needs?: string | string[];
+        steps: { id?: string; name: string; run?: string; env?: Record<string, string> }[];
       }
     >;
   };
   const job = workflow.jobs["n1-compat"]!;
-  expect(job.strategy!.matrix.lane).toEqual(
+  // The lanes come from Scope (VC-934): every lane off-PR and on PRs touching
+  // the data layer, `base` alone otherwise. The fixed promises must be in the
+  // full list, and the full list is what main pushes and nightly runs get.
+  expect(job.strategy!.matrix.lane).toBe("${{ fromJSON(needs.changes.outputs.n1-lanes) }}");
+  const scope = workflow.jobs["changes"]!.steps.find((step) => step.id === "filter")!.run!;
+  const all = /n1_all='(\[[^']*\])'/.exec(scope)?.[1];
+  expect(JSON.parse(all ?? "[]")).toEqual(
     expect.arrayContaining(["release", "latest-canary", "base", "v0.2.1", "v0.2.2-canary.1"]),
   );
+  expect(scope).toMatch(/!= "pull_request" \]\]; then[\s\S]*?echo "n1-lanes=\$n1_all"/);
   expect(job["continue-on-error"]).not.toBe(true);
   expect(job.if).toBeUndefined();
   const prepare = job.steps.find((step) => step.name === "Prepare N-1")!.run!;

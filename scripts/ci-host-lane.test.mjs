@@ -210,15 +210,19 @@ test("actual path classifier selects lanes and fails safe", () => {
     for (const event of ["pull_request", "push", "workflow_dispatch", "schedule"]) {
       for (const [changed, desktop, host, n1] of cases) {
         const output = join(temporary, "output");
+        // Through a file, not the environment: Linux caps one env string at
+        // 128 KB (MAX_ARG_STRLEN), and the long diffs are past that.
+        const diff = join(temporary, "diff");
+        writeFileSync(diff, `${changed}\n`);
         const run = spawnSync(
           "bash",
-          ["-c", 'git() { printf "%s\\n" "$CHANGED"; }\n' + filter.run],
+          ["-c", 'git() { cat "$CHANGED_FILE"; }\n' + filter.run],
           {
             cwd: root,
             env: {
               ...process.env,
               EVENT: event,
-              CHANGED: changed,
+              CHANGED_FILE: diff,
               BASE_SHA: "base",
               HEAD_SHA: "head",
               GITHUB_OUTPUT: output,
@@ -226,7 +230,7 @@ test("actual path classifier selects lanes and fails safe", () => {
             encoding: "utf8",
           },
         );
-        assert.equal(run.status, 0, run.stdout + run.stderr);
+        assert.equal(run.status, 0, `${run.error ?? ""}${run.stdout}${run.stderr}`);
         const pr = event === "pull_request";
         const lanes = !pr || n1 === "all" ? n1All : '["base"]';
         assert.equal(
