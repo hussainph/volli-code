@@ -180,7 +180,13 @@ describe("sessions.accept", () => {
         reasoningLevel: "high",
         connectionId: "local",
       },
-      usageTotals: { costUsd: 1.5, inputTokens: 300, outputTokens: 30, coverage: "complete" },
+      usageTotals: {
+        costUsd: 1.5,
+        inputTokens: 300,
+        outputTokens: 30,
+        coverage: "complete",
+        summary: local.usage,
+      },
       attentionCount: 0,
       needsUser: false,
     });

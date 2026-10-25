@@ -11,7 +11,7 @@
  */
 import { errorMessage, type HarnessId, type ModelSelection, type Project } from "@volli/shared";
 
-import { guardWrite } from "@renderer/components/hosts/use-hosts";
+import { guardSessionWrite as guardWrite } from "@renderer/lib/cloud-session-read-only";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";

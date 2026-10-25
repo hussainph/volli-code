@@ -49,6 +49,7 @@ export type CloudClient = Pick<
   | "watchQuery"
   | "query"
   | "mutation"
+  | "action"
   | "connectionState"
   | "subscribeToConnectionState"
   | "setAuth"

@@ -6,7 +6,11 @@
  * fact again lands on the same rows.
  */
 
-import type { SessionEvent, SessionEventPayload } from "@volli/shared";
+import {
+  EMPTY_SESSION_USAGE_SUMMARY,
+  type SessionEvent,
+  type SessionEventPayload,
+} from "@volli/shared";
 import type { CloudSessionView } from "@volli/shared/cloud";
 
 import type { Doc } from "../_generated/dataModel.js";
@@ -285,6 +289,8 @@ interface UsageTotals {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   coverage: CloudSessionView["usage"]["costCoverage"];
+  /** Additive: older clients keep reading the coarse totals above. */
+  summary: CloudSessionView["usage"];
 }
 
 export const EMPTY_USAGE_TOTALS: UsageTotals = {
@@ -294,6 +300,7 @@ export const EMPTY_USAGE_TOTALS: UsageTotals = {
   cacheReadTokens: 0,
   cacheWriteTokens: 0,
   coverage: "unavailable",
+  summary: EMPTY_SESSION_USAGE_SUMMARY,
 };
 
 type ListingFields = Pick<
@@ -344,6 +351,7 @@ function usageTotalsOf(view: CloudSessionView): UsageTotals {
     cacheReadTokens: view.usage.cacheReadTokens,
     cacheWriteTokens: view.usage.cacheWriteTokens,
     coverage: view.usage.costCoverage,
+    summary: view.usage,
   };
 }
 

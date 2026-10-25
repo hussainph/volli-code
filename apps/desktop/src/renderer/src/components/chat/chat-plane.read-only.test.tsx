@@ -3,6 +3,8 @@
 import { act } from "react";
 import { MotionGlobalConfig } from "motion/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { LOCAL_LAUNCH } from "@volli/shared";
+import { adoptLaunch } from "@renderer/stores/launch";
 import {
   EMPTY_TRANSCRIPT,
   type ChatSessionProjection,
@@ -70,6 +72,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  adoptLaunch(LOCAL_LAUNCH);
   await world?.cleanup();
   world = null;
   MotionGlobalConfig.skipAnimations = false;
@@ -141,6 +144,14 @@ async function mountPlane(cloud = true) {
   );
   return { container, holdMessage };
 }
+
+it("shows the cloud read-only explanation instead of local command controls", async () => {
+  adoptLaunch({ store: "cloud", userId: "u", backendUrl: "https://example.convex.cloud" });
+  const { container, holdMessage } = await mountPlane();
+  expect(container.textContent).toContain("Not available yet in cloud");
+  expect(container.querySelector("textarea")).toBeNull();
+  expect(holdMessage).not.toHaveBeenCalled();
+});
 
 function message(container: HTMLElement): HTMLTextAreaElement {
   const textarea = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]');

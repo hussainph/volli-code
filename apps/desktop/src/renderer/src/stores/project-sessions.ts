@@ -48,6 +48,7 @@ import { sessionListingReaderForProject } from "@renderer/lib/session-listing-re
 import { toastError } from "@renderer/lib/toast";
 import type { SessionActivityNotice } from "../../../ipc/contract";
 import { markSessionRead } from "./session-read-mark";
+import { launchStore } from "./launch";
 
 /** One project's rows, split into the two shapes every consumer wants them in. */
 export interface ProjectSessionRows {
@@ -513,6 +514,7 @@ export const useProjectSessionsStore = createProjectSessionsStore();
  * Returns the unsubscribe function for the caller's effect cleanup.
  */
 export function subscribeProjectSessionActivity(): () => void {
+  if (launchStore() === "cloud") return () => {};
   return window.api.sessions.onActivity((notice) => {
     useProjectSessionsStore.getState().applyActivity(notice);
   });

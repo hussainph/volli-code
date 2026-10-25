@@ -41,6 +41,7 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 | `functions/lib/activity.ts`                                         | The feed reader: the k-way merge, the cursor, visibility, folding and the tickets and people a page names.                                                                                                                                                                                        |
 | `functions/boardReceipts.ts`, `functions/crons.ts`                  | The scheduled sweeps (receipts hourly, packed transcript staging every 15 min, the runner offline sweep every minute, runner link/audit expiry hourly).                                                                                                                                           |
 | `functions/transcripts.ts`                                          | Transcript bodies and Pi logs: `stageArtifacts`, `commitSegment`, `commitPiLogSegment`, `head` (where a runner resumes), the producer fence and `sweepPacked`.                                                                                                                                    |
+| `functions/sessionTranscript.ts`                                    | Viewer-authorized transcript segment manifests, staged artifact bodies and signed GETs for committed packs/spills. The renderer hydrates settled history with these reads.                                                                                                                        |
 | `functions/files.ts`                                                | `presignPut`: a SigV4 URL bound to one key, length and SHA-256 (signed by `presignS3Request` in `@volli/shared/cloud`).                                                                                                                                                                           |
 | `functions/lib/objectStore.ts`                                      | The S3-compatible store the backend signs for (`VOLLI_S3_*` variables; unset refuses with `storage_unconfigured`).                                                                                                                                                                                |
 | `functions/lib/visibility.ts`                                       | The visibility writes and filters: `visibilityForNewSession` (every Session-creating write), `shareSession`, `visibleBoardEvents` (every read of board events that may name a Session). The decisions are the predicates in `@volli/shared/cloud`.                                                |
@@ -375,3 +376,11 @@ Convex and Cloudflare accounts exist. Deploy CI will push this package with
 target that has `VOLLI_TEST_JWKS` set. Signing uploads already works against
 any S3-compatible store: a deployment points at its bucket with the
 `VOLLI_S3_*` variables (`functions/lib/objectStore.ts`).
+
+The desktop reads transcript packs and spilled bodies directly with
+`sessionTranscript.presignGet`, after the backend checks Session visibility.
+Build the desktop with `VOLLI_CLOUD_STORAGE_ORIGIN=https://<bucket-origin>`
+(the exact public HTTPS origin, no credentials, path or wildcard) to allow
+these GETs in its CSP. The bucket's CORS must also allow the desktop origin
+and `GET`; without storage configuration older packed bodies fail visibly,
+while staged inline bodies and live chunks require no object-store access.

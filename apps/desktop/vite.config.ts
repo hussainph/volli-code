@@ -626,6 +626,13 @@ export default defineConfig(({ mode, command }) => ({
         // the wrong store, and nothing on screen says so.
         "src/lib/board-api.ts",
         "src/lib/cloud-board-api.ts",
+        "src/lib/cloud-session-listing.ts",
+        "src/lib/cloud-session-source.ts",
+        "src/lib/cloud-sessions.ts",
+        "src/lib/cloud-session-read-only.ts",
+        "src/lib/cloud-session-view.ts",
+        "src/lib/cloud-transcript-reader.ts",
+        "src/lib/cloud-session-transport.ts",
         // When a remote project's Session listing is read again (VC-713): a
         // missed branch is a question nobody sees on reopen, or a poll that
         // never stops.
