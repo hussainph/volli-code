@@ -296,8 +296,8 @@ type ProjectAccess =
   | { kind: "not_a_member" };
 
 async function projectAccess(
-  ctx: ReadCtx,
-  viewer: Viewer,
+  ctx: { db: GenericDatabaseReader<DataModel> },
+  viewer: { userId: UserId },
   projectId: string,
 ): Promise<ProjectAccess> {
   const project = await ctx.db
@@ -316,6 +316,20 @@ async function projectAccess(
     return { kind: "not_a_member" };
   }
   return { kind: "ok", project, membership };
+}
+
+/**
+ * The live project (in a live Workspace) `userId` can see, or `null`: for a
+ * caller acting for someone other than the signed-in viewer (a runner for its
+ * owner) and for reads that skip what a person can no longer see.
+ */
+export async function findVisibleProject(
+  ctx: { db: GenericDatabaseReader<DataModel> },
+  userId: UserId,
+  projectId: string,
+): Promise<Doc<"projects"> | null> {
+  const access = await projectAccess(ctx, { userId }, projectId);
+  return access.kind === "ok" ? access.project : null;
 }
 
 /** A live project (in a live Workspace) the viewer can see: an active Member of its CURRENT Workspace. */

@@ -685,12 +685,16 @@ export default defineSchema({
   })
     .index("by_session", ["sessionId"])
     .index("by_runner", ["claim.runnerId"]),
-  // The bounded cloud fold (≤ 64 KB by contract).
+  // The bounded cloud fold (≤ 64 KB by contract), stored as its JSON text.
   sessionStates: defineTable({
     sessionId: uuid,
     throughSequence: v.number(),
     foldVersion: v.number(),
     state: json,
+    // When a catch-up (or refold) over the accepted history was last scheduled; null when caught up.
+    catchUpAt: v.optional(nullable(time)),
+    // The last fact whose derived rows (turns, attention, receipts) were written; a refold keeps it.
+    derivedThrough: v.optional(v.number()),
   }).index("by_session", ["sessionId"]),
   // Accepted, immutable Session facts: the shared envelope plus backend metadata.
   sessionEvents: defineTable({

@@ -1,0 +1,437 @@
+/**
+ * What an accepted fact derives beyond the fold itself: the turn index, the
+ * owner's attention items, the second job receipt, and the listing row. Each
+ * writer is idempotent (an upsert by a frozen id), so a refold that passes a
+ * fact again lands on the same rows.
+ */
+
+import type { SessionEvent, SessionEventPayload } from "@volli/shared";
+import type { CloudSessionView } from "@volli/shared/cloud";
+
+import type { Doc } from "../_generated/dataModel.js";
+import type { MutationCtx } from "../_generated/server";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** JSON with object keys sorted, so two encodings of one value compare equal. */
+export function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (isRecord(value)) {
+    return `{${Object.keys(value)
+      .toSorted()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+// ── what one fact derives ───────────────────────────────────────────────────
+
+export async function deriveFromFact(
+  ctx: MutationCtx,
+  session: Doc<"sessions">,
+  fact: SessionEvent,
+  before: CloudSessionView | null,
+  after: CloudSessionView,
+): Promise<void> {
+  const { payload } = fact;
+  switch (payload.kind) {
+    case "attention.raised":
+      await raiseAttention(ctx, session, {
+        source: "session_attention",
+        sourceId: payload.attention.id,
+        kind: payload.attention.kind,
+        title: ATTENTION_TITLES[payload.attention.kind],
+        detail: payload.attention.detail,
+        raisedAt: fact.occurredAt,
+      });
+      break;
+    case "attention.cleared":
+      await clearAttention(ctx, session.id, payload.attentionId, "resolved", fact.occurredAt);
+      break;
+    case "interaction.opened":
+      await raiseAttention(ctx, session, {
+        source: "interaction",
+        sourceId: payload.interaction.id,
+        kind: payload.interaction.kind,
+        title: payload.interaction.title,
+        detail: payload.interaction.detail,
+        raisedAt: fact.occurredAt,
+      });
+      break;
+    case "interaction.resolved":
+      await clearAttention(ctx, session.id, payload.interactionId, "resolved", fact.occurredAt);
+      break;
+    case "interaction.cancelled":
+      await clearAttention(ctx, session.id, payload.interactionId, "superseded", fact.occurredAt);
+      break;
+    case "session.signaled":
+      if (payload.signal === "blocked") {
+        await raiseAttention(ctx, session, {
+          source: "session_blocked",
+          sourceId: BLOCKED_SOURCE_ID,
+          kind: "blocked",
+          title: "Blocked",
+          detail: payload.reason,
+          raisedAt: fact.occurredAt,
+        });
+      } else {
+        await clearAttention(ctx, session.id, BLOCKED_SOURCE_ID, "resolved", fact.occurredAt);
+      }
+      break;
+    case "command.receipt.recorded":
+      await mirrorReceipt(ctx, session.id, payload.receipt);
+      break;
+    case "turn.started":
+      await startTurn(ctx, session.id, fact, payload.turnId, payload.attachmentId, after);
+      break;
+    case "usage.recorded":
+      if (payload.turnId !== null)
+        await addTurnUsage(ctx, session.id, payload.turnId, payload.usage);
+      break;
+    default:
+      break;
+  }
+  if (before?.turnActive === true && !after.turnActive && before.latestTurnId !== null) {
+    await endTurn(ctx, session.id, before.latestTurnId, fact, after.lastTurnOutcome);
+  }
+  // An item that left the fold without its clearing fact was dropped by the
+  // fold's cap: its row is cleared too, so Needs you agrees with the listing.
+  if (before !== null) {
+    const kept = new Set([
+      ...after.attention.active.map(({ id }) => id),
+      ...after.interactions.active.map(({ id }) => id),
+    ]);
+    for (const { id } of [...before.attention.active, ...before.interactions.active]) {
+      if (!kept.has(id)) await clearAttention(ctx, session.id, id, "superseded", fact.occurredAt);
+    }
+  }
+}
+
+/** The Attention kinds' titles, as a Needs-you row names them. */
+const ATTENTION_TITLES: Record<string, string> = {
+  input_required: "Needs your input",
+  permission_required: "Needs your permission",
+  auth_required: "Needs you to sign in",
+  configuration_invalid: "Configuration needs fixing",
+  rate_limited: "Rate limited",
+  quota_exhausted: "Quota exhausted",
+  context_limit_reached: "Context limit reached",
+  transport_retrying: "Reconnecting",
+  partial_turn_interrupted: "Turn interrupted",
+  adapter_disconnected: "Agent disconnected",
+  adapter_unrecoverable: "Agent stopped",
+};
+
+/**
+ * The frozen source ids of the items the backend itself raises for a
+ * Session, in a `volli:` namespace no Engine attention or interaction id
+ * uses. Durable: never rename them.
+ */
+const BLOCKED_SOURCE_ID = "volli:blocked";
+const quarantineSourceId = (sequence: number) => `volli:quarantine:${sequence}`;
+
+/** Frozen: Session-derived attention ids are `s:{sessionId}:{sourceId}`, so a refold finds the same row. */
+function attentionId(sessionId: string, sourceId: string): string {
+  return `s:${sessionId}:${sourceId}`;
+}
+
+async function attentionRow(ctx: MutationCtx, id: string) {
+  return ctx.db
+    .query("attentionItems")
+    .withIndex("by_uuid", (q) => q.eq("id", id))
+    .unique();
+}
+
+async function raiseAttention(
+  ctx: MutationCtx,
+  session: Doc<"sessions">,
+  item: {
+    source: Doc<"attentionItems">["source"];
+    sourceId: string;
+    kind: string;
+    title: string | undefined;
+    detail: string | null;
+    raisedAt: number;
+  },
+): Promise<void> {
+  const id = attentionId(session.id, item.sourceId);
+  const fields = {
+    source: item.source,
+    sourceId: item.sourceId,
+    kind: item.kind,
+    title: item.title ?? item.kind,
+    detail: item.detail,
+    raisedAt: item.raisedAt,
+    clearedAt: null,
+    clearedReason: null,
+  };
+  const existing = await attentionRow(ctx, id);
+  if (existing === null) {
+    await ctx.db.insert("attentionItems", {
+      id,
+      userId: session.ownerUserId,
+      projectId: session.projectId,
+      ticketId: session.ticketId,
+      sessionId: session.id,
+      seenAt: null,
+      ...fields,
+    });
+  } else {
+    await ctx.db.patch(existing._id, fields);
+  }
+}
+
+async function clearAttention(
+  ctx: MutationCtx,
+  sessionId: string,
+  sourceId: string,
+  reason: "resolved" | "superseded",
+  at: number,
+): Promise<void> {
+  const existing = await attentionRow(ctx, attentionId(sessionId, sourceId));
+  if (existing !== null && existing.clearedAt === null) {
+    await ctx.db.patch(existing._id, { clearedAt: at, clearedReason: reason });
+  }
+}
+
+/** A fact the backend could not read or fold is loud: its owner sees it in Needs you. */
+export async function raiseQuarantine(
+  ctx: MutationCtx,
+  session: Doc<"sessions">,
+  envelope: { sequence: number; kind: string; occurredAt: number },
+  quarantine: { code: string; detail: string },
+): Promise<void> {
+  await raiseAttention(ctx, session, {
+    source: "runner_alert",
+    sourceId: quarantineSourceId(envelope.sequence),
+    kind: "event_quarantined",
+    title: "A session event could not be read",
+    detail: `${envelope.kind || "(no kind)"} at ${envelope.sequence}: ${quarantine.detail}`,
+    raisedAt: envelope.occurredAt,
+  });
+}
+
+/** The second receipt: the engine's verdict on a command, copied onto its job. */
+async function mirrorReceipt(
+  ctx: MutationCtx,
+  sessionId: string,
+  receipt: Extract<SessionEventPayload, { kind: "command.receipt.recorded" }>["receipt"],
+): Promise<void> {
+  const job = await ctx.db
+    .query("runnerJobs")
+    .withIndex("by_uuid", (q) => q.eq("id", receipt.commandId))
+    .unique();
+  if (job === null || job.sessionId !== sessionId) return;
+  const mirrored = {
+    status: receipt.status,
+    code: receipt.status === "rejected" ? receipt.code : null,
+    detail:
+      receipt.status === "rejected" || receipt.status === "unreconciled" ? receipt.detail : null,
+    at: receipt.recordedAt,
+  };
+  if (stableJson(job.receipt) !== stableJson(mirrored)) {
+    await ctx.db.patch(job._id, { receipt: mirrored });
+  }
+}
+
+async function turnRow(ctx: MutationCtx, sessionId: string, turnId: string) {
+  return ctx.db
+    .query("sessionTurns")
+    .withIndex("by_session_turn", (q) => q.eq("sessionId", sessionId).eq("turnId", turnId))
+    .first();
+}
+
+async function startTurn(
+  ctx: MutationCtx,
+  sessionId: string,
+  fact: SessionEvent,
+  turnId: string,
+  attachmentId: string,
+  after: CloudSessionView,
+): Promise<void> {
+  const fields = {
+    attachmentId,
+    startedSequence: fact.sequence,
+    endedSequence: null,
+    outcome: null,
+    origin: after.latestTurnOrigin,
+    startedAt: fact.occurredAt,
+    endedAt: null,
+  };
+  const existing = await turnRow(ctx, sessionId, turnId);
+  if (existing === null) {
+    await ctx.db.insert("sessionTurns", {
+      sessionId,
+      turnId,
+      usage: null,
+      segmentId: null,
+      ...fields,
+    });
+  } else if (existing.startedSequence === fact.sequence) {
+    // A refold replaying the same start: its usage is re-added from the facts.
+    await ctx.db.patch(existing._id, { ...fields, usage: null });
+  }
+}
+
+async function endTurn(
+  ctx: MutationCtx,
+  sessionId: string,
+  turnId: string,
+  fact: SessionEvent,
+  outcome: string | null,
+): Promise<void> {
+  const existing = await turnRow(ctx, sessionId, turnId);
+  if (existing !== null) {
+    await ctx.db.patch(existing._id, {
+      endedSequence: fact.sequence,
+      outcome,
+      endedAt: fact.occurredAt,
+    });
+  }
+}
+
+/** What a turn spent, summed over its `usage.recorded` facts. */
+interface TurnUsage {
+  requestCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  /** Over priced operations only; null when none was priced. */
+  knownCostUsd: number | null;
+}
+
+async function addTurnUsage(
+  ctx: MutationCtx,
+  sessionId: string,
+  turnId: string,
+  usage: Extract<SessionEventPayload, { kind: "usage.recorded" }>["usage"],
+): Promise<void> {
+  const existing = await turnRow(ctx, sessionId, turnId);
+  if (existing === null) return;
+  const total: TurnUsage = (existing.usage as TurnUsage | null) ?? {
+    requestCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    knownCostUsd: null,
+  };
+  await ctx.db.patch(existing._id, {
+    usage: {
+      requestCount: total.requestCount + 1,
+      inputTokens: total.inputTokens + (usage.inputTokens ?? 0),
+      outputTokens: total.outputTokens + (usage.outputTokens ?? 0),
+      cacheReadTokens: total.cacheReadTokens + (usage.cacheReadTokens ?? 0),
+      cacheWriteTokens: total.cacheWriteTokens + (usage.cacheWriteTokens ?? 0),
+      knownCostUsd:
+        usage.costUsd === null ? total.knownCostUsd : (total.knownCostUsd ?? 0) + usage.costUsd,
+    } satisfies TurnUsage,
+  });
+}
+
+// ── the listing row ─────────────────────────────────────────────────────────
+
+/** What the listing row shows of a Session's spend. */
+interface UsageTotals {
+  costUsd: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  coverage: CloudSessionView["usage"]["costCoverage"];
+}
+
+export const EMPTY_USAGE_TOTALS: UsageTotals = {
+  costUsd: null,
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  coverage: "unavailable",
+};
+
+type ListingFields = Pick<
+  Doc<"sessions">,
+  | "title"
+  | "status"
+  | "turnActive"
+  | "lastTurnOutcome"
+  | "signal"
+  | "stopped"
+  | "needsUser"
+  | "attentionCount"
+  | "model"
+>;
+
+/** The listing-visible fields of a fold, as the row stores them. */
+function listingFieldsOf(view: CloudSessionView): ListingFields {
+  return {
+    title: view.session.title,
+    status: view.status,
+    turnActive: view.turnActive,
+    lastTurnOutcome: view.lastTurnOutcome,
+    signal:
+      view.signal === null
+        ? null
+        : { signal: view.signal.signal, reason: view.signal.reason, at: view.signal.occurredAt },
+    stopped: view.stopped === null ? null : { at: view.stopped.at, reason: view.stopped.reason },
+    needsUser: view.needsUser,
+    attentionCount: view.attention.active.length + view.interactions.active.length,
+    model:
+      view.modelSelection === null
+        ? null
+        : {
+            providerId: view.modelSelection.providerId,
+            modelId: view.modelSelection.modelId,
+            reasoningLevel: view.modelSelection.reasoningLevel,
+            // The model gateway adds backend connections; today every selection is local.
+            connectionId: "local",
+          },
+  };
+}
+
+function usageTotalsOf(view: CloudSessionView): UsageTotals {
+  return {
+    costUsd: view.usage.knownCostUsd,
+    inputTokens: view.usage.inputTokens,
+    outputTokens: view.usage.outputTokens,
+    cacheReadTokens: view.usage.cacheReadTokens,
+    cacheWriteTokens: view.usage.cacheWriteTokens,
+    coverage: view.usage.costCoverage,
+  };
+}
+
+/**
+ * Writes the listing row only when something a list shows changed, so a list
+ * subscription does not re-run on every fact. Spend and recency are coarse:
+ * they ride along with another change (a turn starting or ending, a signal, an
+ * attention change), and spend alone is written only between turns, so a busy
+ * turn's usage facts do not churn the list. The snapshot carries them exactly.
+ */
+export async function syncListing(
+  ctx: MutationCtx,
+  session: Doc<"sessions">,
+  view: CloudSessionView,
+): Promise<void> {
+  const current = (await ctx.db.get(session._id))!;
+  const fields = listingFieldsOf(view);
+  const changed: Partial<Doc<"sessions">> = {};
+  for (const [key, value] of Object.entries(fields) as [keyof ListingFields, unknown][]) {
+    if (stableJson(current[key]) !== stableJson(value)) {
+      (changed as Record<string, unknown>)[key] = value;
+    }
+  }
+  const usageTotals = usageTotalsOf(view);
+  const usageChanged = stableJson(current.usageTotals) !== stableJson(usageTotals);
+  const primary = Object.keys(changed).length > 0;
+  if (primary || (usageChanged && !view.turnActive)) {
+    if (usageChanged) changed.usageTotals = usageTotals;
+    if (current.lastActivityAt !== view.lastActivityAt)
+      changed.lastActivityAt = view.lastActivityAt;
+  }
+  if (Object.keys(changed).length > 0) await ctx.db.patch(session._id, changed);
+}

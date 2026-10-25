@@ -506,6 +506,9 @@ importers:
       '@volli/host-core':
         specifier: workspace:*
         version: link:../packages/host-core
+      '@volli/session-engine':
+        specifier: workspace:*
+        version: link:../packages/session-engine
       convex-test:
         specifier: 0.0.65
         version: 0.0.65(convex@1.48.0(react@19.3.1))

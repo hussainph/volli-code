@@ -232,6 +232,24 @@ Each was a decision made while turning the design into code.
     can request a secret by name. A scope holds at most 100 secrets and
     64 KiB of names and values (`MAX_SECRETS_PER_SCOPE`, `MAX_SCOPE_BYTES`),
     so a resolved set stays far inside a process's environment limit.
+32. Session facts and folds are stored as JSON text: `sessionEvents.payload`
+    and `.provenance` hold the codec's encoding of the envelope's parts, and
+    `sessionStates.state` the bounded fold's. Event payloads carry object keys
+    a Convex value refuses (`$schema` in an MCP tool schema, non-ASCII keys),
+    so they cross the boundary as text both ways: `sessions.accept` takes each
+    fact's JSON text, `sessions.command` an intent's, and `history` and
+    `snapshot` return renderer-safe JSON text.
+33. `sessionStates.catchUpAt` (optional) marks a scheduled catch-up or refold
+    of the fold over the accepted history; `null` once it reaches the head.
+    `sessionStates.derivedThrough` (optional) is the last fact whose derived
+    rows (turns, attention items, job receipts) were written, so a refold
+    rebuilds the state without replaying old derived rows over newer ones.
+    A stored state is read only by the fold version and event vocabulary that
+    wrote it; any other is refolded from the accepted history on the next
+    accept.
+34. A Session started on a runner is created by its first `accept`, whose
+    sequence 1 is the Engine's `session.create` command (`session.created`
+    follows at 2 and must match the row).
 
 ## Migrated rows
 
@@ -249,3 +267,7 @@ Each was a decision made while turning the design into code.
   payloads after a storability check only, not through the per-kind codecs
   the intake will apply (it classifies `kindKnown`/`quarantine` with the
   shared Session event codec before sending).
+- Migrated Session event rows hold `payload` and `provenance` as values, where
+  the intake stores JSON text (note 32); the intake reads both. A payload with
+  a key a Convex value refuses (`$schema`, non-ASCII) cannot be imported that
+  way, so the import should send them as text.
