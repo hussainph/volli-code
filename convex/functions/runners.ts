@@ -13,7 +13,8 @@
  * The box exchanges its refresh credential at `POST /runner/token` for a
  * 15-minute runner token and the credential's successor (`rotateCredential`).
  * A credential presented after its successor was used means it was copied:
- * the runner is cut off (`revoked`, reason `credential_reuse`).
+ * the runner is cut off (`revoked`, reason `credential_reuse`), and its owner
+ * gets a Needs-you runner alert, cleared when they remove the runner.
  *
  * Liveness: `heartbeat` writes only `runnerPresence`, which no client
  * subscribes to; `runners.status` changes only on a transition (the first
@@ -29,6 +30,7 @@ import type { GenericDatabaseReader, GenericDatabaseWriter } from "convex/server
 
 import {
   LIVE_RUNNER_STATUSES,
+  RUNNER_ALERTS,
   RUNNER_INSTALL_TOKEN_TTL_MS,
   RUNNER_LINK_REQUEST_TTL_MS,
   RUNNER_OFFLINE_AFTER_MS,
@@ -59,6 +61,7 @@ import {
 import { internal } from "./_generated/api";
 import type { DataModel, Doc } from "./_generated/dataModel.js";
 import { action, internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
+import { clearRunnerAlert, raiseRunnerAlert } from "./lib/attention";
 import { authError, requireViewer } from "./lib/auth";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
 import { mintSecret } from "./lib/runnerSecrets";
@@ -248,6 +251,12 @@ async function revokeRunner(
     at: now,
     detail: { reason, ...detail },
   });
+  // A runner cut off for reuse tells its owner in Needs you; removing it is the answer.
+  if (reason === RUNNER_STATUS_REASONS.credentialReuse) {
+    await raiseRunnerAlert(ctx, runner, RUNNER_ALERTS.credentialReuse, now);
+  } else if (reason === RUNNER_STATUS_REASONS.removed) {
+    await clearRunnerAlert(ctx, runner.id, RUNNER_ALERTS.credentialReuse, now);
+  }
 }
 
 async function setStatus(

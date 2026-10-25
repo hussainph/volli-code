@@ -47,12 +47,12 @@ import { internalMutation, mutation, query } from "./_generated/server";
 import {
   findMembership,
   findPolicy,
-  findVisibleProject,
   requireProject,
   requireSessionActor,
   requireSessionVisible,
   requireViewer,
 } from "./lib/auth";
+import { attentionVisibility } from "./lib/attention";
 import { enqueueJob } from "./lib/jobs";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
 import {
@@ -473,8 +473,8 @@ const ATTENTION_SCAN_LIMIT = 500;
 
 /**
  * The viewer's open attention items from their Sessions, newest first: all
- * of them, or one Session's. Items in a project the viewer can no longer see
- * are left out.
+ * of them, or one Session's. Items the viewer can no longer see (no longer an
+ * active Member of the project's Workspace: `canSeeAttention`) are left out.
  */
 export const attention = query({
   args: { sessionId: v.optional(v.string()) },
@@ -494,7 +494,7 @@ export const attention = query({
         .slice(0, ATTENTION_LIMIT);
     } else {
       items = [];
-      const projects = new Map<string, boolean>();
+      const canSee = attentionVisibility(ctx, viewer);
       const open = await ctx.db
         .query("attentionItems")
         .withIndex("by_user_open", (q) => q.eq("userId", viewer.userId).eq("clearedAt", null))
@@ -502,12 +502,7 @@ export const attention = query({
         .take(ATTENTION_SCAN_LIMIT);
       for (const item of open) {
         if (item.sessionId === null) continue;
-        let visible = projects.get(item.projectId);
-        if (visible === undefined) {
-          visible = (await findVisibleProject(ctx, viewer.userId, item.projectId)) !== null;
-          projects.set(item.projectId, visible);
-        }
-        if (visible) items.push(item);
+        if (await canSee(item)) items.push(item);
         if (items.length >= ATTENTION_LIMIT) break;
       }
     }

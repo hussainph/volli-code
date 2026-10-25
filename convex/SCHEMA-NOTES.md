@@ -198,9 +198,9 @@ Each was a decision made while turning the design into code.
     a runner linked by a device code starts with the right install mode.
 27. A runner cut off for credential reuse is recorded as a `token_reuse`
     runner event and shown in the owner's runner list
-    (`statusReason: credential_reuse`). It raises no Needs-you item yet:
-    `attentionItems.projectId` is required, and a runner belongs to no
-    project. The attention work decides how person-level items are stored.
+    (`statusReason: credential_reuse`). It also raises a Needs-you runner
+    alert for the owner (`r:{runnerId}:credential_reuse`, project-less, see
+    39), cleared when they remove the runner.
 28. `runnerJobs.failure` (optional, added after the first version) holds the
     job's last failure: what the runner reported, or a lease that ran out
     (`by: "backend"`). A retry keeps it, so a waiting job and a dead letter both
@@ -250,7 +250,6 @@ Each was a decision made while turning the design into code.
 34. A Session started on a runner is created by its first `accept`, whose
     sequence 1 is the Engine's `session.create` command (`session.created`
     follows at 2 and must match the row).
-
 35. **GitHub installations are global**, not owned by a Workspace (the
     design gave `githubInstallations` a `workspaceId`). A GitHub account can
     install an App only once, and its repositories serve a person's personal
@@ -277,6 +276,22 @@ Each was a decision made while turning the design into code.
     (optional: rows the migration importer writes need not carry them; absent
     reads as not yet checked) and two indexes, `by_github_repo` (webhook
     routing) and `by_installation` (an installation's removal or reconcile).
+39. `attentionItems` is written only by `lib/attention.ts`. Its ids are each
+    producer's frozen derivation (`attention.ts` in `@volli/shared/cloud`):
+    `s:{sessionId}:{sourceId}` (Session items; the backend's own source ids
+    are `volli:blocked`, `volli:quarantine:{sequence}` and
+    `volli:notify:{notifyId}`), `t:{ticketId}:review:{userId}` (review
+    requests) and `r:{runnerId}:{alert}` (runner alerts), so a refold, a
+    retry or a later board write finds the same row. Widened (expand only):
+    `projectId` is `nullable` (a runner alert belongs to no project, and is
+    visible to its person only); `workspaceId` (optional, nullable) is set
+    only on a billing item, the same exception usage rows make; `source`
+    gains `notify`; `by_ticket` (ticket, source, cleared) finds a ticket's
+    open review requests.
+    Visibility is decided at read time (`canSeeAttention`, membership through
+    the project's current Workspace); an `access_lost` sweep after a Member is
+    suspended, removed or leaves keeps stored rows honest for counts and
+    pushes, and a person active there again by the time it runs keeps theirs.
 
 ## Migrated rows
 
