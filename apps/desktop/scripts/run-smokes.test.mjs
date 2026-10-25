@@ -285,15 +285,21 @@ test("CLI validates tiers/jobs/shards and lowers jobs to Session concurrency bud
   assert.throws(() => parseArgs(["--unknown"]), /unknown argument/);
 });
 
-test("CI gates core/rest and always uploads evidence; quarantine is separate and non-red", () => {
+test("CI gates core, runs rest after merge, always uploads evidence; quarantine is non-red", () => {
   const ci = parse(readFileSync(join(REPO, ".github/workflows/ci.yml"), "utf8"));
+  const extended = parse(readFileSync(join(REPO, ".github/workflows/ci-extended.yml"), "utf8"));
   const nightly = parse(readFileSync(join(REPO, ".github/workflows/smoke-quarantine.yml"), "utf8"));
   assert.ok(ci.jobs.gate.needs.includes("smoke-boot"));
-  assert.ok(ci.jobs.gate.needs.includes("smoke-rest"));
-  for (const lane of ["smoke-boot", "smoke-rest"]) {
-    const steps = ci.jobs[lane].steps;
+  assert.ok(extended.jobs.summary.needs.includes("smoke-rest"));
+  for (const [lane, job] of [
+    ["smoke-boot", ci.jobs["smoke-boot"]],
+    ["smoke-rest", extended.jobs["smoke-rest"]],
+  ]) {
+    const steps = job.steps;
     const smoke = steps.find((step) => step.run?.includes("smoke-quiet-check.mjs"));
     assert.match(smoke.run, lane === "smoke-boot" ? /--tier core/ : /--tier rest/);
+    // The whole rest tier in one job: no shard may silently drop journeys.
+    if (lane === "smoke-rest") assert.doesNotMatch(smoke.run, /--shard/);
     assert.equal(smoke.env.VOLLI_SMOKE_REPORT_DIR, "${{ runner.temp }}/smoke-results");
     const upload = steps.find((step) => step.with?.name?.startsWith("smoke-results-"));
     assert.equal(upload.if, "always()");
@@ -307,4 +313,5 @@ test("CI gates core/rest and always uploads evidence; quarantine is separate and
   assert.equal(smoke["continue-on-error"], true);
   assert.match(smoke.run, /--tier quarantine/);
   assert.ok(!ci.jobs.gate.needs.includes("quarantine"));
+  assert.ok(!extended.jobs.summary.needs.includes("quarantine"));
 });

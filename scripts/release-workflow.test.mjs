@@ -418,3 +418,35 @@ test("manifest version validation is build-only, not pnpm dev or CI test lanes",
     assert.doesNotMatch(commands, /copy-hostd-manifest|hostd-release-manifest|releaseVersion/);
   }
 });
+
+test("release guard requires a green ci.yml AND ci-extended.yml run on the exact commit", () => {
+  const greenGuard = workflow.jobs.prepare.steps.find(
+    (step) => step.name === "Guard: CI is green on this commit",
+  );
+  assert.equal(greenGuard.if, "inputs.require_green");
+  // Stub git and gh; the conclusions per workflow come from the environment.
+  const stub = `git() { echo abc123; }
+  gh() {
+    case "$2" in
+      */workflows/ci.yml/runs?head_sha=abc123*) printf '%b' "$CI" ;;
+      */workflows/ci-extended.yml/runs?head_sha=abc123*) printf '%b' "$EXTENDED" ;;
+      *) return 99 ;;
+    esac
+  }\n`;
+  const cases = [
+    ["success", "success", true],
+    ["cancelled\\nsuccess", "success", true],
+    ["success", "", false],
+    ["", "success", false],
+    ["success", "cancelled", false],
+    ["failure", "success", false],
+    ["success", "failure\\ncancelled", false],
+  ];
+  for (const [ci, extended, green] of cases) {
+    const run = spawnSync("bash", ["-c", stub + greenGuard.run], {
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_REPOSITORY: "owner/repo", CI: ci, EXTENDED: extended },
+    });
+    assert.equal(run.status === 0, green, `ci=${ci} extended=${extended}\n${run.stdout}`);
+  }
+});

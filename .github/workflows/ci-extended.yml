@@ -1,0 +1,215 @@
+name: CI extended
+
+# The lanes that left the PR gate (VC-934), kept rather than deleted: the rest
+# smoke tier (every non-core, non-quarantined journey) and flag-on cloud
+# acceptance. They are macOS-only and long, and gating every PR on them held
+# all five of the account's concurrent macOS slots per PR run, so PRs queued
+# behind each other. Here they run:
+#   - on every push to main — the merged tree, after the PR gate;
+#   - nightly, so a quiet day still gets a result;
+#   - on demand for ANY branch: `gh workflow run ci-extended.yml --ref <branch>`.
+#     A PR that changes a journey's area or the cloud path should dispatch it
+#     before merge; its result shows on that commit;
+#   - on a PR only when it changes this file or the smoke runner, so the lane
+#     definition is proven by the PR that edits it (as ci.yml is).
+#
+# Results are visible, not gating: a red here is a red X on the commit and a
+# failed `Extended result`, never a required PR check. The release workflow
+# reads it — a commit is released only when this workflow AND CI succeeded on
+# it. A red on main is a regression to triage (AGENTS.md, CI is the gate);
+# measured repeat flakers belong in smoke-quarantine.yml, not in a re-run.
+#
+# The rest tier is ONE macOS job, not the three shards it was on PRs, and
+# cloud acceptance waits for it rather than running beside it: here latency
+# matters less than slots, so this workflow holds one macOS slot at a time
+# (main's own core e2e in ci.yml holds a second), leaving the PR lanes three
+# of the five. The runner still globs apps/desktop/e2e/*-smoke.mjs and subtracts
+# core, credential/legacy exclusions and measured quarantine, so a new smoke
+# joins this lane with no registration step.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - .github/workflows/ci-extended.yml
+      - apps/desktop/scripts/run-smokes.mjs
+      - apps/desktop/scripts/smoke-quiet-check.mjs
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# On main, a RUNNING run is never cancelled — a lane this long, cancelled by
+# every merge in a burst, would never report. GitHub keeps at most ONE queued
+# run per group and replaces it with the newer commit's (the replaced one
+# shows as cancelled on its commit, which the release guard therefore
+# refuses), so a burst of merges costs one in-flight run plus one run of the
+# newest commit. A PR's newer push does supersede its older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  smoke-rest:
+    name: Smoke (rest tier)
+    runs-on: macos-15
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Build and fetch Electron
+        run: |
+          vp run --filter @volli/desktop build
+          vp run --filter @volli/desktop ensure:electron
+
+      - name: Run the rest tier and verify quiet native windows
+        env:
+          VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/smoke-results
+        run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier rest --jobs 4
+
+      - name: Upload rest smoke attempts and native-window evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-results-rest-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/smoke-results
+          if-no-files-found: warn
+          retention-days: 30
+
+  # Production add-host wiring over volli-drive's loopback sshd fixture.
+  # CI-only: install/start use the disposable macOS runner's launchd and home.
+  # Package hostd BEFORE the desktop install can rebuild native dependencies
+  # for Electron; the delivered archive must contain the exact .nvmrc Node.
+  #
+  # After the rest tier, not beside it (one macOS slot at a time), and whatever
+  # its outcome: a red rest tier must not hide the cloud result.
+  smoke-cloud:
+    name: Smoke (cloud acceptance)
+    needs: smoke-rest
+    if: ${{ !cancelled() }}
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          # acceptance.json must name the PR head, not GitHub's synthetic merge.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        with:
+          node-version-file: .nvmrc
+          run-install: false
+
+      # setup-vp manages pnpm internally; package.mjs calls it by name.
+      - name: Enable pinned pnpm
+        run: |
+          set -euo pipefail
+          node_bin="$(dirname "$(node -p process.execPath)")"
+          mkdir -p "$RUNNER_TEMP/pnpm-bin"
+          "$node_bin/corepack" enable --install-directory "$RUNNER_TEMP/pnpm-bin" pnpm
+          echo "$RUNNER_TEMP/pnpm-bin" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/pnpm-bin:$PATH"
+          expected="$(node -p 'require("./package.json").packageManager.split("@")[1]')"
+          test "$(pnpm --version)" = "$expected"
+
+      - name: Check hostd target and desktop version
+        run: |
+          set -euo pipefail
+          test "$(node -p process.platform)" = darwin
+          test "$(node -p process.arch)" = arm64
+          test "$(node -p process.versions.node)" = "$(cat .nvmrc)"
+          test "$(node -p 'require("./package.json").version')" = "$(node -p 'require("./apps/desktop/package.json").version')"
+
+      - name: Host-only install
+        run: pnpm --filter volli-code --filter './packages/*' --filter './apps/hostd' install --frozen-lockfile
+
+      - name: Package hostd and export production install artifact
+        run: |
+          set -euo pipefail
+          node apps/hostd/scripts/package.mjs --out "$RUNNER_TEMP/hostd"
+          version="$(node -p 'require("./apps/desktop/package.json").version')"
+          tarball="$RUNNER_TEMP/hostd/volli-hostd-$version-darwin-arm64.tar.gz"
+          test -f "$tarball"
+          test -f "$tarball.sha256"
+          echo "VOLLI_HOSTD_DEV_TARBALLS=$tarball" >> "$GITHUB_ENV"
+
+      - name: Install desktop dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and fetch Electron
+        run: |
+          vp run --filter @volli/desktop build
+          vp run --filter @volli/desktop ensure:electron
+
+      - name: Run flag-on remote acceptance
+        env:
+          VOLLI_EXPERIMENTAL: cloud
+          VOLLI_DRIVE_HOME: ${{ runner.temp }}/cloud-drive
+          VOLLI_DRIVE_EVIDENCE: ${{ runner.temp }}/cloud-acceptance
+          VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/cloud-acceptance
+        run: node apps/desktop/e2e/volli-drive/remote-acceptance-smoke.mjs
+
+      - name: Upload cloud acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-results-cloud-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cloud-acceptance
+          if-no-files-found: warn
+          retention-days: 30
+
+  # One place to read the outcome, on the run page and in its summary. It
+  # waits on every lane (`always()`, so a cancelled or failed lane is still
+  # reported) and fails unless every lane succeeded — nothing here may skip.
+  # Adding a lane means adding it to `needs` and to the list below.
+  summary:
+    name: Extended result
+    if: always()
+    needs: [smoke-rest, smoke-cloud]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Report every lane and require success
+        id: report
+        shell: bash
+        env:
+          SMOKE_REST: ${{ needs.smoke-rest.result }}
+          SMOKE_CLOUD: ${{ needs.smoke-cloud.result }}
+        run: |
+          set -euo pipefail
+          status=0
+          {
+            echo "### CI extended (non-gating for PRs; required for release)"
+            echo
+            echo "| Lane | Result |"
+            echo "|---|---|"
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          report() {
+            echo "| $1 | $2 |" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            if [[ "$2" == success ]]; then
+              echo "ok    $1: $2"
+            else
+              echo "::error::$1 is '$2', expected 'success'"
+              status=1
+            fi
+          }
+          report "Smoke (rest tier)" "$SMOKE_REST"
+          report "Smoke (cloud acceptance)" "$SMOKE_CLOUD"
+          exit "$status"
