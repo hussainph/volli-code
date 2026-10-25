@@ -1,9 +1,13 @@
 /** The cloud projection of runner-owned slots; never starts an agent loop. */
 import {
+  decodeSessionEventPayload,
+  decodeSessionEventProvenance,
   encodeSessionJson,
   noticeProse,
   NOTICE_PROSE_LIMIT,
   SUBAGENT_ANSWER_NOTICE_LIMIT,
+  SUBAGENT_NOTICE_COMMAND_ID_SUFFIX,
+  SESSION_HOST_NOTICE_METADATA_KIND,
   type NoticeAnswer,
   type SessionEvent,
 } from "@volli/shared";
@@ -209,11 +213,87 @@ async function deliveryFault(
   });
 }
 
+type OriginalAnswer = { status: "answered" | "failed" | "stopped"; settledAt: number };
+
+function isSubagentAnswer(fact: SessionEvent): boolean {
+  const origin = subagentCommandOrigin(fact);
+  return (
+    fact.payload.kind === "command.recorded" &&
+    fact.payload.command.intent.kind === "message.submit" &&
+    fact.payload.command.sessionId === fact.sessionId &&
+    origin?.kind === "volli" &&
+    origin.reason === "subagent-notice"
+  );
+}
+
+/** Accepted runner facts carry trusted door attribution, not the message's prose. */
+async function originalAnswer(
+  ctx: Reader,
+  slot: Slot,
+  fact: SessionEvent,
+): Promise<OriginalAnswer | null> {
+  const ids = subagentNoticeIds(`${slot.parentSessionId}:${slot.toolCallId}`);
+  if (
+    !isSubagentAnswer(fact) ||
+    fact.sessionId !== slot.parentSessionId ||
+    fact.payload.kind !== "command.recorded" ||
+    fact.payload.command.id !== ids.commandId ||
+    fact.payload.command.intent.kind !== "message.submit"
+  )
+    return null;
+  const reference = fact.payload.command.intent.reference;
+  const row = await ctx.db
+    .query("transcriptArtifacts")
+    .withIndex("by_session_digest", (q) =>
+      q.eq("sessionId", slot.parentSessionId).eq("digest", reference.id),
+    )
+    .unique();
+  // Packing/spilling must not resurrect a spent watch. The frozen command id
+  // and trusted subagent-notice origin are durable evidence of delivery; an
+  // inline body additionally supplies its outcome and verifies the child id.
+  if (row?.body == null) return { status: "answered", settledAt: fact.occurredAt };
+  try {
+    const artifact = JSON.parse(row.body) as {
+      message?: {
+        id?: string;
+        role?: string;
+        metadata?: {
+          kind?: string;
+          notice?: { kind?: string; childSessionId?: string; state?: string };
+        };
+      };
+    };
+    const message = artifact?.message;
+    const notice = message?.metadata?.notice;
+    if (
+      message?.id !== ids.messageId ||
+      message.role !== "user" ||
+      message.metadata?.kind !== SESSION_HOST_NOTICE_METADATA_KIND ||
+      notice?.kind !== "subagent" ||
+      notice.childSessionId !== slot.childSessionId
+    )
+      return null;
+    switch (notice.state) {
+      case "completed":
+        return { status: "answered", settledAt: fact.occurredAt };
+      case "stopped":
+        return { status: "stopped", settledAt: fact.occurredAt };
+      case "interrupted":
+      case "failed":
+      case "timed-out":
+        return { status: "failed", settledAt: fact.occurredAt };
+      default:
+        return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
 /** Local delivery can reach the parent before the child's drain reaches us. */
-async function originalWasSettled(ctx: Reader, slot: Slot, watch: Watch): Promise<boolean> {
-  if (watch.originalSettled) return true;
+async function recordedOriginalAnswer(ctx: Reader, slot: Slot): Promise<OriginalAnswer | null> {
   const commandId = subagentNoticeIds(`${slot.parentSessionId}:${slot.toolCallId}`).commandId;
-  const recorded = await ctx.db
+  const row = await ctx.db
     .query("sessionEvents")
     .withIndex("by_session_command", (q) =>
       q
@@ -222,7 +302,116 @@ async function originalWasSettled(ctx: Reader, slot: Slot, watch: Watch): Promis
         .eq("kind", "command.recorded"),
     )
     .first();
-  return recorded !== null && recorded.kindKnown && recorded.quarantine === null;
+  if (row === null || !row.kindKnown || row.quarantine !== null) return null;
+  return originalAnswer(ctx, slot, {
+    id: row.eventId,
+    sessionId: row.sessionId,
+    sequence: row.sequence,
+    occurredAt: row.occurredAt,
+    recordedAt: row.recordedAt,
+    payload: decodeSessionEventPayload(
+      typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload,
+      "delegation answer",
+    ),
+    provenance: decodeSessionEventProvenance(
+      typeof row.provenance === "string" ? JSON.parse(row.provenance) : row.provenance,
+      "delegation answer",
+    ),
+  });
+}
+
+async function originalWasSettled(ctx: Reader, slot: Slot, watch: Watch): Promise<boolean> {
+  return watch.originalSettled || (await recordedOriginalAnswer(ctx, slot)) !== null;
+}
+
+async function reconcileOriginalAnswer(ctx: MutationCtx, slot: Slot, answer: OriginalAnswer) {
+  const watch = watchOf(slot);
+  const commandId = subagentNoticeIds(`${slot.parentSessionId}:${slot.toolCallId}`).commandId;
+  const activeOriginal = watch.active?.commandId === commandId;
+  if (watch.originalSettled && watch.originalOutcome && !activeOriginal) return;
+  await ctx.db.patch(slot._id, {
+    watch: {
+      ...watch,
+      originalSettled: true,
+      originalOutcome: true,
+      active: activeOriginal ? null : watch.active,
+    },
+    // Keep a settled child-ledger row canonical. An active original or an
+    // unsettled slot (e.g. a pre-intent throw) needs the local notice's outcome.
+    ...(activeOriginal || (!watch.originalOutcome && watch.active === null)
+      ? { status: answer.status, settledAt: answer.settledAt }
+      : {}),
+  });
+}
+
+async function onParentAnswer(ctx: MutationCtx, parent: Doc<"sessions">, fact: SessionEvent) {
+  if (!isSubagentAnswer(fact) || fact.payload.kind !== "command.recorded") return;
+  const id = fact.payload.command.id;
+  const prefix = `${parent.id}:`;
+  if (!id.startsWith(prefix) || !id.endsWith(SUBAGENT_NOTICE_COMMAND_ID_SUFFIX)) return;
+  const toolCallId = id.slice(prefix.length, -SUBAGENT_NOTICE_COMMAND_ID_SUFFIX.length);
+  const slot = await ctx.db
+    .query("delegations")
+    .withIndex("by_parent_call", (q) =>
+      q.eq("parentSessionId", parent.id).eq("toolCallId", toolCallId),
+    )
+    .unique();
+  if (slot === null) return;
+  const child = await sessionRow(ctx, slot.childSessionId);
+  if (
+    child === null ||
+    child.role !== "subagent" ||
+    child.parentSessionId !== parent.id ||
+    child.ownerUserId !== parent.ownerUserId ||
+    child.projectId !== parent.projectId
+  )
+    return;
+  const answer = await originalAnswer(ctx, slot, fact);
+  if (answer !== null) await reconcileOriginalAnswer(ctx, slot, answer);
+}
+
+/** A delayed original kickoff is not a new resumption after its parent was told. */
+async function isOriginalKickoffTurn(ctx: Reader, slot: Slot, turnId: string): Promise<boolean> {
+  const kickoff = await ctx.db
+    .query("sessionEvents")
+    .withIndex("by_session_command", (q) =>
+      q
+        .eq("sessionId", slot.childSessionId)
+        .eq("commandId", `${slot.parentSessionId}:${slot.toolCallId}:kickoff`)
+        .eq("kind", "command.recorded"),
+    )
+    .first();
+  if (kickoff === null || !kickoff.kindKnown || kickoff.quarantine !== null) return false;
+  const turn = await ctx.db
+    .query("sessionEvents")
+    .withIndex("by_session_kind", (q) =>
+      q
+        .eq("sessionId", slot.childSessionId)
+        .eq("kind", "turn.started")
+        .gt("sequence", kickoff.sequence),
+    )
+    .filter((q) => q.and(q.eq(q.field("kindKnown"), true), q.eq(q.field("quarantine"), null)))
+    .first();
+  if (turn === null) return false;
+  // A rejected/unrun kickoff can have its first later turn opened by a NEW
+  // message. Only consume the turn when the frozen kickoff is still its
+  // immediate command predecessor; ambiguity must not hide resumed work.
+  const opener = await ctx.db
+    .query("sessionEvents")
+    .withIndex("by_session_kind", (q) =>
+      q
+        .eq("sessionId", slot.childSessionId)
+        .eq("kind", "command.recorded")
+        .lt("sequence", turn.sequence),
+    )
+    .order("desc")
+    .first();
+  if (opener?.sequence !== kickoff.sequence) return false;
+  const payload = decodeSessionEventPayload(
+    typeof turn.payload === "string" ? JSON.parse(turn.payload) : turn.payload,
+    "delegation kickoff turn",
+  );
+  return payload.kind === "turn.started" && payload.turnId === turnId;
 }
 
 async function settleChild(
@@ -268,7 +457,11 @@ async function settleChild(
       armed = true;
     } else if (payload.kind === "turn.started") {
       watch.originalSettled = await originalWasSettled(ctx, slot, watch);
-      if (!watch.originalSettled || !isSubagentHostNoticeOrigin(view.latestTurnOrigin)) {
+      if (
+        !watch.originalSettled ||
+        (!isSubagentHostNoticeOrigin(view.latestTurnOrigin) &&
+          !(await isOriginalKickoffTurn(ctx, slot, payload.turnId)))
+      ) {
         watch.active = {
           afterSequence: fact.sequence,
           resumed: true,
@@ -284,7 +477,8 @@ async function settleChild(
       payload.command.intent.kind === "message.submit" &&
       view.turnActive &&
       view.latestTurnId !== null &&
-      !isSubagentHostNoticeOrigin(subagentCommandOrigin(fact))
+      !isSubagentHostNoticeOrigin(subagentCommandOrigin(fact)) &&
+      !(await isOriginalKickoffTurn(ctx, slot, view.latestTurnId))
     ) {
       watch.originalSettled = await originalWasSettled(ctx, slot, watch);
       if (watch.originalSettled) {
@@ -463,6 +657,7 @@ export async function onDelegationFact(
   view: CloudSessionView,
 ): Promise<void> {
   await projectBirth(ctx, session, fact);
+  await onParentAnswer(ctx, session, fact);
   await settleChild(ctx, session, fact, view);
   if (fact.payload.kind === "session.stopped") await stopOtherRunnerChildren(ctx, session);
 }
@@ -475,6 +670,22 @@ export async function onDelegationHead(
 ): Promise<void> {
   if (view.stopped !== null) await stopOtherRunnerChildren(ctx, session);
   if (session.role === "subagent" && session.parentSessionId !== null) {
+    const slot = await ctx.db
+      .query("delegations")
+      .withIndex("by_child", (q) => q.eq("childSessionId", session.id))
+      .unique();
+    if (slot !== null) {
+      const watch = watchOf(slot);
+      const originalId = subagentNoticeIds(`${slot.parentSessionId}:${slot.toolCallId}`).commandId;
+      if (
+        !watch.originalSettled ||
+        !watch.originalOutcome ||
+        watch.active?.commandId === originalId
+      ) {
+        const answer = await recordedOriginalAnswer(ctx, slot);
+        if (answer !== null) await reconcileOriginalAnswer(ctx, slot, answer);
+      }
+    }
     const parent = await sessionRow(ctx, session.parentSessionId);
     if (parent?.stopped != null) await stopOtherRunnerChildren(ctx, parent);
   }
