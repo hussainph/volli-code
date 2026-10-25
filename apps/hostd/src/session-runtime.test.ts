@@ -222,8 +222,11 @@ describe("headless runtime ownership", () => {
       options: { ...f.input.options, projectsRoot: "/home/service/volli" },
       boardFeed: {} as never,
     });
+    seam.handlers.mockReturnValueOnce({ map: "host" } as never);
     await owner.ready();
     await owner.ready();
+    // One map for the host, however often `ready()` is asked (VC-923).
+    expect(seam.handlers).toHaveBeenCalledOnce();
     expect(seam.workspaces).toHaveBeenCalledExactlyOnceWith({
       db: f.host.database.db,
       projectsRoot: "/home/service/volli",
@@ -339,14 +342,17 @@ describe("headless runtime ownership", () => {
     seam.project.mockReturnValue({ ticketPrefix: "VC" });
     expect(identity.ticketDisplayIdOf("t")).toBe("VC-1");
     // The tool door projects the one map (VC-923): none before `ready()` built it.
+    // The tool door projects the one map (VC-923): a recovered Session's tool
+    // call may build it before `ready()` does, and `ready()` hands out the same.
     const [agentOptions] = f.facade.agents.mock.lastCall as unknown as [
-      { handlers: () => unknown },
+      { handlers: (ready: unknown) => unknown },
     ];
-    expect(agentOptions.handlers()).toBeNull();
     const map = { map: "host" };
     seam.handlers.mockReturnValueOnce(map as never);
+    expect(agentOptions.handlers(f.proof)).toBe(map);
     const ready = await owner.ready();
-    expect(agentOptions.handlers()).toBe(map);
+    expect(ready.handlers).toBe(map);
+    expect(agentOptions.handlers(f.proof)).toBe(map);
     expect(seam.commands).toHaveBeenCalledWith(f.proof);
     expect(ready).toMatchObject({
       sessionEngine: "recovered-engine",
@@ -603,6 +609,12 @@ describe("headless runtime ownership", () => {
     await expect(owner.ready()).rejects.toThrow("runtime is unavailable");
     seam.recovered.mockReturnValueOnce({ sessions: {}, runtime: null });
     await expect(owner.ready()).rejects.toThrow("runtime is unavailable");
+    // The tool door's map is refused the same way (VC-923).
+    const [agentOptions] = f.facade.agents.mock.lastCall as unknown as [
+      { handlers: (ready: unknown) => unknown },
+    ];
+    seam.recovered.mockReturnValueOnce({ sessions: null, runtime: f.runtime });
+    expect(() => agentOptions.handlers(f.proof)).toThrow("runtime is unavailable");
     f.agents.toolDoor.mockReturnValueOnce(null as never);
     await expect(
       (seam.assembly.mock.lastCall![0] as RuntimeAssemblyOptions).callVerb(

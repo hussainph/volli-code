@@ -1515,7 +1515,8 @@ const appStartup = app.whenReady().then(async () => {
   /**
    * The host's one handler map (VC-668), built once from the recovered
    * services and handed to every door: the Session RPC bridge, the
-   * `volli:ticket-move` channel and the agent socket each project it, under
+   * `volli:ticket-move` channel, the agent socket and the Agent Tool Surface
+   * door each project it, under
    * that door's own policy (the map is sealed: no door can call it without
    * one). What
    * this root used to write around each call (reconciling preferences on a

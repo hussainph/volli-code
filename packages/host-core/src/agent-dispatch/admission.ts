@@ -288,8 +288,11 @@ export function coordinationRefusal(
  * The agent socket's policy at the host's handler map (VC-668), for one
  * request: a projected verb reaches `handlers[key]` only through it.
  *
- * It is the socket's coordination policy, judged again at the map rather than
- * trusted from the dispatch line that already ran it, and it admits only the
+ * It is the socket's coordination policy. For a key another door also
+ * reaches (a catalog or board command), it is judged again at the map rather
+ * than trusted from the dispatch line that already ran it; for one of the
+ * socket's own verbs, which no other door reaches, the dispatch hands it the
+ * verdict it just reached (`agent-commands.ts`). It admits only the
  * key this request's verb projects (`projected`: a both-door entry's socket
  * binding id is its key, as is each of the socket's own verbs', VC-923, and
  * `ticket.create`/`update`/`comment` name their board key, VC-794; undefined

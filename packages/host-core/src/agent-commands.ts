@@ -63,7 +63,8 @@ export type { AgentCommandService, AgentCommandServiceOptions } from "./agent-di
 
 import type { AgentCommandService, AgentCommandServiceOptions } from "./agent-dispatch/context";
 
-const SOCKET_SERVED: ReadonlySet<string> = new Set(SERVED_AGENT_HANDLER_KEYS);
+/** The agent doors' own verbs: keys no door but the one serving them reaches. */
+const SERVED_AGENT_KEYS: ReadonlySet<string> = new Set(SERVED_AGENT_HANDLER_KEYS);
 
 export function createAgentCommandService(
   options: AgentCommandServiceOptions,
@@ -284,8 +285,8 @@ export function createAgentCommandService(
           // map call follows this line with no await between, over a
           // synchronous store: the verdict above is the map's, so the hot path
           // (`hook`) reads its project's policy once, as it always has.
-          projected !== undefined && SOCKET_SERVED.has(projected)
-            ? () => refusal
+          projected !== undefined && SERVED_AGENT_KEYS.has(projected)
+            ? () => null
             : () => coordinationRefusal(readPolicy, projects, envSession, request, door),
         ),
       };

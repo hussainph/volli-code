@@ -27,10 +27,10 @@ export interface RuntimeSessionAgentOptions {
   log: Pick<Logger, "error">;
   /**
    * The host's handler map for these recovered services (VC-923), which the
-   * tool door projects and serves its own verbs into: the root's one map, or
-   * null where this launch built none, which leaves no tool door.
+   * tool door projects and serves its own verbs into: the root's one map,
+   * built on first ask, so a tool call never waits on another door to build it.
    */
-  handlers: (ready: RecoveredSessionServices<RuntimeSessionFacade>) => HostHandlerMap | null;
+  handlers: (ready: RecoveredSessionServices<RuntimeSessionFacade>) => HostHandlerMap;
 }
 
 export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) {
@@ -137,14 +137,10 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
       agentToolDoor = null;
       return agentToolDoor;
     }
-    // No map yet is no door yet, never a door that answers some other way:
-    // the next call asks again.
-    const handlers = options.handlers(ready);
-    if (handlers === null) return null;
     agentToolDoor = createHostAgentToolDoor({
       db: sessionDb,
       projects: () => listProjects(sessionDb),
-      handlers,
+      handlers: options.handlers(ready),
       delegation: sessionDelegation,
       automations: () => {
         if (runtimeAutomations.kind === "degraded") return null;

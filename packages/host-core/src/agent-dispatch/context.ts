@@ -476,8 +476,9 @@ export interface AgentCommandContext extends AgentVerbContext {
   /**
    * This request's policy at the handler map (VC-668): a projected verb
    * reaches `handlers[key]` only through it. It judges the socket's own
-   * coordination policy for this request again, at the map, and admits only
-   * the key this request's verb projects.
+   * coordination policy for this request again, at the map, for a key another
+   * door also reaches (the socket's own verbs reuse the dispatch's verdict),
+   * and admits only the key this request's verb projects.
    */
   readonly handlerPolicy: HandlerPolicy;
 }

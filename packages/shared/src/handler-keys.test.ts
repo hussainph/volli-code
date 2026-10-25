@@ -17,6 +17,7 @@ import {
   type ServedAgentHandlerKey,
   type SharedAgentHandlerKey,
   type SharedAgentHandlerKeysExact,
+  type ToolVerbsAreAgentKeys,
   type CatalogHandlerKey,
   type HostHandlerKey,
   type HostHandlerKeyOf,
@@ -90,6 +91,7 @@ describe("the host handler map's keys", () => {
     expect(Object.isFrozen(SHARED_AGENT_HANDLER_KEYS)).toBe(true);
     expect(Object.isFrozen(SERVED_AGENT_HANDLER_KEYS)).toBe(true);
     expectTypeOf<SharedAgentHandlerKeysExact>().toEqualTypeOf<never>();
+    expectTypeOf<ToolVerbsAreAgentKeys>().toEqualTypeOf<never>();
     expectTypeOf<Extract<ServedAgentHandlerKey, SharedAgentHandlerKey>>().toEqualTypeOf<never>();
   });
 

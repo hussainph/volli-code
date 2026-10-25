@@ -173,6 +173,8 @@ function harness(
     refusedAttach?: CommandReceipt;
     /** Sees every verdict the map's policies give (VC-923). */
     onAdmission?: AdmissionObserver;
+    /** A launch whose Session runtime never came up: the map has no facade. */
+    noRuntime?: boolean;
   } = {},
 ) {
   ctx = openTestDb();
@@ -227,6 +229,8 @@ function harness(
           };
         },
       },
+      // Spread after the facade, so it replaces it with none.
+      ...(overrides.noRuntime === true ? { sessions: undefined } : {}),
       submitSessionMessage: async (input) => {
         kickoffs.push(input);
       },
@@ -320,6 +324,30 @@ describe("every tool verb is a projection of the host's map", () => {
 });
 
 describe("session_start through the Agent Tool Surface", () => {
+  it("refuses in words on a launch with no Session runtime, and releases a Ticket caller's claim", async () => {
+    const released: unknown[] = [];
+    const h = harness({
+      noRuntime: true,
+      delegation: grantingDelegation({ releaseIfUnstarted: (ref) => void released.push(ref) }),
+    });
+    const result = await h.call({ ticket: "VC-1" }, "tc-none", TICKET_CALLER);
+    expect(result.text).toBe(
+      "Volli's Session runtime is not available this launch, so nothing was started.",
+    );
+    expect(released).toEqual([{ parentSessionId: TICKET_CALLER.sessionId, toolCallId: "tc-none" }]);
+    expect(h.kickoffs).toEqual([]);
+    expect(h.notices).toEqual([]);
+  });
+
+  it("announces one start, on the map's bus, citing the calling Session's Ticket", async () => {
+    const h = harness();
+    await h.call({ ticket: "VC-1", message: "Fix it" }, "tc-notice", TICKET_CALLER);
+    expect(h.notices).toEqual([
+      expect.objectContaining({ sessionId: STARTED_SESSION, actorTicket: "VC-1" }),
+    ]);
+    expect(h.kickoffs).toHaveLength(1);
+  });
+
   it("starts a Ticket Session on the caller's project without touching the socket", async () => {
     const watches = recordingWatches();
     const h = harness({ watches });

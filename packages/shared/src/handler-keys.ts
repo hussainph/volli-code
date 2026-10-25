@@ -133,6 +133,12 @@ export type SharedAgentHandlerKeysExact = AssertNever<
   | Exclude<SharedAgentHandlerKey, AgentCommandBindingId & VerbToolKey>
 >;
 
+/**
+ * Every tool verb is an agent key: a tool verb that became a catalog command
+ * would leave the tool door projecting a catalog handler with a tool's input.
+ */
+export type ToolVerbsAreAgentKeys = AssertNever<Exclude<VerbToolKey, AgentHandlerKey>>;
+
 /** The agent keys one agent door serves into the map: every agent key but the shared ones. */
 export type ServedAgentHandlerKey = Exclude<AgentHandlerKey, SharedAgentHandlerKey>;
 
@@ -174,7 +180,8 @@ export type SocketDelegatedHandlerKey = (typeof SOCKET_DELEGATED_HANDLER_KEYS)[n
 
 /**
  * The handler keys the agent socket serves under its own verb's name: a
- * both-door catalog command's, and every {@link AgentHandlerKey}. Its
+ * both-door catalog command's, and every {@link AgentHandlerKey} that is a
+ * socket verb. Its
  * `AGENT_VERB_TABLE` binding for each must be a projection of the map, never a
  * handler of its own. The socket's ticket writes that project a board key under
  * another name are {@link SocketBoardProjections} (VC-794).

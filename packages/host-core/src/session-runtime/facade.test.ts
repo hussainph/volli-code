@@ -178,16 +178,14 @@ async function fixture() {
 }
 
 describe("lifted Session facade and recovered agent staging", () => {
-  it("builds no tool door before the root's map exists, and builds it once it does", async () => {
+  it("builds the tool door once, over the root's map for its recovered services", async () => {
     const f = await fixture();
-    let map: HostHandlerMap | null = null;
-    const agents = stage(f, { handlers: () => map });
-    expect(agents.toolDoor(f.ready)).toBeNull();
-    expect(f.agentServices.createToolDoor).not.toHaveBeenCalled();
-    map = HANDLERS;
+    const handlers = vi.fn(() => HANDLERS);
+    const agents = stage(f, { handlers });
     const door = agents.toolDoor(f.ready);
     expect(door).not.toBeNull();
     expect(agents.toolDoor(f.ready)).toBe(door);
+    expect(handlers).toHaveBeenCalledExactlyOnceWith(f.ready);
     expect(f.agentServices.createToolDoor).toHaveBeenCalledOnce();
     expect(f.agentServices.createToolDoor.mock.lastCall![0].handlers).toBe(HANDLERS);
   });

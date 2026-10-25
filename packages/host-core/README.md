@@ -880,8 +880,9 @@ and the door's `HandlerPolicy` runs first; a refusal throws
 `HandlerRefusedError` and the handler never runs. The policies:
 `ROUTER_POLICY` for a router's context, `DESKTOP_WINDOW_POLICY` for a legacy
 desktop IPC channel (`handlers/policies.ts`), and the socket's per-request
-`socketHandlerPolicy`, its coordination policy judged again at the map
-(`agent-dispatch/admission.ts`). Tests build the real map over a test
+`socketHandlerPolicy`, its coordination policy judged again at the map for
+a key another door also reaches (`agent-dispatch/admission.ts`), and the tool
+door's per-call `agent-tool` policy (`agent-tool-door.ts`). Tests build the real map over a test
 database with `testHostHandlers`, or seal their own entries with
 `sealTestHandlers` (`./testing`). The contract: HP § Command catalog, "One
 handler map".

@@ -682,6 +682,18 @@ function withoutSecret(error: unknown, secret: string): unknown {
 }
 
 /**
+ * The start's own unavailable (VC-923): this launch has no Sessions facade.
+ * Each agent door words it in its own vocabulary, which it can do only for
+ * this cause; any other unavailable (no database) keeps its own message.
+ */
+export class SessionRuntimeUnavailableError extends OperationUnavailableError {
+  constructor() {
+    super(SESSIONS_UNAVAILABLE);
+    this.name = "SessionRuntimeUnavailableError";
+  }
+}
+
+/**
  * Builds the host's handler map, sealed behind policy. Call it once per
  * composition root, with the recovered services, and hand the same object to
  * every door; each door invokes it through its own policy.
@@ -790,7 +802,8 @@ function hostHandlerEntries(
     // envelope, and both reach this. The facade, the kickoff, the auto-title
     // refinement, the mutation and the start notice are its, once.
     "session.start": (input, call) => {
-      const facade = sessions();
+      if (options.sessions === null) throw new SessionRuntimeUnavailableError();
+      const facade = options.sessions;
       const database = board();
       const projects = listProjects(database);
       const ticket = getTicket(database, input.ticketId);

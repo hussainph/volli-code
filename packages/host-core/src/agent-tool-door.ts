@@ -37,7 +37,6 @@ import {
   displayTicketId,
   isAgentModelTier,
   isHandlerRefused,
-  isOperationUnavailable,
   REASONING_LEVELS,
   shortSessionId,
   VERB_TOOL_KEYS,
@@ -69,7 +68,11 @@ import {
   type HandlerPolicy,
   type HostHandlerMap,
 } from "./handlers/handler-map";
-import type { HostHandlers, ToolServedKey } from "./handlers/host-handlers";
+import {
+  SessionRuntimeUnavailableError,
+  type HostHandlers,
+  type ToolServedKey,
+} from "./handlers/host-handlers";
 import {
   retiredSessionAwaitTool,
   retiredTicketAwaitTool,
@@ -137,10 +140,10 @@ export interface AutomationToolPort {
 /**
  * What the door reaches, resolved per call rather than captured.
  *
- * `projects` and `sessions` are functions because both change after this is
- * built: a project can be added while a Session runs, and the facade is
- * composed later in main's own startup order. Capturing either would freeze an
- * answer that is only true at boot.
+ * `projects` and the hosts below are functions because they change after this
+ * is built: a project can be added while a Session runs, and the runtime's
+ * collaborators are composed later in main's own startup order. Capturing
+ * them would freeze an answer that is only true at boot.
  */
 export interface AgentToolDoorOptions {
   db: Database.Database;
@@ -148,7 +151,7 @@ export interface AgentToolDoorOptions {
   /**
    * The host's handler map (VC-923), which this door projects: every tool
    * verb is a key on it. This door serves its own verbs' entries into the
-   * map on construction ({@link toolVerbEntries}); `session.start`, which the
+   * map on construction; `session.start`, which the
    * person's operator CLI shares, is the map's own start command, with the
    * facade, the kickoff, the auto-title, the mutation and the start notice.
    */
@@ -164,7 +167,7 @@ export interface AgentToolDoorOptions {
   /** The caller's project policy, read per call: budgets, and what a watch may be woken by. */
   authorityPolicy: (projectId: string) => AuthorityPolicy;
   /**
-   * The watch registry (VC-457), resolved per call like the Sessions facade:
+   * The watch registry (VC-457), resolved per call like the other hosts here:
    * what `watch`, the retired awaits, and the watches `session_start`,
    * `automation_run` and `session_send` arm for their caller all write to.
    * `null` reads as "no structured runtime this launch".
@@ -172,7 +175,7 @@ export interface AgentToolDoorOptions {
   watches: () => Watches | null;
   /**
    * The supervision operations' ports (VC-86), resolved per call like the
-   * Sessions facade: the runtime is composed after this door is. `null` reads
+   * other hosts here: the runtime is composed after this door is. `null` reads
    * as "no structured runtime this launch" and each tool refuses in words.
    */
   supervise: () => SendSessionPorts | null;
@@ -538,7 +541,7 @@ async function startSessionTool(
       return refusal(`Volli refused to start the Session: ${error.message}`);
     }
     if (isHandlerRefused(error)) return refusal(error.message);
-    if (isOperationUnavailable(error)) {
+    if (error instanceof SessionRuntimeUnavailableError) {
       return refusal(
         "Volli's Session runtime is not available this launch, so nothing was started.",
       );
@@ -1014,7 +1017,7 @@ export interface ToolVerbInput {
 }
 
 /** The map's entries for this door's own verbs, over its options: what the door serves. */
-export function toolVerbEntries(options: AgentToolDoorOptions): Pick<HostHandlers, ToolServedKey> {
+function toolVerbEntries(options: AgentToolDoorOptions): Pick<HostHandlers, ToolServedKey> {
   const entries: Partial<Record<ToolServedKey, HostHandlers[ToolServedKey]>> = {};
   for (const key of Object.keys(VERB_TOOL_HANDLERS) as ToolServedKey[]) {
     const handle = VERB_TOOL_HANDLERS[key];
@@ -1073,6 +1076,9 @@ export type AgentToolDoor = (
   budgetAsk?: VerbBudgetAsk,
 ) => Promise<RuntimeVerbResult>;
 
+/** Every verb a bundle can hold: what this door can be asked at all. */
+const TOOL_VERBS: ReadonlySet<string> = new Set(VERB_TOOL_KEYS);
+
 /**
  * Build the one closure the Pi adapter hands every attachment that holds a
  * verb, and serve this door's own verbs into the map it projects (VC-923).
@@ -1113,5 +1119,3 @@ export function createAgentToolDoor(options: AgentToolDoorOptions): AgentToolDoo
     }
   };
 }
-
-const TOOL_VERBS: ReadonlySet<string> = new Set(VERB_TOOL_KEYS);

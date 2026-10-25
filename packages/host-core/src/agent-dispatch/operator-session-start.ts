@@ -9,7 +9,6 @@ import {
   REASONING_LEVELS,
   shortSessionId,
   isAgentModelTier,
-  isOperationUnavailable,
   type AgentResponse,
   type ReasoningLevel,
 } from "@volli/shared";
@@ -18,6 +17,7 @@ import {
   type StartSessionModelChoice,
 } from "../session-runtime/start-session";
 import { StructuredSessionsError } from "../session-runtime/sessions";
+import { SessionRuntimeUnavailableError } from "../handlers/host-handlers";
 import { ticketForDisplayId } from "./resolution";
 import { failure } from "./context";
 import type { SocketDecode } from "./projection";
@@ -91,7 +91,7 @@ export function sessionStartFailure(error: unknown): AgentResponse | undefined {
           : "INVALID_REQUEST",
       error.message,
     );
-  if (isOperationUnavailable(error))
+  if (error instanceof SessionRuntimeUnavailableError)
     return failure("APP_UNREACHABLE", "The Session runtime is unavailable.");
   return undefined;
 }

@@ -39,6 +39,7 @@ import { createWorktreeReadService } from "../worktree-reads";
 import { ADMITTED, admittedHandlers, type HandlerPolicy } from "./handler-map";
 import {
   createHostHandlers,
+  SessionRuntimeUnavailableError,
   type HostHandlerCoverage,
   type HostHandlerOptions,
   type HostHandlers,
@@ -733,6 +734,11 @@ describe("Session commands", () => {
         "session-started",
         expect.objectContaining({ sessionId: READY.sessionId, actorTicket: "VC-1" }),
       );
+      // Once each: the map's start is the only one that announces.
+      expect(publish.mock.calls.map(([topic]) => topic)).toEqual([
+        "data-changed",
+        "session-started",
+      ]);
     });
 
     it("answers unavailable with no Sessions facade, and refuses a ticket outside its project", async () => {
@@ -743,6 +749,8 @@ describe("Session commands", () => {
         .then(() => handlers()["session.start"](input, USER))
         .catch((thrown: unknown) => thrown);
       expect(isOperationUnavailable(error)).toBe(true);
+      // The start's own unavailable, which each agent door words in its own vocabulary.
+      expect(error).toBeInstanceOf(SessionRuntimeUnavailableError);
       const start = vi.fn(async () => READY);
       const map = handlers({ sessions: { create: vi.fn(), attach: vi.fn(), start } });
       for (const wrong of [

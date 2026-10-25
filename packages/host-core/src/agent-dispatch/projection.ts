@@ -19,7 +19,12 @@
  * {@link SocketBoardProjections} verb, and the private registry below lets a
  * test prove at runtime that each such binding reaches exactly its own key.
  */
-import { errorMessage, isHandlerRefused, isOperationUnavailable } from "@volli/shared";
+import {
+  errorMessage,
+  isHandlerRefused,
+  isOperationUnavailable,
+  logErrorSummary,
+} from "@volli/shared";
 import type {
   AgentRequest,
   AgentResponse,
@@ -39,6 +44,9 @@ import type {
 import type { ServedAgentHandlerKey } from "@volli/shared";
 import { failure, type AgentCommandContext } from "./context";
 import type { DoorActor } from "./resolution";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("agent-socket");
 import type { AgentVerbBinding } from "./table";
 
 /**
@@ -118,6 +126,9 @@ export function projectHandler<Key extends Exclude<SocketProjectedKey, ServedAge
     if (own !== undefined) return own;
     const refusal = mapRefusal(error);
     if (refusal !== undefined) return refusal;
+    // The same line the socket's generic door writes for a failed request:
+    // the summary, never a message that may quote the request.
+    log.warn("agent socket request failed", { key, error: logErrorSummary(error) });
     return failure(
       isOperationUnavailable(error) ? "APP_UNREACHABLE" : "MUTATION_FAILED",
       errorMessage(error),

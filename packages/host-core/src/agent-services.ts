@@ -72,8 +72,10 @@ export type HostAgentToolDoorOptions = AgentToolDoorOptions;
 
 /**
  * The structured runtime's verb tools, served into the host's handler map
- * (VC-923). The start's mutation and notice reach the event bus through the
- * map's own start command; the other verbs' through the ports they hold.
+ * (VC-923). The door holds no bus wiring of its own any more: the start's
+ * mutation and notice reach the event bus through the map's own start
+ * command, and the other verbs' through the ports they hold. It stays the
+ * one construction seam `session-runtime/agents.ts` builds the door through.
  */
 export function createHostAgentToolDoor(options: HostAgentToolDoorOptions): AgentToolDoor {
   return createAgentToolDoor(options);
