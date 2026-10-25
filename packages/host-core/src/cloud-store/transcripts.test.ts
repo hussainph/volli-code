@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http";
+import { mkdir, symlink } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
@@ -280,6 +281,58 @@ describe("the runner's transcript producer composition", () => {
     cursors.save({ ...cursors.get(SESSION)!, ownerUserId: "another-account" });
     await expect(f.publish().pack(SESSION, new AbortController().signal)).rejects.toThrow(
       "local claim",
+    );
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("reports missing Pi directories without blocking packs and refuses a symlinked history parent", async () => {
+    const f = await fixture();
+    const piDirectory = join(dirname(db.dbPath), "pi-sessions");
+    const path = join(piDirectory, "--workspace--", "pi-file.jsonl");
+    const session = await cloud!.engine.getSession({ sessionId: SESSION });
+    vi.spyOn(cloud!.engine, "getSession").mockResolvedValue({
+      ...session!,
+      attachments: [
+        {
+          id: "binding",
+          sessionId: SESSION,
+          adapterId: "pi",
+          venue: LOCAL_RUNNER,
+          continuity: "fresh",
+          authority: null,
+          status: "closed",
+          openedAt: 1,
+          closedAt: 2,
+          outcome: "completed",
+          failure: null,
+          exitCode: 0,
+          native: {
+            id: "pi-file",
+            detail: {
+              kind: "volli.native-binding.v1",
+              locator: {
+                runtime: "pi",
+                sessionId: "pi-file",
+                sessionFilePath: path,
+              },
+            },
+          },
+        },
+      ],
+    });
+    const cursors = sqliteDrainCursorStore(db.db);
+    cursors.save({ ...cursors.get(SESSION)!, acceptedThrough: f.events.length });
+    const query = vi
+      .spyOn(f.link, "query")
+      .mockResolvedValue({ transcriptThrough: f.events.length, piLogs: {} });
+    const report = await f.publish().pack(SESSION, new AbortController().signal);
+    expect(report.transcript).toEqual([]);
+    expect(report.piLogs.missing).toEqual(["pi-file"]);
+    query.mockClear();
+    await mkdir(piDirectory);
+    await symlink(dirname(db.dbPath), join(piDirectory, "--workspace--"), "dir");
+    await expect(f.publish().pack(SESSION, new AbortController().signal)).rejects.toThrow(
+      "symbolic link",
     );
     expect(query).not.toHaveBeenCalled();
   });

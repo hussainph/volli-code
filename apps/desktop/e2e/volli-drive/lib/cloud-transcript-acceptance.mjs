@@ -6,24 +6,19 @@
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { createHash, createHmac, randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { createServer } from "node:http";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { gunzipSync, zstdDecompressSync } from "node:zlib";
 
+import { verifyS3Request } from "../../../../../convex/fixture/s3-boundary.ts";
 import { waitUntil } from "../../lib/smoke-kit.mjs";
 
 const exec = promisify(execFile);
 const MAX_BYTES = 64 * 1024 * 1024;
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
-const hmac = (key, text) => createHmac("sha256", key).update(text).digest();
-const encode = (text) =>
-  encodeURIComponent(text).replace(
-    /[!'()*]/gu,
-    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
 
 async function clientFor(fixture, token) {
   const [{ ConvexHttpClient }, { makeFunctionReference }] = await Promise.all([
@@ -54,64 +49,6 @@ async function tableRows(fixture, table, sessionId) {
     cursor = page.continueCursor;
   }
   throw new Error(`Unexpectedly large throwaway backend table: ${table}`);
-}
-
-function authenticate(request, url, credentials) {
-  const params = url.searchParams;
-  assert.equal(params.size, 6, "only the six SigV4 parameters are accepted");
-  assert.equal(params.get("X-Amz-Algorithm"), "AWS4-HMAC-SHA256");
-  const stamp = params.get("X-Amz-Date");
-  assert.match(stamp ?? "", /^\d{8}T\d{6}Z$/u);
-  const now = Date.now();
-  const datedAt = Date.parse(
-    `${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)}T${stamp.slice(9, 11)}:${stamp.slice(11, 13)}:${stamp.slice(13, 15)}Z`,
-  );
-  const expiry = Number(params.get("X-Amz-Expires"));
-  assert.ok(Number.isInteger(expiry) && expiry > 0 && expiry <= 300);
-  assert.ok(datedAt <= now + 5_000 && now < datedAt + expiry * 1_000, "URL is unexpired");
-  const day = stamp.slice(0, 8);
-  const scope = `${day}/auto/s3/aws4_request`;
-  assert.equal(params.get("X-Amz-Credential"), `${credentials.accessKeyId}/${scope}`);
-  const names = params.get("X-Amz-SignedHeaders").split(";");
-  assert.deepEqual(names, [...new Set(names)].toSorted());
-  assert.ok(names.includes("host"));
-  if (request.method === "PUT") {
-    assert.ok(names.includes("content-length"));
-    assert.ok(names.includes("x-amz-checksum-sha256"));
-  }
-  const headers = names
-    .map((name) => {
-      const value = request.headers[name];
-      assert.equal(typeof value, "string", `signed header ${name} is present`);
-      return `${name}:${value.trim().replace(/\s+/gu, " ")}\n`;
-    })
-    .join("");
-  const query = [...params]
-    .filter(([name]) => name !== "X-Amz-Signature")
-    .map(([name, value]) => `${encode(name)}=${encode(value)}`)
-    .toSorted()
-    .join("&");
-  const canonical = [
-    request.method,
-    url.pathname,
-    query,
-    headers,
-    names.join(";"),
-    "UNSIGNED-PAYLOAD",
-  ].join("\n");
-  const signingKey = hmac(
-    hmac(hmac(hmac(`AWS4${credentials.secretAccessKey}`, day), "auto"), "s3"),
-    "aws4_request",
-  );
-  const signature = hmac(
-    signingKey,
-    `AWS4-HMAC-SHA256\n${stamp}\n${scope}\n${sha256(canonical)}`,
-  ).toString("hex");
-  assert.equal(
-    params.get("X-Amz-Signature"),
-    signature,
-    "method/key/headers are signed by the backend",
-  );
 }
 
 /** A same-process, bounded, path-style S3 bucket with renderer CORS support. */
@@ -153,8 +90,7 @@ export async function startTranscriptStore(fixture, reportDir) {
             response.writeHead(204).end();
             return;
           }
-          assert.ok(["PUT", "GET"].includes(request.method));
-          authenticate(request, url, credentials);
+          key = verifyS3Request(request, url, { ...credentials, bucket, region: "auto" });
           let body;
           if (request.method === "PUT") {
             const length = Number(request.headers["content-length"]);

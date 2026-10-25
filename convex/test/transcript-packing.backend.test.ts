@@ -449,7 +449,7 @@ describe("transcript packing through the production cloud store", () => {
     expect(s3.failures).toEqual([]);
   }, 60_000);
 
-  test("live turn ends, the ten-minute long-turn interval and attachment close pack through composition", async () => {
+  test("live turn ends, the four-MB/ten-minute long-turn bounds and attachment close pack through composition", async () => {
     const w = (world = await historyWorld());
     const sessionId = await birth(w);
     const piFileId = `live-${randomUUID()}`;
@@ -478,13 +478,21 @@ describe("transcript packing through the production cloud store", () => {
     expect((await w.cloud.engine.getSession({ sessionId }))?.turnActive).toBe(true);
     await end(w, attachment, long.turnId);
     await accepted(w, sessionId);
+    const large = await reply(w, attachment, `Four MB ${CANARY} ${"x".repeat(4 * 1024 * 1024)}`);
+    const largeThrough = await accepted(w, sessionId);
+    // No turn end and no interval callback: accepted artifact bytes alone
+    // must invoke the production worker through FileTranscriptArtifactStore.byteLength.
+    await packed(w, sessionId, largeThrough);
+    expect((await w.cloud.engine.getSession({ sessionId }))?.turnActive).toBe(true);
+    await end(w, attachment, large.turnId);
+    await accepted(w, sessionId);
     const tail = Buffer.from(`${JSON.stringify({ type: "close", text: CANARY })}\n`);
     await appendFile(path, tail);
     const closed = await closeAttachment(w, attachment);
     await accepted(w, sessionId);
     await packed(w, sessionId, closed.sequence, piFileId, tail.length);
     const { decoded } = await readPacks(w, sessionId);
-    expect(decoded.flatMap((pack) => pack.entries)).toHaveLength(3);
+    expect(decoded.flatMap((pack) => pack.entries)).toHaveLength(4);
     expect(piObjects(w, sessionId, attachment.id, piFileId)).toHaveLength(1);
     expect(s3.failures).toEqual([]);
   }, 60_000);

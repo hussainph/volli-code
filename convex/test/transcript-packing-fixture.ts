@@ -1,5 +1,5 @@
 /** Real runner/cloud-store fixtures; only the object-storage service is fake. */
-import { createHash, createHmac, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -34,6 +34,7 @@ import { createSessionWakeBus } from "@volli/host-core/sessions";
 import { createTestSessionEngine, testProject } from "@volli/host-core/testing";
 
 import { api, internal } from "../functions/_generated/api";
+import { verifyS3Request } from "../fixture/s3-boundary.ts";
 import { connectBackend } from "../fixture/testing";
 
 export const CANARY = 'packing-canary-"escaped"-é-950';
@@ -73,13 +74,6 @@ const header = (req: IncomingMessage, name: string) => {
   if (typeof value !== "string") throw new Error(`Missing signed header ${name}`);
   return value.trim().replace(/\s+/gu, " ");
 };
-const hmac = (key: string | Buffer, text: string) =>
-  createHmac("sha256", key).update(text).digest();
-const encode = (text: string) =>
-  encodeURIComponent(text).replace(
-    /[!'()*]/gu,
-    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
 
 /**
  * A loopback S3 boundary, not a fetch mock. Independently verifies SigV4 with
@@ -104,59 +98,10 @@ export async function startHistoryS3() {
   const releases = new Set<() => void>();
   let origin = "";
 
-  function authorize(req: IncomingMessage, url: URL) {
-    const params = url.searchParams;
-    const stamp = params.get("X-Amz-Date") ?? "";
-    const now = Date.parse(
-      `${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)}T${stamp.slice(9, 11)}:${stamp.slice(11, 13)}:${stamp.slice(13, 15)}Z`,
-    );
-    const expires = Number(params.get("X-Amz-Expires"));
-    if (!Number.isFinite(now) || expires < 1 || expires > 300 || Date.now() > now + expires * 1000)
-      throw new Error("Expired or invalid signature date");
-    const scope = `${stamp.slice(0, 8)}/${region}/s3/aws4_request`;
-    if (
-      params.get("X-Amz-Algorithm") !== "AWS4-HMAC-SHA256" ||
-      params.get("X-Amz-Credential") !== `${accessKeyId}/${scope}`
-    )
-      throw new Error("Wrong signing credential");
-    const signedNames = params.get("X-Amz-SignedHeaders");
-    const expectedNames =
-      req.method === "PUT" ? "content-length;host;x-amz-checksum-sha256" : "host";
-    if (signedNames !== expectedNames) throw new Error("Length and checksum must be signed");
-    const query = [...params.entries()]
-      .filter(([name]) => name !== "X-Amz-Signature")
-      .map(([name, value]) => `${encode(name)}=${encode(value)}`)
-      .toSorted()
-      .join("&");
-    const canonical = [
-      req.method,
-      url.pathname,
-      query,
-      signedNames
-        .split(";")
-        .map((name) => `${name}:${header(req, name)}\n`)
-        .join(""),
-      signedNames,
-      "UNSIGNED-PAYLOAD",
-    ].join("\n");
-    const signingKey = hmac(
-      hmac(hmac(hmac(`AWS4${secretAccessKey}`, stamp.slice(0, 8)), region), "s3"),
-      "aws4_request",
-    );
-    const signature = hmac(
-      signingKey,
-      ["AWS4-HMAC-SHA256", stamp, scope, sha256(canonical)].join("\n"),
-    ).toString("hex");
-    if (params.get("X-Amz-Signature") !== signature) throw new Error("Invalid S3 signature");
-    if (!url.pathname.startsWith(`/${bucket}/`)) throw new Error("Wrong bucket");
-    return decodeURIComponent(url.pathname.slice(bucket.length + 2));
-  }
-
   const server = createServer(async (req, res) => {
     try {
-      if (req.method !== "PUT" && req.method !== "GET") throw new Error("Unexpected S3 method");
       const url = new URL(req.url!, origin);
-      const key = authorize(req, url);
+      const key = verifyS3Request(req, url, { bucket, accessKeyId, secretAccessKey, region });
       if (req.method === "GET") {
         const object = objects.get(key);
         res.writeHead(object ? 200 : 404);

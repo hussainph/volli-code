@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { SessionEvent } from "@volli/shared";
-import { TRANSCRIPT_PACK_INTERVAL_MS } from "@volli/shared/cloud";
+import { TRANSCRIPT_PACK_INTERVAL_MS, TRANSCRIPT_PACK_MAX_BYTES } from "@volli/shared/cloud";
+import { logContext, withLogContext } from "../log/context";
+import { ObjectUploadError } from "../transcript-spool/object-store";
 import type { BackendLink, LinkStatus } from "../cloud-runner/backend-link";
 import type { DrainCursor } from "../cloud-runner/drain";
 import { createTranscriptPacking } from "./transcript-packing";
@@ -29,6 +31,7 @@ function fixture() {
     },
   } satisfies Pick<BackendLink, "status" | "onStatus">;
   const pack = vi.fn(async (_id: string, _signal: AbortSignal) => report);
+  const artifactBytes = vi.fn(async () => 1 as number | null);
   const onError = vi.fn();
   const onReport = vi.fn();
   const listEvents = vi.fn(({ sessionId, afterSequence, limit }) =>
@@ -40,6 +43,7 @@ function fixture() {
     ownerUserId: "owner",
     link,
     pack,
+    artifactBytes,
     onError,
     onReport,
     cursors: {
@@ -58,13 +62,28 @@ function fixture() {
     return cursor;
   };
   const accepted = (kind: string, sequence: number, through = sequence) => {
-    events.push({ sessionId: "session", sequence, payload: { kind } } as SessionEvent);
+    events.push({
+      sessionId: "session",
+      sequence,
+      payload: {
+        kind,
+        ...(kind === "transcript.referenced"
+          ? {
+              reference: {
+                id: `sha256:${String(sequence).padStart(64, "0")}`,
+                mediaType: "application/json",
+              },
+            }
+          : {}),
+      },
+    } as SessionEvent);
     rows.get("session")!.acceptedThrough = through;
     worker.accepted("session", through);
   };
   return {
     worker,
     pack,
+    artifactBytes,
     rows,
     row,
     accepted,
@@ -181,7 +200,82 @@ describe("accepted history packing lifecycle", () => {
     await tick();
     f.status({ state: "connected" });
     await tick();
-    expect(f.pack).toHaveBeenCalledTimes(6);
+    expect(f.pack).toHaveBeenCalledTimes(5); // a network reconnect is not recovery from revocation
+  });
+
+  it("packs a continuing turn at four accepted MB and resets only successfully covered accounting", async () => {
+    const f = fixture();
+    f.row();
+    f.worker.start();
+    await tick();
+    f.artifactBytes.mockResolvedValue(TRANSCRIPT_PACK_MAX_BYTES / 2);
+    f.accepted("transcript.referenced", 2);
+    await tick();
+    expect(f.pack).toHaveBeenCalledTimes(1);
+    f.accepted("transcript.referenced", 3);
+    await tick();
+    expect(f.pack).toHaveBeenCalledTimes(2);
+    f.accepted("transcript.referenced", 4);
+    await tick();
+    expect(f.pack).toHaveBeenCalledTimes(2);
+    f.artifactBytes.mockResolvedValue(null);
+    f.accepted("transcript.referenced", 5);
+    await tick();
+    expect(f.pack).toHaveBeenCalledTimes(3); // unreadable size tries packing, never drops history
+  });
+
+  it("never strands accepted work in promise finalization microtasks", async () => {
+    for (let depth = 0; depth < 8; depth += 1) {
+      const f = fixture();
+      f.row();
+      f.onReport.mockImplementationOnce(() => {
+        let tail = Promise.resolve();
+        for (let index = 0; index < depth; index += 1) tail = tail.then(() => {});
+        void tail.then(() => f.accepted("turn.completed", 2));
+      });
+      f.worker.start();
+      await tick();
+      expect(f.pack, `microtask depth ${depth}`).toHaveBeenCalledTimes(2);
+      f.worker.close();
+    }
+  });
+
+  it("detaches background work from request traces and roots each Session separately", async () => {
+    const f = fixture();
+    f.row();
+    f.row("second");
+    const contexts: unknown[] = [];
+    f.pack.mockImplementation(async () => {
+      contexts.push(logContext());
+      return report;
+    });
+    withLogContext({ traceId: "caller-trace", commandId: "caller-command" }, () =>
+      f.worker.start(),
+    );
+    await tick();
+    expect(contexts).toEqual([{ sessionId: "session" }, { sessionId: "second" }]);
+  });
+
+  it("holds non-retriable storage failures until a new claim or restart, not a network reconnect", async () => {
+    const f = fixture();
+    f.row();
+    f.pack.mockRejectedValueOnce(new ObjectUploadError("key", 403));
+    f.worker.start();
+    await tick();
+    expect(f.onError).toHaveBeenLastCalledWith("session", "object_http_403");
+    await vi.advanceTimersByTimeAsync(TRANSCRIPT_PACK_INTERVAL_MS);
+    f.status({ state: "connected" });
+    await tick();
+    expect(f.pack).toHaveBeenCalledTimes(1);
+    f.rows.get("session")!.generation = 2;
+    f.worker.refresh();
+    await tick();
+    expect(f.pack).toHaveBeenCalledTimes(2);
+    f.pack.mockRejectedValueOnce(new ObjectUploadError("key", 503));
+    f.worker.refresh();
+    await tick();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(f.pack).toHaveBeenCalledTimes(4);
   });
 
   it("aborts in-flight work immediately, bounds stop, and ignores late failures without timers or DB reads", async () => {

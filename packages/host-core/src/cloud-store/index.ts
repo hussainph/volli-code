@@ -437,6 +437,7 @@ export function createCloudProductStore(options: {
         cursors: sqliteDrainCursorStore(db),
         ledger: sqliteDrainLedger(db),
         pack: publishTranscriptFacts.pack,
+        artifactBytes: async (reference) => artifacts?.byteLength?.(reference) ?? null,
         onError: (sessionId, code) =>
           log.warn("Session history upload was retained", { sessionId, code }),
         onReport: (sessionId, report) => {

@@ -305,7 +305,13 @@ export function createCloudTranscriptPublisher(options: {
           !parts[1]!.endsWith(".jsonl")
         )
           throw new Error("A Pi session file is outside the runner's history layout.");
-        const root = await realpath(lexicalRoot);
+        let root: string;
+        try {
+          root = await realpath(lexicalRoot);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          root = lexicalRoot; // missing history is reported without blocking transcript packs
+        }
         try {
           if ((await lstat(dirname(locator.sessionFilePath))).isSymbolicLink())
             throw new Error("A Pi history directory is a symbolic link.");
@@ -317,7 +323,7 @@ export function createCloudTranscriptPublisher(options: {
           path = await realpath(locator.sessionFilePath);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-          path = locator.sessionFilePath; // the spool reports a missing file
+          path = resolve(root, within); // the spool reports a missing file
         }
         const inside = relative(root, path);
         if (

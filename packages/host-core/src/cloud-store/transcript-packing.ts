@@ -1,5 +1,8 @@
 /** Turn-end/interval packing is background work, independent of the ordered fact drain. */
-import { TRANSCRIPT_PACK_INTERVAL_MS } from "@volli/shared/cloud";
+import type { TranscriptReference } from "@volli/shared";
+import { TRANSCRIPT_PACK_INTERVAL_MS, TRANSCRIPT_PACK_MAX_BYTES } from "@volli/shared/cloud";
+import { withRootLogContext } from "../log/context";
+import { ObjectUploadError } from "../transcript-spool/object-store";
 import type { BackendLink } from "../cloud-runner/backend-link";
 import type { DrainCursorStore, DrainLedger } from "../cloud-runner/drain";
 import type { createCloudTranscriptPublisher } from "./transcripts";
@@ -31,6 +34,7 @@ export function createTranscriptPacking(options: {
   cursors: DrainCursorStore;
   ledger: DrainLedger;
   pack: ReturnType<typeof createCloudTranscriptPublisher>["pack"];
+  artifactBytes(reference: TranscriptReference): Promise<number | null>;
   onError(sessionId: string, code: string): void;
   onReport(sessionId: string, report: PackingReport): void;
 }) {
@@ -46,8 +50,10 @@ export function createTranscriptPacking(options: {
   const retryAt = new Map<string, number>();
   const checked = new Map<string, number>();
   const acceptedChecks = new Map<string, number>();
+  const unpackedBytes = new Map<string, { sizes: Map<number, number>; total: number }>();
+  const packedThrough = new Map<string, number>();
   let checkQueued = false;
-  // A permanent producer refusal is retried only after reconnect or a new claim.
+  // Permanent refusals require a new claim or an explicit store restart, not a network flap.
   const refused = new Map<string, number>();
   const eligible = (sessionId: string) => {
     const row = options.cursors.get(sessionId);
@@ -85,50 +91,80 @@ export function createTranscriptPacking(options: {
     retry.unref?.();
   }
   function kick() {
-    if (!started || closed || running !== null || options.link.status.state !== "connected") return;
-    running = Promise.resolve()
-      .then(async () => {
-        while (pending.size > 0) {
-          if (closed || options.link.status.state !== "connected") break;
-          const id = pending.values().next().value!;
-          pending.delete(id);
-          if (!eligible(id)) continue;
-          const generation = options.cursors.get(id)!.generation;
-          const deadline = new AbortController();
-          passTimer = setTimeout(
-            () => deadline.abort(new Error("Session history upload timed out.")),
-            PASS_MS,
-          );
-          passTimer.unref?.();
-          try {
-            const report = await options.pack(
-              id,
-              AbortSignal.any([lifetime.signal, deadline.signal]),
-            );
-            if (!closed) options.onReport(id, report);
-            retryAt.delete(id);
-          } catch (error) {
-            if (closed) return;
-            const value = error as { code?: string; data?: { code?: string } } | null;
-            const code = value?.data?.code ?? value?.code ?? "upload_failed";
-            options.onError(id, code);
-            if (TERMINAL.has(code)) {
-              refused.set(id, generation);
-              pending.delete(id);
-            } else if (!closing) {
-              pending.delete(id);
-              retryAt.set(id, Date.now() + RETRY_MS);
-            }
-          } finally {
-            clearTimeout(passTimer);
-            passTimer = undefined;
+    if (
+      !started ||
+      closed ||
+      running !== null ||
+      pending.size === 0 ||
+      options.link.status.state !== "connected"
+    )
+      return;
+    running = withRootLogContext({}, () =>
+      Promise.resolve()
+        .then(async () => {
+          while (pending.size > 0) {
+            if (closed || options.link.status.state !== "connected") break;
+            const id = pending.values().next().value!;
+            pending.delete(id);
+            if (!eligible(id)) continue;
+            const { generation, acceptedThrough } = options.cursors.get(id)!;
+            await withRootLogContext({ sessionId: id }, async () => {
+              const deadline = new AbortController();
+              passTimer = setTimeout(
+                () => deadline.abort(new Error("Session history upload timed out.")),
+                PASS_MS,
+              );
+              passTimer.unref?.();
+              try {
+                const report = await options.pack(
+                  id,
+                  AbortSignal.any([lifetime.signal, deadline.signal]),
+                );
+                if (!closed) {
+                  options.onReport(id, report);
+                  packedThrough.set(id, acceptedThrough);
+                  const bytes = unpackedBytes.get(id);
+                  if (bytes !== undefined) {
+                    for (const [sequence, size] of bytes.sizes) {
+                      if (sequence <= acceptedThrough) {
+                        bytes.total -= size;
+                        bytes.sizes.delete(sequence);
+                      }
+                    }
+                    if (bytes.sizes.size === 0) unpackedBytes.delete(id);
+                  }
+                }
+                retryAt.delete(id);
+              } catch (error) {
+                if (closed) return;
+                const value = error as { code?: string; data?: { code?: string } } | null;
+                const permanentUpload = error instanceof ObjectUploadError && !error.retriable;
+                const code =
+                  error instanceof ObjectUploadError
+                    ? `object_http_${error.status}`
+                    : (value?.data?.code ?? value?.code ?? "upload_failed");
+                options.onError(id, code);
+                if (permanentUpload || TERMINAL.has(code)) {
+                  refused.set(id, generation);
+                  pending.delete(id);
+                } else if (!closing) {
+                  pending.delete(id);
+                  retryAt.set(id, Date.now() + RETRY_MS);
+                }
+              } finally {
+                clearTimeout(passTimer);
+                passTimer = undefined;
+              }
+            });
           }
-        }
-      })
-      .finally(() => {
-        running = null;
-        scheduleRetry();
-      });
+        })
+        .finally(() => {
+          running = null;
+          scheduleRetry();
+          // An acknowledgement can enqueue between loop exhaustion and finalization.
+          kick();
+        }),
+    );
   }
   let off: (() => void) | undefined;
   function close() {
@@ -142,6 +178,8 @@ export function createTranscriptPacking(options: {
     retryAt.clear();
     checked.clear();
     acceptedChecks.clear();
+    unpackedBytes.clear();
+    packedThrough.clear();
     refused.clear();
   }
   return {
@@ -150,7 +188,6 @@ export function createTranscriptPacking(options: {
       started = true;
       off = options.link.onStatus((status) => {
         if (closing || closed || status.state !== "connected") return;
-        refused.clear();
         retryAt.clear();
         clearTimeout(retry);
         all();
@@ -173,42 +210,66 @@ export function createTranscriptPacking(options: {
       if (checkQueued) return;
       checkQueued = true;
       // Never do IO or throw into sessions.accept's acknowledgement callback.
-      void Promise.resolve()
-        .then(() => {
-          checkQueued = false;
-          if (closing || closed) return;
-          for (const [id, acceptedThrough] of acceptedChecks) {
-            acceptedChecks.delete(id);
-            if (!eligible(id)) continue;
-            let after = Math.min(checked.get(id) ?? 0, acceptedThrough);
-            let settled = false;
-            while (after < acceptedThrough) {
-              const page = options.ledger.listEvents({
-                sessionId: id,
-                afterSequence: after,
-                limit: 256,
-              });
-              if (page.length === 0) break;
-              for (const event of page) {
-                if (event.sequence > acceptedThrough) break;
-                const kind = event.payload.kind;
-                settled ||=
-                  kind === "turn.completed" ||
-                  kind === "turn.interrupted" ||
-                  kind === "attachment.closed" ||
-                  kind === "attachment.failed" ||
-                  kind === "session.stopped";
+      void withRootLogContext({}, () =>
+        Promise.resolve()
+          .then(async () => {
+            if (closing || closed) return;
+            for (const [id, acceptedThrough] of acceptedChecks) {
+              acceptedChecks.delete(id);
+              if (!eligible(id)) continue;
+              let after = Math.min(checked.get(id) ?? 0, acceptedThrough);
+              let settled = false;
+              while (after < acceptedThrough) {
+                const page = options.ledger.listEvents({
+                  sessionId: id,
+                  afterSequence: after,
+                  limit: 256,
+                });
+                if (page.length === 0) break;
+                for (const event of page) {
+                  if (event.sequence > acceptedThrough) break;
+                  const kind = event.payload.kind;
+                  if (kind === "transcript.referenced") {
+                    const bytes = await options.artifactBytes(event.payload.reference);
+                    if (closed) return;
+                    if (event.sequence > (packedThrough.get(id) ?? 0)) {
+                      let measured = unpackedBytes.get(id);
+                      if (measured === undefined) {
+                        measured = { sizes: new Map(), total: 0 };
+                        unpackedBytes.set(id, measured);
+                      }
+                      // Unknown size is a reason to try packing, never to drop history.
+                      const size = bytes ?? TRANSCRIPT_PACK_MAX_BYTES;
+                      measured.total += size - (measured.sizes.get(event.sequence) ?? 0);
+                      measured.sizes.set(event.sequence, size);
+                      settled ||= measured.total >= TRANSCRIPT_PACK_MAX_BYTES;
+                    }
+                  }
+                  settled ||=
+                    kind === "turn.completed" ||
+                    kind === "turn.interrupted" ||
+                    kind === "attachment.closed" ||
+                    kind === "attachment.failed" ||
+                    kind === "session.stopped";
+                }
+                after = Math.min(page.at(-1)!.sequence, acceptedThrough);
               }
-              after = Math.min(page.at(-1)!.sequence, acceptedThrough);
+              checked.set(id, acceptedThrough);
+              if (settled) pending.add(id);
             }
-            checked.set(id, acceptedThrough);
-            if (settled) pending.add(id);
-          }
-          kick();
-        })
-        .catch(() => {
-          if (!closed) options.onError(sessionId, "history_read_failed");
-        });
+            kick();
+          })
+          .catch(() => {
+            if (!closed) options.onError(sessionId, "history_read_failed");
+          })
+          .finally(() => {
+            checkQueued = false;
+            if (!closed && !closing && acceptedChecks.size > 0) {
+              const [id, sequence] = acceptedChecks.entries().next().value!;
+              this.accepted(id, sequence);
+            }
+          }),
+      );
     },
     refresh() {
       if (closing || closed) return;
