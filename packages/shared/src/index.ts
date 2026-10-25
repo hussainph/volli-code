@@ -115,6 +115,7 @@ export * from "./session-ledger";
 export * from "./secrets";
 export * from "./session-watchdog";
 export * from "./quota-reset";
+export * from "./restart-resume";
 export * from "./scheduled-resume";
 export * from "./performance-observer";
 export * from "./session-usage";

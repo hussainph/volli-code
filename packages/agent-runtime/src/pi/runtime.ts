@@ -3,7 +3,11 @@
 import { safeStopMessage } from "./safe-diagnostic";
 
 import { ProviderStopCapture, finalStopDetail, safeProviderMessage } from "./provider-stop";
-import { decodeSessionStopDetail, type SessionStopDetail } from "@volli/shared";
+import {
+  decodeSessionStopDetail,
+  RECOVERED_TURN_INTERRUPTED_DETAIL,
+  type SessionStopDetail,
+} from "@volli/shared";
 
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
@@ -96,6 +100,11 @@ import {
   type ConversationReader,
 } from "./compaction";
 import { createContextTokenProjector } from "./token-counting";
+import {
+  ABANDONED_QUESTION_RESULT,
+  interruptedToolResults,
+  resumeBoundary,
+} from "./resume-boundary";
 import { conversationIsEmpty, systemHead, withSystemHead } from "./transcript-context";
 import {
   canAnnounceToolRefresh,
@@ -1948,7 +1957,7 @@ async function attachSession(
         content: [
           {
             type: "text",
-            text: "The question was abandoned when the runtime restarted. No answer was obtained.",
+            text: ABANDONED_QUESTION_RESULT,
           },
         ],
         isError: true,
@@ -2082,7 +2091,7 @@ async function attachSession(
           kind: "attention",
           state: "raised",
           reason: "partial-turn",
-          message: "A recovered Pi turn ended before its completion marker was committed.",
+          message: RECOVERED_TURN_INTERRUPTED_DETAIL,
         });
         activeAttentionReasons.add("partial-turn");
       }
@@ -2972,6 +2981,15 @@ async function attachSession(
      */
     const retryFailedTurn = async (commandId: string | null): Promise<DeliveryOutcome> => {
       const messages = [...agent.state.messages];
+      // Only a turn recovered from a lost process can end on a tool call with
+      // no result: this process runs every call it is asked for. Resuming it
+      // answers the call as interrupted — durably, so a second attach finds
+      // the answer — and leaves running it again to the model (VC-450).
+      for (const result of interruptedToolResults(messages, hasFailedStopReason, host.now())) {
+        await mainBranch.appendMessage(result, piContext());
+        messages.push(result);
+        agent.state.messages = [...messages];
+      }
       const tail = messages.at(-1);
       if (tail?.role === "assistant" && hasFailedStopReason(tail as AssistantMessage)) {
         messages.pop();
@@ -4045,6 +4063,10 @@ async function attachSession(
           agent.state.thinkingLevel = selection.reasoningLevel;
         });
         return { kind: "selected" };
+      },
+
+      resumeBoundary() {
+        return resumeBoundary(agent.state.messages, hasFailedStopReason);
       },
 
       async retry(commandId): Promise<DeliveryOutcome> {

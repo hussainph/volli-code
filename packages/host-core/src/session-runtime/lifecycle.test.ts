@@ -12,6 +12,7 @@ import * as shell from "../shell/shell-notices";
 import * as resumptions from "./session-resumptions";
 import * as schedules from "../db/scheduled-resume-repo";
 import * as followUps from "../db/session-follow-up-repo";
+import * as restart from "./restart-resume";
 
 vi.mock("../db/session-follow-up-repo", () => ({
   consumeFollowUpCleanClose: vi.fn(() => [] as string[]),
@@ -33,6 +34,7 @@ vi.mock("../session-control", () => ({
 }));
 vi.mock("./durable-host-notice-delivery", () => ({ createHostNoticeDelivery: vi.fn() }));
 vi.mock("./boot-recovery", () => ({ closeStaleAttachments: vi.fn() }));
+vi.mock("./restart-resume", () => ({ resumeRecoveredTurns: vi.fn(async () => {}) }));
 vi.mock("../mcp/session-host", () => ({ closeAllMcpSessionHosts: vi.fn() }));
 vi.mock("./session-resumptions", () => ({ catchUpSessionResumptions: vi.fn(async () => {}) }));
 // The real VC-618 drain still runs, so its RPC/runtime → MCP → flush order is
@@ -725,4 +727,75 @@ it("passes the host venue into recovery and watchdog and rejects cast/copied pro
   await owner.close();
   expect(() => readRecoveredSessionServices(ready)).toThrow("closing");
   expect(() => readRecoveredSessionServices(view)).toThrow("closing");
+});
+
+describe("restart resume after recovery (VC-450)", () => {
+  const recovered = { turns: [{ sessionId: "s", attachmentId: "a" }], lostAt: 5 };
+
+  function armed(f: ReturnType<typeof fixture>) {
+    vi.mocked(recovery.closeStaleAttachments).mockImplementation(async (input) => {
+      f.calls.push("attachments");
+      input.onRecovered?.(recovered);
+      return 0;
+    });
+  }
+
+  it("judges recovered turns after the queue, over this host's runtime and engine", async () => {
+    const f = fixture();
+    armed(f);
+    const runs = deferred();
+    let given: Parameters<typeof restart.resumeRecoveredTurns>[0] | undefined;
+    vi.mocked(restart.resumeRecoveredTurns).mockImplementation((ports, input) => {
+      f.calls.push("restart.resume");
+      expect(input).toBe(recovered);
+      given = ports;
+      return runs.promise;
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    await owner.ready();
+    expect(f.calls.indexOf("follow-ups.recover")).toBeLessThan(f.calls.indexOf("restart.resume"));
+    expect(f.calls.indexOf("restart.resume")).toBeLessThan(f.calls.indexOf("notices.recover"));
+    // Every port reaches the runtime or engine it names.
+    const ports = given!;
+    Object.assign(f.runtime, {
+      resumeBoundary: vi.fn(() => "settled"),
+      pendingTurnStarts: vi.fn(() => new Set(["s"])),
+    });
+    vi.mocked(f.runtime.projection).mockResolvedValueOnce({
+      projection: { session: { id: "s" } },
+    } as never);
+    expect(await ports.projection("s")).toEqual({ session: { id: "s" } });
+    await ports.ticketSessions({ projectId: "p", ticketId: "t" });
+    expect(f.engine.listSessions).toHaveBeenCalledWith({
+      projectId: "p",
+      scope: "ticket",
+      ticketId: "t",
+    });
+    expect(ports.resumeBoundary({ attachmentId: "a" })).toBe("settled");
+    expect(ports.pendingTurnStarts()).toEqual(new Set(["s"]));
+    await ports.command({ commandId: "c", sessionId: "s", command: { kind: "executor.retry" } });
+    expect(f.runtime.command).toHaveBeenCalledOnce();
+    expect(ports.shouldStop()).toBe(false);
+    // A resumed run outlives readiness; close waits for it.
+    let closed = false;
+    const closing = owner.close().then(() => {
+      closed = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    expect(ports.shouldStop()).toBe(true);
+    runs.resolve();
+    await closing;
+    expect(closed).toBe(true);
+  });
+
+  it("arms nothing without a runtime", async () => {
+    const bare = fixture();
+    armed(bare);
+    const owner = createSessionRuntimeLifecycle({ ...bare.options, runtime: null });
+    await owner.ready();
+    expect(restart.resumeRecoveredTurns).not.toHaveBeenCalled();
+    await owner.close();
+  });
 });

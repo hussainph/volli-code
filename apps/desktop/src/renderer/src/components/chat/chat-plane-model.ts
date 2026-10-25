@@ -23,6 +23,7 @@ import {
   attentionResumeAt,
   findComposerVerb,
   REASONING_LEVELS,
+  RECOVERED_TURN_INTERRUPTED_DETAIL,
   revealedSessionAttention,
   type ComposerVerb,
 } from "@volli/shared";
@@ -473,6 +474,12 @@ export interface SessionBlockerState {
   /** Runtime facts and failed sends belong in the conversation, not setup chrome. */
   placement?: "timeline";
   /**
+   * A timeline row that describes the turn running now rather than a stop to
+   * recover from, so it stays while that turn runs. Every other timeline row
+   * gives way to a new turn.
+   */
+  duringTurn?: true;
+  /**
    * Null where nothing on this surface can fix it. A button that cannot help is
    * worse than no button: it spends the reader's one attempt at recovery and
    * then leaves them where they started, doubting the message too.
@@ -513,6 +520,10 @@ export interface SessionBlockerInput {
   sessionModel: SessionModelStanding | null;
   /** The resume this Session is waiting to run at a quota reset, if any. */
   scheduledResume: PresentedScheduledResume | null;
+  /** Whether a turn is open now — a restart resume's, while the recovery warning still stands. */
+  turnActive: boolean;
+  /** The live attachment, which an interrupted turn can be resumed on. */
+  liveExecutorId: string | null;
   /** Epoch ms: a reset already behind is not offered as a resume. */
   now: number;
   /**
@@ -656,12 +667,20 @@ export function sessionBlocker(
   if (attention) {
     if (asked && answeredByCard(attention.kind)) return null;
     return {
-      ...attentionBlocker(attention, retry, retryRuntime, settings, acts.dismiss, {
-        scheduled: input.scheduledResume,
-        now: input.now,
-        schedule: acts.scheduleResume,
-        cancel: acts.cancelScheduledResume,
-      }),
+      ...attentionBlocker(
+        attention,
+        retry,
+        retryRuntime,
+        settings,
+        acts.dismiss,
+        {
+          scheduled: input.scheduledResume,
+          now: input.now,
+          schedule: acts.scheduleResume,
+          cancel: acts.cancelScheduledResume,
+        },
+        { turnActive: input.turnActive, liveExecutorId: input.liveExecutorId },
+      ),
       placement: "timeline",
     };
   }
@@ -809,14 +828,18 @@ function providerRecovery(input: {
  *   connection that never dropped. When a spent allowance with a stated reset
  *   stopped it, a scheduled resume sits beside the Retry — see
  *   {@link stoppedRunBlocker}.
+ * - **Resume** — `partial_turn_interrupted` while its attachment is still the
+ *   live one and idle: the turn a lost process cut short continues from its
+ *   last settled point, and a tool call left without a result is answered as
+ *   interrupted rather than run again (VC-450). Once the attachment is gone,
+ *   typing is the recovery. While a restart resume runs it, the row says so.
  * - **No recovery** — `transport_retrying` (the runtime is already reconnecting
  *   on its own, waiting for the network or backing off, and `recover` would
  *   neither cut that wait short nor add a retry to it — a button there promises
  *   an act that does nothing); `context_limit_reached` (the runtime has already compacted
  *   this Session and been refused again, so there is nothing left to summarize);
  *   `quota_exhausted` (a spent allowance is not retryable and no local setting
- *   refills it); `partial_turn_interrupted` (a stopped turn left the composer
- *   usable — resending is typing, not recovering); `input_required` and
+ *   refills it); `input_required` and
  *   `permission_required` (the answer lives on the interaction card, which
  *   outranks this row entirely).
  */
@@ -827,6 +850,7 @@ function attentionBlocker(
   settings: SessionBlockerAction,
   dismiss: (dismissKey: string) => void,
   resume: ResumeContext,
+  turn: InterruptedTurnContext,
 ): SessionBlockerState {
   const detail = attention.detail;
   const dismissKey = attentionDismissKey(attention);
@@ -882,7 +906,7 @@ function attentionBlocker(
         dismissAttention,
       );
     case "partial_turn_interrupted":
-      return { message: "Turn interrupted", detail, tone: "waiting", action: null };
+      return interruptedTurnBlocker(attention, retryRuntime, turn);
     case "adapter_unrecoverable":
       return stoppedRunBlocker(attention, retryRuntime, resume, dismissKey, dismissAttention);
     case "input_required":
@@ -890,6 +914,41 @@ function attentionBlocker(
     case "permission_required":
       return { message: "Waiting for approval", detail, tone: "waiting", action: null };
   }
+}
+
+/** What the interruption row needs to offer a resume, or say one is running. */
+interface InterruptedTurnContext {
+  turnActive: boolean;
+  liveExecutorId: string | null;
+}
+
+/**
+ * A turn a lost process cut short. Only the attachment recovery rebuilt can
+ * continue it: on it, an idle Session offers Resume, and a turn running while
+ * the recovery warning still stands is the restart resume — a person's own
+ * message or Retry answers the warning before its turn opens.
+ */
+function interruptedTurnBlocker(
+  attention: SessionAttention,
+  retryRuntime: SessionBlockerAction,
+  turn: InterruptedTurnContext,
+): SessionBlockerState {
+  const live = attention.attachmentId !== null && attention.attachmentId === turn.liveExecutorId;
+  if (live && turn.turnActive && attention.detail === RECOVERED_TURN_INTERRUPTED_DETAIL) {
+    return {
+      message: "Resumed after restart",
+      detail: null,
+      tone: "waiting",
+      action: null,
+      duringTurn: true,
+    };
+  }
+  return {
+    message: "Turn interrupted",
+    detail: attention.detail,
+    tone: "waiting",
+    action: live && !turn.turnActive ? { label: "Resume", act: retryRuntime.act } : null,
+  };
 }
 
 /** What the stopped-run row needs to offer, or show, a scheduled resume. */

@@ -97,6 +97,9 @@ export default defineConfig({
         // Recovery-before-consumers and a single drain are now executable port
         // contracts, replacing desktop's source scans (VC-622).
         "src/session-runtime/lifecycle.ts",
+        // Whether a turn a lost process cut short continues on its own (VC-450):
+        // every branch is a Session waking unasked, or one left stranded.
+        "src/session-runtime/restart-resume.ts",
         "src/session-runtime/facade.ts",
         "src/session-runtime/agents.ts",
         "src/session-runtime/context.ts",

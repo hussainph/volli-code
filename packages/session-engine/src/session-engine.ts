@@ -6,6 +6,8 @@ import {
   createSessionProjectionCheckpoint,
   observationPayload,
   pendingScheduledResume,
+  isRestartResumeCommandId,
+  restartResumeCommandId,
   reportSessionUsage,
   scheduledResumeRetryCommandId,
   sameCommandReceipt,
@@ -1569,7 +1571,8 @@ function rejectionFor(
       detail: "The model cannot change while a turn is active",
     };
   }
-  const resumeRejection = scheduledResumeRejection(projection, command);
+  const resumeRejection =
+    scheduledResumeRejection(projection, command) ?? restartResumeRejection(projection, command);
   if (resumeRejection) {
     return {
       id: `rejected:${command.id}`,
@@ -1586,6 +1589,33 @@ function rejectionFor(
     code: routeRejection.code,
     detail: routeRejection.detail,
   };
+}
+
+/**
+ * A host's restart resume is judged again as it is recorded (VC-450): the host
+ * decided from a projection it read a moment earlier, and a turn started since
+ * — by a person, a queued message or anything else — has the last word. It is
+ * accepted only while the turn it names is still the latest, still idle, and
+ * still interrupted.
+ */
+function restartResumeRejection(
+  projection: SessionProjection,
+  command: SessionCommand,
+): { code: string; detail: string } | null {
+  const intent = command.intent;
+  if (intent.kind !== "executor.retry" || !isRestartResumeCommandId(command.id)) return null;
+  const turnId = projection.latestTurnId;
+  const current =
+    turnId !== null &&
+    !projection.turnActive &&
+    projection.lastTurnOutcome === "interrupted" &&
+    restartResumeCommandId(intent.attachmentId, turnId) === command.id;
+  return current
+    ? null
+    : {
+        code: "restart_resume_stale",
+        detail: `Session ${projection.session.id} moved on before its restart resume`,
+      };
 }
 
 /**

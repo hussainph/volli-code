@@ -1,4 +1,10 @@
-import { COMMAND_INTENT_CONFLICT, type CommandIntentConflict } from "@volli/shared";
+import {
+  COMMAND_INTENT_CONFLICT,
+  isRestartResumeCommandId,
+  RECOVERED_TURN_INTERRUPTED_DETAIL,
+  type CommandIntentConflict,
+  type RuntimeResumeBoundary,
+} from "@volli/shared";
 import { canonicalJson } from "./transcript-artifacts";
 import {
   projectSessionFollowUps,
@@ -702,6 +708,13 @@ export interface HostedSessionRuntime extends SessionRuntime {
    */
   pendingTurnStarts(): ReadonlySet<string>;
   /**
+   * Where an attachment this process holds stands, as its executor reads it
+   * (VC-450): what a host asks before it continues a turn a lost process cut
+   * short. `null` when nothing here holds the binding or its executor cannot
+   * say — and then nothing is continued on its own.
+   */
+  resumeBoundary(input: { attachmentId: string }): RuntimeResumeBoundary | null;
+  /**
    * The idle-exit latch's runtime half (VC-577): from now on every NEW turn
    * start is refused before it has any effect — a message, a retry, a
    * compaction, an attach — with {@link SessionRuntimeExitingError}, and a
@@ -1179,6 +1192,10 @@ class DefaultSessionRuntime implements SessionRuntime {
     });
   }
 
+  resumeBoundary(input: { attachmentId: string }): RuntimeResumeBoundary | null {
+    return this.#bindings.get(input.attachmentId)?.handle.resumeBoundary?.() ?? null;
+  }
+
   pendingTurnStarts(): ReadonlySet<string> {
     const pending = new Set(this.#acceptedStarts.keys());
     // A drain decides whether to release a row only after an async read, so
@@ -1491,7 +1508,13 @@ class DefaultSessionRuntime implements SessionRuntime {
       return this.#stop(request as StopCommandRequest);
     }
     let projection = await this.#requireSession(request.sessionId);
-    if (request.command.kind === "message.submit") {
+    // A person's Retry of an interrupted turn answers the restart warning as
+    // a message does. A host's own restart resume keeps it, so the row can
+    // say the turn running now was resumed after the restart (VC-450).
+    if (
+      request.command.kind === "message.submit" ||
+      (request.command.kind === "executor.retry" && !isRestartResumeCommandId(request.commandId))
+    ) {
       projection = await this.#acknowledgeBootInterruption(projection);
     }
     const boundary = this.#followUpDeliveryBoundaries.get(request.commandId);
@@ -2432,8 +2455,7 @@ class DefaultSessionRuntime implements SessionRuntime {
               (attachment.adapterId === this.ports.executor.id &&
                 id ===
                   `${this.ports.executor.durableIdNamespace}:attention:${attachmentId}:partial-turn` &&
-                detail ===
-                  "A recovered Pi turn ended before its completion marker was committed.")),
+                detail === RECOVERED_TURN_INTERRUPTED_DETAIL)),
         ),
     );
     if (warnings.length === 0) return projection;

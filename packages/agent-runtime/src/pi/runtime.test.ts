@@ -70,6 +70,7 @@ import { projectedContextTokens } from "./token-counting";
 import { ScopedExecutionEnv } from "./scoped-execution-env";
 import { MAIN_BRANCH_TIP, SIDECAR_IDENTITY } from "./sidecar-storage";
 import { createSessionTools } from "./tools";
+import { INTERRUPTED_TOOL_RESULT } from "./resume-boundary";
 import { withoutReasoning } from "./reasoning";
 import { recoveryRefFor } from "./transcript";
 import { withoutSystemMessages } from "./transcript-context";
@@ -2248,6 +2249,70 @@ describe("asking the driver", () => {
     });
     expect(repaired).toHaveLength(1);
     await third.close();
+  });
+
+  it("tells where a recovered turn stands, and resumes a lost tool call as interrupted (VC-450)", async () => {
+    const attachment = fixture();
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("read", { path: "MARKER.txt" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("Read it.");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession(attachment.spec);
+    expect(first.resumeBoundary?.()).toBe("none");
+    await first.submitUserMessage("Read the marker", "queue", "before-crash");
+    // Settled: the reply finished, nothing is left to continue.
+    expect(first.resumeBoundary?.()).toBe("none");
+    const recovery = first.recovery!;
+    await first.close();
+    // The process died while the tool ran: its result, and everything after
+    // it, never reached the sidecar.
+    const lines = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
+    const lost = lines.findIndex((line) => line.includes('"role":"toolResult"'));
+    expect(lost).toBeGreaterThan(0);
+    writeFileSync(recovery.sessionFilePath, `${lines.slice(0, lost).join("\n")}\n`);
+
+    let context: Context | undefined;
+    const second = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, request) => {
+            context = request;
+            emit.text("Checked before repeating it.");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession({ ...attachment.spec, recovery });
+    await second.reconcile(null);
+    expect(second.resumeBoundary?.()).toBe("tool-in-flight");
+    expect(await second.retry("resume")).toMatchObject({ kind: "delivered", delivery: "retry" });
+    const results = context?.messages.filter((message) => message.role === "toolResult");
+    expect(results).toEqual([
+      expect.objectContaining({
+        toolName: "read",
+        isError: true,
+        content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }],
+      }),
+    ]);
+    // Durable, so the next attach finds the answer instead of the lost call.
+    expect(second.resumeBoundary?.()).toBe("none");
+    await second.close();
+    const repaired = entryRecords(recovery.sessionFilePath).filter((entry) => {
+      const message = entry["message"] as { role?: string } | undefined;
+      return message?.role === "toolResult";
+    });
+    expect(repaired).toHaveLength(1);
   });
 
   it("reaches the person through the frozen ask_user tool", async () => {

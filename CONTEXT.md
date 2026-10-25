@@ -853,6 +853,16 @@ scheduled resume does not count. Never scheduled without being chosen, and never
 re-scheduled on its own.
 _Avoid_: auto-retry, auto-resume, Automation
 
+**Restart Resume**:
+The host continuing, on its own, a turn a lost process cut short, through the
+ordinary retry and never by sending the person's message again. Only when the
+turn stopped at a settled point (a user message, or tool results that answered
+every call) and is still wanted: nobody picked the Session or its Ticket up
+since the loss, the loss is recent, and the turn was not already a restart
+resume. A turn cut short inside a tool waits for the person's **Resume**. One
+attempt per loss; a skip raises nothing new.
+_Avoid_: auto-retry, crash replay, Scheduled Resume
+
 **SessionInteraction**:
 A decision a Session is waiting on — a permission or a question — held in Volli
 terms: a title, optional detail, declared options, and an opaque runtime

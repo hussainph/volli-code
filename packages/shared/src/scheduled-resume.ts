@@ -27,6 +27,7 @@ import type {
   SessionCommandIntent,
   SessionProjection,
 } from "./session-ledger";
+import { isRestartResumeCommandId } from "./restart-resume";
 
 /** A pending scheduled resume, as read out of its Session's commands. */
 export interface ScheduledResume {
@@ -157,13 +158,52 @@ export function pendingScheduledResume(
     scheduledAt: command.createdAt,
     retryCommandId,
     fired: later.some((candidate) => candidate.id === retryCommandId),
-    continued: later.some(
-      (candidate) =>
-        candidate.id !== retryCommandId &&
-        CONTINUES_SESSION[candidate.intent.kind] &&
-        receipts.get(candidate.id)?.status !== "rejected",
-    ),
+    continued: continuedByHand(later, receipts, (id) => id === retryCommandId),
   };
+}
+
+/**
+ * Whether a person (or an agent acting for one) picked a Session up again
+ * after `since`: one command on {@link CONTINUES_SESSION} created after it
+ * that the engine did not refuse. A host's own resume — a restart resume, or
+ * this Session's scheduled one — is not a person picking it up.
+ *
+ * The rule a scheduled resume's "continued" and a restart resume's share: the
+ * same table answers both, so a command added later cannot continue one and
+ * not the other.
+ */
+export function sessionContinuedSince(
+  projection: Pick<SessionProjection, "commands" | "receipts">,
+  since: number,
+): boolean {
+  const scheduledRetries = scheduledRetryIds(projection.commands);
+  return continuedByHand(
+    projection.commands.filter(({ createdAt }) => createdAt > since),
+    latestReceipts(projection.receipts),
+    (id) => scheduledRetries.has(id),
+  );
+}
+
+function continuedByHand(
+  commands: readonly SessionCommand[],
+  receipts: ReadonlyMap<string, CommandReceipt>,
+  own: (commandId: string) => boolean,
+): boolean {
+  return commands.some(
+    (candidate) =>
+      !own(candidate.id) &&
+      !isRestartResumeCommandId(candidate.id) &&
+      CONTINUES_SESSION[candidate.intent.kind] &&
+      receipts.get(candidate.id)?.status !== "rejected",
+  );
+}
+
+function scheduledRetryIds(commands: readonly SessionCommand[]): Set<string> {
+  return new Set(
+    commands.flatMap((command) =>
+      command.intent.kind === "resume.schedule" ? [scheduledResumeRetryCommandId(command.id)] : [],
+    ),
+  );
 }
 
 /** Each command's latest receipt: a replay can answer an unreconciled one later. */
@@ -294,7 +334,8 @@ export function scheduledResumeVerdict(
   if (pending.continued) return { kind: "settle", outcome: skipped("continued", null) };
   const superseded = input.ticketSessions.some(
     (sibling) =>
-      sibling.session.id !== projection.session.id && movedOn(sibling, pending.scheduledAt),
+      sibling.session.id !== projection.session.id &&
+      ticketSiblingMovedOn(sibling, pending.scheduledAt),
   );
   if (superseded) return { kind: "settle", outcome: skipped("superseded", null) };
   return {
@@ -305,26 +346,32 @@ export function scheduledResumeVerdict(
   };
 }
 
-/** Whether a sibling was picked up by a person after `since`, or is running a turn they started. */
-function movedOn(sibling: ScheduledResumeSibling, since: number): boolean {
+/**
+ * Whether another Session on the Ticket was picked up by a person after
+ * `since`, or is running a turn they started — the "superseded" rule a
+ * scheduled resume and a restart resume both apply to their siblings.
+ *
+ * A host's own resume there is not it moving on: a sibling resuming on its
+ * own schedule, or continuing after the same process loss, is doing what was
+ * already asked of it, and whichever resume runs first must not talk the
+ * other out of it.
+ */
+export function ticketSiblingMovedOn(sibling: ScheduledResumeSibling, since: number): boolean {
   const receipts = latestReceipts(sibling.receipts);
-  const scheduledRetries = new Set(
-    sibling.commands.flatMap((command) =>
-      command.intent.kind === "resume.schedule" ? [scheduledResumeRetryCommandId(command.id)] : [],
-    ),
-  );
+  const scheduledRetries = scheduledRetryIds(sibling.commands);
+  const automatic = (id: string) => scheduledRetries.has(id) || isRestartResumeCommandId(id);
   const starts = sibling.commands.filter(
     (command) =>
       (command.intent.kind === "message.submit" || command.intent.kind === "executor.retry") &&
       receipts.get(command.id)?.status !== "rejected",
   );
-  // The turn running now is the one the latest start opened: a scheduled
-  // resume's own turn is not a person's.
+  // The turn running now is the one the latest start opened: a host resume's
+  // own turn is not a person's.
   const latest = starts.at(-1);
-  if (sibling.turnActive && (latest === undefined || !scheduledRetries.has(latest.id))) {
+  if (sibling.turnActive && (latest === undefined || !automatic(latest.id))) {
     return true;
   }
-  return starts.some((command) => command.createdAt > since && !scheduledRetries.has(command.id));
+  return starts.some((command) => command.createdAt > since && !automatic(command.id));
 }
 
 function skipped(

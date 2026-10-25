@@ -24,6 +24,7 @@ import {
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
   QueueRevisionConflictError,
+  RECOVERED_TURN_INTERRUPTED_DETAIL,
   blobUrl,
   type BlobLinkView,
   type ModelAccessSnapshot,
@@ -2639,6 +2640,41 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       expect(container?.querySelector('[data-slot="session-blocker"]')).toBeNull();
     },
   );
+
+  it("keeps saying a restart resumed the turn while that turn runs (VC-450)", async () => {
+    const store = chatStore(transcript(2));
+    await mountPlane(store);
+    await ingest(store, [boundary(1, "turn.started")]);
+    const notice = {
+      id: "pi:attention:rebuilt:partial-turn",
+      attachmentId: "rebuilt",
+      kind: "partial_turn_interrupted" as const,
+      detail: RECOVERED_TURN_INTERRUPTED_DETAIL,
+      diagnostic: null,
+    };
+    await act(async () =>
+      store.setState((state) => {
+        const slice = state.sessions[SESSION]!;
+        return {
+          sessions: {
+            ...state.sessions,
+            [SESSION]: {
+              ...slice,
+              projection: {
+                ...slice.projection!,
+                turnActive: true,
+                liveExecutor: { id: "rebuilt" },
+                attention: { active: [notice], primary: notice },
+              },
+            },
+          },
+        };
+      }),
+    );
+    expect(container?.querySelector('[data-slot="session-blocker"]')?.textContent).toContain(
+      "Resumed after restart",
+    );
+  });
 
   it("retires the local wait and held shadow as soon as the host owns the words", async () => {
     vi.useFakeTimers();

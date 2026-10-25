@@ -10,7 +10,11 @@ import {
   SESSION_LISTING_CACHE_LIMIT,
   SESSION_LISTING_FOLD_CHUNK,
 } from "./session-engine";
-import { createSessionProjectionCheckpoint, roleImpliedByTicket } from "@volli/shared";
+import {
+  createSessionProjectionCheckpoint,
+  restartResumeCommandId,
+  roleImpliedByTicket,
+} from "@volli/shared";
 import type {
   AcceptedCommandReceipt,
   ListSessionsQuery,
@@ -1214,6 +1218,99 @@ describe("SessionEngine creation and explicit commands", () => {
         reason: "Wedged for 3h",
         by: { kind: "session", sessionId: "supervisor-1" },
       },
+    });
+  });
+
+  describe("a restart resume (VC-450)", () => {
+    async function interrupted() {
+      const { plane } = composition();
+      const { session } = await plane.createSession(createRequest());
+      const running = attachment(session.id);
+      const observe = (id: string, occurredAt: number, payload: Record<string, unknown>) =>
+        plane.observe({
+          id,
+          sessionId: session.id,
+          attachmentId: running.id,
+          occurredAt,
+          provenance: adapterProvenance,
+          ...payload,
+        } as Parameters<typeof plane.observe>[0]);
+      await observe("open", 1, { kind: "attachment.opened", attachment: running });
+      await observe("start-1", 2, {
+        kind: "turn.started",
+        attachmentId: running.id,
+        turnId: "turn-1",
+      });
+      await observe("lost-1", 3, {
+        kind: "turn.interrupted",
+        attachmentId: running.id,
+        turnId: "turn-1",
+      });
+      const resume = (turnId = "turn-1") =>
+        plane.submit({
+          commandId: restartResumeCommandId(running.id, turnId),
+          sessionId: session.id,
+          intent: { kind: "executor.retry", attachmentId: running.id },
+          provenance: userProvenance,
+        });
+      return { plane, session, running, observe, resume };
+    }
+
+    it("accepts the resume of the interrupted latest turn", async () => {
+      const { resume } = await interrupted();
+      expect((await resume()).receipt?.status).not.toBe("rejected");
+    });
+
+    it("refuses one a later turn, a running turn or another turn has overtaken", async () => {
+      const { plane } = composition();
+      const { session } = await plane.createSession(createRequest());
+      const idle = attachment(session.id);
+      await plane.observe({
+        id: "open",
+        sessionId: session.id,
+        occurredAt: 1,
+        provenance: adapterProvenance,
+        kind: "attachment.opened",
+        attachment: idle,
+      });
+      await expect(
+        plane.submit({
+          commandId: restartResumeCommandId(idle.id, "turn-1"),
+          sessionId: session.id,
+          intent: { kind: "executor.retry", attachmentId: idle.id },
+          provenance: userProvenance,
+        }),
+      ).resolves.toMatchObject({ receipt: { status: "rejected", code: "restart_resume_stale" } });
+
+      const named = await interrupted();
+      await expect(named.resume("turn-0")).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "restart_resume_stale" },
+      });
+
+      const running = await interrupted();
+      await running.observe("start-2", 4, {
+        kind: "turn.started",
+        attachmentId: running.running.id,
+        turnId: "turn-2",
+      });
+      await expect(running.resume("turn-2")).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "restart_resume_stale" },
+      });
+
+      const completed = await interrupted();
+      await completed.observe("start-2", 4, {
+        kind: "turn.started",
+        attachmentId: completed.running.id,
+        turnId: "turn-2",
+      });
+      await completed.observe("done-2", 5, {
+        kind: "turn.completed",
+        attachmentId: completed.running.id,
+        turnId: "turn-2",
+      });
+      await expect(completed.resume("turn-2")).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "restart_resume_stale" },
+      });
     });
   });
 

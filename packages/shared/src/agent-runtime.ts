@@ -2103,6 +2103,22 @@ export type CompactionRequestOutcome =
       message: string;
     };
 
+/**
+ * Where an idle attachment's conversation stands, as the runtime holds it —
+ * what a host reads before continuing a turn a lost process cut short
+ * (VC-450).
+ *
+ * - `settled` — it ends on a user message, or on tool results that answered
+ *   every call of the reply before them: continuing asks the model again and
+ *   repeats nothing that already ran.
+ * - `tool-in-flight` — a tool call has no real result: it may have run, partly
+ *   run, or never started, and only the person can judge its side effects. A
+ *   question abandoned with the process counts too: nobody answered it.
+ * - `none` — nothing is left to continue (no messages, or the reply already
+ *   finished and only its completion marker was lost).
+ */
+export type RuntimeResumeBoundary = "settled" | "tool-in-flight" | "none";
+
 /** One live runtime attachment. Closing it never ends Session identity. */
 export interface RuntimeAttachmentHandle {
   submitUserMessage(
@@ -2139,8 +2155,17 @@ export interface RuntimeAttachmentHandle {
   ): Promise<DeliveryOutcome>;
   /** Apply a validated model policy only while this attachment is idle. */
   selectModel(selection: ModelSelection): Promise<ModelSelectionOutcome>;
-  /** Retry the last failed run without duplicating its user message. */
+  /**
+   * Retry the last failed run without duplicating its user message. After a
+   * process loss it is also the resume: a tool call the lost process left
+   * without a result is answered as interrupted, never run again by itself.
+   */
   retry(commandId?: string): Promise<DeliveryOutcome>;
+  /**
+   * Where the conversation stands while idle (see {@link RuntimeResumeBoundary}).
+   * Optional: a runtime that cannot say is never continued automatically.
+   */
+  resumeBoundary?(): RuntimeResumeBoundary;
   /**
    * Compact this Session's context now, because someone asked.
    *
