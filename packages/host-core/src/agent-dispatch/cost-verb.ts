@@ -43,7 +43,7 @@ import type {
 
 import { getTicketRow } from "../db/tickets-repo";
 import { failure } from "./context";
-import type { AgentCommandContext } from "./context";
+import type { AgentVerbContext } from "./context";
 import { projectForCreate, ticketForDisplayId } from "./resolution";
 
 /**
@@ -150,7 +150,7 @@ function usageWire(summary: SessionUsageSummary): Record<string, unknown> {
 function groupIdentity(
   key: string | null,
   groupBy: SessionUsageGrouping,
-  context: { db: AgentCommandContext["options"]["db"]; projectById: ReadonlyMap<string, Project> },
+  context: { db: AgentVerbContext["options"]["db"]; projectById: ReadonlyMap<string, Project> },
 ): { key: string | null; label: string | null } {
   if (key === null) return { key: null, label: null };
   if (groupBy === "session") {
@@ -171,7 +171,7 @@ function groupIdentity(
 
 /** `volli cost` — the local Session/Ticket/project rollup. */
 export async function costVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, envSession, sessionEngine, now } = context;

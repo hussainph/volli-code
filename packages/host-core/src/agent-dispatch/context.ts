@@ -193,14 +193,18 @@ export interface AgentCommandServiceOptions {
    */
   onSessionStarted?: (notice: SessionStartedNotice) => void;
   /**
-   * The host's handler map (VC-668), as far as this door projects it: every
-   * verb that is also a catalog command, and the ticket create, update and
-   * comment (whose commands are the board's, VC-794), is bound in `table.ts`
-   * as a projection of `handlers[key]`, never as a handler of its own. A Done
-   * move's trim, its interrupts and its armed arrival, and every projected
-   * write's receipt, feed rows and `data-changed`, therefore belong to the
-   * handler, which the composition root built once for every door. The
-   * projection invokes it only under {@link AgentCommandContext.handlerPolicy}.
+   * The host's handler map (VC-668), which this door projects: every verb is
+   * bound in `table.ts` as a projection of `handlers[key]`, never as a
+   * handler of its own — a catalog command's under its key, the ticket
+   * create, update and comment under the board's (VC-794), and every other
+   * verb under its own key, whose entry this service serves into the map on
+   * construction (VC-923, `agent-dispatch/verbs.ts`). A Done move's trim, its
+   * interrupts and its armed arrival, and every projected board write's
+   * receipt, feed rows and `data-changed`, therefore belong to the handler,
+   * which the composition root built once for every door. The projection
+   * invokes it only under {@link AgentCommandContext.handlerPolicy}. The four
+   * Session reads are delegated the other way: the map's entry runs this
+   * service (`executeInWorkspace`).
    */
   handlers: HostHandlerMap;
   /**
@@ -360,8 +364,14 @@ export interface PendingHarnessLaunch {
  * no default and reads best at its own name. The fields beside it are the ones
  * the service RESOLVED once at construction — a default applied, or a map it
  * owns — so a handler cannot accidentally use an unresolved `options.now`.
+ *
+ * Since VC-923 a verb's handler is the map's entry for its key
+ * (`agent-dispatch/verbs.ts`), and this is the context that entry builds for
+ * it, from the service's state and the request the door resolved
+ * ({@link AgentVerbInput}). The door's own context adds its policy at the map
+ * ({@link AgentCommandContext}).
  */
-export interface AgentCommandContext {
+export interface AgentVerbContext {
   /** Everything the composition root injected. */
   readonly options: AgentCommandServiceOptions;
   /** {@link AgentCommandServiceOptions.now}, defaulted to `Date.now`. */
@@ -479,6 +489,36 @@ export interface AgentCommandContext {
    * judged them: that runs off the token alone.
    */
   readonly actor: TicketEventActor | null;
+}
+
+/**
+ * The request as the socket door resolved it, which is what a verb's map
+ * entry is asked (VC-923): the wire request, and every request-scoped fact
+ * of {@link AgentVerbContext} the door decided before admitting it — the
+ * projects it listed, who `VOLLI_SESSION` names, who the token authenticated,
+ * and the attribution. Plain data, no port: the entry builds the rest of its
+ * context from the service's own state, so each door owes only these facts.
+ */
+export interface AgentVerbInput {
+  readonly request: AgentRequest;
+  readonly projects: readonly Project[];
+  readonly envSession: EnvSessionIdentity | null;
+  readonly envSessionTerminal: SessionRecord | null;
+  readonly authenticatedSessionId: string | null;
+  readonly actor: TicketEventActor | null;
+}
+
+/**
+ * What the socket door holds for one request: the verb context its decodes
+ * read, and its policy at the map.
+ */
+export interface AgentCommandContext extends AgentVerbContext {
+  /**
+   * Who the door authenticated, as host history attributes a caller: the
+   * call a projected verb with no {@link AgentVerbContext.actor} of its own
+   * is made under at the map. Never a grant: admission ran off the token.
+   */
+  readonly doorActor: TicketEventActor;
   /**
    * This request's policy at the handler map (VC-668): a projected verb
    * reaches `handlers[key]` only through it. It judges the socket's own
@@ -493,6 +533,12 @@ export interface AgentCommandContext {
  * chain. Uniformly async, so the table holds one shape rather than two.
  */
 export type AgentVerbHandler = (
+  context: AgentVerbContext,
+  request: AgentRequest,
+) => Promise<AgentResponse>;
+
+/** What the socket's table calls for one request: a projection, or a delegated read. */
+export type SocketVerbHandle = (
   context: AgentCommandContext,
   request: AgentRequest,
 ) => Promise<AgentResponse>;

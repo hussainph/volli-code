@@ -11,6 +11,7 @@
 import { DESKTOP_ENTRIES, type DesktopKey } from "./desktop-entries";
 import type { TicketEventActor } from "./ticket-events";
 import {
+  AGENT_COMMAND_BINDINGS,
   CATALOG_ENTRIES,
   type AgentCommandBindingId,
   type CatalogKey,
@@ -60,13 +61,58 @@ export type HandlerProjectionKey = (typeof HANDLER_PROJECTION_KEYS)[number];
 export type PublicHandlerKey = Exclude<CatalogKey, DoorLocalCatalogKey | HandlerProjectionKey>;
 
 /**
- * Every key the host's ONE handler map answers (D-A1 = (c) hybrid): the public
- * catalog's domain handler keys (wire aliases reuse these) and the desktop-only tier's (`DESKTOP_ENTRIES`,
- * VC-608), together. The map is total over both, so a key of either tier with
- * no handler fails `pnpm typecheck`, and promoting a desktop entry to the
- * public tier keeps its key, and so its handler.
+ * The keys the catalog's doors serve (D-A1 = (c) hybrid): the public
+ * catalog's domain handler keys (wire aliases reuse these) and the
+ * desktop-only tier's (`DESKTOP_ENTRIES`, VC-608), together. A router, the
+ * WebSocket and the desktop window's legacy channels reach these and nothing
+ * else; promoting a desktop entry to the public tier keeps its key, and so its
+ * handler.
  */
-export type HostHandlerKey = PublicHandlerKey | DesktopKey;
+export type CatalogHandlerKey = PublicHandlerKey | DesktopKey;
+
+/**
+ * The socket's ticket writes whose command is a board handler under the
+ * board's own key (VC-794): the CLI keeps its verbs and their wire shape, and
+ * the write, its receipt, its wakes and its feed rows are the handler's, as
+ * they are for the person's own edit. One compound update, not three calls:
+ * `board.updateTicket` takes the priority, labels and body mutation too, so
+ * `volli ticket update` stays one transaction.
+ */
+export const SOCKET_BOARD_PROJECTIONS = Object.freeze({
+  "ticket.create": "board.createTicket",
+  "ticket.update": "board.updateTicket",
+  "ticket.comment": "board.createComment",
+} as const satisfies Partial<Record<AgentCommandBindingId, CatalogKey>>);
+
+/** {@link SOCKET_BOARD_PROJECTIONS}, as a type: socket verb to the board key it projects. */
+export type SocketBoardProjections = typeof SOCKET_BOARD_PROJECTIONS;
+
+/**
+ * The agent doors' own keys (VC-923): every socket verb that is neither a
+ * catalog command nor a ticket write projected onto a board key. They are
+ * entries of the same one map as the catalog's, reached only through it and
+ * only under a door's policy, so the socket's verb table is a table of
+ * projections like every other door's. No catalog door reaches them: their
+ * entries have no catalog declaration, so the catalog's policies refuse them.
+ *
+ * Their handlers are the agent socket's own verbs, whose ports (the
+ * Session Engine, the attachments, the host's environment facts) are the
+ * agent command service's composition: that service serves them into the map
+ * it was handed (`serveHostHandlers`), and until it does they answer
+ * unavailable.
+ */
+export type AgentHandlerKey = Exclude<
+  AgentCommandBindingId,
+  CatalogKey | DesktopKey | keyof SocketBoardProjections
+>;
+
+/**
+ * Every key the host's ONE handler map answers: the catalog's
+ * ({@link CatalogHandlerKey}) and the agent doors' ({@link AgentHandlerKey}),
+ * together. The map is total over all of them, so a key with no handler fails
+ * `pnpm typecheck`.
+ */
+export type HostHandlerKey = CatalogHandlerKey | AgentHandlerKey;
 
 type AssertNever<Type extends never> = Type;
 
@@ -99,11 +145,11 @@ export const SOCKET_DELEGATED_HANDLER_KEYS = Object.freeze([
 export type SocketDelegatedHandlerKey = (typeof SOCKET_DELEGATED_HANDLER_KEYS)[number];
 
 /**
- * The handler keys the agent socket also serves: its `AGENT_VERB_TABLE`
- * binding for each must be a projection of the map, never a handler of its
- * own. A both-door entry's socket binding id is its key. The socket's ticket
- * writes that project a board key under another name are host-core's
- * `SocketBoardProjections` (VC-794).
+ * The handler keys the agent socket serves under its own verb's name: a
+ * both-door catalog command's, and every {@link AgentHandlerKey}. Its
+ * `AGENT_VERB_TABLE` binding for each must be a projection of the map, never a
+ * handler of its own. The socket's ticket writes that project a board key under
+ * another name are {@link SocketBoardProjections} (VC-794).
  */
 export type SocketHandlerKey = Exclude<
   Extract<HostHandlerKey, AgentCommandBindingId>,
@@ -166,8 +212,27 @@ export const DESKTOP_HANDLER_KEYS: readonly DesktopKey[] = Object.freeze(
   DESKTOP_ENTRIES.map((entry) => entry.key),
 );
 
-/** {@link HostHandlerKey}, at runtime: the public tier's keys, then the desktop tier's. */
-export const HOST_HANDLER_KEYS: readonly HostHandlerKey[] = Object.freeze([
+/** {@link CatalogHandlerKey}, at runtime: the public tier's keys, then the desktop tier's. */
+export const CATALOG_HANDLER_KEYS: readonly CatalogHandlerKey[] = Object.freeze([
   ...PUBLIC_HANDLER_KEYS,
   ...DESKTOP_HANDLER_KEYS,
+]);
+
+const catalogued: ReadonlySet<string> = new Set([
+  ...CATALOG_ENTRIES.map((entry) => entry.key),
+  ...DESKTOP_HANDLER_KEYS,
+  ...Object.keys(SOCKET_BOARD_PROJECTIONS),
+]);
+
+/** {@link AgentHandlerKey}, at runtime, in the Verb Registry's declaration order. */
+export const AGENT_HANDLER_KEYS: readonly AgentHandlerKey[] = Object.freeze(
+  [...new Set(Object.values(AGENT_COMMAND_BINDINGS))].filter(
+    (key) => !catalogued.has(key),
+  ) as AgentHandlerKey[],
+);
+
+/** {@link HostHandlerKey}, at runtime: the catalog's keys, then the agent doors'. */
+export const HOST_HANDLER_KEYS: readonly HostHandlerKey[] = Object.freeze([
+  ...CATALOG_HANDLER_KEYS,
+  ...AGENT_HANDLER_KEYS,
 ]);

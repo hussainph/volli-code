@@ -16,9 +16,11 @@
  *
  * The agent socket is not a catalog door: its coordination policy reads the
  * Verb Registry's `actor` and per-project authority, and lives with it in
- * `agent-dispatch/admission.ts`.
+ * `agent-dispatch/admission.ts`. Its own verbs' keys (`AgentHandlerKey`,
+ * VC-923) have no catalog entry, so these policies refuse them to everyone.
  */
 import {
+  AGENT_HANDLER_KEYS,
   CATALOG_ENTRIES,
   DESKTOP_CATALOG_ENTRIES,
   catalogActorAdmits,
@@ -33,6 +35,7 @@ import { ADMITTED, refused, type AdmissionVerdict, type HandlerPolicy } from "./
 // Both tiers: a desktop-only entry's catalog shape is its placement-derived
 // policy (`desktopCatalogEntry`), judged by the same rule as a public entry's.
 const entryOf = catalogLookup([...CATALOG_ENTRIES, ...DESKTOP_CATALOG_ENTRIES]);
+const agentKeys: ReadonlySet<string> = new Set(AGENT_HANDLER_KEYS);
 
 /** The policy actor a call's attributed actor is, or null for one no catalog entry admits. */
 function policyActorOf(call: HandlerCall): "user" | "session" | null {
@@ -54,6 +57,9 @@ function policyActorOf(call: HandlerCall): "user" | "session" | null {
  * the router has already judged each subject.
  */
 export function catalogVerdict(key: HostHandlerKey, call: HandlerCall): AdmissionVerdict {
+  // An agent door's own key (VC-923) has no catalog entry: no catalog door
+  // reaches it, whoever asks.
+  if (agentKeys.has(key)) return refused(`${key} is not open to this caller.`);
   const entry = entryOf(key);
   const actor = policyActorOf(call);
   const desktopWindow = call.origin === "desktop-window";

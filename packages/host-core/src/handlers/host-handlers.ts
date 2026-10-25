@@ -12,9 +12,11 @@ import type {
  * ({@link HostHandlerMap}), and its only invocation path takes a policy
  * (`./handler-map`). The tRPC routers (IPC and WebSocket) call
  * `ctx.handlers[key]` on the router policy's view; the agent socket's
- * `AGENT_VERB_TABLE` binds a both-door key, and the ticket writes whose
- * command is a board key (VC-794), only as a projection of `handlers[key]`
- * under its coordination policy (`agent-dispatch/table.ts`);
+ * `AGENT_VERB_TABLE` binds every verb (a both-door key, a ticket write whose
+ * command is a board key, VC-794, and each of its own verbs' keys, VC-923)
+ * only as a projection of `handlers[key]` under its coordination policy
+ * (`agent-dispatch/table.ts`), bar the four Session reads the map delegates
+ * the other way;
  * a legacy per-channel IPC handler that still serves a catalog command
  * invokes the same entry under the desktop window's policy until its area
  * moves. So "both doors reach the same function, admitted" is a fact of the
@@ -82,6 +84,7 @@ import {
   type HostSignInUpdate,
   type HostLogsBatch,
   type HostLogsRead,
+  type AgentHandlerKey,
   type HostHandlerKey,
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
@@ -102,6 +105,7 @@ import {
   type WorktreeTrimSettings,
 } from "@volli/shared";
 
+import type { AgentVerbInput } from "../agent-dispatch/context";
 import type { DetachedWorkPort } from "../detached-work";
 import type { BrowserShortcutsPort } from "./browser-shortcuts-port";
 import type { BrowserPictureStore } from "../browser/picture-store";
@@ -173,7 +177,7 @@ export type SessionCreateHandlerInput = Omit<SessionStartInput, "role" | "parent
  * projects structurally (it cannot import host-core, D2), and a composition
  * root's assignment of this map to that slice is the check that they agree.
  */
-export interface HostHandlerSignatures extends BoardHandlerSignatures {
+export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHandlerSignatures {
   readonly "workspaces.list": HostHandler<void, HostWorkspaceList>;
   readonly "workspaces.create": HostHandler<HostWorkspaceCreateInput, HostWorkspaceCreateResult>;
   readonly "sessions.create": HostHandler<SessionCreateHandlerInput, { sessionId: string }>;
@@ -392,6 +396,18 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
   readonly "browserShortcuts.focusPage": HostHandler<{ tabId: string }, null>;
 }
 
+/**
+ * The agent doors' entries (VC-923): each socket verb that is neither a
+ * catalog command nor a board write is its own key, answered by the verb's
+ * handler with the socket's wire answer. The input is the request as the
+ * door resolved it ({@link AgentVerbInput}); the call is who the door
+ * authenticated. The agent command service serves them into the map
+ * (`./handler-map`); the map is sealed without them.
+ */
+export type AgentHandlerSignatures = {
+  readonly [Key in AgentHandlerKey]: HostHandler<AgentVerbInput, AgentResponse>;
+};
+
 /** What a Session read's handler is asked: its Workspace, and the socket verb's args. */
 export interface SessionReadHandlerInput {
   readonly workspaceId: string;
@@ -407,6 +423,9 @@ export type SessionReadPort = (
 
 /** The one map: every {@link HostHandlerKey}, and nothing else. */
 export type HostHandlers = { readonly [Key in HostHandlerKey]: HostHandlerSignatures[Key] };
+
+/** What {@link createHostHandlers} seals: every entry but the agent doors', which are served. */
+export type SealedHostHandlers = Omit<HostHandlers, AgentHandlerKey>;
 
 type AssertNever<Type extends never> = Type;
 /**
@@ -617,7 +636,7 @@ export function createHostHandlers(
 function hostHandlerEntries(
   ports: Pick<HostSessionPorts, "events" | "attention">,
   options: HostHandlerOptions,
-): HostHandlers {
+): SealedHostHandlers {
   // JS callers must fail closed too: a Done trim without activity evidence
   // could remove a directory a live process is standing in.
   if (typeof options.busyWorktreeSites !== "function") {

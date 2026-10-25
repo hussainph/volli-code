@@ -33,6 +33,9 @@ export default defineConfig({
         "src/handlers/handler-map.ts",
         "src/handlers/policies.ts",
         "src/agent-dispatch/projection.ts",
+        // The socket's own verbs as the map's entries (VC-923): what every
+        // socket verb that is no catalog command reaches.
+        "src/agent-dispatch/verbs.ts",
         // File/blob/template services moved with their tests at unchanged 100% (VC-557).
         "src/blob-attach.ts",
         "src/blob-collect.ts",

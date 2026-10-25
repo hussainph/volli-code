@@ -291,8 +291,9 @@ export function coordinationRefusal(
  * It is the socket's coordination policy, judged again at the map rather than
  * trusted from the dispatch line that already ran it, and it admits only the
  * key this request's verb projects (`projected`: a both-door entry's socket
- * binding id is its key, and `ticket.create`/`update`/`comment` name their
- * board key, VC-794; undefined for a verb that projects none). It is
+ * binding id is its key, as is each of the socket's own verbs', VC-923, and
+ * `ticket.create`/`update`/`comment` name their board key, VC-794; undefined
+ * for the four Session reads the map delegates to the socket). It is
  * deliberately not the catalog's router actor: the board's keys are
  * person-only on the WebSocket until VC-565, while a Session the project's
  * policy admits has always written tickets here.

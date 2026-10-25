@@ -23,7 +23,7 @@ import { listArchivedTicketsByProject, listTicketsByProject } from "../db/ticket
 import { previewTicketWorktree, syncTicketWorktree } from "../worktree";
 import { isInside } from "../worktree/paths";
 import { failure } from "./context";
-import type { AgentCommandContext, EnvSessionIdentity } from "./context";
+import type { AgentVerbContext, EnvSessionIdentity } from "./context";
 import { dryRunResponse } from "./preview";
 import { ticketForDisplayId } from "./resolution";
 
@@ -160,7 +160,7 @@ function noWorktreeRefusal(displayId: string, usesWorktree: boolean): string {
 
 /** `volli worktree status` — a ticket's branch, base, and sync state. */
 export async function worktreeStatusVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, envSession, worktreeReads } = context;
@@ -203,7 +203,7 @@ export async function worktreeStatusVerb(
 
 /** `volli worktree diff` — a ticket's diff, the PR range by default. */
 export async function worktreeDiffVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, envSession, worktreeReads } = context;
@@ -272,7 +272,7 @@ const SYNC_FILE_CAP = 20;
  * `execute` reaches — does not change when the Ticket leaves the board.
  */
 export async function worktreeSyncVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, envSession, gitAsync, worktreeExists, worktreeReads } = context;

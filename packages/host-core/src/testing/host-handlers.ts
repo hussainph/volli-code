@@ -11,7 +11,8 @@
  */
 import type Database from "better-sqlite3";
 import {
-  HOST_HANDLER_KEYS,
+  AGENT_HANDLER_KEYS,
+  CATALOG_HANDLER_KEYS,
   type DataChangedEvent,
   type HandlerCall,
   type HostHandlerKey,
@@ -140,12 +141,17 @@ export function sealTestHandlers(
   onAdmission?: AdmissionObserver,
 ): HostHandlerMap {
   const total: Record<string, unknown> = {};
-  for (const key of HOST_HANDLER_KEYS) {
+  for (const key of CATALOG_HANDLER_KEYS) {
     total[key] =
       entries[key] ??
       (() => {
         throw new Error(`This test states no ${key} handler.`);
       });
+  }
+  // An agent-door key the test states is sealed; the rest stay empty for the
+  // agent command service to serve (VC-923), exactly as on a host's map.
+  for (const key of AGENT_HANDLER_KEYS) {
+    if (entries[key] !== undefined) total[key] = entries[key];
   }
   return sealHostHandlers(total as unknown as HostHandlers, onAdmission);
 }

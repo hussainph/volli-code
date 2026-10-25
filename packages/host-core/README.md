@@ -848,11 +848,19 @@ composition root calls it once with the recovered services (database, runtime,
 Sessions facade, Model Access, Automations, busy-worktree guard, and
 desktop's experiments and interrupts) and hands the same object to every door:
 the routers' `ctx.handlers`, the socket's `handlers` option (whose
-`AGENT_VERB_TABLE` binds a catalog key only through `projectHandler`), and
+`AGENT_VERB_TABLE` binds every verb only as a projection of the map), and
 any legacy IPC channel that still serves a catalog command. `HostHandlers` is
-total over both tiers' keys, so a missing handler fails `pnpm typecheck`; a
-service a host lacks makes its handlers throw `OperationUnavailableError`
-rather than leaving a hole.
+total over both tiers' keys and the agent doors' own (`AgentHandlerKey`,
+VC-923), so a missing handler fails `pnpm typecheck`; a service a host lacks
+makes its handlers throw `OperationUnavailableError` rather than leaving a
+hole.
+
+The agent doors' keys are the socket's own verbs (`identify`, `hook`,
+`worktree.sync`, `session.done`, …): their handlers
+(`agent-dispatch/verbs.ts`) need the agent command service's ports, which a
+root composes after the map, so the map is sealed without them and
+`createAgentCommandService` serves them into the map it is handed, once.
+Until it does they answer unavailable, and no catalog policy admits them.
 
 Desktop main also passes `remoteHosts` (`RemoteHostsPort`,
 `handlers/remote-hosts-port.ts`, VC-700): its registry of hosts added over

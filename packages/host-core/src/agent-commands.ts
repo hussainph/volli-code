@@ -8,6 +8,9 @@
  * Registry's own handler binding. What is left here is the part that is the
  * same for every verb — list the projects, resolve what this verb's table
  * entry asks for, call it — plus the seams the composition root injects.
+ * Since VC-923 "call it" is the map's: every verb's handler is an entry of the
+ * host's handler map, and this service serves its own verbs' entries into the
+ * map it is handed (`agent-dispatch/verbs.ts`).
  *
  * It remains the door's one public face. `index.ts` and the tests import from
  * here, and the two Brief compositions are re-exported rather than moved,
@@ -22,16 +25,16 @@ import { AGENT_COMMAND_BINDINGS, verbEntry, makeAgentError } from "@volli/shared
 import type {
   AgentRequest,
   AgentResponse,
-  SessionProjection,
   SessionReadVerb,
   SessionRecord,
   TicketEventActor,
 } from "@volli/shared";
 
-import { projectedHandlerKey } from "./agent-dispatch/projection";
+import { doorCallActor, projectedHandlerKey } from "./agent-dispatch/projection";
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
 import { coordinationRefusal, socketHandlerPolicy } from "./agent-dispatch/admission";
-import { isHostHandlerMap } from "./handlers/handler-map";
+import { isHostHandlerMap, serveHostHandlers } from "./handlers/handler-map";
+import { agentVerbEntries, rosterLoaders } from "./agent-dispatch/verbs";
 import type {
   AgentCommandContext,
   EnvSessionIdentity,
@@ -125,6 +128,25 @@ export function createAgentCommandService(
     options.readAuthorityPolicy ??
     ((projectId: string) => getProjectAuthorityPolicy(options.db, projectId));
 
+  // The socket's own verbs are entries of the map (VC-923), over this
+  // service's state: served once, now, so every door that projects the map
+  // reaches them through it, under that door's policy.
+  serveHostHandlers(
+    options.handlers,
+    agentVerbEntries({
+      options,
+      now,
+      newId,
+      gitAsync,
+      worktreeExists,
+      worktreeReads,
+      sessionEngine,
+      watermarks,
+      terminalUpdateLocks,
+      pendingLaunches,
+    }),
+  );
+
   const service = {
     /**
      * One request, through the one pipeline. `workspaceId` is
@@ -167,36 +189,13 @@ export function createAgentCommandService(
       );
       // Every Session of every project — lazy and memoized (VC-403). Nothing
       // is folded until a handler calls `context.loadProjections()` or
-      // `context.loadSessions()`, and calling either twice (or calling both —
-      // `loadSessions` is built ON `loadProjections`) still folds it exactly
-      // once. This replaced an eager fold gated by a per-verb table policy:
-      // laziness now makes the opt-out automatic for any verb that never
-      // calls either loader, which is most of them. Identity questions — who
-      // is `VOLLI_SESSION` — are answered by `envSession` below instead, off
-      // its own single-Session lookup rather than this fold.
-      let projectionsPromise: Promise<readonly SessionProjection[]> | null = null;
-      const loadProjections = (): Promise<readonly SessionProjection[]> => {
-        projectionsPromise ??= (async () =>
-          (
-            await Promise.all(
-              projects.map((project) =>
-                sessionEngine.listSessions({ projectId: project.id, scope: "all" }),
-              ),
-            )
-          ).flat())();
-        return projectionsPromise;
-      };
-      let sessionsPromise: Promise<readonly SessionRecord[]> | null = null;
-      // The terminal half of `loadProjections`'s answer: the verbs that need a
-      // PTY (resume, rename, the terminal half of list) have nothing a
-      // structured-only Session can answer, and dropping it there is correct,
-      // not a compatibility gap.
-      const loadSessions = (): Promise<readonly SessionRecord[]> => {
-        sessionsPromise ??= loadProjections().then((projections) =>
-          projections.flatMap((projection) => terminalSessionRecord(projection) ?? []),
-        );
-        return sessionsPromise;
-      };
+      // `context.loadSessions()`. This replaced an eager fold gated by a
+      // per-verb table policy: laziness now makes the opt-out automatic for
+      // any verb that never calls either loader, which is most of them.
+      // Identity questions — who is `VOLLI_SESSION` — are answered by
+      // `envSession` below instead, off its own single-Session lookup rather
+      // than this fold.
+      const { loadProjections, loadSessions } = rosterLoaders(sessionEngine, projects);
       // The `VOLLI_SESSION` identity rung, resolved against the Session Engine
       // rather than the fleet fold above: a structured (chat) Session exports
       // `VOLLI_SESSION` too (VC-51), and it has no terminal attachment for
@@ -267,6 +266,7 @@ export function createAgentCommandService(
         envSessionTerminal,
         authenticatedSessionId: door.kind === "session" ? door.sessionId : null,
         actor,
+        doorActor: doorCallActor(door, envSession),
         handlerPolicy: socketHandlerPolicy(request, projectedHandlerKey(binding), () =>
           coordinationRefusal(readPolicy, projects, envSession, request, door),
         ),

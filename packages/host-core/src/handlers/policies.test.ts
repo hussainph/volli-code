@@ -3,6 +3,8 @@
  * transport-independent, and the desktop window's trusted identity.
  */
 import {
+  AGENT_HANDLER_KEYS,
+  CATALOG_HANDLER_KEYS,
   DESKTOP_HANDLER_KEYS,
   HOST_HANDLER_KEYS,
   PUBLIC_HANDLER_KEYS,
@@ -23,9 +25,23 @@ const REFUSED = (key: string) => ({
 });
 
 describe("catalogVerdict", () => {
-  it("admits the desktop's own window to every key the map serves", () => {
-    for (const key of HOST_HANDLER_KEYS) {
+  it("admits the desktop's own window to every catalog key the map serves", () => {
+    for (const key of CATALOG_HANDLER_KEYS) {
       expect(catalogVerdict(key, WINDOW), key).toBe(ADMITTED);
+    }
+  });
+
+  // The agent doors' own keys (VC-923) are entries of the same map, but no
+  // catalog door reaches them: whoever asks, a router or the desktop window's
+  // legacy channels are refused before the handler.
+  it("refuses every caller every agent-door key", () => {
+    expect(AGENT_HANDLER_KEYS.length).toBeGreaterThan(0);
+    for (const key of AGENT_HANDLER_KEYS) {
+      for (const call of [WINDOW, DEVICE, SESSION]) {
+        expect(catalogVerdict(key, call), key).toEqual(REFUSED(key));
+        expect(ROUTER_POLICY.admit(key, {}, call), key).toEqual(REFUSED(key));
+      }
+      expect(DESKTOP_WINDOW_POLICY.admit(key, {}, WINDOW), key).toEqual(REFUSED(key));
     }
   });
 

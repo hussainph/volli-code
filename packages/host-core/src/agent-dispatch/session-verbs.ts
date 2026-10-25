@@ -55,7 +55,7 @@ import {
 import { readSessionUsageWindow } from "./cost-verb";
 import { chatSessionRecord, terminalSessionRecord } from "../session-control";
 import { failure } from "./context";
-import type { AgentCommandContext } from "./context";
+import type { AgentVerbContext } from "./context";
 import { dryRunResponse } from "./preview";
 import { positiveIntOr, projectForCreate, ticketForDisplayId } from "./resolution";
 import { pendingSessionQuestions } from "./pending-session-questions";
@@ -143,7 +143,7 @@ function chatProjectionForPublicId(
 
 /** `volli session list` — a project's active terminal and chat sessions. */
 export async function sessionListVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, envSession, now } = context;
@@ -395,7 +395,7 @@ function publicSessionSignal(projection: SessionProjection | undefined, observed
 
 /** `volli session show` — metadata without spending a transcript read. */
 export async function sessionShowVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, now } = context;
@@ -608,7 +608,7 @@ const PEEK_ATTENTION: Record<SessionAttentionKind, { message: string; recovery: 
 
 /** `volli session peek` — a terminal's trailing output, or a chat's tail. */
 export async function sessionPeekVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, sessionEngine, now } = context;
@@ -797,7 +797,7 @@ export async function sessionPeekVerb(
  * peek cuts every message to a line, and this is the one read that does not.
  */
 export async function sessionAnswerVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, sessionEngine, now } = context;
@@ -842,7 +842,7 @@ export async function sessionAnswerVerb(
  * verbatim — the caller's mistake is the same mistake whichever it typed.
  */
 async function recordSessionSignal(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
   signal: "done" | "blocked",
 ): Promise<AgentResponse> {
@@ -931,7 +931,7 @@ async function recordSessionSignal(
  * an empty checklist" would be noise on all three.
  */
 async function postFinalTodoList(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   session: { id: string; projectId: string; ticketId: string | null },
   signal: "done" | "blocked",
 ): Promise<void> {
@@ -976,7 +976,7 @@ async function postFinalTodoList(
 
 /** `volli session done` — this Session's work is finished. */
 export async function sessionDoneVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   return recordSessionSignal(context, request, "done");
@@ -984,7 +984,7 @@ export async function sessionDoneVerb(
 
 /** `volli session blocked` — this Session needs a person. */
 export async function sessionBlockedVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   return recordSessionSignal(context, request, "blocked");
