@@ -36,7 +36,9 @@ describe("a runner's status", () => {
 
   it("shows a status this build does not name as the backend wrote it", () => {
     expect(at("hibernating")).toEqual({ state: "idle", label: "hibernating" });
-    expect(at("draining")).toEqual({ state: "idle", label: "draining" });
+    expect(at("draining")).toEqual({ state: "parked", label: "Finishing its work" });
+    expect(at("upgrade_required")).toEqual({ state: "error", label: "Needs an update" });
+    expect(at("degraded")).toEqual({ state: "error", label: "Degraded" });
   });
 
   it("names the time today and the date before that", () => {

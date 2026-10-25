@@ -107,13 +107,7 @@ export {
   type RunnerPresenceTimers,
   runnerPresenceBackend,
 } from "../cloud-runner/presence";
-export {
-  createRunnerPowerCycle,
-  RUNNER_SUSPEND_REPORT_BUDGET_MS,
-  type RunnerPowerCycle,
-  type RunnerPowerCycleOptions,
-  watchSleep,
-} from "../cloud-runner/wake";
+export { createRunnerPowerCycle, type RunnerPowerCycle, watchSleep } from "../cloud-runner/wake";
 export {
   createRunnerTokenSource,
   type RunnerLinkLoss,

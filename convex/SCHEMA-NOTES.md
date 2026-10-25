@@ -284,7 +284,18 @@ Each was a decision made while turning the design into code.
     is revoked with reason `replaced` and, like a removed runner, leaves the
     owner's list and frees its name; its Session claims pass on at the next
     generation. `runners.status` gains `asleep` (a Mac whose lid closed),
-    which the offline sweep does not watch.
+    which the offline sweep does not watch. Working-copy jobs stay with the
+    replaced runner until Working copies move; that move is not part of this
+    handover.
+40. `runners.desktopRegistrationId` is an optional desktop registration retry
+    key (a client-minted lowercase UUID); older rows and other link methods
+    omit it. `registerThisMac` and `linkFromDesktop` accept optional nullable
+    `registrationId` (invalid values are ignored). A matching caller-owned,
+    non-gone runner with an unused generation-1 credential is returned with
+    its current hash replaced by the freshly minted credential's hash, without
+    creating another runner or moving work again. Used credentials and gone
+    runners take the normal registration path. A Mac still heartbeating in a
+    live status cannot be replaced, even when `replacesRunnerId` names it.
 
 ## Migrated rows
 

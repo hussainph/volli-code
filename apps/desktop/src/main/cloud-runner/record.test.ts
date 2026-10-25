@@ -23,10 +23,23 @@ describe("this Mac's runner record", () => {
     const dana = runnerRecordStore(row, DANA, log);
     const sam = runnerRecordStore(row, SAM, log);
     expect(dana.read()).toBeNull();
-    dana.write({ runnerId: RUNNER, hostname: "danas-mac", tombstone: null });
-    sam.write({ runnerId: RUNNER, hostname: "danas-mac", tombstone: "removed" });
-    expect(dana.read()).toEqual({ runnerId: RUNNER, hostname: "danas-mac", tombstone: null });
+    dana.write({ runnerId: RUNNER, machine: "m1", registrationId: null, tombstone: null });
+    sam.write({ runnerId: RUNNER, machine: "m1", registrationId: null, tombstone: "removed" });
+    expect(dana.read()).toEqual({
+      runnerId: RUNNER,
+      machine: "m1",
+      registrationId: null,
+      tombstone: null,
+    });
     expect(sam.read()?.tombstone).toBe("removed");
+    // A registration sent and not yet answered: no runner yet, its id kept for the retry.
+    dana.write({ runnerId: null, machine: "m1", registrationId: "reg-1", tombstone: null });
+    expect(dana.read()).toEqual({
+      runnerId: null,
+      machine: "m1",
+      registrationId: "reg-1",
+      tombstone: null,
+    });
   });
 
   it("reads anything unreadable as nothing remembered, and an unknown tombstone as removed", () => {
@@ -41,7 +54,12 @@ describe("this Mac's runner record", () => {
       expect(decodeRunnerRecords(raw)).toEqual({});
     }
     const raw = encodeRunnerRecords({
-      [DANA]: { runnerId: RUNNER, hostname: "h", tombstone: "something-newer" as never },
+      [DANA]: {
+        runnerId: RUNNER,
+        machine: "m1",
+        registrationId: null,
+        tombstone: "something-newer" as never,
+      },
     });
     expect(decodeRunnerRecords(raw)[DANA]?.tombstone).toBe("removed");
     expect(
@@ -55,12 +73,13 @@ describe("this Mac's runner record", () => {
       warn: (message) => void warnings.push(message),
     });
     expect(store.read()).toBeNull();
-    store.write({ runnerId: RUNNER, hostname: "h", tombstone: null });
+    store.write({ runnerId: RUNNER, machine: "m1", registrationId: null, tombstone: null });
     expect(warnings).toHaveLength(2);
     expect(runnerRecordStore(() => null, DANA, log).read()).toBeNull();
     runnerRecordStore(() => null, DANA, log).write({
-      runnerId: RUNNER,
-      hostname: "h",
+      runnerId: null,
+      machine: "m1",
+      registrationId: "reg-1",
       tombstone: null,
     });
   });

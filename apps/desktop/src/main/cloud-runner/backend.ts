@@ -18,10 +18,21 @@ export interface MacRunnerBackend {
   /** `runners.registerThisMac`: the grant, credential included (sealed by the caller at once). */
   registerThisMac(
     accessToken: string,
-    input: { host: RunnerHostFacts; name: string | null; replacesRunnerId: string | null },
+    input: {
+      host: RunnerHostFacts;
+      name: string | null;
+      replacesRunnerId: string | null;
+      /** Minted per registration and kept until it is answered: a retry is the same registration. */
+      registrationId: string;
+    },
   ): Promise<RunnerLinkGrant>;
   /** `runners.remove`: revokes the runner; idempotent. */
   removeRunner(accessToken: string, runnerId: string): Promise<void>;
+  /** One of the person's runners as `runners.list` shows it; `null` when it is not listed (removed). */
+  runnerStatus(
+    accessToken: string,
+    runnerId: string,
+  ): Promise<{ status: string; statusReason: string | null } | null>;
 }
 
 /** The request never got an answer from the backend (offline, timeout, a 5xx): retry later. */
@@ -37,7 +48,7 @@ export function convexMacRunnerBackend(options: {
   const base = options.url.replace(/\/+$/u, "");
   const fetchImpl = options.fetch ?? fetch;
   const call = async (
-    kind: "action" | "mutation",
+    kind: "action" | "mutation" | "query",
     path: string,
     accessToken: string,
     args: Record<string, unknown>,
@@ -84,6 +95,7 @@ export function convexMacRunnerBackend(options: {
         host: input.host,
         name: input.name,
         ...(input.replacesRunnerId === null ? {} : { replacesRunnerId: input.replacesRunnerId }),
+        registrationId: input.registrationId,
       });
       try {
         return parseRunnerLinkGrant(value);
@@ -95,6 +107,20 @@ export function convexMacRunnerBackend(options: {
     },
     async removeRunner(accessToken, runnerId) {
       await call("mutation", "runners:remove", accessToken, { runnerId });
+    },
+    async runnerStatus(accessToken, runnerId) {
+      const value = await call("query", "runners:list", accessToken, {});
+      if (!Array.isArray(value)) {
+        throw new BackendUnreachableError(
+          "Volli Cloud answered with a list this build cannot read.",
+        );
+      }
+      const row = (value as Record<string, unknown>[]).find((runner) => runner["id"] === runnerId);
+      if (row === undefined) return null;
+      return {
+        status: typeof row["status"] === "string" ? row["status"] : "unknown",
+        statusReason: typeof row["statusReason"] === "string" ? row["statusReason"] : null,
+      };
     },
   };
 }

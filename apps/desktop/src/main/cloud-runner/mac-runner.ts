@@ -48,9 +48,12 @@ import type { ConnectRunner, RunnerConnection } from "./connection";
 
 /** What this Mac remembers about its runner outside the sealed store. Never a secret. */
 export interface MacRunnerRecord {
-  readonly runnerId: string;
-  /** The host the record was written on. */
-  readonly hostname: string;
+  /** The runner it registered as; `null` before the first registration landed. */
+  readonly runnerId: string | null;
+  /** The machine the record was written on (`MacRunnerOptions.machine`). */
+  readonly machine: string;
+  /** A registration sent and not yet answered: a retry sends the same id, so it is never a second runner. */
+  readonly registrationId: string | null;
   /** Set once the runner was removed or cut off: this Mac does not add itself back. */
   readonly tombstone: ThisMacRunnerProblem | null;
 }
@@ -82,10 +85,15 @@ export interface MacRunnerOptions {
   readonly connect: ConnectRunner;
   /** What registering sends: the host facts, and the name to ask for. */
   host(): Promise<{ facts: RunnerHostFacts; name: string | null }>;
-  /** This machine's hostname, as the host facts carry it. */
-  hostname(): string;
+  /**
+   * This machine, stably (a hash of its hardware id): only the machine a
+   * record was written on registers as its runner's replacement, so a profile
+   * restored onto another Mac never takes over the original's runner.
+   */
+  machine(): Promise<string>;
   readonly power: PowerPort;
   readonly now?: () => number;
+  readonly newId?: () => string;
   readonly timers?: MacRunnerTimers;
   readonly log: {
     info(message: string, fields?: Record<string, unknown>): void;
@@ -149,27 +157,42 @@ function whoIn(snapshot: AccountSnapshot, userId: string): Who {
   return id === null || id === userId ? "me" : "out";
 }
 
-function lossProblem(reason: RunnerLinkLoss): ThisMacRunnerProblem {
-  return reason === "invalid_credential" ? "credential_reuse" : "removed";
+/** Why a revoked runner was cut off, from the person's own list; `removed` when it is gone from it. */
+function revokedProblem(reason: string | null): ThisMacRunnerProblem {
+  if (reason === "credential_reuse") return "credential_reuse";
+  if (reason === "replaced") return "replaced";
+  return "removed";
 }
 
 export function createMacRunner(options: MacRunnerOptions): MacRunner {
   const now = options.now ?? Date.now;
+  const newId = options.newId ?? (() => crypto.randomUUID());
   const timers = options.timers ?? DEFAULT_TIMERS;
   const listeners = new Set<(snapshot: ThisMacRunnerSnapshot) => void>();
   let snapshot: ThisMacRunnerSnapshot = THIS_MAC_RUNNER_OFF;
-  /** Advanced by every start, stop and end: work begun under an older one drops its result. */
+  /** Advanced by every begin and end: work begun under an older one drops its result. */
   let epoch = 0;
+  /** Advanced by every removal: a registration that lands after one is undone, never sealed. */
+  let removals = 0;
   let who: Who = "pending";
   let started = false;
   let link: RunnerLink | null = null;
   let connection: RunnerConnection | null = null;
+  /** The connection being stopped: nothing new connects before it is done with the credential. */
+  let ending: Promise<void> = Promise.resolve();
+  /** The one registration in flight: a new begin waits for it rather than sending another. */
+  let registering: Promise<void> | null = null;
   let asleep: { since: number } | null = null;
+  let waking = false;
   let retryTimer: unknown = null;
   let retryMs: number = MAC_RUNNER_RETRY.firstMs;
   let offAccount: (() => void) | null = null;
   let offPower: (() => void) | null = null;
   let stopping: Promise<void> | null = null;
+  let machine: Promise<string> | null = null;
+  const thisMachine = () => (machine ??= options.machine());
+
+  const knownRunnerId = () => link?.runnerId ?? options.record.read()?.runnerId ?? null;
 
   function publish(next: Omit<ThisMacRunnerSnapshot, "since"> & { since?: number | null }) {
     const since =
@@ -189,7 +212,7 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
   function publishState(state: ThisMacRunnerState, since?: number | null) {
     publish({
       state,
-      runnerId: link?.runnerId ?? options.record.read()?.runnerId ?? null,
+      runnerId: knownRunnerId(),
       runnerName: link?.name ?? null,
       waitingFacts: 0,
       problem: null,
@@ -205,7 +228,7 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
   ) {
     publish({
       state,
-      runnerId: link?.runnerId ?? options.record.read()?.runnerId ?? null,
+      runnerId: knownRunnerId(),
       runnerName: link?.name ?? null,
       waitingFacts: 0,
       problem,
@@ -217,6 +240,8 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
   function publishLinked() {
     if (connection === null) return;
     if (asleep !== null) return publishState("asleep", asleep.since);
+    // Until the wake sequence has beaten, what the connection says is from before the sleep.
+    if (waking) return publishState("connecting");
     const status = connection.status;
     if (status.state === "offline") return publishState("offline", status.since);
     if (status.state === "connected" && connection.beating) return publishState("online");
@@ -228,19 +253,27 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
     retryTimer = null;
   }
 
-  /** Ends the current epoch's connection. `report`: say `stopped` first (a clean stop). */
-  async function endConnection(report: boolean) {
+  /**
+   * Ends the current epoch at once (synchronously) and its connection in the
+   * background; `report`: say `stopped` first (a clean stop). Whatever starts
+   * next waits for `ending`, so two connections never present one credential.
+   */
+  function endEpoch(report: boolean): number {
     epoch += 1;
     cancelRetry();
-    const ending = connection;
+    const closing = connection;
     connection = null;
-    if (ending !== null) await (report ? ending.stop() : ending.close()).catch(() => {});
+    if (closing !== null) {
+      const done = (report ? closing.stop() : closing.close()).catch(() => {});
+      ending = Promise.all([ending, done]).then(() => {});
+    }
+    return epoch;
   }
 
-  /** A store whose saves stop once `mine` ended: a late rotation never restores a removed link. */
+  /** A store that answers nothing and saves nothing once `mine` ended: a late rotation never restores a removed link. */
   function fenced(mine: number): RunnerLinkStore {
     return {
-      load: () => options.store.load(),
+      load: async () => (mine === epoch ? options.store.load() : null),
       save: async (next) => {
         if (mine !== epoch) throw new Error("This runner link has ended.");
         await options.store.save(next);
@@ -263,23 +296,43 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
     connection.start();
   }
 
+  async function tombstone(runnerId: string | null, problem: ThisMacRunnerProblem) {
+    options.record.write({
+      runnerId,
+      machine: await thisMachine(),
+      registrationId: null,
+      tombstone: problem,
+    });
+  }
+
   async function lost(mine: number, reason: RunnerLinkLoss) {
     if (mine !== epoch) return;
-    const problem = lossProblem(reason);
     const ended = link;
-    await endConnection(false);
+    endEpoch(false);
     options.log.warn("this Mac's runner link ended", { reason, runnerId: ended?.runnerId });
     await options.store.clear().catch((error: unknown) => {
       options.log.warn("could not clear this Mac's runner link", { error });
     });
-    if (ended !== null) {
-      options.record.write({
-        runnerId: ended.runnerId,
-        hostname: options.hostname(),
-        tombstone: problem,
-      });
+    if (reason !== "revoked") {
+      // The sealed credential is gone or unknown to the backend, and the
+      // runner was not cut off: register again as its replacement.
+      void begin();
+      return;
     }
     link = ended;
+    let problem: ThisMacRunnerProblem = "removed";
+    try {
+      const token = await options.account.accessToken();
+      if (token !== null && ended !== null) {
+        const status = await options.backend.runnerStatus(token, ended.runnerId);
+        problem = status === null ? "removed" : revokedProblem(status.statusReason);
+      }
+    } catch (error) {
+      // Offline: "removed" says enough until the person looks.
+      options.log.warn("could not ask why this Mac's runner was cut off", { error });
+    }
+    if (epoch !== mine + 1) return;
+    await tombstone(ended?.runnerId ?? null, problem);
     publishProblem("removed", problem);
   }
 
@@ -288,28 +341,38 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
     const mine = epoch;
     retryTimer = timers.setTimeout(() => {
       retryTimer = null;
-      if (mine === epoch && who !== "out") void begin();
+      if (mine === epoch && who === "me") void begin();
     }, retryMs);
     retryMs = Math.min(retryMs * 2, MAC_RUNNER_RETRY.maxMs);
   }
 
   async function register(mine: number, record: MacRunnerRecord | null) {
     publishState("registering");
+    const removalsAtStart = removals;
+    const here = await thisMachine();
+    // Only the machine the record was written on replaces its runner.
+    const mineRecord = record !== null && record.machine === here ? record : null;
+    const registrationId = mineRecord?.registrationId ?? newId();
+    options.record.write({
+      runnerId: mineRecord?.runnerId ?? null,
+      machine: here,
+      registrationId,
+      tombstone: null,
+    });
+    let token: string | null = null;
     let grant;
     try {
       const host = await options.host();
-      const token = await options.account.accessToken();
-      if (mine !== epoch) return;
+      token = await options.account.accessToken();
       if (token === null) {
-        publishState("unregistered");
+        if (mine === epoch) publishState("unregistered");
         return;
       }
       grant = await options.backend.registerThisMac(token, {
         host: host.facts,
         name: host.name,
-        // Only the Mac the record was written on replaces its runner.
-        replacesRunnerId:
-          record !== null && record.hostname === options.hostname() ? record.runnerId : null,
+        replacesRunnerId: mineRecord?.runnerId ?? null,
+        registrationId,
       });
     } catch (error) {
       if (mine !== epoch) return;
@@ -321,6 +384,14 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
       options.log.warn("could not register this Mac", { error });
       publishProblem("failed", "unreachable");
       scheduleRetry();
+      return;
+    }
+    if (removals !== removalsAtStart) {
+      // The person removed this Mac while it was being added: undo it, keep the tombstone.
+      await tombstone(grant.runnerId, "removed");
+      await options.backend.removeRunner(token, grant.runnerId).catch((error: unknown) => {
+        options.log.warn("could not remove a runner registered during its removal", { error });
+      });
       return;
     }
     const linked: RunnerLink = {
@@ -339,7 +410,8 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
     }
     options.record.write({
       runnerId: linked.runnerId,
-      hostname: options.hostname(),
+      machine: here,
+      registrationId: null,
       tombstone: null,
     });
     options.log.info("registered this Mac as a runner", { runnerId: linked.runnerId });
@@ -347,10 +419,15 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
     if (mine === epoch) connect(mine, linked);
   }
 
-  /** Starts a fresh epoch: connect the sealed link, or register when there is none. */
+  /**
+   * Starts a fresh epoch: connect the sealed link, or register when there is
+   * none and the person is signed in (`me`), not merely restoring.
+   */
   async function begin() {
-    await endConnection(false);
-    const mine = epoch;
+    const mine = endEpoch(false);
+    await ending;
+    if (registering !== null) await registering;
+    if (mine !== epoch) return;
     let sealed: RunnerLink | null;
     try {
       sealed = await options.store.load();
@@ -371,7 +448,16 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
       publishProblem("removed", record.tombstone);
       return;
     }
-    await register(mine, record);
+    if (who !== "me") {
+      // Registering waits for the sign-in to finish (`onAccount`).
+      publishState("unregistered");
+      return;
+    }
+    const run = register(mine, record).finally(() => {
+      if (registering === run) registering = null;
+    });
+    registering = run;
+    await run;
   }
 
   function onAccount(next: AccountSnapshot) {
@@ -380,14 +466,20 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
     if (who === was && started) return;
     if (who === "out") {
       // Signed out: stop, and keep the sealed credential for the next sign-in.
-      if (connection !== null) void endConnection(true);
-      else epoch += 1;
-      cancelRetry();
+      endEpoch(true);
       link = null;
       publish(THIS_MAC_RUNNER_OFF);
       return;
     }
-    if (was === "out" || !started || snapshot.state === "off") void begin();
+    // At start, a restoring sign-in may already connect a sealed link (it is
+    // this launch's person's); anything else starts once the sign-in is done.
+    if (!started) {
+      void begin();
+      return;
+    }
+    if (who === "me" && (snapshot.state === "off" || snapshot.state === "unregistered")) {
+      void begin();
+    }
   }
 
   return {
@@ -407,9 +499,14 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
         },
         onWake: () => {
           asleep = null;
-          if (connection !== null) {
+          const live = connection;
+          if (live !== null) {
+            waking = true;
             publishLinked();
-            void connection.power.resume();
+            void live.power.resume().finally(() => {
+              waking = false;
+              if (connection === live) publishLinked();
+            });
           } else if (snapshot.state === "failed" && snapshot.problem === "unreachable") {
             // Waking is the moment the network comes back: try now, not at the next retry.
             retryMs = MAC_RUNNER_RETRY.firstMs;
@@ -437,19 +534,21 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
       await begin();
     },
     async removeThisMac() {
-      const runnerId = link?.runnerId ?? options.record.read()?.runnerId ?? null;
+      const runnerId = knownRunnerId();
       if (runnerId !== null && snapshot.state !== "removed") {
         const token = await options.account.accessToken();
         if (token === null) throw new Error("Sign in to Volli Cloud to remove this Mac.");
         // The backend first: if it fails, nothing here changed.
         await options.backend.removeRunner(token, runnerId);
       }
+      removals += 1;
       const removed = link;
-      await endConnection(false);
-      await options.store.clear();
-      if (runnerId !== null) {
-        options.record.write({ runnerId, hostname: options.hostname(), tombstone: "removed" });
-      }
+      endEpoch(false);
+      // The tombstone first: a sealed store that cannot be cleared now (a locked keychain) must not bring it back.
+      await tombstone(runnerId, "removed");
+      await options.store.clear().catch((error: unknown) => {
+        options.log.warn("could not clear this Mac's runner link", { error });
+      });
       link = removed;
       publishProblem("removed", "removed");
     },
@@ -458,7 +557,8 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
       stopping ??= (async () => {
         offAccount?.();
         offPower?.();
-        await endConnection(true);
+        endEpoch(true);
+        await ending;
       })();
       return stopping;
     },

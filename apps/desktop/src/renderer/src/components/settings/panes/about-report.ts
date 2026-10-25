@@ -52,7 +52,8 @@ export function buildAboutReport({
     `Migration history: ${support.migrationHistory}`,
     `Last update check: ${support.lastUpdateCheck}`,
     `Boot recovery: ${support.bootRecovery}`,
-    `Runner: ${support.cloudRunner}`,
+    // Only a Volli Cloud launch has a runner line.
+    ...(support.cloudRunner === undefined ? [] : [`Runner: ${support.cloudRunner}`]),
   ];
 
   if (rows.length > 0) {

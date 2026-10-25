@@ -15,6 +15,7 @@
 import * as React from "react";
 import type { ThisMacRunnerSnapshot } from "@volli/shared";
 
+import { NOT_CONNECTED } from "@renderer/lib/cloud-board-api";
 import { cloudSession, followCloudSession, type CloudSession } from "@renderer/lib/cloud-client";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { cloudFailure, type Watched } from "@renderer/stores/cloud-board/source";
@@ -60,8 +61,6 @@ export interface RunnerCommands {
   addThisMac(): Promise<unknown>;
   removeThisMac(): Promise<unknown>;
 }
-
-export const NOT_CONNECTED = "Volli Cloud isn’t connected.";
 
 const failureOf = (error: unknown, fallback: string): string =>
   error instanceof Error && error.message !== "" ? error.message : fallback;
@@ -120,8 +119,11 @@ function useRunnerList(follow: FollowSession, attempt: number): Loaded<readonly 
     const stopFollowing = follow((session) => {
       stopWatch?.();
       stopWatch = null;
+      if (session === null) {
+        setView({ kind: "failed", message: NOT_CONNECTED });
+        return;
+      }
       setView({ kind: "loading" });
-      if (session === null) return;
       const watch = session.client.watchQuery(session.api.runners.list, {}) as Watched<
         readonly RunnerRow[]
       >;
@@ -203,6 +205,15 @@ export function runnerStatus(
       return { state: "exited", label: "Volli is closed" };
     case "updating":
       return { state: "starting", label: "Updating" };
+    case "draining":
+      return { state: "parked", label: "Finishing its work" };
+    case "degraded":
+      return {
+        state: "error",
+        label: runner.statusReason === null ? "Degraded" : `Degraded: ${runner.statusReason}`,
+      };
+    case "upgrade_required":
+      return { state: "error", label: "Needs an update" };
     case "revoked":
       return {
         state: "error",

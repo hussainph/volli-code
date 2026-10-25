@@ -28,18 +28,24 @@ describe("the Mac runner's calls as the person", () => {
   it("registers through the HTTP actions API with the person's token", async () => {
     const { requests, backend } = answering(200, { status: "success", value: GRANT });
     await expect(
-      backend.registerThisMac("person", { host: HOST, name: "Dana's Mac", replacesRunnerId: null }),
+      backend.registerThisMac("person", {
+        host: HOST,
+        name: "Dana's Mac",
+        replacesRunnerId: null,
+        registrationId: "reg-1",
+      }),
     ).resolves.toEqual(GRANT);
     await backend.registerThisMac("person", {
       host: HOST,
       name: null,
       replacesRunnerId: GRANT.runnerId,
+      registrationId: "reg-1",
     });
     expect(requests[0]!.url).toBe("https://x.convex.cloud/api/action");
     expect(new Headers(requests[0]!.init.headers).get("authorization")).toBe("Bearer person");
     expect(JSON.parse(requests[0]!.init.body as string)).toEqual({
       path: "runners:registerThisMac",
-      args: { host: HOST, name: "Dana's Mac" },
+      args: { host: HOST, name: "Dana's Mac", registrationId: "reg-1" },
       format: "json",
     });
     expect(JSON.parse(requests[1]!.init.body as string).args.replacesRunnerId).toBe(GRANT.runnerId);
@@ -53,6 +59,26 @@ describe("the Mac runner's calls as the person", () => {
       path: "runners:remove",
       args: { runnerId: GRANT.runnerId },
     });
+  });
+
+  it("reads one runner's status from the person's list", async () => {
+    const listed = answering(200, {
+      status: "success",
+      value: [{ id: GRANT.runnerId, status: "revoked", statusReason: "credential_reuse" }, {}],
+    });
+    await expect(listed.backend.runnerStatus("p", GRANT.runnerId)).resolves.toEqual({
+      status: "revoked",
+      statusReason: "credential_reuse",
+    });
+    await expect(listed.backend.runnerStatus("p", "other")).resolves.toBeNull();
+    expect(listed.requests[0]!.url).toBe("https://x.convex.cloud/api/query");
+    const odd = answering(200, { status: "success", value: [{ id: "r", status: 1 }] }).backend;
+    await expect(odd.runnerStatus("p", "r")).resolves.toEqual({
+      status: "unknown",
+      statusReason: null,
+    });
+    const unreadable = answering(200, { status: "success", value: {} }).backend;
+    await expect(unreadable.runnerStatus("p", "r")).rejects.toBeInstanceOf(BackendUnreachableError);
   });
 
   it("tells a refusal from an outage", async () => {
@@ -75,7 +101,12 @@ describe("the Mac runner's calls as the person", () => {
     await expect(down.removeRunner("p", "r")).rejects.toBeInstanceOf(BackendUnreachableError);
     const unreadable = answering(200, { status: "success", value: { runnerId: "x" } }).backend;
     await expect(
-      unreadable.registerThisMac("p", { host: HOST, name: null, replacesRunnerId: null }),
+      unreadable.registerThisMac("p", {
+        host: HOST,
+        name: null,
+        replacesRunnerId: null,
+        registrationId: "reg-1",
+      }),
     ).rejects.toBeInstanceOf(BackendUnreachableError);
     const offline = convexMacRunnerBackend({
       url: "https://x.convex.cloud",

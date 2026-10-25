@@ -1,8 +1,9 @@
 /**
  * What this Mac remembers about its runners outside the sealed store: one
  * non-secret `app_state` row, {@link CLOUD_RUNNER_APP_STATE_KEY}, holding per
- * person the runner's id, the host it was written on, and a tombstone once
- * the runner was removed or cut off. Never a credential.
+ * person the runner's id, the machine it was written on, a registration still
+ * waiting for its answer, and a tombstone once the runner was removed or cut
+ * off. Never a credential.
  *
  * It outlives the sealed link on purpose: a Mac that lost its keychain item
  * still knows which runner it was, and registers as its replacement instead
@@ -25,12 +26,16 @@ type Records = Record<string, MacRunnerRecord>;
 function readRecord(value: unknown): MacRunnerRecord | null {
   if (value === null || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
-  const runnerId = readId("runner", record["runnerId"]);
-  const { hostname, tombstone } = record;
-  if (runnerId === null || typeof hostname !== "string") return null;
+  const runnerId = record["runnerId"] === null ? null : readId("runner", record["runnerId"]);
+  const { machine, tombstone } = record;
+  if ((runnerId === null && record["runnerId"] !== null) || typeof machine !== "string")
+    return null;
+  const registrationId =
+    typeof record["registrationId"] === "string" ? record["registrationId"] : null;
   return {
     runnerId,
-    hostname,
+    machine,
+    registrationId,
     tombstone:
       tombstone === null
         ? null

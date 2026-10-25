@@ -213,6 +213,19 @@ To rotate, add the next public key to `VOLLI_RUNNER_JWKS`, push, then switch
 `issuer_unconfigured` and spends no credential. The fixture gives each run
 a fresh pair; `connectBackend().siteUrl` is where `/runner/*` lives.
 
+### Desktop registration retries
+
+`runners.registerThisMac` accepts optional nullable `registrationId`, a
+client-minted lowercase UUID kept across retries of the same registration.
+Invalid values are ignored. Before its first credential is used (generation 1,
+`currentFirstUsedAt: null`), a matching caller-owned, non-gone runner is
+returned with a fresh credential instead of creating another runner or moving
+work again. Otherwise registration follows the normal path. A
+`replacesRunnerId` naming a Mac still heartbeating in a live status is ignored,
+so a restored profile cannot revoke an active Mac. Working-copy jobs stay with
+the replaced runner until Working copies move; that move is not part of this
+handover.
+
 ### Bumping the pin
 
 Bump the backend release and the `convex` npm version together. Releases are

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { LOCAL_LAUNCH, OperationUnavailableError, THIS_MAC_RUNNER_OFF } from "@volli/shared";
 
+import { chooseProductStore } from "../cloud-launch";
 import { resolveRunnerSiteUrl, runnerAccountPort, thisMacRunnerLaunch } from "./index";
 import type { MacRunner } from "./mac-runner";
 
@@ -28,6 +29,16 @@ describe("the runner's HTTP actions origin", () => {
 describe("which launch makes this Mac a runner", () => {
   it("only a Volli Cloud launch with an HTTP actions origin; a local (and every flag-off) launch composes nothing", () => {
     expect(thisMacRunnerLaunch(LOCAL_LAUNCH, "https://a.convex.site")).toBeNull();
+    // Main's own boot decision with the flag off: no marker is read, nothing is composed.
+    const flagOff = chooseProductStore({
+      cloudFlag: false,
+      readMarker: () => {
+        throw new Error("a flag-off boot reads no marker");
+      },
+      backendUrl: "https://a.convex.cloud",
+      signInConfigured: true,
+    });
+    expect(thisMacRunnerLaunch(flagOff, "https://a.convex.site")).toBeNull();
     const cloud = { store: "cloud", userId: "u", backendUrl: "https://a.convex.cloud" } as const;
     expect(thisMacRunnerLaunch(cloud, null)).toBeNull();
     expect(thisMacRunnerLaunch(cloud, "https://a.convex.site")).toEqual({

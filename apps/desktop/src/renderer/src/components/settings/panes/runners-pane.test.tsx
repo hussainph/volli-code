@@ -268,7 +268,7 @@ describe("Settings → Runners", () => {
     await type(runnerRow("runner-box").querySelector("input")!, "crate", "Enter");
     expect(tier.cloud.mutations).toHaveLength(0);
     expect(error).toHaveBeenCalledWith(
-      "Couldn’t rename box: Volli Cloud isn’t connected.",
+      "Couldn’t rename box: Volli Cloud isn’t connected yet.",
       expect.anything(),
     );
   });
@@ -328,7 +328,7 @@ describe("Settings → Runners", () => {
     tier.list(ROWS);
     expect(tier.cloud.watchers(LIST, {})).toBe(1);
     tier.close();
-    expect(container.textContent).toContain("Loading runners…");
+    expect(container.textContent).toContain("Volli Cloud isn’t connected yet.");
     expect(tier.cloud.watchers(LIST, {})).toBe(0);
     act(() => root.unmount());
     expect(tier.unsubscribe).toHaveBeenCalledOnce();

@@ -535,6 +535,8 @@ export default defineSchema({
     installMode: literals(RUNNER_INSTALL_MODES),
     linkedVia: literals(RUNNER_LINK_METHODS),
     linkedAt: time,
+    // Desktop registration retry key; absent on older rows and other link methods.
+    desktopRegistrationId: v.optional(uuid),
     autoUpdate: v.object({
       enabled: v.boolean(),
       channel: v.string(),

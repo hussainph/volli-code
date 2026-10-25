@@ -18,12 +18,18 @@
  * A Mac that lost its sealed credential (keychain loss, a reset inventory)
  * registers again naming the runner it was (`replacesRunnerId`, from a
  * non-secret local record). When that names one of the caller's own Mac
- * runners that is not gone, the new runner succeeds it in the same
- * transaction: it takes the old runner's name, the old runner is revoked
- * (reason `replaced`) and leaves the list, and the old runner's work follows
+ * runners that is neither gone nor still heartbeating in a live status, the
+ * new runner succeeds it in the same transaction: it takes the old runner's
+ * name, the old runner is revoked (reason `replaced`) and leaves the list,
+ * and the old runner's work follows
  * (`moveRunnerWork`): Session claims (next generation), Session Places,
- * viewers, and open jobs that name no Working copy. Any other value registers
- * a plain new runner, so the id reveals nothing about anyone else's runners.
+ * viewers, and open jobs that name no Working copy. Working-copy jobs stay
+ * with the replaced runner until Working copies move (not part of this
+ * handover).
+ * Any other value registers a plain new runner, so the id reveals nothing
+ * about anyone else's runners. A client-minted `registrationId` makes a lost
+ * registration reply retryable while the first credential is unused: the
+ * same runner is returned with a fresh credential, without moving work again.
  *
  * Liveness: `heartbeat` writes only `runnerPresence`, which no client
  * subscribes to; `runners.status` changes only on a transition (the first
@@ -184,6 +190,7 @@ interface NewRunner {
   credentialHash: string;
   /** The runner this one succeeds: its name does not count as taken. */
   replaces?: string;
+  desktopRegistrationId?: string;
 }
 
 /** Inserts the runner, its first credential and its `linked` audit event. */
@@ -210,6 +217,9 @@ async function createRunner(ctx: Writer, input: NewRunner): Promise<IssuedGrant>
     installMode: input.host.installMode,
     linkedVia: input.linkedVia,
     linkedAt: now,
+    ...(input.desktopRegistrationId === undefined
+      ? {}
+      : { desktopRegistrationId: input.desktopRegistrationId }),
     autoUpdate: DEFAULT_AUTO_UPDATE,
     update: null,
     revokedAt: null,
@@ -480,9 +490,10 @@ export const revokeInstallToken = mutation({
 
 /**
  * The runner a re-registering Mac may succeed: one of `ownerUserId`'s own Mac
- * runners that is not gone, registering again as a Mac. Anything else
- * (nothing named, a malformed or unknown id, someone else's runner, another
- * kind, a removed or already replaced runner) is `null`, read the same way.
+ * runners that is neither gone nor still heartbeating in a live status,
+ * registering again as a Mac. Anything else (nothing named, a malformed or
+ * unknown id, someone else's runner, another kind, a removed or already
+ * replaced runner) is `null`, read the same way.
  */
 async function replaceableRunner(
   ctx: Reader,
@@ -493,7 +504,43 @@ async function replaceableRunner(
   if (kind !== "mac" || typeof runnerId !== "string" || !isUuid(runnerId)) return null;
   const runner = await runnerById(ctx, runnerId);
   if (runner === null || runner.ownerUserId !== ownerUserId) return null;
-  return runner.kind === "mac" && !isGone(runner) ? runner : null;
+  if (runner.kind !== "mac" || isGone(runner)) return null;
+  if (LIVE_RUNNER_STATUSES.some((status) => status === runner.status)) {
+    const presence = await ctx.db
+      .query("runnerPresence")
+      .withIndex("by_runner", (q) => q.eq("runnerId", runner.id))
+      .unique();
+    if (presence !== null && Date.now() - presence.lastHeartbeatAt <= RUNNER_OFFLINE_AFTER_MS) {
+      return null;
+    }
+  }
+  return runner;
+}
+
+/** A lost registration reply may replace only the caller's never-used first credential. */
+async function retryDesktopRegistration(
+  ctx: Writer,
+  ownerUserId: string,
+  registrationId: string,
+  credentialHash: string,
+): Promise<IssuedGrant | null> {
+  const owned = await ctx.db
+    .query("runners")
+    .withIndex("by_owner_name", (q) => q.eq("ownerUserId", ownerUserId))
+    .collect();
+  for (const runner of owned) {
+    if (runner.desktopRegistrationId !== registrationId || isGone(runner)) continue;
+    const credentials = await credentialsOf(ctx, runner.id);
+    // A token exchange advances generation even before the first runner write.
+    if (credentials?.generation !== 1 || credentials.currentFirstUsedAt !== null) continue;
+    await ctx.db.patch(credentials._id, { currentHash: credentialHash });
+    return {
+      runnerId: parseId("runner", runner.id),
+      name: runner.name,
+      generation: credentials.generation,
+    };
+  }
+  return null;
 }
 
 /**
@@ -536,15 +583,10 @@ async function moveRunnerWork(ctx: Writer, from: string, to: string): Promise<bo
     const jobs = await ctx.db
       .query("runnerJobs")
       .withIndex("by_runner_ready", (q) => q.eq("runnerId", from).eq("status", status))
+      .filter((q) => q.eq(q.field("workingCopyId"), null))
       .take(SWEEP_PAGE_SIZE);
-    let moved = 0;
-    for (const job of jobs) {
-      if (job.workingCopyId !== null) continue;
-      await ctx.db.patch(job._id, { runnerId: to });
-      moved += 1;
-    }
-    // Jobs that stay are read again by the next page; continue only while it moves something.
-    if (jobs.length === SWEEP_PAGE_SIZE && moved > 0) jobsLeft = true;
+    for (const job of jobs) await ctx.db.patch(job._id, { runnerId: to });
+    if (jobs.length === SWEEP_PAGE_SIZE) jobsLeft = true;
   }
   return jobsLeft || [intakes, sessions, viewers].some((rows) => rows.length === SWEEP_PAGE_SIZE);
 }
@@ -566,6 +608,7 @@ export const linkFromDesktop = internalMutation({
     host: v.any(),
     name: nullable(v.string()),
     replacesRunnerId: v.optional(nullable(v.string())),
+    registrationId: v.optional(nullable(v.string())),
   },
   handler: async (ctx, args): Promise<IssuedGrant> => {
     const { userId, user } = await requireViewer(ctx);
@@ -574,6 +617,16 @@ export const linkFromDesktop = internalMutation({
     }
     const host = parsed(parseRunnerHostFacts, args.host);
     const kind = runnerKindForOs(host.platform.os);
+    const registrationId = isUuid(args.registrationId) ? args.registrationId : undefined;
+    if (registrationId !== undefined) {
+      const retry = await retryDesktopRegistration(
+        ctx,
+        userId,
+        registrationId,
+        args.credentialHash,
+      );
+      if (retry !== null) return retry;
+    }
     const replaced = await replaceableRunner(ctx, userId, kind, args.replacesRunnerId);
     const grant = await createRunner(ctx, {
       ownerUserId: userId,
@@ -584,6 +637,7 @@ export const linkFromDesktop = internalMutation({
       name: replaced?.name ?? args.name,
       nameHint: null,
       credentialHash: args.credentialHash,
+      ...(registrationId === undefined ? {} : { desktopRegistrationId: registrationId }),
       ...(replaced === null ? {} : { replaces: replaced.id }),
     });
     if (replaced !== null) {
@@ -607,13 +661,16 @@ export const linkFromDesktop = internalMutation({
  * grant a box gets from linking; the desktop seals the credential locally.
  * `replacesRunnerId` is the runner this Mac was before it lost its
  * credential: when it is the caller's own Mac runner, the new one succeeds it
- * (see the module comment); otherwise it is ignored.
+ * (see the module comment); otherwise it is ignored. `registrationId` is a
+ * client-minted lowercase UUID retained across retries until the first
+ * credential is used; null, omitted or malformed ids are ignored.
  */
 export const registerThisMac = action({
   args: {
     host: v.any(),
     name: nullable(v.string()),
     replacesRunnerId: v.optional(nullable(v.string())),
+    registrationId: v.optional(nullable(v.string())),
   },
   handler: async (ctx, args): Promise<RunnerLinkGrant> => {
     const credential = mintSecret(RUNNER_SECRET_PREFIXES.credential);

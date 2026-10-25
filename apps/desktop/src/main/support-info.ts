@@ -119,8 +119,8 @@ export function describeBootRecovery(report: BootRecoveryReport | null): string 
 }
 
 /** This Mac's runner as the report's one line: state, problem and the waiting count; never an id or a name. */
-export function describeCloudRunner(snapshot: ThisMacRunnerSnapshot | null): string {
-  if (snapshot === null || snapshot.state === "off") return "off";
+export function describeCloudRunner(snapshot: ThisMacRunnerSnapshot | null): string | null {
+  if (snapshot === null || snapshot.state === "off") return null;
   const state =
     snapshot.problem === null ? snapshot.state : `${snapshot.state} (${snapshot.problem})`;
   const waiting =
@@ -143,7 +143,9 @@ function schemaVersion(db: Database.Database): number {
 export function collectSupportInfo(deps: SupportInfoDeps): SupportInfo {
   const db = deps.database();
   if (db === null) throw new Error("Profile database is unavailable");
+  const cloudRunner = describeCloudRunner(deps.cloudRunner?.() ?? null);
   return {
+    ...(cloudRunner === null ? {} : { cloudRunner }),
     appVersion: deps.appVersion(),
     channel: readUpdateChannel(db, deps.buildKind),
     platform: deps.platform,
@@ -152,7 +154,6 @@ export function collectSupportInfo(deps: SupportInfoDeps): SupportInfo {
     migrationHistory: describeMigrationHistory(checkMigrationHistory(db, SCHEMA_HEAD)),
     lastUpdateCheck: describeLastUpdateCheck(deps.lastUpdateCheck()),
     bootRecovery: describeBootRecovery(deps.bootRecovery()),
-    cloudRunner: describeCloudRunner(deps.cloudRunner?.() ?? null),
   };
 }
 

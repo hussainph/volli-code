@@ -12,7 +12,7 @@
  * the flag on.
  */
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as os from "node:os";
 
 import {
@@ -46,6 +46,28 @@ function computerName(): Promise<string | null> {
       const name = error ? "" : stdout.trim();
       done(name === "" ? null : name);
     });
+  });
+}
+
+/**
+ * This machine, stably: a hash of the Mac's hardware UUID (`IOPlatformUUID`),
+ * which a restored profile or a renamed host does not change; the hostname
+ * where it cannot be read. Hashed, so the record never holds the hardware id.
+ */
+export function thisMachineId(): Promise<string> {
+  const hashed = (value: string) =>
+    createHash("sha256").update(`volli-runner-machine:${value}`).digest("hex").slice(0, 32);
+  if (process.platform !== "darwin") return Promise.resolve(hashed(os.hostname()));
+  return new Promise((done) => {
+    execFile(
+      "ioreg",
+      ["-rd1", "-c", "IOPlatformExpertDevice"],
+      { timeout: 5_000 },
+      (error, stdout) => {
+        const uuid = error ? null : /"IOPlatformUUID"\s*=\s*"([^"]+)"/u.exec(stdout)?.[1];
+        done(hashed(uuid ?? os.hostname()));
+      },
+    );
   });
 }
 
@@ -160,7 +182,7 @@ export function createDesktopMacRunner(input: DesktopMacRunnerInput): MacRunner 
       facts: runnerHostFacts("app"),
       name: await thisMacName(input.packaged),
     }),
-    hostname: () => os.hostname(),
+    machine: thisMachineId,
     power: input.power,
     log: input.log,
   });

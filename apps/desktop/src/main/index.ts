@@ -1043,6 +1043,8 @@ const appStartup = app.whenReady().then(async () => {
   );
   // Bound once menu-bar mode exists below: its browser closes while resident.
   let residentMenuBar: { isResident(): boolean } | null = null;
+  // The cloud launch's turn-time power assertion, released at teardown.
+  let releaseTurnPower: (() => void) | null = null;
   // Loaded only for a cloud launch: a local one never loads the Convex client.
   const convexClient =
     runnerLaunch !== null && liveHost !== undefined
@@ -1354,6 +1356,7 @@ const appStartup = app.whenReady().then(async () => {
       // sign-in waiting on the browser ends and the dev issuer stops listening.
       accountGithub.dispose();
       account.dispose();
+      releaseTurnPower?.();
     },
     cloudEnabled: () => isExperimentEnabled("cloud"),
     terminalQuit: prepareTerminalQuit,
@@ -2443,7 +2446,7 @@ const appStartup = app.whenReady().then(async () => {
   runnerEdge.bind({ menuBar });
   if (macRunner !== null && liveHost !== undefined) {
     residentMenuBar = menuBar;
-    holdWhileTurnsRun(liveHost.liveWork, electronMenuBarPower());
+    releaseTurnPower = holdWhileTurnsRun(liveHost.liveWork, electronMenuBarPower());
     macRunner.start();
   }
   // The quit path is whole from here: a dropped binding fails the launch.
