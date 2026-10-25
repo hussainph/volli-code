@@ -221,7 +221,7 @@ jobs:
           node --test scripts/check-public-content.test.mjs
           node scripts/check-public-content.mjs
 
-      # docs/telemetry.md is generated from the telemetry vocabulary (VC-505).
+      # docs/telemetry.md is generated from the telemetry vocabulary and consent modules (VC-505).
       - name: Check generated telemetry field list
         run: node scripts/generate-telemetry-fields.mjs --check
 
