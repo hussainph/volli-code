@@ -44,6 +44,8 @@ test("the cloud entry point's runtime imports stay small and pure", () => {
     expect(names).not.toContain(heavy);
   }
   expect([...packages].toSorted()).toEqual([
+    // SigV4 presigning (`s3-presign.ts`).
+    "@noble/hashes/hmac.js",
     "@noble/hashes/sha2.js",
     "@noble/hashes/utils.js",
     "fractional-indexing",

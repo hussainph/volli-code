@@ -35,6 +35,7 @@ export type IdKind =
   | "signal"
   | "boardEvent"
   | "session"
+  | "transcriptSegment"
   | "runner"
   | "workingCopy"
   | "job"

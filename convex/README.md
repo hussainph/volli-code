@@ -33,7 +33,10 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 | `functions/lib/board.ts`                           | What board writes share: the actor, the project counter (`BoardWrite`: ticket numbers and the board event `seq`), row ↔ rule-fact mapping, typed errors.                                |
 | `functions/lib/boardReceipts.ts`                   | `withBoardReceipt`: every board mutation is idempotent by `commandId` for seven days; another intent under the same id is `command_conflict`.                                           |
 | `functions/lib/boardEffects.ts`                    | A board write's machine side effects (Done/archive trim, interrupts, armed arrivals, worktree materialization) as `runnerJobs` rows for the runner that holds the work.                 |
-| `functions/boardReceipts.ts`, `functions/crons.ts` | The hourly sweep of expired receipts.                                                                                                                                                   |
+| `functions/boardReceipts.ts`, `functions/crons.ts` | The scheduled sweeps (receipts hourly, packed transcript staging every 15 min).                                                                                                         |
+| `functions/transcripts.ts`                         | Transcript bodies and Pi logs: `stageArtifacts`, `commitSegment`, `commitPiLogSegment`, `head` (where a runner resumes), the producer fence and `sweepPacked`.                          |
+| `functions/files.ts`                               | `presignPut`: a SigV4 URL bound to one key, length and SHA-256 (signed by `presignS3Request` in `@volli/shared/cloud`).                                                                 |
+| `functions/lib/objectStore.ts`                     | The S3-compatible store the backend signs for (`VOLLI_S3_*` variables; unset refuses with `storage_unconfigured`).                                                                      |
 | `functions/_generated/`                            | Output of `convex codegen`, **committed**. CI regenerates it and fails on any drift. Never edit or format it by hand.                                                                   |
 | `fixture/backend.json`                             | The pin: one backend release, the `convex` npm version that goes with it, and a sha256 for each platform's zip.                                                                         |
 | `fixture/backend.ts`                               | Downloads and verifies the binary, then starts a backend: free loopback ports, a fresh data dir, a random instance secret, beacon off. `stop()` kills it and deletes the dir.           |
@@ -168,7 +171,9 @@ typechecks this package along with the rest of the workspace.
 ## Deployments (not yet)
 
 There are no cloud deployments yet. Dev, staging and prod deployments, deploy
-CI, object storage (R2), backups and export are added once the Convex and
-Cloudflare accounts exist. Deploy CI will push this package with
+CI, the object-storage bucket (R2), backups and export are added once the
+Convex and Cloudflare accounts exist. Deploy CI will push this package with
 `npx convex deploy` and a per-environment deploy key. It will refuse any
-target that has `VOLLI_TEST_JWKS` set.
+target that has `VOLLI_TEST_JWKS` set. Signing uploads already works against
+any S3-compatible store: a deployment points at its bucket with the
+`VOLLI_S3_*` variables (`functions/lib/objectStore.ts`).

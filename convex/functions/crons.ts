@@ -9,4 +9,12 @@ const crons = cronJobs();
 // Board receipts answer retries for seven days; expired ones read as absent already.
 crons.interval("prune board receipts", { hours: 1 }, internal.boardReceipts.prune, {});
 
+// Staging rows a committed transcript segment covers expire an hour after it.
+crons.interval(
+  "sweep packed transcript artifacts",
+  { minutes: 15 },
+  internal.transcripts.sweepPacked,
+  {},
+);
+
 export default crons;
