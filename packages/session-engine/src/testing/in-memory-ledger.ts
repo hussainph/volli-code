@@ -23,8 +23,8 @@ import type {
 /**
  * Scope is decided by the ATTRIBUTION on the fact, never by the Session row.
  *
- * Same rule the SQLite projection follows, and it has to be, because this
- * adapter is the reference that one is checked against: a Ticket that has since
+ * Same rule the SQLite projection follows, and the shared ledger contract
+ * (`session-ledger-contract.ts`) holds both to it: a Ticket that has since
  * been deleted still owns the spend recorded against it, and a scope resolved
  * off `sessions.ticket_id` would answer `{ kind: "ticket" }` with nothing while
  * the projection still answered with the bill.
@@ -49,7 +49,9 @@ type ConcreteLatestSessionSignal = Omit<LatestSessionSignal, "sessionId"> & { se
 
 /**
  * A transactional test adapter. Production composition supplies SQLite (and,
- * later, another durable writer) behind the exact same port.
+ * later, another durable writer) behind the exact same port, and every one of
+ * them — this included — must pass `describeSessionLedgerContract`. A behaviour
+ * this twin needs that the contract does not pin is a contract case missing.
  */
 class InMemorySessionLedger implements SessionLedger {
   #sessions = new Map<string, Session>();
@@ -205,9 +207,9 @@ class InMemorySessionLedger implements SessionLedger {
 
   /**
    * Derived from the events, not from a table. This adapter exists for tests,
-   * where correctness is the whole point and a scan costs nothing — and
-   * deriving it here is what makes it the reference the SQLite projection is
-   * checked against.
+   * where correctness is the whole point and a scan costs nothing, so the
+   * contract's usage cases compare the SQLite projection against a derivation
+   * rather than against a second projection.
    */
   #listUsage(query: ListSessionUsageQuery): readonly SessionUsageEntry[] {
     const entries: SessionUsageEntry[] = [];
@@ -262,8 +264,8 @@ class InMemorySessionLedger implements SessionLedger {
    * Derived straight from the events rather than from an index: this store is
    * a test double whose whole content fits in memory, so the cheap answer and
    * the true answer are the same walk. The SQLite ledger keeps a projected
-   * closure mark instead — same meaning, different cost — and
-   * `session-engine.test.ts` holds the two to the same answers.
+   * closure mark instead — same meaning, different cost — and the shared
+   * ledger contract holds the two to the same answers.
    */
   #listAttachedSessions(): readonly Session[] {
     const attached: Session[] = [];
@@ -364,10 +366,17 @@ class InMemorySessionLedger implements SessionLedger {
 
   #listEvents(query: ListSessionEventsQuery): readonly SessionEvent[] {
     const afterSequence = query.afterSequence ?? 0;
-    const limit = query.limit ?? Number.POSITIVE_INFINITY;
+    // The same refusals as the SQLite ledger: a cursor or limit that is not a
+    // non-negative integer is a caller bug, not an empty page.
+    if (!Number.isInteger(afterSequence) || afterSequence < 0) {
+      throw new Error("Event pagination cursor must be a non-negative integer");
+    }
+    if (query.limit !== undefined && (!Number.isInteger(query.limit) || query.limit < 0)) {
+      throw new Error("Event pagination limit must be a non-negative integer");
+    }
     return this.#eventsFor(query.sessionId)
       .filter((event) => event.sequence > afterSequence)
-      .slice(0, Math.max(0, limit))
+      .slice(0, query.limit)
       .map(clone);
   }
 

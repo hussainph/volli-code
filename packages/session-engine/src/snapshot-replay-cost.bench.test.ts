@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { SessionEvent, SessionLedgerIds, SessionProjectionCheckpoint } from "@volli/shared";
 import {
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamFrame,
@@ -17,6 +15,7 @@ import {
   type SessionTranscriptArtifact,
   type TranscriptArtifactStore,
 } from "./index";
+import { createInMemorySessionLedger, createInMemoryTranscriptArtifactStore } from "./testing";
 
 /**
  * What opening, resuming and scrolling back through a Session costs, by age

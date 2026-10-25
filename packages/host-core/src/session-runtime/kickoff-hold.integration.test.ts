@@ -17,7 +17,6 @@
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
-  createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
   type BindingHandle,
@@ -38,6 +37,7 @@ import { createDelegations, DELEGATION_ID_SUFFIXES } from "./delegate-session";
 import { createTicketSessionDelegationStore } from "./delegation-store";
 import { createSessions } from "./sessions";
 import { kickoffSubmitter, startSessionOperation } from "./start-session";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 const MODEL: ModelSelection = {
   providerId: "scripted",

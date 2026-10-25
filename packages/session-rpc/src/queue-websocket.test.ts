@@ -16,13 +16,7 @@ import {
   type HostHelloInput,
 } from "@volli/host-protocol";
 import { expectHostError, ipcContractLink, recordSubscription } from "@volli/host-protocol/testing";
-import {
-  createInMemorySessionFollowUpLedger,
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
-  createSessionEngine,
-  createSessionRuntime,
-} from "@volli/session-engine";
+import { createSessionEngine, createSessionRuntime } from "@volli/session-engine";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import {
@@ -49,6 +43,11 @@ import {
   peerInput,
   type PeerExchange,
 } from "./canary-peer.test-support";
+import {
+  createInMemorySessionFollowUpLedger,
+  createInMemorySessionLedger,
+  createInMemoryTranscriptArtifactStore,
+} from "@volli/session-engine/testing";
 const canary = process.env.VOLLI_CANARY_CAPTURE_DIR ? null : loadCanaryPeer();
 
 /** What the Session router alone serves: every v1 feature but the board's (VC-565). */

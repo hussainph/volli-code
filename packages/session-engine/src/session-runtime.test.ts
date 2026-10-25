@@ -15,8 +15,6 @@ import {
 import legacyLedger from "../../shared/src/fixtures/legacy-authority-ledger.json";
 import type { UIMessage } from "ai";
 import {
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamCompactionProgress,
@@ -46,6 +44,11 @@ import {
   type TranscriptDelta,
 } from "./index";
 import { PROJECTION_CACHE_LIMIT } from "./session-runtime";
+import {
+  createCommittedSessionStream,
+  createInMemorySessionLedger,
+  createInMemoryTranscriptArtifactStore,
+} from "./testing";
 
 const venue = { id: "machine-1", kind: "local" as const };
 
@@ -205,8 +208,8 @@ function composition(
     observability?: ObservabilitySink;
     /**
      * Where the runtime hears committed events. Absent means what every host
-     * composes (VC-790): {@link committedStream} over the engine, which the
-     * returned `engine` then writes through. `false` composes none, for the
+     * composes (VC-790): {@link createCommittedSessionStream} over the engine,
+     * which the returned `engine` then writes through. `false` composes none, for the
      * fallback the runtime keeps without it.
      */
     committed?: SubscribeCommittedSessionEvents | false;
@@ -221,7 +224,7 @@ function composition(
       clock,
       ids: ids(),
     });
-  const stream = options.committed === undefined ? committedStream(base) : null;
+  const stream = options.committed === undefined ? createCommittedSessionStream(base) : null;
   const engine = stream?.engine ?? base;
   const committed = stream?.committed ?? options.committed;
   const adapter = options.adapter ?? new FakeAdapter();
@@ -245,81 +248,13 @@ function composition(
   };
 }
 
-/**
- * The host's post-commit wake bus in miniature (`session-wake.ts` in
- * host-core): wraps an Engine so every write, once it settles, announces each
- * event it appended — including the ones `submit` appends and does not return
- * — to every listener, in ledger order.
- */
-function committedStream(base: SessionEngine) {
-  const listeners = new Set<(event: SessionEvent) => void>();
-  const announced = new Map<string, number>();
-  async function announce(sessionId: string): Promise<void> {
-    let events: readonly SessionEvent[];
-    try {
-      events = await base.listEvents({ sessionId, afterSequence: announced.get(sessionId) ?? 0 });
-    } catch {
-      // As the real bus does: a read-back that failed must not fail the write
-      // it followed, and the next write's announce picks these events up.
-      return;
-    }
-    if (events.length === 0) return;
-    announced.set(sessionId, events[events.length - 1]!.sequence);
-    for (const event of events) {
-      // A snapshot, as the real bus takes: a listener may unsubscribe on the event.
-      const settled = [...listeners];
-      for (const listener of settled) listener(event);
-    }
-  }
-  const engine: SessionEngine = {
-    ...base,
-    createSession: async (request) => {
-      const result = await base.createSession(request);
-      await announce(result.session.id);
-      return result;
-    },
-    getOrRecordSessionInput: async (request) => {
-      const result = await base.getOrRecordSessionInput(request);
-      await announce(request.sessionId);
-      return result;
-    },
-    recordToolRefresh: async (request) => {
-      const result = await base.recordToolRefresh(request);
-      await announce(request.sessionId);
-      return result;
-    },
-    observe: async (observation) => {
-      const result = await base.observe(observation);
-      await announce(result.sessionId);
-      return result;
-    },
-    submit: async (request) => {
-      const result = await base.submit(request);
-      await announce(request.sessionId);
-      return result;
-    },
-    completeModelSelection: async (request) => {
-      const result = await base.completeModelSelection(request);
-      await announce(request.sessionId);
-      return result;
-    },
-  };
-  const committed: SubscribeCommittedSessionEvents = (listener) => {
-    listeners.add(listener);
-    return () => {
-      listeners.delete(listener);
-    };
-  };
-  return { engine, committed, listeners };
-}
-
 /** {@link composition} as the host composes it, with the stream's listeners exposed. */
 function committedComposition(
   options: Omit<NonNullable<Parameters<typeof composition>[0]>, "engine" | "committed"> = {},
 ) {
   let now = 100;
   const clock = options.clock ?? { now: () => now++ };
-  const stream = committedStream(
+  const stream = createCommittedSessionStream(
     createSessionEngine({ ledger: createInMemorySessionLedger(), clock, ids: ids() }),
   );
   return {

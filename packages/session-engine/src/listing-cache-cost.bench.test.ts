@@ -7,7 +7,8 @@ import type {
   SessionProjection,
   SessionProjectionEvent,
 } from "@volli/shared";
-import { createInMemorySessionLedger, createSessionEngine } from "./index";
+import { createSessionEngine } from "./index";
+import { createInMemorySessionLedger } from "./testing";
 
 /**
  * What it costs to stop a caller aliasing a cached listing row (VC-393).

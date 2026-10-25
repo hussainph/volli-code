@@ -10,8 +10,6 @@ import {
 import type { UIMessage } from "ai";
 
 import {
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
   currentTodoList,
@@ -27,6 +25,7 @@ import {
 } from "./index";
 import { BASELINE_SCAN_CHUNK, recoverTranscriptBaseline } from "./transcript-baseline";
 import type { SessionTranscriptArtifact } from "./transcript-artifacts";
+import { createInMemorySessionLedger, createInMemoryTranscriptArtifactStore } from "./testing";
 
 /**
  * The plan and reply of a Session whose history predates transcript digests,

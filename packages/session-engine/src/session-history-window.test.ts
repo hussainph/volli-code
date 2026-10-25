@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { SessionEvent, SessionLedgerIds, SessionProjectionCheckpoint } from "@volli/shared";
 import {
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamFrame,
@@ -17,6 +15,7 @@ import {
   type SessionTranscriptArtifact,
   type TranscriptArtifactStore,
 } from "./index";
+import { createInMemorySessionLedger, createInMemoryTranscriptArtifactStore } from "./testing";
 
 /**
  * A history window's two contracts, held against randomized Sessions (VC-315).

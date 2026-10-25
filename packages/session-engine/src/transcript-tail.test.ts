@@ -3,14 +3,13 @@ import { ACTIVITY_METADATA_KEY } from "@volli/shared";
 import type { CommandReceipt, SessionEvent, TranscriptReference } from "@volli/shared";
 import type { UIMessage } from "ai";
 
-import { createInMemorySessionLedger } from "./in-memory-ledger";
-import { createInMemoryTranscriptArtifactStore } from "./transcript-artifacts";
 import type { SessionTranscriptArtifact } from "./transcript-artifacts";
 import {
   readSessionTranscriptTail,
   TRANSCRIPT_TAIL_TEXT_LIMIT,
   transcriptReferenceFor,
 } from "./transcript-tail";
+import { createInMemorySessionLedger, createInMemoryTranscriptArtifactStore } from "./testing";
 
 const PROVENANCE = {
   source: { kind: "adapter", id: "pi", detail: null },

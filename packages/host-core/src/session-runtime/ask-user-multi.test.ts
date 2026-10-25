@@ -3,7 +3,6 @@ import { dirname, join } from "node:path";
 import {
   createSessionEngine,
   createSessionRuntime,
-  createInMemoryTranscriptArtifactStore,
   sessionRootThreadId,
 } from "@volli/session-engine";
 import {
@@ -21,6 +20,7 @@ import { insertProject } from "../db/projects-repo";
 import { openRawDb, openTestDb, testProject } from "../db/test-helpers";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { createPiNativeAdapter } from "./pi-adapter";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 const questions: RuntimeAskUserQuestion[] = [
   {

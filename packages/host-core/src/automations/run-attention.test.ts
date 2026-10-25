@@ -18,8 +18,6 @@
  */
 import { describe, expect, it } from "vite-plus/test";
 import {
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
   type NativeHarnessAdapter,
@@ -32,6 +30,10 @@ import {
   runAttentionNotification,
   runAttentionTarget,
 } from "./run-attention";
+import {
+  createInMemorySessionLedger,
+  createInMemoryTranscriptArtifactStore,
+} from "@volli/session-engine/testing";
 
 const SESSION_ID = "session-1";
 

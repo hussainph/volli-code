@@ -4,9 +4,9 @@ import type { SessionEvent, TranscriptReference } from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
-import { createInMemoryTranscriptArtifactStore } from "./transcript-artifacts";
 import type { SessionTranscriptArtifact } from "./transcript-artifacts";
 import { currentTodoList, readSessionTodoList } from "./session-todo";
+import { createInMemoryTranscriptArtifactStore } from "./testing";
 
 let nextId = 0;
 

@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
-  createInMemoryTranscriptArtifactStore,
   createSessionRuntime,
   type HarnessCommand,
   type NativeHarnessAdapter,
@@ -16,6 +15,7 @@ import {
   stampFollowUpCleanClose,
 } from "../db/session-follow-up-repo";
 import { openRawDb, openTestDb, testProject, type TestDb } from "../db/test-helpers";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 let fixture: TestDb;
 let runtime: ReturnType<typeof createSessionRuntime> | undefined;

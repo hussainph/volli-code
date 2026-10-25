@@ -1,11 +1,11 @@
 /** A real Engine-port proof, not desktop boot recovery or a production binding. */
+import { createSessionEngine } from "@volli/session-engine";
+import type { SessionEventProvenance } from "@volli/shared";
+import type { TranslatedObservation } from "../../../session-engine/src/observation-translation.ts";
 import {
   createInMemorySessionLedger,
   createInMemoryTranscriptArtifactStore,
-  createSessionEngine,
-} from "@volli/session-engine";
-import type { SessionEventProvenance } from "@volli/shared";
-import type { TranslatedObservation } from "../../../session-engine/src/observation-translation.ts";
+} from "@volli/session-engine/testing";
 
 export async function proveEngineProjection(
   facts: readonly TranslatedObservation[],

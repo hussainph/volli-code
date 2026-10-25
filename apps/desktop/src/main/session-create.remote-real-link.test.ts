@@ -21,7 +21,7 @@ import {
   testProject,
   testTicket,
 } from "@volli/host-core/testing";
-import { createSessionRuntime, createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
+import { createSessionRuntime } from "@volli/session-engine";
 import type { FlushHost } from "@volli/session-presentation";
 import { createHostRouter, RpcDiagnosticLog } from "@volli/session-rpc";
 import { startHostProtocolListener } from "@volli/session-rpc/websocket";
@@ -72,6 +72,7 @@ import {
   workspaceLink,
   type Cleanups,
 } from "./remote-sessions.real-link.test-support";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 const electron = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),

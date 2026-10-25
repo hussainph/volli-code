@@ -12793,7 +12793,7 @@ describe("compaction failure privacy (VC-482 verification blocker)", () => {
           const { RuntimeObservationTranslator } =
             await import("../../../session-engine/src/observation-translation");
           const { createInMemorySessionLedger } =
-            await import("../../../session-engine/src/in-memory-ledger");
+            await import("../../../session-engine/src/testing/in-memory-ledger");
           const { observationPayload, projectSession } = await import("@volli/shared");
           const { compactionBoundaryCopy } =
             await import("../../../session-presentation/src/compaction-boundary");

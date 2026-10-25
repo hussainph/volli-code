@@ -7,8 +7,6 @@ import type {
 } from "@volli/shared";
 import { CHECKPOINT_REFRESH_EVENTS } from "./session-engine";
 import {
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
   type BindingHandle,
@@ -17,6 +15,7 @@ import {
   type SessionLocationResolver,
   type SessionRuntime,
 } from "./index";
+import { createInMemorySessionLedger, createInMemoryTranscriptArtifactStore } from "./testing";
 
 /**
  * What one streamed turn costs the durable ledger (VC-356, item 3).

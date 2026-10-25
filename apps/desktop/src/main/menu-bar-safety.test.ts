@@ -14,8 +14,6 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { UIMessage } from "ai";
 import type { RuntimeObservation } from "@volli/shared";
 import {
-  createInMemorySessionFollowUpLedger,
-  createInMemoryTranscriptArtifactStore,
   createSessionRuntime,
   SessionRuntimeExitingError,
   type BindingHandle,
@@ -34,6 +32,10 @@ import { prepareDesktopQuit } from "./host-runtime";
 import { createMenuBarHost, trayModel, type MenuBarHostPorts } from "./menu-bar-host";
 import { refuseQuit, registerAcceptedQuitCoordinator } from "./quit-gate";
 import { readUpdateLiveWork } from "./update-ipc";
+import {
+  createInMemorySessionFollowUpLedger,
+  createInMemoryTranscriptArtifactStore,
+} from "@volli/session-engine/testing";
 
 const resources: Array<() => void> = [];
 afterEach(() => {
