@@ -33,6 +33,7 @@ import { NodeExecutionEnv } from "./harness-env";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { ScopedExecutionEnv, type ScopedExecutionEnvOptions } from "./scoped-execution-env";
 import { ShellSpillBudget } from "./shell-spill";
+import { CredentialRedactionStream, ExactValueByteRedactor } from "@volli/shared";
 
 type SandboxOverrides = Partial<NonNullable<ScopedExecutionEnvOptions["sandbox"]>>;
 
@@ -91,6 +92,19 @@ function readBytes(path: string, offset: number, length: number): Buffer {
   } finally {
     closeSync(descriptor);
   }
+}
+
+/**
+ * VC-865: the spool is written through the caller's spill redaction, in
+ * stream order and ahead of the byte budget, and fails closed on any error.
+ */
+function redacting(fail: "never" | "always" | "final" = "never") {
+  const redactor = new ExactValueByteRedactor([["secret-value", "‹secret:TOKEN›"]]);
+  return () =>
+    new CredentialRedactionStream((window, from, final) => {
+      if (fail === "always" || (fail === "final" && final)) throw new Error("secret-value");
+      return redactor.step(window, from, final);
+    });
 }
 
 function roots() {
@@ -1097,6 +1111,119 @@ describe("ScopedExecutionEnv", () => {
     append.mockRestore();
     await unwritableEnv.cleanup();
   });
+
+  it("spools a value split across chunks and streams as one marker", async () => {
+    const { worktree } = roots();
+    const running = child();
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => running) as never,
+    });
+    const seen = collected({
+      limits: { maxBytes: 6, maxLines: 100 },
+      spill: true,
+      spillRedaction: redacting(),
+    });
+    const run = env.exec("output", seen.options);
+    await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
+    running.stdout.write("aaa secret-");
+    await nextTurn();
+    running.stdout.write("value bbb secret-va");
+    await nextTurn();
+    running.emit("close", 0);
+
+    const result = await run;
+    const spillPath = result.ok ? result.value.spillPath : undefined;
+    expect(readFileSync(spillPath!, "utf8")).toBe("aaa ‹secret:TOKEN› bbb secret-va");
+    // The window is the capture's own: redacting the spool changes none of it.
+    expect(seen.text).toBe("ret-va");
+    await env.cleanup();
+  });
+
+  it("redacts ahead of the spool's cap, so a value straddling it leaves only a cut marker", async () => {
+    const { worktree } = roots();
+    const running = child();
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => running) as never,
+    });
+    const seen = collected({
+      limits: { maxBytes: 8, maxLines: 100 },
+      spill: true,
+      spillRedaction: redacting(),
+    });
+    const run = env.exec("output", seen.options);
+    await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
+    const chunk = "a".repeat(1024 * 1024);
+    for (let index = 0; index < ShellSpillBudget.maxBytes / chunk.length - 1; index += 1) {
+      running.stdout.write(chunk);
+      await nextTurn();
+    }
+    // Seven bytes short of the cap: the value starts inside it and ends past it.
+    running.stdout.write("a".repeat(chunk.length - 7));
+    await nextTurn();
+    running.stdout.write("secret-");
+    await nextTurn();
+    running.stdout.write("value tail\n");
+    running.emit("close", 0);
+
+    const result = await run;
+    expect(result).toMatchObject({
+      ok: true,
+      value: { spillTruncatedAt: ShellSpillBudget.maxBytes },
+    });
+    const spillPath = result.ok ? result.value.spillPath : undefined;
+    // Only the first seven bytes of the marker fit; no byte of the value does.
+    const size = statSync(spillPath!).size;
+    expect(size).toBe(ShellSpillBudget.maxBytes);
+    expect(readBytes(spillPath!, size - 9, 9).toString("utf8")).toBe("aa‹secr");
+    await env.cleanup();
+  }, 60_000);
+
+  it.each(["always", "final"] as const)(
+    "fails a command whose spool could not be redacted, writing nothing undecided (%s)",
+    async (when) => {
+      const { worktree } = roots();
+      const running = child();
+      const env = await ScopedExecutionEnv.create(worktree, {
+        sandbox: sandbox(),
+        spawn: (() => running) as never,
+      });
+      const run = env.exec("output", {
+        capture: {
+          limits: { maxBytes: 4, maxLines: 100 },
+          spill: true,
+          spillRedaction: redacting(when),
+        },
+      });
+      await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
+      const created = vi.spyOn(env, "createTempFile");
+      running.stdout.write("more than four bytes ");
+      await nextTurn();
+      running.stdout.write("tail secret-");
+      await nextTurn();
+      running.emit("close", 0);
+
+      const result = await run;
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: "unknown",
+          message: "Failed to preserve complete shell output: Credential redaction failed.",
+        },
+      });
+      if (when === "always") expect(created).not.toHaveBeenCalled();
+      else {
+        // Only decided, redacted bytes ever reach the spool; the held prefix never does.
+        const spillPath = (await created.mock.results[0]!.value) as { value: string };
+        const saved = readFileSync(spillPath.value, "utf8");
+        expect(saved).not.toBe("");
+        expect("more than four bytes tail ".startsWith(saved)).toBe(true);
+      }
+      created.mockRestore();
+      await env.cleanup();
+    },
+  );
 
   it("forwards append-file cancellation to the underlying environment", async () => {
     const { worktree } = roots();

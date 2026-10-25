@@ -125,9 +125,13 @@ describe("person-only secret request service", () => {
       "dispose",
       "hasValues",
       "redact",
+      "redactStreamStep",
       "request",
       "withdraw",
     ]);
+    // The streaming step answers with redacted bytes only, never a value.
+    const step = port.redactStreamStep(new TextEncoder().encode("plain"), 0, true);
+    expect(new TextDecoder().decode(step.bytes)).toBe("plain");
   });
   it("declines without storing, cancels without leaking a stale answer, and expires Session values", async () => {
     const { service, port } = setup();

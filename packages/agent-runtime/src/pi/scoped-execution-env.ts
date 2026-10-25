@@ -30,7 +30,7 @@ import {
 } from "./harness-env";
 import type { SpawnLedgerPort } from "@volli/shared";
 import { refuseDaemonizingExecute } from "../shell/refusal";
-import { ShellSpillBudget } from "./shell-spill";
+import { ShellSpillBudget, ShellSpillRedactor } from "./shell-spill";
 import {
   scopedEnvironment,
   sessionCommandEnvironment,
@@ -915,6 +915,11 @@ export class ScopedExecutionEnv implements ExecutionEnv {
       // The cut can land inside a multibyte character, so the capped bytes go
       // through a decoder that is never ended: the partial character is
       // withheld rather than written back as U+FFFD, bytes the budget had spent.
+      //
+      // VC-865: the caller's spill redaction runs first, in stream order and
+      // before the budget, so a value straddling the cap is replaced whole and
+      // only its marker can be cut. It stops once the budget is spent.
+      const spillRedactor = new ShellSpillRedactor(options.capture?.spillRedaction);
       const spillBudget = new ShellSpillBudget();
       const spillDecoder = new StringDecoder("utf8");
       let spillHeld: string[] = [];
@@ -956,8 +961,28 @@ export class ScopedExecutionEnv implements ExecutionEnv {
       const pumpSpill = () => {
         spillChain = (spillChain ?? Promise.resolve()).then(drainSpill);
       };
+      const failSpillRedaction = (error: unknown) => {
+        spillError ??= new ExecutionError(
+          "unknown",
+          `Failed to preserve complete shell output: ${asError(error).message}`,
+          asError(error),
+        );
+      };
       const holdForSpill = (text: string) => {
-        const capped = spillBudget.take(Buffer.from(text, "utf8"));
+        if (spillError !== undefined) return;
+        let safe: Uint8Array = Buffer.alloc(0);
+        if (spillBudget.truncatedAt === undefined) {
+          try {
+            safe = spillRedactor.push(Buffer.from(text, "utf8"));
+          } catch (error) {
+            failSpillRedaction(error);
+            return;
+          }
+        }
+        holdSpillBytes(safe);
+      };
+      const holdSpillBytes = (bytes: Uint8Array) => {
+        const capped = spillBudget.take(bytes);
         if (spillBudget.truncatedAt !== undefined)
           collector.setSpillTruncatedAt(spillBudget.truncatedAt);
         const complete = spillDecoder.write(capped);
@@ -1081,6 +1106,13 @@ export class ScopedExecutionEnv implements ExecutionEnv {
           // the metadata names a path, and a caller that reads it immediately
           // must not find a half-written file.
           if (spilling) {
+            if (spillError === undefined && spillBudget.truncatedAt === undefined) {
+              try {
+                holdSpillBytes(spillRedactor.end());
+              } catch (error) {
+                failSpillRedaction(error);
+              }
+            }
             pumpSpill();
             await spillChain;
           }

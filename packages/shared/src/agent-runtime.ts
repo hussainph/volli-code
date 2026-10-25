@@ -28,6 +28,7 @@ import type {
 } from "./authority";
 import { NON_CODING_TOOL_IDS } from "./authority";
 import type { DecisionAnswered, DecisionMiss } from "./decision-model";
+import type { CredentialStreamStepper } from "./credential-stream-redaction";
 import { parseCodeModeSurface, type CodeModeSurface } from "./code-mode";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
 import { validateMcpToolDefinitions } from "./mcp";
@@ -1258,6 +1259,12 @@ export interface SessionRuntimeSpec {
   credentialRedaction?: {
     redact(text: string): string;
     hasValues?(): boolean;
+    /**
+     * The same exact-value redaction as one bounded streaming step over bytes,
+     * for output written outside tool results (shell spills). Absent: shell
+     * spills are disabled while values are held.
+     */
+    redactStreamStep?: CredentialStreamStepper;
   };
   secret?: {
     request(
@@ -1267,6 +1274,8 @@ export interface SessionRuntimeSpec {
     redact(text: string): string;
     /** Whether credential values are held; absent means shell spills are disabled. */
     hasValues?(): boolean;
+    /** See `credentialRedaction.redactStreamStep`. */
+    redactStreamStep?: CredentialStreamStepper;
   };
   /**
    * Read one public web document, through a boundary this Session does not own.

@@ -908,8 +908,8 @@ tree's generation for the browser) and the time. A search (`web_search`,
 `execute` keeps Pi's inline handling: the last 2,000 lines or 50 KB, with output
 saved in a temp file capped at 64 MiB. The result names the spill cap when exceeded.
 Native execution removes these files when its attachment closes; they are not
-Session-persistent MCP output. Spilling remains disabled while the launch holds
-credential values.
+Session-persistent MCP output. The spill is credential-redacted before it is
+written (see [secrets](secrets.md#what-redaction-promises)).
 
 ## What is out of scope
 
