@@ -22,6 +22,7 @@ import {
   type RunnerLinkStore,
 } from "@volli/host-core/cloud-runner";
 import type { AgentCommand, AgentRequest } from "@volli/shared";
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared/cloud";
 
 import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
@@ -65,8 +66,14 @@ function request(cmd: AgentCommand, args: Record<string, unknown>): AgentRequest
 
 describe("agent verbs through the runner", () => {
   test("a cloud Session's agent writes the board as itself, until its claim moves", async () => {
-    const person = backend.client(`user:${randomUUID()}`);
-    const { userId } = await person.mutation(api.accounts.ensureViewer, {});
+    const email = `agent-verbs-${randomUUID()}@example.test`;
+    await backend.admin(internal.previewAccess.set, { kind: "email", value: email, enabled: true });
+    const person = backend.client(`user:${randomUUID()}`, {
+      claims: { email, email_verified: true },
+    });
+    const { userId } = await person.mutation(api.accounts.ensureViewer, {
+      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    });
     const [workspace] = await person.query(api.workspaces.listMine, {});
     const projectId = randomUUID();
     await person.mutation(api.projects.create, {
