@@ -1,0 +1,18 @@
+import { expect, test } from "vite-plus/test";
+
+import * as cloud from "./index";
+
+test("the cloud entry point exposes each module", () => {
+  for (const name of [
+    "readActor",
+    "isBoardEventKind",
+    "parseId",
+    "isJobKind",
+    "positionBetween",
+    "transcriptPackKey",
+    "renderTicketKey",
+    "canSeeSession",
+  ]) {
+    expect(typeof (cloud as Record<string, unknown>)[name]).toBe("function");
+  }
+});

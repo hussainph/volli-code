@@ -1,9 +1,9 @@
 # `@volli/convex`
 
 The Volli Cloud backend: the Convex schema and server functions, plus a pinned
-local backend that tests and codegen run against. This is the skeleton. The
-schema is a placeholder until the data model lands, and no cloud deployment
-exists yet.
+local backend that tests and codegen run against. The schema holds the whole
+cloud data model (validators and indexes); product functions arrive area by
+area, each in its own module. No cloud deployment exists yet.
 
 Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 
@@ -17,17 +17,21 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 
 ## Layout
 
-| Path                                            | What it holds                                                                                                                                                                 |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `functions/`                                    | The Convex functions directory (`convex.json` → `"functions"`). `schema.ts`, `auth.config.ts`, function modules.                                                              |
-| `functions/_generated/`                         | Output of `convex codegen`, **committed**. CI regenerates it and fails on any drift. Never edit or format it by hand.                                                         |
-| `fixture/backend.json`                          | The pin: one backend release, the `convex` npm version that goes with it, and a sha256 for each platform's zip.                                                               |
-| `fixture/backend.ts`                            | Downloads and verifies the binary, then starts a backend: free loopback ports, a fresh data dir, a random instance secret, beacon off. `stop()` kills it and deletes the dir. |
-| `fixture/jwt.ts`                                | The test issuer: a fresh ES256 key per run, and `mintTestToken(pem, subject)`.                                                                                                |
-| `fixture/with-backend.ts`                       | Runs one command against a throwaway backend, then stops it.                                                                                                                  |
-| `fixture/global-setup.ts`, `fixture/testing.ts` | Vitest wiring for `test:backend`: `connectBackend().client("user:alice")`.                                                                                                    |
-| `test/*.test.ts`                                | Unit tests: functions run in-process under [`convex-test`](https://docs.convex.dev/testing/convex-test). No backend.                                                          |
-| `test/*.backend.test.ts`                        | Integration tests against the real pinned backend.                                                                                                                            |
+| Path                                            | What it holds                                                                                                                                                                           |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `functions/`                                    | The Convex functions directory (`convex.json` → `"functions"`). `schema.ts`, `auth.config.ts`, function modules.                                                                        |
+| `functions/schema.ts`                           | Every table, its validators and indexes. Conventions and the recorded deviations: `SCHEMA-NOTES.md`.                                                                                    |
+| `functions/lib/validators.ts`                   | Validator building blocks (`uuid`, `nullable`, `literals`, the `actor` union), built from the shared vocabulary in `@volli/shared/cloud`.                                               |
+| `functions/lib/auth.ts`                         | Identity and membership checks: `requireIdentity`, `ensureViewer`, `requireViewer`, `requireMember`, `requireManage`, `requireProject`, `requireSessionVisible`, `requireSessionActor`. |
+| `functions/accounts.ts`                         | `ensureViewer` (the first call after sign-in) and `viewer`.                                                                                                                             |
+| `functions/_generated/`                         | Output of `convex codegen`, **committed**. CI regenerates it and fails on any drift. Never edit or format it by hand.                                                                   |
+| `fixture/backend.json`                          | The pin: one backend release, the `convex` npm version that goes with it, and a sha256 for each platform's zip.                                                                         |
+| `fixture/backend.ts`                            | Downloads and verifies the binary, then starts a backend: free loopback ports, a fresh data dir, a random instance secret, beacon off. `stop()` kills it and deletes the dir.           |
+| `fixture/jwt.ts`                                | The test issuer: a fresh ES256 key per run, and `mintTestToken(pem, subject)`.                                                                                                          |
+| `fixture/with-backend.ts`                       | Runs one command against a throwaway backend, then stops it.                                                                                                                            |
+| `fixture/global-setup.ts`, `fixture/testing.ts` | Vitest wiring for `test:backend`: `connectBackend().client("user:alice")`.                                                                                                              |
+| `test/*.test.ts`                                | Unit tests: functions run in-process under [`convex-test`](https://docs.convex.dev/testing/convex-test). No backend.                                                                    |
+| `test/*.backend.test.ts`                        | Integration tests against the real pinned backend.                                                                                                                                      |
 
 ## Running it locally
 
@@ -82,7 +86,12 @@ as anyone:
 ```ts
 const backend = connectBackend();
 await backend.client("user:alice").query(api.health.whoami, {});
+// With the profile claims a real provider sends:
+backend.client("user:alice", { claims: { email: "alice@example.com", name: "Alice" } });
 ```
+
+The backend is shared by every file in a run, so each test signs in as fresh
+subjects rather than expecting an empty database.
 
 **No cloud deployment may ever set `VOLLI_TEST_JWKS`.** Without it, the
 deployment trusts no test issuer.
