@@ -31,6 +31,7 @@ import type * as lib_validators from "../lib/validators.js";
 import type * as lib_visibility from "../lib/visibility.js";
 import type * as lib_workspaces from "../lib/workspaces.js";
 import type * as members from "../members.js";
+import type * as migration from "../migration.js";
 import type * as projects from "../projects.js";
 import type * as runnerHttp from "../runnerHttp.js";
 import type * as runners from "../runners.js";
@@ -68,6 +69,7 @@ declare const fullApi: ApiFromModules<{
   "lib/visibility": typeof lib_visibility;
   "lib/workspaces": typeof lib_workspaces;
   members: typeof members;
+  migration: typeof migration;
   projects: typeof projects;
   runnerHttp: typeof runnerHttp;
   runners: typeof runners;

@@ -1219,6 +1219,9 @@ export default defineSchema({
     armedByUserId: nullable(uuid),
     runnerId: nullable(uuid),
     createdAt: time,
+    // A failed arrival attempt's error, and the command id its Retry replays under.
+    error: v.optional(v.string()),
+    retryCommandId: v.optional(v.string()),
   })
     .index("by_uuid", ["id"])
     .index("by_automation", ["automationId", "createdAt"])

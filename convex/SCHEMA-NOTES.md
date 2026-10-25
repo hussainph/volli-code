@@ -201,3 +201,20 @@ Each was a decision made while turning the design into code.
     (`statusReason: credential_reuse`). It raises no Needs-you item yet:
     `attentionItems.projectId` is required, and a runner belongs to no
     project. The attention work decides how person-level items are stored.
+
+## Migrated rows
+
+- `automationRuns` has optional `error` and `retryCommandId`: a migrated
+  failed arrival attempt keeps its error and the command id its Retry replays
+  under.
+- Migrated rows are mapped by `migrationDocument` (`@volli/shared/cloud`),
+  which supplies every field local history does not decide (project ship
+  behaviour, a Session's open status and unfolded `usageTotals: null`, a
+  Working copy's clean diff, a pre-claim delegation's `legacy:<child>` tool
+  call). `test/migration.test.ts` inserts one record of every stream.
+- Two known gaps, both owned by the Session intake work: a migrated root
+  Session's `origin` is `user` even when an Automation started it, and the
+  migration stores Session event payloads, config definitions and job
+  payloads after a storability check only, not through the per-kind codecs
+  the intake will apply (it classifies `kindKnown`/`quarantine` with the
+  shared Session event codec before sending).

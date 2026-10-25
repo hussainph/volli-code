@@ -206,6 +206,20 @@ export function workingCopyId(ticketId: string): string {
   return derivedId("working-copy", ticketId, "primary");
 }
 
+/**
+ * The config entry id of a local MCP server. Local server ids are short slugs,
+ * not UUIDs, so the cloud row takes an id derived from it (the slug is kept in
+ * the entry's definition).
+ */
+export function mcpServerEntryId(serverId: string): string {
+  return derivedId("mcp-server", serverId);
+}
+
+/** The audit row id of a local MCP operation (local ids are not UUIDs either). */
+export function mcpOperationId(operationId: string): string {
+  return derivedId("mcp-operation", operationId);
+}
+
 /** The id of a config entry made from a column or a setting. */
 export function configEntryId(scope: string, kind: string, name: string): string {
   return derivedId("config-entry", scope, kind, name);
