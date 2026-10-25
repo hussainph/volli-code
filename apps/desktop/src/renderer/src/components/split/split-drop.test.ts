@@ -30,6 +30,7 @@ import {
   SPLIT_DROP_EDGE_BAND_CSS,
   SPLIT_FILE_DRAG_TYPE,
   SPLIT_SESSION_DRAG_TYPE,
+  TOP_STRIP_DROP_ID,
   type SplitDragPayload,
   type SplitPaneTabs,
 } from "./split-drop";
@@ -213,6 +214,19 @@ describe("splitZoneDropOperation", () => {
 });
 
 describe("splitTabDropOperation", () => {
+  it("takes a group pane's tab let go on the top strip back out as an ordinary tab", () => {
+    expect(
+      splitTabDropOperation({ activeId: "term-1", overId: TOP_STRIP_DROP_ID, panes: PANES }),
+    ).toEqual({ kind: "move", tabId: "term-1", paneId: "root" });
+    expect(
+      splitTabDropOperation({ activeId: "unseen", overId: TOP_STRIP_DROP_ID, panes: PANES }),
+    ).toEqual({ kind: "move", tabId: "unseen", paneId: "root" });
+    // An ordinary tab already lives there.
+    expect(
+      splitTabDropOperation({ activeId: "chat:a", overId: TOP_STRIP_DROP_ID, panes: PANES }),
+    ).toBeNull();
+  });
+
   it("reorders inside one pane, exactly as the strip always did", () => {
     expect(
       splitTabDropOperation({ activeId: "file:one.ts", overId: "chat:a", panes: PANES }),

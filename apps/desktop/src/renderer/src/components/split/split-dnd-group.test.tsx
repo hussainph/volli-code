@@ -9,7 +9,7 @@ import type {
 } from "@dnd-kit/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { SplitDnd } from "./split-dnd";
-import { splitZoneId, type SplitDropOperation } from "./split-drop";
+import { splitZoneId, TOP_STRIP_DROP_ID, type SplitDropOperation } from "./split-drop";
 import { Tab, TabStrip, TabStripSurface } from "@renderer/components/ui/tab-strip";
 
 const harness = vi.hoisted(() => ({ props: null as DndContextProps | null }));
@@ -191,4 +191,63 @@ it("keeps surface siblings stationary while standalone sortable strips retain th
     ),
   );
   expect((host.querySelector('[role="tab"]') as HTMLElement).style.transform).toContain("100px");
+});
+
+/** A droppable 400×30 at `top`, as dnd-kit measures one. */
+function container(id: string, top: number) {
+  return {
+    id,
+    rect: { current: { top, bottom: top + 30, left: 0, right: 400, width: 400, height: 30 } },
+  };
+}
+
+/** What the surface collision answers for `ids` under `pointer`. */
+function collide(pointer: { x: number; y: number }, ids: string[]) {
+  mountPairSurface();
+  return harness.props!.collisionDetection!({
+    pointerCoordinates: pointer,
+    droppableContainers: ids.map((id, index) =>
+      container(id, id === TOP_STRIP_DROP_ID ? 0 : index * 100),
+    ),
+    droppableRects: new Map(
+      ids.map((id, index) => [
+        id,
+        {
+          top: id === TOP_STRIP_DROP_ID ? 0 : index * 100,
+          bottom: (id === TOP_STRIP_DROP_ID ? 0 : index * 100) + 30,
+          left: 0,
+          right: 400,
+          width: 400,
+          height: 30,
+        },
+      ]),
+    ),
+    collisionRect: { top: 0, bottom: 1, left: 0, right: 1, width: 1, height: 1 },
+    active: { id: "source" },
+  } as unknown as Parameters<CollisionDetection>[0]);
+}
+
+describe("the top strip as a drop target", () => {
+  it("lands on the strip itself only where no tab is level with the pointer", () => {
+    expect(collide({ x: 50, y: 15 }, [TOP_STRIP_DROP_ID]).map((hit) => hit.id)).toEqual([
+      TOP_STRIP_DROP_ID,
+    ]);
+    // A tab level with the pointer wins, exactly as a reorder always did.
+    expect(collide({ x: 50, y: 115 }, [TOP_STRIP_DROP_ID, "tab"]).map((hit) => hit.id)).toEqual([
+      "tab",
+    ]);
+    expect(collide({ x: 50, y: 400 }, [TOP_STRIP_DROP_ID])).toEqual([]);
+  });
+
+  it("leaves the strip out of a keyboard drag's candidates", () => {
+    mountPairSurface();
+    const hits = harness.props!.collisionDetection!({
+      pointerCoordinates: null,
+      droppableContainers: [container(TOP_STRIP_DROP_ID, 0)],
+      droppableRects: new Map(),
+      collisionRect: { top: 0, bottom: 1, left: 0, right: 1, width: 1, height: 1 },
+      active: { id: "source" },
+    } as unknown as Parameters<CollisionDetection>[0]);
+    expect(hits).toEqual([]);
+  });
 });

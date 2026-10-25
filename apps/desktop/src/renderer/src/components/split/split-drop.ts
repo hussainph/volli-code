@@ -28,7 +28,7 @@
  * is still the authority at drop time — the slot is a preview, not a channel.
  * (Same shape and same justification as `editor/reveal-line.ts`.)
  */
-import type { SplitViewEdge } from "@volli/shared";
+import { SPLIT_VIEW_ROOT_PANE_ID, type SplitViewEdge } from "@volli/shared";
 
 import { tabDropOrder } from "@renderer/components/ui/tab-reorder";
 
@@ -191,6 +191,13 @@ export function isSplitZoneId(id: string): boolean {
   return parseSplitZoneId(id) !== null;
 }
 
+/**
+ * The top strip's own droppable (VC-614): a tab let go anywhere on the top
+ * strip but over none of its tabs — past its last tab, or on a strip whose
+ * every tab sits in a group chip — still lands on it, and leaves its group.
+ */
+export const TOP_STRIP_DROP_ID = "split-strip:top";
+
 // ---------------------------------------------------------------------------
 // What a drop writes
 
@@ -252,6 +259,12 @@ export function splitTabDropOperation(input: {
 }): SplitDropOperation | null {
   const { activeId, overId, panes } = input;
   if (overId === null) return null;
+  if (overId === TOP_STRIP_DROP_ID) {
+    // An ordinary tab is already the top strip's; there is nothing to leave.
+    return paneOf(panes, activeId)?.paneId === SPLIT_VIEW_ROOT_PANE_ID
+      ? null
+      : { kind: "move", tabId: activeId, paneId: SPLIT_VIEW_ROOT_PANE_ID };
+  }
   const zone = parseSplitZoneId(overId);
   if (zone !== null) return splitZoneDropOperation(panes, activeId, zone.paneId, zone.zone);
   const source = paneOf(panes, activeId);

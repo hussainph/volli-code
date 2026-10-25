@@ -53,6 +53,7 @@ import {
   splitTabDropOperation,
   subscribeSplitDrag,
   splitDragSnapshot,
+  TOP_STRIP_DROP_ID,
   type SplitDragOrigin,
   type SplitDragPayload,
   type SplitDropOperation,
@@ -117,14 +118,18 @@ function useSurfaceSensors() {
 }
 
 /**
- * Zones first, then the strip the pointer is in, then nothing.
+ * Zones first, then the strip the pointer is in, then the top strip itself,
+ * then nothing.
  *
  * A KEYBOARD drag has no pointer, and zones are pointer-only in v1 (`⌘\` is the
  * keyboard's route to a split) — so with no coordinates this is the plain
  * `closestCenter` over tabs the strip has always used.
  */
 const splitCollision: CollisionDetection = (args) => {
-  const tabs = args.droppableContainers.filter((container) => !isSplitZoneId(String(container.id)));
+  const tabs = args.droppableContainers.filter((container) => {
+    const id = String(container.id);
+    return !isSplitZoneId(id) && id !== TOP_STRIP_DROP_ID;
+  });
   const pointer = args.pointerCoordinates;
   if (pointer === null) return closestCenter({ ...args, droppableContainers: tabs });
 
@@ -139,7 +144,12 @@ const splitCollision: CollisionDetection = (args) => {
     const rect = container.rect.current;
     return rect !== null && pointer.y >= rect.top - 6 && pointer.y <= rect.bottom + 6;
   });
-  return inBand.length === 0 ? [] : closestCenter({ ...args, droppableContainers: inBand });
+  if (inBand.length > 0) return closestCenter({ ...args, droppableContainers: inBand });
+  // On the top strip but over none of its tabs: still a drop ON the strip.
+  const strip = args.droppableContainers.filter(
+    (container) => String(container.id) === TOP_STRIP_DROP_ID,
+  );
+  return pointerWithin({ ...args, droppableContainers: strip });
 };
 
 export function SplitDnd({
