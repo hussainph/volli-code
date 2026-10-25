@@ -6,6 +6,11 @@
  *
  * Shown only with `cloud` on: the category does not exist otherwise. Main
  * owns the sign-in; this pane reads its snapshot and never sees a token.
+ *
+ * **The launch (VC-889).** Signing in or out restarts Volli into the other
+ * store. In a local launch, a completed sign-in offers "Restart to open Volli
+ * Cloud" (a toast, and a row that stays until the restart); in a cloud
+ * launch, Sign out confirms, then signs out and restarts.
  */
 import * as React from "react";
 import { GithubLogoIcon } from "@phosphor-icons/react/dist/csr/GithubLogo";
@@ -32,8 +37,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@renderer/components/ui/alert-dialog";
+import { toast } from "sonner";
+
+import { SignOutRestartDialog } from "@renderer/components/cloud/sign-out-restart";
 import { Button } from "@renderer/components/ui/button";
 import { toastError } from "@renderer/lib/toast";
+import { launchStore } from "@renderer/stores/launch";
 
 import { useAccount, type AccountCommands, type AccountRpc } from "./use-account";
 
@@ -100,16 +109,25 @@ function purgeDate(at: number): string {
   return new Date(at).toLocaleDateString(undefined, { dateStyle: "long" });
 }
 
+/** Whether this signed-in account opens Volli Cloud on the next launch, from a local one. */
+function restartOffered(account: AccountSummary): boolean {
+  return launchStore() === "local" && account.backend === "synced" && account.userId !== null;
+}
+
 function SignedIn({
   account,
   failure,
   commands,
+  rpc,
 }: {
   account: AccountSummary;
   failure: string | null;
   commands: AccountCommands;
+  rpc: AccountRpc | undefined;
 }) {
   const [confirming, setConfirming] = React.useState(false);
+  const [signingOut, setSigningOut] = React.useState(false);
+  const cloudLaunch = launchStore() === "cloud";
   return (
     <>
       <PrefSection
@@ -119,7 +137,9 @@ function SignedIn({
           <SectionAction
             label="Sign out"
             icon={SignOutIcon}
-            onAct={() => act(commands.signOut, "Sign out")}
+            onAct={() =>
+              cloudLaunch ? setSigningOut(true) : act(commands.signOut, "Sign out")
+            }
           />
         }
       >
@@ -142,6 +162,13 @@ function SignedIn({
           <p role="alert" className="text-ui text-destructive">
             {failure}
           </p>
+        ) : null}
+        {restartOffered(account) ? (
+          <PrefRow label="Board">
+            <Button size="sm" variant="outline" onClick={() => act(commands.relaunch, "Restart")}>
+              Restart to open Volli Cloud
+            </Button>
+          </PrefRow>
         ) : null}
       </PrefSection>
       {account.backend !== "none" ? (
@@ -191,13 +218,40 @@ function SignedIn({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <SignOutRestartDialog
+        open={signingOut}
+        onOpenChange={setSigningOut}
+        {...(rpc === undefined ? {} : { rpc })}
+      />
     </>
   );
+}
+
+/**
+ * The moment a sign-in completes in a local launch, one toast offers the
+ * restart into Volli Cloud; "Later" is dismissing it (the row stays).
+ */
+function useRestartOffer(snapshot: AccountSnapshot | null, commands: AccountCommands): void {
+  const previous = React.useRef<AccountSnapshot | null>(null);
+  React.useEffect(() => {
+    const before = previous.current;
+    previous.current = snapshot;
+    if (before === null || snapshot === null || snapshot.account === null) return;
+    const offeredBefore = before.account !== null && restartOffered(before.account);
+    if (offeredBefore || !restartOffered(snapshot.account)) return;
+    toast("Restart to open Volli Cloud", {
+      id: "cloud-restart-offer",
+      duration: Infinity,
+      action: { label: "Restart now", onClick: () => act(commands.relaunch, "Restart") },
+      cancel: { label: "Later", onClick: () => {} },
+    });
+  }, [snapshot, commands]);
 }
 
 /** `rpc` is the tier client; a test passes its own. */
 export function AccountPane({ rpc }: { rpc?: AccountRpc } = {}) {
   const { view, commands, retry } = useAccount(rpc);
+  useRestartOffer(view.kind === "ready" ? view.snapshot : null, commands);
   if (view.kind === "loading") {
     return (
       <PrefSection title="Account" icon={UserCircleIcon}>
@@ -225,7 +279,14 @@ export function AccountPane({ rpc }: { rpc?: AccountRpc } = {}) {
     );
   }
   if (snapshot.state === "signed-in" && snapshot.account !== null) {
-    return <SignedIn account={snapshot.account} failure={snapshot.failure} commands={commands} />;
+    return (
+      <SignedIn
+        account={snapshot.account}
+        failure={snapshot.failure}
+        commands={commands}
+        rpc={rpc}
+      />
+    );
   }
   return <SignIn snapshot={snapshot} commands={commands} />;
 }

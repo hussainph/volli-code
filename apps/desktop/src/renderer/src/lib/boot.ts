@@ -6,7 +6,7 @@
  * always-clear-legacy-storage step) is unit-testable without mounting React.
  */
 import { toast } from "sonner";
-import { sanitizeLegacyProjects } from "@volli/shared";
+import { LOCAL_LAUNCH, sanitizeLegacyProjects, type CloudLaunch } from "@volli/shared";
 import type {
   BootstrapPayload,
   BootstrapResult,
@@ -23,13 +23,21 @@ import { toastError } from "@renderer/lib/toast";
 import { setBootNotice } from "@renderer/lib/boot-notice";
 import {
   PROJECTS_UI_APP_STATE_KEY,
+  decodeCloudSelection,
   decodeProjectsUiState,
   decodeRemoteSelection,
   encodeProjectsUiState,
   useProjectsStore,
+  type CloudSelection,
 } from "@renderer/stores/projects";
 import { useBoardStore } from "@renderer/stores/board";
-import { isRemoteProject, useHostConnectionStore } from "@renderer/stores/host-connection";
+import { installCloudBoardSource } from "@renderer/stores/board-source";
+import { ConvexBoardSource } from "@renderer/stores/cloud-board/source";
+import { followCloudWorkspace, useCloudWorkspaceStore } from "@renderer/stores/cloud-board/workspace";
+import { createCloudHostSource } from "@renderer/stores/cloud-link";
+import { useHostConnectionStore } from "@renderer/stores/host-connection";
+import { adoptLaunch, cloudLaunchNow, launchStore } from "@renderer/stores/launch";
+import { followCloudSession, startCloudClient } from "@renderer/lib/cloud-client";
 import { useRemoteBoardAvailabilityStore } from "@renderer/stores/remote-board-availability";
 import { followRemoteClaims, type FollowedHostStore } from "@renderer/lib/follow-remote-projects";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
@@ -125,10 +133,9 @@ export async function refreshPlanningData(
   change: { ticketId?: string; projectId?: string; kind?: DataChangeKind } = {},
   gateway: Pick<BootGateway, "bootstrap" | "projectRoster"> = defaultGateway,
 ): Promise<BootResult> {
-  // With `cloud` on, the board's own change feed carries every board change
-  // (VC-565): only the list of projects is still this window's to refresh.
-  const protocol = boardProtocol();
-  if (protocol !== null) return refreshProjectList(change, gateway, protocol.sync);
+  // A cloud launch shows none of this Mac's database (VC-889): its board is
+  // Volli Cloud's, current on its own.
+  if (launchStore() === "cloud") return { ok: true };
   const movedCheckout = change.kind === "worktree";
   if (movedCheckout) useWorkingCopyStore.getState().invalidateTickets(change.ticketId);
   if (!movesBoardData(change.kind)) {
@@ -191,42 +198,6 @@ export async function refreshPlanningData(
 }
 
 /**
- * The `cloud`-on refresh: a change that names a project the board already
- * follows is the feed's (it stamped the same write), so nothing is read. An
- * untargeted one, or one naming a project this window does not hold, may
- * have added or removed a project: the project list is re-read (the
- * bootstrap's projects; the board slices stay the feed's), a new project is
- * opened, and a removed one forgotten.
- */
-async function refreshProjectList(
-  change: { ticketId?: string; projectId?: string },
-  gateway: Pick<BootGateway, "bootstrap">,
-  sync: { follows(projectId: string): boolean },
-): Promise<BootResult> {
-  if (change.projectId !== undefined && sync.follows(change.projectId)) return { ok: true };
-  const result = await gateway.bootstrap();
-  if (!result.ok) return result;
-  const { projects } = result.data;
-  const previousSelection = useProjectsStore.getState().selectedProjectId;
-  const selectedProjectId = projects.some(({ id }) => id === previousSelection)
-    ? previousSelection
-    : (projects[0]?.id ?? null);
-  const known = new Set(projects.map(({ id }) => id));
-  const hosts = useHostConnectionStore.getState();
-  for (const projectId of Object.keys(useBoardStore.getState().ticketsByProject)) {
-    // A remote project is never in this Mac's bootstrap (VC-711): its board
-    // stays, and leaves with its claim (`followRemoteProjects`).
-    if (!known.has(projectId) && !isRemoteProject(hosts, projectId)) {
-      useBoardStore.getState().forget(projectId);
-    }
-  }
-  useProjectsStore.getState().hydrate(projects, selectedProjectId);
-  for (const { id } of projects) useBoardStore.getState().seedProject(id);
-  useBoardStore.getState().notePlanningChange(change);
-  return { ok: true };
-}
-
-/**
  * Follows every remote project the host-connection store claims
  * (`./follow-remote-projects`), dropping a project's board and row when its
  * claim goes.
@@ -276,11 +247,11 @@ async function readBootCloudFlag(
 }
 
 /**
- * With `cloud` on, moves the board onto the host protocol (VC-565): starts
- * the board client and sync engine over the desktop's IPC bridge, and opens
- * every project boot hydrated, from its snapshot, following its feed. With
- * it off (or unreadable) the board stays on the legacy IPC, exactly as before.
- * Resolves whether the protocol path started.
+ * With `cloud` on in a local launch, starts the board protocol's sync engine
+ * for the projects a remote host serves (VC-711), each over its Workspace
+ * link, as their claims arrive. This Mac's own projects stay on the legacy
+ * IPC with the flag on as with it off (VC-889). With it off (or unreadable)
+ * nothing starts. Resolves whether the protocol path started.
  */
 export async function startBoardProtocolIfEnabled(
   readCloud: () => Promise<boolean> = readCloudFlag,
@@ -296,7 +267,7 @@ export async function startBoardProtocolIfEnabled(
   const { sync } = startBoardProtocol({
     view: {
       paint: (projectId, tickets, labels, unloaded) =>
-        useBoardStore.getState().paintProtocolBoard(projectId, tickets, labels, unloaded),
+        useBoardStore.getState().paintBoard(projectId, tickets, labels, unloaded),
       adoptProject: (project) => useProjectsStore.getState().adoptProject(project),
       notePlanningChange: (change) => useBoardStore.getState().notePlanningChange(change),
       checkoutMoved: (ticketId) => {
@@ -313,15 +284,85 @@ export async function startBoardProtocolIfEnabled(
   // Remote projects (VC-711): each one's board over its Workspace link, for
   // the window's life.
   followRemoteProjects(sync, useHostConnectionStore, () => boardProtocol()?.sync === sync);
-  await Promise.all(
-    useProjectsStore.getState().projects.map(({ id }) =>
-      sync.open(id).catch((error: unknown) => {
-        toastError(
-          `Couldn't open the board: ${error instanceof Error ? error.message : String(error)}`,
-        );
+  return true;
+}
+
+/** Which product store this launch shows: main's answer, read once (`cloud.launch`). */
+async function readCloudLaunch(signal?: AbortSignal): Promise<CloudLaunch> {
+  return sessionRpcClient().cloud.launch.query(undefined, { signal });
+}
+
+/** A stalled or failed launch read is a local launch: the one that always works. */
+async function readBootLaunch(
+  read: (signal: AbortSignal) => Promise<CloudLaunch>,
+): Promise<CloudLaunch> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve()
+        .then(() => read(controller.signal))
+        .catch(() => LOCAL_LAUNCH),
+      new Promise<CloudLaunch>((resolve) => {
+        timer = setTimeout(() => resolve(LOCAL_LAUNCH), 1_000);
       }),
-    ),
-  );
+    ]);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}
+
+/** The cloud selection the last cloud launch left, read at boot for {@link startCloudBoard}. */
+let bootCloudSelection: CloudSelection | null = null;
+
+/** What {@link startCloudBoard} reaches; tests pass their own. */
+export interface CloudBoardDeps {
+  start: typeof startCloudClient;
+}
+
+/**
+ * A cloud launch's board (VC-889): the board source over the window's Volli
+ * Cloud client, Volli Cloud's link in the host-connection store, the current
+ * Workspace's projects, and then the client itself. Does nothing in a local
+ * launch. Resolves whether it started; a client that could not start says so.
+ */
+export async function startCloudBoard(
+  deps: CloudBoardDeps = { start: startCloudClient },
+): Promise<boolean> {
+  const launch = cloudLaunchNow();
+  if (launch === null) return false;
+  const source = new ConvexBoardSource({
+    paint: (projectId, tickets, labels, unloaded) =>
+      useBoardStore.getState().paintBoard(projectId, tickets, labels, unloaded),
+    notePlanningChange: (change) => useBoardStore.getState().notePlanningChange(change),
+    failed: (message) => toastError(message),
+    refused: (message) => toast(message, { id: "host-local-only" }),
+    dropped: (projectId, message) => {
+      const project = useProjectsStore.getState().projects.find(({ id }) => id === projectId);
+      useBoardStore.getState().forget(projectId);
+      useProjectsStore.getState().dropRemoteProject(projectId);
+      toast.warning(`${project?.name ?? "A project"} isn’t available any more: ${message}`);
+    },
+  });
+  installCloudBoardSource(source);
+  useHostConnectionStore.getState().attach(createCloudHostSource({ projects: useProjectsStore }));
+  // The source first: a project the follower seeds opens on a running client.
+  followCloudSession((session) => source.attach(session));
+  followCloudWorkspace({
+    follow: followCloudSession,
+    projects: useProjectsStore,
+    board: useBoardStore.getState(),
+    workspace: useCloudWorkspaceStore,
+    persisted: bootCloudSelection,
+    failed: (message) => toastError(message),
+    notice: (message) => toast.warning(message),
+  });
+  try {
+    await deps.start(launch);
+  } catch (error) {
+    toastError(`Couldn’t start Volli Cloud: ${error instanceof Error ? error.message : String(error)}`);
+  }
   return true;
 }
 
@@ -453,6 +494,7 @@ export async function boot(
   gateway: BootGateway = defaultGateway,
   storage: BootStorage = localStorage,
   readCloud: (signal: AbortSignal) => Promise<boolean> = readCloudFlag,
+  readLaunch: (signal: AbortSignal) => Promise<CloudLaunch> = readCloudLaunch,
 ): Promise<BootResult> {
   stopSelectionRestore?.();
   stopSelectionRestore = null;
@@ -515,8 +557,15 @@ export async function boot(
   // `select` afterward) so boot never fires a redundant appState.set — the
   // value already came FROM app_state, there's nothing new to persist.
   const cloud = await readBootCloudFlag(readCloud);
-  const remote = cloud ? decodeRemoteSelection(payload.appState[PROJECTS_UI_APP_STATE_KEY]) : null;
+  // Which store this launch shows (VC-889): asked only with the flag on, so
+  // a flag-off boot makes no new call.
+  const launch = cloud ? await readBootLaunch(readLaunch) : LOCAL_LAUNCH;
+  adoptLaunch(launch);
   const selectedProjectId = resolveSelectedProjectId(payload.appState, payload.projects);
+  if (launch.store === "cloud") {
+    return bootCloudLaunch(payload, selectedProjectId);
+  }
+  const remote = cloud ? decodeRemoteSelection(payload.appState[PROJECTS_UI_APP_STATE_KEY]) : null;
   useProjectsStore.setState({ pendingRemoteSelection: null });
   useProjectsStore
     .getState()
@@ -584,5 +633,38 @@ export async function boot(
   // and its own try/catch means it can't fail boot either.
   void notifyOrphanedWorktrees();
 
+  return { ok: true };
+}
+
+/**
+ * The rest of a cloud launch's boot (VC-889): this Mac's projects and boards
+ * are not hydrated (Volli Cloud's arrive with the client, `startCloudBoard`);
+ * only their count is kept, for the rail's footer, and the local and remote
+ * selections stay as they were for the next local launch. The window's own
+ * preferences restore as always.
+ */
+async function bootCloudLaunch(
+  payload: BootstrapPayload,
+  localSelection: string | null,
+): Promise<BootResult> {
+  const raw = payload.appState[PROJECTS_UI_APP_STATE_KEY];
+  bootCloudSelection = decodeCloudSelection(raw);
+  useProjectsStore.setState({ pendingRemoteSelection: null });
+  useProjectsStore
+    .getState()
+    .beginCloudLaunch({ local: localSelection, remote: decodeRemoteSelection(raw) });
+  useCloudWorkspaceStore.setState({ localProjects: payload.projects.length });
+  await Promise.all([
+    useUiStore.persist.rehydrate(),
+    useProjectUiStore.persist.rehydrate(),
+    useChatDraftsStore.persist.rehydrate(),
+  ]);
+  // A provisional Draft belongs to one of this Mac's tickets or projects,
+  // none of which this launch shows: they wait for a local launch.
+  useChatSessionsStore.getState().restoreProvisionalChatTabs(
+    useChatDraftsStore.getState().drafts,
+    new Set(),
+    new Set(),
+  );
   return { ok: true };
 }

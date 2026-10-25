@@ -2722,12 +2722,12 @@ describe("hydrateProjectRoster keeps identities (VC-447)", () => {
 
 // ---- VC-565: the protocol path (`cloud` on) -------------------------------------------
 
-describe("paintProtocolBoard", () => {
+describe("paintBoard", () => {
   it("seeds a Workspace it has never painted, marking the rows whose body it has not read", () => {
     const store = createBoardStore(fakeGateway());
     const tickets = [ticket({ id: "a", status: "doing" }), ticket({ id: "b", status: "todo" })];
 
-    store.getState().paintProtocolBoard("p1", tickets, [labelNamed("bug")], new Set(["b"]));
+    store.getState().paintBoard("p1", tickets, [labelNamed("bug")], new Set(["b"]));
 
     expect(store.getState().ticketsByProject.p1).toEqual(tickets);
     expect(store.getState().labelsByProject.p1).toEqual([labelNamed("bug")]);
@@ -2738,7 +2738,7 @@ describe("paintProtocolBoard", () => {
   it("seeds empty slices for an empty Workspace", () => {
     const store = createBoardStore(fakeGateway());
 
-    store.getState().paintProtocolBoard("p1", [], [], new Set());
+    store.getState().paintBoard("p1", [], [], new Set());
 
     expect(store.getState().ticketsByProject.p1).toEqual([]);
     expect(store.getState().labelsByProject.p1).toEqual([]);
@@ -2748,7 +2748,7 @@ describe("paintProtocolBoard", () => {
     const store = createBoardStore(fakeGateway());
     store
       .getState()
-      .paintProtocolBoard(
+      .paintBoard(
         "p1",
         [ticket({ id: "a", status: "doing" })],
         [labelNamed("bug")],
@@ -2758,7 +2758,7 @@ describe("paintProtocolBoard", () => {
 
     store
       .getState()
-      .paintProtocolBoard(
+      .paintBoard(
         "p1",
         [{ ...before.ticketsByProject.p1![0]! }],
         [labelNamed("bug")],
@@ -2773,7 +2773,7 @@ describe("paintProtocolBoard", () => {
     const labels = [labelNamed("bug")];
     store
       .getState()
-      .paintProtocolBoard(
+      .paintBoard(
         "p1",
         [ticket({ id: "a", status: "doing" }), ticket({ id: "b", status: "todo" })],
         labels,
@@ -2784,7 +2784,7 @@ describe("paintProtocolBoard", () => {
 
     store
       .getState()
-      .paintProtocolBoard(
+      .paintBoard(
         "p1",
         [{ ...a!, status: "done" }, { ...b! }],
         [labelNamed("bug")],
@@ -2801,7 +2801,7 @@ describe("paintProtocolBoard", () => {
     const store = createBoardStore(fakeGateway());
     store
       .getState()
-      .paintProtocolBoard(
+      .paintBoard(
         "p1",
         [ticket({ id: "a", status: "doing" })],
         [labelNamed("bug")],
@@ -2811,7 +2811,7 @@ describe("paintProtocolBoard", () => {
 
     store
       .getState()
-      .paintProtocolBoard(
+      .paintBoard(
         "p1",
         [{ ...ticketsBefore.p1![0]! }],
         [{ ...labelNamed("bug"), color: "#f00" }],
@@ -2825,10 +2825,10 @@ describe("paintProtocolBoard", () => {
   it("moves the unloaded marks alone when only they changed", () => {
     const store = createBoardStore(fakeGateway());
     const tickets = [ticket({ id: "a", status: "doing" }), ticket({ id: "b", status: "todo" })];
-    store.getState().paintProtocolBoard("p1", tickets, [], new Set(["a"]));
+    store.getState().paintBoard("p1", tickets, [], new Set(["a"]));
     const ticketsBefore = store.getState().ticketsByProject;
 
-    store.getState().paintProtocolBoard(
+    store.getState().paintBoard(
       "p1",
       tickets.map((row) => structuredClone(row)),
       [],
@@ -2844,13 +2844,13 @@ describe("paintProtocolBoard", () => {
     const store = createBoardStore(fakeGateway());
     const a = ticket({ id: "a", status: "doing" });
     const b = ticket({ id: "b", status: "doing", order: 1 });
-    store.getState().paintProtocolBoard("p1", [a, b], [], new Set());
+    store.getState().paintBoard("p1", [a, b], [], new Set());
     useChatSessionsStore.setState({ openTabs: { a: ["c1"], b: ["c2"] } });
 
-    store.getState().paintProtocolBoard("p1", [b], [], new Set());
+    store.getState().paintBoard("p1", [b], [], new Set());
     expect(useChatSessionsStore.getState().openTabs).toEqual({ b: ["c2"], p1: ["c1"] });
 
-    store.getState().paintProtocolBoard("p1", [a, b], [], new Set());
+    store.getState().paintBoard("p1", [a, b], [], new Set());
     expect(useChatSessionsStore.getState().openTabs).toEqual({ a: ["c1"], b: ["c2"] });
   });
 
@@ -2858,11 +2858,11 @@ describe("paintProtocolBoard", () => {
     resetChatTabs();
     const store = createBoardStore(fakeGateway());
     const a = ticket({ id: "a", status: "doing" });
-    store.getState().paintProtocolBoard("p1", [a], [], new Set());
+    store.getState().paintBoard("p1", [a], [], new Set());
     useChatSessionsStore.setState({ openTabs: { x: ["c1"] } });
     const reconcile = vi.spyOn(useChatSessionsStore.getState(), "reconcileTicketChatTabs");
 
-    store.getState().paintProtocolBoard("p1", [a], [labelNamed("bug")], new Set());
+    store.getState().paintBoard("p1", [a], [labelNamed("bug")], new Set());
 
     expect(reconcile).not.toHaveBeenCalled();
     reconcile.mockRestore();
@@ -3224,7 +3224,7 @@ describe("the board store on the protocol path (cloud on)", () => {
     const store = createBoardStore(fakeGateway());
     store
       .getState()
-      .paintProtocolBoard("p1", [ticket({ id: "a", status: "doing" })], [], new Set(["a"]));
+      .paintBoard("p1", [ticket({ id: "a", status: "doing" })], [], new Set(["a"]));
 
     store.getState().adoptTicketBody("p1", "a", "# Read");
 
@@ -3326,7 +3326,7 @@ it("preserves 599 of 600 ticket identities on both board paths", () => {
   store.getState().hydrateProjectRoster("p1", summaries, []);
   const off = store.getState().ticketsByProject.p1!;
   expect(off.filter((t, i) => t === rows[i])).toHaveLength(599);
-  store.getState().paintProtocolBoard(
+  store.getState().paintBoard(
     "p1",
     // Fresh objects with equal values: the paint must keep the identities.
     // oxlint-disable-next-line oxc/no-map-spread

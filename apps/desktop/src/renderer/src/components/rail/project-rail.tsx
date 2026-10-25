@@ -13,8 +13,10 @@ import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable"
 import type { Project } from "@volli/shared";
 
 import { AddProjectTile } from "@renderer/components/rail/add-project-tile";
+import { CloudWorkspaceHead, LocalProjectsFoot } from "@renderer/components/rail/cloud-rail";
 import { ProjectTile } from "@renderer/components/rail/project-tile";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { launchStore } from "@renderer/stores/launch";
 
 /**
  * Memoized for the same reason as `Board`, and it takes no props at all, so the
@@ -27,6 +29,8 @@ import { useProjectsStore } from "@renderer/stores/projects";
 export const ProjectRail = React.memo(function ProjectRail() {
   const projects = useProjectsStore((state) => state.projects);
   const reorder = useProjectsStore((state) => state.reorder);
+  // Fixed for the window's life: main chose it before the window opened.
+  const cloudLaunch = launchStore() === "cloud";
   const [activeDragId, setActiveDragId] = React.useState<string | null>(null);
   // The order at drag start, so `commitReorder` persists (and can revert to)
   // it once — a drag can cross many tiles, and each crossing only updates
@@ -77,6 +81,7 @@ export const ProjectRail = React.memo(function ProjectRail() {
       >
         <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
           <div className="flex min-h-0 flex-1 flex-col items-center gap-4 overflow-y-auto px-2 pt-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {cloudLaunch ? <CloudWorkspaceHead /> : null}
             {projects.map((project, index) => (
               <ProjectTile
                 key={project.id}
@@ -89,7 +94,8 @@ export const ProjectRail = React.memo(function ProjectRail() {
         </SortableContext>
       </DndContext>
       <div className="flex shrink-0 justify-center pt-2 pb-4">
-        <AddProjectTile />
+        {/* A cloud launch adds no folder of this Mac's (VC-889). */}
+        {cloudLaunch ? <LocalProjectsFoot /> : <AddProjectTile />}
       </div>
     </div>
   );

@@ -3,7 +3,9 @@ import type { Ticket } from "@volli/shared";
 
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { isTicketBodyLoaded, planningChangeAffects, useBoardStore } from "@renderer/stores/board";
-import { boardApi } from "@renderer/lib/board-protocol";
+import { boardApi } from "@renderer/lib/board-api";
+import { cloudBoardSource } from "@renderer/stores/board-source";
+import { useProjectPlace } from "@renderer/stores/project-place";
 
 /**
  * What the open Ticket view may do with the body in the board store.
@@ -39,11 +41,18 @@ export interface TicketBodyState {
  * stays silent (CLAUDE.md: the test is whether a person is waiting on the
  * result). `status` reflects only the first kind; a failed refresh leaves
  * `ready` and the body that is already there.
+ *
+ * A CLOUD PROJECT (VC-889) keeps its body live instead: the open ticket's own
+ * `board.getTicket` watch on the window's Volli Cloud client adopts every
+ * answer, so there is no refresh to schedule. The first answer turns
+ * `loading` into `ready`; a first read that fails is `failed`, with its retry.
  */
 export function useTicketBody(ticket: Pick<Ticket, "id" | "projectId">): TicketBodyState {
   const planningChange = useBoardStore((state) => state.lastPlanningChange);
   const loaded = useBoardStore((state) => isTicketBodyLoaded(state, ticket.id));
+  const cloud = useProjectPlace(ticket.projectId) === "cloud";
   const [failed, setFailed] = React.useState(false);
+  const [cloudAttempt, setCloudAttempt] = React.useState(0);
   const bodyRead = useLatestAsync();
   const openTicket = React.useRef(ticket);
   openTicket.current = ticket;
@@ -74,19 +83,34 @@ export function useTicketBody(ticket: Pick<Ticket, "id" | "projectId">): TicketB
   }, [ticket.id, ticket.projectId, bodyRead]);
 
   React.useEffect(() => {
+    if (cloud) return undefined;
     reload();
     return bodyRead.invalidate;
-  }, [reload, bodyRead]);
+  }, [cloud, reload, bodyRead]);
+
+  // The ticket's identity, not its object: a repaint must not re-subscribe.
+  const { id: openTicketId, projectId: openProjectId } = ticket;
+  React.useEffect(() => {
+    const source = cloud ? cloudBoardSource() : null;
+    if (source === null) return undefined;
+    setFailed(false);
+    return source.followTicket(openTicketId, {
+      onBody: (body) =>
+        useBoardStore.getState().adoptTicketBody(openProjectId, openTicketId, body),
+      onError: () => setFailed(true),
+    });
+  }, [cloud, openTicketId, openProjectId, cloudAttempt]);
 
   const seenPlanningVersion = React.useRef(planningChange.version);
   React.useEffect(() => {
     if (planningChange.version === seenPlanningVersion.current) return;
     seenPlanningVersion.current = planningChange.version;
-    if (planningChangeAffects(planningChange, ticket.id)) reload();
-  }, [planningChange, ticket.id, reload]);
+    if (!cloud && planningChangeAffects(planningChange, ticket.id)) reload();
+  }, [cloud, planningChange, ticket.id, reload]);
 
   // Loaded wins over a failure: once a body is on screen, a later read that
   // fails is refinement nobody asked for, and its fallback is already rendered.
   const status: TicketBodyStatus = loaded ? "ready" : failed ? "failed" : "loading";
-  return { status, retry: reload };
+  const retryCloud = React.useCallback(() => setCloudAttempt((attempt) => attempt + 1), []);
+  return { status, retry: cloud ? retryCloud : reload };
 }

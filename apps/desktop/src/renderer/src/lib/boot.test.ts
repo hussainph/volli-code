@@ -1418,7 +1418,7 @@ describe("remote projects", () => {
         opened.push(projectId);
         // Its snapshot's project is its row.
         useProjectsStore.getState().adoptProject(workspace(projectId));
-        useBoardStore.getState().paintProtocolBoard(projectId, [], [], new Set());
+        useBoardStore.getState().paintBoard(projectId, [], [], new Set());
         if (projectId === "r2") throw new Error("the box is away");
       }),
       close: vi.fn((projectId: string) => void closed.push(projectId)),
@@ -1474,7 +1474,7 @@ describe("remote projects", () => {
     claim("r1");
     useProjectsStore.getState().adoptProject(workspace("r1"));
     const remoteBoard = [boardTicket("rt", "r1")];
-    useBoardStore.getState().paintProtocolBoard("r1", remoteBoard, [], new Set());
+    useBoardStore.getState().paintBoard("r1", remoteBoard, [], new Set());
     useProjectsStore.getState().select("r1");
     const gateway = fakeGateway({
       bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({

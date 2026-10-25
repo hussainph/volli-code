@@ -13,6 +13,8 @@ import {
   decideMoveTickets,
   decideUnarchiveTicket,
   decideUpdateTicket,
+  compareBoardOrder,
+  labelNamesOf,
   movingTicketIds,
   normalizeLabelColor,
   requireCommentEditable,
@@ -147,6 +149,31 @@ describe("labels", () => {
     // Two aliases (of labels that are gone): the first keeps the key.
     const other = label(3, "ui", { mergedIntoId: lid(8) });
     expect(create([alias, other], ["ui"]).ticket.labelIds).toEqual([lid(1)]);
+  });
+
+  test("labelNamesOf wears each stored id as its live label, once, unknown ids dropped", () => {
+    const labels = [
+      label(1, "old", { mergedIntoId: lid(2) }),
+      label(2, "new"),
+      label(3, "ui"),
+      label(4, "loop", { mergedIntoId: lid(4) }),
+    ];
+    expect(labelNamesOf([lid(1), lid(3), lid(2), lid(99), lid(4)], labels)).toEqual([
+      "new",
+      "ui",
+      "loop",
+    ]);
+    expect(labelNamesOf([], labels)).toEqual([]);
+  });
+
+  test("compareBoardOrder orders by column, then position, then number", () => {
+    const sorted = [
+      ticket(3, { status: "doing", position: "a0" }),
+      ticket(2, { status: "todo", position: "a1" }),
+      ticket(5, { status: "todo", position: "a0" }),
+      ticket(4, { status: "todo", position: "a0" }),
+    ].toSorted(compareBoardOrder);
+    expect(sorted.map(({ number }) => number)).toEqual([4, 5, 2, 3]);
   });
 
   test("normalizeLabelColor keeps a 1–64 character colour or null", () => {

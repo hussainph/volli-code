@@ -19,6 +19,13 @@
  * their claim does (`dropRemoteProject`). This Mac's own writes (add, remove,
  * relink, the persisted rail order) never name one: they are this Mac's
  * database's, and a remote id would mean nothing there.
+ *
+ * **A cloud launch (VC-889).** The rail lists the current Volli Cloud
+ * Workspace's projects and nothing else: `hydrateCloud`, fed by its
+ * `projects.list` (`cloud-board/workspace.ts`), never the local bootstrap.
+ * This Mac's own writes refuse every one of them. The selection is persisted
+ * per store: a cloud selection beside the local one, so each kind of launch
+ * returns to its own last project.
  */
 import {
   errorMessage,
@@ -45,8 +52,9 @@ import { hostOfProject, isRemoteProject, useHostConnectionStore } from "./host-c
 import { writeThrough } from "./mutate";
 import { setProjectRowSink, useThemeStore } from "./theme";
 import { useProjectUiStore } from "./project-ui";
-import { boardApi } from "@renderer/lib/board-protocol";
+import { boardApi } from "@renderer/lib/board-api";
 import { isExperimentOn, useExperimentsStore } from "./experiments";
+import { launchStore } from "./launch";
 
 /** The `app_state` key `selectedProjectId` is persisted under — also read by lib/boot.ts. */
 export const PROJECTS_UI_APP_STATE_KEY = "volli:projects-ui";
@@ -58,10 +66,17 @@ export interface RemoteSelection {
   readonly hostName: string;
 }
 
+/** A cloud launch's selection (VC-889): which Workspace, and which of its projects. */
+export interface CloudSelection {
+  readonly workspaceId: string;
+  readonly projectId: string | null;
+}
+
 /** The shape persisted under {@link PROJECTS_UI_APP_STATE_KEY}. */
 interface ProjectsUiState {
   selectedProjectId: string | null;
   remoteSelection?: RemoteSelection;
+  cloudSelection?: CloudSelection;
 }
 
 /**
@@ -76,10 +91,12 @@ interface ProjectsUiState {
 export function encodeProjectsUiState(
   selectedProjectId: string | null,
   remoteSelection?: RemoteSelection,
+  cloudSelection?: CloudSelection,
 ): string {
   const state: ProjectsUiState = {
     selectedProjectId,
     ...(remoteSelection === undefined ? {} : { remoteSelection }),
+    ...(cloudSelection === undefined ? {} : { cloudSelection }),
   };
   return JSON.stringify(state);
 }
@@ -115,6 +132,21 @@ export function decodeRemoteSelection(raw: string | undefined): RemoteSelection 
   }
 }
 
+/** A cloud launch's persisted selection, or `null` (VC-889). */
+export function decodeCloudSelection(raw: string | undefined): CloudSelection | null {
+  try {
+    const value = (JSON.parse(raw ?? "null") as ProjectsUiState | null)?.cloudSelection;
+    return value &&
+      typeof value.workspaceId === "string" &&
+      value.workspaceId.length > 0 &&
+      (value.projectId === null || typeof value.projectId === "string")
+      ? { workspaceId: value.workspaceId, projectId: value.projectId }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The subset of the preload API the projects store needs — narrow and fake-able for tests. */
 export interface ProjectsGateway {
   create(input: { path: string; name: string }): Promise<ProjectCreateResult>;
@@ -142,6 +174,7 @@ export interface ProjectsGateway {
   setSelection(
     selectedProjectId: string | null,
     remoteSelection?: RemoteSelection,
+    cloudSelection?: CloudSelection,
   ): Promise<AppStateSetResult>;
 }
 
@@ -185,10 +218,10 @@ const defaultGateway: ProjectsGateway = {
     await sessionRpcClient().project.reorder.mutate({ orderedIds });
     return { ok: true };
   },
-  setSelection: (selectedProjectId, remoteSelection) =>
+  setSelection: (selectedProjectId, remoteSelection, cloudSelection) =>
     window.api.appState.set(
       PROJECTS_UI_APP_STATE_KEY,
-      encodeProjectsUiState(selectedProjectId, remoteSelection),
+      encodeProjectsUiState(selectedProjectId, remoteSelection, cloudSelection),
     ),
 };
 
@@ -201,6 +234,17 @@ interface ProjectsState {
   selectedProjectId: string | null;
   /** Seeds state from the boot payload — the ONE place state is set wholesale outside a mutation. */
   hydrate(projects: Project[], selectedProjectId: string | null): void;
+  /**
+   * A cloud launch's boot (VC-889): the local and remote selections this
+   * launch must keep as they were, for the next local launch.
+   */
+  beginCloudLaunch(kept: { local: string | null; remote: RemoteSelection | null }): void;
+  /**
+   * The current Volli Cloud Workspace's projects, from its `projects.list`
+   * (VC-889): the rail's whole list in a cloud launch. `selectedProjectId` is
+   * what the caller resolved; the selection is persisted as the cloud one.
+   */
+  hydrateCloud(workspaceId: string, projects: Project[], selectedProjectId: string | null): void;
   /**
    * Replaces one row with an authoritative copy written elsewhere.
    *
@@ -316,10 +360,17 @@ export type ProjectRelinkSettlement =
 export type RemoteProjectTest = (projectId: string) => boolean;
 
 const defaultIsRemote: RemoteProjectTest = (projectId) =>
-  isRemoteProject(useHostConnectionStore.getState(), projectId);
+  launchStore() === "cloud" || isRemoteProject(useHostConnectionStore.getState(), projectId);
 
 /** What a remote project's local-only write says instead of reaching this Mac's database. */
 export const REMOTE_PROJECT_LOCAL_ONLY = "That isn’t available for a project on a remote host yet.";
+
+/** The same, for a cloud launch's projects (VC-889). */
+export const CLOUD_PROJECT_LOCAL_ONLY = "Not available for Volli Cloud projects yet.";
+
+function localOnlyRefusal(): string {
+  return launchStore() === "cloud" ? CLOUD_PROJECT_LOCAL_ONLY : REMOTE_PROJECT_LOCAL_ONLY;
+}
 
 /** Factory so tests can inject a fake gateway (and scope listener) instead of the real seams. */
 export function createProjectsStore(
@@ -327,6 +378,7 @@ export function createProjectsStore(
   onSelectedProjectChange: SelectedProjectListener = defaultSelectedProjectListener,
   isRemote: RemoteProjectTest = defaultIsRemote,
   selectionHost: (id: string) => RemoteSelection | null = (id) => {
+    if (launchStore() === "cloud") return null;
     if (!isExperimentOn(useExperimentsStore.getState().snapshot, "cloud")) return null;
     const state = useHostConnectionStore.getState();
     if (!isRemoteProject(state, id)) return null;
@@ -350,6 +402,10 @@ export function createProjectsStore(
   // Every stored link is `started.catch(...)` — already recovered — so chaining
   // `.then(run)` off it directly can never skip `run` on a predecessor failure.
   let localSelection: string | null = null;
+  // A cloud launch (VC-889): the Workspace on screen, and the remote
+  // selection a later local launch restores, kept untouched meanwhile.
+  let cloudWorkspaceId: string | null = null;
+  let keptRemoteSelection: RemoteSelection | null = null;
   // Only This Mac's bootstrap and successful local creates establish provenance.
   // A vanished remote claim must never turn its still-resident row into a local one.
   let localProjectIds = new Set<string>();
@@ -373,6 +429,10 @@ export function createProjectsStore(
    * block or revert the in-memory change.
    */
   function persistSelection(selectedProjectId: string | null): void {
+    if (cloudWorkspaceId !== null) {
+      persistCloudSelection(cloudWorkspaceId, selectedProjectId);
+      return;
+    }
     const remote = selectedProjectId === null ? null : selectionHost(selectedProjectId);
     if (selectedProjectId === null || localProjectIds.has(selectedProjectId)) {
       localSelection = selectedProjectId;
@@ -382,6 +442,18 @@ export function createProjectsStore(
         ? gateway.setSelection(selectedProjectId)
         : gateway.setSelection(localSelection, remote);
     write
+      .then((result) => {
+        if (!result.ok) toastError(`Couldn't save selected project: ${result.error}`);
+      })
+      .catch((error: unknown) => {
+        toastError(`Couldn't save selected project: ${errorMessage(error)}`);
+      });
+  }
+
+  /** A cloud launch's selection, beside the local one this launch leaves as it was. */
+  function persistCloudSelection(workspaceId: string, projectId: string | null): void {
+    gateway
+      .setSelection(localSelection, keptRemoteSelection ?? undefined, { workspaceId, projectId })
       .then((result) => {
         if (!result.ok) toastError(`Couldn't save selected project: ${result.error}`);
       })
@@ -489,6 +561,20 @@ export function createProjectsStore(
       },
       folderClaim: null,
 
+      beginCloudLaunch(kept) {
+        localSelection = kept.local;
+        keptRemoteSelection = kept.remote;
+      },
+
+      hydrateCloud(workspaceId, projects, selectedProjectId) {
+        const previous = get().selectedProjectId;
+        const persisted = cloudWorkspaceId === workspaceId && previous === selectedProjectId;
+        cloudWorkspaceId = workspaceId;
+        set({ projects, selectedProjectId, pendingRemoteSelection: null });
+        if (!persisted) persistCloudSelection(workspaceId, selectedProjectId);
+        announceSelection(previous, selectedProjectId);
+      },
+
       hydrate(projects, selectedProjectId) {
         const previous = get().selectedProjectId;
         // The local bootstrap knows nothing of remote rows: keep each one still
@@ -578,7 +664,7 @@ export function createProjectsStore(
 
       async relink(id, path) {
         if (isRemote(id)) {
-          toastError(`Couldn't relink project: ${REMOTE_PROJECT_LOCAL_ONLY}`);
+          toastError(`Couldn't relink project: ${localOnlyRefusal()}`);
           return { ok: false, refusal: null };
         }
         // The refusal id is read on the way THROUGH `writeThrough` rather than
@@ -655,7 +741,7 @@ export function createProjectsStore(
         // snapshot; the fresh re-read below handles what actually changed.
         if (!get().projects.some((project) => project.id === id)) return;
         if (isRemote(id)) {
-          toastError(`Couldn't remove project: ${REMOTE_PROJECT_LOCAL_ONLY}`);
+          toastError(`Couldn't remove project: ${localOnlyRefusal()}`);
           return;
         }
 
@@ -717,6 +803,8 @@ export function createProjectsStore(
       async commitReorder(previousOrder) {
         const { projects } = get();
         if (sameOrder(projects, previousOrder)) return; // nothing moved since the drag started
+        // A cloud launch's rail order is this window's: nothing of it is this Mac's.
+        if (cloudWorkspaceId !== null) return;
 
         // This Mac's database orders its own projects; a remote row's place
         // in the rail is this window's.

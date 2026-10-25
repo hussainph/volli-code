@@ -32,19 +32,8 @@
 import { createTRPCClient, type TRPCClient, type TRPCLink } from "@trpc/client";
 import { hostLinkTrpcLink } from "@volli/host-protocol/client-link";
 import type { BoardRouter } from "@volli/session-rpc";
-import type { ModelSelection } from "@volli/shared";
 
-import type {
-  ProjectFolderResult,
-  ProjectUpdateResult,
-  Result,
-  TicketBodyResult,
-  TicketCommentResult,
-  TicketCommentsResult,
-  TicketEventsResult,
-  TicketLatestSignalsResult,
-  TicketStatusEntriesResult,
-} from "../../../ipc/contract";
+import type { BoardApi } from "./board-api";
 import { isRemoteProject, useHostConnectionStore } from "../stores/host-connection";
 import { relayHostLink } from "./relay-host-link";
 import { sessionRpcClient } from "./session-rpc-ipc-link";
@@ -229,67 +218,6 @@ async function read<Answer>(
   }
 }
 
-/** The board surfaces' reads and writes, in the legacy channels' shapes. */
-export interface BoardApi {
-  tickets: {
-    events(input: { ticketId: string }): Promise<TicketEventsResult>;
-    body(input: { ticketId: string }): Promise<TicketBodyResult>;
-    latestSignals(input: { projectId: string }): Promise<TicketLatestSignalsResult>;
-    statusEntries(input: { projectId: string }): Promise<TicketStatusEntriesResult>;
-  };
-  comments: {
-    list(input: { ticketId: string }): Promise<TicketCommentsResult>;
-    create(input: {
-      ticketId: string;
-      body: string;
-      sessionId?: string | null;
-    }): Promise<TicketCommentResult>;
-    update(input: { commentId: string; body: string }): Promise<TicketCommentResult>;
-    remove(input: { commentId: string }): Promise<Result>;
-  };
-  projects: {
-    update(input: {
-      id: string;
-      baseBranch: string | null;
-      setupCommand?: string | null;
-    }): Promise<ProjectUpdateResult>;
-    setSkillModes(input: {
-      id: string;
-      modes: Record<string, string>;
-    }): Promise<ProjectUpdateResult>;
-    setSessionDefaults(input: {
-      id: string;
-      model: ModelSelection | null;
-    }): Promise<ProjectUpdateResult>;
-    checkFolder(projectId: string): Promise<ProjectFolderResult>;
-  };
-}
-
-/** The legacy door: `window.api`'s own functions, untouched. */
-function legacyBoardApi(): BoardApi {
-  const { tickets, comments, projects } = window.api;
-  return {
-    tickets: {
-      events: (input) => tickets.events(input),
-      body: (input) => tickets.body(input),
-      latestSignals: (input) => tickets.latestSignals(input),
-      statusEntries: (input) => tickets.statusEntries(input),
-    },
-    comments: {
-      list: (input) => comments.list(input),
-      create: (input) => comments.create(input),
-      update: (input) => comments.update(input),
-      remove: (input) => comments.remove(input),
-    },
-    projects: {
-      update: (input) => projects.update(input),
-      setSkillModes: (input) => projects.setSkillModes(input),
-      setSessionDefaults: (input) => projects.setSessionDefaults(input),
-      checkFolder: (projectId) => projects.checkFolder(projectId),
-    },
-  };
-}
-
 /** The answer of a write proved by the feed rather than its reply. */
 function receiptOf(commandId: string) {
   return {
@@ -442,11 +370,4 @@ export function protocolBoardApi(
       },
     },
   };
-}
-
-/** The board surfaces' door: the protocol facade with `cloud` on, `window.api` otherwise. */
-export function boardApi(): BoardApi {
-  return active === null
-    ? legacyBoardApi()
-    : protocolBoardApi(active.clientFor, active.sync, active.commentTickets);
 }

@@ -53,6 +53,7 @@ function standIn() {
       requestDeletion: { mutate: vi.fn(async () => null) },
       cancelDeletion: { mutate: vi.fn(async () => null) },
     },
+    cloud: { relaunch: { mutate: vi.fn(async () => null) } },
   } satisfies AccountRpc;
   return {
     rpc,
