@@ -124,3 +124,33 @@ Each was a decision made while turning the design into code.
     reply to `invites.create` for a link: a retry leaves a second pending link
     nobody holds, which expires after 7 days (the invite lifetime) and can be
     revoked.
+16. Board events gain `project_archived` and `project_unarchived` (no payload
+    fields): the design names project archive but no kind for it. Board event
+    kinds are written by the board functions as of this change and are frozen
+    from here on.
+17. Ticket signals' ids are a `signal` id kind (`SignalId`), minted by the
+    caller like comment ids. Labels created by naming them on a ticket are
+    minted by the backend.
+18. A board receipt's `intentDigest` covers the operation, the intent AND the
+    acting person, so a `commandId` reused by someone else is a conflict,
+    never their replay. A replay is answered only to a viewer who can still
+    see the receipt's project.
+19. Comment edits and removals, label colours and pure reorders (a move
+    within one column) record no board event, as on the local board; the rows
+    carry `editedAt` / `deletedAt` / the new key. Comments are edited and
+    removed only by their author's person.
+20. The board's `json` fields are typed at compile time rather than by a
+    runtime codec: `boardEvents.payload` is a `BoardEventPayload` built by
+    the shared rules, `boardReceipts.reply` is the function's own reply, and
+    `runnerJobs.payload` is provisional until the runner work types each kind
+    in `JobPayloads` (an arrival's `automation.run` carries
+    `trigger: "arrival"`, which is what a later move replaces).
+21. After a create's receipt has expired (seven days), retrying it answers
+    `id_taken` rather than comparing the stored row with the intent: board
+    commands from an offline runner fail fast instead of buffering, so a
+    retry that late does not arise.
+22. A Done move or an archive trims the ticket's ready worktrees at once
+    (`availableAt` = now), as the local board does; other Working copy kinds
+    are not trimmed. A move out of the active columns interrupts every
+    running Session on the ticket, whoever owns it: the move is a board fact,
+    and the interrupt keeps the Session and its transcript.
