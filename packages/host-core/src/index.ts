@@ -111,7 +111,13 @@ export interface DegradedHostCore extends HostLifecycleOwner {
   readonly databaseFailure: DbOpenFailure;
 }
 
-export interface LiveHostCore extends HostLifecycleOwner, HostSessionServices {
+/**
+ * The live host. Its Session writer's ledger and notice outbox stay inside
+ * host-core: the runner composition reaches the outbox through the services'
+ * runtime slot, and nothing outside writes around the engine.
+ */
+export interface LiveHostCore
+  extends HostLifecycleOwner, Omit<HostSessionServices, "sessionLedger" | "hostNoticeOutbox"> {
   readonly kind: "live";
   readonly database: { ok: true; db: Database.Database };
   readonly worktrees: WorktreeRuntime;
@@ -164,7 +170,11 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
       ...owner,
     };
   }
-  const sessionServices = createHostSessionServices(db, ports);
+  const {
+    sessionLedger: _ledger,
+    hostNoticeOutbox: _outbox,
+    ...sessionServices
+  } = createHostSessionServices(db, ports);
   const worktrees = createWorktreeRuntime(ports, options);
   const worktreeDeps = worktrees.deps(db);
   const worktreeReads = createWorktreeReadService({ deps: () => worktreeDeps });

@@ -35,13 +35,13 @@ export interface HostSessionPorts {
 }
 
 /**
- * What the Session runtime host-core assembles later tells the Session
- * services it built first: which executor bindings are open (a listing row is
- * live only while one is), and each folded projection, for scheduled resume.
- * Not ports: both answers come from host-core's own runtime assembly
- * (`session-runtime/assembly`) and lifecycle (`session-runtime/lifecycle`),
- * which wire them here as they are built (VC-632). Until then nothing is open
- * and nothing is scheduled.
+ * What the Session runtime tells the Session services built before it:
+ * which executor bindings are open (a listing row is live only while one
+ * is), each folded projection for scheduled resume, and the runtime's turn
+ * start latch. Not ports: host-core's runner composition
+ * (`session-runtime/runner`) binds them, once, through
+ * {@link SESSION_RUNTIME} as it builds the runtime and its lifecycle
+ * (VC-632, VC-671). Until then nothing is open and nothing is scheduled.
  */
 export interface SessionRuntimeWiring {
   openNativeBindings(): readonly Pick<OpenNativeBinding, "attachmentId" | "sessionId">[];
@@ -55,23 +55,23 @@ export interface SessionRuntimeWiring {
 
 const NO_PENDING_STARTS: ReadonlySet<string> = new Set();
 
-/** Keyed by the composed engine, which is the identity every runtime constructor receives. */
-const runtimeWiring = new WeakMap<SessionEngine, SessionRuntimeWiring>();
+/**
+ * The key of the services' one runtime slot. Package-private: no entry
+ * exports it, so only host-core's runner composition (and `./testing`) can
+ * bind a runtime to the host's Session services.
+ */
+export const SESSION_RUNTIME: unique symbol = Symbol("host-core Session runtime wiring");
 
-/** Internal: the runtime assembly and lifecycle report into the services that own `engine`. */
-export function wireSessionRuntime(
-  engine: SessionEngine,
-  wiring: Partial<SessionRuntimeWiring>,
-): void {
-  const slot = runtimeWiring.get(engine);
-  if (slot === undefined) return;
-  if (wiring.openNativeBindings !== undefined) slot.openNativeBindings = wiring.openNativeBindings;
-  if (wiring.observeScheduledResume !== undefined) {
-    slot.observeScheduledResume = wiring.observeScheduledResume;
-  }
-  if (wiring.pendingTurnStarts !== undefined) slot.pendingTurnStarts = wiring.pendingTurnStarts;
-  if (wiring.holdTurnStarts !== undefined) slot.holdTurnStarts = wiring.holdTurnStarts;
-  if (wiring.releaseTurnStarts !== undefined) slot.releaseTurnStarts = wiring.releaseTurnStarts;
+/** The slot a host's Session services hold for the one runtime composed over them. */
+export interface SessionRuntimeSlot {
+  /**
+   * Once per host, before anything is composed: a second runtime over one
+   * engine is a composition error. Answers the binder the runtime's answers
+   * go through once they exist.
+   */
+  claim(): (wiring: Partial<SessionRuntimeWiring>) => void;
+  /** The durable shell-notice outbox, which only the runtime's lifecycle delivers. */
+  readonly hostNoticeOutbox: HostNoticeOutbox;
 }
 
 export interface HostSessionServices {
@@ -83,6 +83,7 @@ export interface HostSessionServices {
   readonly liveWork: HostLiveWorkWatch;
   readonly sessionActivityWatch: SessionActivityWatch;
   readonly sessionEngine: SessionEngine;
+  readonly [SESSION_RUNTIME]: SessionRuntimeSlot;
 }
 
 export function createHostSessionServices(
@@ -170,8 +171,19 @@ export function createHostSessionServices(
     },
   });
   const sessionEngine = sessionWakeBus.engine;
-  runtimeWiring.set(sessionEngine, runtime);
+  let claimed = false;
+  const slot: SessionRuntimeSlot = {
+    claim() {
+      if (claimed) throw new Error("A Session runtime is already bound to these Session services.");
+      claimed = true;
+      return (wiring) => {
+        Object.assign(runtime, wiring);
+      };
+    },
+    hostNoticeOutbox,
+  };
   return {
+    [SESSION_RUNTIME]: slot,
     sessionLedger,
     hostNoticeOutbox,
     sessionWakeBus,

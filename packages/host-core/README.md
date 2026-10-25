@@ -379,10 +379,11 @@ to the `SecretStore` it builds rather than to `createHostCore`. See
 
 ### Session composition
 
-`createHostCore` returns `sessionLedger`, `hostNoticeOutbox`, `sessionWakeBus`,
-`sessionReadWatch`, `sessionActivityWatch` and `sessionEngine` on the live
-host; a degraded host has none of them. The outbox shares the engine's one
-transaction writer. The wake bus (`session-control/session-wake.ts`) is the
+`createHostCore` returns `sessionWakeBus`, `sessionReadWatch`, `liveWork`,
+`sessionActivityWatch` and `sessionEngine` on the live host; a degraded host
+has none of them. The Session ledger and the host notice outbox stay inside
+host-core (VC-671): the outbox shares the engine's one transaction writer, and
+only the runner composition's lifecycle delivers it. The wake bus (`session-control/session-wake.ts`) is the
 one decorator over the engine (VC-790): every committed Session Event, whoever
 wrote it, fans out to its subscribers after the write's transaction. The
 activity watch is one of them — it marks the Session's listing row dirty and
@@ -413,15 +414,16 @@ same call when nothing is live: new starts are then refused before any effect
 and queued follow-ups wait, durable, for the next launch. Armed Automations
 are deliberately not live work.
 
-Two facts arrive later and are not ports, because host-core answers both
+Facts that arrive later are not ports, because host-core answers them
 itself: which executor bindings are open (a listing row is live only while one
-is) and each folded projection for scheduled resume. They are
-`SessionRuntimeWiring` (`session-services.ts`). The runtime assembly wires the
-open bindings when it builds the Session runtime, and the lifecycle wires
-scheduled resume when it is built, each into the services that own the engine
-it was given. Until then nothing is open and nothing is scheduled. (They were
-ports, `listOpenNativeBindings` and `observeScheduledResume`, that desktop and
-`hostd` late-bound to those same host-core objects; VC-632 removed them.)
+is), which turn starts are pending and the start latch, and each folded
+projection for scheduled resume. They are `SessionRuntimeWiring`
+(`session-services.ts`). The runner composition claims the services' one
+runtime slot (`SESSION_RUNTIME`, in no entry) before it builds anything, and
+binds the runtime's and lifecycle's answers through it once both exist; a
+second runtime over one host is refused. Until then nothing is open and
+nothing is scheduled. (They were late-bound ports, then a module-level
+`WeakMap` keyed by the engine; VC-632 and VC-671 removed each.)
 
 Engine construction is private to the Sessions module (`src/sessions/engine.ts`,
 in no entry). It requires the shared ledger; terminal, data and runtime
@@ -852,10 +854,13 @@ change feed.
 `createHostHandlers(ports, services)` (`@volli/host-core/handlers`, VC-668)
 builds the host's one map from key to the whole command: every public
 catalog key and every desktop-only key (`DESKTOP_ENTRIES`, VC-608), whose
-policy is its channel's VC-574 placement. A
-composition root calls it once with the recovered services (database, runtime,
-Sessions facade, Model Access, Automations, busy-worktree guard, and
-desktop's experiments and interrupts) and hands the same object to every door:
+policy is its channel's VC-574 placement. The
+runner composition calls it once (`runner.handlers(ready)`, VC-671) with the
+recovered services it owns (database, runtime, Sessions facade, the kickoff
+and title ports, Model Access, Automations, worktree reads, detached work,
+listing rows, ticket signals) plus what only the host's doors know
+(`RunnerDoorCapabilities`: the busy-worktree guard, experiments, terminals'
+interrupts, sign-ins, relays, logs), and every door gets the same object:
 the routers' `ctx.handlers`, the socket's `handlers` option (whose
 `AGENT_VERB_TABLE` binds every verb only as a projection of the map), and
 any legacy IPC channel that still serves a catalog command. `HostHandlers` is
@@ -872,10 +877,9 @@ which a root composes after the map, so the map is sealed without them:
 `createAgentToolDoor` each serve theirs into the map they are handed, once.
 Until then they answer unavailable, and no catalog policy admits them.
 `session.start`, on both agent doors, is the map's own start command, built
-from the Sessions facade and the kickoff and title ports a root passes
-(`submitSessionMessage`, `refineAutoTitle`). The Session runtime's agent
-staging builds the tool door over the root's map (`handlers`, read per
-recovered services).
+from the Sessions facade and the kickoff and title ports the runner fills
+(`submitSessionMessage`, `refineAutoTitle`). The runner's agent staging builds
+the tool door over the same map.
 
 Desktop main also passes `remoteHosts` (`RemoteHostsPort`,
 `handlers/remote-hosts-port.ts`, VC-700): its registry of hosts added over

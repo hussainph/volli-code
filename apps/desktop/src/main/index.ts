@@ -130,6 +130,7 @@ import {
   ModelAccessSignInService,
   createConnectivityPort,
   createRunnerComposition,
+  type RunnerDoorCapabilities,
   SessionRuntimeClosingError,
   type RecoveredSessionServices,
   recoveredSessionClientPorts,
@@ -141,7 +142,6 @@ import {
 import type { OpenNativeBinding } from "@volli/session-engine";
 import {
   admittedHandlers,
-  createHostHandlers,
   hostProjectLiveWork,
   ROUTER_POLICY,
   type HostHandlerMap,
@@ -1232,8 +1232,8 @@ const appStartup = app.whenReady().then(async () => {
       publishState: (started) => publishBackgroundShellEvent({ shell: started }),
       publishRemoved: (removedShellId) => publishBackgroundShellEvent({ removedShellId }),
     },
-    // The tool door projects the same one map as every other door (VC-923).
-    handlers: (ready) => handlersFor(ready),
+    // What only this Mac's doors know, for the one handler map (VC-668).
+    doors: () => desktopDoors(),
     transport: () => sessionRpc,
     stopProducers: () => {
       hostClosing = true;
@@ -1257,7 +1257,6 @@ const appStartup = app.whenReady().then(async () => {
   });
   const {
     runtime: sessionRuntime,
-    piRuntimeHost,
     piSessionsDirectory,
     transcriptArtifacts,
     tokens: sessionTokens,
@@ -1376,12 +1375,7 @@ const appStartup = app.whenReady().then(async () => {
    * implies, resuming an Automation's delivery after attach, a deliberate
    * move's armed arrival) is the handler's now.
    */
-  let hostHandlers: HostHandlerMap | undefined;
-  const createHandlers = (
-    ready: RecoveredSessionServices<RuntimeSessionFacade>,
-  ): HostHandlerMap => {
-    const { runtime, sessions, submitKickoffMessage, autoTitler } =
-      recoveredRuntimeSessionServices(ready);
+  const desktopDoors = (): RunnerDoorCapabilities => {
     const projectLiveWork = hostProjectLiveWork({
       runtime: () => sessionRuntime,
       shells: backgroundShells,
@@ -1393,22 +1387,10 @@ const appStartup = app.whenReady().then(async () => {
         log.error("could not release session of a removed project", { sessionId, error });
       },
     });
-    return createHostHandlers(hostPorts, {
-      db: sessionDb,
-      dataDir: hostCore.dataDir,
-      runtime,
-      sessions,
-      // The start both agent doors reach (VC-923): its kickoff and its title.
-      ...(submitKickoffMessage === undefined ? {} : { submitSessionMessage: submitKickoffMessage }),
-      ...(autoTitler === null ? {} : { refineAutoTitle: (input) => void autoTitler.refine(input) }),
-      pictures: runner.pictures,
-      modelAccess: piRuntimeHost,
+    return {
       backgroundShells,
       experiments: { snapshot: readExperiments, set: setExperiment },
-      automations: runtimeAutomations,
       busyWorktreeSites,
-      // The host's one worktree read service (VC-788); none without a database.
-      worktreeReads: liveHost?.worktreeReads ?? null,
       interruptTicketSessions: interruptTicketSessionsAnnounced,
       // What removing a project stops before it detaches it (VC-796): every door
       // that removes one, the window's `volli:project-remove` included.
@@ -1419,26 +1401,10 @@ const appStartup = app.whenReady().then(async () => {
           void browserTabs.clearAgentPartition({ projectId, ticketId: null });
         },
       },
-      ...(liveHost === undefined ? {} : { detachedWork: liveHost.detachedWork }),
       // This Mac's recent log (VC-699): main's, the in-process host's and the
       // renderer's lines, which the dev log viewer reads through `host.logs`.
       logs: desktopLog?.ring ?? null,
-      // The Session listing rows (VC-713): the bodies `volli:session-list`
-      // reads, so this Mac's map answers `session.listing` as hostd's does.
-      sessionListing:
-        sessionEngine === null || sessionDb === null
-          ? null
-          : {
-              db: sessionDb,
-              listSessions: (query) => sessionEngine.listSessions(query),
-              liveAttachmentIds: () =>
-                new Set(listOpenNativeBindings().map((binding) => binding.attachmentId)),
-            },
       boardFeed,
-      ticketSignals:
-        sessionEngine === null
-          ? null
-          : (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
       // Archiving or deleting a ticket drops its Sessions' saved tool output (VC-469).
       piSessionsDirectory,
       remoteHosts: remoteHostsPort(remoteHosts, (hostId) => signInPreflight(hostSignIns, hostId)),
@@ -1466,11 +1432,11 @@ const appStartup = app.whenReady().then(async () => {
         subscribe: browserShortcutRelay.subscribe,
         focusPage: (tabId) => browserTabs.focusPage(tabId),
       },
-    });
+    };
   };
-  /** Built once, at the first door that needs it; every later door gets the same object. */
+  /** Built once by the runner, at the first door that needs it; every later door gets the same object. */
   const handlersFor = (ready: RecoveredSessionServices<RuntimeSessionFacade>): HostHandlerMap =>
-    (hostHandlers ??= createHandlers(ready));
+    runner.handlers(ready);
   // No runtime, no bridge — but the channels are still claimed, answering
   // every request with the reason the runtime is down (in practice: the
   // database open recorded above, Node-ABI classification included). Left

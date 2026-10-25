@@ -142,7 +142,7 @@ vi.mock("../../../packages/host-core/src/index", async (importOriginal) => {
   };
 });
 
-// The handler map hostd builds (VC-668): the move's guard and drain are its.
+// The handler map the runner builds for hostd (VC-668): the move's guard and drain are its.
 vi.mock("../../../packages/host-core/src/handlers/host-handlers", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../../packages/host-core/src/handlers/host-handlers")>();
@@ -152,7 +152,11 @@ vi.mock("../../../packages/host-core/src/handlers/host-handlers", async (importO
       faults.busySites = options.busyWorktreeSites;
       faults.detachedWork = options.detachedWork ?? null;
       faults.worktreeReads.handlers = options.worktreeReads;
-      return actual.createHostHandlers(ports, options);
+      return actual.createHostHandlers(ports, {
+        ...options,
+        ...(faults.noSessionsFacade ? { sessions: null } : {}),
+        onAdmission: (record) => faults.admissions.push(record),
+      });
     },
   };
 });
@@ -209,19 +213,6 @@ vi.mock("../../../packages/host-core/src/agent-socket", async (importOriginal) =
       });
       return failing(await actual.startAgentSocket(options, (server) => claim(failing(server))));
     },
-  };
-});
-
-vi.mock("@volli/host-core/handlers", async (original) => {
-  const actual = await original<typeof import("@volli/host-core/handlers")>();
-  return {
-    ...actual,
-    createHostHandlers: (...[ports, options]: Parameters<typeof actual.createHostHandlers>) =>
-      actual.createHostHandlers(ports, {
-        ...options,
-        ...(faults.noSessionsFacade ? { sessions: null } : {}),
-        onAdmission: (record) => faults.admissions.push(record),
-      }),
   };
 });
 

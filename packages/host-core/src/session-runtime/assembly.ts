@@ -57,7 +57,6 @@ import {
   sessionTranscriptsRoot,
 } from "./index";
 import { resolveHostToolSurface } from "./host-capabilities";
-import { wireSessionRuntime } from "../session-services";
 import {
   effectiveToolSurface,
   declarationToolSurface,
@@ -596,14 +595,6 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           ...(agentObservability === null ? {} : { observability: agentObservability }),
         })
       : null;
-  if (sessionEngine !== null && sessionRuntime !== null) {
-    wireSessionRuntime(sessionEngine, {
-      openNativeBindings: () => sessionRuntime.openNativeBindings(),
-      pendingTurnStarts: () => sessionRuntime.pendingTurnStarts(),
-      holdTurnStarts: () => sessionRuntime.holdTurnStarts(),
-      releaseTurnStarts: () => sessionRuntime.releaseTurnStarts(),
-    });
-  }
   return {
     pictures,
     sessionToolSurface,

@@ -10,7 +10,7 @@ import type { HostedSessionRuntime } from "@volli/session-engine";
 import type { SessionProjection, SessionExecutionVenue } from "@volli/shared";
 import { isLiveHost, type HostCore, type HostCorePorts } from "../index";
 import { shutdownNativeSessions } from "../host-shutdown";
-import { wireSessionRuntime } from "../session-services";
+import { SESSION_RUNTIME } from "../session-services";
 import { listProjects } from "../db/projects-repo";
 import {
   consumeFollowUpCleanClose,
@@ -113,7 +113,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   const { database } = host;
   const liveHost = isLiveHost(host) ? host : undefined;
   const sessionEngine = liveHost?.sessionEngine ?? null;
-  const hostNoticeOutbox = liveHost?.hostNoticeOutbox ?? null;
+  const hostNoticeOutbox = liveHost?.[SESSION_RUNTIME].hostNoticeOutbox ?? null;
   const sessionWakeBus = liveHost?.sessionWakeBus ?? null;
   const notices =
     runtime === null || hostNoticeOutbox === null
@@ -343,8 +343,6 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   const observeScheduledResume = (projection: SessionProjection): void => {
     if (!closing) resume?.observe(projection);
   };
-  // The host's Session services fold every projection through here from now on.
-  if (sessionEngine !== null) wireSessionRuntime(sessionEngine, { observeScheduledResume });
   return {
     ready,
     close,

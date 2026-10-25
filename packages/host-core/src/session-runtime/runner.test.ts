@@ -27,8 +27,6 @@ import type { HostStopPolicy } from "../host-lifecycle";
 import { HEADLESS_ATTENTION, NO_POWER_EVENTS } from "../ports";
 import { SecretStore } from "../secrets";
 import { SecretService } from "../secrets/service";
-import type { HostHandlerMap } from "../handlers/handler-map";
-import { testHostHandlers } from "../testing/host-handlers";
 import * as boot from "./boot-recovery";
 import { readRecoveredSessionServices, SessionRuntimeClosingError } from "./lifecycle";
 import * as pi from "./pi-adapter";
@@ -130,7 +128,7 @@ function compose({ host, ports, root }: Awaited<ReturnType<typeof composedHost>>
       calls.push("transport.close");
     }),
   };
-  let map: HostHandlerMap | undefined;
+  const doors = vi.fn(() => ({ experiments: null, busyWorktreeSites: async () => [] }));
   const installQuitHold = vi.fn(() => {
     calls.push("quit.hold");
   });
@@ -149,11 +147,8 @@ function compose({ host, ports, root }: Awaited<ReturnType<typeof composedHost>>
     ),
     capabilities: { askUser: false, requestSecret: false },
     beforeExecution: async () => {},
-    // The tool door projects the host's one map; nothing here calls a verb.
-    handlers: () => {
-      if (!isLiveHost(host)) throw new Error("A degraded host has no tool door.");
-      return (map ??= testHostHandlers({ db: host.database.db }));
-    },
+    // What this host's doors answer; nothing here calls a verb.
+    doors,
     transport: () => transport,
     stopProducers: () => {
       calls.push("host.producers.stop");
@@ -169,6 +164,7 @@ function compose({ host, ports, root }: Awaited<ReturnType<typeof composedHost>>
   return {
     calls,
     runner,
+    doors,
     automationsStart,
     transport,
     installQuitHold,
@@ -211,6 +207,10 @@ describe("runner composition", () => {
     const proof = bind.mock.calls[0]![0];
     expect(() => readRecoveredSessionServices(proof)).not.toThrow();
     await expect(f.runner.ready()).resolves.toBe(proof);
+    // The tool door already asked for the one handler map; every door gets it.
+    expect(f.doors).toHaveBeenCalledExactlyOnceWith(proof);
+    expect(f.runner.handlers(proof)).toBe(f.runner.handlers(proof));
+    expect(f.doors).toHaveBeenCalledOnce();
 
     f.calls.length = 0;
     const checkpoint = vi.spyOn(host.database.db, "pragma");

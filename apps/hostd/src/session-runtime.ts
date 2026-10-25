@@ -17,15 +17,12 @@ import {
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { RetentionReclaimSeams } from "@volli/host-core/maintenance";
 import type { BoardChangeFeed } from "@volli/host-core/board";
-import {
-  createHostHandlers,
-  type HostHandlerMap,
-  type SessionReadPort,
-} from "@volli/host-core/handlers";
+import type { SessionReadPort } from "@volli/host-core/handlers";
 import type { LogRing } from "@volli/host-core/log";
 import { SecretService } from "@volli/host-core/secrets";
 import {
   createRunnerComposition,
+  type RunnerDoorCapabilities,
   type RunnerReady,
   recoveredSessionCommandPorts,
   recoveredRuntimeSessionServices,
@@ -109,7 +106,6 @@ export function createHeadlessSessionRuntime(input: {
 }) {
   const { host, ports, env, options } = input;
   const db = host.database.db;
-  const sessionEngine = host.sessionEngine;
   const homeDir = headlessHomeDir(env);
   // hostd keeps no stored experiments: the `cloud` flag is the environment's
   // opt-in, read once at boot. (Not `host-protocol.ts`' twin: that module is
@@ -160,8 +156,8 @@ export function createHeadlessSessionRuntime(input: {
         options.platform ?? process.platform,
         gitHelper,
       ),
-    // The tool door projects the same one map as the socket (VC-923).
-    handlers: (ready) => handlersFor(ready),
+    // What only this host's doors know, for the one handler map (VC-668).
+    doors: (ready) => hostdDoors(ready),
     installQuitHold: () => {},
   });
   const { shells, tokens, automations } = runner;
@@ -190,16 +186,15 @@ export function createHeadlessSessionRuntime(input: {
       });
     },
   };
-  let hostHandlers: HostHandlerMap | undefined;
   /** The agent command service's Session reads, which the map forwards to once served. */
   let sessionReads: SessionReadPort | undefined;
   /**
-   * The host's one handler map over the recovered services, built once (when
-   * the runner binds this host's doors, or by the tool door if a recovered
-   * Session calls a tool first) and handed to every door that projects it.
+   * What only this host's doors know, for the one handler map the runner
+   * builds over the recovered services (once, when the runner binds this
+   * host's doors, or by the tool door if a recovered Session calls a tool
+   * first).
    */
-  function handlersFor(ready: RunnerReady): HostHandlerMap {
-    if (hostHandlers !== undefined) return hostHandlers;
+  function hostdDoors(ready: RunnerReady): RunnerDoorCapabilities {
     const { sessions, runtime, piRuntimeHost } = recoveredRuntimeSessionServices(ready);
     if (sessions === null || runtime === null)
       throw new Error("The headless Session runtime is unavailable.");
@@ -247,50 +242,20 @@ export function createHeadlessSessionRuntime(input: {
             detachedWork: host.detachedWork,
             onCreated: (project) => ports.events.publish("data-changed", { projectId: project.id }),
           });
-    const commandPorts = recoveredSessionCommandPorts(ready);
-    // The host's one handler map (VC-668): every door this host serves
-    // projects it. hostd keeps no experiments and composes no terminals,
-    // so those handlers answer unavailable and a backward move interrupts
-    // nothing a terminal holds.
-    hostHandlers = createHostHandlers(ports, {
-      db,
-      dataDir: host.dataDir,
-      runtime,
-      sessions,
-      // The start both agent doors reach (VC-923): its kickoff and its title.
-      ...(commandPorts.submitSessionMessage === undefined
-        ? {}
-        : { submitSessionMessage: commandPorts.submitSessionMessage }),
-      ...(commandPorts.refineAutoTitle === undefined
-        ? {}
-        : { refineAutoTitle: commandPorts.refineAutoTitle }),
-      pictures: runner.pictures,
-      modelAccess: piRuntimeHost,
+    // hostd keeps no experiments and composes no terminals, so those
+    // handlers answer unavailable and a backward move interrupts nothing a
+    // terminal holds.
+    return {
       experiments: null,
-      automations,
       busyWorktreeSites,
-      // The host's one worktree read service (VC-788): a scope switch's
-      // materialization and a Done trim retire the answers it holds.
-      worktreeReads: host.worktreeReads,
-      detachedWork: host.detachedWork,
       // Served before any door opens: hostd hands it over before it
       // settles the socket or starts the listener.
       sessionReads: (verb, workspaceId, args) => sessionReads!(verb, workspaceId, args),
       signIns,
       workspaces,
       logs: input.logs ?? null,
-      // The listing rows (VC-713): the same rows the desktop's own
-      // listing builds, live-ness from this process's executor bindings.
-      sessionListing: {
-        db,
-        listSessions: (query) => sessionEngine.listSessions(query),
-        liveAttachmentIds: () =>
-          new Set(runtime.openNativeBindings().map((binding) => binding.attachmentId)),
-      },
       ...(input.boardFeed === undefined ? {} : { boardFeed: input.boardFeed }),
-      ticketSignals: (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
-    });
-    return hostHandlers;
+    };
   }
   /** What a recovered host serves, from the recovered proof. */
   const serve = (ready: RunnerReady) => ({
@@ -307,11 +272,11 @@ export function createHeadlessSessionRuntime(input: {
     verifySessionToken: tokens.verify,
     automationsAvailable: automations.kind === "live" && automations.execution.kind === "ready",
     // Built before the tool door serves its verbs into it (VC-923).
-    handlers: handlersFor(ready),
+    handlers: runner.handlers(ready),
   });
   const owner = runner.owner({
     // The map is built before the tool door serves its verbs into it.
-    bind: (ready) => void handlersFor(ready),
+    bind: (ready) => void runner.handlers(ready),
     // The Workspace service closes before the Session drain it reads through.
     beforeClose: async () => {
       await workspaces?.close();
