@@ -109,6 +109,23 @@ export function closeAgentTabsCopy(count: number): { message: string; detail: st
 export const BROWSER_CLOSED_FOR_MENU_BAR =
   "The browser was closed when Volli moved to the menu bar. Browser tools are unavailable until the person reopens the Volli window; continue without the browser.";
 
+/**
+ * The {@link MenuBarHostPorts.browserTabs} port over the app's tab host: entry
+ * closes every agent tab with {@link BROWSER_CLOSED_FOR_MENU_BAR} as the reason
+ * an agent's Browser call is given, and a reveal reopens them.
+ */
+export function menuBarBrowserTabs(tabs: {
+  sessionTabCount(): number;
+  closeAllForAgents(reason: string): void;
+  reopenForAgents(): void;
+}): MenuBarHostPorts["browserTabs"] {
+  return {
+    sessionTabCount: () => tabs.sessionTabCount(),
+    closeForMenuBar: () => tabs.closeAllForAgents(BROWSER_CLOSED_FOR_MENU_BAR),
+    reopen: () => tabs.reopenForAgents(),
+  };
+}
+
 /** What one accepted ⌘Q does under the flag. */
 export type QuitBranch = "quit" | "menu-bar";
 

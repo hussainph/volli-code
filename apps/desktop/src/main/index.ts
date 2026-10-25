@@ -75,11 +75,8 @@ import {
   beginAcceptedUpdateInstall,
   clearUnsavedDocumentsOnWindowClosed,
   planUnsavedQuit,
-  quitAlreadyRefused,
   quitConfirmDetail,
   recordUnsavedDocuments,
-  registerAcceptedQuitCoordinator,
-  refuseQuit,
   unsavedDocumentNames,
   updateInstallQuitInFlight,
 } from "./quit-gate";
@@ -147,7 +144,7 @@ import {
   type HostHandlerMap,
 } from "@volli/host-core/handlers";
 import { registerDatabaseRecoveryIpcHandlers } from "./database-recovery-ipc";
-import { prepareDesktopQuit } from "./host-runtime";
+import { createDesktopRunnerEdge, unsavedDraftsQuitGate } from "./runner-edge";
 import {
   createHostFileServices,
   collectUnlinkedBlobs,
@@ -201,22 +198,19 @@ import {
   setExperiment,
 } from "./experiments";
 import {
-  BROWSER_CLOSED_FOR_MENU_BAR,
   createMenuBarHost,
+  menuBarBrowserTabs,
   menuBarSmokeSettleMs,
   type MenuBarHost,
 } from "./menu-bar-host";
+import { answerSecondInstance, createAppWindows } from "./app-windows";
 import {
   confirmCloseAgentTabs,
   confirmMenuBarQuit,
   electronMenuBarPower,
   electronMenuBarTray,
 } from "./menu-bar-electron";
-import {
-  createClientStateFlush,
-  MENU_BAR_FLUSH_OVERDUE_MS,
-  SHUTDOWN_FLUSH_TIMEOUT_MS,
-} from "./client-state-flush";
+import { createClientStateFlush } from "./client-state-flush";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
@@ -406,19 +400,15 @@ const worktreeLog = hostLogger("worktree");
 let revealWindowForLaunch: (() => void) | null = null;
 if (ownsAppProfile) {
   app.on("second-instance", () => {
-    const mainWindow = BrowserWindow.getAllWindows()[0];
-    if (!mainWindow) {
-      // Flag off: today's early return. Flag on: a menu-bar host (or one whose
-      // every window was closed) answers a second launch with a window.
-      if (isExperimentEnabled("cloud")) revealWindowForLaunch?.();
-      return;
-    }
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    revealWindow(mainWindow, nativeWindowPolicy);
-    sealQuietAppActivation(app, nativeWindowPolicy);
-    // show() normally gives focus on its own; preserve the explicit focus from
-    // this second-instance path without letting a quiet smoke take it.
-    if (!nativeWindowPolicy.enabled) mainWindow.focus();
+    answerSecondInstance(BrowserWindow.getAllWindows()[0], {
+      cloudEnabled: () => isExperimentEnabled("cloud"),
+      revealForLaunch: revealWindowForLaunch,
+      show: (window) => {
+        revealWindow(window, nativeWindowPolicy);
+        sealQuietAppActivation(app, nativeWindowPolicy);
+      },
+      quiet: nativeWindowPolicy.enabled,
+    });
   });
 }
 
@@ -426,8 +416,6 @@ if (ownsAppProfile) {
 // below is exact-host and containment checked: it cannot serve project files or
 // anything else from the local filesystem.
 const PACKAGED_RENDERER_ROOT = join(__dirname, "../dist");
-
-function noQuitAction(): void {}
 
 function noOpenNativeBindings(): readonly OpenNativeBinding[] {
   return [];
@@ -1169,39 +1157,25 @@ const appStartup = app.whenReady().then(async () => {
     sessionName: async (sessionId: string) =>
       (await sessionRuntime?.projection({ sessionId }))?.projection.session.title ?? null,
   });
-  let sessionRpc: ReturnType<typeof registerSessionRpcIpcHandlers> | null = null;
-  // Set once the host begins stopping: a quit then is never offered menu-bar mode.
-  let hostClosing = false;
-  // The quit path the runner's accepted-quit hold calls (below): declared
-  // before the runner, so the hold never reaches a binding that is not yet live.
-  let terminalQuit: (event: { preventDefault(): void }) => void = noQuitAction;
-  let unsavedQuit: (event: { preventDefault(): void }) => void = noQuitAction;
-  let abortRepack = noQuitAction;
-  /** Flag on, system shutdown (VC-577): what the two confirms would have torn down, unasked. */
-  let systemShutdownTeardown = noQuitAction;
   /**
-   * The flag-on shutdown's draft flush (VC-577), joined into the accepted
-   * quit's host shutdown below so `app.exit` waits for it — bounded, so
-   * power-off is never stalled. Resolved unless a shutdown teardown ran.
+   * Everything the runner calls back into on this Mac (VC-671): the
+   * accepted-quit hold and the quit path it runs, the producer stop, and the
+   * Session RPC transport. The runner's input reads it eagerly and its
+   * composition installs the hold synchronously, so it is declared before the
+   * runner (declared after, this file does not compile). Boot binds each quit
+   * gate below as it builds what the gate guards; every gate is read when a
+   * quit runs.
    */
-  let systemShutdownFlush: Promise<unknown> = Promise.resolve();
-  /** Menu-bar mode (VC-577). Built once the window factory and updater exist. */
-  let menuBarHost: MenuBarHost | null = null;
-  const prepareHostQuit = (event: { preventDefault(): void }) => {
-    // Flag off: the former listener order, including the two unconditional
-    // stops on a refused attempt. Only the quit trigger is registered. Flag
-    // on: the menu-bar branch decides after the confirms, and a host already
-    // stopping is never offered it.
-    prepareDesktopQuit(event, {
-      stopAutomations: runtimeAutomations.stop,
-      unsavedQuit,
-      terminalQuit,
-      abortRepack,
-      ...(menuBarHost !== null && !hostClosing && isExperimentEnabled("cloud")
-        ? { menuBar: menuBarHost, systemShutdownTeardown }
-        : {}),
-    });
-  };
+  const runnerEdge = createDesktopRunnerEdge({
+    lifecycle: quittingApp,
+    host: hostCore,
+    remoteHosts,
+    stopBackgroundWork: () => webSealing.stop(),
+    cloudEnabled: () => isExperimentEnabled("cloud"),
+    terminalQuit: prepareTerminalQuit,
+    createSessionRpc,
+    closeSocket: shutdownAgentSocket,
+  });
   /**
    * This Mac's runner (VC-671): host-core's Session runtime composition,
    * over the host built above. Desktop answers what
@@ -1234,26 +1208,9 @@ const appStartup = app.whenReady().then(async () => {
     },
     // What only this Mac's doors know, for the one handler map (VC-668).
     doors: () => desktopDoors(),
-    transport: () => sessionRpc,
-    stopProducers: () => {
-      hostClosing = true;
-      ptyManagerRef?.stopParkSweep();
-    },
-    installQuitHold: () =>
-      registerAcceptedQuitCoordinator({
-        lifecycle: quittingApp,
-        shutdownNativeSessions: async () => {
-          await Promise.all([hostCore.stop("quit"), systemShutdownFlush, remoteHosts.close()]);
-        },
-        shutdownAgentSocket: async () => {},
-        prepareQuit: (event) => prepareHostQuit(event),
-        stopBackgroundWork: () => webSealing.stop(),
-        onShutdownDeadline: (deadlineMs) =>
-          hostCore.warnIfFollowUpCleanCloseSkipped(
-            `quit: shutdown deadline expired after ${deadlineMs}ms`,
-          ),
-        reportFailure: (error) => log.error("failed to coordinate app shutdown", { error }),
-      }),
+    transport: runnerEdge.transport,
+    stopProducers: runnerEdge.stopProducers,
+    installQuitHold: runnerEdge.installQuitHold,
   });
   const {
     runtime: sessionRuntime,
@@ -1265,6 +1222,7 @@ const appStartup = app.whenReady().then(async () => {
     observability: agentObservability,
     automations: runtimeAutomations,
   } = runner;
+  runnerEdge.bind({ automations: runtimeAutomations });
   const listOpenNativeBindings =
     sessionRuntime === null ? noOpenNativeBindings : () => sessionRuntime.openNativeBindings();
   const sessionDb = dbHandle.ok ? dbHandle.db : null;
@@ -1519,14 +1477,7 @@ const appStartup = app.whenReady().then(async () => {
   );
   // The host adopts the runner: recovery, Automations, the Session RPC edge
   // over the handler map, then the tool door. The socket drains beside it.
-  await hostCore.start(
-    runner.owner({
-      bind: (ready) => {
-        sessionRpc = createSessionRpc(ready, runner.handlers(ready));
-      },
-      closeSocket: shutdownAgentSocket,
-    }),
-  );
+  await hostCore.start(runnerEdge.ownerFor(runner));
   const readyRuntimeServices = await runner.ready();
   // Reclaim attachment bytes nothing points at any more (VC-50) — a detached
   // file, or an abandoned new-Ticket composer draft, which attaches eagerly and
@@ -1827,23 +1778,12 @@ const appStartup = app.whenReady().then(async () => {
       recordUnsavedDocuments(args[0]);
     },
   );
-  // Asked ahead of the terminal gate: a discarded draft is the only thing on
-  // the quit path that cannot be recovered afterwards. The accepted-quit
-  // coordinator registered above only holds the event synchronously; it defers
-  // teardown until this gate and the terminal gate have recorded their verdict.
-  unsavedQuit = (event) => {
-    if (quitAlreadyRefused(event)) return;
-    // An accepted update install already carried the unsaved-drafts warning in
-    // its own dialog (VC-59's one-prompt decision) — asking again here would
-    // stack a second modal on an answer the user has given.
-    if (updateInstallQuitInFlight()) return;
-    const names = unsavedDocumentNames();
-    const step = planUnsavedQuit({
-      names,
-      skipConfirm: process.env["VOLLI_SKIP_CLOSE_CONFIRM"] === "1",
-    });
-    if (step === "confirm" && !confirmDiscardUnsaved(names, "Quit")) refuseQuit(event);
-  };
+  // The accepted-quit coordinator registered above only holds the event
+  // synchronously; it defers teardown until this gate and the terminal gate
+  // have recorded their verdict.
+  runnerEdge.bind({
+    unsavedQuit: unsavedDraftsQuitGate({ confirmDiscard: confirmDiscardUnsaved, env: process.env }),
+  });
 
   // The terminal door takes the same reader the structured door uses (VC-403):
   // one question about one machine, asked once.
@@ -1858,18 +1798,8 @@ const appStartup = app.whenReady().then(async () => {
     },
   );
   ptyManagerRef = ptyManager;
-  terminalQuit = (event) => prepareTerminalQuit(ptyManager, event);
-  // Flag on, logout/restart/shutdown (VC-577): the terminal confirm's killAll
-  // and the windows' draft flush, with nothing that could refuse power-off.
-  systemShutdownTeardown = () => {
-    ptyManager.killAll();
-    // Every window, a hidden menu-bar one included; joined by the accepted
-    // quit's shutdown above, never longer than the bound.
-    systemShutdownFlush = flushWindowState(
-      BrowserWindow.getAllWindows(),
-      SHUTDOWN_FLUSH_TIMEOUT_MS,
-    );
-  };
+  // The busy-terminal gate's subject; a flag-on system shutdown kills it unasked.
+  runnerEdge.bind({ terminals: ptyManager });
   registerBrowserTabIpcHandlers(browserTabs);
   registerBackgroundShellIpcHandlers(backgroundShells);
   // An archived Ticket's headless agent tabs have no one left to drive them
@@ -1968,14 +1898,8 @@ const appStartup = app.whenReady().then(async () => {
       log: hostLogger("browser").error,
     });
   }
-  // Menu-bar entry's flush-and-ack barrier (VC-577): windows it is about to
-  // destroy are hidden and no longer count as open, so a reopen during the
-  // (bounded) flush builds a fresh window instead of finding a doomed one.
-  const retiringWindows = new WeakSet<BrowserWindow>();
-  const liveWindows = (): BrowserWindow[] =>
-    BrowserWindow.getAllWindows().filter(
-      (window) => !window.isDestroyed() && !retiringWindows.has(window),
-    );
+  // The draft flush-and-ack barrier (VC-577): menu-bar entry and a system
+  // shutdown ask each renderer to save its drafts before a window goes.
   const clientStateFlush = createClientStateFlush({ newRequestId: () => randomUUID() });
   ipcMain.on(
     "volli:client-state-flushed" satisfies VolliIpcChannel,
@@ -1983,20 +1907,6 @@ const appStartup = app.whenReady().then(async () => {
       clientStateFlush.acknowledge(args[0]);
     },
   );
-  const flushWindowState = (
-    windows: readonly BrowserWindow[],
-    timeoutMs: number,
-    onAcked?: (window: BrowserWindow) => void,
-  ) =>
-    clientStateFlush.flush(
-      windows.map((window) => ({
-        isDestroyed: () => window.isDestroyed() || window.webContents.isDestroyed(),
-        requestFlush: (requestId: string) =>
-          window.webContents.send("volli:client-state-flush" satisfies VolliIpcEvent, requestId),
-        ...(onAcked === undefined ? {} : { onAcked: () => onAcked(window) }),
-      })),
-      timeoutMs,
-    );
   const createOwnedWindow = (): BrowserWindow => {
     const window = createWindow(ptyManager, currentFirstPaint());
     // Browser Tabs are live machine resources, not durable documents. Once the
@@ -2031,26 +1941,30 @@ const appStartup = app.whenReady().then(async () => {
     });
     return window;
   };
+  // Which windows count as open, their draft flush, and the reveal each door
+  // that brings one back takes (VC-577).
+  const appWindows = createAppWindows({
+    all: () => BrowserWindow.getAllWindows(),
+    create: createOwnedWindow,
+    reveal: (window) => revealWindow(window, nativeWindowPolicy),
+    flush: clientStateFlush,
+  });
+  // A flag-on system shutdown flushes every window's drafts, bounded.
+  runnerEdge.bind({ windows: appWindows });
   // A notification clicked with every window closed asks for one (macOS keeps
   // the app alive), and the renderer collects the parked target as it
   // subscribes. Bound here because this is where the factory exists.
-  notifications.bindWindowOpener(() => {
-    // Through the menu-bar host once it exists, so a click on a windowless
-    // host also brings the Dock icon back (VC-577). Outside menu-bar mode its
-    // reveal is exactly this line's former body.
-    if (menuBarHost !== null) menuBarHost.reveal();
-    else if (BrowserWindow.getAllWindows().length === 0) createOwnedWindow();
-  });
+  notifications.bindWindowOpener(() => appWindows.openForNotification(runnerEdge.menuBar()));
   const mainWindow = createOwnedWindow();
   const transcriptRepackAbort = new AbortController();
-  abortRepack = () => transcriptRepackAbort.abort();
+  runnerEdge.bind({ repack: transcriptRepackAbort });
   mainWindow.webContents.once("did-finish-load", () => {
     // Transcript repack is migration-by-sibling rather than an in-place
     // rewrite. Give first paint five seconds of quiet, then process only small
     // batches with a pause between them. Every individual failure is kept for
     // the next launch, with its legacy bytes untouched.
     const repackDelay = setTimeout(() => {
-      if (hostClosing) return;
+      if (runnerEdge.hostClosing()) return;
       const repack = repackLegacyTranscriptArtifacts(transcriptArtifacts, {
         batchSize: 25,
         signal: transcriptRepackAbort.signal,
@@ -2124,7 +2038,7 @@ const appStartup = app.whenReady().then(async () => {
       // run is stamped, so an already-removed folder is recorded as removed
       // rather than described as work nobody attempted. Read-only,
       // and never fatal to a launch.
-      if (hostClosing) return;
+      if (runnerEdge.hostClosing()) return;
       const reconcile = reconcileInterruptedCleanups({
         worktree: liveHost.worktreeDeps,
         engine: orphanCleanupEngine(db),
@@ -2190,7 +2104,7 @@ const appStartup = app.whenReady().then(async () => {
     onStateChange: (state) => {
       broadcastUpdateState(state);
       // The Tray's "Install Update When Idle" follows the staged update.
-      menuBarHost?.refresh();
+      runnerEdge.menuBar()?.refresh();
     },
     // The double-notify guard: with a window open the sidebar badge/dialog
     // owns the "downloaded" announcement; the native notification only speaks
@@ -2262,63 +2176,9 @@ const appStartup = app.whenReady().then(async () => {
       tryBeginIdleExit: () => true,
       abandonIdleExit: () => {},
     },
-    browserTabs: {
-      sessionTabCount: () => browserTabs.sessionTabCount(),
-      closeForMenuBar: () => browserTabs.closeAllForAgents(BROWSER_CLOSED_FOR_MENU_BAR),
-      reopen: () => browserTabs.reopenForAgents(),
-    },
+    browserTabs: menuBarBrowserTabs(browserTabs),
     confirmCloseAgentTabs,
-    windows: {
-      count: () => liveWindows().length,
-      // `destroy`, not `close`: the quit's own unsaved-drafts and terminal
-      // confirms already answered, and a window `close` would ask again.
-      // `destroy` skips `beforeunload`, so each renderer is asked to flush
-      // its pending drafts first, and each window is destroyed only from its
-      // own ack. Hidden at once, so the person sees the quit take effect.
-      // Menu-bar entry is not power-off: a window that has not acked is never
-      // destroyed — past the overdue mark it is logged and stays hidden until
-      // a reveal reuses it or a real quit tears it down.
-      closeAll: () => {
-        const closing = liveWindows();
-        for (const window of closing) {
-          retiringWindows.add(window);
-          window.hide();
-        }
-        void flushWindowState(closing, MENU_BAR_FLUSH_OVERDUE_MS, (window) => {
-          hostLogger("menu-bar").info("window draft flush acknowledged", { windowId: window.id });
-          // Native destruction must not run inside the acknowledgement IPC
-          // checkpoint (the same compositor-teardown hazard as VC-536 exit).
-          // Keep this Immediate referenced; a reveal before it runs owns the
-          // retained renderer again, so both guards belong inside the callback.
-          setImmediate(() => {
-            if (!retiringWindows.has(window) || window.isDestroyed()) return;
-            retiringWindows.delete(window);
-            hostLogger("menu-bar").info("destroying acknowledged window", { windowId: window.id });
-            window.destroy();
-            hostLogger("menu-bar").info("acknowledged window destroyed", { windowId: window.id });
-          });
-        }).then(({ unanswered }) => {
-          if (unanswered > 0) {
-            hostLogger("menu-bar").warn("windows still saving drafts; kept hidden, not destroyed", {
-              unanswered,
-            });
-          }
-        });
-      },
-      // A hidden window still waiting on its flush is reused rather than
-      // duplicated: its renderer, and its unsaved drafts, are still there.
-      open: () => {
-        const retained = BrowserWindow.getAllWindows().find(
-          (window) => !window.isDestroyed() && retiringWindows.has(window),
-        );
-        if (retained === undefined) {
-          createOwnedWindow();
-          return;
-        }
-        retiringWindows.delete(retained);
-        revealWindow(retained, nativeWindowPolicy);
-      },
-    },
+    windows: appWindows.menuBarPort,
     dock: {
       hide: () => hideDockForMenuBar(app, nativeWindowPolicy),
       show: () => showDockAfterMenuBar(app, nativeWindowPolicy),
@@ -2350,7 +2210,9 @@ const appStartup = app.whenReady().then(async () => {
       if (!nativeWindowPolicy.enabled) app.focus({ steal: true });
     },
   });
-  menuBarHost = menuBar;
+  runnerEdge.bind({ menuBar });
+  // The quit path is whole from here: a dropped binding fails the launch.
+  runnerEdge.assertBound();
   revealWindowForLaunch = () => menuBar.reveal({ focus: true });
   // The menu-bar smokes' seam (`e2e/menu-bar-*-smoke.mjs`): a CI runner has no
   // model to keep a turn live, so the mechanics smoke enters the mode through
@@ -2884,20 +2746,9 @@ const appStartup = app.whenReady().then(async () => {
     });
   }
 
-  app.on("activate", () => {
-    // An activation means a noted logout did not happen (VC-577): the next
-    // ⌘Q keeps its turns again. Inert with the flag off — only the flag-on
-    // quit branch reads that latch.
-    menuBar.noteActivated();
-    // On macOS it's common to re-create a window when the dock icon is
-    // clicked and there are no other windows open. A menu-bar host (VC-577)
-    // also leaves menu-bar mode and shows its Dock icon again; otherwise the
-    // reveal is exactly this re-creation. A window menu-bar entry hid while
-    // its drafts flush does not count as open (flag off: there is none).
-    if (liveWindows().length === 0) {
-      menuBar.reveal();
-    }
-  });
+  // An activation means a noted logout did not happen (VC-577), and with no
+  // open window one comes back through the menu-bar host.
+  app.on("activate", () => appWindows.activated(menuBar));
 });
 void appStartup.catch((error: unknown) => {
   if (error instanceof SessionRuntimeClosingError) return;
