@@ -541,14 +541,59 @@ async function dropQueuedTarget(ctx: MutationCtx, watch: Doc<"watches">) {
           (change.subject === "session" ? change.sessionId : change.ticketId) === watch.target.id
         ),
     );
-    if (changes.length === payload.changes.length && payload.overflow === 0) continue;
-    if (changes.length === 0)
+    if (changes.length === payload.changes.length) continue;
+    if (changes.length === 0 && payload.overflow === 0)
       await cancelJob(ctx, job, Date.now(), {
         code: "access_lost",
         detail: "Access to the watched work was lost.",
       });
-    else await patchQueuedJob(ctx, job, { ...payload, changes, overflow: 0 });
+    else await patchQueuedJob(ctx, job, { ...payload, changes });
   }
+}
+
+/** Re-check every target at the lease boundary as well as at fire/sweep time.
+ * Even an unwatched/stopped target may still have prose in a sleeping job. */
+export async function noticeForClaim(
+  ctx: MutationCtx,
+  job: Doc<"runnerJobs">,
+): Promise<Doc<"runnerJobs"> | null> {
+  if (job.kind !== "session.notice") return job;
+  const payload = parseJobPayload("session.notice", job.payload);
+  if (payload.notice !== "watch") return job;
+  const watcher = job.sessionId === null ? null : await sessionRow(ctx, job.sessionId);
+  const viewer = watcher === null ? null : await ownerViewer(ctx, watcher);
+  const visibility = new Map<string, boolean>();
+  const changes: WatchChangeV1[] = [];
+  for (const change of payload.changes) {
+    const target: WatchTarget = {
+      kind: change.subject,
+      id: change.subject === "session" ? change.sessionId : change.ticketId,
+    };
+    const key = `${target.kind}:${target.id}`;
+    let visible = visibility.get(key);
+    if (visible === undefined) {
+      try {
+        if (viewer === null) throw watchError("not_found", "No watcher owner.");
+        await visibleTarget(ctx, viewer, target);
+        visible = true;
+      } catch (error) {
+        if (!(error instanceof ConvexError)) throw error;
+        visible = false;
+      }
+      visibility.set(key, visible);
+    }
+    if (visible) changes.push(change);
+  }
+  if (changes.length === payload.changes.length) return job;
+  if ((changes.length === 0 && payload.overflow === 0) || job.lease !== null) {
+    await cancelJob(ctx, job, Date.now(), {
+      code: "access_lost",
+      detail: "Access to watched work changed before delivery.",
+    });
+    return null;
+  }
+  await patchQueuedJob(ctx, job, { ...payload, changes });
+  return (await ctx.db.get(job._id))!;
 }
 
 export async function onBoardEvents(
@@ -619,16 +664,16 @@ export async function onBoardEvents(
   }
 }
 
-async function childEndedBefore(ctx: Reader, childSessionId: string, at: number): Promise<boolean> {
-  // Birth is being accepted now, so its first accepted batch is bounded at
-  // 100 facts. Look ahead in that batch before retracting a genuine final turn.
+async function childHasSettled(ctx: Reader, childSessionId: string): Promise<boolean> {
+  // Read the child's own accepted sequence, never compare clocks across
+  // Sessions. All facts of this accept are inserted before its birth folds.
   const facts = await ctx.db
     .query("sessionEvents")
     .withIndex("by_session_sequence", (q) => q.eq("sessionId", childSessionId))
     .order("desc")
     .take(100);
   for (const fact of facts) {
-    if (!fact.kindKnown || fact.quarantine !== null || fact.occurredAt > at) continue;
+    if (!fact.kindKnown || fact.quarantine !== null) continue;
     if (
       [
         "turn.completed",
@@ -641,14 +686,21 @@ async function childEndedBefore(ctx: Reader, childSessionId: string, at: number)
       return true;
     if (fact.kind === "turn.started") return false;
   }
-  return false;
+  // A delayed birth fold with a longer, inconclusive suffix cannot prove a
+  // pending child. Preserve the parent's notice rather than retract blindly.
+  return (facts.at(-1)?.sequence ?? 1) > 1;
 }
 
 /** A child can drain its birth just after the parent's turn end. Until claim
  * (and only inside the initial coalescing window), retract that premature
  * completion and keep the turn arm for the parent's real final turn. */
 async function deferForLateChild(ctx: MutationCtx, child: Doc<"sessions">) {
-  if (child.role !== "subagent" || child.parentSessionId === null) return;
+  if (
+    child.role !== "subagent" ||
+    child.parentSessionId === null ||
+    (await childHasSettled(ctx, child.id))
+  )
+    return;
   const rows = await ctx.db
     .query("watches")
     .withIndex("by_target", (q) =>
@@ -669,18 +721,17 @@ async function deferForLateChild(ctx: MutationCtx, child: Doc<"sessions">) {
       if (job.lease !== null || Date.now() > job.availableAt) continue;
       const payload = parseJobPayload("session.notice", job.payload);
       if (payload.notice !== "watch") continue;
-      const changes: WatchChangeV1[] = [];
-      for (const change of payload.changes) {
-        const premature =
+      // The child is pending NOW. Defer only the parent's latest completion
+      // still inside its quiet window; older completions remain independent
+      // facts. This deliberately makes no cross-runner timestamp inference.
+      const last = payload.changes.findLastIndex(
+        (change) =>
           change.subject === "session" &&
           change.sessionId === child.parentSessionId &&
-          change.fact === "turn-completed" &&
-          change.occurredAt !== null &&
-          change.occurredAt >= child.createdAt &&
-          !(await childEndedBefore(ctx, child.id, change.occurredAt));
-        if (!premature) changes.push(change);
-      }
-      if (changes.length === payload.changes.length) continue;
+          change.fact === "turn-completed",
+      );
+      if (last < 0) continue;
+      const changes = payload.changes.filter((_change, index) => index !== last);
       await ctx.db.patch(watch._id, { turnArmed: true });
       if (changes.length === 0 && payload.overflow === 0)
         await cancelJob(ctx, job, Date.now(), {

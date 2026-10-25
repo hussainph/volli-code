@@ -66,6 +66,7 @@ import {
   type LeaseRef,
 } from "./lib/jobs";
 import { requireRunner, requireRunnerForWrite } from "./lib/runnerAuth";
+import { noticeForClaim } from "./lib/watches";
 
 /** How many of its own leased jobs a claim looks at to take back. A runner holds far fewer. */
 const LEASED_SCAN = 256;
@@ -167,8 +168,10 @@ export const claim = mutation({
         await cancelJob(ctx, job, now, NOT_A_MEMBER);
         continue;
       }
-      const ref = { bootId, attempt: (job.lease?.attempt ?? 0) + 1 };
-      claimed.push(claimedJob(await lease(ctx, job, ref, now + JOB_LEASE_MS)));
+      const deliverable = await noticeForClaim(ctx, job);
+      if (deliverable === null) continue;
+      const ref = { bootId, attempt: (deliverable.lease?.attempt ?? 0) + 1 };
+      claimed.push(claimedJob(await lease(ctx, deliverable, ref, now + JOB_LEASE_MS)));
     }
     return claimed;
   },

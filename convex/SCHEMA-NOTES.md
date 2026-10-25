@@ -487,7 +487,12 @@ A routing refusal leaves the turn arm intact and raises one frozen-id Session
 attention item (`volli:watch-delivery`); successful future delivery clears it.
 A refused automatic arm is logged and is returned as an additive `watch`
 result by `sessions.command`, never rolling back an otherwise valid steer.
-Losing access strips that target's prose from never-leased queued jobs.
+Losing access strips that target's prose from never-leased queued jobs. Claim
+also re-checks every target, including notices whose watch already ended; a
+re-leased job with newly hidden content is cancelled rather than rewritten.
+Anonymous overflow counts are retained because they name no target or prose.
+Late-child deferral uses the child's accepted sequence and the backend quiet
+window, never runner clocks to infer cross-Session causality.
 
 The runner's `host_notice_outbox` is retained, not replaced: it owns delivery
 timing and first-writer-wins replay after the job reaches the runner. Cloud

@@ -585,6 +585,95 @@ describe("durable watches", () => {
       turnArmed: true,
     });
   });
+  test("claim re-checks visibility even after unwatch, without waiting for the sweep", async () => {
+    const w = await world();
+    await w.arm();
+    await accept(w.t, w.watcher.runnerId, w.target.sessionId, w.target.events.slice(w.turnEnd));
+    await w.as.mutation(api.watches.unwatch, { watcherSessionId: w.watcher.sessionId });
+    const bob = await signIn(w.t, "claim-private-owner");
+    await w.t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("sessions")
+        .withIndex("by_uuid", (q) => q.eq("id", w.target.sessionId))
+        .unique();
+      await ctx.db.patch(row!._id, { ownerUserId: bob.userId, visibility: "private" });
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 2_000);
+    expect(
+      await asRunner(w.t, w.watcher.runnerId).mutation(api.runnerJobs.claim, {
+        bootId: randomUUID(),
+      }),
+    ).toEqual([]);
+    expect((await notices(w.t, w.watcher.sessionId))[0]?.failure?.code).toBe("access_lost");
+  });
+  test.each([false, true])(
+    "access cleanup preserves anonymous overflow counts (other listed change: %s)",
+    async (other) => {
+      const w = await world();
+      await w.arm();
+      await w.arm(newId("command"), w.ticket.ticketId, "ticket");
+      await accept(w.t, w.watcher.runnerId, w.target.sessionId, w.target.events.slice(w.turnEnd));
+      if (other)
+        await w.person.mutation(api.board.createComment, {
+          commandId: newId("command"),
+          ticketId: w.ticket.ticketId,
+          commentId: newId("comment"),
+          body: "visible",
+        });
+      const bob = await signIn(w.t, `overflow-owner-${other}`);
+      await w.t.run(async (ctx) => {
+        const row = await ctx.db
+          .query("sessions")
+          .withIndex("by_uuid", (q) => q.eq("id", w.target.sessionId))
+          .unique();
+        await ctx.db.patch(row!._id, { ownerUserId: bob.userId, visibility: "private" });
+        const job = (
+          await ctx.db
+            .query("runnerJobs")
+            .withIndex("by_session", (q) => q.eq("sessionId", w.watcher.sessionId))
+            .collect()
+        ).find((j) => j.kind === "session.notice")!;
+        const payload = parseJobPayload("session.notice", job.payload);
+        await ctx.db.patch(job._id, { payload: { ...payload, overflow: 5 } });
+      });
+      await w.t.mutation(internal.watches.sweep, {});
+      const job = (await notices(w.t, w.watcher.sessionId))[0]!;
+      const payload = parseJobPayload("session.notice", job.payload);
+      expect(job.status).toBe("queued");
+      expect(payload.notice === "watch" && payload.overflow).toBe(5);
+      expect(payload.notice === "watch" && payload.changes.length).toBe(other ? 1 : 0);
+    },
+  );
+
+  test("late-child deferral does not infer causality from runner clocks", async () => {
+    const w = await world();
+    await w.arm();
+    await accept(w.t, w.watcher.runnerId, w.target.sessionId, [w.target.events[w.turnEnd]!]);
+    const child = await writeSession({
+      projectId: w.projectId,
+      ticketId: w.ticket.ticketId,
+      parentSessionId: w.target.sessionId,
+    });
+    const future = Date.now() + 365 * 24 * 60 * 60_000;
+    const birth = child.events.slice(0, 2).map((event) => {
+      const payload = event.payload;
+      return {
+        ...event,
+        occurredAt: future,
+        recordedAt: future,
+        payload:
+          payload.kind === "command.recorded"
+            ? { ...payload, command: { ...payload.command, createdAt: future } }
+            : payload.kind === "session.created"
+              ? { ...payload, session: { ...payload.session, createdAt: future } }
+              : payload,
+      };
+    });
+    await accept(w.t, w.watcher.runnerId, child.sessionId, birth);
+    expect((await notices(w.t, w.watcher.sessionId))[0]?.status).toBe("cancelled");
+    expect((await watchRows(w.t, w.watcher.sessionId))[0]?.turnArmed).toBe(true);
+  });
 });
 
 async function fire(
