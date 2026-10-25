@@ -49,14 +49,15 @@ function computerName(): Promise<string | null> {
   });
 }
 
+const hashed = (value: string) =>
+  createHash("sha256").update(`volli-runner-machine:${value}`).digest("hex").slice(0, 32);
+
 /**
  * This machine, stably: a hash of the Mac's hardware UUID (`IOPlatformUUID`),
  * which a restored profile or a renamed host does not change; the hostname
  * where it cannot be read. Hashed, so the record never holds the hardware id.
  */
 export function thisMachineId(): Promise<string> {
-  const hashed = (value: string) =>
-    createHash("sha256").update(`volli-runner-machine:${value}`).digest("hex").slice(0, 32);
   if (process.platform !== "darwin") return Promise.resolve(hashed(os.hostname()));
   return new Promise((done) => {
     execFile(
