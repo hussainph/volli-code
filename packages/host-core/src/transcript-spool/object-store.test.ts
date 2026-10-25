@@ -95,10 +95,12 @@ async function mockStore(credentials: S3Credentials, bucket: string, status = 20
         Number(stamp.slice(13, 15)),
       );
       const signedNames = query.get("X-Amz-SignedHeaders")!.split(";");
-      const headers: Record<string, string> = {};
-      for (const name of signedNames) {
-        if (name !== "host") headers[name] = String(request.headers[name]);
-      }
+      // Only the headers a presigned upload signs; anything else fails the check.
+      const headers = {
+        "content-length": String(request.headers["content-length"]),
+        "x-amz-checksum-sha256": String(request.headers["x-amz-checksum-sha256"]),
+      };
+      const signsExactly = signedNames.join(";") === "content-length;host;x-amz-checksum-sha256";
       const prefix = `/${bucket}/`;
       const key = decodeURIComponent(url.pathname.slice(prefix.length));
       const expected = presignS3Request({
@@ -113,6 +115,7 @@ async function mockStore(credentials: S3Credentials, bucket: string, status = 20
       });
       const checksum = request.headers["x-amz-checksum-sha256"] as string | undefined;
       const valid =
+        signsExactly &&
         new URL(expected.url).searchParams.get("X-Amz-Signature") ===
           query.get("X-Amz-Signature") &&
         Number(request.headers["content-length"]) === body.length &&
