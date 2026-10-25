@@ -271,9 +271,16 @@ export const complete = mutation({
                 at: now,
               }
             : null;
+        // A summarized attempt must not downgrade an outcome already folded
+        // from the immutable Session ledger.
         await ctx.db.patch(job._id, {
           status: "done",
-          ...(queueReceipt === null ? {} : { receipt: queueReceipt }),
+          ...(queueReceipt !== null &&
+          (job.receipt === null ||
+            job.receipt.status === "unreconciled" ||
+            (job.receipt.status === "accepted" && queueReceipt.status === "completed"))
+            ? { receipt: queueReceipt }
+            : {}),
           result: reported.result as Doc<"runnerJobs">["result"],
           ...terminal(now),
         });

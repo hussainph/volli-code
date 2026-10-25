@@ -61,20 +61,66 @@ export async function executeFollowUpJob(
   let command: Exclude<SessionClientCommand, { kind: "session.create" }>;
   if (intent.kind === "message.cancel") command = intent;
   else if (intent.kind === "message.submit" && intent.delivery === "steer") {
-    const queued = (await runtime.projection({ sessionId: job.sessionId })).projection.queue?.find(
-      (item) => item.id === intent.messageId,
-    );
-    if (queued === undefined)
-      return {
-        status: "done",
-        result: { receipt: { status: "rejected", code: "message_not_queued", detail: null } },
+    const { projection } = await runtime.projection({ sessionId: job.sessionId });
+    const prior = projection.commands?.find((recorded) => recorded.id === job.commandId);
+    if (prior?.intent.kind === "message.submit") {
+      const artifacts = input.artifacts();
+      if (artifacts === null)
+        return failed(
+          "transcript_unavailable",
+          "This runner cannot verify the prior message.",
+          true,
+        );
+      const body = await readMessageBody(
+        artifacts,
+        input.commandArtifact,
+        job.sessionId,
+        prior.intent.reference,
+      );
+      if ("outcome" in body) return body.outcome;
+      if (body.artifact.message.id !== intent.messageId)
+        return failed("command_conflict", "This command already names another message.");
+      const receipt = projection.receipts.findLast(
+        (recorded) => recorded.commandId === job.commandId,
+      );
+      if (receipt !== undefined) {
+        await input.publish(job.sessionId);
+        return {
+          status: "done",
+          result: {
+            receipt: {
+              status: receipt.status,
+              code: receipt.status === "rejected" ? receipt.code : null,
+              detail:
+                receipt.status === "rejected" || receipt.status === "unreconciled"
+                  ? receipt.detail
+                  : null,
+            },
+          },
+        };
+      }
+      command = {
+        kind: "message.submit",
+        message: body.artifact.message,
+        delivery: "steer",
+        settle: "opened",
       };
-    command = {
-      kind: "message.submit",
-      message: queued.message,
-      delivery: "steer",
-      settle: "opened",
-    };
+    } else {
+      const queued = projection.queue?.find((item) => item.id === intent.messageId);
+      if (queued === undefined) {
+        await input.publish(job.sessionId);
+        return {
+          status: "done",
+          result: { receipt: { status: "rejected", code: "message_not_queued", detail: null } },
+        };
+      }
+      command = {
+        kind: "message.submit",
+        message: queued.message,
+        delivery: "steer",
+        settle: "opened",
+      };
+    }
   } else {
     const artifacts = input.artifacts();
     if (artifacts === null)

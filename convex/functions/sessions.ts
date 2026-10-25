@@ -71,7 +71,7 @@ import {
 import { attentionVisibility } from "./lib/attention";
 import { PERSON_OR_AGENT, requireActor } from "./lib/actorAuth";
 import { enqueueJob, type JobDraft } from "./lib/jobs";
-import { routeFollowUp } from "./lib/followUps";
+import { routeFollowUp, advanceFollowUpRevision } from "./lib/followUps";
 import { tryArmSessionWatch } from "./lib/watches";
 import { listingOf } from "./lib/sessionDerived";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
@@ -173,6 +173,7 @@ export const transferClaim = internalMutation({
       .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
       .unique();
     if (queue !== null) await ctx.db.delete(queue._id);
+    await advanceFollowUpRevision(ctx, sessionId, generation);
     for (const viewer of await ctx.db
       .query("sessionViewers")
       .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
@@ -492,6 +493,28 @@ export const command = mutation({
 });
 
 // ── reads (client) ──────────────────────────────────────────────────────────
+
+/** Both command stages, including queue controls that append no Session event. */
+export const receipt = query({
+  args: { sessionId: v.string(), commandId: v.string() },
+  handler: async (ctx, { sessionId, commandId }) => {
+    const { viewer } = await requireActor(ctx, PERSON_OR_AGENT);
+    await requireSessionVisible(ctx, sessionId, viewer);
+    const job = await ctx.db
+      .query("runnerJobs")
+      .withIndex("by_uuid", (q) => q.eq("id", commandId))
+      .unique();
+    if (job === null || job.sessionId !== sessionId || !job.kind.startsWith("session."))
+      return null;
+    return {
+      commandId: job.commandId,
+      status: job.status,
+      receipt: job.receipt,
+      failure: job.failure ?? null,
+      runnerId: job.runnerId,
+    };
+  },
+});
 
 type SessionListing = NonNullable<Doc<"sessions">["listing"]>;
 

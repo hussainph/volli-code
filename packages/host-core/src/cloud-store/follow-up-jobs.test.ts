@@ -60,6 +60,116 @@ function fakeRuntimeFixture() {
   return { calls, command, read, input };
 }
 describe("follow-up inbox executor", () => {
+  test("replays an accepted send-now after restart and a failed mirror without steering twice", async () => {
+    const db = openTestDb();
+    insertProject(db.db, testProject({ id: "p" }));
+    const engine = createTestSessionEngine(db.db);
+    await engine.createSession({
+      commandId: "create",
+      requestedSessionId: "s",
+      projectId: "p",
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: null,
+      provenance: {
+        source: { kind: "system", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const sent: string[] = [];
+    const executors = createSessionExecutorSlot({
+      id: "fake",
+      durableIdNamespace: "fake",
+      adapterVersion: "1",
+      runtime: { path: "fake", version: "1", fingerprint: "fake" },
+      attach: async (_spec, sink) => ({
+        native: { id: "native", detail: null },
+        dispatch: async (command) => {
+          if (command.kind === "message.submit") {
+            sent.push(command.commandId);
+            if (command.delivery !== "steer")
+              await sink.emit({
+                kind: "turn",
+                state: "started",
+                turnId: `turn:${command.commandId}`,
+                occurredAt: Date.now(),
+              });
+          }
+          return {
+            commandId: command.commandId,
+            status: "accepted",
+            acceptedAt: Date.now(),
+            native: null,
+          };
+        },
+        reconcile: async () => ({ cursor: null, observations: [], receipts: [] }),
+        release: async () => {},
+      }),
+    });
+    const makeRuntime = () =>
+      createSessionRuntime({
+        engine,
+        followUps: createSqliteSessionFollowUpLedger(db.db),
+        artifacts,
+        executors,
+        clock: { now: Date.now },
+        ids: { next: () => crypto.randomUUID() },
+        locations: {
+          resolve: async () => ({ directory: "/fake", venue: { id: "local", kind: "local" } }),
+          prepare: async () => ({ directory: "/fake", venue: { id: "local", kind: "local" } }),
+          reaffirm: async () => {},
+        },
+      });
+    let runtime = makeRuntime();
+    try {
+      await runtime.command({
+        sessionId: "s",
+        commandId: "attach",
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      });
+      await runtime.command({
+        sessionId: "s",
+        commandId: "live",
+        command: { kind: "message.submit", message: { ...message, id: "live" }, settle: "opened" },
+      });
+      await vi.waitFor(async () =>
+        expect((await runtime.projection({ sessionId: "s" })).projection.turnActive).toBe(true),
+      );
+      await runtime.command({
+        sessionId: "s",
+        commandId: "queue",
+        command: { kind: "message.submit", message, delivery: "queue" },
+      });
+      const claimed = job({ kind: "message.submit", delivery: "steer", messageId: "m" });
+      claimed.job.kind = "session.command";
+      const publish = vi.fn(async () => {}).mockRejectedValueOnce(new Error("mirror disconnected"));
+      const input: FollowUpJobInput = {
+        runtime: () => runtime,
+        artifacts: () => artifacts,
+        publish,
+      };
+      await expect(executeFollowUpJob(claimed, context, input)).rejects.toThrow(
+        "mirror disconnected",
+      );
+      await vi.waitFor(async () =>
+        expect((await runtime.projection({ sessionId: "s" })).projection.queue).toEqual([]),
+      );
+      expect(sent).toContain(claimed.job.commandId);
+      await runtime.close();
+      runtime = makeRuntime();
+      expect(await executeFollowUpJob(claimed, context, input)).toEqual({
+        status: "done",
+        result: { receipt: { status: "accepted", code: null, detail: null } },
+      });
+      expect(sent.filter((id) => id === claimed.job.commandId)).toHaveLength(1);
+      expect(publish).toHaveBeenCalledTimes(2);
+    } finally {
+      await runtime.close();
+      db.cleanup();
+    }
+  });
   test("a re-lease replays the real SQLite queue without a second item", async () => {
     const fixture = openTestDb();
     insertProject(fixture.db, testProject({ id: "p" }));

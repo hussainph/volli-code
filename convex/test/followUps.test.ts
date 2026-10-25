@@ -167,6 +167,69 @@ describe("follow-up intent routing", () => {
     expect(sendNow.status).toBe("queued");
   });
 
+  test("backend-held edits advance the combined revision and stale clients conflict", async () => {
+    const w = await world();
+    await w.command(w.submit());
+    const before = await w.person.query(api.followUps.queue, { sessionId: w.sessionId });
+    const edit = {
+      kind: "message.edit",
+      messageId: "m",
+      reference: { ...w.reference, id: "changed" },
+      expectedRevision: before.revision,
+    };
+    const editId = randomUUID();
+    await w.command(edit, editId);
+    const after = await w.person.query(api.followUps.queue, { sessionId: w.sessionId });
+    expect(after.revision).toBeGreaterThan(before.revision);
+    await expect(w.command({ ...edit, reference: w.reference })).rejects.toMatchObject(
+      code("queue_revision_conflict"),
+    );
+    await expect(
+      w.command({ kind: "message.cancel", messageId: "m", expectedRevision: before.revision }),
+    ).rejects.toMatchObject(code("queue_revision_conflict"));
+    expect((await w.command(edit, editId)).receipt?.status).toBe("accepted");
+    expect((await w.person.query(api.followUps.queue, { sessionId: w.sessionId })).revision).toBe(
+      after.revision,
+    );
+  });
+
+  test("runner-held controls translate view revisions to runner revisions", async () => {
+    const w = await world();
+    const queued = await w.command(w.submit());
+    await w.runner.mutation(api.runnerJobs.claim, { bootId: randomUUID() });
+    await w.runner.mutation(api.followUps.mirror, {
+      sessionId: w.sessionId,
+      generation: 1,
+      revision: 27,
+      items: [
+        {
+          messageId: "m",
+          commandId: queued.commandId,
+          state: "queued",
+          message: null,
+          messageDigest: "digest",
+        },
+      ],
+    });
+    const view = await w.person.query(api.followUps.queue, { sessionId: w.sessionId });
+    const result = await w.command({
+      kind: "message.cancel",
+      messageId: "m",
+      expectedRevision: view.revision,
+    });
+    const row = await w.t.run((ctx) =>
+      ctx.db
+        .query("runnerJobs")
+        .withIndex("by_uuid", (q) => q.eq("id", result.commandId))
+        .unique(),
+    );
+    expect(JSON.parse(row!.payload.intent)).toMatchObject({
+      kind: "message.cancel",
+      expectedRevision: 27,
+    });
+    expect(JSON.parse(row!.commandIntent!)).toMatchObject({ expectedRevision: view.revision });
+  });
+
   test("leased (including requeued) work edits/cancels go to the runner", async () => {
     const w = await world();
     const id = randomUUID();
@@ -200,12 +263,78 @@ describe("follow-up intent routing", () => {
         result: { receipt: { status: "rejected", code: "session_stopped", detail: null } },
       },
     });
-    const replay = await w.command(w.submit(), queued.commandId);
+    const replay = await w.person.query(api.sessions.receipt, {
+      sessionId: w.sessionId,
+      commandId: queued.commandId,
+    });
     expect(replay).toMatchObject({
       status: "done",
       receipt: { status: "rejected", code: "session_stopped" },
     });
   });
+  test("completion summaries cannot downgrade an accepted ledger receipt", async () => {
+    const w = await world();
+    const queued = await w.command(w.submit());
+    const bootId = randomUUID();
+    const [claimed] = await w.runner.mutation(api.runnerJobs.claim, { bootId });
+    await w.t.run(async (ctx) => {
+      const row = (await ctx.db
+        .query("runnerJobs")
+        .withIndex("by_uuid", (q) => q.eq("id", queued.commandId))
+        .unique())!;
+      await ctx.db.patch(row._id, {
+        receipt: { status: "accepted", code: null, detail: null, at: 1 },
+      });
+    });
+    await w.runner.mutation(api.runnerJobs.complete, {
+      jobId: queued.commandId,
+      bootId,
+      attempt: claimed!.lease.attempt,
+      outcome: {
+        status: "done",
+        result: { receipt: { status: "rejected", code: "message_not_queued", detail: null } },
+      },
+    });
+    expect(
+      await w.person.query(api.sessions.receipt, {
+        sessionId: w.sessionId,
+        commandId: queued.commandId,
+      }),
+    ).toMatchObject({ status: "done", receipt: { status: "accepted", at: 1 } });
+  });
+
+  test("receipt reads are visibility checked and scoped to the named Session", async () => {
+    const w = await world();
+    const queued = await w.command(w.submit());
+    expect(
+      await w.person.query(api.sessions.receipt, {
+        sessionId: w.sessionId,
+        commandId: randomUUID(),
+      }),
+    ).toBeNull();
+    const outsider = w.t.withIdentity({
+      subject: "user:receipt-outsider",
+      issuer: "https://issuer.test",
+    });
+    await outsider.mutation(api.accounts.ensureViewer, {});
+    await expect(
+      outsider.query(api.sessions.receipt, { sessionId: w.sessionId, commandId: queued.commandId }),
+    ).rejects.toMatchObject(code("not_found"));
+    await w.t.run(async (ctx) => {
+      const row = (await ctx.db
+        .query("runnerJobs")
+        .withIndex("by_uuid", (q) => q.eq("id", queued.commandId))
+        .unique())!;
+      await ctx.db.patch(row._id, { sessionId: null });
+    });
+    expect(
+      await w.person.query(api.sessions.receipt, {
+        sessionId: w.sessionId,
+        commandId: queued.commandId,
+      }),
+    ).toBeNull();
+  });
+
   test("cap, duplicate message and owner/archived rules", async () => {
     const w = await world();
     for (let i = 0; i < 32; i++) await w.command(w.submit(`m${i}`));
@@ -254,8 +383,14 @@ describe("follow-up mirror", () => {
         },
       ],
     };
+    const before = await w.person.query(api.followUps.queue, { sessionId: w.sessionId });
     expect(await w.runner.mutation(api.followUps.mirror, args)).toEqual({ written: true });
+    const mirrored = await w.person.query(api.followUps.queue, { sessionId: w.sessionId });
+    expect(mirrored.revision).toBeGreaterThan(before.revision);
     expect(await w.runner.mutation(api.followUps.mirror, args)).toEqual({ written: false });
+    expect((await w.person.query(api.followUps.queue, { sessionId: w.sessionId })).revision).toBe(
+      mirrored.revision,
+    );
     await expect(
       w.runner.mutation(api.followUps.mirror, { ...args, generation: 0 }),
     ).rejects.toMatchObject(code("fenced"));
@@ -304,9 +439,12 @@ describe("follow-up mirror", () => {
       toRunnerId: w.runnerIds[1]!,
       headSequence: intake!.acceptedThrough,
     });
-    expect((await w.person.query(api.followUps.queue, { sessionId: w.sessionId })).items).toEqual(
-      [],
-    );
+    const transferred = await w.person.query(api.followUps.queue, { sessionId: w.sessionId });
+    expect(transferred.items).toEqual([]);
+    expect(transferred.revision).toBeGreaterThan(mirrored.revision);
+    await expect(
+      w.command({ kind: "message.cancel", messageId: "m", expectedRevision: mirrored.revision }),
+    ).rejects.toMatchObject(code("queue_revision_conflict"));
     await expect(
       w.runner.mutation(api.followUps.mirror, { ...args, revision: 2 }),
     ).rejects.toMatchObject(code("fenced"));

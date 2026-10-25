@@ -11,7 +11,12 @@ import { requireRunnerForWrite } from "./lib/runnerAuth";
 import { requireSessionVisible } from "./lib/auth";
 import { PERSON_OR_AGENT, requireActor } from "./lib/actorAuth";
 import { ownerMayWorkOn } from "./lib/jobs";
-import { followUpJobs, queueJobs } from "./lib/followUps";
+import {
+  followUpJobs,
+  queueJobs,
+  followUpRevision,
+  advanceFollowUpRevision,
+} from "./lib/followUps";
 
 const item = v.object({
   messageId: v.string(),
@@ -89,8 +94,14 @@ export const mirror = mutation({
     )
       return { written: false };
     const row = { ...args, runnerId: caller.runnerId, updatedAt: Date.now() };
+    if (bytes(JSON.stringify(row)) > FOLLOW_UP_MIRROR_MAX_BYTES)
+      throw new ConvexError({
+        code: "invalid_queue",
+        message: "The follow-up mirror exceeds its bounds.",
+      });
     if (previous === null) await ctx.db.insert("sessionFollowUpQueues", row);
     else await ctx.db.replace(previous._id, row);
+    await advanceFollowUpRevision(ctx, args.sessionId, args.generation);
     return { written: true };
   },
 });
@@ -119,7 +130,7 @@ export const queue = query({
       .withIndex("by_uuid", (q) => q.eq("id", session.placeRunnerId))
       .unique();
     return {
-      revision: current?.revision ?? 0,
+      revision: await followUpRevision(ctx, sessionId, intake?.claim.generation ?? 1),
       items: followUpQueueView(
         current?.items ?? [],
         queueJobs(await followUpJobs(ctx, sessionId)),

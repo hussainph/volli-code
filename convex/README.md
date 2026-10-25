@@ -87,8 +87,12 @@ held it, the control travels as `session.command` and the runner decides the
 release race. `followUps.queue` combines open intake with the runner's
 claim-fenced `followUps.mirror` (32 items, 64 KiB, bodies at most 8 KiB each).
 The mirror is live state, republished on reconnect; it is not a retry buffer.
+The queue view's revision also covers never-leased edits/cancels. A client
+precondition is translated to the runner's own revision before delivery.
 The runner publishes it before completing intake, and still releases messages
-at its own idle boundary without a backend round trip.
+at its own idle boundary without a backend round trip. Clients subscribe to
+`sessions.receipt({sessionId, commandId})` for both command stages, including
+runner-held queue-control refusals that append no Session event.
 
 Queue/edit commands carry the exact canonical artifact as `artifact`, bound
 to the queued message id; metadata and rich parts are preserved. A queued

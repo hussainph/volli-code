@@ -932,6 +932,12 @@ export default defineSchema({
   sessionViewerHeartbeats: defineTable({ viewerId: uuid, expiresAt: time })
     .index("by_viewer", ["viewerId"])
     .index("by_expiry", ["expiresAt"]),
+  // Public queue preconditions cover backend intent changes AND runner mirrors.
+  sessionFollowUpRevisions: defineTable({
+    sessionId: uuid,
+    generation: v.number(),
+    revision: v.number(),
+  }).index("by_session", ["sessionId"]),
   // Rebuildable runner-owned queue view. Intent is held separately by runnerJobs.
   sessionFollowUpQueues: defineTable({
     sessionId: uuid,

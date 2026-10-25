@@ -328,8 +328,11 @@ Each was a decision made while turning the design into code.
 43. Follow-up intent jobs keep optional immutable `commandIntent` for replay
     comparison: their mutable payload may have been edited while never leased.
     `sessionFollowUpQueues` is a claim-fenced, rebuildable side table keyed by
-    Session, capped at 32 items and 64 KiB. Queue changes do not invalidate the
-    Session snapshot. Claim transfer drops the mirror; generation checks also
+    Session, capped at 32 items and 64 KiB. A separate `sessionFollowUpRevisions`
+    clock advances for backend-held edits/cancels as well as mirrors; client
+    preconditions use that clock and are translated to the runner revision
+    before delivery. Claim-generation changes invalidate old preconditions.
+    Queue changes do not invalidate the Session snapshot. Claim transfer drops the mirror; generation checks also
     hide obsolete mirrors after runner replacement. Queue-control receipts
     travel with job completion because these runtime controls are deliberately
     outside the immutable event command vocabulary. Delegations gain optional
