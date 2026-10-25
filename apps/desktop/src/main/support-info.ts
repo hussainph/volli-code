@@ -105,7 +105,11 @@ export function describeBootRecovery(report: BootRecoveryReport | null): string 
   if (kinds.size > BOOT_RECOVERY_FAILURE_KINDS) {
     listed.push(`${kinds.size - BOOT_RECOVERY_FAILURE_KINDS} more`);
   }
-  return `${at}, ${turns}, ${closed}${listed.length === 0 ? "" : `; failed: ${listed.join(", ")}`}`;
+  const sweep =
+    report.error === null
+      ? ""
+      : `; sweep failed: ${report.error.name}${report.error.code === undefined ? "" : `:${report.error.code}`}`;
+  return `${at}, ${turns}, ${closed}${listed.length === 0 ? "" : `; failed: ${listed.join(", ")}`}${sweep}`;
 }
 
 /**

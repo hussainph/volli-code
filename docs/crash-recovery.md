@@ -25,14 +25,18 @@ be on the ledger when a later step fails. The sweep therefore reads the Session
 again. If the turn has ended and the runtime still holds the binding, the
 attachment stays open and the turn counts as recovered, so restart resume can
 continue it. In every other case the host raises its `:boot-recovery`
-Attention and closes the attachment.
+Attention and closes the attachment. A turn still open on a rebuilt binding is
+closed, not reconciled again. That close leaves the rebuilt binding held by the
+runtime until shutdown.
 
 Each close records its reason in `provenance.source.detail.bootRecovery`:
 `binding_unrecoverable` (the executor could not be rebuilt), `reconcile_failed`
 (it was rebuilt but did not record the turn's end), or `not_rebuildable` (a
 terminal companion or a retired runtime). The record also keeps the error's
 class name and code, but never its message. The host log line
-`failed to recover attachment` has the same reason and the full error. The
+`failed to recover attachment` (a warning, `recovered an attachment whose
+reconcile failed`, when the turn was kept) has the same reason and the redacted
+error. The
 support report's **Boot recovery** line counts this launch's recovered turns,
 closed attachments and each kind of failure.
 

@@ -94,6 +94,8 @@ export function mapRecoveredSessionServices<Source, Services>(
  */
 export interface BootRecoveryReport {
   readonly finishedAt: number;
+  /** The sweep itself threw, so the counts cover only what it did before. */
+  readonly error: LogErrorSummary | null;
   readonly recovered: number;
   readonly closed: number;
   readonly failures: readonly {
@@ -276,13 +278,13 @@ export function createSessionRuntimeLifecycle<Services>(options: {
             ports.log.error("failed to recover attachment", { attachmentId, error }),
           onFailure: ({ sessionId, attachmentId, reason, outcome, error }) => {
             failures.push({ reason, outcome, error: logErrorSummary(error) });
-            ports.log.error("failed to recover attachment", {
-              sessionId,
-              attachmentId,
-              reason,
-              outcome,
-              error,
-            });
+            const fields = { sessionId, attachmentId, reason, outcome, error };
+            // A recovered turn kept its attachment: worth a look, not an outage.
+            if (outcome === "recovered") {
+              ports.log.warn("recovered an attachment whose reconcile failed", fields);
+            } else {
+              ports.log.error("failed to recover attachment", fields);
+            }
           },
           onRecovered: (recovered) => {
             recoveredTurns = recovered.turns.length;
@@ -293,6 +295,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
         if (!closing) {
           bootRecovery = {
             finishedAt: Date.now(),
+            error: null,
             recovered: recoveredTurns,
             closed: closedAttachments,
             failures,
@@ -300,6 +303,16 @@ export function createSessionRuntimeLifecycle<Services>(options: {
         }
       } catch (error) {
         ports.log.error("failed to recover stale attachments", { error });
+        // The launch most likely to be reported: say the sweep failed, not "not finished".
+        if (!closing) {
+          bootRecovery = {
+            finishedAt: Date.now(),
+            error: logErrorSummary(error),
+            recovered: recoveredTurns,
+            closed: 0,
+            failures,
+          };
+        }
       }
       if (delegation !== null && !closing) {
         try {

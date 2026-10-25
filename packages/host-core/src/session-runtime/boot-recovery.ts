@@ -140,7 +140,7 @@ export type BootRecoveryReason =
   | "not_rebuildable";
 
 /** The reason a close carries in its provenance, and the error behind it as far as is safe to keep. */
-export interface BootRecoveryDetail {
+interface BootRecoveryDetail {
   readonly reason: BootRecoveryReason;
   /** The failure's class name and stable code — never its message. `null` when nothing failed. */
   readonly error: LogErrorSummary | null;
@@ -220,6 +220,8 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
         }
         if (stopping()) return closed;
         let detail: BootRecoveryDetail;
+        // A failed reconcile is reported once the close it led to was attempted.
+        let reportClosed: (() => void) | undefined;
         if (needsStructuredTurnRecovery(projection, attachment, owns(attachment))) {
           try {
             await options.reconcile({
@@ -245,11 +247,14 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
               if (options.onFailure) options.onFailure(failure);
               else options.onError(attachment.id, error);
             };
-            // A rebuilt executor replays its own history before anything else
-            // in a reconcile can fail, so the lost turn's end may already be on
-            // the ledger the listing predates. Then the turn is recovered: the
-            // attachment and its live binding stay, and a restart resume may
-            // continue it. Closing it would strand a turn the executor saved.
+            // A rebuilt executor records its replayed history before the
+            // reconcile's receipts and follow-ups, so when one of those fails
+            // the lost turn's end may already be on the ledger the listing
+            // predates. Then the turn is recovered: the attachment and its live
+            // binding stay, and a restart resume may continue it. Closing it
+            // would strand a turn the executor saved. A turn still open is
+            // closed rather than reconciled again: the failure is as likely to
+            // repeat as the evidence is to change.
             if (reason === "reconcile_failed") {
               if (await endedOnLiveAttachment(options, projection.session.id, attachment.id)) {
                 report("recovered");
@@ -258,11 +263,11 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
               }
               if (stopping()) return closed;
             }
-            // The host found a turn with no surviving process. Record that
-            // failure predicate even when the runtime could not reconstruct
-            // its own sidecar, then close the unusable attachment so the
+            // No executor recorded how the turn ended: either none could be
+            // rebuilt, or the one that was did not get that far. Raise the
+            // host's process-loss Attention, then close the attachment so the
             // durable projection no longer claims the turn is active.
-            report("closed");
+            reportClosed = () => report("closed");
             detail = { reason, error: logErrorSummary(error) };
             await tryRaiseCrashRecoveryAttention(
               options,
@@ -291,6 +296,7 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
         } catch (error) {
           options.onError(attachment.id, error);
         }
+        reportClosed?.();
       }
     }
   }

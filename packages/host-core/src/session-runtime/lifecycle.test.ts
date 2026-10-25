@@ -444,21 +444,39 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
         outcome: "recovered",
         error: conflict,
       });
+      ports.onFailure!({
+        sessionId: "s",
+        attachmentId: "gone",
+        reason: "binding_unrecoverable",
+        outcome: "closed",
+        error: conflict,
+      });
       ports.onRecovered!({ turns: [{ sessionId: "s", attachmentId: "live" }], lostAt: 1 });
       return 2;
     });
     const owner = createSessionRuntimeLifecycle(f.options);
     expect(owner.bootRecovery()).toBeNull();
     await owner.ready();
+    expect(f.options.ports.log.warn).toHaveBeenCalledWith(
+      "recovered an attachment whose reconcile failed",
+      {
+        sessionId: "s",
+        attachmentId: "live",
+        reason: "reconcile_failed",
+        outcome: "recovered",
+        error: conflict,
+      },
+    );
     expect(f.options.ports.log.error).toHaveBeenCalledWith("failed to recover attachment", {
       sessionId: "s",
-      attachmentId: "live",
-      reason: "reconcile_failed",
-      outcome: "recovered",
+      attachmentId: "gone",
+      reason: "binding_unrecoverable",
+      outcome: "closed",
       error: conflict,
     });
     expect(owner.bootRecovery()).toEqual({
       finishedAt: expect.any(Number),
+      error: null,
       recovered: 1,
       closed: 2,
       failures: [
@@ -467,9 +485,54 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
           outcome: "recovered",
           error: { name: "SessionEngineConflictError" },
         },
+        {
+          reason: "binding_unrecoverable",
+          outcome: "closed",
+          error: { name: "SessionEngineConflictError" },
+        },
       ],
     });
     await owner.close();
+  });
+
+  it("reports a sweep that threw as failed, keeping what it had seen", async () => {
+    const f = fixture();
+    vi.mocked(recovery.closeStaleAttachments).mockImplementation(async (ports) => {
+      ports.onFailure!({
+        sessionId: "s",
+        attachmentId: "a",
+        reason: "binding_unrecoverable",
+        outcome: "closed",
+        error: new Error("sidecar missing"),
+      });
+      throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    await owner.ready();
+    expect(owner.bootRecovery()).toEqual({
+      finishedAt: expect.any(Number),
+      error: { name: "Error", code: "SQLITE_BUSY" },
+      recovered: 0,
+      closed: 0,
+      failures: [{ reason: "binding_unrecoverable", outcome: "closed", error: { name: "Error" } }],
+    });
+    await owner.close();
+  });
+
+  it("reports no failed sweep once a close has begun", async () => {
+    const f = fixture();
+    const gate = deferred();
+    vi.mocked(recovery.closeStaleAttachments).mockImplementation(async () => {
+      await gate.promise;
+      throw new Error("runtime closed");
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    const refused = expect(owner.ready()).rejects.toBeInstanceOf(SessionRuntimeClosingError);
+    const drain = owner.close();
+    gate.resolve();
+    await refused;
+    await drain;
+    expect(owner.bootRecovery()).toBeNull();
   });
 
   it("reads no live binding without a runtime, and reports no sweep a close cut short", async () => {

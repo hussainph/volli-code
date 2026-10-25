@@ -8,7 +8,9 @@ import {
   type NativeAttachmentSpec,
 } from "@volli/session-engine";
 import {
+  readSessionOrigin,
   RECOVERED_TURN_INTERRUPTED_DETAIL,
+  scrubSessionEvent,
   restartResumeCommandId,
   type SessionAttentionKind,
   type SessionInteractionPrompt,
@@ -85,10 +87,12 @@ function fixture() {
       /** Set synchronously on entering a gate, before the runtime arms its timer. */
       stalled: boolean;
       /**
-       * A command whose acceptance the next reconcile contradicts, after its
-       * replay: the receipt conflict older builds hit (VC-926).
+       * A command whose acceptance every reconcile contradicts with a refusal,
+       * after its replay, so the reconcile fails on its receipts.
        */
       contradictAcceptance: string | null;
+      /** Thrown by every reconcile before it reads the executor's record. */
+      reconcileFailure: Error | null;
     } = {
       attachFailure: null,
       attachGate: null,
@@ -96,6 +100,7 @@ function fixture() {
       attachDelayMs: 0,
       stalled: false,
       contradictAcceptance: null,
+      reconcileFailure: null,
     };
     const adapter = createPiNativeAdapter({
       sessionDataDir,
@@ -133,6 +138,7 @@ function fixture() {
           const binding = await adapter.attach(spec, sink);
           const reconcile = binding.reconcile.bind(binding);
           binding.reconcile = async (cursor) => {
+            if (control.reconcileFailure) throw control.reconcileFailure;
             const reconciliation = await reconcile(cursor);
             const commandId = control.contradictAcceptance;
             if (commandId === null) return reconciliation;
@@ -1053,12 +1059,59 @@ describe("restart resume through the durable Pi binding (VC-450)", () => {
     );
     expect(recovered?.turns).toEqual([{ sessionId, attachmentId }]);
 
-    current.control.contradictAcceptance = null;
+    // The contradiction stands: continuing the turn must not depend on it.
     await resume(current, recovered!);
     const projection = (await current.host.projection({ sessionId })).projection;
     expect(projection.lastTurnOutcome).toBe("completed");
     expect(projection.liveExecutor?.id).toBe(attachmentId);
     expect(userTexts(f.script.requests.at(-1)!, "Build the thing")).toHaveLength(1);
+  });
+
+  it("closes a rebuilt attachment that never recorded the turn's end, and says why durably", async () => {
+    const f = fixture();
+    const { sessionId, attachmentId } = await start(f);
+    const current = await f.restart(f, true);
+    current.control.reconcileFailure = Object.assign(new Error("record unreadable at /private"), {
+      name: "PiRecoveryError",
+      code: "sidecar_unreadable",
+    });
+    const failures: BootRecoveryFailure[] = [];
+    expect(await f.boot(current, undefined, (failure) => failures.push(failure))).toEqual({
+      closed: 1,
+      errors: [],
+    });
+    expect(failures).toMatchObject([
+      { attachmentId, reason: "reconcile_failed", outcome: "closed" },
+    ]);
+    const projection = (await current.host.projection({ sessionId })).projection;
+    expect(projection.turnActive).toBe(false);
+    expect(projection.liveExecutor).toBeNull();
+    // Read back through the real SQLite ledger and its codec, then scrubbed
+    // for a client: the reason survives, the origin still reads, no message.
+    const recovery = (await current.engine.listEvents({ sessionId })).filter(
+      (event) => event.provenance.source.id === "desktop-recovery",
+    );
+    expect(recovery.map(({ payload }) => payload.kind)).toEqual([
+      "interaction.cancelled",
+      "attention.raised",
+      "attachment.closed",
+    ]);
+    for (const event of recovery.slice(1)) {
+      const scrubbed = scrubSessionEvent(event);
+      expect(scrubbed.provenance.source.detail).toEqual({
+        sessionOrigin: { kind: "volli", reason: "relaunch-recovery" },
+        bootRecovery: {
+          reason: "reconcile_failed",
+          error: { name: "PiRecoveryError", code: "sidecar_unreadable" },
+        },
+      });
+      expect(
+        readSessionOrigin(
+          (scrubbed.provenance.source.detail as { sessionOrigin: unknown }).sessionOrigin,
+        ),
+      ).toEqual({ kind: "volli", reason: "relaunch-recovery" });
+      expect(JSON.stringify(scrubbed)).not.toContain("/private");
+    }
   });
 
   it("leaves a turn lost inside a tool for the person, whose Resume then continues it", async () => {

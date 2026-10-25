@@ -146,6 +146,7 @@ describe("collectSupportInfo", () => {
         database: () => testDb(),
         bootRecovery: () => ({
           finishedAt: Date.UTC(2026, 9, 25, 3),
+          error: null,
           recovered: 1,
           closed: 2,
           failures: [
@@ -177,20 +178,40 @@ describe("collectSupportInfo", () => {
 
   it("words a boot recovery that has not finished, or found nothing, on one line", () => {
     expect(describeBootRecovery(null)).toBe("not finished");
-    expect(describeBootRecovery({ finishedAt: 0, recovered: 0, closed: 0, failures: [] })).toBe(
-      "1970-01-01T00:00:00.000Z, 0 lost turns recovered, 0 attachments closed",
+    expect(
+      describeBootRecovery({ finishedAt: 0, error: null, recovered: 0, closed: 0, failures: [] }),
+    ).toBe("1970-01-01T00:00:00.000Z, 0 lost turns recovered, 0 attachments closed");
+    expect(
+      describeBootRecovery({ finishedAt: 0, error: null, recovered: 2, closed: 1, failures: [] }),
+    ).toBe("1970-01-01T00:00:00.000Z, 2 lost turns recovered, 1 attachment closed");
+    expect(
+      describeBootRecovery({
+        finishedAt: 0,
+        error: { name: "Error", code: "SQLITE_BUSY" },
+        recovered: 0,
+        closed: 0,
+        failures: [],
+      }),
+    ).toBe(
+      "1970-01-01T00:00:00.000Z, 0 lost turns recovered, 0 attachments closed; sweep failed: Error:SQLITE_BUSY",
     );
-    expect(describeBootRecovery({ finishedAt: 0, recovered: 2, closed: 1, failures: [] })).toBe(
-      "1970-01-01T00:00:00.000Z, 2 lost turns recovered, 1 attachment closed",
-    );
+    expect(
+      describeBootRecovery({
+        finishedAt: 0,
+        error: { name: "TypeError" },
+        recovered: 0,
+        closed: 0,
+        failures: [],
+      }),
+    ).toMatch(/; sweep failed: TypeError$/);
     const failures = Array.from({ length: 7 }, (_, index) => ({
       reason: "reconcile_failed" as const,
       outcome: "closed" as const,
       error: { name: `Error${index}` },
     }));
-    expect(describeBootRecovery({ finishedAt: 0, recovered: 0, closed: 7, failures })).toMatch(
-      /Error4, 2 more$/,
-    );
+    expect(
+      describeBootRecovery({ finishedAt: 0, error: null, recovered: 0, closed: 7, failures }),
+    ).toMatch(/Error4, 2 more$/);
   });
 
   it("words every last-check result on one line", () => {
