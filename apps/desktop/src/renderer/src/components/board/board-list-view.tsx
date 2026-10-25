@@ -3,6 +3,7 @@ import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import {
+  cardTicketKey,
   displayTicketId,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
@@ -76,7 +77,7 @@ export function TicketRowContent({
   /** What is running on this ticket, or `null` for nothing (VC-100). */
   sessionActivity?: TicketSessionActivity | null;
 }) {
-  const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
+  const displayId = cardTicketKey(ticketPrefix, ticket.ticketNumber);
 
   return (
     <div

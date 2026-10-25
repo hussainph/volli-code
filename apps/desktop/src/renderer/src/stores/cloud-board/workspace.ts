@@ -15,12 +15,13 @@
  *   project goes: there is no half-cloud board.
  */
 import type { Project } from "@volli/shared";
+import { newId } from "@volli/shared/cloud";
 import { create } from "zustand";
 
 import type { CloudSession } from "@renderer/lib/cloud-client";
 
 import type { CloudSelection } from "../projects";
-import { cloudFailure, type Watched } from "./source";
+import { CLOUD_READ_ONLY, cloudFailure, type Watched } from "./source";
 import { projectRows, type CloudProjectRow } from "./projection";
 
 /** What the rail's head and foot read in a cloud launch. */
@@ -177,4 +178,40 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
     stopFollowing();
     stopAll();
   };
+}
+
+/**
+ * A new project in the Workspace on screen (VC-889, D4: a `blank` project,
+ * before it has a repository): the client mints its id, and the rail shows
+ * it once `projects.list` answers with it (no optimistic row: a project the
+ * backend has not made yet has no board to open). Refused, and never issued,
+ * while the socket is down. Answers its id, or the sentence to say.
+ */
+export async function createCloudProject(
+  input: { readonly name: string; readonly ticketPrefix?: string },
+  session: CloudSession | null,
+  workspaceId: string | null,
+): Promise<{ ok: true; projectId: string } | { ok: false; error: string }> {
+  if (
+    session === null ||
+    workspaceId === null ||
+    !session.client.connectionState().isWebSocketConnected
+  ) {
+    return { ok: false, error: CLOUD_READ_ONLY };
+  }
+  const projectId = newId("project");
+  const { client, api } = session;
+  try {
+    await client.mutation(api.projects.create, {
+      commandId: newId("command"),
+      workspaceId,
+      projectId,
+      name: input.name,
+      ...(input.ticketPrefix === undefined ? {} : { ticketPrefix: input.ticketPrefix }),
+      origin: "blank",
+    });
+  } catch (error) {
+    return { ok: false, error: cloudFailure(error).message };
+  }
+  return { ok: true, projectId };
 }

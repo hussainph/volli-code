@@ -3376,13 +3376,18 @@ describe("the board store in a cloud launch (VC-889)", () => {
 
   it("sends every project's board through Volli Cloud's source, never this Mac's", async () => {
     adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
-    const source = new ConvexBoardSource({
-      paint: vi.fn(),
-      notePlanningChange: vi.fn(),
-      failed: vi.fn(),
-      refused: vi.fn(),
-      dropped: vi.fn(),
-    });
+    const source = new ConvexBoardSource(
+      {
+        paint: vi.fn(),
+        notePlanningChange: vi.fn(),
+        failed: vi.fn(),
+        refused: vi.fn(),
+        unconfirmed: vi.fn(),
+        readOnly: () => null,
+        dropped: vi.fn(),
+      },
+      "user-1",
+    );
     installCloudBoardSource(source);
     const move = vi.spyOn(source, "moveTickets");
     const open = vi.spyOn(source, "open");

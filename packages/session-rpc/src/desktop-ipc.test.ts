@@ -130,6 +130,7 @@ describe("the desktop's IPC exposure", () => {
       "account.accessToken",
       "cloud.launch",
       "cloud.relaunch",
+      "cloud.reportUnsavedWrites",
     ]);
   });
 

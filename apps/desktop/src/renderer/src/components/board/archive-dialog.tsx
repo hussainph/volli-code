@@ -40,6 +40,7 @@ import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { formatStamp } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
+import { launchStore } from "@renderer/stores/launch";
 import { useBoardStore } from "@renderer/stores/board";
 
 /** "Jul 14, 2026" — a compact archived-on stamp. */
@@ -162,21 +163,24 @@ export function ArchiveRow({
               <ArrowUUpLeftIcon />
               Restore
             </Button>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="Delete permanently"
-                  className="shrink-0 text-muted-foreground hover:text-destructive"
-                  {...readOnlyControl(canWrite)}
-                  onClick={() => onRequestDelete(ticket)}
-                >
-                  <TrashIcon />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">Delete permanently</TooltipContent>
-            </Tooltip>
+            {/* A cloud ticket offers Archive only: deletion is retention's (VC-889). */}
+            {launchStore() === "cloud" ? null : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="Delete permanently"
+                    className="shrink-0 text-muted-foreground hover:text-destructive"
+                    {...readOnlyControl(canWrite)}
+                    onClick={() => onRequestDelete(ticket)}
+                  >
+                    <TrashIcon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">Delete permanently</TooltipContent>
+              </Tooltip>
+            )}
           </span>
         }
       />

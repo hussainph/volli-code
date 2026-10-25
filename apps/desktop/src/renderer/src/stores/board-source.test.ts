@@ -45,13 +45,18 @@ describe("where a project's board goes (VC-889)", () => {
   it("is Volli Cloud's source for every project of a cloud launch", () => {
     adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
     expect(boardSourceFor("any")).toBeNull();
-    const source = new ConvexBoardSource({
-      paint: vi.fn(),
-      notePlanningChange: vi.fn(),
-      failed: vi.fn(),
-      refused: vi.fn(),
-      dropped: vi.fn(),
-    });
+    const source = new ConvexBoardSource(
+      {
+        paint: vi.fn(),
+        notePlanningChange: vi.fn(),
+        failed: vi.fn(),
+        refused: vi.fn(),
+        unconfirmed: vi.fn(),
+        readOnly: () => null,
+        dropped: vi.fn(),
+      },
+      "user-1",
+    );
     installCloudBoardSource(source);
     expect(cloudBoardSource()).toBe(source);
     expect(boardSourceFor("any")).toBe(source);

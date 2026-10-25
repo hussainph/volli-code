@@ -245,6 +245,7 @@ export interface DesktopRouterHandlers {
   readonly "account.accessToken": HostHandler<{ force: boolean }, AccountAccessToken>;
   readonly "cloud.launch": HostHandler<void, CloudLaunch>;
   readonly "cloud.relaunch": HostHandler<void, null>;
+  readonly "cloud.reportUnsavedWrites": HostHandler<{ count: number }, null>;
 }
 
 type AssertNever<Type extends never> = Type;
@@ -888,6 +889,10 @@ export function createDesktopRouter() {
       relaunch: hostProcedure("cloud.relaunch")
         .output(z.null())
         .mutation(({ ctx }) => ctx.handlers["cloud.relaunch"](undefined, ctx.call)),
+      reportUnsavedWrites: hostProcedure("cloud.reportUnsavedWrites")
+        .input(z.strictObject({ count: z.number().int().nonnegative().max(1_000_000) }))
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["cloud.reportUnsavedWrites"](input, ctx.call)),
     },
   });
 }

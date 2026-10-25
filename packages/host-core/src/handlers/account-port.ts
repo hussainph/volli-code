@@ -48,4 +48,6 @@ export interface AccountPort {
   launch(): Answer<CloudLaunch>;
   /** Restarts the app through the normal quit gates, into the store the account now chooses. */
   relaunch(): Answer<void>;
+  /** The window's board writes still unanswered, for the quit gate to ask about. */
+  reportUnsavedWrites(count: number): Answer<void>;
 }

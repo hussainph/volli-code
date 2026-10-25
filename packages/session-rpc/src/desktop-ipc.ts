@@ -216,6 +216,7 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "account.accessToken": "ipc",
   "cloud.launch": "ipc",
   "cloud.relaunch": "ipc",
+  "cloud.reportUnsavedWrites": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

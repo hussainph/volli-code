@@ -124,6 +124,7 @@ const SAMPLE_INPUTS: {
   "account.accessToken": { force: false },
   "cloud.launch": undefined,
   "cloud.relaunch": undefined,
+  "cloud.reportUnsavedWrites": { count: 1 },
   "ticket.move": { projectId: PROJECT, ticketId: "ticket-1", toStatus: "done" },
   "sessions.create": { operationId: "op", projectId: PROJECT, ticketId: null, title: null },
   "sessions.attach": { operationId: "op", ...SESSION },

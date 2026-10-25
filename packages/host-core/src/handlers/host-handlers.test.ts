@@ -1575,6 +1575,7 @@ describe("the Volli Cloud account", () => {
     () => map["account.accessToken"]({ force: false }, WINDOW),
     () => map["cloud.launch"](undefined, WINDOW),
     () => map["cloud.relaunch"](undefined, WINDOW),
+    () => map["cloud.reportUnsavedWrites"]({ count: 1 }, WINDOW),
   ];
 
   it("answers unavailable for every key on a host with no account service (hostd)", async () => {
@@ -1601,6 +1602,7 @@ describe("the Volli Cloud account", () => {
       accessToken: vi.fn(async () => ({ kind: "token" as const, token: "jwt", expiresAt: 9 })),
       launch: vi.fn(() => ({ store: "local" as const })),
       relaunch: vi.fn(),
+      reportUnsavedWrites: vi.fn(),
     } satisfies AccountPort;
     const map = handlers({ account: port });
     const snapshots = sink();
@@ -1635,5 +1637,7 @@ describe("the Volli Cloud account", () => {
     expect(await map["cloud.launch"](undefined, WINDOW)).toEqual({ store: "local" });
     expect(await map["cloud.relaunch"](undefined, WINDOW)).toBeNull();
     expect(port.relaunch).toHaveBeenCalledOnce();
+    expect(await map["cloud.reportUnsavedWrites"]({ count: 2 }, WINDOW)).toBeNull();
+    expect(port.reportUnsavedWrites).toHaveBeenCalledWith(2);
   });
 });

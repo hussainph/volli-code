@@ -501,6 +501,14 @@ export const DESKTOP_ENTRIES = [
     idempotency: "natural",
     summary: "Restart Volli into the product store the account now chooses.",
   },
+  {
+    // `natural`: the window reports its whole count each time; the last one stands.
+    key: "cloud.reportUnsavedWrites",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "How many board changes this window has sent Volli Cloud and not had answered.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];

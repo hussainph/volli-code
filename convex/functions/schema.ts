@@ -216,7 +216,8 @@ export default defineSchema({
     colorIndex: v.number(),
     // Fixed for the project's life (ticket keys survive moves).
     ticketPrefix: v.string(),
-    origin: literals(["github", "promoted_local", "migrated"]),
+    // `blank`: made empty in a Workspace, before it has a repository (VC-889).
+    origin: literals(["github", "promoted_local", "migrated", "blank"]),
     shipBehaviour: literals(["commit", "push", "pr", "custom"]),
     customShipPrompt: nullable(v.string()),
     coAuthorDefault: v.boolean(),

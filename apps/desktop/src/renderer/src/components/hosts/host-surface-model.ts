@@ -123,14 +123,6 @@ export function hostSurface(host: HostRecord, now: number): HostSurface | null {
           graced: false,
         };
       }
-      if (link.reason === "writes-unavailable") {
-        return {
-          tone: "quiet",
-          icon: "warning",
-          line: `Read-only on ${host.name} for now`,
-          graced: false,
-        };
-      }
       if (link.reason === "signed-out") {
         return {
           tone: "error",
@@ -149,7 +141,7 @@ export function hostSurface(host: HostRecord, now: number): HostSurface | null {
 
 function incompatibleSurface(
   host: HostRecord,
-  reason: Exclude<HostIncompatibility, "signed-out" | "writes-unavailable">,
+  reason: Exclude<HostIncompatibility, "signed-out">,
   requiredVersion: string | undefined,
 ): HostSurface {
   switch (reason) {
@@ -228,7 +220,6 @@ export function hostBadge(host: HostRecord): HostBadge {
   const link = host.link;
   if (link.status === "offline") return "offline";
   if (link.status === "incompatible") {
-    if (link.reason === "writes-unavailable") return null;
     return link.reason === "host-too-old" || link.reason === "host-too-new" ? "attention" : "fail";
   }
   if (link.status === "version-skewed" || host.expiredSignIns.length > 0) return "attention";
@@ -329,7 +320,6 @@ export function hostDetail(host: HostRecord): HostDetail | null {
         action: MANAGE_HOSTS,
       };
     }
-    if (link.reason === "writes-unavailable") return null;
     if (link.reason === "signed-out") {
       return {
         kind: "incompatible",
@@ -349,9 +339,7 @@ export function hostDetail(host: HostRecord): HostDetail | null {
   return null;
 }
 
-function incompatibleDetail(
-  reason: Exclude<HostIncompatibility, "signed-out" | "writes-unavailable">,
-): HostDetail {
+function incompatibleDetail(reason: Exclude<HostIncompatibility, "signed-out">): HostDetail {
   switch (reason) {
     case "sign-in-refused":
       return { kind: "incompatible", text: "Didn’t accept this sign-in", action: SIGN_IN_AGAIN };
@@ -401,11 +389,7 @@ export function hostTransitionToast(before: HostRecord, after: HostRecord): Host
 }
 
 function servingLink(link: HostLinkView): boolean {
-  return (
-    link.status === "open" ||
-    link.status === "version-skewed" ||
-    (link.status === "incompatible" && link.reason === "writes-unavailable")
-  );
+  return link.status === "open" || link.status === "version-skewed";
 }
 
 /**
@@ -415,9 +399,6 @@ function servingLink(link: HostLinkView): boolean {
  */
 export function hostDotState(host: HostRecord): StatusDotState {
   if (host.link.status === "offline") return "exited";
-  if (host.link.status === "incompatible" && host.link.reason === "writes-unavailable") {
-    return "ready";
-  }
   if (isBlocking(host.link)) return "error";
   if (host.link.status === "connecting" || host.link.status === "reconnecting") return "starting";
   if (host.expiredSignIns.length > 0 || host.update !== null) return "waiting";

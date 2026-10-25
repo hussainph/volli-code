@@ -190,6 +190,7 @@ function harness(options: { firstSnapshot?: AccountSnapshot; online?: boolean } 
     },
     inputs: inputs.getState(),
     clock,
+    reportUnsavedWrites: vi.fn(),
   };
   return {
     deps,
@@ -245,6 +246,12 @@ describe("the cloud launch's client", () => {
     expect(h.inputs.getState().input.authenticated).toBe(false);
     client.connection({ isWebSocketConnected: true, hasEverConnected: true });
     expect(h.inputs.getState().input.connection).toMatchObject({ connected: true });
+    // Unanswered writes reach main's quit gate when their count changes.
+    client.connection({ isWebSocketConnected: true, inflightMutations: 2 });
+    client.connection({ isWebSocketConnected: true, inflightMutations: 2 });
+    expect(h.deps.reportUnsavedWrites).toHaveBeenCalledExactlyOnceWith(2);
+    closeCloudClient();
+    expect(h.deps.reportUnsavedWrites).toHaveBeenLastCalledWith(0);
   });
 
   it("follows the OS's online state and a wake from sleep", async () => {

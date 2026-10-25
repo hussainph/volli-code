@@ -65,7 +65,7 @@ export function createDesktopAccount(input: {
  */
 export function accountPort(
   service: AccountService,
-  launch: { launch(): CloudLaunch; relaunch(): void },
+  launch: { launch(): CloudLaunch; relaunch(): void; reportUnsavedWrites(count: number): void },
 ): AccountPort {
   return {
     snapshot: () => service.snapshot(),
@@ -78,5 +78,6 @@ export function accountPort(
     accessToken: (force) => service.windowToken(force),
     launch: () => launch.launch(),
     relaunch: () => launch.relaunch(),
+    reportUnsavedWrites: (count) => launch.reportUnsavedWrites(count),
   };
 }

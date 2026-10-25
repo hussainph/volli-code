@@ -13,7 +13,11 @@ import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable"
 import type { Project } from "@volli/shared";
 
 import { AddProjectTile } from "@renderer/components/rail/add-project-tile";
-import { CloudWorkspaceHead, LocalProjectsFoot } from "@renderer/components/rail/cloud-rail";
+import {
+  CloudWorkspaceHead,
+  LocalProjectsFoot,
+  NewCloudProjectTile,
+} from "@renderer/components/rail/cloud-rail";
 import { ProjectTile } from "@renderer/components/rail/project-tile";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { launchStore } from "@renderer/stores/launch";
@@ -93,10 +97,17 @@ export const ProjectRail = React.memo(function ProjectRail() {
           </div>
         </SortableContext>
       </DndContext>
-      <div className="flex shrink-0 justify-center pt-2 pb-4">
-        {/* A cloud launch adds no folder of this Mac's (VC-889). */}
-        {cloudLaunch ? <LocalProjectsFoot /> : <AddProjectTile />}
-      </div>
+      {/* A cloud launch adds no folder of this Mac's (VC-889). */}
+      {cloudLaunch ? (
+        <div className="flex shrink-0 flex-col items-center gap-4 pt-2 pb-4">
+          <NewCloudProjectTile />
+          <LocalProjectsFoot />
+        </div>
+      ) : (
+        <div className="flex shrink-0 justify-center pt-2 pb-4">
+          <AddProjectTile />
+        </div>
+      )}
     </div>
   );
 });

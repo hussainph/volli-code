@@ -1,15 +1,19 @@
 /**
  * The board's per-surface door in a cloud launch (VC-889): a ticket's
  * history, body and comments read from Volli Cloud through the window's
- * client, in the legacy channels' shapes (`board-api.ts`).
+ * client, in the legacy channels' shapes (`board-api.ts`), and its comments
+ * written through the board source (gated, with their optimistic paint).
  *
  * Each read is one query; while the open ticket's own watch on the same
  * query is live (`stores/cloud-board/source.ts`), the client answers it from
  * its cache. Session facts arrive with cloud Sessions: until then the
  * sidebar's signals and status entries answer empty, which their readers
  * already treat as "nothing to say" (a ticket missing there keeps its
- * Sessions). Writes are refused in this release, with the board's words.
+ * Sessions). Project settings are not on Volli Cloud yet, and refuse.
  */
+import type { TicketComment } from "@volli/shared";
+
+import { cloudBoardSource } from "../stores/board-source";
 import { CLOUD_WRITES_UNAVAILABLE, cloudFailure } from "../stores/cloud-board/source";
 import {
   projectComments,
@@ -21,6 +25,19 @@ import type { BoardApi } from "./board-api";
 import { cloudSession, type CloudSession } from "./cloud-client";
 
 const NOT_CONNECTED = "Volli Cloud isn’t connected yet.";
+
+/** How many comments the door remembers (for an edit's ticket): oldest first out. */
+export const KNOWN_COMMENTS_MAX = 10_000;
+
+/** The comments this window has listed or written, by id: what an edit or removal is placed by. */
+const known = new Map<string, TicketComment>();
+
+function note(comment: TicketComment): TicketComment {
+  known.delete(comment.id);
+  known.set(comment.id, comment);
+  if (known.size > KNOWN_COMMENTS_MAX) known.delete(known.keys().next().value!);
+  return comment;
+}
 
 /** One read through the running client, its failure in the board's words. */
 async function read<Answer>(
@@ -36,6 +53,7 @@ async function read<Answer>(
 }
 
 const refused = async () => ({ ok: false as const, error: CLOUD_WRITES_UNAVAILABLE });
+const notConnected = () => ({ ok: false as const, error: NOT_CONNECTED });
 
 export function cloudBoardApi(): BoardApi {
   return {
@@ -63,12 +81,35 @@ export function cloudBoardApi(): BoardApi {
           client.query(api.board.comments, { ticketId }),
         );
         return result.ok
-          ? { ok: true, comments: projectComments(result.answer as CloudCommentRow[]) }
+          ? {
+              ok: true,
+              comments: projectComments(result.answer as CloudCommentRow[]).map(note),
+            }
           : result;
       },
-      create: refused,
-      update: refused,
-      remove: refused,
+      create: async ({ ticketId, body }) => {
+        const source = cloudBoardSource();
+        if (source === null) return notConnected();
+        const result = await source.createComment(ticketId, body);
+        return result.ok ? { ok: true, comment: note(result.comment) } : result;
+      },
+      update: async ({ commentId, body }) => {
+        const source = cloudBoardSource();
+        const comment = known.get(commentId);
+        if (source === null || comment === undefined) return notConnected();
+        const result = await source.updateComment(comment.ticketId, commentId, body);
+        return result.ok
+          ? { ok: true, comment: note({ ...comment, body, updatedAt: Date.now() }) }
+          : result;
+      },
+      remove: async ({ commentId }) => {
+        const source = cloudBoardSource();
+        const comment = known.get(commentId);
+        if (source === null || comment === undefined) return notConnected();
+        const result = await source.removeComment(comment.ticketId, commentId);
+        if (result.ok) known.delete(commentId);
+        return result;
+      },
     },
     projects: {
       update: refused,

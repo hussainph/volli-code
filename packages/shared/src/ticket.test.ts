@@ -7,6 +7,7 @@ import {
   FIRST_CLASS_HARNESS_IDS,
   HARNESS_LABELS,
   harnessLabel,
+  cardTicketKey,
   displayTicketId,
   createTicket,
   isTicketStatus,
@@ -19,6 +20,13 @@ import {
   isActiveTicketStatus,
   leavesActiveColumns,
 } from "./ticket";
+
+describe("cardTicketKey", () => {
+  it("is the display id, or nothing before the number is allocated", () => {
+    expect(cardTicketKey("VC", 12)).toBe("VC-12");
+    expect(cardTicketKey("VC", 0)).toBe("");
+  });
+});
 
 describe("displayTicketId", () => {
   it("joins the prefix and ticket number", () => {

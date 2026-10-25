@@ -78,6 +78,7 @@ import {
   clearUnsavedDocumentsOnWindowClosed,
   planUnsavedQuit,
   quitConfirmDetail,
+  recordUnsavedBoardWrites,
   recordUnsavedDocuments,
   unsavedDocumentNames,
   updateInstallQuitInFlight,
@@ -1470,6 +1471,10 @@ const appStartup = app.whenReady().then(async () => {
           // Like every other account entry, nothing with `cloud` off.
           if (!isExperimentEnabled("cloud")) throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
           relaunch.request();
+        },
+        reportUnsavedWrites: (count) => {
+          if (!isExperimentEnabled("cloud")) throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
+          recordUnsavedBoardWrites(count);
         },
       }),
     };

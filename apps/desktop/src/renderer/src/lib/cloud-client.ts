@@ -159,6 +159,8 @@ export interface CloudClientDeps {
   };
   inputs: Pick<CloudLinkInputState, "update">;
   clock: CloudClock;
+  /** Tells main's quit gate how many board writes are still unanswered (§7.8). */
+  reportUnsavedWrites(count: number): void;
 }
 
 function defaultDeps(): CloudClientDeps {
@@ -171,6 +173,15 @@ function defaultDeps(): CloudClientDeps {
     window,
     inputs: useCloudLinkInputs.getState(),
     clock: SYSTEM_CLOCK,
+    reportUnsavedWrites: (count) => {
+      // Background bookkeeping nobody waits on: a failed report is logged, and
+      // the next change reports the whole count again.
+      sessionRpcClient()
+        .cloud.reportUnsavedWrites.mutate({ count })
+        .catch((error: unknown) => {
+          console.warn("[volli] couldn't report unsaved board writes:", error);
+        });
+    },
   };
 }
 
@@ -246,8 +257,17 @@ export async function startCloudClient(
     });
   authenticate();
 
+  let reportedWrites = 0;
+  const reportWrites = (count: number) => {
+    if (count === reportedWrites) return;
+    reportedWrites = count;
+    deps.reportUnsavedWrites(count);
+  };
   const stopConnection = client.subscribeToConnectionState((state) => {
-    if (!closed) inputs.update({ connection: readConnection(state) });
+    if (closed) return;
+    const connection = readConnection(state);
+    inputs.update({ connection });
+    reportWrites(connection.inflightMutations);
   });
   inputs.update({ client: "running", connection: readConnection(client.connectionState()) });
 
@@ -325,6 +345,8 @@ export async function startCloudClient(
     deps.window.removeEventListener("offline", offline);
     deps.window.removeEventListener("pagehide", close);
     inputs.update({ client: "closed" });
+    // Its writes go with it: nothing is left for the quit gate to ask about.
+    reportWrites(0);
     publish(null);
     void client.close();
   }
