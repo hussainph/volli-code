@@ -325,6 +325,22 @@ Each was a decision made while turning the design into code.
     their requested kinds with an existing open watch, so a selective await
     cannot remove interest from an automatic or explicit watch; unwatch resets it.
 
+43. Follow-up intent jobs keep optional immutable `commandIntent` for replay
+    comparison: their mutable payload may have been edited while never leased.
+    `sessionFollowUpQueues` is a claim-fenced, rebuildable side table keyed by
+    Session, capped at 32 items and 64 KiB. Queue changes do not invalidate the
+    Session snapshot. Claim transfer drops the mirror; generation checks also
+    hide obsolete mirrors after runner replacement. Queue-control receipts
+    travel with job completion because these runtime controls are deliberately
+    outside the immutable event command vocabulary. Delegations gain optional
+    `stopCommandId`, minted once for a cross-runner stop cascade and reused on
+    derivation replay, and a bounded `watch` projection. Watch boundaries—not
+    lifetime settlement—choose outcomes: held kickoffs stay unarmed, Retry
+    keeps the original answer id, and resumed/joined turns get their frozen
+    per-turn answer ids. Only armed original watches defer a parent's watchers
+    or participate in stop cascades. `sessionEvents.by_session_command` proves
+    the parent recorded an original answer without scanning its history.
+
 ## Runner-routed agent Session commands
 
 `sessions.command` accepts the existing UUID command ids and, for an authenticated

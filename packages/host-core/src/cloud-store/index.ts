@@ -26,6 +26,8 @@ import { createCloudSessionLocationResolver, type CloudSessionLocationOptions } 
 import { registerWorkingCopyJobs } from "./jobs";
 import { registerSessionCommandJob, ownerGuardedInbox } from "./session-jobs";
 import { registerSessionNoticeJob, type SessionNoticeOutbox } from "./notice-jobs";
+import { createFollowUpMirror } from "./follow-up-mirror";
+import { executeFollowUpJob } from "./follow-up-jobs";
 import { runGitCapturingAsync } from "../worktree/git";
 import { getTrimSettings } from "../worktree/trim-settings";
 import type { BusyWorktreeSites } from "../worktree/activity";
@@ -69,8 +71,8 @@ export function createCloudProductStore(options: {
   prepareEnvironment?: CloudSessionLocationOptions["prepareEnvironment"];
   environmentRecipes?: () => boolean;
   /**
-   * Receiving seam: S5 supplies the follow-up executor when it lands. The
-   * notice executor is this store's own (`notice-jobs.ts`).
+   * Specialized follow-up executor override; the default and notice executor
+   * are composed here behind the same owner gate.
    */
   sessionJobs?: Partial<Record<"session.followUp", JobExecutor>>;
 }) {
@@ -210,6 +212,20 @@ export function createCloudProductStore(options: {
       }),
     cloudBoardVerbs: createCloudBoardVerbs({ backend: agentBackend }),
     cloudSessionVerbs,
+  };
+  const followUpMirror = createFollowUpMirror({
+    runtime: () => runtime,
+    link: () => active?.link ?? null,
+    generation: (sessionId) => sqliteDrainCursorStore(db).get(sessionId)?.generation ?? null,
+    owns: owner.owns,
+    onError: (error) => log.warn("Follow-up live view could not publish", { error }),
+  });
+  const followUpSessions = () =>
+    (db.prepare("SELECT session_id FROM session_follow_up_queue").all() as { session_id: string }[])
+      .map((row) => row.session_id)
+      .filter(owner.owns);
+  const refreshFollowUps = () => {
+    void followUpMirror.refresh(followUpSessions());
   };
   const offWake = host.sessionWakeBus.subscribe(({ event }) => {
     if (!owner.owns(event.sessionId)) return;
@@ -375,6 +391,8 @@ export function createCloudProductStore(options: {
       runtime = value;
       artifacts = store;
       active?.startStreams();
+      followUpMirror.bind();
+      refreshFollowUps();
     },
     /** The runtime lifecycle's durable outbox door, for `session.notice` jobs. */
     bindNotices(outbox: SessionNoticeOutbox): void {
@@ -413,7 +431,10 @@ export function createCloudProductStore(options: {
       recovery.observe(parts.link);
       const reports = publisher(registry());
       const offReports = parts.link.onStatus((status) => {
-        if (status.state === "connected") void reports.flush();
+        if (status.state === "connected") {
+          void reports.flush();
+          refreshFollowUps();
+        }
       });
       const inbox = createInboxWorker({
         backend: inboxOverLink(parts.link),
@@ -427,28 +448,39 @@ export function createCloudProductStore(options: {
         ownerUserId,
         owns: owner.owns,
       });
-      registerSessionCommandJob(guarded, {
-        engine: owner.engine,
+      const followUps = {
         runtime: () => runtime,
         artifacts: () => artifacts,
-        async commandArtifact({ sessionId, digest }) {
+        publish: followUpMirror.publish,
+        commandArtifact: async ({ sessionId, digest }: { sessionId: string; digest: string }) => {
           const cursor = sqliteDrainCursorStore(db).get(sessionId);
           if (!owner.owns(sessionId) || cursor === null)
             throw new Error("This runner does not own the command's Session.");
           if (parts.link.query === undefined)
             throw new Error("Runner artifact reads are unavailable.");
-          const row = (await parts.link.query("transcripts:commandArtifact", {
+          const result = await parts.link.query("transcripts:commandArtifact", {
             sessionId,
             generation: cursor.generation,
             digest,
-          })) as { body: string } | null;
-          return row?.body ?? null;
+          });
+          return (result as { body: string } | null)?.body ?? null;
         },
+      };
+      registerSessionCommandJob(guarded, {
+        engine: owner.engine,
+        runtime: () => runtime,
+        artifacts: () => artifacts,
+        commandArtifact: followUps.commandArtifact,
+        followUps,
       });
+      if (options.sessionJobs?.["session.followUp"] === undefined)
+        guarded.register(
+          "session.followUp",
+          async (job, jobContext) => (await executeFollowUpJob(job, jobContext, followUps))!,
+        );
       // A watcher's notice: composed here, then handed to the durable outbox.
       registerSessionNoticeJob(guarded, { outbox: () => notices });
-      // S5's follow-up executor is not invented here; its production
-      // composition passes it through this same owner gate.
+      // Optional specialized executors still cross the same owner gate.
       for (const [kind, executor] of Object.entries(options.sessionJobs ?? {}))
         guarded.register(kind, executor);
       registerWorkingCopyJobs(inbox, {
@@ -501,6 +533,7 @@ export function createCloudProductStore(options: {
           sync ??= startRunnerSync({ link: parts.link, drain, inbox, presence: parts.presence });
           startStreams();
           void reports.flush();
+          refreshFollowUps();
         },
         waiting: () => drain.status().waiting + reports.pending(),
         suspend: () => sync?.suspend(),
@@ -528,6 +561,7 @@ export function createCloudProductStore(options: {
       };
     },
     dispose() {
+      followUpMirror.close();
       offWake();
       void active?.stopStreams().catch(() => log.warn("Session live chunks did not close"));
       drain.stop();

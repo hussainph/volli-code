@@ -59,6 +59,7 @@ import { findVisibleProject } from "./auth";
 import type { CallingRunner } from "./runnerAuth";
 import { visibilityForNewSession } from "./visibility";
 import { EMPTY_USAGE_TOTALS, deriveFromFact, stableJson, syncListing } from "./sessionDerived";
+import { onDelegationHead } from "./delegations";
 import { endedTurnsOf, scheduleStreamCleanup } from "./streamChunks";
 
 // ── limits ──────────────────────────────────────────────────────────────────
@@ -767,7 +768,11 @@ async function applyFold(
   };
   if (doc === null) await ctx.db.insert("sessionStates", { sessionId: session.id, ...stored });
   else await ctx.db.patch(doc._id, stored);
-  if (options.atHead) await syncListing(ctx, session, cloudSessionView(state));
+  if (options.atHead) {
+    const current = cloudSessionView(state);
+    await syncListing(ctx, session, current);
+    await onDelegationHead(ctx, session, current);
+  }
   return setAside;
 }
 

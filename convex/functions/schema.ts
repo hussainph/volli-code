@@ -824,6 +824,7 @@ export default defineSchema({
   })
     .index("by_session_sequence", ["sessionId", "sequence"])
     .index("by_session_event", ["sessionId", "eventId"])
+    .index("by_session_command", ["sessionId", "commandId", "kind"])
     .index("by_session_kind", ["sessionId", "kind", "sequence"]),
   sessionTurns: defineTable({
     sessionId: uuid,
@@ -931,6 +932,26 @@ export default defineSchema({
   sessionViewerHeartbeats: defineTable({ viewerId: uuid, expiresAt: time })
     .index("by_viewer", ["viewerId"])
     .index("by_expiry", ["expiresAt"]),
+  // Rebuildable runner-owned queue view. Intent is held separately by runnerJobs.
+  sessionFollowUpQueues: defineTable({
+    sessionId: uuid,
+    runnerId: uuid,
+    generation: v.number(),
+    revision: v.number(),
+    items: v.array(
+      v.object({
+        messageId: v.string(),
+        commandId: v.string(),
+        state: literals(["queued", "releasing"]),
+        afterCurrentStep: v.optional(v.boolean()),
+        refused: v.optional(v.boolean()),
+        refusedDetail: v.optional(v.string()),
+        message: nullable(v.string()),
+        messageDigest: v.string(),
+      }),
+    ),
+    updatedAt: time,
+  }).index("by_session", ["sessionId"]),
   delegations: defineTable({
     childSessionId: uuid,
     parentSessionId: uuid,
@@ -938,6 +959,25 @@ export default defineSchema({
     depth: v.number(),
     toolCallId: v.string(),
     createCommandId: v.string(),
+    stopCommandId: v.optional(uuid),
+    // A slot outlives each watch: failed first attaches wait for Retry, and
+    // resumed turns use their own frozen notice ids without a stop cascade.
+    watch: v.optional(
+      v.object({
+        throughSequence: v.number(),
+        // Parent recorded :answer, or its own stop settled the original watch.
+        originalSettled: v.boolean(),
+        // Original result already chosen, even if its notice is still parked.
+        originalOutcome: v.boolean(),
+        active: nullable(
+          v.object({
+            afterSequence: v.number(),
+            resumed: v.boolean(),
+            commandId: v.string(),
+          }),
+        ),
+      }),
+    ),
     status: literals(["starting", "running", "answered", "failed", "stopped"]),
     answerRef: nullable(json),
     createdAt: time,
@@ -1014,6 +1054,8 @@ export default defineSchema({
     workingCopyId: nullable(uuid),
     commandId: nullable(uuid),
     payload: json,
+    // Frozen caller intent: queued follow-up payloads may be edited in place.
+    commandIntent: v.optional(v.string()),
     priority: literals(JOB_PRIORITIES),
     // 0 urgent, 1 normal (`jobRank`): the ready index sorts on it.
     rank: v.number(),
