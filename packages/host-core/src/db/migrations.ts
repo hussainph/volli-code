@@ -15,6 +15,7 @@
  * adding a migration.
  */
 import { BOARD_COMMAND_RECEIPTS_MIGRATION } from "./board-receipts-migration";
+import { RUNNER_DRAIN_MIGRATION } from "./runner-drain-migration";
 import { CLOUD_IDENTITY_MIGRATION } from "./cloud-identity-migration";
 import { HOST_NOTICE_OUTBOX_MIGRATION } from "./host-notice-outbox-migration";
 import {
@@ -2818,6 +2819,11 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "projects.removed_at — removing a project detaches it instead of deleting (VC-822)",
     sql: PROJECT_REMOVED_COLUMN_MIGRATION,
     apply: applyProjectRemovedColumn,
+  },
+  {
+    version: 65,
+    name: "session drain cursors and the job journal — the cloud runner's machine state (VC-892)",
+    sql: RUNNER_DRAIN_MIGRATION,
   },
 ];
 

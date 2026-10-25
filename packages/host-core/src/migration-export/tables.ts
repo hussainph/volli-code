@@ -282,6 +282,16 @@ export const MIGRATION_TABLE_DECISIONS: readonly MigrationTableDecision[] = [
   { table: "devices", disposition: "drop", reason: "Retired host authority." },
   { table: "migration_history", disposition: "runner", reason: "Per-file history." },
   {
+    table: "session_drain_cursors",
+    disposition: "runner",
+    reason: "The runner's own accepted cursors; the import writes the backend's side.",
+  },
+  {
+    table: "job_journal",
+    disposition: "runner",
+    reason: "Outcomes owed under this runner's leases.",
+  },
+  {
     table: "board_command_receipts",
     disposition: "drop",
     reason:
