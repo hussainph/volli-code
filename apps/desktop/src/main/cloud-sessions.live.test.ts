@@ -19,13 +19,13 @@
  *   `CloudSessionSource`: both listings follow the runner's facts.
  *
  * Runs only under the fixture, which hands it the backend's URLs and the test
- * issuer's key. It needs no admin key: every row it seeds goes through public
- * functions. CI's `Convex (codegen + backend)` lane is meant to run it with
+ * issuer's key. Preview enrollment alone uses the fixture's admin key; all
+ * product setup and Session facts use authenticated public functions. CI's `Convex (codegen + backend)` lane is meant to run it with
  * `VOLLI_CLOUD_SESSION_LIVE_REQUIRED=1` (it then fails rather than skips);
  * it skips everywhere else, the desktop lanes included.
  *
  *   pnpm -C convex with-backend --deploy -- \
- *     sh -c 'cd ../apps/desktop && vp test run src/renderer/src/lib/cloud-sessions.live.test.ts'
+ *     sh -c 'cd ../apps/desktop && vp test run src/main/cloud-sessions.live.test.ts'
  */
 import { createHash, randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -55,17 +55,23 @@ import type {
   TranscriptReference,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared";
 
-import { DEV_AUDIENCE, DEV_ISSUER, DEV_KEY_ID } from "../../../main/account/dev-issuer";
-import { signEs256Jwt } from "../../../main/account/jwt";
-import type { CloudSession } from "./cloud-client";
-import { CloudSessionSource } from "./cloud-session-source";
-import { cloudChatTransport, showCloudSession } from "./cloud-session-transport";
+import { DEV_AUDIENCE, DEV_ISSUER, DEV_KEY_ID } from "./account/dev-issuer";
+import { inviteTestEmail } from "./test-helpers/preview";
+import { signEs256Jwt } from "./account/jwt";
+import type { CloudSession } from "@renderer/lib/cloud-client";
+import { CloudSessionSource } from "@renderer/lib/cloud-session-source";
+import { cloudChatTransport, showCloudSession } from "@renderer/lib/cloud-session-transport";
 
 const url = process.env["VOLLI_CONVEX_URL"];
 const siteUrl = process.env["VOLLI_CONVEX_SITE_URL"];
 const privateKeyPem = process.env["VOLLI_CONVEX_TEST_PRIVATE_KEY"];
-const fixture = url !== undefined && siteUrl !== undefined && privateKeyPem !== undefined;
+const fixture =
+  url !== undefined &&
+  siteUrl !== undefined &&
+  privateKeyPem !== undefined &&
+  process.env["VOLLI_CONVEX_ADMIN_KEY"] !== undefined;
 
 // CI's Convex lane sets this: there the test must run, never skip.
 if (process.env["VOLLI_CLOUD_SESSION_LIVE_REQUIRED"] === "1" && !fixture) {
@@ -217,7 +223,10 @@ describe.skipIf(!fixture)("the cloud Session view against the pinned local backe
     // Setup, as the person: their account, their Workspace, a project.
     const person = new ConvexHttpClient(url!);
     person.setAuth(token(subject));
-    await person.mutation(api.accounts.ensureViewer, {});
+    await inviteTestEmail(url!, `${subject}@example.com`);
+    await person.mutation(api.accounts.ensureViewer, {
+      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    });
     const [workspace] = await person.query(api.workspaces.listMine, {});
     const projectId = randomUUID();
     await person.mutation(api.projects.create, {
