@@ -1007,7 +1007,6 @@ export function decodeSessionCommandIntent(value: unknown, context: string): Ses
         role: readSessionRole(row.role, ticketId, `${context}.role`),
         parentSessionId: readParentSessionId(row.parentSessionId, `${context}.parentSessionId`),
         title: readNullableString(row.title, `${context}.title`),
-        ...optionalOwnerUserId(row.ownerUserId, `${context}.ownerUserId`),
       };
     }
     case "session.archive":

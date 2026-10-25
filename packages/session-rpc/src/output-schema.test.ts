@@ -437,6 +437,46 @@ describe("publishable Session procedure schemas", () => {
     expect(receiptSchema.parse(value)).toEqual(value);
   });
 
+  it.each([undefined, "cloud-owner"])(
+    "retains optional owner stamps through Session outputs (%s)",
+    async (ownerUserId) => {
+      const owner = ownerUserId === undefined ? {} : { ownerUserId };
+      const owned = { ...session, ...owner };
+      const projection = { session: owned };
+      const frames = [
+        frame({ kind: "session.created", session: owned }),
+        frame({
+          kind: "command.recorded",
+          command: {
+            ...payloads["command.recorded"].command,
+            route: null,
+            intent: {
+              kind: "session.create",
+              projectId: session.projectId,
+              ticketId: session.ticketId,
+              role: session.role,
+              parentSessionId: session.parentSessionId,
+              title: session.title,
+            },
+          },
+        }),
+      ];
+      for (const sample of frames) expect(frameSchema.parse(sample)).toEqual(sample);
+      expect(sessionProjectionOutputSchema.parse({ projection, throughSequence: 2 })).toEqual({
+        projection,
+        throughSequence: 2,
+      });
+      const snapshot = { projection, frames, throughSequence: 2 };
+      expect(sessionSnapshotOutputSchema.parse(snapshot)).toEqual(snapshot);
+      const caller = callerWithResults({ projection, frames });
+      expect(await caller.session.projection({ sessionId: "session" })).toEqual({
+        projection,
+        throughSequence: 2,
+      });
+      expect(await caller.session.snapshot({ sessionId: "session" })).toEqual(snapshot);
+    },
+  );
+
   it("keeps optional stop details and a minimal projection without defaults", () => {
     const result = {
       sessionId: "session",

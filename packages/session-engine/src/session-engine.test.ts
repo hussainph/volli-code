@@ -4791,12 +4791,13 @@ describe("listSessions cached projections are frozen (VC-393)", () => {
 });
 
 describe("Session birth owner and atomic machine-state hook", () => {
-  it("records the owner in birth and intent, inherits it for a child, and rejects changing it on replay", async () => {
+  it("stamps the birth owner, inherits it for a child, and rejects changing it on replay without widening command intent", async () => {
     const { plane } = composition();
     const request = { ...createRequest(), ownerUserId: "person-a" };
     const parent = await plane.createSession(request);
     expect(parent.session.ownerUserId).toBe("person-a");
-    expect(parent.command.intent).toMatchObject({ ownerUserId: "person-a" });
+    expect(parent.command.intent).not.toHaveProperty("ownerUserId");
+    expect((await plane.createSession(request)).session).toEqual(parent.session);
     const child = await plane.createSession({
       ...createRequest("child"),
       role: "subagent",

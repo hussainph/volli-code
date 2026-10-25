@@ -2431,7 +2431,7 @@ it("retains birth refresh wording markers without defaulting historical records"
 });
 
 describe("additive Session birth owner", () => {
-  it("round-trips an owner through the durable event and command codecs without changing legacy bytes", () => {
+  it("round-trips a birth owner without changing legacy bytes or the command intent grammar", () => {
     for (const owner of [{}, { ownerUserId: "person-a" }]) {
       const payload = { kind: "session.created", session: { ...session, ...owner } };
       expect(decodeSessionEventPayload(JSON.parse(encodeSessionJson(payload)), "birth")).toEqual(
@@ -2444,7 +2444,6 @@ describe("additive Session birth owner", () => {
         role: session.role,
         parentSessionId: session.parentSessionId,
         title: session.title,
-        ...owner,
       };
       expect(decodeSessionCommandIntent(JSON.parse(encodeSessionJson(intent)), "create")).toEqual(
         intent,
@@ -2457,9 +2456,6 @@ describe("additive Session birth owner", () => {
         { kind: "session.created", session: { ...session, ownerUserId } },
         "birth",
       ),
-    ).toThrow("ownerUserId");
-    expect(() =>
-      decodeSessionCommandIntent({ kind: "session.create", ...session, ownerUserId }, "create"),
     ).toThrow("ownerUserId");
   });
 });

@@ -1250,7 +1250,6 @@ export type SessionCommandIntent =
       ticketId: string | null;
       role: SessionRole;
       parentSessionId: string | null;
-      ownerUserId?: string;
       title: string | null;
     }
   | { kind: "session.archive" }

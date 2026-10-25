@@ -415,7 +415,6 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
             ticketId: request.ticketId,
             role: request.role,
             parentSessionId: request.parentSessionId,
-            ...(ownerUserId === undefined ? {} : { ownerUserId }),
             title: request.title,
           },
           route: null,
@@ -1382,6 +1381,11 @@ function replayCreate(
   if (!receipt) throw new SessionEngineConflictError(`Command ${stored.id} has no create receipt`);
   const session = transaction.getSession(stored.sessionId);
   if (!session) throw new SessionEngineConflictError(`Command ${stored.id} has no Session`);
+  if (session.ownerUserId !== request.ownerUserId) {
+    throw new SessionEngineCommandConflictError(
+      `Command ${stored.id} was accepted for another Session owner`,
+    );
+  }
   if (receipt.result.sessionId !== session.id) {
     throw new SessionEngineConflictError(
       `Command ${stored.id} has a create receipt for another Session`,
@@ -1435,7 +1439,6 @@ function sameCreateSessionRequest(command: SessionCommand, request: CreateSessio
     command.intent.ticketId === request.ticketId &&
     command.intent.role === request.role &&
     command.intent.parentSessionId === request.parentSessionId &&
-    command.intent.ownerUserId === request.ownerUserId &&
     command.intent.title === request.title
   );
 }
