@@ -32,7 +32,7 @@ import {
 } from "@renderer/stores/projects";
 import { useBoardStore } from "@renderer/stores/board";
 import { cloudBoardSource, installCloudBoardSource } from "@renderer/stores/board-source";
-import { ConvexBoardSource } from "@renderer/stores/cloud-board/source";
+import { CLOUD_READ_ONLY, ConvexBoardSource } from "@renderer/stores/cloud-board/source";
 import {
   BOARD_SNAPSHOT_AFTER_MS,
   createSnapshotWriter,
@@ -339,7 +339,7 @@ function cloudBoardSnapshot(userId: string, source: ConvexBoardSource) {
       liveBoardSnapshot({
         userId,
         savedAt,
-        showingSnapshot: useCloudLinkInputs.getState().input.snapshotAt !== null,
+        link: useCloudLinkInputs.getState().input,
         workspace: useCloudWorkspaceStore.getState().workspace,
         projects: useProjectsStore.getState().projects,
         ticketsByProject: useBoardStore.getState().ticketsByProject,
@@ -362,6 +362,12 @@ function cloudBoardSnapshot(userId: string, source: ConvexBoardSource) {
     useProjectsStore.subscribe((state, previous) => {
       if (state.projects !== previous.projects) writer.schedule();
     }),
+    // The board kept waits for this window's writes to be answered.
+    useCloudLinkInputs.subscribe((state, previous) => {
+      const now = state.input.connection?.inflightMutations ?? 0;
+      const before = previous.input.connection?.inflightMutations ?? 0;
+      if (now === 0 && before > 0) writer.schedule();
+    }),
   ];
   stopKeepingBoard = () => {
     for (const stop of stops) stop();
@@ -371,7 +377,10 @@ function cloudBoardSnapshot(userId: string, source: ConvexBoardSource) {
     snapshot: async () => {
       try {
         const { text } = await sessionRpcClient().cloud.readSnapshot.query();
-        return decodeBoardSnapshot(text, userId);
+        const snapshot = decodeBoardSnapshot(text, userId);
+        if (text !== null && snapshot === null)
+          console.warn("the kept board snapshot is unreadable");
+        return snapshot;
       } catch (error) {
         console.warn("couldn't read the board snapshot", error);
         return null;
@@ -379,6 +388,13 @@ function cloudBoardSnapshot(userId: string, source: ConvexBoardSource) {
     },
     shown: (savedAt: number | null) =>
       useCloudLinkInputs.getState().update({ snapshotAt: savedAt }),
+    follow: (projectId: string) => {
+      source.open(projectId).catch((error: unknown) => {
+        toastError(
+          `Couldn’t open the board: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+    },
     ...timers,
   };
 }
@@ -730,7 +746,12 @@ async function bootCloudLaunch(
       failed: (message) => toastError(message),
       refused: (message) => toast(message, { id: "host-read-only" }),
       unconfirmed: (message) => toast.warning(message, { id: "cloud-unconfirmed" }),
-      readOnly: (projectId) => cloudReadOnlyReason(projectId),
+      readOnly: (projectId) =>
+        projectId !== undefined
+          ? cloudReadOnlyReason(projectId)
+          : useCloudLinkInputs.getState().input.snapshotAt !== null
+            ? CLOUD_READ_ONLY
+            : null,
       dropped: (projectId, message) => {
         const project = useProjectsStore.getState().projects.find(({ id }) => id === projectId);
         useBoardStore.getState().forget(projectId);

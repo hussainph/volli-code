@@ -38,12 +38,7 @@ import {
 
 import { createCloudHostSource, createCloudLinkInputStore } from "../cloud-link";
 import { CLOUD_HOST_ID, createHostConnectionStore, type HostLinkView } from "../host-connection";
-import {
-  decodeBoardSnapshot,
-  encodeBoardSnapshot,
-  liveBoardSnapshot,
-  type BoardSnapshot,
-} from "./snapshot";
+import { decodeBoardSnapshot, liveBoardSnapshot, type BoardSnapshot } from "./snapshot";
 import { ConvexBoardSource } from "./source";
 import { followCloudWorkspace, useCloudWorkspaceStore } from "./workspace";
 
@@ -164,7 +159,7 @@ async function launchWindow(
       projectState.projects = [];
       projectState.selectedProjectId = null;
     },
-    showCloudSnapshot: (projects: Project[], selected: string | null) => {
+    showCloudSnapshot: (_workspaceId: string, projects: Project[], selected: string | null) => {
       projectState.projects = projects;
       projectState.selectedProjectId = selected;
     },
@@ -207,6 +202,7 @@ async function launchWindow(
       afterMs: 1_000,
       snapshot: async () => decodeBoardSnapshot(kept, subject),
       shown: (savedAt) => inputs.getState().update({ snapshotAt: savedAt }),
+      follow: (projectId) => void source.open(projectId),
       setTimeout: (run, ms) => setTimeout(run, ms),
       clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
     },
@@ -231,7 +227,7 @@ async function launchWindow(
       liveBoardSnapshot({
         userId: subject,
         savedAt: Date.now(),
-        showingSnapshot: inputs.getState().input.snapshotAt !== null,
+        link: inputs.getState().input,
         workspace: useCloudWorkspaceStore.getState().workspace,
         projects: projectState.projects,
         ticketsByProject: Object.fromEntries([...boards].map(([id, board]) => [id, board.tickets])),
@@ -504,7 +500,8 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
         timeout: 15_000,
       });
       await vi.waitFor(() => expect(first.keep()).not.toBeNull(), { timeout: 15_000 });
-      const kept = encodeBoardSnapshot(first.keep()!);
+      // The writer's text: the board as JSON (its cards carry no bodies here).
+      const kept = JSON.stringify(first.keep()!);
       const savedAt = decodeBoardSnapshot(kept, subject)!.savedAt;
       first.close();
 

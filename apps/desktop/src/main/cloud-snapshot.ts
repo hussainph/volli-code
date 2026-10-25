@@ -4,15 +4,17 @@
  *
  * - **Per account.** One file per signed-in person under
  *   `<userData>/cloud-board-snapshots/`, named by a hash of their user id; the
- *   window never names a path, and only ever reads its own launch's account.
+ *   window never names a path or an account: main uses its own launch's.
  * - **Opaque here.** The window encodes and validates the board
  *   (`stores/cloud-board/snapshot.ts`, schema-versioned); main stores the text
  *   as it is, bounded, never parsed.
  * - **Atomic.** Written to a temporary file and renamed over the old one, so
- *   a crash mid-write leaves the previous snapshot whole. Owner-only mode.
+ *   a process that dies mid-write leaves the previous snapshot whole (no
+ *   fsync: after a power loss it may be gone, and the launch shows none).
+ *   Owner-only mode.
  * - **Gone with the sign-in.** Cleared whenever the account ends up signed out
- *   (a sign-out, a refused refresh, an account deletion): no other person's
- *   board survives on this Mac.
+ *   (a sign-out, a refused refresh, an account deletion), and never written
+ *   again by that process: no other person's board survives on this Mac.
  *
  * It is a cache of what the backend already holds, never a fact the backend
  * has not accepted: nothing here is ever sent anywhere.
@@ -21,28 +23,31 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { CLOUD_SNAPSHOT_TEXT_MAX } from "@volli/shared";
+
 /** The directory under `userData` the snapshots live in. */
 export const CLOUD_SNAPSHOT_DIRECTORY = "cloud-board-snapshots";
 
-/** The largest snapshot kept, in UTF-16 code units of its text. */
-export const CLOUD_SNAPSHOT_MAX_LENGTH = 16 * 1024 * 1024;
-
-/** One account's file name: a hash of its user id, so the directory names nobody. */
-export function snapshotFileName(userId: string): string {
+/** One account's file name: a hash of its user id. */
+function snapshotFileName(userId: string): string {
   return `${createHash("sha256").update(userId).digest("hex").slice(0, 32)}.json`;
 }
+
+/** Why a snapshot is not kept: the sign-in it belonged to has ended in this process. */
+export const CLOUD_SNAPSHOT_ENDED = "The sign-in this board belonged to has ended.";
 
 export interface CloudSnapshotFiles {
   /** The account's snapshot text, or `null` when there is none. */
   read(userId: string): string | null;
-  /** Replaces the account's snapshot, atomically. */
+  /** Replaces the account's snapshot, atomically; refused once {@link clearAll} ran. */
   write(userId: string, text: string): void;
-  /** Removes every snapshot on this Mac. */
+  /** Removes every snapshot on this Mac, and keeps none again in this process. */
   clearAll(): void;
 }
 
 /** The snapshots under `directory`. */
 export function cloudSnapshotFiles(directory: string): CloudSnapshotFiles {
+  let ended = false;
   return {
     read(userId) {
       try {
@@ -53,7 +58,8 @@ export function cloudSnapshotFiles(directory: string): CloudSnapshotFiles {
       }
     },
     write(userId, text) {
-      if (text.length > CLOUD_SNAPSHOT_MAX_LENGTH) {
+      if (ended) throw new Error(CLOUD_SNAPSHOT_ENDED);
+      if (text.length > CLOUD_SNAPSHOT_TEXT_MAX) {
         throw new Error("The board snapshot is too large to keep.");
       }
       mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -67,6 +73,7 @@ export function cloudSnapshotFiles(directory: string): CloudSnapshotFiles {
       }
     },
     clearAll() {
+      ended = true;
       rmSync(directory, { recursive: true, force: true });
     },
   };

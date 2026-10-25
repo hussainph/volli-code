@@ -1,15 +1,30 @@
 import type { Label, Project, Ticket } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import { INITIAL_CLOUD_LINK_INPUT, readConnection } from "../cloud-link";
 import {
-  BOARD_SNAPSHOT_DEBOUNCE_MS,
-  BOARD_SNAPSHOT_VERSION,
   createSnapshotWriter,
   decodeBoardSnapshot,
-  encodeBoardSnapshot,
   liveBoardSnapshot,
   type BoardSnapshot,
 } from "./snapshot";
+
+const BOARD_SNAPSHOT_VERSION = 1;
+const BOARD_SNAPSHOT_DEBOUNCE_MS = 2_000;
+
+/** The text the writer hands main for `snapshot`. */
+function encoded(board: BoardSnapshot): string {
+  let text = "";
+  createSnapshotWriter({
+    read: () => board,
+    save: async (next) => {
+      text = next;
+    },
+    clock: { now: () => 0, setTimeout: (run) => run(), clearTimeout: () => {} },
+    warn: () => {},
+  }).schedule();
+  return text;
+}
 
 const PROJECT: Project = {
   id: "p1",
@@ -58,7 +73,7 @@ function snapshot(overrides: Partial<BoardSnapshot> = {}): BoardSnapshot {
 
 describe("the last-seen cloud board's format (VC-889, D3)", () => {
   it("round-trips a board, leaving every body out", () => {
-    const text = encodeBoardSnapshot(snapshot());
+    const text = encoded(snapshot());
     expect(text).not.toContain("a body the snapshot never keeps");
     expect(decodeBoardSnapshot(text, "user-1")).toEqual(
       snapshot({ boards: { p1: { tickets: [{ ...TICKET, body: "" }], labels: [LABEL] } } }),
@@ -66,7 +81,7 @@ describe("the last-seen cloud board's format (VC-889, D3)", () => {
   });
 
   it("reads nothing kept, another account's, another version's, or a broken one as none", () => {
-    const good = JSON.parse(encodeBoardSnapshot(snapshot())) as Record<string, unknown>;
+    const good = JSON.parse(encoded(snapshot())) as Record<string, unknown>;
     const variant = (patch: Record<string, unknown>) => JSON.stringify({ ...good, ...patch });
     const broken = [
       null,
@@ -94,10 +109,16 @@ describe("the last-seen cloud board's format (VC-889, D3)", () => {
 });
 
 describe("the board a cloud launch keeps (VC-889, D3)", () => {
+  const LIVE = {
+    ...INITIAL_CLOUD_LINK_INPUT,
+    client: "running" as const,
+    authenticated: true,
+    connection: readConnection({ isWebSocketConnected: true }),
+  };
   const input = {
     userId: "user-1",
     savedAt: 42,
-    showingSnapshot: false,
+    link: LIVE,
     workspace: { id: "w1", name: "Team" },
     projects: [PROJECT, { ...PROJECT, id: "p2" }],
     ticketsByProject: { p1: [TICKET] },
@@ -118,9 +139,25 @@ describe("the board a cloud launch keeps (VC-889, D3)", () => {
   });
 
   it("keeps nothing while the snapshot is on screen, before a Workspace, or a board has painted", () => {
-    expect(liveBoardSnapshot({ ...input, showingSnapshot: true })).toBeNull();
+    expect(liveBoardSnapshot({ ...input, link: { ...LIVE, snapshotAt: 1 } })).toBeNull();
     expect(liveBoardSnapshot({ ...input, workspace: null })).toBeNull();
     expect(liveBoardSnapshot({ ...input, painted: (id) => id === "p1" })).toBeNull();
+  });
+
+  it("keeps nothing unless the client runs, signed in, with every write answered", () => {
+    const signedOut = { state: "signed-out" as const, backend: null, failure: null };
+    for (const link of [
+      { ...LIVE, client: "starting" as const },
+      { ...LIVE, client: "closed" as const },
+      { ...LIVE, authenticated: false },
+      { ...LIVE, authenticated: null },
+      { ...LIVE, account: signedOut },
+      { ...LIVE, connection: readConnection({ inflightMutations: 1 }) },
+    ]) {
+      expect(liveBoardSnapshot({ ...input, link })).toBeNull();
+    }
+    // No connection read yet is no write in flight.
+    expect(liveBoardSnapshot({ ...input, link: { ...LIVE, connection: null } })).not.toBeNull();
   });
 });
 
@@ -154,7 +191,7 @@ describe("writing the snapshot when the board settles (VC-889, D3)", () => {
     ]);
     timers[1]!.run();
     expect(read).toHaveBeenCalledWith(7);
-    expect(save).toHaveBeenCalledWith(encodeBoardSnapshot(snapshot({ savedAt: 7 })));
+    expect(save).toHaveBeenCalledWith(encoded(snapshot({ savedAt: 7 })));
     // The timer has run: the next change starts afresh, nothing to clear.
     write.schedule();
     expect(clock.clearTimeout).toHaveBeenCalledTimes(1);

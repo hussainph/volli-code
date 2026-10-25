@@ -1494,7 +1494,9 @@ const appStartup = app.whenReady().then(async () => {
         },
         // Only a cloud launch has a board to keep, and only its own account's.
         saveSnapshot: (text) => {
-          if (launch.store !== "cloud") throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
+          if (launch.store !== "cloud") {
+            throw new OperationUnavailableError("Only a Volli Cloud launch keeps its board.");
+          }
           cloudSnapshots.write(launch.userId, text);
         },
         readSnapshot: () => (launch.store === "cloud" ? cloudSnapshots.read(launch.userId) : null),

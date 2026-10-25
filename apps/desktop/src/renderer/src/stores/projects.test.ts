@@ -2013,10 +2013,21 @@ describe("a cloud launch's projects (VC-889)", () => {
     const announced = vi.fn();
     const store = createProjectsStore(gateway, announced);
     const a = project({ id: "a", path: "" });
-    store.getState().showCloudSnapshot([a], "a");
-    expect(store.getState().projects).toEqual([a]);
+    const b = project({ id: "b", path: "" });
+    store.getState().showCloudSnapshot("w1", [a, b], "a");
+    expect(store.getState().projects).toEqual([a, b]);
     expect(announced).toHaveBeenCalledWith("a");
     expect(gateway.setSelection).not.toHaveBeenCalled();
+    // A selection made meanwhile is the Workspace's cloud selection, never this Mac's.
+    store.getState().select("b");
+    expect(gateway.setSelection).toHaveBeenLastCalledWith(null, undefined, {
+      workspaceId: "w1",
+      projectId: "b",
+    });
+    // The live list answering with the same selection writes nothing again.
+    const writes = vi.mocked(gateway.setSelection).mock.calls.length;
+    store.getState().hydrateCloud("w1", [a, b], "b");
+    expect(gateway.setSelection).toHaveBeenCalledTimes(writes);
   });
 
   it("keeps the cloud selection through a local launch's own selection changes", () => {

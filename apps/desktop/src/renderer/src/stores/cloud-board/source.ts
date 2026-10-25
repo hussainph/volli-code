@@ -69,8 +69,12 @@ export interface CloudBoardView {
   refused(message: string): void;
   /** A write still unanswered, or an answer worth a word that is not a failure. */
   unconfirmed(message: string): void;
-  /** Why the project cannot be written to now (its link's words), or `null` when it can. */
-  readOnly(projectId: string): string | null;
+  /**
+   * Why the project cannot be written to now (its link's words), or `null`
+   * when it can; `undefined` asks about Volli Cloud itself, for a ticket whose
+   * project this source has not read (one the offline snapshot painted).
+   */
+  readOnly(projectId: string | undefined): string | null;
   /** The project is gone for this person: leave it, saying why. */
   dropped(projectId: string, message: string): void;
 }
@@ -368,7 +372,7 @@ export class ConvexBoardSource implements BoardSource {
     if (session === null || !session.client.connectionState().isWebSocketConnected) {
       return CLOUD_READ_ONLY;
     }
-    return projectId === undefined ? null : this.#view.readOnly(projectId);
+    return this.#view.readOnly(projectId);
   }
 
   /** The project's roster as the client holds it now, its pending updates included. */

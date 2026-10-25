@@ -1,9 +1,15 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { CLOUD_SNAPSHOT_MAX_LENGTH, cloudSnapshotFiles, snapshotFileName } from "./cloud-snapshot";
+import { CLOUD_SNAPSHOT_TEXT_MAX } from "@volli/shared";
+
+import { CLOUD_SNAPSHOT_ENDED, cloudSnapshotFiles } from "./cloud-snapshot";
+
+const snapshotFileName = (userId: string) =>
+  `${createHash("sha256").update(userId).digest("hex").slice(0, 32)}.json`;
 
 const directories: string[] = [];
 afterEach(() => {
@@ -36,7 +42,7 @@ describe("the last-seen cloud board on disk (VC-889)", () => {
   it("refuses a snapshot past its bound, keeping the one it had", () => {
     const { store } = files();
     store.write("user-1", "kept");
-    expect(() => store.write("user-1", "x".repeat(CLOUD_SNAPSHOT_MAX_LENGTH + 1))).toThrow(
+    expect(() => store.write("user-1", "x".repeat(CLOUD_SNAPSHOT_TEXT_MAX + 1))).toThrow(
       "too large",
     );
     expect(store.read("user-1")).toBe("kept");
@@ -57,12 +63,15 @@ describe("the last-seen cloud board on disk (VC-889)", () => {
     expect(() => store.read("user-1")).toThrow();
   });
 
-  it("clears every snapshot, and clearing nothing is fine", () => {
+  it("clears every snapshot, and keeps none again once the sign-in has ended", () => {
     const { directory, store } = files();
-    store.clearAll();
     store.write("user-1", "a");
     store.clearAll();
     expect(existsSync(directory)).toBe(false);
     expect(store.read("user-1")).toBeNull();
+    expect(() => store.write("user-1", "late")).toThrow(CLOUD_SNAPSHOT_ENDED);
+    expect(existsSync(directory)).toBe(false);
+    // Clearing nothing is fine.
+    store.clearAll();
   });
 });

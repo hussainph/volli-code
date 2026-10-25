@@ -22,10 +22,12 @@ import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { adoptLaunch, launchStore } from "@renderer/stores/launch";
 import { cloudBoardSource } from "@renderer/stores/board-source";
 import { useCloudWorkspaceStore } from "@renderer/stores/cloud-board/workspace";
+import { decodeBoardSnapshot } from "@renderer/stores/cloud-board/snapshot";
 import {
-  BOARD_SNAPSHOT_DEBOUNCE_MS,
-  decodeBoardSnapshot,
-} from "@renderer/stores/cloud-board/snapshot";
+  INITIAL_CLOUD_LINK_INPUT,
+  readConnection,
+  useCloudLinkInputs,
+} from "@renderer/stores/cloud-link";
 
 import type { BoardSyncTransport } from "@renderer/stores/board-sync";
 
@@ -1679,11 +1681,12 @@ describe("a cloud launch's boot (VC-889)", () => {
         cloud: { saveSnapshot: { mutate } },
       } as never);
       await startCloudBoard({ start: vi.fn() as never });
+      useCloudLinkInputs.getState().update({ client: "running", authenticated: true });
       useCloudWorkspaceStore.setState({ workspace: { id: "w1", name: "Team" } });
       // A board change and a project-list change are one write, once quiet.
       useBoardStore.getState().paintBoard("nothing-listed", [], [], new Set());
       useProjectsStore.setState({ projects: [] });
-      await vi.advanceTimersByTimeAsync(BOARD_SNAPSHOT_DEBOUNCE_MS);
+      await vi.advanceTimersByTimeAsync(2_000);
       expect(mutate).toHaveBeenCalledOnce();
       expect(decodeBoardSnapshot(mutate.mock.calls[0]![0].text, "u")).toMatchObject({
         workspace: { id: "w1", name: "Team" },
@@ -1692,9 +1695,20 @@ describe("a cloud launch's boot (VC-889)", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       mutate.mockRejectedValueOnce(new Error("disk full"));
       useProjectsStore.setState({ projects: [] });
-      await vi.advanceTimersByTimeAsync(BOARD_SNAPSHOT_DEBOUNCE_MS);
+      await vi.advanceTimersByTimeAsync(2_000);
       expect(warn).toHaveBeenCalledWith(expect.any(String), expect.any(Error));
+      // A write of this window's still unanswered holds the keep until it is.
+      mutate.mockClear();
+      const inputs = useCloudLinkInputs.getState();
+      inputs.update({ connection: readConnection({ inflightMutations: 1 }) });
+      useProjectsStore.setState({ projects: [] });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(mutate).not.toHaveBeenCalled();
+      inputs.update({ connection: readConnection({ inflightMutations: 0 }) });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(mutate).toHaveBeenCalledOnce();
     } finally {
+      useCloudLinkInputs.setState({ input: INITIAL_CLOUD_LINK_INPUT });
       useCloudWorkspaceStore.setState({ workspace: null });
       vi.mocked(sessionRpcClient).mockReset();
       vi.useRealTimers();

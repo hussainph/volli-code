@@ -4,8 +4,10 @@ import type { Project } from "@volli/shared";
 import type { CloudSession } from "@renderer/lib/cloud-client";
 
 import { fakeCloud, refusal } from "./fake-cloud.test-support";
+import { useCloudLinkInputs } from "../cloud-link";
 import { projectRows, type CloudProjectRow } from "./projection";
-import { BOARD_SNAPSHOT_VERSION, type BoardSnapshot } from "./snapshot";
+import { CLOUD_READ_ONLY } from "./source";
+import type { BoardSnapshot } from "./snapshot";
 import {
   createCloudProject,
   followCloudWorkspace,
@@ -31,7 +33,7 @@ const W2 = { workspaceId: "w2", name: "Team" };
 
 function harness(
   persisted: CloudWorkspaceDeps["persisted"] = null,
-  offline?: { snapshot: BoardSnapshot | null },
+  offline?: { snapshot: BoardSnapshot | null | (() => Promise<BoardSnapshot | null>) },
 ) {
   const cloud = fakeCloud();
   let listener: ((session: CloudSession | null) => void) | null = null;
@@ -46,13 +48,19 @@ function harness(
       state.projects = [];
       state.selectedProjectId = null;
     }),
-    showCloudSnapshot: vi.fn((projects: Project[], selected: string | null) => {
-      state.projects = projects;
-      state.selectedProjectId = selected;
-    }),
+    showCloudSnapshot: vi.fn(
+      (_workspaceId: string, projects: Project[], selected: string | null) => {
+        state.projects = projects;
+        state.selectedProjectId = selected;
+      },
+    ),
   };
   const timers: (() => void)[] = [];
   const shown = vi.fn<(savedAt: number | null) => void>();
+  const snapshot = vi.fn(async () => {
+    const kept = offline?.snapshot ?? null;
+    return typeof kept === "function" ? kept() : kept;
+  });
   const deps: CloudWorkspaceDeps = {
     follow: (next) => {
       listener = next;
@@ -71,8 +79,9 @@ function harness(
       : {
           offline: {
             afterMs: 4_000,
-            snapshot: async () => offline.snapshot,
+            snapshot,
             shown,
+            follow: vi.fn(),
             setTimeout: (run: () => void) => timers.push(run) - 1,
             clearTimeout: vi.fn(),
           },
@@ -88,6 +97,7 @@ function harness(
     close: () => listener!(null),
     listening: () => listener !== null,
     shown,
+    snapshot,
     /** The offline timer runs out, and the snapshot (if any) is read. */
     timeout: async () => {
       timers[0]!();
@@ -98,7 +108,7 @@ function harness(
 }
 
 const SNAPSHOT: BoardSnapshot = {
-  version: BOARD_SNAPSHOT_VERSION,
+  version: 1,
   userId: "user-1",
   savedAt: 42,
   workspace: { id: "w1", name: W1.name },
@@ -230,6 +240,20 @@ describe("the current Volli Cloud Workspace (VC-889)", () => {
 });
 
 describe("a new project in the Workspace (VC-889)", () => {
+  it("is refused while the offline snapshot is on screen", async () => {
+    useCloudLinkInputs.getState().update({ snapshotAt: 5 });
+    try {
+      const cloud = fakeCloud();
+      expect(await createCloudProject({ name: "X" }, cloud.session, "w1")).toEqual({
+        ok: false,
+        error: CLOUD_READ_ONLY,
+      });
+      expect(cloud.mutations).toEqual([]);
+    } finally {
+      useCloudLinkInputs.getState().update({ snapshotAt: null });
+    }
+  });
+
   it("is refused while the socket is down, or before a Workspace is known", async () => {
     const cloud = fakeCloud();
     cloud.connected = false;
@@ -280,7 +304,7 @@ describe("the offline snapshot at launch (VC-889, D3)", () => {
     );
     // A project whose board the snapshot did not hold paints empty.
     expect(h.deps.board.paintBoard).toHaveBeenCalledWith("b", [], [], new Set());
-    expect(h.state.showCloudSnapshot).toHaveBeenCalledWith(SNAPSHOT.projects, "b");
+    expect(h.state.showCloudSnapshot).toHaveBeenCalledWith("w1", SNAPSHOT.projects, "b");
     expect(h.shown).toHaveBeenCalledExactlyOnceWith(42);
     expect(h.deps.board.seedProject).not.toHaveBeenCalled();
   });
@@ -295,7 +319,10 @@ describe("the offline snapshot at launch (VC-889, D3)", () => {
     // Still the snapshot until the projects answer.
     expect(h.deps.board.forget).not.toHaveBeenCalled();
     h.cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("b"), projectRow("c")]);
-    expect(vi.mocked(h.deps.board.forget).mock.calls).toEqual([["a"], ["b"], ["a"]]);
+    // What the live list no longer holds goes, unannounced; what it keeps
+    // stays on screen while its live board is followed.
+    expect(vi.mocked(h.deps.board.forget).mock.calls).toEqual([["a"]]);
+    expect(h.deps.offline!.follow).toHaveBeenCalledExactlyOnceWith("b");
     expect(h.deps.notice).not.toHaveBeenCalled();
     expect(h.shown).toHaveBeenLastCalledWith(null);
     expect(vi.mocked(h.deps.board.seedProject).mock.calls).toEqual([["b"], ["c"]]);
@@ -330,8 +357,24 @@ describe("the offline snapshot at launch (VC-889, D3)", () => {
     live.connect();
     live.cloud.answer("workspaces:listMine", {}, [W1]);
     live.cloud.answer("projects:list", { workspaceId: "w1" }, []);
+    // The wait is called off at the first live answer; a late timer reads nothing.
+    expect(live.deps.offline!.clearTimeout).toHaveBeenCalledWith(0);
     await live.timeout();
+    expect(live.snapshot).not.toHaveBeenCalled();
     expect(live.shown).not.toHaveBeenCalled();
+
+    // The live list answering while the snapshot is read wins.
+    let answer: ((kept: BoardSnapshot) => void) | undefined;
+    const racing = harness(null, {
+      snapshot: () => new Promise<BoardSnapshot>((resolve) => (answer = resolve)),
+    });
+    racing.connect();
+    await racing.timeout();
+    racing.cloud.answer("workspaces:listMine", {}, [W1]);
+    racing.cloud.answer("projects:list", { workspaceId: "w1" }, []);
+    answer!(SNAPSHOT);
+    await Promise.resolve();
+    expect(racing.shown).not.toHaveBeenCalled();
 
     const none = harness(null, { snapshot: null });
     none.connect();
@@ -345,9 +388,68 @@ describe("the offline snapshot at launch (VC-889, D3)", () => {
     expect(closed.shown).not.toHaveBeenCalled();
   });
 
-  it("stops its timer when it stops following", () => {
+  it("shows the snapshot when the client arrives after the wait ran out", async () => {
+    const h = harness(null, { snapshot: SNAPSHOT });
+    await h.timeout();
+    expect(h.shown).not.toHaveBeenCalled();
+    h.connect();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.shown).toHaveBeenCalledExactlyOnceWith(42);
+    // A second client finds it on screen already.
+    h.connect();
+    await Promise.resolve();
+    expect(h.snapshot).toHaveBeenCalledOnce();
+  });
+
+  it("names the live Workspace again when its projects replace a snapshot shown after it opened", async () => {
+    const h = harness(null, {
+      snapshot: { ...SNAPSHOT, workspace: { id: "w1", name: "Old name" } },
+    });
+    h.connect();
+    h.cloud.answer("workspaces:listMine", {}, [W1]);
+    expect(useCloudWorkspaceStore.getState().workspace?.name).toBe(W1.name);
+    await h.timeout();
+    expect(useCloudWorkspaceStore.getState().workspace?.name).toBe("Old name");
+    // A Workspace-list change meanwhile keeps the snapshot's name on screen.
+    h.cloud.answer("workspaces:listMine", {}, [{ ...W1, name: "Renamed" }]);
+    expect(useCloudWorkspaceStore.getState().workspace?.name).toBe("Old name");
+    h.cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("a")]);
+    expect(useCloudWorkspaceStore.getState().workspace).toEqual({ id: "w1", name: "Renamed" });
+  });
+
+  it("drops the snapshot when the live answer is that there is no Workspace", async () => {
+    const h = harness(null, { snapshot: SNAPSHOT });
+    h.connect();
+    await h.timeout();
+    h.cloud.answer("workspaces:listMine", {}, []);
+    expect(h.state.clearCloud).toHaveBeenCalledOnce();
+    expect(h.deps.board.forget).toHaveBeenCalledWith("a");
+    expect(useCloudWorkspaceStore.getState().workspace).toBeNull();
+    expect(h.shown).toHaveBeenLastCalledWith(null);
+    // Still nothing: nothing more to drop.
+    h.cloud.answer("workspaces:listMine", {}, []);
+    expect(h.state.clearCloud).toHaveBeenCalledOnce();
+  });
+
+  it("says when the snapshot could not be shown", async () => {
+    const h = harness(null, {
+      snapshot: () => Promise.reject(new Error("unreadable")),
+    });
+    h.connect();
+    await h.timeout();
+    await vi.waitFor(() =>
+      expect(h.deps.failed).toHaveBeenCalledWith("Couldn’t show the last-seen board: unreadable"),
+    );
+  });
+
+  it("stops its timer when it stops following, and only once", async () => {
     const h = harness(null, { snapshot: SNAPSHOT });
     h.stop();
-    expect(h.deps.offline!.clearTimeout).toHaveBeenCalledWith(0);
+    expect(h.deps.offline!.clearTimeout).toHaveBeenCalledExactlyOnceWith(0);
+    const ran = harness(null, { snapshot: null });
+    await ran.timeout();
+    ran.stop();
+    expect(ran.deps.offline!.clearTimeout).not.toHaveBeenCalled();
   });
 });

@@ -11,15 +11,19 @@
  *   or one that does not hold together, reads as none. An offline launch then
  *   shows today's offline state rather than a guess.
  * - **Written when the live board settles:** debounced, so a burst of changes
- *   is one write, and only while the board on screen is the live one.
+ *   is one write, and only while the board on screen is the live one, the
+ *   sign-in holds, and no write of this window's is still unanswered (an
+ *   optimistic change is never kept as if the backend had accepted it).
  */
 import type { Label, Project, Ticket } from "@volli/shared";
 
+import type { CloudLinkInput } from "../cloud-link";
+
 /** The snapshot format this build writes and reads. */
-export const BOARD_SNAPSHOT_VERSION = 1;
+const BOARD_SNAPSHOT_VERSION = 1;
 
 /** How long the live board must be quiet before it is written. */
-export const BOARD_SNAPSHOT_DEBOUNCE_MS = 2_000;
+const BOARD_SNAPSHOT_DEBOUNCE_MS = 2_000;
 
 /** How long a cloud launch waits for its live project list before showing the snapshot. */
 export const BOARD_SNAPSHOT_AFTER_MS = 4_000;
@@ -37,7 +41,7 @@ export interface BoardSnapshot {
 }
 
 /** The snapshot's text, bodies left out. */
-export function encodeBoardSnapshot(snapshot: BoardSnapshot): string {
+function encodeBoardSnapshot(snapshot: BoardSnapshot): string {
   const boards = Object.fromEntries(
     Object.entries(snapshot.boards).map(([projectId, board]) => [
       projectId,
@@ -118,22 +122,36 @@ export function decodeBoardSnapshot(text: string | null, userId: string): BoardS
 }
 
 /**
- * The board to keep, as the window holds it now: `null` unless it is the live
- * one (the snapshot is not on screen) and every listed project's board has
+ * The board to keep, as the window holds it now: `null` unless it is the
+ * live one (the snapshot is not on screen, the client runs, the sign-in
+ * holds, no write is unanswered) and every listed project's board has
  * painted from a live answer, so a half-loaded board never replaces a whole
  * one.
  */
 export function liveBoardSnapshot(input: {
   readonly userId: string;
   readonly savedAt: number;
-  readonly showingSnapshot: boolean;
+  readonly link: Pick<
+    CloudLinkInput,
+    "client" | "connection" | "authenticated" | "account" | "snapshotAt"
+  >;
   readonly workspace: { readonly id: string; readonly name: string } | null;
   readonly projects: readonly Project[];
   readonly ticketsByProject: Readonly<Record<string, readonly Ticket[]>>;
   readonly labelsByProject: Readonly<Record<string, readonly Label[]>>;
   painted(projectId: string): boolean;
 }): BoardSnapshot | null {
-  if (input.showingSnapshot || input.workspace === null) return null;
+  const { link } = input;
+  if (
+    link.snapshotAt !== null ||
+    link.client !== "running" ||
+    link.authenticated !== true ||
+    link.account?.state === "signed-out" ||
+    (link.connection?.inflightMutations ?? 0) > 0 ||
+    input.workspace === null
+  ) {
+    return null;
+  }
   if (!input.projects.every((project) => input.painted(project.id))) return null;
   return {
     version: BOARD_SNAPSHOT_VERSION,
@@ -153,13 +171,6 @@ export function liveBoardSnapshot(input: {
   };
 }
 
-/** A timer, injectable for tests. */
-export interface SnapshotClock {
-  now(): number;
-  setTimeout(run: () => void, ms: number): unknown;
-  clearTimeout(handle: unknown): void;
-}
-
 /**
  * Writes the live board once it has been quiet for
  * {@link BOARD_SNAPSHOT_DEBOUNCE_MS}: `read` answers the board to keep (or
@@ -169,7 +180,11 @@ export interface SnapshotClock {
 export function createSnapshotWriter(deps: {
   read(savedAt: number): BoardSnapshot | null;
   save(text: string): Promise<unknown>;
-  clock: SnapshotClock;
+  clock: {
+    now(): number;
+    setTimeout(run: () => void, ms: number): unknown;
+    clearTimeout(handle: unknown): void;
+  };
   warn(message: string, error: unknown): void;
 }): { schedule(): void } {
   let timer: unknown = null;
