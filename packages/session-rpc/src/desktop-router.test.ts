@@ -311,6 +311,8 @@ const GITHUB = {
   waiting: null,
   requested: false,
   failure: null,
+} as const;
+
 /** This Mac's runner snapshot main hands the window (VC-895): never its credential. */
 const THIS_MAC = {
   state: "online",
@@ -1393,6 +1395,8 @@ describeContract<Host, DesktopRouter>(
           }).success,
         ).toBe(false);
       }
+    });
+
     // This Mac as a runner (VC-895): desktop main's Mac runner, the window's alone.
     it("serves this Mac's runner snapshot and its commands, and streams every change", async () => {
       const fixture = host(LOCAL_DESKTOP_CALLER);

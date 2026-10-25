@@ -565,6 +565,7 @@ export const DESKTOP_ENTRIES = [
     placement: "host",
     idempotency: "natural",
     summary: "Disconnect GitHub: revoke the App's authorization and forget the connection.",
+  },
   // This Mac as one of the person's runners (VC-895; wire types in
   // `./this-mac-runner`). Host-placed: the registration is this device's, and
   // only its own window drives it. Desktop main serves them through the map's
