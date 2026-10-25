@@ -1,5 +1,5 @@
 /**
- * `@volli/host-core/session-runtime`: the Pi-backed Session runtime: staged assembly, facade, lifecycle, model access and decisions, background shells.
+ * `@volli/host-core/session-runtime`: the Pi-backed Session runtime: the runner composition and the recovered services it issues, model access and decisions, background shells.
  *
  * An explicit list: a name is public because a client, or a client's test,
  * imports it as this cluster's API. Add one here when a client needs it;
@@ -24,22 +24,12 @@ export {
 export { PiSessionOrphanService } from "../pi-session-orphans";
 export { removeTicketToolOutput } from "../pi-tool-output";
 export { buildSessionEnvReport } from "../session-env";
-export { createRuntimeAssembly, type RuntimeAssemblyOptions } from "../session-runtime/assembly";
-export { createAttachmentIdentities } from "../session-runtime/attachment-identity";
 export type { AutoTitleRequest } from "../session-runtime/auto-title";
-export { createRuntimeAutomations } from "../session-runtime/automations";
 export { closeStaleAttachments } from "../session-runtime/boot-recovery";
 export { createConnectivityPort } from "../session-runtime/connectivity";
-export { createRuntimeContextResolver } from "../session-runtime/context";
-export {
-  createTicketSessionDelegationStore,
-  TicketSessionDelegationStore,
-} from "../session-runtime/delegation-store";
 export { createHostNoticeDelivery } from "../session-runtime/durable-host-notice-delivery";
 export {
-  createRuntimeSessionFacade,
   recoveredRuntimeSessionServices,
-  recoveredSessionAutomationPorts,
   recoveredSessionClientPorts,
   recoveredSessionCommandPorts,
   type RuntimeSessionFacade,
@@ -47,11 +37,8 @@ export {
 export type { HostNoticeDelivery } from "../session-runtime/host-notice-delivery";
 export { repackLegacyTranscriptArtifacts } from "../session-runtime";
 export {
-  createSessionRuntimeLifecycle,
-  readRecoveredSessionServices,
   type RecoveredSessionServices,
   SessionRuntimeClosingError,
-  type SessionRuntimeLifecycle,
 } from "../session-runtime/lifecycle";
 export {
   assertDefaultModelAvailable,
@@ -74,7 +61,7 @@ export {
   type PiAdapterOptions,
   type PiRuntimeContext,
 } from "../session-runtime/pi-adapter";
-export { createRunnerComposition } from "../session-runtime/runner";
+export { createRunnerComposition, type RunnerReady } from "../session-runtime/runner";
 export { createSqliteHostNoticeOutbox } from "../session-runtime/sqlite-host-notice-outbox";
 export type { StopSessionByIdPorts } from "../session-runtime/supervise-session";
 export { createFileTranscriptArtifactStore } from "../session-runtime/transcript-artifacts";

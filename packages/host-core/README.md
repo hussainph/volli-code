@@ -189,7 +189,7 @@ One convention for what a module asks for and what it is (VC-632):
   environment hooks, the shell feed, extra producers and the quit hold). It
   returns the services doors read, `owner(edge)` for `host.start`, and
   `ready()`, and drains by the host's own `stopPolicy`. The staging below is
-  private to it; desktop composes it.
+  private to it; desktop and `hostd` both compose it.
 - **Staged constructors.** `session-runtime/assembly` builds the inert Pi
   attachment over the host's one engine, model access, MCP/Code Mode/Web Access
   owners, secret service and attachment identities. Browser and shell ports
@@ -199,7 +199,7 @@ One convention for what a module asks for and what it is (VC-632):
   `session-runtime/context` resolves attach-time briefs and frozen inputs.
   `session-runtime/facade` and `session-runtime/agents` add skills, model,
   Sessions, titler, peek, the kickoff submit and delegation recovery staging.
-  Desktop and `hostd` use the same constructors; their adapters supply
+  Only the runner composition calls them; a host's adapters supply
   host-owned ports and pre-execution hooks, never separate executors.
 - **Recovery before consumers.** `session-runtime/lifecycle` installs the
   quit hold synchronously, then recovers stale attachments, delegations,

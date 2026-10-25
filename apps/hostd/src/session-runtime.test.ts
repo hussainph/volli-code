@@ -3,10 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { HeadlessSecrets } from "./secrets";
 import { busyRefusal } from "@volli/host-core/worktree";
-import type {
-  RuntimeAssemblyOptions,
-  BackgroundShellHostPorts,
-} from "@volli/host-core/session-runtime";
+import type { BackgroundShellHostPorts } from "@volli/host-core/session-runtime";
+// The runner's private staging, recorded here at its module seam.
+import type { RuntimeAssemblyOptions } from "../../../packages/host-core/src/session-runtime/assembly";
 
 const seam = vi.hoisted(() => ({
   assembly: vi.fn(),
@@ -171,9 +170,11 @@ function fixture() {
   const spawnLedger = { ledger: "host-spawn-ledger" };
   const host = {
     kind: "live",
+    stopPolicy: "drain-and-close",
     database: { ok: true, db: {} },
     sessionEngine: { listAttachedSessions: vi.fn(async () => []) },
     sessionWakeBus: { subscribe: vi.fn(() => () => {}) },
+    liveWork: { observeShell: vi.fn(), forgetShell: vi.fn() },
     dataDir: "/data",
     runtimeServices,
     maintenance: { spawnLedger },
@@ -309,7 +310,7 @@ describe("headless runtime ownership", () => {
       piRuntimeHost: f.assembly.piRuntimeHost,
       homeDir: "/home/service",
       cloudEnabled: expect.any(Function),
-      log: f.log,
+      log: expect.objectContaining({ error: expect.any(Function) }),
     });
     // Skills/templates precedence follows the environment's `cloud` opt-in.
     expect(seam.automations.mock.lastCall![0].cloudEnabled()).toBe(false);
@@ -333,6 +334,9 @@ describe("headless runtime ownership", () => {
     shell.onNotice!({} as never);
     shell.publishState({} as never);
     shell.publishRemoved("id");
+    // The host's live work counts this host's shells too (VC-577).
+    expect(f.host.liveWork.observeShell).toHaveBeenCalledOnce();
+    expect(f.host.liveWork.forgetShell).toHaveBeenCalledWith("id");
     expect(f.store.redact).toHaveBeenCalledWith("output");
     expect(f.lifecycle.relayShellNotice).toHaveBeenCalled();
     const identity = seam.identities.mock.lastCall![0];
@@ -604,11 +608,12 @@ describe("headless runtime ownership", () => {
   });
   it("refuses absent recovered services and the unavailable tool door", async () => {
     const f = fixture();
-    const owner = f.launch();
     seam.recovered.mockReturnValueOnce({ sessions: null, runtime: f.runtime });
-    await expect(owner.ready()).rejects.toThrow("runtime is unavailable");
+    await expect(f.launch().ready()).rejects.toThrow("runtime is unavailable");
+    // A host that cannot serve runs no scheduler.
+    expect(f.automations.stop).toHaveBeenCalledOnce();
     seam.recovered.mockReturnValueOnce({ sessions: {}, runtime: null });
-    await expect(owner.ready()).rejects.toThrow("runtime is unavailable");
+    await expect(f.launch().ready()).rejects.toThrow("runtime is unavailable");
     // The tool door's map is refused the same way (VC-923).
     const [agentOptions] = f.facade.agents.mock.lastCall as unknown as [
       { handlers: (ready: unknown) => unknown },
@@ -623,6 +628,6 @@ describe("headless runtime ownership", () => {
         new AbortController().signal,
         undefined,
       ),
-    ).rejects.toThrow("tool door is unavailable");
+    ).rejects.toThrow("no Volli verb handlers");
   });
 });
