@@ -74,12 +74,13 @@ export function isUuid(value: unknown): value is string {
 /** Thrown when a value that must be an id is not one. */
 export class InvalidIdError extends Error {
   readonly code = "invalid_id";
-  constructor(
-    readonly kind: IdKind,
-    readonly value: unknown,
-  ) {
+  readonly kind: IdKind;
+  readonly value: unknown;
+  constructor(kind: IdKind, value: unknown) {
     super(`Expected a lowercase UUID for ${kind}, got ${describe(value)}`);
     this.name = "InvalidIdError";
+    this.kind = kind;
+    this.value = value;
   }
 }
 
