@@ -337,6 +337,18 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
       "Which host held authority over each workspace at each epoch. The counter must never restart, or a restored workspace could reissue an epoch the old host already used.",
   },
   {
+    table: "session_drain_cursors",
+    decision: "exclude",
+    reason:
+      "This runner's accepted cursor per claimed Session, valid only for this runner's claim on the backend. A restore is a new runner whose claims and cursors start from the backend.",
+  },
+  {
+    table: "job_journal",
+    decision: "exclude",
+    reason:
+      "Job outcomes owed under this boot's leases. A restored host holds no lease, and the backend re-queues the jobs.",
+  },
+  {
     table: "board_command_receipts",
     decision: "exclude",
     reason:
