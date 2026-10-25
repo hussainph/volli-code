@@ -122,7 +122,6 @@ import type { SessionStopDetail } from "@volli/shared";
 import {
   composeSubagentNotice,
   noticeProse,
-  readSessionOrigin,
   sessionHostNoticeMetadata,
   shortSessionId,
   SUBAGENT_ANSWER_NOTICE_LIMIT,
@@ -141,6 +140,12 @@ import type {
   TicketEventActor,
   TranscriptReference,
 } from "@volli/shared";
+import {
+  isSubagentHostNoticeOrigin as isHostNoticeOrigin,
+  subagentCommandOrigin,
+  subagentNoticeIds,
+  subagentOutcome,
+} from "@volli/shared/cloud";
 import type {
   SessionAnswer,
   SessionEngine,
@@ -308,10 +313,7 @@ function kickoffIds(operationId: string): { commandId: string; messageId: string
 
 /** The notice's ids, derived so a replayed watcher delivers one message. */
 function noticeIds(operationId: string): { commandId: string; messageId: string } {
-  return {
-    commandId: `${operationId}${DELEGATION_ID_SUFFIXES.notice}`,
-    messageId: `${operationId}${DELEGATION_ID_SUFFIXES.noticeMessage}`,
-  };
+  return subagentNoticeIds(operationId);
 }
 
 /** A durable title from the task's first line, when the parent named none. */
@@ -353,62 +355,17 @@ function outcomeOf(
   operationId: string,
   resumed = false,
 ): SubagentOutcomeState | null {
-  switch (payload.kind) {
-    case "command.receipt.recorded":
-      return !resumed &&
-        payload.receipt.status === "rejected" &&
-        payload.receipt.commandId === kickoffIds(operationId).commandId
-        ? "failed"
-        : null;
-    case "turn.completed":
-      return "completed";
-    case "turn.interrupted":
-      return "interrupted";
-    case "session.stopped":
-      return "stopped";
-    case "attachment.failed":
-      return "failed";
-    case "attachment.closed":
-      return payload.outcome === "completed" ? null : payload.outcome;
-    default:
-      return null;
-  }
+  return subagentOutcome(payload, operationId, resumed)?.state ?? null;
 }
 
 export type { NoticeDelivery } from "./host-notice-delivery";
-
-/**
- * Which of Volli's own origins are a host notice — Volli telling the Session
- * something, not anyone resuming it (VC-809). A Record, so a new reason fails
- * to compile here until someone decides which it is.
- */
-const IS_HOST_NOTICE: Record<Extract<SessionOrigin, { kind: "volli" }>["reason"], boolean> = {
-  "watch-notice": true,
-  "subagent-notice": true,
-  "browser-notice": true,
-  "shell-notice": true,
-  "worktree-notice": true,
-  "relaunch-recovery": false,
-  "scheduled-resume": false,
-  supervision: false,
-  "auto-title": false,
-};
-
-/** A turn Volli opened by telling the Session something, not by anyone resuming it. */
-function isHostNoticeOrigin(origin: SessionOrigin | null): boolean {
-  return origin?.kind === "volli" && IS_HOST_NOTICE[origin.reason];
-}
 
 /**
  * The origin a `command.recorded` event carries: the slim fold's field when
  * present, else the door's attribution in its provenance. Null when unknown.
  */
 export function commandOriginOf(event: SessionEvent): SessionOrigin | null {
-  if (event.commandOrigin !== undefined) return event.commandOrigin;
-  const detail = event.provenance?.source.detail;
-  return typeof detail === "object" && detail !== null && !Array.isArray(detail)
-    ? readSessionOrigin((detail as Record<string, unknown>).sessionOrigin)
-    : null;
+  return subagentCommandOrigin(event);
 }
 
 /**
@@ -419,10 +376,7 @@ export function resumedNoticeIds(
   operationId: string,
   turnId: string,
 ): { commandId: string; messageId: string } {
-  return {
-    commandId: `${operationId}:resume:${turnId}${DELEGATION_ID_SUFFIXES.notice}`,
-    messageId: `${operationId}:resume:${turnId}${DELEGATION_ID_SUFFIXES.noticeMessage}`,
-  };
+  return subagentNoticeIds(operationId, turnId);
 }
 
 /**

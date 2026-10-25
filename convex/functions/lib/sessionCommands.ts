@@ -36,7 +36,9 @@
  * (`transcripts.commandArtifact`). The body is bound to the intent: its
  * SHA-256 is the reference's digest, the reference names the transcript
  * media type, and the message is the one user message the command sends,
- * `${commandId}:message`, text parts only.
+ * `${commandId}:message`, text parts only. Owner follow-up controls supply
+ * their queued message id instead and retain rich parts/metadata verbatim;
+ * an edit must not rename the message or change its artifact derivation.
  */
 
 import { ConvexError } from "convex/values";
@@ -162,6 +164,7 @@ export async function readCommandArtifact(
   artifact: string,
   intent: Extract<SessionCommandIntent, { kind: "message.submit" }>,
   commandId: string,
+  queued?: { messageId: string; allowRichParts: boolean },
 ): Promise<CommandArtifact> {
   const bad = (why: string) => refuse("invalid_request", `The message body ${why}.`);
   const bytes = utf8Length(artifact);
@@ -196,17 +199,27 @@ export async function readCommandArtifact(
   }
   const message = value.message;
   if (!isRecord(message) || message.role !== "user") throw bad("must be one user message");
-  if (message.id !== `${commandId}:message`) {
-    throw bad("must be this command's message (`<commandId>:message`)");
+  if (message.id !== (queued?.messageId ?? `${commandId}:message`)) {
+    throw bad(
+      queued === undefined
+        ? "must be this command's message (`<commandId>:message`)"
+        : "must name the queued message",
+    );
   }
   if (
     !Array.isArray(message.parts) ||
     message.parts.length === 0 ||
     !message.parts.every(
-      (part) => isRecord(part) && part.type === "text" && typeof part.text === "string",
+      (part) =>
+        isRecord(part) &&
+        typeof part.type === "string" &&
+        (queued?.allowRichParts === true ||
+          (part.type === "text" && typeof part.text === "string")),
     )
   ) {
-    throw bad("carries text parts only");
+    throw bad(
+      queued?.allowRichParts === true ? "has invalid message parts" : "carries text parts only",
+    );
   }
   return { digest: reference.id, mediaType: reference.mediaType, bytes, body: artifact };
 }

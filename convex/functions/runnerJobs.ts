@@ -31,9 +31,11 @@
  */
 
 import { ConvexError, v } from "convex/values";
+import { decodeCloudSessionIntent } from "@volli/shared";
 
 import {
   INVALID_JOB_RESULT,
+  isFollowUpIntent,
   JOB_CLAIM_MAX,
   JOB_LEASE_MAX_MS,
   JOB_LEASE_MS,
@@ -251,8 +253,34 @@ export const complete = mutation({
     if (reported.status === "done") {
       const problem = jobResultProblem(reported.result);
       if (problem === null) {
+        // Queue controls do not append event-ledger commands. Their runner
+        // receipt travels with completion instead of waiting for the fact fold.
+        const result = reported.result as { receipt?: unknown } | null | undefined;
+        const receipt = result?.receipt as Record<string, unknown> | null | undefined;
+        const queueControl = isQueueControl(job);
+        const queueReceipt =
+          queueControl &&
+          receipt != null &&
+          ["accepted", "rejected", "completed", "unreconciled"].includes(String(receipt.status)) &&
+          (receipt.code === null || typeof receipt.code === "string") &&
+          (receipt.detail === null || typeof receipt.detail === "string")
+            ? {
+                status: receipt.status as "accepted" | "rejected" | "completed" | "unreconciled",
+                code: receipt.code as string | null,
+                detail: receipt.detail as string | null,
+                at: now,
+              }
+            : null;
+        // A summarized attempt must not downgrade an outcome already folded
+        // from the immutable Session ledger.
         await ctx.db.patch(job._id, {
           status: "done",
+          ...(queueReceipt !== null &&
+          (job.receipt === null ||
+            job.receipt.status === "unreconciled" ||
+            (job.receipt.status === "accepted" && queueReceipt.status === "completed"))
+            ? { receipt: queueReceipt }
+            : {}),
           result: reported.result as Doc<"runnerJobs">["result"],
           ...terminal(now),
         });
@@ -271,6 +299,19 @@ export const complete = mutation({
     });
   },
 });
+
+function isQueueControl(job: Doc<"runnerJobs">): boolean {
+  if (job.kind === "session.followUp") return true;
+  if (job.kind !== "session.command") return false;
+  try {
+    const intent = job.commandIntent ?? (job.payload as { intent?: string }).intent;
+    return (
+      typeof intent === "string" && isFollowUpIntent(decodeCloudSessionIntent(JSON.parse(intent)))
+    );
+  } catch {
+    return false;
+  }
+}
 
 async function recordFailure(
   ctx: MutationCtx,

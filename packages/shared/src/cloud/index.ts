@@ -22,6 +22,8 @@ export * from "./members";
 export * from "./notices";
 export * from "./migration-import";
 export * from "./place";
+export * from "./follow-ups";
+export * from "./subagent-outcome";
 export * from "./positions";
 export * from "./preview-access";
 export * from "./project-rules";

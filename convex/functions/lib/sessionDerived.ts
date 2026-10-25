@@ -30,6 +30,7 @@ import {
 import type { Doc } from "../_generated/dataModel.js";
 import type { MutationCtx } from "../_generated/server";
 import { onSessionFact } from "./watches";
+import { onDelegationFact } from "./delegations";
 import {
   SESSION_BLOCKED_SOURCE_ID,
   clearSessionAttention,
@@ -63,6 +64,7 @@ export async function deriveFromFact(
   before: CloudSessionView | null,
   after: CloudSessionView,
 ): Promise<void> {
+  await onDelegationFact(ctx, session, fact, after);
   await onSessionFact(ctx, session, fact, after);
   const { payload } = fact;
   switch (payload.kind) {

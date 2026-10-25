@@ -671,6 +671,8 @@ export interface OpenNativeBinding {
 
 /** The host-owned runtime plus the live local bindings only its process can know about. */
 export interface HostedSessionRuntime extends SessionRuntime {
+  /** Live queue observation without subscribing to or pinning Session history. */
+  onFollowUpQueue?(listener: (emission: SessionStreamQueue) => void): () => void;
   /** Host startup/recovery sweep, independent of attached Clients. */
   recoverFollowUps(): Promise<void>;
   /**
@@ -1075,6 +1077,7 @@ class DefaultSessionRuntime implements SessionRuntime {
   #closed = false;
 
   readonly #followUps: FollowUpQueue;
+  readonly #queueObservers = new Set<(emission: SessionStreamQueue) => void>();
 
   /** Accepted, not yet opened turn starts per Session (VC-577); see {@link pendingTurnStarts}. */
   readonly #acceptedStarts = new Map<string, number>();
@@ -1112,6 +1115,13 @@ class DefaultSessionRuntime implements SessionRuntime {
       id: (kind) => this.#id(kind),
       publishEvents: (events) => this.#publish(events),
       publishQueue: async (emission) => {
+        for (const listener of this.#queueObservers) {
+          try {
+            listener(emission);
+          } catch (error) {
+            void this.#followUps.failure(error);
+          }
+        }
         await Promise.all(
           [...(this.#subscribers.get(emission.sessionId) ?? [])].map((subscriber) =>
             this.#appendTransient(subscriber, emission),
@@ -3258,6 +3268,14 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
   }
 
+  onFollowUpQueue(listener: (emission: SessionStreamQueue) => void): () => void {
+    this.#assertOpen();
+    this.#queueObservers.add(listener);
+    return () => {
+      this.#queueObservers.delete(listener);
+    };
+  }
+
   recoverFollowUps(): Promise<void> {
     return this.#followUps.recover();
   }
@@ -3267,6 +3285,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     this.#closed = true;
     this.#stopCommitted();
     this.#followUps.close();
+    this.#queueObservers.clear();
     // The cache is derived and best-effort: a failed shutdown write only makes
     // the next launch refold. Capture before clearing so even an attachment
     // that has not emitted its close yet leaves a reusable prefix. The results

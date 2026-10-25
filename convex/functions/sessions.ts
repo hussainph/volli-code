@@ -30,8 +30,8 @@ import { ConvexError, v } from "convex/values";
 import {
   assertCloudInteractionReference,
   CLOUD_MESSAGE_MEDIA_TYPE,
-  decodeSessionCommandIntent,
   encodeSessionJson,
+  decodeCloudSessionIntent,
   readCloudMessageBody,
   scrubSessionAttachment,
   scrubSessionAttachmentFailure,
@@ -41,10 +41,10 @@ import {
   sessionListingActivity,
   sessionListingWaitingOn,
   type SessionAttachmentProjection,
-  type SessionCommandIntent,
 } from "@volli/shared";
 import {
   canSeeSession,
+  isFollowUpIntent,
   cloudSessionView,
   INLINE_ARTIFACT_MAX_BYTES,
   SESSION_COMMAND_FORMAT,
@@ -70,7 +70,8 @@ import {
 } from "./lib/auth";
 import { attentionVisibility } from "./lib/attention";
 import { PERSON_OR_AGENT, requireActor } from "./lib/actorAuth";
-import { enqueueJob } from "./lib/jobs";
+import { enqueueJob, type JobDraft } from "./lib/jobs";
+import { routeFollowUp, advanceFollowUpRevision } from "./lib/followUps";
 import { tryArmSessionWatch } from "./lib/watches";
 import { listingOf } from "./lib/sessionDerived";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
@@ -167,6 +168,12 @@ export const transferClaim = internalMutation({
       state: "active",
     });
     await ctx.db.patch(session._id, { placeRunnerId: toRunnerId });
+    const queue = await ctx.db
+      .query("sessionFollowUpQueues")
+      .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+      .unique();
+    if (queue !== null) await ctx.db.delete(queue._id);
+    await advanceFollowUpRevision(ctx, sessionId, generation);
     for (const viewer of await ctx.db
       .query("sessionViewers")
       .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
@@ -299,10 +306,12 @@ const MAX_INTENT_BYTES = 64 * 1024;
  *   `<commandId>:message`, text parts only. An agent's `message.submit` must
  *   carry it (never `body`): its target may be on another runner.
  *
- * A person's message without either is queued as before: its reference
+ * Follow-up queue/edit controls use `artifact` with their queued message id,
+ * preserving rich parts; they do not use the ordinary message's `body` door.
+ * A person's ordinary message without either is queued as before: its reference
  * names a body the runner holds itself. An interaction answer carries none:
- * its reference must be the one its intent derives. No other intent takes a
- * body. A new interaction answer must name an open, ordinary question
+ * its reference must be the one its intent derives. Other ordinary intents
+ * take no body. A new interaction answer must name an open, ordinary question
  * (`requireAnswerableInteraction`) before anything is persisted.
  */
 export const command = mutation({
@@ -320,11 +329,11 @@ export const command = mutation({
     if (new TextEncoder().encode(args.intent).length > MAX_INTENT_BYTES) {
       throw fail("invalid_request", `An intent is limited to ${MAX_INTENT_BYTES} bytes.`);
     }
-    let intent: Exclude<SessionCommandIntent, { kind: "session.create" }>;
+    let intent: Exclude<ReturnType<typeof decodeCloudSessionIntent>, { kind: "session.create" }>;
     let intentJson: string;
     let isMessage = false;
     try {
-      const decoded = decodeSessionCommandIntent(JSON.parse(args.intent), "intent");
+      const decoded = decodeCloudSessionIntent(JSON.parse(args.intent));
       if (decoded.kind === "session.create") throw new Error("intent.kind creates a session");
       intent = decoded;
       intentJson = encodeSessionJson(decoded);
@@ -335,7 +344,12 @@ export const command = mutation({
         `The intent is not a Session command: ${error instanceof Error ? error.message : "unreadable"}.`,
       );
     }
-    checkSupervision(caller, session, intent);
+    if (isFollowUpIntent(intent)) {
+      // Agent supervision remains the steer/stop surface, never a second
+      // way to edit another Session's owner-controlled follow-up queue.
+      if (caller.kind === "agent")
+        throw fail("forbidden", "Only the Session owner edits its follow-up queue.");
+    } else checkSupervision(caller, session, intent);
     const scope = { sessionId: session.id, commandId: args.commandId };
     let staged: StagedBody | null = null;
     if (args.body !== undefined && args.artifact !== undefined) {
@@ -344,13 +358,30 @@ export const command = mutation({
     if (caller.kind === "agent" && args.body !== undefined) {
       throw fail("invalid_request", "An agent's message carries its body (`artifact`).");
     }
-    if (
+    if (isFollowUpIntent(intent)) {
+      if (args.body !== undefined)
+        throw fail("invalid_request", "A queue control carries its canonical body as `artifact`.");
+      if (args.artifact !== undefined) {
+        if (intent.kind === "message.cancel" || intent.reference === undefined)
+          throw fail("invalid_request", "This queue control carries no message body.");
+        staged = await readCommandArtifact(
+          args.artifact,
+          { kind: "message.submit", reference: intent.reference },
+          args.commandId,
+          { messageId: intent.messageId, allowRichParts: true },
+        );
+      } else if (
+        intent.kind === "message.edit" ||
+        (intent.kind === "message.submit" && intent.delivery === "queue")
+      ) {
+        throw fail("invalid_request", "A queued message or edit carries its body (`artifact`).");
+      }
+    } else if (
       (args.body !== undefined || args.artifact !== undefined) &&
       intent.kind !== "message.submit"
     ) {
       throw fail("invalid_request", "Only a message.submit carries a message body.");
-    }
-    if (intent.kind === "message.submit" && args.artifact !== undefined) {
+    } else if (intent.kind === "message.submit" && args.artifact !== undefined) {
       staged = await readCommandArtifact(args.artifact, intent, args.commandId);
     } else if (intent.kind === "message.submit" && args.body !== undefined) {
       if (new TextEncoder().encode(args.body).length > INLINE_ARTIFACT_MAX_BYTES) {
@@ -398,7 +429,17 @@ export const command = mutation({
     if (intake === null) throw fail("not_found", "That session does not exist.");
     // The inbox's own rules: idempotent by id (`id_taken` for another intent),
     // routed to the claimed runner, which must be the owner's.
-    await enqueueJob(ctx, {
+    const existing = await ctx.db
+      .query("runnerJobs")
+      .withIndex("by_uuid", (q) => q.eq("id", args.commandId))
+      .unique();
+    if (
+      existing !== null &&
+      (existing.sessionId !== session.id ||
+        (existing.commandIntent ?? (existing.payload as { intent?: string }).intent) !== intentJson)
+    )
+      throw fail("id_taken", "That command id was used for another intent.");
+    const draft: JobDraft<"session.command"> & { commandId: string } = {
       id: args.commandId,
       runnerId: intake.claim.runnerId,
       kind: "session.command",
@@ -409,7 +450,16 @@ export const command = mutation({
       payload: { format: SESSION_COMMAND_FORMAT, intent: intentJson },
       createdBy: caller.actor,
       onBehalfOf: viewer.userId,
-    });
+    };
+    if (existing === null) {
+      if (isFollowUpIntent(intent)) await routeFollowUp(ctx, draft, intent, session);
+      else await enqueueJob(ctx, draft);
+      const saved = (await ctx.db
+        .query("runnerJobs")
+        .withIndex("by_uuid", (q) => q.eq("id", args.commandId))
+        .unique())!;
+      await ctx.db.patch(saved._id, { commandIntent: intentJson });
+    }
     const watch =
       caller.kind === "agent" && isMessage
         ? await tryArmSessionWatch(ctx, {
@@ -445,6 +495,28 @@ export const command = mutation({
 });
 
 // ── reads (client) ──────────────────────────────────────────────────────────
+
+/** Both command stages, including queue controls that append no Session event. */
+export const receipt = query({
+  args: { sessionId: v.string(), commandId: v.string() },
+  handler: async (ctx, { sessionId, commandId }) => {
+    const { viewer } = await requireActor(ctx, PERSON_OR_AGENT);
+    await requireSessionVisible(ctx, sessionId, viewer);
+    const job = await ctx.db
+      .query("runnerJobs")
+      .withIndex("by_uuid", (q) => q.eq("id", commandId))
+      .unique();
+    if (job === null || job.sessionId !== sessionId || !job.kind.startsWith("session."))
+      return null;
+    return {
+      commandId: job.commandId,
+      status: job.status,
+      receipt: job.receipt,
+      failure: job.failure ?? null,
+      runnerId: job.runnerId,
+    };
+  },
+});
 
 type SessionListing = NonNullable<Doc<"sessions">["listing"]>;
 

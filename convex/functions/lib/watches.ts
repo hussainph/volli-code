@@ -44,6 +44,7 @@ import type { MutationCtx } from "../_generated/server";
 import { requireProject, requireSessionVisible, type Viewer } from "./auth";
 import { cancelJob, patchQueuedJob, tryEnqueueJob } from "./jobs";
 import { raiseSessionAttention, clearSessionAttention } from "./attention";
+import { delegationWatchIsActive } from "./delegations";
 const WATCH_COALESCE_MS = 1_500;
 
 type WatchTarget = { kind: "session" | "ticket"; id: string };
@@ -346,9 +347,14 @@ export async function onSessionFact(
 ) {
   await autoArm(ctx, session, fact);
   if (
-    fact.sequence === 1 &&
-    fact.payload.kind === "command.recorded" &&
-    fact.payload.command.intent.kind === "session.create"
+    (fact.sequence === 1 &&
+      fact.payload.kind === "command.recorded" &&
+      fact.payload.command.intent.kind === "session.create") ||
+    (session.role === "subagent" &&
+      (fact.payload.kind === "turn.started" ||
+        fact.payload.kind === "command.receipt.recorded" ||
+        (fact.payload.kind === "command.recorded" &&
+          fact.payload.command.intent.kind === "message.submit")))
   )
     await deferForLateChild(ctx, session);
   if (fact.payload.kind === "session.stopped" || fact.payload.kind === "session.archived")
@@ -422,8 +428,11 @@ async function pendingChildren(ctx: Reader, parentSessionId: string): Promise<st
       .withIndex("by_parent_status", (q) =>
         q.eq("parentSessionId", parentSessionId).eq("status", status),
       )
+      .filter((q) => q.or(q.eq(q.field("watch"), undefined), q.neq(q.field("watch.active"), null)))
       .take(WATCH_CHANGE_MAX_PENDING);
-    children.push(...rows.map((row) => row.childSessionId));
+    // Resumed work still has a live watch; a held kickoff has none. Only
+    // the separate parent-stop cascade excludes resumed watches.
+    children.push(...rows.filter(delegationWatchIsActive).map((row) => row.childSessionId));
   }
   return children.slice(0, WATCH_CHANGE_MAX_PENDING);
 }
@@ -741,6 +750,11 @@ async function childHasSettled(ctx: Reader, childSessionId: string): Promise<boo
  * (and only inside the initial coalescing window), retract that premature
  * completion and keep the turn arm for the parent's real final turn. */
 async function deferForLateChild(ctx: MutationCtx, child: Doc<"sessions">) {
+  const slot = await ctx.db
+    .query("delegations")
+    .withIndex("by_child", (q) => q.eq("childSessionId", child.id))
+    .unique();
+  if (slot !== null && !delegationWatchIsActive(slot)) return;
   if (
     child.role !== "subagent" ||
     child.parentSessionId === null ||

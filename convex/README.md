@@ -79,6 +79,40 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 | `test/*.test.ts`                                                    | Unit tests: functions run in-process under [`convex-test`](https://docs.convex.dev/testing/convex-test). No backend.                                                                                                                                                                              |
 | `test/*.backend.test.ts`                                            | Integration tests against the real pinned backend.                                                                                                                                                                                                                                                |
 
+## Follow-ups and delegation answers
+
+`sessions.command` routes queued messages as `session.followUp` jobs. An edit
+or cancel changes a never-leased intake job in place; once any runner has
+held it, the control travels as `session.command` and the runner decides the
+release race. `followUps.queue` combines open intake with the runner's
+claim-fenced `followUps.mirror` (32 items, 64 KiB, bodies at most 8 KiB each).
+The mirror is live state, republished on reconnect; it is not a retry buffer.
+The queue view's revision also covers never-leased edits/cancels. A client
+precondition is translated to the runner's own revision before delivery.
+The runner publishes it before completing intake, and still releases messages
+at its own idle boundary without a backend round trip. Clients subscribe to
+`sessions.receipt({sessionId, commandId})` for both command stages, including
+runner-held queue-control refusals that append no Session event.
+
+Queue/edit commands carry the exact canonical artifact as `artifact`, bound
+to the queued message id; metadata and rich parts are preserved. A queued
+send-now names only its message id (`message.submit`, `delivery: "steer"`):
+the runner uses its canonical queued body, even when the mirror elides it.
+These owner controls do not widen an agent's steer/stop supervision surface.
+
+The accept fold projects delegation slots and durable watch boundaries. An
+initial failed attach stays unarmed while its kickoff waits for Retry; it
+cannot spend the original answer id or defer its parent's watchers. Each
+armed watch settles on its earliest durable outcome. Original/retry answers
+use `{parent}:{toolCall}:answer`; later resumed or joined turns use the frozen
+`{parent}:{toolCall}:resume:{turnId}:answer` id. Host-notice-only turns do not
+re-arm. Local and backend answers race into one first-writer-wins outbox slot.
+A locally delivered original answer also retires its cloud watch when kickoff
+failed before recording a child intent, including parent-first drain ordering.
+A parent's stop cascades only to original watches on other runners, after the
+child projection catches up. `delegations.forParent` is visibility-checked;
+starting a child elsewhere is a separate runner-selection feature.
+
 ## The migration import
 
 `functions/migration.ts` is the SQLite → Volli Cloud import: internal
