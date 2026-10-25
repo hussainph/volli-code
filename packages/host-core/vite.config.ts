@@ -193,6 +193,22 @@ export default defineConfig({
         "src/observability/genai.ts",
         "src/observability/settings.ts",
         "src/observability/sink.ts",
+        // The migration exporter (VC-317): it reads a person's whole history
+        // once, into the format the move to Volli Cloud imports, and nobody
+        // re-runs that move to check it. A branch wrong here is a fact that
+        // silently does not arrive, a path that leaks into a cloud row, or a
+        // cancelled export that reads as complete. `worker-entry.ts` stays
+        // out: its one line only ever runs inside a worker thread, which the
+        // coverage provider does not instrument; `worker.test.ts` drives it.
+        "src/migration-export/errors.ts",
+        "src/migration-export/exporter.ts",
+        "src/migration-export/records.ts",
+        "src/migration-export/sources.ts",
+        "src/migration-export/staging.ts",
+        "src/migration-export/tables.ts",
+        "src/migration-export/transform.ts",
+        "src/migration-export/verify.ts",
+        "src/migration-export/worker.ts",
       ],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
     },
