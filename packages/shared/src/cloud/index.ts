@@ -10,6 +10,7 @@ export * from "./actor";
 export * from "./board-events";
 export * from "./board-receipts";
 export * from "./board-rules";
+export * from "./gateway";
 export * from "./ids";
 export * from "./jobs";
 export * from "./members";

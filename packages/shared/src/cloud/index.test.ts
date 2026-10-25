@@ -7,6 +7,7 @@ test("the cloud entry point exposes each module", () => {
     "readActor",
     "readActivityEvent",
     "isBoardEventKind",
+    "parseGatewayGrantClaims",
     "parseId",
     "isJobKind",
     "positionBetween",

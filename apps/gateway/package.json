@@ -1,0 +1,26 @@
+{
+  "name": "@volli/gateway",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The Volli model gateway: a Cloudflare Worker that relays model calls for backend-held API connections and meters their usage.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "dev:grant": "node scripts/dev-grant.ts",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vp test run",
+    "test:coverage": "vp test run --coverage"
+  },
+  "dependencies": {
+    "@volli/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "miniflare": "5.20261012.1-beta",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:",
+    "wrangler": "4.151.1"
+  }
+}
