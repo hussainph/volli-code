@@ -3762,6 +3762,11 @@ describe("agent command service", () => {
       );
       // Attributed to the Session that wrote it, exactly as `ticket comment` is.
       expect(comments[0]).toMatchObject({ actor: "session", sessionId });
+      // Written through the board's own comment command (VC-928): receipted,
+      // like every other board write, rather than by a raw repository call.
+      expect(ctx.db.prepare("SELECT operation FROM board_command_receipts").all()).toEqual([
+        { operation: "board.createComment" },
+      ]);
     });
 
     it("posts it on session blocked too, where an unfinished list is the point", async () => {
