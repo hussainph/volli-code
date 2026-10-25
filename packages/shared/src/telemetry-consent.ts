@@ -16,13 +16,14 @@
  *    region, or unknown, nothing is sent until the person chooses. Anywhere
  *    else both tiers are on, once the first-run notice has been shown.
  *
- * **Linking.** The first time a signed-in device resolves against an account,
- * its choice and the account's are reconciled per tier, the more private
- * value winning, and the result is written to both — so a device where the
- * person turned a tier off never has it silently turned back on by an
- * account, and that tier goes off on their other devices too. After that the
- * account is the authority, and a later change on any device is written to
- * the account like any other decision.
+ * **Linking.** While a device is not linked to the account — the first
+ * resolve after each sign-in, and after any decision this device could not
+ * write to the account — its choice and the account's are reconciled per
+ * tier, the more private value winning, and the result is written to both.
+ * So a device where the person turned a tier off never has it silently
+ * turned back on by an account, and that tier goes off on their other devices
+ * too. While linked, the account is the authority, and a change on any device
+ * is written to the account like any other decision.
  *
  * Nothing here reads the environment, the clock or storage; the caller passes
  * them in and persists what {@link TelemetryResolution} says to write. This
@@ -130,7 +131,13 @@ export interface TelemetryAccountState {
   choice: TelemetryChoice | null;
   /** The account's region, when it has one. Narrowed here; anything else is unknown. */
   region?: unknown;
-  /** Whether this device has already reconciled with this account. */
+  /**
+   * Whether this device's stored choice is known to match this account's.
+   * The caller sets it when a resolution says `linkAccount` and its writes are
+   * stored, and clears it on sign-out, on switching account, and whenever a
+   * decision stored on this device could not be written to the account — so
+   * the next resolve reconciles again, off winning.
+   */
   linked: boolean;
 }
 
@@ -209,8 +216,8 @@ export function resolveTelemetry(input: TelemetryInputs): TelemetryResolution {
     !ask && volliTelemetry !== "on" && (input.noticeShownVersion ?? 0) < TELEMETRY_NOTICE_VERSION;
   const sends = !ask && !noticeDue;
   return {
-    crash: sends && (choice?.crash ?? true),
-    usage: sends && (choice?.usage ?? true),
+    crash: sends && (choice === null || choice.crash === true),
+    usage: sends && (choice === null || choice.usage === true),
     why: ask ? "awaiting-choice" : noticeDue ? "awaiting-notice" : "notice-default",
     card: ask ? "choice" : noticeDue ? "notice" : null,
     ...stored,
@@ -249,21 +256,29 @@ function storedChoice(
 
 /**
  * Two decisions as one, per tier, off winning. A tier left on is on in both,
- * so the newer of the two notices covers it, and the later decision is the
- * one on record.
+ * so the decision made under the newer notice (the later one, on a tie)
+ * consented to it; its notice version, time and region are the record, so
+ * the merged record never claims a decision nobody made.
  */
 function reconcile(
   local: TelemetryChoice | null,
   account: TelemetryChoice | null,
 ): TelemetryChoice | null {
   if (local === null || account === null) return local ?? account;
-  const later = account.decidedAt > local.decidedAt ? account : local;
+  const newer =
+    account.noticeVersion !== local.noticeVersion
+      ? account.noticeVersion > local.noticeVersion
+        ? account
+        : local
+      : account.decidedAt > local.decidedAt
+        ? account
+        : local;
   return {
     crash: local.crash && account.crash,
     usage: local.usage && account.usage,
-    noticeVersion: Math.max(local.noticeVersion, account.noticeVersion),
-    decidedAt: later.decidedAt,
-    regionAtDecision: later.regionAtDecision,
+    noticeVersion: newer.noticeVersion,
+    decidedAt: newer.decidedAt,
+    regionAtDecision: newer.regionAtDecision,
   };
 }
 

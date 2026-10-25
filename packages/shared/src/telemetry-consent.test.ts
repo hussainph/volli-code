@@ -205,6 +205,37 @@ describe("resolveTelemetry: linking a device to an account", () => {
     });
   });
 
+  it("keeps a tier turned off on this device while unlinked, over an account's later on", () => {
+    // Turned off while signed out (or a write to the account failed), so the
+    // device is not linked when it next resolves against the account.
+    const local = choice(false, true, { decidedAt: 9000 });
+    const remote = choice(true, true, { decidedAt: 1000 });
+    const resolved = resolveTelemetry(
+      inputs({ local, account: account({ linked: false, choice: remote }) }),
+    );
+    expect(resolved).toMatchObject({ crash: false, usage: true, localWrite: null });
+    expect(resolved.accountWrite).toEqual(local);
+  });
+
+  it("records the decision that consented to what stays on, never a mix of two", () => {
+    const local = choice(true, true, {
+      noticeVersion: V + 1,
+      decidedAt: 1000,
+      regionAtDecision: "DE",
+    });
+    const remote = choice(true, false, {
+      noticeVersion: V,
+      decidedAt: 2000,
+      regionAtDecision: "US",
+    });
+    expect(
+      resolveTelemetry(inputs({ local, account: account({ linked: false, choice: remote }) }))
+        .choice,
+    ).toEqual(
+      choice(true, false, { noticeVersion: V + 1, decidedAt: 1000, regionAtDecision: "DE" }),
+    );
+  });
+
   it("links with nothing to write when neither side has chosen", () => {
     expect(resolveTelemetry(inputs({ account: account({ linked: false }) }))).toMatchObject({
       choice: null,
@@ -285,7 +316,7 @@ describe("resolveTelemetry: no current choice", () => {
     });
   });
 
-  it.each([null, undefined, "", "de", "XK", "419", 49])(
+  it.each([null, undefined, "", "zz", "XK", "419", 49])(
     "asks first where the region is unknown (%j)",
     (osRegion) => {
       expect(resolveTelemetry(inputs({ osRegion }))).toMatchObject({
@@ -304,7 +335,7 @@ describe("resolveTelemetry: no current choice", () => {
 
   it("asks first when either the OS or the account names a choice region", () => {
     expect(
-      resolveTelemetry(inputs({ osRegion: "US", account: account({ region: "CA" }) })).card,
+      resolveTelemetry(inputs({ osRegion: "US", account: account({ region: "DE" }) })).card,
     ).toBe("choice");
     expect(
       resolveTelemetry(inputs({ osRegion: "FR", account: account({ region: "US" }) })).card,
@@ -371,6 +402,13 @@ describe("resolveTelemetry: a choice made under an older notice", () => {
         }),
       ),
     ).toMatchObject({ crash: true, usage: false, card: null });
+  });
+
+  it("sends no tier a malformed stored record leaves unstated", () => {
+    const malformed = { usage: true, noticeVersion: V - 1, decidedAt: 1, regionAtDecision: null };
+    expect(
+      resolveTelemetry(inputs({ local: malformed as unknown as TelemetryChoice })),
+    ).toMatchObject({ crash: false, usage: true });
   });
 
   it("asks again in a choice region, and sends nothing until answered", () => {
@@ -489,6 +527,34 @@ describe("resolveTelemetry: every combination", () => {
     }
   });
 
+  it("settles in one round: after persisting, a second resolve writes nothing and agrees", () => {
+    for (const [input, out] of rows) {
+      const persisted = inputs({
+        ...input,
+        local: out.localWrite ?? input.local,
+        account:
+          input.account === null
+            ? null
+            : {
+                ...input.account,
+                choice: out.accountWrite ?? input.account.choice,
+                linked: input.account.linked || out.linkAccount,
+              },
+      });
+      const again = resolveTelemetry(persisted);
+      expect(
+        [again.localWrite, again.accountWrite, again.linkAccount],
+        JSON.stringify(input),
+      ).toEqual([null, null, false]);
+      expect([again.crash, again.usage, again.why, again.card]).toEqual([
+        out.crash,
+        out.usage,
+        out.why,
+        out.card,
+      ]);
+    }
+  });
+
   it("reconciles only when linking, and otherwise follows a linked account", () => {
     for (const [input, out] of rows) {
       const acct = input.account;
@@ -513,6 +579,45 @@ describe("resolveTelemetry: every combination", () => {
       expect(out.localWrite ?? input.local).toEqual(out.choice ?? input.local);
       expect(out.accountWrite ?? acct.choice).toEqual(out.choice ?? acct.choice);
     }
+  });
+});
+
+describe("resolveTelemetry: two devices on one account", () => {
+  /** One device's stored state, and the shared account's. */
+  interface World {
+    a: { local: TelemetryChoice | null; linked: boolean };
+    b: { local: TelemetryChoice | null; linked: boolean };
+    account: TelemetryChoice | null;
+  }
+
+  function step(world: World, device: "a" | "b"): TelemetryResolution {
+    const here = world[device];
+    const out = resolveTelemetry(
+      inputs({ local: here.local, account: { choice: world.account, linked: here.linked } }),
+    );
+    here.local = out.localWrite ?? here.local;
+    world.account = out.accountWrite ?? world.account;
+    here.linked = here.linked || out.linkAccount;
+    return out;
+  }
+
+  it("spreads a tier one device turned off to the other, then lets it come back on", () => {
+    const world: World = {
+      a: { local: choice(false, true, { decidedAt: 2000 }), linked: false },
+      b: { local: choice(true, true, { decidedAt: 1000 }), linked: false },
+      account: null,
+    };
+    expect(step(world, "a")).toMatchObject({ crash: false, usage: true });
+    expect(step(world, "b")).toMatchObject({ crash: false, usage: true });
+    expect(world.b.local).toEqual(world.account);
+
+    // The person turns crash reports back on from device B, signed in.
+    const on = telemetryChoice({ crash: true, usage: true }, { decidedAt: 3000, region: "US" });
+    world.b.local = on;
+    world.account = on;
+    expect(step(world, "a")).toMatchObject({ crash: true, usage: true });
+    expect(step(world, "b")).toMatchObject({ crash: true, usage: true, ...NO_WRITES });
+    expect(world.a.local).toEqual(on);
   });
 });
 
