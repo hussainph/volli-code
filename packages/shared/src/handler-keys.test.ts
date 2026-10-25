@@ -9,9 +9,14 @@ import {
   HANDLER_PROJECTION_KEYS,
   HOST_HANDLER_KEYS,
   PUBLIC_HANDLER_KEYS,
+  SERVED_AGENT_HANDLER_KEYS,
+  SHARED_AGENT_HANDLER_KEYS,
   SOCKET_BOARD_PROJECTIONS,
   SOCKET_DELEGATED_HANDLER_KEYS,
   type AgentHandlerKey,
+  type ServedAgentHandlerKey,
+  type SharedAgentHandlerKey,
+  type SharedAgentHandlerKeysExact,
   type CatalogHandlerKey,
   type HostHandlerKey,
   type HostHandlerKeyOf,
@@ -23,7 +28,10 @@ import {
   BOARD_ENTRIES,
   CATALOG_ENTRIES,
   VERB_REGISTRY,
+  VERB_TOOL_KEYS,
+  isVerbToolKey,
   verbEntry,
+  type AgentCommandBindingId,
 } from "./verb-registry";
 
 describe("the host handler map's keys", () => {
@@ -70,8 +78,25 @@ describe("the host handler map's keys", () => {
     expect(Object.isFrozen(SOCKET_BOARD_PROJECTIONS)).toBe(true);
   });
 
+  it("give every tool verb its own agent key, and share only the start with the socket", () => {
+    for (const key of VERB_TOOL_KEYS) expect(AGENT_HANDLER_KEYS, key).toContain(key);
+    const socket = new Set<string>(Object.values(AGENT_COMMAND_BINDINGS));
+    expect(AGENT_HANDLER_KEYS.filter((key) => socket.has(key) && isVerbToolKey(key))).toEqual([
+      ...SHARED_AGENT_HANDLER_KEYS,
+    ]);
+    expect(SERVED_AGENT_HANDLER_KEYS).toEqual(
+      AGENT_HANDLER_KEYS.filter((key) => key !== "session.start"),
+    );
+    expect(Object.isFrozen(SHARED_AGENT_HANDLER_KEYS)).toBe(true);
+    expect(Object.isFrozen(SERVED_AGENT_HANDLER_KEYS)).toBe(true);
+    expectTypeOf<SharedAgentHandlerKeysExact>().toEqualTypeOf<never>();
+    expectTypeOf<Extract<ServedAgentHandlerKey, SharedAgentHandlerKey>>().toEqualTypeOf<never>();
+  });
+
   it("name the both-door commands, each bound on the socket under its own key", () => {
-    expectTypeOf<SocketHandlerKey>().toEqualTypeOf<"ticket.move" | AgentHandlerKey>();
+    expectTypeOf<SocketHandlerKey>().toEqualTypeOf<
+      "ticket.move" | Extract<AgentHandlerKey, AgentCommandBindingId>
+    >();
     for (const key of PUBLIC_HANDLER_KEYS) {
       const entry = verbEntry(key)!;
       if (!entry.accessModes.includes("cli")) continue;

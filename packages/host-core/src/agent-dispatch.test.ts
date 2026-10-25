@@ -42,6 +42,7 @@ import {
   AGENT_COMMAND_BINDINGS,
   AGENT_COMMANDS,
   AGENT_HANDLER_KEYS,
+  SERVED_AGENT_HANDLER_KEYS,
   SOCKET_BOARD_PROJECTIONS,
   DEFAULT_AUTHORITY_POLICY,
   HOST_HANDLER_KEYS,
@@ -62,7 +63,7 @@ import {
   invokeHandler,
   refused,
 } from "./handlers/handler-map";
-import { AGENT_VERB_HANDLERS } from "./agent-dispatch/verbs";
+import { agentVerbEntries } from "./agent-dispatch/verbs";
 import { sealTestHandlers, testHostHandlers } from "./testing/host-handlers";
 import {
   doorCallActor,
@@ -193,7 +194,10 @@ describe("every socket verb is a projection of the host's map (VC-668, VC-923)",
   };
 
   it("binds the both-door commands, the board's ticket writes and its own verbs as projections", () => {
-    expect(SOCKET_HANDLER_KEYS).toEqual(["ticket.move", ...AGENT_HANDLER_KEYS]);
+    expect(SOCKET_HANDLER_KEYS).toEqual([
+      "ticket.move",
+      ...AGENT_HANDLER_KEYS.filter((key) => key in AGENT_VERB_TABLE),
+    ]);
     expect(SOCKET_BOARD_PROJECTIONS).toEqual(BOARD_PROJECTIONS);
     for (const key of delegated) expect(key in AGENT_VERB_TABLE, key).toBe(true);
     for (const [id, binding] of Object.entries(AGENT_VERB_TABLE)) {
@@ -208,14 +212,14 @@ describe("every socket verb is a projection of the host's map (VC-668, VC-923)",
     expect(own.toSorted()).toEqual([...delegated].toSorted());
   });
 
-  it("holds one handler for every agent key, and no other", () => {
-    // The socket's own verbs' handlers, now the map's entries: exactly the
-    // agent tier, in the registry's order.
-    expect(Object.keys(AGENT_VERB_HANDLERS)).toEqual([...AGENT_HANDLER_KEYS]);
-    for (const [key, handle] of Object.entries(AGENT_VERB_HANDLERS)) {
-      const expected = `${key.replaceAll(/\.([a-z])/g, (_, initial: string) => initial.toUpperCase())}Verb`;
-      expect(handle.name, key).toBe(expected);
-    }
+  it("serves one entry for every socket-served agent key, and no other", () => {
+    // The socket's own verbs' handlers, as the map's entries: exactly the
+    // socket's served agent keys, in the registry's order. The start is the
+    // map's own command, shared with the tool door.
+    expect(Object.keys(agentVerbEntries({} as never))).toEqual(
+      SERVED_AGENT_HANDLER_KEYS.filter((key) => key in AGENT_VERB_TABLE),
+    );
+    expect(projectedHandlerKey(AGENT_VERB_TABLE["session.start"])).toBe("session.start");
   });
 
   it("serves the socket's own verbs into the map once, and refuses a second service", () => {
@@ -482,6 +486,52 @@ describe("every socket verb is a projection of the host's map (VC-668, VC-923)",
   });
 });
 
+describe("how often the coordination policy is read (VC-923)", () => {
+  function counted() {
+    const ctxScenario = scenario();
+    let reads = 0;
+    const service = createAgentCommandService({
+      handlers: testHostHandlers({ db: ctx.db }),
+      db: ctx.db,
+      sessionEngine: createTestSessionEngine(ctx.db),
+      appVersion: "1.2.3",
+      verifySessionToken: ctxScenario.verify,
+      readAuthorityPolicy: () => {
+        reads += 1;
+        return DEFAULT_AUTHORITY_POLICY;
+      },
+    });
+    return { service, env: ctxScenario.env, reads: () => reads };
+  }
+
+  it("reads it once for one of the socket's own verbs, the hot path included", async () => {
+    const { service, env, reads } = counted();
+    const response = await service.execute({
+      v: 1,
+      cmd: "hook",
+      args: { harness: "claude-code", event: "turn.started" },
+      ctx: { cwd: "/repo/volli", env },
+    });
+    expect(response.ok).toBe(true);
+    expect(reads()).toBe(1);
+  });
+
+  it("reads it again at the map for a key another door also reaches", async () => {
+    const { service, env, reads } = counted();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, status: "todo" }),
+    );
+    await service.execute({
+      v: 1,
+      cmd: "ticket.move",
+      args: { id: "VC-1", to: "done" },
+      ctx: { cwd: "/repo/volli", env },
+    });
+    expect(reads()).toBe(2);
+  });
+});
+
 describe("a socket verb the map serves (VC-923)", () => {
   const REQUEST: AgentRequest = { v: 1, cmd: "identify", args: {}, ctx: { cwd: "/", env: {} } };
   const UNAUTHENTICATED = { kind: "unauthenticated" } as const;
@@ -509,11 +559,19 @@ describe("a socket verb the map serves (VC-923)", () => {
         return answer;
       },
     });
-    const response = await servedVerb("identify", "resolve").handle(doorContext(handlers), REQUEST);
+    const presented: AgentRequest = {
+      ...REQUEST,
+      ctx: { cwd: "/", env: { session: "s-1", token: "secret", operatorToken: "op" } },
+    };
+    const response = await servedVerb("identify", "resolve").handle(
+      doorContext(handlers),
+      presented,
+    );
     expect(response).toBe(answer);
+    // The claim goes on; the door's credentials stay behind.
     expect(seen).toEqual([
       {
-        request: REQUEST,
+        request: { ...REQUEST, ctx: { cwd: "/", env: { session: "s-1" } } },
         projects: [expect.objectContaining({ id: "project-one" })],
         envSession: null,
         envSessionTerminal: null,
@@ -812,7 +870,7 @@ describe("which verbs pay for the roster fold (VC-403)", () => {
         ctx.db,
         testTicket("project-one", { id: "ticket-one", ticketNumber: 1, status: "todo" }),
       );
-      await service.execute({
+      const response = await service.execute({
         v: 1,
         cmd: command,
         args:
@@ -821,6 +879,8 @@ describe("which verbs pay for the roster fold (VC-403)", () => {
             : { ...ARGS[AGENT_COMMAND_BINDINGS[command]] },
         ctx: { cwd: "/repo/volli", env },
       });
+      // Admitted is not ran: an entry nothing served would answer this.
+      if (!response.ok) expect(response.error.message, command).not.toMatch(/is not served/);
       reached[command] = records;
       ctx.cleanup();
     }

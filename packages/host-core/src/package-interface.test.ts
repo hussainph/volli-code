@@ -135,11 +135,12 @@ const MAP_ONLY_MODULES: Readonly<Record<string, readonly string[]>> = {
 };
 const MAP_ONLY = new Set(Object.values(MAP_ONLY_MODULES).flat());
 /**
- * Where they belong: the handler map's own constructor, and the agent command
- * service, which serves the socket's own verbs into the map it is handed.
+ * Where they belong: the handler map's own constructor, and the two agent
+ * doors, which serve their own verbs into the map they are handed.
  */
 const MAP_ONLY_HOME = [
   "agent-commands.ts: serveHostHandlers",
+  "agent-tool-door.ts: serveHostHandlers",
   "handlers/host-handlers.ts: executeTicketMove",
   "handlers/host-handlers.ts: sealHostHandlers",
 ];
@@ -501,7 +502,7 @@ describe("host-core's package interface", () => {
     expect(productionExportsMatching(PACKAGE, (name) => MAP_ONLY.has(name))).toEqual([]);
   });
 
-  it("lets only the handler map import the move primitive or seal a map, and only the socket serve one", () => {
+  it("lets only the handler map import the move primitive or seal a map, and only the agent doors serve one", () => {
     expect(mapOnlyImporters(SRC)).toEqual(MAP_ONLY_HOME);
   });
 
@@ -510,6 +511,7 @@ describe("host-core's package interface", () => {
       "host-core-map-only-",
       {
         "agent-commands.ts": 'import { serveHostHandlers } from "./handlers/handler-map";',
+        "agent-tool-door.ts": 'import { serveHostHandlers } from "./handlers/handler-map";',
         "handlers/host-handlers.ts":
           'import { executeTicketMove } from "../ticket-move";\nimport { sealHostHandlers } from "./handler-map";',
         "ticket-move.ts": "export function executeTicketMove() {}",

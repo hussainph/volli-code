@@ -21,7 +21,6 @@
  */
 import { errorMessage, isHandlerRefused, isOperationUnavailable } from "@volli/shared";
 import type {
-  AgentHandlerKey,
   AgentRequest,
   AgentResponse,
   HandlerCall,
@@ -31,7 +30,13 @@ import type {
 } from "@volli/shared";
 
 import { HandlerNotServedError, invokeHandler } from "../handlers/handler-map";
-import type { HostHandlerInput, HostHandlerOutput, HostHandlers } from "../handlers/host-handlers";
+import type {
+  HostHandlerInput,
+  HostHandlerOutput,
+  HostHandlers,
+  SocketServedKey,
+} from "../handlers/host-handlers";
+import type { ServedAgentHandlerKey } from "@volli/shared";
 import { failure, type AgentCommandContext } from "./context";
 import type { DoorActor } from "./resolution";
 import type { AgentVerbBinding } from "./table";
@@ -72,7 +77,10 @@ export type SocketDecode<Key extends SocketProjectedKey> = (
 
 declare const PROJECTION: unique symbol;
 
-/** A table binding {@link projectHandler} minted for `Key`; nothing else carries the brand. */
+/**
+ * A table binding {@link projectHandler} or {@link servedVerb} minted for
+ * `Key`; nothing else carries the brand.
+ */
 export interface ProjectedVerbBinding<Key extends SocketProjectedKey> extends AgentVerbBinding {
   readonly [PROJECTION]: Key;
 }
@@ -93,14 +101,23 @@ export function projectedHandlerKey(binding: AgentVerbBinding): SocketProjectedK
  * cannot answer it now (retryable), `MUTATION_FAILED` otherwise, with the
  * handler's own message.
  */
-export function projectHandler<Key extends SocketProjectedKey>(
+export function projectHandler<Key extends Exclude<SocketProjectedKey, ServedAgentHandlerKey>>(
   key: Key,
-  binding: Pick<AgentVerbBinding, "envSession"> & { readonly decode: SocketDecode<Key> },
+  binding: Pick<AgentVerbBinding, "envSession"> & {
+    readonly decode: SocketDecode<Key>;
+    /**
+     * The verb's own answer for a handler's throw, where it has a vocabulary
+     * of its own for one (the start's model refusals); `undefined` falls
+     * through to the rule below.
+     */
+    readonly failed?: (error: unknown) => AgentResponse | undefined;
+  },
 ): ProjectedVerbBinding<Key> {
   return minted(key, binding.envSession, binding.decode, (error) => {
-    if (isHandlerRefused(error)) {
-      return failure("FORBIDDEN_ACTOR", error.message, error.hint ?? undefined);
-    }
+    const own = binding.failed?.(error);
+    if (own !== undefined) return own;
+    const refusal = mapRefusal(error);
+    if (refusal !== undefined) return refusal;
     return failure(
       isOperationUnavailable(error) ? "APP_UNREACHABLE" : "MUTATION_FAILED",
       errorMessage(error),
@@ -120,7 +137,7 @@ export function projectHandler<Key extends SocketProjectedKey>(
  * on to the socket's generic door exactly as it did when the table called
  * the verb directly.
  */
-export function servedVerb<Key extends AgentHandlerKey>(
+export function servedVerb<Key extends SocketServedKey>(
   key: Key,
   envSession: AgentVerbBinding["envSession"],
 ): ProjectedVerbBinding<Key> {
@@ -129,7 +146,7 @@ export function servedVerb<Key extends AgentHandlerKey>(
     envSession,
     (context, request) => ({
       input: {
-        request,
+        request: withoutCredentials(request),
         projects: context.projects,
         envSession: context.envSession,
         envSessionTerminal: context.envSessionTerminal,
@@ -140,15 +157,34 @@ export function servedVerb<Key extends AgentHandlerKey>(
       reply: (output) => output,
     }),
     (error) => {
-      if (isHandlerRefused(error)) {
-        return failure("FORBIDDEN_ACTOR", error.message, error.hint ?? undefined);
-      }
+      const refusal = mapRefusal(error);
+      if (refusal !== undefined) return refusal;
       if (error instanceof HandlerNotServedError) {
         return failure("APP_UNREACHABLE", errorMessage(error));
       }
       throw error;
     },
   );
+}
+
+/** A refusal at the map, as the socket's own refusal; undefined for anything else. */
+function mapRefusal(error: unknown): AgentResponse | undefined {
+  return isHandlerRefused(error)
+    ? failure("FORBIDDEN_ACTOR", error.message, error.hint ?? undefined)
+    : undefined;
+}
+
+/**
+ * The request a served verb's entry is asked, with the door's credentials
+ * left behind: the attachment token and the operator token prove who called
+ * at the door, which judged them, and no verb reads them. The `VOLLI_SESSION`
+ * claim stays, because verbs resolve a caller's project from it.
+ */
+function withoutCredentials(request: AgentRequest): AgentRequest {
+  const env = { ...request.ctx.env };
+  delete env.token;
+  delete env.operatorToken;
+  return { ...request, ctx: { ...request.ctx, env } };
 }
 
 /**

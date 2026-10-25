@@ -19,7 +19,11 @@ import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { RetentionReclaimSeams } from "@volli/host-core/maintenance";
 import { getProjectById, getTicket } from "@volli/host-core/db";
 import type { BoardChangeFeed } from "@volli/host-core/board";
-import { createHostHandlers, type SessionReadPort } from "@volli/host-core/handlers";
+import {
+  createHostHandlers,
+  type HostHandlerMap,
+  type SessionReadPort,
+} from "@volli/host-core/handlers";
 import type { LogRing } from "@volli/host-core/log";
 import { SecretService } from "@volli/host-core/secrets";
 import { AgentObservability, hostMcpDispatch, hostCodeMode } from "@volli/host-core/integrations";
@@ -247,6 +251,10 @@ export function createHeadlessSessionRuntime(input: {
     decisions,
     delegation,
   });
+  /** The host's one handler map, built at the first `ready()` and handed to every door. */
+  let hostHandlers: HostHandlerMap | undefined;
+  /** The agent command service's Session reads, which the map forwards to once served. */
+  let sessionReads: SessionReadPort | undefined;
   const agents = facade.agents({
     host,
     delegation,
@@ -254,6 +262,8 @@ export function createHeadlessSessionRuntime(input: {
     mcpSettings,
     events: ports.events,
     log: ports.log,
+    // The tool door projects the same one map as the socket (VC-923).
+    handlers: () => hostHandlers ?? null,
   });
   const lifecycle = createSessionRuntimeLifecycle({
     venue: options.venue,
@@ -326,7 +336,6 @@ export function createHeadlessSessionRuntime(input: {
       if (sessions === null || runtime === null)
         throw new Error("The headless Session runtime is unavailable.");
       automations.start(recoveredSessionAutomationPorts(ready));
-      agents.toolDoor(ready);
       const busyWorktreeSites: BusyWorktreeSites = async (target) => {
         // No terminals are composed on this host. When a terminal port lands,
         // its live cwds must join this supplier rather than bypassing the guard.
@@ -372,9 +381,53 @@ export function createHeadlessSessionRuntime(input: {
               onCreated: (project) =>
                 ports.events.publish("data-changed", { projectId: project.id }),
             });
-      let sessionReads: SessionReadPort | undefined;
+      const commandPorts = recoveredSessionCommandPorts(ready);
+      // The host's one handler map (VC-668): every door this host serves
+      // projects it. hostd keeps no experiments and composes no terminals,
+      // so those handlers answer unavailable and a backward move interrupts
+      // nothing a terminal holds.
+      hostHandlers ??= createHostHandlers(ports, {
+        db,
+        dataDir: host.dataDir,
+        runtime,
+        sessions,
+        // The start both agent doors reach (VC-923): its kickoff and its title.
+        ...(commandPorts.submitSessionMessage === undefined
+          ? {}
+          : { submitSessionMessage: commandPorts.submitSessionMessage }),
+        ...(commandPorts.refineAutoTitle === undefined
+          ? {}
+          : { refineAutoTitle: commandPorts.refineAutoTitle }),
+        pictures: assembly.pictures,
+        modelAccess: piRuntimeHost,
+        experiments: null,
+        automations,
+        busyWorktreeSites,
+        // The host's one worktree read service (VC-788): a scope switch's
+        // materialization and a Done trim retire the answers it holds.
+        worktreeReads: host.worktreeReads,
+        detachedWork: host.detachedWork,
+        // Served before any door opens: hostd hands it over before it
+        // settles the socket or starts the listener.
+        sessionReads: (verb, workspaceId, args) => sessionReads!(verb, workspaceId, args),
+        signIns,
+        workspaces,
+        logs: input.logs ?? null,
+        // The listing rows (VC-713): the same rows the desktop's own
+        // listing builds, live-ness from this process's executor bindings.
+        sessionListing: {
+          db,
+          listSessions: (query) => sessionEngine.listSessions(query),
+          liveAttachmentIds: () =>
+            new Set(runtime.openNativeBindings().map((binding) => binding.attachmentId)),
+        },
+        ...(input.boardFeed === undefined ? {} : { boardFeed: input.boardFeed }),
+        ticketSignals: (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
+      });
+      // Its verbs are served into the map just built (VC-923).
+      agents.toolDoor(ready);
       return {
-        ...recoveredSessionCommandPorts(ready),
+        ...commandPorts,
         /**
          * Hands the map its Session reads (VC-663, D4): the agent command
          * service's Workspace-scoped `executeInWorkspace`, which is built
@@ -386,41 +439,7 @@ export function createHeadlessSessionRuntime(input: {
         venue: options.venue,
         verifySessionToken: tokens.verify,
         automationsAvailable: automations.kind === "live" && automations.execution.kind === "ready",
-        // The host's one handler map (VC-668): every door this host serves
-        // projects it. hostd keeps no experiments and composes no terminals,
-        // so those handlers answer unavailable and a backward move interrupts
-        // nothing a terminal holds.
-        handlers: createHostHandlers(ports, {
-          db,
-          dataDir: host.dataDir,
-          runtime,
-          sessions,
-          pictures: assembly.pictures,
-          modelAccess: piRuntimeHost,
-          experiments: null,
-          automations,
-          busyWorktreeSites,
-          // The host's one worktree read service (VC-788): a scope switch's
-          // materialization and a Done trim retire the answers it holds.
-          worktreeReads: host.worktreeReads,
-          detachedWork: host.detachedWork,
-          // Served before any door opens: hostd hands it over before it
-          // settles the socket or starts the listener.
-          sessionReads: (verb, workspaceId, args) => sessionReads!(verb, workspaceId, args),
-          signIns,
-          workspaces,
-          logs: input.logs ?? null,
-          // The listing rows (VC-713): the same rows the desktop's own
-          // listing builds, live-ness from this process's executor bindings.
-          sessionListing: {
-            db,
-            listSessions: (query) => sessionEngine.listSessions(query),
-            liveAttachmentIds: () =>
-              new Set(runtime.openNativeBindings().map((binding) => binding.attachmentId)),
-          },
-          ...(input.boardFeed === undefined ? {} : { boardFeed: input.boardFeed }),
-          ticketSignals: (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
-        }),
+        handlers: hostHandlers,
       };
     },
   };

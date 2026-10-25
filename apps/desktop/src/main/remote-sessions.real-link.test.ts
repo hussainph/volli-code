@@ -174,6 +174,8 @@ async function box(features: readonly string[] = FEATURES) {
   // then attach — what `Sessions.create`/`attach` do, without prompt
   // resources, worktrees or a model catalog.
   const sessions: NonNullable<Parameters<typeof createHostHandlers>[1]["sessions"]> = {
+    // The agent doors' start (VC-923) is not what this suite drives.
+    start: () => Promise.reject(new Error("This suite starts no Ticket Session.")),
     async create(input) {
       const created = await runtime.command({
         commandId: `${input.operationId}:create`,

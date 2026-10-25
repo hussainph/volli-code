@@ -43,16 +43,9 @@ import type {
   TicketEventActor,
   TranscriptReference,
 } from "@volli/shared";
-import type {
-  DataChangedEvent,
-  HarnessEventNotice,
-  SessionHarnessNotice,
-  SessionStartedNotice,
-} from "@volli/shared";
+import type { DataChangedEvent, HarnessEventNotice, SessionHarnessNotice } from "@volli/shared";
 
 import type { NotificationOutcome, NotificationRequest } from "@volli/shared";
-import type { AutoTitleRequest } from "../session-runtime/auto-title";
-import type { Sessions } from "../session-runtime/sessions";
 import type { HandlerPolicy, HostHandlerMap } from "../handlers/handler-map";
 import type { RunGitAsync } from "../worktree";
 import type { WorktreeReadService } from "../worktree-reads";
@@ -145,53 +138,6 @@ export interface AgentCommandServiceOptions {
    * inventing one.
    */
   sessionEnv?: (cwd: string, projectRoot: string) => Promise<SessionEnvReport>;
-  /**
-   * The product Session start route (VC-13) — the same facade the renderer's
-   * `sessions.create` RPC rides, threaded in the way {@link sessionEngine} is
-   * so no parallel creation path can grow here. Raw `session.create` over
-   * this door stays FORBIDDEN. Absent means the Session runtime never came up
-   * this launch, which the verb reports as retryable.
-   */
-  sessions?: Pick<Sessions, "start">;
-  /**
-   * Submits one user message to a structured Session — the kickoff turn. The
-   * runtime answers a `message.submit` only when the TURN it started ends, so
-   * the door fires this detached and replies as the session opens; a refusal
-   * lands in the log and in the Session's own durable state, never in the
-   * caller's exit code.
-   */
-  submitSessionMessage?: (input: {
-    sessionId: string;
-    text: string;
-    /**
-     * The turn's durable ids, derived by the caller from its own operation id
-     * rather than minted here (VC-162).
-     *
-     * `message.submit` is deduplicated by command id in the Session Engine, so
-     * whether a replayed start sends one kickoff or two is decided entirely by
-     * whether this id is stable. Minting it here — which is what this port used
-     * to do — made every replay a second turn, which no caller could fix from
-     * outside.
-     */
-    commandId: string;
-    messageId: string;
-  }) => Promise<void>;
-  /**
-   * Fires one model-call title refinement (VC-81) behind a kickoff-derived
-   * heuristic title, using the model ladder — utility default, then the
-   * Session's own model, then the Role's default. Never fires for an
-   * explicit `--title` (that is already a person's choice), and never
-   * rejects: the heuristic is the fallback the titler keeps on failure.
-   * Absent means no model refinement this launch — heuristic only.
-   */
-  refineAutoTitle?: (input: AutoTitleRequest) => void;
-  /**
-   * Called after `session.start` opens a Session, with everything the
-   * renderer's toast says and targets. A notice, not a navigation: the app
-   * must never move or steal focus because a start landed — the toast's
-   * action is the only door into the new session's tab.
-   */
-  onSessionStarted?: (notice: SessionStartedNotice) => void;
   /**
    * The host's handler map (VC-668), which this door projects: every verb is
    * bound in `table.ts` as a projection of `handlers[key]`, never as a
@@ -365,8 +311,8 @@ export interface PendingHarnessLaunch {
  * the service RESOLVED once at construction — a default applied, or a map it
  * owns — so a handler cannot accidentally use an unresolved `options.now`.
  *
- * Since VC-923 a verb's handler is the map's entry for its key
- * (`agent-dispatch/verbs.ts`), and this is the context that entry builds for
+ * A verb's handler is the map's entry for its key (VC-923,
+ * `agent-dispatch/verbs.ts`), and this is the context that entry builds for
  * it, from the service's state and the request the door resolved
  * ({@link AgentVerbInput}). The door's own context adds its policy at the map
  * ({@link AgentCommandContext}).
@@ -498,6 +444,13 @@ export interface AgentVerbContext {
  * projects it listed, who `VOLLI_SESSION` names, who the token authenticated,
  * and the attribution. Plain data, no port: the entry builds the rest of its
  * context from the service's own state, so each door owes only these facts.
+ *
+ * The entry trusts these facts: identity reaches it here, as the door
+ * resolved it, not through the call. That is safe because only the socket's
+ * policy admits a socket verb's key (the catalog's refuse every agent key, the
+ * tool door's admits only its own call's verb), and the socket resolved them
+ * from a token it verified. The door's credentials themselves stay behind:
+ * `request` reaches the entry without the attachment or operator token.
  */
 export interface AgentVerbInput {
   readonly request: AgentRequest;
@@ -515,8 +468,9 @@ export interface AgentVerbInput {
 export interface AgentCommandContext extends AgentVerbContext {
   /**
    * Who the door authenticated, as host history attributes a caller: the
-   * call a projected verb with no {@link AgentVerbContext.actor} of its own
-   * is made under at the map. Never a grant: admission ran off the token.
+   * `HandlerCall` a served verb with no {@link AgentVerbContext.actor} of its
+   * own (a read, or a verb that skips identity) is invoked under, so the map
+   * is always told who called. Never a grant: admission ran off the token.
    */
   readonly doorActor: TicketEventActor;
   /**
@@ -530,7 +484,8 @@ export interface AgentCommandContext extends AgentVerbContext {
 
 /**
  * One verb's handler: the named function that replaced its branch of the
- * chain. Uniformly async, so the table holds one shape rather than two.
+ * chain. Uniformly async, so the handler table holds one shape rather than
+ * two.
  */
 export type AgentVerbHandler = (
   context: AgentVerbContext,

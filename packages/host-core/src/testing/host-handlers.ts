@@ -11,12 +11,14 @@
  */
 import type Database from "better-sqlite3";
 import {
-  AGENT_HANDLER_KEYS,
   CATALOG_HANDLER_KEYS,
+  SERVED_AGENT_HANDLER_KEYS,
+  SHARED_AGENT_HANDLER_KEYS,
   type DataChangedEvent,
   type HandlerCall,
   type HostHandlerKey,
   type NotificationRequest,
+  type SessionStartedNotice,
   type TicketMovedNotice,
 } from "@volli/shared";
 
@@ -27,7 +29,11 @@ import {
   type AdmissionObserver,
   type HostHandlerMap,
 } from "../handlers/handler-map";
-import { createHostHandlers, type HostHandlers } from "../handlers/host-handlers";
+import {
+  createHostHandlers,
+  type HostHandlerOptions,
+  type HostHandlers,
+} from "../handlers/host-handlers";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import type { HostSessionPorts } from "../session-services";
 import { runGitCapturingAsync, type RunGitAsync } from "../worktree";
@@ -57,6 +63,16 @@ export interface TestHandlerPorts {
   /** Sees every policy verdict at the map, before the handler it admits. */
   readonly onAdmission?: AdmissionObserver;
   /**
+   * The Sessions facade verbs a test drives (the start, VC-923); the map's
+   * Session commands reach them, and an absent facade answers unavailable.
+   */
+  readonly sessions?: Partial<NonNullable<HostHandlerOptions["sessions"]>>;
+  /** The start's kickoff delivery and title refinement (VC-923). */
+  readonly submitSessionMessage?: HostHandlerOptions["submitSessionMessage"];
+  readonly refineAutoTitle?: HostHandlerOptions["refineAutoTitle"];
+  /** Sees every start notice the map publishes. */
+  readonly onSessionStarted?: (notice: SessionStartedNotice) => void;
+  /**
    * Builds the Done trim's worktree bundle the way production does
    * (`worktreeDeps`), with attachments under this data directory, instead
    * of the test's `git`/`gitAsync` bundle.
@@ -75,6 +91,7 @@ export function testHostHandlers(ports: TestHandlerPorts): HostHandlerMap {
       publish: (topic: string, payload: unknown) => {
         if (topic === "data-changed")
           ports.onMutation?.(payload as Omit<DataChangedEvent, "entity">);
+        if (topic === "session-started") ports.onSessionStarted?.(payload as SessionStartedNotice);
       },
     },
     attention: {
@@ -98,7 +115,11 @@ export function testHostHandlers(ports: TestHandlerPorts): HostHandlerMap {
     db: ports.db,
     dataDir: ports.productionWorktree?.dataDir ?? "",
     runtime: null,
-    sessions: null,
+    sessions: (ports.sessions ?? null) as HostHandlerOptions["sessions"],
+    ...(ports.submitSessionMessage === undefined
+      ? {}
+      : { submitSessionMessage: ports.submitSessionMessage }),
+    ...(ports.refineAutoTitle === undefined ? {} : { refineAutoTitle: ports.refineAutoTitle }),
     modelAccess: null,
     experiments: null,
     automations,
@@ -141,16 +162,16 @@ export function sealTestHandlers(
   onAdmission?: AdmissionObserver,
 ): HostHandlerMap {
   const total: Record<string, unknown> = {};
-  for (const key of CATALOG_HANDLER_KEYS) {
+  for (const key of [...CATALOG_HANDLER_KEYS, ...SHARED_AGENT_HANDLER_KEYS]) {
     total[key] =
       entries[key] ??
       (() => {
         throw new Error(`This test states no ${key} handler.`);
       });
   }
-  // An agent-door key the test states is sealed; the rest stay empty for the
-  // agent command service to serve (VC-923), exactly as on a host's map.
-  for (const key of AGENT_HANDLER_KEYS) {
+  // A door's own verb the test states is sealed; the rest stay empty for the
+  // agent doors to serve (VC-923), exactly as on a host's map.
+  for (const key of SERVED_AGENT_HANDLER_KEYS) {
     if (entries[key] !== undefined) total[key] = entries[key];
   }
   return sealHostHandlers(total as unknown as HostHandlers, onAdmission);

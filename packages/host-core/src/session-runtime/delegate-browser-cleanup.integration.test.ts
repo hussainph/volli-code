@@ -45,6 +45,7 @@ import { createPiNativeAdapter } from "./pi-adapter";
 import type { SessionStartInput } from "./sessions";
 import { supervisionMarker } from "./supervise-session";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
+import { testHostHandlers } from "../testing/host-handlers";
 
 function deferred() {
   let resolve!: () => void;
@@ -399,10 +400,9 @@ function fixture(role: "project" | "ticket", options: { shells?: BackgroundShell
   const door = createAgentToolDoor({
     db: database.db,
     projects: () => listProjects(database.db),
-    sessions: () => null,
+    handlers: testHostHandlers({ db: database.db }),
     delegation: createTicketSessionDelegationStore(database.db),
     automations: () => null,
-    actorTicketDisplay: () => null,
     now: () => clock++,
     authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
     watches: () => watches,

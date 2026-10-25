@@ -33,6 +33,7 @@ import { openRawDb, openTestDb, testProject, testTicket, type TestDb } from "../
 import type { McpProtocolClient } from "./discovery";
 import { serversForFrozenMcpTools } from "./session-host";
 import { McpSettingsService } from "./settings";
+import { testHostHandlers } from "../testing/host-handlers";
 
 let ctx: TestDb;
 /** A handle a test reopened after a simulated relaunch, so `afterEach` can close it. */
@@ -135,10 +136,7 @@ function harness(options: HarnessOptions = {}) {
       { id: "project-one", name: "Volli", path: "/repo/volli" } as never,
       { id: "project-two", name: "Other", path: "/repo/other" } as never,
     ],
-    sessions: () => null,
-    submitSessionMessage: async () => {},
-    onSessionStarted: () => {},
-    actorTicketDisplay: () => null,
+    handlers: testHostHandlers({ db }),
     now: () => 1_000,
     delegation: {
       startGrantScope: () => null,

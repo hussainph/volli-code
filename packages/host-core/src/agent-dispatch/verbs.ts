@@ -3,7 +3,8 @@
  *
  * Every socket verb that is neither a catalog command nor a ticket write
  * projected onto a board key is its own key on the map (`AgentHandlerKey`),
- * and {@link AGENT_VERB_HANDLERS} is what answers each one: the verb's handler,
+ * and {@link AGENT_VERB_HANDLERS} is what answers each one but the start
+ * (the map's own command, shared with the Agent Tool Surface): the verb's handler,
  * unchanged, run against a context built from the agent command service's
  * state and the request the door resolved. The socket's `AGENT_VERB_TABLE`
  * binds every one of them only as a projection of `handlers[key]`
@@ -19,10 +20,10 @@
  * unavailable.
  */
 
-import type { AgentHandlerKey, SessionProjection, SessionRecord } from "@volli/shared";
+import type { SessionProjection, SessionRecord } from "@volli/shared";
 import type { SessionEngine } from "@volli/session-engine";
 
-import type { HostHandlers } from "../handlers/host-handlers";
+import type { HostHandlers, SocketServedKey } from "../handlers/host-handlers";
 import { terminalSessionRecord } from "../session-control";
 import type { AgentVerbContext, AgentVerbHandler, AgentVerbInput } from "./context";
 import { doctorVerb, modelListVerb, notifyVerb, promptBaselineVerb } from "./app-verbs";
@@ -31,7 +32,6 @@ import { costVerb } from "./cost-verb";
 import { hookVerb, sessionHarnessVerb, sessionLinkVerb } from "./harness-verbs";
 import { labelMergeVerb } from "./label-verbs";
 import { projectAddVerb } from "./project-verbs";
-import { sessionStartVerb } from "./operator-session-start";
 import {
   boardVerb,
   identifyVerb,
@@ -47,12 +47,14 @@ import { ticketSignalVerb } from "./ticket-verbs";
 import { worktreeDiffVerb, worktreeStatusVerb, worktreeSyncVerb } from "./worktree-verbs";
 
 /**
- * Each agent key's handler, in the Verb Registry's declaration order. Total
- * over `AgentHandlerKey`, so a socket verb that gains no catalog key and no
- * handler does not compile, and neither does a handler for a key the map
- * does not hold.
+ * Each of the socket's own verbs' handlers, in the Verb Registry's
+ * declaration order. Total over the socket's served keys, so a socket verb
+ * that gains no catalog key and no handler does not compile, and neither does
+ * a handler for a key the map does not hold. `session.start` is not here: the
+ * person's operator start and the named tool share the map's own start
+ * command, which the table projects.
  */
-export const AGENT_VERB_HANDLERS: { readonly [Key in AgentHandlerKey]: AgentVerbHandler } = {
+const AGENT_VERB_HANDLERS: { readonly [Key in SocketServedKey]: AgentVerbHandler } = {
   identify: identifyVerb,
   board: boardVerb,
   "ticket.list": ticketListVerb,
@@ -70,7 +72,6 @@ export const AGENT_VERB_HANDLERS: { readonly [Key in AgentHandlerKey]: AgentVerb
   "label.merge": labelMergeVerb,
   "model.list": modelListVerb,
   cost: costVerb,
-  "session.start": sessionStartVerb,
   "session.done": sessionDoneVerb,
   "session.blocked": sessionBlockedVerb,
   "session.link": sessionLinkVerb,
@@ -130,9 +131,9 @@ export function rosterLoaders(
  */
 export function agentVerbEntries(
   state: AgentVerbServiceState,
-): Pick<HostHandlers, AgentHandlerKey> {
-  const entries: Partial<Record<AgentHandlerKey, HostHandlers[AgentHandlerKey]>> = {};
-  for (const key of Object.keys(AGENT_VERB_HANDLERS) as AgentHandlerKey[]) {
+): Pick<HostHandlers, SocketServedKey> {
+  const entries: Partial<Record<SocketServedKey, HostHandlers[SocketServedKey]>> = {};
+  for (const key of Object.keys(AGENT_VERB_HANDLERS) as SocketServedKey[]) {
     const handle = AGENT_VERB_HANDLERS[key];
     entries[key] = (input) =>
       handle(
@@ -148,5 +149,5 @@ export function agentVerbEntries(
         input.request,
       );
   }
-  return entries as Pick<HostHandlers, AgentHandlerKey>;
+  return entries as Pick<HostHandlers, SocketServedKey>;
 }

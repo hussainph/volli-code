@@ -8,7 +8,7 @@
  * Registry's own handler binding. What is left here is the part that is the
  * same for every verb — list the projects, resolve what this verb's table
  * entry asks for, call it — plus the seams the composition root injects.
- * Since VC-923 "call it" is the map's: every verb's handler is an entry of the
+ * "Call it" is the map's (VC-923): every verb's handler is an entry of the
  * host's handler map, and this service serves its own verbs' entries into the
  * map it is handed (`agent-dispatch/verbs.ts`).
  *
@@ -21,7 +21,12 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 
-import { AGENT_COMMAND_BINDINGS, verbEntry, makeAgentError } from "@volli/shared";
+import {
+  AGENT_COMMAND_BINDINGS,
+  SERVED_AGENT_HANDLER_KEYS,
+  verbEntry,
+  makeAgentError,
+} from "@volli/shared";
 import type {
   AgentRequest,
   AgentResponse,
@@ -57,6 +62,8 @@ export { CHAT_PEEK_ENTRIES } from "./agent-dispatch/session-verbs";
 export type { AgentCommandService, AgentCommandServiceOptions } from "./agent-dispatch/context";
 
 import type { AgentCommandService, AgentCommandServiceOptions } from "./agent-dispatch/context";
+
+const SOCKET_SERVED: ReadonlySet<string> = new Set(SERVED_AGENT_HANDLER_KEYS);
 
 export function createAgentCommandService(
   options: AgentCommandServiceOptions,
@@ -248,6 +255,7 @@ export function createAgentCommandService(
         if (!resolved.ok) return resolved.response;
         actor = resolved.actor;
       }
+      const projected = projectedHandlerKey(binding);
       const context: AgentCommandContext = {
         options,
         now,
@@ -267,8 +275,18 @@ export function createAgentCommandService(
         authenticatedSessionId: door.kind === "session" ? door.sessionId : null,
         actor,
         doorActor: doorCallActor(door, envSession),
-        handlerPolicy: socketHandlerPolicy(request, projectedHandlerKey(binding), () =>
-          coordinationRefusal(readPolicy, projects, envSession, request, door),
+        handlerPolicy: socketHandlerPolicy(
+          request,
+          projected,
+          // A key other doors also reach (a catalog or board command) is judged
+          // again at the map. One of this socket's own verbs is reachable
+          // through no other door (the catalog's policies refuse it), and its
+          // map call follows this line with no await between, over a
+          // synchronous store: the verdict above is the map's, so the hot path
+          // (`hook`) reads its project's policy once, as it always has.
+          projected !== undefined && SOCKET_SERVED.has(projected)
+            ? () => refusal
+            : () => coordinationRefusal(readPolicy, projects, envSession, request, door),
         ),
       };
       return auditOperatorWrite(door, request, await binding.handle(context, request));

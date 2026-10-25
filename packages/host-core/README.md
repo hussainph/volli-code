@@ -856,11 +856,17 @@ makes its handlers throw `OperationUnavailableError` rather than leaving a
 hole.
 
 The agent doors' keys are the socket's own verbs (`identify`, `hook`,
-`worktree.sync`, `session.done`, …): their handlers
-(`agent-dispatch/verbs.ts`) need the agent command service's ports, which a
-root composes after the map, so the map is sealed without them and
-`createAgentCommandService` serves them into the map it is handed, once.
-Until it does they answer unavailable, and no catalog policy admits them.
+`worktree.sync`, `session.done`, …) and the Agent Tool Surface's
+(`session.send`, `mcp.*`, `watch`, …). Their handlers need the door's ports,
+which a root composes after the map, so the map is sealed without them:
+`createAgentCommandService` (`agent-dispatch/verbs.ts`) and
+`createAgentToolDoor` each serve theirs into the map they are handed, once.
+Until then they answer unavailable, and no catalog policy admits them.
+`session.start`, on both agent doors, is the map's own start command, built
+from the Sessions facade and the kickoff and title ports a root passes
+(`submitSessionMessage`, `refineAutoTitle`). The Session runtime's agent
+staging builds the tool door over the root's map (`handlers`, read per
+recovered services).
 
 Desktop main also passes `remoteHosts` (`RemoteHostsPort`,
 `handlers/remote-hosts-port.ts`, VC-700): its registry of hosts added over

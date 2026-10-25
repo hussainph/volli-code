@@ -1,6 +1,6 @@
 /**
- * Which catalog keys the host's handler map answers (VC-668; HP § Command
- * catalog, "One handler map").
+ * Which keys the host's handler map answers (VC-668; HP § Command catalog,
+ * "One handler map"): the catalog's, and the agent doors' own (VC-923).
  *
  * The map itself lives in `@volli/host-core/handlers`: a total mapping from
  * {@link HostHandlerKey} to the one function every door's projection calls.
@@ -13,11 +13,13 @@ import type { TicketEventActor } from "./ticket-events";
 import {
   AGENT_COMMAND_BINDINGS,
   CATALOG_ENTRIES,
+  VERB_TOOL_KEYS,
   type AgentCommandBindingId,
   type CatalogKey,
   type CatalogKeyOf,
   type VerbEntry,
   type VerbKey,
+  type VerbToolKey,
 } from "./verb-registry";
 
 /**
@@ -89,22 +91,50 @@ export type SocketBoardProjections = typeof SOCKET_BOARD_PROJECTIONS;
 
 /**
  * The agent doors' own keys (VC-923): every socket verb that is neither a
- * catalog command nor a ticket write projected onto a board key. They are
- * entries of the same one map as the catalog's, reached only through it and
- * only under a door's policy, so the socket's verb table is a table of
- * projections like every other door's. No catalog door reaches them: their
- * entries have no catalog declaration, so the catalog's policies refuse them.
+ * catalog command nor a ticket write projected onto a board key, and every
+ * verb of the Agent Tool Surface. They are entries of the same one map as the
+ * catalog's, reached only through it and only under a door's policy, so the
+ * socket's verb table and the tool door's are tables of projections like
+ * every other door's. No catalog door reaches them: their entries have no
+ * catalog declaration, so the catalog's policies refuse them.
  *
- * Their handlers are the agent socket's own verbs, whose ports (the
- * Session Engine, the attachments, the host's environment facts) are the
- * agent command service's composition: that service serves them into the map
- * it was handed (`serveHostHandlers`), and until it does they answer
+ * `session.start` is on both agent doors (the person's operator CLI and the
+ * named tool), and so is one entry: the start command, built by the map like
+ * any catalog command. Every other agent key is one door's own verb, whose
+ * ports (the Session Engine, the attachments, the delegation and watch
+ * registries, the host's environment facts) are that door's composition: the
+ * agent command service and the tool door each serve theirs into the map they
+ * were handed (`serveHostHandlers`), and until they do those answer
  * unavailable.
  */
 export type AgentHandlerKey = Exclude<
-  AgentCommandBindingId,
+  AgentCommandBindingId | VerbToolKey,
   CatalogKey | DesktopKey | keyof SocketBoardProjections
 >;
+
+type AssertNever<Type extends never> = Type;
+
+/**
+ * The agent keys BOTH agent doors serve, whose one entry the map builds itself
+ * rather than either door serving it (VC-923): today the start, which is the
+ * person's operator CLI verb and the named `session_start` tool. Checked
+ * against the registry: a verb on both agent doors that is missing here, or a
+ * key here on only one, fails `pnpm typecheck`.
+ */
+export const SHARED_AGENT_HANDLER_KEYS = Object.freeze([
+  "session.start",
+] as const satisfies readonly AgentHandlerKey[]);
+
+export type SharedAgentHandlerKey = (typeof SHARED_AGENT_HANDLER_KEYS)[number];
+
+/** Every agent key on both agent doors is a shared one, and no other is. */
+export type SharedAgentHandlerKeysExact = AssertNever<
+  | Exclude<Extract<AgentHandlerKey, AgentCommandBindingId & VerbToolKey>, SharedAgentHandlerKey>
+  | Exclude<SharedAgentHandlerKey, AgentCommandBindingId & VerbToolKey>
+>;
+
+/** The agent keys one agent door serves into the map: every agent key but the shared ones. */
+export type ServedAgentHandlerKey = Exclude<AgentHandlerKey, SharedAgentHandlerKey>;
 
 /**
  * Every key the host's ONE handler map answers: the catalog's
@@ -113,8 +143,6 @@ export type AgentHandlerKey = Exclude<
  * `pnpm typecheck`.
  */
 export type HostHandlerKey = CatalogHandlerKey | AgentHandlerKey;
-
-type AssertNever<Type extends never> = Type;
 
 /** No desktop-only key is a Verb Registry key: one key, one tier. */
 export type DesktopKeysDisjoint = AssertNever<Extract<DesktopKey, VerbKey>>;
@@ -224,11 +252,21 @@ const catalogued: ReadonlySet<string> = new Set([
   ...Object.keys(SOCKET_BOARD_PROJECTIONS),
 ]);
 
-/** {@link AgentHandlerKey}, at runtime, in the Verb Registry's declaration order. */
+/**
+ * {@link AgentHandlerKey}, at runtime: the socket's, in the Verb Registry's
+ * declaration order, then the tool surface's that the socket does not hold.
+ */
 export const AGENT_HANDLER_KEYS: readonly AgentHandlerKey[] = Object.freeze(
-  [...new Set(Object.values(AGENT_COMMAND_BINDINGS))].filter(
+  [...new Set<string>([...Object.values(AGENT_COMMAND_BINDINGS), ...VERB_TOOL_KEYS])].filter(
     (key) => !catalogued.has(key),
   ) as AgentHandlerKey[],
+);
+
+const shared: ReadonlySet<string> = new Set(SHARED_AGENT_HANDLER_KEYS);
+
+/** {@link ServedAgentHandlerKey}, at runtime, in {@link AGENT_HANDLER_KEYS}' order. */
+export const SERVED_AGENT_HANDLER_KEYS: readonly ServedAgentHandlerKey[] = Object.freeze(
+  AGENT_HANDLER_KEYS.filter((key) => !shared.has(key)) as ServedAgentHandlerKey[],
 );
 
 /** {@link HostHandlerKey}, at runtime: the catalog's keys, then the agent doors'. */

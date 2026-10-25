@@ -21,7 +21,7 @@
  *   that one verb has one binding: `packages/cli` answers both locally, and a
  *   second implementation is what the declaration exists to make impossible.
  *
- * Since VC-923 an entry no longer holds its verb's handler. The handler is
+ * An entry does not hold its verb's handler (VC-923). The handler is
  * the host handler map's entry for the verb's key (`./verbs.ts` for the
  * socket's own verbs), and the entry here is the door's projection of it:
  * what the dispatch resolves first, and how the request maps onto the
@@ -34,6 +34,7 @@
 import type { AgentCommandBindingId, SocketHandlerKey } from "@volli/shared";
 
 import type { SocketVerbHandle } from "./context";
+import { sessionStartDecode, sessionStartFailure } from "./operator-session-start";
 import {
   sessionAnswerVerb,
   sessionListVerb,
@@ -64,7 +65,7 @@ import {
  *
  * There used to be a second policy here — whether the dispatch folded every
  * project's Sessions before calling the handler — declared per verb beside
- * this one. VC-403 retired it: `AgentCommandContext.loadProjections` /
+ * this one. VC-403 retired it: `AgentVerbContext.loadProjections` /
  * `loadSessions` fold the roster lazily and memoized, so a verb that never
  * calls either one simply never pays for the fold, with no policy needed to
  * say so up front. `VOLLI_SESSION` identity stays a real per-verb choice —
@@ -80,8 +81,8 @@ import {
 type EnvSessionPolicy = "resolve" | "skip";
 
 /**
- * One verb's binding: the handler that answers it, and what the dispatch
- * resolves on its behalf first.
+ * One verb's binding: the projection (or, for a delegated read, the handler)
+ * that answers it, and what the dispatch resolves on its behalf first.
  *
  * The policy sits HERE, beside the handler, rather than in a condition inside
  * the dispatch. In the chain it was two `request.cmd` tests listing six verbs
@@ -173,8 +174,13 @@ export const AGENT_VERB_TABLE: {
   // usage projection — no Session history is folded to price a pass.
   cost: servedVerb("cost", "resolve"),
   // The person's start, on a hostd operator token only (`operatorCli`); an
-  // agent starts a Session through the named `session_start` tool.
-  "session.start": servedVerb("session.start", "skip"),
+  // agent starts a Session through the named `session_start` tool. Both reach
+  // the map's one start command (VC-923).
+  "session.start": projectHandler("session.start", {
+    decode: sessionStartDecode,
+    failed: sessionStartFailure,
+    envSession: "skip",
+  }),
   // The four Session reads the map delegates the other way (VC-663, D4): the
   // WebSocket's `session.list` (and its siblings) runs THIS handler, Workspace-
   // scoped, so the socket keeps it.
