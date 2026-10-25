@@ -28,6 +28,7 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { SignOutIcon } from "@phosphor-icons/react/dist/csr/SignOut";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { UserCircleIcon } from "@phosphor-icons/react/dist/csr/UserCircle";
+// TODO: use #1014’s shared legal URLs and keep this checkbox as the only sign-in disclosure.
 import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared";
 import type {
   AccountConnection,

@@ -59,10 +59,10 @@ export function hasPreviewAgreement(user: Doc<"users">): boolean {
   );
 }
 
-function agreementRequired() {
+function agreementRequired(message = PREVIEW_AGREEMENT_REQUIRED_MESSAGE) {
   return new ConvexError({
     code: "preview_agreement_required",
-    message: PREVIEW_AGREEMENT_REQUIRED_MESSAGE,
+    message,
   });
 }
 
@@ -73,9 +73,11 @@ export async function recordPreviewAgreement(
   version: string | undefined,
 ): Promise<Viewer> {
   if (version === undefined) return viewer;
-  if (version !== PREVIEW_ENROLLMENT_AGREEMENT_VERSION) throw agreementRequired();
-  if ((await previewAccess(ctx, viewer)) !== "granted" || hasPreviewAgreement(viewer.user))
-    return viewer;
+  if ((await previewAccess(ctx, viewer)) !== "granted") return viewer;
+  if (version !== PREVIEW_ENROLLMENT_AGREEMENT_VERSION) {
+    throw agreementRequired("Update Volli to accept the current Preview Agreement.");
+  }
+  if (hasPreviewAgreement(viewer.user)) return viewer;
   const fields = { previewAgreementVersion: version, previewAgreementAcceptedAt: Date.now() };
   await ctx.db.patch(viewer.user._id, fields);
   return { ...viewer, user: { ...viewer.user, ...fields } };

@@ -429,8 +429,16 @@ requires the current receipt as well as invitation. Account replies include
 `previewAgreementAccepted`; missing/unknown acceptance fails the desktop gate
 closed and offers sign-out/reacceptance. The temporary enrollment version
 constant has a one-line TODO to switch to the legal pages' shared constant
-once that change lands. Legal text still requires owner approval before the
+once that change lands. Waitlisted people must accept again after invitation;
+no receipt is stored before they are invited. Only the current receipt is
+kept on the person row. Legal text still requires owner approval before the
 preview ships.
+
+Deploy the backend before a desktop that sends the new optional agreement
+argument: an older backend rejects unknown arguments. Older canaries cannot
+submit agreement acceptance, so they must update before setting up, creating
+or accepting Workspaces. A stale submitted agreement version explicitly asks
+the person to update Volli; sign-out alone cannot update a compiled version.
 
 CI holds the backend preview gate and the desktop launch gate at 100%
 statements, branches, functions and lines. Backend transport tests also
