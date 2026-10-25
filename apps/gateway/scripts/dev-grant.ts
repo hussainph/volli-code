@@ -14,7 +14,7 @@
  * The provider key is read from the environment so it never lands in shell
  * history; it is sealed into the grant and only the Worker can open it.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -64,12 +64,22 @@ if (!providerKey) {
   process.exit(2);
 }
 
-let state: { issuer: DevIssuer; sealingKey: DevSealingKey };
-if (existsSync(statePath)) {
-  state = JSON.parse(readFileSync(statePath, "utf8"));
-} else {
+type DevState = { issuer: DevIssuer; sealingKey: DevSealingKey };
+
+function readState(): DevState | null {
+  try {
+    return JSON.parse(readFileSync(statePath, "utf8")) as DevState;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+let state = readState();
+if (!state) {
   state = { issuer: await createDevIssuer(), sealingKey: await createDevSealingKey() };
-  writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+  // `wx`: never overwrite keys another run wrote in the meantime.
+  writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600, flag: "wx" });
   const vars = [
     `GATEWAY_ISSUER=${state.issuer.issuer}`,
     `GATEWAY_JWKS='${state.issuer.jwks}'`,
