@@ -38,67 +38,91 @@ registerHooks({
   },
 });
 
-const { TELEMETRY_EVENTS, REPORTABLE_ERROR_CODES, CUSTOM_CATALOG_ID, UNKNOWN_VERSION } =
-  await import(pathToFileURL(VOCABULARY).href);
+const {
+  TELEMETRY_EVENTS,
+  REPORTABLE_ERROR_CODES,
+  CUSTOM_CATALOG_ID,
+  UNKNOWN_VERSION,
+  MAX_TELEMETRY_ROWS,
+} = await import(pathToFileURL(VOCABULARY).href);
 
 const code = (value) => `\`${value}\``;
 
-/** A word list as inline code, or its summary when it is too long to read. */
-function words(values, summary) {
-  return summary === undefined
-    ? values.map(code).join(", ")
-    : `${summary} (${values.length} values)`;
-}
+/**
+ * Each field type: its "Type" cell, and the sentence the page's overview uses
+ * for it. Only the types the schema actually uses reach the overview.
+ */
+const FIELD_TYPES = {
+  word: {
+    cell: (field) =>
+      field.summary === undefined
+        ? `One of: ${field.values.map(code).join(", ")}`
+        : `${field.summary} (${field.values.length} values)`,
+    overview: "a word from a fixed list",
+  },
+  count: { cell: () => "Count (integer, 0 or more)", overview: "a count" },
+  integer: { cell: () => "Integer", overview: "an integer, such as an exit code" },
+  duration: { cell: () => "Duration in milliseconds", overview: "a duration" },
+  rate: {
+    cell: () => "Fraction, above 0 and at most 1",
+    overview: "a fraction, such as a sampling rate",
+  },
+  flag: { cell: () => "true or false", overview: "true or false" },
+  version: {
+    cell: () => `A release version such as ${code("0.3.0")}, or ${code(UNKNOWN_VERSION)}`,
+    overview: `a release version, or ${code(UNKNOWN_VERSION)}`,
+  },
+  provider: {
+    cell: () => `A provider id from the model catalog Volli ships, or ${code(CUSTOM_CATALOG_ID)}`,
+    overview: `a provider or model id from the model catalog Volli ships, or ${code(CUSTOM_CATALOG_ID)}`,
+  },
+  model: {
+    cell: (field) =>
+      `A model id the model catalog Volli ships lists under ${code(field.provider)}, or ${code(CUSTOM_CATALOG_ID)}`,
+    overview: null,
+  },
+  tally: {
+    cell: (field) =>
+      `A count for each of: ${field.keys.map(code).join(", ")}. A word that counted nothing may be left out`,
+    overview: "a count for each word of a fixed list",
+  },
+  rows: {
+    cell: () => `A list of at most ${MAX_TELEMETRY_ROWS} rows, each with the fields below`,
+    overview: `a list of rows made of the above, at most ${MAX_TELEMETRY_ROWS} long`,
+  },
+};
 
-/** A field's "Type" cell. */
-function typeCell(field) {
-  switch (field.type) {
-    case "word":
-      return field.summary === undefined
-        ? `One of: ${words(field.values)}`
-        : words(field.values, field.summary);
-    case "count":
-      return "Count (integer, 0 or more)";
-    case "integer":
-      return "Integer";
-    case "duration":
-      return "Duration in milliseconds";
-    case "rate":
-      return "Fraction, above 0 and at most 1";
-    case "flag":
-      return "true or false";
-    case "catalog":
-      return catalogType(field.catalog);
-    case "tally":
-      return `A count for each of: ${words(field.keys)}. Words with no count are left out`;
-    case "rows":
-      return "A list of rows, each with the fields below";
-    default:
-      throw new Error(`unknown telemetry field type ${field.type}`);
-  }
+function fieldType(field) {
+  const type = FIELD_TYPES[field.type];
+  if (type === undefined) throw new Error(`unknown telemetry field type ${field.type}`);
+  return type;
 }
 
 /** One table row per field; a `rows` field adds its own fields under `name[].`. */
 function fieldRows(fields, prefix = "", out = []) {
   for (const [key, field] of Object.entries(fields)) {
     const optional = field.optional === true ? " (optional)" : "";
-    out.push(`| ${code(`${prefix}${key}`)}${optional} | ${typeCell(field)} | ${field.doc} |`);
+    out.push(
+      `| ${code(`${prefix}${key}`)}${optional} | ${fieldType(field).cell(field)} | ${field.doc} |`,
+    );
     if (field.type === "rows") fieldRows(field.fields, `${prefix}${key}[].`, out);
   }
   return out;
 }
 
-function catalogType(catalog) {
-  switch (catalog) {
-    case "provider":
-      return `A provider id from the model catalog Volli ships, or ${code(CUSTOM_CATALOG_ID)}`;
-    case "model":
-      return `A model id from the model catalog Volli ships, or ${code(CUSTOM_CATALOG_ID)}`;
-    case "version":
-      return `A release version such as ${code("0.3.0")}, or ${code(UNKNOWN_VERSION)}`;
-    default:
-      throw new Error(`unknown telemetry catalog ${catalog}`);
-  }
+/** The overview sentence of every field type in use, in `FIELD_TYPES` order. */
+function typesInUse() {
+  const used = new Set();
+  const walk = (fields) => {
+    for (const field of Object.values(fields)) {
+      used.add(field.type);
+      if (field.type === "rows") walk(field.fields);
+    }
+  };
+  for (const spec of Object.values(TELEMETRY_EVENTS)) walk(spec.fields);
+  return Object.entries(FIELD_TYPES)
+    .filter(([type, { overview }]) => used.has(type) && overview !== null)
+    .map(([, { overview }]) => `- ${overview}`);
 }
 
 function render() {
@@ -108,15 +132,22 @@ function render() {
     "",
     `<!-- Generated by \`node scripts/generate-telemetry-fields.mjs\` from \`${source}\`. Do not edit by hand. -->`,
     "",
-    "This page lists every event, and every field of each event, that Volli's own telemetry",
-    "service may receive. A field that is not on this page is never sent.",
+    "Volli's own telemetry will have two parts, each with its own switch: usage statistics and",
+    "crash reports. No build sends either yet. The exporter, its identifiers and its consent",
+    "controls ship separately, and are held to this page.",
     "",
-    "No build sends these events yet. The exporter and its consent controls ship separately,",
-    "and are held to this list.",
+    "## Usage statistics",
     "",
-    "Every field is one of: a word from a fixed list, a count, a duration, a true-or-false flag,",
-    "or an identifier from a catalog Volli ships. No field can hold free text. In particular,",
-    "Volli never sends:",
+    "Every usage event Volli's own telemetry service may receive is listed below, with every",
+    "property it may carry. A property that is not listed is never part of a usage event.",
+    "The identifier and timestamp each event is sent with will be described here when the",
+    "exporter ships.",
+    "",
+    "No property can hold free text. Each one is:",
+    "",
+    ...typesInUse(),
+    "",
+    "In particular, Volli never sends:",
     "",
     "- ticket, project, workspace or repository names",
     "- file paths, commands, prompts, model output or tool arguments",
@@ -130,21 +161,22 @@ function render() {
   ];
   for (const [name, spec] of Object.entries(TELEMETRY_EVENTS)) {
     lines.push(
-      `## ${code(name)}`,
+      `### ${code(name)}`,
       "",
       spec.doc,
       "",
-      "| Field | Type | Meaning |",
+      "| Property | Type | Meaning |",
       "| --- | --- | --- |",
       ...fieldRows(spec.fields),
       "",
     );
   }
   lines.push(
-    "## Error codes in crash reports",
+    "## Crash reports",
     "",
-    "A crash report keeps its stack trace but never an error's message. When the error is one",
-    "of Volli's own typed errors with one of these codes, the report carries the code instead:",
+    "Not sent yet. Crash reports will keep an error's stack trace but never its message. When",
+    "the error is one of Volli's own typed errors with one of these codes, the report carries",
+    "the code instead:",
     "",
     ...REPORTABLE_ERROR_CODES.map((value) => `- ${code(value)}`),
     "",

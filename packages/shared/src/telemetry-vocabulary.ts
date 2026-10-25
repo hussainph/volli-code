@@ -11,22 +11,23 @@
  * **The schema is the vocabulary.** {@link TELEMETRY_EVENTS} is a value, and
  * every event type below is derived from it, so the generated docs page
  * (`docs/telemetry.md`, `scripts/generate-telemetry-fields.mjs --check`), the
- * TypeScript types and {@link isTelemetryEvent} cannot describe different
- * events. A field can only be declared as one of the {@link TelemetryFieldSpec}
+ * TypeScript types and {@link serializeTelemetryEvent}'s check cannot
+ * describe different events. A field can only be declared as one of the {@link TelemetryFieldSpec}
  * shapes, and none of them is a free string:
  *
  * - a closed word, from an `as const` list;
  * - a count, an integer, a duration or a sample rate;
  * - a flag;
- * - a catalog id ({@link TelemetryCatalogId}): a configuration identifier that
- *   only a narrowing function can mint, and that falls back to a fixed word
- *   when the value is not in the catalog — never to a truncated or hashed
- *   version of it;
+ * - a catalog id ({@link TelemetryCatalogId}): a provider or model identifier
+ *   that only {@link catalogModelRef} can mint, and that falls back to
+ *   `custom` when the value is not in the catalog — never to a truncated or
+ *   hashed version of it;
+ * - a release version, which falls back to `unknown`;
  * - a tally (closed word → count) or rows of the above.
  *
  * So the privacy property is enforced by construction, as in VC-119, rather
- * than by a redaction pass. A type test in this package fails if any leaf of
- * {@link TelemetryEvent} widens to `string`.
+ * than by a redaction pass. A type test in this package fails if any leaf or
+ * key of {@link TelemetryEvent} can hold an open string.
  *
  * Property names reuse the `gen_ai.*` attribute names the OTLP mapping in
  * host-core already speaks where the two overlap, so field telemetry, the
@@ -48,24 +49,16 @@ import { ACTIVITY_KINDS } from "./session-activity";
 // ── Closed word lists ────────────────────────────────────────────────────────
 
 /** How this launch relates to the previous one on this install. */
-export const LAUNCH_KINDS = ["first-run", "update", "normal"] as const;
-
-export type LaunchKind = (typeof LAUNCH_KINDS)[number];
+const LAUNCH_KINDS = ["first-run", "update", "normal"] as const;
 
 /** The release channel the running build was published on. */
-export const RELEASE_CHANNELS = ["release", "canary"] as const;
-
-export type ReleaseChannel = (typeof RELEASE_CHANNELS)[number];
+const RELEASE_CHANNELS = ["release", "canary"] as const;
 
 /** `process.platform`, for the platforms Volli builds for. */
 export const TELEMETRY_PLATFORMS = ["darwin", "linux", "win32"] as const;
 
-export type TelemetryPlatform = (typeof TELEMETRY_PLATFORMS)[number];
-
 /** `process.arch`, with anything Volli does not build for collapsed to `other`. */
 export const TELEMETRY_ARCHES = ["arm64", "x64", "other"] as const;
-
-export type TelemetryArch = (typeof TELEMETRY_ARCHES)[number];
 
 /**
  * Electron's `render-process-gone` reasons, quoted from its typings, plus
@@ -83,35 +76,24 @@ export const RENDERER_GONE_REASONS = [
   "unknown",
 ] as const;
 
-export type RendererGoneReason = (typeof RENDERER_GONE_REASONS)[number];
-
 /** How a turn ended — the two outcomes {@link TurnEvent} already reports. */
-export const TURN_OUTCOMES = ["completed", "interrupted"] as const;
-
-export type TurnOutcome = (typeof TURN_OUTCOMES)[number];
+const TURN_OUTCOMES = ["completed", "interrupted"] as const;
 
 /** How a compaction ended — the two outcomes {@link CompactionEvent} already reports. */
-export const COMPACTION_OUTCOMES = ["compacted", "failed"] as const;
+const COMPACTION_OUTCOMES = ["compacted", "failed"] as const;
 
 /** Where a Runner runs. */
 export const RUNNER_KINDS = ["mac", "linux", "cloud"] as const;
 
-export type RunnerKind = (typeof RUNNER_KINDS)[number];
-
 /**
  * Why the telemetry pipeline itself lost an event, counted in the next rollup.
  *
- * `queue-full` and `sink-error` are {@link DroppedEvent}'s. The exporter adds
- * two of its own: a crash report the scrubber threw on (dropped, never sent
- * unscrubbed), and a batch that was still undeliverable when its retry window
- * closed.
+ * `queue-full` and `sink-error` are {@link DroppedEvent}'s. The other two are
+ * for the exporter to count: a crash report the scrubber threw on (dropped,
+ * never sent unscrubbed), and a batch still undeliverable when its retry
+ * window closed.
  */
-export const TELEMETRY_DROP_REASONS = [
-  "queue-full",
-  "sink-error",
-  "scrubber-error",
-  "expired",
-] as const;
+const TELEMETRY_DROP_REASONS = ["queue-full", "sink-error", "scrubber-error", "expired"] as const;
 
 /**
  * The product features whose use is counted, as a closed list.
@@ -158,7 +140,7 @@ export type FeatureId = (typeof FEATURE_IDS)[number];
  * ISO actually assigns: a user-assigned code (`XK`), a UN M.49 area (`419`) or
  * an empty string is not a country this list can speak, and reads as unknown.
  */
-export const ISO_REGION_CODES = [
+const ISO_REGION_CODES = [
   "AD",
   "AE",
   "AF",
@@ -421,7 +403,7 @@ export type IsoRegionCode = (typeof ISO_REGION_CODES)[number];
  * then carries the code alone. Each entry is the literal `code` of an error
  * class Volli ships; add one only by quoting such a class.
  */
-export const REPORTABLE_ERROR_CODES = [
+export const REPORTABLE_ERROR_CODES = deepFreeze([
   "client-capability-unavailable",
   "credential-key-pending",
   "credential-lock-busy",
@@ -436,31 +418,32 @@ export const REPORTABLE_ERROR_CODES = [
   "sealed-file-unverified",
   "secret-key-unavailable",
   "trash-unavailable",
-] as const;
+] as const);
 
 export type ReportableErrorCode = (typeof REPORTABLE_ERROR_CODES)[number];
 
-// ── Catalog ids ──────────────────────────────────────────────────────────────
-
-/** The configuration catalogs a telemetry field may name an entry of. */
-export type TelemetryCatalogKind = "provider" | "model" | "version";
+// ── Catalog ids and versions ─────────────────────────────────────────────────
 
 declare const catalogBrand: unique symbol;
 
 /**
- * An identifier from a closed catalog, branded so only a narrowing function in
- * this module can produce one: {@link catalogModelRef} for providers and
- * models, {@link telemetryVersion} for versions. A plain `string` is not
- * assignable to it, so an unnarrowed value cannot reach a telemetry event
- * without a cast a reviewer would see.
+ * A provider or model identifier from the shipped catalog, branded so only
+ * {@link catalogModelRef} can produce one. A plain `string` is not assignable
+ * to it, so an unnarrowed value cannot reach a telemetry event without a cast
+ * a reviewer would see — and {@link serializeTelemetryEvent} re-checks it
+ * against the catalog anyway.
  */
-export type TelemetryCatalogId<K extends TelemetryCatalogKind> = string & {
+export type TelemetryCatalogId<K extends "provider" | "model"> = string & {
   readonly [catalogBrand]: K;
 };
 
 export type CatalogProviderId = TelemetryCatalogId<"provider">;
 export type CatalogModelId = TelemetryCatalogId<"model">;
-export type TelemetryVersion = TelemetryCatalogId<"version">;
+
+declare const versionBrand: unique symbol;
+
+/** A release version string, minted only by {@link telemetryVersion}. */
+export type TelemetryVersion = string & { readonly [versionBrand]: true };
 
 /** What a provider or model outside the catalog is reported as. */
 export const CUSTOM_CATALOG_ID = "custom";
@@ -468,15 +451,23 @@ export const CUSTOM_CATALOG_ID = "custom";
 /** What a version that is not a release version string is reported as. */
 export const UNKNOWN_VERSION = "unknown";
 
+declare const modelCatalogBrand: unique symbol;
+
 /**
- * The model catalog Volli ships: provider id → that provider's model ids.
+ * The model catalog Volli ships, minted only by {@link telemetryModelCatalog}.
  *
- * It must be built from Pi's built-in catalog (and the publisher feed that
- * refreshes it), never from the merged registry. A user's `models.json` can
- * add a provider, and can add a model under a built-in provider, with any name
- * at all — `acme-internal-llm` belongs in their own collector, not ours.
+ * Build it from Pi's generated static catalog and the publisher feed that
+ * refreshes it (`agent-runtime/src/pi/model-catalog.ts`) — never from the
+ * merged model registry, and never from a provider that lists models through
+ * its own `refreshModels`. A user's `models.json` can add a provider, or a
+ * model under a built-in provider, with any name at all; a provider that
+ * fetches its list with the user's credential (radius, from an organisation's
+ * gateway) can list names an organisation chose. Those belong in the user's
+ * own collector, not ours.
  */
-export type TelemetryModelCatalog = ReadonlyMap<string, ReadonlySet<string>>;
+export type TelemetryModelCatalog = ReadonlyMap<string, ReadonlySet<string>> & {
+  readonly [modelCatalogBrand]: true;
+};
 
 /**
  * Bounds on a catalog id even when the catalog vouches for it: the charset
@@ -487,6 +478,26 @@ const CATALOG_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$/;
 
 /** A release version string: `x.y.z`, optionally with one numbered prerelease tag. */
 const VERSION_PATTERN = /^\d{1,4}\.\d{1,4}\.\d{1,4}(?:-(?:canary|beta|rc)\.\d{1,4})?$/;
+
+/**
+ * The catalog, copied so a later change to the source cannot widen it.
+ * Entries outside the id shape, and any literally named `custom`, are left
+ * out: they could not be told apart from what `custom` means.
+ */
+export function telemetryModelCatalog(
+  providers: Iterable<readonly [string, Iterable<string>]>,
+): TelemetryModelCatalog {
+  const models = new Map<string, ReadonlySet<string>>();
+  for (const [provider, ids] of providers) {
+    if (!isCatalogId(provider)) continue;
+    const kept = new Set(models.get(provider));
+    for (const id of ids) {
+      if (isCatalogId(id)) kept.add(id);
+    }
+    models.set(provider, kept);
+  }
+  return models as unknown as TelemetryModelCatalog;
+}
 
 /**
  * A provider/model pair as the catalog's own ids, or `custom`.
@@ -521,7 +532,7 @@ export function telemetryVersion(value: unknown): TelemetryVersion | typeof UNKN
 }
 
 function isCatalogId(value: unknown): value is string {
-  return typeof value === "string" && CATALOG_ID_PATTERN.test(value);
+  return typeof value === "string" && value !== CUSTOM_CATALOG_ID && CATALOG_ID_PATTERN.test(value);
 }
 
 // ── Narrowing ────────────────────────────────────────────────────────────────
@@ -562,7 +573,7 @@ export function reportableErrorCode(error: unknown): ReportableErrorCode | undef
 // ── Schema ───────────────────────────────────────────────────────────────────
 
 /** Every field shape a telemetry event may declare. There is no free-string shape. */
-export type TelemetryFieldSpec =
+type TelemetryFieldSpec =
   | {
       readonly type: "word";
       readonly values: readonly string[];
@@ -572,19 +583,24 @@ export type TelemetryFieldSpec =
       readonly doc: string;
     }
   | {
-      /** count: integer ≥ 0. integer: any safe integer. duration: ms ≥ 0. rate: 0 < x ≤ 1. */
-      readonly type: "count" | "integer" | "duration" | "rate" | "flag";
+      /**
+       * count: integer ≥ 0. integer: any safe integer. duration: ms ≥ 0.
+       * rate: 0 < x ≤ 1. version: a release version string or `unknown`.
+       * provider: a catalog provider or `custom`.
+       */
+      readonly type: "count" | "integer" | "duration" | "rate" | "flag" | "version" | "provider";
       readonly optional?: boolean;
       readonly doc: string;
     }
   | {
-      readonly type: "catalog";
-      readonly catalog: TelemetryCatalogKind;
+      /** A catalog model or `custom`, checked against the provider in `provider`, its sibling field. */
+      readonly type: "model";
+      readonly provider: string;
       readonly optional?: boolean;
       readonly doc: string;
     }
   | {
-      /** A count per word, with words that counted nothing left out. */
+      /** A count per word. A word that counted nothing may be left out. */
       readonly type: "tally";
       readonly keys: readonly string[];
       readonly optional?: boolean;
@@ -597,13 +613,24 @@ export type TelemetryFieldSpec =
       readonly doc: string;
     };
 
-export interface TelemetryEventSpec {
+type TelemetryFieldMap = Readonly<Record<string, TelemetryFieldSpec>>;
+
+interface TelemetryEventSpec {
   readonly doc: string;
-  readonly fields: Readonly<Record<string, TelemetryFieldSpec>>;
+  readonly fields: TelemetryFieldMap;
 }
 
-/** Upper bound on a `rows` field's length; a rollup that would exceed it is split. */
+/** Upper bound on a `rows` field's length. A rollup with more rows must be split. */
 export const MAX_TELEMETRY_ROWS = 256;
+
+const MODEL_FIELDS = {
+  "gen_ai.provider.name": { type: "provider", doc: "The provider." },
+  "gen_ai.request.model": {
+    type: "model",
+    provider: "gen_ai.provider.name",
+    doc: "The model requested.",
+  },
+} as const satisfies TelemetryFieldMap;
 
 const TOKEN_FIELDS = {
   "gen_ai.usage.input_tokens": { type: "count", doc: "Uncached input tokens, summed." },
@@ -620,13 +647,14 @@ const TOKEN_FIELDS = {
     type: "count",
     doc: "Reasoning tokens, summed.",
   },
-} as const satisfies Record<string, TelemetryFieldSpec>;
+} as const satisfies TelemetryFieldMap;
 
 /**
- * Every event Volli's own telemetry destination may receive, and every field of
- * each. A field that is not here is never sent.
+ * Every usage event Volli's own telemetry destination may receive, and every
+ * property of each. A property that is not here is never sent. Frozen, so a
+ * cast cannot widen what the check accepts.
  */
-export const TELEMETRY_EVENTS = {
+export const TELEMETRY_EVENTS = deepFreeze({
   app_started: {
     doc: "Once per launch, when the first window has shown.",
     fields: {
@@ -639,7 +667,7 @@ export const TELEMETRY_EVENTS = {
         values: LAUNCH_KINDS,
         doc: "First launch of this install, first launch of a new version, or neither.",
       },
-      app_version: { type: "catalog", catalog: "version", doc: "The running build's version." },
+      app_version: { type: "version", doc: "The running build's version." },
       channel: { type: "word", values: RELEASE_CHANNELS, doc: "The build's release channel." },
       os: { type: "word", values: TELEMETRY_PLATFORMS, doc: "Operating system." },
       os_version_major: { type: "count", doc: "Operating system major version." },
@@ -675,16 +703,7 @@ export const TELEMETRY_EVENTS = {
         type: "rows",
         doc: "One row per provider and model used.",
         fields: {
-          "gen_ai.provider.name": {
-            type: "catalog",
-            catalog: "provider",
-            doc: "The provider.",
-          },
-          "gen_ai.request.model": {
-            type: "catalog",
-            catalog: "model",
-            doc: "The model requested.",
-          },
+          ...MODEL_FIELDS,
           attempts: { type: "count", doc: "Provider requests made." },
           stop_reasons: {
             type: "tally",
@@ -701,8 +720,9 @@ export const TELEMETRY_EVENTS = {
       },
       tools: {
         type: "rows",
-        doc: "One row per tool and capability class used.",
+        doc: "One row per tool, capability class and the model that called the tool.",
         fields: {
+          ...MODEL_FIELDS,
           "gen_ai.tool.name": {
             type: "word",
             values: OBSERVED_TOOL_IDS,
@@ -769,22 +789,12 @@ export const TELEMETRY_EVENTS = {
     doc: "Once a day per signed-in Runner.",
     fields: {
       runner_kind: { type: "word", values: RUNNER_KINDS, doc: "Where the Runner runs." },
-      runner_version: {
-        type: "catalog",
-        catalog: "version",
-        doc: "The Runner's version.",
-      },
+      runner_version: { type: "version", doc: "The Runner's version." },
     },
   },
-} as const satisfies Record<string, TelemetryEventSpec>;
+} as const satisfies Record<string, TelemetryEventSpec>);
 
 // ── Types derived from the schema ────────────────────────────────────────────
-
-type CatalogValue<K> = K extends "provider"
-  ? CatalogProviderId | typeof CUSTOM_CATALOG_ID
-  : K extends "model"
-    ? CatalogModelId | typeof CUSTOM_CATALOG_ID
-    : TelemetryVersion | typeof UNKNOWN_VERSION;
 
 type FieldValue<F> = F extends { type: "word"; values: readonly (infer V)[] }
   ? V
@@ -792,31 +802,35 @@ type FieldValue<F> = F extends { type: "word"; values: readonly (infer V)[] }
     ? number
     : F extends { type: "flag" }
       ? boolean
-      : F extends { type: "catalog"; catalog: infer K }
-        ? CatalogValue<K>
-        : F extends { type: "tally"; keys: readonly (infer K extends string)[] }
-          ? { [Key in K]?: number }
-          : F extends { type: "rows"; fields: infer R }
-            ? TelemetryProperties<R>[]
-            : never;
+      : F extends { type: "version" }
+        ? TelemetryVersion | typeof UNKNOWN_VERSION
+        : F extends { type: "provider" }
+          ? CatalogProviderId | typeof CUSTOM_CATALOG_ID
+          : F extends { type: "model" }
+            ? CatalogModelId | typeof CUSTOM_CATALOG_ID
+            : F extends { type: "tally"; keys: readonly (infer K extends string)[] }
+              ? { [Key in K]?: number }
+              : F extends { type: "rows"; fields: infer R }
+                ? TelemetryProperties<R>[]
+                : never;
 
 type Simplify<T> = { [K in keyof T]: T[K] } & {};
 
 /** The properties object a field map describes: optional specs become optional keys. */
-export type TelemetryProperties<R> = Simplify<
+type TelemetryProperties<R> = Simplify<
   { [K in keyof R as R[K] extends { optional: true } ? never : K]: FieldValue<R[K]> } & {
     [K in keyof R as R[K] extends { optional: true } ? K : never]?: FieldValue<R[K]>;
   }
 >;
 
-export type TelemetryEventName = keyof typeof TELEMETRY_EVENTS;
+type TelemetryEventName = keyof typeof TELEMETRY_EVENTS;
 
 export interface TelemetryEventOf<N extends TelemetryEventName> {
   event: N;
   properties: TelemetryProperties<(typeof TELEMETRY_EVENTS)[N]["fields"]>;
 }
 
-/** Everything Volli's own telemetry destination may receive. */
+/** Every usage event Volli's own telemetry destination may receive. */
 export type TelemetryEvent = { [N in TelemetryEventName]: TelemetryEventOf<N> }[TelemetryEventName];
 
 export type AppStartedEvent = TelemetryEventOf<"app_started">;
@@ -826,30 +840,54 @@ export type AgentRollupEvent = TelemetryEventOf<"agent_rollup">;
 export type TurnSampledEvent = TelemetryEventOf<"turn_sampled">;
 export type RunnerHeartbeatEvent = TelemetryEventOf<"runner_heartbeat_daily">;
 
-// ── Runtime conformance ──────────────────────────────────────────────────────
+// ── Serialization ────────────────────────────────────────────────────────────
 
 /**
- * Whether a value is exactly a {@link TelemetryEvent}: a known event, every
- * required field present, no field the schema does not declare, and every
- * value inside its declared shape.
+ * A usage event as the exact JSON to send, or `undefined` when it is not one.
  *
- * The exporter's last gate before a value is queued, and it fails closed. The
- * types already guarantee this for code that does not cast; this catches the
- * code that does, and a value that crossed a process boundary.
+ * The exporter must send nothing else: this is the gate between a value and
+ * the wire, and it fails closed. It serializes first and checks the parsed
+ * copy, so what is checked is byte for byte what would be sent — a getter, a
+ * `toJSON`, a Proxy or a non-enumerable key cannot show the check one object
+ * and the wire another, and an optional field left `undefined` is simply
+ * absent. The copy must then be exactly a known event: every required field
+ * present, nothing the schema does not declare, every value inside its
+ * declared shape, and every provider and model in `catalog` (or `custom`).
+ *
+ * The types already guarantee all of this for code that does not cast. This
+ * catches the code that does, and a value that crossed a process boundary.
  */
-export function isTelemetryEvent(value: unknown): value is TelemetryEvent {
-  if (!isPlainObject(value) || !hasExactlyKeys(value, ["event", "properties"])) return false;
+export function serializeTelemetryEvent(
+  value: unknown,
+  catalog: TelemetryModelCatalog,
+): string | undefined {
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+  if (json === undefined) return undefined;
+  return conformsToEvent(JSON.parse(json), catalog) ? json : undefined;
+}
+
+/** Checks a JSON-parsed value, so only plain objects, arrays and primitives arrive here. */
+function conformsToEvent(value: unknown, catalog: TelemetryModelCatalog): boolean {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== 2 || !keys.includes("event") || !keys.includes("properties")) return false;
   const name = value.event;
   if (typeof name !== "string" || !Object.hasOwn(TELEMETRY_EVENTS, name)) return false;
   const spec: TelemetryEventSpec = TELEMETRY_EVENTS[name as TelemetryEventName];
-  return conformsToFields(value.properties, spec.fields);
+  return conformsToFields(value.properties, spec.fields, catalog);
 }
 
 function conformsToFields(
   value: unknown,
-  fields: Readonly<Record<string, TelemetryFieldSpec>>,
-): boolean {
-  if (!isPlainObject(value)) return false;
+  fields: TelemetryFieldMap,
+  catalog: TelemetryModelCatalog,
+): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
   for (const key of Object.keys(value)) {
     if (!Object.hasOwn(fields, key)) return false;
   }
@@ -858,17 +896,22 @@ function conformsToFields(
       if (field.optional === true) continue;
       return false;
     }
-    if (!conformsToField(value[key], field)) return false;
+    if (!conformsToField(value[key], field, value, catalog)) return false;
   }
   return true;
 }
 
-function conformsToField(value: unknown, field: TelemetryFieldSpec): boolean {
+function conformsToField(
+  value: unknown,
+  field: TelemetryFieldSpec,
+  row: Record<string, unknown>,
+  catalog: TelemetryModelCatalog,
+): boolean {
   switch (field.type) {
     case "word":
       return closedWord(field.values, value) !== undefined;
     case "count":
-      return Number.isSafeInteger(value) && (value as number) >= 0;
+      return isCount(value);
     case "integer":
       return Number.isSafeInteger(value);
     case "duration":
@@ -877,25 +920,26 @@ function conformsToField(value: unknown, field: TelemetryFieldSpec): boolean {
       return typeof value === "number" && value > 0 && value <= 1;
     case "flag":
       return typeof value === "boolean";
-    case "catalog":
-      return field.catalog === "version"
-        ? value === UNKNOWN_VERSION || telemetryVersion(value) !== UNKNOWN_VERSION
-        : value === CUSTOM_CATALOG_ID || isCatalogId(value);
+    case "version":
+      return value === UNKNOWN_VERSION || telemetryVersion(value) !== UNKNOWN_VERSION;
+    case "provider":
+      return catalogModelRef(catalog, value, undefined).provider === value;
+    case "model": {
+      const ref = catalogModelRef(catalog, row[field.provider], value);
+      return ref.provider === row[field.provider] && ref.model === value;
+    }
     case "tally":
       return (
-        isPlainObject(value) &&
+        isRecord(value) &&
         Object.entries(value).every(
-          ([key, count]) =>
-            closedWord(field.keys, key) !== undefined &&
-            Number.isSafeInteger(count) &&
-            (count as number) >= 0,
+          ([key, count]) => closedWord(field.keys, key) !== undefined && isCount(count),
         )
       );
     case "rows":
       return (
         Array.isArray(value) &&
         value.length <= MAX_TELEMETRY_ROWS &&
-        value.every((row) => conformsToFields(row, field.fields))
+        value.every((entry) => conformsToFields(entry, field.fields, catalog))
       );
     /* v8 ignore next 4 -- unreachable while the union is exhausted above; it exists to stop being so at compile time. */
     default: {
@@ -905,13 +949,18 @@ function conformsToField(value: unknown, field: TelemetryFieldSpec): boolean {
   }
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null) return false;
-  const prototype: unknown = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
+function isCount(value: unknown): boolean {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
-function hasExactlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const own = Object.keys(value);
-  return own.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
 }
