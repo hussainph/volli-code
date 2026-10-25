@@ -13,6 +13,7 @@ import {
   jobs,
   projectEvents,
   seedAutomation,
+  seedRunner,
   seedSession,
   seedWorkingCopy,
   setup,
@@ -681,7 +682,7 @@ describe("board.moveTickets", () => {
     await move(ids["A"]!, "needs_review", picked.automationId);
     expect(await jobs(t, ids["A"]!)).toEqual([]);
 
-    const placeRunnerId = newId("runner");
+    const placeRunnerId = await seedRunner(t, userId);
     const row = await ticketRow(t, ids["B"]!);
     await t.run((ctx) => ctx.db.patch(row!._id, { placeRunnerId }));
     await move(ids["B"]!, "needs_review", picked.automationId);
@@ -753,6 +754,23 @@ describe("board.moveTickets", () => {
     expect(reply.unstartedRuns).toEqual([
       { ticketId: ids["A"], automationId: picked.automationId, reason: "no_place" },
     ]);
+    // A Place on a teammate's runner (or an unknown one) is never used for a pick.
+    const teammate = await signIn(t, "teammate");
+    for (const placeRunnerId of [await seedRunner(t, teammate.userId), newId("runner")]) {
+      const row = await ticketRow(t, ids["B"]!);
+      await t.run((ctx) => ctx.db.patch(row!._id, { placeRunnerId }));
+      const picked2 = await as.mutation(api.board.moveTickets, {
+        commandId: command(),
+        projectId,
+        ticketIds: [ids["B"]!],
+        toStatus: row!.status === "needs_review" ? "doing" : "needs_review",
+        choice: { kind: "automation", automationId: picked.automationId },
+      });
+      expect(picked2.unstartedRuns).toEqual([
+        { ticketId: ids["B"], automationId: picked.automationId, reason: "place_not_yours" },
+      ]);
+    }
+    expect(await jobs(t, ids["B"]!)).toEqual([]);
     expect((await jobs(t, ids["A"]!)).map((job) => [job.id, job.status])).toEqual([
       [scheduled, "queued"],
     ]);

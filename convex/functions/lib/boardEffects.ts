@@ -1,6 +1,10 @@
 /**
  * A board write's machine side effects, as runner jobs.
  *
+ * TODO(B3): insert through the runner inbox's `tryEnqueueJob` (one way to add
+ * a job, with its routing rules) once it lands, instead of writing
+ * `runnerJobs` rows here.
+ *
  * The pure rules say WHAT must happen (`BoardSideEffect`); this module says
  * WHERE: which runner holds the ticket's Working copies or runs its Sessions,
  * or which runner an armed column's armer chose. Each becomes a `runnerJobs`
@@ -13,6 +17,7 @@
  */
 
 import {
+  actorUserId,
   jobRank,
   newId,
   TERMINAL_JOB_TTL_MS,
@@ -51,14 +56,16 @@ export interface EffectContext {
 }
 
 /**
- * An Automation run a person picked that has nowhere to run yet: the ticket
- * has no Place and the pick is not the column's armed Automation. Reported in
+ * An Automation run a person picked that has nowhere to run: the pick is not
+ * the column's armed Automation, and the ticket has no Place or its Place is
+ * someone else's runner. Reported in
  * the move's reply rather than dropped silently.
  */
 interface UnstartedRun {
   ticketId: string;
   automationId: string;
-  reason: "no_place";
+  /** No Place yet, or the Place is another person's runner (a pick never runs on a teammate's machine). */
+  reason: "no_place" | "place_not_yours";
 }
 
 /** Inserts the jobs a write's side effects need; returns the runs it could not place. */
@@ -239,12 +246,27 @@ async function jobsFor(
       if (automation === null || automation.deletedAt !== null) return [];
       if (automation.projectId !== ticket.projectId) return [];
       const armed = arming !== null && arming.automationId === automationId;
-      // An armed run goes to the runner its armer chose; a pick of another
-      // Automation runs where the ticket already lives, or waits for a Place.
-      const runnerId = armed ? arming.runnerId : ticket.placeRunnerId;
-      if (runnerId === null) {
-        unstarted.push({ ticketId: ticket.id, automationId, reason: "no_place" });
-        return [];
+      // An armed run goes to the runner its armer chose (their own). A pick of
+      // another Automation runs on the ticket's Place only when that runner
+      // is the picker's own: work never lands on a teammate's machine.
+      let runnerId: string;
+      if (armed) {
+        runnerId = arming.runnerId;
+      } else {
+        const place = ticket.placeRunnerId;
+        if (place === null) {
+          unstarted.push({ ticketId: ticket.id, automationId, reason: "no_place" });
+          return [];
+        }
+        const runner = await ctx.db
+          .query("runners")
+          .withIndex("by_uuid", (q) => q.eq("id", place))
+          .unique();
+        if (runner === null || runner.ownerUserId !== actorUserId(actor)) {
+          unstarted.push({ ticketId: ticket.id, automationId, reason: "place_not_yours" });
+          return [];
+        }
+        runnerId = place;
       }
       return [
         {

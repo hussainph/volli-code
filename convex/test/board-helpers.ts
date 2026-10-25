@@ -265,3 +265,30 @@ export async function seedAutomation(
     return { automationId, runnerId };
   });
 }
+
+/** A runner row owned by `ownerUserId`. */
+export async function seedRunner(t: Tester, ownerUserId: string) {
+  return t.run(async (ctx) => {
+    const id = newId("runner");
+    await ctx.db.insert("runners", {
+      id,
+      ownerUserId,
+      kind: "mac",
+      name: `mac-${id.slice(0, 4)}`,
+      status: "online",
+      statusReason: null,
+      statusChangedAt: 0,
+      version: "0.3.0",
+      platform: { os: "macos", distro: null, kernel: null, arch: "arm64", glibc: null },
+      capabilities: {},
+      installMode: "app",
+      linkedVia: "desktop",
+      linkedAt: 0,
+      autoUpdate: { enabled: true, channel: "stable", pinnedVersion: null },
+      update: null,
+      revokedAt: null,
+      createdAt: 0,
+    });
+    return id;
+  });
+}
