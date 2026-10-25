@@ -105,6 +105,11 @@ export interface RunnerCompositionInput {
   packaged: boolean;
   /** Whether the `cloud` flag is on now; read at every skills and prompt-template load. */
   cloudEnabled(): boolean;
+  /**
+   * Whether this launch shows Volli Cloud's board rather than this host's
+   * (VC-889): its interrupted turns are then not resumed on their own.
+   */
+  cloudLaunch?(): boolean;
   /** Where Code Mode's worker and WebAssembly are; absent offers no Code Mode. */
   codeModeSandbox?: CodeModeSandboxAssets;
   secrets: SecretService;
@@ -386,6 +391,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
   lifecycle = createSessionRuntimeLifecycle<RuntimeSessionFacade>({
     venue,
     ...(input.ownsLegacyRunner === undefined ? {} : { ownsLegacyRunner: input.ownsLegacyRunner }),
+    ...(input.cloudLaunch === undefined ? {} : { cloudLaunch: input.cloudLaunch }),
     host,
     ports,
     runtime: assembly.sessionRuntime,

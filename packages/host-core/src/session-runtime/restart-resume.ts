@@ -57,6 +57,8 @@ export interface RestartResumePorts {
   command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult>;
   /** Whether the host is closing: no new resume starts once it is. */
   shouldStop(): boolean;
+  /** Whether this launch shows Volli Cloud's board, not this Mac's (VC-889): nothing resumes. */
+  cloudLaunch?(): boolean;
   now?(): number;
 }
 
@@ -103,6 +105,7 @@ async function judgeAndRun(
       startPending: ports.pendingTurnStarts().has(sessionId),
       boundary: ports.resumeBoundary({ attachmentId }),
       ticketSessions,
+      cloudLaunch: ports.cloudLaunch?.() ?? false,
     });
     if (verdict.kind === "skip") {
       log.info("interrupted turn left for the person", { sessionId, reason: verdict.reason });

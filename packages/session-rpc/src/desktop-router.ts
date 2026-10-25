@@ -35,7 +35,9 @@ import {
   HOST_LINK_RELAY_EVENT_ID_MAX,
   HOST_LINK_RELAY_PATH_MAX,
   hostLinkRelayEventEnds,
+  type AccountAccessToken,
   type AccountConnection,
+  type CloudLaunch,
   type AccountSnapshot,
   type ActiveAddHost,
   type AddHostAnswer,
@@ -73,7 +75,13 @@ import { readHostError, type JsonUnsafeProcedures } from "@volli/host-protocol";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
-import { accountSignInInputSchema, accountSnapshotSchema } from "./account-schema";
+import {
+  accountAccessTokenInputSchema,
+  accountAccessTokenSchema,
+  accountSignInInputSchema,
+  accountSnapshotSchema,
+  cloudLaunchSchema,
+} from "./account-schema";
 import { AsyncQueue } from "./async-queue";
 import { boardId } from "./board-schema";
 import {
@@ -233,6 +241,10 @@ export interface DesktopRouterHandlers {
   readonly "account.signOut": HostHandler<void, null>;
   readonly "account.requestDeletion": HostHandler<void, null>;
   readonly "account.cancelDeletion": HostHandler<void, null>;
+  /** The window's Volli Cloud client and the launch's store (VC-889). */
+  readonly "account.accessToken": HostHandler<{ force: boolean }, AccountAccessToken>;
+  readonly "cloud.launch": HostHandler<void, CloudLaunch>;
+  readonly "cloud.relaunch": HostHandler<void, null>;
 }
 
 type AssertNever<Type extends never> = Type;
@@ -829,7 +841,9 @@ export function createDesktopRouter() {
      * The Volli Cloud account on this Mac (VC-884). Born on the bridge:
      * host-placed, the person's own window only; desktop main's account
      * service answers through the map (only with `cloud` on), and every
-     * other host answers unavailable. No procedure carries a token.
+     * other host answers unavailable. Only `accessToken` carries a token:
+     * a short-lived access JWT for this window's own Volli Cloud client
+     * (VC-889), never the refresh token.
      */
     account: {
       snapshot: hostProcedure("account.snapshot")
@@ -857,6 +871,23 @@ export function createDesktopRouter() {
       cancelDeletion: hostProcedure("account.cancelDeletion")
         .output(z.null())
         .mutation(({ ctx }) => ctx.handlers["account.cancelDeletion"](undefined, ctx.call)),
+      accessToken: hostProcedure("account.accessToken")
+        .input(accountAccessTokenInputSchema)
+        .output(accountAccessTokenSchema)
+        .query(({ ctx, input }) => ctx.handlers["account.accessToken"](input, ctx.call)),
+    },
+    /**
+     * Which product store this launch uses, and the restart into the other one
+     * (VC-889). Desktop main chose the store before the window opened; it is
+     * fixed for the process.
+     */
+    cloud: {
+      launch: hostProcedure("cloud.launch")
+        .output(cloudLaunchSchema)
+        .query(({ ctx }) => ctx.handlers["cloud.launch"](undefined, ctx.call)),
+      relaunch: hostProcedure("cloud.relaunch")
+        .output(z.null())
+        .mutation(({ ctx }) => ctx.handlers["cloud.relaunch"](undefined, ctx.call)),
     },
   });
 }

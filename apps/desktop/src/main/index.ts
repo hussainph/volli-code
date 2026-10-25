@@ -117,7 +117,9 @@ import {
   getGlobalAppearance,
   getGlobalCanvas,
   getAllAppState,
+  getAppState,
   setAppState,
+  deleteAppState,
   getBlob,
 } from "@volli/host-core/db";
 import { NO_LIVE_WORK } from "@volli/host-core/sessions";
@@ -173,6 +175,12 @@ import {
 import { observeKeychainUse, webSealingLifecycle } from "./web/sealing-lifecycle";
 import { createDesktopRemoteHosts, remoteHostsPort } from "./remote-hosts";
 import { accountPort, createDesktopAccount, resolveAccountConfig } from "./account";
+import {
+  CLOUD_LAUNCH_APP_STATE_KEY,
+  chooseProductStore,
+  createRelaunchController,
+  launchMarkerStore,
+} from "./cloud-launch";
 import { engineSignInLinks, remoteSignInsPort, signInPreflight } from "./host-sign-ins/port";
 import {
   createHostLinkRelay,
@@ -828,8 +836,26 @@ const appStartup = app.whenReady().then(async () => {
   // refresh token (the harness keyring in harness mode), the backend's
   // `ensureViewer`. Every call refuses while `cloud` is off; nothing is read
   // until the window first asks for the account.
+  const accountConfig = resolveAccountConfig({ env: process.env, packaged: app.isPackaged });
+  // The next launch's product store (VC-889): written when a sign-in
+  // completes, cleared when it ends. A row in this Mac's database, reached
+  // once the database below is open; a degraded one launches local.
+  let launchMarkerDb: Parameters<typeof getAppState>[0] | null = null;
+  const launchMarker = launchMarkerStore(
+    () =>
+      launchMarkerDb === null
+        ? null
+        : {
+            read: () => getAppState(launchMarkerDb!, CLOUD_LAUNCH_APP_STATE_KEY),
+            write: (value) =>
+              setAppState(launchMarkerDb!, CLOUD_LAUNCH_APP_STATE_KEY, value, Date.now()),
+            remove: () => deleteAppState(launchMarkerDb!, CLOUD_LAUNCH_APP_STATE_KEY),
+          },
+    hostLogger("cloud-launch"),
+  );
   const account = createDesktopAccount({
-    config: resolveAccountConfig({ env: process.env, packaged: app.isPackaged }),
+    config: accountConfig,
+    marker: launchMarker,
     enabled: () => isExperimentEnabled("cloud"),
     inventory: hostPrivateInventory,
     unlockInventory: unlockHostPrivate,
@@ -937,6 +963,20 @@ const appStartup = app.whenReady().then(async () => {
   installExperimentalSettings(
     new ExperimentalSettings(watchedDb, process.env["VOLLI_EXPERIMENTAL"], buildKind),
   );
+  // The launch's product store (VC-889), decided once here, before the window
+  // opens, and fixed for this process: Volli Cloud's board with the flag on,
+  // a signed-in marker and a configured backend; this Mac's otherwise.
+  launchMarkerDb = watchedDb;
+  const launch = chooseProductStore({
+    cloudFlag: isExperimentEnabled("cloud"),
+    readMarker: () => launchMarker.read(),
+    backendUrl: accountConfig.backendUrl,
+  });
+  // Signing in or out restarts into the other store, through every quit gate.
+  const relaunch = createRelaunchController({
+    quit: () => app.quit(),
+    relaunch: () => app.relaunch(),
+  });
   const sessionWakeBus = liveHost?.sessionWakeBus ?? null;
   const sessionReadWatch = liveHost?.sessionReadWatch ?? null;
   const sessionEngine = liveHost?.sessionEngine ?? null;
@@ -1205,6 +1245,7 @@ const appStartup = app.whenReady().then(async () => {
     terminalQuit: prepareTerminalQuit,
     createSessionRpc,
     closeSocket: shutdownAgentSocket,
+    relaunch,
   });
   /**
    * This Mac's runner (VC-671): host-core's Session runtime composition,
@@ -1223,6 +1264,9 @@ const appStartup = app.whenReady().then(async () => {
     env: process.env,
     packaged: !isDev,
     cloudEnabled: () => isExperimentEnabled("cloud"),
+    // A launch showing Volli Cloud leaves this Mac's interrupted turns for a
+    // launch that shows them (VC-889, B4 D9).
+    cloudLaunch: () => launch.store === "cloud",
     ...codeModeSandbox,
     secrets,
     capabilities: {
@@ -1417,7 +1461,10 @@ const appStartup = app.whenReady().then(async () => {
         focusPage: (tabId) => browserTabs.focusPage(tabId),
       },
       // The Volli Cloud account (VC-884).
-      account: accountPort(account),
+      account: accountPort(account, {
+        launch: () => launch,
+        relaunch: () => relaunch.request(),
+      }),
     };
   };
   // No runtime, no bridge — but the channels are still claimed, answering

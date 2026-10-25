@@ -1572,6 +1572,9 @@ describe("the Volli Cloud account", () => {
     () => map["account.signOut"](undefined, WINDOW),
     () => map["account.requestDeletion"](undefined, WINDOW),
     () => map["account.cancelDeletion"](undefined, WINDOW),
+    () => map["account.accessToken"]({ force: false }, WINDOW),
+    () => map["cloud.launch"](undefined, WINDOW),
+    () => map["cloud.relaunch"](undefined, WINDOW),
   ];
 
   it("answers unavailable for every key on a host with no account service (hostd)", async () => {
@@ -1595,6 +1598,9 @@ describe("the Volli Cloud account", () => {
       signOut: vi.fn(),
       requestDeletion: vi.fn(async () => {}),
       cancelDeletion: vi.fn(),
+      accessToken: vi.fn(async () => ({ kind: "token" as const, token: "jwt", expiresAt: 9 })),
+      launch: vi.fn(() => ({ store: "local" as const })),
+      relaunch: vi.fn(),
     } satisfies AccountPort;
     const map = handlers({ account: port });
     const snapshots = sink();
@@ -1620,5 +1626,14 @@ describe("the Volli Cloud account", () => {
     ] as const) {
       expect(port[method]).toHaveBeenCalledOnce();
     }
+    expect(await map["account.accessToken"]({ force: true }, WINDOW)).toEqual({
+      kind: "token",
+      token: "jwt",
+      expiresAt: 9,
+    });
+    expect(port.accessToken).toHaveBeenCalledWith(true);
+    expect(await map["cloud.launch"](undefined, WINDOW)).toEqual({ store: "local" });
+    expect(await map["cloud.relaunch"](undefined, WINDOW)).toBeNull();
+    expect(port.relaunch).toHaveBeenCalledOnce();
   });
 });

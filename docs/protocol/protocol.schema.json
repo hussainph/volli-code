@@ -142,6 +142,86 @@
   "protocolVersion": 1,
   "tiers": {
     "desktop": {
+      "account.accessToken": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "force": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "force"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "expiresAt": {
+                  "type": "number"
+                },
+                "kind": {
+                  "const": "token",
+                  "type": "string"
+                },
+                "token": {
+                  "maxLength": 16384,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "token",
+                "expiresAt"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "signed-out",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "unavailable",
+                  "type": "string"
+                },
+                "retryAfterMs": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "retryAfterMs"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "account.cancelDeletion": {
         "compatibility": "client-local",
         "input": {
@@ -638,6 +718,75 @@
           "type": "object"
         },
         "outputValidation": "documented-yield",
+        "voidOutput": false
+      },
+      "cloud.launch": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "store": {
+                  "const": "local",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "store"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "backendUrl": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "store": {
+                  "const": "cloud",
+                  "type": "string"
+                },
+                "userId": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "store",
+                "userId",
+                "backendUrl"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "cloud.relaunch": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
         "voidOutput": false
       },
       "hostAdd.active": {

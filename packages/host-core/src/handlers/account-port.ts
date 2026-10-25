@@ -10,10 +10,20 @@
  * throws `OperationUnavailableError` itself. Structural, so host-core imports
  * nothing of the desktop's.
  *
- * **Secrets.** Nothing here carries one out: a snapshot holds a profile and a
- * state, never a token or a provider subject.
+ * **Secrets.** A snapshot holds a profile and a state, never a token or a
+ * provider subject. The one exception is {@link AccountPort.accessToken}: a
+ * short-lived access token for the person's own window's Volli Cloud client
+ * (VC-889), never the refresh token.
+ *
+ * It also answers for the launch the account chose (VC-889): which product
+ * store this process uses, and the restart into the other one.
  */
-import type { AccountConnection, AccountSnapshot } from "@volli/shared";
+import type {
+  AccountAccessToken,
+  AccountConnection,
+  AccountSnapshot,
+  CloudLaunch,
+} from "@volli/shared";
 
 type Answer<Value> = Value | Promise<Value>;
 
@@ -32,4 +42,10 @@ export interface AccountPort {
   requestDeletion(): Answer<void>;
   /** Asks the backend to restore an account whose deletion is scheduled. */
   cancelDeletion(): Answer<void>;
+  /** A short-lived access token for the window's Convex client; `force` refreshes first. */
+  accessToken(force: boolean): Answer<AccountAccessToken>;
+  /** The product store this launch chose before the window opened; fixed for the process. */
+  launch(): Answer<CloudLaunch>;
+  /** Restarts the app through the normal quit gates, into the store the account now chooses. */
+  relaunch(): Answer<void>;
 }

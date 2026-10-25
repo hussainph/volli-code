@@ -60,9 +60,11 @@ import {
   type AddHostFacts,
   type AddHostStartInput,
   type AddHostStepId,
+  type AccountAccessToken,
   type AccountConnection,
   type AccountSnapshot,
   type AgentResponse,
+  type CloudLaunch,
   type BrowserAppShortcutEvent,
   type CodeModePolicy,
   type CompactionPolicy,
@@ -443,6 +445,10 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
   readonly "account.signOut": HostHandler<void, null>;
   readonly "account.requestDeletion": HostHandler<void, null>;
   readonly "account.cancelDeletion": HostHandler<void, null>;
+  /** VC-889: the window's Convex client's token, the launch's store, and the restart. */
+  readonly "account.accessToken": HostHandler<{ force: boolean }, AccountAccessToken>;
+  readonly "cloud.launch": HostHandler<void, CloudLaunch>;
+  readonly "cloud.relaunch": HostHandler<void, null>;
 }
 
 /** The agent keys the socket serves: its own verbs, less the start both agent doors share. */
@@ -1201,5 +1207,8 @@ function hostHandlerEntries(
     "account.signOut": () => done(() => account().signOut()),
     "account.requestDeletion": () => done(() => account().requestDeletion()),
     "account.cancelDeletion": () => done(() => account().cancelDeletion()),
+    "account.accessToken": ({ force }) => account().accessToken(force),
+    "cloud.launch": () => account().launch(),
+    "cloud.relaunch": () => done(() => account().relaunch()),
   };
 }

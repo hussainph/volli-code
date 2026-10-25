@@ -472,6 +472,35 @@ export const DESKTOP_ENTRIES = [
     idempotency: "natural",
     summary: "Restore an account whose deletion is scheduled.",
   },
+  // The window's own Volli Cloud client (VC-889): it reads the board from the
+  // backend itself, so it asks main for a short-lived access token whenever it
+  // connects. Never the refresh token, and only the person's own window: a
+  // desktop entry has no network door and no Session reaches it.
+  {
+    key: "account.accessToken",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "A short-lived access token for this window's Volli Cloud client.",
+  },
+  // Which product store this launch uses, chosen by main before the window
+  // opened and fixed for the process (VC-889): this Mac's database, or the
+  // signed-in person's Workspaces on Volli Cloud.
+  {
+    key: "cloud.launch",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "Whether this launch shows this Mac's projects or Volli Cloud's.",
+  },
+  {
+    // `natural`: a second request while one is waiting on the quit gates is the same request.
+    key: "cloud.relaunch",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Restart Volli into the product store the account now chooses.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];

@@ -103,6 +103,13 @@ describe("resumeRecoveredTurns (VC-450)", () => {
     expect([...commands, ...unknown.commands]).toEqual([]);
   });
 
+  it("resumes nothing in a launch that shows Volli Cloud's board (VC-889)", async () => {
+    const { port, sessions, commands } = ports({ cloudLaunch: () => true });
+    sessions.set("a", projection("a"));
+    await resumeRecoveredTurns(port, { turns: [turn("a")], lostAt: LOST_AT });
+    expect(commands).toEqual([]);
+  });
+
   it("judges each Session on its own, and outlives a refused or failed resume", async () => {
     let calls = 0;
     const { port, sessions } = ports({
