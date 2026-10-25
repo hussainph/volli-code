@@ -165,6 +165,44 @@ describe("the inbox worker", () => {
     ]);
   });
 
+  it("reports a result the backend cannot store as a permanent failure, never as a send that loops", async () => {
+    const inbox = fakeInbox([[job("j1"), job("j2")]]);
+    const worker = createInboxWorker({
+      backend: inbox.backend,
+      journal: memoryJournal().store,
+      bootId: BOOT,
+      ...manualTimers(),
+    });
+    worker.register("workingCopy.refresh", async (claimed) =>
+      claimed.job.id === "j1"
+        ? { status: "done", result: { $schema: "https://json-schema.org/draft/2020-12/schema" } }
+        : { status: "done", result: undefined },
+    );
+    await worker.start();
+    await flush();
+    expect(inbox.completes.map((c) => [c.jobId, c.outcome])).toEqual([
+      [
+        "j1",
+        {
+          status: "failed",
+          code: "invalid_job_result",
+          detail: "The result is not plain JSON.",
+          retryable: false,
+        },
+      ],
+      [
+        "j2",
+        {
+          status: "failed",
+          code: "invalid_job_result",
+          detail: "The result is not plain JSON.",
+          retryable: false,
+        },
+      ],
+    ]);
+    worker.stop();
+  });
+
   it("keeps an unreported outcome through a crash and reports it on the next start", async () => {
     const journal = memoryJournal([
       {

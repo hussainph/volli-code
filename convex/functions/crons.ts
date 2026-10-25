@@ -24,5 +24,7 @@ crons.interval("runners: offline sweep", { minutes: 1 }, internal.runners.sweepO
 });
 // Expired install tokens and device codes, and runner audit events past 90 days.
 crons.interval("runners: expiry cleanup", { hours: 1 }, internal.runners.sweepExpired, {});
+// Runner inbox: delete finished jobs once their keep time has passed.
+crons.interval("purge finished runner jobs", { hours: 1 }, internal.runnerJobs.sweep, {});
 
 export default crons;

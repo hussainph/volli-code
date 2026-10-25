@@ -1,10 +1,6 @@
 /**
  * A board write's machine side effects, as runner jobs.
  *
- * TODO(B3): insert through the runner inbox's `tryEnqueueJob` (one way to add
- * a job, with its routing rules) once it lands, instead of writing
- * `runnerJobs` rows here.
- *
  * The pure rules say WHAT must happen (`BoardSideEffect`); this module says
  * WHERE: which runner holds the ticket's Working copies or runs its Sessions,
  * or which runner an armed column's armer chose. Each becomes a `runnerJobs`
@@ -12,37 +8,30 @@
  * the write committed. Nothing here runs the work: the runner claims the job,
  * re-checks what it depended on, and reports the outcome.
  *
- * Job payloads are this module's until the runner tickets that execute each
- * kind type them in `@volli/shared/cloud` (`JobPayloads`).
+ * Jobs go in through the runner inbox (`tryEnqueueJob`), which checks each
+ * payload against `JobPayloads` and applies the routing rules: a runner only
+ * runs its owner's work, in projects its owner is still a Member of. A job the
+ * inbox will not route is skipped rather than failing the board write; the
+ * board fact stands, and what did not start is reported in the reply (a
+ * picked run that cannot run, a worktree that was not asked for). A malformed
+ * job (a defect, not a routing refusal) still fails the write, loudly.
  */
 
 import {
   actorUserId,
-  jobRank,
   newId,
-  TERMINAL_JOB_TTL_MS,
+  SESSION_INTERRUPT_FORMAT,
   type Actor,
   type BoardSideEffect,
-  type JobKind,
-  type JobPriority,
   type UserId,
 } from "@volli/shared/cloud";
 
 import type { Doc } from "../_generated/dataModel.js";
 import type { MutationCtx } from "../_generated/server.js";
+import { cancelJob, tryEnqueueJob, type JobDraft, type JobRefusalCode } from "./jobs";
 
-interface JobDraft {
-  id?: string;
-  runnerId: string;
-  kind: JobKind;
-  sessionId?: string | null;
-  workingCopyId?: string | null;
-  commandId?: string | null;
-  payload: Record<string, unknown>;
-  priority?: JobPriority;
-  availableAt: number;
-  createdBy: Actor;
-}
+/** A job this module builds; the project and ticket are the effect's ticket's. */
+type EffectJob = Omit<JobDraft, "projectId" | "ticketId">;
 
 export interface EffectContext {
   ctx: MutationCtx;
@@ -56,63 +45,77 @@ export interface EffectContext {
 }
 
 /**
- * An Automation run a person picked that has nowhere to run: the pick is not
- * the column's armed Automation, and the ticket has no Place or its Place is
- * someone else's runner. Reported in
- * the move's reply rather than dropped silently.
+ * An Automation run a person picked that has nowhere to run, reported in the
+ * move's reply rather than dropped silently.
  */
 interface UnstartedRun {
   ticketId: string;
   automationId: string;
-  /** No Place yet, or the Place is another person's runner (a pick never runs on a teammate's machine). */
-  reason: "no_place" | "place_not_yours";
+  /**
+   * `no_place`: the ticket has no Place yet. `place_not_yours`: its Place is
+   * another person's runner (a pick never runs on a teammate's machine).
+   * `runner_unavailable`: the runner it would run on was removed.
+   * `not_a_member`: the person whose work it is left the Workspace.
+   */
+  reason: "no_place" | "place_not_yours" | "runner_unavailable" | "not_a_member";
 }
 
-/** Inserts the jobs a write's side effects need; returns the runs it could not place. */
+export interface SideEffectReport {
+  /** Picked Automation runs that could not start. */
+  unstartedRuns: UnstartedRun[];
+  /**
+   * Tickets switched to a worktree whose Working copy was not asked for: the
+   * Place is not the switcher's runner. The Place's owner makes it when they
+   * next work on the ticket there (the runner reports the Working copy it
+   * makes, with the runner registration work).
+   */
+  deferredWorktrees: string[];
+}
+
+function unstartedReason(refused: JobRefusalCode): UnstartedRun["reason"] {
+  if (refused === "runner_unavailable" || refused === "not_a_member") return refused;
+  return "place_not_yours";
+}
+
+/** Inserts the jobs a write's side effects need; reports what did not start. */
 export async function enqueueSideEffects(
   context: EffectContext,
   effects: readonly BoardSideEffect[],
-): Promise<UnstartedRun[]> {
-  const unstarted: UnstartedRun[] = [];
+): Promise<SideEffectReport> {
+  const report: SideEffectReport = { unstartedRuns: [], deferredWorktrees: [] };
   for (const effect of effects) {
     const ticket = context.tickets.get(effect.ticketId);
     if (ticket === undefined)
       throw new Error(`Side effect for an unloaded ticket ${effect.ticketId}`);
-    const jobs = await jobsFor(context, ticket, effect, unstarted);
-    for (const job of jobs) await insertJob(context, ticket, job);
+    for (const job of await jobsFor(context, ticket, effect, report.unstartedRuns)) {
+      const outcome = await tryEnqueueJob(context.ctx, {
+        ...job,
+        projectId: ticket.projectId,
+        ticketId: ticket.id,
+      });
+      if (!("refused" in outcome)) continue;
+      // Work no one is waiting on (a trim, an interrupt, an armed run) has no
+      // one to tell; the log keeps why it did not start.
+      console.warn("board side effect not routed", {
+        effect: effect.kind,
+        job: job.kind,
+        ticketId: ticket.id,
+        refused: outcome.refused,
+      });
+      if (job.kind === "automation.run") {
+        const payload = job.payload as { automationId: string; origin: string };
+        if (payload.origin === "chosen") {
+          report.unstartedRuns.push({
+            ticketId: ticket.id,
+            automationId: payload.automationId,
+            reason: unstartedReason(outcome.refused),
+          });
+        }
+      }
+      if (job.kind === "workingCopy.materialize") report.deferredWorktrees.push(ticket.id);
+    }
   }
-  return unstarted;
-}
-
-async function insertJob(
-  { ctx, now }: EffectContext,
-  ticket: Doc<"tickets">,
-  job: JobDraft,
-): Promise<void> {
-  const id = job.id ?? newId("job");
-  const priority = job.priority ?? "normal";
-  await ctx.db.insert("runnerJobs", {
-    id,
-    runnerId: job.runnerId,
-    kind: job.kind,
-    projectId: ticket.projectId,
-    sessionId: job.sessionId ?? null,
-    ticketId: ticket.id,
-    workingCopyId: job.workingCopyId ?? null,
-    commandId: job.commandId ?? null,
-    payload: job.payload,
-    priority,
-    rank: jobRank(priority),
-    status: "queued",
-    availableAt: job.availableAt,
-    lease: null,
-    receipt: null,
-    result: null,
-    createdBy: job.createdBy,
-    createdAt: now,
-    completedAt: null,
-    expiresAt: null,
-  });
+  return report;
 }
 
 async function ticketJobs(ctx: MutationCtx, ticketId: string): Promise<Doc<"runnerJobs">[]> {
@@ -132,7 +135,7 @@ async function jobsFor(
   ticket: Doc<"tickets">,
   effect: BoardSideEffect,
   unstarted: UnstartedRun[],
-): Promise<JobDraft[]> {
+): Promise<EffectJob[]> {
   const { ctx, actor, now } = context;
   switch (effect.kind) {
     case "trim_working_copies": {
@@ -155,6 +158,8 @@ async function jobsFor(
           payload: { ticketId: ticket.id, workingCopyId: copy.id, reason: effect.reason },
           availableAt: now,
           createdBy: actor,
+          // Housekeeping of a copy the runner holds: its owner's own disk.
+          onBehalfOf: null,
         }));
     }
 
@@ -165,7 +170,7 @@ async function jobsFor(
         .query("sessions")
         .withIndex("by_ticket_activity", (q) => q.eq("ticketId", ticket.id))
         .collect();
-      const jobs: JobDraft[] = [];
+      const jobs: EffectJob[] = [];
       for (const session of sessions) {
         if (
           session.deletedAt !== null ||
@@ -189,9 +194,7 @@ async function jobsFor(
           sessionId: session.id,
           commandId,
           payload: {
-            sessionId: session.id,
-            commandId,
-            intent: { kind: "executor.interrupt" },
+            format: SESSION_INTERRUPT_FORMAT,
             reason: "ticket_left_active_columns",
             from: effect.from,
             to: effect.to,
@@ -203,6 +206,7 @@ async function jobsFor(
             reason: "supervision",
             onBehalfOf: session.ownerUserId as UserId,
           },
+          onBehalfOf: session.ownerUserId,
         });
       }
       return jobs;
@@ -218,10 +222,9 @@ async function jobsFor(
           job.status === "queued" &&
           (job.payload as { trigger?: unknown }).trigger === ARRIVAL_TRIGGER
         ) {
-          await ctx.db.patch(job._id, {
-            status: "cancelled",
-            completedAt: now,
-            expiresAt: now + TERMINAL_JOB_TTL_MS,
+          await cancelJob(ctx, job, now, {
+            code: "superseded",
+            detail: "A later move replaced this arrival.",
           });
         }
       }
@@ -249,6 +252,7 @@ async function jobsFor(
       // An armed run goes to the runner its armer chose (their own). A pick of
       // another Automation runs on the ticket's Place only when that runner
       // is the picker's own: work never lands on a teammate's machine.
+      const picker = actorUserId(actor);
       let runnerId: string;
       if (armed) {
         runnerId = arming.runnerId;
@@ -262,7 +266,7 @@ async function jobsFor(
           .query("runners")
           .withIndex("by_uuid", (q) => q.eq("id", place))
           .unique();
-        if (runner === null || runner.ownerUserId !== actorUserId(actor)) {
+        if (runner === null || runner.ownerUserId !== picker) {
           unstarted.push({ ticketId: ticket.id, automationId, reason: "place_not_yours" });
           return [];
         }
@@ -283,6 +287,8 @@ async function jobsFor(
           },
           availableAt: effect.notBefore,
           createdBy: actor,
+          // Armed: the armer's work, with their credentials. Picked: the picker's.
+          onBehalfOf: armed ? arming.armedByUserId : picker,
         },
       ];
     }
@@ -293,6 +299,8 @@ async function jobsFor(
       // being made (`hasLiveWorktree`), so there is none to duplicate.
       if (ticket.placeRunnerId === null) return [];
       const runnerId = ticket.placeRunnerId;
+      const switcher = actorUserId(actor);
+      if (switcher === null) return [];
       return [
         {
           runnerId,
@@ -300,6 +308,10 @@ async function jobsFor(
           payload: { ticketId: ticket.id, reason: "checkout_mode_changed" },
           availableAt: now,
           createdBy: actor,
+          // The switch is the switcher's request, and making a worktree runs
+          // the project's setup: it happens only on the switcher's own runner.
+          // Elsewhere it is reported as deferred (`SideEffectReport`).
+          onBehalfOf: switcher,
         },
       ];
     }

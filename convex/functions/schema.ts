@@ -889,12 +889,28 @@ export default defineSchema({
     createdAt: time,
     completedAt: nullable(time),
     expiresAt: nullable(time),
+    // The last failure: reported by the runner, or a lease that ran out (`by: "backend"`).
+    // A retry keeps it, so "retrying after <code>" and the dead letter both say why.
+    failure: v.optional(
+      nullable(
+        v.object({
+          attempt: v.number(),
+          code: v.string(),
+          detail: nullable(v.string()),
+          retryable: v.boolean(),
+          by: literals(["runner", "backend"]),
+          at: time,
+        }),
+      ),
+    ),
   })
     .index("by_uuid", ["id"])
     .index("by_runner_ready", ["runnerId", "status", "rank", "availableAt"])
     .index("by_session", ["sessionId", "createdAt"])
     .index("by_ticket", ["ticketId", "createdAt"])
-    .index("by_expiry", ["expiresAt"]),
+    .index("by_expiry", ["expiresAt"])
+    // Queued work of one kind by age (the notice expiry sweep).
+    .index("by_kind_status", ["kind", "status", "createdAt"]),
 
   // ── attention / Needs-you ──────────────────────────────────────────────────
   attentionItems: defineTable({
