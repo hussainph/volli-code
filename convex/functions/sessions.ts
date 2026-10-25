@@ -31,6 +31,7 @@ import {
   assertCloudInteractionReference,
   CLOUD_MESSAGE_MEDIA_TYPE,
   encodeSessionJson,
+  decodeCloudSessionIntent,
   readCloudMessageBody,
   scrubSessionAttachment,
   scrubSessionAttachmentFailure,
@@ -43,7 +44,6 @@ import {
 } from "@volli/shared";
 import {
   canSeeSession,
-  decodeCloudSessionIntent,
   isFollowUpIntent,
   cloudSessionView,
   INLINE_ARTIFACT_MAX_BYTES,

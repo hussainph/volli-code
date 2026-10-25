@@ -31,10 +31,10 @@
  */
 
 import { ConvexError, v } from "convex/values";
+import { decodeCloudSessionIntent } from "@volli/shared";
 
 import {
   INVALID_JOB_RESULT,
-  decodeCloudSessionIntent,
   isFollowUpIntent,
   JOB_CLAIM_MAX,
   JOB_LEASE_MAX_MS,

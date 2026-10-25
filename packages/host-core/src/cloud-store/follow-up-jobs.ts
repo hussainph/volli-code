@@ -1,13 +1,12 @@
 /** Follow-up intake and runner-held edits/cancels share the existing runtime queue. */
 import { SessionRuntimeConflictError } from "@volli/session-engine";
-import { QueueRevisionConflictError } from "@volli/shared";
+import { QueueRevisionConflictError, decodeCloudSessionIntent } from "@volli/shared";
 import type {
   HostedSessionRuntime,
   SessionClientCommand,
   TranscriptArtifactStore,
 } from "@volli/session-engine";
 import {
-  decodeCloudSessionIntent,
   isFollowUpIntent,
   type ClaimedJob,
   type FollowUpIntent,

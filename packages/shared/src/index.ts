@@ -141,6 +141,7 @@ export * from "./session-usage-report";
 export * from "./session-streak";
 export * from "./working-copy";
 export * from "./session-event-codec";
+export * from "./cloud-session-intent";
 export * from "./cloud-message-artifact";
 export * from "./transcript-canonical-json";
 export * from "./native-observation-id";

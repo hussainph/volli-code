@@ -1,8 +1,7 @@
 /** Intent routing only. The runner owns queue release, steering and delivery races. */
 import { ConvexError } from "convex/values";
-import { encodeSessionJson } from "@volli/shared";
+import { encodeSessionJson, decodeCloudSessionIntent } from "@volli/shared";
 import {
-  decodeCloudSessionIntent,
   FOLLOW_UP_QUEUE_MAX,
   followUpQueueView,
   SESSION_COMMAND_FORMAT,

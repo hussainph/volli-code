@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vite-plus/test";
+import { decodeCloudSessionIntent } from "../cloud-session-intent";
 import {
-  decodeCloudSessionIntent,
   isFollowUpIntent,
   followUpQueueView,
   type FollowUpIntent,
