@@ -864,9 +864,17 @@ describe("sweeps", () => {
   });
 
   test("the daily reconcile removes installations GitHub no longer has", async () => {
+    vi.useFakeTimers();
     const t = setup();
     const installation = github.addInstallation(ACME);
     await deliver(t, "installation", { action: "created", installation });
+    // Finish the webhook's reconcile while GitHub still has the installation.
+    // Otherwise it can remove the row before the daily sweep counts it.
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await t.run((ctx) => ctx.db.query("githubInstallations").first())).toMatchObject({
+      deletedAt: null,
+      reconciledAt: expect.any(Number),
+    });
     await seedRepo(t, { githubRepoId: "3001", installationId: "77", owner: "acme", name: "api" });
     github.installations.clear();
     expect(await t.action(internal.githubIngest.reconcileAll, {})).toEqual({ removed: 1 });
