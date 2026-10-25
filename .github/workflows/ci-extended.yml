@@ -25,7 +25,9 @@ name: CI extended
 # (main's own core e2e in ci.yml holds a second), leaving the PR lanes three
 # of the five. The runner still globs apps/desktop/e2e/*-smoke.mjs and subtracts
 # core, credential/legacy exclusions and measured quarantine, so a new smoke
-# joins this lane with no registration step.
+# joins this lane with no registration step. The small two-Mac cloud wake
+# journey leads the chain so its failure reports before the long rest tier;
+# every later lane still runs after a failure, and the summary requires all.
 on:
   push:
     branches: [main]
@@ -54,6 +56,8 @@ concurrency:
 jobs:
   smoke-rest:
     name: Smoke (rest tier)
+    needs: smoke-cloud-wake
+    if: ${{ !cancelled() }}
     runs-on: macos-15
     timeout-minutes: 50
     steps:
@@ -182,13 +186,12 @@ jobs:
   # SIMULATED by main's dual-locked smoke seam (real power events, the runner
   # transport held down); the real lid test is on hardware, by the owner.
   #
-  # After cloud acceptance, not beside it (one macOS slot at a time), and
-  # whatever its outcome. Its own build: the renderer CSP must reach the
-  # loopback backend (VOLLI_CLOUD_LOOPBACK=1), which the release and the
-  # other lanes never build with.
+  # First in the same single-slot chain, for quick cloud wake feedback.
+  # The rest tier and remote acceptance still run afterward, even if this
+  # fails. Its own build: the renderer CSP must reach the loopback backend
+  # (VOLLI_CLOUD_LOOPBACK=1), which release and other lanes never build with.
   smoke-cloud-wake:
     name: Smoke (cloud wake acceptance)
-    needs: smoke-cloud
     if: ${{ !cancelled() }}
     runs-on: macos-15
     timeout-minutes: 40

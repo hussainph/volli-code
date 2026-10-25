@@ -178,6 +178,41 @@ export async function quitCloudLaunchFromTray(app, exited, { timeoutMs = 30_000 
 }
 
 /**
+ * The close record of an Electron that already quit on its own (the Tray's
+ * Quit Volli), proven from the EXACT ChildProcess handle the supervisor
+ * captured when it launched that pid. Playwright disposes its Electron
+ * dispatcher once the process exits, so `app.process()` (and with it
+ * `closeAppBounded`) can no longer inspect it. The handle captured at launch
+ * still holds Node's own exit fields.
+ *
+ * - `null`: the child is still running. The caller closes it the bounded way
+ *   while Playwright can still reach it.
+ * - throws when there is no captured handle, or it is not the recorded pid:
+ *   a missing or unknown child is a fault, never a clean exit.
+ *
+ * It sends no signal and touches no process.
+ */
+export function observedChildExit(child, expectedPid) {
+  if (child === null || child === undefined || typeof child !== "object") {
+    throw new Error("no captured Electron child handle: cannot prove how it exited");
+  }
+  if (!Number.isInteger(expectedPid) || expectedPid <= 0 || child.pid !== expectedPid) {
+    throw new Error(
+      `the captured Electron child is pid ${child.pid}, not the recorded pid ${expectedPid}`,
+    );
+  }
+  const exitCode = child.exitCode ?? null;
+  const signal = child.signalCode ?? null;
+  if (exitCode === null && signal === null) return null;
+  return {
+    kind: "already-exited",
+    pid: child.pid,
+    exit: { code: exitCode, signal },
+    closeFailures: [],
+  };
+}
+
+/**
  * How a driven Electron must have ended: its own quit, exit code 0, no signal,
  * no failed close step. A bounded close that had to terminate or kill it is
  * not a clean quit, whatever the leftovers say.

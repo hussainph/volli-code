@@ -57,6 +57,7 @@ import {
   cloudFixtureFromSupervisorEnv,
   completeDevSignIn,
   launchMarkerUser,
+  observedChildExit,
   quitCloudLaunchFromTray,
   readAppState,
   recordedDevSignIn,
@@ -112,6 +113,15 @@ let electronPid = null;
 /** { pid, pgid, started }: the Electron child, as ps saw it at launch. */
 let electronIdentity = null;
 let electronExit = null;
+/**
+ * The exact ChildProcess of the Electron pid this supervisor launched,
+ * captured at launch. Playwright disposes its dispatcher once that process
+ * exits, so a cloud instance's quit is proven from this handle afterwards.
+ */
+let electronChild = null;
+/** A cloud instance's last Tray quit and close record, kept for the manifest. */
+let lastTrayQuit = null;
+let lastCloudClose = null;
 let provider = null;
 let remoteFixture = null;
 let server = null;
@@ -506,11 +516,27 @@ async function finalize(reason, { keepScratch = false } = {}) {
   const before = await owned().catch(() => []);
   let close = null;
   let trayQuit = null;
-  if (app && electronExit === null) {
-    // A cloud launch stays resident on an ordinary quit: quit it for real,
-    // the person's way, first. The bounded close then only observes the exit
-    // (or, if the Tray quit did not end it, closes it and says how).
-    if (spec.cloud) trayQuit = await cloudTrayQuit().catch((error) => ({ error: error.message }));
+  if (spec.cloud) {
+    // A cloud launch stays resident on an ordinary quit: it quits for real,
+    // the person's way (closeCloudInstance). One that already quit (a
+    // restart's quit, then a failure) keeps that quit's record, proven again
+    // from the exact child handle.
+    if (app && electronExit === null) {
+      const closed = await closeCloudInstance().catch((error) => ({
+        trayQuit: lastTrayQuit,
+        close: { kind: "error", error: error.message },
+      }));
+      trayQuit = closed.trayQuit;
+      close = closed.close;
+    } else if (electronExit !== null) {
+      trayQuit = lastTrayQuit;
+      try {
+        close = observedChildExit(electronChild, electronPid) ?? lastCloudClose;
+      } catch (error) {
+        close = { kind: "error", error: error.message };
+      }
+    }
+  } else if (app && electronExit === null) {
     close = await closeAppBounded(app).catch((error) => ({ kind: "error", error: error.message }));
   }
   let remoteCleanupError = null;
@@ -661,6 +687,9 @@ async function boot() {
  * here, with the same environment, profile, database and harness directory.
  */
 async function startElectron(extraEnv) {
+  // Quit evidence belongs to one launch, never the process that replaces it.
+  lastTrayQuit = null;
+  lastCloudClose = null;
   // Re-checked at the call: nothing between the gate above and here may have
   // pointed smoke-kit at a packed app.
   assertLaunchable(spec);
@@ -672,6 +701,7 @@ async function startElectron(extraEnv) {
     extraArgs: ["--use-mock-keychain", "--password-store=basic"],
   });
   const child = app.process();
+  electronChild = child;
   electronPid = child.pid;
   electronIdentity = await processIdentity(electronPid).catch(() => null);
   await registry.update(spec.id, { electronPid, electron: electronIdentity }).catch(() => {});
@@ -732,10 +762,9 @@ async function restart(reason) {
   restarting = true;
   const started = performance.now();
   try {
-    // A local launch quits on an ordinary quit; a cloud one stays resident,
-    // so it quits through the Tray's Quit Volli, as a person would.
-    const trayQuit = await cloudTrayQuit();
-    const close = await closeAppBounded(app);
+    // Through the Tray's Quit Volli, as a person would (a cloud launch stays
+    // resident on an ordinary quit), proven from the exact child handle.
+    const { trayQuit, close } = await closeCloudInstance();
     const unclean = cleanQuitProblems(close);
     if (unclean.length > 0) {
       throw new Error(
@@ -743,8 +772,26 @@ async function restart(reason) {
       );
     }
     if (electronExit?.code === HARNESS_VIOLATION_EXIT_CODE) throw new Error("keychain violation");
-    // Anything the old process left is ours to end before the new one starts.
-    await killExactly(await owned().catch(() => []), { signal: "SIGKILL", graceMs: 2_000 });
+    // A clean quit takes its helpers with it. Nothing is signalled here: a
+    // process that outlives the quit fails the restart, and `stop` reaps it
+    // by identity and reports it as a leftover.
+    let outlived = [];
+    try {
+      await waitUntil(
+        "the quit Electron's processes to exit",
+        async () => {
+          outlived = await owned();
+          return outlived.length === 0;
+        },
+        { timeout: 10_000, interval: 200 },
+      );
+    } catch (error) {
+      // An unreadable process table is not proof that every helper exited.
+      throw new Error(
+        `processes outlived the quit before the restart, or could not be inspected: ${JSON.stringify(outlived.map((row) => ({ pid: row.pid, started: row.started })))}`,
+        { cause: error },
+      );
+    }
     await fs.rm(L.appSocket, { force: true });
     electronExit = null;
     mainPage = null;
@@ -938,8 +985,35 @@ async function handle(cmd, args) {
 async function cloudTrayQuit() {
   requireCloud();
   const result = await quitCloudLaunchFromTray(app, () => electronExit !== null);
+  lastTrayQuit = result;
   transcript({ cmd: "tray-quit", ...result });
   return result;
+}
+
+/**
+ * A cloud instance's quit, proven. The child handle and pid are taken BEFORE
+ * the Tray quit, so the proof is about the process this supervisor launched.
+ * An exit is read from that handle (no signal, no Playwright); only a child
+ * still running is closed the bounded way, while Playwright can reach it. A
+ * missing or mismatched handle throws: never read as a clean quit.
+ */
+async function closeCloudInstance() {
+  requireCloud();
+  const child = electronChild;
+  const pid = electronPid;
+  const trayQuit = await cloudTrayQuit();
+  let close = observedChildExit(child, pid);
+  if (close === null) {
+    try {
+      close = await closeAppBounded(app);
+    } catch (error) {
+      // It may have exited while the bounded close looked for it; else the fault stands.
+      close = observedChildExit(child, pid);
+      if (close === null) throw error;
+    }
+  }
+  lastCloudClose = close;
+  return { trayQuit, close };
 }
 
 function requireCloud() {

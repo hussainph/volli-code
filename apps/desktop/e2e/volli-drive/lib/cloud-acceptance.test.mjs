@@ -18,6 +18,7 @@ import {
   completeDevSignIn,
   devAccessToken,
   launchMarkerUser,
+  observedChildExit,
   quitCloudLaunchFromTray,
   recordedDevSignIn,
   recordedRunnerId,
@@ -221,15 +222,47 @@ test("only a cloud instance reaches the Tray quit; native Quit stays the remote 
     supervisor,
     /async function cloudTrayQuit\(\) \{\s*requireCloud\(\);\s*const result = await quitCloudLaunchFromTray\(/u,
   );
-  // Its callers: stop, only for a cloud spec; restart, which refuses non-cloud instances.
-  assert.equal(supervisor.match(/await cloudTrayQuit\(\)/gu)?.length, 2);
-  assert.match(supervisor, /if \(spec\.cloud\) trayQuit = await cloudTrayQuit\(\)/u);
+  // Its one caller proves the quit; that is reached from stop (cloud spec
+  // only) and restart (which refuses non-cloud instances), nowhere else.
+  assert.equal(supervisor.match(/await cloudTrayQuit\(\)/gu)?.length, 1);
+  assert.match(
+    supervisor,
+    /async function closeCloudInstance\(\) \{\s*requireCloud\(\);\s*const child = electronChild;\s*const pid = electronPid;\s*const trayQuit = await cloudTrayQuit\(\);/u,
+    "the exact child and pid are taken before the Tray quit",
+  );
+  assert.equal(supervisor.match(/await closeCloudInstance\(\)/gu)?.length, 2);
+  const finalize = supervisor.slice(
+    supervisor.indexOf("async function finalize("),
+    supervisor.indexOf("function armIdle("),
+  );
+  assert.match(
+    finalize,
+    /if \(spec\.cloud\) \{[\s\S]*?await closeCloudInstance\(\)[\s\S]*?\} else if \(app && electronExit === null\) \{\s*close = await closeAppBounded\(app\)/u,
+  );
   const restart = supervisor.slice(
     supervisor.indexOf("async function restart("),
     supervisor.indexOf("async function handle("),
   );
   assert.match(restart, /if \(!spec\.cloud\) throw new Error/u);
-  assert.ok(restart.indexOf("if (!spec.cloud)") < restart.indexOf("await cloudTrayQuit()"));
+  assert.ok(restart.indexOf("if (!spec.cloud)") < restart.indexOf("await closeCloudInstance()"));
+  // A restart signals nothing: a process outliving the quit fails it instead.
+  assert.doesNotMatch(restart, /killExactly|SIGKILL|SIGTERM|\.kill\(/u);
+  assert.match(restart, /processes outlived the quit before the restart/u);
+  assert.doesNotMatch(
+    restart,
+    /\.catch\(\(\) => \{\}\)/u,
+    "process inspection failure cannot become a successful restart",
+  );
+  const launch = supervisor.slice(
+    supervisor.indexOf("async function startElectron("),
+    supervisor.indexOf("async function restart("),
+  );
+  assert.match(
+    launch,
+    /lastTrayQuit = null;\s*lastCloudClose = null;/u,
+    "a new process never reuses the prior launch's quit proof",
+  );
+  assert.doesNotMatch(nativeQuit, /closeCloudInstance|observedChildExit/u);
   // Every cloud-only command refuses an instance that is not one.
   for (const command of [
     "cloud-sign-in-browser",
@@ -242,4 +275,32 @@ test("only a cloud instance reaches the Tray quit; native Quit stays the remote 
     const body = supervisor.slice(start, supervisor.indexOf("case ", start + 6));
     assert.match(body, /requireCloud\(\);/u, `${command} refuses a non-cloud instance`);
   }
+});
+
+test("a quit Electron's exit is read from the exact child launched, never assumed", () => {
+  const exited = { pid: 4242, exitCode: 0, signalCode: null };
+  assert.deepEqual(observedChildExit(exited, 4242), {
+    kind: "already-exited",
+    pid: 4242,
+    exit: { code: 0, signal: null },
+    closeFailures: [],
+  });
+  // Killed or failing exits are reported as they were, for cleanQuitProblems to refuse.
+  assert.deepEqual(observedChildExit({ pid: 7, exitCode: null, signalCode: "SIGKILL" }, 7).exit, {
+    code: null,
+    signal: "SIGKILL",
+  });
+  assert.equal(
+    cleanQuitProblems(observedChildExit({ pid: 7, exitCode: 1, signalCode: null }, 7)).length,
+    1,
+  );
+  // Still running: the caller closes it the bounded way.
+  assert.equal(observedChildExit({ pid: 4242, exitCode: null, signalCode: null }, 4242), null);
+  // A missing handle or another pid is a fault, not a clean quit.
+  assert.throws(() => observedChildExit(null, 4242), /no captured Electron child/u);
+  assert.throws(() => observedChildExit(undefined, 4242), /no captured Electron child/u);
+  assert.throws(() => observedChildExit(exited, 4243), /not the recorded pid/u);
+  assert.throws(() => observedChildExit(exited, null), /not the recorded pid/u);
+  assert.throws(() => observedChildExit({ ...exited, pid: 0 }, 0), /not the recorded pid/u);
+  assert.throws(() => observedChildExit({ ...exited, pid: -1 }, -1), /not the recorded pid/u);
 });
