@@ -488,7 +488,8 @@ describe("pollRetention — checks & conflicts surfacing", () => {
     seedProject();
     seedTicket({ prUrl: "https://x/pull/7" });
     let conclusion: string | null = null;
-    const { deps } = makeDeps(() =>
+    let clock = 1000;
+    const { deps: fixed } = makeDeps(() =>
       prView({
         statusCheckRollup: [
           {
@@ -500,16 +501,21 @@ describe("pollRetention — checks & conflicts surfacing", () => {
         ],
       }),
     );
+    const deps: RetentionPollPorts = { ...fixed, now: () => clock };
     const store = createRetentionStore();
 
     await pollRetention(deps, store);
-    // Same rollup again: nothing moved, so nothing is broadcast.
+    // Same rollup again: nothing moved, so nothing is broadcast. A running
+    // check keeps the PR on the active interval, so one interval later it is
+    // read again.
+    clock += RETENTION_POLL_INTERVAL_MS;
     expect((await pollRetention(deps, store)).changed).toBe(false);
 
     // The suite goes green. The name is identical and the length is identical
     // — only the state moved, which is precisely the transition the rail
     // exists to show, so it MUST reach the broadcast.
     conclusion = "SUCCESS";
+    clock += RETENTION_POLL_INTERVAL_MS;
     expect((await pollRetention(deps, store)).changed).toBe(true);
     expect(getRetentionState(deps, store, "t1")!.checks[0]?.state).toBe("passing");
   });
@@ -644,10 +650,16 @@ describe("RetentionWatcher — F4: schedule() never leaves a second timer chain"
       const deps: RetentionPollPorts = {
         db: ctx.db,
         net,
-        now: () => 1000,
+        now: () => Date.now(),
         notify: () => {},
       };
-      const config = { intervalMs: 1000, maxBackoffMs: 60_000 };
+      const config = {
+        intervalMs: 1000,
+        maxBackoffMs: 60_000,
+        quietMaxMs: 900_000,
+        trimRecheckMs: 21_600_000,
+        changeDebounceMs: 2_000,
+      };
       const watcher = new RetentionWatcher(deps, config);
 
       watcher.start();
@@ -764,7 +776,13 @@ describe("RetentionWatcher — driver surface (no timers)", () => {
     seedProject();
     seedTicket({ status: "done", prUrl: "https://x/pull/7", doneAt: 0 });
     const { deps } = makeDeps(() => ({ stdout: "" }));
-    const watcher = new RetentionWatcher(deps, { intervalMs: 60_000, maxBackoffMs: 900_000 });
+    const watcher = new RetentionWatcher(deps, {
+      intervalMs: 60_000,
+      maxBackoffMs: 900_000,
+      quietMaxMs: 900_000,
+      trimRecheckMs: 21_600_000,
+      changeDebounceMs: 2_000,
+    });
 
     const state = watcher.getState("t1")!;
     // No poll ran, so the PR observation is unknown but the stored url shows through.
@@ -779,13 +797,25 @@ describe("RetentionWatcher — driver surface (no timers)", () => {
 
   it("stop() before start() is a safe no-op", () => {
     const { deps } = makeDeps(() => ({ stdout: "" }));
-    const watcher = new RetentionWatcher(deps, { intervalMs: 60_000, maxBackoffMs: 900_000 });
+    const watcher = new RetentionWatcher(deps, {
+      intervalMs: 60_000,
+      maxBackoffMs: 900_000,
+      quietMaxMs: 900_000,
+      trimRecheckMs: 21_600_000,
+      changeDebounceMs: 2_000,
+    });
     expect(() => watcher.stop()).not.toThrow();
   });
 });
 
 describe("nextBackoffDelay + config", () => {
-  const config = { intervalMs: 60_000, maxBackoffMs: 900_000 };
+  const config = {
+    intervalMs: 60_000,
+    maxBackoffMs: 900_000,
+    quietMaxMs: 900_000,
+    trimRecheckMs: 21_600_000,
+    changeDebounceMs: 2_000,
+  };
 
   it("returns the base interval when healthy", () => {
     expect(nextBackoffDelay(0, config)).toBe(60_000);
@@ -801,10 +831,12 @@ describe("nextBackoffDelay + config", () => {
   });
 
   it("reads env overrides, falling back to the defaults", () => {
-    expect(retentionConfigFromEnv({})).toEqual({
-      intervalMs: RETENTION_POLL_INTERVAL_MS,
-      maxBackoffMs: RETENTION_MAX_BACKOFF_MS,
-    });
+    expect(retentionConfigFromEnv({})).toEqual(
+      expect.objectContaining({
+        intervalMs: RETENTION_POLL_INTERVAL_MS,
+        maxBackoffMs: RETENTION_MAX_BACKOFF_MS,
+      }),
+    );
     expect(retentionConfigFromEnv({ VOLLI_RETENTION_INTERVAL_MS: "500" }).intervalMs).toBe(500);
     expect(retentionConfigFromEnv({ VOLLI_RETENTION_INTERVAL_MS: "0" }).intervalMs).toBe(
       RETENTION_POLL_INTERVAL_MS,
@@ -887,7 +919,13 @@ describe("pollRetention — trim-on-finish backfill (VC-340)", () => {
 });
 
 describe("RetentionWatcher — settled(): stop, then drain before the database closes (VC-627)", () => {
-  const config = { intervalMs: 1000, maxBackoffMs: 60_000 };
+  const config = {
+    intervalMs: 1000,
+    maxBackoffMs: 60_000,
+    quietMaxMs: 900_000,
+    trimRecheckMs: 21_600_000,
+    changeDebounceMs: 2_000,
+  };
 
   it("settles at once with no poll in flight, and is safe to ask repeatedly and concurrently", async () => {
     const { deps } = makeDeps(() => ({ stdout: "" }));
@@ -1126,10 +1164,11 @@ describe("pollRetention — terminal PRs are not re-polled (VC-836)", () => {
       String(args[2]).includes("/pull/m") ? prView({ state: "MERGED" }) : prView(),
     );
     const notifications: Notified[] = [];
+    let clock = DAY;
     const deps: RetentionPollPorts = {
       db: ctx.db,
       net: run,
-      now: () => DAY,
+      now: () => clock,
       notify: (request) => notifications.push(request),
     };
     const store = createRetentionStore();
@@ -1143,7 +1182,11 @@ describe("pollRetention — terminal PRs are not re-polled (VC-836)", () => {
     expect(getRetentionState(deps, store, "m0")!.prState).toBe("merged");
     expect(notifications).toEqual([]);
 
-    // Open PRs keep their cadence: the next cycle reads them again.
+    // Open PRs keep their cadence: a cycle one interval later reads them
+    // again, and a cycle before then reads nothing (VC-686).
+    await pollRetention(deps, store);
+    expect(calls).toHaveLength(10);
+    clock += RETENTION_POLL_INTERVAL_MS;
     await pollRetention(deps, store);
     expect(calls).toHaveLength(20);
   });

@@ -15,6 +15,20 @@
  * dismissal are (re)computed on read against the live DB and clock, so toggling
  * Keep or dismissing takes effect immediately, without waiting for a poll. A
  * background READ failure is silent (a read is not a mutation — no toasts).
+ *
+ * ── CADENCE (VC-686) ──────────────────────────────────────────────────────
+ * A host that stays on all day (the menu-bar Mac, a Linux runner) must not pay
+ * for a board nobody is touching. So a cycle no longer reads every ticket: each
+ * ticket carries its own read schedule. A read that saw something change, or a
+ * PR whose checks are still running, is due again after the base interval; a
+ * read that saw nothing new, or failed, doubles that ticket's delay, up to the
+ * quiet ceiling. A ticket whose row changed (moved, re-pointed, a PR stamped)
+ * is due at once, and a committed change to a ticket wakes the driver and reads
+ * that ticket, so the board drives the reads rather than the clock. A person
+ * looking (window focus, a manual poll) refreshes anything older than the base
+ * interval. The trim backfill keeps its own per-ticket memo, so a
+ * finished worktree is walked again only when its ticket changes or the memo
+ * lapses, not every cycle.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
@@ -26,6 +40,7 @@ import { recordTicketEvent } from "../db/events-repo";
 import { getProjectById } from "../db/projects-repo";
 import { prepared } from "../db/prepared";
 import {
+  getTicketRow,
   listRetentionCandidates,
   listTrimCandidates,
   updateTicketFields,
@@ -42,6 +57,7 @@ import {
   type ReclaimPorts,
   type TrimFinishPorts,
 } from "./retention";
+import { getTrimSettings } from "./trim-settings";
 import { hostLogger } from "../log/root";
 
 const log = hostLogger("worktree-watch");
@@ -58,6 +74,24 @@ export const RETENTION_POLL_INTERVAL_MS = 60_000;
 /** Exponential-backoff ceiling: ~15 min. */
 export const RETENTION_MAX_BACKOFF_MS = 15 * 60_000;
 /**
+ * The ceiling a quiet ticket's read delay doubles toward (VC-686): how stale a
+ * PR nobody touched may get before an unattended host looks again. A person
+ * looking refreshes it sooner (see {@link RetentionPollOptions.present}).
+ */
+const RETENTION_QUIET_MAX_MS = 15 * 60_000;
+/**
+ * How long the trim backfill trusts a finished worktree it trimmed, or found
+ * nothing to trim in, before walking it again with an unchanged ticket
+ * (VC-686). The Done move trims on its own (`ticket-move.ts`); this pass only
+ * catches what that missed, so it has no reason to walk the same clean
+ * checkout every minute.
+ */
+const RETENTION_TRIM_RECHECK_MS = 6 * 60 * 60_000;
+/** How long a burst of ticket changes is folded before the watch reads (VC-686). */
+const RETENTION_CHANGE_DEBOUNCE_MS = 2_000;
+/** How often the driver writes its load summary to the host log (VC-686). */
+const LOAD_SUMMARY_INTERVAL_MS = 60 * 60_000;
+/**
  * How long a Done ticket with no `pr_url` keeps looking for one (VC-836). A PR
  * is normally open (and stamped) long before its ticket reaches Done, so this
  * only has to outlast an agent that opened it late or a stretch offline; past
@@ -67,8 +101,15 @@ const DONE_DISCOVERY_GRACE_MS = 7 * 24 * 60 * 60_000;
 
 /** The watch's tunables — derived once from the environment. */
 export interface RetentionWatchConfig {
+  /** The base cycle, and the read delay of a ticket that is still moving. */
   intervalMs: number;
   maxBackoffMs: number;
+  /** The ceiling a quiet (or failing) ticket's read delay doubles toward. */
+  quietMaxMs: number;
+  /** How long the trim backfill trusts a worktree it trimmed or found clean. */
+  trimRecheckMs: number;
+  /** How long a burst of ticket changes is folded into one cycle. */
+  changeDebounceMs: number;
 }
 
 /** Parses a positive-int env string, falling back on absent/invalid/non-positive values. */
@@ -81,7 +122,7 @@ function positiveIntFromEnv(value: string | undefined, fallback: number): number
 /**
  * Builds the watch config from the environment. `VOLLI_RETENTION_INTERVAL_MS` /
  * `VOLLI_RETENTION_MAX_BACKOFF_MS` override the timings (positive-int strings
- * only) so the e2e smokes can poll fast. Pure.
+ * only) so the e2e smokes can poll fast; the cadence ceilings are fixed. Pure.
  */
 export function retentionConfigFromEnv(env: NodeJS.ProcessEnv): RetentionWatchConfig {
   return {
@@ -90,6 +131,9 @@ export function retentionConfigFromEnv(env: NodeJS.ProcessEnv): RetentionWatchCo
       env["VOLLI_RETENTION_MAX_BACKOFF_MS"],
       RETENTION_MAX_BACKOFF_MS,
     ),
+    quietMaxMs: RETENTION_QUIET_MAX_MS,
+    trimRecheckMs: RETENTION_TRIM_RECHECK_MS,
+    changeDebounceMs: RETENTION_CHANGE_DEBOUNCE_MS,
   };
 }
 
@@ -99,10 +143,30 @@ export function retentionConfigFromEnv(env: NodeJS.ProcessEnv): RetentionWatchCo
  * `maxBackoffMs` (the T3 backoff pattern — a `gh`-not-installed / offline run
  * must not hammer the CLI every 60s). Pure.
  */
-export function nextBackoffDelay(failures: number, config: RetentionWatchConfig): number {
+export function nextBackoffDelay(
+  failures: number,
+  config: Pick<RetentionWatchConfig, "intervalMs" | "maxBackoffMs">,
+): number {
   if (failures <= 0) return config.intervalMs;
   const scaled = config.intervalMs * 2 ** failures;
   return Math.min(scaled, config.maxBackoffMs);
+}
+
+/**
+ * The driver's delay before the next cycle (VC-686): the failure backoff when
+ * whole cycles are failing, else until the earliest ticket read falls due —
+ * never sooner than the base interval and never later than the quiet ceiling
+ * (the reclaim and trim answers ride the same cycle). Pure.
+ */
+function nextCycleDelay(
+  failures: number,
+  nextDueInMs: number | null,
+  config: RetentionWatchConfig,
+): number {
+  if (failures > 0) return nextBackoffDelay(failures, config);
+  const ceiling = Math.max(config.intervalMs, config.quietMaxMs);
+  if (nextDueInMs === null) return ceiling;
+  return Math.min(Math.max(nextDueInMs, config.intervalMs), ceiling);
 }
 
 // --- store ------------------------------------------------------------------
@@ -117,19 +181,131 @@ interface RetentionObservation {
 }
 
 /**
+ * One ticket's read schedule (VC-686): the row it was read against, when, and
+ * when it is due again.
+ */
+interface ReadSchedule {
+  /** {@link ticketFingerprint} of the row the last read answered. */
+  fingerprint: string;
+  readAt: number;
+  delayMs: number;
+  dueAt: number;
+}
+
+/** The trim backfill's memo for one ticket (VC-686). */
+interface TrimMemo {
+  /** The ticket row, Keep pin, merge flag and trim settings the last check answered. */
+  key: string;
+  recheckAt: number;
+}
+
+/**
  * The watch's module-resident transient state. `observations` holds the last
  * poll's PR read per ticket; `notifiedMerged` dedups the one-shot merge event +
- * notification; `dismissed` is the launch-scoped prompt suppression. All rebuilt
- * from scratch on launch — nothing here is persisted.
+ * notification; `dismissed` is the launch-scoped prompt suppression; `reads`
+ * and `trims` are the per-ticket cadence (VC-686). All rebuilt from scratch on
+ * launch — nothing here is persisted.
  */
 export interface RetentionStore {
   observations: Map<string, RetentionObservation>;
   notifiedMerged: Set<string>;
   dismissed: Set<string>;
+  reads: Map<string, ReadSchedule>;
+  trims: Map<string, TrimMemo>;
 }
 
 export function createRetentionStore(): RetentionStore {
-  return { observations: new Map(), notifiedMerged: new Set(), dismissed: new Set() };
+  return {
+    observations: new Map(),
+    notifiedMerged: new Set(),
+    dismissed: new Set(),
+    reads: new Map(),
+    trims: new Map(),
+  };
+}
+
+/** The timings one cycle reads and schedules by (VC-686). */
+type RetentionCadence = Pick<RetentionWatchConfig, "intervalMs" | "quietMaxMs" | "trimRecheckMs">;
+
+const DEFAULT_CADENCE: RetentionCadence = {
+  intervalMs: RETENTION_POLL_INTERVAL_MS,
+  quietMaxMs: RETENTION_QUIET_MAX_MS,
+  trimRecheckMs: RETENTION_TRIM_RECHECK_MS,
+};
+
+/** One cycle's options. */
+export interface RetentionPollOptions {
+  /** Defaults to the shipped timings. */
+  cadence?: RetentionCadence;
+  /**
+   * A person is looking (window focus, a manual poll): every ticket whose last
+   * read is older than the base interval is read now, whatever its backoff.
+   */
+  present?: boolean;
+  /** Tickets a committed change named since the last cycle: read now, whatever their backoff. */
+  woken?: ReadonlySet<string>;
+}
+
+/**
+ * The ticket fields a retention read depends on (VC-686): a moved, archived,
+ * re-pointed or freshly stamped ticket reads as changed and is due at once. An
+ * edit to anything else (title, body, labels) is not a reason to call `gh`.
+ */
+function ticketFingerprint(ticket: TicketRow): string {
+  return [
+    ticket.status,
+    ticket.branch ?? "",
+    ticket.pr_url ?? "",
+    ticket.worktree_path ?? "",
+    ticket.archived_at ?? "",
+  ].join("\u0000");
+}
+
+/** Whether a ticket's PR read is due this cycle (VC-686). */
+function readDue(
+  store: RetentionStore,
+  ticketId: string,
+  fingerprint: string,
+  now: number,
+  options: Required<RetentionPollOptions>,
+): boolean {
+  if (options.woken.has(ticketId)) return true;
+  const entry = store.reads.get(ticketId);
+  if (entry === undefined || entry.fingerprint !== fingerprint) return true;
+  // A clock stepped backwards must not stall a read by the size of the step.
+  if (now >= entry.dueAt || now < entry.readAt) return true;
+  return options.present && now - entry.readAt >= options.cadence.intervalMs;
+}
+
+/**
+ * Schedules a ticket's next read (VC-686). After a read that saw a change, a
+ * first read, a read of a changed row, or a PR still moving, it is due again
+ * after the base interval. After a quiet read, or a failed one, its delay
+ * doubles up to the ceiling: a ticket whose `gh` read keeps failing (a deleted
+ * PR, a repository it can no longer reach) backs off on its own instead of
+ * holding the driver to a one-minute wake.
+ */
+function scheduleRead(
+  store: RetentionStore,
+  ticketId: string,
+  fingerprint: string,
+  now: number,
+  cadence: RetentionCadence,
+  active: boolean,
+): void {
+  const previous = store.reads.get(ticketId);
+  const delayMs =
+    active || previous === undefined || previous.fingerprint !== fingerprint
+      ? cadence.intervalMs
+      : Math.min(previous.delayMs * 2, Math.max(cadence.intervalMs, cadence.quietMaxMs));
+  store.reads.set(ticketId, { fingerprint, readAt: now, delayMs, dueAt: now + delayMs });
+}
+
+/** An open PR whose checks have not all settled is still moving (VC-686). */
+function stillMoving(observation: RetentionObservation): boolean {
+  return (
+    observation.prState === "open" && observation.checks.some((check) => check.state === "pending")
+  );
 }
 
 // --- poll deps + step -------------------------------------------------------
@@ -169,10 +345,18 @@ export interface RetentionPollPorts {
 export interface PollResult {
   /** At least one observation was created or changed (the driver broadcasts). */
   changed: boolean;
-  /** How many `gh` reads were attempted this cycle. */
+  /** How many `gh` reads were attempted this cycle (one process each). */
   attempted: number;
   /** How many of those failed (a wholly-failed cycle drives backoff). */
   failed: number;
+  /**
+   * How many finished tickets the trim backfill asked this cycle. One that gets
+   * past the cheap refusals (missing folder, Keep, trim off) costs git
+   * processes and a tree walk.
+   */
+  trimChecks: number;
+  /** Milliseconds until the earliest scheduled read falls due; `null` when none is scheduled. */
+  nextDueInMs: number | null;
 }
 
 /** Whether a `pr_merged` event already exists for the ticket (durable dedup across restarts). */
@@ -316,20 +500,41 @@ function ghCwd(deps: RetentionPollPorts, ticket: TicketRow): string | null {
 export async function pollRetention(
   deps: RetentionPollPorts,
   store: RetentionStore,
+  options: RetentionPollOptions = {},
 ): Promise<PollResult> {
-  const result: PollResult = { changed: false, attempted: 0, failed: 0 };
+  const result: PollResult = {
+    changed: false,
+    attempted: 0,
+    failed: 0,
+    trimChecks: 0,
+    nextDueInMs: null,
+  };
+  const cycle: Required<RetentionPollOptions> = {
+    cadence: options.cadence ?? DEFAULT_CADENCE,
+    present: options.present ?? false,
+    woken: options.woken ?? new Set(),
+  };
+  const now = deps.now();
   /** Tickets this cycle knows merged — finished, whatever column they are in. */
   const mergedThisCycle = new Set<string>();
+  /** Every candidate this cycle saw; a schedule for anything else is dropped. */
+  const seen = new Set<string>();
 
   for (const ticket of listRetentionCandidates(deps.db)) {
+    seen.add(ticket.id);
     // Per-ticket isolation: a throw here (SQLITE_BUSY, an FK failure on a
     // ticket deleted mid-cycle, ...) must not abort the whole candidate loop —
     // log it and move on so every OTHER ticket's discovery/status/merge still
     // runs this cycle, and `deps.onChange` still fires for whatever changed.
     try {
       const cwd = ghCwd(deps, ticket);
-      if (cwd === null) continue;
+      if (cwd === null) {
+        store.reads.delete(ticket.id);
+        continue;
+      }
 
+      let fingerprint = ticketFingerprint(ticket);
+      const due = readDue(store, ticket.id, fingerprint, now, cycle);
       let prUrl = ticket.pr_url;
       // A PR the discovery saw but could not durably stamp (VC-113): the
       // reclaim below must read this ticket as having an UNKNOWN PR this cycle,
@@ -338,11 +543,20 @@ export async function pollRetention(
       let prUnresolved = false;
 
       // (1) DISCOVER — adopt an agent-opened PR for a branch with no stored url.
-      if (prUrl === null && ticket.branch && shouldDiscover(deps, ticket)) {
+      const branch = prUrl === null ? ticket.branch : null;
+      const discoverable = branch !== null && branch !== "" && shouldDiscover(deps, ticket);
+      // Nothing left to discover (no branch, past the Done grace, or a PR
+      // already stored): no schedule, so the driver never wakes for it.
+      if (prUrl === null && !discoverable) store.reads.delete(ticket.id);
+      // Not due (VC-686): the last read found no PR for this unchanged row. That
+      // answer is good enough to show, but not to delete by: the reclaim below
+      // waits for the cycle whose discovery is fresh.
+      const staleDiscovery = discoverable && !due;
+      if (discoverable && due) {
         result.attempted += 1;
         const discovered = await ghDiscoverPr(deps.net, {
           worktreePath: cwd,
-          branch: ticket.branch,
+          branch,
         });
         if (!discovered.ok) {
           result.failed += 1;
@@ -350,6 +564,7 @@ export async function pollRetention(
             ticketId: ticket.id,
             error: discovered.failure.message,
           });
+          scheduleRead(store, ticket.id, fingerprint, now, cycle.cadence, false);
           continue;
         }
         if (discovered.value.url !== null) {
@@ -359,9 +574,18 @@ export async function pollRetention(
           if (stampDiscoveredPr(deps, ticket, discovered.value.url)) {
             prUrl = discovered.value.url;
             result.changed = true;
+            // The stamp rewrote the row; schedule against what is stored now,
+            // or the next cycle reads this ticket again as "changed".
+            const stamped = getTicketRow(deps.db, ticket.id);
+            if (stamped !== undefined) fingerprint = ticketFingerprint(stamped);
           } else {
+            // Read again next interval, whatever the backoff said: the stamp
+            // is what DISCOVER retries, and until it lands nothing is reclaimed.
             prUnresolved = true;
+            scheduleRead(store, ticket.id, fingerprint, now, cycle.cadence, true);
           }
+        } else {
+          scheduleRead(store, ticket.id, fingerprint, now, cycle.cadence, false);
         }
       }
 
@@ -370,10 +594,14 @@ export async function pollRetention(
       // finished by dwell alone, and skipping it here is how the tidiest
       // tickets would have been the ones that kept their checkouts forever.
       // It does NOT run when a PR was seen this cycle but not stamped: an open
-      // PR is half the reclaim question, and we have no answer for it yet.
+      // PR is half the reclaim question, and we have no answer for it yet. Nor
+      // when this cycle skipped a discovery that is still owed (VC-686): "no
+      // PR" from an earlier cycle is not an answer a deletion may rest on.
       if (prUrl === null) {
         if (store.observations.delete(ticket.id)) result.changed = true;
-        if (!prUnresolved && (await maybeReclaim(deps, ticket, null))) result.changed = true;
+        if (!prUnresolved && !staleDiscovery && (await maybeReclaim(deps, ticket, null))) {
+          result.changed = true;
+        }
         continue;
       }
 
@@ -383,6 +611,7 @@ export async function pollRetention(
       // keeps its schedule without spending a `gh` call.
       const terminal = knownTerminalObservation(deps, store, ticket.id, prUrl);
       if (terminal !== null) {
+        store.reads.delete(ticket.id);
         if (observationChanged(store.observations.get(ticket.id), terminal)) result.changed = true;
         store.observations.set(ticket.id, terminal);
         if (terminal.prState === "merged") {
@@ -395,6 +624,20 @@ export async function pollRetention(
         continue;
       }
 
+      // Not due (VC-686): the last read of this same PR stands, and the
+      // reclaim runs on it exactly as it does for a terminal PR above. A ticket
+      // backing off from a failed read has no last read and waits its turn. A
+      // merge whose one-shot write failed is never left waiting: it is read
+      // again so the write is retried.
+      const last = store.observations.get(ticket.id);
+      const mergeOwed = last?.prState === "merged" && !store.notifiedMerged.has(ticket.id);
+      if (!due && !mergeOwed) {
+        if (last !== undefined && last.prUrl === prUrl) {
+          if (await maybeReclaim(deps, ticket, last.prState)) result.changed = true;
+        }
+        continue;
+      }
+
       // (2) STATUS — read the PR's live state.
       result.attempted += 1;
       const status = await ghPrStatus(deps.net, { worktreePath: cwd, prUrl });
@@ -404,6 +647,7 @@ export async function pollRetention(
           ticketId: ticket.id,
           error: status.failure.message,
         });
+        scheduleRead(store, ticket.id, fingerprint, now, cycle.cadence, false);
         continue;
       }
 
@@ -413,7 +657,8 @@ export async function pollRetention(
         hasConflicts: status.value.hasConflicts,
         checks: status.value.checks,
       };
-      if (observationChanged(store.observations.get(ticket.id), observation)) result.changed = true;
+      const moved = observationChanged(last, observation);
+      if (moved) result.changed = true;
       store.observations.set(ticket.id, observation);
 
       // (3) MERGE — the one-shot merged event + notification. `notifiedMerged`
@@ -443,6 +688,22 @@ export async function pollRetention(
         store.notifiedMerged.add(ticket.id);
       }
 
+      // Scheduled only now (VC-686): a merge write that threw above leaves the
+      // merge owed, so the next cycle reads it again and retries the write. A
+      // merged or closed PR is terminal from here on and holds no schedule.
+      if (observation.prState === "open") {
+        scheduleRead(
+          store,
+          ticket.id,
+          fingerprint,
+          now,
+          cycle.cadence,
+          moved || stillMoving(observation),
+        );
+      } else {
+        store.reads.delete(ticket.id);
+      }
+
       // A merge is a finish wherever the card happens to sit, so the trim pass
       // below is told about it — `listTrimCandidates` only knows Done/archived.
       if (observation.prState === "merged") mergedThisCycle.add(ticket.id);
@@ -459,7 +720,18 @@ export async function pollRetention(
   // (5) TRIM — the footprint gate (VC-340), over Done/archived tickets plus
   // anything this cycle saw merged. Runs after the reclaim so a directory that
   // was just removed is not walked on the way out.
-  if (await runTrimPass(deps, mergedThisCycle)) result.changed = true;
+  const trim = await runTrimPass(deps, store, mergedThisCycle, now, cycle.cadence);
+  if (trim.changed) result.changed = true;
+  result.trimChecks = trim.checks;
+
+  // A ticket that left the candidate set takes its schedule with it, so an
+  // always-on host's memory does not grow with every ticket it ever watched.
+  let nextDueAt: number | null = null;
+  for (const [ticketId, entry] of store.reads) {
+    if (!seen.has(ticketId)) store.reads.delete(ticketId);
+    else if (nextDueAt === null || entry.dueAt < nextDueAt) nextDueAt = entry.dueAt;
+  }
+  result.nextDueInMs = nextDueAt === null ? null : Math.max(0, nextDueAt - now);
 
   if (result.changed) deps.onChange?.();
   return result;
@@ -481,20 +753,53 @@ export async function pollRetention(
  */
 async function runTrimPass(
   deps: RetentionPollPorts,
+  store: RetentionStore,
   mergedThisCycle: ReadonlySet<string>,
-): Promise<boolean> {
+  now: number,
+  cadence: RetentionCadence,
+): Promise<{ changed: boolean; checks: number }> {
   const trim = deps.trim;
-  if (trim === undefined) return false;
-  const ticketIds = new Set<string>([
-    ...listTrimCandidates(deps.db).map((ticket) => ticket.id),
-    ...mergedThisCycle,
-  ]);
+  if (trim === undefined) return { changed: false, checks: 0 };
+  const rows = new Map<string, TicketRow | undefined>(
+    listTrimCandidates(deps.db).map((ticket) => [ticket.id, ticket]),
+  );
+  for (const ticketId of mergedThisCycle) {
+    if (!rows.has(ticketId)) rows.set(ticketId, getTicketRow(deps.db, ticketId));
+  }
+  for (const ticketId of store.trims.keys()) {
+    if (!rows.has(ticketId)) store.trims.delete(ticketId);
+  }
+  // Settings belong in the memo's key: a person who changes what a trim keeps,
+  // or turns it back on, has asked a new question of every worktree.
+  const settings = JSON.stringify(getTrimSettings(deps.db));
   let changed = false;
-  for (const ticketId of ticketIds) {
+  let checks = 0;
+  for (const [ticketId, row] of rows) {
     try {
-      const outcome = await trimFinishedWorktree(trim, ticketId, {
-        prMerged: mergedThisCycle.has(ticketId),
-      });
+      const prMerged = mergedThisCycle.has(ticketId);
+      // The memo (VC-686): an unchanged ticket this pass already answered is
+      // not asked again until its recheck. A changed row is a new question.
+      const key =
+        row === undefined
+          ? null
+          : [ticketFingerprint(row), row.retention_keep, prMerged, settings].join("\u0000");
+      const memo = store.trims.get(ticketId);
+      if (key !== null && memo !== undefined && memo.key === key && now < memo.recheckAt) {
+        continue;
+      }
+      checks += 1;
+      const outcome = await trimFinishedWorktree(trim, ticketId, { prMerged });
+      // Trimmed, or nothing left to trim, holds for hours; a refusal (busy,
+      // tracked changes, a failed git, a missing folder) is asked again once
+      // the quiet ceiling passes, so it costs one check per ceiling rather
+      // than one per cycle.
+      if (key !== null) {
+        const clean = outcome.kind === "trimmed" || outcome.nothingLeft === true;
+        store.trims.set(ticketId, {
+          key,
+          recheckAt: now + (clean ? cadence.trimRecheckMs : cadence.quietMaxMs),
+        });
+      }
       if (outcome.kind !== "trimmed") continue;
       changed = true;
       log.info("ignored paths trimmed", {
@@ -508,7 +813,7 @@ async function runTrimPass(
       log.error("trim failed", { ticketId, error });
     }
   }
-  return changed;
+  return { changed, checks };
 }
 
 /**
@@ -644,12 +949,37 @@ export function getRetentionState(
 // --- driver -----------------------------------------------------------------
 
 /**
- * The start/stop interval driver over {@link pollRetention} (the `park.ts`
- * pattern, but self-rescheduling with `setTimeout` so the delay can back off on
- * failure). Owns the transient {@link RetentionStore}; exposes `triggerNow`
- * (the on-focus/manual poll), the composed `getState`, and `dismiss`.
+ * Subscribes to committed ticket changes that can move a retention answer
+ * (VC-686), naming the ticket each one touched. Returns the unsubscribe.
+ */
+export type RetentionChangeSource = (listener: (ticketId: string) => void) => () => void;
+
+/** What the driver has spent since its last load summary (VC-686). */
+interface LoadWindow {
+  startedAt: number;
+  cycles: number;
+  ghReads: number;
+  ghFailures: number;
+  trimChecks: number;
+  cycleMs: number;
+}
+
+/**
+ * The start/stop driver over {@link pollRetention} (the `park.ts` pattern, but
+ * self-rescheduling with `setTimeout` so the delay can follow the per-ticket
+ * schedule and back off on failure). Owns the transient
+ * {@link RetentionStore}; exposes `triggerNow` (the on-focus/manual poll), the
+ * composed `getState`, and `dismiss`.
  *
- * `stop()` only disarms the timer; a poll already in flight keeps running and
+ * Event-driven where it can be (VC-686): with a {@link RetentionChangeSource},
+ * a committed ticket change wakes it after a short debounce and the changed
+ * ticket is read whatever its backoff, and between
+ * changes it sleeps until the earliest ticket read falls due, up to the quiet
+ * ceiling. Each cycle's spawns and scan time are counted, and an hourly summary
+ * goes to the host log, so an always-on host's background cost is measurable
+ * where it runs.
+ *
+ * `stop()` only disarms the timers; a poll already in flight keeps running and
  * still writes (a `pr_opened` stamp, a `pr_merged` event, a reclaim). A host
  * that is about to close the database stops the watch and then awaits
  * {@link RetentionWatcher.settled} (VC-627).
@@ -657,39 +987,60 @@ export function getRetentionState(
 export class RetentionWatcher {
   private readonly store = createRetentionStore();
   private timer: NodeJS.Timeout | null = null;
+  private changeTimer: NodeJS.Timeout | null = null;
+  private unsubscribe: (() => void) | null = null;
+  /** Tickets a change named since the last cycle began. */
+  private readonly woken = new Set<string>();
+  /** A ticket changed while a poll was in flight: read again once it lands. */
+  private changedMidPoll = false;
   private failures = 0;
   /** The poll in flight, if any. Never rejects; `null` between polls. */
   private inFlight: Promise<void> | null = null;
   private started = false;
+  private load: LoadWindow | null = null;
 
   constructor(
     private readonly deps: RetentionPollPorts,
     private readonly config: RetentionWatchConfig,
+    private readonly changes?: RetentionChangeSource,
   ) {}
 
   /** Starts the recurring poll (idempotent). The first poll runs after one interval. */
   start(): void {
     if (this.started) return;
     this.started = true;
+    this.unsubscribe = this.changes?.((ticketId) => this.ticketChanged(ticketId)) ?? null;
     this.schedule(this.config.intervalMs);
   }
 
   /** Stops the recurring poll. A poll already in flight runs on: see {@link settled}. */
   stop(): void {
     this.started = false;
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    this.changedMidPoll = false;
+    this.woken.clear();
     if (this.timer !== null) {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    if (this.changeTimer !== null) {
+      clearTimeout(this.changeTimer);
+      this.changeTimer = null;
+    }
   }
 
-  /** Runs a poll immediately (on window focus / manual trigger), then reschedules. */
+  /**
+   * Runs a poll immediately (on window focus / manual trigger), then
+   * reschedules. A person is looking, so every ticket read longer than the
+   * base interval ago is read again, whatever its backoff.
+   */
   triggerNow(): void {
     if (this.timer !== null) {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    void this.runOnce();
+    void this.runOnce(true);
   }
 
   /**
@@ -712,6 +1063,31 @@ export class RetentionWatcher {
     this.store.dismissed.add(ticketId);
   }
 
+  /**
+   * A committed ticket change: read soon, folding a burst into one cycle. The
+   * cycle reads the tickets that changed (and anything else already due), so
+   * a busy board costs reads in proportion to what moved.
+   */
+  private ticketChanged(ticketId: string): void {
+    if (!this.started) return;
+    this.woken.add(ticketId);
+    if (this.inFlight !== null) {
+      this.changedMidPoll = true;
+      return;
+    }
+    if (this.changeTimer !== null) return;
+    this.changeTimer = setTimeout(() => {
+      this.changeTimer = null;
+      if (!this.started) return;
+      if (this.timer !== null) {
+        clearTimeout(this.timer);
+        this.timer = null;
+      }
+      void this.runOnce(false);
+    }, this.config.changeDebounceMs);
+    this.changeTimer.unref();
+  }
+
   private schedule(delay: number): void {
     if (!this.started) return;
     // Clear any timer already pending before overwriting the field — without
@@ -719,22 +1095,32 @@ export class RetentionWatcher {
     // in-flight run's `finally` schedule a SECOND self-perpetuating chain
     // that stop() can no longer reach (it only clears the last-written id).
     if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = setTimeout(() => void this.runOnce(), delay);
+    this.timer = setTimeout(() => void this.runOnce(false), delay);
     // Never keep the process alive for a poll at quit (park.ts precedent).
     this.timer.unref();
   }
 
-  private async runOnce(): Promise<void> {
+  private async runOnce(present: boolean): Promise<void> {
     // A trigger that lands mid-poll is dropped; the in-flight run reschedules.
     if (this.inFlight !== null) return;
     let finished!: () => void;
     this.inFlight = new Promise<void>((resolve) => {
       finished = resolve;
     });
+    let nextDueInMs: number | null = null;
+    const startedAt = performance.now();
+    const woken = new Set(this.woken);
+    this.woken.clear();
     try {
-      const result = await pollRetention(this.deps, this.store);
+      const result = await pollRetention(this.deps, this.store, {
+        cadence: this.config,
+        present,
+        woken,
+      });
       this.failures =
         result.attempted > 0 && result.failed === result.attempted ? this.failures + 1 : 0;
+      nextDueInMs = result.nextDueInMs;
+      this.account(result, performance.now() - startedAt);
     } catch (error) {
       // Defensive: pollRetention already swallows per-ticket read failures, but a
       // catastrophic failure must never leave an unhandled rejection.
@@ -744,7 +1130,52 @@ export class RetentionWatcher {
       this.inFlight = null;
       // Waiters resume on a later microtask, after the reschedule below.
       finished();
-      this.schedule(nextBackoffDelay(this.failures, this.config));
+      if (this.changedMidPoll) {
+        this.changedMidPoll = false;
+        this.schedule(this.config.changeDebounceMs);
+      } else {
+        this.schedule(nextCycleDelay(this.failures, nextDueInMs, this.config));
+      }
     }
+  }
+
+  /**
+   * Counts one cycle's cost and writes the hourly summary when it is due.
+   * `cycleMs` is wall time, including the `gh` and git processes it waited on.
+   */
+  private account(result: PollResult, cycleMs: number): void {
+    const now = this.deps.now();
+    const load = (this.load ??= {
+      startedAt: now,
+      cycles: 0,
+      ghReads: 0,
+      ghFailures: 0,
+      trimChecks: 0,
+      cycleMs: 0,
+    });
+    load.cycles += 1;
+    load.ghReads += result.attempted;
+    load.ghFailures += result.failed;
+    load.trimChecks += result.trimChecks;
+    load.cycleMs += cycleMs;
+    if (log.enabled("debug")) {
+      log.debug("retention cycle", {
+        ghReads: result.attempted,
+        ghFailures: result.failed,
+        trimChecks: result.trimChecks,
+        cycleMs: Math.round(cycleMs),
+        nextDueInMs: result.nextDueInMs,
+      });
+    }
+    if (now - load.startedAt < LOAD_SUMMARY_INTERVAL_MS) return;
+    log.info("retention load", {
+      windowMs: now - load.startedAt,
+      cycles: load.cycles,
+      ghReads: load.ghReads,
+      ghFailures: load.ghFailures,
+      trimChecks: load.trimChecks,
+      cycleMs: Math.round(load.cycleMs),
+    });
+    this.load = null;
   }
 }
