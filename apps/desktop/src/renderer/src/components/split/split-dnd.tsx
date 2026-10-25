@@ -46,6 +46,7 @@ import {
   type DragMoveEvent,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
+import { SPLIT_VIEW_ROOT_PANE_ID } from "@volli/shared";
 
 import {
   isSplitZoneId,
@@ -152,6 +153,17 @@ const splitCollision: CollisionDetection = (args) => {
   return pointerWithin({ ...args, droppableContainers: strip });
 };
 
+/**
+ * Whether two tabs sit in the shown group together. `panes` are the shown
+ * group's panes beside the top strip's own (`SPLIT_VIEW_ROOT_PANE_ID`), so two
+ * tabs both outside the root pane share that one group.
+ */
+function sharesShownGroup(panes: readonly SplitPaneTabs[], first: string, second: string) {
+  const grouped = (id: string) =>
+    panes.some((pane) => pane.paneId !== SPLIT_VIEW_ROOT_PANE_ID && pane.tabIds.includes(id));
+  return grouped(first) && grouped(second);
+}
+
 export function SplitDnd({
   origin,
   panes,
@@ -168,6 +180,11 @@ export function SplitDnd({
     pointerRef.current = args.pointerCoordinates;
     return splitCollision(args);
   }, []);
+  // Read at drop time rather than closed over: a drag can outlive several
+  // renders (a chat streams a title, a pane resizes), and the panes as they
+  // stand when the pointer is released are the ones the drop is about.
+  const panesRef = React.useRef(panes);
+  panesRef.current = panes;
   const previewRef = React.useRef<HTMLElement | null>(null);
   const clearPairPreview = React.useCallback(() => {
     previewRef.current?.removeAttribute("data-pair-drop-edge");
@@ -184,6 +201,10 @@ export function SplitDnd({
         if (target.closest("[data-split-area]") !== area) continue;
         const id = target.dataset.pairTargetId;
         if (id === undefined || id === String(event.active.id)) continue;
+        // A segment of the dragged tab's OWN group is no target: grouping
+        // beside a tab it is already grouped with changes nothing, and an edge
+        // lit for a no-op would swallow the drop that leaves the group.
+        if (sharesShownGroup(panesRef.current, String(event.active.id), id)) continue;
         const scroller = target.closest('[data-slot="tab-scroll"]');
         if (scroller !== null) {
           const clip = scroller.getBoundingClientRect();
@@ -204,12 +225,6 @@ export function SplitDnd({
   const [activeTabId, setActiveTabId] = React.useState<string | null>(null);
   const [ghostLabel, setGhostLabel] = React.useState<string | null>(null);
   const nativePayload = useAcceptedNativeDrag(origin);
-
-  // Read at drop time rather than closed over: a drag can outlive several
-  // renders (a chat streams a title, a pane resizes), and the panes as they
-  // stand when the pointer is released are the ones the drop is about.
-  const panesRef = React.useRef(panes);
-  panesRef.current = panes;
 
   const handleDragStart = React.useCallback((event: DragStartEvent) => {
     setActiveTabId(String(event.active.id));

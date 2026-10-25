@@ -79,17 +79,19 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function mountPairSurface() {
+function mountPairSurface(
+  panes = [
+    { paneId: "root", tabIds: ["source", "target"] },
+    { paneId: "pane-2", tabIds: ["stacked"] },
+  ],
+) {
   const pair = vi.fn();
   const drop = vi.fn<(operation: SplitDropOperation) => void>();
   act(() =>
     root.render(
       <SplitDnd
         origin={{ scope: "project", projectId: "p", ticketId: null }}
-        panes={[
-          { paneId: "root", tabIds: ["source", "target"] },
-          { paneId: "pane-2", tabIds: ["stacked"] },
-        ]}
+        panes={panes}
         onTabDrop={drop}
         onNativeDrop={() => {}}
         onGroupDrop={pair}
@@ -150,6 +152,40 @@ describe("top-strip edge grouping", () => {
     expect(host.querySelector("[data-pair-drop-edge]")).toBeNull();
     act(() => harness.props!.onDragEnd?.(event));
     expect(pair).not.toHaveBeenCalled();
+  });
+
+  it("offers no edge on a segment of the dragged tab's own shown group", () => {
+    // `source` and `target` are both in the shown group's panes: grouping one
+    // beside the other changes nothing, so the drop stays the top strip's.
+    const { pair, drop, event } = mountPairSurface([
+      { paneId: "root", tabIds: [] },
+      { paneId: "pane-2", tabIds: ["source"] },
+      { paneId: "pane-3", tabIds: ["target"] },
+    ]);
+    move(event, 190);
+    expect(host.querySelector("[data-pair-drop-edge]")).toBeNull();
+    act(() =>
+      harness.props!.onDragEnd?.({ ...event, over: { id: TOP_STRIP_DROP_ID } } as DragEndEvent),
+    );
+    expect(pair).not.toHaveBeenCalled();
+    expect(drop).toHaveBeenCalledExactlyOnceWith({
+      kind: "move",
+      tabId: "source",
+      paneId: "root",
+    });
+  });
+
+  it("still groups a pane's tab beside a tab outside its group", () => {
+    const { pair, event } = mountPairSurface([
+      { paneId: "root", tabIds: ["target"] },
+      { paneId: "pane-2", tabIds: ["source"] },
+    ]);
+    move(event, 190);
+    expect(host.querySelector("[data-pair-drop-edge]")?.getAttribute("data-pair-drop-edge")).toBe(
+      "right",
+    );
+    act(() => harness.props!.onDragEnd?.(event));
+    expect(pair).toHaveBeenCalledExactlyOnceWith("target", "source", "right");
   });
 
   it("hands a pane's centre zone to the ordinary drop: the tab joins that stack", () => {
