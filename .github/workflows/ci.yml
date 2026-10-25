@@ -736,7 +736,10 @@ jobs:
       - name: Desktop sign-in against the pinned backend
         env:
           VOLLI_ACCOUNT_LIVE_REQUIRED: "1"
-        run: pnpm -C convex with-backend --deploy -- pnpm -C ../apps/desktop exec vp test run src/main/account/convex.live.test.ts --maxWorkers=2
+        working-directory: convex
+        run: >-
+          node fixture/with-backend.ts --deploy --
+          sh -c 'cd ../apps/desktop && vp test run src/main/account/convex.live.test.ts --maxWorkers=2'
 
   # N-1 compatibility (VC-633). A previous build, run from its own shipped
   # sources, against a profile THIS build migrated to its head: it must write
