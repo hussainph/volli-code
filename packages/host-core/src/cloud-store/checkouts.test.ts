@@ -48,6 +48,7 @@ function fixture(runnerId: string | null = RUNNER) {
   const store = createCloudProductStore({
     host,
     ownerUserId: "owner-a",
+    backendUrl: "https://example.convex.cloud",
     runnerId: () => runnerId,
     home: root,
     busySites: async () => [],

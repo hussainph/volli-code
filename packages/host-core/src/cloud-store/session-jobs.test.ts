@@ -28,7 +28,11 @@ import { createTestSessionEngine } from "../testing/session-engine";
 import type { JobContext, JobExecutor } from "../cloud-runner/inbox";
 import { sqliteDrainCursorStore } from "../cloud-runner/sqlite-stores";
 import { SpoolTranscriptArtifactStore } from "../transcript-spool/artifact-spool";
-import { ownerGuardedInbox, registerSessionCommandJob } from "./session-jobs";
+import {
+  ownerGuardedInbox,
+  registerSessionCommandJob,
+  type CommandArtifactSource,
+} from "./session-jobs";
 
 let opened: TestDb | undefined;
 afterEach(() => {
@@ -411,13 +415,13 @@ it("keeps local exception paths out of journaled Session outcomes", async () => 
   expect(JSON.stringify(outcome)).not.toContain("/runner/private");
 });
 
-describe("a message the client staged with its command", () => {
+describe("a message staged with its command", () => {
   const spools: string[] = [];
   afterEach(() => {
     for (const directory of spools.splice(0)) rmSync(directory, { recursive: true, force: true });
   });
 
-  async function staged(messageBody?: (args: unknown) => Promise<string | null>) {
+  async function staged(commandArtifact?: CommandArtifactSource) {
     const f = await fixture();
     const directory = mkdtempSync(join(tmpdir(), "volli-staged-message-"));
     spools.push(directory);
@@ -430,16 +434,19 @@ describe("a message the client staged with its command", () => {
         engine: f.engine,
         runtime: () => ({ command }) as unknown as HostedSessionRuntime,
         artifacts: () => store,
-        ...(messageBody === undefined ? {} : { messageBody }),
+        ...(commandArtifact === undefined ? {} : { commandArtifact }),
       },
     );
-    const send = (built: { intent: string }) =>
-      executors.get("session.command")!(job(JSON.parse(built.intent)), jobContext);
+    const send = (built: { intent: string }, edit?: (claimed: ClaimedJob) => void) => {
+      const claimed = job(JSON.parse(built.intent));
+      edit?.(claimed);
+      return executors.get("session.command")!(claimed, jobContext);
+    };
     return { store, command, send };
   }
 
-  const sent = () =>
-    cloudMessageSubmit({ sessionId: "a-session", commandId: "delivery-command", message });
+  const sent = (commandId = "delivery-command") =>
+    cloudMessageSubmit({ sessionId: "a-session", commandId, message });
 
   it("names the reference the runtime's own transcript store writes for the command", async () => {
     const { store } = await staged();
@@ -457,40 +464,64 @@ describe("a message the client staged with its command", () => {
     expect((await store.readCanonicalBytes(written)).toString("utf8")).toBe(built.body);
   });
 
-  it("fetches a body it does not hold, stores it through the spool, then delivers it", async () => {
+  it("hydrates a person's body by its digest through the spool, then delivers it", async () => {
     const built = sent();
-    const fetchBody = vi.fn(async () => built.body);
-    const { store, command, send } = await staged(fetchBody);
+    const commandArtifact = vi.fn(async () => built.body);
+    const { store, command, send } = await staged(commandArtifact);
     expect(await send(built)).toEqual({ status: "done", result: null });
-    expect(fetchBody).toHaveBeenCalledWith({
+    expect(commandArtifact).toHaveBeenCalledWith({
       sessionId: "a-session",
-      commandId: "delivery-command",
+      digest: built.reference.digest,
     });
     expect((await store.read(built.reference)).message).toEqual(message);
     expect(command).toHaveBeenCalledWith(
       expect.objectContaining({
         commandId: "delivery-command",
+        origin: { kind: "user" },
         command: { kind: "message.submit", message, settle: "opened" },
       }),
     );
     // Held now: a redelivery reads it locally.
     expect(await send(built)).toEqual({ status: "done", result: null });
-    expect(fetchBody).toHaveBeenCalledTimes(1);
+    expect(commandArtifact).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses a body that is missing, or not the command's, without delivering", async () => {
-    const built = sent();
-    const other = cloudMessageSubmit({
+  it("hydrates an agent's body under its composite operation id and delivers it as a steer", async () => {
+    const operation = "parent-session:tool-call-1";
+    const built = sent(operation);
+    const commandArtifact = vi.fn(async () => built.body);
+    const { store, command, send } = await staged(commandArtifact);
+    const asAgent = (claimed: ClaimedJob) => {
+      claimed.job.commandId = operation as typeof claimed.job.commandId;
+      claimed.job.createdBy = {
+        kind: "agent",
+        userId: "a",
+        sessionId: "parent-session",
+      } as typeof claimed.job.createdBy;
+    };
+    expect(await send(built, asAgent)).toEqual({ status: "done", result: null });
+    // The read is by digest: the operation id never reaches it.
+    expect(commandArtifact).toHaveBeenCalledWith({
       sessionId: "a-session",
-      commandId: "another-command",
-      message,
+      digest: built.reference.digest,
     });
+    await expect(store.read(built.reference)).resolves.toMatchObject({ message });
+    expect(command).toHaveBeenCalledWith({
+      sessionId: "a-session",
+      commandId: operation,
+      origin: { kind: "session", sessionId: "parent-session" },
+      command: { kind: "message.submit", message, settle: "opened", delivery: "steer" },
+    });
+  });
+
+  it("refuses a staged body that is not the reference's, without delivering", async () => {
+    const built = sent();
     let body: string | null = null;
     const { command, send } = await staged(async () => body);
     for (const [next, code] of [
-      [null, "message_unavailable"],
-      [other.body, "invalid_message_body"],
-      [built.body.replace("Message", "Massage"), "invalid_message_body"],
+      [sent("another-command").body, "artifact_mismatch"],
+      [built.body.replace("Message", "Massage"), "artifact_mismatch"],
+      ["{", "invalid_artifact"],
     ] as const) {
       body = next;
       expect(await send(built)).toMatchObject({ status: "failed", code, retryable: false });
@@ -498,29 +529,39 @@ describe("a message the client staged with its command", () => {
     expect(command).not.toHaveBeenCalled();
   });
 
-  it("throws (so the inbox retries) when the backend cannot answer", async () => {
-    const unreachable = await staged(async () => {
-      throw new Error("offline");
-    });
-    await expect(unreachable.send(sent())).rejects.toThrow("offline");
-    expect(unreachable.command).not.toHaveBeenCalled();
+  it("retries when nothing is staged or the backend cannot answer", async () => {
+    const read = vi
+      .fn<() => Promise<string | null>>()
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(new Error("offline"));
+    const { command, send } = await staged(read);
+    await expect(send(sent())).rejects.toThrow();
+    await expect(send(sent())).rejects.toThrow("offline");
+    expect(command).not.toHaveBeenCalled();
   });
 
-  it("fails at once, path-free, when the backend refuses the read for good", async () => {
+  it("ends on the backend's typed refusals with its own path-free sentence", async () => {
     let refusal: unknown = null;
     const { command, send } = await staged(async () => {
       throw refusal;
     });
-    for (const code of ["fenced", "not_your_runner", "not_found", "invalid_request"]) {
+    for (const [code, retryable] of [
+      ["not_claimed", false],
+      ["invalid_argument", false],
+      ["revoked", false],
+      ["not_a_runner", false],
+      // The claim may be this runner's under a generation its drain has not learnt yet.
+      ["stale_claim", true],
+    ] as const) {
       refusal = Object.assign(new Error("/Users/someone/secret"), {
         data: { code, message: "/Users/someone/secret" },
       });
       const outcome = await send(sent());
-      expect(outcome).toMatchObject({ status: "failed", code, retryable: false });
+      expect(outcome).toMatchObject({ status: "failed", code, retryable });
       expect(JSON.stringify(outcome)).not.toContain("/Users");
     }
-    // An auth or transport failure may pass: it is retried.
-    for (const retried of [{ data: { code: "revoked" } }, { data: null }, null]) {
+    // A refreshing token, a transport failure, or an untyped one may recover.
+    for (const retried of [{ data: { code: "unauthenticated" } }, { data: null }, null]) {
       refusal = retried;
       await expect(send(sent())).rejects.toBe(retried);
     }

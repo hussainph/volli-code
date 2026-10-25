@@ -11,8 +11,7 @@
  *   reads it back (`commandArtifact`, the claim-fenced
  *   `transcripts.commandArtifact`) and writes it to its own store, which
  *   re-verifies the digest, before delivery. A person's client stages its
- *   message the same way (`sessions.command`'s `body`); both are read and
- *   checked by the one path below, whichever backend read the runner wires.
+ *   message the same way (`sessions.command`'s `body`): one read, one check.
  * - **An agent's send is a steer.** As `session_send` is locally
  *   (`supervise-session.ts`): delivered into a turn in flight now rather than
  *   after it, settled when the turn opens. The durable intent carries no
@@ -117,80 +116,66 @@ export type CommandArtifactSource = (input: {
   digest: string;
 }) => Promise<string | null>;
 
-/**
- * The same staged body read by its command instead
- * (`sessionMessages.forRunner({ sessionId, commandId })`): fenced by the
- * active claim and the job routed to this runner. Same answers as
- * {@link CommandArtifactSource}.
- */
-export type MessageBodySource = (input: {
-  sessionId: string;
-  commandId: string;
-}) => Promise<string | null>;
-
 export interface SessionCommandJobInput {
   engine: SessionEngine;
   runtime(): HostedSessionRuntime | null;
   artifacts(): TranscriptArtifactStore | null;
-  /**
-   * Hydrates a body this runner never wrote. Preferred when both are wired;
-   * absent both, a missing body fails as before.
-   */
+  /** Hydrates a body this runner never wrote; absent, a missing body fails as before. */
   commandArtifact?: CommandArtifactSource;
-  /** Hydrates by command id, when no {@link commandArtifact} read is wired. */
-  messageBody?: MessageBodySource;
 }
 
 type Hydrated = { artifact: SessionTranscriptArtifact } | { outcome: JobOutcome };
 
 /**
- * The backend's refusals of a body read that no retry can change: this runner
- * lost the claim, the Session is not its owner's, or the command is gone or
- * carries no message. Each gets a fixed, path-free sentence of its own; the
- * backend's own message is never journaled.
+ * The backend's typed refusals of a body read (`transcripts.commandArtifact`),
+ * each with a fixed, path-free sentence of its own: the backend's message is
+ * never journaled. Final: no runner holds the Session, or the reference names
+ * no staged body. A claim that moved on is retried: a claim handed to this
+ * runner is read under its new generation once the drain has learnt it, and
+ * the job follows the claim otherwise.
  */
-const BODY_REFUSALS: Readonly<Record<string, string>> = {
-  fenced: "This runner no longer holds the Session's claim.",
-  stale_claim: "This runner no longer holds the Session's claim.",
-  not_claimed: "No runner holds this Session's claim.",
-  not_your_runner: "This Session does not belong to this runner's owner.",
-  not_found: "This message's Session or command is gone.",
-  invalid_request: "This command carries no message.",
-  invalid_argument: "This command's message reference is not a staged body's.",
+const BODY_REFUSALS: Readonly<Record<string, { detail: string; retryable: boolean }>> = {
+  not_claimed: { detail: "No runner holds this Session's claim.", retryable: false },
+  invalid_argument: {
+    detail: "This command's message reference names no staged body.",
+    retryable: false,
+  },
+  revoked: { detail: "This runner was removed from its account.", retryable: false },
+  not_a_runner: { detail: "This connection is not a runner.", retryable: false },
+  stale_claim: {
+    detail: "This runner does not hold the Session's current claim.",
+    retryable: true,
+  },
 };
 
 function refusalOf(error: unknown): JobOutcome | null {
   const code = (error as { data?: { code?: unknown } } | null)?.data?.code;
   if (typeof code !== "string" || !Object.hasOwn(BODY_REFUSALS, code)) return null;
-  return failed(code, BODY_REFUSALS[code]!);
+  const { detail, retryable } = BODY_REFUSALS[code]!;
+  return { status: "failed", code, detail, retryable };
 }
 
 /**
  * The referenced body: from this runner's store, else staged by the backend
- * and written here first. One check for every source: the store's own codec
+ * and written here first. One check for every staged body, a person's or an
+ * agent's: the store's own codec
  * re-derives the reference from the canonical bytes it verified, and only a
  * body whose reference is the command's is delivered.
  */
 async function readMessageBody(
   artifacts: TranscriptArtifactStore,
-  input: Pick<SessionCommandJobInput, "commandArtifact" | "messageBody">,
-  job: { sessionId: string; commandId: string },
+  source: CommandArtifactSource | undefined,
+  sessionId: string,
   reference: TranscriptReference,
 ): Promise<Hydrated> {
   try {
     return { artifact: await artifacts.read(reference) };
   } catch (error) {
     const digest = reference.digest;
-    const read =
-      input.commandArtifact !== undefined && digest !== null
-        ? () => input.commandArtifact!({ sessionId: job.sessionId, digest })
-        : input.messageBody !== undefined
-          ? () => input.messageBody!({ sessionId: job.sessionId, commandId: job.commandId })
-          : null;
-    if (read === null) throw error;
+    if (source === undefined || digest === null) throw error;
     let body: string | null;
     try {
-      body = await read();
+      body = await source({ sessionId, digest });
     } catch (refusal) {
       // Anything else (offline, a timeout, an expired token) throws: the inbox retries.
       const outcome = refusalOf(refusal);
@@ -319,8 +304,8 @@ export function registerSessionCommandJob(
           return failed("transcript_unavailable", "This runner cannot read the message body.");
         const body = await readMessageBody(
           artifacts,
-          input,
-          { sessionId: job.sessionId, commandId: job.commandId },
+          input.commandArtifact,
+          job.sessionId,
           intent.reference,
         );
         if ("outcome" in body) return body.outcome;

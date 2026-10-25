@@ -1,23 +1,18 @@
 /**
- * The message bodies a client staged with its Session commands
- * (`sessions.command`), as their runner and their owner read them back.
+ * The commands an owner sent their Session, as a reload reads them back
+ * (`pending`): what the runner's engine has not answered (no receipt), still
+ * waiting or ended without an answer (failed, cancelled, expired) with the
+ * typed reason, and a message's staged body to show it by.
  *
- * - `forRunner` (runner): the staged body of one `message.submit` command,
- *   for the runner that holds the Session's active claim and that the
- *   command's job is routed to (its lease is not checked: the body is the
- *   same for every attempt).
- *   The runner checks the body against the command's reference and stores it
- *   through its own transcript codec before delivering the message.
- * - `pending` (client): the owner's commands the runner's engine has not
- *   answered (no receipt): still waiting, or ended without an answer (failed,
- *   cancelled, expired) with the typed reason. A reload shows what was sent
- *   and what became of it, with a message's body to show it by.
+ * A runner reads the same staged bodies through `transcripts.commandArtifact`
+ * (claim-fenced), whether a person's client (`body`) or an agent
+ * (`artifact`) staged them with `sessions.command`.
  *
  * Bodies are a client's own message text: they leave only to the Session's
- * owner and to the owner's claimed runner, and never name a path.
+ * owner (here) and to its claimed runner, and never name a path.
  */
 
-import { ConvexError, v } from "convex/values";
+import { v } from "convex/values";
 
 import { decodeSessionCommandIntent, type TranscriptReference } from "@volli/shared";
 import { parseJobPayload, SESSION_INTERRUPT_FORMAT, type JobStatus } from "@volli/shared/cloud";
@@ -25,15 +20,7 @@ import { parseJobPayload, SESSION_INTERRUPT_FORMAT, type JobStatus } from "@voll
 import type { Doc } from "./_generated/dataModel.js";
 import { query, type QueryCtx } from "./_generated/server";
 import { PERSON_OR_AGENT, requireActor } from "./lib/actorAuth";
-import { findVisibleProject, requireSessionActor } from "./lib/auth";
-import { requireRunner } from "./lib/runnerAuth";
-
-function fail(
-  code: "invalid_request" | "not_found" | "not_your_runner" | "fenced",
-  message: string,
-) {
-  return new ConvexError({ code, message });
-}
+import { requireSessionActor } from "./lib/auth";
 
 /** A job's intent; `interrupt` for an interrupt, `null` for a payload this build cannot read. */
 function readIntent(job: Doc<"runnerJobs">) {
@@ -44,11 +31,6 @@ function readIntent(job: Doc<"runnerJobs">) {
   } catch {
     return null;
   }
-}
-
-function intentOf(job: Doc<"runnerJobs">) {
-  const intent = readIntent(job);
-  return intent === "interrupt" ? null : intent;
 }
 
 async function stagedBody(
@@ -63,58 +45,6 @@ async function stagedBody(
     .first();
   return row?.body ?? null;
 }
-
-// ── the runner ──────────────────────────────────────────────────────────────
-
-export type RunnerMessageBody = { status: "staged"; body: string } | { status: "missing" };
-
-/**
- * The staged body of `commandId`, a `message.submit` job of `sessionId`, for
- * the runner that holds the Session's active claim and that the job is routed to
- * (not its lease). The Session must be
- * the runner owner's, in a project they are still an active Member of.
- * `missing`: no inline body is staged for the command's reference.
- */
-export const forRunner = query({
-  args: { sessionId: v.string(), commandId: v.string() },
-  handler: async (ctx, args): Promise<RunnerMessageBody> => {
-    const caller = await requireRunner(ctx);
-    const session = await ctx.db
-      .query("sessions")
-      .withIndex("by_uuid", (q) => q.eq("id", args.sessionId))
-      .unique();
-    if (session === null || session.deletedAt !== null)
-      throw fail("not_found", "That session does not exist.");
-    if (session.ownerUserId !== caller.ownerUserId)
-      throw fail("not_your_runner", "This runner does not run that owner's work.");
-    const intake = await ctx.db
-      .query("sessionIntake")
-      .withIndex("by_session", (q) => q.eq("sessionId", session.id))
-      .unique();
-    if (intake === null || intake.state !== "active" || intake.claim.runnerId !== caller.runnerId)
-      throw fail("fenced", "This runner no longer holds the session's claim.");
-    if ((await findVisibleProject(ctx, caller.ownerUserId, session.projectId)) === null)
-      throw fail("not_found", "That session does not exist.");
-    const job = await ctx.db
-      .query("runnerJobs")
-      .withIndex("by_uuid", (q) => q.eq("id", args.commandId))
-      .unique();
-    if (
-      job === null ||
-      job.kind !== "session.command" ||
-      job.sessionId !== session.id ||
-      job.runnerId !== caller.runnerId
-    )
-      throw fail("not_found", "That command is not this runner's.");
-    const intent = intentOf(job);
-    if (intent === null || intent.kind !== "message.submit")
-      throw fail("invalid_request", "That command carries no message.");
-    const body = await stagedBody(ctx, session.id, intent.reference.digest);
-    return body === null ? { status: "missing" } : { status: "staged", body };
-  },
-});
-
-// ── the owner ───────────────────────────────────────────────────────────────
 
 /** Commands listed at most, newest first. */
 const PENDING_LIMIT = 20;

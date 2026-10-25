@@ -1,13 +1,21 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { convexTest } from "convex-test";
 import { describe, expect, test } from "vite-plus/test";
 
+import { canonicalJson, TRANSCRIPT_ARTIFACT_MEDIA_TYPE } from "@volli/session-engine";
 import { cloudInteractionResolve, cloudMessageSubmit } from "@volli/shared";
-import { INLINE_ARTIFACT_MAX_BYTES, RUNNER_TOKEN_ISSUER, type UserId } from "@volli/shared/cloud";
+import {
+  AGENT_TOKEN_ISSUER,
+  INLINE_ARTIFACT_MAX_BYTES,
+  RUNNER_TOKEN_ISSUER,
+  agentSubject,
+  type SessionId,
+  type UserId,
+} from "@volli/shared/cloud";
 
 import { api } from "../functions/_generated/api";
-import { seedTestRunner, seedTestWorld } from "../functions/lib/testWorld";
+import { seedTestWorld } from "../functions/lib/testWorld";
 import schema from "../functions/schema";
 import { wire, writeSession } from "./sessionFixtures";
 
@@ -30,7 +38,7 @@ const message = (text: string) => ({
   parts: [{ type: "text", text }],
 });
 
-/** Alice's Session, claimed by her first runner; Bob is a teammate; Carol has a runner of her own. */
+/** Alice's Session, claimed by her first runner; Bob is a teammate; Carol is outside the Workspace. */
 async function world() {
   const t = convexTest(schema, modules);
   const users: Record<string, UserId> = {};
@@ -40,7 +48,6 @@ async function world() {
   const seeded = await t.run((ctx) =>
     seedTestWorld(ctx, { ownerUserId: users.alice!, memberUserIds: [users.bob!], runners: 2 }),
   );
-  const carolRunner = await t.run((ctx) => seedTestRunner(ctx, users.carol!, "carol-runner"));
   const runner = seeded.runnerIds[0]!;
   const { sessionId, events, engine } = await writeSession({
     projectId: seeded.projectId,
@@ -103,8 +110,10 @@ async function world() {
     }),
   });
   await drain();
-  const send = (args: { commandId: string; intent: string; body?: string }, as = "alice") =>
-    asUser(t, as).mutation(api.sessions.command, { sessionId, ...args });
+  const send = (
+    args: { commandId: string; intent: string; body?: string; artifact?: string },
+    as = "alice",
+  ) => asUser(t, as).mutation(api.sessions.command, { sessionId, ...args });
   const staged = () => t.run((ctx) => ctx.db.query("transcriptArtifacts").collect());
   /** An answer to one of the Session's questions, built as the renderer builds it. */
   const answer = (
@@ -125,9 +134,9 @@ async function world() {
     });
   return {
     t,
+    alice: users.alice!,
+    projectId: seeded.projectId,
     runner,
-    otherRunner: seeded.runnerIds[1]!,
-    carolRunner,
     sessionId,
     attachmentId,
     send,
@@ -257,44 +266,6 @@ describe("sessions.command with a message body", () => {
       status: "queued",
     });
     expect(await staged()).toEqual([]);
-  });
-});
-
-describe("sessionMessages.forRunner", () => {
-  test("hands the staged body to the runner holding the claim and the job, no one else", async () => {
-    const { t, runner, otherRunner, carolRunner, sessionId, send } = await world();
-    const commandId = randomUUID();
-    const built = cloudMessageSubmit({ sessionId, commandId, message: message("hello") });
-    await send({ commandId, intent: built.intent, body: built.body });
-    const read = (as: string, id = commandId) =>
-      asRunner(t, as).query(api.sessionMessages.forRunner, { sessionId, commandId: id });
-    await expect(read(runner)).resolves.toEqual({ status: "staged", body: built.body });
-    await expect(read(otherRunner)).rejects.toThrow(code("fenced"));
-    const intake = await t.run((ctx) =>
-      ctx.db
-        .query("sessionIntake")
-        .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
-        .unique(),
-    );
-    await t.run((ctx) => ctx.db.patch(intake!._id, { state: "releasing" }));
-    await expect(read(runner)).rejects.toThrow(code("fenced"));
-    await t.run((ctx) => ctx.db.patch(intake!._id, { state: "active" }));
-    await expect(read(carolRunner)).rejects.toThrow(code("not_your_runner"));
-    await expect(read(runner, randomUUID())).rejects.toThrow(code("not_found"));
-    await expect(
-      asUser(t, "alice").query(api.sessionMessages.forRunner, { sessionId, commandId }),
-    ).rejects.toThrow(code("not_a_runner"));
-    const retitle = randomUUID();
-    await send({
-      commandId: retitle,
-      intent: JSON.stringify({ kind: "session.retitle", title: "x" }),
-    });
-    await expect(read(runner, retitle)).rejects.toThrow(code("invalid_request"));
-    await t.run(async (ctx) => {
-      for (const row of await ctx.db.query("transcriptArtifacts").collect())
-        await ctx.db.delete(row._id);
-    });
-    await expect(read(runner)).resolves.toEqual({ status: "missing" });
   });
 });
 
@@ -472,5 +443,177 @@ describe("sessions.command with an interaction answer", () => {
       code("interaction_closed"),
     );
     expect(await stored(t)).not.toContain(CANARY);
+  });
+});
+
+/** An agent's steer as its verb builds it: `artifact`, the message `<commandId>:message`. */
+function agentSteer(commandId: string, text = "Owner direction: rebase first.") {
+  const artifact = canonicalJson({
+    version: 1,
+    threadId: commandId,
+    branchId: commandId,
+    attemptId: commandId,
+    turnId: null,
+    message: { id: `${commandId}:message`, role: "user", parts: [{ type: "text", text }] },
+  });
+  const digest = `sha256:${createHash("sha256").update(artifact, "utf8").digest("hex")}`;
+  return {
+    artifact,
+    digest,
+    intent: JSON.stringify({
+      kind: "message.submit",
+      reference: { id: digest, digest, mediaType: TRANSCRIPT_ARTIFACT_MEDIA_TYPE },
+    }),
+  };
+}
+
+/** A Board Session of Alice's project on the same runner, and its Agent token's identity. */
+async function boardAgent(w: Awaited<ReturnType<typeof world>>) {
+  const { sessionId, events } = await writeSession({ projectId: w.projectId });
+  for (const event of events) {
+    await asRunner(w.t, w.runner).mutation(api.sessions.accept, {
+      sessionId,
+      generation: 1,
+      events: [wire(event)],
+    });
+  }
+  const as = w.t.withIdentity({
+    issuer: AGENT_TOKEN_ISSUER,
+    subject: agentSubject(sessionId as SessionId),
+    own: w.alice,
+    rnr: w.runner,
+    gen: 1,
+    tkt: null,
+  });
+  return {
+    boardId: sessionId,
+    send: (args: { commandId: string; intent: string; body?: string; artifact?: string }) =>
+      as.mutation(api.sessions.command, { sessionId: w.sessionId, ...args }),
+  };
+}
+
+const runnerRead = (w: Awaited<ReturnType<typeof world>>, digest: string) =>
+  asRunner(w.t, w.runner).query(api.transcripts.commandArtifact, {
+    sessionId: w.sessionId,
+    generation: 1,
+    digest,
+  });
+
+describe("a message body's two spellings", () => {
+  test("refuses `body` and `artifact` together, whether they agree or not, writing nothing", async () => {
+    const w = await world();
+    const agent = await boardAgent(w);
+    const commandId = randomUUID();
+    const person = cloudMessageSubmit({
+      sessionId: w.sessionId,
+      commandId,
+      message: message("hello"),
+    });
+    const steer = agentSteer(commandId);
+    for (const extra of [
+      { body: person.body, artifact: person.body },
+      { body: person.body, artifact: steer.artifact },
+    ]) {
+      await expect(w.send({ commandId, intent: person.intent, ...extra })).rejects.toThrow(
+        code("invalid_request"),
+      );
+    }
+    for (const extra of [
+      { body: steer.artifact, artifact: steer.artifact },
+      { body: person.body, artifact: steer.artifact },
+    ]) {
+      await expect(agent.send({ commandId, intent: steer.intent, ...extra })).rejects.toThrow(
+        code("invalid_request"),
+      );
+    }
+    expect(await w.t.run((ctx) => ctx.db.query("runnerJobs").collect())).toEqual([]);
+    expect(await w.staged()).toEqual([]);
+  });
+
+  test("an agent's message carries `artifact`, never `body`, under its composite operation id", async () => {
+    const w = await world();
+    const agent = await boardAgent(w);
+    const operation = `${agent.boardId}:tool-call-1`;
+    const steer = agentSteer(operation);
+    const asPerson = cloudMessageSubmit({
+      sessionId: w.sessionId,
+      commandId: operation,
+      message: message("hello"),
+    });
+    await expect(agent.send({ commandId: operation, intent: steer.intent })).rejects.toThrow(
+      code("invalid_request"),
+    );
+    await expect(
+      agent.send({ commandId: operation, intent: asPerson.intent, body: asPerson.body }),
+    ).rejects.toThrow(code("invalid_request"));
+    expect(await w.staged()).toEqual([]);
+    const first = await agent.send({
+      commandId: operation,
+      intent: steer.intent,
+      artifact: steer.artifact,
+    });
+    expect(first).toMatchObject({ commandId: operation, status: "queued" });
+    await expect(
+      agent.send({ commandId: operation, intent: steer.intent, artifact: steer.artifact }),
+    ).resolves.toEqual(first);
+    // The one runner read hydrates it by digest; the operation id never reaches it.
+    await expect(runnerRead(w, steer.digest)).resolves.toEqual({
+      digest: steer.digest,
+      mediaType: TRANSCRIPT_ARTIFACT_MEDIA_TYPE,
+      body: steer.artifact,
+    });
+  });
+
+  test("both spellings stage through one rule: the runner's read, repair and idempotency", async () => {
+    const w = await world();
+    const agent = await boardAgent(w);
+    const personId = randomUUID();
+    const person = cloudMessageSubmit({
+      sessionId: w.sessionId,
+      commandId: personId,
+      message: message("hello"),
+    });
+    const agentId = randomUUID();
+    const steer = agentSteer(agentId);
+    // A corrupt inline row already sits under each body's digest.
+    await w.t.run(async (ctx) => {
+      for (const digest of [person.reference.digest!, steer.digest]) {
+        await ctx.db.insert("transcriptArtifacts", {
+          sessionId: w.sessionId,
+          digest,
+          mediaType: "application/json",
+          bytes: 7,
+          body: "corrupt",
+          spillKey: null,
+          firstSequence: null,
+          uploadedBy: "runner",
+          packedSegmentId: null,
+          expiresAt: null,
+          createdAt: 1,
+        });
+      }
+    });
+    await w.send({ commandId: personId, intent: person.intent, body: person.body });
+    await agent.send({ commandId: agentId, intent: steer.intent, artifact: steer.artifact });
+    const rows = await w.staged();
+    expect(rows.map(({ digest, body, mediaType }) => ({ digest, body, mediaType }))).toEqual(
+      expect.arrayContaining([
+        {
+          digest: person.reference.digest,
+          body: person.body,
+          mediaType: TRANSCRIPT_ARTIFACT_MEDIA_TYPE,
+        },
+        { digest: steer.digest, body: steer.artifact, mediaType: TRANSCRIPT_ARTIFACT_MEDIA_TYPE },
+      ]),
+    );
+    expect(rows).toHaveLength(2);
+    await expect(runnerRead(w, person.reference.digest!)).resolves.toMatchObject({
+      body: person.body,
+    });
+    await expect(runnerRead(w, steer.digest)).resolves.toMatchObject({ body: steer.artifact });
+    // Replays stage nothing new.
+    await w.send({ commandId: personId, intent: person.intent, body: person.body });
+    await agent.send({ commandId: agentId, intent: steer.intent, artifact: steer.artifact });
+    expect(await w.staged()).toEqual(rows);
   });
 });

@@ -413,18 +413,6 @@ export function createCloudProductStore(options: {
           })) as { body: string } | null;
           return row?.body ?? null;
         },
-        // A message a client sent: its body is staged with the command, fenced by this claim.
-        messageBody: async (args) => {
-          if (parts.link.query === undefined) throw new Error("Message reads are unavailable.");
-          const reply = (await parts.link.query("sessionMessages:forRunner", { ...args })) as {
-            status?: unknown;
-            body?: unknown;
-          } | null;
-          if (reply?.status === "missing") return null;
-          if (reply?.status !== "staged" || typeof reply.body !== "string")
-            throw new Error("Volli Cloud returned an unreadable message.");
-          return reply.body;
-        },
       });
       // A watcher's notice: composed here, then handed to the durable outbox.
       registerSessionNoticeJob(guarded, { outbox: () => notices });
