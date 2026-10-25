@@ -14,6 +14,7 @@ import {
 } from "./index";
 import { CREDENTIAL_LOCK_ASYNC_TIMEOUT_MS } from "./credential-lock";
 import { waitForCredentialRead } from "./credential-wait";
+import { CloudSessionSecrets, type CloudSecretSource } from "./cloud-secrets";
 import { hostLogger } from "../log/root";
 
 const log = hostLogger("secrets");
@@ -45,10 +46,26 @@ export const CREDENTIAL_DOOR_WAIT_MS = CREDENTIAL_LOCK_ASYNC_TIMEOUT_MS;
  * Attention; this map holds only the live promise correlations needed to deliver
  * a dedicated write-only submission. Neither generic answers nor facts carry values.
  */
+export interface SecretServiceOptions {
+  /**
+   * Volli Cloud team secrets for the Sessions this runner has claimed,
+   * supplied by the cloud product store. Absent with the local store: then
+   * nothing changes.
+   */
+  cloud?: CloudSecretSource;
+}
+
 export class SecretService {
   readonly #pending = new Map<string, Pending>();
   readonly #owners = new Map<string, SecretOwner>();
-  constructor(readonly store: SecretStore) {}
+  readonly #cloud: CloudSessionSecrets | null;
+  constructor(
+    readonly store: SecretStore,
+    options: SecretServiceOptions = {},
+  ) {
+    this.#cloud =
+      options.cloud === undefined ? null : new CloudSessionSecrets(options.cloud, store);
+  }
 
   environment(sessionId: string): Record<string, string> {
     const owner = this.#owners.get(sessionId);
@@ -59,9 +76,25 @@ export class SecretService {
    * Command-start read and last-use commit: brief contention must not fail the
    * command, or silently omit stored secrets. A stuck lock still rejects
    * before any process is spawned. The synchronous door remains a try-once API.
+   * With a cloud source, the Session's team secrets lie underneath the stored
+   * ones (`cloud-secrets.ts`: fetched once per attachment, redaction first); a
+   * refused or failed fetch fails the command rather than run it without them.
    */
-  environmentAsync(sessionId: string, signal?: AbortSignal): Promise<Record<string, string>> {
-    return retryWhileBusy(() => this.environment(sessionId), CREDENTIAL_DOOR_WAIT_MS, signal);
+  async environmentAsync(sessionId: string, signal?: AbortSignal): Promise<Record<string, string>> {
+    // Team secrets apply only where stored ones may be injected (not subagents).
+    const team =
+      this.#cloud === null || !this.#owners.has(sessionId)
+        ? {}
+        : await this.#cloud.environment(sessionId, signal);
+    const local = await retryWhileBusy(
+      () => this.environment(sessionId),
+      CREDENTIAL_DOOR_WAIT_MS,
+      signal,
+    );
+    // A value the person stored on this machine is their own, nearest choice:
+    // it wins over the team's for the same name. The runner's own process
+    // environment stays underneath both.
+    return { ...team, ...local };
   }
 
   port(owner: SecretOwner, wait?: SecretWaitPublisher, allowInjection = true) {
@@ -269,6 +302,7 @@ export class SecretService {
       }
     }
     this.store.endSession(sessionId);
+    this.#cloud?.end(sessionId);
     this.#owners.delete(sessionId);
   }
 }

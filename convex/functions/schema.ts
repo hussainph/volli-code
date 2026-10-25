@@ -38,6 +38,8 @@ import {
   RUNNER_LINK_METHODS,
   RUNNER_LOCAL_CREDENTIAL_KINDS,
   RUNNER_STATUSES,
+  SECRET_EXPOSURES,
+  SECRET_KINDS,
   SESSION_VISIBILITIES,
   SESSION_VISIBILITY_REASONS,
   TICKET_LINK_KINDS,
@@ -971,10 +973,11 @@ export default defineSchema({
     scope: configLevel,
     scopeKey: v.string(),
     name: v.string(),
-    kind: literals(["env", "secret"]),
+    kind: literals(SECRET_KINDS),
     plain: nullable(v.string()),
+    // `kid` names the `secretKeys` row the value is sealed under (SCHEMA-NOTES).
     sealed: nullable(sealed),
-    exposure: literals(["setup", "session"]),
+    exposure: literals(SECRET_EXPOSURES),
     requestedBySessionId: nullable(uuid),
     last4: nullable(v.string()),
     createdBy: actor,
@@ -984,6 +987,20 @@ export default defineSchema({
   })
     .index("by_uuid", ["id"])
     .index("by_scope_name", ["scopeKey", "name"]),
+  // The data keys `secrets` values are sealed under: one per Workspace
+  // (`w:{workspaceId}`) and one per person (`u:{userId}`), each wrapped by the
+  // root key named `rootKid`. Never returned by a query (`lib/sealing.ts`).
+  secretKeys: defineTable({
+    id: uuid,
+    owner: v.string(),
+    rootKid: v.string(),
+    wrapped: v.bytes(),
+    createdAt: time,
+    rewrappedAt: nullable(time),
+  })
+    .index("by_uuid", ["id"])
+    .index("by_owner", ["owner"])
+    .index("by_root_kid", ["rootKid"]),
   // Sealed client-side to the gateway: the backend cannot open `sealedKey`.
   modelConnections: defineTable({
     id: uuid,
