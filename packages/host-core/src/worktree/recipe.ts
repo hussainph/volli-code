@@ -20,15 +20,7 @@
  * and "Then run" runs exactly as before.
  */
 import { createHash } from "node:crypto";
-import {
-  accessSync,
-  constants,
-  openSync,
-  readSync,
-  closeSync,
-  readFileSync,
-  statSync,
-} from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** Which of the recipe's two scripts. */
@@ -77,21 +69,24 @@ function digest(bytes: Buffer | string): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function isExecutable(file: string): boolean {
+/**
+ * The file's bytes and whether anyone may execute it, read through one open
+ * descriptor so what is judged is what was read; `null` when there is no file
+ * there, or something other than a regular file.
+ */
+function readRegularFile(file: string): { content: Buffer; executable: boolean } | null {
+  let fd: number;
   try {
-    accessSync(file, constants.X_OK);
-    return true;
-  } catch {
-    return false;
+    fd = openSync(file, "r");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    throw error;
   }
-}
-
-/** Whether the file opens with `#!` — the one case `exec` can run it directly. */
-function hasShebang(file: string): boolean {
-  const fd = openSync(file, "r");
   try {
-    const head = Buffer.alloc(2);
-    return readSync(fd, head, 0, 2, 0) === 2 && head.toString("latin1") === "#!";
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return null;
+    return { content: readFileSync(fd), executable: (stat.mode & 0o111) !== 0 };
   } finally {
     closeSync(fd);
   }
@@ -112,10 +107,13 @@ export function resolveRecipe(
   storedCommand: string | null,
 ): ResolvedRecipe | null {
   const file = recipeFile(workingCopy, script);
-  const stat = statSync(file, { throwIfNoEntry: false });
-  if (stat?.isFile() === true) {
-    const form = isExecutable(file) && hasShebang(file) ? "exec" : "bash";
-    return { source: "repo", script, file, form, sha: digest(readFileSync(file)) };
+  const bytes = readRegularFile(file);
+  if (bytes !== null) {
+    const form =
+      bytes.executable && bytes.content.subarray(0, 2).toString("latin1") === "#!"
+        ? "exec"
+        : "bash";
+    return { source: "repo", script, file, form, sha: digest(bytes.content) };
   }
   if (script !== "setup") return null;
   const command = storedCommand?.trim() ?? "";
