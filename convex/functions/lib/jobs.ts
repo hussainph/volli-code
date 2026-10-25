@@ -144,7 +144,8 @@ function commandIdOf(draft: JobDraft): string | null {
   if (value === null || value === undefined) return null;
   if (isUuid(value)) return value;
   // Notice ids are also frozen (`watch:{session}:{uuid}` / `{parent}:{toolCall}:answer`).
-  if ((draft.kind === "session.command" || draft.kind === "session.notice") && isDerivedId(value)) return value;
+  if ((draft.kind === "session.command" || draft.kind === "session.notice") && isDerivedId(value))
+    return value;
   return parseId("command", value);
 }
 

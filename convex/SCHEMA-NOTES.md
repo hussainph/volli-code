@@ -318,14 +318,17 @@ Each was a decision made while turning the design into code.
     sequence watermark, and last-arm/notice times. Seven-day `watchReceipts`
     prevent an arm retry from re-arming after delivery or unwatch. Notice jobs
     use their frozen derived command ids, not UUID job ids, so outbox dedupe and
-    second-stage receipts keep the pre-cloud watch/subagent identity.
+    second-stage receipts keep the pre-cloud watch/subagent identity. A watch
+    command's optional `kinds` preserves frozen awaits' selective `for` requests;
+    the receipt stores that subset additively, so changed-kind retries conflict.
+    Older receipts without it mean the full target vocabulary.
 
 ## Runner-routed agent Session commands
 
 `sessions.command` accepts the existing UUID command ids and, for an authenticated
 agent only, its frozen `<sessionId>:<toolCallId>` operation id (bounded to 512
-characters). A `session.command` job takes that same id; non-command jobs still
-mint UUIDs. Agent supervision is limited to the caller's project: a project
+characters). A `session.command` job takes that same id; other jobs keep their
+existing UUID or frozen notice-id scheme. Agent supervision is limited to the caller's project: a project
 Session may send/stop there, a ticket Session only its own subagents. An agent
 may signal only itself.
 

@@ -38,12 +38,9 @@ describe("the cloud route table", () => {
   });
 
   it("keeps retired tools routable for frozen Sessions", () => {
-    expect(CLOUD_AGENT_ROUTES["ticket.await"]).toMatchObject({ route: "blocked", until: "VC-894" });
-    expect(CLOUD_AGENT_ROUTES["session.await"]).toMatchObject({
-      route: "blocked",
-      until: "VC-894",
-    });
-    expect(CLOUD_AGENT_ROUTES.watch).toMatchObject({ route: "blocked", until: "VC-894" });
+    expect(CLOUD_AGENT_ROUTES["ticket.await"]).toMatchObject({ route: "cloud-watch" });
+    expect(CLOUD_AGENT_ROUTES["session.await"]).toMatchObject({ route: "cloud-watch" });
+    expect(CLOUD_AGENT_ROUTES.watch).toMatchObject({ route: "cloud-watch" });
   });
 
   it("sends the board's reads and writes to the backend, and a project's creation to a person", () => {

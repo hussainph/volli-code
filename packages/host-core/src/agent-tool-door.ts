@@ -514,7 +514,9 @@ async function startSessionTool(
     // caller hears about, so both arm the watch; an unsent kickoff opens none.
     const watched =
       started.state === "ready" || started.kickoff === "held"
-        ? ` ${await watchOpenedSession(watchPorts(options), session, { sessionId: started.sessionId, title: started.title }, "started")}`
+        ? options.cloudSessionVerbs === undefined
+          ? ` ${await watchOpenedSession(watchPorts(options), session, { sessionId: started.sessionId, title: started.title }, "started")}`
+          : " Volli Cloud arms its watch when the start facts are accepted; notices wait in this runner's inbox while it is offline."
         : "";
     return {
       // The same facts as the prose, as data (VC-471), in the shape the
@@ -679,12 +681,14 @@ async function sendSessionTool(
               : "The adapter accepted it but did not report whether it opened or joined a turn.",
         delegatedChildren.includes(outcome.sessionId)
           ? "Its delegation answer reports back; no separate watch was armed."
-          : await watchOpenedSession(
-              watchPorts(options),
-              session,
-              { sessionId: outcome.sessionId, title: outcome.title },
-              "steered",
-            ),
+          : options.cloudSessionVerbs === undefined
+            ? await watchOpenedSession(
+                watchPorts(options),
+                session,
+                { sessionId: outcome.sessionId, title: outcome.title },
+                "steered",
+              )
+            : "Volli Cloud arms its watch when the steering facts are accepted; notices wait in this runner's inbox while it is offline.",
       ].join(" "),
     };
   } catch (error) {

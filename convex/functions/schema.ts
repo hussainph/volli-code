@@ -988,6 +988,7 @@ export default defineSchema({
     watcherSessionId: uuid,
     target: v.object({ kind: literals(["session", "ticket"]), id: uuid }),
     watchId: uuid,
+    kinds: v.optional(v.array(v.string())),
     expiresAt: time,
   })
     .index("by_command", ["commandId"])

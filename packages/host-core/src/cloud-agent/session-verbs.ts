@@ -24,6 +24,7 @@ import { createCloudSessionReads, cloudSessionRefusal } from "./session-reads";
 import { failure } from "../agent-dispatch/context";
 import { dryRunResponse } from "../agent-dispatch/preview";
 import { supervisionMarker } from "../session-runtime/supervise-session";
+import { createCloudWatchVerb } from "./watch-verbs";
 
 export interface CloudSessionVerbsOptions {
   backend: AgentBackend;
@@ -64,6 +65,7 @@ export function createCloudSessionVerbs(options: CloudSessionVerbsOptions) {
   const newId = options.newId ?? randomUUID;
   const now = options.now ?? Date.now;
   const reads = createCloudSessionReads({ backend });
+  const watch = createCloudWatchVerb({ backend, engine, reads, now });
   async function localTarget(handle: string, projectId?: string): Promise<boolean> {
     const rows =
       projectId === undefined
@@ -147,14 +149,8 @@ export function createCloudSessionVerbs(options: CloudSessionVerbsOptions) {
         return refused(
           "Automations cannot be run through Volli Cloud yet; no local Automation was substituted.",
         );
-      if (
-        request.verb === "watch" ||
-        request.verb === "ticket.await" ||
-        request.verb === "session.await"
-      )
-        return refused(
-          "Volli Cloud watches are not available yet. Read the target's current state instead; no in-process watch was armed.",
-        );
+      const watchResult = await watch(session, request, signal);
+      if (watchResult !== null) return watchResult;
       if (request.verb !== "session.send" && request.verb !== "session.stop") return null;
       const handle = request.input["session"];
       if (typeof handle !== "string" || !handle.trim())
@@ -246,6 +242,7 @@ export function createCloudSessionVerbs(options: CloudSessionVerbsOptions) {
           status: string;
           receipt: { status: string; code?: string | null; detail?: string | null } | null;
           runner: { name: string } | null;
+          watch?: { status: string; code?: string } | null;
         };
         const action = request.verb === "session.stop" ? "stop" : "steering";
         if (
@@ -259,8 +256,12 @@ export function createCloudSessionVerbs(options: CloudSessionVerbsOptions) {
           return {
             text: `The runner completed the recorded ${action} job for Session ${shortSessionId(target.id)}. Read its history for the execution outcome; no second command was queued.`,
           };
+        const watchNote =
+          result.watch?.status === "not_armed"
+            ? ` A watch could not be armed (${result.watch.code ?? "unavailable"}); inspect the Session manually.`
+            : "";
         return {
-          text: `${result.status === "leased" ? "The runner has claimed" : "Queued"} ${action} for Session ${shortSessionId(target.id)}${result.runner === null ? "" : ` on ${result.runner.name}`}. This is the inbox receipt, not confirmation that its runner executed it. Read the Session to confirm delivery.`,
+          text: `${result.status === "leased" ? "The runner has claimed" : "Queued"} ${action} for Session ${shortSessionId(target.id)}${result.runner === null ? "" : ` on ${result.runner.name}`}. This is the inbox receipt, not confirmation that its runner executed it. Read the Session to confirm delivery.${watchNote}`,
         };
       } catch (error) {
         const response = responseFor(

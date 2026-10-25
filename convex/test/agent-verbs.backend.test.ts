@@ -175,6 +175,24 @@ describe("agent verbs through the runner", () => {
       rootThreadId: "fixture-root",
       attachmentId: "fixture-attachment",
     };
+    expect(
+      (
+        await sessionVerbs.tool(caller, {
+          verb: "session.await",
+          toolCallId: "watch-remote",
+          input: { sessions: remote.sessionId.slice(0, 8), for: "verdict" },
+        })
+      )?.text,
+    ).toContain("retired await");
+    expect(
+      (
+        await sessionVerbs.tool(caller, {
+          verb: "watch",
+          toolCallId: "unwatch-remote",
+          input: { sessions: remote.sessionId.slice(0, 8), action: "unwatch" },
+        })
+      )?.details,
+    ).toMatchObject({ ended: 1 });
     expect((await sessionVerbs.tool(caller, call))?.text).toContain("Queued steering");
     expect((await sessionVerbs.tool(caller, call))?.text).toContain("Queued steering");
     const jobs = await next.client.mutation(api.runnerJobs.claim, {

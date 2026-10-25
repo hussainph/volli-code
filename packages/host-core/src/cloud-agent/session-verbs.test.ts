@@ -92,7 +92,11 @@ async function fixture() {
         current: PROJECT,
       };
     else if (wire.path === "sessions:list")
-      value = { page: [remote], isDone: true, continueCursor: "" };
+      value = {
+        page: [remote, { ...remote, id: CALLER, title: "Caller" }],
+        isDone: true,
+        continueCursor: "",
+      };
     else if (wire.path === "sessions:snapshot")
       value = { session: remote, state: null, foldedThrough: 0, catchingUp: false };
     else if (wire.path === "sessions:command") {
@@ -107,7 +111,9 @@ async function fixture() {
         runner: { name: "Other Mac" },
       };
     } else if (wire.path === "board:resolveTicketKey")
-      value = { ticketId: "ticket", projectId: PROJECT };
+      value = { ticketId: "71000000-0000-4000-8000-000000000001", projectId: PROJECT, key: "VC-1" };
+    else if (wire.path === "watches:watch") value = { watchId: "watch-id" };
+    else if (wire.path === "watches:unwatch") value = { ended: 1 };
     else throw new Error(`Unexpected ${wire.path}`);
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ status: "success", value }));
@@ -252,6 +258,38 @@ describe("cloud Session target routing", () => {
         (c) => c.path === "sessions:command" && c.args["commandId"] === `${CALLER}:lost-stop`,
       ),
     ).toHaveLength(1);
+  });
+  it("routes durable watch/unwatch and frozen awaits through the Agent token", async () => {
+    const f = await fixture();
+    const input = { sessions: shortSessionId(REMOTE), tickets: "VC-1" };
+    expect((await f.tool("watch", input, "watch-1"))?.text).toContain("Watching");
+    expect((await f.tool("watch", input, "watch-1"))?.text).toContain("Watching");
+    const arms = f.calls.filter((call) => call.path === "watches:watch");
+    expect(arms).toHaveLength(4);
+    expect(arms[0]!.args).toEqual(arms[2]!.args);
+    expect(arms[0]!.auth).toBe("Bearer agent-token");
+    expect(
+      (
+        await f.tool(
+          "session.await",
+          { sessions: shortSessionId(REMOTE), for: "verdict" },
+          "legacy-1",
+        )
+      )?.text,
+    ).toContain("retired await");
+    expect(f.calls.findLast((call) => call.path === "watches:watch")!.args["kinds"]).toEqual([
+      "verdict",
+    ]);
+    expect(
+      (await f.tool("watch", { sessions: shortSessionId(REMOTE), action: "unwatch" }))?.details,
+    ).toMatchObject({ ended: 1 });
+    expect((await f.tool("watch", { sessions: shortSessionId(CALLER) }))?.text).toContain(
+      "cannot watch itself",
+    );
+    f.offline();
+    expect((await f.tool("watch", { sessions: shortSessionId(REMOTE) }))?.text).toContain(
+      "connection",
+    );
   });
   it("refuses unavailable cloud workflows instead of substituting local behavior", async () => {
     const f = await fixture();
