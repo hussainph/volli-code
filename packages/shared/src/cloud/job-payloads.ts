@@ -195,11 +195,15 @@ export class InvalidJobPayloadError extends Error {
 type Row = Record<string, unknown>;
 
 class Reader {
-  constructor(
-    private readonly kind: JobKind,
-    readonly row: Row,
-    private readonly prefix = "",
-  ) {}
+  private readonly kind: JobKind;
+  readonly row: Row;
+  private readonly prefix: string;
+
+  constructor(kind: JobKind, row: Row, prefix = "") {
+    this.kind = kind;
+    this.row = row;
+    this.prefix = prefix;
+  }
 
   fail(detail: string): never {
     throw new InvalidJobPayloadError(this.kind, `${this.prefix}${detail}`);
