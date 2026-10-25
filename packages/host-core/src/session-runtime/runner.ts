@@ -91,7 +91,7 @@ export interface RunnerCompositionInput {
   version: string;
   venue: RunnerIdentity;
   /** Upgrade-only ownership of a runner an older build recorded (`boot-recovery.ts`). */
-  ownsLegacyRunner?(venue: RunnerIdentity): boolean;
+  ownsLegacyRunner?(runner: RunnerIdentity): boolean;
   homeDir: string;
   /** Prepended to every Session command's PATH: where `volli` resolves. */
   binDir: string;

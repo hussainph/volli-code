@@ -12,8 +12,11 @@
  * {@link import("./session-ledger").LOCAL_RUNNER}. This is that location's
  * `directory` — the tree on disk — plus what git says is in it. The two sit
  * beside each other in the domain and answer different questions: WHERE the
- * process runs, versus WHAT it is standing in. (Formerly the "venue" types;
- * the IPC door was `volli:venue-snapshot`.)
+ * process runs, versus WHAT it is standing in.
+ *
+ * Nor the cloud board's `WorkingCopySnapshot` (`@volli/shared/cloud`), the
+ * durable identity a `working_copy_changed` event records with no path. This
+ * is a local, never-persisted reading of the tree on this machine.
  *
  * Crosses the IPC boundary (main computes it from git; the empty chat and the
  * Home rail consume it), so the shapes live here — the same argument
@@ -63,7 +66,8 @@ export interface WorkingCopyLineDiff {
 }
 
 /**
- * One working copy, as of one reading.
+ * One working copy, measured as of one reading. Local only: it carries an
+ * absolute path, so it never enters durable history.
  *
  * `diff` is `null` whenever there is no base to measure against — every main
  * checkout, and a worktree whose base branch is unknown. The visual then DROPS
@@ -71,7 +75,7 @@ export interface WorkingCopyLineDiff {
  * "no work", which is the opposite of what a dirty main checkout means, and the
  * missing hairline does identity work for free.
  */
-export interface WorkingCopySnapshot {
+export interface WorkingCopyMeasurement {
   kind: WorkingCopyKind;
   /** Absolute path of the checkout. */
   path: string;
@@ -98,7 +102,7 @@ export interface WorkingCopySnapshot {
  * any other: that working copy is true, and it is where its Session really binds.
  */
 export type WorkingCopyReading =
-  | { state: "measured"; workingCopy: WorkingCopySnapshot }
+  | { state: "measured"; workingCopy: WorkingCopyMeasurement }
   | { state: "pending" };
 
 /** The order segments are drawn in, committed first: progress before exposure. */

@@ -91,6 +91,7 @@ import type {
   SessionEventPayload,
   SessionEventProvenance,
   RunnerIdentity,
+  RunnerKind,
   SessionInteraction,
   SessionInteractionAnswer,
   SessionInteractionOption,
@@ -107,7 +108,12 @@ import type {
 
 type JsonRecord = Record<string, unknown>;
 
-const RUNNER_KINDS = ["local", "cloud", "remote", "unknown"] as const;
+const RUNNER_KINDS = [
+  "local",
+  "cloud",
+  "remote",
+  "unknown",
+] as const satisfies readonly RunnerKind[];
 
 /**
  * Thrown when durable history carries a payload kind this build does not know.

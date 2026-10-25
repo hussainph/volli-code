@@ -7,9 +7,8 @@
  * reviving a terminal-shaped `sessions` repository.  They intentionally live
  * beside the ledger and must never be imported by production modules.
  */
-import { LOCAL_RUNNER } from "@volli/shared";
 import type Database from "better-sqlite3";
-import { EMPTY_SESSION_USAGE_SUMMARY, roleImpliedByTicket } from "@volli/shared";
+import { LOCAL_RUNNER, EMPTY_SESSION_USAGE_SUMMARY, roleImpliedByTicket } from "@volli/shared";
 import type { SessionNativeReference, SessionRecord, SessionRole } from "@volli/shared";
 import { internSessionEventProvenance } from "../db/session-event-provenance";
 import {

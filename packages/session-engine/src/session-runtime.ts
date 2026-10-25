@@ -1,5 +1,5 @@
-import { LOCAL_RUNNER } from "@volli/shared";
 import {
+  LOCAL_RUNNER,
   COMMAND_INTENT_CONFLICT,
   RECOVERED_TURN_INTERRUPTED_DETAIL,
   type CommandIntentConflict,

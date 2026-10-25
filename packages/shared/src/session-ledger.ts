@@ -346,7 +346,11 @@ export interface SessionAttachment {
   authority: null;
 }
 
-/** What sort of Runner a {@link RunnerIdentity} names. Durable: every value ships in ledger rows. */
+/**
+ * What sort of Runner a {@link RunnerIdentity} names, as attachment and
+ * provenance rows record it. Durable: every value ships in ledger rows. This
+ * is the ledger's own vocabulary, not the backend's runner registration kinds.
+ */
 export type RunnerKind = "local" | "cloud" | "remote" | "unknown";
 
 /**
@@ -357,8 +361,8 @@ export type RunnerKind = "local" | "cloud" | "remote" | "unknown";
  * never rewritten. Readonly because the shared constant below is one frozen
  * object handed to every caller.
  *
- * Formerly `SessionExecutionVenue`; fields that hold it are still named
- * `venue` wherever they are persisted or on a wire.
+ * Fields that hold it are named `venue`: ledger rows, the protocol schema and
+ * older builds read that name, so it stays.
  */
 export interface RunnerIdentity {
   readonly id: string;
@@ -369,9 +373,9 @@ export interface RunnerIdentity {
  * The desktop's own Runner, exactly as every shipped build has written it:
  * `{ id: "local", kind: "local" }`. FROZEN AND DURABLE — attachment rows,
  * event provenance and boot recovery's ownership match all compare this
- * literal, so it must never become a minted runner id or gain a field. A
- * registered Mac runner gets an identity of its own beside it; history written
- * under this one keeps it.
+ * literal, so it must never become a minted runner id or gain a field. When a
+ * registered Mac runner gets an identity of its own, it sits beside this one;
+ * history written under this one keeps it.
  */
 export const LOCAL_RUNNER: RunnerIdentity = Object.freeze({ id: "local", kind: "local" });
 

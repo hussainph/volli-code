@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
-import type { WorkingCopySnapshot } from "@volli/shared";
+import type { WorkingCopyMeasurement } from "@volli/shared";
 
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import type { WorkingCopyEntry } from "@renderer/stores/working-copy";
@@ -15,7 +15,7 @@ import { HomeSessionCard, modelMetaLine, type HomeSessionFacts } from "./home-se
  * reach — and all of it is settled on the first paint. The card is pure, so
  * nothing has to be seeded to mount it.
  */
-const WORKING_COPY: WorkingCopySnapshot = {
+const WORKING_COPY: WorkingCopyMeasurement = {
   kind: "worktree",
   path: "/Users/someone/.volli/worktrees/volli-code-f3732f45/VC-288-narrow-pane",
   branch: "volli/VC-288-narrow-pane-follow-ups-beyond-vc-264",

@@ -13,8 +13,8 @@
  * process-per-event hot path, and live in `harness-verbs.ts`.
  */
 
-import { LOCAL_RUNNER } from "@volli/shared";
 import {
+  LOCAL_RUNNER,
   displayTicketId,
   effectiveHarnessId,
   EMPTY_SESSION_USAGE_SUMMARY,

@@ -23,9 +23,9 @@
  * order, and `listLatestTicketSignals` is sorted by ticket id in the same byte
  * order.
  */
-import { LOCAL_RUNNER } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  LOCAL_RUNNER,
   createSessionProjectionCheckpoint,
   type CommandReceipt,
   type SessionAttachment,

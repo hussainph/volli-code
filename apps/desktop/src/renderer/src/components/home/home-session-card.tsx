@@ -348,7 +348,8 @@ function WorkingCopyRows({
     // The rail's fault rule (`rail-panel-parts.tsx`): the sentence a person
     // needs on the row, the diagnostic on `title`, and the one action that
     // fixes it beside them. The raw read error at this width is an ellipsis
-    // that pushes Retry off the end.
+    // that pushes Retry off the end. The words are shipped copy, kept until
+    // the place-label copy pass.
     return (
       <div
         className={cn(CARD_ROW, RAIL_CARD_SEAM)}

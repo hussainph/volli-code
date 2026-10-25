@@ -1,12 +1,12 @@
-import { LOCAL_RUNNER } from "@volli/shared";
 import { afterEach } from "vite-plus/test";
-import type {
-  Session,
-  SessionEventProvenance,
-  SessionLedger,
-  SessionOrigin,
-  SessionProjectionEvent,
-  SessionUsage,
+import {
+  LOCAL_RUNNER,
+  type Session,
+  type SessionEventProvenance,
+  type SessionLedger,
+  type SessionOrigin,
+  type SessionProjectionEvent,
+  type SessionUsage,
 } from "@volli/shared";
 import {
   createSessionEngine,

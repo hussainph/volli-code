@@ -94,7 +94,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   host: HostCore;
   venue?: RunnerIdentity;
   /** Upgrade-only ownership supplied by the host, not the executor. */
-  ownsLegacyRunner?(venue: RunnerIdentity): boolean;
+  ownsLegacyRunner?(runner: RunnerIdentity): boolean;
   ports: Pick<HostCorePorts, "power" | "attention" | "events" | "log">;
   runtime: HostedSessionRuntime | null;
   /** A transport constructed from ready services may bind after recovery. */

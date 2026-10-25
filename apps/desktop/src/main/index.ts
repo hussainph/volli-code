@@ -1,4 +1,3 @@
-import { LOCAL_RUNNER } from "@volli/shared";
 import {
   app,
   BaseWindow,
@@ -22,6 +21,7 @@ import { realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  LOCAL_RUNNER,
   BLOB_URL_SCHEME,
   CHAT_DRAFTS_APP_STATE_KEY,
   chatDraftAttachmentHashes,

@@ -31,7 +31,7 @@ import {
   workingCopyFileTotal,
   workingCopySegments,
   type WorkingCopyFileState,
-  type WorkingCopySnapshot,
+  type WorkingCopyMeasurement,
 } from "@volli/shared";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
@@ -54,7 +54,7 @@ const STATE_LABEL: Record<WorkingCopyFileState, string> = {
   untracked: "untracked",
 };
 
-export function WorkingCopyVisual({ workingCopy }: { workingCopy: WorkingCopySnapshot }) {
+export function WorkingCopyVisual({ workingCopy }: { workingCopy: WorkingCopyMeasurement }) {
   const total = workingCopyFileTotal(workingCopy.files);
   const segments = workingCopySegments(workingCopy.files);
   const diff = workingCopy.diff;

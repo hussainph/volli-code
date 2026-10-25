@@ -25,7 +25,7 @@ import type {
   WorkingCopyFileCounts,
   WorkingCopyKind,
   WorkingCopyReading,
-  WorkingCopySnapshot,
+  WorkingCopyMeasurement,
 } from "@volli/shared";
 
 import { getProjectById } from "../db/projects-repo";
@@ -35,7 +35,7 @@ import { runGitCapturingAsync, stderrOf } from "./git";
 import { readOnlyGitAsync } from "./scan";
 import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";
 
-export interface WorkingCopySnapshotInput {
+export interface WorkingCopyMeasureInput {
   /** The checkout to measure. */
   path: string;
   kind: WorkingCopyKind;
@@ -64,7 +64,7 @@ export interface WorkingCopySnapshotInput {
  */
 async function resolveBase(
   git: RunGitAsync,
-  input: WorkingCopySnapshotInput,
+  input: WorkingCopyMeasureInput,
 ): Promise<string | null> {
   if (input.baseBranch === null) return null;
   try {
@@ -131,7 +131,7 @@ export async function readWorkingCopy(
   if (worktreePath === null && ticket !== undefined && ticket.uses_worktree !== 0) {
     return ok({ state: "pending" });
   }
-  const measured = await workingCopySnapshot(
+  const measured = await measureWorkingCopy(
     deps.gitAsync ?? runGitCapturingAsync,
     worktreePath === null
       ? { path: project.path, kind: "main-checkout", baseBranch: null }
@@ -159,10 +159,10 @@ interface DirtyEntry {
  * many Sessions share, and a plain `git status` holds its `index.lock` for the
  * whole untracked scan — any of their `git add`/`commit` calls would fail.
  */
-export async function workingCopySnapshot(
+export async function measureWorkingCopy(
   runGit: RunGitAsync,
-  input: WorkingCopySnapshotInput,
-): Promise<WorktreeResult<WorkingCopySnapshot>> {
+  input: WorkingCopyMeasureInput,
+): Promise<WorktreeResult<WorkingCopyMeasurement>> {
   const git = readOnlyGitAsync(runGit);
   try {
     // `--show-current` rather than `rev-parse --abbrev-ref HEAD`: it prints

@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import type { WorkingCopyReading, WorkingCopySnapshot } from "@volli/shared";
+import type { WorkingCopyReading, WorkingCopyMeasurement } from "@volli/shared";
 
 import { ChatEmptyState } from "./chat-empty-state";
 import { WorkingCopyChips } from "./working-copy-chips";
@@ -12,7 +12,7 @@ import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkingCopyStore, workingCopyKey } from "@renderer/stores/working-copy";
 
-function workingCopy(over: Partial<WorkingCopySnapshot> = {}): WorkingCopySnapshot {
+function workingCopy(over: Partial<WorkingCopyMeasurement> = {}): WorkingCopyMeasurement {
   return {
     kind: "worktree",
     path: "/worktrees/volli-code-abc/VC-81",

@@ -42,6 +42,7 @@ import {
   SESSION_ESCALATION_STOP_ID,
   SESSION_PERMISSION_OPTIONS,
   SESSION_REFUSAL_OPTION_IDS,
+  type RunnerKind,
   type SessionInteraction,
   type SessionInteractionCancelReason,
   type SessionInteractionOption,
@@ -255,7 +256,7 @@ export type RuntimeSessionIdentity =
   | SubagentRuntimeIdentity;
 
 /** Where execution happens. Local is the only runner built today. */
-export type RuntimeRunnerKind = "local";
+export type RuntimeRunnerKind = Extract<RunnerKind, "local">;
 
 /**
  * The named half of a Session's Agent Tool Surface: what its Role handed it,

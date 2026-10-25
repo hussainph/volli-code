@@ -3,7 +3,7 @@ import type {
   ChatSessionRecord,
   SessionHarnessState,
   SessionRecord,
-  WorkingCopySnapshot,
+  WorkingCopyMeasurement,
 } from "@volli/shared";
 
 import { WORKING_WINDOW_MS, type SessionTab } from "@renderer/stores/sessions";
@@ -174,7 +174,7 @@ function terminalRow(row: SessionRecord, over: Partial<HomeTerminalPulse> = {}) 
 }
 
 /** One reading of the Main checkout, as the working copy store holds it. */
-function workingCopy(over: Partial<WorkingCopySnapshot> = {}): WorkingCopySnapshot {
+function workingCopy(over: Partial<WorkingCopyMeasurement> = {}): WorkingCopyMeasurement {
   return {
     kind: "main-checkout",
     path: "/code/volli-code",

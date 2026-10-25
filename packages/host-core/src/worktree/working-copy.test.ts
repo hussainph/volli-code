@@ -12,7 +12,7 @@ import type { TestDb } from "../db/test-helpers";
 import { insertTicket, updateTicketFields } from "../db/tickets-repo";
 import { GitError } from "./git";
 import { scriptedReadOnlyGit } from "./scripted-git";
-import { readWorkingCopy, workingCopySnapshot } from "./working-copy";
+import { readWorkingCopy, measureWorkingCopy } from "./working-copy";
 
 /** Real git in a temp repo, with an identity so commits do not need the host's. */
 function runRepoGit(cwd: string, args: readonly string[]): string {
@@ -54,17 +54,14 @@ function scriptedWorkingCopyGit(opts: { branch?: string; status?: string; numsta
   });
 }
 
-describe("workingCopySnapshot", () => {
+describe("measureWorkingCopy", () => {
   it("reads the branch, and calls it null on a detached HEAD", async () => {
-    const onBranch = await workingCopySnapshot(
-      scriptedWorkingCopyGit({ branch: "main" }).gitAsync,
-      {
-        path: "/repo",
-        kind: "main-checkout",
-        baseBranch: null,
-      },
-    );
-    const detached = await workingCopySnapshot(scriptedWorkingCopyGit({ branch: "" }).gitAsync, {
+    const onBranch = await measureWorkingCopy(scriptedWorkingCopyGit({ branch: "main" }).gitAsync, {
+      path: "/repo",
+      kind: "main-checkout",
+      baseBranch: null,
+    });
+    const detached = await measureWorkingCopy(scriptedWorkingCopyGit({ branch: "" }).gitAsync, {
       path: "/repo",
       kind: "main-checkout",
       baseBranch: null,
@@ -85,7 +82,7 @@ describe("workingCopySnapshot", () => {
       ),
     });
 
-    const result = await workingCopySnapshot(gitAsync, {
+    const result = await measureWorkingCopy(gitAsync, {
       path: "/repo",
       kind: "main-checkout",
       baseBranch: null,
@@ -107,7 +104,7 @@ describe("workingCopySnapshot", () => {
       numstat: z("10\t2\tsrc/both.ts", "4\t0\tsrc/committed.ts"),
     });
 
-    const result = await workingCopySnapshot(gitAsync, {
+    const result = await measureWorkingCopy(gitAsync, {
       path: "/wt",
       kind: "worktree",
       baseBranch: "main",
@@ -131,7 +128,7 @@ describe("workingCopySnapshot", () => {
       numstat: z("96\t12\tsrc/a.ts", "-\t-\tassets/logo.png", "14\t3\tsrc/b.ts"),
     });
 
-    const result = await workingCopySnapshot(gitAsync, {
+    const result = await measureWorkingCopy(gitAsync, {
       path: "/wt",
       kind: "worktree",
       baseBranch: "main",
@@ -152,7 +149,7 @@ describe("workingCopySnapshot", () => {
   it("drops the diff entirely when the working copy has no base to measure against", async () => {
     const { gitAsync, calls } = scriptedWorkingCopyGit({ status: z("? loose.md") });
 
-    const result = await workingCopySnapshot(gitAsync, {
+    const result = await measureWorkingCopy(gitAsync, {
       path: "/repo",
       kind: "main-checkout",
       baseBranch: null,
@@ -175,7 +172,7 @@ describe("workingCopySnapshot", () => {
       return "";
     });
 
-    const result = await workingCopySnapshot(gitAsync, {
+    const result = await measureWorkingCopy(gitAsync, {
       path: "/wt",
       kind: "worktree",
       baseBranch: "gone",
@@ -198,7 +195,7 @@ describe("workingCopySnapshot", () => {
       ),
     });
 
-    const result = await workingCopySnapshot(gitAsync, {
+    const result = await measureWorkingCopy(gitAsync, {
       path: "/repo",
       kind: "main-checkout",
       baseBranch: null,
@@ -217,7 +214,7 @@ describe("workingCopySnapshot", () => {
       status: z("u UU N... 100644 100644 100644 100644 aaaa bbbb cccc src/conflict.ts"),
     });
 
-    const result = await workingCopySnapshot(gitAsync, {
+    const result = await measureWorkingCopy(gitAsync, {
       path: "/wt",
       kind: "worktree",
       baseBranch: null,
@@ -231,7 +228,7 @@ describe("workingCopySnapshot", () => {
       throw new GitError("failed", "fatal: not a git repository", ["status"]);
     });
 
-    const result = await workingCopySnapshot(gitAsync, {
+    const result = await measureWorkingCopy(gitAsync, {
       path: "/nowhere",
       kind: "main-checkout",
       baseBranch: null,
@@ -399,7 +396,7 @@ describe("readWorkingCopy", () => {
   });
 });
 
-describe("workingCopySnapshot — against real git", () => {
+describe("measureWorkingCopy — against real git", () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {
@@ -435,7 +432,7 @@ describe("workingCopySnapshot — against real git", () => {
     writeFileSync(join(dir, "scratch.md"), "notes\n");
 
     const { runGitCapturingAsync } = await import("./git");
-    const result = await workingCopySnapshot(runGitCapturingAsync, {
+    const result = await measureWorkingCopy(runGitCapturingAsync, {
       path: dir,
       kind: "worktree",
       baseBranch: "main",

@@ -18,8 +18,12 @@
  * structured executor never attaches under someone else's native identity — a
  * later attach is a fresh binding of its own.
  */
-import { LOCAL_RUNNER } from "@volli/shared";
-import type { RunnerIdentity, SessionInteraction, SessionObservation } from "@volli/shared";
+import {
+  LOCAL_RUNNER,
+  type RunnerIdentity,
+  type SessionInteraction,
+  type SessionObservation,
+} from "@volli/shared";
 
 import { STRUCTURED_ADAPTER_ID } from "./sessions";
 
@@ -56,7 +60,7 @@ export interface BootRecoveryOptions {
   /** Only this host's bindings are owned by its restart. Defaults to desktop. */
   venue?: RunnerIdentity;
   /** Host-specific upgrade ownership; never broadens ordinary runtime authority. */
-  ownsLegacyRunner?(venue: RunnerIdentity): boolean;
+  ownsLegacyRunner?(runner: RunnerIdentity): boolean;
   /** Rehydrate and reconcile a structured attachment that lost its process mid-turn. */
   reconcile(input: { sessionId: string; attachmentId: string }): Promise<void>;
   projectIds: readonly string[];

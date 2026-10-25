@@ -39,8 +39,8 @@
  * take the host down with it.
  */
 
-import { LOCAL_RUNNER } from "@volli/shared";
 import {
+  LOCAL_RUNNER,
   DEFAULT_SESSION_WATCHDOG_SILENCE_MS,
   sessionNotificationItem,
   sessionWedge,

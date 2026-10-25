@@ -966,7 +966,8 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       // from one that said "no ticket".
       return input["ticketId"] === null || typeof input["ticketId"] === "string";
     },
-    invalidError: "Invalid working copy",
+    // Shipped wording; it can reach the Home card's error tooltip.
+    invalidError: "Invalid venue",
   },
   "volli:session-rename": {
     guard: (args): args is IpcArgs<"volli:session-rename"> => {

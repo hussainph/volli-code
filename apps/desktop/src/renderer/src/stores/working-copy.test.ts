@@ -1,10 +1,10 @@
-import type { WorkingCopySnapshot } from "@volli/shared";
+import type { WorkingCopyMeasurement } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { createWorkingCopyStore, useWorkingCopyStore, workingCopyKey } from "./working-copy";
 import { remoteProject } from "./remote-project.test-support";
 
-function snapshot(over: Partial<WorkingCopySnapshot> = {}): WorkingCopySnapshot {
+function snapshot(over: Partial<WorkingCopyMeasurement> = {}): WorkingCopyMeasurement {
   return {
     kind: "worktree",
     path: "/worktrees/VC-81",
@@ -16,7 +16,7 @@ function snapshot(over: Partial<WorkingCopySnapshot> = {}): WorkingCopySnapshot 
 }
 
 /** A `measured` answer, as main sends one. */
-function measured(over: Partial<WorkingCopySnapshot> = {}) {
+function measured(over: Partial<WorkingCopyMeasurement> = {}) {
   return { ok: true, reading: { state: "measured", workingCopy: snapshot(over) } };
 }
 

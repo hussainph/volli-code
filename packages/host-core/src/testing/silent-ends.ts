@@ -1,5 +1,4 @@
 /** TEST-ONLY: actual Pi adapter, engine, SQLite and transcript artifacts. */
-import { LOCAL_RUNNER } from "@volli/shared";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
@@ -8,7 +7,12 @@ import {
   sessionRootThreadId,
   readSessionTranscriptTail,
 } from "@volli/session-engine";
-import type { SessionRuntimeSpec, RuntimeAttachmentHandle, McpToolDefinition } from "@volli/shared";
+import {
+  LOCAL_RUNNER,
+  type SessionRuntimeSpec,
+  type RuntimeAttachmentHandle,
+  type McpToolDefinition,
+} from "@volli/shared";
 import { createPiAgentRuntime } from "@volli/agent-runtime";
 import {
   scriptedProvider,

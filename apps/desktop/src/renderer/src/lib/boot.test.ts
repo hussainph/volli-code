@@ -4,7 +4,7 @@ import {
   CHAT_DRAFTS_APP_STATE_KEY,
   type Project,
   type Ticket,
-  type WorkingCopySnapshot,
+  type WorkingCopyMeasurement,
 } from "@volli/shared";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -88,7 +88,7 @@ function fakeStorage(initial: Record<string, string> = {}): BootStorage {
 }
 
 /** One measured working copy, as main answers `workingCopy.snapshot`. */
-function workingCopy(over: Partial<WorkingCopySnapshot> = {}): WorkingCopySnapshot {
+function workingCopy(over: Partial<WorkingCopyMeasurement> = {}): WorkingCopyMeasurement {
   return {
     kind: "worktree",
     path: "/worktrees/VC-286",

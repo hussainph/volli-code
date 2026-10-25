@@ -51,7 +51,7 @@ const IDENTITY_TABLES = IDENTITY_OBJECTS.filter(({ type }) => type === "table").
 
 /**
  * A worker's kind is the `RunnerIdentity` kind its attachments record.
- * Adding a venue kind fails to compile here until someone decides whether a
+ * Adding a runner kind fails to compile here until someone decides whether a
  * worker can have it, because the column's CHECK cannot be altered in place.
  */
 const WORKER_KINDS = {

@@ -26,7 +26,11 @@
  */
 import * as React from "react";
 
-import { summarizeSessionUsage, type SessionUsage, type WorkingCopySnapshot } from "@volli/shared";
+import {
+  summarizeSessionUsage,
+  type SessionUsage,
+  type WorkingCopyMeasurement,
+} from "@volli/shared";
 
 import {
   HomeSessionCard,
@@ -48,7 +52,7 @@ const RAIL_FLOOR = 240;
 
 // ─── fixtures ───────────────────────────────────────────────────────────────
 
-const WORKING_COPY: WorkingCopySnapshot = {
+const WORKING_COPY: WorkingCopyMeasurement = {
   kind: "main-checkout",
   path: "/Users/someone/code/volli-code",
   branch: "main",

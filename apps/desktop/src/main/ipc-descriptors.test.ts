@@ -1437,7 +1437,7 @@ describe("DATA_IPC descriptor table", () => {
     });
 
     it("carries the handler's exact invalid-input message", () => {
-      expect(invalidError).toBe("Invalid working copy");
+      expect(invalidError).toBe("Invalid venue");
     });
   });
 

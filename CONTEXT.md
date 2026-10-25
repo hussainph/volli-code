@@ -48,8 +48,8 @@ _Avoid_: venue, execution venue, location
 **Working copy**:
 A ticket's git checkout on one Runner: one per ticket per machine, shared by
 that machine's Sessions. Today it is the **Ticket worktree** (or the **Main
-checkout** for a worktree-opt-out ticket). Another Runner starts from what is
-pushed; uncommitted work is shown as "uncommitted on <machine>", never moved
+checkout** for a worktree-opt-out ticket; a Board Session stands in the Main
+checkout). Another Runner starts from what is pushed; uncommitted work is shown as "uncommitted on <machine>", never moved
 behind the person's back.
 _Avoid_: checkout lease, workspace, sandbox
 
@@ -101,7 +101,8 @@ _Avoid_: notifications (delivery, not the list), activity feed
 **Host** and **Worker** are replaced by the backend (authority) and **Runner**
 (execution). **Host link** and **Host protocol** are superseded by backend
 functions and the Runner connection. **Execution venue** is replaced by
-**Place**. **Checkout lease / epoch** and **Workspace epoch** are dropped:
+**Place**; the Runner a Session's facts ran on is a `RunnerIdentity` in code
+(still stored as `venue`). **Checkout lease / epoch** and **Workspace epoch** are dropped:
 authority never moves, and one Working copy per ticket per machine needs no
 fence. **Checkpoint ref** is retired: Volli never pushes uncommitted work.
 Their contracts live in the superseded `docs/host-*.md` until those are

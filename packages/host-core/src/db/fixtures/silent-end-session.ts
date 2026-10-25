@@ -1,4 +1,3 @@
-import { LOCAL_RUNNER } from "@volli/shared";
 import { copyFileSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -7,7 +6,7 @@ import {
   sessionRootThreadId,
 } from "@volli/session-engine";
 import { createPiAgentRuntime } from "@volli/agent-runtime";
-import type { RuntimeAttachmentHandle, SessionRuntimeSpec } from "@volli/shared";
+import { LOCAL_RUNNER, type RuntimeAttachmentHandle, type SessionRuntimeSpec } from "@volli/shared";
 import { scriptedProvider } from "../../../../agent-runtime/test-fixtures/scripted-provider";
 import { openVolliDb } from "../database-file";
 import { createSqliteSessionLedger } from "../../session-control/sqlite-ledger";

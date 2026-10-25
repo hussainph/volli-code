@@ -1,6 +1,5 @@
 /** One live host runtime-service module. Construction captures ports; credentials remain lazy. */
-import { LOCAL_RUNNER } from "@volli/shared";
-import type { RunnerIdentity } from "@volli/shared";
+import { LOCAL_RUNNER, type RunnerIdentity } from "@volli/shared";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";

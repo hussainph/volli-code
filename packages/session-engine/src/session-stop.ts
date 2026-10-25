@@ -1,6 +1,5 @@
 /** Transport-independent stop semantics shared by the host runtime and supervision tools. */
-import { LOCAL_RUNNER } from "@volli/shared";
-import { shortSessionId } from "@volli/shared";
+import { LOCAL_RUNNER, shortSessionId } from "@volli/shared";
 import type {
   CommandReceipt,
   SessionEventProvenance,

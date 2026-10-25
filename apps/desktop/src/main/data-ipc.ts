@@ -1,4 +1,3 @@
-import { LOCAL_RUNNER } from "@volli/shared";
 import { pageClientEventSink } from "./client-event-sink";
 import { assertRendererAppStateKey } from "./app-state-key-guard";
 import { randomUUID } from "node:crypto";
@@ -41,6 +40,7 @@ import {
 } from "@volli/host-core/maintenance";
 import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import {
+  LOCAL_RUNNER,
   errorMessage,
   validateAuthorityPolicyOverride,
   LEGACY_BACKUP_APP_STATE_KEY,

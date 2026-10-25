@@ -43,7 +43,7 @@ function identityRows(db: Database.Database) {
 }
 
 describe("hostd's host id", () => {
-  it("owns legacy remote socket paths, never UUID workers or desktop venues", () => {
+  it("owns legacy remote socket paths, never UUID workers or the desktop runner", () => {
     expect(ownsLegacyHostdRunner({ id: "/run/old/volli.sock", kind: "remote" })).toBe(true);
     expect(ownsLegacyHostdRunner({ id: HOST_ID, kind: "remote" })).toBe(false);
     expect(ownsLegacyHostdRunner({ id: "future-worker", kind: "remote" })).toBe(false);
@@ -91,7 +91,7 @@ describe("hostd's host id", () => {
     expect(db.inTransaction).toBe(false);
   });
 
-  it("names the venue by the host id, never by an address, with hostd's kind", () => {
+  it("names the runner by the host id, never by an address, with hostd's kind", () => {
     const db = migrated();
     expect(HOSTD_RUNNER_KIND).toBe("remote");
     expect(hostdRunner(db, { newId: () => HOST_ID })).toEqual({ id: HOST_ID, kind: "remote" });

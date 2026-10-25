@@ -28,7 +28,7 @@ import { runGitCapturingAsync } from "./git";
 import { scriptedGit } from "./scripted-git";
 import { getWorktreeStatus } from "./status";
 import type { RunGitAsync } from "./types";
-import { workingCopySnapshot } from "./working-copy";
+import { measureWorkingCopy } from "./working-copy";
 
 /** Plausible answers so each read walks its whole path, status included. */
 function answer(args: readonly string[]): string {
@@ -55,8 +55,8 @@ describe("background worktree reads issue read-only git (VC-834)", () => {
       (git) => getWorktreeStatus(git, { worktreePath: "/wt", branch: "topic", baseBranch: "main" }),
     ],
     [
-      "workingCopySnapshot",
-      (git) => workingCopySnapshot(git, { path: "/wt", kind: "worktree", baseBranch: "main" }),
+      "measureWorkingCopy",
+      (git) => measureWorkingCopy(git, { path: "/wt", kind: "worktree", baseBranch: "main" }),
     ],
     [
       "diffStat (working-tree)",
@@ -160,7 +160,7 @@ describe("background worktree status reads leave the index untouched (real git)"
     });
     expect(status.uncommitted).toBe(true);
     expect(
-      (await workingCopySnapshot(git, { path: dir, kind: "worktree", baseBranch: "main" })).ok,
+      (await measureWorkingCopy(git, { path: dir, kind: "worktree", baseBranch: "main" })).ok,
     ).toBe(true);
     expect(
       (await diffStat(git, { worktreePath: dir, baseBranch: "main" }, "working-tree")).ok,

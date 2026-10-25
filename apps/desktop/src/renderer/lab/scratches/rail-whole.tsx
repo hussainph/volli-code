@@ -111,7 +111,7 @@ import {
   type SessionUsageReportQuery,
   type SessionUsageScope,
   type Ticket,
-  type WorkingCopySnapshot,
+  type WorkingCopyMeasurement,
 } from "@volli/shared";
 import { EMPTY_TRANSCRIPT, type ChatSessionSlice } from "@volli/session-presentation";
 
@@ -190,7 +190,7 @@ const HOME_CHAT_ID = "chat-scratch-a";
 
 // ─── fixtures ───────────────────────────────────────────────────────────────
 
-const WORKING_COPY: WorkingCopySnapshot = {
+const WORKING_COPY: WorkingCopyMeasurement = {
   kind: "main-checkout",
   path: "/Users/someone/code/voltaic",
   branch: "main",

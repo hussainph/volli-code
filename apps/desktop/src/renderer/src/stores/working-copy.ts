@@ -11,7 +11,7 @@
  * PULLED, NOT PUSHED, and deliberately so. A Change Set has a filesystem watch
  * behind it because a ticket's Changes rail is a live surface someone reads
  * while an agent writes; the working copy is drawn on an EMPTY chat and in a rail
- * beside it, which is to say at rest. {@link WorkingCopyState.refresh} is there for
+ * beside it, which is to say at rest. {@link WorkingCopyStoreState.refresh} is there for
  * the moments a caller knows the tree moved (a Session started, a turn ended);
  * everything else reads the last answer, which is what it was already looking
  * at.
@@ -25,15 +25,15 @@
  * A READING BELONGS TO A CHECKOUT, not to a scope (VC-286). A ticket keeps its
  * scope across materializing, removing and recreating its worktree, but each of
  * those is a different tree — or none — and the answer taken in the last one is
- * not a slower version of the next one. {@link WorkingCopyState.invalidateTickets}
+ * not a slower version of the next one. {@link WorkingCopyStoreState.invalidateTickets}
  * is that boundary: it advances a per-scope REVISION, which both drops the
  * reading on screen and disowns any read still in flight, so a snapshot taken
- * before the worktree existed can never land after it does. When a working copy grows
- * an execution-host identity (`SessionLocation.working copy`), a host change is
- * another move of the same revision and joins here rather than beside it.
+ * before the worktree existed can never land after it does. When a reading grows
+ * a Runner identity (`SessionLocation.venue`), a Runner change is another move
+ * of the same revision and joins here rather than beside it.
  */
 import { create } from "zustand";
-import { errorMessage, type WorkingCopySnapshot } from "@volli/shared";
+import { errorMessage, type WorkingCopyMeasurement } from "@volli/shared";
 import { notAvailableOn, remoteHostNow } from "./remote-project";
 
 /**
@@ -49,7 +49,7 @@ import { notAvailableOn, remoteHostNow } from "./remote-project";
 export type WorkingCopyEntry =
   | { status: "loading" }
   | { status: "resolving" }
-  | { status: "ready"; workingCopy: WorkingCopySnapshot }
+  | { status: "ready"; workingCopy: WorkingCopyMeasurement }
   | { status: "error"; error: string };
 
 /**
@@ -64,7 +64,7 @@ export function workingCopyKey(projectId: string, ticketId: string | null): stri
   return `${projectId}:${ticketId ?? ""}`;
 }
 
-interface WorkingCopyState {
+interface WorkingCopyStoreState {
   byScope: Readonly<Record<string, WorkingCopyEntry>>;
   /**
    * Reads the working copy again and replaces its entry. Concurrent reads of one
@@ -119,7 +119,7 @@ export function createWorkingCopyStore() {
   const revisions = new Map<string, number>();
   const revisionOf = (key: string): number => revisions.get(key) ?? 0;
 
-  return create<WorkingCopyState>()((set, get) => ({
+  return create<WorkingCopyStoreState>()((set, get) => ({
     byScope: {},
 
     refresh(projectId, ticketId) {

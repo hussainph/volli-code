@@ -23,12 +23,12 @@
  */
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
-import type { WorkingCopySnapshot } from "@volli/shared";
+import type { WorkingCopyMeasurement } from "@volli/shared";
 
 import { ValueReveal } from "@renderer/components/ui/value-reveal";
 
 /** The word for each working copy kind. A noun; the drawing above carries the rest. */
-export function workingCopyKindLabel(workingCopy: WorkingCopySnapshot): string {
+export function workingCopyKindLabel(workingCopy: WorkingCopyMeasurement): string {
   return workingCopy.kind === "main-checkout" ? "Main checkout" : "Worktree";
 }
 
@@ -62,7 +62,7 @@ function ScopeChip({
   );
 }
 
-export function WorkingCopyChips({ workingCopy }: { workingCopy: WorkingCopySnapshot }) {
+export function WorkingCopyChips({ workingCopy }: { workingCopy: WorkingCopyMeasurement }) {
   return (
     <div className="flex flex-wrap items-center justify-center gap-1">
       <ScopeChip

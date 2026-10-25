@@ -122,10 +122,10 @@ export type { CollisionScan, ScannedWorktree, SkippedWorktree } from "./collisio
 // partition the empty chat draws and the loose count the Home rail shows.
 // `readWorkingCopy` resolves the directory by the Session runtime's own rule, so the
 // two can never disagree about which tree a Session is standing in.
-export { readWorkingCopy, workingCopySnapshot } from "./working-copy";
+export { readWorkingCopy, measureWorkingCopy } from "./working-copy";
 export type {
   WorkingCopyReadPorts,
-  WorkingCopySnapshotInput,
+  WorkingCopyMeasureInput,
   WorkingCopyTarget,
 } from "./working-copy";
 export type { ChangeSetInput, ChangeSetBaseFileInput, ChangeSetBaseFile } from "./change-set";

@@ -19,7 +19,7 @@ import {
   type ChatSessionRecord,
   type SessionHarnessState,
   type SessionRecord,
-  type WorkingCopySnapshot,
+  type WorkingCopyMeasurement,
 } from "@volli/shared";
 
 import { SESSION_ROSTER_FILTER_THRESHOLD } from "@renderer/components/ticket/session-history";
@@ -510,7 +510,7 @@ export interface HomeCheckoutGlance {
 }
 
 export function homeCheckoutGlance(input: {
-  workingCopy: WorkingCopySnapshot | null;
+  workingCopy: WorkingCopyMeasurement | null;
   failed: boolean;
 }): HomeCheckoutGlance | null {
   if (input.failed) return { phrase: "Unreadable", tone: "error" };
