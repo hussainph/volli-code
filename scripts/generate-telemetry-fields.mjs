@@ -1,6 +1,7 @@
 /**
  * Writes `docs/telemetry.md`, the list of every field Volli's own telemetry
- * destination may receive, from the vocabulary that defines it (VC-505).
+ * destination may receive, and where it asks before sending, from the
+ * modules that define them (VC-505).
  *
  *     node scripts/generate-telemetry-fields.mjs         # rewrite in place
  *     node scripts/generate-telemetry-fields.mjs --check # fail if stale (CI)
@@ -23,6 +24,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolvePath(HERE, "..");
 const VOCABULARY = resolvePath(ROOT, "packages/shared/src/telemetry-vocabulary.ts");
+const CONSENT = resolvePath(ROOT, "packages/shared/src/telemetry-consent.ts");
 const OUTPUT = resolvePath(ROOT, "docs/telemetry.md");
 
 registerHooks({
@@ -45,6 +47,7 @@ const {
   UNKNOWN_VERSION,
   MAX_TELEMETRY_ROWS,
 } = await import(pathToFileURL(VOCABULARY).href);
+const { CHOICE_REGIONS } = await import(pathToFileURL(CONSENT).href);
 
 const code = (value) => `\`${value}\``;
 
@@ -135,6 +138,14 @@ function render() {
     "Volli's own telemetry will have two parts, each with its own switch: usage statistics and",
     "crash reports. No build sends either yet. The exporter, its identifiers and its consent",
     "controls ship separately, and are held to this page.",
+    "",
+    "## Where Volli asks first",
+    "",
+    "In these regions, and wherever the region is unknown, Volli will send nothing until you",
+    "choose. Elsewhere it will send once it has shown a first-run notice saying how to turn it",
+    "off. Regions are ISO 3166-1 alpha-2 country codes:",
+    "",
+    [...CHOICE_REGIONS].map(code).join(", "),
     "",
     "## Usage statistics",
     "",

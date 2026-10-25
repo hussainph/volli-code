@@ -6,6 +6,14 @@ Volli's own telemetry will have two parts, each with its own switch: usage stati
 crash reports. No build sends either yet. The exporter, its identifiers and its consent
 controls ship separately, and are held to this page.
 
+## Where Volli asks first
+
+In these regions, and wherever the region is unknown, Volli will send nothing until you
+choose. Elsewhere it will send once it has shown a first-run notice saying how to turn it
+off. Regions are ISO 3166-1 alpha-2 country codes:
+
+`AT`, `BE`, `BG`, `CY`, `CZ`, `DE`, `DK`, `EE`, `ES`, `FI`, `FR`, `GR`, `HR`, `HU`, `IE`, `IT`, `LT`, `LU`, `LV`, `MT`, `NL`, `PL`, `PT`, `RO`, `SE`, `SI`, `SK`, `AX`, `GF`, `GP`, `MF`, `MQ`, `RE`, `YT`, `IS`, `LI`, `NO`, `GB`, `CA`
+
 ## Usage statistics
 
 Every usage event Volli's own telemetry service may receive is listed below, with every
