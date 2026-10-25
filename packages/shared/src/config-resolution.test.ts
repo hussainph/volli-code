@@ -34,6 +34,23 @@ describe("configPlan", () => {
     });
   });
 
+  it("puts the repo tier directly under policy wherever a surface reads it", () => {
+    const plans = [
+      configPlan("skills"),
+      configPlan("promptTemplates", false),
+      configPlan("promptTemplates", true),
+      configPlan("skillMode"),
+      configPlan("decisionModel"),
+      configPlan("theme"),
+    ];
+    for (const { order } of plans) {
+      if (!order.includes("repo")) continue;
+      expect(order.indexOf("repo")).toBe(
+        order.includes("policy") ? order.indexOf("policy") + 1 : 0,
+      );
+    }
+  });
+
   it("declares the override surfaces in their current order", () => {
     expect(configPlan("skillMode")).toEqual({ merge: "override", order: ["project"] });
     expect(configPlan("decisionModel")).toEqual({
@@ -159,6 +176,17 @@ describe("resolveConfigEntries", () => {
       { policy: ["risky"] },
     );
     expect(resolved.map(({ key }) => key)).toEqual(["other", "safe"]);
+  });
+
+  it("never lets a deny level below the repo remove a repo entry", () => {
+    expect(
+      resolveConfigEntries(
+        plan,
+        { repo: [entry("tool", "repo")], project: [entry("tool", "project")] },
+        byName,
+        { project: ["tool"] },
+      ),
+    ).toEqual([{ key: "tool", value: entry("tool", "repo"), level: "repo" }]);
   });
 
   it("lets a level above a deny define the denied key again", () => {

@@ -21,11 +21,12 @@
  *    overrides all. A deny level must be in the order (policy first, so it
  *    is present before its rows exist); a deny list from any other level is
  *    ignored.
- *  - its **order**: the levels it reads, highest first. A surface that still
- *    resolves in its pre-cloud order declares that order literally and says
- *    why; a surface that moves to the target order under the `cloud` flag
- *    declares both (`flagOff` and `cloud`), so flag-off behaviour stays
- *    byte-identical.
+ *  - its **order**: the levels it reads, highest first. A surface whose
+ *    current order already is the target order declares it through
+ *    `targetOrder`; a surface that still resolves in its pre-cloud order
+ *    declares that order literally and says why; a surface that moves to the
+ *    target order under the `cloud` flag declares both (`flagOff` and
+ *    `cloud`), so flag-off behaviour stays byte-identical.
  *
  * Today only local levels exist: `personal` (this person's machine-wide
  * settings, `~/.agents/skills`, `<userData>/commands`), `project` (the

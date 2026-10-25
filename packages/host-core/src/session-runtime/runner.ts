@@ -103,7 +103,7 @@ export interface RunnerCompositionInput {
   env: Readonly<Record<string, string | undefined>>;
   /** A packaged build ignores the developer opt-ins above. */
   packaged: boolean;
-  /** Whether the `cloud` flag is on now; read at every skills and prompt-template load. */
+  /** Whether the `cloud` flag is on now; read at every prompt-template load and by environment recipes. */
   cloudEnabled(): boolean;
   /** Where Code Mode's worker and WebAssembly are; absent offers no Code Mode. */
   codeModeSandbox?: CodeModeSandboxAssets;
