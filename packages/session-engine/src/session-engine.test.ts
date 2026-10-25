@@ -45,9 +45,9 @@ function ids(): SessionLedgerIds {
   return { next: (kind) => `${kind}-${++sequence}` };
 }
 
-function composition() {
+function composition(options: { checkReferences?: boolean } = {}) {
   let now = 100;
-  const ledger = createInMemorySessionLedger();
+  const ledger = createInMemorySessionLedger(options);
   const plane = createSessionEngine({ ledger, clock: { now: () => now++ }, ids: ids() });
   return { ledger, plane };
 }
@@ -3382,7 +3382,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
   });
 
   it("detects missing canonical events for otherwise stored receipt and command history", async () => {
-    const missingReceiptEvent = composition();
+    const missingReceiptEvent = composition({ checkReferences: false });
     const { session } = await missingReceiptEvent.plane.createSession(createRequest());
     const submitted = await missingReceiptEvent.plane.submit({
       commandId: "command-missing-receipt-event",
@@ -3433,7 +3433,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
       }),
     ).rejects.toThrow("has no Session event");
 
-    const missingCommandEvent = composition();
+    const missingCommandEvent = composition({ checkReferences: false });
     const seeded = sessionRecord();
     await missingCommandEvent.ledger.transaction((transaction) => {
       transaction.insertSession(seeded);
@@ -3583,7 +3583,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
   });
 
   it("detects a pre-existing create command with a missing receipt, Session, or created event", async () => {
-    const noReceipt = composition();
+    const noReceipt = composition({ checkReferences: false });
     const receiptlessSession = sessionRecord("session-no-receipt");
     await noReceipt.ledger.transaction((transaction) => {
       transaction.insertSession(receiptlessSession);
@@ -3602,7 +3602,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
       "no create receipt",
     );
 
-    const noSession = composition();
+    const noSession = composition({ checkReferences: false });
     await noSession.ledger.transaction((transaction) => {
       transaction.saveCommand(
         command("command-create", "missing", {
@@ -3623,7 +3623,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
     });
     await expect(noSession.plane.createSession(createRequest())).rejects.toThrow("has no Session");
 
-    const noEvent = composition();
+    const noEvent = composition({ checkReferences: false });
     const seeded = sessionRecord();
     await noEvent.ledger.transaction((transaction) => {
       transaction.insertSession(seeded);
@@ -3648,7 +3648,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
       "incomplete durable history",
     );
 
-    const mismatchedCreatedFact = composition();
+    const mismatchedCreatedFact = composition({ checkReferences: false });
     const createdSession = sessionRecord("session-created-mismatch");
     const createCommand = command("command-create", createdSession.id, {
       kind: "session.create",
@@ -3705,7 +3705,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
       "does not match Session",
     );
 
-    const mismatchedCreateReceipt = composition();
+    const mismatchedCreateReceipt = composition({ checkReferences: false });
     const receiptSession = sessionRecord("session-receipt-mismatch");
     await mismatchedCreateReceipt.ledger.transaction((transaction) => {
       transaction.insertSession(receiptSession);

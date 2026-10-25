@@ -11,7 +11,8 @@ describeCommittedSessionStreamContract("wake bus", () => {
   let id = 0;
   const bus = createSessionWakeBus(
     createTestSessionEngine(ctx.db, { now: () => 100, nextId: () => `wake-${++id}` }),
-    { db: ctx.db },
+    // A listener the contract makes throw is reported here, not to the write.
+    { db: ctx.db, onError: () => {} },
   );
   return {
     engine: bus.engine,

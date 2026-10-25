@@ -1555,6 +1555,41 @@ describe("the Session usage projection", () => {
   });
 
   describe("listProjectionEvents (VC-355)", () => {
+    // The contract compares only the facts: the port lets an adapter return full
+    // events here. This one must not, because skipping the join is its point.
+    it("returns the same facts in the same order without the provenance field", async () => {
+      const { ledger, control, projectId } = setup();
+      const created = await control.createSession({
+        commandId: "create-projection-events",
+        projectId,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Projection events",
+        provenance,
+      });
+      await control.submit({
+        commandId: "retitle-projection-events",
+        sessionId: created.session.id,
+        intent: { kind: "session.retitle", title: "Renamed" },
+        provenance,
+      });
+
+      const { audit, fold } = await ledger.transaction((transaction) => ({
+        audit: transaction.listEvents({ sessionId: created.session.id }),
+        fold: transaction.listProjectionEvents({ sessionId: created.session.id }),
+      }));
+
+      expect(fold.length).toBeGreaterThan(1);
+      expect(fold).toEqual(audit.map(({ provenance: _provenance, ...event }) => event));
+      for (const event of fold) expect("provenance" in event).toBe(false);
+      // The point of the split: the audit field is never fetched, so the same
+      // rows fold to the same state without decoding one provenance per event.
+      expect(createSessionProjectionCheckpoint(created.session, fold).projection).toEqual(
+        createSessionProjectionCheckpoint(created.session, audit).projection,
+      );
+    });
+
     it("keeps the pagination contract when a page is entirely retired kinds", async () => {
       const { ledger, control, projectId } = setup();
       const created = await control.createSession({

@@ -36,7 +36,11 @@ export function createInMemorySessionFollowUpLedger(
         if (result && typeof result === "object" && "then" in result) {
           throw new Error("Follow-up ledger transaction must be synchronous");
         }
-        states.set(sessionId, JSON.parse(canonicalJson(state)) as SessionFollowUpState);
+        // As the SQLite queue does: a Session nobody has written keeps no row
+        // until a writer moves its revision.
+        if (states.has(sessionId) || state.revision > 0) {
+          states.set(sessionId, JSON.parse(canonicalJson(state)) as SessionFollowUpState);
+        }
         return result;
       };
       return eventLedger
@@ -57,7 +61,10 @@ export function createInMemorySessionFollowUpLedger(
         : apply();
     },
     async pendingSessionIds() {
-      return [...states].filter(([, state]) => state.entries.length > 0).map(([id]) => id);
+      return [...states]
+        .filter(([, state]) => state.entries.length > 0)
+        .map(([id]) => id)
+        .toSorted();
     },
   };
 }

@@ -9,10 +9,14 @@
  * replace the "announced before the write settles" rule with an explicit
  * own-write marker the runtime can read.
  */
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import type { SessionEvent } from "@volli/shared";
 import type { SessionEngine } from "../session-engine";
-import { contractProvenance as provenance } from "./contract-fixtures";
+import {
+  contractCreateRequest,
+  contractProvenance as provenance,
+  storePerCase,
+} from "./contract-fixtures";
 
 export interface CommittedSessionStreamContractStore {
   /** The Engine every write goes through; its writes are what is announced. */
@@ -29,36 +33,21 @@ export type CommittedSessionStreamContractFactory = () =>
 
 const PROJECT = "project-stream-contract";
 
+const create = (engine: SessionEngine, name: string) =>
+  engine.createSession(contractCreateRequest(name, PROJECT));
+
 export function describeCommittedSessionStreamContract(
   adapter: string,
   open: CommittedSessionStreamContractFactory,
 ): void {
   describe(`committed Session stream contract: ${adapter}`, () => {
-    let opened: CommittedSessionStreamContractStore[] = [];
-    afterEach(async () => {
-      const stores = opened;
-      opened = [];
-      for (const store of stores) await store.dispose();
-    });
+    const openStore = storePerCase(open);
     async function fresh() {
-      const store = await open();
-      opened.push(store);
+      const store = await openStore();
       await store.seedProject(PROJECT);
       const heard: SessionEvent[] = [];
       const stop = store.subscribe((event) => heard.push(event));
       return { ...store, heard, stop };
-    }
-    function create(engine: SessionEngine, name: string) {
-      return engine.createSession({
-        commandId: `create-${name}`,
-        requestedSessionId: name,
-        projectId: PROJECT,
-        ticketId: null,
-        role: "project",
-        parentSessionId: null,
-        title: name,
-        provenance,
-      });
     }
 
     it("announces every committed event once, in ledger order, including those submit does not return", async () => {
@@ -166,6 +155,42 @@ export function describeCommittedSessionStreamContract(
           .map(({ sequence }) => sequence);
         expect(sequences).toEqual(sequences.toSorted((left, right) => left - right));
       }
+    });
+
+    it("keeps a throwing listener from failing the write or silencing the listeners after it", async () => {
+      const { engine, subscribe } = await fresh();
+      subscribe(() => {
+        throw new Error("listener failed");
+      });
+      const after: SessionEvent[] = [];
+      subscribe((event) => after.push(event));
+      await expect(create(engine, "session-throwing")).resolves.toMatchObject({
+        session: { id: "session-throwing" },
+      });
+      const ledger = await engine.listEvents({ sessionId: "session-throwing" });
+      expect(after.map(({ id }) => id)).toEqual(ledger.map(({ id }) => id));
+    });
+
+    it("answers reads as the Engine it wraps does: every caller holds this one", async () => {
+      const { engine } = await fresh();
+      await create(engine, "session-reads");
+      await expect(
+        Promise.all([
+          engine.listSessions({ projectId: PROJECT, scope: "all" }),
+          engine.countSessions({ projectId: PROJECT, scope: "all" }),
+          engine.listAttachedSessions(),
+          engine.listSessionStarts({ sinceMs: 0 }),
+          engine.listLatestTicketSignals({ projectId: PROJECT }),
+          engine.reportUsage({ scope: { kind: "all" } }),
+        ]),
+      ).resolves.toMatchObject([
+        [{ session: { id: "session-reads" } }],
+        1,
+        [],
+        [expect.any(Number)],
+        [],
+        { total: { requestCount: 0 } },
+      ]);
     });
 
     it("stops announcing to a listener once it unsubscribes", async () => {

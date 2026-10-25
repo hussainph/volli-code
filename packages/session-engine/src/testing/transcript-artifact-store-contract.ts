@@ -9,14 +9,20 @@
  * canonical size without ever throwing.
  *
  * Durability, compression and on-disk forms stay in each store's own tests.
+ *
+ * Deliberate pins beyond the port's prose: `byteLength` is optional in the
+ * port, but a store that backs a history window must answer it, so every
+ * store here does; and a written reference names its digest as its id, which
+ * is what lets a reader validate a reference without asking the store.
  */
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import {
   canonicalJson,
   TRANSCRIPT_ARTIFACT_MEDIA_TYPE,
   type SessionTranscriptArtifact,
   type TranscriptArtifactStore,
 } from "../transcript-artifacts";
+import { storePerCase } from "./contract-fixtures";
 
 export interface TranscriptArtifactStoreContractStore {
   store: TranscriptArtifactStore;
@@ -46,17 +52,8 @@ export function describeTranscriptArtifactStoreContract(
   open: TranscriptArtifactStoreContractFactory,
 ): void {
   describe(`TranscriptArtifactStore contract: ${adapter}`, () => {
-    let opened: TranscriptArtifactStoreContractStore[] = [];
-    afterEach(async () => {
-      const stores = opened;
-      opened = [];
-      for (const store of stores) await store.dispose();
-    });
-    async function fresh(): Promise<TranscriptArtifactStore> {
-      const store = await open();
-      opened.push(store);
-      return store.store;
-    }
+    const openStore = storePerCase(open);
+    const fresh = async (): Promise<TranscriptArtifactStore> => (await openStore()).store;
 
     it("returns a self-describing reference and reads the canonical artifact back", async () => {
       const store = await fresh();

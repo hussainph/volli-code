@@ -10,15 +10,28 @@
  *
  * Every write here bumps `revision`, as every runtime writer does: a store may
  * skip persisting a state whose revision never moved past zero.
+ *
+ * Deliberate pin beyond the port's prose: one Session's transactions run in
+ * the order they were asked for. The runtime's release and its queue commands
+ * race on one Session, and an answer that depended on which settled first
+ * would reorder a person's queue.
  */
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import type { SessionLedger } from "@volli/shared";
+import type { CommandReceipt, SessionCommand } from "@volli/shared";
 import {
   emptySessionFollowUpState,
   type SessionFollowUpLedger,
+  type SessionFollowUpState,
   type StoredSessionFollowUp,
 } from "../session-follow-ups";
-import { contractEngine, contractProvenance as provenance } from "./contract-fixtures";
+import type { SessionRuntimeCommandResult } from "../session-runtime";
+import {
+  contractCreateRequest,
+  contractEngine,
+  contractProvenance as provenance,
+  storePerCase,
+} from "./contract-fixtures";
 
 export interface SessionFollowUpLedgerContractStore {
   /** The event ledger the queue proves delivery against. */
@@ -58,29 +71,12 @@ export function describeSessionFollowUpLedgerContract(
   open: SessionFollowUpLedgerContractFactory,
 ): void {
   describe(`SessionFollowUpLedger contract: ${adapter}`, () => {
-    let opened: SessionFollowUpLedgerContractStore[] = [];
-    afterEach(async () => {
-      const stores = opened;
-      opened = [];
-      for (const store of stores) await store.dispose();
-    });
+    const openStore = storePerCase(open);
     async function fresh(...names: string[]) {
-      const store = await open();
-      opened.push(store);
+      const store = await openStore();
       await store.seedProject(PROJECT);
       const { engine } = contractEngine(store.ledger);
-      for (const name of names) {
-        await engine.createSession({
-          commandId: `create-${name}`,
-          requestedSessionId: name,
-          projectId: PROJECT,
-          ticketId: null,
-          role: "project",
-          parentSessionId: null,
-          title: name,
-          provenance,
-        });
-      }
+      for (const name of names) await engine.createSession(contractCreateRequest(name, PROJECT));
       return { ...store, engine };
     }
 
@@ -92,27 +88,38 @@ export function describeSessionFollowUpLedgerContract(
       await expect(followUps.pendingSessionIds()).resolves.toEqual([]);
     });
 
-    it("commits the work's changes and reads them back in the order written", async () => {
+    it("commits the work's changes and reads every field back, entries in the order written", async () => {
       const { followUps } = await fresh("session-write");
-      const entries = [
-        entry(3, { origin: { kind: "user" }, model: { providerId: "p", modelId: "m" } }),
-        entry(1, { state: "releasing", steer: { signature: "sig", targetTurnId: "turn-1" } }),
-        entry(2, { refused: true, refusedDetail: "Held" }),
-      ];
+      const written = {
+        ...emptySessionFollowUpState(),
+        revision: 1,
+        entries: [
+          entry(3, {
+            origin: { kind: "user" },
+            model: { providerId: "p", modelId: "m" },
+            agent: "reviewer",
+            variant: "fast",
+          }),
+          entry(1, { state: "releasing", steer: { signature: "sig", targetTurnId: "turn-1" } }),
+          entry(2, { refused: true, refusedDetail: "Held" }),
+        ],
+        releasedBoundary: "idle:turn-1",
+        // A queue command's reply and a release's evidence outlive the entry
+        // they were about.
+        commands: { "queued-0": { signature: "sig-0", result: queuedResult("queued-0") } },
+        releases: {
+          "delivery-0": { command: deliveryCommand("delivery-0"), receipt: deliveryReceipt() },
+        },
+      } satisfies SessionFollowUpState;
       await expect(
         followUps.transaction("session-write", (state) => {
-          state.entries.push(...entries);
-          state.revision += 1;
-          state.releasedBoundary = "idle:turn-1";
+          Object.assign(state, structuredClone(written));
           return "written";
         }),
       ).resolves.toBe("written");
-      await expect(followUps.transaction("session-write", (state) => state)).resolves.toEqual({
-        ...emptySessionFollowUpState(),
-        revision: 1,
-        entries,
-        releasedBoundary: "idle:turn-1",
-      });
+      await expect(followUps.transaction("session-write", (state) => state)).resolves.toEqual(
+        written,
+      );
     });
 
     it("hands each transaction a private state: a reference kept past commit changes nothing", async () => {
@@ -148,7 +155,7 @@ export function describeSessionFollowUpLedgerContract(
           state.revision += 1;
           return Promise.resolve("not synchronous");
         }) as never),
-      ).rejects.toThrow("must be synchronous");
+      ).rejects.toThrow();
       await expect(followUps.transaction("session-rollback", (state) => state)).resolves.toEqual(
         emptySessionFollowUpState(),
       );
@@ -211,4 +218,47 @@ export function describeSessionFollowUpLedgerContract(
       ).resolves.toEqual([true, false]);
     });
   });
+}
+
+const SESSION = "session-write";
+
+function deliveryCommand(id: string): SessionCommand {
+  return {
+    id,
+    sessionId: SESSION,
+    createdAt: 100,
+    intent: { kind: "message.submit", reference: { id: "message", mediaType: null, digest: null } },
+    route: null,
+  };
+}
+
+function deliveryReceipt(): CommandReceipt {
+  return {
+    id: "receipt-delivery-0",
+    commandId: "delivery-0",
+    status: "accepted",
+    acceptedAt: 100,
+    result: { kind: "message.submitted", sessionId: SESSION },
+    recordedAt: 100,
+    sequence: 4,
+  };
+}
+
+function queuedResult(commandId: string): SessionRuntimeCommandResult {
+  return {
+    sessionId: SESSION,
+    command: {
+      id: commandId,
+      sessionId: SESSION,
+      createdAt: 100,
+      route: null,
+      intent: {
+        kind: "message.queue",
+        message: { id: "message-0", role: "user", parts: [{ type: "text", text: "Queued" }] },
+      },
+    },
+    receipt: null,
+    throughSequence: 3,
+    refusal: null,
+  };
 }

@@ -4,30 +4,42 @@
  * Run it once per adapter: session-engine runs it against the in-memory twin,
  * host-core against `SqliteSessionLedger`, and a backend ledger joins by
  * calling it with its own factory. Each case is a guarantee some caller relies
- * on — acceptance order, contiguous immutable sequences, rollback, idempotent
- * receipts, usage scoped by attribution, checkpoint monotonicity — so a
- * divergence between two adapters fails here on the side that drifted rather
- * than surfacing later as a production-only bug.
+ * on — acceptance order, contiguous immutable sequences, rollback, referential
+ * integrity, idempotent receipts, usage scoped by attribution, checkpoint
+ * monotonicity — so a divergence between two adapters fails here on the side
+ * that drifted rather than surfacing later as a production-only bug.
  *
  * The cases speak only through the port (and the Engine built on it). Storage
- * details — corrupt rows, prepared-statement reuse, migrations — stay in each
- * adapter's own tests.
+ * details — corrupt rows, prepared-statement reuse, migrations, whether the
+ * slim fold read really omits provenance — stay in each adapter's own tests.
+ *
+ * Deliberate pins beyond the port's prose, because every caller today reads
+ * them and a second adapter that answered differently would reorder what a
+ * person sees: equal `listSessions` stamps tie-break on the id's UTF-8 bytes
+ * (SQLite's BINARY collation), `listAttachedSessions` uses the `listSessions`
+ * order, and `listLatestTicketSignals` is sorted by ticket id in the same byte
+ * order.
  */
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import {
   createSessionProjectionCheckpoint,
   type CommandReceipt,
+  type SessionAttachment,
   type SessionCommand,
   type SessionEvent,
   type SessionLedger,
-  type SessionOrigin,
+  type SessionLedgerTransaction,
+  type SessionUsageAttribution,
 } from "@volli/shared";
 import {
   asStored,
+  contractCreateRequest,
   contractEngine,
   contractProvenance as provenance,
   contractSession,
   contractUsage,
+  provenanceWithOrigin,
+  storePerCase,
 } from "./contract-fixtures";
 
 /** One fresh, empty store, as a case sees it. */
@@ -48,51 +60,36 @@ export type SessionLedgerContractFactory = () =>
 
 const PROJECT = "project-contract";
 const OTHER_PROJECT = "project-contract-other";
+const ticketA: SessionUsageAttribution = { projectId: PROJECT, ticketId: "ticket-a" };
+// The attribution is frozen on the fact and never re-derived from the
+// Session row, so one fact here deliberately disagrees with its row.
+const stray: SessionUsageAttribution = { projectId: OTHER_PROJECT, ticketId: "ticket-other" };
 
 export function describeSessionLedgerContract(
   adapter: string,
   open: SessionLedgerContractFactory,
 ): void {
   describe(`SessionLedger contract: ${adapter}`, () => {
-    let opened: SessionLedgerContractStore[] = [];
-    afterEach(async () => {
-      const stores = opened;
-      opened = [];
-      for (const store of stores) await store.dispose();
-    });
-    async function fresh(): Promise<
-      SessionLedgerContractStore & ReturnType<typeof contractEngine>
-    > {
-      const store = await open();
-      opened.push(store);
-      await store.seedProject(PROJECT, ["ticket-a", "ticket-b", "Ticket-c"]);
+    const openStore = storePerCase(open);
+    async function fresh() {
+      const store = await openStore();
+      await store.seedProject(PROJECT, ["ticket-a", "ticket-b", "Ticket-c", "ticket-d"]);
       await store.seedProject(OTHER_PROJECT, ["ticket-other"]);
-      return { ...store, ...contractEngine(store.ledger) };
+      const { engine, clock } = contractEngine(store.ledger);
+      const createSession = async (
+        name: string,
+        options: Parameters<typeof contractCreateRequest>[2] & { projectId?: string } = {},
+      ) =>
+        (
+          await engine.createSession(
+            contractCreateRequest(name, options.projectId ?? PROJECT, options),
+          )
+        ).session;
+      const head = (sessionId: string) =>
+        store.ledger.transaction((transaction) => transaction.latestEventSequence(sessionId));
+      return { ledger: store.ledger, engine, clock, createSession, head };
     }
-    async function createSession(
-      engine: ReturnType<typeof contractEngine>["engine"],
-      name: string,
-      options: { projectId?: string; ticketId?: string | null; origin?: SessionOrigin } = {},
-    ) {
-      const ticketId = options.ticketId ?? null;
-      const created = await engine.createSession({
-        commandId: `create-${name}`,
-        requestedSessionId: name,
-        projectId: options.projectId ?? PROJECT,
-        ticketId,
-        role: ticketId === null ? "project" : "ticket",
-        parentSessionId: null,
-        title: name,
-        provenance:
-          options.origin === undefined
-            ? provenance
-            : {
-                ...provenance,
-                source: { ...provenance.source, detail: { sessionOrigin: options.origin } },
-              },
-      });
-      return created.session;
-    }
+
     describe("transactions", () => {
       it("runs transactions one at a time, in the order they were asked for", async () => {
         const { ledger } = await fresh();
@@ -115,16 +112,18 @@ export function describeSessionLedgerContract(
       });
 
       it("resolves with the work's value, and rolls every write back when the work throws", async () => {
-        const { ledger, engine } = await fresh();
-        const session = await createSession(engine, "session-rollback");
-        const before = await ledger.transaction((transaction) =>
-          transaction.listEvents({ sessionId: session.id }),
-        );
+        const { ledger, createSession, head } = await fresh();
+        const session = await createSession("session-rollback");
+        const before = await head(session.id);
         await expect(
           ledger.transaction((transaction) => {
             transaction.insertSession(contractSession("session-never", PROJECT));
             transaction.saveCommand(retitleCommand(session.id, "command-never"));
-            transaction.appendEvent(archived(session.id, before.length + 1, "event-never"));
+            transaction.appendEvent(archived(session.id, before + 1, "event-never"));
+            transaction.appendEvent(attachmentOpened(session.id, before + 2, "attachment-never"));
+            transaction.appendEvent(
+              usageEvent(session.id, before + 3, { projectId: PROJECT, ticketId: null }),
+            );
             transaction.saveProjectionCheckpoint(
               createSessionProjectionCheckpoint(
                 session,
@@ -142,32 +141,50 @@ export function describeSessionLedgerContract(
             event: transaction.getEvent("event-never"),
             latest: transaction.latestEventSequence(session.id),
             checkpoint: transaction.getProjectionCheckpoint(session.id),
+            usage: transaction.listUsage({ scope: { kind: "all" } }),
+            attached: transaction.listAttachedSessions(),
           })),
         ).resolves.toEqual({
           session: null,
           command: null,
           event: null,
-          latest: before.length,
+          latest: before,
           checkpoint: null,
+          usage: [],
+          attached: [],
         });
-        await expect(ledger.transaction(() => "value")).resolves.toBe("value");
+        // Nothing of the rolled-back attachment survived: its id opens again.
+        await expect(
+          ledger.transaction((transaction) => {
+            transaction.appendEvent(attachmentOpened(session.id, before + 1, "attachment-never"));
+            return "value";
+          }),
+        ).resolves.toBe("value");
       });
 
-      it("closes the transaction handle once the work returns", async () => {
+      it("closes the transaction handle once the work returns or throws", async () => {
         const { ledger } = await fresh();
-        let leaked: Parameters<Parameters<SessionLedger["transaction"]>[0]>[0] | undefined;
+        let returned: SessionLedgerTransaction | undefined;
+        let threw: SessionLedgerTransaction | undefined;
         await ledger.transaction((transaction) => {
-          leaked = transaction;
+          returned = transaction;
         });
-        expect(() => leaked!.getSession("session-any")).toThrow(/closed/);
-        expect(() => leaked!.insertSession(contractSession("session-late", PROJECT))).toThrow(
-          /closed/,
-        );
+        await expect(
+          ledger.transaction((transaction) => {
+            threw = transaction;
+            throw new Error("rollback");
+          }),
+        ).rejects.toThrow("rollback");
+        for (const leaked of [returned!, threw!]) {
+          expect(() => leaked.getSession("session-any")).toThrow();
+          expect(() => leaked.listEvents({ sessionId: "session-any" })).toThrow();
+          expect(() => leaked.insertSession(contractSession("session-late", PROJECT))).toThrow();
+        }
       });
     });
 
     describe("Sessions", () => {
-      it("stores a Session exactly as inserted and refuses an id already used by any record", async () => {
+      it("stores a Session exactly as inserted and refuses an id any record already uses", async () => {
         const { ledger, engine } = await fresh();
         const parent = contractSession("session-parent", PROJECT, { createdAt: 50 });
         const child = contractSession("session-child", PROJECT, {
@@ -189,19 +206,25 @@ export function describeSessionLedgerContract(
           ]),
         ).resolves.toEqual([parent, child, null]);
 
-        await expect(
-          ledger.transaction((transaction) =>
-            transaction.insertSession({ ...parent, title: "Again" }),
-          ),
-        ).rejects.toThrow();
-        // One id space across records: an event id cannot become a Session id.
-        const created = await createSession(engine, "session-with-events");
-        const [firstEvent] = await engine.listEvents({ sessionId: created.id });
-        await expect(
-          ledger.transaction((transaction) =>
-            transaction.insertSession(contractSession(firstEvent!.id, PROJECT)),
-          ),
-        ).rejects.toThrow();
+        // One id space across Sessions, events, commands, receipts and attachments.
+        const created = await engine.createSession(contractCreateRequest("session-ids", PROJECT));
+        const sessionId = created.session.id;
+        const next = created.receipt.sequence + 1;
+        await ledger.transaction((transaction) =>
+          transaction.appendEvent(attachmentOpened(sessionId, next, "attachment-ids")),
+        );
+        const reuses: Array<(transaction: SessionLedgerTransaction) => void> = [
+          (transaction) => transaction.insertSession({ ...parent, title: "Again" }),
+          (transaction) => transaction.insertSession(contractSession(created.event.id, PROJECT)),
+          (transaction) =>
+            transaction.appendEvent(archived(sessionId, next + 1, created.command.id)),
+          (transaction) => transaction.saveCommand(retitleCommand(sessionId, created.receipt.id)),
+          (transaction) => transaction.saveCommand(retitleCommand(sessionId, "attachment-ids")),
+          (transaction) => transaction.appendEvent(archived(sessionId, next + 1, "attachment-ids")),
+        ];
+        for (const reuse of reuses) {
+          await expect(ledger.transaction(reuse)).rejects.toThrow();
+        }
       });
 
       it("lists and counts base Sessions by scope, newest first, then by id in byte order", async () => {
@@ -266,19 +289,48 @@ export function describeSessionLedgerContract(
           ]),
         ).resolves.toEqual([[100, 200, 300], [200, 300], []]);
       });
+
+      it("hands every read its own copy of Sessions, commands, receipts and checkpoints", async () => {
+        const { ledger, engine } = await fresh();
+        const created = await engine.createSession(contractCreateRequest("session-copy", PROJECT));
+        const sessionId = created.session.id;
+        await ledger.transaction((transaction) =>
+          transaction.saveProjectionCheckpoint(
+            createSessionProjectionCheckpoint(
+              created.session,
+              transaction.listEvents({ sessionId }),
+            ),
+          ),
+        );
+        const read = (transaction: SessionLedgerTransaction) => ({
+          session: transaction.getSession(sessionId),
+          listed: transaction.listSessions({ projectId: PROJECT, scope: "all" }),
+          command: transaction.getCommand(created.command.id),
+          receipt: transaction.getReceipt(created.receipt.id),
+          receipts: transaction.listReceipts(created.command.id),
+          checkpoint: transaction.getProjectionCheckpoint(sessionId),
+        });
+        const first = await ledger.transaction(read);
+        const snapshot = structuredClone(first);
+        scribble(first.session);
+        scribble(first.listed[0]);
+        scribble(first.command);
+        scribble(first.receipt);
+        scribble(first.receipts[0]);
+        Object.assign(first.checkpoint!, { throughSequence: -1 });
+        await expect(ledger.transaction(read)).resolves.toEqual(snapshot);
+      });
     });
 
     describe("events", () => {
       it("appends only the next contiguous sequence of a Session it holds", async () => {
-        const { ledger, engine } = await fresh();
-        const session = await createSession(engine, "session-append");
-        const head = await ledger.transaction((transaction) =>
-          transaction.latestEventSequence(session.id),
-        );
-        expect(head).toBeGreaterThan(0);
+        const { ledger, engine, createSession, head } = await fresh();
+        const session = await createSession("session-append");
+        const latest = await head(session.id);
+        expect(latest).toBeGreaterThan(0);
         for (const refused of [
-          archived(session.id, head + 2), // a gap
-          archived(session.id, head), // a sequence already taken
+          archived(session.id, latest + 2), // a gap
+          archived(session.id, latest), // a sequence already taken
           archived(session.id, 0),
           archived("session-unknown", 1), // a Session the store does not hold
         ]) {
@@ -290,47 +342,140 @@ export function describeSessionLedgerContract(
         const [first] = await engine.listEvents({ sessionId: session.id });
         await expect(
           ledger.transaction((transaction) =>
-            transaction.appendEvent(archived(session.id, head + 1, first!.id)),
+            transaction.appendEvent(archived(session.id, latest + 1, first!.id)),
           ),
         ).rejects.toThrow();
         await ledger.transaction((transaction) =>
-          transaction.appendEvent(archived(session.id, head + 1)),
+          transaction.appendEvent(archived(session.id, latest + 1)),
         );
-        await expect(
-          ledger.transaction((transaction) => transaction.latestEventSequence(session.id)),
-        ).resolves.toBe(head + 1);
+        await expect(head(session.id)).resolves.toBe(latest + 1);
       });
 
       it("refuses an event this build could not read back", async () => {
-        const { ledger, engine } = await fresh();
-        const session = await createSession(engine, "session-unreadable");
-        const head = await engine.latestEventSequence({ sessionId: session.id });
+        const { ledger, createSession, head } = await fresh();
+        const session = await createSession("session-unreadable");
+        const latest = await head(session.id);
         await expect(
           ledger.transaction((transaction) =>
             transaction.appendEvent({
-              ...archived(session.id, head + 1),
+              ...archived(session.id, latest + 1),
               payload: { kind: "capabilities.retired" },
             } as unknown as SessionEvent),
           ),
         ).rejects.toThrow();
-        await expect(engine.latestEventSequence({ sessionId: session.id })).resolves.toBe(head);
+        await expect(head(session.id)).resolves.toBe(latest);
+      });
+
+      it("refuses a write that names a record it does not hold, or another Session's", async () => {
+        const { ledger, engine, createSession, head } = await fresh();
+        const session = await createSession("session-references");
+        const other = await engine.createSession(
+          contractCreateRequest("session-references-other", PROJECT),
+        );
+        const latest = await head(session.id);
+        await ledger.transaction((transaction) =>
+          transaction.appendEvent(attachmentOpened(session.id, latest + 1, "attachment-held")),
+        );
+        const otherHead = await head(other.session.id);
+        await ledger.transaction((transaction) =>
+          transaction.appendEvent(
+            attachmentOpened(other.session.id, otherHead + 1, "attachment-other"),
+          ),
+        );
+        const next = latest + 2;
+        const command = retitleCommand(session.id, "command-references");
+        const receipt: CommandReceipt = {
+          id: "receipt-references",
+          commandId: command.id,
+          status: "completed",
+          result: { kind: "session.retitled", sessionId: session.id },
+          recordedAt: next * 10,
+          sequence: next,
+        };
+        const refusals: Record<string, (transaction: SessionLedgerTransaction) => void> = {
+          "a command for no Session": (transaction) =>
+            transaction.saveCommand(retitleCommand("session-unknown", "command-orphan")),
+          "a fact naming a command nobody stored": (transaction) =>
+            transaction.appendEvent({ ...archived(session.id, next), commandId: "command-none" }),
+          "a fact naming another Session's command": (transaction) =>
+            transaction.appendEvent({
+              ...archived(session.id, next),
+              commandId: other.command.id,
+            }),
+          "a fact naming an attachment nobody opened": (transaction) =>
+            transaction.appendEvent({
+              ...archived(session.id, next),
+              attachmentId: "attachment-none",
+            }),
+          "an attachment opened for another Session": (transaction) =>
+            transaction.appendEvent({
+              ...attachmentOpened(session.id, next, "attachment-foreign"),
+              payload: {
+                kind: "attachment.opened",
+                attachment: attachment(other.session.id, "attachment-foreign"),
+              },
+            }),
+          "a fact naming another Session's attachment": (transaction) =>
+            transaction.appendEvent({
+              ...archived(session.id, next),
+              attachmentId: "attachment-other",
+            }),
+          "an attachment opened twice": (transaction) =>
+            transaction.appendEvent({
+              ...attachmentOpened(session.id, next, "attachment-held"),
+              id: "attachment-held-again",
+            }),
+          "a receipt with no receipt event": (transaction) => {
+            transaction.saveCommand(command);
+            transaction.appendReceipt(receipt);
+          },
+          "a receipt event for a receipt nobody stored": (transaction) => {
+            transaction.saveCommand(command);
+            transaction.appendEvent({
+              ...archived(session.id, next),
+              commandId: command.id,
+              payload: { kind: "command.receipt.recorded", receipt },
+            });
+          },
+          "a receipt event in another Session than its command's": (transaction) => {
+            transaction.saveCommand(command);
+            const elsewhere = { ...receipt, sequence: otherHead + 2 };
+            transaction.appendReceipt(elsewhere);
+            transaction.appendEvent({
+              ...archived(other.session.id, otherHead + 2),
+              payload: { kind: "command.receipt.recorded", receipt: elsewhere },
+            });
+          },
+          "a receipt for no command": (transaction) =>
+            transaction.appendReceipt({ ...receipt, commandId: "command-none" }),
+        };
+        for (const [refusal, write] of Object.entries(refusals)) {
+          await expect(ledger.transaction(write), refusal).rejects.toThrow();
+        }
+        await expect(
+          ledger.transaction((transaction) => ({
+            latest: transaction.latestEventSequence(session.id),
+            command: transaction.getCommand(command.id),
+            receipt: transaction.getReceipt(receipt.id),
+          })),
+        ).resolves.toEqual({ latest: latest + 1, command: null, receipt: null });
       });
 
       it("reads the events after sequence N in ascending order, bounded by a limit", async () => {
-        const { ledger, engine } = await fresh();
-        const session = await createSession(engine, "session-read");
-        const head = await engine.latestEventSequence({ sessionId: session.id });
-        const appended = [1, 2, 3, 4, 5].map((step) => archived(session.id, head + step));
+        const { ledger, createSession, head } = await fresh();
+        const session = await createSession("session-read");
+        const latest = await head(session.id);
+        const appended = [1, 2, 3, 4, 5].map((step) => archived(session.id, latest + step));
         await ledger.transaction((transaction) => {
           for (const event of appended) transaction.appendEvent(event);
         });
 
         const read = await ledger.transaction((transaction) => ({
           all: transaction.listEvents({ sessionId: session.id }),
-          after: transaction.listEvents({ sessionId: session.id, afterSequence: head }),
-          page: transaction.listEvents({ sessionId: session.id, afterSequence: head, limit: 2 }),
+          after: transaction.listEvents({ sessionId: session.id, afterSequence: latest }),
+          page: transaction.listEvents({ sessionId: session.id, afterSequence: latest, limit: 2 }),
           empty: transaction.listEvents({ sessionId: session.id, limit: 0 }),
-          end: transaction.listEvents({ sessionId: session.id, afterSequence: head + 5 }),
+          end: transaction.listEvents({ sessionId: session.id, afterSequence: latest + 5 }),
           unknown: transaction.listEvents({ sessionId: "session-unknown" }),
           one: transaction.getEvent(appended[2]!.id),
           missing: transaction.getEvent("event-missing"),
@@ -338,7 +483,7 @@ export function describeSessionLedgerContract(
           latestUnknown: transaction.latestEventSequence("session-unknown"),
         }));
         expect(read.all.map(({ sequence }) => sequence)).toEqual(
-          Array.from({ length: head + 5 }, (_, index) => index + 1),
+          Array.from({ length: latest + 5 }, (_, index) => index + 1),
         );
         expect(read.after.map(asStored)).toEqual(appended);
         expect(read.page.map(asStored)).toEqual(appended.slice(0, 2));
@@ -347,13 +492,13 @@ export function describeSessionLedgerContract(
         expect(read.unknown).toEqual([]);
         expect(asStored(read.one!)).toEqual(appended[2]);
         expect(read.missing).toBeNull();
-        expect(read.latest).toBe(head + 5);
+        expect(read.latest).toBe(latest + 5);
         expect(read.latestUnknown).toBe(0);
       });
 
       it("refuses a negative or fractional cursor or limit", async () => {
-        const { ledger, engine } = await fresh();
-        const session = await createSession(engine, "session-cursor");
+        const { ledger, createSession } = await fresh();
+        const session = await createSession("session-cursor");
         for (const query of [{ afterSequence: -1 }, { afterSequence: 1.5 }, { limit: -1 }]) {
           await expect(
             ledger.transaction((transaction) =>
@@ -371,8 +516,8 @@ export function describeSessionLedgerContract(
       // The drain contract: a reader holding a cursor can trust that what it
       // read stays true, and that what follows its cursor is everything new.
       it("keeps what it returned immutable: a reader's copy, a stable prefix, nothing rewritten", async () => {
-        const { ledger, engine } = await fresh();
-        const session = await createSession(engine, "session-immutable");
+        const { ledger, engine, createSession } = await fresh();
+        const session = await createSession("session-immutable");
         const first = await ledger.transaction((transaction) =>
           transaction.listEvents({ sessionId: session.id }),
         );
@@ -402,13 +547,13 @@ export function describeSessionLedgerContract(
       });
 
       it("holds every event a write appended after its cursor, including those submit does not return", async () => {
-        const { ledger, engine } = await fresh();
-        const session = await createSession(engine, "session-unreturned");
+        const { ledger, engine, createSession, head } = await fresh();
+        const session = await createSession("session-unreturned");
         for (const [commandId, intent] of [
           ["retitle-unreturned", { kind: "session.retitle", title: "Renamed" }],
           ["signal-unreturned", { kind: "session.signal", signal: "done", reason: "Finished" }],
         ] as const) {
-          const cursor = await engine.latestEventSequence({ sessionId: session.id });
+          const cursor = await head(session.id);
           const result = await engine.submit({
             commandId,
             sessionId: session.id,
@@ -435,14 +580,29 @@ export function describeSessionLedgerContract(
         }
       });
 
-      it("hands a fold the same facts in the same order, without provenance but with each command's origin", async () => {
-        const { ledger, engine } = await fresh();
+      it("hands a fold the same facts in the same order, folding to the same state, origins included", async () => {
+        const { ledger, engine, createSession } = await fresh();
         const origin = {
           kind: "automation",
           automationRunId: "run-contract",
           automationName: "Review",
         } as const;
-        const session = await createSession(engine, "session-fold", { origin });
+        const session = await createSession("session-fold", { origin });
+        const start = await engine.submit({
+          commandId: "start-fold",
+          sessionId: session.id,
+          intent: { kind: "executor.start", adapterId: "terminal", continuity: "fresh" },
+          provenance: provenanceWithOrigin(origin),
+        });
+        await engine.observe({
+          id: "opened-fold",
+          kind: "attachment.opened",
+          sessionId: session.id,
+          commandId: start.command.id,
+          occurredAt: 200,
+          provenance,
+          attachment: attachment(session.id, "attachment-fold"),
+        });
         await engine.submit({
           commandId: "retitle-fold",
           sessionId: session.id,
@@ -458,25 +618,23 @@ export function describeSessionLedgerContract(
             limit: 2,
           }),
         }));
-        for (const event of fold) expect(event).not.toHaveProperty("provenance");
-        expect(fold.map(({ commandOrigin: _origin, ...event }) => asStored(event))).toEqual(
-          audit.map(({ provenance: _provenance, ...event }) => asStored(event)),
-        );
+        // The port lets an adapter that cannot separate the two hand back full
+        // events, so only the facts are compared, never which extras ride along.
+        expect(factsOf(fold)).toEqual(factsOf(audit));
         expect(page.map(({ sequence }) => sequence)).toEqual([2, 3]);
-        // The create command came through a door that named its origin; the
-        // retitle did not, which a fold reads as no origin at all.
-        const commands = fold.filter(({ payload }) => payload.kind === "command.recorded");
-        expect(commands.map(({ commandOrigin }) => commandOrigin ?? null)).toEqual([origin, null]);
-        expect(createSessionProjectionCheckpoint(session, fold).projection).toEqual(
-          createSessionProjectionCheckpoint(session, audit).projection,
-        );
+        const folded = createSessionProjectionCheckpoint(session, fold).projection;
+        expect(folded).toEqual(createSessionProjectionCheckpoint(session, audit).projection);
+        // The origin a trusted door recorded reaches the fold.
+        expect(folded.attachments.map(({ id, origin: opened }) => [id, opened])).toEqual([
+          ["attachment-fold", origin],
+        ]);
       });
     });
 
     describe("projection checkpoints", () => {
-      it("keeps the furthest valid checkpoint and refuses one ahead of the log", async () => {
-        const { ledger, engine } = await fresh();
-        const session = await createSession(engine, "session-checkpoint");
+      it("keeps the furthest valid checkpoint and refuses one ahead of the log or for no Session", async () => {
+        const { ledger, engine, createSession } = await fresh();
+        const session = await createSession("session-checkpoint");
         const events = await engine.listEvents({ sessionId: session.id });
         const latest = createSessionProjectionCheckpoint(session, events);
         const earlier = createSessionProjectionCheckpoint(session, events.slice(0, 1));
@@ -493,44 +651,41 @@ export function describeSessionLedgerContract(
 
         for (const refused of [
           { ...latest, throughSequence: latest.throughSequence + 1 },
-          { ...latest, sessionId: "session-unknown" },
+          // Well formed, for a Session this store does not hold.
+          createSessionProjectionCheckpoint(contractSession("session-ghost", PROJECT), []),
         ]) {
           await expect(
             ledger.transaction((transaction) => transaction.saveProjectionCheckpoint(refused)),
           ).rejects.toThrow();
         }
         await expect(
-          ledger.transaction((transaction) => transaction.getProjectionCheckpoint(session.id)),
-        ).resolves.toEqual(latest);
+          ledger.transaction((transaction) => [
+            transaction.getProjectionCheckpoint(session.id),
+            transaction.getProjectionCheckpoint("session-ghost"),
+          ]),
+        ).resolves.toEqual([latest, null]);
       });
     });
 
     describe("commands and receipts", () => {
       it("answers a replayed create or command with the first result, appending nothing", async () => {
-        const { ledger, engine } = await fresh();
-        const request = {
-          commandId: "create-replayed",
-          projectId: PROJECT,
-          ticketId: null,
-          role: "project",
-          parentSessionId: null,
-          title: "Replayed",
-          provenance,
-        } as const;
+        const { ledger, engine, head } = await fresh();
+        const request = contractCreateRequest("session-replayed", PROJECT);
         const created = await engine.createSession(request);
+        const sessionId = created.session.id;
+        const afterCreate = await head(sessionId);
         await expect(engine.createSession(request)).resolves.toEqual(created);
+        await expect(head(sessionId)).resolves.toBe(afterCreate);
         const retitle = {
           commandId: "retitle-replayed",
-          sessionId: created.session.id,
+          sessionId,
           intent: { kind: "session.retitle", title: "Renamed" },
           provenance,
         } as const;
         const first = await engine.submit(retitle);
-        const head = await engine.latestEventSequence({ sessionId: created.session.id });
+        const afterSubmit = await head(sessionId);
         await expect(engine.submit(retitle)).resolves.toEqual(first);
-        await expect(engine.latestEventSequence({ sessionId: created.session.id })).resolves.toBe(
-          head,
-        );
+        await expect(head(sessionId)).resolves.toBe(afterSubmit);
 
         await expect(
           ledger.transaction((transaction) => ({
@@ -551,11 +706,11 @@ export function describeSessionLedgerContract(
         });
       });
 
-      it("lists a command's receipts in sequence order and refuses a receipt for no command", async () => {
-        const { ledger, engine } = await fresh();
-        const session = await createSession(engine, "session-receipts");
+      it("lists a command's receipts in sequence order, each carried by its own event", async () => {
+        const { ledger, createSession, head } = await fresh();
+        const session = await createSession("session-receipts");
         const command = retitleCommand(session.id, "command-receipts");
-        const head = await engine.latestEventSequence({ sessionId: session.id });
+        const latest = await head(session.id);
         const receipts: CommandReceipt[] = [
           {
             id: "receipt-accepted",
@@ -564,7 +719,7 @@ export function describeSessionLedgerContract(
             acceptedAt: 500,
             result: { kind: "session.retitled", sessionId: session.id },
             recordedAt: 500,
-            sequence: head + 2,
+            sequence: latest + 2,
           },
           {
             id: "receipt-completed",
@@ -572,18 +727,13 @@ export function describeSessionLedgerContract(
             status: "completed",
             result: { kind: "session.retitled", sessionId: session.id },
             recordedAt: 600,
-            sequence: head + 3,
+            sequence: latest + 3,
           },
         ];
         await ledger.transaction((transaction) => {
           transaction.saveCommand(command);
           transaction.appendEvent({
-            id: "command-receipts-recorded",
-            sessionId: session.id,
-            sequence: head + 1,
-            occurredAt: 400,
-            recordedAt: 400,
-            provenance,
+            ...archived(session.id, latest + 1, "command-receipts-recorded"),
             commandId: command.id,
             payload: { kind: "command.recorded", command },
           });
@@ -608,12 +758,6 @@ export function describeSessionLedgerContract(
             receipts: transaction.listReceipts(command.id),
           })),
         ).resolves.toEqual({ command, receipts });
-
-        await expect(
-          ledger.transaction((transaction) =>
-            transaction.appendReceipt({ ...receipts[0]!, id: "receipt-orphan", commandId: "nope" }),
-          ),
-        ).rejects.toThrow();
         await expect(
           ledger.transaction((transaction) => transaction.saveCommand(command)),
         ).rejects.toThrow();
@@ -622,10 +766,10 @@ export function describeSessionLedgerContract(
 
     describe("attached Sessions", () => {
       it("lists every Session holding an open attachment, across projects, newest first", async () => {
-        const { ledger, engine, clock } = await fresh();
+        const { ledger, engine, clock, createSession } = await fresh();
         async function attach(name: string, projectId: string) {
           clock.now += 10;
-          const session = await createSession(engine, name, { projectId });
+          const session = await createSession(name, { projectId });
           const start = await engine.submit({
             commandId: `start-${name}`,
             sessionId: session.id,
@@ -638,7 +782,7 @@ export function describeSessionLedgerContract(
         const elsewhere = await attach("session-elsewhere", OTHER_PROJECT);
         const closed = await attach("session-closed", PROJECT);
         const failed = await attach("session-failed", PROJECT);
-        await createSession(engine, "session-bare");
+        await createSession("session-bare");
         for (const { session, commandId, attachmentId } of [live, elsewhere, closed]) {
           await engine.observe({
             id: `opened-${session.id}`,
@@ -678,7 +822,7 @@ export function describeSessionLedgerContract(
 
     describe("latest ticket signals", () => {
       it("names each ticket's signal by acceptance order, never by its clock or its Session id", async () => {
-        const { engine, clock } = await fresh();
+        const { engine, clock, createSession } = await fresh();
         async function signal(
           sessionId: string,
           ticketId: string | null,
@@ -688,7 +832,7 @@ export function describeSessionLedgerContract(
         ) {
           clock.now = at;
           if ((await engine.getBaseSession({ sessionId })) === null) {
-            await createSession(engine, sessionId, { projectId, ticketId });
+            await createSession(sessionId, { projectId, ticketId });
           }
           await engine.submit({
             commandId: `signal-${sessionId}-${value}-${at}`,
@@ -700,10 +844,13 @@ export function describeSessionLedgerContract(
         // ticket-a: the clock moves backwards between two accepted signals (VC-512).
         await signal("session-z", "ticket-a", "blocked", 200);
         await signal("session-a", "ticket-a", "done", 100);
-        // ticket-b: two signals share a millisecond; the one accepted second
-        // belongs to the Session whose id sorts first.
+        // ticket-b and ticket-d: two signals share a millisecond. The one
+        // accepted second sorts first in one pair and last in the other, so no
+        // id order can stand in for acceptance order.
         await signal("session-y", "ticket-b", "done", 150);
         await signal("session-b", "ticket-b", "blocked", 150);
+        await signal("session-d-a", "ticket-d", "blocked", 150);
+        await signal("session-d-z", "ticket-d", "done", 150);
         // Ticket-c: one Session changes its mind.
         await signal("session-c", "Ticket-c", "blocked", 160);
         await signal("session-c", "Ticket-c", "done", 170);
@@ -713,46 +860,30 @@ export function describeSessionLedgerContract(
 
         await expect(engine.listLatestTicketSignals({ projectId: PROJECT })).resolves.toEqual([
           // Byte order: "T" sorts before "t".
-          {
-            ticketId: "Ticket-c",
-            sessionId: "session-c",
-            signal: "done",
-            reason: "session-c at 170",
-            createdAt: 170,
-          },
-          {
-            ticketId: "ticket-a",
-            sessionId: "session-a",
-            signal: "done",
-            reason: "session-a at 100",
-            createdAt: 100,
-          },
-          {
-            ticketId: "ticket-b",
-            sessionId: "session-b",
-            signal: "blocked",
-            reason: "session-b at 150",
-            createdAt: 150,
-          },
+          latestSignal("Ticket-c", "session-c", "done", 170),
+          latestSignal("ticket-a", "session-a", "done", 100),
+          latestSignal("ticket-b", "session-b", "blocked", 150),
+          latestSignal("ticket-d", "session-d-z", "done", 150),
         ]);
       });
     });
 
     describe("usage", () => {
-      it("selects usage by the attribution on the fact, newest first, in a half-open window", async () => {
-        const { ledger, engine } = await fresh();
-        const ticketed = await createSession(engine, "session-ticketed", { ticketId: "ticket-a" });
-        const loose = await createSession(engine, "session-loose");
-        const elsewhere = await createSession(engine, "session-elsewhere", {
-          projectId: OTHER_PROJECT,
-        });
-        const spend = [
+      async function spend() {
+        const context = await fresh();
+        const { ledger, engine, createSession, head } = context;
+        const ticketed = await createSession("session-ticketed", { ticketId: "ticket-a" });
+        const ticketedToo = await createSession("session-ticketed-too", { ticketId: "ticket-a" });
+        const loose = await createSession("session-loose");
+        const elsewhere = await createSession("session-elsewhere", { projectId: OTHER_PROJECT });
+        const observed = [
           { session: ticketed, at: 1_000, costUsd: 1 },
           { session: loose, at: 2_000, costUsd: 2 },
+          { session: ticketedToo, at: 2_500, costUsd: 16 },
           { session: elsewhere, at: 3_000, costUsd: 4 },
           { session: ticketed, at: 4_000, costUsd: 8 },
         ];
-        for (const [index, { session, at, costUsd }] of spend.entries()) {
+        for (const [index, { session, at, costUsd }] of observed.entries()) {
           await engine.observe({
             id: `usage-${index}`,
             kind: "usage.recorded",
@@ -764,43 +895,30 @@ export function describeSessionLedgerContract(
             usage: contractUsage({ costUsd }),
           });
         }
-
-        const read = await ledger.transaction((transaction) => {
-          const at = (query: Parameters<typeof transaction.listUsage>[0]) =>
-            transaction.listUsage(query).map(({ occurredAt }) => occurredAt);
-          return {
-            all: at({ scope: { kind: "all" } }),
-            project: at({ scope: { kind: "project", projectId: PROJECT } }),
-            ticket: at({ scope: { kind: "ticket", ticketId: "ticket-a" } }),
-            session: at({ scope: { kind: "session", sessionId: loose.id } }),
-            since: at({ scope: { kind: "all" }, since: 2_000 }),
-            until: at({ scope: { kind: "all" }, until: 2_000 }),
-            window: at({ scope: { kind: "all" }, since: 2_000, until: 4_000 }),
-            entry: transaction.listUsage({ scope: { kind: "session", sessionId: ticketed.id } }),
-            meteredFrom: transaction.usageMeteredFrom(),
-          };
-        });
-        expect(read.all).toEqual([4_000, 3_000, 2_000, 1_000]);
-        expect(read.project).toEqual([4_000, 2_000, 1_000]);
-        expect(read.ticket).toEqual([4_000, 1_000]);
-        expect(read.session).toEqual([2_000]);
-        expect(read.since).toEqual([4_000, 3_000, 2_000]);
-        expect(read.until).toEqual([1_000]);
-        expect(read.window).toEqual([3_000, 2_000]);
-        expect(read.entry).toEqual([
+        const sequence = (await head(loose.id)) + 1;
+        await ledger.transaction((transaction) =>
+          transaction.appendEvent(usageEvent(loose.id, sequence, stray)),
+        );
+        return { ...context, ticketed, loose };
+      }
+      it("selects usage by the attribution on the fact, newest first, in a half-open window", async () => {
+        const { ledger, ticketed, loose } = await spend();
+        const read = await ledger.transaction((transaction) => ({
+          scopes: scopes(transaction, loose.id),
+          ticketed: transaction.listUsage({ scope: { kind: "session", sessionId: ticketed.id } }),
+          loose: transaction.listUsage({ scope: { kind: "session", sessionId: loose.id } }),
+          meteredFrom: transaction.usageMeteredFrom(),
+        }));
+        expect(read.scopes).toEqual(expectedScopes);
+        expect(read.ticketed).toEqual([
+          { ...contractUsage({ costUsd: 8 }), ...usageEntry(ticketed.id, ticketA, 4_000) },
+          { ...contractUsage({ costUsd: 1 }), ...usageEntry(ticketed.id, ticketA, 1_000) },
+        ]);
+        expect(read.loose).toEqual([
+          { ...contractUsage({ costUsd: 32 }), ...usageEntry(loose.id, stray, 5_000) },
           {
-            ...contractUsage({ costUsd: 8 }),
-            sessionId: ticketed.id,
-            projectId: PROJECT,
-            ticketId: "ticket-a",
-            occurredAt: 4_000,
-          },
-          {
-            ...contractUsage({ costUsd: 1 }),
-            sessionId: ticketed.id,
-            projectId: PROJECT,
-            ticketId: "ticket-a",
-            occurredAt: 1_000,
+            ...contractUsage({ costUsd: 2 }),
+            ...usageEntry(loose.id, { projectId: PROJECT, ticketId: null }, 2_000),
           },
         ]);
         // A fresh store has no history that predates metering.
@@ -808,27 +926,18 @@ export function describeSessionLedgerContract(
       });
 
       it("rebuilds the usage read from the facts alone, to the same answer", async () => {
-        const { ledger, engine } = await fresh();
-        const session = await createSession(engine, "session-rebuild", { ticketId: "ticket-a" });
-        for (const [index, at] of [1_000, 2_000].entries()) {
-          await engine.observe({
-            id: `usage-rebuild-${index}`,
-            kind: "usage.recorded",
-            sessionId: session.id,
-            occurredAt: at,
-            provenance,
-            attachmentId: null,
-            turnId: null,
-            usage: contractUsage({ modelId: `model-${index}` }),
-          });
-        }
-        const live = await ledger.transaction((transaction) =>
-          transaction.listUsage({ scope: { kind: "all" } }),
-        );
-        expect(live).toHaveLength(2);
+        const { ledger, loose } = await spend();
+        const live = await ledger.transaction((transaction) => ({
+          rows: transaction.listUsage({ scope: { kind: "all" } }),
+          scopes: scopes(transaction, loose.id),
+        }));
+        expect(live.scopes).toEqual(expectedScopes);
         await ledger.transaction((transaction) => transaction.rebuildUsageProjection());
         await expect(
-          ledger.transaction((transaction) => transaction.listUsage({ scope: { kind: "all" } })),
+          ledger.transaction((transaction) => ({
+            rows: transaction.listUsage({ scope: { kind: "all" } }),
+            scopes: scopes(transaction, loose.id),
+          })),
         ).resolves.toEqual(live);
       });
     });
@@ -857,7 +966,7 @@ function archived(sessionId: string, sequence: number, id = `${sessionId}-${sequ
   } satisfies SessionEvent;
 }
 
-function attachment(sessionId: string, attachmentId: string) {
+function attachment(sessionId: string, attachmentId: string): SessionAttachment {
   return {
     id: attachmentId,
     sessionId,
@@ -866,5 +975,85 @@ function attachment(sessionId: string, attachmentId: string) {
     continuity: "fresh",
     native: null,
     authority: null,
-  } as const;
+  };
 }
+
+function attachmentOpened(sessionId: string, sequence: number, attachmentId: string): SessionEvent {
+  return {
+    ...archived(sessionId, sequence, `${attachmentId}-opened`),
+    payload: { kind: "attachment.opened", attachment: attachment(sessionId, attachmentId) },
+  };
+}
+
+/** A metered operation written straight to the ledger, attributed as given. */
+function usageEvent(
+  sessionId: string,
+  sequence: number,
+  attribution: SessionUsageAttribution,
+): SessionEvent {
+  return {
+    ...archived(sessionId, sequence, `${sessionId}-usage-${sequence}`),
+    occurredAt: 5_000,
+    payload: {
+      kind: "usage.recorded",
+      attachmentId: null,
+      turnId: null,
+      attribution,
+      usage: contractUsage({ costUsd: 32 }),
+    },
+  };
+}
+
+function scopes(transaction: SessionLedgerTransaction, looseId: string) {
+  const at = (query: Parameters<typeof transaction.listUsage>[0]) =>
+    transaction.listUsage(query).map(({ occurredAt }) => occurredAt);
+  return {
+    all: at({ scope: { kind: "all" } }),
+    project: at({ scope: { kind: "project", projectId: PROJECT } }),
+    otherProject: at({ scope: { kind: "project", projectId: OTHER_PROJECT } }),
+    ticket: at({ scope: { kind: "ticket", ticketId: "ticket-a" } }),
+    strayTicket: at({ scope: { kind: "ticket", ticketId: "ticket-other" } }),
+    session: at({ scope: { kind: "session", sessionId: looseId } }),
+    since: at({ scope: { kind: "all" }, since: 2_000 }),
+    until: at({ scope: { kind: "all" }, until: 2_000 }),
+    window: at({ scope: { kind: "all" }, since: 2_000, until: 4_000 }),
+  };
+}
+
+const expectedScopes = {
+  all: [5_000, 4_000, 3_000, 2_500, 2_000, 1_000],
+  project: [4_000, 2_500, 2_000, 1_000],
+  otherProject: [5_000, 3_000],
+  ticket: [4_000, 2_500, 1_000],
+  strayTicket: [5_000],
+  session: [5_000, 2_000],
+  since: [5_000, 4_000, 3_000, 2_500, 2_000],
+  until: [1_000],
+  window: [3_000, 2_500, 2_000],
+};
+
+const scribble = (value: unknown) => Object.assign(value as object, { id: "scribbled" });
+
+const factsOf = (events: readonly object[]) =>
+  events.map((event) => {
+    const {
+      provenance: _provenance,
+      commandOrigin: _origin,
+      ...rest
+    } = event as SessionEvent & { commandOrigin?: unknown };
+    return asStored(rest);
+  });
+
+const latestSignal = (ticketId: string, sessionId: string, value: string, at: number) => ({
+  ticketId,
+  sessionId,
+  signal: value,
+  reason: `${sessionId} at ${at}`,
+  createdAt: at,
+});
+
+const usageEntry = (sessionId: string, attribution: SessionUsageAttribution, at: number) => ({
+  sessionId,
+  ...attribution,
+  occurredAt: at,
+});

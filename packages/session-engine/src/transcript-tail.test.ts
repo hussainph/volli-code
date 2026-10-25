@@ -83,9 +83,13 @@ function submitEvent(sequence: number, reference: TranscriptReference): SessionE
   };
 }
 
-/** Writes use the durable ledger codec, not hand-waved projection fixtures. */
+/**
+ * Writes run the durable ledger codec, not hand-waved projection fixtures. The
+ * reference checks are off: these histories name commands they never stored,
+ * which is exactly what the tail reader must not trust.
+ */
 async function ledgerPorts(events: readonly SessionEvent[]) {
-  const ledger = createInMemorySessionLedger();
+  const ledger = createInMemorySessionLedger({ checkReferences: false });
   await ledger.transaction((transaction) => {
     transaction.insertSession({
       id: "session-1",
