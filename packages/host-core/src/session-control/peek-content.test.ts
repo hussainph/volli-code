@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
 import type { SessionTranscriptArtifact } from "@volli/session-engine";
 import { EMPTY_SESSION_USAGE_SUMMARY, peekSummaryOf } from "@volli/shared";
 import type {
@@ -11,6 +10,7 @@ import type {
 import type { UIMessage } from "ai";
 
 import { PEEK_EXCERPT_CHARS, readSessionPeekContent } from "./peek-content";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 const PROVENANCE = {
   source: { kind: "adapter", id: "pi", detail: null },

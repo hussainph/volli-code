@@ -1,5 +1,4 @@
 export * from "./session-engine";
-export * from "./in-memory-ledger";
 export * from "./native-adapter";
 // Only the addressing convention is public. How a runtime observation becomes a
 // Session fact — the translator and the shape it produces — is this package's

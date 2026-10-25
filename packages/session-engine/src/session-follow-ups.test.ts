@@ -2,9 +2,6 @@ import { describe, expect, it } from "vite-plus/test";
 import type { UIMessage } from "ai";
 import type { RuntimeObservation, SessionLedger } from "@volli/shared";
 import {
-  createInMemorySessionFollowUpLedger,
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamQueue,
@@ -20,6 +17,11 @@ import {
   type SessionFollowUpLedger,
   type SessionStreamEmission,
 } from "./index";
+import {
+  createInMemorySessionFollowUpLedger,
+  createInMemorySessionLedger,
+  createInMemoryTranscriptArtifactStore,
+} from "./testing";
 
 const message = (id: string, text = id): UIMessage => ({
   id,
@@ -638,20 +640,6 @@ describe("host follow-up commands", () => {
     await runtime.close();
   });
 
-  it("keeps in-memory storage atomic and refuses transactions that escape across an await", async () => {
-    const ledger = createInMemorySessionFollowUpLedger();
-    expect(await ledger.transaction("session", () => "primitive")).toBe("primitive");
-    await expect(
-      ledger.transaction("session", (() => Promise.resolve(1)) as never),
-    ).rejects.toThrow("must be synchronous");
-    await expect(
-      ledger.transaction("session", (state) => {
-        state.revision = 2;
-        throw new Error("abort");
-      }),
-    ).rejects.toThrow("abort");
-    expect(await ledger.transaction("session", (state) => state.revision)).toBe(0);
-  });
   it("accepts durably without waiting for the active command, then releases without a Client", async () => {
     const f = fixture();
     const runtime = f.runtime();

@@ -21,7 +21,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  createInMemorySessionLedger,
   createSessionEngine,
   createSessionRuntime,
   SESSION_HISTORY_WINDOW,
@@ -36,6 +35,7 @@ import type { SessionEvent, SessionProjectionCheckpoint } from "@volli/shared";
 import { afterAll, describe, expect, it } from "vite-plus/test";
 
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
+import { createInMemorySessionLedger } from "@volli/session-engine/testing";
 
 /** The ticket's 100, 1,000 and 10,000 events. */
 const SIZES = [100, 1_000, 10_000] as const;

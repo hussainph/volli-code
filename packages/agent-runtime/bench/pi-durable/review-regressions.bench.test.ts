@@ -4,14 +4,14 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxProvider, fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { expect, it } from "vite-plus/test";
 import type { RuntimeObservation } from "@volli/shared";
-import {
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
-  createSessionEngine,
-} from "@volli/session-engine";
+import { createSessionEngine } from "@volli/session-engine";
 import { RuntimeObservationTranslator } from "../../../session-engine/src/observation-translation.ts";
 import { createDurableSpikeRuntime } from "./runtime.ts";
 import { fallback, fixtureModels, fixtureSpec } from "./fixture.ts";
+import {
+  createInMemorySessionLedger,
+  createInMemoryTranscriptArtifactStore,
+} from "@volli/session-engine/testing";
 
 it("two stores project globally distinct facts into one Engine; live cursors reconcile", async () => {
   const directory = await mkdtemp(join(process.cwd(), ".pi-durable-identities-"));

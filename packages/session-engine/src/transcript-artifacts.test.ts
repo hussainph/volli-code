@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { UIMessage } from "ai";
-import {
-  canonicalJson,
-  createInMemoryTranscriptArtifactStore,
-  type SessionTranscriptArtifact,
-} from "./transcript-artifacts";
+import { canonicalJson, type SessionTranscriptArtifact } from "./transcript-artifacts";
 
 function artifact(message: UIMessage): SessionTranscriptArtifact {
   return {
@@ -17,49 +13,18 @@ function artifact(message: UIMessage): SessionTranscriptArtifact {
   };
 }
 
-describe("in-memory transcript artifacts", () => {
-  it("says an artifact's canonical size, and null for one it does not hold (VC-315)", async () => {
-    const artifacts = createInMemoryTranscriptArtifactStore();
-    const value = artifact({
-      id: "sized",
-      role: "assistant",
-      parts: [{ type: "text", text: "é" }],
-    });
-    const reference = await artifacts.write(value);
-    await expect(artifacts.byteLength!(reference)).resolves.toBe(
-      new TextEncoder().encode(canonicalJson(value)).length,
+// What a store does with an artifact — content addressing, independent reads,
+// reference validation, sizes — is the shared store contract
+// (`testing/transcript-artifact-store-contract.ts`). These pin the canonical
+// encoding every store addresses by.
+describe("canonical transcript JSON", () => {
+  it("refuses to encode an undefined artifact", () => {
+    expect(() => canonicalJson(undefined)).toThrow(
+      "Cannot serialize an undefined transcript artifact",
     );
-    await expect(
-      artifacts.byteLength!({ ...reference, id: "fnv1a64:0000000000000000" }),
-    ).resolves.toBeNull();
   });
 
-  it("returns independent values and validates content-addressed references", async () => {
-    const artifacts = createInMemoryTranscriptArtifactStore();
-    const reference = await artifacts.write(
-      artifact({ id: "artifact-1", role: "user", parts: [{ type: "text", text: "Hello" }] }),
-    );
-    const first = await artifacts.read(reference);
-    first.message.parts[0] = { type: "text", text: "mutated by caller" };
-
-    expect((await artifacts.read(reference)).message.parts).toMatchObject([{ text: "Hello" }]);
-    await expect(
-      artifacts.read({
-        ...reference,
-        id: "fnv1a64:0000000000000000",
-        digest: "fnv1a64:0000000000000000",
-      }),
-    ).rejects.toThrow("was not found");
-    await expect(artifacts.read({ ...reference, mediaType: "application/json" })).rejects.toThrow(
-      "reference is invalid",
-    );
-    await expect(
-      artifacts.write(undefined as unknown as SessionTranscriptArtifact),
-    ).rejects.toThrow("Cannot serialize an undefined transcript artifact");
-  });
-
-  it("content-addresses messages by canonical JSON value", async () => {
-    const artifacts = createInMemoryTranscriptArtifactStore();
+  it("encodes canonically equivalent messages to the same bytes", () => {
     const withOptionalValues = artifact({
       role: "assistant",
       id: "message-1",
@@ -76,15 +41,11 @@ describe("in-memory transcript artifacts", () => {
       role: "assistant",
     });
 
-    const first = await artifacts.write(withOptionalValues);
-    const second = await artifacts.write(canonicalEquivalent);
-
-    expect(second).toEqual(first);
-    await expect(artifacts.read(first)).resolves.toEqual(canonicalEquivalent);
+    expect(canonicalJson(withOptionalValues)).toBe(canonicalJson(canonicalEquivalent));
+    expect(JSON.parse(canonicalJson(withOptionalValues))).toEqual(canonicalEquivalent);
   });
 
-  it("rejects non-plain objects nested in message parts", async () => {
-    const artifacts = createInMemoryTranscriptArtifactStore();
+  it("rejects non-plain objects nested in message parts", () => {
     const badValues = [new Date("2025-01-01T00:00:00.000Z"), new Map([["key", "value"]])];
 
     for (const [index, value] of badValues.entries()) {
@@ -94,7 +55,7 @@ describe("in-memory transcript artifacts", () => {
         parts: [{ type: "data-example", data: { nested: value } }],
       } as unknown as UIMessage;
 
-      await expect(artifacts.write(artifact(message))).rejects.toThrowError(
+      expect(() => canonicalJson(artifact(message))).toThrowError(
         new TypeError("Cannot serialize a non-plain object in a transcript artifact"),
       );
     }

@@ -68,8 +68,8 @@ import { scriptedGit, scriptedReadOnlyGit } from "./worktree/scripted-git";
 import * as worktree from "./worktree";
 import { createWorktreeSnapshotCache } from "./worktree/snapshot";
 import { createWorktreeReadService } from "./worktree-reads";
-import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
 import type { SessionEngine } from "@volli/session-engine";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 /** The transcript store the chat-peek tests read through, as main's file store would. */
 const artifacts = createInMemoryTranscriptArtifactStore();

@@ -34,7 +34,7 @@ import { admittedHandlers, createHostHandlers, ROUTER_POLICY } from "@volli/host
 import { createTestSessionEngine, openTestDb, testProject } from "@volli/host-core/testing";
 import { createLogRing } from "@volli/host-core/log";
 import { createWorktreeReadService, runGitCapturingAsync } from "@volli/host-core/worktree";
-import { createSessionRuntime, createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
+import { createSessionRuntime } from "@volli/session-engine";
 import {
   createSurfaceStore,
   disposeChatClient,
@@ -91,6 +91,7 @@ import {
   workspaceLink,
   type Cleanups,
 } from "./remote-sessions.real-link.test-support";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 const electron = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),

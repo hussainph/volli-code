@@ -7,8 +7,8 @@ import {
   type SessionInput,
 } from "@volli/shared";
 import { createSessionEngine, SessionEngineNotFoundError } from "./session-engine";
-import { createInMemorySessionLedger } from "./in-memory-ledger";
 import { assertAdditiveToolRefresh, type ToolRefreshRequest } from "./tool-refresh";
+import { createInMemorySessionLedger } from "./testing";
 
 type Surface = Extract<SessionInput, { kind: "tool-surface" }>;
 type Refresh = ToolRefreshRequest & { kind: "session.tools.refreshed" };

@@ -4,7 +4,6 @@
  */
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
-  createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
   type BindingHandle,
@@ -30,6 +29,7 @@ import {
 } from "./correlation";
 import { createLogger, MAX_LOG_LINE_BYTES } from "./logger";
 import { installHostLog } from "./root";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 const A = { traceId: "a".repeat(32), spanId: "1".repeat(16) };
 const B = { traceId: "b".repeat(32), spanId: "2".repeat(16) };

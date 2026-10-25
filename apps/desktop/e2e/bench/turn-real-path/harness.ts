@@ -41,7 +41,6 @@ import {
   type RealPathRequestKind,
 } from "@volli/agent-runtime/bench/turn-to-completion";
 import {
-  createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamFrame,
@@ -63,6 +62,7 @@ import {
 } from "@volli/host-core/session-runtime";
 
 import { PRIVATE_CONTENT_CANARY, type SubscriberMode } from "./constants";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 export { PRIVATE_CONTENT_CANARY, type SubscriberMode } from "./constants";
 

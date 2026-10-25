@@ -3,8 +3,6 @@ import type { RuntimeObservation, SessionLedgerIds } from "@volli/shared";
 import type { UIMessage } from "ai";
 import {
   canonicalJson,
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamFrame,
@@ -22,6 +20,7 @@ import {
   type SessionTranscriptArtifact,
   type TranscriptArtifactStore,
 } from "./index";
+import { createInMemorySessionLedger, createInMemoryTranscriptArtifactStore } from "./testing";
 
 /**
  * Persistence probe for the delta-frames work (proof checked in before the

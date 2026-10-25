@@ -15,8 +15,6 @@ import {
   type SessionTodoList,
 } from "@volli/shared";
 import {
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
   createSessionRuntime,
   type BindingHandle,
   type NativeHarnessAdapter,
@@ -27,6 +25,10 @@ import {
   type TranscriptArtifactStore,
 } from "@volli/session-engine";
 import type { UIMessage } from "ai";
+import {
+  createInMemorySessionLedger,
+  createInMemoryTranscriptArtifactStore,
+} from "@volli/session-engine/testing";
 
 /** One recorded assistant message: its prose (blank is silent) and, optionally, a plan call. */
 export interface LegacyMessage {

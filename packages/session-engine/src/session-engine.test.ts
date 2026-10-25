@@ -4,7 +4,6 @@ import {
   SessionEngineConflictError,
   SessionEngineNotFoundError,
   createSessionEngine,
-  createInMemorySessionLedger,
 } from "./index";
 import {
   CHECKPOINT_REFRESH_EVENTS,
@@ -29,6 +28,7 @@ import type {
   SessionUsage,
   UnstampedCommandReceipt,
 } from "@volli/shared";
+import { createInMemorySessionLedger } from "./testing";
 
 const localVenue = { id: "machine-1", kind: "local" as const };
 const userProvenance: SessionEventProvenance = {
@@ -45,9 +45,9 @@ function ids(): SessionLedgerIds {
   return { next: (kind) => `${kind}-${++sequence}` };
 }
 
-function composition() {
+function composition(options: { checkReferences?: boolean } = {}) {
   let now = 100;
-  const ledger = createInMemorySessionLedger();
+  const ledger = createInMemorySessionLedger(options);
   const plane = createSessionEngine({ ledger, clock: { now: () => now++ }, ids: ids() });
   return { ledger, plane };
 }
@@ -1916,100 +1916,6 @@ describe("SessionEngine creation and explicit commands", () => {
     await expect(plane.listSessionStarts({ sinceMs: 31 })).resolves.toEqual([]);
   });
 
-  it("lists each ticket's latest signal in stable ticket order without projecting unsignaled Sessions", async () => {
-    const { plane } = composition();
-    const ticketBFirst = await plane.createSession({
-      ...createRequest("command-latest-b-first"),
-      ticketId: "ticket-b",
-    });
-    const ticketBLatest = await plane.createSession({
-      ...createRequest("command-latest-b-latest"),
-      ticketId: "ticket-b",
-    });
-    const ticketBOlderIgnored = await plane.createSession({
-      ...createRequest("command-latest-b-older-ignored"),
-      ticketId: "ticket-b",
-    });
-    const ticketA = await plane.createSession({
-      ...createRequest("command-latest-a"),
-      ticketId: "ticket-a",
-    });
-    await plane.createSession({
-      ...createRequest("command-latest-unsignaled"),
-      ticketId: "ticket-c",
-    });
-
-    await plane.submit({
-      commandId: "signal-latest-b-older-ignored",
-      sessionId: ticketBOlderIgnored.session.id,
-      intent: { kind: "session.signal", signal: "done", reason: "Oldest" },
-      provenance: userProvenance,
-    });
-    await plane.submit({
-      commandId: "signal-latest-b-first",
-      sessionId: ticketBFirst.session.id,
-      intent: { kind: "session.signal", signal: "done", reason: "Older" },
-      provenance: userProvenance,
-    });
-    await plane.submit({
-      commandId: "signal-latest-b-latest",
-      sessionId: ticketBLatest.session.id,
-      intent: { kind: "session.signal", signal: "blocked", reason: "Newer" },
-      provenance: userProvenance,
-    });
-    await plane.submit({
-      commandId: "signal-latest-a",
-      sessionId: ticketA.session.id,
-      intent: { kind: "session.signal", signal: "done", reason: "Alphabetical first" },
-      provenance: userProvenance,
-    });
-
-    const signals = await plane.listLatestTicketSignals({ projectId: "project-1" });
-
-    expect(signals.map(({ ticketId }) => ticketId)).toEqual(["ticket-a", "ticket-b"]);
-    expect(signals).toMatchObject([
-      { sessionId: ticketA.session.id, signal: "done", reason: "Alphabetical first" },
-      { sessionId: ticketBLatest.session.id, signal: "blocked", reason: "Newer" },
-    ]);
-  });
-
-  it("breaks equal-time ticket signal ties by local acceptance order, not Session id (VC-512)", async () => {
-    const { ledger, plane } = composition();
-    const bmpId = "session-\uE000";
-    const nonBmpId = "session-\u{10000}";
-    await ledger.transaction((transaction) => {
-      // Accepted first is the Session id SQLite BINARY would rank HIGHER, so an
-      // ordering by id — or by occurredAt, which both signals share — would
-      // name the wrong signal "latest".
-      for (const sessionId of [nonBmpId, bmpId]) {
-        transaction.insertSession({ ...sessionRecord(sessionId), ticketId: "ticket-1" });
-        transaction.appendEvent({
-          id: `signal-${sessionId}`,
-          sessionId,
-          sequence: 1,
-          occurredAt: 100,
-          recordedAt: 100,
-          provenance: userProvenance,
-          payload: {
-            kind: "session.signaled",
-            signal: "done",
-            reason: sessionId,
-          },
-        });
-      }
-    });
-
-    await expect(plane.listLatestTicketSignals({ projectId: "project-1" })).resolves.toEqual([
-      {
-        ticketId: "ticket-1",
-        sessionId: bmpId,
-        signal: "done",
-        reason: bmpId,
-        createdAt: 100,
-      },
-    ]);
-  });
-
   it("records native continuation evidence only for known open attachments and replays it exactly", async () => {
     const { plane } = composition();
     const { session } = await plane.createSession(createRequest());
@@ -3476,7 +3382,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
   });
 
   it("detects missing canonical events for otherwise stored receipt and command history", async () => {
-    const missingReceiptEvent = composition();
+    const missingReceiptEvent = composition({ checkReferences: false });
     const { session } = await missingReceiptEvent.plane.createSession(createRequest());
     const submitted = await missingReceiptEvent.plane.submit({
       commandId: "command-missing-receipt-event",
@@ -3527,7 +3433,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
       }),
     ).rejects.toThrow("has no Session event");
 
-    const missingCommandEvent = composition();
+    const missingCommandEvent = composition({ checkReferences: false });
     const seeded = sessionRecord();
     await missingCommandEvent.ledger.transaction((transaction) => {
       transaction.insertSession(seeded);
@@ -3677,7 +3583,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
   });
 
   it("detects a pre-existing create command with a missing receipt, Session, or created event", async () => {
-    const noReceipt = composition();
+    const noReceipt = composition({ checkReferences: false });
     const receiptlessSession = sessionRecord("session-no-receipt");
     await noReceipt.ledger.transaction((transaction) => {
       transaction.insertSession(receiptlessSession);
@@ -3696,7 +3602,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
       "no create receipt",
     );
 
-    const noSession = composition();
+    const noSession = composition({ checkReferences: false });
     await noSession.ledger.transaction((transaction) => {
       transaction.saveCommand(
         command("command-create", "missing", {
@@ -3717,7 +3623,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
     });
     await expect(noSession.plane.createSession(createRequest())).rejects.toThrow("has no Session");
 
-    const noEvent = composition();
+    const noEvent = composition({ checkReferences: false });
     const seeded = sessionRecord();
     await noEvent.ledger.transaction((transaction) => {
       transaction.insertSession(seeded);
@@ -3742,7 +3648,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
       "incomplete durable history",
     );
 
-    const mismatchedCreatedFact = composition();
+    const mismatchedCreatedFact = composition({ checkReferences: false });
     const createdSession = sessionRecord("session-created-mismatch");
     const createCommand = command("command-create", createdSession.id, {
       kind: "session.create",
@@ -3799,7 +3705,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
       "does not match Session",
     );
 
-    const mismatchedCreateReceipt = composition();
+    const mismatchedCreateReceipt = composition({ checkReferences: false });
     const receiptSession = sessionRecord("session-receipt-mismatch");
     await mismatchedCreateReceipt.ledger.transaction((transaction) => {
       transaction.insertSession(receiptSession);
@@ -3826,7 +3732,9 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
   });
 });
 
-describe("InMemorySessionLedger", () => {
+// What every ledger adapter must do at runtime is the shared contract
+// (`testing/session-ledger-contract.ts`); this pins the port's types.
+describe("SessionLedger port types", () => {
   it("requires synchronous work while keeping transaction methods synchronous", () => {
     const ledger = createInMemorySessionLedger();
     expectTypeOf<
@@ -3842,186 +3750,6 @@ describe("InMemorySessionLedger", () => {
       return ledger.transaction(async () => "async result");
     };
     expectTypeOf(invalid).toBeFunction();
-  });
-
-  it("exposes only a scoped transaction facade and closes captured facades", async () => {
-    const ledger = createInMemorySessionLedger();
-    expectTypeOf(ledger).toEqualTypeOf<SessionLedger>();
-    expect(ledger).not.toHaveProperty("getSession");
-    expect(ledger).not.toHaveProperty("insertSession");
-
-    const resolved = { transaction: null as SessionLedgerTransaction | null };
-    await ledger.transaction((transaction) => {
-      resolved.transaction = transaction;
-      expect(transaction.getSession("missing")).toBeNull();
-    });
-    const closedResolvedTransaction = resolved.transaction;
-    if (!closedResolvedTransaction) throw new Error("Expected a captured transaction facade");
-    expect(() => closedResolvedTransaction.getSession("missing")).toThrow("is closed");
-    expect(() => closedResolvedTransaction.insertSession(sessionRecord())).toThrow("is closed");
-
-    const rejected = { transaction: null as SessionLedgerTransaction | null };
-    await expect(
-      ledger.transaction((transaction) => {
-        rejected.transaction = transaction;
-        throw new Error("rollback captured facade");
-      }),
-    ).rejects.toThrow("rollback captured facade");
-    const closedRejectedTransaction = rejected.transaction;
-    if (!closedRejectedTransaction) throw new Error("Expected a rejected transaction facade");
-    expect(() => closedRejectedTransaction.listEvents({ sessionId: "missing" })).toThrow(
-      "is closed",
-    );
-  });
-
-  it("lists cloned base Sessions through explicit scopes in durable descending order", async () => {
-    const ledger = createInMemorySessionLedger();
-    const ticketOlder = {
-      ...sessionRecord("session-ticket-older"),
-      ticketId: "ticket-1",
-      title: "Older ticket",
-      createdAt: 1,
-    };
-    const projectSession = {
-      ...sessionRecord("session-project"),
-      title: "Board chat",
-      createdAt: 2,
-    };
-    const ticketLaterId = {
-      ...sessionRecord("session-zulu"),
-      ticketId: "ticket-1",
-      title: "Later id",
-      createdAt: 3,
-    };
-    const ticketEarlierId = {
-      ...sessionRecord("session-alpha"),
-      ticketId: "ticket-1",
-      title: "Earlier id",
-      createdAt: 3,
-    };
-    const otherProject = {
-      ...sessionRecord("session-other"),
-      projectId: "project-2",
-      createdAt: 4,
-    };
-    await ledger.transaction((transaction) => {
-      for (const session of [
-        ticketOlder,
-        projectSession,
-        ticketLaterId,
-        ticketEarlierId,
-        otherProject,
-      ]) {
-        transaction.insertSession(session);
-      }
-      const all = transaction.listSessions({ projectId: "project-1", scope: "all" });
-      expect(all.map((session) => session.id)).toEqual([
-        ticketLaterId.id,
-        ticketEarlierId.id,
-        projectSession.id,
-        ticketOlder.id,
-      ]);
-      expect(
-        transaction
-          .listSessions({ projectId: "project-1", scope: "ticket", ticketId: "ticket-1" })
-          .map((session) => session.id),
-      ).toEqual([ticketLaterId.id, ticketEarlierId.id, ticketOlder.id]);
-      expect(transaction.listSessions({ projectId: "project-1", scope: "project" })).toEqual([
-        projectSession,
-      ]);
-      // @ts-expect-error -- `Session` is readonly (VC-393); this reaches past
-      // the type on purpose, to prove the ledger answered with a copy rather
-      // than the row it holds. The returned row is not frozen, only the
-      // listing cache's own projections are, so the assignment succeeds.
-      all[0]!.title = "Mutated query result";
-      expect(transaction.listSessions({ projectId: "project-1", scope: "all" })[0]?.title).toBe(
-        "Later id",
-      );
-    });
-  });
-
-  it("uses SQLite BINARY descending ID order when creation times are equal", async () => {
-    const ledger = createInMemorySessionLedger();
-    const createdAt = 3;
-    const sessionIds = ["session-a", "session-z", "session-é", "session-中", "session-😀"];
-
-    await ledger.transaction((transaction) => {
-      for (const id of sessionIds) {
-        transaction.insertSession({ ...sessionRecord(id), createdAt });
-      }
-
-      // SQLite BINARY compares UTF-8 bytes: F0 (😀), E4 (中), C3 (é), 7A (z), 61 (a).
-      expect(transaction.listSessions({ projectId: "project-1", scope: "all" })).toMatchObject([
-        { id: "session-😀" },
-        { id: "session-中" },
-        { id: "session-é" },
-        { id: "session-z" },
-        { id: "session-a" },
-      ]);
-    });
-  });
-
-  it("is transactional, append-only, and globally id-safe", async () => {
-    const ledger = createInMemorySessionLedger();
-    const session = sessionRecord();
-    const event = createdEvent("event-1", session);
-    const storedCommand = command("command-1", session.id, {
-      kind: "message.submit",
-      reference: { id: "message", mediaType: null, digest: null },
-    });
-    const receipt = acceptedReceipt("receipt-1", storedCommand.id, {
-      kind: "message.submitted",
-      sessionId: session.id,
-    });
-
-    await expect(
-      ledger.transaction((transaction) => {
-        transaction.insertSession(session);
-        throw new Error("rollback");
-      }),
-    ).rejects.toThrow("rollback");
-    await ledger.transaction((transaction) => {
-      expect(transaction.getSession("missing")).toBeNull();
-      expect(transaction.getEvent("missing")).toBeNull();
-      expect(transaction.getCommand("missing")).toBeNull();
-      expect(transaction.getReceipt("missing")).toBeNull();
-      expect(() => transaction.appendEvent(event)).toThrow("was not found");
-      transaction.insertSession(session);
-      expect(() => transaction.insertSession(session)).toThrow("already exists");
-      expect(() => transaction.appendEvent({ ...event, id: "event-2", sequence: 2 })).toThrow(
-        "must be monotonic",
-      );
-      transaction.appendEvent(event);
-      expect(
-        transaction.listEvents({ sessionId: session.id, afterSequence: 0, limit: -1 }),
-      ).toEqual([]);
-      transaction.saveCommand(storedCommand);
-      expect(() => transaction.saveCommand({ ...storedCommand })).toThrow("already exists");
-      expect(() =>
-        transaction.appendEvent({ ...event, id: storedCommand.id, sequence: 2 }),
-      ).toThrow("already exists");
-      expect(() =>
-        transaction.appendReceipt({
-          ...receipt,
-          commandId: "missing-command",
-          id: "receipt-missing",
-        }),
-      ).toThrow("was not found");
-      transaction.appendReceipt(receipt);
-      transaction.appendReceipt({
-        id: "receipt-completed",
-        commandId: storedCommand.id,
-        status: "completed",
-        recordedAt: 1,
-        sequence: 2,
-        result: receipt.result,
-      });
-      expect(transaction.getReceipt(receipt.id)).toEqual(receipt);
-      expect(transaction.listReceipts(storedCommand.id)).toHaveLength(2);
-      expect(() => transaction.saveCommand({ ...storedCommand, id: receipt.id })).toThrow(
-        "already exists",
-      );
-    });
   });
 });
 
@@ -4174,42 +3902,7 @@ describe("reportUsage", () => {
   });
 });
 
-describe("the in-memory ledger's usage port", () => {
-  // Every adapter must honour the whole port. This one derives usage on each
-  // read, so it has no stored projection to discard — but a rebuild must still
-  // be callable and must still leave the same answers, or the port would be a
-  // promise only SQLite keeps.
-  it("answers a rebuild without losing what it can already derive", async () => {
-    const { ledger, plane } = composition();
-    const created = await plane.createSession(createRequest("create-rebuild"));
-    await plane.observe({
-      id: "usage-rebuild",
-      kind: "usage.recorded",
-      sessionId: created.session.id,
-      occurredAt: 1_000,
-      provenance: adapterProvenance,
-      attachmentId: null,
-      turnId: null,
-      usage: {
-        cause: "assistant",
-        providerId: "anthropic",
-        modelId: "claude-opus-4-1",
-        inputTokens: 1,
-        outputTokens: 1,
-        cacheReadTokens: null,
-        cacheWriteTokens: null,
-        costUsd: 0.5,
-        costBasis: "catalog-estimate",
-      },
-    });
-
-    const before = await plane.reportUsage({ scope: { kind: "all" } });
-    await ledger.transaction((transaction) => {
-      transaction.rebuildUsageProjection();
-    });
-    await expect(plane.reportUsage({ scope: { kind: "all" } })).resolves.toEqual(before);
-  });
-
+describe("usage whose Session is gone", () => {
   // A usage event whose Session the ledger no longer has cannot be attributed
   // to a project or a ticket, so it is dropped rather than reported under an
   // invented scope.

@@ -3,7 +3,6 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DynamicToolUIPart } from "ai";
-import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
 import {
   RuntimeObservationTranslator,
   type TranslatedObservation,
@@ -25,6 +24,7 @@ import {
   forgetBrowserPictures,
 } from "@renderer/components/browser/browser-tab-card";
 import { ToolRow } from "./activity-ui";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 // A real PNG is kept through the picture store seam, never the activity text budget.
 const PNG =

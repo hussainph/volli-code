@@ -16,8 +16,6 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
   type BindingHandle,
@@ -34,6 +32,10 @@ import { resetPhasesForTest } from "../worktree/phase";
 import { createSessionLocationResolver } from "./location";
 import { createSessions } from "./sessions";
 import { startSessionOperation } from "./start-session";
+import {
+  createInMemorySessionLedger,
+  createInMemoryTranscriptArtifactStore,
+} from "@volli/session-engine/testing";
 
 const MODEL: ModelSelection = {
   providerId: "openai-codex",

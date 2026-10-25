@@ -2,11 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import {
-  createSessionRuntime,
-  createInMemoryTranscriptArtifactStore,
-  sessionRootThreadId,
-} from "@volli/session-engine";
+import { createSessionRuntime, sessionRootThreadId } from "@volli/session-engine";
 import {
   DEFAULT_AUTHORITY_POLICY,
   sessionAwaitsUser,
@@ -24,6 +20,7 @@ import { insertProject } from "@volli/host-core/db";
 import { SecretStore, SecretService } from "@volli/host-core/secrets";
 import { keychainSecretCodec } from "./codec";
 import { registerSecretIpc } from "./ipc";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 const { handlers } = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),

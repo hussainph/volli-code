@@ -2,8 +2,6 @@ import { describe, expect, it } from "vite-plus/test";
 import type { RuntimeObservation, SessionLedgerIds } from "@volli/shared";
 import type { UIMessage } from "ai";
 import {
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamFrame,
@@ -15,6 +13,7 @@ import {
   type SessionLocationResolver,
   type SessionRuntime,
 } from "./index";
+import { createInMemorySessionLedger, createInMemoryTranscriptArtifactStore } from "./testing";
 
 const venue = { id: "invariant-machine", kind: "local" as const };
 
