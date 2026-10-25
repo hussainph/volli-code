@@ -273,12 +273,13 @@ jobs:
           fi
           node scripts/protocol-schema/generate.mjs --check "${args[@]}"
 
-      # The live kickoff smoke needs credentials; its ledger/selection predicates
-      # and card-opening helper are deterministic and must still run on every PR.
+      # Smoke helpers and date-boundary fixtures are pure checks on every PR,
+      # including helpers whose live journey needs credentials (kickoff).
       - name: Test smoke runner policy, reporting and helpers
         run: >-
           node --test apps/desktop/scripts/run-smokes.test.mjs
           apps/desktop/scripts/smoke-quiet-check.test.mjs
+          apps/desktop/e2e/lib/automation-schedule-fixture.test.mjs
           apps/desktop/e2e/lib/kickoff-support.test.mjs
           apps/desktop/e2e/lib/focus-ring-probe.test.mjs
           apps/desktop/e2e/lib/smoke-kit.test.mjs
