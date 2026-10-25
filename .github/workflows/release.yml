@@ -186,7 +186,7 @@ jobs:
           # non-fast-forward and the push is rejected, so the run fails here
           # having pushed no tag and released nothing. Re-run to pick up the
           # new head.
-          git push origin "HEAD:$GITHUB_REF_NAME"
+          git push origin "HEAD:refs/heads/$GITHUB_REF_NAME"
           git push origin "$TAG"
 
   # Resolve once, so every hostd target and desktop use exactly the same ref.
