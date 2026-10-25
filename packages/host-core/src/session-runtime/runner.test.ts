@@ -27,8 +27,7 @@ import type { HostStopPolicy } from "../host-lifecycle";
 import { HEADLESS_ATTENTION, NO_POWER_EVENTS } from "../ports";
 import { SecretStore } from "../secrets";
 import { SecretService } from "../secrets/service";
-import type { HostHandlerMap } from "../handlers/handler-map";
-import { testHostHandlers } from "../testing/host-handlers";
+import * as handlerModule from "../handlers/host-handlers";
 import * as boot from "./boot-recovery";
 import { readRecoveredSessionServices, SessionRuntimeClosingError } from "./lifecycle";
 import * as pi from "./pi-adapter";
@@ -130,7 +129,7 @@ function compose({ host, ports, root }: Awaited<ReturnType<typeof composedHost>>
       calls.push("transport.close");
     }),
   };
-  let map: HostHandlerMap | undefined;
+  const doors = vi.fn(() => ({ experiments: null, busyWorktreeSites: async () => [] }));
   const installQuitHold = vi.fn(() => {
     calls.push("quit.hold");
   });
@@ -149,11 +148,8 @@ function compose({ host, ports, root }: Awaited<ReturnType<typeof composedHost>>
     ),
     capabilities: { askUser: false, requestSecret: false },
     beforeExecution: async () => {},
-    // The tool door projects the host's one map; nothing here calls a verb.
-    handlers: () => {
-      if (!isLiveHost(host)) throw new Error("A degraded host has no tool door.");
-      return (map ??= testHostHandlers({ db: host.database.db }));
-    },
+    // What this host's doors answer; nothing here calls a verb.
+    doors,
     transport: () => transport,
     stopProducers: () => {
       calls.push("host.producers.stop");
@@ -169,6 +165,7 @@ function compose({ host, ports, root }: Awaited<ReturnType<typeof composedHost>>
   return {
     calls,
     runner,
+    doors,
     automationsStart,
     transport,
     installQuitHold,
@@ -211,6 +208,10 @@ describe("runner composition", () => {
     const proof = bind.mock.calls[0]![0];
     expect(() => readRecoveredSessionServices(proof)).not.toThrow();
     await expect(f.runner.ready()).resolves.toBe(proof);
+    // The tool door already asked for the one handler map; every door gets it.
+    expect(f.doors).toHaveBeenCalledExactlyOnceWith(proof);
+    expect(f.runner.handlers(proof)).toBe(f.runner.handlers(proof));
+    expect(f.doors).toHaveBeenCalledOnce();
 
     f.calls.length = 0;
     const checkpoint = vi.spyOn(host.database.db, "pragma");
@@ -262,6 +263,57 @@ describe("runner composition", () => {
     await expect(stopping).resolves.toEqual({ reason: "quit", clean: true });
     expect(bind).not.toHaveBeenCalled();
     expect(host.database.db.open).toBe(true);
+  });
+
+  it("fills the handler map's host-owned options itself, beside the host's door capabilities", async () => {
+    const fixture = await composedHost("desktop-quit");
+    const { host } = fixture;
+    if (!isLiveHost(host)) throw new Error(host.database.error);
+    const build = vi.spyOn(handlerModule, "createHostHandlers");
+    const f = compose(fixture);
+    await host.start(f.runner.owner());
+    const proof = await f.runner.ready();
+    const map = f.runner.handlers(proof);
+    expect(build).toHaveBeenCalledOnce();
+    const [, options] = build.mock.calls[0]!;
+    expect(build.mock.results[0]!.value).toBe(map);
+    expect(options).toMatchObject({
+      db: host.database.db,
+      dataDir: host.dataDir,
+      runtime: f.runner.runtime,
+      pictures: f.runner.pictures,
+      modelAccess: f.runner.piRuntimeHost,
+      automations: f.runner.automations,
+      worktreeReads: host.worktreeReads,
+      detachedWork: host.detachedWork,
+      // The door's own answer passes straight through.
+      experiments: null,
+    });
+    expect(options.sessions).not.toBeNull();
+    expect(options.submitSessionMessage).toBeTypeOf("function");
+    expect(options.refineAutoTitle).toBeTypeOf("function");
+    // Listing rows are live only while this process holds a binding.
+    expect(options.sessionListing?.db).toBe(host.database.db);
+    expect(options.sessionListing?.liveAttachmentIds()).toEqual(new Set());
+    await expect(options.ticketSignals?.("project")).resolves.toEqual([]);
+  });
+
+  it("gives a degraded host's map no database, readers or listing", async () => {
+    const fixture = await composedHost("desktop-quit", { degraded: true });
+    const build = vi.spyOn(handlerModule, "createHostHandlers");
+    const f = compose(fixture);
+    await fixture.host.start(f.runner.owner());
+    f.runner.handlers(await f.runner.ready());
+    const [, options] = build.mock.calls[0]!;
+    expect(options).toMatchObject({
+      db: null,
+      runtime: null,
+      sessions: null,
+      worktreeReads: null,
+      sessionListing: null,
+      ticketSignals: null,
+    });
+    expect(options).not.toHaveProperty("detachedWork");
   });
 
   it("stops the scheduler again when the host's edge fails to bind", async () => {

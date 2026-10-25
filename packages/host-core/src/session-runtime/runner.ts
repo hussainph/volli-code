@@ -27,6 +27,7 @@ import { isLiveHost, type HostCore, type HostCorePorts, type HostRuntimeOwner } 
 import { getProjectById } from "../db/projects-repo";
 import { getTicket } from "../db/tickets-repo";
 import { hostLogger } from "../log/root";
+import { SESSION_RUNTIME } from "../session-services";
 import { hostMcpDispatch } from "../mcp/dispatch-policy";
 import { hostCodeMode } from "../codemode/dev-config";
 import { AgentObservability } from "../observability/settings";
@@ -39,6 +40,7 @@ import { createSessionTokenRegistry, type SessionTokenRegistry } from "../sessio
 import { BackgroundShellHost, type BackgroundShellHostPorts } from "../shell/background-shell-host";
 import type { BrowserPictureStore } from "../browser/picture-store";
 import type { HostHandlerMap } from "../handlers/handler-map";
+import { createHostHandlers, type HostHandlerOptions } from "../handlers/host-handlers";
 import { createAttachmentIdentities } from "./attachment-identity";
 import { createRuntimeAssembly, type RuntimeAssemblyOptions } from "./assembly";
 import { createRuntimeAutomations, type RuntimeAutomations } from "./automations";
@@ -46,6 +48,7 @@ import { createRuntimeContextResolver } from "./context";
 import { createTicketSessionDelegationStore } from "./delegation-store";
 import {
   createRuntimeSessionFacade,
+  recoveredRuntimeSessionServices,
   recoveredSessionAutomationPorts,
   type RuntimeSessionFacade,
 } from "./facade";
@@ -66,6 +69,24 @@ export type RunnerProductStore = { readonly kind: "local"; readonly host: HostCo
 
 /** The recovered proof every ledger consumer requires (`lifecycle.ts`). */
 export type RunnerReady = RecoveredSessionServices<RuntimeSessionFacade>;
+
+/** The handler options the runner fills from the host and its recovered services. */
+type RunnerHandlerServices =
+  | "db"
+  | "dataDir"
+  | "pictures"
+  | "runtime"
+  | "sessions"
+  | "submitSessionMessage"
+  | "refineAutoTitle"
+  | "modelAccess"
+  | "automations"
+  | "worktreeReads"
+  | "detachedWork"
+  | "sessionListing"
+  | "ticketSignals";
+/** Everything else a host's handler map needs: what its environment answers. */
+export type RunnerDoorCapabilities = Omit<HostHandlerOptions, RunnerHandlerServices>;
 
 export interface RunnerCompositionInput {
   store: RunnerProductStore;
@@ -105,10 +126,12 @@ export interface RunnerCompositionInput {
   /** A client's live feed of background shells; the host's live work is always fed. */
   shellFeed?: Pick<BackgroundShellHostPorts, "publishState" | "publishRemoved">;
   /**
-   * The host's one handler map for the recovered services (VC-923): the tool
-   * door projects it and serves its own verbs into it.
+   * What only this host's doors know, for the one handler map the runner
+   * builds over the recovered services (VC-668, VC-923): its worktree guard,
+   * experiments, terminals, sign-ins, relays and logs. The Session services,
+   * the database and the host's own readers are the runner's to supply.
    */
-  handlers(ready: RunnerReady): HostHandlerMap;
+  doors(ready: RunnerReady): RunnerDoorCapabilities;
   /** A transport built from ready services, closed inside the Session drain. */
   transport?(): { close(): Promise<void> } | null;
   /** Synchronous: desktop installs its accepted-quit hold over `close`. */
@@ -141,6 +164,8 @@ export interface RunnerComposition {
   readonly concurrency: SessionConcurrencyEnvReader | null;
   readonly observability: AgentObservability | null;
   readonly automations: RuntimeAutomations;
+  /** The host's one handler map over the recovered services, built on first ask. */
+  handlers(ready: RunnerReady): HostHandlerMap;
   /** The owner `host.start` adopts: recovery, Automations, the tool door, then `edge.bind`. */
   owner(edge?: RunnerHostEdge): HostRuntimeOwner;
   /** The recovered proof; starts or joins recovery. */
@@ -154,6 +179,8 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
   const live = isLiveHost(host) ? host : undefined;
   const db = live?.database.db ?? null;
   const sessionEngine = live?.sessionEngine ?? null;
+  // One runtime per host's Session services, claimed before anything is built.
+  const bindSessionRuntime = live?.[SESSION_RUNTIME].claim();
   const runtimeServices = live?.runtimeServices;
 
   const delegation = db === null ? null : createTicketSessionDelegationStore(db);
@@ -296,8 +323,53 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     mcpSettings: runtimeServices?.mcp ?? null,
     events: ports.events,
     log: hostLogger("session-agents"),
-    handlers: (ready) => input.handlers(ready),
+    handlers: (ready) => handlersFor(ready),
   });
+  let handlerMap: HostHandlerMap | undefined;
+  /** Built once, from the first recovered proof a door or the tool door brings. */
+  const handlersFor = (ready: RunnerReady): HostHandlerMap => {
+    if (handlerMap !== undefined) return handlerMap;
+    // The host's answers first: a host that cannot serve refuses here.
+    const doors = input.doors(ready);
+    const { runtime, sessions, submitKickoffMessage, autoTitler } =
+      recoveredRuntimeSessionServices(ready);
+    handlerMap = createHostHandlers(ports, {
+      ...doors,
+      db,
+      dataDir: host.dataDir,
+      runtime,
+      sessions,
+      // The start every agent door reaches (VC-923): its kickoff and its title.
+      ...(submitKickoffMessage === undefined ? {} : { submitSessionMessage: submitKickoffMessage }),
+      ...(autoTitler === null
+        ? {}
+        : { refineAutoTitle: (request) => void autoTitler.refine(request) }),
+      pictures: assembly.pictures,
+      modelAccess: assembly.piRuntimeHost,
+      automations,
+      // The host's one worktree read service (VC-788): a scope switch's
+      // materialization and a Done trim retire the answers it holds.
+      worktreeReads: live?.worktreeReads ?? null,
+      ...(live === undefined ? {} : { detachedWork: live.detachedWork }),
+      // The listing rows (VC-713), live-ness from this process's executor bindings.
+      sessionListing:
+        sessionEngine === null || db === null
+          ? null
+          : {
+              db,
+              listSessions: (query) => sessionEngine.listSessions(query),
+              liveAttachmentIds: () =>
+                new Set(
+                  (runtime?.openNativeBindings() ?? []).map((binding) => binding.attachmentId),
+                ),
+            },
+      ticketSignals:
+        sessionEngine === null
+          ? null
+          : (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
+    });
+    return handlerMap;
+  };
   const stopProducers = (): void => {
     try {
       input.stopProducers?.();
@@ -337,6 +409,21 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     stopProducers,
     installQuitHold: (close) => input.installQuitHold(close),
   });
+  // The host's Session services hear what only the runtime and its lifecycle
+  // know: open bindings, pending starts and the start latch (VC-577), and
+  // every folded projection, for scheduled resume.
+  const runtime = assembly.sessionRuntime;
+  bindSessionRuntime?.({
+    observeScheduledResume: lifecycle.observeScheduledResume,
+    ...(runtime === null
+      ? {}
+      : {
+          openNativeBindings: () => runtime.openNativeBindings(),
+          pendingTurnStarts: () => runtime.pendingTurnStarts(),
+          holdTurnStarts: () => runtime.holdTurnStarts(),
+          releaseTurnStarts: () => runtime.releaseTurnStarts(),
+        }),
+  });
   const close = async (): Promise<void> => {
     if (!fullDrain) return lifecycle.close();
     try {
@@ -356,6 +443,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     concurrency,
     observability,
     automations,
+    handlers: handlersFor,
     owner: (edge = {}) => ({
       start: async () => {
         const ready = await lifecycle.ready();

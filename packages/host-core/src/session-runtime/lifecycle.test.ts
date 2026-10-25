@@ -5,6 +5,7 @@ import type { AgentObservability } from "../observability/settings";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { Delegations } from "./delegate-session";
 import * as control from "../session-control";
+import { SESSION_RUNTIME } from "../session-services";
 import * as notices from "./durable-host-notice-delivery";
 import * as recovery from "./boot-recovery";
 import * as mcp from "../mcp/session-host";
@@ -118,11 +119,12 @@ function fixture() {
     submit: vi.fn(async () => ({})),
     listSessions: vi.fn(async () => []),
   } as unknown as SessionEngine;
+  const outbox = {};
   const host = {
     kind: "live",
     database: { ok: true, db: {} },
     sessionEngine: engine,
-    hostNoticeOutbox: {},
+    [SESSION_RUNTIME]: { hostNoticeOutbox: outbox },
     sessionWakeBus: { subscribe: vi.fn() },
     detachedWork: { track: vi.fn() },
   } as unknown as LiveHostCore;
@@ -165,6 +167,7 @@ function fixture() {
     stopProducers: () => calls.push("automations.stop"),
   };
   return {
+    outbox,
     options,
     calls,
     services,
@@ -282,7 +285,7 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
       "ready.services",
     ]);
     expect(notices.createHostNoticeDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({ outbox: f.options.host.hostNoticeOutbox, runtime: f.runtime }),
+      expect.objectContaining({ outbox: f.outbox, runtime: f.runtime }),
     );
     await owner.close();
   });

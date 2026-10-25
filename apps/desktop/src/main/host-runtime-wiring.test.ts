@@ -920,7 +920,7 @@ describe("index.ts desktop host runtime wiring", () => {
     const handlers = { kind: "host-handlers" };
     const scope: Record<string, unknown> = {
       sessionRpc: null,
-      handlersFor: vi.fn(() => handlers),
+      runner: { handlers: vi.fn(() => handlers) },
       createSessionRpc: vi.fn(() => rpc),
       shutdownAgentSocket: vi.fn(async () => true),
     };
@@ -929,7 +929,9 @@ describe("index.ts desktop host runtime wiring", () => {
       scope,
     );
     edge.bind(proof);
-    expect(scope["handlersFor"]).toHaveBeenCalledExactlyOnceWith(proof);
+    expect(
+      (scope["runner"] as { handlers: ReturnType<typeof vi.fn> }).handlers,
+    ).toHaveBeenCalledExactlyOnceWith(proof);
     expect(scope["createSessionRpc"]).toHaveBeenCalledExactlyOnceWith(proof, handlers);
     expect(scope["sessionRpc"]).toBe(rpc);
     expect(await edge.closeSocket()).toBe(true);

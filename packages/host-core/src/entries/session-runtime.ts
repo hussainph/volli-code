@@ -60,7 +60,11 @@ export {
   type PiAdapterOptions,
   type PiRuntimeContext,
 } from "../session-runtime/pi-adapter";
-export { createRunnerComposition, type RunnerReady } from "../session-runtime/runner";
+export {
+  createRunnerComposition,
+  type RunnerDoorCapabilities,
+  type RunnerReady,
+} from "../session-runtime/runner";
 export { createSqliteHostNoticeOutbox } from "../session-runtime/sqlite-host-notice-outbox";
 export type { StopSessionByIdPorts } from "../session-runtime/supervise-session";
 export { createFileTranscriptArtifactStore } from "../session-runtime/transcript-artifacts";

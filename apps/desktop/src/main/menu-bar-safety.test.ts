@@ -26,7 +26,7 @@ import { insertProject } from "../../../../packages/host-core/src/db/projects-re
 import { openTestDb, testProject } from "../../../../packages/host-core/src/db/test-helpers";
 import {
   createHostSessionServices,
-  wireSessionRuntime,
+  SESSION_RUNTIME,
 } from "../../../../packages/host-core/src/session-services";
 import { prepareDesktopQuit } from "./host-runtime";
 import { createMenuBarHost, trayModel, type MenuBarHostPorts } from "./menu-bar-host";
@@ -155,7 +155,7 @@ async function hostWithRuntime() {
     },
   });
   resources.push(() => void runtime.close());
-  wireSessionRuntime(host.sessionEngine, {
+  host[SESSION_RUNTIME].claim()({
     openNativeBindings: () => runtime.openNativeBindings(),
     pendingTurnStarts: () => runtime.pendingTurnStarts(),
     holdTurnStarts: () => runtime.holdTurnStarts(),
@@ -215,7 +215,7 @@ describe("VC-577 menu-bar safety, through the real host", () => {
       provenance,
     });
     const sessionId = born.session.id;
-    wireSessionRuntime(engine, {
+    composed[SESSION_RUNTIME].claim()({
       openNativeBindings: () => [{ sessionId, attachmentId: "binding" }],
     });
     await engine.observe({

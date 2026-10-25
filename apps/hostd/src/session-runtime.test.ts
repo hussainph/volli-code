@@ -5,6 +5,7 @@ import type { HeadlessSecrets } from "./secrets";
 import { busyRefusal } from "@volli/host-core/worktree";
 import type { BackgroundShellHostPorts } from "@volli/host-core/session-runtime";
 // The runner's private staging, recorded here at its module seam.
+import { SESSION_RUNTIME } from "../../../packages/host-core/src/session-services";
 import type { RuntimeAssemblyOptions } from "../../../packages/host-core/src/session-runtime/assembly";
 
 const seam = vi.hoisted(() => ({
@@ -175,6 +176,7 @@ function fixture() {
     sessionEngine: { listAttachedSessions: vi.fn(async () => []) },
     sessionWakeBus: { subscribe: vi.fn(() => () => {}) },
     liveWork: { observeShell: vi.fn(), forgetShell: vi.fn() },
+    [SESSION_RUNTIME]: { claim: () => () => {} },
     dataDir: "/data",
     runtimeServices,
     maintenance: { spawnLedger },

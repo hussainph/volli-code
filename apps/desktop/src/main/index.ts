@@ -130,6 +130,7 @@ import {
   ModelAccessSignInService,
   createConnectivityPort,
   createRunnerComposition,
+  type RunnerDoorCapabilities,
   SessionRuntimeClosingError,
   type RecoveredSessionServices,
   recoveredSessionClientPorts,
@@ -141,7 +142,6 @@ import {
 import type { OpenNativeBinding } from "@volli/session-engine";
 import {
   admittedHandlers,
-  createHostHandlers,
   hostProjectLiveWork,
   ROUTER_POLICY,
   type HostHandlerMap,
@@ -1232,8 +1232,8 @@ const appStartup = app.whenReady().then(async () => {
       publishState: (started) => publishBackgroundShellEvent({ shell: started }),
       publishRemoved: (removedShellId) => publishBackgroundShellEvent({ removedShellId }),
     },
-    // The tool door projects the same one map as every other door (VC-923).
-    handlers: (ready) => handlersFor(ready),
+    // What only this Mac's doors know, for the one handler map (VC-668).
+    doors: () => desktopDoors(),
     transport: () => sessionRpc,
     stopProducers: () => {
       hostClosing = true;
@@ -1257,7 +1257,6 @@ const appStartup = app.whenReady().then(async () => {
   });
   const {
     runtime: sessionRuntime,
-    piRuntimeHost,
     piSessionsDirectory,
     transcriptArtifacts,
     tokens: sessionTokens,
@@ -1365,23 +1364,14 @@ const appStartup = app.whenReady().then(async () => {
     },
   });
   /**
-   * The host's one handler map (VC-668), built once from the recovered
-   * services and handed to every door: the Session RPC bridge, the
-   * `volli:ticket-move` channel, the agent socket and the Agent Tool Surface
-   * door each project it, under
-   * that door's own policy (the map is sealed: no door can call it without
-   * one). What
-   * this root used to write around each call (reconciling preferences on a
-   * refresh, the availability check before a default, the Role a ticket
-   * implies, resuming an Automation's delivery after attach, a deliberate
-   * move's armed arrival) is the handler's now.
+   * What only this Mac's doors know, for the host's one handler map (VC-668).
+   * The runner builds the map once from the recovered services and these
+   * capabilities, and every door projects it under its own policy: the
+   * Session RPC bridge, the `volli:ticket-move` channel, the agent socket and
+   * the Agent Tool Surface door (`runner.handlers`). The map is sealed: no
+   * door can call it without one.
    */
-  let hostHandlers: HostHandlerMap | undefined;
-  const createHandlers = (
-    ready: RecoveredSessionServices<RuntimeSessionFacade>,
-  ): HostHandlerMap => {
-    const { runtime, sessions, submitKickoffMessage, autoTitler } =
-      recoveredRuntimeSessionServices(ready);
+  const desktopDoors = (): RunnerDoorCapabilities => {
     const projectLiveWork = hostProjectLiveWork({
       runtime: () => sessionRuntime,
       shells: backgroundShells,
@@ -1393,22 +1383,10 @@ const appStartup = app.whenReady().then(async () => {
         log.error("could not release session of a removed project", { sessionId, error });
       },
     });
-    return createHostHandlers(hostPorts, {
-      db: sessionDb,
-      dataDir: hostCore.dataDir,
-      runtime,
-      sessions,
-      // The start both agent doors reach (VC-923): its kickoff and its title.
-      ...(submitKickoffMessage === undefined ? {} : { submitSessionMessage: submitKickoffMessage }),
-      ...(autoTitler === null ? {} : { refineAutoTitle: (input) => void autoTitler.refine(input) }),
-      pictures: runner.pictures,
-      modelAccess: piRuntimeHost,
+    return {
       backgroundShells,
       experiments: { snapshot: readExperiments, set: setExperiment },
-      automations: runtimeAutomations,
       busyWorktreeSites,
-      // The host's one worktree read service (VC-788); none without a database.
-      worktreeReads: liveHost?.worktreeReads ?? null,
       interruptTicketSessions: interruptTicketSessionsAnnounced,
       // What removing a project stops before it detaches it (VC-796): every door
       // that removes one, the window's `volli:project-remove` included.
@@ -1419,26 +1397,10 @@ const appStartup = app.whenReady().then(async () => {
           void browserTabs.clearAgentPartition({ projectId, ticketId: null });
         },
       },
-      ...(liveHost === undefined ? {} : { detachedWork: liveHost.detachedWork }),
       // This Mac's recent log (VC-699): main's, the in-process host's and the
       // renderer's lines, which the dev log viewer reads through `host.logs`.
       logs: desktopLog?.ring ?? null,
-      // The Session listing rows (VC-713): the bodies `volli:session-list`
-      // reads, so this Mac's map answers `session.listing` as hostd's does.
-      sessionListing:
-        sessionEngine === null || sessionDb === null
-          ? null
-          : {
-              db: sessionDb,
-              listSessions: (query) => sessionEngine.listSessions(query),
-              liveAttachmentIds: () =>
-                new Set(listOpenNativeBindings().map((binding) => binding.attachmentId)),
-            },
       boardFeed,
-      ticketSignals:
-        sessionEngine === null
-          ? null
-          : (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
       // Archiving or deleting a ticket drops its Sessions' saved tool output (VC-469).
       piSessionsDirectory,
       remoteHosts: remoteHostsPort(remoteHosts, (hostId) => signInPreflight(hostSignIns, hostId)),
@@ -1466,11 +1428,8 @@ const appStartup = app.whenReady().then(async () => {
         subscribe: browserShortcutRelay.subscribe,
         focusPage: (tabId) => browserTabs.focusPage(tabId),
       },
-    });
+    };
   };
-  /** Built once, at the first door that needs it; every later door gets the same object. */
-  const handlersFor = (ready: RecoveredSessionServices<RuntimeSessionFacade>): HostHandlerMap =>
-    (hostHandlers ??= createHandlers(ready));
   // No runtime, no bridge — but the channels are still claimed, answering
   // every request with the reason the runtime is down (in practice: the
   // database open recorded above, Node-ABI classification included). Left
@@ -1563,7 +1522,7 @@ const appStartup = app.whenReady().then(async () => {
   await hostCore.start(
     runner.owner({
       bind: (ready) => {
-        sessionRpc = createSessionRpc(ready, handlersFor(ready));
+        sessionRpc = createSessionRpc(ready, runner.handlers(ready));
       },
       closeSocket: shutdownAgentSocket,
     }),
@@ -1672,7 +1631,7 @@ const appStartup = app.whenReady().then(async () => {
     // `volli:ticket-move` projects the host's move: its backward-move
     // interrupt and armed arrival (an Option-drag choice included) are the
     // handler's, exactly as they are for the socket's.
-    handlers: handlersFor(readyRuntimeServices),
+    handlers: runner.handlers(readyRuntimeServices),
     // Where attachment bytes live (VC-50) — the same root the volli-blob:
     // protocol serves from and materialization copies out of.
     blobsRoot: blobsRoot(app.getPath("userData")),
@@ -2770,7 +2729,7 @@ const appStartup = app.whenReady().then(async () => {
             // The same map the renderer's channel projects: an explicit
             // `volli ticket move` is the other Deliberate-move door, with the
             // same interrupt and the same main-owned pending arrival (VC-668).
-            handlers: handlersFor(readyRuntimeServices),
+            handlers: runner.handlers(readyRuntimeServices),
             // The `env` block `volli identify` prints (VC-94): the PATH main
             // adopted, its latest non-interactive provenance, the measured tools
             // resolved against it (and which of them this workspace implies),

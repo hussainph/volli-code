@@ -39,7 +39,6 @@ beforeEach(async () => {
     host: {
       database: { ok: false },
       sessionEngine: null,
-      hostNoticeOutbox: null,
       sessionWakeBus: null,
       maintenance: { shutdownNativeSessions: async () => {} },
     } as unknown as HostCore,

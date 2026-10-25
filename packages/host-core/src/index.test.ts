@@ -23,7 +23,9 @@ import { SCHEMA_HEAD } from "./db/migrations";
 import { MIN_READER_VERSION_KEY } from "./db/schema-compatibility";
 import { insertProject } from "./db/projects-repo";
 import { testProject } from "./db/test-helpers";
+import type { SessionLedger } from "@volli/shared";
 import * as sessionLedgerModule from "./session-control/sqlite-ledger";
+import { SESSION_RUNTIME } from "./session-services";
 import * as sessionControl from "./session-control";
 import { createHostSessionRuntime, type HostSessionRuntimeOptions } from "./session-runtime";
 import { PtyManager, type PtyManagerOptions } from "./pty/manager";
@@ -217,7 +219,9 @@ describe("createHostCore", () => {
     opened.push(core);
     const db = core.database.db;
     const engine = core.sessionEngine;
-    const writer = vi.spyOn(core.sessionLedger, "transaction");
+    expect(construct).toHaveBeenCalledTimes(1);
+    const ledger = construct.mock.results[0]!.value as SessionLedger;
+    const writer = vi.spyOn(ledger, "transaction");
     const project = testProject();
     insertProject(db, project);
     const wakes: SessionWake[] = [];
@@ -254,7 +258,6 @@ describe("createHostCore", () => {
     });
     try {
       expect(construct).toHaveBeenCalledTimes(1);
-      expect(construct.mock.results[0]?.value).toBe(core.sessionLedger);
       writer.mockClear();
       const created = await runtime.command({
         commandId: "create-through-runtime",
@@ -280,7 +283,7 @@ describe("createHostCore", () => {
         }),
       );
       writer.mockClear();
-      await core.hostNoticeOutbox.pending();
+      await core[SESSION_RUNTIME].hostNoticeOutbox.pending();
       expect(writer).toHaveBeenCalledTimes(1);
       writer.mockClear();
       await engine.getSession({ sessionId });
@@ -431,8 +434,10 @@ describe("createHostCore", () => {
     expect(host.database.ok).toBe(true);
     expect(host).not.toHaveProperty("databaseFailure");
     expect(host.sessionEngine).toBeDefined();
-    expect(host.sessionLedger).toBeDefined();
-    expect(host.hostNoticeOutbox).toBeDefined();
+    // The writer's ledger and outbox stay inside host-core.
+    expect(host).not.toHaveProperty("sessionLedger");
+    expect(host).not.toHaveProperty("hostNoticeOutbox");
+    expect(host[SESSION_RUNTIME].hostNoticeOutbox).toBeDefined();
   });
 
   it("installs the transaction-ownership handler the host chose", () => {
