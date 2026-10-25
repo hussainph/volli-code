@@ -399,6 +399,24 @@ export const DESKTOP_ENTRIES = [
     idempotency: "natural",
     summary: "Remove a project from Volli: stop its Sessions' live work, then detach it.",
   },
+  // A working copy's environment setup (VC-584, behind the `cloud` flag):
+  // where it stands, and a person's answer to a failed one. Workspace-placed
+  // on the ticket whose working copy it is; client-local while the recipe's
+  // config has not moved to the backend.
+  {
+    key: "worktree.setupStatus",
+    compatibility: "client-local",
+    placement: "workspace",
+    idempotency: "read",
+    summary: "Where a ticket's working copy's environment setup stands on this runner.",
+  },
+  {
+    key: "worktree.answerSetup",
+    compatibility: "client-local",
+    placement: "workspace",
+    idempotency: "natural",
+    summary: "Answer a failed environment setup: retry it, or start without it.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];

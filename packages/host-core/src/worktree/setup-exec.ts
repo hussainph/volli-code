@@ -20,15 +20,44 @@
  * before that ceiling fails the start with no reason. The run is over when the
  * shell exits, not when every pipe closes, so a background process the command
  * left behind cannot hold the start open.
+ *
+ * With environment recipes on (the `cloud` flag, VC-584) the same run serves
+ * the working copy's recipe (`recipe.ts`): `.agents/setup` when the working
+ * copy has one, otherwise the stored command, run as before. Each run is
+ * recorded as a fact of the working copy (`environment-runs.ts`), and a setup
+ * that did not succeed is a GATE: every later structured start of that
+ * working copy is refused with the same reason until a person answers it —
+ * Retry (`retryWorktreeSetup`), or Start anyway
+ * (`startWorktreeSetupAnyway`). A repository script's leftover processes are
+ * stopped when it exits: setup prepares, it does not start services.
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 
+import {
+  isBlockingSetupRun,
+  readEnvironmentRun,
+  recordEnvironmentRun,
+  type EnvironmentRunFact,
+  type EnvironmentRunOutcome,
+  type EnvironmentRunStart,
+} from "./environment-runs";
 import { claimFirstRunSetup } from "./first-run";
 import { canonicalize } from "./paths";
 import { setPhase } from "./phase";
+import {
+  localRunnerKind,
+  recipeEnvironment,
+  recipeInvocation,
+  resolveRecipe,
+  type ResolvedRecipe,
+  type RunnerKind,
+} from "./recipe";
 import { recordSetupFailure, SETUP_TAIL_MAX_CHARS } from "./setup-run";
 import type { WorktreePorts } from "./types";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("worktree-setup");
 
 /**
  * How long a structured start lets its setup command run: under the Session
@@ -54,8 +83,24 @@ export interface WorktreeSetupExecParams {
    * Asked only once this call has claimed the run.
    */
   environment: () => Promise<{ shellPath: string; env: Record<string, string> }>;
+  /**
+   * Present when environment recipes are on (VC-584): what the recipe's
+   * variables name. Absent, the run is exactly the VC-835 setup command.
+   */
+  recipe?: WorktreeRecipeContext;
   /** Overrides {@link SETUP_DEADLINE_MS}; tests only. */
   deadlineMs?: number;
+  /** Clock for run facts; defaults to `Date.now`. */
+  now?: () => number;
+}
+
+/** What a recipe run tells its script, beyond the working copy itself. */
+export interface WorktreeRecipeContext {
+  projectId: string;
+  /** The ticket's display id (`VC-12`). */
+  ticketDisplayId: string;
+  /** Defaults to this machine's kind. */
+  runnerKind?: RunnerKind;
 }
 
 /**
@@ -63,11 +108,13 @@ export interface WorktreeSetupExecParams {
  * configured (the claim consumed it). `succeeded`: the command exited 0.
  * `failed`: it exited non-zero, died on a signal, ran out of time or never
  * started — already recorded on the ticket; `message` is the one-line reason.
+ * With recipes on, `failed` is also the answer for a working copy whose
+ * earlier setup failed and is still unanswered; `run` is that fact.
  */
 export type WorktreeSetupExecOutcome =
   | { kind: "skipped" }
   | { kind: "succeeded" }
-  | { kind: "failed"; message: string };
+  | { kind: "failed"; message: string; run?: EnvironmentRunFact };
 
 /**
  * Runs in flight, by canonical worktree path. A second structured start for the
@@ -75,6 +122,11 @@ export type WorktreeSetupExecOutcome =
  * agent in a checkout that is still being set up.
  */
 const inflight = new Map<string, Promise<WorktreeSetupExecOutcome>>();
+
+/** Whether a setup run is in flight for the working copy right now. */
+export function isWorktreeSetupRunning(worktreePath: string): boolean {
+  return inflight.has(canonicalize(worktreePath));
+}
 
 /** Process groups of the setup commands running now, stopped if the host exits first. */
 const liveGroups = new Set<number>();
@@ -113,31 +165,179 @@ export function runPendingWorktreeSetup(
     claimed = claimFirstRunSetup(deps, params.worktreePath);
   } catch (error) {
     // Still owed: nothing ran. Say why this start could not take it.
-    return Promise.resolve(fail(deps, params, `could not be claimed (${errorText(error)})`, ""));
+    return Promise.resolve(
+      fail(deps, params, null, `could not be claimed (${errorText(error)})`, ""),
+    );
   }
-  if (!claimed) return Promise.resolve({ kind: "skipped" });
-  const command = params.setupCommand?.trim() ?? "";
-  if (command.length === 0) return Promise.resolve({ kind: "skipped" });
-  const run = execSetup(deps, params, command).finally(() => inflight.delete(key));
+  if (!claimed) {
+    return Promise.resolve(
+      params.recipe === undefined ? { kind: "skipped" } : gateOutcome(deps, params),
+    );
+  }
+  let recipe: ResolvedRecipe | null;
+  if (params.recipe === undefined) {
+    const command = params.setupCommand?.trim() ?? "";
+    recipe =
+      command.length === 0 ? null : { source: "legacyCommand", script: "setup", command, sha: "" };
+  } else {
+    try {
+      recipe = resolveRecipe(params.worktreePath, "setup", params.setupCommand);
+    } catch (error) {
+      return Promise.resolve(
+        fail(deps, params, null, `could not be read (${errorText(error)})`, ""),
+      );
+    }
+  }
+  if (recipe === null) return Promise.resolve({ kind: "skipped" });
+  const run = execSetup(deps, params, recipe).finally(() => inflight.delete(key));
   inflight.set(key, run);
   return run;
 }
 
+/**
+ * The answer for a start that did not claim a run: the working copy's last
+ * setup, when it failed and nobody answered it, still blocks — the start is
+ * refused with that run's reason and nothing is recorded again.
+ */
+function gateOutcome(
+  deps: WorktreePorts,
+  params: WorktreeSetupExecParams,
+): WorktreeSetupExecOutcome {
+  let last: EnvironmentRunFact | null;
+  try {
+    last = readEnvironmentRun(deps, params.worktreePath, "setup");
+  } catch (error) {
+    return {
+      kind: "failed",
+      message: `The environment setup record could not be read (${errorText(error)}).`,
+    };
+  }
+  if (!isBlockingSetupRun(last)) return { kind: "skipped" };
+  return { kind: "failed", message: blockedMessage(last), run: last };
+}
+
+/** The one-line reason a start refused by a failed setup gives. */
+function blockedMessage(run: EnvironmentRunFact): string {
+  const summary = /[.!?]$/.test(run.summary) ? run.summary : `${run.summary}.`;
+  return `Environment setup failed: ${summary} Retry setup, or start anyway.`;
+}
+
+/** What a finished child process did. */
+type ExecResult =
+  | { kind: "exited"; code: number }
+  | { kind: "signalled"; signal: NodeJS.Signals | null }
+  | { kind: "timed-out"; deadlineMs: number }
+  | { kind: "not-started"; reason: string };
+
 async function execSetup(
   deps: WorktreePorts,
   params: WorktreeSetupExecParams,
-  command: string,
+  recipe: ResolvedRecipe,
 ): Promise<WorktreeSetupExecOutcome> {
   setPhase(params.ticketId, "setting-up", deps.onPhase);
+  const now = params.now ?? Date.now;
+  const start: EnvironmentRunStart | null =
+    params.recipe === undefined
+      ? null
+      : {
+          script: "setup",
+          source: recipe.source,
+          scriptSha: recipe.sha,
+          reason: readPrevious(deps, params.worktreePath) === null ? "new-working-copy" : "retry",
+          runnerKind: params.recipe.runnerKind ?? localRunnerKind(),
+          ticketId: params.ticketId,
+          startedAt: now(),
+        };
   let environment: { shellPath: string; env: Record<string, string> };
   try {
     environment = await params.environment();
   } catch (error) {
-    return fail(deps, params, `could not start (${errorText(error)})`, "");
+    return fail(deps, params, start, `could not start (${errorText(error)})`, "", recipe);
   }
   if (!existsSync(params.worktreePath)) {
-    return fail(deps, params, "could not start: the worktree directory is missing", "");
+    return fail(
+      deps,
+      params,
+      start,
+      "could not start: the worktree directory is missing",
+      "",
+      recipe,
+    );
   }
+  const env =
+    params.recipe === undefined
+      ? environment.env
+      : {
+          ...environment.env,
+          ...recipeEnvironment({
+            runnerKind: start!.runnerKind,
+            projectId: params.recipe.projectId,
+            ticket: params.recipe.ticketDisplayId,
+            workingCopy: params.worktreePath,
+            reason: { script: "setup", why: start!.reason as "new-working-copy" | "retry" },
+          }),
+        };
+  const { result, tail } = await spawnSetup(
+    recipeInvocation(recipe, environment.shellPath),
+    params.worktreePath,
+    env,
+    params.deadlineMs ?? SETUP_DEADLINE_MS,
+    // A repository script prepares the working copy; anything it left running
+    // is stopped with it. The stored command keeps its old behaviour.
+    recipe.source === "repo",
+  );
+  if (result.kind === "exited" && result.code === 0) {
+    if (start !== null) {
+      recordFact(deps, params, start, {
+        outcome: "succeeded",
+        exitCode: 0,
+        summary: `${subject(recipe)} succeeded.`,
+        tail,
+      });
+    }
+    setPhase(params.ticketId, "ready", deps.onPhase);
+    return { kind: "succeeded" };
+  }
+  return fail(deps, params, start, describe(result), tail, recipe, result);
+}
+
+/** The last setup fact, read leniently: an unreadable one only means "not a first run". */
+function readPrevious(
+  deps: WorktreePorts,
+  worktreePath: string,
+): EnvironmentRunFact | null | "unreadable" {
+  try {
+    return readEnvironmentRun(deps, worktreePath, "setup");
+  } catch {
+    return "unreadable";
+  }
+}
+
+function describe(result: ExecResult): string {
+  switch (result.kind) {
+    case "exited":
+      return `exited with code ${result.code}`;
+    case "signalled":
+      return `was stopped by ${result.signal ?? "a signal"}`;
+    case "timed-out":
+      return `did not finish within ${formatDuration(result.deadlineMs)} and was stopped`;
+    case "not-started":
+      return result.reason;
+  }
+}
+
+/** What a reason's sentence is about. */
+function subject(recipe: ResolvedRecipe | undefined): string {
+  return recipe?.source === "repo" ? "`.agents/setup`" : "The project's setup command";
+}
+
+function spawnSetup(
+  invocation: { file: string; args: string[] },
+  cwd: string,
+  env: Record<string, string>,
+  deadlineMs: number,
+  stopLeftovers: boolean,
+): Promise<{ result: ExecResult; tail: string }> {
   return new Promise((resolve) => {
     let tail = "";
     let settled = false;
@@ -145,9 +345,9 @@ async function execSetup(
     // No stdin: nobody can answer a prompt here, so one reads end-of-file and
     // fails instead of hanging the start. Its own process group, so a stop
     // reaches everything the command started.
-    const child = spawn(environment.shellPath, ["-c", command], {
-      cwd: params.worktreePath,
-      env: environment.env,
+    const child = spawn(invocation.file, invocation.args, {
+      cwd,
+      env,
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
     });
@@ -156,16 +356,19 @@ async function execSetup(
       liveGroups.add(pgid);
       stopLiveGroupsOnExit();
     }
-    const settle = (outcome: WorktreeSetupExecOutcome | { reason: string }): void => {
+    const settle = (result: ExecResult): void => {
       if (settled) return;
       settled = true;
       clearTimeout(deadline);
-      if (pgid !== undefined) liveGroups.delete(pgid);
+      if (pgid !== undefined) {
+        liveGroups.delete(pgid);
+        if (stopLeftovers && result.kind !== "timed-out") killGroup(pgid, "SIGKILL");
+      }
       // A background process the command left behind may hold the pipes open;
       // the run is over, so stop reading them.
       child.stdout?.destroy();
       child.stderr?.destroy();
-      resolve("reason" in outcome ? fail(deps, params, outcome.reason, tail) : outcome);
+      resolve({ result, tail });
     };
     for (const stream of [child.stdout, child.stderr]) {
       // Decoded per stream, so a character split across chunks survives.
@@ -174,14 +377,12 @@ async function execSetup(
         tail = (tail + chunk).slice(-SETUP_TAIL_MAX_CHARS);
       });
     }
-    child.once("error", (error) => settle({ reason: `could not start (${error.message})` }));
+    child.once("error", (error) =>
+      settle({ kind: "not-started", reason: `could not start (${error.message})` }),
+    );
     const finish = (code: number | null, signal: NodeJS.Signals | null): void => {
-      if (settled) return;
-      if (code === 0) {
-        setPhase(params.ticketId, "ready", deps.onPhase);
-        settle({ kind: "succeeded" });
-      } else if (code !== null) settle({ reason: `exited with code ${code}` });
-      else settle({ reason: `was stopped by ${signal ?? "a signal"}` });
+      if (code !== null) settle({ kind: "exited", code });
+      else settle({ kind: "signalled", signal });
     };
     // The shell's exit decides the outcome. Its last output can still be in
     // the pipes, so `close` settles it as soon as they drain — or, when
@@ -190,30 +391,61 @@ async function execSetup(
       child.once("close", () => finish(code, signal));
       setTimeout(() => finish(code, signal), DRAIN_GRACE_MS).unref?.();
     });
-    const deadlineMs = params.deadlineMs ?? SETUP_DEADLINE_MS;
     deadline = setTimeout(() => {
       if (pgid === undefined) return;
       killGroup(pgid, "SIGTERM");
       // Whatever ignored the polite signal does not get to keep running.
       setTimeout(() => killGroup(pgid, "SIGKILL"), KILL_GRACE_MS).unref?.();
-      settle({ reason: `did not finish within ${formatDuration(deadlineMs)} and was stopped` });
+      settle({ kind: "timed-out", deadlineMs });
     }, deadlineMs);
   });
+}
+
+function recordFact(
+  deps: WorktreePorts,
+  params: WorktreeSetupExecParams,
+  start: EnvironmentRunStart,
+  end: { outcome: EnvironmentRunOutcome; exitCode: number | null; summary: string; tail: string },
+): EnvironmentRunFact | null {
+  try {
+    return recordEnvironmentRun(deps, params.worktreePath, start, {
+      endedAt: (params.now ?? Date.now)(),
+      ...end,
+    });
+  } catch (error) {
+    // The outcome is still reported where the run happened; only the record
+    // the gate reads is missing, so a later start is not blocked by it.
+    log.error("failed to record the setup run", { ticketId: params.ticketId, error });
+    return null;
+  }
 }
 
 /** Records the failure on the ticket and phrases the start's one-line reason. */
 function fail(
   deps: WorktreePorts,
   params: WorktreeSetupExecParams,
+  start: EnvironmentRunStart | null,
   reason: string,
   tail: string,
+  recipe?: ResolvedRecipe,
+  result?: ExecResult,
 ): WorktreeSetupExecOutcome {
-  recordSetupFailure(deps, params.ticketId, `${tail}\n[setup command ${reason}]`);
+  const what = subject(recipe);
+  recordSetupFailure(
+    deps,
+    params.ticketId,
+    `${tail}\n[${recipe?.source === "repo" ? ".agents/setup" : "setup command"} ${reason}]`,
+  );
   const lastLine = lastOutputLine(tail);
-  return {
-    kind: "failed",
-    message: `The project's setup command ${reason}${lastLine === null ? "." : `: ${lastLine}`}`,
-  };
+  const message = `${what} ${reason}${lastLine === null ? "." : `: ${lastLine}`}`;
+  if (start === null) return { kind: "failed", message };
+  const run = recordFact(deps, params, start, {
+    outcome: result?.kind === "timed-out" ? "timed_out" : "failed",
+    exitCode: result?.kind === "exited" ? result.code : null,
+    summary: message,
+    tail,
+  });
+  return run === null ? { kind: "failed", message } : { kind: "failed", message, run };
 }
 
 function errorText(error: unknown): string {

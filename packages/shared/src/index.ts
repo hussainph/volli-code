@@ -24,6 +24,7 @@ export * from "./operation-unavailable";
 export * from "./handler-refused";
 export * from "./handler-keys";
 export * from "./desktop-entries";
+export * from "./environment-recipe";
 export type * from "./browser-app-shortcut";
 export * from "./host-link-relay";
 export * from "./agent-surface";

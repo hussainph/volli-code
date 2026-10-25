@@ -236,6 +236,13 @@ export type { SetupRun, SetupRunPorts, SetupRunParams, SetupFeedResult } from ".
 export { claimFirstRunSetup } from "./first-run";
 export { runPendingWorktreeSetup } from "./setup-exec";
 
+// The environment recipe (VC-584, behind the `cloud` flag): the resume run a
+// structured start makes, and what a terminal types for a claimed setup run.
+// The setup gate's state and answers are the handler map's
+// (`./setup-gate`).
+export { runWorktreeResume, watchRunnerWakes } from "./resume-exec";
+export { terminalSetupCommand } from "./terminal-setup";
+
 // The default git runners (both capture stderr) — callers build `deps.git` /
 // `deps.gitAsync` from these. The async one exists because the Change Set reads
 // must never block main; see git.ts.

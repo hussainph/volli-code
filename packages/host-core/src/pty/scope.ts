@@ -69,6 +69,8 @@ export interface SessionScope {
    */
   worktree: {
     ticketId: string;
+    /** The ticket's display id (`VC-12`), which a recipe script is told (VC-584). */
+    displayId: string;
     projectPath: string;
     setupCommand: string | null;
     kickoff: { harnessId: HarnessId; prompt: string } | null;
@@ -187,6 +189,7 @@ export async function resolveScope(
           worktree: usesWorktree
             ? {
                 ticketId: request.ticket.ticketId,
+                displayId,
                 projectPath: ctx.projectPath,
                 setupCommand: ctx.setupCommand,
                 kickoff: null,
@@ -256,6 +259,7 @@ export async function resolveScope(
         worktree: usesWorktree
           ? {
               ticketId: request.ticket.ticketId,
+              displayId,
               projectPath: ctx.projectPath,
               setupCommand: ctx.setupCommand,
               kickoff: kickoff ?? null,

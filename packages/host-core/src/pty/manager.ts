@@ -42,6 +42,7 @@ import {
   acquireWorktreeStartLease,
   claimFirstRunSetup,
   createSetupRun,
+  terminalSetupCommand,
   recordSetupFailure,
   ensure,
   runGitCapturingAsync,
@@ -1022,25 +1023,63 @@ export class PtyManager {
           this.adapterFor,
         );
         const setupCommand = worktree.setupCommand?.trim() ?? "";
+        const deps = this.host.worktreeDeps(db);
         let claimedSetup = false;
         if (worktreeOutcome.setupPending && identity.worktreePath !== null) {
           try {
-            claimedSetup = claimFirstRunSetup(this.host.worktreeDeps(db), identity.worktreePath);
+            claimedSetup = claimFirstRunSetup(deps, identity.worktreePath);
           } catch (error) {
             // Still owed, and said on the ticket; the terminal itself starts.
             recordSetupFailure(
-              { db, onPhase: this.host.worktreeDeps(db).onPhase },
+              { db, onPhase: deps.onPhase },
               worktree.ticketId,
               `[setup command could not be claimed (${errorMessage(error)})]`,
             );
           }
         }
-        if (claimedSetup && setupCommand.length > 0) {
+        // With environment recipes on (VC-584), the claimed run is the working
+        // copy's recipe — its own `.agents/setup` first, else the stored
+        // command — and its outcome is recorded as the working copy's setup
+        // fact. Off, it is the stored command exactly as before.
+        let setup: {
+          command: string;
+          onSettled?: (s: { exitCode: number | null }) => void;
+        } | null = claimedSetup && setupCommand.length > 0 ? { command: setupCommand } : null;
+        if (
+          claimedSetup &&
+          deps.environmentRecipes?.() === true &&
+          identity.worktreePath !== null
+        ) {
+          try {
+            setup = terminalSetupCommand(deps, {
+              ticketId: worktree.ticketId,
+              displayId: worktree.displayId,
+              projectId: scope.projectId,
+              worktreePath: identity.worktreePath,
+              storedCommand: worktree.setupCommand,
+              shellPath: file,
+            });
+          } catch (error) {
+            setup = null;
+            recordSetupFailure(
+              { db, onPhase: deps.onPhase },
+              worktree.ticketId,
+              `[.agents/setup could not be read (${errorMessage(error)})]`,
+            );
+          }
+        }
+        if (setup !== null) {
           // `file` is the resolved shell the PTY was spawned with — the sentinel
           // wrapper is shell-aware (fish is not POSIX), so it must match.
           const setupRun = createSetupRun(
-            { db, onPhase: this.host.worktreeDeps(db).onPhase },
-            { ticketId: worktree.ticketId, setupCommand, shellPath: file, launchCommand },
+            { db, onPhase: deps.onPhase },
+            {
+              ticketId: worktree.ticketId,
+              setupCommand: setup.command,
+              shellPath: file,
+              launchCommand,
+              ...(setup.onSettled === undefined ? {} : { onSettled: setup.onSettled }),
+            },
           );
           session.setupRun = setupRun;
           pty.write(`${setupRun.commandLine}\r`);

@@ -23,6 +23,10 @@ import {
   type RemoteHostsSnapshot,
   type TicketEventActor,
 } from "@volli/shared";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
 
 import { insertProject } from "../db/projects-repo";
@@ -36,6 +40,7 @@ import type { RuntimeAutomations } from "../session-runtime/automations";
 import { createTicketCommand } from "../ticket-commands";
 import { runGitCapturingAsync } from "../worktree/git";
 import { createWorktreeReadService } from "../worktree-reads";
+import { recordEnvironmentRun } from "../worktree/environment-runs";
 import { ADMITTED, admittedHandlers, type HandlerPolicy } from "./handler-map";
 import {
   createHostHandlers,
@@ -919,6 +924,79 @@ describe("desktop-only commands", () => {
     expect(await handlers()["worktree.trimSettings"](undefined, WINDOW)).toMatchObject({
       trimOnFinish: expect.any(Boolean),
       keepPatterns: expect.any(Array),
+    });
+  });
+
+  // VC-584: the setup gate's state and a person's answers, served off the
+  // ticket's working copy on this runner.
+  describe("environment setup", () => {
+    let home: string;
+    const worktreePath = "/wt/VC-7";
+    const map = () =>
+      handlers({
+        worktree: { db: ctx.db, gitAsync: runGitCapturingAsync, blobsRoot: "", home },
+      });
+    const fail = () =>
+      recordEnvironmentRun(
+        { home },
+        worktreePath,
+        {
+          script: "setup",
+          source: "repo",
+          scriptSha: "sha",
+          reason: "new-working-copy",
+          runnerKind: "mac",
+          ticketId: "wt-ticket",
+          startedAt: 1,
+        },
+        { endedAt: 2, outcome: "failed", exitCode: 1, summary: "it broke.", tail: "out" },
+      );
+
+    beforeEach(() => {
+      home = mkdtempSync(join(tmpdir(), "volli-handlers-setup-"));
+      insertTicket(
+        ctx.db,
+        testTicket(PROJECT, { id: "wt-ticket", usesWorktree: true, worktreePath }),
+      );
+      insertTicket(
+        ctx.db,
+        testTicket(PROJECT, { id: "plain-ticket", ticketNumber: 99, usesWorktree: false }),
+      );
+    });
+    afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+    it("answers none for a ticket with no working copy, and refuses an unknown one", async () => {
+      expect(await map()["worktree.setupStatus"]({ ticketId: "plain-ticket" }, WINDOW)).toEqual({
+        kind: "none",
+      });
+      expect(
+        await map()["worktree.answerSetup"]({ ticketId: "plain-ticket", answer: "retry" }, WINDOW),
+      ).toEqual({ kind: "none" });
+      await expect(
+        Promise.resolve().then(() => map()["worktree.setupStatus"]({ ticketId: "nope" }, WINDOW)),
+      ).rejects.toThrow("Unknown ticket");
+    });
+
+    it("reads a failed setup without its runner-side ids, then answers it", async () => {
+      expect(await map()["worktree.setupStatus"]({ ticketId: "wt-ticket" }, WINDOW)).toEqual({
+        kind: "none",
+      });
+      fail();
+      const run = { source: "repo", summary: "it broke.", exitCode: 1, endedAt: 2, tail: "out" };
+      expect(await map()["worktree.setupStatus"]({ ticketId: "wt-ticket" }, WINDOW)).toEqual({
+        kind: "failed",
+        run,
+      });
+
+      expect(
+        await map()["worktree.answerSetup"](
+          { ticketId: "wt-ticket", answer: "start-anyway" },
+          WINDOW,
+        ),
+      ).toEqual({ kind: "started-anyway", run });
+      expect(
+        await map()["worktree.answerSetup"]({ ticketId: "wt-ticket", answer: "retry" }, WINDOW),
+      ).toEqual({ kind: "pending" });
     });
   });
 });

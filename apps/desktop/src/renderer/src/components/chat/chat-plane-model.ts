@@ -18,6 +18,8 @@ import type {
   SessionAttentionProjection,
   SessionInteraction,
   SessionInteractionResolution,
+  WorktreeSetupAnswer,
+  WorktreeSetupRunView,
 } from "@volli/shared";
 import {
   attentionResumeAt,
@@ -486,6 +488,8 @@ export interface SessionBlockerState {
    */
   action: SessionBlockerAction | null;
   secondaryAction?: SessionBlockerAction | null;
+  /** Only the failed environment setup's row has a third act (VC-584). */
+  tertiaryAction?: SessionBlockerAction;
   /** Present only on the unconfigured first-run row; see {@link SessionBlockerSignInMenu}. */
   signInMenu?: SessionBlockerSignInMenu;
   /**
@@ -531,6 +535,12 @@ export interface SessionBlockerInput {
    * honest — the row then offers Settings alone, exactly as before.
    */
   signInProviders: readonly SignInProviderOption[];
+  /**
+   * The ticket's working copy's failed environment setup, when the plane has
+   * read one for a start that failed preparing it (VC-584, the `cloud` flag).
+   * Absent or null, a `configuration_invalid` row is the plain one.
+   */
+  failedSetup?: WorktreeSetupRunView | null;
 }
 
 export interface SessionBlockerActs {
@@ -547,6 +557,25 @@ export interface SessionBlockerActs {
   scheduleResume(input: { attentionId: string; attachmentId: string; resumeAt: number }): void;
   /** Withdraws a scheduled resume. */
   cancelScheduledResume(scheduleId: string): void;
+  /** Answers the working copy's failed setup, then tries the start again (VC-584). */
+  answerSetup(answer: WorktreeSetupAnswer): void;
+  /** Files the ticket whose Session repairs the setup, and opens it (VC-584). */
+  fixSetup(): void;
+}
+
+/** How a start that failed preparing its worktree words it (`session-runtime/location.ts`). */
+const WORKTREE_PREPARATION_FAILED = "Couldn't prepare the worktree";
+
+/**
+ * Whether an Attention may be a working copy's setup gate refusing a start
+ * (VC-584): the configuration failure a start raises when preparing its
+ * worktree failed. Only then is the setup's status worth one read.
+ */
+export function mayBeWorktreeSetupGate(attention: SessionAttention | null): boolean {
+  return (
+    attention?.kind === "configuration_invalid" &&
+    attention.detail?.startsWith(WORKTREE_PREPARATION_FAILED) === true
+  );
 }
 
 /** Select the user's existing ticket terminal tab without creating a new one. */
@@ -666,6 +695,9 @@ export function sessionBlocker(
     input.attention.primary;
   if (attention) {
     if (asked && answeredByCard(attention.kind)) return null;
+    if (attention.kind === "configuration_invalid" && input.failedSetup) {
+      return { ...setupFailedBlocker(attention, input.failedSetup, acts), placement: "timeline" };
+    }
     return {
       ...attentionBlocker(
         attention,
@@ -723,6 +755,33 @@ export function sessionBlocker(
     );
   }
   return null;
+}
+
+/**
+ * A working copy's failed environment setup, which refuses every start until
+ * a person answers it (VC-584). Settings cannot fix it, so the row offers the
+ * three answers instead: run it again, start without it, or file a ticket for
+ * an agent to repair the recipe.
+ */
+function setupFailedBlocker(
+  attention: SessionAttention,
+  run: WorktreeSetupRunView,
+  acts: SessionBlockerActs,
+): SessionBlockerState {
+  const dismissKey = attentionDismissKey(attention);
+  return {
+    ...errorBlocker(
+      {
+        message: "Environment setup failed",
+        detail: run.summary,
+        action: { label: "Retry setup", act: () => acts.answerSetup("retry") },
+        secondaryAction: { label: "Start anyway", act: () => acts.answerSetup("start-anyway") },
+      },
+      dismissKey,
+      () => acts.dismiss(dismissKey),
+    ),
+    tertiaryAction: { label: "Fix with an agent", act: acts.fixSetup },
+  };
 }
 
 /** The two attention kinds a card standing on screen already answers. */

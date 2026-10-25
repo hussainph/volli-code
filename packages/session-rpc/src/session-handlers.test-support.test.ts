@@ -60,6 +60,8 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
     () => handlers["project.reorder"]({ orderedIds: [] }, CALL),
     () => handlers["project.remove"]({ projectId: "p" }, CALL),
     () => handlers["worktree.trimSettings"](undefined, CALL),
+    () => handlers["worktree.setupStatus"]({ ticketId: "t" }, CALL),
+    () => handlers["worktree.answerSetup"]({ ticketId: "t", answer: "retry" }, CALL),
     () => handlers["hosts.snapshot"](undefined, CALL),
     () => handlers["hosts.subscribe"](undefined, CALL, sink),
     () => handlers["hosts.retry"]({ hostId: HOST }, CALL),
@@ -178,6 +180,8 @@ describe("sessionHandlersFrom", () => {
         "project.reorder": port as never,
         "project.remove": port as never,
         "worktree.trimSettings": port as never,
+        "worktree.setupStatus": port as never,
+        "worktree.answerSetup": port as never,
         "hosts.snapshot": port as never,
         "hosts.subscribe": port as never,
         "hosts.retry": port as never,
@@ -206,7 +210,7 @@ describe("sessionHandlersFrom", () => {
       },
     };
     for (const call of callAll(sessionHandlersFrom(ports))) await call();
-    expect(port).toHaveBeenCalledTimes(44);
+    expect(port).toHaveBeenCalledTimes(46);
     expect(port).toHaveBeenCalledWith({ flowId: "f", questionId: "q1", password: "p" }, CALL);
     expect(runtime.command).toHaveBeenCalledWith({
       commandId: "cancel",
@@ -252,7 +256,8 @@ describe("sessionHandlersFrom", () => {
     // reads (VC-713), the Workspace link relay's three (VC-711), and a host's
     // projects' four (VC-710), the active add flows' one (VC-720), and
     // the host-scoped projects' two and HOST relay's three (VC-722),
-    // and moving a running command to the background (VC-757).
-    expect(Object.keys(context.handlers)).toHaveLength(87);
+    // and moving a running command to the background (VC-757), and a
+    // working copy's setup status and answer (VC-584).
+    expect(Object.keys(context.handlers)).toHaveLength(89);
   });
 });

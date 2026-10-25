@@ -156,12 +156,14 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   // host commands (`project.reorder`, `worktree.trimSettings`) are
   // additive-only across supported skew, while the client-local families
   // (`hosts.*`, `hostAdd.*`, `hostSignIns.*`, `hostLink.*`, `hostScope.*`,
-  // `browserShortcuts.*`) ship with this
+  // `browserShortcuts.*`, `worktree.setupStatus`/`answerSetup`) ship with this
   // renderer and main in one bundle and are not cross-version promises.
   "shells.moveToBackground": "ipc",
   "project.reorder": "ipc",
   "project.remove": "ipc",
   "worktree.trimSettings": "ipc",
+  "worktree.setupStatus": "ipc",
+  "worktree.answerSetup": "ipc",
   "hosts.snapshot": "ipc",
   "hosts.subscribe": "ipc",
   "hosts.retry": "ipc",

@@ -81,6 +81,8 @@ describe("the desktop's IPC exposure", () => {
       "project.reorder",
       "project.remove",
       "worktree.trimSettings",
+      "worktree.setupStatus",
+      "worktree.answerSetup",
       "hosts.snapshot",
       "hosts.subscribe",
       "hosts.retry",

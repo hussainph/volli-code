@@ -255,6 +255,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     binDir: input.binDir,
     venue,
     hostPorts: ports,
+    environmentRecipes: { enabled: () => input.cloudEnabled(), power: ports.power },
     modelAccess: runtimeServices?.modelAccess ?? null,
     decisions: runtimeServices?.decisions ?? null,
     webAccess: runtimeServices?.webAccess ?? null,

@@ -107,6 +107,8 @@ import {
   type SessionListingPage,
   type SessionReadVerb,
   type Ticket,
+  type WorktreeSetupAnswer,
+  type WorktreeSetupStatusView,
   type WorktreeTrimSettings,
 } from "@volli/shared";
 
@@ -170,6 +172,12 @@ import {
 } from "../ticket-move";
 import type { BusyWorktreeSites } from "../worktree/activity";
 import { getTrimSettings } from "../worktree/trim-settings";
+import {
+  retryWorktreeSetup,
+  startWorktreeSetupAnyway,
+  worktreeSetupStatus,
+  type WorktreeSetupStatus,
+} from "../worktree/setup-gate";
 import type { WorktreePorts } from "../worktree/types";
 import { worktreeDeps } from "../worktree-runtime";
 import type { WorktreeReadInvalidation } from "../worktree-reads";
@@ -318,6 +326,13 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
   /** Stops a project's live work, then detaches it (VC-796, VC-822): `../project-remove`. */
   readonly "project.remove": HostHandler<{ projectId: string }, null>;
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
+  /** Where the ticket's working copy's environment setup stands (VC-584). */
+  readonly "worktree.setupStatus": HostHandler<{ ticketId: string }, WorktreeSetupStatusView>;
+  /** A person's answer to a failed environment setup (VC-584). */
+  readonly "worktree.answerSetup": HostHandler<
+    { ticketId: string; answer: WorktreeSetupAnswer },
+    WorktreeSetupStatusView
+  >;
   /**
    * Remote hosts this desktop added over SSH (VC-700 PR 2), all host-placed:
    * {@link HostHandlerOptions.remoteHosts}'s, or unavailable.
@@ -657,6 +672,22 @@ function joined<Result>(
 function present<Service>(service: Service | null, message: string): Service {
   if (service === null) throw new OperationUnavailableError(message);
   return service;
+}
+
+/** The ticket's working copy on this runner, or `null` when it has none; unknown tickets throw. */
+function ticketWorktreePath(database: Database.Database, ticketId: string): string | null {
+  const ticket = getTicket(database, ticketId);
+  if (!ticket) throw new Error("Unknown ticket");
+  return ticket.usesWorktree ? ticket.worktreePath : null;
+}
+
+/** A setup status as a window reads it: the run's ids and machine facts stay on the runner. */
+function setupStatusView(status: WorktreeSetupStatus): WorktreeSetupStatusView {
+  if (status.kind === "none" || status.kind === "pending" || status.kind === "running") {
+    return { kind: status.kind };
+  }
+  const { source, summary, exitCode, endedAt, tail } = status.run;
+  return { kind: status.kind, run: { source, summary, exitCode, endedAt, tail } };
 }
 
 /** Runs a command for its effect: the bridge's answer is `null`. */
@@ -1007,6 +1038,26 @@ function hostHandlerEntries(
         return null;
       }),
     "worktree.trimSettings": () => getTrimSettings(board()),
+    // The working copy's setup gate (VC-584). A ticket with no working copy
+    // on this runner has nothing to stand on: `none`.
+    "worktree.setupStatus": ({ ticketId }) => {
+      const database = board();
+      const path = ticketWorktreePath(database, ticketId);
+      return path === null
+        ? { kind: "none" }
+        : setupStatusView(worktreeSetupStatus(worktree(database), path));
+    },
+    "worktree.answerSetup": ({ ticketId, answer }) => {
+      const database = board();
+      const path = ticketWorktreePath(database, ticketId);
+      if (path === null) return { kind: "none" };
+      const deps = worktree(database);
+      return setupStatusView(
+        answer === "retry"
+          ? retryWorktreeSetup(deps, path, ticketId)
+          : startWorktreeSetupAnyway(deps, path, now()),
+      );
+    },
     // Remote hosts (VC-700 PR 2): desktop main's registry, through its port.
     "hosts.snapshot": () => remoteHosts().snapshot(),
     "hosts.subscribe": async (_input, _call, sink) =>

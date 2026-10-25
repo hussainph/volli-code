@@ -34,6 +34,7 @@ const {
   onWorktreePhase,
   userDataPathRef,
   worktreeHomeRef,
+  recipesRef,
 } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
   listeners: new Map<string, (...args: never[]) => unknown>(),
@@ -53,6 +54,8 @@ const {
   // The `~` the worktree deps resolve — where a worktree's pending setup
   // marker lives. A real temp dir, so the claim never touches a real home.
   worktreeHomeRef: { current: "/volli-test-home" },
+  // Whether environment recipes (the `cloud` flag, VC-584) are on.
+  recipesRef: { current: false },
 }));
 
 vi.mock("electron", () => ({
@@ -101,6 +104,7 @@ vi.mock("./worktree-host", () => ({
     git: () => "",
     onPhase: onWorktreePhase,
     home: worktreeHomeRef.current,
+    environmentRecipes: () => recipesRef.current,
   }),
 }));
 vi.mock("../../../../packages/host-core/src/worktree-runtime", () => ({
@@ -112,6 +116,7 @@ import {
   isFirstRunPending,
   markFirstRunPending,
 } from "../../../../packages/host-core/src/worktree/first-run";
+import { readEnvironmentRun } from "../../../../packages/host-core/src/worktree/environment-runs";
 import { PtyManager, type ParkConfig, type ProcessInspector } from "@volli/host-core/pty";
 import { clientEventSink } from "./client-event-sink";
 import { abandonAcceptedUpdateInstall, beginAcceptedUpdateInstall, refuseQuit } from "./quit-gate";
@@ -2436,6 +2441,37 @@ describe("worktree ticket sessions", () => {
     expect(harness).toContain("codex");
     expect(harness).toContain("go");
     expect(onWorktreePhase).toHaveBeenCalledWith("wt1", "ready");
+  });
+
+  // VC-584: with environment recipes on, the working copy's own
+  // `.agents/setup` wins over the stored command, typed under the recipe's
+  // variables, and its outcome is the working copy's setup fact.
+  it("types the working copy's .agents/setup when recipes are on, and records its outcome", async () => {
+    recipesRef.current = true;
+    try {
+      await fs.mkdir(join(wtCwd(), ".agents"), { recursive: true });
+      await fs.writeFile(join(wtCwd(), ".agents", "setup"), "echo hi\n");
+      ensureOk(true);
+      const { result, pty } = await createWorktreeSession({ harnessId: "codex", prompt: "go" });
+      if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+
+      const setupLine = pty.write.mock.calls[0]![0] as string;
+      expect(setupLine).toContain(`bash '${join(wtCwd(), ".agents", "setup")}' < /dev/null`);
+      expect(setupLine).toContain("VOLLI_TICKET='WP-20'");
+      expect(setupLine).toContain("VOLLI_SETUP_REASON='new-working-copy'");
+      expect(setupLine).not.toContain("pnpm install");
+
+      pty.emitData("hi\n__VOLLI_SETUP_DONE:3__\n");
+      expect(pty.write).toHaveBeenCalledTimes(1);
+      expect(readEnvironmentRun({ home: root }, wtCwd(), "setup")).toMatchObject({
+        source: "repo",
+        outcome: "failed",
+        exitCode: 3,
+      });
+    } finally {
+      recipesRef.current = false;
+      await fs.rm(wtCwd(), { recursive: true, force: true });
+    }
   });
 
   it("leaves a live shell and records worktree_failed(setup) when the setup command exits non-zero", async () => {
