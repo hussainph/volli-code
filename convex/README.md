@@ -23,7 +23,7 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 | `functions/schema.ts`                              | Every table, its validators and indexes. Conventions and the recorded deviations: `SCHEMA-NOTES.md`.                                                                                    |
 | `functions/lib/validators.ts`                      | Validator building blocks (`uuid`, `nullable`, `literals`, the `actor` union), built from the shared vocabulary in `@volli/shared/cloud`.                                               |
 | `functions/lib/auth.ts`                            | Identity and membership checks: `requireIdentity`, `ensureViewer`, `requireViewer`, `requireMember`, `requireManage`, `requireProject`, `requireSessionVisible`, `requireSessionActor`. |
-| `functions/accounts.ts`                            | `ensureViewer` (the first call after sign-in; creates the person's own Workspace through `lib/firstSignIn.ts`) and `viewer`.                                                            |
+| `functions/accounts.ts`                            | `ensureViewer` (the first call after sign-in; creates the person's own Workspace through `lib/firstSignIn.ts`), `viewer`, and account deletion: `requestDeletion` / `cancelDeletion`.   |
 | `functions/workspaces.ts`                          | The switcher (`listMine`), `get`, `create`, `rename`, and the admin policy (`policy`, `setPolicy`: `shareAll`, `whoCanInvite`).                                                         |
 | `functions/members.ts`                             | The roster, `setRole`, `suspend` / `unsuspend`, `remove`, `leave`. The rules are `decideMemberChange` in `@volli/shared/cloud`.                                                         |
 | `functions/invites.ts`                             | Email and single-use link invites: `create`, `revoke`, `list`, `listMine`, `preview`, `accept` (by id) and `acceptLink` (by token).                                                     |
@@ -119,6 +119,32 @@ rewritten onto these decisions, because its dense integer positions differ.
 
 **No cloud deployment may ever set `VOLLI_TEST_JWKS`.** Without it, the
 deployment trusts no test issuer.
+
+### Sign-in provider
+
+The sign-in provider is WorkOS AuthKit; desktop main runs the browser flow
+(PKCE, public client) and sends the access token here. `auth.config.ts`
+trusts WorkOS's two issuers when the deployment variable `WORKOS_CLIENT_ID`
+names a WorkOS environment, and nothing else otherwise.
+
+`profileFromIdentity` (`lib/auth.ts`) reads the new user's profile from the
+token's `email`, `email_verified` and `name` claims. WorkOS access tokens do
+not carry them by default: each WorkOS environment needs a JWT template that
+adds them, for example
+`{"email": {{user.email}}, "email_verified": {{user.email_verified}}, "name": "{{user.first_name}} {{user.last_name}}"}`.
+
+Without a WorkOS environment, an unpackaged desktop signs in against its local
+dev issuer, which signs tokens as the test issuer above with the fixture's
+key:
+
+```sh
+VOLLI_ACCOUNT_PROVIDER=dev pnpm -C convex with-backend --deploy -- pnpm -C .. dev
+```
+
+`with-backend` hands the app `VOLLI_CONVEX_URL` and
+`VOLLI_CONVEX_TEST_PRIVATE_KEY`; Settings → Account (with `cloud` on) then
+signs in through the browser and `accounts.ensureViewer` runs on the
+throwaway backend.
 
 ### Bumping the pin
 

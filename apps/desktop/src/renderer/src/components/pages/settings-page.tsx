@@ -28,13 +28,15 @@ export function SettingsPage({
 }: { initialCategoryKey?: string; initialSignInProviderId?: string } = {}) {
   const logs = useLogViewerEnabled();
   const hosts = useCloudEnabled();
+  // Volli Cloud's Account rides the same flag as Hosts (VC-884).
+  const account = hosts;
   const experiments = useExperimentsStore((state) => state.snapshot);
   React.useEffect(() => {
     void useExperimentsStore.getState().ensure();
   }, []);
   const groups = React.useMemo(
-    () => settingsGroups(initialSignInProviderId, { logs, hosts, experiments }),
-    [initialSignInProviderId, logs, hosts, experiments],
+    () => settingsGroups(initialSignInProviderId, { logs, hosts, account, experiments }),
+    [initialSignInProviderId, logs, hosts, account, experiments],
   );
 
   // Resolved once, from the deep link. `resolveSettingsCategory` maps the

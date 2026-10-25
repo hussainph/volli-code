@@ -15,7 +15,7 @@ import { createPrivateKey, generateKeyPairSync, sign } from "node:crypto";
 
 import { TEST_AUDIENCE, TEST_ISSUER } from "../functions/auth.config.ts";
 
-const TEST_KEY_ID = "volli-test-1";
+export const TEST_KEY_ID = "volli-test-1";
 
 export type TestIssuer = {
   /** The value for the `VOLLI_TEST_JWKS` deployment variable. */

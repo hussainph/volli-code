@@ -142,6 +142,372 @@
   "protocolVersion": 1,
   "tiers": {
     "desktop": {
+      "account.cancelDeletion": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "account.cancelSignIn": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "account.requestDeletion": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "account.signIn": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "connection": {
+              "enum": [
+                "github",
+                "google"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "connection"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "account.signOut": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "account.snapshot": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "account": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "backend": {
+                      "enum": [
+                        "synced",
+                        "unreachable",
+                        "refused",
+                        "none"
+                      ],
+                      "type": "string"
+                    },
+                    "deletionPurgeAfter": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "displayName": {
+                      "maxLength": 512,
+                      "type": "string"
+                    },
+                    "email": {
+                      "anyOf": [
+                        {
+                          "maxLength": 512,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "userId": {
+                      "anyOf": [
+                        {
+                          "maxLength": 512,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "displayName",
+                    "email",
+                    "userId",
+                    "deletionPurgeAfter",
+                    "backend"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "failure": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "provider": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "workos",
+                    "dev"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "signingInWith": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "github",
+                    "google"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "enum": [
+                "unconfigured",
+                "signed-out",
+                "restoring",
+                "signing-in",
+                "signed-in"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "provider",
+            "signingInWith",
+            "account",
+            "failure"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "account.subscribe": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "subscription",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "account": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "backend": {
+                      "enum": [
+                        "synced",
+                        "unreachable",
+                        "refused",
+                        "none"
+                      ],
+                      "type": "string"
+                    },
+                    "deletionPurgeAfter": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "displayName": {
+                      "maxLength": 512,
+                      "type": "string"
+                    },
+                    "email": {
+                      "anyOf": [
+                        {
+                          "maxLength": 512,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "userId": {
+                      "anyOf": [
+                        {
+                          "maxLength": 512,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "displayName",
+                    "email",
+                    "userId",
+                    "deletionPurgeAfter",
+                    "backend"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "failure": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "provider": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "workos",
+                    "dev"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "signingInWith": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "github",
+                    "google"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "enum": [
+                "unconfigured",
+                "signed-out",
+                "restoring",
+                "signing-in",
+                "signed-in"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "provider",
+            "signingInWith",
+            "account",
+            "failure"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "documented-yield",
+        "voidOutput": false
+      },
       "browserShortcuts.focusPage": {
         "compatibility": "client-local",
         "input": {

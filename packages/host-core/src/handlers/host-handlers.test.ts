@@ -49,6 +49,7 @@ import {
   type HostHandlerOptions,
   type HostHandlers,
 } from "./host-handlers";
+import type { AccountPort } from "./account-port";
 import type { BrowserShortcutsPort } from "./browser-shortcuts-port";
 import type { RemoteHostsPort } from "./remote-hosts-port";
 
@@ -1549,5 +1550,75 @@ describe("Browser page shortcuts", () => {
 
     expect(await map["browserShortcuts.focusPage"]({ tabId: "opaque-1" }, WINDOW)).toBeNull();
     expect(port.focusPage).toHaveBeenCalledWith("opaque-1");
+  });
+});
+
+// The Volli Cloud account (VC-884): desktop main's account service, through
+// its port; absent everywhere else.
+describe("the Volli Cloud account", () => {
+  const SNAPSHOT = {
+    state: "signed-out",
+    provider: "dev",
+    signingInWith: null,
+    account: null,
+    failure: null,
+  } as const;
+
+  const everyCall = (map: ReturnType<typeof handlers>): (() => unknown)[] => [
+    () => map["account.snapshot"](undefined, WINDOW),
+    () => map["account.subscribe"](undefined, WINDOW, sink()),
+    () => map["account.signIn"]({ connection: "github" }, WINDOW),
+    () => map["account.cancelSignIn"](undefined, WINDOW),
+    () => map["account.signOut"](undefined, WINDOW),
+    () => map["account.requestDeletion"](undefined, WINDOW),
+    () => map["account.cancelDeletion"](undefined, WINDOW),
+  ];
+
+  it("answers unavailable for every key on a host with no account service (hostd)", async () => {
+    for (const map of [handlers(), handlers({ account: null })]) {
+      for (const call of everyCall(map)) {
+        expect(await unavailable(call)).toBe("Accounts are unavailable on this host");
+      }
+    }
+  });
+
+  it("forwards each command to the port and feeds the window every snapshot", async () => {
+    const unsubscribe = vi.fn();
+    const port = {
+      snapshot: vi.fn(() => SNAPSHOT),
+      subscribe: vi.fn((listener: (snapshot: typeof SNAPSHOT) => void) => {
+        listener(SNAPSHOT);
+        return unsubscribe;
+      }),
+      signIn: vi.fn(),
+      cancelSignIn: vi.fn(),
+      signOut: vi.fn(),
+      requestDeletion: vi.fn(async () => {}),
+      cancelDeletion: vi.fn(),
+    } satisfies AccountPort;
+    const map = handlers({ account: port });
+    const snapshots = sink();
+
+    expect(await map["account.snapshot"](undefined, WINDOW)).toEqual(SNAPSHOT);
+    expect(await map["account.subscribe"](undefined, WINDOW, snapshots)).toBe(unsubscribe);
+    expect(snapshots.emit).toHaveBeenCalledWith(SNAPSHOT);
+    expect(await map["account.signIn"]({ connection: "google" }, WINDOW)).toBeNull();
+    expect(port.signIn).toHaveBeenCalledWith("google");
+    for (const key of [
+      "account.cancelSignIn",
+      "account.signOut",
+      "account.requestDeletion",
+      "account.cancelDeletion",
+    ] as const) {
+      expect(await map[key](undefined, WINDOW)).toBeNull();
+    }
+    for (const method of [
+      "cancelSignIn",
+      "signOut",
+      "requestDeletion",
+      "cancelDeletion",
+    ] as const) {
+      expect(port[method]).toHaveBeenCalledOnce();
+    }
   });
 });

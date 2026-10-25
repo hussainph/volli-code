@@ -183,6 +183,8 @@ describe("accounts.ensureViewer", () => {
       userId: first.userId,
       displayName: "Alice",
       primaryEmail: "alice@example.com",
+      status: "active",
+      purgeAfter: null,
     });
 
     const rows = await t.run(async (ctx) => ({

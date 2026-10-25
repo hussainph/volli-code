@@ -273,6 +273,13 @@ export function sessionHandlersFrom(
     "hostScope.subscribe": remote("hostScope.subscribe"),
     "browserShortcuts.subscribe": remote("browserShortcuts.subscribe"),
     "browserShortcuts.focusPage": remote("browserShortcuts.focusPage"),
+    "account.snapshot": remote("account.snapshot"),
+    "account.subscribe": remote("account.subscribe"),
+    "account.signIn": remote("account.signIn"),
+    "account.cancelSignIn": remote("account.cancelSignIn"),
+    "account.signOut": remote("account.signOut"),
+    "account.requestDeletion": remote("account.requestDeletion"),
+    "account.cancelDeletion": remote("account.cancelDeletion"),
   };
   return {
     ...handlers,

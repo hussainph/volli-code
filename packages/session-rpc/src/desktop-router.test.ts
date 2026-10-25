@@ -265,6 +265,21 @@ const SHORTCUT = {
   },
 } as const;
 
+/** The account snapshot main hands the window (VC-884): a profile, never a token. */
+const ACCOUNT = {
+  state: "signed-in",
+  provider: "dev",
+  signingInWith: null,
+  account: {
+    displayName: "Dana",
+    email: "dana@example.com",
+    userId: "6b4c3a1e-2a9f-4c3e-9d1b-0f8e7d6c5b4a",
+    deletionPurgeAfter: null,
+    backend: "synced",
+  },
+  failure: null,
+} as const;
+
 function recordingHandlers(fixture: Host): DesktopRouterHandlers {
   const record =
     <Output>(key: string, output: Output) =>
@@ -327,6 +342,13 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "hostScope.subscribe": stream("hostScope.subscribe", { kind: "started" }),
     "browserShortcuts.subscribe": stream("browserShortcuts.subscribe", SHORTCUT),
     "browserShortcuts.focusPage": record("browserShortcuts.focusPage", null),
+    "account.snapshot": record("account.snapshot", ACCOUNT),
+    "account.subscribe": stream("account.subscribe", ACCOUNT),
+    "account.signIn": record("account.signIn", null),
+    "account.cancelSignIn": record("account.cancelSignIn", null),
+    "account.signOut": record("account.signOut", null),
+    "account.requestDeletion": record("account.requestDeletion", null),
+    "account.cancelDeletion": record("account.cancelDeletion", null),
     ...fixture.overrides,
   };
 }
@@ -1173,6 +1195,55 @@ describeContract<Host, DesktopRouter>(
       expect(fixture.calls).toHaveLength(2);
     });
 
+    // The Volli Cloud account (VC-884): desktop main's account service, the window's alone.
+    it("serves the account snapshot and its commands, and streams every change", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      expect(await client.account.snapshot.query()).toEqual(ACCOUNT);
+      const stream = collect((handlers) => client.account.subscribe.subscribe(undefined, handlers));
+      await vi.waitFor(() => expect(stream.values).toEqual([ACCOUNT]));
+      const signedOut = {
+        state: "signed-out",
+        provider: "dev",
+        signingInWith: null,
+        account: null,
+        failure: null,
+      } as const;
+      await fixture.sinks.get("account.subscribe")!.emit(signedOut);
+      await vi.waitFor(() => expect(stream.values).toEqual([ACCOUNT, signedOut]));
+      stream.unsubscribe();
+      await vi.waitFor(() => expect(fixture.unsubscribed).toEqual(["account.subscribe"]));
+
+      expect(await client.account.signIn.mutate({ connection: "github" })).toBeNull();
+      expect(await client.account.cancelSignIn.mutate()).toBeNull();
+      expect(await client.account.signOut.mutate()).toBeNull();
+      expect(await client.account.requestDeletion.mutate()).toBeNull();
+      expect(await client.account.cancelDeletion.mutate()).toBeNull();
+      expect(fixture.calls.map(({ key, input, call }) => [key, input, call])).toEqual([
+        ["account.snapshot", undefined, WINDOW_CALL],
+        ["account.subscribe", undefined, WINDOW_CALL],
+        ["account.signIn", { connection: "github" }, WINDOW_CALL],
+        ["account.cancelSignIn", undefined, WINDOW_CALL],
+        ["account.signOut", undefined, WINDOW_CALL],
+        ["account.requestDeletion", undefined, WINDOW_CALL],
+        ["account.cancelDeletion", undefined, WINDOW_CALL],
+      ]);
+      for (const input of [{ connection: "apple" }, { connection: "github", extra: 1 }, {}]) {
+        expect(await expectHostError(client.account.signIn.mutate(input as never))).toMatchObject({
+          code: "BAD_REQUEST",
+        });
+      }
+      expect(fixture.calls).toHaveLength(7);
+    });
+
+    it("refuses an account snapshot that would carry anything but the profile", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER, {
+        "account.snapshot": () => ({ ...ACCOUNT, state: "signed-in-ish" }) as never,
+      });
+      const client = await connect(fixture);
+      await expect(client.account.snapshot.query()).rejects.toBeDefined();
+    });
+
     it("streams the hosts snapshot, the current first, until the window stops it", async () => {
       const fixture = host(LOCAL_DESKTOP_CALLER);
       const client = await connect(fixture);
@@ -1486,6 +1557,13 @@ describe("the desktop router's grammar", () => {
         "hostScope.subscribe",
         "browserShortcuts.subscribe",
         "browserShortcuts.focusPage",
+        "account.snapshot",
+        "account.subscribe",
+        "account.signIn",
+        "account.cancelSignIn",
+        "account.signOut",
+        "account.requestDeletion",
+        "account.cancelDeletion",
       ].toSorted(),
     );
     expect(schemas["worktree.trimSettings"]).toMatchObject({
