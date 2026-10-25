@@ -117,7 +117,7 @@ The same environment carries this Session's **parallelism budget**: `VOLLI_CONCU
 ## Foundations
 
 - **Data**: today local SQLite (better-sqlite3, WAL, main-process-owned) and transcripts as indexed files on disk. Target: Convex for live state, object storage (R2) for bulk history (transcripts packed per turn, Pi logs, blobs), SQLite for runner-local state (see **Store rule**).
-- **Terminal companions**: preserve the manifest registry, exact-hash trust, launch configuration, wrappers, hooks, CLI correlation, and honest terminal resume where they continue to improve manual terminal use. Preserve no generic structured-adapter machinery merely for future plurality.
+- **Terminal companions**: preserve the manifest registry, exact-hash trust, launch configuration, wrappers, hooks, CLI correlation, and honest terminal resume where they continue to improve manual terminal use. Preserve no generic structured-adapter machinery merely for future plurality beyond the executor slot.
 - **Execution**: worktree-per-ticket: one Working copy per ticket per machine, shared by that machine's Sessions. Terminal wrappers and hooks remain compatibility mechanisms for TUI harnesses.
 - **Git belongs to the user.** Volli never auto-commits or pushes. Agents push only when asked or when the project's ship behaviour says so. A Session on another runner starts from what is pushed.
 - **Board**: fixed columns Backlog · Todo · Doing · Needs Review · Done. Explicit moves win over stale lifecycle evidence; automation only de-escalates and never destroys data. Archive worktrees instead of deleting them.

@@ -6815,8 +6815,8 @@ describe("SessionRuntime executor slot (VC-916)", () => {
     await releaseAttachment(relaunched.runtime, sessionId, reattached.id);
     await relaunched.runtime.close();
 
-    // A build that no longer ships `other` falls back to its default, as every
-    // Session recorded under a retired adapter did when the slot held one.
+    // A build that no longer ships `other` falls back to its default, as a
+    // Session recorded under a retired adapter does.
     const retired = composition({
       engine: first.engine,
       adapter: fake,
@@ -6825,5 +6825,40 @@ describe("SessionRuntime executor slot (VC-916)", () => {
     const fallback = await attachedRuntime(retired.runtime, sessionId, "command-fallback");
     expect(fallback.adapterId).toBe("fake");
     expect(fake.attaches).toBe(1);
+  });
+
+  it("replays a recorded attach on the runtime its intent named, not on the default", async () => {
+    const fake = new FakeAdapter();
+    const other = new OtherAdapter();
+    const { runtime, engine } = composition({ adapter: fake, others: [other] });
+    const created = await runtime.command({
+      commandId: "command-create",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Replayed",
+      },
+    });
+    const sessionId = created.sessionId;
+    // A build whose default was `other` recorded the start and then lost it.
+    await engine.submit({
+      commandId: "command-attach-recorded",
+      sessionId,
+      intent: { kind: "executor.start", adapterId: "other", continuity: "fresh" },
+      provenance: { source: { kind: "user", id: "session-client", detail: null }, venue },
+    });
+
+    const replayed = await runtime.command({
+      commandId: "command-attach-recorded",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+
+    expect(replayed.receipt?.status).not.toBe("completed");
+    expect(fake.attaches).toBe(0);
+    expect(other.attaches).toBe(0);
   });
 });

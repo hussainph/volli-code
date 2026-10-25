@@ -14,20 +14,26 @@
  * adapter rather than by a second string beside it that could drift — a
  * renamed key would orphan every attachment on disk that carries the old one.
  *
- * **Selection is per Session and persisted in its own ledger.** A Session runs
- * on the runtime its most recent attachment by a registered runtime was opened
- * under: the `executor.start` intent and the attachment it opened both record
- * that id durably, so a relaunch selects the same runtime with no new field to
- * keep in step. A Session no registered runtime has attached yet — a new one,
- * or one whose only attachments came from a runtime this build no longer
- * ships — runs on the slot's default, which is exactly what every such Session
- * did when the slot held one executor. A Session that must start on a
- * non-default runtime needs that choice written before its first attach; that
- * arrives with the runtime that needs it, as a durable field on
- * `session.create` this selection reads first.
+ * **Selection is per Session and persisted in its own ledger, once it has
+ * attached.** A Session runs on the runtime named by its newest attachment —
+ * opened, closed or failed — whose runtime this build registers. Every
+ * attachment records that id durably, so a relaunch selects the same runtime
+ * with no new field to keep in step. Before a registered runtime has attached
+ * (a new Session, or one whose attachments all name a runtime this build does
+ * not ship, such as a retired adapter or a terminal companion) a Session runs
+ * on the slot's default. A replayed attach command keeps the runtime its
+ * recorded `executor.start` intent names (see the Session runtime's attach).
+ * Nothing yet records a choice before the first attach, so starting a Session
+ * on a non-default runtime is not expressible.
+ *
+ * `terminal` is reserved: it is the adapter id of a terminal companion
+ * attachment, which is never a structured runtime.
  */
 import type { SessionAttachment } from "@volli/shared";
 import type { NativeHarnessAdapter } from "./native-adapter";
+
+/** A terminal companion attachment's adapter id; never a structured runtime's. */
+const TERMINAL_ADAPTER_ID = "terminal";
 
 export interface SessionExecutorSlot {
   /** Every runtime this process can attach, keyed by its adapter `id`. */
@@ -47,6 +53,9 @@ export function createSessionExecutorSlot(
 ): SessionExecutorSlot {
   const runtimes = new Map<string, NativeHarnessAdapter>();
   for (const runtime of [defaultRuntime, ...others]) {
+    if (runtime.id === TERMINAL_ADAPTER_ID) {
+      throw new Error(`Executor slot cannot hold a runtime with the reserved id ${runtime.id}`);
+    }
     if (runtimes.has(runtime.id)) {
       throw new Error(`Executor slot already holds a runtime with id ${runtime.id}`);
     }

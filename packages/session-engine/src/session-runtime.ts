@@ -1793,7 +1793,13 @@ class DefaultSessionRuntime implements SessionRuntime {
     location: SessionLocation,
     existed: boolean,
   ): Promise<SessionRuntimeCommandResult> {
-    const adapter = this.#executorFor(projection);
+    // A replay keeps the runtime its recorded intent named, which the Engine
+    // holds it to; only a fresh attach selects (VC-916).
+    const recorded = projection.commands.find(({ id }) => id === request.commandId)?.intent;
+    const adapter =
+      (recorded?.kind === "executor.start"
+        ? this.ports.executors.runtimes.get(recorded.adapterId)
+        : undefined) ?? this.#executorFor(projection);
     const submitted = await this.ports.engine.submit({
       commandId: request.commandId,
       sessionId: request.sessionId,
@@ -3152,7 +3158,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       const receipt = await this.#recordDelivery(
         request.sessionId,
         attachment.id,
-        this.#executorFor(projection),
+        this.#adapterIdentityFor(attachment.adapterId),
         attachment.venue,
         !existed
           ? {
@@ -5600,7 +5606,7 @@ class DefaultSessionRuntime implements SessionRuntime {
    *
    * A durable attachment names the adapter that opened it, and history outlives
    * the executor that wrote it: a Session bound under a runtime this build no
-   * longer ships cannot be rehydrated by the one it does. Refusing is what turns
+   * longer ships cannot be rehydrated by any runtime it does. Refusing is what turns
    * that into an honest recovery failure rather than a live binding pointed at
    * someone else's native identity.
    */

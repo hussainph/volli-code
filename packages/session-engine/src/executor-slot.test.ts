@@ -36,9 +36,12 @@ describe("executor slot (VC-916)", () => {
     expect([...createSessionExecutorSlot(pi).runtimes.keys()]).toEqual(["pi"]);
   });
 
-  it("refuses two runtimes under one id rather than letting the later one win", () => {
+  it("refuses two runtimes under one id, and the terminal companion's id", () => {
     expect(() => createSessionExecutorSlot(runtime("pi"), [runtime("pi")])).toThrow(
       "Executor slot already holds a runtime with id pi",
+    );
+    expect(() => createSessionExecutorSlot(runtime("pi"), [runtime("terminal")])).toThrow(
+      "Executor slot cannot hold a runtime with the reserved id terminal",
     );
   });
 
