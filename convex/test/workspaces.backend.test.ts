@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import { newId } from "@volli/shared/cloud";
+
 import { describe, expect, test } from "vite-plus/test";
 
 import { api } from "../functions/_generated/api";
@@ -39,7 +41,7 @@ describe("workspaces on the pinned local backend", () => {
       activeMemberCount: 1,
     });
 
-    const workspaceId = randomUUID();
+    const workspaceId = newId("workspace");
     await ana.client.mutation(api.workspaces.create, { workspaceId, name: "Ana & Co" });
 
     // An email invite, seen by Ben at sign-in and accepted by id.
@@ -120,6 +122,25 @@ describe("workspaces on the pinned local backend", () => {
     await expect(
       cy.client.mutation(api.invites.create, { workspaceId, email: null, role: "member" }),
     ).rejects.toThrow(code("forbidden"));
+
+    // Remove ends the membership; an invite brings the same person back.
+    await ben.client.mutation(api.members.remove, { workspaceId, userId: cyId });
+    await expect(cy.client.query(api.workspaces.get, { workspaceId })).rejects.toThrow(
+      code("not_a_member"),
+    );
+    expect((await ana.client.query(api.workspaces.get, { workspaceId })).activeMemberCount).toBe(2);
+    const back = await ben.client.mutation(api.invites.create, {
+      workspaceId,
+      email: cy.email,
+      role: "member",
+    });
+    await expect(
+      cy.client.mutation(api.invites.accept, { inviteId: back.inviteId }),
+    ).resolves.toEqual({
+      workspaceId,
+      role: "member",
+      alreadyMember: false,
+    });
 
     // Hand the Workspace on, then the first owner may leave.
     await ana.client.mutation(api.members.setRole, { workspaceId, userId: benId, role: "owner" });

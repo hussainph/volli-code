@@ -1,12 +1,15 @@
 /**
- * Invites: by email or as a link, revoked by the inviter or an owner/admin,
+ * Invites: by email or as a link, revoked by the sender or an owner/admin,
  * accepted by the invitee. An invitee becomes a Member only on acceptance.
  *
  * - Who may invite is the Workspace's `whoCanInvite` policy (default
- *   `members`); an inviter grants at most their own role.
+ *   `members`); an inviter grants at most their own role. An invite is only as
+ *   good as its sender: once they could no longer send it (suspended, gone,
+ *   demoted, or the policy changed), it can no longer be accepted.
  * - An email invite is bound to that address: only a signed-in person whose
  *   VERIFIED email matches may accept it, by its id (from `listMine`) or by
- *   its link. Inviting a pending address again reissues the same invite.
+ *   its link. Inviting a pending address again reissues the same invite, if
+ *   the person asking could have revoked it.
  * - A link invite names no address: whoever signs in with the link first
  *   accepts it, once.
  * - Both carry a token, minted here and returned once to the inviter to build
@@ -14,6 +17,10 @@
  *   invite is never accepted by id.
  * - Sending the email is not here yet (no mail provider): the client shares
  *   the link.
+ *
+ * Listing queries read the clock: an invite that expires while a list is
+ * subscribed stays listed until the list next re-runs. Acceptance always
+ * checks expiry.
  */
 
 import { v } from "convex/values";
@@ -21,32 +28,45 @@ import { v } from "convex/values";
 import {
   MEMBER_ROLES,
   canInviteAs,
+  canReissueInvite,
   canRevokeInvite,
+  decideInviteAcceptance,
   newId,
+  type InviteAcceptance,
+  type InviteFacts,
+  type InviteState,
   type MemberRole,
   type UserId,
+  type WorkspaceId,
 } from "@volli/shared/cloud";
 
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel.js";
-import { authError, findPolicy, requireMember, requireViewer, type Viewer } from "./lib/auth";
+import { audit } from "./lib/audit";
+import {
+  authError,
+  findMembership,
+  findPolicy,
+  normalizeEmail,
+  requireMember,
+  requireViewer,
+  type Viewer,
+} from "./lib/auth";
 import { literals, nullable } from "./lib/validators";
 import {
-  INVITE_TTL_MS,
-  audit,
   findMemberRow,
   findWorkspace,
-  hashInviteToken,
   idArg,
-  inviteEmail,
-  inviteState,
   joinWorkspace,
-  mintInviteToken,
   personActor,
   usersById,
   workspaceError,
-  type InviteState,
 } from "./lib/workspaces";
+
+/** How long an invite (email or link) stays acceptable. */
+const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+const TOKEN_BYTES = 32;
 
 export type CreatedInvite = {
   inviteId: string;
@@ -77,10 +97,13 @@ export type MyInvite = {
   expiresAt: number;
 };
 
+/** What a link would do for the viewer: `valid` joins; anything else is why not. */
+export type InvitePreviewStatus = Exclude<InviteAcceptance, "join"> | "valid";
+
 export type InvitePreview =
   | { status: "invalid" }
   | {
-      status: Exclude<InviteState, "pending"> | "valid" | "email_mismatch" | "already_member";
+      status: InvitePreviewStatus;
       workspaceId: string;
       workspaceName: string;
       role: MemberRole;
@@ -91,17 +114,79 @@ export type InvitePreview =
 
 export type AcceptedInvite = { workspaceId: string; role: MemberRole; alreadyMember: boolean };
 
+// ── tokens and invite facts ─────────────────────────────────────────────────
+
+/** A fresh invite token: 32 random bytes, base64url. */
+function mintInviteToken(): string {
+  const bytes = new Uint8Array(TOKEN_BYTES);
+  crypto.getRandomValues(bytes);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** The stored form of an invite token: its sha256, lowercase hex. */
+async function hashInviteToken(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function inviteState(invite: Doc<"workspaceInvites">, now: number): InviteState {
+  if (invite.revokedAt !== null) return "revoked";
+  if (invite.acceptedAt !== null) return "accepted";
+  if (invite.expiresAt <= now) return "expired";
+  return "pending";
+}
+
+function inviteFacts(invite: Doc<"workspaceInvites">): InviteFacts {
+  return {
+    workspaceId: invite.workspaceId as WorkspaceId,
+    invitedByUserId: invite.invitedByUserId as UserId,
+    role: invite.role,
+  };
+}
+
+/** A plausible email address, normalized, or `invalid_argument`. */
+function inviteEmail(raw: string): string {
+  const email = normalizeEmail(raw);
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw workspaceError("invalid_argument", "That is not an email address.");
+  }
+  return email;
+}
+
+function verifiedEmail(viewer: Viewer): string | null {
+  return viewer.user.emailVerified ? viewer.user.primaryEmail : null;
+}
+
+async function pendingEmailInvites(
+  ctx: { db: QueryCtx["db"] },
+  workspaceId: string,
+  email: string,
+  now: number,
+): Promise<Doc<"workspaceInvites">[]> {
+  return (
+    await ctx.db
+      .query("workspaceInvites")
+      .withIndex("by_workspace_email", (q) => q.eq("workspaceId", workspaceId).eq("email", email))
+      .collect()
+  ).filter((invite) => inviteState(invite, now) === "pending");
+}
+
+// ── create, revoke ──────────────────────────────────────────────────────────
+
 /**
  * Invites someone by email, or (with `email: null`) makes a single-use link.
- * Inviting an address with a pending invite reissues it: a fresh token and
- * expiry, the new role and inviter, the old link dead.
+ * Inviting an address with a pending invite reissues it (a fresh token and
+ * expiry, the new role and sender, the old link dead) when the person asking
+ * could have revoked it and could have sent it; otherwise `already_invited`.
  */
 export const create = mutation({
   args: { workspaceId: v.string(), email: nullable(v.string()), role: literals(MEMBER_ROLES) },
   handler: async (ctx, args): Promise<CreatedInvite> => {
     const { viewer, workspace, membership } = await requireMember(ctx, args.workspaceId);
     const policy = await findPolicy(ctx, workspace.id);
-    if (!canInviteAs(viewer, membership, args.role, policy)) {
+    if (!canInviteAs(viewer, workspace.id as WorkspaceId, membership, args.role, policy)) {
       throw authError("forbidden", "Your role does not allow this invite.");
     }
     const email = args.email === null ? null : inviteEmail(args.email);
@@ -113,15 +198,14 @@ export const create = mutation({
 
     if (email !== null) {
       await refuseExistingMember(ctx, workspace.id, email);
-      const pending = (
-        await ctx.db
-          .query("workspaceInvites")
-          .withIndex("by_workspace_email", (q) =>
-            q.eq("workspaceId", workspace.id).eq("email", email),
-          )
-          .collect()
-      ).find((invite) => inviteState(invite, now) === "pending");
+      const [pending] = await pendingEmailInvites(ctx, workspace.id, email, now);
       if (pending !== undefined) {
+        if (!canReissueInvite(viewer, membership, inviteFacts(pending), args.role, policy)) {
+          throw workspaceError(
+            "already_invited",
+            "Someone else has already invited this address. Ask them or an admin to change it.",
+          );
+        }
         await ctx.db.patch(pending._id, {
           tokenHash,
           expiresAt,
@@ -168,12 +252,14 @@ export const create = mutation({
   },
 });
 
+/** An address that already belongs to a Member (by a verified email) is not invited again. */
 async function refuseExistingMember(ctx: MutationCtx, workspaceId: string, email: string) {
   const users = await ctx.db
     .query("users")
     .withIndex("by_email", (q) => q.eq("primaryEmail", email))
     .collect();
   for (const user of users) {
+    if (!user.emailVerified) continue;
     const member = await findMemberRow(ctx, workspaceId, user.id);
     if (member !== null && member.status !== "left") {
       throw workspaceError(
@@ -200,14 +286,12 @@ async function findInvite(
 export const revoke = mutation({
   args: { inviteId: v.string() },
   handler: async (ctx, args): Promise<{ inviteId: string; revoked: boolean }> => {
-    const inviteId = idArg("invite", args.inviteId);
     const viewer = await requireViewer(ctx);
+    const inviteId = idArg("invite", args.inviteId);
     const invite = await findInvite(ctx, inviteId);
     if (invite === null) throw authError("not_found", "That invite does not exist.");
     const { membership } = await requireMember(ctx, invite.workspaceId);
-    if (
-      !canRevokeInvite(viewer, membership, { invitedByUserId: invite.invitedByUserId as UserId })
-    ) {
+    if (!canRevokeInvite(viewer, membership, inviteFacts(invite))) {
       throw authError("forbidden", "Your role does not allow this.");
     }
     if (invite.revokedAt !== null) return { inviteId, revoked: false };
@@ -228,6 +312,8 @@ export const revoke = mutation({
     return { inviteId, revoked: true };
   },
 });
+
+// ── reads ───────────────────────────────────────────────────────────────────
 
 /** The Workspace's pending, unexpired invites, for any active Member. Never a token. */
 export const list = query({
@@ -258,10 +344,6 @@ export const list = query({
       .toSorted((a, b) => a.createdAt - b.createdAt);
   },
 });
-
-function verifiedEmail(viewer: Viewer): string | null {
-  return viewer.user.emailVerified ? viewer.user.primaryEmail : null;
-}
 
 /**
  * Pending invites addressed to the viewer's verified email, in Workspaces
@@ -315,6 +397,39 @@ async function inviteByToken(
     .unique();
 }
 
+/**
+ * The one decision both `preview` and acceptance read: what accepting this
+ * invite would do for the viewer now. `null` when its Workspace is gone.
+ */
+async function acceptanceOf(
+  ctx: { db: QueryCtx["db"] },
+  viewer: Viewer,
+  invite: Doc<"workspaceInvites">,
+): Promise<{
+  decision: InviteAcceptance;
+  workspace: Doc<"workspaces">;
+  member: Doc<"workspaceMembers"> | null;
+} | null> {
+  const workspace = await findWorkspace(ctx, invite.workspaceId);
+  if (workspace === null || workspace.deletedAt !== null) return null;
+  const member = await findMemberRow(ctx, workspace.id, viewer.userId);
+  const sender = { userId: invite.invitedByUserId as UserId };
+  const decision = decideInviteAcceptance({
+    state: inviteState(invite, Date.now()),
+    acceptedByViewer: invite.acceptedByUserId === viewer.userId,
+    emailMismatch: invite.email !== null && invite.email !== verifiedEmail(viewer),
+    viewerStatus: member?.status ?? null,
+    senderMayInvite: canInviteAs(
+      sender,
+      workspace.id as WorkspaceId,
+      await findMembership(ctx, workspace.id, sender.userId),
+      invite.role,
+      await findPolicy(ctx, workspace.id),
+    ),
+  });
+  return { decision, workspace, member };
+}
+
 /** What a link would do for the signed-in viewer: the landing page before "Join". */
 export const preview = query({
   args: { token: v.string() },
@@ -322,21 +437,13 @@ export const preview = query({
     const viewer = await requireViewer(ctx);
     const invite = await inviteByToken(ctx, args.token);
     if (invite === null) return { status: "invalid" };
-    const workspace = await findWorkspace(ctx, invite.workspaceId);
-    if (workspace === null || workspace.deletedAt !== null) return { status: "invalid" };
+    const acceptance = await acceptanceOf(ctx, viewer, invite);
+    if (acceptance === null) return { status: "invalid" };
     const inviter = (await usersById(ctx, [invite.invitedByUserId])).get(invite.invitedByUserId);
-    const member = await findMemberRow(ctx, workspace.id, viewer.userId);
-    const state = inviteState(invite, Date.now());
-    let status: Exclude<InvitePreview["status"], "invalid">;
-    if (state !== "pending") status = state;
-    else if (member?.status === "active") status = "already_member";
-    else if (invite.email !== null && invite.email !== verifiedEmail(viewer)) {
-      status = "email_mismatch";
-    } else status = "valid";
     return {
-      status,
-      workspaceId: workspace.id,
-      workspaceName: workspace.name,
+      status: acceptance.decision === "join" ? "valid" : acceptance.decision,
+      workspaceId: acceptance.workspace.id,
+      workspaceName: acceptance.workspace.name,
       role: invite.role,
       invitedByName: inviter?.displayName ?? "Unknown",
       email: invite.email,
@@ -346,59 +453,62 @@ export const preview = query({
 });
 
 /**
- * Joins the invite's Workspace. Already an active Member: a no-op that leaves
- * the invite for whoever it was meant for. A suspended Member must be
- * unsuspended instead. A departed one comes back with the invite's role.
+ * Joins the invite's Workspace, or says why not. Already an active Member: a
+ * no-op that leaves the invite for whoever it was meant for. A suspended
+ * Member is restored by unsuspend, not by an invite. A departed one comes
+ * back with the invite's role. Joining also settles any other pending email
+ * invites to the viewer's address there.
  */
 async function acceptInvite(
   ctx: MutationCtx,
   viewer: Viewer,
   invite: Doc<"workspaceInvites">,
 ): Promise<AcceptedInvite> {
-  const now = Date.now();
-  const workspace = await findWorkspace(ctx, invite.workspaceId);
-  if (workspace === null || workspace.deletedAt !== null) {
-    throw authError("not_found", "That workspace does not exist.");
-  }
-  const member = await findMemberRow(ctx, workspace.id, viewer.userId);
-  const state = inviteState(invite, now);
-  if (
-    state === "accepted" &&
-    invite.acceptedByUserId === viewer.userId &&
-    member?.status === "active"
-  ) {
-    return { workspaceId: workspace.id, role: member.role, alreadyMember: true };
-  }
-  if (state === "revoked" || state === "accepted") {
+  const acceptance = await acceptanceOf(ctx, viewer, invite);
+  if (acceptance === null)
     throw workspaceError("invite_invalid", "This invite is no longer valid.");
+  const { decision, workspace, member } = acceptance;
+  switch (decision) {
+    case "already_member":
+      return { workspaceId: workspace.id, role: member!.role, alreadyMember: true };
+    case "accepted":
+    case "revoked":
+    case "sender_cannot_invite":
+      throw workspaceError("invite_invalid", "This invite is no longer valid.");
+    case "expired":
+      throw workspaceError("invite_expired", "This invite has expired.");
+    case "email_mismatch":
+      throw workspaceError(
+        "invite_email_mismatch",
+        "This invite is for a different email address. Sign in with that address to accept it.",
+      );
+    case "suspended":
+      throw workspaceError(
+        "suspended",
+        "You are suspended in this workspace. Ask an admin to restore you.",
+      );
+    case "join":
+      break;
   }
-  if (state === "expired") throw workspaceError("invite_expired", "This invite has expired.");
-  if (invite.email !== null && invite.email !== verifiedEmail(viewer)) {
-    throw workspaceError(
-      "invite_email_mismatch",
-      "This invite is for a different email address. Sign in with that address to accept it.",
-    );
-  }
-  if (member?.status === "active") {
-    return { workspaceId: workspace.id, role: member.role, alreadyMember: true };
-  }
-  if (member?.status === "suspended") {
-    throw workspaceError(
-      "suspended",
-      "You are suspended in this workspace. Ask an admin to restore you.",
-    );
-  }
-  await ctx.db.patch(invite._id, { acceptedByUserId: viewer.userId, acceptedAt: now });
+  const now = Date.now();
   const actor = personActor(viewer);
-  await audit(ctx, {
-    workspaceId: workspace.id,
-    actor,
-    kind: "invite.accepted",
-    targetKind: "invite",
-    targetId: invite.id,
-    at: now,
-    detail: { userId: viewer.userId, role: invite.role },
-  });
+  const email = verifiedEmail(viewer);
+  const settled =
+    email === null
+      ? [invite]
+      : [invite, ...(await pendingEmailInvites(ctx, workspace.id, email, now))];
+  for (const each of new Map(settled.map((row) => [row._id, row])).values()) {
+    await ctx.db.patch(each._id, { acceptedByUserId: viewer.userId, acceptedAt: now });
+    await audit(ctx, {
+      workspaceId: workspace.id,
+      actor,
+      kind: "invite.accepted",
+      targetKind: "invite",
+      targetId: each.id,
+      at: now,
+      detail: { userId: viewer.userId, role: each.role },
+    });
+  }
   await joinWorkspace(ctx, actor, {
     workspaceId: workspace.id,
     userId: viewer.userId,

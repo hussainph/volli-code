@@ -4,7 +4,6 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { newId } from "@volli/shared/cloud";
 
 import { api } from "../functions/_generated/api";
-import { slugify } from "../functions/lib/workspaces";
 import schema from "../functions/schema";
 
 const modules = import.meta.glob("../functions/**/*.ts");
@@ -174,9 +173,10 @@ describe("workspaces.create", () => {
     await expect(
       alice.client.mutation(api.workspaces.create, { workspaceId, name: "Side project" }),
     ).resolves.toEqual({ ...first, created: false });
+    // The same creator retrying is the same intent, whatever the name says now.
     await expect(
       alice.client.mutation(api.workspaces.create, { workspaceId, name: "Other" }),
-    ).rejects.toThrow(code("id_taken"));
+    ).resolves.toMatchObject({ created: false });
     await expect(
       bob.client.mutation(api.workspaces.create, { workspaceId, name: "Side project" }),
     ).rejects.toThrow(code("id_taken"));
@@ -207,12 +207,18 @@ describe("workspaces.create", () => {
   });
 });
 
-describe("slugify", () => {
-  test("lowercase ASCII words joined by dashes", () => {
-    expect(slugify("Acme, Inc.")).toBe("acme-inc");
-    expect(slugify("Ça va — très bien")).toBe("ca-va-tres-bien");
-    expect(slugify("日本")).toBe("workspace");
-    expect(slugify(`${"a".repeat(39)} b`)).toBe("a".repeat(39));
+describe("slugs", () => {
+  test("lowercase ASCII words joined by dashes, kept unique", async () => {
+    const t = convexTest(schema, modules);
+    const { client } = await signIn(t, person("Alice"));
+    const slugOf = async (name: string) =>
+      (await client.mutation(api.workspaces.create, { workspaceId: newId("workspace"), name }))
+        .slug;
+    expect(await slugOf("Acme, Inc.")).toBe("acme-inc");
+    expect(await slugOf("Ça va — très bien")).toBe("ca-va-tres-bien");
+    expect(await slugOf("日本")).toBe("workspace");
+    expect(await slugOf(`${"a".repeat(39)} b`)).toBe("a".repeat(39));
+    expect(await slugOf("Acme Inc")).toMatch(/^acme-inc-[0-9a-f]{6}$/);
   });
 });
 
@@ -551,7 +557,6 @@ describe("members", () => {
       actor: { kind: "person", userId: owner.userId },
       detail: { userId: member.userId, from: "member", to: "admin" },
     });
-    expect(rows.every((row) => !JSON.stringify(row.detail).includes("token"))).toBe(true);
   });
 });
 
@@ -942,7 +947,219 @@ describe("a deleted Workspace", () => {
       status: "invalid",
     });
     await expect(bob.client.mutation(api.invites.acceptLink, { token })).rejects.toThrow(
-      code("not_found"),
+      code("invite_invalid"),
+    );
+  });
+});
+
+describe("review follow-ups", () => {
+  test("listMine and invites.listMine: anyone signed in, each seeing only their own", async () => {
+    const t = convexTest(schema, modules);
+    const world = await team(t);
+    for (const position of POSITIONS) {
+      const mine = caller(world, position).query(api.workspaces.listMine, {});
+      const invites = caller(world, position).query(api.invites.listMine, {});
+      if (position === "anonymous") {
+        await expect(mine).rejects.toThrow(code("unauthenticated"));
+        await expect(invites).rejects.toThrow(code("unauthenticated"));
+        continue;
+      }
+      const ids = (await mine).map((row) => row.workspaceId);
+      const active = position === "owner" || position === "admin" || position === "member";
+      expect(ids.includes(world.workspaceId)).toBe(active);
+      await expect(invites).resolves.toEqual([]);
+    }
+  });
+
+  test("preview and accept agree, for every position", async () => {
+    const t = convexTest(schema, modules);
+    const world = await team(t);
+    const { token } = await world.owner.client.mutation(api.invites.create, {
+      workspaceId: world.workspaceId,
+      email: null,
+      role: "member",
+    });
+    const expected: Record<Exclude<Position, "anonymous">, [string, string | null]> = {
+      owner: ["already_member", null],
+      admin: ["already_member", null],
+      member: ["already_member", null],
+      suspended: ["suspended", "suspended"],
+      left: ["valid", null],
+      outsider: ["accepted", "invite_invalid"],
+    };
+    for (const [position, [status, acceptError]] of Object.entries(expected)) {
+      const client = caller(world, position as Position);
+      await expect(client.query(api.invites.preview, { token })).resolves.toMatchObject({
+        status,
+      });
+      const accepting = client.mutation(api.invites.acceptLink, { token });
+      // `left` uses the link first; the outsider then finds it spent.
+      if (acceptError === null) await expect(accepting).resolves.toBeDefined();
+      else await expect(accepting).rejects.toThrow(code(acceptError));
+    }
+    await expect(world.anonymous.query(api.invites.preview, { token })).rejects.toThrow(
+      code("unauthenticated"),
+    );
+  });
+
+  test("a member cannot take over someone else's pending invite", async () => {
+    const t = convexTest(schema, modules);
+    const world = await team(t);
+    const { workspaceId, owner, member, admin } = world;
+    const first = await owner.client.mutation(api.invites.create, {
+      workspaceId,
+      email: "zoe@example.com",
+      role: "admin",
+    });
+    await expect(
+      member.client.mutation(api.invites.create, {
+        workspaceId,
+        email: "zoe@example.com",
+        role: "member",
+      }),
+    ).rejects.toThrow(code("already_invited"));
+    // An admin may replace a member-level invite, but not an owner-level one.
+    await owner.client.mutation(api.invites.create, {
+      workspaceId,
+      email: "yan@example.com",
+      role: "owner",
+    });
+    await expect(
+      admin.client.mutation(api.invites.create, {
+        workspaceId,
+        email: "yan@example.com",
+        role: "member",
+      }),
+    ).rejects.toThrow(code("already_invited"));
+    const zoe = await signIn(t, person("Zoe"));
+    await expect(
+      zoe.client.mutation(api.invites.accept, { inviteId: first.inviteId }),
+    ).resolves.toMatchObject({ role: "admin" });
+  });
+
+  test("an invite dies with its sender's right to send it", async () => {
+    const t = convexTest(schema, modules);
+    const world = await team(t);
+    const { workspaceId, owner, admin, member } = world;
+    const fromMember = await member.client.mutation(api.invites.create, {
+      workspaceId,
+      email: null,
+      role: "member",
+    });
+    const fromAdmin = await admin.client.mutation(api.invites.create, {
+      workspaceId,
+      email: null,
+      role: "admin",
+    });
+    // The policy change stops members' invites; the demotion stops the admin's.
+    await owner.client.mutation(api.workspaces.setPolicy, { workspaceId, whoCanInvite: "admins" });
+    await owner.client.mutation(api.members.setRole, {
+      workspaceId,
+      userId: admin.userId,
+      role: "member",
+    });
+    const newcomer = await signIn(t, person("Nia"));
+    for (const { token } of [fromMember, fromAdmin]) {
+      await expect(newcomer.client.query(api.invites.preview, { token })).resolves.toMatchObject({
+        status: "sender_cannot_invite",
+      });
+      await expect(newcomer.client.mutation(api.invites.acceptLink, { token })).rejects.toThrow(
+        code("invite_invalid"),
+      );
+    }
+    // A suspended sender's invites stop too.
+    await owner.client.mutation(api.workspaces.setPolicy, { workspaceId, whoCanInvite: "members" });
+    const again = await member.client.mutation(api.invites.create, {
+      workspaceId,
+      email: null,
+      role: "member",
+    });
+    await owner.client.mutation(api.members.suspend, { workspaceId, userId: member.userId });
+    await expect(
+      newcomer.client.mutation(api.invites.acceptLink, { token: again.token }),
+    ).rejects.toThrow(code("invite_invalid"));
+  });
+
+  test("joining settles the other pending email invites to that address", async () => {
+    const t = convexTest(schema, modules);
+    const world = await team(t);
+    const { workspaceId, owner } = world;
+    const byEmail = await owner.client.mutation(api.invites.create, {
+      workspaceId,
+      email: "zoe@example.com",
+      role: "member",
+    });
+    const link = await owner.client.mutation(api.invites.create, {
+      workspaceId,
+      email: null,
+      role: "member",
+    });
+    const zoe = await signIn(t, person("Zoe"));
+    await zoe.client.mutation(api.invites.acceptLink, { token: link.token });
+    await expect(owner.client.query(api.invites.list, { workspaceId })).resolves.toEqual([]);
+    await expect(
+      zoe.client.mutation(api.invites.accept, { inviteId: byEmail.inviteId }),
+    ).resolves.toMatchObject({ alreadyMember: true });
+    const log = JSON.stringify(await t.run((ctx) => ctx.db.query("auditLog").collect()));
+    expect(log).not.toContain(byEmail.token);
+    expect(log).not.toContain(link.token);
+  });
+
+  test("create replays after a rename, but not once the creator has left", async () => {
+    const t = convexTest(schema, modules);
+    const alice = await signIn(t, person("Alice"));
+    const bob = await signIn(t, person("Bob"));
+    const workspaceId = newId("workspace");
+    await alice.client.mutation(api.workspaces.create, { workspaceId, name: "One" });
+    await alice.client.mutation(api.workspaces.rename, { workspaceId, name: "Two" });
+    await expect(
+      alice.client.mutation(api.workspaces.create, { workspaceId, name: "One" }),
+    ).resolves.toMatchObject({ created: false });
+    await addMember(alice.client, bob.client, workspaceId, "owner");
+    await alice.client.mutation(api.members.leave, { workspaceId });
+    await expect(
+      alice.client.mutation(api.workspaces.create, { workspaceId, name: "One" }),
+    ).rejects.toThrow(code("id_taken"));
+  });
+
+  test("a display name the rename rules would refuse still makes a valid personal Workspace", async () => {
+    const t = convexTest(schema, modules);
+    const { client } = await signIn(t, {
+      ...person("x"),
+      name: `\u0007${"😀".repeat(70)}`,
+    });
+    const [personal] = await client.query(api.workspaces.listMine, {});
+    expect(Array.from(personal!.name)).toHaveLength(64);
+    expect(personal!.name.startsWith("😀")).toBe(true);
+    const only = await signIn(t, { ...person("y"), name: "\u0007\u0008" });
+    // profileFromIdentity keeps the control characters, so the fallback applies.
+    const [fallback] = await only.client.query(api.workspaces.listMine, {});
+    expect(fallback!.name).toBe("My workspace");
+  });
+
+  test("unsuspend sets the tier from the current plan", async () => {
+    const t = convexTest(schema, modules);
+    const world = await team(t);
+    const { workspaceId, owner, suspended } = world;
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("workspaces")
+        .withIndex("by_uuid", (q) => q.eq("id", workspaceId))
+        .unique();
+      await ctx.db.patch(row!._id, { planKey: "team" });
+    });
+    await owner.client.mutation(api.members.unsuspend, { workspaceId, userId: suspended.userId });
+    const roster = await owner.client.query(api.members.list, { workspaceId });
+    expect(roster.find((row) => row.userId === suspended.userId)?.billingTier).toBe("team");
+  });
+
+  test("an argument is checked after the identity", async () => {
+    const t = convexTest(schema, modules);
+    await expect(
+      t.mutation(api.members.suspend, { workspaceId: newId("workspace"), userId: "nope" }),
+    ).rejects.toThrow(code("unauthenticated"));
+    await expect(t.mutation(api.invites.revoke, { inviteId: "nope" })).rejects.toThrow(
+      code("unauthenticated"),
     );
   });
 });

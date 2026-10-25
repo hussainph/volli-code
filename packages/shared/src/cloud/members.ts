@@ -2,9 +2,7 @@
  * Who may change whose membership of a Workspace (0.3), evaluated once.
  *
  * Pure decisions the backend's Member and invite mutations run, and that a
- * client may run to show only the actions that will succeed. The caller has
- * already resolved the acting person's ACTIVE membership; these rules decide
- * the rest:
+ * client may run to show only the actions that will succeed:
  *
  * - Roles rank `member` < `admin` < `owner`. An inviter grants at most their
  *   own role (a member, where `whoCanInvite` lets them invite, invites
@@ -16,16 +14,17 @@
  * - Nobody suspends or removes themselves; leaving is its own action.
  * - A departed (`left`) Member is no longer a Member: nothing applies to them
  *   until they are invited back.
+ * - An invite is only as good as its sender: it is accepted only while the
+ *   sender may still invite at its role.
  */
 
-import type { UserId } from "./ids";
-import type { MemberRole, MembershipFacts, PolicyFacts } from "./visibility";
-import { isActiveMember } from "./visibility";
+import type { UserId, WorkspaceId } from "./ids";
+import type { MemberRole, MemberStatus, MembershipFacts, PolicyFacts } from "./visibility";
+import { canManage, isActiveMember } from "./visibility";
 
 const ROLE_RANK: Record<MemberRole, number> = { member: 0, admin: 1, owner: 2 };
 
-/** Whether `role` ranks at or above `floor`. */
-export function roleAtLeast(role: MemberRole, floor: MemberRole): boolean {
+function roleAtLeast(role: MemberRole, floor: MemberRole): boolean {
   return ROLE_RANK[role] >= ROLE_RANK[floor];
 }
 
@@ -86,34 +85,98 @@ export function decideMemberChange(
 }
 
 /**
- * Whether an active Member may invite someone as `role`: the Workspace's
- * `whoCanInvite` policy lets them invite at all, and they grant at most their
- * own role.
+ * Whether the viewer may invite someone to `workspaceId` as `role`: the
+ * `invite` gate (owners, admins, and members while `whoCanInvite` is
+ * `members`), granting at most their own role.
  */
 export function canInviteAs(
   viewer: { userId: UserId },
+  workspaceId: WorkspaceId,
   membership: MembershipFacts | null,
   role: MemberRole,
   policy: Pick<PolicyFacts, "whoCanInvite">,
 ): boolean {
-  if (membership === null || !isActiveMember(viewer, membership.workspaceId, membership)) {
-    return false;
-  }
-  const mayInvite = roleAtLeast(membership.role, "admin") || policy.whoCanInvite === "members";
-  return mayInvite && roleAtLeast(membership.role, role);
+  return (
+    canManage(viewer, workspaceId, membership, "invite", policy) &&
+    roleAtLeast(membership!.role, role)
+  );
 }
 
-/**
- * Whether an active Member may revoke a pending invite: the person who sent
- * it, or any owner or admin.
- */
+/** A pending invite as the invite rules read it. */
+export interface InviteFacts {
+  workspaceId: WorkspaceId;
+  invitedByUserId: UserId;
+  role: MemberRole;
+}
+
+/** Whether the viewer may revoke a pending invite: its sender, or any owner or admin. */
 export function canRevokeInvite(
   viewer: { userId: UserId },
   membership: MembershipFacts | null,
-  invite: { invitedByUserId: UserId },
+  invite: InviteFacts,
 ): boolean {
-  if (membership === null || !isActiveMember(viewer, membership.workspaceId, membership)) {
-    return false;
-  }
+  if (!isActiveMember(viewer, invite.workspaceId, membership)) return false;
   return invite.invitedByUserId === viewer.userId || roleAtLeast(membership.role, "admin");
+}
+
+/**
+ * Whether the viewer may replace a pending invite (same address, fresh link)
+ * with one at `role`: they could revoke it, they could send the new one, and
+ * the invite they replace grants no more than they could.
+ */
+export function canReissueInvite(
+  viewer: { userId: UserId },
+  membership: MembershipFacts | null,
+  pending: InviteFacts,
+  role: MemberRole,
+  policy: Pick<PolicyFacts, "whoCanInvite">,
+): boolean {
+  return (
+    canRevokeInvite(viewer, membership, pending) &&
+    canInviteAs(viewer, pending.workspaceId, membership, role, policy) &&
+    roleAtLeast(membership!.role, pending.role)
+  );
+}
+
+/** Where an invite stands, from its own fields and the clock. */
+export type InviteState = "pending" | "accepted" | "revoked" | "expired";
+
+/** The facts that decide what accepting an invite does for one person. */
+export interface InviteAcceptanceFacts {
+  state: InviteState;
+  /** The invite was already accepted, by this person. */
+  acceptedByViewer: boolean;
+  /** An email invite whose address is not the viewer's verified email. */
+  emailMismatch: boolean;
+  /** The viewer's membership of the invite's Workspace, if any. */
+  viewerStatus: MemberStatus | null;
+  /** The sender may still invite at the invite's role (see {@link canInviteAs}). */
+  senderMayInvite: boolean;
+}
+
+/**
+ * What accepting an invite does: `join`, `already_member` (nothing to do; the
+ * invite is left for whoever it was meant for), or why it is refused. Both the
+ * link preview and acceptance read this one decision.
+ */
+export type InviteAcceptance =
+  | "join"
+  | "already_member"
+  | "accepted"
+  | "revoked"
+  | "expired"
+  | "email_mismatch"
+  | "suspended"
+  | "sender_cannot_invite";
+
+export function decideInviteAcceptance(facts: InviteAcceptanceFacts): InviteAcceptance {
+  if (facts.state === "accepted" && facts.acceptedByViewer && facts.viewerStatus === "active") {
+    return "already_member";
+  }
+  if (facts.state !== "pending") return facts.state;
+  if (facts.emailMismatch) return "email_mismatch";
+  if (facts.viewerStatus === "active") return "already_member";
+  if (facts.viewerStatus === "suspended") return "suspended";
+  if (!facts.senderMayInvite) return "sender_cannot_invite";
+  return "join";
 }

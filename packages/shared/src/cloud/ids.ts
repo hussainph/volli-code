@@ -41,7 +41,8 @@ export type IdKind =
   | "automation"
   | "export"
   | "migration"
-  | "audit";
+  | "deletionRequest"
+  | "auditEntry";
 
 declare const ID_KIND: unique symbol;
 
@@ -66,6 +67,8 @@ export type CommandId = Id<"command">;
 export type AutomationId = Id<"automation">;
 export type ExportId = Id<"export">;
 export type MigrationId = Id<"migration">;
+export type DeletionRequestId = Id<"deletionRequest">;
+export type AuditEntryId = Id<"auditEntry">;
 
 /** Whether `value` is a lowercase canonical UUID string (any version). */
 export function isUuid(value: unknown): value is string {

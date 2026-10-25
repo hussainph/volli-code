@@ -3,9 +3,12 @@ import { describe, expect, test } from "vite-plus/test";
 import type { UserId, WorkspaceId } from "./ids";
 import {
   canInviteAs,
+  canReissueInvite,
   canRevokeInvite,
+  decideInviteAcceptance,
   decideMemberChange,
-  roleAtLeast,
+  type InviteAcceptanceFacts,
+  type InviteFacts,
   type MemberChange,
 } from "./members";
 import { MEMBER_ROLES, type MemberRole, type MembershipFacts } from "./visibility";
@@ -21,16 +24,6 @@ function facts(userId: UserId, overrides: Partial<MembershipFacts> = {}): Member
 
 const as = (role: MemberRole) => facts(ACTOR, { role });
 const target = (overrides: Partial<MembershipFacts> = {}) => facts(TARGET, overrides);
-
-describe("roleAtLeast", () => {
-  test("ranks member < admin < owner", () => {
-    expect(roleAtLeast("owner", "admin")).toBe(true);
-    expect(roleAtLeast("admin", "admin")).toBe(true);
-    expect(roleAtLeast("member", "admin")).toBe(false);
-    expect(roleAtLeast("admin", "owner")).toBe(false);
-    expect(MEMBER_ROLES.every((role) => roleAtLeast(role, "member"))).toBe(true);
-  });
-});
 
 describe("decideMemberChange", () => {
   const managed: MemberChange[] = [
@@ -142,46 +135,125 @@ describe("decideMemberChange", () => {
 
 describe("canInviteAs", () => {
   const viewer = { userId: ACTOR };
-  const policy = {
-    members: { whoCanInvite: "members" as const },
-    admins: { whoCanInvite: "admins" as const },
-  };
+  const members = { whoCanInvite: "members" as const };
+  const admins = { whoCanInvite: "admins" as const };
 
   test("grants at most the inviter's own role", () => {
-    expect(canInviteAs(viewer, as("owner"), "owner", policy.admins)).toBe(true);
-    expect(canInviteAs(viewer, as("admin"), "admin", policy.admins)).toBe(true);
-    expect(canInviteAs(viewer, as("admin"), "owner", policy.admins)).toBe(false);
-    expect(canInviteAs(viewer, as("member"), "member", policy.members)).toBe(true);
-    expect(canInviteAs(viewer, as("member"), "admin", policy.members)).toBe(false);
+    expect(canInviteAs(viewer, WS, as("owner"), "owner", admins)).toBe(true);
+    expect(canInviteAs(viewer, WS, as("admin"), "admin", admins)).toBe(true);
+    expect(canInviteAs(viewer, WS, as("admin"), "owner", admins)).toBe(false);
+    expect(canInviteAs(viewer, WS, as("member"), "member", members)).toBe(true);
+    expect(canInviteAs(viewer, WS, as("member"), "admin", members)).toBe(false);
   });
 
   test("whoCanInvite = admins stops members inviting", () => {
-    expect(canInviteAs(viewer, as("member"), "member", policy.admins)).toBe(false);
+    expect(canInviteAs(viewer, WS, as("member"), "member", admins)).toBe(false);
   });
 
-  test("needs the viewer's own active membership", () => {
-    expect(canInviteAs(viewer, null, "member", policy.members)).toBe(false);
-    expect(
-      canInviteAs(viewer, facts(ACTOR, { status: "suspended" }), "member", policy.members),
-    ).toBe(false);
-    expect(canInviteAs(viewer, target(), "member", policy.members)).toBe(false);
+  test("needs the viewer's own active membership of that Workspace", () => {
+    expect(canInviteAs(viewer, WS, null, "member", members)).toBe(false);
+    expect(canInviteAs(viewer, WS, facts(ACTOR, { status: "suspended" }), "member", members)).toBe(
+      false,
+    );
+    expect(canInviteAs(viewer, WS, target(), "member", members)).toBe(false);
+    expect(canInviteAs(viewer, OTHER_WS, as("owner"), "member", members)).toBe(false);
   });
 });
 
 describe("canRevokeInvite", () => {
   const viewer = { userId: ACTOR };
-
-  test("the inviter, or an owner or admin", () => {
-    expect(canRevokeInvite(viewer, as("member"), { invitedByUserId: ACTOR })).toBe(true);
-    expect(canRevokeInvite(viewer, as("member"), { invitedByUserId: TARGET })).toBe(false);
-    expect(canRevokeInvite(viewer, as("admin"), { invitedByUserId: TARGET })).toBe(true);
-    expect(canRevokeInvite(viewer, as("owner"), { invitedByUserId: TARGET })).toBe(true);
+  const sentBy = (userId: UserId): InviteFacts => ({
+    workspaceId: WS,
+    invitedByUserId: userId,
+    role: "member",
   });
 
-  test("needs the viewer's own active membership", () => {
-    expect(canRevokeInvite(viewer, null, { invitedByUserId: ACTOR })).toBe(false);
+  test("the sender, or an owner or admin", () => {
+    expect(canRevokeInvite(viewer, as("member"), sentBy(ACTOR))).toBe(true);
+    expect(canRevokeInvite(viewer, as("member"), sentBy(TARGET))).toBe(false);
+    expect(canRevokeInvite(viewer, as("admin"), sentBy(TARGET))).toBe(true);
+    expect(canRevokeInvite(viewer, as("owner"), sentBy(TARGET))).toBe(true);
+  });
+
+  test("needs the viewer's own active membership of the invite's Workspace", () => {
+    expect(canRevokeInvite(viewer, null, sentBy(ACTOR))).toBe(false);
+    expect(canRevokeInvite(viewer, facts(ACTOR, { status: "suspended" }), sentBy(ACTOR))).toBe(
+      false,
+    );
+    expect(canRevokeInvite(viewer, as("owner"), { ...sentBy(TARGET), workspaceId: OTHER_WS })).toBe(
+      false,
+    );
+  });
+});
+
+describe("canReissueInvite", () => {
+  const viewer = { userId: ACTOR };
+  const members = { whoCanInvite: "members" as const };
+  const pending = (role: MemberRole, invitedByUserId: UserId = TARGET): InviteFacts => ({
+    workspaceId: WS,
+    invitedByUserId,
+    role,
+  });
+
+  test("a member cannot take over someone else's invite", () => {
+    expect(canReissueInvite(viewer, as("member"), pending("member"), "member", members)).toBe(
+      false,
+    );
     expect(
-      canRevokeInvite(viewer, facts(ACTOR, { status: "suspended" }), { invitedByUserId: ACTOR }),
-    ).toBe(false);
+      canReissueInvite(viewer, as("member"), pending("member", ACTOR), "member", members),
+    ).toBe(true);
+  });
+
+  test("nobody replaces an invite that grants more than they could", () => {
+    expect(canReissueInvite(viewer, as("admin"), pending("owner"), "member", members)).toBe(false);
+    expect(canReissueInvite(viewer, as("admin"), pending("admin"), "member", members)).toBe(true);
+    expect(canReissueInvite(viewer, as("owner"), pending("owner"), "owner", members)).toBe(true);
+  });
+
+  test("the new role is still capped by the viewer's own", () => {
+    expect(canReissueInvite(viewer, as("admin"), pending("member"), "owner", members)).toBe(false);
+  });
+});
+
+describe("decideInviteAcceptance", () => {
+  const base: InviteAcceptanceFacts = {
+    state: "pending",
+    acceptedByViewer: false,
+    emailMismatch: false,
+    viewerStatus: null,
+    senderMayInvite: true,
+  };
+  const decide = (overrides: Partial<InviteAcceptanceFacts>) =>
+    decideInviteAcceptance({ ...base, ...overrides });
+
+  test("a pending invite joins a newcomer or a departed Member", () => {
+    expect(decide({})).toBe("join");
+    expect(decide({ viewerStatus: "left" })).toBe("join");
+  });
+
+  test("accepting your own accepted invite again is a no-op", () => {
+    expect(decide({ state: "accepted", acceptedByViewer: true, viewerStatus: "active" })).toBe(
+      "already_member",
+    );
+    expect(decide({ state: "accepted", acceptedByViewer: true, viewerStatus: "left" })).toBe(
+      "accepted",
+    );
+    expect(decide({ state: "accepted" })).toBe("accepted");
+  });
+
+  test("a revoked or expired invite is refused, whoever asks", () => {
+    expect(decide({ state: "revoked", viewerStatus: "active" })).toBe("revoked");
+    expect(decide({ state: "expired" })).toBe("expired");
+  });
+
+  test("the address is checked before membership", () => {
+    expect(decide({ emailMismatch: true, viewerStatus: "active" })).toBe("email_mismatch");
+    expect(decide({ viewerStatus: "active" })).toBe("already_member");
+    expect(decide({ viewerStatus: "suspended" })).toBe("suspended");
+  });
+
+  test("an invite dies with its sender's right to send it", () => {
+    expect(decide({ senderMayInvite: false })).toBe("sender_cannot_invite");
+    expect(decide({ senderMayInvite: false, viewerStatus: "active" })).toBe("already_member");
   });
 });

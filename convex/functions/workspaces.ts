@@ -3,10 +3,10 @@
  * (beyond the personal one every account gets at sign-up), its name and its
  * admin policy.
  *
- * Linear model: there are no Workspace types. A Workspace is a set of Members
- * with roles, one plan and one policy. The two 0.3 policies (Amendment 16) are
- * `shareAll` ("make everything shared") and `whoCanInvite` (default
- * `members`); owners and admins change them, every Member reads them.
+ * There are no Workspace types. A Workspace is a set of Members with roles,
+ * one plan and one policy. The policy has two settings: `shareAll` ("make
+ * everything shared") and `whoCanInvite` (default `members`). Owners and
+ * admins change them; every Member reads them.
  */
 
 import { v } from "convex/values";
@@ -22,8 +22,8 @@ import { mutation, query } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel.js";
 import { requireManage, requireMember, requireViewer } from "./lib/auth";
 import { literals } from "./lib/validators";
+import { audit } from "./lib/audit";
 import {
-  audit,
   createWorkspace,
   findMemberRow,
   findWorkspace,
@@ -109,8 +109,9 @@ export const get = query({
 
 /**
  * Creates a Workspace with the viewer as its owner. The client mints the id;
- * repeating the same create is a no-op that returns the same Workspace, and
- * any other row under that id is `id_taken`.
+ * repeating the create while still a Member is a no-op that returns the same
+ * Workspace (whatever it has been renamed to since), and any other use of
+ * that id is `id_taken`.
  */
 export const create = mutation({
   args: { workspaceId: v.string(), name: v.string() },
@@ -120,16 +121,17 @@ export const create = mutation({
     const name = workspaceName(args.name);
     const existing = await findWorkspace(ctx, workspaceId);
     if (existing !== null) {
+      const member = await findMemberRow(ctx, workspaceId, viewer.userId);
       if (
         existing.createdByUserId === viewer.userId &&
-        existing.name === name &&
-        existing.deletedAt === null
+        existing.deletedAt === null &&
+        member?.status === "active"
       ) {
         return { workspaceId, slug: existing.slug, created: false };
       }
       throw workspaceError("id_taken", "That workspace id is already in use.");
     }
-    const workspace = await createWorkspace(ctx, viewer, { workspaceId, name, personal: false });
+    const workspace = await createWorkspace(ctx, viewer, { workspaceId, name, via: "create" });
     return { workspaceId, slug: workspace.slug, created: true };
   },
 });

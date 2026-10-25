@@ -6,7 +6,8 @@
  * keeps an active owner, and nobody suspends or removes themselves. A
  * suspended Member is not a seat and sees nothing in the Workspace; a removed
  * or departed one is `left`. Either way their rows stay attributed to them,
- * and a departed Member can be invited back.
+ * and a departed Member can be invited back. A suspended Member cannot leave
+ * (they can do nothing in the Workspace); an owner or admin removes them.
  */
 
 import { v } from "convex/values";
@@ -17,18 +18,15 @@ import {
   type MemberChange,
   type MemberRole,
   type MemberStatus,
-  type MembershipFacts,
-  type UserId,
-  type WorkspaceId,
 } from "@volli/shared/cloud";
 
 import { mutation, query, type MutationCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel.js";
-import { authError, requireManage, requireMember } from "./lib/auth";
+import { audit, type AuditKind, type AuditValue } from "./lib/audit";
+import { authError, membershipFacts, requireManage, requireMember } from "./lib/auth";
 import { literals } from "./lib/validators";
 import {
   activeOwnerCount,
-  audit,
   findMemberRow,
   idArg,
   personActor,
@@ -94,36 +92,35 @@ export const list = query({
   },
 });
 
-function factsOf(row: Doc<"workspaceMembers">): MembershipFacts {
-  return {
-    workspaceId: row.workspaceId as WorkspaceId,
-    userId: row.userId as UserId,
-    role: row.role,
-    status: row.status,
-  };
-}
-
-type ChangeResult = { userId: string; role: MemberRole; status: MemberStatus; changed: boolean };
+export type MemberChangeResult = {
+  userId: string;
+  role: MemberRole;
+  status: MemberStatus;
+  /** False when the Member was already in the state asked for. */
+  changed: boolean;
+};
 
 /**
  * Runs one Member change: the caller's access, the shared decision, the
- * write, the seat recount and the audit row, in one transaction.
+ * write, the seat recount and the audit row, in one transaction. The target
+ * is `null` (the viewer) for leave; otherwise a user id, checked after the caller's access.
  */
 async function applyChange(
   ctx: MutationCtx,
   workspaceId: string,
-  targetUserId: string,
+  targetUserId: string | null,
   change: MemberChange,
-): Promise<ChangeResult> {
+): Promise<MemberChangeResult> {
   const access =
     change.kind === "leave"
       ? await requireMember(ctx, workspaceId)
       : await requireManage(ctx, workspaceId, "members");
   const { viewer, workspace, membership } = access;
-  const target = await findMemberRow(ctx, workspace.id, targetUserId);
+  const userId = targetUserId === null ? viewer.userId : idArg("user", targetUserId);
+  const target = await findMemberRow(ctx, workspace.id, userId);
   const refusal = decideMemberChange(
     membership,
-    target === null ? null : factsOf(target),
+    target === null ? null : membershipFacts(target),
     change,
     await activeOwnerCount(ctx, workspace.id),
   );
@@ -142,92 +139,100 @@ async function applyChange(
   }
   const row = target!;
   const now = Date.now();
-  let patch: Partial<Doc<"workspaceMembers">> | null = null;
-  let kind = "";
-  let detail: Record<string, unknown> = { userId: row.userId };
+  let write: {
+    patch: Partial<Doc<"workspaceMembers">>;
+    kind: AuditKind;
+    detail: { [key: string]: AuditValue };
+  } | null = null;
   switch (change.kind) {
     case "set_role":
       if (row.role !== change.role) {
-        patch = { role: change.role };
-        kind = "member.role_changed";
-        detail = { ...detail, from: row.role, to: change.role };
+        write = {
+          patch: { role: change.role },
+          kind: "member.role_changed",
+          detail: { from: row.role, to: change.role },
+        };
       }
       break;
     case "suspend":
       if (row.status === "active") {
-        patch = { status: "suspended", suspendedAt: now };
-        kind = "member.suspended";
+        write = {
+          patch: { status: "suspended", suspendedAt: now },
+          kind: "member.suspended",
+          detail: {},
+        };
       }
       break;
     case "unsuspend":
       if (row.status === "suspended") {
-        patch = { status: "active", suspendedAt: null };
-        kind = "member.unsuspended";
+        write = {
+          // The tier follows the plan, which may have changed while they were away.
+          patch: { status: "active", suspendedAt: null, billingTier: workspace.planKey },
+          kind: "member.unsuspended",
+          detail: {},
+        };
       }
       break;
     case "remove":
     case "leave":
-      patch = { status: "left", leftAt: now, suspendedAt: null };
-      kind = change.kind === "remove" ? "member.removed" : "member.left";
-      detail = { ...detail, role: row.role, wasStatus: row.status };
+      write = {
+        patch: { status: "left", leftAt: now, suspendedAt: null },
+        kind: change.kind === "remove" ? "member.removed" : "member.left",
+        detail: { role: row.role, wasStatus: row.status },
+      };
       break;
   }
-  if (patch === null) {
+  if (write === null) {
     return { userId: row.userId, role: row.role, status: row.status, changed: false };
   }
-  await ctx.db.patch(row._id, patch);
+  await ctx.db.patch(row._id, write.patch);
   await syncSeats(ctx, workspace.id);
   await audit(ctx, {
     workspaceId: workspace.id,
     actor: personActor(viewer),
-    kind,
+    kind: write.kind,
     targetKind: "member",
     targetId: row.id,
     at: now,
-    detail,
+    detail: { userId: row.userId, ...write.detail },
   });
   const after = (await ctx.db.get(row._id))!;
   return { userId: after.userId, role: after.role, status: after.status, changed: true };
 }
 
-const target = { workspaceId: v.string(), userId: v.string() };
+const memberArgs = { workspaceId: v.string(), userId: v.string() };
 
 /** Changes a Member's role (owners and admins; only an owner grants or takes away `owner`). */
 export const setRole = mutation({
-  args: { ...target, role: literals(MEMBER_ROLES) },
-  handler: async (ctx, args) =>
-    await applyChange(ctx, args.workspaceId, idArg("user", args.userId), {
-      kind: "set_role",
-      role: args.role,
-    }),
+  args: { ...memberArgs, role: literals(MEMBER_ROLES) },
+  handler: async (ctx, args): Promise<MemberChangeResult> =>
+    await applyChange(ctx, args.workspaceId, args.userId, { kind: "set_role", role: args.role }),
 });
 
 /** Suspends a Member: no access, not billed, history still theirs. */
 export const suspend = mutation({
-  args: target,
-  handler: async (ctx, args) =>
-    await applyChange(ctx, args.workspaceId, idArg("user", args.userId), { kind: "suspend" }),
+  args: memberArgs,
+  handler: async (ctx, args): Promise<MemberChangeResult> =>
+    await applyChange(ctx, args.workspaceId, args.userId, { kind: "suspend" }),
 });
 
 /** Gives a suspended Member their access (and seat) back. */
 export const unsuspend = mutation({
-  args: target,
-  handler: async (ctx, args) =>
-    await applyChange(ctx, args.workspaceId, idArg("user", args.userId), { kind: "unsuspend" }),
+  args: memberArgs,
+  handler: async (ctx, args): Promise<MemberChangeResult> =>
+    await applyChange(ctx, args.workspaceId, args.userId, { kind: "unsuspend" }),
 });
 
 /** Removes a Member (active or suspended). They can be invited back later. */
 export const remove = mutation({
-  args: target,
-  handler: async (ctx, args) =>
-    await applyChange(ctx, args.workspaceId, idArg("user", args.userId), { kind: "remove" }),
+  args: memberArgs,
+  handler: async (ctx, args): Promise<MemberChangeResult> =>
+    await applyChange(ctx, args.workspaceId, args.userId, { kind: "remove" }),
 });
 
 /** The viewer leaves the Workspace. The last active owner hands the role on first. */
 export const leave = mutation({
   args: { workspaceId: v.string() },
-  handler: async (ctx, args) => {
-    const { viewer } = await requireMember(ctx, args.workspaceId);
-    return await applyChange(ctx, args.workspaceId, viewer.userId, { kind: "leave" });
-  },
+  handler: async (ctx, args): Promise<MemberChangeResult> =>
+    await applyChange(ctx, args.workspaceId, null, { kind: "leave" }),
 });

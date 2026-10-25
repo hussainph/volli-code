@@ -196,7 +196,7 @@ export async function ensureViewer(
 
 // ── membership ────────────────────────────────────────────────────────────
 
-function membershipFacts(member: Doc<"workspaceMembers">): MembershipFacts {
+export function membershipFacts(member: Doc<"workspaceMembers">): MembershipFacts {
   return {
     workspaceId: member.workspaceId as WorkspaceId,
     userId: member.userId as UserId,
