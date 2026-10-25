@@ -1813,6 +1813,7 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
           identity: { worktreePath, branch: "volli/VC-1-a-ticket", baseBranch: "main" },
           created: true,
           restamped: true,
+          setupPending: false,
         },
       };
     });
@@ -1977,6 +1978,7 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
           },
           created: true,
           restamped: true,
+          setupPending: false,
         },
       };
     });
@@ -2022,6 +2024,7 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
         identity: { worktreePath: null, branch: "volli/VC-1", baseBranch: "main" },
         created: false,
         restamped: false,
+        setupPending: false,
       },
     });
 
@@ -4093,6 +4096,7 @@ describe("volli:worktree-recreate", () => {
         },
         created: true,
         restamped: true,
+        setupPending: false,
       },
     });
 

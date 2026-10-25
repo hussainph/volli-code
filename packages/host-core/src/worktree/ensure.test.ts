@@ -12,6 +12,7 @@ import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-hel
 import { getTicketRow, insertTicket } from "../db/tickets-repo";
 import { updateTicketFieldsCommand } from "../ticket-commands";
 import { ensure } from "./ensure";
+import { claimFirstRunSetup } from "./first-run";
 import { GitError, runGitCapturing, runGitCapturingAsync } from "./git";
 import { resetPhasesForTest } from "./phase";
 import { readWorktreeStatus } from "./read";
@@ -372,6 +373,176 @@ describe("ensure — success", () => {
       expect(a.value.created).toBe(true);
       expect(b.value.created).toBe(false);
     }
+  });
+});
+
+describe("ensure — first-run steps are a durable fact of the worktree (VC-835)", () => {
+  /** Seeds the ticket in a project whose setup command is `setupCommand`. */
+  function seedWithSetup(projectPath: string, setupCommand: string | null) {
+    const project = testProject({
+      id: "proj-abcdef12",
+      path: projectPath,
+      baseBranch: "main",
+      setupCommand,
+    });
+    insertProject(ctx.db, project);
+    insertTicket(
+      ctx.db,
+      testTicket(project.id, {
+        id: "ticket-1",
+        ticketNumber: 12,
+        title: "MCP server",
+        status: "doing",
+      }),
+    );
+  }
+
+  /**
+   * A git whose `worktree add` leaves `atAdd(path)` behind, and whose listing
+   * reports that path registered once it was added — what a real add leaves
+   * for the Retry to reconcile to `already-present`.
+   */
+  function addingGit(projectPath: string, atAdd: (path: string) => void) {
+    let added: string | null = null;
+    return scriptedGit((args) => {
+      if (args[0] === "worktree" && args[1] === "list") {
+        const main = `worktree ${projectPath}\nHEAD abc\nbranch refs/heads/main\n`;
+        return added === null
+          ? main
+          : `${main}worktree ${added}\nHEAD def\nbranch refs/heads/${BRANCH}\n`;
+      }
+      if (args[0] === "rev-parse" && args[1] === "--verify") {
+        if (args[3] === "refs/heads/main" || added !== null) return "sha\n";
+        throw new Error("no such ref");
+      }
+      if (args[0] === "worktree" && args[1] === "add") {
+        added = args[4]!;
+        atAdd(added);
+      }
+      return "";
+    });
+  }
+
+  it("owes the setup run on a creation whose project has a setup command", async () => {
+    const projectPath = tempDir("proj");
+    seedWithSetup(projectPath, "touch .setup-ran");
+    const home = tempDir("home");
+    const { gitAsync } = addingGit(projectPath, (path) => mkdirSync(path, { recursive: true }));
+
+    const result = await ensure({ db: ctx.db, gitAsync, home, blobsRoot: "unused" }, "ticket-1");
+
+    expect(result).toMatchObject({ ok: true, value: { created: true, setupPending: true } });
+  });
+
+  it("owes no setup run when the project's command is blank", async () => {
+    const projectPath = tempDir("proj");
+    seedWithSetup(projectPath, "  ");
+    const home = tempDir("home");
+    const { gitAsync } = addingGit(projectPath, (path) => mkdirSync(path, { recursive: true }));
+
+    const result = await ensure({ db: ctx.db, gitAsync, home, blobsRoot: "unused" }, "ticket-1");
+
+    expect(result).toMatchObject({ ok: true, value: { created: true, setupPending: false } });
+  });
+
+  it("still owes both steps after a `worktree add` that failed past leaving the checkout registered", async () => {
+    // The add outlived its deadline but git had already registered the
+    // worktree (VC-785's state): the pending record was written before it.
+    const projectPath = tempDir("proj");
+    writeFileSync(join(projectPath, ".env"), "SECRET=1");
+    seedWithSetup(projectPath, "touch .setup-ran");
+    const home = tempDir("home");
+    let worktreePath = "";
+    let timedOut = false;
+    const { gitAsync } = addingGit(projectPath, (path) => {
+      worktreePath = path;
+      mkdirSync(path, { recursive: true });
+      if (!timedOut) {
+        timedOut = true;
+        throw new GitError("Git command timed out after 120000ms.", "", ["worktree", "add"], true);
+      }
+    });
+    const deps = { db: ctx.db, gitAsync, home, blobsRoot: "unused" };
+
+    expect((await ensure(deps, "ticket-1")).ok).toBe(false);
+    const retry = await ensure(deps, "ticket-1");
+
+    expect(retry).toMatchObject({ ok: true, value: { created: false, setupPending: true } });
+    expect(readFileSync(join(worktreePath, ".env"), "utf8")).toBe("SECRET=1");
+  });
+
+  it("runs the copy and still owes setup on the Retry after a first start's copy failed", async () => {
+    const projectPath = tempDir("proj");
+    writeFileSync(join(projectPath, ".env"), "SECRET=1");
+    seedWithSetup(projectPath, "touch .setup-ran");
+    const home = tempDir("home");
+    // The add "succeeds" but leaves a FILE where the checkout should be, so
+    // the copy step cannot write into it — a registered worktree, a failed
+    // copy: a Retry reconciles to `already-present` and must still run both
+    // creation-only steps.
+    let worktreePath = "";
+    const { gitAsync, countMatching } = addingGit(projectPath, (path) => {
+      worktreePath = path;
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, "");
+    });
+    const deps = { db: ctx.db, gitAsync, home, blobsRoot: "unused" };
+
+    const first = await ensure(deps, "ticket-1");
+    expect(first.ok).toBe(false);
+    expect(
+      listTicketEvents(ctx.db, "ticket-1").find((e) => e.payload.kind === "worktree_failed")
+        ?.payload,
+    ).toMatchObject({ stage: "copy" });
+
+    // The checkout is repaired; the person presses Retry.
+    rmSync(worktreePath);
+    mkdirSync(worktreePath);
+    const retry = await ensure(deps, "ticket-1");
+
+    expect(countMatching(["worktree", "add"])).toBe(1);
+    expect(retry).toMatchObject({ ok: true, value: { created: false, setupPending: true } });
+    expect(readFileSync(join(worktreePath, ".env"), "utf8")).toBe("SECRET=1");
+
+    // The copy is done with now: a newer `.env` in the Main checkout stays put.
+    writeFileSync(join(projectPath, ".env.local"), "LATER=1");
+    const reuse = await ensure(deps, "ticket-1");
+    expect(reuse).toMatchObject({ ok: true, value: { setupPending: true } });
+    expect(existsSync(join(worktreePath, ".env.local"))).toBe(false);
+
+    // Setup stays owed until a door claims it, and is owed to that door alone.
+    expect(claimFirstRunSetup({ home }, worktreePath)).toBe(true);
+    expect(claimFirstRunSetup({ home }, worktreePath)).toBe(false);
+    const after = await ensure(deps, "ticket-1");
+    expect(after).toMatchObject({ ok: true, value: { setupPending: false } });
+  });
+
+  it("owes nothing on a worktree no pending record names — every worktree an older build made", async () => {
+    const projectPath = tempDir("proj");
+    seedWithSetup(projectPath, "touch .setup-ran");
+    const home = tempDir("home");
+    const worktreePath = tempDir("wt");
+    writeFileSync(join(projectPath, ".env"), "SECRET=1");
+    updateTicketFieldsCommand(
+      ctx.db,
+      { ticketId: "ticket-1", worktreePath, branch: BRANCH, baseBranch: "main" },
+      { now: 0, actor: { kind: "automation" } },
+    );
+    const { gitAsync } = scriptedGit((args) => {
+      if (args[0] === "worktree" && args[1] === "list") {
+        return (
+          `worktree ${projectPath}\nHEAD abc\nbranch refs/heads/main\n` +
+          `worktree ${worktreePath}\nHEAD def\nbranch refs/heads/${BRANCH}\n`
+        );
+      }
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "sha\n";
+      return "";
+    });
+
+    const result = await ensure({ db: ctx.db, gitAsync, home, blobsRoot: "unused" }, "ticket-1");
+
+    expect(result).toMatchObject({ ok: true, value: { created: false, setupPending: false } });
+    expect(existsSync(join(worktreePath, ".env"))).toBe(false);
   });
 });
 
@@ -745,6 +916,7 @@ describe("ensure — the ticket's worktree on another branch, against a real rep
         // identity did change, so the rail's Branch has to be told.
         created: false,
         restamped: true,
+        setupPending: false,
         identity: { worktreePath, branch: "volli/VC-12-narrower-fix", baseBranch: "main" },
       },
     });
@@ -789,6 +961,7 @@ describe("ensure — the ticket's worktree on another branch, against a real rep
       value: {
         created: false,
         restamped: true,
+        setupPending: false,
         identity: { worktreePath, branch: "volli/VC-12c-stable-venue", baseBranch: "main" },
       },
     });

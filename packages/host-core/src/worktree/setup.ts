@@ -1,7 +1,9 @@
 /**
- * Setup-command sentinel helpers (worktree-support §6). The setup command runs
- * NOT here but in the PTY after spawn (a later wiring stage), typed into the
- * session terminal — never the pane's primary process. These two
+ * Setup-command sentinel helpers (worktree-support §6). When a terminal is the
+ * door that runs a worktree's setup command, it runs NOT here but in the PTY
+ * after spawn, typed into the session terminal — never the pane's primary
+ * process. (A structured Session has no terminal; it runs the command as a
+ * child process instead, `setup-exec.ts`.) These two
  * pure helpers are the contract that stage consumes: one builds the wrapped
  * line to type, the other scans accumulated terminal output for its completion
  * marker. Kept pure and side-effect-free so both ends unit-test trivially.
