@@ -31,9 +31,9 @@
  *
  * Wiring: {@link startStreamChunks} is the whole of it — one chunker per
  * runner over the backend link and the Session runtime, fed by the link's
- * `sessionViewers:watched` subscription. The runner composition calls it
- * beside `startRunnerSync` (see the cluster entry); nothing composes the
- * runner's cloud sync yet.
+ * `sessionViewers:watched` subscription. `cloud-store/index.ts` starts it
+ * beside `startRunnerSync` once both the runtime and connection are bound,
+ * and stops it before closing that connection.
  */
 import {
   applyTranscriptDelta,

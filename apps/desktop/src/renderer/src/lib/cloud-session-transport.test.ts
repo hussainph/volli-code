@@ -1222,6 +1222,42 @@ function viewerOf(port: FakePort) {
 }
 
 describe("createCloudViewer", () => {
+  it("retries a runner-originated birth promptly, bounds that wait, then uses the lease cadence", async () => {
+    const port = new FakePort();
+    const { clock, warnings, show } = viewerOf(port);
+    const absent = Object.assign(new Error("not yet accepted"), { data: { code: "not_found" } });
+    port.open = async () => {
+      throw absent;
+    };
+    port.beat = async () => ({ open: false });
+    const hide = show();
+    await settle();
+    expect(clock.pending()).toEqual([500]);
+    expect(warnings).toEqual([]);
+    // An absent/private Session does not get an unbounded fast retry loop.
+    for (let retry = 0; retry < 30; retry += 1) {
+      clock.fire();
+      await settle();
+    }
+    expect(clock.pending()).toEqual([20_000]);
+    expect(warnings).toHaveLength(1);
+    port.open = async () => ({ heartbeatMs: 5_000 });
+    clock.fire();
+    await settle();
+    expect(clock.pending()).toEqual([5_000]);
+    // Once opened, losing access never re-enters the fast arrival window.
+    port.beat = async () => {
+      throw absent;
+    };
+    clock.fire();
+    await settle();
+    expect(clock.pending()).toEqual([20_000]);
+    expect(warnings).toHaveLength(2);
+    hide();
+    await settle();
+    expect(clock.pending()).toEqual([]);
+  });
+
   it("opens, renews on the lease's heartbeat, and closes once", async () => {
     const port = new FakePort();
     const { clock, warnings, show } = viewerOf(port);

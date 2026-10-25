@@ -4,14 +4,18 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
 import {
   PACKED_STAGING_TTL_MS,
+  RUNNER_TOKEN_ISSUER,
   artifactSpillKey,
   newId,
   piLogSegmentKey,
+  runnerSubject,
   transcriptPackKey,
+  type RunnerId,
 } from "@volli/shared/cloud";
 
 import { api, internal } from "../functions/_generated/api";
 import type { DataModel } from "../functions/_generated/dataModel.js";
+import { seedTestRunner } from "../functions/lib/testWorld";
 import schema from "../functions/schema";
 
 const modules = import.meta.glob("../functions/**/*.ts");
@@ -34,13 +38,28 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-/** Alice owns a claimed Session; Bob is a fellow member who does not. */
+/** A runner token for `runnerId`, minted for credential generation `gen` when given. */
+function asRunner(t: T, runnerId: string, gen?: number) {
+  return t.withIdentity({
+    issuer: RUNNER_TOKEN_ISSUER,
+    subject: runnerSubject(runnerId as RunnerId),
+    ...(gen === undefined ? {} : { gen }),
+  });
+}
+
+/**
+ * Alice owns a Session claimed by her runner `runnerId`; `spareRunnerId` is
+ * another of hers. Bob is a fellow member who does not own it, with a runner
+ * of his own.
+ */
 async function world(options: { acceptedThrough?: number; intake?: boolean } = {}) {
   const t = convexTest(schema, modules);
   const alice = (await t.withIdentity(ALICE).mutation(api.accounts.ensureViewer, {})).userId;
   const bob = (await t.withIdentity(BOB).mutation(api.accounts.ensureViewer, {})).userId;
-  const runnerId = newId("runner");
-  const ids = await t.run(async (ctx: Ctx) => {
+  const { runnerId, ...ids } = await t.run(async (ctx: Ctx) => {
+    const claimantId = await seedTestRunner(ctx, alice, "Alice's Mac");
+    const spareRunnerId = await seedTestRunner(ctx, alice, "Alice's spare");
+    const bobRunnerId = await seedTestRunner(ctx, bob, "Bob's Mac");
     const workspaceId = newId("workspace");
     await ctx.db.insert("workspaces", {
       id: workspaceId,
@@ -109,7 +128,7 @@ async function world(options: { acceptedThrough?: number; intake?: boolean } = {
       stopped: null,
       needsUser: false,
       attentionCount: 0,
-      placeRunnerId: runnerId,
+      placeRunnerId: claimantId,
       model: null,
       usageTotals: {},
       createdAt: 0,
@@ -120,17 +139,33 @@ async function world(options: { acceptedThrough?: number; intake?: boolean } = {
     if (options.intake !== false) {
       await ctx.db.insert("sessionIntake", {
         sessionId,
-        claim: { runnerId, generation: 3 },
+        claim: { runnerId: claimantId, generation: 3 },
         acceptedThrough: options.acceptedThrough ?? 100,
         lastEventId: null,
         lastAcceptedAt: null,
         state: "active",
       });
     }
-    return { projectId, sessionId };
+    return {
+      projectId,
+      sessionId,
+      workspaceId,
+      runnerId: claimantId,
+      spareRunnerId,
+      bobRunnerId,
+    };
   });
   const claim = { runnerId, generation: 3 };
-  return { t, asAlice: t.withIdentity(ALICE), asBob: t.withIdentity(BOB), claim, ...ids };
+  return {
+    t,
+    alice,
+    asAlice: t.withIdentity(ALICE),
+    asBob: t.withIdentity(BOB),
+    asClaimant: asRunner(t, runnerId),
+    claim,
+    runnerId,
+    ...ids,
+  };
 }
 
 type World = Awaited<ReturnType<typeof world>>;
@@ -214,6 +249,226 @@ describe("the producer fence", () => {
     await expect(
       v.asAlice.mutation(api.transcripts.commitSegment, segment(v, 2, 2)),
     ).rejects.toThrow(code("not_claimed"));
+  });
+});
+
+const headArgs = (w: World, claim = w.claim) => ({
+  sessionId: w.sessionId,
+  claim,
+  piFileIds: ["2026-10-25T01-02-03-004Z_abc"],
+});
+
+const stageArgs = (w: World, claim = w.claim) => ({
+  sessionId: w.sessionId,
+  claim,
+  artifacts: [staged("a", 2)],
+});
+
+describe("the producer fence, for the runner itself", () => {
+  test("the claimed runner stages, commits and reads its head back with its own token", async () => {
+    const w = await world({ acceptedThrough: 10 });
+    await expect(
+      w.asClaimant.mutation(api.transcripts.stageArtifacts, stageArgs(w)),
+    ).resolves.toEqual({ staged: 1, skipped: 0 });
+    await expect(
+      w.asClaimant.mutation(
+        api.transcripts.commitSegment,
+        segment(w, 1, 4, { artifactCount: 1, digests: [digest("a")] }),
+      ),
+    ).resolves.toEqual({ status: "committed" });
+    const piFileId = "2026-10-25T01-02-03-004Z_abc";
+    await expect(
+      w.asClaimant.mutation(api.transcripts.commitPiLogSegment, {
+        sessionId: w.sessionId,
+        claim: w.claim,
+        attachmentId: "att-1",
+        piFileId,
+        startOffset: 0,
+        endOffset: 40,
+        key: piLogSegmentKey({
+          projectId: w.projectId,
+          sessionId: w.sessionId,
+          attachmentId: "att-1",
+          piFileId,
+          offset: 0,
+        }),
+        bytes: 40,
+        sha256: hex("3"),
+      }),
+    ).resolves.toEqual({ status: "committed" });
+    await expect(w.asClaimant.query(api.transcripts.head, headArgs(w))).resolves.toEqual({
+      transcriptThrough: 4,
+      piLogs: { [piFileId]: 40 },
+    });
+    expect((await stagingRows(w.t)).map((r) => [r.digest, r.uploadedBy])).toEqual([
+      [digest("a"), "runner"],
+    ]);
+  });
+
+  test("a runner write ends its previous credential's grace; a head read writes nothing", async () => {
+    const w = await world();
+    await w.t.run(async (ctx: Ctx) => {
+      await ctx.db.insert("runnerCredentials", {
+        runnerId: w.runnerId,
+        currentHash: "current",
+        previousHash: "previous",
+        currentFirstUsedAt: null,
+        generation: 2,
+        rotatedAt: 0,
+        lastUsedAt: 0,
+        lastUsedIp: null,
+      });
+    });
+    const firstUsed = () =>
+      w.t.run(
+        async (ctx: Ctx) =>
+          (await ctx.db.query("runnerCredentials").first())?.currentFirstUsedAt ?? null,
+      );
+    const token = asRunner(w.t, w.runnerId, 2);
+    await token.query(api.transcripts.head, headArgs(w));
+    expect(await firstUsed()).toBeNull();
+    await token.mutation(api.transcripts.stageArtifacts, stageArgs(w));
+    expect(await firstUsed()).not.toBeNull();
+  });
+
+  test("refuses a runner that is not the claim's, or a claim that moved on", async () => {
+    const w = await world();
+    const spare = asRunner(w.t, w.spareRunnerId);
+    // Another of the owner's runners, presenting the claimant's fence or its own.
+    for (const claim of [w.claim, { runnerId: w.spareRunnerId, generation: 3 }]) {
+      await expect(spare.query(api.transcripts.head, headArgs(w, claim))).rejects.toThrow(
+        code("stale_claim"),
+      );
+      await expect(
+        spare.mutation(api.transcripts.stageArtifacts, stageArgs(w, claim)),
+      ).rejects.toThrow(code("stale_claim"));
+    }
+    // The claimant itself, naming another runner in its fence or an older generation.
+    for (const claim of [
+      { runnerId: w.spareRunnerId, generation: 3 },
+      { ...w.claim, generation: 2 },
+    ]) {
+      await expect(
+        w.asClaimant.mutation(api.transcripts.commitSegment, { ...segment(w, 1, 1), claim }),
+      ).rejects.toThrow(code("stale_claim"));
+    }
+    // After a transfer, the old runner's generation is stale.
+    await w.t.run(async (ctx: Ctx) => {
+      const intake = await ctx.db.query("sessionIntake").first();
+      await ctx.db.patch(intake!._id, { claim: { runnerId: w.spareRunnerId, generation: 4 } });
+    });
+    await expect(
+      w.asClaimant.mutation(api.transcripts.stageArtifacts, stageArgs(w)),
+    ).rejects.toThrow(code("stale_claim"));
+    await expect(
+      spare.mutation(
+        api.transcripts.stageArtifacts,
+        stageArgs(w, { runnerId: w.spareRunnerId, generation: 4 }),
+      ),
+    ).resolves.toEqual({ staged: 1, skipped: 0 });
+  });
+
+  test("another person's runner learns nothing about the Session, even holding its claim", async () => {
+    const w = await world();
+    const bobs = asRunner(w.t, w.bobRunnerId);
+    // Even a (corrupt) intake naming Bob's runner does not make Alice's Session his.
+    await w.t.run(async (ctx: Ctx) => {
+      const intake = await ctx.db.query("sessionIntake").first();
+      await ctx.db.patch(intake!._id, { claim: { runnerId: w.bobRunnerId, generation: 3 } });
+    });
+    const claim = { runnerId: w.bobRunnerId, generation: 3 };
+    await expect(bobs.query(api.transcripts.head, headArgs(w, claim))).rejects.toThrow(
+      code("not_claimed"),
+    );
+    await expect(
+      bobs.mutation(api.transcripts.stageArtifacts, stageArgs(w, claim)),
+    ).rejects.toThrow(code("not_claimed"));
+    expect(await stagingRows(w.t)).toEqual([]);
+  });
+
+  test("refuses once the owner loses the project, the Session goes, or the claim is released", async () => {
+    const patchMembership = (w: World, status: "left" | "suspended") =>
+      w.t.run(async (ctx: Ctx) => {
+        const member = (await ctx.db.query("workspaceMembers").collect()).find(
+          (row) => row.userId === w.alice,
+        );
+        await ctx.db.patch(member!._id, { status });
+      });
+    for (const status of ["left", "suspended"] as const) {
+      const w = await world();
+      await patchMembership(w, status);
+      await expect(w.asClaimant.query(api.transcripts.head, headArgs(w))).rejects.toThrow(
+        code("not_claimed"),
+      );
+    }
+    const archived = await world();
+    await archived.t.run(async (ctx: Ctx) => {
+      const project = await ctx.db.query("projects").first();
+      await ctx.db.patch(project!._id, { deletedAt: 1 });
+    });
+    await expect(
+      archived.asClaimant.mutation(api.transcripts.stageArtifacts, stageArgs(archived)),
+    ).rejects.toThrow(code("not_claimed"));
+
+    const deleted = await world();
+    await deleted.t.run(async (ctx: Ctx) => {
+      const session = await ctx.db.query("sessions").first();
+      await ctx.db.patch(session!._id, { deletedAt: 1 });
+    });
+    await expect(
+      deleted.asClaimant.mutation(api.transcripts.stageArtifacts, stageArgs(deleted)),
+    ).rejects.toThrow(code("not_claimed"));
+
+    const unclaimed = await world({ intake: false });
+    await expect(
+      unclaimed.asClaimant.query(api.transcripts.head, headArgs(unclaimed)),
+    ).rejects.toThrow(code("not_claimed"));
+
+    const handoff = await world();
+    const setState = (state: "releasing" | "released") =>
+      handoff.t.run(async (ctx: Ctx) => {
+        const intake = await ctx.db.query("sessionIntake").first();
+        await ctx.db.patch(intake!._id, { state });
+      });
+    await setState("releasing");
+    await expect(
+      handoff.asClaimant.mutation(api.transcripts.commitSegment, segment(handoff, 1, 1)),
+    ).resolves.toEqual({ status: "committed" });
+    await setState("released");
+    await expect(
+      handoff.asClaimant.mutation(api.transcripts.commitSegment, segment(handoff, 2, 2)),
+    ).rejects.toThrow(code("not_claimed"));
+  });
+
+  test("a revoked runner, or one whose owner is leaving, stops at once", async () => {
+    const revoked = await world();
+    await revoked.t.run(async (ctx: Ctx) => {
+      const runner = (await ctx.db.query("runners").collect()).find(
+        (row) => row.id === revoked.runnerId,
+      );
+      await ctx.db.patch(runner!._id, { revokedAt: 1 });
+    });
+    await expect(revoked.asClaimant.query(api.transcripts.head, headArgs(revoked))).rejects.toThrow(
+      code("revoked"),
+    );
+    await expect(
+      revoked.asClaimant.mutation(api.transcripts.stageArtifacts, stageArgs(revoked)),
+    ).rejects.toThrow(code("revoked"));
+
+    const closing = await world();
+    await closing.t.run(async (ctx: Ctx) => {
+      const user = (await ctx.db.query("users").collect()).find((row) => row.id === closing.alice);
+      await ctx.db.patch(user!._id, { status: "deletion_pending" });
+    });
+    await expect(
+      closing.asClaimant.mutation(api.transcripts.commitSegment, segment(closing, 1, 1)),
+    ).rejects.toThrow(code("revoked"));
+
+    // A runner token for no runner row reads as revoked too.
+    const w = await world();
+    await expect(
+      asRunner(w.t, newId("runner")).query(api.transcripts.head, headArgs(w)),
+    ).rejects.toThrow(code("revoked"));
   });
 });
 
@@ -695,5 +950,52 @@ describe("files.presignPut", () => {
     ).resolves.toMatchObject({
       status: "sign",
     });
+  });
+
+  test("signs for the claimed runner's own token, and for no other runner", async () => {
+    vi.useFakeTimers({ now: Date.UTC(2026, 9, 25) });
+    vi.stubEnv("VOLLI_S3_ENDPOINT", "https://acct.r2.cloudflarestorage.com");
+    vi.stubEnv("VOLLI_S3_BUCKET", "volli-history");
+    vi.stubEnv("VOLLI_S3_ACCESS_KEY_ID", "AKID");
+    vi.stubEnv("VOLLI_S3_SECRET_ACCESS_KEY", "secret");
+    const w = await world();
+    const key = transcriptPackKey({
+      projectId: w.projectId,
+      sessionId: w.sessionId,
+      firstSequence: 1,
+      lastSequence: 4,
+    });
+    const args = { sessionId: w.sessionId, claim: w.claim, key, bytes: 10, sha256: hex("1") };
+    await expect(w.asClaimant.action(api.files.presignPut, args)).resolves.toMatchObject({
+      status: "sign",
+      request: { method: "PUT" },
+    });
+    await expect(
+      w.asClaimant.action(api.files.presignPut, { ...args, key: key.replace("tx/", "ev/") }),
+    ).rejects.toThrow(code("invalid_argument"));
+    await expect(
+      w.asClaimant.action(api.files.presignPut, { ...args, claim: { ...w.claim, generation: 2 } }),
+    ).rejects.toThrow(code("stale_claim"));
+    await expect(asRunner(w.t, w.spareRunnerId).action(api.files.presignPut, args)).rejects.toThrow(
+      code("stale_claim"),
+    );
+    await expect(
+      asRunner(w.t, w.bobRunnerId).action(api.files.presignPut, {
+        ...args,
+        claim: { runnerId: w.bobRunnerId, generation: 3 },
+      }),
+    ).rejects.toThrow(code("not_claimed"));
+
+    // Committed by the runner, the key is write-once for it as for anyone.
+    await w.asClaimant.mutation(api.transcripts.commitSegment, segment(w, 1, 4));
+    await expect(w.asClaimant.action(api.files.presignPut, args)).resolves.toEqual({
+      status: "committed",
+    });
+
+    await w.t.run(async (ctx: Ctx) => {
+      const runner = (await ctx.db.query("runners").collect()).find((row) => row.id === w.runnerId);
+      await ctx.db.patch(runner!._id, { revokedAt: 1 });
+    });
+    await expect(w.asClaimant.action(api.files.presignPut, args)).rejects.toThrow(code("revoked"));
   });
 });

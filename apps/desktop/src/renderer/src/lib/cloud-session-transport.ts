@@ -841,6 +841,10 @@ export function createCloudViewer(deps: CloudViewerDeps, sessionId: string): () 
   let timer: unknown = null;
   let stopped = false;
   let sent = false;
+  // Runner-originated Drafts become visible before their first accept. Give
+  // that birth a short, bounded arrival window rather than missing the first
+  // turn's live chunks until the normal 20-second heartbeat.
+  let arrivalRetries = FOLD_WAIT_MS / ARRIVAL_RETRY_MS;
   let last: Promise<unknown> = Promise.resolve();
 
   const clear = () => {
@@ -861,6 +865,11 @@ export function createCloudViewer(deps: CloudViewerDeps, sessionId: string): () 
       .then(() => (stopped ? undefined : step()))
       .catch((error: unknown) => {
         if (stopped) return;
+        if (isNotFound(error) && arrivalRetries > 0) {
+          arrivalRetries -= 1;
+          schedule(ARRIVAL_RETRY_MS);
+          return;
+        }
         deps.warn("[cloud-session] couldn't keep a viewer open", error);
         schedule(SESSION_VIEWER_HEARTBEAT_MS);
       });
@@ -873,6 +882,7 @@ export function createCloudViewer(deps: CloudViewerDeps, sessionId: string): () 
         sessionId,
         clientSessionId: deps.clientSessionId,
       });
+      arrivalRetries = 0;
       schedule(heartbeatMs(lease));
     });
   const beat = () =>

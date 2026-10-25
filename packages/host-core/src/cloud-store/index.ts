@@ -12,7 +12,6 @@ import { createFactDrain } from "../cloud-runner/drain";
 import { createInboxWorker, type JobExecutor } from "../cloud-runner/inbox";
 import { sqliteDrainCursorStore, sqliteJobJournalStore } from "../cloud-runner/sqlite-stores";
 import {
-  acceptOverLink,
   inboxOverLink,
   startRunnerSync,
   wakeOverLink,
@@ -45,6 +44,8 @@ import { createCloudBoardVerbs, CLOUD_VERB_BUDGET_MS } from "../cloud-agent/boar
 import { createCloudSessionVerbs } from "../cloud-agent/session-verbs";
 import { getProjectById } from "../db/projects-repo";
 import { createCloudRestartRecovery } from "./recovery";
+import { createCloudTranscriptPublisher } from "./transcripts";
+import { startStreamChunks, type StreamChunks } from "../cloud-runner/stream-chunker";
 
 export interface CloudRunnerSyncConnection {
   start(): void;
@@ -80,6 +81,8 @@ export function createCloudProductStore(options: {
     link: BackendLink;
     runnerId: string;
     runnerToken?: () => Promise<string | null>;
+    startStreams(): void;
+    stopStreams(): Promise<void>;
   } | null = null;
   let runtime: HostedSessionRuntime | null = null;
   let artifacts: TranscriptArtifactStore | null = null;
@@ -104,17 +107,26 @@ export function createCloudProductStore(options: {
   };
   // A restart resume's first-connect wait and sibling reads (N2-3).
   const recovery = createCloudRestartRecovery({ currentLink: () => active?.link ?? null });
+  const publishTranscriptFacts = createCloudTranscriptPublisher({
+    current: () => active,
+    artifacts: () => artifacts,
+    engine: { getBaseSession: (query) => owner.engine.getBaseSession(query) },
+    ledger: sqliteDrainLedger(db),
+    cursors: sqliteDrainCursorStore(db),
+    backendUrl: options.backendUrl,
+    redaction: {
+      step: (window, from, final) => host.secretStore.redactStreamStep(window, from, final),
+      complete: () => {
+        const state = host.secretStore.status().state;
+        return state === "ready" || state === "empty";
+      },
+    },
+  });
   const drain = createFactDrain({
     ownerUserId,
     ledger: sqliteDrainLedger(db),
     cursors: sqliteDrainCursorStore(db),
-    accept: (args, callOptions) => {
-      try {
-        return acceptOverLink(link())(args, callOptions);
-      } catch (error) {
-        return Promise.reject(error);
-      }
-    },
+    accept: publishTranscriptFacts,
     onBlocked: (sessionId, block) =>
       log.warn("Session cloud drain stopped", { sessionId, code: block.code }),
     onRetry: (sessionId) => log.warn("Session cloud drain will retry", { sessionId }),
@@ -362,6 +374,7 @@ export function createCloudProductStore(options: {
     bindRuntime(value: HostedSessionRuntime | null, store: TranscriptArtifactStore): void {
       runtime = value;
       artifacts = store;
+      active?.startStreams();
     },
     /** The runtime lifecycle's durable outbox door, for `session.notice` jobs. */
     bindNotices(outbox: SessionNoticeOutbox): void {
@@ -374,10 +387,28 @@ export function createCloudProductStore(options: {
       runnerId: string;
       runnerToken?(): Promise<string | null>;
     }): CloudRunnerSyncConnection {
+      let started = false;
+      let ended = false;
+      let streams: StreamChunks | null = null;
+      const startStreams = () => {
+        if (!started || ended || runtime === null || active?.link !== parts.link) return;
+        streams ??= startStreamChunks({
+          link: parts.link,
+          runtime,
+          onError: (_error, sessionId) =>
+            log.warn("Session live chunks were not sent", { sessionId }),
+        });
+      };
+      const stopStreams = async () => {
+        ended = true;
+        await streams?.stop();
+      };
       active = {
         link: parts.link,
         runnerId: parts.runnerId,
         ...(parts.runnerToken === undefined ? {} : { runnerToken: parts.runnerToken }),
+        startStreams,
+        stopStreams,
       };
       recovery.observe(parts.link);
       const reports = publisher(registry());
@@ -466,7 +497,9 @@ export function createCloudProductStore(options: {
       let sync: RunnerSync | null = null;
       return {
         start() {
+          started = true;
           sync ??= startRunnerSync({ link: parts.link, drain, inbox, presence: parts.presence });
+          startStreams();
           void reports.flush();
         },
         waiting: () => drain.status().waiting + reports.pending(),
@@ -477,6 +510,7 @@ export function createCloudProductStore(options: {
         async stop() {
           offReports();
           try {
+            await stopStreams();
             if (sync !== null) await sync.stop();
           } finally {
             if (active?.link === parts.link) active = null;
@@ -484,6 +518,7 @@ export function createCloudProductStore(options: {
         },
         async close() {
           offReports();
+          await stopStreams();
           inbox.stop();
           drain.stop();
           await parts.link.close();
@@ -494,6 +529,7 @@ export function createCloudProductStore(options: {
     },
     dispose() {
       offWake();
+      void active?.stopStreams().catch(() => log.warn("Session live chunks did not close"));
       drain.stop();
       for (const reports of publishers.values()) reports.stop();
     },

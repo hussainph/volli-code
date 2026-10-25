@@ -39,12 +39,11 @@
  * purged. Packing for one Session runs one pass at a time; staging has its
  * own queue, so the drain never waits behind a large upload.
  *
- * Wiring (VC-892 S2, with the cloud product store; recorded on VC-892): the fact drain calls
- * {@link TranscriptSpool.stage} for each batch before its `accept`, and calls
- * {@link TranscriptSpool.packTurn} when a turn's events are accepted, and every
- * {@link TRANSCRIPT_PACK_INTERVAL_MS} inside a long turn. The cloud composition
- * gives Sessions a {@link SpoolTranscriptArtifactStore} in place of the
- * signed-out file store; the backend port is the backend link's.
+ * Production staging: `cloud-store/transcripts.ts` calls `stage` before
+ * accepting a referencing fact, adapting the existing durable file store
+ * without changing its format or flush guarantee. Segment packing and Pi-log
+ * lifecycle composition remain VC-950; the optional weaker-durability spool
+ * store below is not selected by the desktop.
  */
 
 import { createHash } from "node:crypto";
