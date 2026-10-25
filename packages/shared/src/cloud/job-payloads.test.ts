@@ -8,6 +8,7 @@ import {
   SESSION_COMMAND_FORMAT,
   SESSION_FOLLOW_UP_FORMAT,
   SESSION_INTERRUPT_FORMAT,
+  SESSION_NOTICE_FORMAT,
   parseJobPayload,
 } from "./job-payloads";
 import { JOB_KINDS, type JobKind } from "./jobs";
@@ -42,6 +43,13 @@ const VALID: Partial<Record<JobKind, Record<string, unknown>>> = {
     title: "Review the diff",
     model: { providerId: "anthropic", modelId: "claude", reasoningLevel: null },
   },
+  "session.notice": {
+    format: SESSION_NOTICE_FORMAT,
+    notice: "watch",
+    commandId: `watch:${SESSION}:${COPY}`,
+    changes: [],
+    overflow: 0,
+  },
   "automation.run": {
     trigger: "arrival",
     automationId: AUTOMATION,
@@ -75,7 +83,6 @@ describe("parseJobPayload", () => {
     const opaque = JOB_KINDS.filter((kind) => VALID[kind] === undefined);
     expect(opaque).toEqual([
       "session.start",
-      "session.notice",
       "session.release",
       "workingCopy.refresh",
       "environment.run",

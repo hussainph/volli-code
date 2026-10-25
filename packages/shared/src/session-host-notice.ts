@@ -140,3 +140,26 @@ export function sessionHostNoticeMetadata(notice: SessionHostNotice): SessionHos
  * uses it to identify notices written before structured metadata existed.
  */
 export const SUBAGENT_NOTICE_MESSAGE_ID_SUFFIX = ":answer-message";
+
+/**
+ * The frozen suffix on a delegation's notice COMMAND id (`{operationId}:answer`,
+ * or `{operationId}:resume:{turnId}:answer` for a resumed turn). DURABLE, not
+ * live: unanswered-delegation recovery reads it back out of the ledgers, and
+ * the cloud subagent notice reuses it so a parent hears one answer whichever
+ * path delivers first.
+ */
+export const SUBAGENT_NOTICE_COMMAND_ID_SUFFIX = ":answer";
+
+/**
+ * A watch notice's command id: `watch:{watcherSessionId}:{id}`. DURABLE, not
+ * live: the shape local watch notices have always been written under, kept by
+ * the cloud's queued watch notices (whose job id it also is).
+ */
+export function watchNoticeCommandId(watcherSessionId: string, id: string): string {
+  return `watch:${watcherSessionId}:${id}`;
+}
+
+/** A watch notice's message id, derived from its command id (DURABLE, like the command id). */
+export function watchNoticeMessageId(commandId: string): string {
+  return `${commandId}:message`;
+}

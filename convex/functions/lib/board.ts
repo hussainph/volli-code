@@ -36,6 +36,7 @@ import {
 import type { DataModel, Doc } from "../_generated/dataModel.js";
 import type { MutationCtx, QueryCtx } from "../_generated/server.js";
 import { onBoardEvents } from "./attention";
+import { onBoardEvents as onWatchEvents } from "./watches";
 import { authError, requireProject, type Viewer } from "./auth";
 
 export type BoardErrorCode =
@@ -261,6 +262,12 @@ export class BoardWrite {
       });
     }
     await onBoardEvents(this.ctx, {
+      projectId: this.projectId,
+      actor: this.actor,
+      at: this.now,
+      events: drafts,
+    });
+    await onWatchEvents(this.ctx, {
       projectId: this.projectId,
       actor: this.actor,
       at: this.now,

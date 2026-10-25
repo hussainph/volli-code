@@ -16,7 +16,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { ALWAYS_ONLINE, piOwnedModelAccess } from "@volli/agent-runtime";
-import { LOCAL_RUNNER } from "@volli/shared";
+import { LOCAL_RUNNER, sessionHostNoticeMetadata } from "@volli/shared";
+import { SESSION_NOTICE_FORMAT, type ClaimedJob } from "@volli/shared/cloud";
 import {
   createHostCore,
   isLiveHost,
@@ -34,6 +35,9 @@ import { readRecoveredSessionServices, SessionRuntimeClosingError } from "./life
 import * as pi from "./pi-adapter";
 import { createRunnerComposition, type RunnerHostEdge, type RunnerProductStore } from "./runner";
 import { createCloudProductStore } from "../cloud-store";
+import { registerSessionNoticeJob } from "../cloud-store/notice-jobs";
+import { ownerGuardedInbox } from "../cloud-store/session-jobs";
+import type { JobExecutor } from "../cloud-runner/inbox";
 import { sqliteDrainCursorStore } from "../cloud-runner/sqlite-stores";
 import { insertProject } from "../db/projects-repo";
 import { testProject } from "../db/test-helpers";
@@ -183,6 +187,21 @@ function compose(
   };
 }
 
+/** One composed notice, and the lifecycle intent that would compose it (VC-887). */
+const notice = (sessionId: string, commandId: string) => ({
+  sessionId,
+  commandId,
+  messageId: `${commandId}:message`,
+  text: "composed once",
+  metadata: sessionHostNoticeMetadata({ kind: "watch", events: [] }),
+  label: "watch notice",
+});
+const intent = (value: ReturnType<typeof notice>) => ({
+  sessionId: value.sessionId,
+  commandId: value.commandId,
+  compose: vi.fn(() => value),
+});
+
 describe("runner composition", () => {
   it("composes the cloud store's owner-scoped ports through assembly, facade, agents and lifecycle", async () => {
     const fixture = await composedHost("desktop-quit");
@@ -244,6 +263,7 @@ describe("runner composition", () => {
     });
     const bindRuntime = vi.spyOn(cloud, "bindRuntime");
     const bindEnvironment = vi.spyOn(cloud, "bindEnvironment");
+    const bindNotices = vi.spyOn(cloud, "bindNotices");
     const dispose = vi.spyOn(cloud, "dispose");
     const [assemblyModule, facadeModule, agentsModule, lifecycleModule, contextModule] =
       await Promise.all([
@@ -289,9 +309,33 @@ describe("runner composition", () => {
       f.runner.transcriptArtifacts,
     );
 
+    // Backend-queued notices enter this launch's owner-scoped outbox (VC-887).
+    expect(bindNotices).toHaveBeenCalledExactlyOnceWith({ enqueue: expect.any(Function) });
+    const notices = bindNotices.mock.lastCall![0];
     await host.start(f.runner.owner());
     const ready = await f.runner.ready();
     expect(facadeModule.recoveredRuntimeSessionServices(ready).sessionEngine).toBe(cloud.engine);
+    const stored = notice(owned.session.id, `watch:${owned.session.id}:one`);
+    const first = intent(stored);
+    await expect(notices.enqueue(first)).resolves.toEqual(stored);
+    expect(first.compose).toHaveBeenCalledOnce();
+    // A replay of a stored id composes nothing and gets the first payload back.
+    const replay = intent({ ...stored, text: "re-minted" });
+    await expect(notices.enqueue(replay)).resolves.toEqual(stored);
+    expect(replay.compose).not.toHaveBeenCalled();
+    // Settled (delivered or dropped): nothing is composed or stored again.
+    host.database.db
+      .prepare(
+        'UPDATE host_notice_outbox SET notice = NULL, receipt = \'{"status":"accepted"}\' WHERE command_id = ?',
+      )
+      .run(stored.commandId);
+    const settled = intent(stored);
+    await expect(notices.enqueue(settled)).resolves.toBeNull();
+    expect(settled.compose).not.toHaveBeenCalled();
+    const elsewhere = intent(notice(foreign.session.id, `watch:${foreign.session.id}:one`));
+    await expect(notices.enqueue(elsewhere)).rejects.toThrow("outside this launch's Session scope");
+    expect(elsewhere.compose).not.toHaveBeenCalled();
+
     f.runner.handlers(ready);
     const listing = buildHandlers.mock.lastCall![1].sessionListing!;
     expect(
@@ -304,7 +348,159 @@ describe("runner composition", () => {
       reason: "cloud shutdown",
       clean: true,
     });
+    // A closed launch stores nothing: the job fails retryably and comes back.
+    await expect(
+      notices.enqueue(intent(notice(owned.session.id, `watch:${owned.session.id}:two`))),
+    ).rejects.toBeInstanceOf(SessionRuntimeClosingError);
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("runs a claimed session.notice through the real outbox and delivery: parked while detached, dropped for a stopped reader (VC-887)", async () => {
+    const fixture = await composedHost("desktop-quit");
+    const { host, root } = fixture;
+    if (!isLiveHost(host)) throw new Error(host.database.error);
+    const db = host.database.db;
+    const project = testProject({ id: "cloud-project", path: join(root, "cloud-checkout") });
+    insertProject(db, project);
+    db.prepare("INSERT INTO cloud_shadow_rows(kind,id,owner_user_id) VALUES ('project',?,'a')").run(
+      project.id,
+    );
+    const provenance = {
+      source: { kind: "system", id: "test", detail: null },
+      venue: LOCAL_RUNNER,
+    } as const;
+    const born = async (commandId: string) => {
+      const { session } = await host.sessionEngine.createSession({
+        commandId,
+        projectId: project.id,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: null,
+        ownerUserId: "a",
+        provenance,
+      });
+      sqliteDrainCursorStore(db).save({
+        sessionId: session.id,
+        ownerUserId: "a",
+        generation: 1,
+        acceptedThrough: 0,
+        blocked: null,
+      });
+      return session.id;
+    };
+    const detached = await born("detached-birth");
+    const stopped = await born("stopped-birth");
+    const cloud = createCloudProductStore({
+      host,
+      ownerUserId: "a",
+      runnerId: () => "runner-a",
+      home: root,
+      busySites: async () => [],
+    });
+    const bindNotices = vi.spyOn(cloud, "bindNotices");
+    const f = compose(fixture, { kind: "cloud", host, cloud });
+    await host.start(f.runner.owner());
+    await f.runner.ready();
+    // The production executor behind the production owner gate, over the
+    // lifecycle door this composition bound: real SQLite outbox, real delivery.
+    const executors = new Map<string, JobExecutor>();
+    const newId = vi.fn(() => "the-only-nonce");
+    registerSessionNoticeJob(
+      ownerGuardedInbox(
+        { register: (kind, executor) => void executors.set(kind, executor) },
+        { engine: cloud.engine, ownerUserId: "a", owns: cloud.ownsSession },
+      ),
+      { outbox: () => bindNotices.mock.lastCall![0], newId },
+    );
+    const run = (sessionId: string) => {
+      const commandId = `watch:${sessionId}:00000000-0000-4000-8000-0000000000e1`;
+      const claimed = {
+        job: {
+          id: commandId,
+          kind: "session.notice",
+          runnerId: "runner-a",
+          projectId: project.id,
+          ticketId: null,
+          sessionId,
+          workingCopyId: null,
+          commandId,
+          payload: {
+            format: SESSION_NOTICE_FORMAT,
+            notice: "watch",
+            commandId,
+            changes: [
+              {
+                subject: "session",
+                sessionId: "00000000-0000-4000-8000-0000000000e2",
+                title: null,
+                occurredAt: null,
+                fact: "signaled-done",
+                pendingSubagents: [],
+                reason: { text: "Another author's words", totalChars: 22 },
+              },
+            ],
+            overflow: 0,
+          },
+          priority: "normal",
+          createdBy: { kind: "volli", reason: "policy" },
+          createdAt: 0,
+          availableAt: 0,
+        },
+        lease: { bootId: "boot", attempt: 1, expiresAt: Date.now() + 60_000 },
+      } as unknown as ClaimedJob;
+      return {
+        commandId,
+        done: executors.get("session.notice")!(claimed, {
+          signal: new AbortController().signal,
+          renew: async () => true,
+        }),
+      };
+    };
+    const row = (commandId: string) =>
+      db
+        .prepare("SELECT notice, receipt FROM host_notice_outbox WHERE command_id = ?")
+        .get(commandId) as { notice: string | null; receipt: string | null } | undefined;
+    const ON_RUNNER = { status: "done", result: { stage: "on_runner" } };
+
+    // Detached reader: stored, answered on_runner, and parked (never submitted).
+    const parked = run(detached);
+    await expect(parked.done).resolves.toEqual(ON_RUNNER);
+    expect(JSON.parse(row(parked.commandId)!.notice!)).toMatchObject({
+      sessionId: detached,
+      messageId: `${parked.commandId}:message`,
+    });
+    expect(row(parked.commandId)!.notice).toContain("the-only-nonce");
+    await new Promise((done) => setTimeout(done, 50));
+    expect(row(parked.commandId)!.receipt).toBeNull();
+    expect(
+      (await host.sessionEngine.listEvents({ sessionId: detached })).some(
+        (event) => event.commandId === parked.commandId,
+      ),
+    ).toBe(false);
+
+    // Stopped reader: the delivery settles it as dropped(reader-stopped).
+    await host.sessionEngine.submit({
+      commandId: "stop-reader",
+      sessionId: stopped,
+      intent: { kind: "session.stop", reason: null, by: { kind: "user" } },
+      provenance,
+    });
+    const dropped = run(stopped);
+    await expect(dropped.done).resolves.toEqual(ON_RUNNER);
+    await vi.waitFor(() =>
+      expect(row(dropped.commandId)).toEqual({
+        notice: null,
+        receipt: JSON.stringify({ status: "dropped", reason: "reader-stopped" }),
+      }),
+    );
+    expect(newId).toHaveBeenCalledTimes(2);
+    // A re-lease of either composes nothing: stored stays as stored, dropped stays dropped.
+    await expect(run(detached).done).resolves.toEqual(ON_RUNNER);
+    await expect(run(stopped).done).resolves.toEqual(ON_RUNNER);
+    expect(newId).toHaveBeenCalledTimes(2);
+    expect(row(parked.commandId)!.notice).toContain("the-only-nonce");
+    expect(row(dropped.commandId)!.notice).toBeNull();
   });
 
   it("installs the quit hold synchronously and binds the host edge only from recovered readiness", async () => {

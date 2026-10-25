@@ -21,7 +21,25 @@
  * The kinds no ticket has typed yet stay opaque JSON objects.
  */
 
+import type { SessionStopActor } from "../session-ledger";
+import {
+  NOTICE_PROSE_LIMIT,
+  SUBAGENT_ANSWER_NOTICE_LIMIT,
+  SUBAGENT_OUTCOME_STATES,
+  WATCH_ANSWER_NOTICE_LIMIT,
+  type NoticeAnswer,
+  type NoticeProse,
+  type SubagentOutcomeState,
+  type WatchChangeV1,
+  type WatchTicketActor,
+} from "../session-notice";
+import {
+  SUBAGENT_NOTICE_COMMAND_ID_SUFFIX,
+  type SubagentNoticeReason,
+} from "../session-host-notice";
+import { SESSION_STOP_CATEGORIES, type SessionStopDetail } from "../session-stop";
 import { TICKET_STATUSES, type TicketStatus } from "../ticket";
+import { TICKET_SIGNAL_KINDS, TICKET_SIGNAL_VERDICTS } from "../ticket-events";
 import {
   isDerivedId,
   isUuid,
@@ -133,6 +151,63 @@ export interface JobModelChoice {
   reasoningLevel: string | null;
 }
 
+/**
+ * A notice for a Session (VC-887): changes to work it watches, or its
+ * subagent's answer. The runner composes the text (`composeSessionNotice`)
+ * when it puts the notice into its outbox, so the payload carries structured
+ * facts and other authors' words in their own fields, never pre-composed text.
+ */
+export const SESSION_NOTICE_FORMAT = "volli.session-notice/1";
+
+/** The most changes one queued watch notice lists; later ones are counted in `overflow`. */
+export const WATCH_NOTICE_MAX_CHANGES = 50;
+
+/** The most pending subagents one watch change names. */
+export const WATCH_CHANGE_MAX_PENDING = 100;
+
+/** The longest Ticket display id a watch change carries. */
+export const WATCH_DISPLAY_MAX_CHARS = 64;
+
+/**
+ * Changes to the work the job's Session watches, delivered as one notice. The
+ * `commandId` keeps the local shape `watch:{watcherSessionId}:{uuid}` and is
+ * also the job's id.
+ */
+export interface WatchNoticeJobPayload {
+  format: typeof SESSION_NOTICE_FORMAT;
+  notice: "watch";
+  commandId: string;
+  changes: WatchChangeV1[];
+  /** Changes that arrived after `changes` was full: counted, not listed. */
+  overflow: number;
+}
+
+/**
+ * A subagent's outcome, delivered to its parent (the job's Session). The
+ * `commandId` is the delegation's frozen `{operationId}:answer` (or a resumed
+ * turn's `{operationId}:resume:{turnId}:answer`), so a parent hears one answer
+ * whichever path delivers it first.
+ *
+ * Its backend producer is VC-696 (S5): the delegations projection enqueues it
+ * when a child settles. This ticket (VC-887) types it, parses it and composes
+ * it on the runner; nothing enqueues it before VC-696 lands.
+ */
+export interface SubagentNoticeJobPayload {
+  format: typeof SESSION_NOTICE_FORMAT;
+  notice: "subagent";
+  commandId: string;
+  childSessionId: SessionId;
+  title: string;
+  state: SubagentOutcomeState;
+  reason: SubagentNoticeReason | null;
+  stoppedBy: SessionStopActor | null;
+  stopDetail: SessionStopDetail | null;
+  /** The child's final message, cut at `SUBAGENT_ANSWER_NOTICE_LIMIT`. */
+  answer: NoticeAnswer;
+}
+
+export type SessionNoticeJobPayload = WatchNoticeJobPayload | SubagentNoticeJobPayload;
+
 /** The longest Session title a job carries. */
 export const JOB_TITLE_MAX_CHARS = 200;
 
@@ -164,7 +239,7 @@ export interface JobPayloads {
   "session.start": JobPayloadObject;
   "session.command": SessionCommandJobPayload | SessionInterruptJobPayload;
   "session.followUp": SessionFollowUpJobPayload;
-  "session.notice": JobPayloadObject;
+  "session.notice": SessionNoticeJobPayload;
   "session.delegate": SessionDelegatePayload;
   "session.release": JobPayloadObject;
   "workingCopy.materialize": WorkingCopyMaterializePayload;
@@ -259,6 +334,44 @@ class Reader {
       this.fail(`${name} is not an object`);
     }
     return read(new Reader(this.kind, value as Row, `${this.prefix}${name}.`));
+  }
+
+  /** A string of 0 to `max` characters. */
+  string(name: string, max: number): string {
+    const value = this.row[name];
+    if (typeof value !== "string" || value.length > max) {
+      this.fail(`${name} is not a string of at most ${max} characters`);
+    }
+    return value;
+  }
+
+  nullableNested<T>(name: string, read: (reader: Reader) => T): T | null {
+    return this.row[name] === null ? null : this.nested(name, read);
+  }
+
+  /** A list of at most `max` items, each read by `read` under `name[i]`. */
+  list<T>(name: string, max: number, read: (reader: Reader, index: string) => T): T[] {
+    const value = this.row[name];
+    if (!Array.isArray(value) || value.length > max) {
+      this.fail(`${name} is not a list of at most ${max} items`);
+    }
+    const items = value as unknown[];
+    const row: Row = Object.fromEntries(items.map((item, i) => [`${name}[${i}]`, item]));
+    const reader = new Reader(this.kind, row, this.prefix);
+    return items.map((_, i) => read(reader, `${name}[${i}]`));
+  }
+
+  /** A non-negative safe integer (epoch milliseconds, counts). */
+  count(name: string): number {
+    const value = this.row[name];
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+      this.fail(`${name} is not a non-negative integer`);
+    }
+    return value;
+  }
+
+  nullableCount(name: string): number | null {
+    return this.row[name] === null ? null : this.count(name);
   }
 
   positiveInteger(name: string): number {
@@ -384,8 +497,9 @@ function parseTyped(kind: JobKind, r: Reader): JobPayloads[JobKind] {
       r.only("trigger", "automationId", "ticketId", "from", "status", "origin", "armedByUserId");
       r.oneOf("trigger", ["arrival"]);
       return parseArrival(r);
-    case "session.start":
     case "session.notice":
+      return parseSessionNotice(r);
+    case "session.start":
     case "session.release":
     case "workingCopy.refresh":
     case "environment.run":
@@ -425,5 +539,200 @@ function parseArrival(r: Reader): AutomationArrivalRunPayload {
     status: r.oneOf("status", TICKET_STATUSES),
     origin,
     armedByUserId,
+  };
+}
+
+function parseSessionNotice(r: Reader): SessionNoticeJobPayload {
+  r.oneOf("format", [SESSION_NOTICE_FORMAT]);
+  const notice = r.oneOf("notice", ["watch", "subagent"]);
+  const commandId = r.derived("commandId");
+  if (notice === "watch") {
+    r.only("format", "notice", "commandId", "changes", "overflow");
+    if (!commandId.startsWith("watch:")) r.fail("commandId is not a watch notice id");
+    return {
+      format: SESSION_NOTICE_FORMAT,
+      notice,
+      commandId,
+      changes: r.list("changes", WATCH_NOTICE_MAX_CHANGES, (list, at) =>
+        list.nested(at, readChange),
+      ),
+      overflow: r.count("overflow"),
+    };
+  }
+  r.only(
+    "format",
+    "notice",
+    "commandId",
+    "childSessionId",
+    "title",
+    "state",
+    "reason",
+    "stoppedBy",
+    "stopDetail",
+    "answer",
+  );
+  if (!commandId.endsWith(SUBAGENT_NOTICE_COMMAND_ID_SUFFIX)) {
+    r.fail("commandId is not a subagent answer id");
+  }
+  return {
+    format: SESSION_NOTICE_FORMAT,
+    notice,
+    commandId,
+    childSessionId: r.uuid<SessionId>("childSessionId"),
+    title: r.string("title", JOB_TITLE_MAX_CHARS),
+    state: r.oneOf("state", SUBAGENT_OUTCOME_STATES),
+    reason: r.row.reason === null ? null : r.oneOf("reason", ["app-relaunched"]),
+    stoppedBy: r.nullableNested("stoppedBy", readStopActor),
+    stopDetail: r.nullableNested("stopDetail", readStopDetail),
+    answer: r.nested("answer", (a) => readAnswer(a, SUBAGENT_ANSWER_NOTICE_LIMIT)),
+  };
+}
+
+function readChange(r: Reader): WatchChangeV1 {
+  const subject = r.oneOf("subject", ["session", "ticket"]);
+  const occurred = () => r.nullableCount("occurredAt");
+  if (subject === "ticket") {
+    const fact = r.oneOf("fact", ["ticket-moved", "ticket-commented", "ticket-signaled"]);
+    const base = () => ({
+      subject,
+      ticketId: r.uuid<TicketId>("ticketId"),
+      display: r.text("display", WATCH_DISPLAY_MAX_CHARS),
+      by: r.nested("by", readTicketActor),
+      occurredAt: occurred(),
+    });
+    const common = ["subject", "fact", "ticketId", "display", "by", "occurredAt"];
+    switch (fact) {
+      case "ticket-moved":
+        r.only(...common, "from", "to");
+        return {
+          ...base(),
+          fact,
+          from: r.oneOf("from", TICKET_STATUSES),
+          to: r.oneOf("to", TICKET_STATUSES),
+        };
+      case "ticket-commented":
+        r.only(...common, "comment");
+        return {
+          ...base(),
+          fact,
+          comment: r.nullableNested("comment", readProse(NOTICE_PROSE_LIMIT)),
+        };
+      case "ticket-signaled":
+        r.only(...common, "signalKind", "verdict", "detail");
+        return {
+          ...base(),
+          fact,
+          signalKind: r.oneOf("signalKind", TICKET_SIGNAL_KINDS),
+          verdict: r.oneOf("verdict", TICKET_SIGNAL_VERDICTS),
+          detail: r.nullableNested("detail", readProse(NOTICE_PROSE_LIMIT)),
+        };
+    }
+  }
+  const fact = r.oneOf("fact", [
+    "turn-completed",
+    "turn-interrupted",
+    "signaled-done",
+    "signaled-blocked",
+    "stopped",
+  ]);
+  const base = () => ({
+    subject,
+    sessionId: r.uuid<SessionId>("sessionId"),
+    title: r.row.title === null ? null : r.string("title", JOB_TITLE_MAX_CHARS),
+    occurredAt: occurred(),
+  });
+  const pending = () =>
+    r.list("pendingSubagents", WATCH_CHANGE_MAX_PENDING, (list, at) => list.uuid<SessionId>(at));
+  const lastMessage = () =>
+    r.nested("lastMessage", (a) => readAnswer(a, WATCH_ANSWER_NOTICE_LIMIT));
+  const common = ["subject", "fact", "sessionId", "title", "occurredAt"];
+  switch (fact) {
+    case "turn-completed":
+      r.only(...common, "pendingSubagents", "lastMessage");
+      return { ...base(), fact, pendingSubagents: pending(), lastMessage: lastMessage() };
+    case "turn-interrupted":
+      r.only(...common, "pendingSubagents", "stopDetail", "lastMessage");
+      return {
+        ...base(),
+        fact,
+        pendingSubagents: pending(),
+        stopDetail: r.nullableNested("stopDetail", readStopDetail),
+        lastMessage: lastMessage(),
+      };
+    case "signaled-done":
+    case "signaled-blocked":
+      r.only(...common, "pendingSubagents", "reason");
+      return {
+        ...base(),
+        fact,
+        pendingSubagents: pending(),
+        reason: r.nullableNested("reason", readProse(NOTICE_PROSE_LIMIT)),
+      };
+    case "stopped":
+      r.only(...common, "by", "reason");
+      return {
+        ...base(),
+        fact,
+        by: r.nested("by", readStopActor),
+        reason: r.nullableNested("reason", readProse(NOTICE_PROSE_LIMIT)),
+      };
+  }
+}
+
+function readProse(max: number): (r: Reader) => NoticeProse {
+  return (r) => {
+    r.only("text", "totalChars");
+    const text = r.string("text", max);
+    const totalChars = r.count("totalChars");
+    if (totalChars < text.length) r.fail("totalChars is shorter than text");
+    return { text, totalChars };
+  };
+}
+
+function readAnswer(r: Reader, max: number): NoticeAnswer {
+  const state = r.oneOf("state", ["unread", "none", "unreadable", "text"]);
+  switch (state) {
+    case "unread":
+    case "none":
+      r.only("state");
+      return { state };
+    case "unreadable":
+      r.only("state", "error");
+      return { state, error: r.nullableText("error", 1_000) };
+    case "text":
+      r.only("state", "message");
+      return { state, message: r.nested("message", readProse(max)) };
+  }
+}
+
+function readStopActor(r: Reader): SessionStopActor {
+  const kind = r.oneOf("kind", ["session", "user", "watchdog"]);
+  if (kind === "session") {
+    r.only("kind", "sessionId");
+    return { kind, sessionId: r.uuid<SessionId>("sessionId") };
+  }
+  r.only("kind");
+  return { kind };
+}
+
+function readTicketActor(r: Reader): WatchTicketActor {
+  const kind = r.oneOf("kind", ["person", "session", "automation", "volli", "unauthenticated"]);
+  if (kind === "session") {
+    r.only("kind", "sessionId");
+    return { kind, sessionId: r.nullableUuid<SessionId>("sessionId") };
+  }
+  r.only("kind");
+  return { kind };
+}
+
+function readStopDetail(r: Reader): SessionStopDetail {
+  r.only("category", "message", "providerType", "httpStatus", "retry", "resetsAt");
+  return {
+    category: r.oneOf("category", SESSION_STOP_CATEGORIES),
+    message: r.row.message === null ? null : r.string("message", NOTICE_PROSE_LIMIT),
+    providerType: r.row.providerType === null ? null : r.string("providerType", 200),
+    httpStatus: r.nullableCount("httpStatus"),
+    retry: r.oneOf("retry", ["not-retried", "exhausted"]),
+    resetsAt: r.nullableCount("resetsAt"),
   };
 }

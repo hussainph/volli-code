@@ -12,7 +12,9 @@ that writes one.
   `@volli/shared/cloud`. References between tables are these strings, stored
   with the `uuid` validator. A Convex `_id` never leaves `convex/`. Each entity
   table has a `by_uuid` index on `id` (Convex reserves `by_id`); a 1:1 side
-  table is keyed by its owner's id. `test/schema.test.ts` holds this.
+  table is keyed by its owner's id. `test/schema.test.ts` holds this. The
+  exception is a `session.notice` job: its id is its frozen derived notice
+  command id (see deviation 42).
 - **Uniqueness is enforced by the writing mutation**, with an index lookup
   before the insert. Convex has no unique constraint. A field the design calls
   "unique" has an index whose name says what it is unique by.
@@ -312,6 +314,12 @@ Each was a decision made while turning the design into code.
     runners take the normal registration path. A Mac still heartbeating in a
     live status cannot be replaced, even when `replacesRunnerId` names it.
 
+42. Durable watch arms carry optional origin, policy kinds, turn arm, accepted
+    sequence watermark, and last-arm/notice times. Seven-day `watchReceipts`
+    prevent an arm retry from re-arming after delivery or unwatch. Notice jobs
+    use their frozen derived command ids, not UUID job ids, so outbox dedupe and
+    second-stage receipts keep the pre-cloud watch/subagent identity.
+
 ## Migrated rows
 
 - `automationRuns` has optional `error` and `retryCommandId`: a migrated
@@ -452,3 +460,41 @@ liveness and birth scope. It is written with the shared Session listing rules,
 not re-derived by clients. Existing rows without it are read through their stored
 fold until their next accepted fact materializes it. The optional field keeps
 older deployments and stored rows valid.
+
+## Durable watches and notices
+
+`watches` gains optional origin, arming, policy-kind and terminal-reason fields;
+older rows read with the shared default kinds and an armed next turn. Arm
+commands have separate seven-day `watchReceipts`, so retrying a command never
+re-arms a turn already reported or resurrects an ended watch. Ticket watches
+expire after fourteen days without a notice or a deliberate re-arm. A Session
+arm records its accepted-sequence watermark, so a delayed catch-up/refold never
+reports history accepted before that arm; an auto-arm inside an accepted batch
+uses its own command sequence so the batch's later facts still report.
+The hourly paged sweep also ends
+watches whose owner lost access; producers re-check access before each fire.
+
+The accepted-fact hook and `BoardWrite.append` produce structured notice jobs,
+coalescing per watcher with `patchQueuedJob` only while a job was never leased.
+The watcher's claim determines routing, so queued work follows a claim move.
+`session.notice` is the exception to UUID job/command ids: it keeps the frozen
+local `watch:{watcher}:{uuid}` and `{parent}:{toolCall}:answer` command ids as
+its job id, for outbox dedupe and the final accepted-message receipt. Other
+job kinds still require UUID ids. Subagent answer production belongs to the
+delegation fold; the same typed notice executor handles its payload.
+
+A routing refusal leaves the turn arm intact and raises one frozen-id Session
+attention item (`volli:watch-delivery`); successful future delivery clears it.
+A refused automatic arm is logged and is returned as an additive `watch`
+result by `sessions.command`, never rolling back an otherwise valid steer.
+Losing access strips that target's prose from never-leased queued jobs. Claim
+also re-checks every target, including notices whose watch already ended; a
+re-leased job with newly hidden content is cancelled rather than rewritten.
+Anonymous overflow counts are retained because they name no target or prose.
+Late-child deferral uses the child's accepted sequence and the backend quiet
+window, never runner clocks to infer cross-Session causality.
+
+The runner's `host_notice_outbox` is retained, not replaced: it owns delivery
+timing and first-writer-wins replay after the job reaches the runner. Cloud
+Sessions do not arm process-memory watches. Machine-local notices still use
+the outbox directly, and the signed-out watch path keeps its existing rules.

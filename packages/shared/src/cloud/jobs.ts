@@ -102,7 +102,11 @@ export interface JobLease {
 }
 
 export interface RunnerJob<K extends JobKind = JobKind> {
-  /** Equals the `commandId` when the job carries a command, so a retried command finds its job. */
+  /**
+   * Equals the `commandId` when the job carries a command, so a retried command finds its job.
+   * A `session.notice` job's id is its frozen derived command id (`watch:{watcherSessionId}:{uuid}`
+   * or `{operationId}:answer`), not a UUID: the backend admits a derived id for that kind alone.
+   */
   id: JobId;
   runnerId: RunnerId;
   /** Closed on write (backend), open on read (runner). */

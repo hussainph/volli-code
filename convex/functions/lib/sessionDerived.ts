@@ -17,6 +17,7 @@ import type { CloudSessionView } from "@volli/shared/cloud";
 
 import type { Doc } from "../_generated/dataModel.js";
 import type { MutationCtx } from "../_generated/server";
+import { onSessionFact } from "./watches";
 import {
   SESSION_BLOCKED_SOURCE_ID,
   clearSessionAttention,
@@ -48,6 +49,7 @@ export async function deriveFromFact(
   before: CloudSessionView | null,
   after: CloudSessionView,
 ): Promise<void> {
+  await onSessionFact(ctx, session, fact, after);
   const { payload } = fact;
   switch (payload.kind) {
     case "attention.raised":

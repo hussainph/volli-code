@@ -7,7 +7,7 @@ import type { Delegations } from "./delegate-session";
 import * as control from "../session-control";
 import { SESSION_RUNTIME } from "../session-services";
 import * as notices from "./durable-host-notice-delivery";
-import { scopeSqliteHostNoticeOutbox } from "./sqlite-host-notice-outbox";
+import { readSqliteHostNotice, scopeSqliteHostNoticeOutbox } from "./sqlite-host-notice-outbox";
 import * as recovery from "./boot-recovery";
 import * as mcp from "../mcp/session-host";
 import * as shell from "../shell/shell-notices";
@@ -36,6 +36,7 @@ vi.mock("../session-control", () => ({
 }));
 vi.mock("./durable-host-notice-delivery", () => ({ createHostNoticeDelivery: vi.fn() }));
 vi.mock("./sqlite-host-notice-outbox", () => ({
+  readSqliteHostNotice: vi.fn(() => ({ state: "absent" })),
   scopeSqliteHostNoticeOutbox: vi.fn((_db, outbox, ownsSession) => ({
     ...outbox,
     pending: async () =>
@@ -59,6 +60,7 @@ vi.mock("../shell/shell-notices", () => ({
 }));
 afterEach(() => {
   vi.clearAllMocks();
+  vi.mocked(readSqliteHostNotice).mockReturnValue({ state: "absent" });
   vi.mocked(followUps.consumeFollowUpCleanClose).mockReturnValue([]);
 });
 
@@ -195,6 +197,24 @@ function fixture() {
     quit: () => quit(),
   };
 }
+
+/** A backend-queued notice and the intent that would compose it (VC-887). */
+const backendNotice = (commandId: string, sessionId = "mine") => ({
+  sessionId,
+  commandId,
+  messageId: `${commandId}:message`,
+  text: "composed once",
+  metadata: {
+    kind: "session-host-notice" as const,
+    notice: { kind: "watch" as const, events: [] },
+  },
+  label: `notice ${commandId}`,
+});
+const noticeIntent = (value: ReturnType<typeof backendNotice>) => ({
+  sessionId: value.sessionId,
+  commandId: value.commandId,
+  compose: vi.fn(() => value),
+});
 
 describe("Session lifecycle port ordering (replaces desktop source scans)", () => {
   it("holds downgraded queues before boot event writes and explains them with existing Attention", async () => {
@@ -801,6 +821,118 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
       error: expect.objectContaining({ message: "service construction failed" }),
     });
     await owner.close();
+  });
+
+  describe("backend-queued host notices (VC-887)", () => {
+    function owned() {
+      const f = fixture();
+      const put = vi.fn(async (value: unknown) => value);
+      // Before construction: the scoped outbox copies the raw one's methods.
+      Object.assign(f.outbox, { put, pending: async () => [] });
+      const owner = createSessionRuntimeLifecycle({
+        ...f.options,
+        ownsSession: (id) => id === "mine",
+      });
+      return { f, put, owner };
+    }
+
+    it("commits a never-held id, then delivers it behind recovery", async () => {
+      const { f, put, owner } = owned();
+      const gate = deferred();
+      vi.mocked(recovery.closeStaleAttachments).mockImplementationOnce(async () => {
+        await gate.promise;
+        return 0;
+      });
+      const value = backendNotice("watch:mine:1");
+      const first = noticeIntent(value);
+      await expect(owner.enqueueHostNotice(first)).resolves.toEqual(value);
+      expect(first.compose).toHaveBeenCalledOnce();
+      expect(put).toHaveBeenCalledWith(value);
+      // Durable now; delivery waits for boot recovery to finish.
+      expect(f.delivery.deliver).not.toHaveBeenCalled();
+      gate.resolve();
+      await owner.ready();
+      await vi.waitFor(() => expect(f.delivery.deliver).toHaveBeenCalledWith(value));
+      await owner.close();
+    });
+
+    it("composes nothing for a stored or settled id, and nothing for another owner's Session", async () => {
+      const { f, put, owner } = owned();
+      await owner.ready();
+      const value = backendNotice("watch:mine:2");
+      vi.mocked(readSqliteHostNotice).mockReturnValueOnce({ state: "pending", notice: value });
+      const replay = noticeIntent({ ...value, text: "re-minted" });
+      await expect(owner.enqueueHostNotice(replay)).resolves.toEqual(value);
+      expect(replay.compose).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(f.delivery.deliver).toHaveBeenCalledWith(value));
+      vi.mocked(readSqliteHostNotice).mockReturnValueOnce({ state: "settled" });
+      const settled = noticeIntent(value);
+      await expect(owner.enqueueHostNotice(settled)).resolves.toBeNull();
+      expect(settled.compose).not.toHaveBeenCalled();
+      const foreign = noticeIntent(backendNotice("watch:theirs:1", "theirs"));
+      await expect(owner.enqueueHostNotice(foreign)).rejects.toThrow(
+        "outside this launch's Session scope",
+      );
+      expect(foreign.compose).not.toHaveBeenCalled();
+      expect(put).not.toHaveBeenCalled();
+      expect(readSqliteHostNotice).toHaveBeenCalledWith(
+        f.options.host.database.db,
+        value.commandId,
+        "mine",
+      );
+      await owner.close();
+    });
+
+    it("refuses a composition for another id, and delivers nothing the outbox already settled", async () => {
+      const { f, put, owner } = owned();
+      await owner.ready();
+      const wrong = {
+        ...noticeIntent(backendNotice("watch:mine:3")),
+        commandId: "watch:mine:other",
+      };
+      await expect(owner.enqueueHostNotice(wrong)).rejects.toThrow("composed for another id");
+      // A put that lost a race to a settle: nothing to deliver.
+      put.mockResolvedValueOnce(null);
+      await expect(
+        owner.enqueueHostNotice(noticeIntent(backendNotice("watch:mine:4"))),
+      ).resolves.toBeNull();
+      await new Promise((done) => setTimeout(done, 0));
+      expect(f.delivery.deliver).not.toHaveBeenCalled();
+      await owner.close();
+    });
+
+    it("reports a delivery that failed, but stays quiet when a close won", async () => {
+      const { f, owner } = owned();
+      await owner.ready();
+      f.delivery.deliver.mockRejectedValueOnce(new Error("subscribe failed"));
+      await owner.enqueueHostNotice(noticeIntent(backendNotice("watch:mine:5")));
+      await vi.waitFor(() =>
+        expect(f.options.ports.log.error).toHaveBeenCalledWith("host notice delivery failed", {
+          detail: "notice watch:mine:5",
+          error: expect.objectContaining({ message: "subscribe failed" }),
+        }),
+      );
+      vi.mocked(f.options.ports.log.error).mockClear();
+      // Stored, then the close wins before delivery could start.
+      const stored = owner.enqueueHostNotice(noticeIntent(backendNotice("watch:mine:6")));
+      const drain = owner.close();
+      await expect(stored).resolves.toMatchObject({ commandId: "watch:mine:6" });
+      await drain;
+      await new Promise((done) => setTimeout(done, 0));
+      expect(f.options.ports.log.error).not.toHaveBeenCalled();
+      await expect(
+        owner.enqueueHostNotice(noticeIntent(backendNotice("watch:mine:7"))),
+      ).rejects.toBeInstanceOf(SessionRuntimeClosingError);
+    });
+
+    it("refuses when this launch has no delivery", async () => {
+      const f = fixture();
+      const owner = createSessionRuntimeLifecycle({ ...f.options, runtime: null });
+      const value = noticeIntent(backendNotice("watch:mine:8"));
+      await expect(owner.enqueueHostNotice(value)).rejects.toThrow("no host notice delivery");
+      expect(value.compose).not.toHaveBeenCalled();
+      await owner.close();
+    });
   });
 
   it("closing an unstarted owner prevents any later recovery", async () => {

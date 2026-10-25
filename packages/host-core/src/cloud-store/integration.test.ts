@@ -10,7 +10,12 @@ import {
 } from "@volli/session-engine";
 import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 import { decodeSessionEventPayload, LOCAL_RUNNER } from "@volli/shared";
-import { SESSION_COMMAND_FORMAT, type ClaimedJob, type JobOutcome } from "@volli/shared/cloud";
+import {
+  SESSION_COMMAND_FORMAT,
+  SESSION_NOTICE_FORMAT,
+  type ClaimedJob,
+  type JobOutcome,
+} from "@volli/shared/cloud";
 import type { LiveHostCore } from "../index";
 import { createBackendLink, type BackendConnection } from "../cloud-runner/backend-link";
 import { createMutationGate } from "../cloud-runner/flow";
@@ -20,6 +25,11 @@ import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-hel
 import { insertProject, listProjects } from "../db/projects-repo";
 import { insertTicket, listTicketsByProject } from "../db/tickets-repo";
 import { createSessionWakeBus } from "../session-control/session-wake";
+import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
+import {
+  createSqliteHostNoticeOutbox,
+  scopeSqliteHostNoticeOutbox,
+} from "../session-runtime/sqlite-host-notice-outbox";
 import { hostMcpDispatch } from "../mcp/dispatch-policy";
 import { createRuntimeContextResolver } from "../session-runtime/context";
 import { createTestSessionEngine } from "../testing/session-engine";
@@ -545,6 +555,72 @@ describe("cloud product store integration", () => {
     expect(sqliteJobJournalStore(f.db).get("pending-legacy")).not.toBeNull();
     expect((await f.wake.engine.getSession({ sessionId: session.id }))?.session.title).toBeNull();
   }, 20_000);
+
+  it("puts claimed notices into the owner-scoped outbox in Session lane order, answering on_runner", async () => {
+    const f = fixture();
+    f.frozen();
+    const a = f.store();
+    const outbox = scopeSqliteHostNoticeOutbox(
+      f.db,
+      createSqliteHostNoticeOutbox(f.db, createSqliteSessionLedger(f.db)),
+      a.ownsSession,
+    );
+    a.bindNotices({ enqueue: (intent) => outbox.put(intent.compose()) });
+    const remote = connect(f, a);
+    const session = await birth(a, "session-a");
+    const target = "00000000-0000-4000-8000-0000000000b1";
+    const notice = (n: number): ClaimedJob => {
+      const commandId = `watch:${session.id}:00000000-0000-4000-8000-00000000010${n}`;
+      return {
+        job: {
+          id: commandId,
+          kind: "session.notice",
+          runnerId: RUNNER_A,
+          projectId: PROJECT,
+          ticketId: null,
+          sessionId: session.id,
+          workingCopyId: null,
+          commandId,
+          payload: {
+            format: SESSION_NOTICE_FORMAT,
+            notice: "watch",
+            commandId,
+            changes: [
+              {
+                subject: "session",
+                sessionId: target,
+                title: null,
+                occurredAt: n,
+                fact: "signaled-done",
+                pendingSubagents: [],
+                reason: null,
+              },
+            ],
+            overflow: 0,
+          },
+          priority: "normal",
+          createdBy: { kind: "volli", reason: "policy" },
+          createdAt: 0,
+          availableAt: 0,
+        },
+        lease: { bootId: "boot", attempt: 1, expiresAt: Date.now() + 60_000 },
+      } as unknown as ClaimedJob;
+    };
+    remote.sync.start();
+    remote.queued.push(notice(1), notice(2));
+    // The backend's `runnerJobs.wake` subscription, not the poll, claims them.
+    remote.wake();
+    await vi.waitFor(() => expect(remote.completed.size).toBe(2));
+    for (const outcome of remote.completed.values())
+      expect(outcome).toEqual({ status: "done", result: { stage: "on_runner" } });
+    const rows = f.db
+      .prepare("SELECT command_id, session_id FROM host_notice_outbox ORDER BY ordinal")
+      .all();
+    expect(rows).toEqual([
+      { command_id: notice(1).job.id, session_id: session.id },
+      { command_id: notice(2).job.id, session_id: session.id },
+    ]);
+  });
 
   it("keeps cloud identity shadows and cursor Sessions out of the frozen local product", async () => {
     const f = fixture();

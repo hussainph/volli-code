@@ -7,6 +7,7 @@ import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import {
   createSqliteHostNoticeOutbox,
+  readSqliteHostNotice,
   scopeSqliteHostNoticeOutbox,
 } from "./sqlite-host-notice-outbox";
 
@@ -69,6 +70,21 @@ async function setup() {
 }
 
 describe("launch-scoped durable host notices", () => {
+  it("reads one id as absent, pending with its first payload, or settled, and refuses another Session's id", async () => {
+    const f = await setup();
+    expect(readSqliteHostNotice(f.db, f.a.commandId, f.a.sessionId)).toEqual({ state: "absent" });
+    await f.raw.put(f.a);
+    expect(readSqliteHostNotice(f.db, f.a.commandId, f.a.sessionId)).toEqual({
+      state: "pending",
+      notice: f.a,
+    });
+    expect(() => readSqliteHostNotice(f.db, f.a.commandId, f.b.sessionId)).toThrow(
+      "belongs to a different Session",
+    );
+    await f.raw.settle(f.a.commandId, { status: "dropped", reason: "reader-stopped" });
+    expect(readSqliteHostNotice(f.db, f.a.commandId, f.a.sessionId)).toEqual({ state: "settled" });
+  });
+
   it("filters foreign candidate ids before decoding and preserves the original owned payload", async () => {
     const f = await setup();
     await f.raw.put(f.b);
