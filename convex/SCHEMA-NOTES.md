@@ -12,7 +12,9 @@ that writes one.
   `@volli/shared/cloud`. References between tables are these strings, stored
   with the `uuid` validator. A Convex `_id` never leaves `convex/`. Each entity
   table has a `by_uuid` index on `id` (Convex reserves `by_id`); a 1:1 side
-  table is keyed by its owner's id. `test/schema.test.ts` holds this.
+  table is keyed by its owner's id. `test/schema.test.ts` holds this. The
+  exception is a `session.notice` job: its id is its frozen derived notice
+  command id (see deviation 42).
 - **Uniqueness is enforced by the writing mutation**, with an index lookup
   before the insert. Convex has no unique constraint. A field the design calls
   "unique" has an index whose name says what it is unique by.
@@ -312,6 +314,12 @@ Each was a decision made while turning the design into code.
     runners take the normal registration path. A Mac still heartbeating in a
     live status cannot be replaced, even when `replacesRunnerId` names it.
 
+42. Durable watch arms carry optional origin, policy kinds, turn arm, accepted
+    sequence watermark, and last-arm/notice times. Seven-day `watchReceipts`
+    prevent an arm retry from re-arming after delivery or unwatch. Notice jobs
+    use their frozen derived command ids, not UUID job ids, so outbox dedupe and
+    second-stage receipts keep the pre-cloud watch/subagent identity.
+
 ## Migrated rows
 
 - `automationRuns` has optional `error` and `retryCommandId`: a migrated
@@ -474,6 +482,12 @@ local `watch:{watcher}:{uuid}` and `{parent}:{toolCall}:answer` command ids as
 its job id, for outbox dedupe and the final accepted-message receipt. Other
 job kinds still require UUID ids. Subagent answer production belongs to the
 delegation fold; the same typed notice executor handles its payload.
+
+A routing refusal leaves the turn arm intact and raises one frozen-id Session
+attention item (`volli:watch-delivery`); successful future delivery clears it.
+A refused automatic arm is logged and is returned as an additive `watch`
+result by `sessions.command`, never rolling back an otherwise valid steer.
+Losing access strips that target's prose from never-leased queued jobs.
 
 The runner's `host_notice_outbox` is retained, not replaced: it owns delivery
 timing and first-writer-wins replay after the job reaches the runner. Cloud

@@ -17,8 +17,8 @@ import {
   mergeWatchNotice,
   newWatchNotice,
   sessionNoticeMessageId,
-  watchNoticeCommandId,
 } from "./notices";
+import { watchNoticeCommandId } from "../session-host-notice";
 import type { UserId } from "./ids";
 
 const WATCHER = "aaaaaaaa-0000-4000-8000-000000000000";

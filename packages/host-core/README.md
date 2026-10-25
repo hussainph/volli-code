@@ -596,6 +596,11 @@ re-lease), commits it through the runtime lifecycle's `enqueueHostNotice`
 the outbox's delivery owns timing from there. A cloud launch builds no
 in-process watches (`inProcessWatches: false`): the backend arms started and
 steered watches from accepted Session-origin facts, so no notice is doubled.
+Its turn-end deferral (hold a completed turn while the target still has
+subagents running) reads the backend's `delegations` projection, which S5
+(VC-696) writes: until it does, a cloud turn-end notice is never deferred.
+`automation_run` Sessions carry an `automation` origin, so the backend arms no
+watch for the Session that ran one.
 The explicit `watch` verb stays refused until VC-894 (S6-3) routes it to
 `watches:watch` / `unwatch` / `list` under the watcher's Agent token; the exact
 args are in `cloud-agent/routes.ts`. S5's `session.followUp`

@@ -412,6 +412,179 @@ describe("durable watches", () => {
     });
     expect(await notices(w.t, w.watcher.sessionId)).toHaveLength(1);
   });
+  test("a refused arm does not roll back an accepted steer", async () => {
+    const w = await world();
+    await w.t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("sessions")
+        .withIndex("by_uuid", (q) => q.eq("id", w.target.sessionId))
+        .unique();
+      await ctx.db.patch(row!._id, { stopped: { at: 1, reason: null } });
+    });
+    const commandId = newId("command");
+    const reply = await w.as.mutation(api.sessions.command, {
+      sessionId: w.target.sessionId,
+      commandId,
+      intent: JSON.stringify({
+        kind: "message.submit",
+        reference: { id: "body", mediaType: null, digest: null },
+      }),
+    });
+    expect(reply).toMatchObject({
+      commandId,
+      status: "queued",
+      watch: { status: "not_armed", code: "target_stopped" },
+    });
+    expect(
+      await w.t.run((ctx) =>
+        ctx.db
+          .query("runnerJobs")
+          .withIndex("by_uuid", (q) => q.eq("id", commandId))
+          .unique(),
+      ),
+    ).not.toBeNull();
+  });
+
+  test("routing refusal is visible and keeps the turn arm for recovery", async () => {
+    const w = await world();
+    await w.arm();
+    await w.t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("runners")
+        .withIndex("by_uuid", (q) => q.eq("id", w.watcher.runnerId))
+        .unique();
+      await ctx.db.patch(row!._id, { revokedAt: 1, status: "revoked" });
+    });
+    await fire(w, { kind: "turn.completed", attachmentId: "a", turnId: "t" });
+    expect(await notices(w.t, w.watcher.sessionId)).toEqual([]);
+    expect((await watchRows(w.t, w.watcher.sessionId))[0]?.turnArmed).toBe(true);
+    const attention = await w.t.run((ctx) =>
+      ctx.db
+        .query("attentionItems")
+        .withIndex("by_session", (q) => q.eq("sessionId", w.watcher.sessionId))
+        .collect(),
+    );
+    expect(attention).toEqual([
+      expect.objectContaining({
+        sourceId: "volli:watch-delivery",
+        kind: "runner_alert",
+        clearedAt: null,
+      }),
+    ]);
+    await w.t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("runners")
+        .withIndex("by_uuid", (q) => q.eq("id", w.watcher.runnerId))
+        .unique();
+      await ctx.db.patch(row!._id, { revokedAt: null, status: "online" });
+    });
+    await fire(w, { kind: "turn.completed", attachmentId: "a", turnId: "next" });
+    expect(await notices(w.t, w.watcher.sessionId)).toHaveLength(1);
+    expect(
+      (
+        await w.t.run((ctx) =>
+          ctx.db
+            .query("attentionItems")
+            .withIndex("by_session", (q) => q.eq("sessionId", w.watcher.sessionId))
+            .collect(),
+        )
+      )[0]?.clearedReason,
+    ).toBe("resolved");
+  });
+
+  test("access loss removes now-hidden prose from an unleased notice", async () => {
+    const w = await world();
+    await w.arm();
+    await w.arm(newId("command"), w.ticket.ticketId, "ticket");
+    await accept(w.t, w.watcher.runnerId, w.target.sessionId, w.target.events.slice(w.turnEnd));
+    await w.person.mutation(api.board.createComment, {
+      commandId: newId("command"),
+      ticketId: w.ticket.ticketId,
+      commentId: newId("comment"),
+      body: "still visible",
+    });
+    const bob = await signIn(w.t, "other-owner");
+    await w.t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("sessions")
+        .withIndex("by_uuid", (q) => q.eq("id", w.target.sessionId))
+        .unique();
+      await ctx.db.patch(row!._id, { ownerUserId: bob.userId, visibility: "private" });
+    });
+    await w.t.mutation(internal.watches.sweep, {});
+    const payload = parseJobPayload(
+      "session.notice",
+      (await notices(w.t, w.watcher.sessionId))[0]!.payload,
+    );
+    expect(payload.notice === "watch" && payload.changes.map((c) => c.fact)).toEqual([
+      "ticket-commented",
+    ]);
+  });
+
+  test("a turn merged into an already-due job gets its own child-deferral window", async () => {
+    const w = await world();
+    await w.arm();
+    await fire(w, { kind: "session.signaled", signal: "blocked", reason: "earlier" });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 2_000);
+    await accept(w.t, w.watcher.runnerId, w.target.sessionId, [w.target.events[w.turnEnd]!]);
+    const child = await writeSession({
+      projectId: w.projectId,
+      ticketId: w.ticket.ticketId,
+      parentSessionId: w.target.sessionId,
+    });
+    await accept(w.t, w.watcher.runnerId, child.sessionId, child.events.slice(0, 2));
+    const payload = parseJobPayload(
+      "session.notice",
+      (await notices(w.t, w.watcher.sessionId))[0]!.payload,
+    );
+    expect(payload.notice === "watch" && payload.changes.map((c) => c.fact)).toEqual([
+      "signaled-blocked",
+    ]);
+    expect((await watchRows(w.t, w.watcher.sessionId))[0]?.turnArmed).toBe(true);
+  });
+
+  test("a child already ended before the parent does not retract its final completion", async () => {
+    const w = await world();
+    await w.arm();
+    await accept(w.t, w.watcher.runnerId, w.target.sessionId, [w.target.events[w.turnEnd]!]);
+    const child = await writeSession({
+      projectId: w.projectId,
+      ticketId: w.ticket.ticketId,
+      parentSessionId: w.target.sessionId,
+    });
+    await accept(w.t, w.watcher.runnerId, child.sessionId, child.events);
+    expect((await notices(w.t, w.watcher.sessionId))[0]?.status).toBe("queued");
+    expect((await watchRows(w.t, w.watcher.sessionId))[0]?.turnArmed).toBe(false);
+  });
+
+  test("an accepted Session-origin submit re-arms independently of the command door", async () => {
+    const w = await world();
+    await w.arm();
+    await accept(w.t, w.watcher.runnerId, w.target.sessionId, w.target.events.slice(w.turnEnd));
+    const before = w.target.events.length;
+    await w.target.engine.submit({
+      commandId: newId("command"),
+      sessionId: w.target.sessionId,
+      intent: { kind: "message.submit", reference: { id: "body", mediaType: null, digest: null } },
+      provenance: {
+        source: {
+          kind: "user",
+          id: "desktop",
+          detail: { sessionOrigin: { kind: "session", sessionId: w.watcher.sessionId } },
+        },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    const added = [...(await w.target.engine.listEvents({ sessionId: w.target.sessionId }))].slice(
+      before,
+    );
+    await accept(w.t, w.watcher.runnerId, w.target.sessionId, added);
+    expect((await watchRows(w.t, w.watcher.sessionId))[0]).toMatchObject({
+      origin: "steered",
+      turnArmed: true,
+    });
+  });
 });
 
 async function fire(

@@ -60,7 +60,7 @@ import {
 import { attentionVisibility } from "./lib/attention";
 import { PERSON_OR_AGENT, requireActor } from "./lib/actorAuth";
 import { enqueueJob } from "./lib/jobs";
-import { armWatch } from "./lib/watches";
+import { tryArmSessionWatch } from "./lib/watches";
 import { listingOf } from "./lib/sessionDerived";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
 import {
@@ -188,10 +188,12 @@ export const command = mutation({
       throw fail("invalid_request", `An intent is limited to ${MAX_INTENT_BYTES} bytes.`);
     }
     let intentJson: string;
+    let isMessage = false;
     try {
       const intent = decodeSessionCommandIntent(JSON.parse(args.intent), "intent");
       if (intent.kind === "session.create") throw new Error("intent.kind creates a session");
       intentJson = encodeSessionJson(intent);
+      isMessage = intent.kind === "message.submit";
     } catch (error) {
       throw fail(
         "invalid_request",
@@ -217,20 +219,16 @@ export const command = mutation({
       createdBy: caller.actor,
       onBehalfOf: viewer.userId,
     });
-    if (
-      caller.kind === "agent" &&
-      JSON.parse(intentJson).kind === "message.submit" &&
-      caller.agent.sessionId !== session.id &&
-      !(session.role === "subagent" && session.parentSessionId === caller.agent.sessionId)
-    ) {
-      await armWatch(ctx, {
-        watcher: caller.agent.session,
-        target: { kind: "session", id: session.id },
-        origin: "steered",
-        actor: caller.actor,
-        commandId: args.commandId,
-      });
-    }
+    const watch =
+      caller.kind === "agent" && isMessage
+        ? await tryArmSessionWatch(ctx, {
+            watcher: caller.agent.session,
+            target: session,
+            origin: "steered",
+            actor: caller.actor,
+            commandId: args.commandId,
+          })
+        : null;
     const job = (await ctx.db
       .query("runnerJobs")
       .withIndex("by_uuid", (q) => q.eq("id", args.commandId))
@@ -241,6 +239,7 @@ export const command = mutation({
       .unique();
     return {
       commandId: job.id,
+      ...(watch === null ? {} : { watch }),
       status: job.status,
       receipt: job.receipt,
       runner:

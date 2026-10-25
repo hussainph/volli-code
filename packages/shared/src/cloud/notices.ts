@@ -14,7 +14,11 @@
  * the notice into its outbox, minting the envelope nonce there and once.
  */
 
-import { SUBAGENT_NOTICE_MESSAGE_ID_SUFFIX } from "../session-host-notice";
+import {
+  SUBAGENT_NOTICE_COMMAND_ID_SUFFIX,
+  SUBAGENT_NOTICE_MESSAGE_ID_SUFFIX,
+  watchNoticeMessageId,
+} from "../session-host-notice";
 import {
   composeSubagentNotice,
   composeWatchNotice,
@@ -31,22 +35,14 @@ import {
   type WatchNoticeJobPayload,
 } from "./job-payloads";
 
-/** The frozen command id of a watch notice: `watch:{watcherSessionId}:{id}`, as the local path mints it. */
-export function watchNoticeCommandId(watcherSessionId: string, id: string): string {
-  return `watch:${watcherSessionId}:${id}`;
-}
-
-/** The suffix that ends a subagent notice's command id (`{operationId}:answer`). */
-const SUBAGENT_NOTICE_COMMAND_SUFFIX = ":answer";
-
 /**
  * The message id a notice's message is recorded under, derived from its
  * command id exactly as the local writers derive it: `{commandId}:message` for
  * a watch notice, `{operationId}:answer-message` for a subagent's.
  */
 export function sessionNoticeMessageId(payload: SessionNoticeJobPayload): string {
-  if (payload.notice === "watch") return `${payload.commandId}:message`;
-  return `${payload.commandId.slice(0, -SUBAGENT_NOTICE_COMMAND_SUFFIX.length)}${SUBAGENT_NOTICE_MESSAGE_ID_SUFFIX}`;
+  if (payload.notice === "watch") return watchNoticeMessageId(payload.commandId);
+  return `${payload.commandId.slice(0, -SUBAGENT_NOTICE_COMMAND_ID_SUFFIX.length)}${SUBAGENT_NOTICE_MESSAGE_ID_SUFFIX}`;
 }
 
 /** An empty watch notice, to merge the first changes into. */

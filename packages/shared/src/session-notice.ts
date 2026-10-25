@@ -58,7 +58,11 @@ export interface NoticeProse {
   totalChars: number;
 }
 
-/** Cut `text` at `limit` UTF-16 units without splitting a surrogate pair. */
+/**
+ * The first `limit` UTF-16 units of `text`, never ending on half a surrogate
+ * pair: a notice cut through an emoji or a CJK extension character would hand
+ * the model a lone surrogate, which some providers reject outright.
+ */
 export function cutAtCodePoint(text: string, limit: number): string {
   if (text.length <= limit) return text;
   const code = text.charCodeAt(limit - 1);
@@ -158,7 +162,7 @@ export type WatchChangeV1 =
     });
 
 /** The metadata row a delivered notice records for one change. */
-export function watchNoticeEventOf(change: WatchChangeV1): WatchNoticeEvent {
+function watchNoticeEventOf(change: WatchChangeV1): WatchNoticeEvent {
   if (change.subject === "ticket") {
     const base = { subject: "ticket" as const, id: change.ticketId, label: change.display };
     switch (change.fact) {
@@ -426,6 +430,10 @@ function subagentStoppedBy(by: SessionStopActor | null, parentSessionId: string)
  * child's final message quoted as the child's prose. Quoted with a stable
  * response envelope, so it takes no nonce. The first line keeps the shape
  * history already holds (`[Subagent Session <handle> ("<title>") <outcome>.`).
+ *
+ * Callers: the local delegation (`delegate-session.ts` `subagentNotice`), and
+ * a runner's `session.notice` executor through `composeSessionNotice` for the
+ * queued `subagent` payload, whose backend producer is VC-696 (S5).
  */
 export function composeSubagentNotice(input: ComposeSubagentNoticeInput): ComposedNotice {
   const handle = shortSessionId(input.childSessionId);

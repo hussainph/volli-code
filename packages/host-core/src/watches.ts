@@ -92,6 +92,8 @@ import {
   ticketEventWatchActor,
   ticketWatchChanges,
   ticketWatchHears,
+  watchNoticeCommandId,
+  watchNoticeMessageId,
   watchStoppedBy,
   WATCH_ANSWER_NOTICE_LIMIT,
   type NoticeAnswer,
@@ -102,7 +104,6 @@ import {
   type TranscriptReference,
   type WatchChangeV1,
 } from "@volli/shared";
-import { watchNoticeCommandId } from "@volli/shared/cloud";
 import type {
   SessionEngine,
   SessionRuntime,
@@ -306,7 +307,7 @@ export function createWatches(ports: WatchesPorts): Watches {
       {
         sessionId: watcher.sessionId,
         commandId,
-        messageId: `${commandId}:message`,
+        messageId: watchNoticeMessageId(commandId),
         metadata: notice.metadata,
         text: notice.text,
         label: `watch notice to ${shortSessionId(watcher.sessionId)}`,

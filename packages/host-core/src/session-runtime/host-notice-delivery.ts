@@ -156,16 +156,8 @@ export async function deliverHostNotice(
   return "parked";
 }
 
-/**
- * The first `limit` UTF-16 units of `text`, never ending on half a surrogate
- * pair: a notice cut through an emoji or a CJK extension character would hand
- * the model a lone surrogate, which some providers reject outright.
- */
-export function cutAtCodePoint(text: string, limit: number): string {
-  if (text.length <= limit) return text;
-  const code = text.charCodeAt(limit - 1);
-  return text.slice(0, code >= 0xd800 && code <= 0xdbff ? limit - 1 : limit);
-}
+/** Re-exported: the one cut every notice uses lives with the notice words in `@volli/shared`. */
+export { cutAtCodePoint } from "@volli/shared";
 
 export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

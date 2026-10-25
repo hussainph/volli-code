@@ -6,7 +6,6 @@ import {
   composeWatchNotice,
   cutAtCodePoint,
   noticeProse,
-  watchNoticeEventOf,
   watchStoppedBy,
   type ComposeSubagentNoticeInput,
   type WatchChangeV1,
@@ -287,31 +286,38 @@ describe("composeWatchNotice", () => {
   });
 
   test("every change records its metadata row", () => {
-    expect(
-      [
-        { ...ticket, fact: "ticket-moved" as const, from: "todo" as const, to: "doing" as const },
-        { ...ticket, fact: "ticket-commented" as const, comment: null },
-        {
-          ...ticket,
-          fact: "ticket-signaled" as const,
-          signalKind: "review" as const,
-          verdict: "blocked" as const,
-          detail: null,
-        },
-        { ...session, fact: "stopped" as const, by: { kind: "watchdog" as const }, reason: null },
-      ].map((change) => watchNoticeEventOf(change)),
-    ).toEqual([
-      { subject: "ticket", id: "t-1", label: "VC-12", fact: "ticket-moved", detail: "doing" },
-      { subject: "ticket", id: "t-1", label: "VC-12", fact: "ticket-commented", detail: null },
+    const changes: WatchChangeV1[] = [
+      { ...ticket, fact: "ticket-moved", from: "todo", to: "doing" },
+      { ...ticket, fact: "ticket-commented", comment: null },
       {
-        subject: "ticket",
-        id: "t-1",
-        label: "VC-12",
+        ...ticket,
         fact: "ticket-signaled",
-        detail: "review: blocked",
+        signalKind: "review",
+        verdict: "blocked",
+        detail: null,
       },
-      { subject: "session", id: TARGET, label: "bbbbbbbb", fact: "stopped", detail: null },
-    ]);
+      { ...session, fact: "stopped", by: { kind: "watchdog" }, reason: null },
+    ];
+    expect(
+      composeWatchNotice({ watcherSessionId: WATCHER, changes, nonce: counter() }).metadata,
+    ).toEqual({
+      kind: "session-host-notice",
+      notice: {
+        kind: "watch",
+        events: [
+          { subject: "ticket", id: "t-1", label: "VC-12", fact: "ticket-moved", detail: "doing" },
+          { subject: "ticket", id: "t-1", label: "VC-12", fact: "ticket-commented", detail: null },
+          {
+            subject: "ticket",
+            id: "t-1",
+            label: "VC-12",
+            fact: "ticket-signaled",
+            detail: "review: blocked",
+          },
+          { subject: "session", id: TARGET, label: "bbbbbbbb", fact: "stopped", detail: null },
+        ],
+      },
+    });
   });
 });
 

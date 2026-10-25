@@ -9,6 +9,7 @@ import {
   ticketWatchChanges,
   NOTICE_PROSE_LIMIT,
   WATCH_ANSWER_NOTICE_LIMIT,
+  watchNoticeCommandId,
   type NoticeAnswer,
   type WatchChangeV1,
   type SessionAwaitKind,
@@ -19,11 +20,12 @@ import {
   isUuid,
   isDerivedId,
   newId,
+  parseId,
+  type WatchId,
   TERMINAL_JOB_TTL_MS,
   parseJobPayload,
   mergeWatchNotice,
   newWatchNotice,
-  watchNoticeCommandId,
   JOB_TITLE_MAX_CHARS,
   WATCH_CHANGE_MAX_PENDING,
   boardEventWatchActor,
@@ -39,9 +41,10 @@ import type { Doc } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { requireProject, requireSessionVisible, type Viewer } from "./auth";
 import { cancelJob, patchQueuedJob, tryEnqueueJob } from "./jobs";
+import { raiseSessionAttention, clearSessionAttention } from "./attention";
 const WATCH_COALESCE_MS = 1_500;
 
-export type WatchTarget = { kind: "session" | "ticket"; id: string };
+type WatchTarget = { kind: "session" | "ticket"; id: string };
 type WatchOrigin = NonNullable<Doc<"watches">["origin"]>;
 type EndReason = NonNullable<Doc<"watches">["endedReason"]>;
 type Reader = Pick<MutationCtx, "db">;
@@ -93,7 +96,7 @@ export async function armWatch(
     /** Auto-arms happen within a folded batch, before its later facts. */
     armedThroughSequence?: number;
   },
-): Promise<string> {
+): Promise<WatchId> {
   if (!isDerivedId(input.commandId))
     throw watchError("invalid_request", "The watch command id is invalid.");
   if (!isUuid(input.target.id))
@@ -110,7 +113,7 @@ export async function armWatch(
     ) {
       throw watchError("id_taken", "That command id armed a different watch.");
     }
-    return receipt.watchId;
+    return parseId("watch", receipt.watchId);
   }
   const viewer = await ownerViewer(ctx, input.watcher);
   if (viewer === null) throw watchError("not_found", "That watcher does not exist.");
@@ -143,7 +146,7 @@ export async function armWatch(
     throw watchError("watch_limit", "A Session can watch at most 200 targets.");
   const kinds =
     input.target.kind === "session" ? [...SESSION_AWAIT_KINDS] : [...TICKET_AWAIT_KINDS];
-  const id = existing?.id ?? newId("watch");
+  const id = existing === undefined ? newId("watch") : parseId("watch", existing.id);
   const intake =
     input.target.kind === "session"
       ? await ctx.db
@@ -187,6 +190,7 @@ export async function armWatch(
 
 export async function endWatch(ctx: MutationCtx, watch: Doc<"watches">, reason: EndReason) {
   await ctx.db.patch(watch._id, { endedAt: Date.now(), endedReason: reason, turnArmed: false });
+  if (reason === "access_lost") await dropQueuedTarget(ctx, watch);
 }
 
 async function endWatcher(ctx: MutationCtx, watcherSessionId: string) {
@@ -209,6 +213,41 @@ async function endWatcher(ctx: MutationCtx, watcherSessionId: string) {
       });
 }
 
+/** Arming is a side effect, never a reason to roll back a recorded send. */
+export async function tryArmSessionWatch(
+  ctx: MutationCtx,
+  input: {
+    watcher: Doc<"sessions">;
+    target: Doc<"sessions">;
+    origin: "started" | "steered";
+    actor: Actor;
+    commandId: string;
+    armedThroughSequence?: number;
+  },
+): Promise<{ status: "armed"; watchId: string } | { status: "not_armed"; code: string } | null> {
+  if (
+    input.watcher.id === input.target.id ||
+    (input.target.role === "subagent" && input.target.parentSessionId === input.watcher.id)
+  )
+    return null;
+  try {
+    const watchId = await armWatch(ctx, {
+      ...input,
+      target: { kind: "session", id: input.target.id },
+    });
+    return { status: "armed", watchId };
+  } catch (error) {
+    if (!(error instanceof ConvexError)) throw error;
+    const data: unknown = error.data;
+    const code =
+      data !== null && typeof data === "object" && "code" in data && typeof data.code === "string"
+        ? data.code
+        : "watch_refused";
+    console.warn("Session watch not armed", { watcherSessionId: input.watcher.id, code });
+    return { status: "not_armed", code };
+  }
+}
+
 /** Historical buffered starts/steers cannot resurrect a watch after its owner stopped. */
 async function autoArm(ctx: MutationCtx, target: Doc<"sessions">, fact: SessionEvent) {
   const { payload } = fact;
@@ -223,7 +262,6 @@ async function autoArm(ctx: MutationCtx, target: Doc<"sessions">, fact: SessionE
   );
   if (origin?.kind !== "session" || !isUuid(origin.sessionId) || origin.sessionId === target.id)
     return;
-  if (target.role === "subagent" && target.parentSessionId === origin.sessionId) return;
   const watcher = await sessionRow(ctx, origin.sessionId);
   if (
     watcher === null ||
@@ -232,25 +270,19 @@ async function autoArm(ctx: MutationCtx, target: Doc<"sessions">, fact: SessionE
     watcher.stopped !== null
   )
     return;
-  try {
-    await armWatch(ctx, {
-      watcher,
-      target: { kind: "session", id: target.id },
-      origin: intent.kind === "session.create" ? "started" : "steered",
-      actor: {
-        kind: "agent",
-        userId: watcher.ownerUserId as Viewer["userId"],
-        sessionId: watcher.id as SessionId,
-        ticketId: watcher.ticketId as TicketId | null,
-      },
-      commandId: payload.command.id,
-      armedThroughSequence: fact.sequence,
-    });
-  } catch (error) {
-    // A formerly visible target or a stopped watcher is ordinary for buffered
-    // facts. It must not prevent the runner from draining immutable history.
-    if (!(error instanceof ConvexError)) throw error;
-  }
+  await tryArmSessionWatch(ctx, {
+    watcher,
+    target,
+    origin: intent.kind === "session.create" ? "started" : "steered",
+    actor: {
+      kind: "agent",
+      userId: watcher.ownerUserId as UserId,
+      sessionId: watcher.id as SessionId,
+      ticketId: watcher.ticketId as TicketId | null,
+    },
+    commandId: payload.command.id,
+    armedThroughSequence: fact.sequence,
+  });
 }
 
 export async function watchAccess(
@@ -355,8 +387,11 @@ export async function onSessionFact(
             stop.providerType === null ? null : noticeProse(stop.providerType, 200).text,
         };
       }
-      await noticeFor(ctx, watcher, step.change);
-      await ctx.db.patch(watch._id, { lastNoticeAt: Date.now() });
+      const routed = await noticeFor(ctx, watcher, step.change);
+      if (routed) await ctx.db.patch(watch._id, { lastNoticeAt: Date.now() });
+      // If routing was refused, keep the next-turn arm and surface the
+      // failure durably; history is still available at the target.
+      else step.turnArmed = watch.turnArmed ?? true;
     }
     if (step.ended) await endWatch(ctx, watch, "target_stopped");
     else if (step.turnArmed !== (watch.turnArmed ?? true))
@@ -365,13 +400,17 @@ export async function onSessionFact(
 }
 
 async function pendingChildren(ctx: Reader, parentSessionId: string): Promise<string[]> {
-  const rows = await ctx.db
-    .query("delegations")
-    .withIndex("by_parent_status", (q) => q.eq("parentSessionId", parentSessionId))
-    .collect();
-  return rows
-    .filter((row) => row.status === "running" || row.status === "starting")
-    .map((row) => row.childSessionId);
+  const children: string[] = [];
+  for (const status of ["running", "starting"] as const) {
+    const rows = await ctx.db
+      .query("delegations")
+      .withIndex("by_parent_status", (q) =>
+        q.eq("parentSessionId", parentSessionId).eq("status", status),
+      )
+      .take(WATCH_CHANGE_MAX_PENDING);
+    children.push(...rows.map((row) => row.childSessionId));
+  }
+  return children.slice(0, WATCH_CHANGE_MAX_PENDING);
 }
 
 /** The runner composes only staged text; spilled or unavailable bodies stay pointers. */
@@ -405,35 +444,70 @@ async function lastMessage(
   }
 }
 
-async function noticeFor(ctx: MutationCtx, watcher: Doc<"sessions">, change: WatchChangeV1) {
-  const jobs = await ctx.db
+// Frozen attention source id: retries update one visible delivery fault.
+const WATCH_DELIVERY_SOURCE_ID = "volli:watch-delivery";
+async function queuedNotices(ctx: Reader, sessionId: string) {
+  return ctx.db
     .query("runnerJobs")
     .withIndex("by_session_kind_status", (q) =>
-      q.eq("sessionId", watcher.id).eq("kind", "session.notice").eq("status", "queued"),
+      q.eq("sessionId", sessionId).eq("kind", "session.notice").eq("status", "queued"),
     )
     .collect();
+}
+
+async function deliveryFault(ctx: MutationCtx, watcher: Doc<"sessions">, code: string) {
+  await raiseSessionAttention(ctx, watcher, {
+    source: "session_attention",
+    sourceId: WATCH_DELIVERY_SOURCE_ID,
+    kind: "runner_alert",
+    title: "Watch notice could not reach this runner",
+    detail: `Delivery was refused (${code}). The watched facts remain in history; restore this Session's runner to receive future notices.`,
+    raisedAt: Date.now(),
+  });
+}
+
+async function noticeFor(
+  ctx: MutationCtx,
+  watcher: Doc<"sessions">,
+  change: WatchChangeV1,
+): Promise<boolean> {
+  const jobs = await queuedNotices(ctx, watcher.id);
   const queued = jobs.find(
     (job) =>
-      job.kind === "session.notice" &&
-      job.status === "queued" &&
-      job.lease === null &&
-      parseJobPayload("session.notice", job.payload).notice === "watch",
+      job.lease === null && parseJobPayload("session.notice", job.payload).notice === "watch",
   );
   if (queued !== undefined) {
     const payload = parseJobPayload("session.notice", queued.payload);
-    if (payload.notice === "watch")
-      await patchQueuedJob(ctx, queued, mergeWatchNotice(payload, [change]));
-    return;
+    if (payload.notice !== "watch") return false;
+    const patched = await patchQueuedJob(ctx, queued, mergeWatchNotice(payload, [change]));
+    // A turn end merged into an already-due sleeping runner's job still
+    // needs its own quiet window, in which an earlier child birth can retract it.
+    if (patched && change.fact === "turn-completed")
+      await ctx.db.patch(queued._id, {
+        availableAt: Math.max(queued.availableAt, Date.now() + WATCH_COALESCE_MS),
+      });
+    if (patched)
+      await clearSessionAttention(
+        ctx,
+        watcher.id,
+        WATCH_DELIVERY_SOURCE_ID,
+        "resolved",
+        Date.now(),
+      );
+    return patched;
   }
   const intake = await ctx.db
     .query("sessionIntake")
     .withIndex("by_session", (q) => q.eq("sessionId", watcher.id))
     .unique();
-  if (intake === null || intake.state === "released") return;
+  if (intake === null || intake.state === "released") {
+    await deliveryFault(ctx, watcher, "not_claimed");
+    return false;
+  }
   // This command id is durable: local outbox dedupe and the second receipt
-  // both compare the exact pre-cloud watch:{session}:{uuid} string.
+  // compare the exact pre-cloud watch:{session}:{uuid} string.
   const commandId = watchNoticeCommandId(watcher.id, newId("job"));
-  await tryEnqueueJob(ctx, {
+  const outcome = await tryEnqueueJob(ctx, {
     id: commandId,
     commandId,
     kind: "session.notice",
@@ -446,6 +520,35 @@ async function noticeFor(ctx: MutationCtx, watcher: Doc<"sessions">, change: Wat
     onBehalfOf: watcher.ownerUserId,
     createdBy: { kind: "volli", reason: "watch_notice", onBehalfOf: watcher.ownerUserId as UserId },
   });
+  if ("refused" in outcome) {
+    await deliveryFault(ctx, watcher, outcome.refused);
+    return false;
+  }
+  await clearSessionAttention(ctx, watcher.id, WATCH_DELIVERY_SOURCE_ID, "resolved", Date.now());
+  return true;
+}
+
+/** Never ship another author's now-hidden prose from a never-leased job. */
+async function dropQueuedTarget(ctx: MutationCtx, watch: Doc<"watches">) {
+  for (const job of await queuedNotices(ctx, watch.watcherSessionId)) {
+    if (job.lease !== null) continue;
+    const payload = parseJobPayload("session.notice", job.payload);
+    if (payload.notice !== "watch") continue;
+    const changes = payload.changes.filter(
+      (change) =>
+        !(
+          change.subject === watch.target.kind &&
+          (change.subject === "session" ? change.sessionId : change.ticketId) === watch.target.id
+        ),
+    );
+    if (changes.length === payload.changes.length && payload.overflow === 0) continue;
+    if (changes.length === 0)
+      await cancelJob(ctx, job, Date.now(), {
+        code: "access_lost",
+        detail: "Access to the watched work was lost.",
+      });
+    else await patchQueuedJob(ctx, job, { ...payload, changes, overflow: 0 });
+  }
 }
 
 export async function onBoardEvents(
@@ -469,6 +572,7 @@ export async function onBoardEvents(
         q.eq("target.kind", "ticket").eq("target.id", event.ticketId!).eq("endedAt", null),
       )
       .collect();
+    if (rows.length === 0) continue;
     const ticket = await ctx.db
       .query("tickets")
       .withIndex("by_uuid", (q) => q.eq("id", event.ticketId!))
@@ -508,11 +612,36 @@ export async function onBoardEvents(
         },
       );
       if (change !== null) {
-        await noticeFor(ctx, watcher, change);
-        await ctx.db.patch(watch._id, { lastNoticeAt: Date.now() });
+        if (await noticeFor(ctx, watcher, change))
+          await ctx.db.patch(watch._id, { lastNoticeAt: Date.now() });
       }
     }
   }
+}
+
+async function childEndedBefore(ctx: Reader, childSessionId: string, at: number): Promise<boolean> {
+  // Birth is being accepted now, so its first accepted batch is bounded at
+  // 100 facts. Look ahead in that batch before retracting a genuine final turn.
+  const facts = await ctx.db
+    .query("sessionEvents")
+    .withIndex("by_session_sequence", (q) => q.eq("sessionId", childSessionId))
+    .order("desc")
+    .take(100);
+  for (const fact of facts) {
+    if (!fact.kindKnown || fact.quarantine !== null || fact.occurredAt > at) continue;
+    if (
+      [
+        "turn.completed",
+        "turn.interrupted",
+        "session.stopped",
+        "attachment.failed",
+        "attachment.closed",
+      ].includes(fact.kind)
+    )
+      return true;
+    if (fact.kind === "turn.started") return false;
+  }
+  return false;
 }
 
 /** A child can drain its birth just after the parent's turn end. Until claim
@@ -540,16 +669,17 @@ async function deferForLateChild(ctx: MutationCtx, child: Doc<"sessions">) {
       if (job.lease !== null || Date.now() > job.availableAt) continue;
       const payload = parseJobPayload("session.notice", job.payload);
       if (payload.notice !== "watch") continue;
-      const changes = payload.changes.filter(
-        (change) =>
-          !(
-            change.subject === "session" &&
-            change.sessionId === child.parentSessionId &&
-            change.fact === "turn-completed" &&
-            change.occurredAt !== null &&
-            change.occurredAt >= child.createdAt
-          ),
-      );
+      const changes: WatchChangeV1[] = [];
+      for (const change of payload.changes) {
+        const premature =
+          change.subject === "session" &&
+          change.sessionId === child.parentSessionId &&
+          change.fact === "turn-completed" &&
+          change.occurredAt !== null &&
+          change.occurredAt >= child.createdAt &&
+          !(await childEndedBefore(ctx, child.id, change.occurredAt));
+        if (!premature) changes.push(change);
+      }
       if (changes.length === payload.changes.length) continue;
       await ctx.db.patch(watch._id, { turnArmed: true });
       if (changes.length === 0 && payload.overflow === 0)

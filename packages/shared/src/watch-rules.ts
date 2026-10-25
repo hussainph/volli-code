@@ -165,16 +165,31 @@ export function ticketWatchHears(
   return kinds.some((kind) => TICKET_AWAIT_EVENT_KINDS[kind] === eventKind);
 }
 
+/** The Ticket event payloads a watch can report: a local event's or a cloud board event's. */
+export type TicketWatchPayload = Extract<
+  TicketEventPayload | BoardEventPayload,
+  { kind: "status_changed" | "commented" | "signaled" }
+>;
+
+function isTicketWatchPayload(
+  payload: TicketEventPayload | BoardEventPayload,
+): payload is TicketWatchPayload {
+  return (
+    payload.kind === "status_changed" || payload.kind === "commented" || payload.kind === "signaled"
+  );
+}
+
 /**
- * The change one Ticket event reports to one watch, or `null` when the watch
- * does not hear it. Takes a local Ticket event's payload or a cloud board
- * event's: the watched kinds share one shape.
+ * The change one Ticket event reports to one watch, or `null` when it is not
+ * a kind a watch reports or the watch does not hear it. Takes a local Ticket
+ * event's payload or a cloud board event's: the watched kinds share one shape.
  */
 export function ticketWatchChanges(
   payload: TicketEventPayload | BoardEventPayload,
   watch: TicketWatchState,
   context: TicketWatchContext,
 ): WatchChangeV1 | null {
+  if (!isTicketWatchPayload(payload)) return null;
   if (!ticketWatchHears(watch, payload.kind, context.actorSessionId, context.watcherSessionId)) {
     return null;
   }
@@ -196,16 +211,14 @@ export function ticketWatchChanges(
         comment: body === null ? null : noticeProse(body, context.proseLimit),
       };
     }
-    default: {
-      const signal = payload as Extract<TicketEventPayload, { kind: "signaled" }>;
+    case "signaled":
       return {
         ...base,
         fact: "ticket-signaled",
-        signalKind: signal.signalKind,
-        verdict: signal.verdict,
-        detail: signal.detail === null ? null : noticeProse(signal.detail, context.proseLimit),
+        signalKind: payload.signalKind,
+        verdict: payload.verdict,
+        detail: payload.detail === null ? null : noticeProse(payload.detail, context.proseLimit),
       };
-    }
   }
 }
 

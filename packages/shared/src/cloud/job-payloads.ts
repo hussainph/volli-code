@@ -33,7 +33,10 @@ import {
   type WatchChangeV1,
   type WatchTicketActor,
 } from "../session-notice";
-import type { SubagentNoticeReason } from "../session-host-notice";
+import {
+  SUBAGENT_NOTICE_COMMAND_ID_SUFFIX,
+  type SubagentNoticeReason,
+} from "../session-host-notice";
 import { SESSION_STOP_CATEGORIES, type SessionStopDetail } from "../session-stop";
 import { TICKET_STATUSES, type TicketStatus } from "../ticket";
 import { TICKET_SIGNAL_KINDS, TICKET_SIGNAL_VERDICTS } from "../ticket-events";
@@ -184,6 +187,10 @@ export interface WatchNoticeJobPayload {
  * `commandId` is the delegation's frozen `{operationId}:answer` (or a resumed
  * turn's `{operationId}:resume:{turnId}:answer`), so a parent hears one answer
  * whichever path delivers it first.
+ *
+ * Its backend producer is VC-696 (S5): the delegations projection enqueues it
+ * when a child settles. This ticket (VC-887) types it, parses it and composes
+ * it on the runner; nothing enqueues it before VC-696 lands.
  */
 export interface SubagentNoticeJobPayload {
   format: typeof SESSION_NOTICE_FORMAT;
@@ -564,7 +571,9 @@ function parseSessionNotice(r: Reader): SessionNoticeJobPayload {
     "stopDetail",
     "answer",
   );
-  if (!commandId.endsWith(":answer")) r.fail("commandId is not a subagent answer id");
+  if (!commandId.endsWith(SUBAGENT_NOTICE_COMMAND_ID_SUFFIX)) {
+    r.fail("commandId is not a subagent answer id");
+  }
   return {
     format: SESSION_NOTICE_FORMAT,
     notice,
