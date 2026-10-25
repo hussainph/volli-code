@@ -182,6 +182,61 @@ describe("a failed reconnect recovery", () => {
   });
 });
 
+describe("a sleep fence that lands while the claim is in flight", () => {
+  it("drops the answer it no longer owns, and renews before claiming on the next wake", async () => {
+    // Both ends of the claim are held open by hand, so the sleep lands exactly
+    // between the ask and its answer however the scheduler runs: no timer, and
+    // no wall clock, decides which side of the fence the answer arrives on.
+    let asked!: () => void;
+    const claiming = new Promise<void>((done) => {
+      asked = done;
+    });
+    let answer!: () => void;
+    const claimAnswer = new Promise<void>((done) => {
+      answer = done;
+    });
+    const renew = vi.fn(async () => {});
+    const resume = vi.fn();
+    const claim = vi.fn(() => {
+      asked();
+      return claimAnswer;
+    });
+    const drain = vi.fn();
+    const sync = startRunnerSync({
+      link: { status: { state: "connected" }, onStatus: () => () => {}, close: async () => {} },
+      drain: { start: () => {}, stop: () => {}, resumeAll: drain } as never,
+      inbox: {
+        start: async () => {},
+        stop: () => {},
+        pauseClaims: () => {},
+        resumeClaims: resume,
+        renewInFlight: renew,
+        claimNow: claim,
+      } as never,
+      presence: { start: async () => {}, stop: async () => {} } as never,
+    });
+    // Reconnect recovery renewed the leases, re-opened claims, and asked for work.
+    await claiming;
+    expect(renew).toHaveBeenCalledOnce();
+    expect(resume).toHaveBeenCalledOnce();
+    // The Mac sleeps with that claim's answer still on the wire.
+    sync.suspend();
+    answer();
+    // The lane runs in order, so the link added here settles only after the
+    // fenced attempt that was already queued has returned.
+    await sync.catchUp();
+    // That answer belongs to work the fence outlived: the drain stays paused.
+    expect(claim).toHaveBeenCalledOnce();
+    expect(drain).not.toHaveBeenCalled();
+    // The next wake renews before it claims, and only then resumes the drain.
+    await sync.resume();
+    expect(renew).toHaveBeenCalledTimes(2);
+    expect(claim).toHaveBeenCalledTimes(2);
+    expect(drain).toHaveBeenCalledOnce();
+    await sync.stop();
+  });
+});
+
 describe("the composed sync over one gate", () => {
   it("drains big facts and a backlog and reports jobs through one link without deadlocking", async () => {
     const heads = new Map<string, number>();
