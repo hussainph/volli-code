@@ -2019,6 +2019,16 @@ describe("cloud Session read limits", () => {
     expect(
       renderCliSuccess("session.list", { sessions: [], truncated: true }, { json: false }),
     ).toContain("listing limit reached");
+    expect(
+      renderCliSuccess(
+        "session.list",
+        {
+          sessions: [{ id: "abcdef12", kind: "chat", status: "idle", title: "Recent" }],
+          truncated: true,
+        },
+        { json: false },
+      ),
+    ).toContain("\nVolli Cloud listing limit reached");
   });
 });
 
