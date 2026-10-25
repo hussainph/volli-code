@@ -483,10 +483,10 @@ describe("BackgroundShellHost", () => {
       }
     });
 
-    async function escapedPid(host: BackgroundShellHost, who = owner): Promise<number> {
+    async function escapedPid(host: BackgroundShellHost): Promise<number> {
       let seen = "";
       await until(() => {
-        seen = host.read(who, "sh-1", 64_000).output;
+        seen = host.read(owner, "sh-1", 64_000).output;
         return /escaped:\d+/.test(seen);
       });
       const pid = Number(/escaped:(\d+)/.exec(seen)![1]);
@@ -518,6 +518,36 @@ describe("BackgroundShellHost", () => {
 
       expect(removed).toEqual(["sh-1"]);
       await until(() => host.liveCwds().length === 0);
+      expect(alive(pid)).toBe(true);
+    });
+
+    it("lets the host close once the group is gone, instead of joining the escaped writer", async () => {
+      const { host } = harness();
+      await start(host, `${ESCAPE}; sleep 30`);
+      const pid = await escapedPid(host);
+
+      await host.close();
+
+      expect(host.liveCwds()).toEqual([]);
+      expect(alive(pid)).toBe(true);
+    });
+
+    it("settles a promoted foreground shell once its group is empty", async () => {
+      const { host } = harness();
+      const controller = new AbortController();
+      const running = host.runForeground(
+        owner,
+        { command: `sleep 0.3; ${ESCAPE}; echo done`, cwd: workspace(), title: null, env: ENV },
+        { toolCallId: "call-1", signal: controller.signal },
+      );
+      await until(() => host.foregroundAvailable(owner.sessionId, "call-1"));
+      expect(host.moveForeground(owner.sessionId, "call-1")).toEqual({ shellId: "sh-1" });
+      await expect(running).resolves.toMatchObject({ background: { shellId: "sh-1" } });
+      const pid = await escapedPid(host);
+
+      await until(() => host.list(owner.sessionId)[0]?.state === "exited");
+      expect(host.list(owner.sessionId)[0]).toMatchObject({ code: 0, signal: null });
+      expect(host.liveCwds()).toEqual([]);
       expect(alive(pid)).toBe(true);
     });
 

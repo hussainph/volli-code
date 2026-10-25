@@ -66,16 +66,19 @@
  * finish after leader exit and a 100ms stdio idle grace (or normal close),
  * then close their own pipes; promotion withdraws that foreground-only wait.
  *
- * WHAT KEEPS IT LIVE (VC-666). The shell's process group, not its pipes. A
- * grandchild that left the group (`setsid`, a daemonizing server) can hold
- * our stdout long after everything the shell started is gone, and a live
- * shell keeps its worktree busy ({@link liveCwds}) — after its Session is
- * disposed, with no list entry left to stop it from. So once the leader has
- * exited the host polls the group every {@link GROUP_POLL_MS}; when no member
- * is left it gives the pipes one more poll to drain, then closes its own read
- * ends, which fires the `close` that settles the record as usual. The escaped
- * process is not ours to kill and is left running; Volli simply stops
- * listening, so its later writes to that pipe fail (EPIPE / SIGPIPE).
+ * WHAT KEEPS IT LIVE (VC-666). Its pipes, but never past its process group.
+ * A shell exits at pipe EOF, or — once its leader has exited — when no member
+ * of its group is left, whichever comes first. A grandchild that left the
+ * group (`setsid`, a daemonizing server) can hold our stdout long after
+ * everything the shell started is gone, and a live shell keeps its worktree
+ * busy ({@link liveCwds}) — after its Session is disposed, with no list entry
+ * left to stop it from. So once the leader has exited the host polls the group
+ * every {@link GROUP_POLL_MS}; when no member is left it gives the pipes one
+ * more poll to drain, then closes its own read ends, which fires the `close`
+ * that settles the record as usual. The escaped process is not signalled, but
+ * Volli stops listening: its next write to that pipe fails with SIGPIPE (or
+ * EPIPE), which usually ends a process that still logs to it. That is the
+ * trade: a worktree is never held busy by a process outside the shell's group.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -346,6 +349,8 @@ interface ShellEntry {
   returned: boolean;
   /** The pending exit notice, while the grace for the model's own read runs. */
   noticeTimer?: ReturnType<typeof setTimeout>;
+  /** The process-group poll after the leader exits (VC-666); cleared on settle. */
+  groupTimer?: ReturnType<typeof setTimeout>;
   /**
    * Who asked for the kill, once someone did. The Session's own `shell_kill`
    * is confirmed by its tool result and is never echoed back (VC-485's rule for
@@ -568,6 +573,7 @@ export class BackgroundShellHost {
         record.signal = signal;
         record.exitedAt = this.now();
         if (ledgerId !== null) this.ledger.markExited(ledgerId, record.exitedAt);
+        clearTimeout(entry.groupTimer);
         this.processes.delete(entry);
         if (this.shells.has(shellId)) {
           this.deps.publishState(this.stateOf(entry));
@@ -588,9 +594,9 @@ export class BackgroundShellHost {
       // stream has finished emitting before it fires, so a read after
       // `state === "exited"` never misses output the process produced. This
       // only waits on OUR pipes, not a lingering process. A grandchild still
-      // in the group keeps the shell running (a group kill reaches it); one
-      // that escaped the group while holding our stdout is cut loose by
-      // `watchGroup` once the group is empty (VC-666).
+      // in the group and holding our stdout keeps the shell running (a group
+      // kill reaches it); one that escaped the group while holding it is cut
+      // loose by `watchGroup` once the group is empty (VC-666).
       child.once("close", settle);
       child.once("exit", () => this.watchGroup(entry));
       // A spawn that failed after a pid was handed out (rare) ends the same way.
@@ -629,17 +635,12 @@ export class BackgroundShellHost {
    */
   private watchGroup(entry: ShellEntry): void {
     if (entry.foreground) return;
-    const closePipes = (): void => {
-      if (entry.record.state === "exited") return;
-      entry.child.stdout?.destroy();
-      entry.child.stderr?.destroy();
-    };
     const poll = (): void => {
-      if (entry.record.state === "exited") return;
-      if (groupAlive(entry.pid)) setTimeout(poll, GROUP_POLL_MS);
-      else setTimeout(closePipes, GROUP_POLL_MS);
+      entry.groupTimer = groupAlive(entry.pid)
+        ? setTimeout(poll, GROUP_POLL_MS)
+        : setTimeout(() => closeReadEnds(entry), GROUP_POLL_MS);
     };
-    setTimeout(poll, GROUP_POLL_MS);
+    entry.groupTimer = setTimeout(poll, GROUP_POLL_MS);
   }
 
   /** Run privately until exit, cancellation, or an atomic move to the background. */
@@ -686,9 +687,9 @@ export class BackgroundShellHost {
         };
         cleanup();
         // A grandchild can retain the pipes long after bash exits. Foreground
-        // completion follows the leader, unlike a promoted/background record.
-        entry.child.stdout?.destroy();
-        entry.child.stderr?.destroy();
+        // completion follows the leader; a promoted/background record follows
+        // its pipes and, after the leader, its group (VC-666).
+        closeReadEnds(entry);
         resolve(result);
       };
       const drainAfterExit = (): void => {
@@ -1010,8 +1011,7 @@ export class BackgroundShellHost {
         // join that unrelated writer forever. Background shells keep their
         // close-based drain, including after promotion; `watchGroup` closes
         // their pipes once the group is empty (VC-666).
-        entry.child.stdout?.destroy();
-        entry.child.stderr?.destroy();
+        closeReadEnds(entry);
       }
       await entry.exited;
     }
@@ -1107,8 +1107,10 @@ function copyOf(record: RuntimeShellRecord): RuntimeShellRecord {
 }
 
 /**
- * Whether any process is still in the group `pgid` leads. ESRCH is the only
- * answer that means empty; EPERM means a member exists we may not signal.
+ * Whether any process is still in the group `pgid` leads. Only ESRCH is
+ * taken as empty. EPERM is taken as alive: a member we may not signal, or on
+ * macOS a group whose only members are unreaped zombies — which the system
+ * reaps promptly, so the conservative answer only delays the settle.
  */
 function groupAlive(pgid: number): boolean {
   try {
@@ -1117,6 +1119,16 @@ function groupAlive(pgid: number): boolean {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== "ESRCH";
   }
+}
+
+/**
+ * Close the host's read ends of a child's stdout and stderr. Node then fires
+ * the child's `close` (with its real exit code, once it has exited), whoever
+ * still holds the write ends.
+ */
+function closeReadEnds(entry: ShellEntry): void {
+  entry.child.stdout?.destroy();
+  entry.child.stderr?.destroy();
 }
 
 /** Signal the process group, falling back to the process when the group is gone. */
