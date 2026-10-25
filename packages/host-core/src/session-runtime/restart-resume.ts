@@ -61,7 +61,7 @@ export interface RestartResumePorts {
 }
 
 /** How many restart-resumed turns run at once. */
-export const RESTART_RESUME_CONCURRENCY = 2;
+const RESTART_RESUME_CONCURRENCY = 2;
 
 /**
  * Judges every recovered turn and runs the resumes the verdict allows, a few
@@ -92,19 +92,18 @@ async function judgeAndRun(
   try {
     const projection = await ports.projection(sessionId);
     const { projectId, ticketId } = projection.session;
-    const verdict =
-      lostAt === null
-        ? ({ kind: "skip", reason: "expired" } as const)
-        : restartResumeVerdict({
-            projection,
-            attachmentId,
-            lostAt,
-            now: now(),
-            startPending: ports.pendingTurnStarts().has(sessionId),
-            boundary: ports.resumeBoundary({ attachmentId }),
-            ticketSessions:
-              ticketId === null ? [] : await ports.ticketSessions({ projectId, ticketId }),
-          });
+    const ticketSessions =
+      ticketId === null ? [] : await ports.ticketSessions({ projectId, ticketId });
+    // Read last, after every await, so a start accepted meanwhile is seen.
+    const verdict = restartResumeVerdict({
+      projection,
+      attachmentId,
+      lostAt,
+      now: now(),
+      startPending: ports.pendingTurnStarts().has(sessionId),
+      boundary: ports.resumeBoundary({ attachmentId }),
+      ticketSessions,
+    });
     if (verdict.kind === "skip") {
       log.info("interrupted turn left for the person", { sessionId, reason: verdict.reason });
       return;

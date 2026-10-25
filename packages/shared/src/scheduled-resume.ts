@@ -187,11 +187,11 @@ export function sessionContinuedSince(
 function continuedByHand(
   commands: readonly SessionCommand[],
   receipts: ReadonlyMap<string, CommandReceipt>,
-  own: (commandId: string) => boolean,
+  isOwnResume: (commandId: string) => boolean,
 ): boolean {
   return commands.some(
     (candidate) =>
-      !own(candidate.id) &&
+      !isOwnResume(candidate.id) &&
       !isRestartResumeCommandId(candidate.id) &&
       CONTINUES_SESSION[candidate.intent.kind] &&
       receipts.get(candidate.id)?.status !== "rejected",

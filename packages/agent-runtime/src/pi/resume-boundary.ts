@@ -3,9 +3,10 @@
  * the lost process left without a result (VC-450).
  *
  * Pi appends the assistant reply that asks for tools BEFORE it runs them, and
- * each tool result only once that tool has finished. So a sidecar that ends on
- * a reply whose calls are not all answered is a process that died with a tool
- * in flight — and whether that bash command, write or browser action ran,
+ * each tool result only once that tool has finished. So a conversation that
+ * ends on a reply whose calls are not all answered is one cut short with a
+ * tool in flight — a lost process, or a Stop partway through a batch — and
+ * whether that bash command, write or browser action ran,
  * partly ran or never started is unknowable from here. A host must not
  * continue such a turn on its own; a person who asks to resume it gets the
  * call answered as interrupted, so the model is told the truth instead of
@@ -20,9 +21,9 @@ import type { RuntimeResumeBoundary } from "@volli/shared";
 export const ABANDONED_QUESTION_RESULT =
   "The question was abandoned when the runtime restarted. No answer was obtained.";
 
-/** What a resumed tool call the lost process left without a result is answered with. */
-export const INTERRUPTED_TOOL_RESULT =
-  "This tool call was interrupted when the runtime restarted, so its result was lost. It may have run, partly run, or not run at all: check its effects before repeating it.";
+/** What a resumed tool call left without a result is answered with. */
+const INTERRUPTED_TOOL_RESULT =
+  "This tool call was cut short before its result was recorded. It may have run, partly run, or not run at all: check its effects before repeating it.";
 
 /** The tool calls the conversation's last reply made, and the results after it. */
 interface TrailingTools {

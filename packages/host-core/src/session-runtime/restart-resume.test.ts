@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { SessionRuntimeCommandRequest } from "@volli/session-engine";
-import { restartResumeCommandId, type SessionProjection } from "@volli/shared";
+import {
+  RECOVERED_TURN_INTERRUPTED_DETAIL,
+  restartResumeCommandId,
+  type SessionProjection,
+} from "@volli/shared";
 
 import { resumeRecoveredTurns, type RestartResumePorts } from "./restart-resume";
 
@@ -26,8 +30,19 @@ function projection(
     liveExecutor: { id: `${id}-attachment` },
     turnActive: false,
     latestTurnId: "turn-1",
-    latestTurnOrigin: { kind: "user" },
     lastTurnOutcome: "interrupted",
+    attention: {
+      active: [
+        {
+          id: `${id}-warning`,
+          kind: "partial_turn_interrupted",
+          attachmentId: `${id}-attachment`,
+          detail: RECOVERED_TURN_INTERRUPTED_DETAIL,
+          diagnostic: null,
+        },
+      ],
+      primary: null,
+    },
     commands: [],
     receipts: [],
     ...overrides,

@@ -26,6 +26,7 @@ import {
   shortSessionId,
   todoListMarkdown,
   redactPayloadSecrets,
+  isProcessLossWarning,
 } from "@volli/shared";
 import type {
   AgentRequest,
@@ -35,6 +36,7 @@ import type {
   SessionRecord,
   SessionTodoList,
   SessionUsageSummary,
+  SessionAttention,
   SessionAttentionKind,
 } from "@volli/shared";
 import {
@@ -591,6 +593,22 @@ function usageCells(usage: SessionUsageSummary | undefined): Record<string, unkn
   };
 }
 
+/**
+ * The row's copy, with the Resume a turn a lost process cut short offers while
+ * its rebuilt attachment is live and idle — the same rule the chat row and the
+ * host's restart resume read (`isProcessLossWarning`, VC-450).
+ */
+function peekAttention(
+  attention: SessionAttention,
+  projection: Pick<SessionProjection, "turnActive" | "liveExecutor">,
+): { message: string; recovery: string | null } {
+  const copy = PEEK_ATTENTION[attention.kind];
+  return !projection.turnActive &&
+    isProcessLossWarning(attention, projection.liveExecutor?.id ?? null)
+    ? { ...copy, recovery: "Resume" }
+    : copy;
+}
+
 // Human copy, not a new output enum or durable Attention vocabulary.
 const PEEK_ATTENTION: Record<SessionAttentionKind, { message: string; recovery: string | null }> = {
   auth_required: { message: "Sign-in required", recovery: "Open settings" },
@@ -708,7 +726,7 @@ export async function sessionPeekVerb(
         attention === null
           ? null
           : {
-              ...PEEK_ATTENTION[attention.kind],
+              ...peekAttention(attention, chat.projection),
               detail:
                 attention.detail === null
                   ? null

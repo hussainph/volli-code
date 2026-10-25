@@ -36,10 +36,15 @@ A turn continues on its own only when all of these hold:
   a user message, or on tool results that answered every call. A tool call
   without a result (a command, a write or a browser action the process died
   inside) has unknown side effects, and so does a question nobody answered.
+- **It is a plain process loss.** The warning on the attachment is the
+  executor's own recovery sentence, not a diagnosis such as withheld history.
+  A turn whose reply had already finished, and lost only its end marker, raises
+  no warning at all: nothing is left to resume.
 - **It is still wanted.** Nobody continued this Session, and no other Session on
-  its Ticket was picked up, after the prior process was last known alive. The
-  loss is less than twelve hours old. The interrupted turn was not itself a
-  restart resume, so each loss gets one automatic attempt, never a loop.
+  its Ticket was picked up, after the prior process was last known alive. No
+  Stop was recorded for the turn. The loss is less than twelve hours old. The
+  interrupted turn was not itself a restart resume, so each loss gets one
+  automatic attempt, never a loop.
 - **Nothing else holds it.** No turn is running or about to start, and the
   attachment the recovery rebuilt is still the live one. The engine checks this
   again when it records the command.
@@ -50,8 +55,13 @@ interruption row reads **Resumed after restart**. A skipped turn raises nothing
 new: the existing **Turn interrupted** row offers **Resume** while its
 attachment is live, and the skip reason goes to the host log
 (`restart-resume`). Resuming a turn whose tool call was cut short answers that
-call as interrupted, so the model sees that its effects are unknown and is not
-told it ran.
+call as cut short, so the model sees that its effects are unknown and is not
+told it ran. A message answers the warning; a Retry keeps it until the resumed
+turn settles.
+
+Builds before this one read a restart resume's retry as a person's act: their
+scheduled resume on the same Session or Ticket skips as continued or
+superseded rather than running alongside it.
 
 ## Reattach an interrupted Session
 

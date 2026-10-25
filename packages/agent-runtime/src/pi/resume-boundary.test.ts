@@ -4,10 +4,11 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 import {
   ABANDONED_QUESTION_RESULT,
-  INTERRUPTED_TOOL_RESULT,
   interruptedToolResults,
   resumeBoundary,
 } from "./resume-boundary";
+
+const INTERRUPTED = expect.stringContaining("cut short before its result was recorded");
 
 const failed = (message: AssistantMessage) => message.stopReason === "error";
 
@@ -144,7 +145,7 @@ describe("interruptedToolResults (VC-450)", () => {
         role: "toolResult",
         toolCallId: "c1",
         toolName: "bash",
-        content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }],
+        content: [{ type: "text", text: INTERRUPTED }],
         isError: true,
         timestamp: 9,
       },

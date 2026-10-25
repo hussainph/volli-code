@@ -1,16 +1,15 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  RECOVERED_TURN_INTERRUPTED_DETAIL,
   restartResumeCommandId,
   type ScheduledResumeSibling,
   type SessionCommand,
   type SessionCommandIntent,
 } from "@volli/shared";
 
-import {
-  RESTART_RESUME_MAX_AGE_MS,
-  restartResumeVerdict,
-  type RestartResumeVerdictInput,
-} from "./restart-resume";
+import { restartResumeVerdict, type RestartResumeVerdictInput } from "./restart-resume";
+
+const TWELVE_HOURS = 12 * 60 * 60 * 1000;
 
 const ATTACHMENT = "attachment-1";
 const LOST_AT = 1_000;
@@ -28,6 +27,14 @@ const session = {
 function command(id: string, createdAt: number, intent: SessionCommandIntent): SessionCommand {
   return { id, sessionId: session.id, createdAt, intent, route: null };
 }
+
+const warning = {
+  id: "pi:attention:attachment-1:partial-turn",
+  kind: "partial_turn_interrupted" as const,
+  attachmentId: ATTACHMENT,
+  detail: RECOVERED_TURN_INTERRUPTED_DETAIL,
+  diagnostic: null,
+};
 
 const message = (id: string, createdAt: number) =>
   command(id, createdAt, {
@@ -49,8 +56,8 @@ function input(
       liveExecutor: { id: ATTACHMENT } as Projection["liveExecutor"],
       turnActive: false,
       latestTurnId: "turn-1",
-      latestTurnOrigin: { kind: "user" },
       lastTurnOutcome: "interrupted",
+      attention: { active: [warning] },
       commands: [message("m", 500)],
       receipts: [],
       ...projection,
@@ -111,16 +118,62 @@ describe("restartResumeVerdict (VC-450)", () => {
     );
   });
 
-  it("makes one automatic attempt per interruption, never a loop", () => {
+  it("continues only the plain process-loss warning, never a diagnosis", () => {
+    expect(restartResumeVerdict(input({ attention: { active: [] } }))).toEqual(
+      skip("not-a-process-loss"),
+    );
     expect(
       restartResumeVerdict(
-        input({ latestTurnOrigin: { kind: "volli", reason: "relaunch-recovery" } }),
+        input({ attention: { active: [{ ...warning, detail: "History disagreed." }] } }),
       ),
-    ).toEqual(skip("already-resumed"));
-    // Another host origin is not a restart resume.
+    ).toEqual(skip("not-a-process-loss"));
+  });
+
+  it("honours a Stop the lost process never carried out", () => {
+    const interrupt = command("i", 600, { kind: "executor.interrupt", attachmentId: ATTACHMENT });
+    expect(restartResumeVerdict(input({ commands: [message("m", 500), interrupt] }))).toEqual(
+      skip("stopped"),
+    );
+    // A refused Stop stopped nothing; bookkeeping after the start is no act.
     expect(
-      restartResumeVerdict(input({ latestTurnOrigin: { kind: "volli", reason: "watch-notice" } })),
+      restartResumeVerdict(
+        input({
+          commands: [
+            message("m", 500),
+            interrupt,
+            command("t", 700, { kind: "session.retitle", title: "x" }),
+          ],
+          receipts: [
+            {
+              id: "r",
+              commandId: "i",
+              sequence: 1,
+              recordedAt: 600,
+              status: "rejected",
+              code: "nope",
+              detail: null,
+            },
+          ],
+        }),
+      ),
     ).toMatchObject({ kind: "resume" });
+  });
+
+  it("makes one automatic attempt per interruption, never a loop", () => {
+    const resumed = command(restartResumeCommandId(ATTACHMENT, "turn-0"), 600, {
+      kind: "executor.retry",
+      attachmentId: ATTACHMENT,
+    });
+    expect(restartResumeVerdict(input({ commands: [message("m", 500), resumed] }))).toEqual(
+      skip("already-resumed"),
+    );
+    // A person's retry after it is theirs to have lost again.
+    const retry = command("r", 700, { kind: "executor.retry", attachmentId: ATTACHMENT });
+    expect(
+      restartResumeVerdict(input({ commands: [message("m", 500), resumed, retry] })),
+    ).toMatchObject({ kind: "resume" });
+    // Nothing on record at all is no act either way.
+    expect(restartResumeVerdict(input({ commands: [] }))).toMatchObject({ kind: "resume" });
   });
 
   it("skips a Session the person picked up after the loss", () => {
@@ -143,13 +196,14 @@ describe("restartResumeVerdict (VC-450)", () => {
     ).toMatchObject({ kind: "resume" });
   });
 
-  it("leaves a loss too long ago for the person", () => {
-    expect(
-      restartResumeVerdict(input({}, { now: LOST_AT + RESTART_RESUME_MAX_AGE_MS + 1 })),
-    ).toEqual(skip("expired"));
-    expect(
-      restartResumeVerdict(input({}, { now: LOST_AT + RESTART_RESUME_MAX_AGE_MS })),
-    ).toMatchObject({ kind: "resume" });
+  it("leaves a loss too long ago, or at an unknown time, for the person", () => {
+    expect(restartResumeVerdict(input({}, { lostAt: null }))).toEqual(skip("loss-unknown"));
+    expect(restartResumeVerdict(input({}, { now: LOST_AT + TWELVE_HOURS + 1 }))).toEqual(
+      skip("expired"),
+    );
+    expect(restartResumeVerdict(input({}, { now: LOST_AT + TWELVE_HOURS }))).toMatchObject({
+      kind: "resume",
+    });
   });
 
   it("never guesses about a tool in flight, or a boundary the executor cannot state", () => {

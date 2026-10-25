@@ -2299,29 +2299,33 @@ describe("host follow-ups never strand a row", () => {
       await said.runtime.close();
     });
 
-    it("lets a person's Retry answer the restart warning, but keeps it for a restart resume", async () => {
-      const person = fixture();
-      const byHand = await recovered(person);
-      await byHand.runtime.command({
-        commandId: "retry-by-hand",
-        sessionId: byHand.sessionId,
-        command: { kind: "executor.retry" },
+    it("keeps the restart warning through a Retry, and lets a message answer it", async () => {
+      for (const retry of ["person", "host"] as const) {
+        const f = fixture();
+        const { runtime, sessionId, attachmentId } = await recovered(f);
+        await runtime.command({
+          ...(retry === "host" ? { origin: { kind: "volli", reason: "relaunch-recovery" } } : {}),
+          commandId:
+            retry === "host"
+              ? restartResumeCommandId(attachmentId, "turn:active")
+              : "retry-by-hand",
+          sessionId,
+          command: { kind: "executor.retry", attachmentId },
+        });
+        expect(await attentionDetails(runtime, sessionId)).toEqual([
+          RECOVERED_TURN_INTERRUPTED_DETAIL,
+        ]);
+        await runtime.close();
+      }
+      const f = fixture();
+      const typed = await recovered(f);
+      await typed.runtime.command({
+        commandId: "typed",
+        sessionId: typed.sessionId,
+        command: { kind: "message.submit", message: message("typed") },
       });
-      expect(await attentionDetails(byHand.runtime, byHand.sessionId)).toEqual([]);
-      await byHand.runtime.close();
-
-      const host = fixture();
-      const automatic = await recovered(host);
-      await automatic.runtime.command({
-        origin: { kind: "volli", reason: "relaunch-recovery" },
-        commandId: restartResumeCommandId(automatic.attachmentId, "turn:active"),
-        sessionId: automatic.sessionId,
-        command: { kind: "executor.retry", attachmentId: automatic.attachmentId },
-      });
-      expect(await attentionDetails(automatic.runtime, automatic.sessionId)).toEqual([
-        expect.stringContaining(RECOVERED_TURN_INTERRUPTED_DETAIL),
-      ]);
-      await automatic.runtime.close();
+      expect(await attentionDetails(typed.runtime, typed.sessionId)).toEqual([]);
+      await typed.runtime.close();
     });
   });
 

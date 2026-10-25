@@ -2081,12 +2081,16 @@ async function attachSession(
       });
       activeAttentionReasons.add("runtime-failure");
     }
+    // A turn whose reply had already finished lost only its end marker:
+    // nothing is left to resume, so no warning offers a Resume that could do
+    // nothing (VC-450). The turn is still recorded as interrupted.
+    const replyFinished = resumeBoundary(recoveredMessages, hasFailedStopReason) === "none";
     for (const recoveredTurnId of openTurnIds) {
       // Attention identity is frozen per attachment/reason, not per notice.
       // A generic restart warning must not replace an active diagnostic (such
       // as conflicting settled history) with a warning the host may retire.
       // Still interrupt every open turn even when its warning is already held.
-      if (!activeAttentionReasons.has("partial-turn")) {
+      if (!replyFinished && !activeAttentionReasons.has("partial-turn")) {
         await persistObservation({
           kind: "attention",
           state: "raised",
@@ -2981,10 +2985,11 @@ async function attachSession(
      */
     const retryFailedTurn = async (commandId: string | null): Promise<DeliveryOutcome> => {
       const messages = [...agent.state.messages];
-      // Only a turn recovered from a lost process can end on a tool call with
-      // no result: this process runs every call it is asked for. Resuming it
-      // answers the call as interrupted — durably, so a second attach finds
-      // the answer — and leaves running it again to the model (VC-450).
+      // A turn cut short with a tool in flight — a lost process, or a Stop
+      // partway through a batch, once a reattach drops the aborted reply — can
+      // end on a call with no result. Resuming answers it as cut short —
+      // durably, so a second attach finds the answer — and leaves running it
+      // again to the model (VC-450).
       for (const result of interruptedToolResults(messages, hasFailedStopReason, host.now())) {
         await mainBranch.appendMessage(result, piContext());
         messages.push(result);

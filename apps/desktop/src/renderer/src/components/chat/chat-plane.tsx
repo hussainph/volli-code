@@ -1127,7 +1127,7 @@ export function ChatPlane({
       signInProviders,
       scheduledResume: projection?.scheduledResume ?? null,
       turnActive: projection?.turnActive ?? false,
-      liveExecutorId: projection?.liveExecutor?.id ?? null,
+      liveExecutorId,
       now: resumeNow,
     },
     blockerActs,

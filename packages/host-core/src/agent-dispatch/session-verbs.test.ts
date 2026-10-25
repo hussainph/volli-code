@@ -14,6 +14,7 @@ import type {
   SessionOrigin,
   SessionRole,
 } from "@volli/shared";
+import { RECOVERED_TURN_INTERRUPTED_DETAIL } from "@volli/shared";
 import { SESSION_LISTING_CACHE_LIMIT, type StoredSessionFollowUp } from "@volli/session-engine";
 import { createAgentCommandService } from "../agent-commands";
 import { testHostHandlers } from "../testing/host-handlers";
@@ -1354,6 +1355,29 @@ describe("session peek runtime facts (VC-758)", () => {
       expect((await peek(f, id))["attention"]).toEqual({ message: copy, recovery, detail: null });
     },
   );
+
+  it("offers Resume on a turn a lost process cut short while its attachment is idle (VC-450)", async () => {
+    const f = fixture();
+    const id = await f.create("lost", DAY);
+    await f.active(id, 2 * DAY);
+    await raise(f, id, "partial_turn_interrupted", RECOVERED_TURN_INTERRUPTED_DETAIL);
+    // Still running: the resume is under way, nothing to offer.
+    expect((await peek(f, id))["attention"]).toMatchObject({ recovery: null });
+    await f.engine.observe({
+      id: `lost-${id}`,
+      kind: "turn.interrupted",
+      sessionId: id,
+      attachmentId: `attachment-${id}`,
+      occurredAt: 2 * DAY,
+      provenance,
+      turnId: `turn-${id}`,
+    });
+    expect((await peek(f, id))["attention"]).toEqual({
+      message: "Turn interrupted",
+      recovery: "Resume",
+      detail: RECOVERED_TURN_INTERRUPTED_DETAIL,
+    });
+  });
 
   it("redacts and bounds an Attention's detail, and drops the Attention once it is cleared", async () => {
     const f = fixture();

@@ -1,6 +1,5 @@
 import {
   COMMAND_INTENT_CONFLICT,
-  isRestartResumeCommandId,
   RECOVERED_TURN_INTERRUPTED_DETAIL,
   type CommandIntentConflict,
   type RuntimeResumeBoundary,
@@ -1508,13 +1507,10 @@ class DefaultSessionRuntime implements SessionRuntime {
       return this.#stop(request as StopCommandRequest);
     }
     let projection = await this.#requireSession(request.sessionId);
-    // A person's Retry of an interrupted turn answers the restart warning as
-    // a message does. A host's own restart resume keeps it, so the row can
-    // say the turn running now was resumed after the restart (VC-450).
-    if (
-      request.command.kind === "message.submit" ||
-      (request.command.kind === "executor.retry" && !isRestartResumeCommandId(request.commandId))
-    ) {
+    // A message answers the restart warning. A Retry — the person's Resume or
+    // a host's restart resume — keeps it until the resumed turn settles, so
+    // the row says what is running and a refused one leaves it (VC-450).
+    if (request.command.kind === "message.submit") {
       projection = await this.#acknowledgeBootInterruption(projection);
     }
     const boundary = this.#followUpDeliveryBoundaries.get(request.commandId);

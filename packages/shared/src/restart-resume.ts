@@ -28,6 +28,25 @@ export const RECOVERED_TURN_INTERRUPTED_DETAIL =
   "A recovered Pi turn ended before its completion marker was committed.";
 
 /**
+ * Whether an Attention is the plain process-loss warning an executor's own
+ * recovery raised on `attachmentId` — the one turn state a restart resume (or
+ * the person's Resume) continues. A genuine partial-turn diagnostic, such as
+ * withheld history, is not it. One rule for the host's verdict and every
+ * surface that draws the row.
+ */
+export function isProcessLossWarning(
+  attention: { kind: string; attachmentId: string | null; detail: string | null },
+  attachmentId: string | null,
+): boolean {
+  return (
+    attachmentId !== null &&
+    attention.kind === "partial_turn_interrupted" &&
+    attention.attachmentId === attachmentId &&
+    attention.detail === RECOVERED_TURN_INTERRUPTED_DETAIL
+  );
+}
+
+/**
  * The frozen suffix every restart-resume command id ends with.
  *
  * **FROZEN** (CLAUDE.md: a durable id derivation is frozen the moment it

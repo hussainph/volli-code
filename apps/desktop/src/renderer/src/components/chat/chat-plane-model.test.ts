@@ -791,18 +791,20 @@ describe("sessionBlocker", () => {
       placement: "timeline",
     });
 
-    // A genuine partial-turn diagnostic under a running turn is not a resume.
-    expect(
-      sessionBlocker(
-        {
-          ...raised({ ...recovered, detail: "Pi recovery history disagreed." }),
-          liveExecutorId: "attachment-1",
-          turnActive: true,
-        },
-        acts,
-        false,
-      ),
-    ).toMatchObject({ message: "Turn interrupted", action: null });
+    // A genuine partial-turn diagnostic is neither resumable nor a resume.
+    for (const turnActive of [false, true]) {
+      expect(
+        sessionBlocker(
+          {
+            ...raised({ ...recovered, detail: "Pi recovery history disagreed." }),
+            liveExecutorId: "attachment-1",
+            turnActive,
+          },
+          acts,
+          false,
+        ),
+      ).toMatchObject({ message: "Turn interrupted", action: null });
+    }
 
     // Once the attachment is gone, typing is the recovery.
     expect(live({ liveExecutorId: "attachment-2" })).toMatchObject({

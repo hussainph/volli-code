@@ -22,8 +22,8 @@ import type {
 import {
   attentionResumeAt,
   findComposerVerb,
+  isProcessLossWarning,
   REASONING_LEVELS,
-  RECOVERED_TURN_INTERRUPTED_DETAIL,
   revealedSessionAttention,
   type ComposerVerb,
 } from "@volli/shared";
@@ -828,8 +828,8 @@ function providerRecovery(input: {
  *   connection that never dropped. When a spent allowance with a stated reset
  *   stopped it, a scheduled resume sits beside the Retry — see
  *   {@link stoppedRunBlocker}.
- * - **Resume** — `partial_turn_interrupted` while its attachment is still the
- *   live one and idle: the turn a lost process cut short continues from its
+ * - **Resume** — `partial_turn_interrupted` that is the plain process-loss
+ *   warning, while its attachment is still the live one and idle: the turn a lost process cut short continues from its
  *   last settled point, and a tool call left without a result is answered as
  *   interrupted rather than run again (VC-450). Once the attachment is gone,
  *   typing is the recovery. While a restart resume runs it, the row says so.
@@ -923,18 +923,19 @@ interface InterruptedTurnContext {
 }
 
 /**
- * A turn a lost process cut short. Only the attachment recovery rebuilt can
- * continue it: on it, an idle Session offers Resume, and a turn running while
- * the recovery warning still stands is the restart resume — a person's own
- * message or Retry answers the warning before its turn opens.
+ * A turn a lost process cut short. Only the plain process-loss warning on the
+ * attachment recovery rebuilt can be continued (`isProcessLossWarning`, the
+ * host verdict's own rule): idle, it offers Resume; with a turn running, that
+ * turn is the resume — a message answers the warning before its turn opens,
+ * and a Retry keeps it until the resumed turn settles.
  */
 function interruptedTurnBlocker(
   attention: SessionAttention,
   retryRuntime: SessionBlockerAction,
   turn: InterruptedTurnContext,
 ): SessionBlockerState {
-  const live = attention.attachmentId !== null && attention.attachmentId === turn.liveExecutorId;
-  if (live && turn.turnActive && attention.detail === RECOVERED_TURN_INTERRUPTED_DETAIL) {
+  const resumable = isProcessLossWarning(attention, turn.liveExecutorId);
+  if (resumable && turn.turnActive) {
     return {
       message: "Resumed after restart",
       detail: null,
@@ -947,7 +948,7 @@ function interruptedTurnBlocker(
     message: "Turn interrupted",
     detail: attention.detail,
     tone: "waiting",
-    action: live && !turn.turnActive ? { label: "Resume", act: retryRuntime.act } : null,
+    action: resumable && !turn.turnActive ? { label: "Resume", act: retryRuntime.act } : null,
   };
 }
 
