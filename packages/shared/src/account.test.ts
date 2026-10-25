@@ -57,6 +57,7 @@ describe("the account wire vocabulary", () => {
     expect(cloud.map(({ key, idempotency }) => [key, idempotency])).toEqual([
       ["cloud.launch", "read"],
       ["cloud.relaunch", "natural"],
+      ["cloud.reportUnsavedWrites", "natural"],
     ]);
     for (const entry of cloud) {
       expect(entry.placement, entry.key).toBe("host");

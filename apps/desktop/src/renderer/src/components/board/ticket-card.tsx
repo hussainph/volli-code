@@ -2,7 +2,7 @@ import * as React from "react";
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { displayTicketId, type Label, type Ticket } from "@volli/shared";
+import { cardTicketKey, type Label, type Ticket } from "@volli/shared";
 
 import type { TicketDragData } from "@renderer/components/board/board-dnd";
 import type { TicketSelectionGesture } from "@renderer/components/board/board-selection";
@@ -67,7 +67,7 @@ export function TicketCardContent({
    */
   sessionActivity?: TicketSessionActivity | null;
 }) {
-  const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
+  const displayId = cardTicketKey(ticketPrefix, ticket.ticketNumber);
 
   return (
     <article

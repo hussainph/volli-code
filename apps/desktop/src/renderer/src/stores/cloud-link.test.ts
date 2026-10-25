@@ -26,8 +26,7 @@ const UP: CloudConnection = {
 
 const SIGNED_IN = { state: "signed-in", backend: "synced", failure: null } as const;
 
-/** What a serving link reads while this build writes nothing to a cloud board. */
-const SERVING = { status: "incompatible", reason: "writes-unavailable" } as const;
+const SERVING = { status: "open" } as const;
 
 function input(patch: Partial<CloudLinkInput> = {}): CloudLinkInput {
   return {
@@ -43,10 +42,8 @@ function input(patch: Partial<CloudLinkInput> = {}): CloudLinkInput {
 const at = (now: number, downSince: number | null = null) => ({ now, downSince });
 
 describe("Volli Cloud's link view (VC-889)", () => {
-  it("serves read-only while the socket is up, the sign-in accepted and the OS online", () => {
+  it("is open while the socket is up, the sign-in accepted and the OS online", () => {
     expect(cloudLinkView(input(), at(0))).toEqual(SERVING);
-    // A build that writes to the board reads it open.
-    expect(cloudLinkView(input({ writes: true }), at(0))).toEqual({ status: "open" });
     // Before auth has said anything, an open socket still serves.
     expect(cloudLinkView(input({ authenticated: null, account: null }), at(0))).toEqual(SERVING);
   });

@@ -18,6 +18,8 @@ import { ConvexError } from "convex/values";
 
 import {
   BoardRuleError,
+  boardLabelFromRow,
+  boardTicketFromRow,
   InvalidIdError,
   InvalidPositionError,
   newId,
@@ -26,15 +28,9 @@ import {
   type BoardLabel,
   type BoardRuleCode,
   type BoardTicket,
-  type CheckoutMode,
-  type LabelId,
   type PositionKey,
-  type ProjectId,
-  type RunnerId,
-  type TicketId,
   type TicketPatch,
   type TicketStatus,
-  type UserId,
 } from "@volli/shared/cloud";
 
 import type { DataModel, Doc } from "../_generated/dataModel.js";
@@ -134,36 +130,14 @@ export function storedActor(actor: Doc<"ticketComments">["author"]): Actor {
   return actor as Actor;
 }
 
+/** A stored ticket as the rules' facts: the one map clients share (`@volli/shared/cloud`). */
 export function ticketFacts(doc: Doc<"tickets">): BoardTicket {
-  return {
-    id: doc.id as TicketId,
-    projectId: doc.projectId as ProjectId,
-    number: doc.number,
-    title: doc.title,
-    status: doc.status,
-    priority: doc.priority,
-    position: doc.position,
-    labelIds: doc.labelIds as LabelId[],
-    assigneeUserId: doc.assigneeUserId as UserId | null,
-    checkoutMode: doc.checkoutMode as CheckoutMode,
-    preferredHarnessId: doc.preferredHarnessId,
-    branch: doc.branch,
-    baseBranch: doc.baseBranch,
-    retentionKeep: doc.retentionKeep,
-    placeRunnerId: doc.placeRunnerId as RunnerId | null,
-    archivedAt: doc.archivedAt,
-  };
+  return boardTicketFromRow(doc);
 }
 
+/** A stored label as the rules' facts. */
 export function labelFacts(doc: Doc<"labels">): BoardLabel {
-  return {
-    id: doc.id as LabelId,
-    projectId: doc.projectId as ProjectId,
-    name: doc.name,
-    nameKey: doc.nameKey,
-    color: doc.color,
-    mergedIntoId: doc.mergedIntoId as LabelId | null,
-  };
+  return boardLabelFromRow(doc);
 }
 
 /** Every label of a project, aliases included. */

@@ -419,25 +419,3 @@ describe("Volli Cloud's words", () => {
     expect(hostBadge(cloud(chosen))).toBe("fail");
   });
 });
-
-describe("Volli Cloud while this build writes nothing to it (VC-889)", () => {
-  const readOnly: HostLinkView = { status: "incompatible", reason: "writes-unavailable" };
-
-  it("says read-only quietly, with no action, badge or detail, and serves", () => {
-    expect(hostSurface(cloud(readOnly), NOW)).toEqual({
-      tone: "quiet",
-      icon: "warning",
-      line: "Read-only on Volli Cloud for now",
-      graced: false,
-    });
-    expect(hostBadge(cloud(readOnly))).toBeNull();
-    expect(hostDetail(cloud(readOnly))).toBeNull();
-    expect(hostDotState(cloud(readOnly))).toBe("ready");
-    expect(
-      hostTransitionToast(
-        cloud({ status: "offline", since: SINCE, retryAt: null }),
-        cloud(readOnly),
-      ),
-    ).toEqual({ title: "Back on Volli Cloud" });
-  });
-});

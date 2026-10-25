@@ -15,9 +15,12 @@
  *   project goes: there is no half-cloud board.
  */
 import type { Project } from "@volli/shared";
+import { decideCreateProject, newId } from "@volli/shared/cloud";
 import { create } from "zustand";
 
 import type { CloudSession } from "@renderer/lib/cloud-client";
+
+import type { LocalStore } from "./optimistic";
 
 import type { CloudSelection } from "../projects";
 import { cloudFailure, type Watched } from "./source";
@@ -177,4 +180,72 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
     stopFollowing();
     stopAll();
   };
+}
+
+/**
+ * A new project in the Workspace on screen (VC-889, D4: a `blank` project,
+ * before it has a repository): the client mints its id, the shared rule
+ * names its prefix, and the rail shows it at once (an optimistic row in
+ * `projects.list`). Refused, and never issued, while the socket is down.
+ * Answers its id, or the sentence to say.
+ */
+export async function createCloudProject(
+  input: { readonly name: string; readonly ticketPrefix?: string },
+  session: CloudSession | null,
+  workspaceId: string | null,
+): Promise<{ ok: true; projectId: string } | { ok: false; error: string }> {
+  if (
+    session === null ||
+    workspaceId === null ||
+    !session.client.connectionState().isWebSocketConnected
+  ) {
+    return { ok: false, error: "Can’t reach Volli Cloud · Read-only" };
+  }
+  const projectId = newId("project");
+  const { client, api } = session;
+  try {
+    await client.mutation(
+      api.projects.create,
+      {
+        commandId: newId("command"),
+        workspaceId,
+        projectId,
+        name: input.name,
+        ...(input.ticketPrefix === undefined ? {} : { ticketPrefix: input.ticketPrefix }),
+        origin: "blank",
+      },
+      {
+        optimisticUpdate: (raw) => {
+          const store = raw as unknown as LocalStore;
+          const rows = store.getQuery(api.projects.list as never, { workspaceId }) as
+            | (CloudProjectRow & { readonly ticketPrefix: string })[]
+            | undefined;
+          if (rows === undefined) return;
+          let decision;
+          try {
+            decision = decideCreateProject({ projects: rows }, input);
+          } catch {
+            return;
+          }
+          const now = Date.now();
+          store.setQuery(api.projects.list as never, { workspaceId }, [
+            ...rows,
+            {
+              id: projectId,
+              workspaceId,
+              name: decision.name,
+              ticketPrefix: decision.ticketPrefix,
+              colorIndex: decision.colorIndex,
+              createdAt: now,
+              updatedAt: now,
+              archivedAt: null,
+            },
+          ]);
+        },
+      },
+    );
+  } catch (error) {
+    return { ok: false, error: cloudFailure(error).message };
+  }
+  return { ok: true, projectId };
 }

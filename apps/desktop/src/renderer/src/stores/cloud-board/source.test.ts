@@ -1,13 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { fakeCloud, refusal } from "./fake-cloud.test-support";
-import {
-  ARCHIVE_PAGES_MAX,
-  CLOUD_WRITES_UNAVAILABLE,
-  ConvexBoardSource,
-  cloudFailure,
-  type CloudBoardView,
-} from "./source";
+import { ARCHIVE_PAGES_MAX, ConvexBoardSource, cloudFailure, type CloudBoardView } from "./source";
 import type { CloudTicketRow } from "./projection";
 
 const P = "p1";
@@ -39,6 +33,8 @@ function view() {
     notePlanningChange: vi.fn<CloudBoardView["notePlanningChange"]>(),
     failed: vi.fn<CloudBoardView["failed"]>(),
     refused: vi.fn<CloudBoardView["refused"]>(),
+    unconfirmed: vi.fn<CloudBoardView["unconfirmed"]>(),
+    readOnly: vi.fn<CloudBoardView["readOnly"]>(() => null),
     dropped: vi.fn<CloudBoardView["dropped"]>(),
   };
 }
@@ -46,7 +42,7 @@ function view() {
 function setup() {
   const cloud = fakeCloud();
   const screen = view();
-  const source = new ConvexBoardSource(screen);
+  const source = new ConvexBoardSource(screen, "user-1");
   return { cloud, screen, source };
 }
 
@@ -191,21 +187,6 @@ describe("the cloud board source (VC-889)", () => {
     cloud.answer("board:ticketEvents", { ticketId: "t9" }, []);
     expect(screen.notePlanningChange).not.toHaveBeenCalled();
     expect(onBody).not.toHaveBeenCalled();
-  });
-
-  it("refuses every write in this release with the board's words", async () => {
-    const { screen, source } = setup();
-    expect(await source.createTicket(P, { status: "todo", title: "T" })).toBeNull();
-    await source.moveTickets(P, ["t1"], "doing", 0);
-    await source.setPriority(P, "t1", "high");
-    expect(await source.updateTicket(P, { ticketId: "t1", title: "x" })).toBeNull();
-    await source.setLabels(P, "t1", ["bug"]);
-    await source.setLabelColor(P, "l1", null);
-    expect(await source.archiveTicket(P, "t1")).toBe(false);
-    expect(await source.unarchiveTicket(P, {} as never)).toBeNull();
-    expect(await source.deleteTicket(P, "t1")).toBe(false);
-    expect(screen.refused).toHaveBeenCalledTimes(9);
-    expect(screen.refused).toHaveBeenCalledWith(CLOUD_WRITES_UNAVAILABLE);
   });
 
   it("reads the Archive a page at a time, wearing the board's labels", async () => {

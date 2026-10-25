@@ -283,6 +283,7 @@ export function sessionHandlersFrom(
     "account.accessToken": remote("account.accessToken"),
     "cloud.launch": remote("cloud.launch"),
     "cloud.relaunch": remote("cloud.relaunch"),
+    "cloud.reportUnsavedWrites": remote("cloud.reportUnsavedWrites"),
   };
   return {
     ...handlers,

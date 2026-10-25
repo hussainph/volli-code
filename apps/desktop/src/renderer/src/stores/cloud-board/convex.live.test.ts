@@ -82,7 +82,7 @@ function cuttableWebSocket() {
   };
 }
 
-const SERVING = { status: "incompatible", reason: "writes-unavailable" } as const;
+const SERVING = { status: "open" } as const;
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -92,7 +92,7 @@ afterEach(async () => {
 describe.skipIf(url === undefined || privateKeyPem === undefined)(
   "the cloud board against the pinned local backend",
   () => {
-    it("shows two windows the same live board, and goes read-only, cache intact, when cut", async () => {
+    it("shows two windows the same live board, writes optimistically, and goes read-only when cut", async () => {
       const subject = `live-board-${randomUUID()}`;
       // Setup, as the person: their account, their Workspace, a project and a ticket.
       const http = new ConvexHttpClient(url!);
@@ -173,6 +173,7 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
           removeEventListener: () => {},
         },
         inputs: inputs.getState(),
+        reportUnsavedWrites: vi.fn(),
         clock: {
           now: () => Date.now(),
           setTimeout: (run, ms) => setTimeout(run, ms),
@@ -188,20 +189,6 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
       cleanups.push(() => closeCloudClient());
       const mutation = vi.spyOn(session.client, "mutation");
 
-      const painted = new Map<string, { tickets: Ticket[]; labels: Label[] }>();
-      const view = {
-        paint: (id: string, tickets: Ticket[], labels: Label[]) =>
-          void painted.set(id, { tickets, labels }),
-        notePlanningChange: vi.fn(),
-        failed: vi.fn(),
-        refused: vi.fn(),
-        dropped: vi.fn(),
-      };
-      const source = new ConvexBoardSource(view);
-      source.attach(session);
-      await source.open(projectId);
-      cleanups.push(() => source.closeAll());
-
       const projects = {
         getState: () => ({ projects: [{ id: projectId }] }),
         subscribe: () => () => {},
@@ -209,6 +196,23 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
       const hosts = createHostConnectionStore();
       cleanups.push(hosts.getState().attach(createCloudHostSource({ projects, inputs })));
       const link = (): HostLinkView => hosts.getState().projects[projectId]!.link;
+
+      const painted = new Map<string, { tickets: Ticket[]; labels: Label[] }>();
+      const view = {
+        paint: (id: string, tickets: Ticket[], labels: Label[]) =>
+          void painted.set(id, { tickets, labels }),
+        notePlanningChange: vi.fn(),
+        failed: vi.fn(),
+        refused: vi.fn(),
+        unconfirmed: vi.fn(),
+        readOnly: (id: string) =>
+          hosts.getState().projects[id]?.link.status === "open" ? null : "Read-only",
+        dropped: vi.fn(),
+      };
+      const source = new ConvexBoardSource(view, subject);
+      source.attach(session);
+      await source.open(projectId);
+      cleanups.push(() => source.closeAll());
 
       // Both Macs see the same roster.
       await vi.waitFor(() => expect(painted.get(projectId)?.tickets).toHaveLength(1), {
@@ -222,15 +226,15 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
         ticketNumber: 1,
         worktreePath: null,
       });
-      // Serving, read-only until this build writes to cloud boards.
       await vi.waitFor(() => expect(link()).toEqual(SERVING), { timeout: 15_000 });
       expect(hosts.getState().hosts[0]!.id).toBe(CLOUD_HOST_ID);
 
       // A change made elsewhere reaches both.
+      const third = randomUUID();
       await http.mutation(api.board.createTicket, {
         commandId: randomUUID(),
         projectId,
-        ticketId: randomUUID(),
+        ticketId: third,
         status: "doing",
         title: "From a third client",
       });
@@ -275,6 +279,41 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
       );
       expect(view.failed).not.toHaveBeenCalled();
       expect(inputs.getState().input.authenticated).toBe(true);
-    }, 90_000);
+
+      // A move paints at once, with the keys the backend then confirms; Mac B sees it.
+      const position = () => painted.get(projectId)!.tickets.find(({ id }) => id === first)!;
+      const moving = source.moveTickets(projectId, [first], "todo", 0);
+      const optimistic = { ...position() };
+      expect(optimistic.status).toBe("todo");
+      await moving;
+      expect(view.failed).not.toHaveBeenCalled();
+      const confirmed = await http.query(api.board.getTicket, { ticketId: first });
+      expect(confirmed.ticket.status).toBe("todo");
+      await vi.waitFor(
+        () =>
+          expect(rosterB()?.tickets.find(({ id }) => id === first)?.position).toBe(
+            confirmed.ticket.position,
+          ),
+        { timeout: 15_000 },
+      );
+      // The confirmed rows replaced the optimistic ones with nothing moving.
+      expect(position()).toMatchObject({ status: optimistic.status, order: optimistic.order });
+
+      // A write in flight when the socket drops lands exactly once after the restore.
+      const inFlight = source.moveTickets(projectId, [third], "done", 0);
+      socket.cut();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      socket.restore();
+      await inFlight;
+      await vi.waitFor(
+        () => expect(rosterB()?.tickets.find(({ id }) => id === third)?.status).toBe("done"),
+        { timeout: 30_000 },
+      );
+      const history = await http.query(api.board.ticketEvents, { ticketId: third });
+      expect(
+        history.filter(({ payload }) => (payload as { kind: string }).kind === "status_changed"),
+      ).toHaveLength(1);
+      expect(view.failed).not.toHaveBeenCalled();
+    }, 120_000);
   },
 );

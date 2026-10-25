@@ -7,6 +7,7 @@
  */
 export * from "./activity";
 export * from "./actor";
+export * from "./board-client";
 export * from "./board-events";
 export * from "./board-receipts";
 export * from "./board-rules";

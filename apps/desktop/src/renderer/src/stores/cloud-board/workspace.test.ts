@@ -5,7 +5,14 @@ import type { CloudSession } from "@renderer/lib/cloud-client";
 
 import { fakeCloud, refusal } from "./fake-cloud.test-support";
 import type { CloudProjectRow } from "./projection";
-import { followCloudWorkspace, useCloudWorkspaceStore, type CloudWorkspaceDeps } from "./workspace";
+import { api } from "@volli/convex/api";
+
+import {
+  createCloudProject,
+  followCloudWorkspace,
+  useCloudWorkspaceStore,
+  type CloudWorkspaceDeps,
+} from "./workspace";
 
 function projectRow(id: string, overrides: Partial<CloudProjectRow> = {}): CloudProjectRow {
   return {
@@ -159,5 +166,59 @@ describe("the current Volli Cloud Workspace (VC-889)", () => {
     h.stop();
     expect(h.listening()).toBe(false);
     expect(h.cloud.watchers("workspaces:listMine", {})).toBe(0);
+  });
+});
+
+describe("a new project in the Workspace (VC-889)", () => {
+  it("is refused while the socket is down, or before a Workspace is known", async () => {
+    const cloud = fakeCloud();
+    cloud.connected = false;
+    expect(await createCloudProject({ name: "X" }, cloud.session, "w1")).toEqual({
+      ok: false,
+      error: "Can’t reach Volli Cloud · Read-only",
+    });
+    expect(await createCloudProject({ name: "X" }, null, "w1")).toMatchObject({ ok: false });
+    expect(await createCloudProject({ name: "X" }, fakeCloud().session, null)).toMatchObject({
+      ok: false,
+    });
+    expect(cloud.mutations).toEqual([]);
+  });
+
+  it("shows at once with the prefix the shared rule names, as a blank project", async () => {
+    const cloud = fakeCloud();
+    cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("a", { ticketPrefix: "VC" })]);
+    const creating = createCloudProject({ name: "Site", ticketPrefix: "WEB" }, cloud.session, "w1");
+    const [mutation] = cloud.mutations;
+    expect(mutation).toMatchObject({
+      name: "projects:create",
+      args: { workspaceId: "w1", name: "Site", ticketPrefix: "WEB", origin: "blank" },
+    });
+    expect(
+      (
+        cloud.session.client.watchQuery as never as (
+          r: unknown,
+          a: unknown,
+        ) => {
+          localQueryResult(): CloudProjectRow[];
+        }
+      )(api.projects.list, { workspaceId: "w1" })
+        .localQueryResult()
+        .map(({ name, ticketPrefix }) => [name, ticketPrefix]),
+    ).toEqual([
+      ["A", "VC"],
+      ["Site", "WEB"],
+    ]);
+    mutation!.resolve({ projectId: mutation!.args["projectId"] });
+    expect(await creating).toEqual({ ok: true, projectId: mutation!.args["projectId"] });
+  });
+
+  it("paints nothing for a list not loaded or a name the rule refuses, and says a refusal", async () => {
+    const cloud = fakeCloud();
+    const unloaded = createCloudProject({ name: "X" }, cloud.session, "w1");
+    cloud.mutations[0]!.reject(refusal("prefix_taken", "Prefix taken."));
+    expect(await unloaded).toEqual({ ok: false, error: "Prefix taken." });
+    cloud.answer("projects:list", { workspaceId: "w1" }, []);
+    void createCloudProject({ name: "  " }, cloud.session, "w1");
+    expect(cloud.watchers("projects:list", { workspaceId: "w1" })).toBe(0);
   });
 });

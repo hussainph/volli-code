@@ -55,6 +55,21 @@ describe("projects.create", () => {
     ]);
   });
 
+  test("creates a blank project, made in the Workspace before it has a repository (VC-889)", async () => {
+    const t = setup();
+    const { as, workspaceId } = await boardFixture(t);
+    const projectId = newId("project");
+    await as.mutation(api.projects.create, {
+      commandId: newId("command"),
+      workspaceId,
+      projectId,
+      name: "Scratch",
+      origin: "blank",
+    });
+    const row = await as.query(api.projects.get, { projectId });
+    expect(row).toMatchObject({ name: "Scratch", origin: "blank" });
+  });
+
   test("refuses a taken prefix, a taken id, a non-member and a malformed id", async () => {
     const t = setup();
     const { as, workspaceId, projectId } = await boardFixture(t);

@@ -51,8 +51,9 @@ export const get = query({
 
 /**
  * Creates a project with a caller-minted id. `origin` says where it came
- * from: a GitHub repository (P1 adds its repositories) or a promoted local
- * project; migrated projects are created by the migration, not here.
+ * from: a GitHub repository (P1 adds its repositories), a promoted local
+ * project, or nothing yet (`blank`: a desktop's "New project", VC-889);
+ * migrated projects are created by the migration, not here.
  */
 export const create = mutation({
   args: {
@@ -62,7 +63,7 @@ export const create = mutation({
     name: v.string(),
     description: v.optional(v.string()),
     ticketPrefix: v.optional(v.string()),
-    origin: literals(["github", "promoted_local"]),
+    origin: literals(["github", "promoted_local", "blank"]),
   },
   handler: async (ctx, args) => {
     const { commandId, ...intent } = args;

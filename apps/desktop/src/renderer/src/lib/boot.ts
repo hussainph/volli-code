@@ -38,7 +38,13 @@ import {
   useCloudWorkspaceStore,
 } from "@renderer/stores/cloud-board/workspace";
 import { createCloudHostSource } from "@renderer/stores/cloud-link";
-import { useHostConnectionStore } from "@renderer/stores/host-connection";
+import {
+  canWriteProject,
+  hostOfProject,
+  projectLinkOf,
+  useHostConnectionStore,
+} from "@renderer/stores/host-connection";
+import { hostSurface } from "@renderer/components/hosts/host-surface-model";
 import { adoptLaunch, cloudLaunchNow, launchStore } from "@renderer/stores/launch";
 import { followCloudSession, startCloudClient } from "@renderer/lib/cloud-client";
 import { useRemoteBoardAvailabilityStore } from "@renderer/stores/remote-board-availability";
@@ -539,7 +545,7 @@ export async function boot(
   adoptLaunch(launch);
   const selectedProjectId = resolveSelectedProjectId(payload.appState, payload.projects);
   if (launch.store === "cloud") {
-    return bootCloudLaunch(payload, selectedProjectId);
+    return bootCloudLaunch(launch, payload, selectedProjectId);
   }
   const remote = cloud ? decodeRemoteSelection(payload.appState[PROJECTS_UI_APP_STATE_KEY]) : null;
   // The last cloud launch's selection survives this launch's own (VC-889).
@@ -623,7 +629,16 @@ export async function boot(
  * selections stay as they were for the next local launch. The window's own
  * preferences restore as always.
  */
+/** Why a cloud project cannot be written to now, in its link's words, or `null` when it can. */
+function cloudReadOnlyReason(projectId: string): string | null {
+  const state = useHostConnectionStore.getState();
+  if (canWriteProject(state, projectId)) return null;
+  const host = hostOfProject(state, projectId);
+  return hostSurface({ ...host, link: projectLinkOf(state, projectId) }, Date.now())!.line;
+}
+
 async function bootCloudLaunch(
+  launch: Extract<CloudLaunch, { store: "cloud" }>,
   payload: BootstrapPayload,
   localSelection: string | null,
 ): Promise<BootResult> {
@@ -636,19 +651,24 @@ async function bootCloudLaunch(
   useCloudWorkspaceStore.setState({ localProjects: payload.projects.length });
   // Every board write of this launch goes to Volli Cloud's source from the
   // first frame, never to this Mac's database, even before its client runs.
-  const source = new ConvexBoardSource({
-    paint: (projectId, tickets, labels, unloaded) =>
-      useBoardStore.getState().paintBoard(projectId, tickets, labels, unloaded),
-    notePlanningChange: (change) => useBoardStore.getState().notePlanningChange(change),
-    failed: (message) => toastError(message),
-    refused: (message) => toast(message, { id: "host-local-only" }),
-    dropped: (projectId, message) => {
-      const project = useProjectsStore.getState().projects.find(({ id }) => id === projectId);
-      useBoardStore.getState().forget(projectId);
-      useProjectsStore.getState().dropRemoteProject(projectId);
-      toast.warning(`${project?.name ?? "A project"} isn’t available any more: ${message}`);
+  const source = new ConvexBoardSource(
+    {
+      paint: (projectId, tickets, labels, unloaded) =>
+        useBoardStore.getState().paintBoard(projectId, tickets, labels, unloaded),
+      notePlanningChange: (change) => useBoardStore.getState().notePlanningChange(change),
+      failed: (message) => toastError(message),
+      refused: (message) => toast(message, { id: "host-read-only" }),
+      unconfirmed: (message) => toast.warning(message, { id: "cloud-unconfirmed" }),
+      readOnly: (projectId) => cloudReadOnlyReason(projectId),
+      dropped: (projectId, message) => {
+        const project = useProjectsStore.getState().projects.find(({ id }) => id === projectId);
+        useBoardStore.getState().forget(projectId);
+        useProjectsStore.getState().dropRemoteProject(projectId);
+        toast.warning(`${project?.name ?? "A project"} isn’t available any more: ${message}`);
+      },
     },
-  });
+    launch.userId,
+  );
   installCloudBoardSource(source);
   await Promise.all([
     useUiStore.persist.rehydrate(),

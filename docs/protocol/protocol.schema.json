@@ -789,6 +789,32 @@
         "outputValidation": "network-and-tests",
         "voidOutput": false
       },
+      "cloud.reportUnsavedWrites": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "count": {
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "count"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "hostAdd.active": {
         "compatibility": "client-local",
         "input": {

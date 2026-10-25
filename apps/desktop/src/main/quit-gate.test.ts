@@ -13,6 +13,7 @@ import {
   quitConfirmDetail,
   recordUnsavedDocuments,
   registerAcceptedQuitCoordinator,
+  recordUnsavedBoardWrites,
   refuseQuit,
   unsavedDocumentNames,
   updateInstallQuitInFlight,
@@ -146,6 +147,34 @@ describe("refuseQuit", () => {
     refuseQuit({ preventDefault: vi.fn() });
 
     expect(quitAlreadyRefused({ preventDefault: vi.fn() })).toBe(false);
+  });
+});
+
+// VC-889: unanswered Volli Cloud board writes are unsaved work too.
+describe("recordUnsavedBoardWrites", () => {
+  afterEach(() => {
+    recordUnsavedBoardWrites(0);
+    recordUnsavedDocuments({ names: [] });
+  });
+
+  it("names the Volli Cloud board beside the documents while writes are unanswered", () => {
+    recordUnsavedDocuments({ names: ["draft.md"] });
+    recordUnsavedBoardWrites(1);
+    expect(unsavedDocumentNames()).toEqual(["draft.md", "Volli Cloud board (1 change)"]);
+    recordUnsavedBoardWrites(3);
+    expect(unsavedDocumentNames()).toEqual(["draft.md", "Volli Cloud board (3 changes)"]);
+    for (const bad of [0, -1, 1.5, "2", null]) {
+      recordUnsavedBoardWrites(bad);
+      expect(unsavedDocumentNames()).toEqual(["draft.md"]);
+    }
+  });
+
+  it("forgets them with the window", () => {
+    let closed!: () => void;
+    clearUnsavedDocumentsOnWindowClosed({ on: (_event, listener) => (closed = listener) });
+    recordUnsavedBoardWrites(2);
+    closed();
+    expect(unsavedDocumentNames()).toEqual([]);
   });
 });
 

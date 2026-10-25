@@ -37,7 +37,14 @@ describe("desktop main's account composition", () => {
     });
     cleanups.push(() => service.dispose());
     const relaunch = vi.fn();
-    const port = accountPort(service, { launch: () => ({ store: "local" }), relaunch });
+    const reportUnsavedWrites = vi.fn();
+    const port = accountPort(service, {
+      launch: () => ({ store: "local" }),
+      relaunch,
+      reportUnsavedWrites,
+    });
+    await port.reportUnsavedWrites(2);
+    expect(reportUnsavedWrites).toHaveBeenCalledWith(2);
     expect(await port.launch()).toEqual({ store: "local" });
     await port.relaunch();
     expect(relaunch).toHaveBeenCalledOnce();

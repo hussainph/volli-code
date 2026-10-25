@@ -78,6 +78,7 @@ import {
   clearUnsavedDocumentsOnWindowClosed,
   planUnsavedQuit,
   quitConfirmDetail,
+  recordUnsavedBoardWrites,
   recordUnsavedDocuments,
   unsavedDocumentNames,
   updateInstallQuitInFlight,
@@ -1471,6 +1472,7 @@ const appStartup = app.whenReady().then(async () => {
           if (!isExperimentEnabled("cloud")) throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
           relaunch.request();
         },
+        reportUnsavedWrites: (count) => recordUnsavedBoardWrites(count),
       }),
     };
   };
