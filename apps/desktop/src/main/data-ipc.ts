@@ -40,6 +40,7 @@ import {
 } from "@volli/host-core/maintenance";
 import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import {
+  LOCAL_RUNNER,
   errorMessage,
   validateAuthorityPolicyOverride,
   LEGACY_BACKUP_APP_STATE_KEY,
@@ -158,8 +159,8 @@ import type {
   WorktreeTrimScanResult,
   WorktreeTrimSettingsInput,
   WorktreeTrimSettingsResult,
-  VenueSnapshotInput,
-  VenueSnapshotResult,
+  WorkingCopySnapshotInput,
+  WorkingCopySnapshotResult,
 } from "../ipc/contract";
 /**
  * Both listing channels build their rows through one roster-shaped read
@@ -193,22 +194,14 @@ import {
   listBranches,
   OrphanCleanupRefused,
   publishTicketBranch,
-  readWorktreeBaseFile,
-  readWorktreeChangeSet,
-  readVenue,
-  readWorktreeDiff,
-  readWorktreeStatus,
-  resolveWorktreeTarget,
+  readWorkingCopy,
   remove as removeWorktree,
   runNet,
   scanTrimTargets,
   setRetentionTtlDays,
   setTrimSettings,
   trimAllWorktrees,
-  WorktreeChangeWatchManager,
-  createCoalescer,
-  RAIL_READ_SHARE_WINDOW_MS,
-  getWorktreeSnapshots,
+  type WorktreeReadService,
   credentialHelperIssues,
   canonicalize as canonicalizeWorktreePath,
   isInside as isInsideWorktreeHome,
@@ -330,6 +323,13 @@ export function registerDataIpcHandlers(
     detachedWork?: DetachedWorkPort;
     maintenance?: Pick<HostMaintenance, "retention" | "triggerRetention">;
     /**
+     * The host's worktree read service (VC-788): the rail's status, diff,
+     * Change Set and base reads and its change watches, through the same
+     * snapshot and coalescers the agent socket reads. Required with a live
+     * database; a degraded boot registers no handler that would read it.
+     */
+    worktreeReads?: WorktreeReadService;
+    /**
      * Every directory a local execution surface is doing work in that could
      * block destroying `target`: the cwd of each live PTY, plus the worktree of
      * each agent binding under `target` with a turn open. The worktree
@@ -420,6 +420,8 @@ export function registerDataIpcHandlers(
   const db = handle.db;
   const sessionEngine = options.sessionEngine;
   if (sessionEngine === null) throw new Error("Session Engine is unavailable");
+  const worktreeReads = options.worktreeReads;
+  if (worktreeReads === undefined) throw new Error("The worktree read service is unavailable");
   const liveAttachmentIds = (): ReadonlySet<string> =>
     new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
   const listingSources: SessionListingSources = {
@@ -436,35 +438,6 @@ export function registerDataIpcHandlers(
       { events: windowEventBus, attention: { deliver: deliverNotification } },
       () => worktreeDeps(db),
     );
-
-  const changeWatchManager = new WorktreeChangeWatchManager({
-    // The rail's last-known snapshot (VC-372) listens to the same watch the
-    // renderers do: coverage says whether an answer can be trusted at all, and
-    // a relevant change (reported before the debounced broadcast, which is the
-    // earliest this process knows) says the answer is already stale.
-    onCoverageChange: (ticketId, covered) => {
-      const snapshots = getWorktreeSnapshots();
-      if (covered) snapshots.noteCovered(ticketId);
-      else snapshots.noteUncovered(ticketId);
-    },
-    onRelevantChange: (ticketIds) => {
-      const snapshots = getWorktreeSnapshots();
-      for (const ticketId of ticketIds) snapshots.invalidate(ticketId);
-    },
-  });
-  const coalesceChangeSet = createCoalescer();
-  /**
-   * The rail's status and diff reads, coalesced per ticket the way the Change
-   * Set is — and with a share window, because the two rail surfaces
-   * (`ticket-repository-summary` and `ticket-changes-panel`, both mounted at
-   * once in split view) each fire `worktree.status` on mount for the same
-   * ticket. Without the window the second mount queued a second full five-child
-   * spawn set behind the first; with it, one read serves both. The window is far
-   * below the 250ms watch debounce, so a refresh reacting to a real filesystem
-   * change still gets its own fresh run (VC-369).
-   */
-  const coalesceStatus = createCoalescer({ shareWindowMs: RAIL_READ_SHARE_WINDOW_MS });
-  const coalesceDiff = createCoalescer({ shareWindowMs: RAIL_READ_SHARE_WINDOW_MS });
 
   /**
    * Trims a just-finished ticket's worktree (VC-340), beside the reply rather
@@ -773,8 +746,20 @@ export function registerDataIpcHandlers(
     // Switching a ticket into worktree scope makes its checkout before it
     // answers (VC-98), so that one transition is asynchronous; every other
     // update stays the synchronous write it has always been.
+    //
+    // Only the channel's declared fields reach the handler: its other inputs
+    // (a priority, a body mutation, label edits) are the agent socket's, and
+    // this guard does not validate them.
     "volli:ticket-update": (input: TicketUpdateInput): TicketResult | Promise<TicketResult> => {
-      const updated = board("board.updateTicket", input);
+      const { ticketId, title, body, worktreePath, branch, baseBranch, usesWorktree } = input;
+      const declared: TicketUpdateInput = { ticketId };
+      if (title !== undefined) declared.title = title;
+      if (body !== undefined) declared.body = body;
+      if (worktreePath !== undefined) declared.worktreePath = worktreePath;
+      if (branch !== undefined) declared.branch = branch;
+      if (baseBranch !== undefined) declared.baseBranch = baseBranch;
+      if (usesWorktree !== undefined) declared.usesWorktree = usesWorktree;
+      const updated = board("board.updateTicket", declared);
       return updated instanceof Promise
         ? updated.then(({ ticket }) => ({ ok: true, ticket }))
         : { ok: true, ticket: updated.ticket };
@@ -1066,11 +1051,13 @@ export function registerDataIpcHandlers(
       return { ok: true, report };
     },
 
-    "volli:venue-snapshot": async (input: VenueSnapshotInput): Promise<VenueSnapshotResult> => {
-      // `readVenue` owns which directory this is — the same rule the Session
+    "volli:working-copy-snapshot": async (
+      input: WorkingCopySnapshotInput,
+    ): Promise<WorkingCopySnapshotResult> => {
+      // `readWorkingCopy` owns which directory this is — the same rule the Session
       // runtime binds one by — so a renderer never names a path for main to run
       // git in, and the drawing can never be of a tree the agent is not in.
-      const read = await readVenue(worktreeDeps(db), input);
+      const read = await readWorkingCopy(worktreeDeps(db), input);
       if (!read.ok) return { ok: false, error: read.error };
       return { ok: true, reading: read.value };
     },
@@ -1084,7 +1071,7 @@ export function registerDataIpcHandlers(
         intent: { kind: "session.retitle", title: input.title.trim() },
         provenance: {
           source: { kind: "user", id: "renderer", detail: { sessionOrigin: { kind: "user" } } },
-          venue: { id: "local", kind: "local" },
+          venue: LOCAL_RUNNER,
         },
       });
       if (submitted.receipt?.status !== "completed") {
@@ -1142,8 +1129,8 @@ export function registerDataIpcHandlers(
       // The directory is gone; every window's recursive watch on it must go
       // with it. Renderers never unwatch here — from their side the ticket
       // simply stopped having a worktree.
-      changeWatchManager.unwatchTicket(input.ticketId);
-      getWorktreeSnapshots().invalidate(input.ticketId);
+      // No last-known answer about it may outlive it either (VC-372).
+      worktreeReads.releaseTicket(input.ticketId);
       // The worktree identity changed (path cleared) for THIS ticket — re-hydrate
       // every board, and let this ticket's own surfaces refresh promptly.
       broadcastDataChanged({
@@ -1183,7 +1170,7 @@ export function registerDataIpcHandlers(
       if (worktreePath === null) return { ok: false, error: "Worktree path was not resolved" };
       // A checkout came back (or was replaced): whatever this ticket's watch was
       // serving describes the directory that was missing (VC-372).
-      getWorktreeSnapshots().invalidate(input.ticketId);
+      worktreeReads.invalidate(input.ticketId);
       // The identity moved (or came back), so every board re-hydrates and this
       // ticket's own surfaces refresh promptly — same targeting the scope
       // switch and the terminal boot use.
@@ -1328,7 +1315,7 @@ export function registerDataIpcHandlers(
       // ticket to target — untargeted (everyone re-hydrates). Their directories
       // are gone, so no last-known snapshot may outlive them either (VC-372).
       if (outcome.run.items.some((item) => item.state === "completed")) {
-        getWorktreeSnapshots().invalidateAll();
+        worktreeReads.invalidateAll();
         broadcastDataChanged({ kind: "worktree" });
       }
       return { ok: true, run: outcome.run, receipt: outcome.receipt };
@@ -1402,7 +1389,7 @@ export function registerDataIpcHandlers(
       // definition unlinked from any live ticket, so there's no ticket to
       // target — untargeted (everyone re-hydrates), and no last-known snapshot
       // of the vanished directory may be served either (VC-372).
-      getWorktreeSnapshots().invalidateAll();
+      worktreeReads.invalidateAll();
       broadcastDataChanged({ kind: "worktree" });
       return { ok: true };
     },
@@ -1422,7 +1409,7 @@ export function registerDataIpcHandlers(
       // what is now on disk. Files went from tickets this call cannot name, so
       // every last-known snapshot goes with them (VC-372).
       if (!report.dryRun && report.removedCount > 0) {
-        getWorktreeSnapshots().invalidateAll();
+        worktreeReads.invalidateAll();
         broadcastDataChanged({ kind: "worktree" });
       }
       return { ok: true, report };
@@ -1440,20 +1427,17 @@ export function registerDataIpcHandlers(
     // `pr_url`, so both broadcast to re-hydrate every board.
 
     "volli:worktree-status": async (input: TicketIdInput): Promise<WorktreeStatusResult> => {
-      // Thin adapter over the ticketId-in read verb (CONCEPT #42): it owns the
-      // ticket→identity resolution, the no-worktree discrimination, AND the
-      // stamped-but-deleted disk check the CLI door always did but this one
-      // used to skip — which fed a deleted path into the errs-dirty status
-      // read and lied `uncommitted: true` to the renderer.
+      // Thin adapter over the host's read service (VC-788), which owns the
+      // ticket→identity resolution, the no-worktree discrimination and the
+      // stamped-but-deleted disk check (CONCEPT #42); this door owns only its
+      // error sentences.
       //
       // Coalesced per ticket: the read is five git children, and both rail
       // surfaces ask for it on mount (VC-369). Served from the last-known
       // snapshot while a watch covers the worktree (VC-372), so the Now↔Diffs
       // page flip — one surface unmounting as the other mounts — asks git
       // nothing at all.
-      const read = await getWorktreeSnapshots().readStatus(input.ticketId, () =>
-        coalesceStatus(input.ticketId, () => readWorktreeStatus(worktreeDeps(db), input.ticketId)),
-      );
+      const read = await worktreeReads.readStatus(input.ticketId);
       switch (read.kind) {
         case "missing-ticket":
           return { ok: false, error: "Unknown ticket" };
@@ -1467,12 +1451,9 @@ export function registerDataIpcHandlers(
     },
 
     "volli:worktree-diff": async (input: WorktreeDiffInput): Promise<WorktreeDiffResult> => {
-      // Keyed by mode as well as ticket: the two modes are different questions
-      // ("what would the PR contain" vs "what is uncommitted now"), so sharing
-      // one answer between them would return the wrong diff.
-      const read = await coalesceDiff(`${input.ticketId}:${input.mode}`, () =>
-        readWorktreeDiff(worktreeDeps(db), input.ticketId, input.mode),
-      );
+      // Coalesced per ticket AND mode: the two modes are different questions
+      // ("what would the PR contain" vs "what is uncommitted now").
+      const read = await worktreeReads.readDiff(input.ticketId, input.mode);
       switch (read.kind) {
         case "missing-ticket":
           return { ok: false, error: "Unknown ticket" };
@@ -1494,11 +1475,7 @@ export function registerDataIpcHandlers(
       // while a watch covers the worktree (VC-372) — which is also what keeps a
       // diff tab's mount read free: the Diffs page it opened from just read the
       // same Change Set.
-      const read = await getWorktreeSnapshots().readChangeSet(input.ticketId, () =>
-        coalesceChangeSet(input.ticketId, () =>
-          readWorktreeChangeSet(worktreeDeps(db), input.ticketId),
-        ),
-      );
+      const read = await worktreeReads.readChangeSet(input.ticketId);
       switch (read.kind) {
         case "missing-ticket":
           return { ok: false, error: "Unknown ticket" };
@@ -1516,12 +1493,7 @@ export function registerDataIpcHandlers(
     "volli:worktree-base-read": async (
       input: WorktreeBaseReadInput,
     ): Promise<WorktreeBaseReadResult> => {
-      const read = await readWorktreeBaseFile(
-        worktreeDeps(db),
-        input.ticketId,
-        input.path,
-        input.baseRevision,
-      );
+      const read = await worktreeReads.readBaseFile(input.ticketId, input.path, input.baseRevision);
       switch (read.kind) {
         case "missing-ticket":
           return { ok: false, error: "Unknown ticket" };
@@ -1541,14 +1513,9 @@ export function registerDataIpcHandlers(
     },
 
     "volli:worktree-change-watch": async (input: TicketIdInput, sender): Promise<Result> => {
-      // Only the PATH is wanted here, so this resolves the target rather than
-      // reading the status: the full read spawns five git children and this
-      // handler discarded every one of their answers. Both rail surfaces
-      // subscribe on mount, so that waste landed twice on the main process at
-      // exactly the moment a ticket workspace opens (VC-369). Same three
-      // failure arms — `resolveWorktreeTarget` is the verb's own resolution
-      // step, not a second copy of it.
-      const resolved = resolveWorktreeTarget(worktreeDeps(db), input.ticketId);
+      // The service resolves only the path (never the five-child status read,
+      // VC-369) and answers the same three failure arms the reads do.
+      const resolved = await worktreeReads.watch(pageClientEventSink(sender), input.ticketId);
       switch (resolved.kind) {
         case "missing-ticket":
           return { ok: false, error: "Unknown ticket" };
@@ -1557,22 +1524,18 @@ export function registerDataIpcHandlers(
         case "missing-on-disk":
           return { ok: false, error: WORKTREE_MISSING_ON_DISK };
         case "ok":
-          return changeWatchManager.watch(
-            pageClientEventSink(sender),
-            input.ticketId,
-            resolved.target.worktreePath,
-          );
+          return resolved.result;
       }
     },
 
     "volli:worktree-change-watch-pause": (input: TicketIdInput, sender): Result =>
-      changeWatchManager.pause(pageClientEventSink(sender), input.ticketId),
+      worktreeReads.pause(pageClientEventSink(sender), input.ticketId),
 
     "volli:worktree-change-watch-resume": async (input: TicketIdInput, sender): Promise<Result> =>
-      changeWatchManager.resume(pageClientEventSink(sender), input.ticketId),
+      worktreeReads.resume(pageClientEventSink(sender), input.ticketId),
 
     "volli:worktree-change-unwatch": (input: TicketIdInput, sender): Result => {
-      changeWatchManager.unwatch(pageClientEventSink(sender), input.ticketId);
+      worktreeReads.unwatch(pageClientEventSink(sender), input.ticketId);
       return { ok: true };
     },
 
@@ -1594,7 +1557,7 @@ export function registerDataIpcHandlers(
       }
       // The commit moved HEAD and the working tree: the last-known snapshot this
       // ticket's watch was serving is stale (VC-372).
-      getWorktreeSnapshots().invalidate(input.ticketId);
+      worktreeReads.invalidate(input.ticketId);
       // No ticket row changed, but a `worktree_committed` event landed on THIS
       // ticket. Targeting it is what lets the Details rail's git summary refresh
       // promptly (the CLI/rail-side commit → rail guarantee, issue #80) instead
@@ -1615,7 +1578,7 @@ export function registerDataIpcHandlers(
       if (!result.ok) return { ok: false, error: result.error };
       // The branch moved on the remote (and `pr_url` may have been written):
       // this ticket's last-known snapshot is stale (VC-372).
-      getWorktreeSnapshots().invalidate(input.ticketId);
+      worktreeReads.invalidate(input.ticketId);
       // `pr_url` was written (and a `pr_opened` event recorded) on THIS ticket —
       // target it so its rail refreshes promptly, same as the commit path.
       broadcastDataChanged({
@@ -1680,8 +1643,7 @@ export function registerDataIpcHandlers(
       releaseTicketToolOutput(input.ticketId);
       // Same as worktree-remove: the archived worktree's directory is gone, so
       // no window may keep a recursive watch pinned to it.
-      changeWatchManager.unwatchTicket(input.ticketId);
-      getWorktreeSnapshots().invalidate(input.ticketId);
+      worktreeReads.releaseTicket(input.ticketId);
       // The ticket archived + its worktree was removed — target it so its own
       // still-open surfaces refresh (the full re-hydrate drops the card).
       broadcastDataChanged({ ticketId: input.ticketId, kind: "retention" });

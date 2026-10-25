@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createSessionEngine } from "@volli/session-engine";
-import { createSessionProjectionCheckpoint, roleImpliedByTicket } from "@volli/shared";
+import {
+  createSessionProjectionCheckpoint,
+  LOCAL_RUNNER,
+  roleImpliedByTicket,
+} from "@volli/shared";
 import type { SessionEvent, SessionLedger, SessionObservation, SessionUsage } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { internSessionEventProvenance } from "../db/session-event-provenance";
@@ -46,6 +50,10 @@ function provenanceId(): number {
   return internSessionEventProvenance(ctx.db, JSON.stringify(provenance));
 }
 
+// The port's guarantees — ordering, rollback, sequences, receipts, signals,
+// usage scope, checkpoints — are the shared contract, run against this adapter
+// in `sqlite-ledger.contract.test.ts`. These are what only SQLite has: its
+// codecs, its corrupt-row tolerance, its projections and statement cache.
 describe("SqliteSessionLedger", () => {
   it("stores and reads back the Role and the parent link as Session columns (VC-9)", async () => {
     const { control, projectId } = setup();
@@ -131,117 +139,9 @@ describe("SqliteSessionLedger", () => {
     ).resolves.toBeNull();
   });
 
-  it("rolls a checkpoint back with its transaction", async () => {
-    const { control, ledger, projectId } = setup();
-    const created = await control.createSession({
-      commandId: "create-checkpoint-rollback",
-      projectId,
-      ticketId: null,
-      role: "project",
-      parentSessionId: null,
-      title: null,
-      provenance,
-    });
-    const checkpoint = createSessionProjectionCheckpoint(
-      created.session,
-      await control.listEvents({ sessionId: created.session.id }),
-    );
-
-    await expect(
-      ledger.transaction((transaction) => {
-        transaction.saveProjectionCheckpoint(checkpoint);
-        throw new Error("rollback");
-      }),
-    ).rejects.toThrow("rollback");
-    expect(
-      ctx.db
-        .prepare("SELECT 1 FROM session_projection_checkpoints WHERE session_id = ?")
-        .get(created.session.id),
-    ).toBeUndefined();
-  });
-
-  it("commits a complete create fact set once, replays it idempotently, and orders cloned reads", async () => {
-    const { control, projectId } = setup();
-    const first = await control.createSession({
-      commandId: "create-a",
-      projectId,
-      ticketId: null,
-      role: "project",
-      parentSessionId: null,
-      title: "One",
-      provenance,
-    });
-    const replay = await control.createSession({
-      commandId: "create-a",
-      projectId,
-      ticketId: null,
-      role: "project",
-      parentSessionId: null,
-      title: "One",
-      provenance,
-    });
-    const second = await control.createSession({
-      commandId: "create-b",
-      projectId,
-      ticketId: null,
-      role: "project",
-      parentSessionId: null,
-      title: "Two",
-      provenance,
-    });
-
-    expect(replay).toEqual(first);
-    expect(
-      (await control.listSessions({ projectId, scope: "all" })).map((item) => item.session.id),
-    ).toEqual([second.session.id, first.session.id]);
-    const page = await control.listEvents({
-      sessionId: first.session.id,
-      afterSequence: 1,
-      limit: 2,
-    });
-    expect(page.map((event) => event.sequence)).toEqual([2, 3]);
-    page[0]!.payload = { kind: "session.archived" };
-    expect((await control.listEvents({ sessionId: first.session.id }))[1]!.payload.kind).toBe(
-      "session.created",
-    );
-  });
-
-  it("reads Session start stamps across every project from the window's edge", async () => {
-    const { control, projectId } = setup();
-    const other = testProject({ id: "project-2", name: "Other", ticketPrefix: "OT" });
-    insertProject(ctx.db, other);
-    // The injected clock steps by one per id, so each create lands on its own
-    // stamp: 101, 102, 103 in creation order.
-    const first = await control.createSession({
-      commandId: "create-a",
-      projectId,
-      ticketId: null,
-      role: "project",
-      parentSessionId: null,
-      title: "One",
-      provenance,
-    });
-    const elsewhere = await control.createSession({
-      commandId: "create-b",
-      projectId: other.id,
-      ticketId: null,
-      role: "project",
-      parentSessionId: null,
-      title: "Two",
-      provenance,
-    });
-
-    const starts = await control.listSessionStarts({ sinceMs: 0 });
-    expect(starts).toEqual([first.session.createdAt, elsewhere.session.createdAt]);
-    await expect(
-      control.listSessionStarts({ sinceMs: elsewhere.session.createdAt }),
-    ).resolves.toEqual([elsewhere.session.createdAt]);
-    await expect(
-      control.listSessionStarts({ sinceMs: elsewhere.session.createdAt + 1 }),
-    ).resolves.toEqual([]);
-  });
-
-  it("finishes transactions synchronously and rolls a failed transaction back", async () => {
+  // Call order and rollback are the shared contract's (sqlite-ledger.contract.test.ts).
+  // Running the work before `transaction` even returns is this adapter's own.
+  it("runs transaction work synchronously, before the call returns", async () => {
     const { ledger, control, projectId } = setup();
     const created = await control.createSession({
       commandId: "create",
@@ -263,21 +163,6 @@ describe("SqliteSessionLedger", () => {
     });
     expect(order).toEqual(["first", "second"]);
     await Promise.all([first, second]);
-
-    await expect(
-      ledger.transaction((tx) => {
-        tx.appendEvent({
-          id: "bad-event",
-          sessionId: created.session.id,
-          sequence: 99,
-          occurredAt: 1,
-          recordedAt: 1,
-          provenance,
-          payload: { kind: "session.archived" },
-        });
-      }),
-    ).rejects.toThrow("sequence must be monotonic");
-    expect(await control.listEvents({ sessionId: created.session.id })).toHaveLength(3);
   });
 
   it("round-trips the immutable Runtime Brief input through SQLite", async () => {
@@ -660,151 +545,6 @@ describe("SqliteSessionLedger", () => {
     ).resolves.toMatchObject({ session: { title: "Unrelated" } });
   });
 
-  it("reads only the latest explicit signal for each ticket without projecting all Session history", async () => {
-    const { control, projectId } = setup();
-    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-a", usesWorktree: false }));
-    const first = await control.createSession({
-      commandId: "create-signal-first",
-      projectId,
-      ticketId: "ticket-a",
-      role: "ticket",
-      parentSessionId: null,
-      title: "First",
-      provenance,
-    });
-    await control.submit({
-      commandId: "signal-first",
-      sessionId: first.session.id,
-      intent: { kind: "session.signal", signal: "done", reason: "First result" },
-      provenance,
-    });
-    const second = await control.createSession({
-      commandId: "create-signal-second",
-      projectId,
-      ticketId: "ticket-a",
-      role: "ticket",
-      parentSessionId: null,
-      title: "Second",
-      provenance,
-    });
-    await control.submit({
-      commandId: "signal-second",
-      sessionId: second.session.id,
-      intent: { kind: "session.signal", signal: "blocked", reason: "Latest result" },
-      provenance,
-    });
-
-    await expect(control.listLatestTicketSignals({ projectId })).resolves.toEqual([
-      {
-        ticketId: "ticket-a",
-        sessionId: second.session.id,
-        signal: "blocked",
-        reason: "Latest result",
-        createdAt: 114,
-      },
-    ]);
-  });
-
-  it("keeps the last accepted signal when a clock regression moves occurred_at backwards (VC-512)", async () => {
-    let now = 200;
-    const { control, projectId } = setup(() => now);
-    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-a", usesWorktree: false }));
-    const beforeRegression = await control.createSession({
-      commandId: "create-signal-before-regression",
-      projectId,
-      ticketId: "ticket-a",
-      role: "ticket",
-      parentSessionId: null,
-      title: "Before the clock moved",
-      provenance,
-    });
-    await control.submit({
-      commandId: "signal-before-regression",
-      sessionId: beforeRegression.session.id,
-      intent: { kind: "session.signal", signal: "blocked", reason: "Clock said later" },
-      provenance,
-    });
-    // The clock moves backwards — NTP correction, a VM restore, a person — so
-    // the signal ACCEPTED after the first one carries an EARLIER occurred_at.
-    now = 100;
-    const afterRegression = await control.createSession({
-      commandId: "create-signal-after-regression",
-      projectId,
-      ticketId: "ticket-a",
-      role: "ticket",
-      parentSessionId: null,
-      title: "After the clock moved",
-      provenance,
-    });
-    await control.submit({
-      commandId: "signal-after-regression",
-      sessionId: afterRegression.session.id,
-      intent: { kind: "session.signal", signal: "done", reason: "Accepted later" },
-      provenance,
-    });
-
-    // The signal accepted last is the latest state this host knows, whatever
-    // its occurred_at claims; an occurred_at ordering would name the older one.
-    await expect(control.listLatestTicketSignals({ projectId })).resolves.toEqual([
-      {
-        ticketId: "ticket-a",
-        sessionId: afterRegression.session.id,
-        signal: "done",
-        reason: "Accepted later",
-        createdAt: 100,
-      },
-    ]);
-  });
-
-  it("breaks equal-occurred_at signal ties by acceptance order, not Session id (VC-512)", async () => {
-    const { control, projectId } = setup(() => 150);
-    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-a", usesWorktree: false }));
-    const earlierAccepted = await control.createSession({
-      commandId: "create-signal-tie-earlier",
-      projectId,
-      ticketId: "ticket-a",
-      role: "ticket",
-      parentSessionId: null,
-      title: "Accepted first",
-      requestedSessionId: "session-z",
-      provenance,
-    });
-    const laterAccepted = await control.createSession({
-      commandId: "create-signal-tie-later",
-      projectId,
-      ticketId: "ticket-a",
-      role: "ticket",
-      parentSessionId: null,
-      title: "Accepted second",
-      requestedSessionId: "session-a",
-      provenance,
-    });
-    await control.submit({
-      commandId: "signal-tie-earlier",
-      sessionId: earlierAccepted.session.id,
-      intent: { kind: "session.signal", signal: "blocked", reason: "Accepted first" },
-      provenance,
-    });
-    // Accepted second, and its Session id sorts LOWER under SQLite BINARY — the
-    // old tie-break would name the first signal "latest" from this alone.
-    await control.submit({
-      commandId: "signal-tie-later",
-      sessionId: laterAccepted.session.id,
-      intent: { kind: "session.signal", signal: "done", reason: "Accepted second" },
-      provenance,
-    });
-
-    await expect(control.listLatestTicketSignals({ projectId })).resolves.toEqual([
-      {
-        ticketId: "ticket-a",
-        sessionId: laterAccepted.session.id,
-        signal: "done",
-        reason: "Accepted second",
-        createdAt: 150,
-      },
-    ]);
-  });
-
   it("ignores a malformed persisted signal instead of failing the ticket projection", async () => {
     const { control, projectId } = setup();
     insertTicket(
@@ -833,6 +573,66 @@ describe("SqliteSessionLedger", () => {
       );
 
     await expect(control.listLatestTicketSignals({ projectId })).resolves.toEqual([]);
+  });
+
+  it("writes LOCAL_RUNNER as the shipped local/local columns and provenance bytes", async () => {
+    // The frozen desktop identity: older builds and boot recovery read these
+    // exact values, so naming the literal must not move a byte on disk.
+    const { control, projectId } = setup();
+    const local = {
+      source: { kind: "system" as const, id: "desktop", detail: null },
+      venue: LOCAL_RUNNER,
+    };
+    const created = await control.createSession({
+      commandId: "create",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "One",
+      provenance: local,
+    });
+    const start = await control.submit({
+      commandId: "start",
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId: "terminal", continuity: "fresh" },
+      provenance: local,
+    });
+    await control.observe({
+      id: "opened",
+      kind: "attachment.opened",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 200,
+      provenance: local,
+      attachment: {
+        id: "attachment",
+        sessionId: created.session.id,
+        adapterId: "terminal",
+        venue: LOCAL_RUNNER,
+        continuity: "fresh",
+        native: { id: null, detail: { kind: "volli.terminal.v1", cwd: "/repo" } },
+        authority: null,
+      },
+    });
+    expect(ctx.db.prepare("SELECT venue_id, venue_kind FROM session_attachments").get()).toEqual({
+      venue_id: "local",
+      venue_kind: "local",
+    });
+    expect(
+      ctx.db
+        .prepare(
+          `SELECT DISTINCT p.provenance FROM session_events e
+             JOIN session_provenances p ON p.id = e.provenance_id
+            WHERE e.session_id = ?`,
+        )
+        .all(created.session.id),
+    ).toEqual([
+      {
+        provenance:
+          '{"source":{"kind":"system","id":"desktop","detail":null},"venue":{"id":"local","kind":"local"}}',
+      },
+    ]);
   });
 
   it("persists attachment evidence atomically and refuses a corrupt JSON row on read", async () => {
@@ -1682,57 +1482,6 @@ describe("the Session usage projection", () => {
     ).toEqual({ cache_read_tokens: null, cost_usd: null, cost_basis: "unavailable" });
   });
 
-  it("reads a Ticket's whole bill across its Sessions, in one indexed pass", async () => {
-    const { control, projectId } = setup();
-    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-a", usesWorktree: false }));
-    const first = await meteredSession(control, {
-      projectId,
-      ticketId: "ticket-a",
-      commandId: "create-first",
-    });
-    const second = await meteredSession(control, {
-      projectId,
-      ticketId: "ticket-a",
-      commandId: "create-second",
-    });
-    const elsewhere = await meteredSession(control, {
-      projectId,
-      ticketId: null,
-      commandId: "create-elsewhere",
-    });
-
-    await record(control, first, "u1", 1_000, metered({ costUsd: 1 }));
-    await record(control, second, "u2", 2_000, metered({ costUsd: 2 }));
-    await record(control, elsewhere, "u3", 3_000, metered({ costUsd: 4 }));
-
-    const report = await control.reportUsage({
-      scope: { kind: "ticket", ticketId: "ticket-a" },
-      groupBy: "session",
-    });
-    expect(report.total.knownCostUsd).toBe(3);
-    expect(report.meteredSessionCount).toBe(2);
-    expect(report.groups.map((group) => group.key)).toEqual([second, first]);
-  });
-
-  it("bounds a report by when the spending happened", async () => {
-    const { control, projectId } = setup();
-    const sessionId = await meteredSession(control, {
-      projectId,
-      ticketId: null,
-      commandId: "create-windowed",
-    });
-
-    await record(control, sessionId, "old", 1_000, metered({ costUsd: 1 }));
-    await record(control, sessionId, "new", 5_000, metered({ costUsd: 2 }));
-
-    await expect(
-      control.reportUsage({ scope: { kind: "all" }, since: 2_000 }),
-    ).resolves.toMatchObject({ total: { knownCostUsd: 2, requestCount: 1 } });
-    await expect(
-      control.reportUsage({ scope: { kind: "all" }, until: 2_000 }),
-    ).resolves.toMatchObject({ total: { knownCostUsd: 1, requestCount: 1 } });
-  });
-
   // `sessions.ticket_id` is ON DELETE SET NULL. Reading attribution live would
   // move a deleted Ticket's whole bill into unticketed Project spend, which is
   // a quieter lie than showing an id that no longer resolves.
@@ -1870,6 +1619,8 @@ describe("the Session usage projection", () => {
   });
 
   describe("listProjectionEvents (VC-355)", () => {
+    // The contract compares only the facts: the port lets an adapter return full
+    // events here. This one must not, because skipping the join is its point.
     it("returns the same facts in the same order without the provenance field", async () => {
       const { ledger, control, projectId } = setup();
       const created = await control.createSession({
@@ -2046,41 +1797,6 @@ describe("listAttachedSessions (VC-403)", () => {
     return { sessionId: created.session.id, attachmentId };
   }
 
-  it("returns a Session while its attachment is open and drops it once closed", async () => {
-    const { ledger, control, projectId } = setup();
-    const open = await sessionWithAttachment(control, projectId, "open", "terminal");
-    const closed = await sessionWithAttachment(control, projectId, "closed", "terminal");
-    // A Session that never attached at all: the case the narrowing exists for.
-    await control.createSession({
-      commandId: "create-bare",
-      projectId,
-      ticketId: null,
-      role: "project",
-      parentSessionId: null,
-      title: "Never attached",
-      provenance,
-    });
-
-    await expect(
-      ledger.transaction((transaction) => transaction.listAttachedSessions().map(({ id }) => id)),
-    ).resolves.toEqual(expect.arrayContaining([open.sessionId, closed.sessionId]));
-
-    await control.observe({
-      id: "closed-closed",
-      kind: "attachment.closed",
-      sessionId: closed.sessionId,
-      occurredAt: 300,
-      provenance,
-      attachmentId: closed.attachmentId,
-      outcome: "completed",
-    });
-
-    const attached = await ledger.transaction((transaction) =>
-      transaction.listAttachedSessions().map(({ id }) => id),
-    );
-    expect(attached).toEqual([open.sessionId]);
-  });
-
   it("agrees with the fold it replaces, for terminals and chats alike", async () => {
     const { ledger, control, projectId } = setup();
     const terminal = await sessionWithAttachment(control, projectId, "terminal", "terminal");
@@ -2153,47 +1869,6 @@ describe("listAttachedSessions (VC-403)", () => {
     // is not, and the three that never attached are not.
     expect(narrow).toBe(1);
     expect(live.sessionId).not.toBe(exited.sessionId);
-  });
-
-  it("keeps a failed attachment out: it never opened", async () => {
-    const { ledger, control, projectId } = setup();
-    const created = await control.createSession({
-      commandId: "create-failed",
-      projectId,
-      ticketId: null,
-      role: "project",
-      parentSessionId: null,
-      title: "Failed",
-      provenance,
-    });
-    const start = await control.submit({
-      commandId: "start-failed",
-      sessionId: created.session.id,
-      intent: { kind: "executor.start", adapterId: "terminal", continuity: "fresh" },
-      provenance,
-    });
-    await control.observe({
-      id: "failed",
-      kind: "attachment.failed",
-      sessionId: created.session.id,
-      commandId: start.command.id,
-      occurredAt: 200,
-      provenance,
-      attachment: {
-        id: "attachment-failed",
-        sessionId: created.session.id,
-        adapterId: "terminal",
-        venue: { id: "local", kind: "local" },
-        continuity: "fresh",
-        native: null,
-        authority: null,
-      },
-      failure: { code: "terminal_start_failed", detail: "no pty", diagnostic: null },
-    });
-
-    await expect(
-      ledger.transaction((transaction) => transaction.listAttachedSessions()),
-    ).resolves.toEqual([]);
   });
 });
 

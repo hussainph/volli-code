@@ -24,6 +24,7 @@ import {
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
   QueueRevisionConflictError,
+  RECOVERED_TURN_INTERRUPTED_DETAIL,
   blobUrl,
   type BlobLinkView,
   type ModelAccessSnapshot,
@@ -2477,7 +2478,205 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
     }
   });
 
-  it("keeps an already-visible wait through held to durable-pending ownership", async () => {
+  const kickoff: UIMessage = {
+    id: "kickoff",
+    role: "user",
+    parts: [{ type: "text", text: "host-started kickoff" }],
+  };
+  const recorded = (sequence = 1) =>
+    frame(
+      sequence,
+      {
+        kind: "command.recorded",
+        command: {
+          id: "kickoff-command",
+          sessionId: SESSION,
+          createdAt: 0,
+          route: null,
+          intent: {
+            kind: "message.submit",
+            reference: { id: "kickoff-artifact", mediaType: null, digest: null },
+          },
+        },
+      },
+      kickoff,
+    );
+  const receipt = (sequence: number, status: "accepted" | "rejected" | "unreconciled") =>
+    frame(sequence, {
+      kind: "command.receipt.recorded",
+      receipt: {
+        id: `receipt-${sequence}`,
+        commandId: "kickoff-command",
+        recordedAt: sequence,
+        sequence,
+        ...(status === "accepted"
+          ? {
+              status,
+              acceptedAt: sequence,
+              result: { kind: "message.submitted" as const, sessionId: SESSION },
+            }
+          : status === "rejected"
+            ? { status, code: "failure", detail: "refused" }
+            : { status, detail: "turn failed" }),
+      },
+    });
+
+  it("keeps an agent-started durable kickoff above the streaming reply and Working, regardless of receipt timing", async () => {
+    vi.useFakeTimers();
+    const store = chatStore([]);
+    await mountPlane(store);
+    await ingest(store, [recorded()]);
+    await advanceProgressTime(1_000);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held ?? []).toEqual([]);
+    await ingest(
+      store,
+      [boundary(2, "turn.started")],
+      [
+        overlay(
+          2,
+          liveAssistantMessage([{ type: "text", text: "streaming reply", state: "streaming" }]),
+        ),
+      ],
+    );
+    const user = container!.querySelector(".is-user")!;
+    const reply = container!.querySelector(".is-assistant")!;
+    expect(user.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(user.compareDocumentPosition(mark()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await advanceProgressTime(1_000);
+    expect(container?.textContent).not.toContain("Sending…");
+    await ingest(store, [
+      committed(
+        3,
+        liveAssistantMessage([{ type: "text", text: "streaming reply", state: "done" }]),
+      ),
+      boundary(4, "turn.completed"),
+      receipt(5, "accepted"),
+    ]);
+    expect(container!.querySelector(".is-user")).toBe(user);
+    expect(
+      user.compareDocumentPosition(container!.querySelector(".is-assistant")!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+  });
+
+  it("shows exactly one Not delivered footer for a rejected kickoff when no turn ran", async () => {
+    const store = chatStore([]);
+    await mountPlane(store);
+    await ingest(store, [recorded(), receipt(2, "rejected")]);
+    const footers = container!.querySelectorAll('[data-slot="message-delivery"]');
+    expect(footers).toHaveLength(1);
+    expect(footers[0]?.textContent).toBe("Not delivered");
+    expect(mark()).toBeUndefined();
+  });
+
+  it.each(["rejected", "unreconciled"] as const)(
+    "does not label a kickoff %s after its turn ran",
+    async (status) => {
+      const store = chatStore([]);
+      await mountPlane(store);
+      await ingest(store, [
+        recorded(),
+        boundary(2, "turn.started"),
+        boundary(3, "turn.completed"),
+        receipt(4, status),
+      ]);
+      expect(container?.textContent).toContain("host-started kickoff");
+      expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    },
+  );
+
+  it.each(["attention", "sessionError"] as const)(
+    "shows %s once only after failure stops work, with no floating error pill when scrolled up",
+    async (source) => {
+      const store = chatStore(transcript(2));
+      await mountPlane(store);
+      await ingest(store, [boundary(1, "turn.started")]);
+      const notice = {
+        id: "failure",
+        attachmentId: null,
+        kind: "adapter_unrecoverable" as const,
+        resetsAt: null,
+        detail: "Model request failed",
+        diagnostic: null,
+      };
+      await act(async () =>
+        store.setState((state) => {
+          const slice = state.sessions[SESSION]!;
+          return {
+            sessions: {
+              ...state.sessions,
+              [SESSION]: {
+                ...slice,
+                sessionError: source === "sessionError" ? "Model request failed" : null,
+                projection: {
+                  ...slice.projection!,
+                  attention: { active: [notice], primary: notice },
+                },
+              },
+            },
+          };
+        }),
+      );
+      expect(container?.querySelector('[data-slot="session-blocker"]')).toBeNull();
+      await ingest(store, [boundary(2, "turn.completed")]);
+      expect(container?.querySelectorAll('[data-slot="session-blocker"]')).toHaveLength(1);
+      const scroller = container!.querySelector('[role="log"]')!.firstElementChild as HTMLElement;
+      Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 2000 });
+      Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
+      // Reading a nested scrollable message detaches following through the real
+      // Conversation bridge, so the ordinary scroll-to-latest control appears.
+      const message = container!.querySelector(".is-user") as HTMLElement;
+      message.style.overflowY = "auto";
+      await act(async () =>
+        message.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 })),
+      );
+      expect(container?.querySelector('[aria-label="Scroll to latest"]')).not.toBeNull();
+      expect(container?.querySelector('[aria-label*=" · Scroll to latest"]')).toBeNull();
+      expect(container?.querySelectorAll('[data-slot="session-blocker"]')).toHaveLength(1);
+      await ingest(store, [boundary(3, "turn.started")]);
+      expect(mark()).toBeDefined();
+      expect(container?.querySelector('[data-slot="session-blocker"]')).toBeNull();
+    },
+  );
+
+  it("keeps saying a restart resumed the turn while that turn runs (VC-450)", async () => {
+    const store = chatStore(transcript(2));
+    await mountPlane(store);
+    await ingest(store, [boundary(1, "turn.started")]);
+    const notice = {
+      id: "pi:attention:rebuilt:partial-turn",
+      attachmentId: "rebuilt",
+      kind: "partial_turn_interrupted" as const,
+      detail: RECOVERED_TURN_INTERRUPTED_DETAIL,
+      diagnostic: null,
+    };
+    await act(async () =>
+      store.setState((state) => {
+        const slice = state.sessions[SESSION]!;
+        return {
+          sessions: {
+            ...state.sessions,
+            [SESSION]: {
+              ...slice,
+              projection: {
+                ...slice.projection!,
+                turnActive: true,
+                liveExecutor: { id: "rebuilt" },
+                attention: { active: [notice], primary: notice },
+              },
+            },
+          },
+        };
+      }),
+    );
+    expect(container?.querySelector('[data-slot="session-blocker"]')?.textContent).toContain(
+      "Resumed after restart",
+    );
+  });
+
+  it("retires the local wait and held shadow as soon as the host owns the words", async () => {
     vi.useFakeTimers();
     const store = chatStore([]);
     const message: UIMessage = {
@@ -2513,13 +2712,10 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       ),
     ]);
     expect(container?.querySelectorAll(".is-user")).toHaveLength(1);
-    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
-      "Sending…",
-    );
-    await advanceProgressTime(1);
-    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
-      "Sending…",
-    );
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held ?? []).toEqual([]);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    await advanceProgressTime(1_000);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
   });
 
   const submitted = (sequence: number, commandId: string, message: UIMessage) =>
@@ -2541,7 +2737,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       message,
     );
 
-  it("keeps the wait's clock from the hold when ownership hands off part-way through it", async () => {
+  it("retires a local wait before its delay when the host takes ownership", async () => {
     vi.useFakeTimers();
     const store = chatStore([]);
     const message: UIMessage = {
@@ -2558,23 +2754,22 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
     expect(container?.querySelectorAll(".is-user")).toHaveLength(1);
     await advanceProgressTime(299);
     expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
-    await advanceProgressTime(1);
-    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
-      "Sending…",
-    );
+    await advanceProgressTime(1_000);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held ?? []).toEqual([]);
   });
 
-  it("never holds a wait longer than 600ms after the tab mounted when its stamp arrives late", async () => {
+  it("does not restart the local queue delay when its receipt state changes", async () => {
     vi.useFakeTimers();
     const store = chatStore([]);
     const drafts = useChatDraftsStore.getState();
     drafts.holdMessage(SESSION, { id: "late-stamp", text: "Line up", delivery: "queue" });
-    // Accepted before the tab mounts: "Queued", with no pending stamp yet.
+    // Accepted before the tab mounts: the local copy still delays "Queued".
     drafts.amendHeldMessage(SESSION, "late-stamp", (held) => ({ ...held, deliveryAccepted: true }));
     await mountPlane(store);
     expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
     await advanceProgressTime(300);
-    // Pending again, so the message is stamped now — 300ms after the tab mounted.
+    // A receipt-state change does not restart this local copy's delay.
     await act(async () =>
       drafts.amendHeldMessage(SESSION, "late-stamp", (held) => {
         const next = { ...held };
@@ -2640,7 +2835,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
         );
       };
       await setRetry(true);
-      expect(container?.textContent).toContain("Reconnecting");
+      expect(container?.textContent).not.toContain("Reconnecting");
       await advanceProgressTime(299);
       expectMark(status, true);
       await advanceProgressTime(1);

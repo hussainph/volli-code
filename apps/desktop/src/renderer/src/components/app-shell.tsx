@@ -44,7 +44,7 @@ import { useZoomCommands } from "@renderer/hooks/use-zoom-commands";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
 
-const WORKSPACE_RAIL_WIDTH = 60;
+const PROJECT_RAIL_WIDTH = 60;
 /** globals.css `--shell-inset`, in the one place TS has to agree with it. */
 const SHELL_INSET = 8;
 /** The standing hint, in the canvas gutter the framed card already leaves bare. */
@@ -63,7 +63,7 @@ const SHADOW_ALLOWANCE = 16;
  */
 const CLIP_SPILL = 60;
 /**
- * How much wider the arming strip gets when the workspace rail is down. With
+ * How much wider the arming strip gets when the project rail is down. With
  * the rail standing, {@link ZONE_WIDTH} is the gutter the rail already leaves
  * and the sliver says where to aim. With the rail down that same 8px is the
  * bare window edge — in a windowed window, an invisible line floating
@@ -260,7 +260,7 @@ function useSidebarContentMotion({
 }
 
 /**
- * Window shell: the chrome band, the workspace rail, the sidebar panel and the
+ * Window shell: the chrome band, the project rail, the sidebar panel and the
  * content card.
  *
  * THE PANEL IS SUMMONED, NOT DOCKED. The collapsed sidebar used to be a 57px
@@ -272,10 +272,10 @@ function useSidebarContentMotion({
  * `edge-reveal.ts` for when a pointer there MEANS that) and pinned into the
  * layout by ⌘B or the chrome-band trigger.
  *
- * THE WORKSPACE RAIL IS CHROME, NOT SIDEBAR. It is a flow sibling of the panel
- * rather than a tier inside it, owned solely by `workspaceRailHidden`, and it
+ * THE PROJECT RAIL IS CHROME, NOT SIDEBAR. It is a flow sibling of the panel
+ * rather than a tier inside it, owned solely by `projectRailHidden`, and it
  * never rides in the panel's tow. That is one toggle governing one thing: an
- * earlier arrangement had `WorkspaceRailToggle` say "show the switcher" while
+ * earlier arrangement had `ProjectRailToggle` say "show the switcher" while
  * the switcher only STOOD when the panel happened to be pinned, which is two
  * controls, four states and only two of them coherent. All four combinations now
  * mean exactly what they say:
@@ -303,7 +303,7 @@ function useSidebarContentMotion({
  * FLOATS (the spacer never moves and the panel passes over the card). What they
  * are not allowed to differ on is where the panel may paint, and the first
  * version let both of them travel the whole way back to the window edge, which
- * meant the panel crossed the workspace rail — 60px of somebody else's chrome —
+ * meant the panel crossed the project rail — 60px of somebody else's chrome —
  * on every open and every close. That is what read as "clipping through the
  * workspace picker", and it was worst on a pin, where the panel is supposed to
  * be arriving into a dock rather than flying over the room.
@@ -353,7 +353,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   // ticket already in front of the person is not also posted by the OS (VC-295).
   useNotificationTargetReport();
   const sidebarWidth = useUiStore((state) => state.sidebarWidth);
-  const workspaceRailHidden = useUiStore((state) => state.workspaceRailHidden);
+  const projectRailHidden = useUiStore((state) => state.projectRailHidden);
   const pinChoice = useUiStore((state) => state.sidebarPinned);
   const setSidebarPinned = useUiStore((state) => state.setSidebarPinned);
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
@@ -382,8 +382,8 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
     bandRef,
   });
 
-  const railWidth = workspaceRailHidden || terminalFocused ? 0 : WORKSPACE_RAIL_WIDTH;
-  const railHidden = workspaceRailHidden || terminalFocused;
+  const railWidth = projectRailHidden || terminalFocused ? 0 : PROJECT_RAIL_WIDTH;
+  const railHidden = projectRailHidden || terminalFocused;
   // `sidebarWidth` stores the full two-tier width and the panel is always what
   // is left after the rail's fixed 60, whether or not the rail is on screen —
   // but that subtraction now happens once, in CSS, as `--panel-w` below, so a
@@ -599,7 +599,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
           // stored width, which is what keeps the live and committed values
           // meaning the same thing.
           "--sidebar-total": `${sidebarWidth}px`,
-          "--panel-w": `calc(var(${LIVE_WIDTH_PROPERTY}, var(--sidebar-total)) - ${WORKSPACE_RAIL_WIDTH}px)`,
+          "--panel-w": `calc(var(${LIVE_WIDTH_PROPERTY}, var(--sidebar-total)) - ${PROJECT_RAIL_WIDTH}px)`,
           // The panel's own box. Floating, it insets itself by the shell's 8px,
           // so the pane inside has that much less to fill.
           "--sidebar-width": `calc(var(--panel-w) - ${floatingInset}px)`,
@@ -640,7 +640,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
         style={{ zoom: uiScale } as React.CSSProperties}
       >
         {/* Permanent chrome. A flow sibling of the panel, not a tier inside it —
-            it stands or it is gone, and only WorkspaceRailToggle (and terminal
+            it stands or it is gone, and only ProjectRailToggle (and terminal
             focus) decides which. Its own `--rail-width` is what globals.css's
             centering correction reads; capping the padding by it is how a rail
             asked for 0 does not get floored at 8 by its own padding.
@@ -657,7 +657,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             away. */}
         <Sidebar
           collapsible="none"
-          data-workspace-rail
+          data-project-rail
           aria-hidden={railHidden || undefined}
           inert={railHidden}
           className={cn(
@@ -869,7 +869,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             the zone below, which widens by one shell inset to answer the aiming
             problem itself; a hint there is not worth
             the ink. A hint, not a handle. */}
-        {!pinned && !terminalFocused && !workspaceRailHidden ? (
+        {!pinned && !terminalFocused && !projectRailHidden ? (
           <div
             aria-hidden
             className={cn(
@@ -898,7 +898,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             top: ZONE_TOP_DEAD_BAND,
             bottom: 0,
             left: panelLeft,
-            width: workspaceRailHidden ? ZONE_WIDTH + RAIL_OFF_ZONE_EXTRA : ZONE_WIDTH,
+            width: projectRailHidden ? ZONE_WIDTH + RAIL_OFF_ZONE_EXTRA : ZONE_WIDTH,
           }}
         />
       </div>

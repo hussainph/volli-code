@@ -33,12 +33,26 @@ import {
 } from "./sealed-document";
 
 import {
+  ExactValueByteRedactor,
   payloadSecretSpans,
   pemSecretSpans,
+  type CredentialStreamStep,
+  resolveConfigEntries,
+  type ConfigPlan,
   type SecretMetadata,
   type SecretScope,
 } from "@volli/shared";
 export type { SecretMetadata, SecretScope } from "@volli/shared";
+
+/**
+ * Nearest scope wins: session > project > always, by name. These are the
+ * store's own local scopes, not config levels, resolved through the one
+ * config resolver.
+ */
+const SECRET_SCOPE_PLAN: ConfigPlan<"union", SecretScope> = {
+  merge: "union",
+  order: ["session", "project", "always"],
+};
 
 export interface SecretInput {
   name: string;
@@ -147,6 +161,10 @@ function validate(input: SecretInput): void {
   }
 }
 
+function secretMarker(name: string): string {
+  return `‹secret:${name}›`;
+}
+
 /** KMP borders keep both complete matches and trailing previews linear. */
 function secretBorders(value: string): Uint32Array {
   const borders = new Uint32Array(value.length);
@@ -242,6 +260,9 @@ export class SecretStore {
   #failure: Error | null = null;
   #sessions: SecretRecord[] = [];
   readonly #history = new Map<string, string>();
+  /** Bumped whenever {@link #history} gains a value or renames one. */
+  #historyVersion = 0;
+  #streamRedactor: { version: number; redactor: ExactValueByteRedactor } | null = null;
 
   /**
    * `codec` is the host's secret-key adapter: the keychain on desktop, the key
@@ -277,7 +298,7 @@ export class SecretStore {
     };
     if (record.scope === "session") this.#sessions = replace(this.#sessions);
     else this.#change(replace);
-    this.#history.set(record.value, record.name);
+    this.#remember(record.value, record.name);
     return metadata(record);
   }
 
@@ -352,19 +373,22 @@ export class SecretStore {
     sessionId: string,
     projectId: string,
   ): Map<string, SecretRecord> {
-    const selected = new Map<string, SecretRecord>();
-    for (const scope of ["always", "project", "session"] as const) {
-      for (const item of [...persistent, ...this.#sessions]) {
-        if (
-          item.scope === scope &&
-          (scope !== "project" || item.projectId === projectId) &&
-          (scope !== "session" || item.sessionId === sessionId) &&
-          (scope !== "session" || item.projectId === undefined || item.projectId === projectId)
-        )
-          selected.set(item.name, item);
-      }
-    }
-    return selected;
+    const records = [...persistent, ...this.#sessions];
+    const selected = resolveConfigEntries(
+      SECRET_SCOPE_PLAN,
+      {
+        always: records.filter((item) => item.scope === "always"),
+        project: records.filter((item) => item.scope === "project" && item.projectId === projectId),
+        session: records.filter(
+          (item) =>
+            item.scope === "session" &&
+            item.sessionId === sessionId &&
+            (item.projectId === undefined || item.projectId === projectId),
+        ),
+      },
+      (item) => item.name,
+    );
+    return new Map(selected.map(({ key, value }) => [key, value]));
   }
 
   /**
@@ -414,6 +438,28 @@ export class SecretStore {
   /** A single literal replacement pass never reinterprets generated markers. */
   redact(text: string): string {
     return this.#redact(text, false);
+  }
+
+  /**
+   * One step of bounded streaming redaction over UTF-8 bytes, for writers
+   * that cannot hold a whole output (`CredentialRedactionStream` in
+   * `@volli/shared`). Exactly the values and markers {@link redact} uses, read
+   * from the history as it stands at each step, so a value saved mid-stream
+   * applies to every byte not yet decided. Whether a step holds bytes back
+   * reveals whether they begin a value: hand it only to code already trusted
+   * with the values (the runtime they are injected into).
+   */
+  redactStreamStep(window: Uint8Array, from: number, final: boolean): CredentialStreamStep {
+    this.#settle();
+    if (this.#streamRedactor?.version !== this.#historyVersion) {
+      this.#streamRedactor = {
+        version: this.#historyVersion,
+        redactor: new ExactValueByteRedactor(
+          [...this.#history].map(([value, name]) => [value, secretMarker(name)] as const),
+        ),
+      };
+    }
+    return this.#streamRedactor.redactor.step(window, from, final);
   }
 
   /** Withhold a live preview's trailing credential prefix, including a newline. */
@@ -480,7 +526,7 @@ export class SecretStore {
       // Overlapping complete values/prefixes are one protected span. Never
       // preserve a suffix just because another credential started earlier.
       for (let next = at + 1; next < end; next += 1) end = Math.max(end, next + lengths[next]!);
-      parts.push(text.slice(copied, at), name === null ? "[redacted]" : `‹secret:${name}›`);
+      parts.push(text.slice(copied, at), name === null ? "[redacted]" : secretMarker(name));
       copied = end;
       at = end - 1;
     }
@@ -625,10 +671,16 @@ export class SecretStore {
     if (written) this.#status = CREDENTIALS_READY;
   }
 
+  #remember(value: string, name: string): void {
+    if (this.#history.get(value) === name) return;
+    this.#history.set(value, name);
+    this.#historyVersion += 1;
+  }
+
   /** Takes what was just read: every value joins the redaction history before any use. */
   #adopt(current: SecretRecord[] | null): SecretRecord[] {
     const records = current ?? [];
-    for (const item of records) this.#history.set(item.value, item.name);
+    for (const item of records) this.#remember(item.value, item.name);
     this.#status = current === null ? CREDENTIALS_EMPTY : CREDENTIALS_READY;
     return records;
   }

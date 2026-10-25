@@ -28,13 +28,13 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { boardResourceWorkspace } from "@volli/host-core/board";
+import { boardResourceProject } from "@volli/host-core/board";
 import { insertProject } from "@volli/host-core/db";
 import { admittedHandlers, createHostHandlers, ROUTER_POLICY } from "@volli/host-core/handlers";
 import { createTestSessionEngine, openTestDb, testProject } from "@volli/host-core/testing";
 import { createLogRing } from "@volli/host-core/log";
-import { runGitCapturingAsync } from "@volli/host-core/worktree";
-import { createSessionRuntime, createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
+import { createWorktreeReadService, runGitCapturingAsync } from "@volli/host-core/worktree";
+import { createSessionExecutorSlot, createSessionRuntime } from "@volli/session-engine";
 import {
   createSurfaceStore,
   disposeChatClient,
@@ -91,6 +91,7 @@ import {
   workspaceLink,
   type Cleanups,
 } from "./remote-sessions.real-link.test-support";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 const electron = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
@@ -158,7 +159,7 @@ async function box(features: readonly string[] = FEATURES) {
   let createHeld: { reached(): void; released: Promise<void> } | null = null;
   const runtime = createSessionRuntime({
     engine,
-    executor,
+    executors: createSessionExecutorSlot(executor),
     artifacts: createInMemoryTranscriptArtifactStore(),
     locations: {
       resolve: async () => ({ directory: "/srv/repo", venue: { id: HOST, kind: "local" } }),
@@ -174,6 +175,8 @@ async function box(features: readonly string[] = FEATURES) {
   // then attach — what `Sessions.create`/`attach` do, without prompt
   // resources, worktrees or a model catalog.
   const sessions: NonNullable<Parameters<typeof createHostHandlers>[1]["sessions"]> = {
+    // The agent doors' start (VC-923) is not what this suite drives.
+    start: () => Promise.reject(new Error("This suite starts no Ticket Session.")),
     async create(input) {
       const created = await runtime.command({
         commandId: `${input.operationId}:create`,
@@ -235,6 +238,7 @@ async function box(features: readonly string[] = FEATURES) {
         kind: "live",
         execution: { kind: "unavailable", pendingArmedRuns: { noteDeliberateMove: () => {} } },
       } as unknown as Parameters<typeof createHostHandlers>[1]["automations"],
+      worktreeReads: createWorktreeReadService({ deps: () => ({ db: ctx.db }) }),
       busyWorktreeSites: async () => [],
       logs: createLogRing(),
       worktree: { db: ctx.db, gitAsync: runGitCapturingAsync, blobsRoot: "" },
@@ -267,7 +271,7 @@ async function box(features: readonly string[] = FEATURES) {
     "session.subscribeQueue": counted("session.subscribeQueue"),
   };
 
-  const boardWorkspace = boardResourceWorkspace(ctx.db);
+  const boardProject = boardResourceProject(ctx.db);
   const diagnostics = new RpcDiagnosticLog();
   const listener = await startHostProtocolListener({
     router: createHostRouter(),
@@ -291,7 +295,7 @@ async function box(features: readonly string[] = FEATURES) {
       resourceWorkspace: async (resource: { kind: string; id: string }) =>
         resource.kind === "session"
           ? ((await engine.getSession({ sessionId: resource.id }))?.session.projectId ?? null)
-          : boardWorkspace(resource),
+          : boardProject(resource),
     }),
   });
   cleanups.push(() => listener.close());

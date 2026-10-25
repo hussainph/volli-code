@@ -41,6 +41,7 @@ import { approveInBrowser, startOAuthFixture, type OAuthFixture } from "./fixtur
 import { McpOAuthBroker } from "./oauth";
 import { McpSessionHost } from "./session-host";
 import { McpSettingsService } from "./settings";
+import { testHostHandlers } from "../testing/host-handlers";
 
 const CALLER: RuntimeSessionIdentity = {
   role: "project",
@@ -198,10 +199,7 @@ function harness(environment: Record<string, string> = {}) {
   const door = createAgentToolDoor({
     db: ctx.db,
     projects: () => [{ id: "p1", name: "Project", path: "/repo/project" } as never],
-    sessions: () => null,
-    submitSessionMessage: async () => {},
-    onSessionStarted: () => {},
-    actorTicketDisplay: () => null,
+    handlers: testHostHandlers({ db: ctx.db }),
     now: () => 1_000,
     delegation: {
       startGrantScope: () => null,

@@ -24,26 +24,26 @@ import {
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore, type TerminalFocusTarget } from "@renderer/stores/ui";
-import { DEFAULT_WORKSPACE_UI, useWorkspaceStore, type NavKey } from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, useProjectUiStore, type NavKey } from "@renderer/stores/project-ui";
 
-type WorkspaceState = ReturnType<typeof useWorkspaceStore.getState>;
+type ProjectUiStoreState = ReturnType<typeof useProjectUiStore.getState>;
 type SessionsState = ReturnType<typeof useSessionsStore.getState>;
 
 /** The selected project's nav page, defaulted for a project it has no record for. */
-function selectNav(state: WorkspaceState, projectId: string | null): NavKey {
-  if (projectId === null) return DEFAULT_WORKSPACE_UI.nav;
-  return state.byProject[projectId]?.nav ?? DEFAULT_WORKSPACE_UI.nav;
+function selectNav(state: ProjectUiStoreState, projectId: string | null): NavKey {
+  if (projectId === null) return DEFAULT_PROJECT_UI.nav;
+  return state.byProject[projectId]?.nav ?? DEFAULT_PROJECT_UI.nav;
 }
 
 /** The selected project's open ticket, or null on the plain board. */
-function selectOpenTicketId(state: WorkspaceState, projectId: string | null): string | null {
+function selectOpenTicketId(state: ProjectUiStoreState, projectId: string | null): string | null {
   if (projectId === null) return null;
   return state.byProject[projectId]?.openTicketId ?? null;
 }
 
 /** The open ticket's active tab. A ticket always has at least its Body in front. */
 function selectTicketTabId(
-  state: WorkspaceState,
+  state: ProjectUiStoreState,
   projectId: string | null,
   ticketId: string | null,
 ): string | null {
@@ -52,9 +52,9 @@ function selectTicketTabId(
 }
 
 /** Which Home tab is in front — the permanent Board tab by default. */
-function selectHomeTabId(state: WorkspaceState, projectId: string | null): string {
-  if (projectId === null) return DEFAULT_WORKSPACE_UI.homeActiveTab;
-  return state.byProject[projectId]?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab;
+function selectHomeTabId(state: ProjectUiStoreState, projectId: string | null): string {
+  if (projectId === null) return DEFAULT_PROJECT_UI.homeActiveTab;
+  return state.byProject[projectId]?.homeActiveTab ?? DEFAULT_PROJECT_UI.homeActiveTab;
 }
 
 /**
@@ -78,24 +78,24 @@ function selectTerminalSessionId(
 /** The live chrome the chord resolves against, read imperatively at press time. */
 export function readTerminalFocusChrome(): TerminalFocusChrome {
   const selectedProjectId = useProjectsStore.getState().selectedProjectId;
-  const workspace = useWorkspaceStore.getState();
+  const projectUi = useProjectUiStore.getState();
   const sessions = useSessionsStore.getState();
-  const openTicketId = selectOpenTicketId(workspace, selectedProjectId);
+  const openTicketId = selectOpenTicketId(projectUi, selectedProjectId);
   return {
     selectedProjectId,
-    nav: selectNav(workspace, selectedProjectId),
+    nav: selectNav(projectUi, selectedProjectId),
     settingsOpen: useUiStore.getState().settingsOpen,
     openTicketId,
-    homeActiveTab: selectHomeTabId(workspace, selectedProjectId),
+    homeActiveTab: selectHomeTabId(projectUi, selectedProjectId),
     ticketSessionId: selectTerminalSessionId(
       sessions,
       openTicketId,
-      selectTicketTabId(workspace, selectedProjectId, openTicketId),
+      selectTicketTabId(projectUi, selectedProjectId, openTicketId),
     ),
     projectSessionId: selectTerminalSessionId(
       sessions,
       selectedProjectId,
-      selectHomeTabId(workspace, selectedProjectId),
+      selectHomeTabId(projectUi, selectedProjectId),
     ),
   };
 }
@@ -118,12 +118,12 @@ export function readTerminalFocusChrome(): TerminalFocusChrome {
 export function useTerminalFocusTarget(): TerminalFocusTarget | null {
   const selectedProjectId = useProjectsStore((state) => state.selectedProjectId);
   const settingsOpen = useUiStore((state) => state.settingsOpen);
-  const nav = useWorkspaceStore((state) => selectNav(state, selectedProjectId));
-  const openTicketId = useWorkspaceStore((state) => selectOpenTicketId(state, selectedProjectId));
-  const ticketTabId = useWorkspaceStore((state) =>
+  const nav = useProjectUiStore((state) => selectNav(state, selectedProjectId));
+  const openTicketId = useProjectUiStore((state) => selectOpenTicketId(state, selectedProjectId));
+  const ticketTabId = useProjectUiStore((state) =>
     selectTicketTabId(state, selectedProjectId, openTicketId),
   );
-  const homeActiveTab = useWorkspaceStore((state) => selectHomeTabId(state, selectedProjectId));
+  const homeActiveTab = useProjectUiStore((state) => selectHomeTabId(state, selectedProjectId));
   const ticketSessionId = useSessionsStore((state) =>
     selectTerminalSessionId(state, openTicketId, ticketTabId),
   );

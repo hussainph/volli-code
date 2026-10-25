@@ -13,7 +13,7 @@ import {
 } from "@renderer/lib/new-session-shortcut";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
-import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, useProjectUiStore } from "@renderer/stores/project-ui";
 
 /**
  * ⌘T starts a chat, ⌥⌘T starts a terminal, on whatever owns the surface in
@@ -55,13 +55,13 @@ export function useNewSessionShortcut(): void {
       if (isNewSessionGuardedTarget(event.target)) return;
 
       const selectedProjectId = useProjectsStore.getState().selectedProjectId;
-      const workspace = useWorkspaceStore.getState();
-      const ui = selectedProjectId === null ? undefined : workspace.byProject[selectedProjectId];
+      const projectUi = useProjectUiStore.getState();
+      const ui = selectedProjectId === null ? undefined : projectUi.byProject[selectedProjectId];
       const { settingsOpen, newTicketOpen } = useUiStore.getState();
       const landing = newSessionLandingForChrome({
         selectedProjectId,
-        nav: ui?.nav ?? DEFAULT_WORKSPACE_UI.nav,
-        homeActiveTab: ui?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab,
+        nav: ui?.nav ?? DEFAULT_PROJECT_UI.nav,
+        homeActiveTab: ui?.homeActiveTab ?? DEFAULT_PROJECT_UI.homeActiveTab,
         settingsOpen,
         newTicketOpen,
         openTicketId: ui?.openTicketId ?? null,
@@ -79,7 +79,7 @@ export function useNewSessionShortcut(): void {
       // whole job is to start a Session must not also throw a ticket away on
       // the way there — and the boot below records the new tab, so the strip
       // lands on it either way.
-      if (landing.navigateTo !== null) workspace.openHome(landing.projectId);
+      if (landing.navigateTo !== null) projectUi.openHome(landing.projectId);
       const { projectId, ticketId } = landing;
       // One call per cell of the same 2×2 the controls draw, and every one of
       // them is the exact function the matching control calls (session-create.ts)

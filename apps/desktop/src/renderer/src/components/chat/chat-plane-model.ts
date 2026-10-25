@@ -18,10 +18,13 @@ import type {
   SessionAttentionProjection,
   SessionInteraction,
   SessionInteractionResolution,
+  WorktreeSetupAnswer,
+  WorktreeSetupRunView,
 } from "@volli/shared";
 import {
   attentionResumeAt,
   findComposerVerb,
+  isProcessLossWarning,
   REASONING_LEVELS,
   revealedSessionAttention,
   type ComposerVerb,
@@ -473,12 +476,20 @@ export interface SessionBlockerState {
   /** Runtime facts and failed sends belong in the conversation, not setup chrome. */
   placement?: "timeline";
   /**
+   * A timeline row that describes the turn running now rather than a stop to
+   * recover from, so it stays while that turn runs. Every other timeline row
+   * gives way to a new turn.
+   */
+  duringTurn?: true;
+  /**
    * Null where nothing on this surface can fix it. A button that cannot help is
    * worse than no button: it spends the reader's one attempt at recovery and
    * then leaves them where they started, doubting the message too.
    */
   action: SessionBlockerAction | null;
   secondaryAction?: SessionBlockerAction | null;
+  /** Only the failed environment setup's row has a third act (VC-584). */
+  tertiaryAction?: SessionBlockerAction;
   /** Present only on the unconfigured first-run row; see {@link SessionBlockerSignInMenu}. */
   signInMenu?: SessionBlockerSignInMenu;
   /**
@@ -513,6 +524,10 @@ export interface SessionBlockerInput {
   sessionModel: SessionModelStanding | null;
   /** The resume this Session is waiting to run at a quota reset, if any. */
   scheduledResume: PresentedScheduledResume | null;
+  /** Whether a turn is open now — a restart resume's, while the recovery warning still stands. */
+  turnActive: boolean;
+  /** The live attachment, which an interrupted turn can be resumed on. */
+  liveExecutorId: string | null;
   /** Epoch ms: a reset already behind is not offered as a resume. */
   now: number;
   /**
@@ -520,6 +535,12 @@ export interface SessionBlockerInput {
    * honest — the row then offers Settings alone, exactly as before.
    */
   signInProviders: readonly SignInProviderOption[];
+  /**
+   * The ticket's working copy's failed environment setup, when the plane has
+   * read one for a start that failed preparing it (VC-584, the `cloud` flag).
+   * Absent or null, a `configuration_invalid` row is the plain one.
+   */
+  failedSetup?: WorktreeSetupRunView | null;
 }
 
 export interface SessionBlockerActs {
@@ -536,6 +557,38 @@ export interface SessionBlockerActs {
   scheduleResume(input: { attentionId: string; attachmentId: string; resumeAt: number }): void;
   /** Withdraws a scheduled resume. */
   cancelScheduledResume(scheduleId: string): void;
+  /** Answers the working copy's failed setup, then tries the start again (VC-584). */
+  answerSetup(answer: WorktreeSetupAnswer): void;
+  /** Files the ticket whose Session repairs the setup, and opens it (VC-584). */
+  fixSetup(): void;
+}
+
+/** How a start that failed preparing its worktree words it (`session-runtime/location.ts`). */
+const WORKTREE_PREPARATION_FAILED = "Couldn't prepare the worktree";
+
+/**
+ * How the setup's own refusals continue that sentence
+ * (`worktree/setup-exec.ts`): the run that just failed, or the gate an
+ * earlier failure left. A git or copy failure in the same preparation names
+ * neither, and is not the setup's to answer.
+ */
+const SETUP_FAILURE_CLAUSES = [
+  " — Environment setup failed: ",
+  " — .agents/setup ",
+  " — The project's setup command ",
+];
+
+/**
+ * Whether an Attention may be a working copy's setup gate refusing a start
+ * (VC-584): the configuration failure a start raises when its worktree's
+ * setup failed. Only then is the setup's status worth one read.
+ */
+export function mayBeWorktreeSetupGate(attention: SessionAttention | null): boolean {
+  const detail = attention?.kind === "configuration_invalid" ? attention.detail : null;
+  return (
+    detail?.startsWith(WORKTREE_PREPARATION_FAILED) === true &&
+    SETUP_FAILURE_CLAUSES.some((clause) => detail.includes(clause))
+  );
 }
 
 /** Select the user's existing ticket terminal tab without creating a new one. */
@@ -655,13 +708,24 @@ export function sessionBlocker(
     input.attention.primary;
   if (attention) {
     if (asked && answeredByCard(attention.kind)) return null;
+    if (attention.kind === "configuration_invalid" && input.failedSetup) {
+      return { ...setupFailedBlocker(attention, input.failedSetup, acts), placement: "timeline" };
+    }
     return {
-      ...attentionBlocker(attention, retry, retryRuntime, settings, acts.dismiss, {
-        scheduled: input.scheduledResume,
-        now: input.now,
-        schedule: acts.scheduleResume,
-        cancel: acts.cancelScheduledResume,
-      }),
+      ...attentionBlocker(
+        attention,
+        retry,
+        retryRuntime,
+        settings,
+        acts.dismiss,
+        {
+          scheduled: input.scheduledResume,
+          now: input.now,
+          schedule: acts.scheduleResume,
+          cancel: acts.cancelScheduledResume,
+        },
+        { turnActive: input.turnActive, liveExecutorId: input.liveExecutorId },
+      ),
       placement: "timeline",
     };
   }
@@ -704,6 +768,33 @@ export function sessionBlocker(
     );
   }
   return null;
+}
+
+/**
+ * A working copy's failed environment setup, which refuses every start until
+ * a person answers it (VC-584). Settings cannot fix it, so the row offers the
+ * three answers instead: run it again, start without it, or file a ticket for
+ * an agent to repair the recipe.
+ */
+function setupFailedBlocker(
+  attention: SessionAttention,
+  run: WorktreeSetupRunView,
+  acts: SessionBlockerActs,
+): SessionBlockerState {
+  const dismissKey = attentionDismissKey(attention);
+  return {
+    ...errorBlocker(
+      {
+        message: "Environment setup failed",
+        detail: run.summary,
+        action: { label: "Retry setup", act: () => acts.answerSetup("retry") },
+        secondaryAction: { label: "Start anyway", act: () => acts.answerSetup("start-anyway") },
+      },
+      dismissKey,
+      () => acts.dismiss(dismissKey),
+    ),
+    tertiaryAction: { label: "Fix with an agent", act: acts.fixSetup },
+  };
 }
 
 /** The two attention kinds a card standing on screen already answers. */
@@ -809,14 +900,18 @@ function providerRecovery(input: {
  *   connection that never dropped. When a spent allowance with a stated reset
  *   stopped it, a scheduled resume sits beside the Retry — see
  *   {@link stoppedRunBlocker}.
+ * - **Resume** — `partial_turn_interrupted` that is the plain process-loss
+ *   warning, while its attachment is still the live one and idle: the turn a lost process cut short continues from its
+ *   last settled point, and a tool call left without a result is answered as
+ *   interrupted rather than run again (VC-450). Once the attachment is gone,
+ *   typing is the recovery. While a restart resume runs it, the row says so.
  * - **No recovery** — `transport_retrying` (the runtime is already reconnecting
  *   on its own, waiting for the network or backing off, and `recover` would
  *   neither cut that wait short nor add a retry to it — a button there promises
  *   an act that does nothing); `context_limit_reached` (the runtime has already compacted
  *   this Session and been refused again, so there is nothing left to summarize);
  *   `quota_exhausted` (a spent allowance is not retryable and no local setting
- *   refills it); `partial_turn_interrupted` (a stopped turn left the composer
- *   usable — resending is typing, not recovering); `input_required` and
+ *   refills it); `input_required` and
  *   `permission_required` (the answer lives on the interaction card, which
  *   outranks this row entirely).
  */
@@ -827,6 +922,7 @@ function attentionBlocker(
   settings: SessionBlockerAction,
   dismiss: (dismissKey: string) => void,
   resume: ResumeContext,
+  turn: InterruptedTurnContext,
 ): SessionBlockerState {
   const detail = attention.detail;
   const dismissKey = attentionDismissKey(attention);
@@ -882,7 +978,7 @@ function attentionBlocker(
         dismissAttention,
       );
     case "partial_turn_interrupted":
-      return { message: "Turn interrupted", detail, tone: "waiting", action: null };
+      return interruptedTurnBlocker(attention, retryRuntime, turn);
     case "adapter_unrecoverable":
       return stoppedRunBlocker(attention, retryRuntime, resume, dismissKey, dismissAttention);
     case "input_required":
@@ -890,6 +986,42 @@ function attentionBlocker(
     case "permission_required":
       return { message: "Waiting for approval", detail, tone: "waiting", action: null };
   }
+}
+
+/** What the interruption row needs to offer a resume, or say one is running. */
+interface InterruptedTurnContext {
+  turnActive: boolean;
+  liveExecutorId: string | null;
+}
+
+/**
+ * A turn a lost process cut short. Only the plain process-loss warning on the
+ * attachment recovery rebuilt can be continued (`isProcessLossWarning`, the
+ * host verdict's own rule): idle, it offers Resume; with a turn running, that
+ * turn is the resume — a message answers the warning before its turn opens,
+ * and a Retry keeps it until the resumed turn settles.
+ */
+function interruptedTurnBlocker(
+  attention: SessionAttention,
+  retryRuntime: SessionBlockerAction,
+  turn: InterruptedTurnContext,
+): SessionBlockerState {
+  const resumable = isProcessLossWarning(attention, turn.liveExecutorId);
+  if (resumable && turn.turnActive) {
+    return {
+      message: "Resumed after restart",
+      detail: null,
+      tone: "waiting",
+      action: null,
+      duringTurn: true,
+    };
+  }
+  return {
+    message: "Turn interrupted",
+    detail: attention.detail,
+    tone: "waiting",
+    action: resumable && !turn.turnActive ? { label: "Resume", act: retryRuntime.act } : null,
+  };
 }
 
 /** What the stopped-run row needs to offer, or show, a scheduled resume. */

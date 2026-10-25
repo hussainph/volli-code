@@ -297,6 +297,60 @@ describe("terminal supervisor on node-pty under plain Node (VC-560)", () => {
     await until(() => ledger.exited.has(0), "the shell to exit after its window closed");
   });
 
+  it.each([9, 11])("records signal %i as a failed exit after the final output", async (signal) => {
+    const owner = makeClient("owner");
+    const sessionId = await start(owner);
+    manager.write(owner.sink, sessionId, `echo final-$((4+4)); kill -${signal} $$\r`);
+
+    await until(
+      () => owner.events.some((event) => event.topic === "terminal-exit"),
+      "the signal exit event",
+    );
+    const exitIndex = owner.events.findIndex((event) => event.topic === "terminal-exit");
+    expect(owner.events[exitIndex]?.payload).toEqual({ sessionId, exitCode: 128 + signal });
+    expect(
+      owner.events
+        .slice(0, exitIndex)
+        .filter((event) => event.topic === "terminal-data")
+        .map((event) => (event.payload as TerminalDataEvent).data)
+        .join(""),
+    ).toContain("final-8");
+    expect(manager.peek(sessionId, 1)).toBeUndefined();
+    const engine = createTestSessionEngine(testDb.db);
+    await vi.waitFor(async () =>
+      expect((await engine.getSession({ sessionId }))?.attachments).toMatchObject([
+        { status: "closed", exitCode: 128 + signal, outcome: "failed" },
+      ]),
+    );
+    const events = await engine.listEvents({ sessionId });
+    expect(events.filter((event) => event.payload.kind === "attachment.exited")).toMatchObject([
+      { payload: { exitCode: 128 + signal } },
+    ]);
+    expect(events.slice(-2).map((event) => event.payload.kind)).toEqual([
+      "attachment.exited",
+      "attachment.closed",
+    ]);
+  });
+
+  it("records an explicit kill as completed while preserving the observed signal status", async () => {
+    const owner = makeClient("owner");
+    const sessionId = await start(owner);
+    // Let the shell finish installing its signal handlers before sending SIGHUP.
+    manager.write(owner.sink, sessionId, "echo ready-$((4+4))\r");
+    await until(() => owner.output().includes("ready-8"), "the shell to be ready");
+    expect(manager.kill(owner.sink, sessionId)).toEqual({ ok: true });
+    const engine = createTestSessionEngine(testDb.db);
+    await vi.waitFor(async () =>
+      expect((await engine.getSession({ sessionId }))?.attachments).toMatchObject([
+        { status: "closed", exitCode: 129, outcome: "completed" },
+      ]),
+    );
+    expect(owner.events.find((event) => event.topic === "terminal-exit")?.payload).toEqual({
+      sessionId,
+      exitCode: 129,
+    });
+  });
+
   it("delivers a large final output and UTF-8 tail before exit", async () => {
     const owner = makeClient("owner");
     const sessionId = await start(owner);

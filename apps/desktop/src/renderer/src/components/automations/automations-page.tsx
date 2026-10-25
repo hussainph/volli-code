@@ -97,6 +97,7 @@ import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Switch } from "@renderer/components/ui/switch";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { relativeTime } from "@renderer/lib/relative-time";
+import { useAgeNow } from "@renderer/lib/use-age-now";
 import { cn } from "@renderer/lib/utils";
 import {
   automationHistoryKey,
@@ -861,6 +862,9 @@ function RunHistory({
   loaded: boolean;
 }) {
   const entries = React.useMemo(() => automationHistory(runs, skips), [runs, skips]);
+  const now = useAgeNow(
+    entries.map((entry) => (entry.kind === "run" ? entry.run.createdAt : entry.skip.dueAt)),
+  );
   const emptyCopy = historyEmptyCopy(automationId, loaded);
   return (
     <section className="flex flex-col gap-1" data-run-history={automationId ?? "project"}>
@@ -879,9 +883,10 @@ function RunHistory({
               projectId={projectId}
               ticketPrefix={ticketPrefix}
               run={entry.run}
+              now={now}
             />
           ) : (
-            <SkippedRow key={entry.skip.id} skip={entry.skip} />
+            <SkippedRow key={entry.skip.id} skip={entry.skip} now={now} />
           ),
         )
       )}
@@ -908,7 +913,7 @@ function RunHistory({
  * replayed (VC-112), and this is the by-hand recovery that ruling promises
  * instead.
  */
-function SkippedRow({ skip }: { skip: AutomationSkippedOccurrence }) {
+function SkippedRow({ skip, now }: { skip: AutomationSkippedOccurrence; now: number }) {
   const count = skipCountLabel(skip);
   return (
     <ListRow
@@ -954,7 +959,7 @@ function SkippedRow({ skip }: { skip: AutomationSkippedOccurrence }) {
       }
       trailing={
         <span className="shrink-0 text-label text-muted-foreground">
-          {relativeTime(skip.dueAt)}
+          {relativeTime(skip.dueAt, now)}
         </span>
       }
     />
@@ -965,10 +970,12 @@ function RunRow({
   projectId,
   ticketPrefix,
   run,
+  now,
 }: {
   projectId: string;
   ticketPrefix: string;
   run: AutomationRun;
+  now: number;
 }) {
   const ticketNumber = useBoardStore(
     (state) =>
@@ -1026,7 +1033,7 @@ function RunRow({
       }
       trailing={
         <span className="shrink-0 text-label text-muted-foreground">
-          {relativeTime(run.createdAt)}
+          {relativeTime(run.createdAt, now)}
         </span>
       }
     />

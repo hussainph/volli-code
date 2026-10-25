@@ -22,6 +22,7 @@ import { openTestDb, type TestDb } from "@volli/host-core/testing";
 import { writeSecret } from "@volli/host-core/db";
 import {
   collectSupportInfo,
+  describeBootRecovery,
   describeLastUpdateCheck,
   registerSupportIpcHandlers,
   type SupportInfoDeps,
@@ -31,6 +32,7 @@ import {
 const ALLOWLIST = [
   "appVersion",
   "arch",
+  "bootRecovery",
   "channel",
   "lastUpdateCheck",
   "migrationHistory",
@@ -60,6 +62,7 @@ function deps(overrides: Partial<SupportInfoDeps> = {}): SupportInfoDeps {
     platform: "darwin",
     arch: "arm64",
     lastUpdateCheck: () => null,
+    bootRecovery: () => null,
     ...overrides,
   };
 }
@@ -133,6 +136,82 @@ describe("collectSupportInfo", () => {
     for (const leak of ["https", "github.com", "C0FF", "_gh_sess", "Headers"]) {
       expect(JSON.stringify(info), leak).not.toContain(leak);
     }
+  });
+
+  it("reports what boot recovery did as counts, reasons and error class names (VC-926)", () => {
+    const leak = new Error("/Users/ada/secret-project: Command abc already has a terminal receipt");
+    leak.name = "SessionEngineConflictError";
+    const info = collectSupportInfo(
+      deps({
+        database: () => testDb(),
+        bootRecovery: () => ({
+          finishedAt: Date.UTC(2026, 9, 25, 3),
+          error: null,
+          recovered: 1,
+          closed: 2,
+          failures: [
+            { reason: "reconcile_failed", outcome: "recovered", error: { name: leak.name } },
+            {
+              reason: "binding_unrecoverable",
+              outcome: "closed",
+              error: { name: "NativeAttachmentError", code: "queue_admission_timeout" },
+            },
+            {
+              reason: "binding_unrecoverable",
+              outcome: "closed",
+              error: { name: "NativeAttachmentError", code: "queue_admission_timeout" },
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(info.bootRecovery).toBe(
+      "2026-10-25T03:00:00.000Z, 1 lost turn recovered, 2 attachments closed; failed: " +
+        "reconcile_failed→recovered SessionEngineConflictError, " +
+        "binding_unrecoverable→closed NativeAttachmentError:queue_admission_timeout ×2",
+    );
+    for (const text of ["/Users", "secret-project", "terminal receipt"]) {
+      expect(JSON.stringify(info), text).not.toContain(text);
+    }
+  });
+
+  it("words a boot recovery that has not finished, or found nothing, on one line", () => {
+    expect(describeBootRecovery(null)).toBe("not finished");
+    expect(
+      describeBootRecovery({ finishedAt: 0, error: null, recovered: 0, closed: 0, failures: [] }),
+    ).toBe("1970-01-01T00:00:00.000Z, 0 lost turns recovered, 0 attachments closed");
+    expect(
+      describeBootRecovery({ finishedAt: 0, error: null, recovered: 2, closed: 1, failures: [] }),
+    ).toBe("1970-01-01T00:00:00.000Z, 2 lost turns recovered, 1 attachment closed");
+    expect(
+      describeBootRecovery({
+        finishedAt: 0,
+        error: { name: "Error", code: "SQLITE_BUSY" },
+        recovered: 0,
+        closed: 0,
+        failures: [],
+      }),
+    ).toBe(
+      "1970-01-01T00:00:00.000Z, 0 lost turns recovered, 0 attachments closed; sweep failed: Error:SQLITE_BUSY",
+    );
+    expect(
+      describeBootRecovery({
+        finishedAt: 0,
+        error: { name: "TypeError" },
+        recovered: 0,
+        closed: 0,
+        failures: [],
+      }),
+    ).toMatch(/; sweep failed: TypeError$/);
+    const failures = Array.from({ length: 7 }, (_, index) => ({
+      reason: "reconcile_failed" as const,
+      outcome: "closed" as const,
+      error: { name: `Error${index}` },
+    }));
+    expect(
+      describeBootRecovery({ finishedAt: 0, error: null, recovered: 0, closed: 7, failures }),
+    ).toMatch(/Error4, 2 more$/);
   });
 
   it("words every last-check result on one line", () => {

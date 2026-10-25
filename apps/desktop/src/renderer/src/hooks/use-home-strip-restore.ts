@@ -29,7 +29,7 @@ export interface HomeStripRestoreInput {
   emptyTabIds: ReadonlySet<string>;
   /** The tab the record puts in front (or an empty Draft's renderer-only focus). */
   recorded: string;
-  /** `homeTabOrder` off the workspace record, live. */
+  /** `homeTabOrder` off the project UI record, live. */
   tabOrder: TabOrder;
   /** The terminal container's own active session id, or null. */
   containerActive: string | null;

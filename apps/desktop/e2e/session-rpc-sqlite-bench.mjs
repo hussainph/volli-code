@@ -141,12 +141,14 @@ try {
     { openVolliDb },
     { createSqliteSessionLedger },
     engineModule,
+    engineTestingModule,
     transcriptModule,
     sharedModule,
   ] = await Promise.all([
     vite.ssrLoadModule("/packages/host-core/src/db/index.ts"),
     vite.ssrLoadModule("/packages/host-core/src/session-control/sqlite-ledger.ts"),
     vite.ssrLoadModule("/packages/session-engine/src/index.ts"),
+    vite.ssrLoadModule("/packages/session-engine/src/testing/index.ts"),
     vite.ssrLoadModule("/packages/host-core/src/session-runtime/transcript-artifacts.ts"),
     vite.ssrLoadModule("/packages/shared/src/index.ts"),
   ]);
@@ -221,7 +223,7 @@ try {
   const makeRuntime = (runtimeEngine = engine) =>
     engineModule.createSessionRuntime({
       engine: runtimeEngine,
-      executor: {
+      executors: engineModule.createSessionExecutorSlot({
         id: "bench",
         durableIdNamespace: "bench",
         adapterVersion: "1",
@@ -229,10 +231,10 @@ try {
         attach: async () => {
           throw new Error("benchmark projection never attaches");
         },
-      },
+      }),
       artifacts: transcriptPath
         ? transcriptModule.createFileTranscriptArtifactStore(transcriptPath)
-        : engineModule.createInMemoryTranscriptArtifactStore(),
+        : engineTestingModule.createInMemoryTranscriptArtifactStore(),
       locations: {
         resolve: async () => ({ directory: "/bench", venue: { id: "bench", kind: "local" } }),
         prepare: async () => ({ directory: "/bench", venue: { id: "bench", kind: "local" } }),

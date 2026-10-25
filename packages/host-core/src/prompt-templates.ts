@@ -44,6 +44,11 @@ import {
  */
 const MAX_TEMPLATES_PER_DIR = 200;
 
+/** The person’s global prompt templates under the host profile. */
+export function globalCommandsRoot(userDataPath: string): string {
+  return join(userDataPath, "commands");
+}
+
 /** The frontmatter fence, and the only key this format reads. */
 const FRONTMATTER_FENCE = "---";
 
@@ -195,6 +200,8 @@ export async function readPromptTemplateDir(
 export async function loadPromptTemplates(input: {
   projectCommandsDir: string;
   globalCommandsDir: string;
+  /** Whether the `cloud` flag is on: it moves a shared name to the personal tier (`mergePromptTemplates`). */
+  cloud: boolean;
 }): Promise<{ ok: true; templates: readonly PromptTemplate[] } | { ok: false; error: string }> {
   const [project, global] = await Promise.all([
     readPromptTemplateDir(input.projectCommandsDir),
@@ -204,7 +211,11 @@ export async function loadPromptTemplates(input: {
   if (!global.ok) return global;
   return {
     ok: true,
-    templates: mergePromptTemplates({ project: project.templates, global: global.templates }),
+    templates: mergePromptTemplates({
+      project: project.templates,
+      global: global.templates,
+      cloud: input.cloud,
+    }),
   };
 }
 
@@ -217,7 +228,7 @@ export async function loadPromptTemplates(input: {
  * It refuses rather than clobbers. A name already on disk is the one failure a
  * caller can actually do something about (pick another name), and silently
  * overwriting a prompt someone wrote is unrecoverable — there is no undo for a
- * file. The reader merges project over personal, so the SAME name legitimately
+ * file. The reader merges the two tiers by name, so the SAME name legitimately
  * exists in the other tier; the collision checked here is only within `dir`.
  *
  * The description rides YAML frontmatter rather than being left to the body's

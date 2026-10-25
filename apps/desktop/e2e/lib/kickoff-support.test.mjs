@@ -6,7 +6,7 @@ import {
   kickoffTurnEvidence,
   openTicketCard,
   preparedChatSelected,
-  ticketWorkspaceOpen,
+  ticketViewOpen,
 } from "./kickoff-support.mjs";
 
 const SESSION_ID = "session-1";
@@ -180,7 +180,7 @@ function workspaceFixture({ opensOnClick = 1, selectedTabs = 1, selectedSession 
 
 test("card opening checks the named Ticket strip and stops on the first successful gesture", async () => {
   const fixture = workspaceFixture();
-  assert.equal(await ticketWorkspaceOpen(fixture.page), false);
+  assert.equal(await ticketViewOpen(fixture.page), false);
   assert.equal(await openTicketCard(fixture.page, "KO-1"), true);
   assert.equal(fixture.clicks(), 1);
 });

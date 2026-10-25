@@ -144,6 +144,11 @@ export function createBashTool<TContext extends ExecutionToolContext = Execution
         }
       }
 
+      // Volli (VC-820): additive notice; keep the frozen tail and "Full output:" framing.
+      if (capture?.spillTruncatedAt !== undefined) {
+        outputText += `\n\n[Spill truncated at ${capture.spillTruncatedAt} bytes.]`;
+      }
+
       if (!result.ok) {
         const status =
           result.error.code === "timeout"

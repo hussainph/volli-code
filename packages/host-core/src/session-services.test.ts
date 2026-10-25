@@ -6,7 +6,7 @@ import type { AttentionDeliveryPort } from "./ports/attention";
 import type { HostEventBus, HostEventMap } from "./ports/events";
 import {
   createHostSessionServices,
-  wireSessionRuntime,
+  SESSION_RUNTIME,
   type SessionRuntimeWiring,
   type HostSessionPorts,
   type HostSessionServices,
@@ -56,7 +56,7 @@ async function seeded() {
   services = createHostSessionServices(ctx.db, sinks);
   const engine = services.sessionEngine!;
   const runtime = runtimeWiring();
-  wireSessionRuntime(engine, runtime);
+  services[SESSION_RUNTIME].claim()(runtime);
   const order: string[] = [];
   services.sessionWakeBus!.subscribe(() => order.push("wake"));
   runtime.observeScheduledResume.mockImplementation(() => {
@@ -265,15 +265,10 @@ describe("host Session composition", () => {
       expect.objectContaining({ record: expect.objectContaining({ sessionId: first.session.id }) }),
     );
 
-    // An engine the host did not compose has no services to report into.
-    const stranger = runtimeWiring();
-    wireSessionRuntime({ ...engine }, stranger);
+    // One runtime binds once, every answer together; a second is refused.
     const late = runtimeWiring();
-    wireSessionRuntime(engine, { openNativeBindings: late.openNativeBindings });
-    wireSessionRuntime(engine, { observeScheduledResume: late.observeScheduledResume });
-    wireSessionRuntime(engine, { pendingTurnStarts: late.pendingTurnStarts });
-    wireSessionRuntime(engine, { holdTurnStarts: late.holdTurnStarts });
-    wireSessionRuntime(engine, { releaseTurnStarts: late.releaseTurnStarts });
+    services[SESSION_RUNTIME].claim()(late);
+    expect(() => services[SESSION_RUNTIME].claim()).toThrow("already claimed");
     expect(services.liveWork.tryBeginIdleExit()).toBe(true);
     services.liveWork.abandonIdleExit();
     expect(late.pendingTurnStarts).toHaveBeenCalled();
@@ -285,7 +280,5 @@ describe("host Session composition", () => {
     expect(late.observeScheduledResume).toHaveBeenCalledWith(
       expect.objectContaining({ session: expect.objectContaining({ id: second.session.id }) }),
     );
-    expect(stranger.openNativeBindings).not.toHaveBeenCalled();
-    expect(stranger.observeScheduledResume).not.toHaveBeenCalled();
   });
 });

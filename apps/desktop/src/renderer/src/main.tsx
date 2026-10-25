@@ -15,7 +15,6 @@ import {
   announcePendingArmedRunSettlement,
   receivePendingArmedRuns,
 } from "./components/automations/armed-run";
-import { applyRemoteChatTitle } from "./chat/rename";
 import { interruptToastModel } from "./components/sessions/interrupt-toast";
 import { activateNotificationTarget } from "./lib/notification-activation";
 import { desktopNotificationSurface } from "./lib/notification-surface";
@@ -34,7 +33,7 @@ import { attachThisMacWhileCloud } from "./stores/host-sources";
 import { attachRemoteHostsWhileCloud } from "./stores/remote-host-source";
 import { attachRemoteLogSourcesForPage } from "./components/logs/remote-log-sources";
 import { useUpdateStore } from "./stores/update";
-import { useWorkspaceStore } from "./stores/workspace";
+import { useProjectUiStore } from "./stores/project-ui";
 import { watchSystemAppearance } from "./theme/canvas-paint";
 import { initTerminalAppearance } from "./terminal/appearance";
 
@@ -102,15 +101,6 @@ async function main() {
   // does nothing else.
   void startBoardProtocolIfEnabled();
 
-  // Auto-title landings (VC-81). A retitle main performed itself has no
-  // renderer behind it to move labels the way a rename does, and
-  // `session.retitle` skips the runtime publish, so this push is what makes
-  // the model's title appear. No toast: nobody asked for it, and the label
-  // changing IS the feedback.
-  window.api.sessions.onRetitled((event) => {
-    applyRemoteChatTitle(event.sessionId, event.title);
-  });
-
   // Backward-move interrupt announcements (issue #78, CONCEPT #20): automation
   // only ever de-escalates, and never silently — the move that Esc'd live
   // agent sessions toasts where the mover is looking, with a jump-to-ticket
@@ -131,10 +121,10 @@ async function main() {
               label: "View ticket",
               // Route through the nav-intent seam, not bare openTicket: the toast
               // can fire from any nav (Files/Sessions), and detail only renders on
-              // the Board — openTicketWorkspace switches nav so the ticket actually
+              // the Board — openTicketView switches nav so the ticket actually
               // appears (the same fix the composer kickoff needed).
               onClick: () =>
-                useWorkspaceStore.getState().openTicketWorkspace(target.projectId, target.ticketId),
+                useProjectUiStore.getState().openTicketView(target.projectId, target.ticketId),
             },
           }),
     });
@@ -155,7 +145,7 @@ async function main() {
           const chat = useChatSessionsStore.getState();
           chat.adoptChatSession(target.sessionId);
           chat.openChatTab(target.ticketId, target.sessionId);
-          useWorkspaceStore.getState().openTicketWorkspace(target.projectId, target.ticketId, {
+          useProjectUiStore.getState().openTicketView(target.projectId, target.ticketId, {
             tabId: chatTabId(target.sessionId),
           });
         },
@@ -249,7 +239,7 @@ async function main() {
     // Forward the payload's scope (affected ticket/project, or untargeted) so
     // per-ticket surfaces can skip a refetch that's provably for another ticket.
     // `kind` rides along for the one reader that acts on it: a `worktree` change
-    // moved a ticket's CHECKOUT, and its cached venue reading belongs to the
+    // moved a ticket's CHECKOUT, and its cached working copy reading belongs to the
     // checkout it was taken in (VC-286).
     void refreshPlanningData({
       ticketId: event.ticketId,

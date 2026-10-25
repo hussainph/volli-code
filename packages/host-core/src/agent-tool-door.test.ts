@@ -21,6 +21,7 @@ import {
   DEFAULT_AUTHORITY_POLICY,
   defaultModelRequiredForTier,
   NO_AUTOMATION_TRIGGER,
+  VERB_TOOL_KEYS,
   verbEntry,
 } from "@volli/shared";
 import type {
@@ -39,6 +40,8 @@ import type {
 import type { SessionStartedNotice } from "@volli/shared";
 
 import { createAgentToolDoor } from "./agent-tool-door";
+import { testHostHandlers } from "./testing/host-handlers";
+import type { AdmissionObserver } from "./handlers/handler-map";
 import type { AgentToolDoorOptions, VerbBudgetAsk } from "./agent-tool-door";
 import { createAutomationEngine } from "./automations/engine";
 import { createAutomationRunner } from "./automations/run";
@@ -168,6 +171,10 @@ function harness(
     watches?: Watches;
     /** An attach that was not ready, and the receipt it answered with. */
     refusedAttach?: CommandReceipt;
+    /** Sees every verdict the map's policies give (VC-923). */
+    onAdmission?: AdmissionObserver;
+    /** A launch whose Session runtime never came up: the map has no facade. */
+    noRuntime?: boolean;
   } = {},
 ) {
   ctx = openTestDb();
@@ -198,29 +205,37 @@ function harness(
   const door = createAgentToolDoor({
     db,
     projects: () => listProjects(db),
-    sessions: () => ({
-      start: async (input: SessionStartInput) => {
-        startInputs.push(input);
-        if (overrides.startError !== undefined) throw overrides.startError;
-        return {
-          sessionId: STARTED_SESSION,
-          ...(overrides.refusedAttach === undefined
-            ? { state: "ready" as const, receipt: null }
-            : { state: "needs-recovery" as const, receipt: overrides.refusedAttach }),
-          throughSequence: 2,
-          model: {
-            providerId: "openai-codex",
-            modelId: "gpt-5.6-sol",
-            reasoningLevel: "high" as const,
-          },
-        };
+    // The start is the map's own command (VC-923): the facade, the kickoff
+    // and the start notice are the map's ports.
+    handlers: testHostHandlers({
+      db,
+      now: () => 1_000,
+      ...(overrides.onAdmission === undefined ? {} : { onAdmission: overrides.onAdmission }),
+      sessions: {
+        start: async (input: SessionStartInput) => {
+          startInputs.push(input);
+          if (overrides.startError !== undefined) throw overrides.startError;
+          return {
+            sessionId: STARTED_SESSION,
+            ...(overrides.refusedAttach === undefined
+              ? { state: "ready" as const, receipt: null }
+              : { state: "needs-recovery" as const, receipt: overrides.refusedAttach }),
+            throughSequence: 2,
+            model: {
+              providerId: "openai-codex",
+              modelId: "gpt-5.6-sol",
+              reasoningLevel: "high" as const,
+            },
+          };
+        },
       },
+      // Spread after the facade, so it replaces it with none.
+      ...(overrides.noRuntime === true ? { sessions: undefined } : {}),
+      submitSessionMessage: async (input) => {
+        kickoffs.push(input);
+      },
+      onSessionStarted: (notice) => notices.push(notice),
     }),
-    submitSessionMessage: async (input) => {
-      kickoffs.push(input);
-    },
-    onSessionStarted: (notice) => notices.push(notice),
-    actorTicketDisplay: () => null,
     now: () => 1_000,
     delegation: overrides.delegation ?? grantingDelegation(),
     // `automation.run`'s host is inert here — its suite below wires the real
@@ -255,7 +270,84 @@ function harness(
   return { call, door, startInputs, kickoffs, notices };
 }
 
+// Verb parity at the map (VC-923): every tool verb a bundle can hold reaches
+// the map's entry for its own key, once, admitted by the tool door's policy,
+// and no other entry; `session_start` reaches the map's one start command,
+// the same entry the person's operator CLI projects.
+describe("every tool verb is a projection of the host's map", () => {
+  it("reaches exactly its own map entry, under the tool door's policy", async () => {
+    const reached: Record<string, string[]> = {};
+    for (const verb of VERB_TOOL_KEYS) {
+      const records: string[] = [];
+      const { door } = harness({
+        onAdmission: ({ door: policy, key, admitted }) =>
+          records.push(`${policy} ${key} ${admitted}`),
+      });
+      await door(
+        CALLER,
+        { verb, input: verb === "session.start" ? { ticket: "VC-1" } : {}, toolCallId: "tc-0" },
+        new AbortController().signal,
+      );
+      reached[verb] = records;
+      ctx?.cleanup();
+      ctx = undefined;
+    }
+    expect(reached).toEqual(
+      Object.fromEntries(VERB_TOOL_KEYS.map((verb) => [verb, [`agent-tool ${verb} true`]])),
+    );
+  });
+
+  it("serves its own verbs into the map once, and refuses a second door on it", () => {
+    const opened = openTestDb();
+    ctx = opened;
+    const handlers = testHostHandlers({ db: opened.db });
+    const build = () =>
+      createAgentToolDoor({
+        db: opened.db,
+        projects: () => [],
+        handlers,
+        now: () => 0,
+        delegation: grantingDelegation(),
+        automations: () => null,
+        authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
+        watches: () => null,
+        supervise: () => null,
+        delegate: () => null,
+        mcp: () => null,
+      });
+    build();
+    expect(build).toThrow("The handler map already serves session.stop.");
+    expect(() => createAgentToolDoor({} as AgentToolDoorOptions)).toThrow(
+      "The host's handler map is required.",
+    );
+  });
+});
+
 describe("session_start through the Agent Tool Surface", () => {
+  it("refuses in words on a launch with no Session runtime, and releases a Ticket caller's claim", async () => {
+    const released: unknown[] = [];
+    const h = harness({
+      noRuntime: true,
+      delegation: grantingDelegation({ releaseIfUnstarted: (ref) => void released.push(ref) }),
+    });
+    const result = await h.call({ ticket: "VC-1" }, "tc-none", TICKET_CALLER);
+    expect(result.text).toBe(
+      "Volli's Session runtime is not available this launch, so nothing was started.",
+    );
+    expect(released).toEqual([{ parentSessionId: TICKET_CALLER.sessionId, toolCallId: "tc-none" }]);
+    expect(h.kickoffs).toEqual([]);
+    expect(h.notices).toEqual([]);
+  });
+
+  it("announces one start, on the map's bus, citing the calling Session's Ticket", async () => {
+    const h = harness();
+    await h.call({ ticket: "VC-1", message: "Fix it" }, "tc-notice", TICKET_CALLER);
+    expect(h.notices).toEqual([
+      expect.objectContaining({ sessionId: STARTED_SESSION, actorTicket: "VC-1" }),
+    ]);
+    expect(h.kickoffs).toHaveLength(1);
+  });
+
   it("starts a Ticket Session on the caller's project without touching the socket", async () => {
     const watches = recordingWatches();
     const h = harness({ watches });
@@ -837,7 +929,7 @@ function automationHarness(options: { host?: "absent" } = {}) {
   const door = createAgentToolDoor({
     db,
     projects: () => listProjects(db),
-    sessions: () => null,
+    handlers: testHostHandlers({ db }),
     // Inert for the automation suite: its callers never reach `session.start`,
     // and the defaults here are what an ordinary Board Session's rows say.
     delegation: grantingDelegation(),
@@ -851,7 +943,6 @@ function automationHarness(options: { host?: "absent" } = {}) {
               return runner.run(input);
             },
           },
-    actorTicketDisplay: () => null,
     now: () => 1_000,
     authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
     watches: () => null,
@@ -1187,6 +1278,11 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       watches?: Watches;
       /** Session reads after this many succeed reject — the watch lookup's failure. */
       failLookupsAfter?: number;
+      caller?: RuntimeSessionIdentity;
+      durableCallerRole?: "project" | "ticket" | "subagent";
+      targetRole?: "project" | "ticket" | "subagent";
+      parentSessionId?: string | null;
+      liveChildren?: readonly string[];
     } = {},
   ) {
     let lookups = 0;
@@ -1201,20 +1297,32 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
     const door = createAgentToolDoor({
       db,
       projects: () => listProjects(db),
-      sessions: () => null,
+      handlers: testHostHandlers({ db }),
       // Inert for the supervision suite: its callers reach neither
       // `session.start` nor `automation.run`.
       delegation: grantingDelegation(),
       automations: () => null,
-      actorTicketDisplay: () => null,
       now: () => 1_000,
       authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
       watches: () => options.watches ?? null,
-      delegate: () => null,
+      delegate: () =>
+        options.liveChildren === undefined
+          ? null
+          : ({
+              liveChildren: () => options.liveChildren!,
+            } as unknown as NonNullable<ReturnType<AgentToolDoorOptions["delegate"]>>),
       mcp: () => null,
       supervise: () =>
         ({
           sessionEngine: {
+            getSession: async () => ({
+              session: {
+                id: (options.caller ?? CALLER).sessionId,
+                projectId: "project-one",
+                ticketId: null,
+                role: options.durableCallerRole ?? (options.caller ?? CALLER).role,
+              },
+            }),
             listSessions: async () => {
               lookups += 1;
               if (options.failLookupsAfter !== undefined && lookups > options.failLookupsAfter) {
@@ -1226,6 +1334,8 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
                     id: TARGET_SESSION,
                     projectId: "project-one",
                     ticketId: null,
+                    role: options.targetRole ?? "project",
+                    parentSessionId: options.parentSessionId ?? null,
                     title: "Implementer",
                     createdAt: 1,
                   },
@@ -1297,9 +1407,139 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       verb: "session.stop" | "session.send",
       input: Record<string, unknown>,
       signal: AbortSignal = new AbortController().signal,
-    ) => door(CALLER, { verb, input, toolCallId: "tc-9" }, signal);
+    ) => door(options.caller ?? CALLER, { verb, input, toolCallId: "tc-9" }, signal);
     return { call, stops, sends };
   }
+
+  it.each([
+    { role: "subagent" as const, parent: TICKET_CALLER.sessionId, allowed: true },
+    { role: "subagent" as const, parent: "another-parent", allowed: false },
+    { role: "ticket" as const, parent: TICKET_CALLER.sessionId, allowed: false },
+    { role: "project" as const, parent: null, allowed: false },
+  ])(
+    "scopes Ticket steering to its delegated subagents: $role / $parent",
+    async ({ role, parent, allowed }) => {
+      const watches = recordingWatches();
+      const h = superviseHarness({
+        caller: TICKET_CALLER,
+        targetRole: role,
+        parentSessionId: parent,
+        watches,
+      });
+      const result = await h.call("session.send", {
+        session: TARGET_SESSION.slice(0, 8),
+        message: "Focus on the regression",
+        callerRole: "project", // Caller-supplied authority is ignored.
+      });
+      if (allowed) {
+        expect(result.text).toContain("Delivered into Session bbbbbbbb");
+        expect(h.sends).toHaveLength(1);
+        expect(watches.sessions).toEqual([
+          expect.objectContaining({
+            watcherSessionId: TICKET_CALLER.sessionId,
+            targetSessionId: TARGET_SESSION,
+          }),
+        ]);
+      } else {
+        expect(result.text).toContain("a ticket Session may steer only its own subagents");
+        expect(h.sends).toEqual([]);
+        expect(watches.sessions).toEqual([]);
+      }
+    },
+  );
+
+  it.each([
+    { targetRole: "project" as const, parent: null, allowed: false },
+    { targetRole: "subagent" as const, parent: "another-parent", allowed: false },
+    { targetRole: "subagent" as const, parent: CALLER.sessionId, allowed: true },
+  ])(
+    "keeps orphan Ticket steering scoped despite its project runtime identity: $targetRole / $parent",
+    async ({ targetRole, parent, allowed }) => {
+      // The attach resolver briefs a Ticket whose ticketId became null as a
+      // project Session, but its durable Role remains ticket after deletion.
+      const watches = recordingWatches();
+      const h = superviseHarness({
+        caller: CALLER,
+        durableCallerRole: "ticket",
+        targetRole,
+        parentSessionId: parent,
+        watches,
+      });
+      const result = await h.call("session.send", {
+        session: TARGET_SESSION.slice(0, 8),
+        message: "Focus on the regression",
+      });
+      if (allowed) {
+        expect(result.text).toContain("Delivered into Session");
+        expect(h.sends).toHaveLength(1);
+      } else {
+        expect(result.text).toContain("a ticket Session may steer only its own subagents");
+        expect(h.sends).toEqual([]);
+        expect(watches.sessions).toEqual([]);
+      }
+    },
+  );
+
+  it.each(["project", "ticket", "subagent"] as const)(
+    "allows Board steering of a %s Session",
+    async (targetRole) => {
+      const h = superviseHarness({ targetRole, parentSessionId: "another-parent" });
+      const result = await h.call("session.send", {
+        session: TARGET_SESSION.slice(0, 8),
+        message: "Carry on",
+      });
+      expect(result.text).toContain("Delivered into Session bbbbbbbb");
+      expect(h.sends).toHaveLength(1);
+    },
+  );
+
+  it.each([CALLER, TICKET_CALLER])(
+    "does not arm a second report for $role's active delegate",
+    async (caller) => {
+      const watches = recordingWatches();
+      const h = superviseHarness({
+        caller,
+        watches,
+        targetRole: "subagent",
+        parentSessionId: caller.sessionId,
+        liveChildren: [TARGET_SESSION],
+      });
+      const result = await h.call("session.send", {
+        session: TARGET_SESSION.slice(0, 8),
+        message: "Focus on the regression",
+      });
+      expect(h.sends).toHaveLength(1);
+      expect(result.text).toContain("Its delegation answer reports back");
+      expect(watches.sessions).toEqual([]);
+    },
+  );
+
+  it("does not arm a duplicate watch if the delegate answers during delivery", async () => {
+    const delivery = Promise.withResolvers<void>();
+    const watches = recordingWatches();
+    const state = { delivery: delivery.promise, watches, liveChildren: [TARGET_SESSION] };
+    const h = superviseHarness(state);
+    const sending = h.call("session.send", {
+      session: TARGET_SESSION.slice(0, 8),
+      message: "Focus",
+    });
+    await vi.waitFor(() => expect(h.sends).toHaveLength(1));
+    state.liveChildren = [];
+    delivery.resolve();
+    expect((await sending).text).toContain("Its delegation answer reports back");
+    expect(watches.sessions).toEqual([]);
+  });
+
+  it("still watches a target outside the caller's pending delegations", async () => {
+    const watches = recordingWatches();
+    const h = superviseHarness({ watches, liveChildren: ["another-child"] });
+    const result = await h.call("session.send", {
+      session: TARGET_SESSION.slice(0, 8),
+      message: "Carry on",
+    });
+    expect(result.text).toContain("A notice from Volli will arrive");
+    expect(watches.sessions).toHaveLength(1);
+  });
 
   it("confirms a delivered send even when arming its watch cannot read the target (VC-457)", async () => {
     const watches = recordingWatches();
@@ -1449,10 +1689,9 @@ describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
     const door = createAgentToolDoor({
       db,
       projects: () => listProjects(db),
-      sessions: () => null,
+      handlers: testHostHandlers({ db }),
       delegation: grantingDelegation(),
       automations: () => null,
-      actorTicketDisplay: () => null,
       now: () => 1_000,
       authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
       watches: () => null,
@@ -1694,19 +1933,23 @@ describe("verb result details match the registry (VC-471)", () => {
     const door = createAgentToolDoor({
       db,
       projects: () => listProjects(db),
-      sessions: () => ({
-        start: async () => ({
-          sessionId: STARTED_SESSION,
-          state,
-          receipt: null,
-          throughSequence: 2,
-          model,
-        }),
+      handlers: testHostHandlers({
+        db,
+        now: () => 1_000,
+        sessions: {
+          start: async () => ({
+            sessionId: STARTED_SESSION,
+            state,
+            receipt: null,
+            throughSequence: 2,
+            model,
+          }),
+        },
+        submitSessionMessage: async () => {
+          if (options.holds === false)
+            throw new Error("The kickoff was refused (session_archived)");
+        },
       }),
-      submitSessionMessage: async () => {
-        if (options.holds === false) throw new Error("The kickoff was refused (session_archived)");
-      },
-      actorTicketDisplay: () => null,
       now: () => 1_000,
       delegation: grantingDelegation(),
       automations: () => null,

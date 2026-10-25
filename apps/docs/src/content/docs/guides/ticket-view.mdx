@@ -1,0 +1,110 @@
+---
+title: The Ticket view
+description: "Work on one task: read its brief, revisit its chats, inspect files and changes, and edit its properties."
+sidebar:
+  label: Ticket view
+---
+
+import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+A ticket is a task in Volli. Open one to read its **Ticket Body**, return to
+its chats, inspect files and diffs, and edit its properties. The main tab strip
+keeps the documents and chats you open. The rail beside it has four pages:
+**Now**, **Diffs**, **Files**, and **Search**.
+
+## Now
+
+**Now** shows what is true of the whole ticket, in three sections:
+
+- **Properties**: status, priority, and labels. Changing status updates the
+  board. Starting a chat or an Automation Run is a separate action.
+- **Sessions**: the ticket's chats and terminal Sessions. Ended Sessions are
+  folded under the section heading. Open one to return to its history.
+- **Automations**: the saved Automations this ticket can run.
+
+A row pinned at the bottom of **Now** shows the ticket's cost. The worktree row
+is pinned under every page: it shows the branch and opens to the base branch,
+worktree, changes, and pull-request state.
+
+A ticket chat carries the task's context and works from that ticket's worktree.
+Reconnecting it does not create a second chat history. What a chat is holding
+(its Browser Tabs, subagents, plan, and background shells) appears in the
+Activity Island above that chat's composer, not in the rail.
+
+Configure [Models](/guides/models/) first, then use **Chat** in the
+**Sessions** heading to open a draft. Send the first message to start the
+Session. The **Chat** menu also opens a
+[terminal companion](/guides/terminal-companions/) or a
+[Browser Tab](/guides/browser-tabs/).
+
+### Run an Automation on this ticket
+
+The **Automations** section lists the Automations offered to this ticket. The
+one armed for the ticket's current column comes first and is marked.
+
+Select a row, or right-click it, to see its saved Instructions. Choose the
+model for this Run under **Run on**, then select **Run**. Selecting a row never
+starts a Run by itself. You can run an Automation by hand even when
+**Automatic triggers** is off for it.
+
+A Run opens a fresh Session. It appears in **Sessions** with a mark showing
+that a Run started it. The **Automations** section does not list Runs.
+
+Select **Open Automations** in the section heading to create or edit Automation
+records; authoring lives only on that page. For one-off work that you don't want
+to save, start a chat instead.
+
+## Files and references
+
+The **Files** rail shows file references from the Ticket Body, attached files,
+and the ticket worktree's directory tree. Use `@` in the Ticket Body to add a
+file reference. Selecting a file opens a preview tab; keeping it open pins the
+tab.
+
+Ticket files come from the worktree. The project-level **Files** navigator in
+**Home** reads from the main checkout, so the same path can hold different
+content in each place, and editing one does not edit the other.
+
+## Diffs
+
+The **Diffs** rail compares the ticket worktree with its base branch. Open a
+file to inspect its diff. The **Change Set** includes committed and
+uncommitted work, so it reflects the branch as it is on disk. See
+[Review and publish changes](/guides/review-changes/) for testing, commits,
+and pull requests.
+
+## Search
+
+The **Search** rail searches files in the ticket's worktree. For tickets and
+Sessions across projects, use the command palette, `⌘K`.
+
+<Aside type="note">
+  Worktrees are retained when a ticket is archived. See
+  [Chats and worktrees](/guides/agents-and-worktrees/#change-sets-and-retained-worktrees)
+  for safe removal after the branch is landed.
+</Aside>
+
+## Next steps
+
+<CardGrid>
+  <LinkCard
+    title="Chats and worktrees"
+    href="/guides/agents-and-worktrees/"
+    description="See where each kind of chat works and how terminals fit in."
+  />
+  <LinkCard
+    title="The board"
+    href="/guides/board/"
+    description="Understand the ticket states and column Automations."
+  />
+  <LinkCard
+    title="Automations"
+    href="/guides/automations/"
+    description="Create a saved start and read the Runs it opens."
+  />
+  <LinkCard
+    title="Concepts"
+    href="/start/concepts/"
+    description="Look up the terms used in Volli."
+  />
+</CardGrid>

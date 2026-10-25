@@ -3,10 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { HeadlessSecrets } from "./secrets";
 import { busyRefusal } from "@volli/host-core/worktree";
-import type {
-  RuntimeAssemblyOptions,
-  BackgroundShellHostPorts,
-} from "@volli/host-core/session-runtime";
+import type { BackgroundShellHostPorts } from "@volli/host-core/session-runtime";
+// The runner's private staging, recorded here at its module seam.
+import { SESSION_RUNTIME } from "../../../packages/host-core/src/session-services";
+import type { RuntimeAssemblyOptions } from "../../../packages/host-core/src/session-runtime/assembly";
 
 const seam = vi.hoisted(() => ({
   assembly: vi.fn(),
@@ -171,8 +171,12 @@ function fixture() {
   const spawnLedger = { ledger: "host-spawn-ledger" };
   const host = {
     kind: "live",
+    stopPolicy: "drain-and-close",
     database: { ok: true, db: {} },
     sessionEngine: { listAttachedSessions: vi.fn(async () => []) },
+    sessionWakeBus: { subscribe: vi.fn(() => () => {}) },
+    liveWork: { observeShell: vi.fn(), forgetShell: vi.fn() },
+    [SESSION_RUNTIME]: { claim: () => () => {} },
     dataDir: "/data",
     runtimeServices,
     maintenance: { spawnLedger },
@@ -221,8 +225,11 @@ describe("headless runtime ownership", () => {
       options: { ...f.input.options, projectsRoot: "/home/service/volli" },
       boardFeed: {} as never,
     });
+    seam.handlers.mockReturnValueOnce({ map: "host" } as never);
     await owner.ready();
     await owner.ready();
+    // One map for the host, however often `ready()` is asked (VC-923).
+    expect(seam.handlers).toHaveBeenCalledOnce();
     expect(seam.workspaces).toHaveBeenCalledExactlyOnceWith({
       db: f.host.database.db,
       projectsRoot: "/home/service/volli",
@@ -295,6 +302,8 @@ describe("headless runtime ownership", () => {
     expect(input.decisions).toBe(f.runtimeServices.decisions);
     expect(input.mcpSettings).toBe(f.runtimeServices.mcp);
     expect(input.webAccess).toBe(f.runtimeServices.webAccess);
+    // The runtime hears every committed Session Event from the host's one wake bus (VC-790).
+    expect(input.sessionWake).toBe(f.host.sessionWakeBus.subscribe);
     expect(seam.shellOptions!.ledger).toBe(f.spawnLedger);
     // Automations take the host's metadata and its event port, never a host bag.
     expect(seam.automations).toHaveBeenCalledWith({
@@ -302,8 +311,12 @@ describe("headless runtime ownership", () => {
       events: f.input.ports.events,
       piRuntimeHost: f.assembly.piRuntimeHost,
       homeDir: "/home/service",
-      log: f.log,
+      cloudEnabled: expect.any(Function),
+      log: expect.objectContaining({ error: expect.any(Function) }),
     });
+    // Skills/templates precedence follows the environment's `cloud` opt-in.
+    expect(seam.automations.mock.lastCall![0].cloudEnabled()).toBe(false);
+    expect(seam.facade.mock.lastCall![0].cloudEnabled()).toBe(false);
     expect(input).not.toHaveProperty("browser");
     await input.beforeExecution();
     // The agent's `volli` reaches this host, beside the budget (VC-563).
@@ -323,6 +336,9 @@ describe("headless runtime ownership", () => {
     shell.onNotice!({} as never);
     shell.publishState({} as never);
     shell.publishRemoved("id");
+    // The host's live work counts this host's shells too (VC-577).
+    expect(f.host.liveWork.observeShell).toHaveBeenCalledOnce();
+    expect(f.host.liveWork.forgetShell).toHaveBeenCalledWith("id");
     expect(f.store.redact).toHaveBeenCalledWith("output");
     expect(f.lifecycle.relayShellNotice).toHaveBeenCalled();
     const identity = seam.identities.mock.lastCall![0];
@@ -331,7 +347,18 @@ describe("headless runtime ownership", () => {
     expect(identity.ticketDisplayIdOf("t")).toBeNull();
     seam.project.mockReturnValue({ ticketPrefix: "VC" });
     expect(identity.ticketDisplayIdOf("t")).toBe("VC-1");
+    // The tool door projects the one map (VC-923): none before `ready()` built it.
+    // The tool door projects the one map (VC-923): a recovered Session's tool
+    // call may build it before `ready()` does, and `ready()` hands out the same.
+    const [agentOptions] = f.facade.agents.mock.lastCall as unknown as [
+      { handlers: (ready: unknown) => unknown },
+    ];
+    const map = { map: "host" };
+    seam.handlers.mockReturnValueOnce(map as never);
+    expect(agentOptions.handlers(f.proof)).toBe(map);
     const ready = await owner.ready();
+    expect(ready.handlers).toBe(map);
+    expect(agentOptions.handlers(f.proof)).toBe(map);
     expect(seam.commands).toHaveBeenCalledWith(f.proof);
     expect(ready).toMatchObject({
       sessionEngine: "recovered-engine",
@@ -556,6 +583,9 @@ describe("headless runtime ownership", () => {
     });
     expect(seam.assembly.mock.lastCall![0].codeModeSandbox).toEqual({ wasmPath: "/wasm" });
     expect(seam.automations.mock.lastCall![0].homeDir).toMatch(/.+/);
+    createHeadlessSessionRuntime({ ...f.input, env: { VOLLI_EXPERIMENTAL: "cloud" } });
+    expect(seam.automations.mock.lastCall![0].cloudEnabled()).toBe(true);
+    expect(seam.facade.mock.lastCall![0].cloudEnabled()).toBe(true);
     f.automations.execution = { kind: "idle" } as never;
     const ready = await owner.ready();
     expect(ready.automationsAvailable).toBe(false);
@@ -580,11 +610,18 @@ describe("headless runtime ownership", () => {
   });
   it("refuses absent recovered services and the unavailable tool door", async () => {
     const f = fixture();
-    const owner = f.launch();
     seam.recovered.mockReturnValueOnce({ sessions: null, runtime: f.runtime });
-    await expect(owner.ready()).rejects.toThrow("runtime is unavailable");
+    await expect(f.launch().ready()).rejects.toThrow("runtime is unavailable");
+    // A host that cannot serve runs no scheduler.
+    expect(f.automations.stop).toHaveBeenCalledOnce();
     seam.recovered.mockReturnValueOnce({ sessions: {}, runtime: null });
-    await expect(owner.ready()).rejects.toThrow("runtime is unavailable");
+    await expect(f.launch().ready()).rejects.toThrow("runtime is unavailable");
+    // The tool door's map is refused the same way (VC-923).
+    const [agentOptions] = f.facade.agents.mock.lastCall as unknown as [
+      { handlers: (ready: unknown) => unknown },
+    ];
+    seam.recovered.mockReturnValueOnce({ sessions: null, runtime: f.runtime });
+    expect(() => agentOptions.handlers(f.proof)).toThrow("runtime is unavailable");
     f.agents.toolDoor.mockReturnValueOnce(null as never);
     await expect(
       (seam.assembly.mock.lastCall![0] as RuntimeAssemblyOptions).callVerb(
@@ -593,6 +630,6 @@ describe("headless runtime ownership", () => {
         new AbortController().signal,
         undefined,
       ),
-    ).rejects.toThrow("tool door is unavailable");
+    ).rejects.toThrow("no Volli verb handlers");
   });
 });

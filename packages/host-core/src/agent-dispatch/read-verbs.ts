@@ -38,7 +38,7 @@ import {
 import { isInside } from "../worktree/paths";
 import { composeTicketBrief } from "./briefs";
 import { failure } from "./context";
-import type { AgentCommandContext } from "./context";
+import type { AgentVerbContext } from "./context";
 import {
   countOr,
   invalidPriorityResponse,
@@ -134,7 +134,7 @@ function recordedAgentToolSurface(
  * caller is standing in.
  */
 export async function identifyVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, envSession, envSessionTerminal, sessionEngine } = context;
@@ -257,7 +257,7 @@ export async function identifyVerb(
 
 /** `volli board` — a project's board, grouped by column. */
 export async function boardVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, envSession } = context;
@@ -274,7 +274,7 @@ export async function boardVerb(
  * Additive JSON only; the text rendering is unchanged.
  */
 export async function projectListVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   _request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects } = context;
@@ -296,7 +296,7 @@ export async function projectListVerb(
 
 /** `volli label list` — a project's labels, with how many tickets wear each. */
 export async function labelListVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, envSession } = context;
@@ -315,7 +315,7 @@ export async function labelListVerb(
 
 /** `volli ticket list` — a project's tickets, optionally filtered. */
 export async function ticketListVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, envSession } = context;
@@ -363,7 +363,7 @@ export async function ticketListVerb(
 
 /** `volli ticket show` — one ticket, with its recent events and comments. */
 export async function ticketShowVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects } = context;
@@ -417,7 +417,7 @@ export async function ticketShowVerb(
 
 /** `volli ticket events` — a ticket's event log. */
 export async function ticketEventsVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects } = context;
@@ -432,7 +432,7 @@ export async function ticketEventsVerb(
 
 /** `volli ticket brief` — the agent kickoff prompt for a ticket. */
 export async function ticketBriefVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects } = context;

@@ -6,8 +6,9 @@ import type { SessionOrigin } from "@volli/shared";
  * names it, and VC-167 wrote down why: *"when VC-162 flips `session.start` to a
  * `tool` access mode, the tool surface resolves the SAME `session.start` binding
  * rather than growing a second implementation of the verb."* This module is that
- * binding's application half, lifted out of `sessionStartVerb` so the socket and
- * the Agent Tool Surface can both reach it.
+ * binding's application half: the host handler map's `session.start` entry
+ * runs it (VC-923), and the socket's operator start and the Agent Tool
+ * Surface both project that entry.
  *
  * What stayed behind in each door is exactly what differs between them: argv
  * parsing and an `AgentResponse` envelope on the socket side, a schema-checked

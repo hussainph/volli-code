@@ -66,9 +66,10 @@ import { archiveTicketCommand, updateTicketFieldsCommand } from "./ticket-comman
 import { createSessionTokenRegistry } from "./session-tokens";
 import { scriptedGit, scriptedReadOnlyGit } from "./worktree/scripted-git";
 import * as worktree from "./worktree";
-import { getWorktreeSnapshots, resetWorktreeSnapshotsForTest } from "./worktree/snapshot";
-import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
+import { createWorktreeSnapshotCache } from "./worktree/snapshot";
+import { createWorktreeReadService } from "./worktree-reads";
 import type { SessionEngine } from "@volli/session-engine";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 /** The transcript store the chat-peek tests read through, as main's file store would. */
 const artifacts = createInMemoryTranscriptArtifactStore();
@@ -194,8 +195,20 @@ function createAgentCommandService(
   // states build the real map the socket projects, as a root builds it.
   const { busyWorktreeSites, interruptTicketSessions, onDeliberateMove, detachedWork, ...service } =
     options;
+  // One host, one read service: a case's board acts retire the answers its
+  // socket reads are served from.
+  const worktreeReads =
+    options.worktreeReads ??
+    createWorktreeReadService({
+      deps: () => ({
+        db: options.db,
+        gitAsync: options.gitAsync,
+        worktreeExists: options.worktreeExists,
+      }),
+    });
   return createAgentCommandServiceBase({
     ...service,
+    worktreeReads,
     handlers:
       options.handlers ??
       testHostHandlers({
@@ -207,7 +220,11 @@ function createAgentCommandService(
         notify: options.notify,
         onMutation: options.onMutation,
         gitAsync: options.gitAsync,
+        worktreeReads,
         now: options.now,
+        // The service's ids are the map's too: a created ticket's id is the
+        // handler's to mint (VC-794), from the same seam a case states.
+        newId: options.newId,
       }),
     sessionEngine: options.sessionEngine ?? createTestSessionEngine(options.db),
     verifySessionToken: options.verifySessionToken ?? DOOR_TOKENS.verify,
@@ -217,9 +234,9 @@ function createAgentCommandService(
 let ctx: TestDb;
 
 afterEach(() => ctx.cleanup());
-// The rail's last-known snapshot is process-wide (VC-372): every test here
-// starts from a clean launch and leaves no covered ticket behind.
-afterEach(() => resetWorktreeSnapshotsForTest());
+
+/** A seeded worktree path is fictional: every disk-existence check passes. */
+const alwaysExists = () => true;
 
 /**
  * The notification port, as a test records it: the WHOLE request (producer and
@@ -3745,6 +3762,11 @@ describe("agent command service", () => {
       );
       // Attributed to the Session that wrote it, exactly as `ticket comment` is.
       expect(comments[0]).toMatchObject({ actor: "session", sessionId });
+      // Written through the board's own comment command (VC-928): receipted,
+      // like every other board write, rather than by a raw repository call.
+      expect(ctx.db.prepare("SELECT operation FROM board_command_receipts").all()).toEqual([
+        { operation: "board.createComment" },
+      ]);
     });
 
     it("posts it on session blocked too, where an unfinished list is the point", async () => {
@@ -5229,6 +5251,121 @@ describe("agent command service", () => {
     expect(noContext).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
   });
 
+  /**
+   * A worktree scenario whose git waits on a gate the case opens, behind a read
+   * service on a frozen clock: every call the case starts before opening the
+   * gate lands inside the share window, whatever the machine's speed (VC-788).
+   */
+  const burstScenario = async (handler: (args: readonly string[]) => string) => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const { gitAsync: scripted, calls } = scriptedReadOnlyGit(handler);
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const gitAsync = async (args: readonly string[], cwd: string): Promise<string> => {
+      await gate;
+      return scripted(args, cwd);
+    };
+    const worktreeReads = createWorktreeReadService({
+      deps: () => ({ db: ctx.db, gitAsync, worktreeExists: alwaysExists }),
+      now: () => 0,
+    });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      newId: () => "ticket-one",
+      gitAsync,
+      worktreeExists: alwaysExists,
+      worktreeReads,
+    });
+    await seedWorktreeTicket(service);
+    const statusReads = vi.spyOn(worktreeReads, "readStatus");
+    const diffReads = vi.spyOn(worktreeReads, "readDiff");
+    /** Starts the requests together, waits until each reached its read, then opens git. */
+    const burst = async (requests: AgentRequest[]): Promise<AgentResponse[]> => {
+      const pending = Promise.all(requests.map((request) => service.execute(request)));
+      await vi.waitFor(() => {
+        expect(statusReads.mock.calls.length + diffReads.mock.calls.length).toBe(requests.length);
+      });
+      open();
+      return pending;
+    };
+    return { service, calls, burst };
+  };
+
+  const worktreeRequest = (
+    cmd: "worktree.status" | "worktree.diff",
+    args: Record<string, unknown> = {},
+  ): AgentRequest => ({ v: 1, cmd, args, ctx: { cwd: "/wt/VC-1", env: ACTING_ENV } });
+
+  it("runs one git read set for two `worktree status` calls in one burst", async () => {
+    const { service, calls, burst } = await burstScenario((args) => {
+      if (args[0] === "status") return " M src/a.ts\n";
+      if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
+      if (args[0] === "rev-list" && args[1] === "--left-right") return "0\t3\n";
+      if (args[0] === "rev-list") return "2\n";
+      return "";
+    });
+    const [first, second] = await burst([
+      worktreeRequest("worktree.status"),
+      worktreeRequest("worktree.status"),
+    ]);
+    expect(first).toMatchObject({ ok: true, data: { ticket: "VC-1", uncommitted: true } });
+    expect(second).toEqual(first);
+    const shared = calls.length;
+    expect(shared).toBeGreaterThan(0);
+
+    // A lone call after the burst settled pays the whole set again: the burst
+    // paid it exactly once between two callers.
+    await service.execute(worktreeRequest("worktree.status"));
+    expect(calls.length).toBe(shared * 2);
+  });
+
+  it("runs one git read set for two `worktree diff` calls in one burst, per mode", async () => {
+    const { service, calls, burst } = await burstScenario((args) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
+      if (args[0] === "diff" && args.includes("main...HEAD")) return "3\t1\tsrc/a.ts\0";
+      if (args[0] === "diff" && args.includes("HEAD")) return "9\t0\tsrc/wip.ts\0";
+      return "";
+    });
+    const [first, second] = await burst([
+      worktreeRequest("worktree.diff"),
+      worktreeRequest("worktree.diff"),
+    ]);
+    expect(first).toMatchObject({ ok: true, data: { mode: "merge-base", totalFiles: 1 } });
+    expect(second).toEqual(first);
+    const shared = calls.length;
+    expect(shared).toBeGreaterThan(0);
+    await service.execute(worktreeRequest("worktree.diff"));
+    expect(calls.length).toBe(shared * 2);
+
+    // The two modes are different questions: one burst asking both gets each
+    // its own answer, never the other's.
+    const [pr, wip] = await Promise.all([
+      service.execute(worktreeRequest("worktree.diff")),
+      service.execute(worktreeRequest("worktree.diff", { workingTree: true })),
+    ]);
+    expect(pr).toMatchObject({
+      ok: true,
+      data: { mode: "merge-base", files: [{ path: "src/a.ts" }] },
+    });
+    expect(wip).toMatchObject({
+      ok: true,
+      data: { mode: "working-tree", files: [{ path: "src/wip.ts" }] },
+    });
+  });
+
   it("summarizes the merge-base PR diff by default and the working tree on request", async () => {
     ctx = openTestDb();
     insertProject(
@@ -5242,9 +5379,9 @@ describe("agent command service", () => {
     );
     const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
-      if (args[0] === "diff" && args.includes("main...HEAD")) return "3\t1\tsrc/a.ts\n";
-      if (args[0] === "diff" && args.includes("HEAD")) return "9\t0\tsrc/wip.ts\n";
-      if (args[0] === "status") return "?? src/new.ts\n";
+      if (args[0] === "diff" && args.includes("main...HEAD")) return "3\t1\tsrc/a.ts\0";
+      if (args[0] === "diff" && args.includes("HEAD")) return "9\t0\tsrc/wip.ts\0";
+      if (args[0] === "ls-files") return "src/new.ts\0";
       return "";
     });
     const service = createAgentCommandService({
@@ -5310,7 +5447,7 @@ describe("agent command service", () => {
       }),
     );
     const numstat =
-      Array.from({ length: 25 }, (_, i) => `1\t0\tsrc/file-${i}.ts`).join("\n") + "\n";
+      Array.from({ length: 25 }, (_, i) => `1\t0\tsrc/file-${i}.ts`).join("\0") + "\0";
     const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "diff") return numstat;
@@ -5478,6 +5615,7 @@ describe("agent command service", () => {
   const syncScenario = async (
     handler: (args: readonly string[], cwd: string) => string,
     checkedOutBranch = "volli/VC-1-ship",
+    extra: Partial<AgentCommandServiceOptions> = {},
   ): Promise<{
     service: ReturnType<typeof createAgentCommandService>;
     calls: { args: readonly string[]; cwd: string }[];
@@ -5503,6 +5641,7 @@ describe("agent command service", () => {
       newId: () => "ticket-one",
       gitAsync,
       worktreeExists: () => true,
+      ...extra,
     });
     await seedWorktreeTicket(service);
     return { service, calls };
@@ -5510,21 +5649,26 @@ describe("agent command service", () => {
 
   it("retires the rail's last-known snapshot when a merge lands", async () => {
     let head = "aaaaaaa";
-    const { service } = await syncScenario((args) => {
-      if (args[0] === "rev-parse" && args[3] === "MERGE_HEAD") throw new Error("no merge");
-      if (args[0] === "rev-parse" && args[1] === "--verify") return "bbbbbbb\n";
-      if (args[0] === "rev-parse") return `${head}\n`;
-      if (args[0] === "merge") {
-        head = "ddddddd";
+    const snapshots = createWorktreeSnapshotCache();
+    const worktreeReads = createWorktreeReadService({ deps: () => ({ db: ctx.db }), snapshots });
+    const { service } = await syncScenario(
+      (args) => {
+        if (args[0] === "rev-parse" && args[3] === "MERGE_HEAD") throw new Error("no merge");
+        if (args[0] === "rev-parse" && args[1] === "--verify") return "bbbbbbb\n";
+        if (args[0] === "rev-parse") return `${head}\n`;
+        if (args[0] === "merge") {
+          head = "ddddddd";
+          return "";
+        }
+        if (args[0] === "rev-list") return "2\n";
+        if (args[0] === "diff") return "3\t1\tsrc/a.ts\0";
         return "";
-      }
-      if (args[0] === "rev-list") return "2\n";
-      if (args[0] === "diff") return "3\t1\tsrc/a.ts\n";
-      return "";
-    });
+      },
+      undefined,
+      { worktreeReads },
+    );
 
     // Prime a covered answer, the way an open rail would have.
-    const snapshots = getWorktreeSnapshots();
     snapshots.noteCovered("ticket-one");
     const okRead = {
       kind: "ok" as const,
@@ -5578,6 +5722,7 @@ describe("agent command service", () => {
       if (args[0] === "rev-list") return "0\n";
       return "";
     });
+    const snapshots = createWorktreeSnapshotCache();
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
@@ -5585,9 +5730,14 @@ describe("agent command service", () => {
       newId: () => "ticket-one",
       gitAsync,
       worktreeExists: () => true,
+      worktreeReads: createWorktreeReadService({
+        deps: () => ({ db: ctx.db, gitAsync, worktreeExists: () => true }),
+        snapshots,
+      }),
     });
     await seedWorktreeTicket(service);
-    getWorktreeSnapshots().noteCovered("ticket-one");
+    // The covered state an open rail's watch leaves behind.
+    snapshots.noteCovered("ticket-one");
 
     const request = {
       v: 1 as const,
@@ -5615,7 +5765,7 @@ describe("agent command service", () => {
         return "";
       }
       if (args[0] === "rev-list") return "2\n";
-      if (args[0] === "diff") return "3\t1\tsrc/a.ts\n";
+      if (args[0] === "diff") return "3\t1\tsrc/a.ts\0";
       return "";
     });
 
@@ -5732,7 +5882,7 @@ describe("agent command service", () => {
       if (args[0] === "rev-parse") return "aaaaaaa\n";
       if (args[0] === "merge") return "";
       if (args[0] === "rev-list") return "2\n";
-      if (args[0] === "diff") return "3\t1\tsrc/a.ts\n";
+      if (args[0] === "diff") return "3\t1\tsrc/a.ts\0";
       return "";
     }, "some-other-branch");
 
@@ -5758,7 +5908,7 @@ describe("agent command service", () => {
       if (args[0] === "rev-parse") return "aaaaaaa\n";
       if (args[0] === "merge") throw new Error("Automatic merge failed");
       if (args[0] === "diff" && args.includes("--diff-filter=U")) {
-        return "packages/shared/src/x.ts\napps/desktop/src/y.tsx\n";
+        return "packages/shared/src/x.ts\0apps/desktop/src/y.tsx\0";
       }
       return "";
     });
@@ -5794,7 +5944,7 @@ describe("agent command service", () => {
         if (args[0] === "rev-parse" && args[3] === "MERGE_HEAD") throw new Error("no merge");
         if (args[0] === "rev-parse") return "aaaaaaa\n";
         if (args[0] === "merge" && conflicted) throw new Error("Automatic merge failed");
-        if (args[0] === "diff" && args.includes("--diff-filter=U")) return "src/x.ts\n";
+        if (args[0] === "diff" && args.includes("--diff-filter=U")) return "src/x.ts\0";
         return "";
       });
 

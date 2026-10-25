@@ -24,7 +24,7 @@
  */
 import { connect, createServer, type AddressInfo, type Server, type Socket } from "node:net";
 
-import { boardResourceWorkspace, createBoardChangeFeed } from "@volli/host-core/board";
+import { boardResourceProject, createBoardChangeFeed } from "@volli/host-core/board";
 import { getTicketRow, insertProject, insertTicket, listComments } from "@volli/host-core/db";
 import {
   ADMITTED,
@@ -36,7 +36,7 @@ import {
 } from "@volli/host-core/handlers";
 import { openTestDb, testProject, testTicket } from "@volli/host-core/testing";
 import { createLogRing } from "@volli/host-core/log";
-import { runGitCapturingAsync } from "@volli/host-core/worktree";
+import { createWorktreeReadService, runGitCapturingAsync } from "@volli/host-core/worktree";
 import { readHostError } from "@volli/host-protocol";
 import {
   createHostLink,
@@ -148,7 +148,7 @@ async function box(features: readonly string[] = EVERY_FEATURE): Promise<Box> {
   );
   const feed = createBoardChangeFeed({
     projectOfTicket: (ticketId) => getTicketRow(ctx.db, ticketId)?.project_id,
-    workspaces: () => [PROJECT],
+    projects: () => [PROJECT],
   });
   let clock = 10_000;
   const map = createHostHandlers(
@@ -171,6 +171,7 @@ async function box(features: readonly string[] = EVERY_FEATURE): Promise<Box> {
         kind: "live",
         execution: { kind: "unavailable", pendingArmedRuns: { noteDeliberateMove: () => {} } },
       } as unknown as Parameters<typeof createHostHandlers>[1]["automations"],
+      worktreeReads: createWorktreeReadService({ deps: () => ({ db: ctx.db }) }),
       busyWorktreeSites: async () => [],
       boardFeed: feed,
       logs: createLogRing(),
@@ -194,7 +195,7 @@ async function box(features: readonly string[] = EVERY_FEATURE): Promise<Box> {
     "session.subscribe": sessionStream("session.subscribe"),
     "session.subscribeQueue": sessionStream("session.subscribeQueue"),
   };
-  const boardWorkspace = boardResourceWorkspace(ctx.db);
+  const boardProject = boardResourceProject(ctx.db);
   const diagnostics = new RpcDiagnosticLog();
   const listener = await startHostProtocolListener({
     router: createHostRouter(),
@@ -218,7 +219,7 @@ async function box(features: readonly string[] = EVERY_FEATURE): Promise<Box> {
       handlers: handlers as never,
       diagnostics,
       resourceWorkspace: (resource: { kind: string; id: string }) =>
-        resource.kind === "session" ? PROJECT : boardWorkspace(resource),
+        resource.kind === "session" ? PROJECT : boardProject(resource),
     }),
   });
   cleanups.push(() => listener.close());
@@ -313,6 +314,7 @@ async function desktopMain(link: HostLink) {
       modelAccess: null,
       experiments: null,
       automations: { kind: "degraded" } as never,
+      worktreeReads: null,
       busyWorktreeSites: async () => [],
       hostLinkRelay: relay,
     },

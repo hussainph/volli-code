@@ -1,0 +1,26 @@
+{
+  "name": "@volli/convex",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The Volli Cloud backend: Convex schema and server functions, plus the pinned local-backend test fixture.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "backend:fetch": "node fixture/fetch-backend.ts",
+    "codegen": "node fixture/with-backend.ts -- convex codegen --typecheck disable",
+    "typecheck": "tsc --noEmit",
+    "test": "vp test run",
+    "test:backend": "vp test run --config vite.backend.config.ts",
+    "with-backend": "node fixture/with-backend.ts"
+  },
+  "dependencies": {
+    "@volli/shared": "workspace:*",
+    "convex": "1.48.0"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "convex-test": "0.0.65",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

@@ -9,7 +9,7 @@ import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { SessionExecutionVenue, TerminalDataEvent } from "@volli/shared";
+import type { RunnerIdentity, TerminalDataEvent } from "@volli/shared";
 import type { SessionEngine } from "@volli/session-engine";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
@@ -37,6 +37,7 @@ vi.mock("node-pty", () => ({ spawn }));
 let nextPid = 7000;
 function makeFakePty() {
   let dataListener: ((data: string) => void) | undefined;
+  let exitListener: ((event: { exitCode: number; signal?: number }) => void) | undefined;
   nextPid += 1;
   return {
     pid: nextPid,
@@ -44,13 +45,16 @@ function makeFakePty() {
     onData: (listener: (data: string) => void) => {
       dataListener = listener;
     },
-    onExit: vi.fn(),
+    onExit: (listener: (event: { exitCode: number; signal?: number }) => void) => {
+      exitListener = listener;
+    },
     write: vi.fn(),
     resize: vi.fn(),
     kill: vi.fn(),
     pause: vi.fn(),
     resume: vi.fn(),
     emitData: (data: string) => dataListener?.(data),
+    emitExit: (exitCode: number, signal?: number) => exitListener?.({ exitCode, signal }),
   };
 }
 
@@ -136,6 +140,64 @@ async function start(client: ReturnType<typeof makeClient>, onDisconnect?: "clos
 }
 
 const SIZE = { cols: 120, rows: 40, onDisconnect: "detach" } as const;
+
+describe("terminal exit status", () => {
+  it.each([
+    { reported: 0, signal: undefined, exitCode: 0, outcome: "completed" },
+    { reported: 7, signal: 0, exitCode: 7, outcome: "failed" },
+    { reported: 0, signal: 9, exitCode: 137, outcome: "failed" },
+  ])(
+    "reports $exitCode when node-pty returns $reported / signal $signal",
+    async ({ reported, signal, exitCode, outcome }) => {
+      const client = makeClient("owner");
+      const { sessionId, pty } = await start(client);
+      pty.emitData("final bytes");
+      pty.emitExit(reported, signal);
+      expect(client.events).toEqual([
+        { topic: "terminal-data", payload: { sessionId, data: "final bytes" } },
+        { topic: "terminal-exit", payload: { sessionId, exitCode } },
+      ]);
+      const engine = createTestSessionEngine(testDb.db);
+      await vi.waitFor(async () =>
+        expect((await engine.getSession({ sessionId }))?.attachments).toMatchObject([
+          { status: "closed", exitCode, outcome },
+        ]),
+      );
+    },
+  );
+
+  it("does not call a later signal death completed when kill failed to deliver", async () => {
+    const client = makeClient("owner");
+    const { sessionId, pty } = await start(client);
+    pty.kill.mockImplementationOnce(() => {
+      throw new Error("kill failed");
+    });
+    expect(manager.kill(client.sink, sessionId)).toEqual({ ok: false, error: "kill failed" });
+    pty.emitExit(0, 9);
+    const engine = createTestSessionEngine(testDb.db);
+    await vi.waitFor(async () =>
+      expect((await engine.getSession({ sessionId }))?.attachments).toMatchObject([
+        { status: "closed", exitCode: 137, outcome: "failed" },
+      ]),
+    );
+  });
+
+  it("recognizes an explicit close even when kill synchronously reports a signal", async () => {
+    const client = makeClient("owner");
+    const { sessionId, pty } = await start(client);
+    pty.kill.mockImplementationOnce(() => pty.emitExit(0, 1));
+    expect(manager.kill(client.sink, sessionId)).toEqual({ ok: true });
+    expect(client.events).toEqual([
+      { topic: "terminal-exit", payload: { sessionId, exitCode: 129 } },
+    ]);
+    const engine = createTestSessionEngine(testDb.db);
+    await vi.waitFor(async () =>
+      expect((await engine.getSession({ sessionId }))?.attachments).toMatchObject([
+        { status: "closed", exitCode: 129, outcome: "completed" },
+      ]),
+    );
+  });
+});
 
 describe("attach (VC-560)", () => {
   it("refuses an unknown session", () => {
@@ -355,12 +417,9 @@ describe("construction options (VC-627)", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  async function venueOf(
-    hostVenue: SessionExecutionVenue | undefined,
-    venue?: SessionExecutionVenue,
-  ) {
+  async function runnerOf(hostRunner: RunnerIdentity | undefined, venue?: RunnerIdentity) {
     const host: PtyManagerPorts = {
-      ...(hostVenue === undefined ? {} : { venue: hostVenue }),
+      ...(hostRunner === undefined ? {} : { venue: hostRunner }),
       events: { publish: () => {} },
       worktreeDeps: () => {
         throw new Error("a Board Session never asks for a worktree");
@@ -394,17 +453,17 @@ describe("construction options (VC-627)", () => {
   }
 
   it("records an explicit venue option over the host's", async () => {
-    expect(await venueOf({ id: "host", kind: "remote" }, { id: "option", kind: "remote" })).toEqual(
-      { attachment: { id: "option", kind: "remote" }, events: ["option"] },
-    );
+    expect(
+      await runnerOf({ id: "host", kind: "remote" }, { id: "option", kind: "remote" }),
+    ).toEqual({ attachment: { id: "option", kind: "remote" }, events: ["option"] });
   });
 
   it("falls back to the host's venue, then to local", async () => {
-    expect(await venueOf({ id: "host", kind: "remote" })).toEqual({
+    expect(await runnerOf({ id: "host", kind: "remote" })).toEqual({
       attachment: { id: "host", kind: "remote" },
       events: ["host"],
     });
-    expect(await venueOf(undefined)).toEqual({
+    expect(await runnerOf(undefined)).toEqual({
       attachment: { id: "local", kind: "local" },
       events: ["local"],
     });

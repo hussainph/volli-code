@@ -40,7 +40,7 @@ import { SessionPeekDialog } from "@renderer/components/chat/session-peek-dialog
 import { SESSION_ACTIVITY_LABEL } from "@renderer/components/ui/session-activity-status";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useBoardStore } from "@renderer/stores/board";
 import {
@@ -170,11 +170,11 @@ export function PeekConversation({
             : null;
           chat.openChatTab(ticketId ?? subject.projectId, id);
           useProjectsStore.getState().select(subject.projectId);
-          const workspace = useWorkspaceStore.getState();
+          const projectUi = useProjectUiStore.getState();
           if (ticketId === null) {
-            workspace.openHome(subject.projectId, chatTabId(id));
+            projectUi.openHome(subject.projectId, chatTabId(id));
           } else {
-            workspace.openTicketWorkspace(subject.projectId, ticketId, {
+            projectUi.openTicketView(subject.projectId, ticketId, {
               tabId: chatTabId(id),
             });
           }

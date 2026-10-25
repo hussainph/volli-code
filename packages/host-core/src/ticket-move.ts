@@ -30,7 +30,7 @@ import {
 import { withTransaction } from "./db/transaction-gate";
 import { withTicketWake } from "./ticket-wake";
 import { trimFinishedWorktree, type TrimFinishPorts } from "./worktree";
-import { getWorktreeSnapshots } from "./worktree/snapshot";
+import type { WorktreeReadInvalidation } from "./worktree-reads";
 import { hostLogger } from "./log/root";
 
 const log = hostLogger("ticket-move");
@@ -45,6 +45,8 @@ export type TicketMoveCommandInput = {
 );
 
 export interface TicketMovePorts extends TrimFinishPorts {
+  /** The host's worktree reads, whose last-known answers a finished trim retires (VC-372). */
+  worktreeReads: WorktreeReadInvalidation;
   interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
   onDeliberateMove?: (notice: TicketMovedNotice) => void;
   onMutation?: (change: Omit<DataChangedEvent, "entity">) => void;
@@ -72,7 +74,10 @@ export interface TicketMoveSeam {
 
 /** The archive path shares the same best-effort trim, without being a move. */
 export function trimFinishedTicketInBackground(
-  ports: Pick<TicketMovePorts, "worktree" | "now" | "busySites" | "onMutation" | "detachedWork">,
+  ports: Pick<
+    TicketMovePorts,
+    "worktree" | "worktreeReads" | "now" | "busySites" | "onMutation" | "detachedWork"
+  >,
   ticketId: string,
   projectId: string | undefined,
 ): void {
@@ -85,7 +90,7 @@ export function trimFinishedTicketInBackground(
   const work = trimFinishedWorktree(ports, ticketId)
     .then((outcome) => {
       if (outcome.kind !== "trimmed") return;
-      getWorktreeSnapshots().invalidate(ticketId);
+      ports.worktreeReads.invalidate(ticketId);
       ports.onMutation?.({ ticketId, projectId, kind: "worktree" });
     })
     .catch((error: unknown) => {

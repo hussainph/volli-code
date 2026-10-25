@@ -1,5 +1,12 @@
 # Host, workspace and execution identity
 
+> **Superseded (VC-869).** Volli Cloud is moving to a design with no host
+> process: the backend is the single authority and Runners execute
+> ([Workspace authority and offline](BOUNDARIES.md#workspace-authority-and-offline)).
+> This document still describes code in this repository. It is kept for
+> maintenance only and goes when that code is deleted or renamed; don't build
+> new work on it.
+
 These identity and storage contracts accompany the [host protocol](host-protocol.md).
 They distinguish durable names from local locators, authority generations and
 live execution. Some worker/lease storage is an additive foundation, not an
@@ -133,7 +140,7 @@ must be refused. Main-checkout sharing and attachment lease bindings require
 explicit enforcement before worker execution uses them; a path is never a
 durable checkout identity.
 
-## Session attachment, execution venue and location
+## Session attachment, runner identity and location
 
 Session lifetime belongs to the ledger; at most one live executor attachment
 exists per Session. Several Sessions/subagents on one ticket may share a lease;
@@ -141,13 +148,14 @@ the lease is not per Session or attachment. Attach/resume/publication must be
 bound to the grant recorded for that execution, not whatever grant is current
 when a message arrives. Closing a stale attachment retains Session history.
 
-`SessionExecutionVenue {id, kind: local | remote | cloud}` identifies the worker.
+`RunnerIdentity {id, kind: local | remote | cloud}` identifies the worker.
 Historical `unknown` is a read representation, not a valid new target.
-Replacement execution has a new attachment UUID; historical venues are immutable.
-With `cloud` off, `{id:"local", kind:"local"}` stays frozen in historical records.
+Replacement execution has a new attachment UUID; historical runner identities are
+immutable. With `cloud` off, `LOCAL_RUNNER` (`{id:"local", kind:"local"}`) stays
+frozen in historical records. The field holding it is still named `venue`.
 
-`VenueKind` / `VenueSnapshot` (`main-checkout | worktree`) instead describes the
-checkout plus git measurements. Neither implies a worker kind. `SessionLocation`
+`WorkingCopyKind` / `WorkingCopyMeasurement` (`main-checkout | worktree`) instead
+describes the checkout plus git measurements. Neither implies a worker kind. `SessionLocation`
 is `{directory, venue}`: directory is a worker-local locator. `prepare` refuses
 materialization failure rather than falling back to the main checkout; `reaffirm`
 checks the already-bound directory. Never execute a new worker against an old
@@ -155,7 +163,7 @@ worker's recovery path. The local start lease serializes materialization versus
 deletion; it is not distributed ownership.
 
 History remains readable when worker registrations were excluded by restore:
-use recorded venue label or unavailable-worker fallback, never a current worker
+use recorded runner label or unavailable-worker fallback, never a current worker
 row as evidence of historical identity or a live grant.
 
 ## Devices and pairing

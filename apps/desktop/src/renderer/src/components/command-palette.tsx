@@ -72,7 +72,7 @@ import { useHostsWritable, useRemoteHostsStore } from "@renderer/stores/remote-h
 import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -131,17 +131,17 @@ const NAVIGATION_ICONS: Record<
  */
 function goToProjectPage(item: CommandPaletteNavigationItem, projectId: string | null): void {
   if (projectId === null) return;
-  const workspace = useWorkspaceStore.getState();
+  const projectUi = useProjectUiStore.getState();
   if (item.id === "home") {
-    workspace.openHome(projectId);
+    projectUi.openHome(projectId);
   } else if (item.id === "board" || item.id === "list") {
     // The Board tab's own act, then the view: what the header's segmented
     // toggle would leave on screen.
-    workspace.openHomeBoard(projectId);
-    workspace.setBoardView(projectId, item.id);
+    projectUi.openHomeBoard(projectId);
+    projectUi.setBoardView(projectId, item.id);
   } else if (item.id === "configure" || item.id === "configure-pane") {
     if (item.id === "configure-pane") useUiStore.getState().requestConfigureCategory(item.paneKey);
-    workspace.setNav(projectId, "configure");
+    projectUi.setNav(projectId, "configure");
   }
 }
 
@@ -248,7 +248,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   // keystroke: a changed query is a new result set, and a new result set
   // starts truncated again.
   const [expanded, setExpanded] = React.useState<ReadonlySet<PaletteSectionId>>(NOTHING_EXPANDED);
-  const openTicketId = useWorkspaceStore((state) =>
+  const openTicketId = useProjectUiStore((state) =>
     selectedProjectId === null ? null : (state.byProject[selectedProjectId]?.openTicketId ?? null),
   );
   const automationsByProject = useAutomationsStore((state) => state.byProject);
@@ -568,7 +568,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 keywords={match.keywords}
                 onSelect={() => {
                   useProjectsStore.getState().select(item.projectId);
-                  useWorkspaceStore.getState().openTicketWorkspace(item.projectId, item.ticketId, {
+                  useProjectUiStore.getState().openTicketView(item.projectId, item.ticketId, {
                     tabId: TICKET_BODY_TAB_ID,
                   });
                   finishNavigation();
@@ -610,7 +610,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                     if (item.destination === "detail") {
                       // A closed terminal opens its own saved record and
                       // navigates NOWHERE else (VC-290): its tab is gone, and
-                      // the ticket workspace or Home it used to fall through to
+                      // the Ticket view or Home it used to fall through to
                       // is a different Session's surface.
                       useUiStore.getState().openSessionDetail(item.projectId, item.sessionId);
                     } else if (item.sessionKind === "chat") {
@@ -618,9 +618,9 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                       chat.adoptChatSession(item.sessionId);
                       if (item.scope.kind === "ticket") {
                         chat.openChatTab(item.scope.ticketId, item.sessionId);
-                        useWorkspaceStore
+                        useProjectUiStore
                           .getState()
-                          .openTicketWorkspace(item.projectId, item.scope.ticketId, {
+                          .openTicketView(item.projectId, item.scope.ticketId, {
                             tabId: chatTabId(item.sessionId),
                           });
                       } else {
@@ -628,12 +628,12 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                         // `openHome` leaves `openTicketId` alone — a Home Session
                         // tab keeps the ticket remembered behind it (VC-54).
                         chat.openChatTab(item.projectId, item.sessionId);
-                        useWorkspaceStore
+                        useProjectUiStore
                           .getState()
                           .openHome(item.projectId, chatTabId(item.sessionId));
                       }
                     } else if (item.scope.kind === "ticket") {
-                      useWorkspaceStore
+                      useProjectUiStore
                         .getState()
                         .openTicketSession(item.projectId, item.scope.ticketId, item.sessionId);
                     } else {
@@ -642,7 +642,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                       // that the record defaults to the permanent Board tab —
                       // without it the palette would land you on the board.
                       useSessionsStore.getState().setActiveSession(item.projectId, item.sessionId);
-                      useWorkspaceStore.getState().openHome(item.projectId, item.sessionId);
+                      useProjectUiStore.getState().openHome(item.projectId, item.sessionId);
                     }
                     finishNavigation();
                   }}
@@ -742,7 +742,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                   // not open the form itself, because only that page authors
                   // (VC-112) and a create summoned from anywhere is a second
                   // authoring surface wearing a palette row.
-                  useWorkspaceStore.getState().setNav(selectedProjectId, "automations");
+                  useProjectUiStore.getState().setNav(selectedProjectId, "automations");
                   finishNavigation();
                 }}
                 className={PALETTE_ROW}

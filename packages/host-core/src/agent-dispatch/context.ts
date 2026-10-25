@@ -43,23 +43,17 @@ import type {
   TicketEventActor,
   TranscriptReference,
 } from "@volli/shared";
-import type {
-  DataChangedEvent,
-  HarnessEventNotice,
-  SessionHarnessNotice,
-  SessionStartedNotice,
-} from "@volli/shared";
+import type { DataChangedEvent, HarnessEventNotice, SessionHarnessNotice } from "@volli/shared";
 
 import type { NotificationOutcome, NotificationRequest } from "@volli/shared";
-import type { AutoTitleRequest } from "../session-runtime/auto-title";
-import type { Sessions } from "../session-runtime/sessions";
 import type { HandlerPolicy, HostHandlerMap } from "../handlers/handler-map";
 import type { RunGitAsync } from "../worktree";
+import type { WorktreeReadService } from "../worktree-reads";
 import type { VerifyOperatorToken } from "./resolution";
 
 export interface AgentCommandServiceOptions {
-  /** Execution venue for host-issued Session facts; desktop keeps local. */
-  venue?: import("@volli/shared").SessionExecutionVenue;
+  /** Runner for host-issued Session facts; desktop keeps local. */
+  venue?: import("@volli/shared").RunnerIdentity;
   db: Database.Database;
   /** The app composition root's one durable Session Engine. */
   sessionEngine: SessionEngine;
@@ -67,11 +61,14 @@ export interface AgentCommandServiceOptions {
   now?: () => number;
   newId?: () => string;
   /**
-   * The git runner every worktree verb executes through — the non-blocking
-   * one. All git calls stay inside the worktree module (CONCEPT #42); this seam
-   * only lets tests substitute a scripted runner. Defaults to
-   * {@link runGitCapturingAsync}. There is no synchronous runner here, so a
-   * verb cannot put a git child back onto Electron main's thread (VC-786).
+   * The git runner the worktree verbs this service runs itself (`worktree
+   * sync`, the collision scan) execute through — the non-blocking one. All git
+   * calls stay inside the worktree module (CONCEPT #42); this seam only lets
+   * tests substitute a scripted runner. Defaults to {@link runGitCapturingAsync}.
+   * There is no synchronous runner here, so a verb cannot put a git child back
+   * onto Electron main's thread (VC-786). `worktree status` and `worktree diff`
+   * read through {@link worktreeReads} and its own runner; this one reaches them
+   * only through the default service built when that is omitted.
    */
   gitAsync?: RunGitAsync;
   /**
@@ -80,9 +77,18 @@ export interface AgentCommandServiceOptions {
    * but-deleted directory refuses with INVALID_REQUEST rather than letting
    * status.ts's errs-dirty fallback report `uncommitted: true` for a tree that's
    * gone. The same kind of seam as {@link gitAsync} — defaults to {@link existsSync}; tests
-   * substitute a scripted predicate.
+   * substitute a scripted predicate. Like {@link gitAsync}, it reaches `worktree
+   * status` / `worktree diff` only through the default {@link worktreeReads}.
    */
   worktreeExists?: (path: string) => boolean;
+  /**
+   * The host's worktree read service (VC-788): `worktree status` and
+   * `worktree diff` read through the same snapshot and coalescers every other
+   * door does. The host compositions pass their own (`HostAgentCommandOptions`
+   * requires it); absent, the service builds a private one over
+   * {@link gitAsync} and {@link worktreeExists} — a suite's isolated host.
+   */
+  worktreeReads?: WorktreeReadService;
   observeSession?: (
     sessionId: string,
     lines: number,
@@ -133,64 +139,24 @@ export interface AgentCommandServiceOptions {
    */
   sessionEnv?: (cwd: string, projectRoot: string) => Promise<SessionEnvReport>;
   /**
-   * The product Session start route (VC-13) — the same facade the renderer's
-   * `sessions.create` RPC rides, threaded in the way {@link sessionEngine} is
-   * so no parallel creation path can grow here. Raw `session.create` over
-   * this door stays FORBIDDEN. Absent means the Session runtime never came up
-   * this launch, which the verb reports as retryable.
-   */
-  sessions?: Pick<Sessions, "start">;
-  /**
-   * Submits one user message to a structured Session — the kickoff turn. The
-   * runtime answers a `message.submit` only when the TURN it started ends, so
-   * the door fires this detached and replies as the session opens; a refusal
-   * lands in the log and in the Session's own durable state, never in the
-   * caller's exit code.
-   */
-  submitSessionMessage?: (input: {
-    sessionId: string;
-    text: string;
-    /**
-     * The turn's durable ids, derived by the caller from its own operation id
-     * rather than minted here (VC-162).
-     *
-     * `message.submit` is deduplicated by command id in the Session Engine, so
-     * whether a replayed start sends one kickoff or two is decided entirely by
-     * whether this id is stable. Minting it here — which is what this port used
-     * to do — made every replay a second turn, which no caller could fix from
-     * outside.
-     */
-    commandId: string;
-    messageId: string;
-  }) => Promise<void>;
-  /**
-   * Fires one model-call title refinement (VC-81) behind a kickoff-derived
-   * heuristic title, using the model ladder — utility default, then the
-   * Session's own model, then the Role's default. Never fires for an
-   * explicit `--title` (that is already a person's choice), and never
-   * rejects: the heuristic is the fallback the titler keeps on failure.
-   * Absent means no model refinement this launch — heuristic only.
-   */
-  refineAutoTitle?: (input: AutoTitleRequest) => void;
-  /**
-   * Called after `session.start` opens a Session, with everything the
-   * renderer's toast says and targets. A notice, not a navigation: the app
-   * must never move or steal focus because a start landed — the toast's
-   * action is the only door into the new session's tab.
-   */
-  onSessionStarted?: (notice: SessionStartedNotice) => void;
-  /**
-   * The host's handler map (VC-668), as far as this door projects it: every
-   * verb that is also a catalog command is bound in `table.ts` as a
-   * projection of `handlers[key]`, never as a handler of its own. A Done
-   * move's trim, its interrupts and its armed arrival therefore belong to the
-   * handler, which the composition root built once for every door. The
-   * projection invokes it only under {@link AgentCommandContext.handlerPolicy}.
+   * The host's handler map (VC-668), which this door projects: every verb is
+   * bound in `table.ts` as a projection of `handlers[key]`, never as a
+   * handler of its own — a catalog command's under its key, the ticket
+   * create, update and comment under the board's (VC-794), and every other
+   * verb under its own key, whose entry this service serves into the map on
+   * construction (VC-923, `agent-dispatch/verbs.ts`). A Done move's trim, its
+   * interrupts and its armed arrival, and every projected board write's
+   * receipt, feed rows and `data-changed`, therefore belong to the handler,
+   * which the composition root built once for every door. The projection
+   * invokes it only under {@link AgentCommandContext.handlerPolicy}. The four
+   * Session reads are delegated the other way: the map's entry runs this
+   * service (`executeInWorkspace`).
    */
   handlers: HostHandlerMap;
   /**
-   * Called after a socket command COMMITS a planning mutation, with the exact
-   * ticket it resolved and touched — the scope index.ts broadcasts as
+   * Called after a socket command with no map entry COMMITS a planning
+   * mutation (a projected write announces through the map's own bus), with
+   * the exact ticket it resolved and touched — the scope index.ts broadcasts as
    * `volli:data-changed` so the renderer refreshes the right surfaces promptly.
    * Never called for a read-only command or a no-op (e.g. a same-column
    * `ticket.move`). A ticketless Session mutation is project-scoped rather than
@@ -344,8 +310,14 @@ export interface PendingHarnessLaunch {
  * no default and reads best at its own name. The fields beside it are the ones
  * the service RESOLVED once at construction — a default applied, or a map it
  * owns — so a handler cannot accidentally use an unresolved `options.now`.
+ *
+ * A verb's handler is the map's entry for its key (VC-923,
+ * `agent-dispatch/verbs.ts`), and this is the context that entry builds for
+ * it, from the service's state and the request the door resolved
+ * ({@link AgentVerbInput}). The door's own context adds its policy at the map
+ * ({@link AgentCommandContext}).
  */
-export interface AgentCommandContext {
+export interface AgentVerbContext {
   /** Everything the composition root injected. */
   readonly options: AgentCommandServiceOptions;
   /** {@link AgentCommandServiceOptions.now}, defaulted to `Date.now`. */
@@ -356,6 +328,8 @@ export interface AgentCommandContext {
   readonly gitAsync: RunGitAsync;
   /** {@link AgentCommandServiceOptions.worktreeExists}, defaulted to `existsSync`. */
   readonly worktreeExists: (path: string) => boolean;
+  /** {@link AgentCommandServiceOptions.worktreeReads}, defaulted to a private service. */
+  readonly worktreeReads: WorktreeReadService;
   /**
    * The app's one durable Session Engine. Lifted out of `options` because it
    * is a service rather than a seam: every verb that touches a Session reads
@@ -461,20 +435,66 @@ export interface AgentCommandContext {
    * judged them: that runs off the token alone.
    */
   readonly actor: TicketEventActor | null;
+}
+
+/**
+ * The request as the socket door resolved it, which is what a verb's map
+ * entry is asked (VC-923): the wire request, and every request-scoped fact
+ * of {@link AgentVerbContext} the door decided before admitting it — the
+ * projects it listed, who `VOLLI_SESSION` names, who the token authenticated,
+ * and the attribution. Plain data, no port: the entry builds the rest of its
+ * context from the service's own state, so each door owes only these facts.
+ *
+ * The entry trusts these facts: identity reaches it here, as the door
+ * resolved it, not through the call. That is safe because only the socket's
+ * policy admits a socket verb's key (the catalog's refuse every agent key, the
+ * tool door's admits only its own call's verb), and the socket resolved them
+ * from a token it verified. The door's credentials themselves stay behind:
+ * `request` reaches the entry without the attachment or operator token.
+ */
+export interface AgentVerbInput {
+  readonly request: AgentRequest;
+  readonly projects: readonly Project[];
+  readonly envSession: EnvSessionIdentity | null;
+  readonly envSessionTerminal: SessionRecord | null;
+  readonly authenticatedSessionId: string | null;
+  readonly actor: TicketEventActor | null;
+}
+
+/**
+ * What the socket door holds for one request: the verb context its decodes
+ * read, and its policy at the map.
+ */
+export interface AgentCommandContext extends AgentVerbContext {
+  /**
+   * Who the door authenticated, as host history attributes a caller: the
+   * `HandlerCall` a served verb with no {@link AgentVerbContext.actor} of its
+   * own (a read, or a verb that skips identity) is invoked under, so the map
+   * is always told who called. Never a grant: admission ran off the token.
+   */
+  readonly doorActor: TicketEventActor;
   /**
    * This request's policy at the handler map (VC-668): a projected verb
    * reaches `handlers[key]` only through it. It judges the socket's own
-   * coordination policy for this request again, at the map, and admits only
-   * the key this request's verb projects.
+   * coordination policy for this request again, at the map, for a key another
+   * door also reaches (the socket's own verbs reuse the dispatch's verdict),
+   * and admits only the key this request's verb projects.
    */
   readonly handlerPolicy: HandlerPolicy;
 }
 
 /**
  * One verb's handler: the named function that replaced its branch of the
- * chain. Uniformly async, so the table holds one shape rather than two.
+ * chain. Uniformly async, so the handler table holds one shape rather than
+ * two.
  */
 export type AgentVerbHandler = (
+  context: AgentVerbContext,
+  request: AgentRequest,
+) => Promise<AgentResponse>;
+
+/** What the socket's table calls for one request: a projection, or a delegated read. */
+export type SocketVerbHandle = (
   context: AgentCommandContext,
   request: AgentRequest,
 ) => Promise<AgentResponse>;

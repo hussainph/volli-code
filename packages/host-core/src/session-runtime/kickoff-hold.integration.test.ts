@@ -17,7 +17,7 @@
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
-  createInMemoryTranscriptArtifactStore,
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   type BindingHandle,
@@ -38,6 +38,7 @@ import { createDelegations, DELEGATION_ID_SUFFIXES } from "./delegate-session";
 import { createTicketSessionDelegationStore } from "./delegation-store";
 import { createSessions } from "./sessions";
 import { kickoffSubmitter, startSessionOperation } from "./start-session";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 const MODEL: ModelSelection = {
   providerId: "scripted",
@@ -159,7 +160,7 @@ function fixture() {
   };
   const runtime = createSessionRuntime({
     engine,
-    executor,
+    executors: createSessionExecutorSlot(executor),
     artifacts: createInMemoryTranscriptArtifactStore(),
     followUps: createSqliteSessionFollowUpLedger(db.db),
     followUpRetryDelaysMs: [],

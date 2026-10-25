@@ -3,8 +3,6 @@ import type { RuntimeObservation, SessionLedgerIds } from "@volli/shared";
 import type { UIMessage } from "ai";
 import {
   canonicalJson,
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamFrame,
@@ -22,6 +20,8 @@ import {
   type SessionTranscriptArtifact,
   type TranscriptArtifactStore,
 } from "./index";
+import { createInMemorySessionLedger, createInMemoryTranscriptArtifactStore } from "./testing";
+import { createSessionExecutorSlot } from "./executor-slot";
 
 /**
  * Persistence probe for the delta-frames work (proof checked in before the
@@ -212,7 +212,7 @@ function buildRuntime(): {
   const counting = countingArtifactStore(createInMemoryTranscriptArtifactStore());
   const runtime = createSessionRuntime({
     engine,
-    executor: adapter,
+    executors: createSessionExecutorSlot(adapter),
     artifacts: counting.store,
     locations: fixedLocation("/projects/fake"),
     clock,

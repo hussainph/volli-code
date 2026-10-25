@@ -14,6 +14,7 @@
  */
 
 import {
+  LOCAL_RUNNER,
   displayTicketId,
   effectiveHarnessId,
   EMPTY_SESSION_USAGE_SUMMARY,
@@ -24,17 +25,19 @@ import {
   sessionInterruptionReason,
   sessionInterruptionDetail,
   shortSessionId,
-  todoListMarkdown,
   redactPayloadSecrets,
+  isProcessLossWarning,
 } from "@volli/shared";
 import type {
   AgentRequest,
   AgentResponse,
+  HostHandlerKey,
   SessionProjection,
   SessionProvenance,
   SessionRecord,
   SessionTodoList,
   SessionUsageSummary,
+  SessionAttention,
   SessionAttentionKind,
 } from "@volli/shared";
 import {
@@ -43,8 +46,8 @@ import {
   readSessionTranscriptTail,
 } from "@volli/session-engine";
 
-import { createTicketCommentCommand } from "../ticket-commands";
-import { withTicketWake } from "../ticket-wake";
+import { sessionSignalBoardEffects, type TicketId } from "@volli/shared/cloud";
+import { ADMITTED, invokeHandler, refused, type HandlerPolicy } from "../handlers/handler-map";
 import { getTicket } from "../db/tickets-repo";
 import { createSqliteSessionFollowUpLedger } from "../db/session-follow-up-repo";
 import {
@@ -55,7 +58,7 @@ import {
 import { readSessionUsageWindow } from "./cost-verb";
 import { chatSessionRecord, terminalSessionRecord } from "../session-control";
 import { failure } from "./context";
-import type { AgentCommandContext } from "./context";
+import type { AgentVerbContext } from "./context";
 import { dryRunResponse } from "./preview";
 import { positiveIntOr, projectForCreate, ticketForDisplayId } from "./resolution";
 import { pendingSessionQuestions } from "./pending-session-questions";
@@ -143,7 +146,7 @@ function chatProjectionForPublicId(
 
 /** `volli session list` — a project's active terminal and chat sessions. */
 export async function sessionListVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, envSession, now } = context;
@@ -395,7 +398,7 @@ function publicSessionSignal(projection: SessionProjection | undefined, observed
 
 /** `volli session show` — metadata without spending a transcript read. */
 export async function sessionShowVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, now } = context;
@@ -591,6 +594,22 @@ function usageCells(usage: SessionUsageSummary | undefined): Record<string, unkn
   };
 }
 
+/**
+ * The row's copy, with the Resume a turn a lost process cut short offers while
+ * its rebuilt attachment is live and idle — the same rule the chat row and the
+ * host's restart resume read (`isProcessLossWarning`, VC-450).
+ */
+function peekAttention(
+  attention: SessionAttention,
+  projection: Pick<SessionProjection, "turnActive" | "liveExecutor">,
+): { message: string; recovery: string | null } {
+  const copy = PEEK_ATTENTION[attention.kind];
+  return !projection.turnActive &&
+    isProcessLossWarning(attention, projection.liveExecutor?.id ?? null)
+    ? { ...copy, recovery: "Resume" }
+    : copy;
+}
+
 // Human copy, not a new output enum or durable Attention vocabulary.
 const PEEK_ATTENTION: Record<SessionAttentionKind, { message: string; recovery: string | null }> = {
   auth_required: { message: "Sign-in required", recovery: "Open settings" },
@@ -608,7 +627,7 @@ const PEEK_ATTENTION: Record<SessionAttentionKind, { message: string; recovery: 
 
 /** `volli session peek` — a terminal's trailing output, or a chat's tail. */
 export async function sessionPeekVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, sessionEngine, now } = context;
@@ -708,7 +727,7 @@ export async function sessionPeekVerb(
         attention === null
           ? null
           : {
-              ...PEEK_ATTENTION[attention.kind],
+              ...peekAttention(attention, chat.projection),
               detail:
                 attention.detail === null
                   ? null
@@ -797,7 +816,7 @@ export async function sessionPeekVerb(
  * peek cuts every message to a line, and this is the one read that does not.
  */
 export async function sessionAnswerVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, sessionEngine, now } = context;
@@ -842,7 +861,7 @@ export async function sessionAnswerVerb(
  * verbatim — the caller's mistake is the same mistake whichever it typed.
  */
 async function recordSessionSignal(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
   signal: "done" | "blocked",
 ): Promise<AgentResponse> {
@@ -885,7 +904,7 @@ async function recordSessionSignal(
         id: "terminal",
         detail: { sessionOrigin: { kind: "session", sessionId: envSession.id } },
       },
-      venue: options.venue ?? { id: "local", kind: "local" },
+      venue: options.venue ?? LOCAL_RUNNER,
     },
   });
   if (submitted.receipt?.status !== "completed") {
@@ -931,11 +950,11 @@ async function recordSessionSignal(
  * an empty checklist" would be noise on all three.
  */
 async function postFinalTodoList(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   session: { id: string; projectId: string; ticketId: string | null },
   signal: "done" | "blocked",
 ): Promise<void> {
-  const { options, now, actor } = context;
+  const { options, actor } = context;
   const { id: sessionId, ticketId } = session;
   if (ticketId === null) return;
   // Both refusals BEFORE the read, because the read walks the Session's whole
@@ -957,26 +976,46 @@ async function postFinalTodoList(
     log.error("failed to read the session's todo list", { sessionId, error });
     return;
   }
-  if (list === null || list.length === 0) return;
-  const body = `Todo list at session ${signal}:\n\n${todoListMarkdown(list)}`;
-  try {
-    withTicketWake(options.db, ticketId, () =>
-      createTicketCommentCommand(
-        options.db,
-        { ticketId, body, commentActor: actor.kind, sessionId: actor.sessionId },
-        { now: now(), actor },
-      ),
-    );
-  } catch (error) {
-    log.error("failed to comment the session's todo list", { sessionId, ticketId, error });
-    return;
+  // The comment itself is the shared rule the cloud backend applies on accept,
+  // and it is written through the board's own comment command: its receipt,
+  // its feed rows and its wake are the board's, as for `ticket comment`.
+  for (const effect of sessionSignalBoardEffects({
+    signal,
+    ticketId: ticketId as TicketId,
+    todoList: list,
+  })) {
+    try {
+      await invokeHandler(
+        options.handlers,
+        SIGNAL_COMMENT_POLICY,
+        "board.createComment",
+        {
+          commandId: context.newId(),
+          ticketId: effect.ticketId,
+          body: effect.body,
+        },
+        { actor },
+      );
+    } catch (error) {
+      log.error("failed to comment the session's todo list", { sessionId, ticketId, error });
+    }
   }
-  options.onMutation?.({ ticketId, projectId: session.projectId, kind: "comment" });
 }
+
+/**
+ * The map's policy for the one board write a recorded signal makes on its
+ * own: the comment above, and nothing else. The signal itself was admitted at
+ * the socket; this is its consequence, attributed to the same Session.
+ */
+const SIGNAL_COMMENT_POLICY: HandlerPolicy = Object.freeze({
+  door: "agent-socket",
+  admit: (key: HostHandlerKey) =>
+    key === "board.createComment" ? ADMITTED : refused(`A session signal does not reach ${key}.`),
+});
 
 /** `volli session done` — this Session's work is finished. */
 export async function sessionDoneVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   return recordSessionSignal(context, request, "done");
@@ -984,7 +1023,7 @@ export async function sessionDoneVerb(
 
 /** `volli session blocked` — this Session needs a person. */
 export async function sessionBlockedVerb(
-  context: AgentCommandContext,
+  context: AgentVerbContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
   return recordSessionSignal(context, request, "blocked");

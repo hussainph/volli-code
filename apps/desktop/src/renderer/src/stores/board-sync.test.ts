@@ -150,7 +150,7 @@ interface Subscriber {
 type FeedHandlers = Parameters<BoardSyncTransport["changes"]>[2];
 
 /**
- * One host's board: the shared board ops over its rows, a per-Workspace feed
+ * One host's board: the shared board ops over its rows, a per-project feed
  * (cursor `<project>:<seq>`, rising one per stamp), command receipts that
  * answer a repeated `commandId` without a second effect, and the resume
  * semantics of the real feed (one compacted batch at the current cursor).
@@ -245,12 +245,12 @@ class FakeHost implements BoardSyncTransport {
     };
   }
 
-  /** Ends every feed of the Workspace with an error, as a dropped link does. */
+  /** Ends every feed of the project with an error, as a dropped link does. */
   breakFeed(projectId: string, error: unknown = new Error("link dropped")): void {
     for (const subscriber of this.#end(projectId)) subscriber.handlers.onError(error);
   }
 
-  /** Ends every feed of the Workspace with "your cursor cannot resume". */
+  /** Ends every feed of the project with "your cursor cannot resume". */
   requireResnapshot(projectId: string): void {
     for (const subscriber of this.#end(projectId)) subscriber.handlers.onResnapshot();
   }
@@ -337,7 +337,7 @@ class FakeHost implements BoardSyncTransport {
     });
   }
 
-  /** Replaces one Workspace's rows; answers a change per row that moved or left. */
+  /** Replaces one project's rows; answers a change per row that moved or left. */
   #rewrite(projectId: string, next: (board: Ticket[]) => Ticket[]): BoardChange[] {
     const before = this.board(projectId);
     const after = next(before);
@@ -588,7 +588,7 @@ afterEach(() => {
 
 // ---- opening ---------------------------------------------------------------------------------
 
-describe("opening a Workspace", () => {
+describe("opening a project", () => {
   it("paints nothing until the snapshot lands, then the snapshot, and follows the feed from its cursor", async () => {
     const { host, sync, paints, view, last } = harness();
     host.latency = { request: 50, reply: 50, feed: 0 };
@@ -778,7 +778,7 @@ describe("pending writes (T5)", () => {
     expect(placement(last().tickets, "A")).toBe("done#0");
   });
 
-  it("leaves another Workspace's pending edits alone when a batch lands", async () => {
+  it("leaves another project's pending edits alone when a batch lands", async () => {
     const { host, sync, last } = harness();
     host.projects.set("p2", project("p2"));
     host.tickets.push(ticket("X", "todo", 0, { projectId: "p2" }));
@@ -955,7 +955,7 @@ describe("pending writes (T5)", () => {
     expect(unconfirmed).toHaveBeenCalledTimes(1);
   });
 
-  it("does not retry a write whose Workspace closed while it was in flight, and paints nothing", async () => {
+  it("does not retry a write whose project closed while it was in flight, and paints nothing", async () => {
     const { host, sync, view, paints } = harness({ retryDelaysMs: [100] });
     await sync.open("p1");
     host.latency.request = 50;
@@ -972,7 +972,7 @@ describe("pending writes (T5)", () => {
     expect(view.failed).toHaveBeenCalledWith("Couldn't move ticket: host-unreachable");
   });
 
-  it("answers a write to a Workspace it does not follow, painting nothing", async () => {
+  it("answers a write to a project it does not follow, painting nothing", async () => {
     const { host, sync, paints } = harness();
     host.projects.set("p2", project("p2"));
     host.tickets.push(ticket("X", "todo", 0, { projectId: "p2" }));
@@ -1490,7 +1490,7 @@ describe("the change feed", () => {
     expect(host.subscriptions).toHaveLength(5);
   });
 
-  it("does not follow twice when the Workspace re-opened before the retry", async () => {
+  it("does not follow twice when the project re-opened before the retry", async () => {
     const { host, sync } = harness({ feedRetryDelaysMs: [100] });
     await sync.open("p1");
 
@@ -1616,7 +1616,7 @@ describe("roster reads", () => {
 // ---- closing ---------------------------------------------------------------------------------
 
 describe("closing", () => {
-  it("stops the feed, drops that Workspace's pending edits, and leaves the others alone", async () => {
+  it("stops the feed, drops that project's pending edits, and leaves the others alone", async () => {
     const { host, sync, paints, last } = harness();
     host.projects.set("p2", project("p2"));
     host.tickets.push(ticket("X", "todo", 0, { projectId: "p2" }));
@@ -1673,7 +1673,7 @@ describe("closing", () => {
     expect(paints).toHaveLength(painted);
   });
 
-  it("never paints a snapshot that lands after the Workspace closed", async () => {
+  it("never paints a snapshot that lands after the project closed", async () => {
     const { host, sync, paints, view } = harness();
     host.latency.request = 50;
 
@@ -1687,7 +1687,7 @@ describe("closing", () => {
     expect(host.subscriptions).toEqual([]);
   });
 
-  it("closes every Workspace at once", async () => {
+  it("closes every project at once", async () => {
     const { host, sync } = harness();
     host.projects.set("p2", project("p2"));
     await sync.open("p1");
@@ -1700,7 +1700,7 @@ describe("closing", () => {
     expect(host.subscriberCount).toBe(0);
   });
 
-  it("ignores a feed that keeps talking after its Workspace closed", async () => {
+  it("ignores a feed that keeps talking after its project closed", async () => {
     let handlers: FeedHandlers | undefined;
     const host = new FakeHost();
     const { view, paints } = recorder();
@@ -2264,7 +2264,7 @@ describe("interleavings: a newer write supersedes, any proof decides, the base i
 });
 
 describe("bounded memory", () => {
-  it("drops a ticket's body when it leaves the board, and a Workspace's bodies when it closes", async () => {
+  it("drops a ticket's body when it leaves the board, and a project's bodies when it closes", async () => {
     const { host, sync, last } = harness();
     await sync.open("p1");
     host.stamp("p1", [{ kind: "ticket", op: "delete", id: "A", projectId: "p1" }]);
@@ -2309,8 +2309,8 @@ describe("bounded memory", () => {
     await sync.open("p1");
     sync.adoptBody("nowhere", "# Orphan");
     expect(last().tickets.some(({ id }) => id === "nowhere")).toBe(false);
-    expect(sync.workspaceOf("A")).toBe("p1");
-    expect(sync.workspaceOf("nowhere")).toBeUndefined();
+    expect(sync.projectOf("A")).toBe("p1");
+    expect(sync.projectOf("nowhere")).toBeUndefined();
   });
 });
 
@@ -2490,7 +2490,7 @@ describe("edges of the rules", () => {
     expect(host.subscriberCount).toBe(1);
   });
 
-  it("does not re-open a snapshot that failed after its Workspace closed", async () => {
+  it("does not re-open a snapshot that failed after its project closed", async () => {
     const { host, sync } = harness({ feedRetryDelaysMs: [100] });
     host.methodLatency.snapshot = { request: 50 };
     host.fail("snapshot", unreachable);
@@ -2502,7 +2502,7 @@ describe("edges of the rules", () => {
     expect(host.callsTo("snapshot")).toHaveLength(1);
   });
 
-  it("answers a per-surface command still out when every Workspace closes as not done", async () => {
+  it("answers a per-surface command still out when every project closes as not done", async () => {
     const { sync } = harness();
     let fail!: (error: unknown) => void;
     const result = sync.command({
@@ -2813,7 +2813,7 @@ describe("per-aspect order, body freshness, generation-scoped reads", () => {
   });
 });
 
-// ---- routing by Workspace (VC-711) ----------------------------------------------------------
+// ---- routing by project (VC-711) ----------------------------------------------------------
 
 /** Lets the fake hosts answer: they answer on a timer, even at no latency. */
 async function go<Answer>(call: Promise<Answer>): Promise<Answer> {
@@ -2826,8 +2826,8 @@ async function go<Answer>(call: Promise<Answer>): Promise<Answer> {
   throw new Error("never settled");
 }
 
-describe("routing each Workspace to its own host", () => {
-  it("sends every read, feed and write of a Workspace to that Workspace's transport", async () => {
+describe("routing each project to its own host", () => {
+  it("sends every read, feed and write of a project to that project's transport", async () => {
     const local = new FakeHost();
     local.tickets = [ticket("A", "todo", 0)];
     const remote = new FakeHost();
@@ -2876,12 +2876,12 @@ describe("routing each Workspace to its own host", () => {
   });
 });
 
-// ---- what a closed Workspace owns, and a host with no board (VC-711) ----------------------
+// ---- what a closed project owns, and a host with no board (VC-711) ----------------------
 
 const failure = (reason?: string) => ({ data: { hostError: { code: "X", message: "m", reason } } });
 
-describe("a Workspace's own commands, and a host that offers no board", () => {
-  it("ends a per-surface command made for a Workspace when that Workspace closes", async () => {
+describe("a project's own commands, and a host that offers no board", () => {
+  it("ends a per-surface command made for a project when that project closes", async () => {
     const { host, sync } = harness();
     await go(sync.open("p1"));
     const send = vi.fn(() => Promise.reject(unreachable));
@@ -2902,13 +2902,13 @@ describe("a Workspace's own commands, and a host that offers no board", () => {
     const attempts = send.mock.calls.length;
     await vi.advanceTimersByTimeAsync(20_000);
     expect(send).toHaveBeenCalledTimes(attempts);
-    // A command no Workspace owns is not this close's.
+    // A command no project owns is not this close's.
     sync.closeAll();
     expect(await unowned).toMatchObject({ ok: false });
     expect(host.calls.map(({ method }) => method)).toEqual(["snapshot"]);
   });
 
-  it("stops opening a Workspace whose host refuses its board, and follows it no more", async () => {
+  it("stops opening a project whose host refuses its board, and follows it no more", async () => {
     const { host, sync } = harness();
     for (const reason of ["verb-refused", "operation-unavailable", "workspace-unknown"]) {
       host.fail("snapshot", { data: { hostError: { code: "FORBIDDEN", message: "no", reason } } });

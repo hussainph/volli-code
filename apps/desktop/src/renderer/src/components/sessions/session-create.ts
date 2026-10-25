@@ -28,7 +28,7 @@ import {
   type SessionScope,
   type TerminalSplitDirection,
 } from "@renderer/stores/sessions";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { disposeEngine, getOrCreateEngine } from "@renderer/terminal/registry";
 import { refuseRemote, remoteHostNow } from "@renderer/stores/remote-project";
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
@@ -388,7 +388,7 @@ function abandonChat(sessionId: string): void {
 export async function startProjectTerminal(projectId: string): Promise<string | null> {
   const sessionId = await createTerminalSession(projectScope(projectId));
   if (sessionId === null) return null;
-  useWorkspaceStore.getState().setHomeActiveTab(projectId, sessionId);
+  useProjectUiStore.getState().setHomeActiveTab(projectId, sessionId);
   // Returned for the one caller that has something to say to the shell it just
   // opened — the dependency offer types its install into it (VC-156). Every
   // other caller ignores it, exactly as it did when this returned nothing.
@@ -409,7 +409,7 @@ export async function startProjectChat(
     skills,
     land: (sessionId, isSession) => {
       useChatSessionsStore.getState().openChatTab(projectId, sessionId);
-      if (isSession) useWorkspaceStore.getState().setHomeActiveTab(projectId, chatTabId(sessionId));
+      if (isSession) useProjectUiStore.getState().setHomeActiveTab(projectId, chatTabId(sessionId));
       return true;
     },
   });
@@ -437,7 +437,7 @@ export async function startProjectChat(
 export async function startTicketTerminal(projectId: string, ticketId: string): Promise<void> {
   const sessionId = await createTerminalSession(ticketScope(projectId, ticketId));
   if (sessionId === null) return;
-  useWorkspaceStore.getState().setTicketActiveTab(projectId, ticketId, sessionId);
+  useProjectUiStore.getState().setTicketActiveTab(projectId, ticketId, sessionId);
 }
 
 /**
@@ -505,7 +505,7 @@ export async function startTicketChat(
       if (!tickets.some((candidate) => candidate.id === ticketId)) return false;
       useChatSessionsStore.getState().openChatTab(ticketId, booted);
       if (isSession) {
-        useWorkspaceStore.getState().setTicketActiveTab(projectId, ticketId, chatTabId(booted));
+        useProjectUiStore.getState().setTicketActiveTab(projectId, ticketId, chatTabId(booted));
         // The rail's row for this Session needs no read here (VC-373): the
         // chat was minted through the Session Engine, so `volli:session-activity`
         // announces its listing row and the rail's cache folds it in — without

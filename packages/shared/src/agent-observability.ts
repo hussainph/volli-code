@@ -24,6 +24,7 @@ import type {
   CompactionReason,
   ReasoningDropCause,
   ReasoningLevel,
+  RuntimeAttentionReason,
   RuntimeFailure,
   RuntimeObservation,
 } from "./agent-runtime";
@@ -272,7 +273,7 @@ export interface AttachmentEvent {
 export interface AttentionEvent {
   kind: "attention";
   phase: "raised" | "cleared";
-  reason: "auth" | "configuration" | "context" | "runtime-failure" | "partial-turn" | "transport";
+  reason: RuntimeAttentionReason;
   runId?: string;
 }
 

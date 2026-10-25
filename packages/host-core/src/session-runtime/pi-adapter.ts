@@ -5,8 +5,9 @@
  * already speaks product vocabulary; what it does not speak is the durable
  * Session's own seam — attachments, delivery receipts, commands — so everything
  * here is translation and nothing here is policy. There is one manifest id and
- * one profile because there is one executor: no registry, no catalog, no profile
- * spread to grow into.
+ * one profile: Pi is the one runtime in the Session runtime's executor slot
+ * (VC-916), and a second runtime would be a second adapter beside this one,
+ * never a profile spread inside it.
  *
  * Observations are the exception, and they cross untranslated: `RuntimeObservation`
  * is the only observation vocabulary, and turning one into a Session fact is
@@ -102,6 +103,7 @@ import {
   type RuntimeAskRequest,
   type RuntimeAskUserRequest,
   type RuntimeAttachmentHandle,
+  type RuntimeResumeBoundary,
   type RuntimeBrowserPort,
   type RuntimeMcpCall,
   type RuntimeMcpCallResult,
@@ -142,7 +144,7 @@ import { STRUCTURED_ADAPTER_ID } from "./sessions";
 const log = hostLogger("pi-adapter");
 
 /**
- * The one adapter id. Pi is the structured product's single target executor.
+ * Pi's adapter id: its runtime id in the executor slot, and the slot's default.
  *
  * Aliased rather than re-declared, and the boot sweep is why. It retires every
  * local open attachment whose `adapterId` is not
@@ -1527,6 +1529,13 @@ class PiBinding implements BindingHandle {
         native: this.#native,
       })),
     };
+  }
+
+  /** Where the recovered conversation stands; a closed or releasing binding has nothing to continue. */
+  resumeBoundary(): RuntimeResumeBoundary | null {
+    const handle = this.#handle;
+    if (handle === null || this.#releasing) return "none";
+    return handle.resumeBoundary?.() ?? null;
   }
 
   /**

@@ -19,7 +19,6 @@ export {
   agentSitesWithin,
   releaseAgentSites,
 } from "../worktree/agent-sites";
-export { createCoalescer, RAIL_READ_SHARE_WINDOW_MS } from "../worktree/coalesce";
 export { isOwnedWorktreePath, ownedContainers, projectContainerName } from "../worktree/containers";
 export { acquireDeletionLease } from "../worktree/deletion-lease";
 export {
@@ -38,7 +37,7 @@ export {
   liveShellWorktreeSites,
   OrphanCleanupRefused,
   publishTicketBranch,
-  readVenue,
+  readWorkingCopy,
   readWorktreeBaseFile,
   readWorktreeChangeSet,
   readWorktreeDiff,
@@ -59,4 +58,4 @@ export {
   WorktreeChangeWatchManager,
 } from "../worktree";
 export { canonicalize, isInside } from "../worktree/paths";
-export { getWorktreeSnapshots } from "../worktree/snapshot";
+export { createWorktreeReadService, type WorktreeReadService } from "../worktree-reads";

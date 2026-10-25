@@ -468,8 +468,11 @@ function BaseBranchField({ projectId, ticket }: { projectId: string; ticket: Tic
  * The card's inline notice for a failed worktree ensure (transient phase,
  * stores/worktree.ts), with a Retry that boots a fresh bare-shell ticket
  * session — the same path `TicketDetail`'s "New session" uses — to re-run
- * `ensure`. No kickoff: retry only needs the setup pipeline to run again, not a
- * fresh agent prompt.
+ * `ensure`. No kickoff: retry only needs the ensure pipeline to run again, not a
+ * fresh agent prompt. A setup command that already ran — and failed — is not
+ * among what it re-runs: setup is claimed once per worktree
+ * (`host-core/src/worktree/first-run.ts`); a create, copy or attachments stage
+ * that failed is, and a setup run still owed is run by that terminal.
  */
 function WorktreeFailedNotice({ projectId, ticketId }: { projectId: string; ticketId: string }) {
   const [retrying, setRetrying] = React.useState(false);

@@ -44,7 +44,7 @@ import { useBoardStore } from "./board";
 import { hostOfProject, isRemoteProject, useHostConnectionStore } from "./host-connection";
 import { writeThrough } from "./mutate";
 import { setProjectRowSink, useThemeStore } from "./theme";
-import { useWorkspaceStore } from "./workspace";
+import { useProjectUiStore } from "./project-ui";
 import { boardApi } from "@renderer/lib/board-protocol";
 import { isExperimentOn, useExperimentsStore } from "./experiments";
 
@@ -673,7 +673,7 @@ export function createProjectsStore(
         // and drops their records (the PTYs behind them are already gone), the
         // archived tickets' included, whether or not a view is mounted.
         forgetProjectSessions(id);
-        useWorkspaceStore.getState().forget(id);
+        useProjectUiStore.getState().forget(id);
         // `board.forget` owns chat teardown as well as its owner-key bookkeeping,
         // so a local removal and an authoritative board hydration that loses the
         // same project share one disposal path.

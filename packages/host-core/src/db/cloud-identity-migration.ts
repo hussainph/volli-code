@@ -12,6 +12,11 @@
  * host and Workspace files (VC-588), no foreign key crosses between them:
  * `host_id` and `worker_id` below are plain UUID values, not references.
  *
+ * `workspace_epochs.workspace_id` holds a project id: the host protocol called
+ * a project a "Workspace", a word that now names the team container
+ * (CONTEXT.md). Shipped schema is never renamed in place, so the table and
+ * column keep the old name.
+ *
  * Every statement is `IF NOT EXISTS`, so a lineage re-offered version 58 (a
  * rewound `user_version`, a restore) converges instead of failing.
  */

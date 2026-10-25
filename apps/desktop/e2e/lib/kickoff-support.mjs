@@ -11,7 +11,7 @@ import {
  * workspace. Include aria-hidden content: Create-more keeps a modal composer
  * over the workspace, but navigation underneath it is still a regression.
  */
-export async function ticketWorkspaceOpen(page) {
+export async function ticketViewOpen(page) {
   return (
     (await page
       .getByRole("tablist", {
@@ -29,7 +29,7 @@ export async function openTicketCard(page, displayId, { attempts = 3, timeout = 
   for (let i = 0; i < attempts; i += 1) {
     await cardById(page, displayId).dblclick();
     try {
-      await waitUntil("the ticket workspace to open", () => ticketWorkspaceOpen(page), { timeout });
+      await waitUntil("the Ticket view to open", () => ticketViewOpen(page), { timeout });
       return true;
     } catch {
       // A missed gesture leaves the card on the board; retry that same card.

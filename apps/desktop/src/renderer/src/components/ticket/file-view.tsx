@@ -33,7 +33,7 @@ import { toastError } from "@renderer/lib/toast";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { LocalOnly } from "@renderer/components/hosts/local-only";
 
 /**
@@ -60,7 +60,7 @@ interface FileViewProps {
    * save editor with, for a host that persists it per tab — the Project Files
    * workbench, whose tabs must land where you left them after their contents
    * reload lazily (decision #55). Opaque here: it is Monaco's own JSON and this
-   * component never inspects it. Omitted by the ticket workspace, which lets the
+   * component never inspects it. Omitted by the Ticket view, which lets the
    * in-memory document registry remember view state for the session instead.
    */
   initialViewState?: unknown;
@@ -177,13 +177,13 @@ function LocalFileView({
   // than one derived object, so the store cannot hand this component a new value
   // on every render. Artifacts never ask — they take the autosave path below and
   // are always a document.
-  const prefersDocumentView = useWorkspaceStore((workspace) =>
-    (workspace.byProject[projectId]?.markdownDocumentFiles ?? []).includes(relPath),
+  const prefersDocumentView = useProjectUiStore((projectUi) =>
+    (projectUi.byProject[projectId]?.markdownDocumentFiles ?? []).includes(relPath),
   );
-  const prefersPreviewView = useWorkspaceStore((workspace) =>
-    (workspace.byProject[projectId]?.markdownPreviewFiles ?? []).includes(relPath),
+  const prefersPreviewView = useProjectUiStore((projectUi) =>
+    (projectUi.byProject[projectId]?.markdownPreviewFiles ?? []).includes(relPath),
   );
-  const setMarkdownFileView = useWorkspaceStore((workspace) => workspace.setMarkdownFileView);
+  const setMarkdownFileView = useProjectUiStore((projectUi) => projectUi.setMarkdownFileView);
   // Mirrors `sourceDirtyRef` for the one thing a RENDER needs it for: Preview
   // draws the file as last read or saved, so while a draft is open it says so.
   const [sourceDirty, setSourceDirty] = React.useState(false);

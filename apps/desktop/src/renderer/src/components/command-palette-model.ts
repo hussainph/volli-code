@@ -235,7 +235,7 @@ export function buildCommandPaletteItems(
     const project = projectById.get(record.projectId);
     if (project === undefined) continue;
     const linked = record.ticketId === null ? undefined : ticketById.get(record.ticketId);
-    // A chat whose ticket disappeared has no ticket workspace to open. The
+    // A chat whose ticket disappeared has no Ticket view to open. The
     // ticketless case is valid because `ticketId` is deliberately null there.
     if (record.ticketId !== null && linked === undefined) continue;
     sessions.push({

@@ -7,10 +7,15 @@
  */
 import { randomUUID } from "node:crypto";
 import type { HostedSessionRuntime } from "@volli/session-engine";
-import type { SessionProjection, SessionExecutionVenue } from "@volli/shared";
+import {
+  logErrorSummary,
+  type LogErrorSummary,
+  type SessionProjection,
+  type RunnerIdentity,
+} from "@volli/shared";
 import { isLiveHost, type HostCore, type HostCorePorts } from "../index";
 import { shutdownNativeSessions } from "../host-shutdown";
-import { wireSessionRuntime } from "../session-services";
+import { SESSION_RUNTIME } from "../session-services";
 import { listProjects } from "../db/projects-repo";
 import {
   consumeFollowUpCleanClose,
@@ -25,7 +30,13 @@ import {
 import type { AgentObservability } from "../observability/settings";
 import { relayShellNotices } from "../shell/shell-notices";
 import type { BackgroundShellNotice } from "../shell/background-shell-host";
-import { closeStaleAttachments } from "./boot-recovery";
+import {
+  closeStaleAttachments,
+  type BootRecoveredTurns,
+  type BootRecoveryFailure,
+  type BootRecoveryReason,
+} from "./boot-recovery";
+import { resumeRecoveredTurns } from "./restart-resume";
 import { createHostNoticeDelivery } from "./durable-host-notice-delivery";
 import { catchUpSessionResumptions } from "./session-resumptions";
 import type { TicketSessionDelegationStore } from "./delegation-store";
@@ -74,6 +85,26 @@ export function mapRecoveredSessionServices<Source, Services>(
   return proof;
 }
 
+/**
+ * What this launch's boot recovery did, for a support report (VC-926): when it
+ * finished, how many lost turns it rebuilt onto a live attachment, how many
+ * attachments it closed, and every structured attachment whose reconcile
+ * failed, classified. Counts, reasons and error class names only — never a
+ * Session id, a path or a message: a support report is pasted in public.
+ */
+export interface BootRecoveryReport {
+  readonly finishedAt: number;
+  /** The sweep itself threw, so the counts cover only what it did before. */
+  readonly error: LogErrorSummary | null;
+  readonly recovered: number;
+  readonly closed: number;
+  readonly failures: readonly {
+    readonly reason: Exclude<BootRecoveryReason, "not_rebuildable">;
+    readonly outcome: BootRecoveryFailure["outcome"];
+    readonly error: LogErrorSummary;
+  }[];
+}
+
 /** Only the lifecycle can issue this proof that boot recovery has finished. */
 export interface RecoveredSessionServices<Services> {
   readonly [recoveredServices]: true;
@@ -87,13 +118,15 @@ export interface SessionRuntimeLifecycle<Services> {
   observeScheduledResume(projection: SessionProjection): void;
   /** Starts/joins recovery if needed; fresh external notices never bypass it. */
   relayShellNotice(notice: BackgroundShellNotice): void;
+  /** This launch's stale-attachment sweep, once it has finished; `null` before then. */
+  bootRecovery(): BootRecoveryReport | null;
 }
 
 export function createSessionRuntimeLifecycle<Services>(options: {
   host: HostCore;
-  venue?: SessionExecutionVenue;
+  venue?: RunnerIdentity;
   /** Upgrade-only ownership supplied by the host, not the executor. */
-  ownsLegacyVenue?(venue: SessionExecutionVenue): boolean;
+  ownsLegacyRunner?(runner: RunnerIdentity): boolean;
   ports: Pick<HostCorePorts, "power" | "attention" | "events" | "log">;
   runtime: HostedSessionRuntime | null;
   /** A transport constructed from ready services may bind after recovery. */
@@ -113,7 +146,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   const { database } = host;
   const liveHost = isLiveHost(host) ? host : undefined;
   const sessionEngine = liveHost?.sessionEngine ?? null;
-  const hostNoticeOutbox = liveHost?.hostNoticeOutbox ?? null;
+  const hostNoticeOutbox = liveHost?.[SESSION_RUNTIME].hostNoticeOutbox ?? null;
   const sessionWakeBus = liveHost?.sessionWakeBus ?? null;
   const notices =
     runtime === null || hostNoticeOutbox === null
@@ -165,11 +198,14 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   const wake = () => {
     if (!closing) void resume?.pass();
   };
+  let bootRecovery: BootRecoveryReport | null = null;
   let boot: Promise<RecoveredSessionServices<Services>> | undefined;
   let drain: Promise<void> | undefined;
   let closing = false;
   // The startup release sweep, which may outlive readiness (never rejects).
   let followUpRecovery: Promise<void> | undefined;
+  // Turns a restart resume continued, which outlive readiness (never rejects).
+  let restartResumeRuns: Promise<void> | undefined;
   const closed = Promise.withResolvers<false>();
 
   function close(): Promise<void> {
@@ -193,28 +229,36 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     // A host may close the database only after both drain and an in-flight boot
     // sweep finish. Closing the runtime also unblocks its reconciliation path.
     // A startup release that outlived readiness still writes the queue ledger.
-    drain = Promise.all([shutdown, boot?.catch(() => undefined), followUpRecovery]).then(
-      () => undefined,
-    );
+    drain = Promise.all([
+      shutdown,
+      boot?.catch(() => undefined),
+      followUpRecovery,
+      restartResumeRuns,
+    ]).then(() => undefined);
     return drain;
   }
   options.installQuitHold(close);
 
   async function recover(): Promise<RecoveredSessionServices<Services>> {
     let held: string[] = [];
+    // The restart resume the sweep armed, run once the queue has had its turn.
+    // Written by the sweep's callback, so held in a box TypeScript cannot narrow.
+    const recovery: { resume?: () => Promise<void> } = {};
     if (database.ok && sessionEngine !== null) {
       // Compare before recovery itself can append events. A present watermark
       // is consumed in the same transaction that refuses any stale queued rows.
       held = consumeFollowUpCleanClose(database.db, (sessionId, error) =>
         ports.log.error("unreadable follow-up queue", { sessionId, error }),
       );
+      const failures: BootRecoveryReport["failures"][number][] = [];
+      let recoveredTurns = 0;
       try {
-        await closeStaleAttachments({
+        const closedAttachments = await closeStaleAttachments({
           engine: sessionEngine,
           ...(options.venue === undefined ? {} : { venue: options.venue }),
-          ...(options.ownsLegacyVenue === undefined
+          ...(options.ownsLegacyRunner === undefined
             ? {}
-            : { ownsLegacyVenue: options.ownsLegacyVenue }),
+            : { ownsLegacyRunner: options.ownsLegacyRunner }),
           shouldStop: () => closing,
           reconcile: (input) =>
             runtime === null
@@ -225,11 +269,50 @@ export function createSessionRuntimeLifecycle<Services>(options: {
           projectIds: listProjects(database.db).map((project) => project.id),
           newId: randomUUID,
           now: Date.now,
+          // A binding the runtime holds after a failed reconcile was rebuilt.
+          holdsBinding: (attachmentId) =>
+            runtime
+              ?.openNativeBindings()
+              .some((binding) => binding.attachmentId === attachmentId) ?? false,
           onError: (attachmentId, error) =>
             ports.log.error("failed to recover attachment", { attachmentId, error }),
+          onFailure: ({ sessionId, attachmentId, reason, outcome, error }) => {
+            failures.push({ reason, outcome, error: logErrorSummary(error) });
+            const fields = { sessionId, attachmentId, reason, outcome, error };
+            // A recovered turn kept its attachment: worth a look, not an outage.
+            if (outcome === "recovered") {
+              ports.log.warn("recovered an attachment whose reconcile failed", fields);
+            } else {
+              ports.log.error("failed to recover attachment", fields);
+            }
+          },
+          onRecovered: (recovered) => {
+            recoveredTurns = recovered.turns.length;
+            if (runtime === null) return;
+            recovery.resume = () => resumeRestartTurns(runtime, sessionEngine, recovered);
+          },
         });
+        if (!closing) {
+          bootRecovery = {
+            finishedAt: Date.now(),
+            error: null,
+            recovered: recoveredTurns,
+            closed: closedAttachments,
+            failures,
+          };
+        }
       } catch (error) {
         ports.log.error("failed to recover stale attachments", { error });
+        // The launch most likely to be reported: say the sweep failed, not "not finished".
+        if (!closing) {
+          bootRecovery = {
+            finishedAt: Date.now(),
+            error: logErrorSummary(error),
+            recovered: recoveredTurns,
+            closed: 0,
+            failures,
+          };
+        }
       }
       if (delegation !== null && !closing) {
         try {
@@ -270,6 +353,11 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     if (runtime !== null) await recoverFollowUps(runtime);
     if (closing)
       throw new SessionRuntimeClosingError("The Session runtime closed during recovery.");
+    // After the queue: a message the person queued behind the lost turn is
+    // their own word on what comes next, and a turn it opened is one the
+    // restart resume then leaves alone (VC-450). Its turns outlive readiness;
+    // close waits for them.
+    restartResumeRuns = recovery.resume?.();
     try {
       await notices?.recover();
     } catch (error) {
@@ -304,6 +392,25 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     };
     issuedProofs.add(proof);
     return proof;
+  }
+  /** The restart resume over this host's runtime and engine (VC-450). */
+  function resumeRestartTurns(
+    hosted: HostedSessionRuntime,
+    engine: NonNullable<typeof sessionEngine>,
+    recovered: BootRecoveredTurns,
+  ): Promise<void> {
+    return resumeRecoveredTurns(
+      {
+        projection: async (sessionId) => (await hosted.projection({ sessionId })).projection,
+        ticketSessions: ({ projectId, ticketId }) =>
+          engine.listSessions({ projectId, scope: "ticket", ticketId }),
+        resumeBoundary: (input) => hosted.resumeBoundary(input),
+        pendingTurnStarts: () => hosted.pendingTurnStarts(),
+        command: (request) => hosted.command(request),
+        shouldStop: () => closing,
+      },
+      recovered,
+    );
   }
   /**
    * Release/reconcile durable follow-ups, preferably before any Client or
@@ -343,12 +450,11 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   const observeScheduledResume = (projection: SessionProjection): void => {
     if (!closing) resume?.observe(projection);
   };
-  // The host's Session services fold every projection through here from now on.
-  if (sessionEngine !== null) wireSessionRuntime(sessionEngine, { observeScheduledResume });
   return {
     ready,
     close,
     observeScheduledResume,
+    bootRecovery: () => bootRecovery,
     relayShellNotice: (notice) => {
       if (closing || relay === null) return;
       // A fresh external notice cannot read the ledger while boot recovery is

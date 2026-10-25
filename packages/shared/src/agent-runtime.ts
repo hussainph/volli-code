@@ -28,6 +28,7 @@ import type {
 } from "./authority";
 import { NON_CODING_TOOL_IDS } from "./authority";
 import type { DecisionAnswered, DecisionMiss } from "./decision-model";
+import type { CredentialStreamStepper } from "./credential-stream-redaction";
 import { parseCodeModeSurface, type CodeModeSurface } from "./code-mode";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
 import { validateMcpToolDefinitions } from "./mcp";
@@ -41,6 +42,7 @@ import {
   SESSION_ESCALATION_STOP_ID,
   SESSION_PERMISSION_OPTIONS,
   SESSION_REFUSAL_OPTION_IDS,
+  type RunnerKind,
   type SessionInteraction,
   type SessionInteractionCancelReason,
   type SessionInteractionOption,
@@ -253,8 +255,8 @@ export type RuntimeSessionIdentity =
   | ProjectRuntimeIdentity
   | SubagentRuntimeIdentity;
 
-/** Where execution happens. Local is the only venue built today. */
-export type ExecutionVenue = "local";
+/** Where execution happens. Local is the only runner built today. */
+export type RuntimeRunnerKind = Extract<RunnerKind, "local">;
 
 /**
  * The named half of a Session's Agent Tool Surface: what its Role handed it,
@@ -275,12 +277,12 @@ export type ExecutionVenue = "local";
 export interface RuntimeToolBundle {
   /** Compatible versioned verb copy; absent preserves historical description bytes. */
   refreshDescriptions?: true;
-  /** Coding tools, in the order this venue offers them. */
+  /** Coding tools, in the order this runner offers them. */
   tools: readonly CodingToolId[];
   /**
    * Product verbs from `bundle(Role) ∪ grants(session)`, in canonical registry
-   * order. Absent means none — the Ticket Role's default bundle has no
-   * agent-control tool, while a durable birth grant may add one scoped verb.
+   * order. Absent means none. New Ticket Sessions carry delegation-scoped
+   * steering; durable birth grants may add other scoped verbs.
    *
    * Membership comes from here; execution comes from
    * {@link SessionRuntimeSpec.callVerb}. A bundle naming a verb with no port
@@ -1149,7 +1151,7 @@ export interface SessionRuntimeSpec {
    * while allowing task-anchored reads elsewhere on the machine.
    */
   workspacePath: string;
-  venue: ExecutionVenue;
+  venue: RuntimeRunnerKind;
   model: ModelSelection;
   brief: RuntimeBrief;
   /**
@@ -1258,6 +1260,12 @@ export interface SessionRuntimeSpec {
   credentialRedaction?: {
     redact(text: string): string;
     hasValues?(): boolean;
+    /**
+     * The same exact-value redaction as one bounded streaming step over bytes,
+     * for output written outside tool results (shell spills). Absent: shell
+     * spills are disabled while values are held.
+     */
+    redactStreamStep?: CredentialStreamStepper;
   };
   secret?: {
     request(
@@ -1267,6 +1275,8 @@ export interface SessionRuntimeSpec {
     redact(text: string): string;
     /** Whether credential values are held; absent means shell spills are disabled. */
     hasValues?(): boolean;
+    /** See `credentialRedaction.redactStreamStep`. */
+    redactStreamStep?: CredentialStreamStepper;
   };
   /**
    * Read one public web document, through a boundary this Session does not own.
@@ -1656,6 +1666,19 @@ export function sessionToolIds(spec: SessionToolSpec): SessionToolId[] {
   return sessionToolBindings(spec).map((binding) => binding.tool);
 }
 
+/** {@link RuntimeFailure}'s closed reasons, as a list telemetry can tally by. */
+export const RUNTIME_FAILURE_REASONS = [
+  "auth",
+  "configuration",
+  "context",
+  "reasoning",
+  "model",
+  "aborted",
+  "unknown",
+] as const;
+
+export type RuntimeFailureReason = (typeof RUNTIME_FAILURE_REASONS)[number];
+
 /**
  * Sanitized failure surfaced through observations. Never contains secrets.
  *
@@ -1668,7 +1691,7 @@ export function sessionToolIds(spec: SessionToolSpec): SessionToolId[] {
  */
 export interface RuntimeFailure {
   stopDetail?: SessionStopDetail;
-  reason: "auth" | "configuration" | "context" | "reasoning" | "model" | "aborted" | "unknown";
+  reason: RuntimeFailureReason;
   message: string;
 }
 
@@ -1951,6 +1974,18 @@ export type RuntimeActivityObservation =
       error?: string;
     });
 
+/** {@link AttentionObservation}'s reasons, as a list; see the widening rule there. */
+export const RUNTIME_ATTENTION_REASONS = [
+  "auth",
+  "configuration",
+  "context",
+  "runtime-failure",
+  "partial-turn",
+  "transport",
+] as const;
+
+export type RuntimeAttentionReason = (typeof RUNTIME_ATTENTION_REASONS)[number];
+
 /**
  * Attention's `reason` may be widened, never narrowed or renamed.
  *
@@ -1973,7 +2008,7 @@ export interface AttentionObservation {
   stopDetail?: SessionStopDetail;
   kind: "attention";
   state: "raised" | "cleared";
-  reason: "auth" | "configuration" | "context" | "runtime-failure" | "partial-turn" | "transport";
+  reason: RuntimeAttentionReason;
   message: string;
   /**
    * On a raised `runtime-failure` only: the instant, epoch ms, at which the
@@ -2103,6 +2138,22 @@ export type CompactionRequestOutcome =
       message: string;
     };
 
+/**
+ * Where an idle attachment's conversation stands, as the runtime holds it —
+ * what a host reads before continuing a turn a lost process cut short
+ * (VC-450).
+ *
+ * - `settled` — it ends on a user message, or on tool results that answered
+ *   every call of the reply before them: continuing asks the model again and
+ *   repeats nothing that already ran.
+ * - `tool-in-flight` — a tool call has no real result: it may have run, partly
+ *   run, or never started, and only the person can judge its side effects. A
+ *   question abandoned with the process counts too: nobody answered it.
+ * - `none` — nothing is left to continue (no messages, or the reply already
+ *   finished and only its completion marker was lost).
+ */
+export type RuntimeResumeBoundary = "settled" | "tool-in-flight" | "none";
+
 /** One live runtime attachment. Closing it never ends Session identity. */
 export interface RuntimeAttachmentHandle {
   submitUserMessage(
@@ -2139,8 +2190,17 @@ export interface RuntimeAttachmentHandle {
   ): Promise<DeliveryOutcome>;
   /** Apply a validated model policy only while this attachment is idle. */
   selectModel(selection: ModelSelection): Promise<ModelSelectionOutcome>;
-  /** Retry the last failed run without duplicating its user message. */
+  /**
+   * Retry the last failed run without duplicating its user message. After a
+   * process loss it is also the resume: a tool call the lost process left
+   * without a result is answered as interrupted, never run again by itself.
+   */
   retry(commandId?: string): Promise<DeliveryOutcome>;
+  /**
+   * Where the conversation stands while idle (see {@link RuntimeResumeBoundary}).
+   * Optional: a runtime that cannot say is never continued automatically.
+   */
+  resumeBoundary?(): RuntimeResumeBoundary;
   /**
    * Compact this Session's context now, because someone asked.
    *
@@ -2191,7 +2251,10 @@ export interface UtilityCompletion {
   signal?: AbortSignal;
 }
 
-/** The singular runtime port. Not a registry; there is exactly one executor. */
+/**
+ * The Agent Runtime port Pi's executor is built on. Not a registry: the Session
+ * runtime's executor slot is where runtimes sit side by side.
+ */
 export interface AgentRuntime {
   /** Inspect provider accounts and models without exposing runtime credentials or native types. */
   inspectModelAccess(input?: {

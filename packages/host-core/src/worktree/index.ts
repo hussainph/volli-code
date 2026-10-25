@@ -118,20 +118,22 @@ export type {
 export { scanCollisions } from "./collisions";
 export type { CollisionScan, ScannedWorktree, SkippedWorktree } from "./collisions";
 
-// The venue read (VC-55): the checkout a Session runs in, measured — the file
+// The Working copy read (VC-55): the checkout a Session runs in, measured — the file
 // partition the empty chat draws and the loose count the Home rail shows.
-// `readVenue` resolves the directory by the Session runtime's own rule, so the
+// `readWorkingCopy` resolves the directory by the Session runtime's own rule, so the
 // two can never disagree about which tree a Session is standing in.
-export { readVenue, venueSnapshot } from "./venue";
-export type { VenueReadPorts, VenueSnapshotInput, VenueTarget } from "./venue";
+export { readWorkingCopy, measureWorkingCopy } from "./working-copy";
+export type {
+  WorkingCopyReadPorts,
+  WorkingCopyMeasureInput,
+  WorkingCopyTarget,
+} from "./working-copy";
 export type { ChangeSetInput, ChangeSetBaseFileInput, ChangeSetBaseFile } from "./change-set";
 export {
   WorktreeChangeWatchManager,
   WATCH_DEBOUNCE_MS,
   WATCH_MAX_WAIT_MS,
 } from "./change-set-watch";
-export { createCoalescer } from "./coalesce";
-export type { Coalescer } from "./coalesce";
 export { commitRemaining } from "./commit";
 export type { CommitOutcome, CommitRemainingInput } from "./commit";
 export {
@@ -227,8 +229,23 @@ export { buildSetupSentinelLine, parseSetupSentinel } from "./setup";
 // The stateful sentinel-gated setup-command machine (§6): pty.ts drives it
 // through a narrow handle (feed output, notify exit) instead of owning the
 // tail-scan / phase-transition / worktree_failed(setup) emission inline.
-export { createSetupRun } from "./setup-run";
+export { createSetupRun, recordSetupFailure } from "./setup-run";
 export type { SetupRun, SetupRunPorts, SetupRunParams, SetupFeedResult } from "./setup-run";
+
+// Whether a worktree still owes its setup run is a durable fact of the worktree
+// (VC-835), not of one `ensure` call: a door claims the run before starting it,
+// so exactly one door runs it. The terminal claims and types it into its shell;
+// a structured Session claims and runs it as a child process before its first
+// turn.
+export { claimFirstRunSetup } from "./first-run";
+export { runPendingWorktreeSetup } from "./setup-exec";
+
+// The environment recipe (VC-584, behind the `cloud` flag): the resume run a
+// structured start makes, and what a terminal types for a claimed setup run.
+// The setup gate's state and answers are the handler map's
+// (`./setup-gate`).
+export { runWorktreeResume, watchRunnerWakes } from "./resume-exec";
+export { terminalSetupCommand } from "./terminal-setup";
 
 // The default git runners (both capture stderr) — callers build `deps.git` /
 // `deps.gitAsync` from these. The async one exists because the Change Set reads

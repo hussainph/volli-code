@@ -4,7 +4,7 @@
  * `@volli/shared`'s `sessionWedge`.
  *
  * ── WHY A SCAN AND NOT A SUBSCRIPTION ─────────────────────────────────────
- * `activity-watch.ts` decorates the engine and sees every durable write; a
+ * The wake bus (`session-wake.ts`) sees every durable write; a
  * wedge is the ABSENCE of writes, which no write-side observer can notice.
  * The complement of a push channel is a clock, so this is one: every interval
  * it asks the runtime which native bindings are open — the exact "an executor
@@ -40,12 +40,13 @@
  */
 
 import {
+  LOCAL_RUNNER,
   DEFAULT_SESSION_WATCHDOG_SILENCE_MS,
   sessionNotificationItem,
   sessionWedge,
   shortSessionId,
 } from "@volli/shared";
-import type { SessionInFlightTool, SessionProjection, SessionExecutionVenue } from "@volli/shared";
+import type { SessionInFlightTool, SessionProjection, RunnerIdentity } from "@volli/shared";
 import type { SessionEngine } from "@volli/session-engine";
 
 import type { NotificationRequest } from "@volli/shared";
@@ -65,7 +66,7 @@ export interface SessionWatchdogBinding {
 }
 
 export interface SessionWatchdogPorts {
-  venue?: SessionExecutionVenue;
+  venue?: RunnerIdentity;
   /** The executors this process holds open — the runtime's own binding list. */
   listBindings(): readonly SessionWatchdogBinding[];
   /** One Session's durable state; live progress comes from the binding above. */
@@ -156,7 +157,7 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
           id: "session-watchdog",
           detail: { sessionOrigin: { kind: "volli", reason: "supervision" } },
         },
-        venue: ports.venue ?? { id: "local", kind: "local" },
+        venue: ports.venue ?? LOCAL_RUNNER,
       },
     });
     ports.notify?.({
@@ -184,12 +185,24 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
   }
 
   async function scan(): Promise<void> {
-    for (const binding of ports.listBindings()) {
+    const bindings = ports.listBindings();
+    // Nothing live, nothing to read: an idle host's tick ends here.
+    if (bindings.length === 0) return;
+    const startedAt = performance.now();
+    for (const binding of bindings) {
       try {
         await inspect(binding);
       } catch (error) {
         onError(error);
       }
+    }
+    // The scan's cost on an always-on host (VC-686): one projection read per
+    // live Session per interval, measured where it runs.
+    if (log.enabled("debug")) {
+      log.debug("watchdog scan", {
+        sessions: bindings.length,
+        scanMs: Math.round(performance.now() - startedAt),
+      });
     }
   }
 

@@ -14,21 +14,24 @@
  * - its **materialization**: switching a ticket into worktree scope makes the
  *   checkout (VC-98), refusing the opposite switch while that runs;
  * - its **feed publication**: the committed rows, naming the `commandId`, on
- *   the Workspace's change feed (F1, T5), in the turn of the commit;
+ *   the project's change feed (F1, T5), in the turn of the commit;
  * - its **announcement**: `data-changed` for the flag-off windows, except to
  *   the desktop window that asked, whose reply already carries the row (the
  *   one difference VC-668 documented), unless the change moved a checkout.
  *
  * Doors hold no repository and no SQLite: the desktop's legacy channels, the
- * board router (IPC bridge and WebSocket) and the agent socket's `ticket.move`
- * each invoke this map under their own policy, and nothing else.
+ * board router (IPC bridge and WebSocket) and the agent socket's ticket writes
+ * (`ticket.move`, and `ticket.create`/`update`/`comment` through
+ * `board.createTicket`/`updateTicket`/`createComment`, VC-794) each invoke
+ * this map under their own policy, and nothing else.
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
+  applyTicketBodyMutation,
+  labelNameKey,
   OperationUnavailableError,
   parseSkillModes,
-  USER_ACTOR,
   type ArchivedTicket,
   type BoardChange,
   type BoardCommandReceipt,
@@ -43,6 +46,7 @@ import {
   type Project,
   type ProjectFolderState,
   type Ticket,
+  type TicketBodyMutation,
   type TicketComment,
   type TicketEvent,
   type TicketPriority,
@@ -55,7 +59,13 @@ import type { DetachedWorkPort } from "../detached-work";
 import { hostLogger } from "../log/root";
 import { deleteComment, getComment, listComments, updateComment } from "../db/comments-repo";
 import { listTicketEvents, listTicketStatusEntries } from "../db/events-repo";
-import { getLabel, listLabelsByProject, listTicketLabels, setLabelColor } from "../db/labels-repo";
+import {
+  findLabelByName,
+  getLabel,
+  listLabelsByProject,
+  listTicketLabels,
+  setLabelColor,
+} from "../db/labels-repo";
 import {
   getProjectById,
   isProjectAttached,
@@ -95,7 +105,7 @@ import {
 import { withTicketWake } from "../ticket-wake";
 import { ensure } from "../worktree";
 import type { BusyWorktreeSites } from "../worktree/activity";
-import { getWorktreeSnapshots } from "../worktree/snapshot";
+import type { WorktreeReadInvalidation } from "../worktree-reads";
 import type { WorktreePorts } from "../worktree/types";
 import type { BoardChangeFeed, BoardFeedBatch } from "./change-feed";
 import { recordBoardCommand, replayBoardCommand, replayOrphanedBoardCommand } from "./receipts";
@@ -109,7 +119,7 @@ export interface BoardCommandId {
 
 /**
  * What every board write answers besides its row: its receipt, when it
- * carried a `commandId`, and the Workspace feed's cursor through which its
+ * carried a `commandId`, and the project feed's cursor through which its
  * effect is stamped (as `throughSequence` is a Session's, HP § Commands): a
  * Client that has applied the feed through it holds the write (T5).
  */
@@ -165,6 +175,19 @@ export interface BoardUpdateTicketInput extends BoardCommandId {
   readonly branch?: string | null;
   readonly baseBranch?: string | null;
   readonly usesWorktree?: boolean;
+  // The agent socket's `volli ticket update` (VC-794): one command that may
+  // also set the harness and priority, mutate the body and edit labels, all
+  // in this handler's one transaction and one wake. The socket's decode
+  // validates them; the board router's schema and the desktop's
+  // `volli:ticket-update` channel pass none of them on.
+  readonly preferredHarnessId?: HarnessId;
+  readonly priority?: TicketPriority;
+  /** Applied to the body as it stands inside the write; never with `body`. */
+  readonly bodyMutation?: TicketBodyMutation;
+  /** Label names to add, matched to the project's labels ignoring case. */
+  readonly addLabels?: readonly string[];
+  /** Label names to remove, matched the same way; a name the ticket lacks is ignored. */
+  readonly removeLabels?: readonly string[];
 }
 
 /** A subscription's sink, as the handler map names it. */
@@ -260,10 +283,18 @@ export interface BoardCommandOptions {
   /** The host's database, or null when it did not open: every board command answers unavailable. */
   readonly db: Database.Database | null;
   readonly now: () => number;
+  /** Mints a created ticket's id; `randomUUID` unless a test states its own. */
+  readonly newId?: () => string;
   readonly events: HostEventBus;
   readonly feed: BoardChangeFeed;
   /** The worktree bundle a materialization and an archive's trim run through. */
   readonly worktree: (db: Database.Database) => WorktreePorts;
+  /**
+   * The host's worktree reads: a materialization or a trim retires their
+   * answers (VC-372). Asked at use, like {@link worktree}: a host whose
+   * database did not open has none, and runs no command that would ask.
+   */
+  readonly worktreeReads: () => WorktreeReadInvalidation;
   readonly busyWorktreeSites: BusyWorktreeSites;
   readonly detachedWork?: DetachedWorkPort;
   /** The Session ledger's latest outcome per ticket, or null on a host without one. */
@@ -299,11 +330,11 @@ const PROJECT_REMOVED = "This project was removed from Volli. Add its folder aga
  */
 const materializingWorktrees = new Set<string>();
 
-function withWorkspace(
+function withProject(
   prior: { readonly reply: unknown } | undefined,
-  workspaceId: string,
-): { readonly reply: unknown; readonly workspaceId: string } | undefined {
-  return prior === undefined ? undefined : { reply: prior.reply, workspaceId };
+  projectId: string,
+): { readonly reply: unknown; readonly projectId: string } | undefined {
+  return prior === undefined ? undefined : { reply: prior.reply, projectId };
 }
 
 function receiptOf(commandId: string | undefined, replayed: boolean): BoardCommandReceipt | null {
@@ -336,6 +367,38 @@ function currentComment(db: Database.Database, commentId: string): TicketComment
   return row;
 }
 
+/** The body a mutation makes of the ticket's body as it stands in this transaction. */
+function mutatedBody(
+  db: Database.Database,
+  ticketId: string,
+  mutation: TicketBodyMutation,
+): string {
+  const current = getTicketBody(db, ticketId);
+  if (current === undefined) throw new Error("Unknown ticket");
+  const next = applyTicketBodyMutation(current, mutation);
+  if (!next.ok) throw new Error(next.message);
+  return next.body;
+}
+
+/**
+ * The ticket's labels after an edit: removals and additions matched to the
+ * project's labels ignoring case, an addition the ticket already wears
+ * skipped, the rest kept in order.
+ */
+function editedLabels(
+  db: Database.Database,
+  ticket: Ticket,
+  add: readonly string[],
+  remove: readonly string[],
+): string[] {
+  const canonicalName = (name: string) => findLabelByName(db, ticket.projectId, name)?.name ?? name;
+  const currentKeys = new Set(ticket.labels.map(labelNameKey));
+  const removedKeys = new Set(remove.map(canonicalName).map(labelNameKey));
+  return ticket.labels
+    .filter((label) => !removedKeys.has(labelNameKey(label)))
+    .concat(add.map(canonicalName).filter((label) => !currentKeys.has(labelNameKey(label))));
+}
+
 /** A roster row: the ticket without its body (VC-387). */
 export function ticketSummary(ticket: Ticket): TicketSummary {
   const { body: _body, ...summary } = ticket;
@@ -345,6 +408,7 @@ export function ticketSummary(ticket: Ticket): TicketSummary {
 /** Builds the Board module's handlers from the host's services. */
 export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerSignatures {
   const { feed, now } = options;
+  const newId = options.newId ?? randomUUID;
   const board = (): Database.Database => {
     if (options.db === null) throw new OperationUnavailableError(BOARD_UNAVAILABLE);
     return options.db;
@@ -353,7 +417,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
   /**
    * Tells the flag-off windows, never twice on the feed. The desktop window
    * that asked holds the answer already, unless the change moved a checkout
-   * (whose venue every reader re-measures).
+   * (whose working copy every reader re-measures).
    */
   const announce = (call: HandlerCall, change: DataChangeScope, always = false): void => {
     if (call.origin === "desktop-window" && !always) return;
@@ -367,59 +431,59 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
    * is gone), or the recorded value for a write whose answer names no row.
    * Otherwise `write` runs in one transaction with the receipt, inside the
    * ticket's wake when it names one, and `committed` publishes after COMMIT.
-   * `workspaceId` null means the resource is gone: only a repeat of the
+   * `projectId` null means the resource is gone: only a repeat of the
    * command that removed it can still answer, from its receipt; anything else
    * runs `write`, which refuses.
    */
   function recorded<Value>(
     spec: {
       readonly operation: string;
-      readonly workspaceId: string | null;
+      readonly projectId: string | null;
       readonly input: BoardCommandId;
       readonly wakeTicketId?: string;
       readonly current?: (db: Database.Database, answered: NoInfer<Value>) => NoInfer<Value>;
     },
     write: (db: Database.Database) => Value,
-    committed: (value: Value, workspaceId: string) => void,
+    committed: (value: Value, projectId: string) => void,
   ): { receipt: BoardCommandReceipt | null; value: Value; throughCursor: string } {
     const db = board();
     const { commandId, ...intent } = spec.input;
     if (commandId !== undefined) {
-      const prior: { readonly reply: unknown; readonly workspaceId: string } | undefined =
-        spec.workspaceId === null
+      const prior: { readonly reply: unknown; readonly projectId: string } | undefined =
+        spec.projectId === null
           ? replayOrphanedBoardCommand(db, { commandId, operation: spec.operation, intent }, now())
-          : withWorkspace(
+          : withProject(
               replayBoardCommand(
                 db,
-                { workspaceId: spec.workspaceId, commandId, operation: spec.operation, intent },
+                { projectId: spec.projectId, commandId, operation: spec.operation, intent },
                 now(),
               ),
-              spec.workspaceId,
+              spec.projectId,
             );
       if (prior !== undefined) {
         const reply = prior.reply as Value;
         return {
           receipt: receiptOf(commandId, true),
           value: spec.current === undefined ? reply : spec.current(db, reply),
-          throughCursor: feed.cursor(prior.workspaceId),
+          throughCursor: feed.cursor(prior.projectId),
         };
       }
     }
     // A removed project takes no write (VC-822): it is detached, not deleted,
     // and nothing in it changes until its folder is added again. A replay above
     // still answers the write it already took.
-    if (spec.workspaceId !== null && isProjectRemoved(db, spec.workspaceId)) {
+    if (spec.projectId !== null && isProjectRemoved(db, spec.projectId)) {
       throw new Error(PROJECT_REMOVED);
     }
     // A resource that is gone refuses inside `write`, with today's message.
-    const workspaceId = spec.workspaceId ?? "";
+    const projectId = spec.projectId ?? "";
     const transact = (): Value =>
       withTransaction(db, () => {
         const value = write(db);
         if (commandId !== undefined) {
           recordBoardCommand(
             db,
-            { workspaceId, commandId, operation: spec.operation, intent },
+            { projectId, commandId, operation: spec.operation, intent },
             value,
             now(),
           );
@@ -431,16 +495,16 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       spec.wakeTicketId === undefined
         ? transact()
         : withTicketWake(db, spec.wakeTicketId, transact);
-    committed(value, workspaceId);
+    committed(value, projectId);
     return {
       receipt: receiptOf(commandId, false),
       value,
-      throughCursor: feed.cursor(workspaceId),
+      throughCursor: feed.cursor(projectId),
     };
   }
 
-  /** The Workspace a ticket belongs to, for its receipt key; null when it is gone. */
-  const workspaceOfTicket = (ticketId: string): string | null =>
+  /** The project a ticket belongs to, for its receipt key; null when it is gone. */
+  const projectOfTicket = (ticketId: string): string | null =>
     getTicketRow(board(), ticketId)?.project_id ?? null;
 
   const ticketChanges = (
@@ -480,7 +544,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     } = recorded(
       {
         operation,
-        workspaceId: input.projectId,
+        projectId: input.projectId,
         input,
         current: (db) => {
           const row = getProjectById(db, input.projectId);
@@ -524,7 +588,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     } = recorded(
       {
         operation,
-        workspaceId: workspaceOfTicket(input.ticketId),
+        projectId: projectOfTicket(input.ticketId),
         input,
         wakeTicketId: input.ticketId,
         current: (db) => currentTicket(db, input.ticketId),
@@ -551,9 +615,9 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     }
   };
 
-  const commentWorkspace = (commentId: string): string | null => {
+  const projectOfComment = (commentId: string): string | null => {
     const comment = getComment(board(), commentId);
-    return comment === undefined ? null : workspaceOfTicket(comment.ticketId);
+    return comment === undefined ? null : projectOfTicket(comment.ticketId);
   };
 
   return {
@@ -595,7 +659,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
           void sink.emit(batch);
         },
         // The feed ended under the subscription (an epoch change, or the
-        // Workspace removed): the Client resnapshots.
+        // project removed): the Client resnapshots.
         (error) => sink.fail(error),
       );
     },
@@ -652,7 +716,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       ),
 
     "board.createTicket": (input, call) => {
-      const ticketId = randomUUID();
+      const ticketId = newId();
       const {
         receipt,
         throughCursor,
@@ -660,7 +724,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       } = recorded(
         {
           operation: "board.createTicket",
-          workspaceId: input.projectId,
+          projectId: input.projectId,
           input,
           wakeTicketId: ticketId,
           current: (db, answered: Ticket) => currentTicket(db, answered.id),
@@ -697,7 +761,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       const db = board();
       const { commandId, ...move } = input;
       const key = (id: string) => ({
-        workspaceId: input.projectId,
+        projectId: input.projectId,
         commandId: id,
         operation: "board.moveTickets",
         intent: move,
@@ -747,11 +811,56 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
           "The ticket's worktree is still being created, so its worktree scoping can't change yet. Try again once it's ready.",
         );
       }
+      if (input.body !== undefined && input.bodyMutation !== undefined) {
+        throw new Error("A ticket update takes a body or a body mutation, not both.");
+      }
       // Read before the write: only the transition materializes.
       const before = getTicketRow(db, input.ticketId);
-      const { commandId: _commandId, ...fields } = input;
-      const result = ticketWrite("board.updateTicket", input, call, (database) =>
-        updateTicketFieldsCommand(database, fields, { now: now(), actor: call.actor }),
+      const {
+        commandId: _commandId,
+        priority,
+        bodyMutation,
+        addLabels,
+        removeLabels,
+        ...fields
+      } = input;
+      const editsLabels = addLabels !== undefined || removeLabels !== undefined;
+      // One transaction and one wake, whatever the update names: its events
+      // (fields, then priority, then labels) commit together or not at all.
+      const result = ticketWrite(
+        "board.updateTicket",
+        input,
+        call,
+        (database) => {
+          const context = { now: now(), actor: call.actor };
+          let ticket = updateTicketFieldsCommand(
+            database,
+            bodyMutation === undefined
+              ? fields
+              : { ...fields, body: mutatedBody(database, input.ticketId, bodyMutation) },
+            context,
+          );
+          if (priority !== undefined) {
+            ticket = setTicketPriorityCommand(
+              database,
+              { ticketId: input.ticketId, priority },
+              context,
+            );
+          }
+          if (editsLabels) {
+            ticket = setTicketLabelsCommand(
+              database,
+              {
+                ticketId: input.ticketId,
+                labels: editedLabels(database, ticket, addLabels ?? [], removeLabels ?? []),
+              },
+              context,
+            );
+          }
+          return ticket;
+        },
+        // A label an edit named may be new: its row goes on the feed too.
+        editsLabels,
       );
       const { ticket } = result;
       const switchedOn =
@@ -765,7 +874,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
         }));
       }
       // Switching off moves the Session destination to the main checkout, with
-      // nothing async behind it: venue readers stop waiting on a checkout that
+      // nothing async behind it: working copy readers stop waiting on a checkout that
       // will never arrive (VC-286). Only the transition says so.
       const switchedOff =
         before !== undefined && before.uses_worktree !== 0 && ticket.usesWorktree === false;
@@ -801,7 +910,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       const { receipt, throughCursor } = recorded(
         {
           operation: "board.archiveTicket",
-          workspaceId: projectId,
+          projectId,
           input,
           wakeTicketId: input.ticketId,
         },
@@ -816,6 +925,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
           trimFinishedTicketInBackground(
             {
               worktree: options.worktree(db),
+              worktreeReads: options.worktreeReads(),
               now,
               detachedWork: options.detachedWork,
               busySites: options.busyWorktreeSites,
@@ -856,12 +966,12 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       ),
 
     // A repeat of a delete finds its ticket gone: it answers from its receipt
-    // (`recorded`, with no Workspace), and anything else refuses as today.
+    // (`recorded`, with no project), and anything else refuses as today.
     "board.deleteTicket": (input, call) => {
       const db = board();
       const row = getTicketRow(db, input.ticketId);
       const { receipt, throughCursor } = recorded(
-        { operation: "board.deleteTicket", workspaceId: row?.project_id ?? null, input },
+        { operation: "board.deleteTicket", projectId: row?.project_id ?? null, input },
         (database) => {
           if (row === undefined) throw new Error("Unknown ticket");
           // Before the delete, which detaches the Sessions from the ticket, and
@@ -886,7 +996,10 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       return { receipt, throughCursor };
     },
 
-    // The person's comment: the caller is the author, never an input field.
+    // The caller is the author, never an input field: the person (the window,
+    // the board router, an operator), who may link a Session, or the Session
+    // the agent socket authenticated (VC-794), which cites only itself. Any
+    // other caller cites none.
     "board.createComment": (input, call) => {
       const {
         receipt,
@@ -895,7 +1008,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       } = recorded(
         {
           operation: "board.createComment",
-          workspaceId: workspaceOfTicket(input.ticketId),
+          projectId: projectOfTicket(input.ticketId),
           input,
           wakeTicketId: input.ticketId,
           current: (db, answered: TicketComment) => currentComment(db, answered.id),
@@ -906,8 +1019,13 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
             {
               ticketId: input.ticketId,
               body: input.body,
-              commentActor: USER_ACTOR,
-              sessionId: input.sessionId,
+              commentActor: call.actor.kind,
+              sessionId:
+                call.actor.kind === "session"
+                  ? call.actor.sessionId
+                  : call.actor.kind === "user"
+                    ? input.sessionId
+                    : null,
             },
             { now: now(), actor: call.actor },
           ),
@@ -925,7 +1043,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       } = recorded(
         {
           operation: "board.updateComment",
-          workspaceId: commentWorkspace(input.commentId),
+          projectId: projectOfComment(input.commentId),
           input,
           current: (db) => currentComment(db, input.commentId),
         },
@@ -947,7 +1065,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     "board.removeComment": (input, call) => {
       const existing = getComment(board(), input.commentId);
       const { receipt, throughCursor } = recorded(
-        { operation: "board.removeComment", workspaceId: commentWorkspace(input.commentId), input },
+        { operation: "board.removeComment", projectId: projectOfComment(input.commentId), input },
         (db) => {
           if (existing === undefined) throw new Error("Unknown comment");
           deleteComment(db, input.commentId);
@@ -967,7 +1085,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       } = recorded(
         {
           operation: "board.setLabelColor",
-          workspaceId: existing?.projectId ?? null,
+          projectId: existing?.projectId ?? null,
           input,
           current: (db) => {
             const row = getLabel(db, input.labelId);
@@ -1124,7 +1242,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     });
     // A checkout appeared (or the attempt left one half-made): a last-known
     // snapshot taken without one cannot describe it (VC-372).
-    getWorktreeSnapshots().invalidate(committed.id);
+    options.worktreeReads().invalidate(committed.id);
     const ticket = getTicket(db, committed.id) ?? committed;
     // Said on both outcomes, before the answer: success has a new identity
     // stamp to show, and failure a scope flag that really did change under a

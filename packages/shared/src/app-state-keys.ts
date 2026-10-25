@@ -127,7 +127,7 @@ const EXACT = {
     placement: "client-local",
     owner: "stays",
     reason:
-      "The renderer's workspace persist store (stores/workspace.ts): per-project view memory (open ticket, tabs, file views). Keyed by project, owned by the viewer.",
+      "The renderer's per-project UI persist store (stores/project-ui.ts; the key predates Workspace meaning the team container): per-project view memory (open ticket, tabs, file views). Keyed by project, owned by the viewer.",
   },
   "volli:projects-ui": {
     placement: "client-local",

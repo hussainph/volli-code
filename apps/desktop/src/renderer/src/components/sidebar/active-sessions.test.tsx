@@ -39,7 +39,7 @@ import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useRemoteSessionAvailabilityStore } from "@renderer/stores/remote-session-availability";
 import { projectScope, useSessionsStore, type SessionLaunch } from "@renderer/stores/sessions";
 import { useSessionOrderStore } from "@renderer/stores/session-order";
-import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, useProjectUiStore } from "@renderer/stores/project-ui";
 
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), info: vi.fn(), success: vi.fn() }),
@@ -185,7 +185,7 @@ beforeEach(() => {
   });
   useProjectSessionsStore.setState({ byProject: {}, listingState: {} });
   useSessionOrderStore.setState({ held: {}, holds: 0 });
-  useWorkspaceStore.setState({ byProject: {} });
+  useProjectUiStore.setState({ byProject: {} });
 });
 
 afterEach(async () => {
@@ -734,10 +734,10 @@ describe("the Previous band's cap (VC-116)", () => {
 
   /** Puts ticketless chat `c{index}` in front of you, as Home's active tab. */
   const selectHomeChat = (index: number): void => {
-    useWorkspaceStore.setState({
+    useProjectUiStore.setState({
       byProject: {
         [PROJECT.id]: {
-          ...DEFAULT_WORKSPACE_UI,
+          ...DEFAULT_PROJECT_UI,
           nav: "home",
           homeActiveTab: chatTabId(`c${index}`),
         },

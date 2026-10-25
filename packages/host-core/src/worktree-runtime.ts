@@ -56,7 +56,7 @@ export function worktreeHomeDir(): string {
 export function worktreeDeps(
   db: Database.Database,
   ports: { events: HostEventBus },
-  options: { dataDir: string },
+  options: WorktreeRuntimeOptions,
 ): WorktreePorts {
   return {
     db,
@@ -64,7 +64,17 @@ export function worktreeDeps(
     home: resolveHome(),
     onPhase: (ticketId, phase) => broadcastPhase(ports.events, ticketId, phase),
     blobsRoot: blobsRoot(options.dataDir),
+    ...(options.environmentRecipes === undefined
+      ? {}
+      : { environmentRecipes: options.environmentRecipes }),
   };
+}
+
+/** The host's worktree policy: where attachment bytes live, and whether recipes are on. */
+export interface WorktreeRuntimeOptions {
+  dataDir: string;
+  /** Environment recipes (VC-584), read per call: the `cloud` flag. Absent is off. */
+  environmentRecipes?: () => boolean;
 }
 
 /**
@@ -102,7 +112,7 @@ export function worktreesHome(): string {
 /** Captures the host's event port and data-directory policy for its worktree calls. */
 export function createWorktreeRuntime(
   ports: { events: HostEventBus },
-  options: { dataDir: string },
+  options: WorktreeRuntimeOptions,
 ) {
   return { deps: (db: Database.Database) => worktreeDeps(db, ports, options) };
 }

@@ -195,7 +195,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
         with:
           node-version-file: package.json
           cache: true
@@ -220,6 +220,10 @@ jobs:
         run: |
           node --test scripts/check-public-content.test.mjs
           node scripts/check-public-content.mjs
+
+      # docs/telemetry.md is generated from the telemetry vocabulary and consent modules (VC-505).
+      - name: Check generated telemetry field list
+        run: node scripts/generate-telemetry-fields.mjs --check
 
       - name: Check committed protocol schema and additive compatibility
         env:
@@ -431,7 +435,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
         with:
           node-version-file: package.json
           cache: true
@@ -512,7 +516,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
         with:
           node-version-file: package.json
           cache: true
@@ -581,7 +585,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
         with:
           # Exact host/container pin, rather than the root engines caret range.
           node-version-file: .nvmrc
@@ -661,6 +665,82 @@ jobs:
           --filter './packages/*' --filter './apps/*' --filter '!@volli/desktop'
           test:coverage --maxWorkers=$(nproc)
 
+  # The Convex backend (VC-882), against the pinned local backend. Its own
+  # Linux job so the ~64 MB fixture never lands in a desktop lane: it starts
+  # with them and is usually done first. The binary is downloaded once per pin
+  # (sha256-verified by the fixture) and cached outside the checkout, keyed on
+  # convex/fixture/backend.json, so bumping the pin is what refreshes it.
+  #   - codegen needs a live deployment, so it runs under the fixture; the
+  #     committed functions/_generated must be exactly what the pinned CLI
+  #     writes (no diff, nothing untracked). Typecheck stays in Check + Build.
+  #   - unit tests run in-process (convex-test); backend tests push the
+  #     functions to one real backend and sign in through the test issuer.
+  convex:
+    name: Convex (codegen + backend)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        with:
+          node-version-file: .nvmrc
+          cache: true
+          run-install: true
+
+      - name: Place the backend cache outside the checkout
+        run: echo "VOLLI_CONVEX_BACKEND_CACHE=$RUNNER_TEMP/convex-local-backend" >> "$GITHUB_ENV"
+
+      # Restore and save are split so a download is kept even when a later
+      # step fails; the key changes only with the pin.
+      - name: Restore the pinned Convex local backend
+        id: backend-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/convex-local-backend
+          key: convex-local-backend-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('convex/fixture/backend.json') }}
+
+      - name: Fetch and verify the pinned backend
+        run: vp run --filter @volli/convex backend:fetch
+
+      - name: Save the pinned Convex local backend
+        if: steps.backend-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/convex-local-backend
+          key: ${{ steps.backend-cache.outputs.cache-primary-key }}
+
+      # `Check + Build` typechecks the committed code; no drift here means
+      # that is the code the pinned CLI generates.
+      - name: Codegen is committed and current
+        run: |
+          vp run --filter @volli/convex codegen
+          git status --porcelain -- convex/functions/_generated
+          git diff -- convex/functions/_generated
+          test -z "$(git status --porcelain -- convex/functions/_generated)"
+
+      - name: Unit tests (convex-test)
+        run: vp run --filter @volli/convex test --maxWorkers=$(nproc)
+
+      - name: Backend tests (pinned local backend)
+        run: vp run --filter @volli/convex test:backend
+
+      # The desktop's Volli Cloud sign-in end to end (VC-884): its dev issuer,
+      # loopback callback, sealed store and the accounts functions on the
+      # pinned backend. Required here, so a missing fixture env fails rather
+      # than skips.
+      - name: Desktop sign-in against the pinned backend
+        env:
+          VOLLI_ACCOUNT_LIVE_REQUIRED: "1"
+        working-directory: convex
+        run: >-
+          node fixture/with-backend.ts --deploy --
+          sh -c 'cd ../apps/desktop && vp test run src/main/account/convex.live.test.ts --maxWorkers=2'
+
   # N-1 compatibility (VC-633). A previous build, run from its own shipped
   # sources, against a profile THIS build migrated to its head: it must write
   # to the profile if the head's migrations are compatible (and this build must
@@ -699,7 +779,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
         with:
           node-version-file: .nvmrc
           cache: true
@@ -826,7 +906,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
         with:
           node-version-file: package.json
           cache: true
@@ -928,7 +1008,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
         with:
           node-version-file: package.json
           cache: true
@@ -974,7 +1054,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
         with:
           node-version-file: .nvmrc
           run-install: false
@@ -1060,6 +1140,7 @@ jobs:
         test-desktop,
         coverage-desktop,
         test-packages,
+        convex,
         n1-compat,
         host-container,
         smoke-boot,
@@ -1082,6 +1163,7 @@ jobs:
           TEST_DESKTOP: ${{ needs.test-desktop.result }}
           COVERAGE_DESKTOP: ${{ needs.coverage-desktop.result }}
           TEST_PACKAGES: ${{ needs.test-packages.result }}
+          CONVEX: ${{ needs.convex.result }}
           N1_COMPAT: ${{ needs.n1-compat.result }}
           HOST_CONTAINER: ${{ needs.host-container.result }}
           SMOKE_BOOT: ${{ needs.smoke-boot.result }}
@@ -1126,6 +1208,7 @@ jobs:
           expect "Test (desktop shards)" "$TEST_DESKTOP" success
           expect "Coverage (desktop)" "$COVERAGE_DESKTOP" success
           expect "Test (packages)" "$TEST_PACKAGES" success
+          expect "Convex (codegen + backend)" "$CONVEX" success
           expect "N-1 compatibility" "$N1_COMPAT" success
           expect "Build (host container)" "$HOST_CONTAINER" "$container"
           expect "Smoke (core e2e)" "$SMOKE_BOOT" "$boot"

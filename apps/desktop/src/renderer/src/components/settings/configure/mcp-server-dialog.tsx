@@ -57,6 +57,7 @@ import { Segmented } from "@renderer/components/ui/segmented";
 import { Textarea } from "@renderer/components/ui/textarea";
 import { Health } from "@renderer/components/settings/kit";
 import { relativeTime } from "@renderer/lib/relative-time";
+import { useAgeNow } from "@renderer/lib/use-age-now";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 
@@ -138,10 +139,16 @@ function storedSlots(server: McpServerDraft, access: McpServerAccess | undefined
  * the settings allow; this says whether the list beside it is anything like
  * current (VC-380).
  */
-export function refreshedLabel(server: McpServerRecord): string {
+export function refreshedLabel(server: McpServerRecord, now: number = Date.now()): string {
   return server.refreshedAt === null
     ? "Never refreshed"
-    : `Refreshed ${relativeTime(server.refreshedAt)}`;
+    : `Refreshed ${relativeTime(server.refreshedAt, now)}`;
+}
+
+/** Mounted only while the saved server's refreshed stamp is visible. */
+function RefreshedStamp({ server }: { server: McpServerRecord }) {
+  const now = useAgeNow(server.refreshedAt === null ? [] : [server.refreshedAt]);
+  return <span>{refreshedLabel(server, now)}</span>;
 }
 
 /**
@@ -549,7 +556,7 @@ export function McpServerDialog({
                 {connectedHere && !unread ? null : (
                   <>
                     <span aria-hidden>·</span>
-                    <span>{refreshedLabel(saved)}</span>
+                    <RefreshedStamp server={saved} />
                   </>
                 )}
                 {provenance === null ? null : (

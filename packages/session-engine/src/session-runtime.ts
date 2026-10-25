@@ -1,4 +1,10 @@
-import { COMMAND_INTENT_CONFLICT, type CommandIntentConflict } from "@volli/shared";
+import {
+  LOCAL_RUNNER,
+  COMMAND_INTENT_CONFLICT,
+  RECOVERED_TURN_INTERRUPTED_DETAIL,
+  type CommandIntentConflict,
+  type RuntimeResumeBoundary,
+} from "@volli/shared";
 import { canonicalJson } from "./transcript-artifacts";
 import {
   projectSessionFollowUps,
@@ -39,7 +45,7 @@ import type {
   SessionEventProvenance,
   RuntimeMessageSettle,
   RuntimeObservation,
-  SessionExecutionVenue,
+  RunnerIdentity,
   SessionInFlightTool,
   SessionInteractionCancelReason,
   SessionInteractionResolution,
@@ -66,6 +72,7 @@ import type {
   Reconciliation,
 } from "./native-adapter";
 import { NativeAttachmentError } from "./native-adapter";
+import { selectSessionExecutor, type SessionExecutorSlot } from "./executor-slot";
 import type { TranslatedObservation, TranslatedObservationSink } from "./observation-translation";
 import {
   RuntimeObservationTranslator,
@@ -83,8 +90,10 @@ import {
 } from "./transcript-overlay";
 
 export interface SessionLocation {
+  /** The Working copy on disk the Session stands in. */
   directory: string;
-  venue: SessionExecutionVenue;
+  /** The Runner it executes on; named `venue` like the attachment field it becomes. */
+  venue: RunnerIdentity;
 }
 
 export interface SessionLocationResolver {
@@ -126,8 +135,40 @@ export interface SessionRuntimeIds {
   next(kind: "attachment" | "event" | "receipt" | "attention"): string;
 }
 
+/**
+ * Hear every Session Event the ledger commits, whoever wrote it; returns
+ * unsubscribe. Called synchronously, once per event, in ledger order, after
+ * the write's transaction committed.
+ */
+export type SubscribeCommittedSessionEvents = (
+  listener: (event: SessionEvent) => void,
+) => () => void;
+
 export interface SessionRuntimePorts {
   engine: SessionEngine;
+  /**
+   * The host's post-commit stream of every durable Session Event (VC-790).
+   *
+   * The runtime is not the ledger's only writer: a Session retitle, an agent
+   * CLI signal and a terminal's own command bookkeeping all submit straight to
+   * the Engine, and what they append is never handed to {@link #publish}. With
+   * this port each such event is enqueued for the Session's live subscribers
+   * the moment it commits, so a write that lands while a chat is idle reaches
+   * it without waiting on an unrelated later event. Events of the runtime's
+   * own writing arrive here too and are left to its own publish, which runs
+   * only once it has finished with them (see `#ownWrites`).
+   *
+   * Absent, those writes still arrive — but only when a later published event
+   * exposes the gap they left (see `#nextAfterGap`).
+   *
+   * The contract a composer owes: the stream announces the commits of
+   * {@link engine} — the same Engine, not another writer's — and it announces
+   * each write's events before that write's promise settles. The runtime
+   * relies on the second to tell its own events from the rest; a stream that
+   * announced later would hand subscribers the runtime's own facts before it
+   * had finished with them.
+   */
+  committed?: SubscribeCommittedSessionEvents;
   /** Durable host queue. Explicit queue commands fail closed when not composed. */
   followUps?: SessionFollowUpLedger;
   /** Diagnostics for an automatic release failure; the item remains durable. */
@@ -145,8 +186,12 @@ export interface SessionRuntimePorts {
    * not admission-bounded (VC-799). Ten minutes unless a test says otherwise.
    */
   firstAttachPreparationTimeoutMs?: number;
-  /** The one structured executor this runtime attaches. */
-  executor: NativeHarnessAdapter;
+  /**
+   * Every structured runtime this runtime can attach, and the default a
+   * Session runs on (VC-916). Pi is the one entry that ships; see
+   * {@link SessionExecutorSlot} for how a Session's runtime is selected.
+   */
+  executors: SessionExecutorSlot;
   artifacts: TranscriptArtifactStore;
   locations: SessionLocationResolver;
   clock: SessionRuntimeClock;
@@ -670,6 +715,13 @@ export interface HostedSessionRuntime extends SessionRuntime {
    */
   pendingTurnStarts(): ReadonlySet<string>;
   /**
+   * Where an attachment this process holds stands, as its executor reads it
+   * (VC-450): what a host asks before it continues a turn a lost process cut
+   * short. `null` when nothing here holds the binding or its executor cannot
+   * say — and then nothing is continued on its own.
+   */
+  resumeBoundary(input: { attachmentId: string }): RuntimeResumeBoundary | null;
+  /**
    * The idle-exit latch's runtime half (VC-577): from now on every NEW turn
    * start is refused before it has any effect — a message, a retry, a
    * compaction, an attach — with {@link SessionRuntimeExitingError}, and a
@@ -744,7 +796,7 @@ interface BindingRecord {
   handle: BindingHandle;
   spec: NativeAttachmentSpec;
   attachment: SessionAttachment;
-  venue: SessionExecutionVenue;
+  venue: RunnerIdentity;
   cursor: SessionNativeDetail | null;
   /** Latest token/tool observation this live binding received, never a durable fact. */
   lastProgressAt: number;
@@ -802,6 +854,12 @@ interface Subscriber {
    * from the ledger.
    */
   onFailure?: (error: unknown) => void;
+  /**
+   * Set by the first {@link DefaultSessionRuntime#failSubscriber}. Every drain
+   * link queued behind a failed one reaches the same `catch`, and the
+   * subscription dies once: it is told once, with the error that killed it.
+   */
+  failed?: true;
   draining: Promise<void>;
   active: boolean;
 }
@@ -1077,7 +1135,73 @@ class DefaultSessionRuntime implements SessionRuntime {
   /** Follow-up drains the latch held back, woken when it lifts. */
   readonly #heldFollowUpDrains = new Set<string>();
 
-  constructor(private readonly ports: SessionRuntimePorts) {}
+  /** Ends the {@link SessionRuntimePorts.committed} subscription; set once, at construction. */
+  readonly #stopCommitted: () => void;
+  /**
+   * Per Session, how many of this runtime's own Engine writes are in flight.
+   * While one is, {@link #committed} leaves that Session's events to the
+   * runtime's own publish; see {@link #ownWrites}.
+   */
+  readonly #writing = new Map<string, number>();
+  private readonly ports: SessionRuntimePorts;
+
+  constructor(ports: SessionRuntimePorts) {
+    this.ports =
+      ports.committed === undefined ? ports : { ...ports, engine: this.#ownWrites(ports.engine) };
+    this.#stopCommitted = ports.committed?.((event) => this.#committed(event)) ?? (() => {});
+  }
+
+  /**
+   * The Engine as this runtime writes through it, when a committed stream is
+   * composed: each write it makes to an existing Session is bracketed in
+   * {@link #writing}, so the stream does not hand subscribers an event the
+   * runtime wrote itself.
+   *
+   * Those events must keep reaching subscribers through {@link #publish},
+   * because a frame there means the runtime has FINISHED with the fact: an
+   * `attachment.opened` is published only after the binding is installed, and
+   * host-notice delivery submits on that frame. Delivered at commit instead, a
+   * notice could reach `#bindingForAttachment` before the binding exists and
+   * rebuild a second one. The stream is for the writes made around the
+   * runtime; the runtime's own stay on the path they were built for.
+   *
+   * A Proxy rather than a hand-forwarded object, so no Engine method needs
+   * repeating here; only the writes this runtime makes are bracketed
+   * (`createSession` needs none — a Session it is minting has no subscriber).
+   * The commit's fan-out runs inside the decorated call, before it settles, so
+   * the bracket covers it. A write made around the runtime to the same Session
+   * in that window is left to `#nextAfterGap`, as every such write once was.
+   */
+  #ownWrites(engine: SessionEngine): SessionEngine {
+    const bracket =
+      <Request extends { sessionId: string }, Result>(
+        write: (request: Request) => Promise<Result>,
+      ) =>
+      async (request: Request): Promise<Result> => {
+        const { sessionId } = request;
+        this.#writing.set(sessionId, (this.#writing.get(sessionId) ?? 0) + 1);
+        try {
+          return await write(request);
+        } finally {
+          const left = this.#writing.get(sessionId)! - 1;
+          if (left === 0) this.#writing.delete(sessionId);
+          else this.#writing.set(sessionId, left);
+        }
+      };
+    const writes: Partial<SessionEngine> = {
+      observe: bracket((observation) => engine.observe(observation)),
+      submit: bracket((request) => engine.submit(request)),
+      completeModelSelection: bracket((request) => engine.completeModelSelection(request)),
+    };
+    return new Proxy(engine, {
+      get: (target, property, receiver) =>
+        Reflect.get(Object.hasOwn(writes, property) ? writes : target, property, receiver),
+    });
+  }
+
+  resumeBoundary(input: { attachmentId: string }): RuntimeResumeBoundary | null {
+    return this.#bindings.get(input.attachmentId)?.handle.resumeBoundary?.() ?? null;
+  }
 
   pendingTurnStarts(): ReadonlySet<string> {
     const pending = new Set(this.#acceptedStarts.keys());
@@ -1129,7 +1253,9 @@ class DefaultSessionRuntime implements SessionRuntime {
     this.#assertOpen();
     const attachment = projection.liveExecutor;
     const adapter =
-      attachment === null ? this.ports.executor : this.#adapterIdentityFor(attachment.adapterId);
+      attachment === null
+        ? this.#executorFor(projection)
+        : this.#adapterIdentityFor(attachment.adapterId);
     const attentionId = messageDeliveryFailureAttentionId(
       input.sessionId,
       adapter.id,
@@ -1391,6 +1517,9 @@ class DefaultSessionRuntime implements SessionRuntime {
       return this.#stop(request as StopCommandRequest);
     }
     let projection = await this.#requireSession(request.sessionId);
+    // A message answers the restart warning. A Retry — the person's Resume or
+    // a host's restart resume — keeps it until the resumed turn settles, so
+    // the row says what is running and a refused one leaves it (VC-450).
     if (request.command.kind === "message.submit") {
       projection = await this.#acknowledgeBootInterruption(projection);
     }
@@ -1480,7 +1609,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         },
         provenance: {
           source: { kind: "user", id: "renderer", detail: { sessionOrigin: { kind: "user" } } },
-          venue: { id: "local", kind: "local" },
+          venue: LOCAL_RUNNER,
         },
       });
       if (replay.receipt?.status !== "completed") {
@@ -1667,11 +1796,17 @@ class DefaultSessionRuntime implements SessionRuntime {
     location: SessionLocation,
     existed: boolean,
   ): Promise<SessionRuntimeCommandResult> {
-    const adapter = this.ports.executor;
+    // A replay keeps the runtime its recorded intent named, which the Engine
+    // holds it to; only a fresh attach selects (VC-916).
+    const recorded = projection.commands.find(({ id }) => id === request.commandId)?.intent;
+    const adapter =
+      (recorded?.kind === "executor.start"
+        ? this.ports.executors.runtimes.get(recorded.adapterId)
+        : undefined) ?? this.#executorFor(projection);
     const submitted = await this.ports.engine.submit({
       commandId: request.commandId,
       sessionId: request.sessionId,
-      // The route is this runtime's own executor, never a client-supplied id.
+      // The route is the Session's own runtime, never a client-supplied id.
       // The Session Engine holds the route and the attachment to the same
       // adapter id, so anything else would be a conflict thrown mid-attach.
       intent: {
@@ -2293,10 +2428,11 @@ class DefaultSessionRuntime implements SessionRuntime {
     while (this.#followUpDrains.size > 0) await Promise.all(this.#followUpDrains.values());
   }
 
-  #followUpFailureAttentionId(sessionId: string): string {
+  #followUpFailureAttentionId(projection: SessionProjection): string {
+    const sessionId = projection.session.id;
     return messageDeliveryFailureAttentionId(
       sessionId,
-      this.ports.executor.id,
+      this.#executorFor(projection).id,
       `follow-up:${sessionId}`,
     );
   }
@@ -2321,20 +2457,20 @@ class DefaultSessionRuntime implements SessionRuntime {
     const warnings = projection.attention.active.filter(
       ({ id, kind, attachmentId, detail }) =>
         kind === "partial_turn_interrupted" &&
-        projection.attachments.some(
-          (attachment) =>
+        projection.attachments.some((attachment) => {
+          const runtime = this.ports.executors.runtimes.get(attachment.adapterId);
+          return (
             attachment.id === attachmentId &&
             // Host recovery closes a binding it could not reconstruct.
             ((id === `${attachmentId}:boot-recovery` && attachment.status === "closed") ||
               // Successful Pi recovery keeps the binding and interrupts the old
               // turn. Match its frozen id AND legacy recovery sentence, never a
               // genuine partial-turn failure (e.g. conflicting sidecar history).
-              (attachment.adapterId === this.ports.executor.id &&
-                id ===
-                  `${this.ports.executor.durableIdNamespace}:attention:${attachmentId}:partial-turn` &&
-                detail ===
-                  "A recovered Pi turn ended before its completion marker was committed.")),
-        ),
+              (runtime !== undefined &&
+                id === `${runtime.durableIdNamespace}:attention:${attachmentId}:partial-turn` &&
+                detail === RECOVERED_TURN_INTERRUPTED_DETAIL))
+          );
+        }),
     );
     if (warnings.length === 0) return projection;
     const cleared = [];
@@ -2344,7 +2480,7 @@ class DefaultSessionRuntime implements SessionRuntime {
           id: this.#id("event"),
           sessionId: projection.session.id,
           occurredAt: this.ports.clock.now(),
-          provenance: adapterProvenance(this.ports.executor, null),
+          provenance: adapterProvenance(this.#executorFor(projection), null),
           kind: "attention.cleared",
           attentionId: warning.id,
         }),
@@ -2412,7 +2548,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     if (!pending) return;
     projection = await this.#acknowledgeBootInterruption(projection);
     const startPending = this.#executorStartPending(projection);
-    const ownFailureId = this.#followUpFailureAttentionId(sessionId);
+    const ownFailureId = this.#followUpFailureAttentionId(projection);
     const blockers = projection.attention.active.filter(({ id }) => id !== ownFailureId);
     // Only an in-flight start is normal progress: its completion wakes the
     // queue. A durable orphan has no wake and still needs actionable Attention.
@@ -2741,13 +2877,16 @@ class DefaultSessionRuntime implements SessionRuntime {
       return;
     }
     const projection = await this.#requireSession(sessionId);
-    const failureId = this.#followUpFailureAttentionId(sessionId);
+    const failureId = this.#followUpFailureAttentionId(projection);
     if (!projection.attention.active.some(({ id }) => id === failureId)) return;
     const cleared = await this.ports.engine.observe({
       id: this.#id("event"),
       sessionId,
       occurredAt: this.ports.clock.now(),
-      provenance: adapterProvenance(this.ports.executor, projection.liveExecutor?.venue ?? null),
+      provenance: adapterProvenance(
+        this.#executorFor(projection),
+        projection.liveExecutor?.venue ?? null,
+      ),
       kind: "attention.cleared",
       attentionId: failureId,
     });
@@ -3022,7 +3161,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       const receipt = await this.#recordDelivery(
         request.sessionId,
         attachment.id,
-        this.ports.executor,
+        this.#adapterIdentityFor(attachment.adapterId),
         attachment.venue,
         !existed
           ? {
@@ -3415,7 +3554,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     attachmentId: string;
     projection: SessionProjection;
     adapter: AdapterIdentity;
-    venue: SessionExecutionVenue;
+    venue: RunnerIdentity;
     receipt: CommandReceipt;
   }): Promise<void> {
     if (input.receipt.status !== "accepted") return;
@@ -4009,6 +4148,7 @@ class DefaultSessionRuntime implements SessionRuntime {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    this.#stopCommitted();
     for (const { timer } of this.#followUpRetries.values()) clearTimeout(timer);
     this.#followUpRetries.clear();
     // The cache is derived and best-effort: a failed shutdown write only makes
@@ -4094,7 +4234,7 @@ class DefaultSessionRuntime implements SessionRuntime {
   #pipeline(
     adapter: NativeHarnessAdapter,
     spec: NativeAttachmentSpec,
-    venue: SessionExecutionVenue,
+    venue: RunnerIdentity,
   ): { translator: RuntimeObservationTranslator; sink: BufferedObservationSink } {
     const translator = new RuntimeObservationTranslator({
       namespace: adapter.durableIdNamespace,
@@ -4113,7 +4253,7 @@ class DefaultSessionRuntime implements SessionRuntime {
   async #recordFact(
     adapter: NativeHarnessAdapter,
     spec: NativeAttachmentSpec,
-    venue: SessionExecutionVenue,
+    venue: RunnerIdentity,
     observation: TranslatedObservation,
     /** The pipeline this fact came through, re-read for the one write that can outlast it. */
     sink: BufferedObservationSink,
@@ -4717,7 +4857,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     sessionId: string,
     attachmentId: string | null,
     adapter: AdapterIdentity,
-    venue: SessionExecutionVenue,
+    venue: RunnerIdentity,
     receipt: DeliveryReceipt,
     resultKind: DeliveryResultKind,
   ): Promise<CommandReceipt> {
@@ -4858,6 +4998,36 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
   }
 
+  /**
+   * One event the ledger committed, from {@link SessionRuntimePorts.committed}.
+   *
+   * Deliberately narrower than {@link #publish}: it feeds subscribers and
+   * nothing else. Follow-up scheduling stays on the runtime's own publishes,
+   * which are the writes it was built for, and so does the overlay's durable
+   * sequence: `#publish` raises it only after the settle it reports has
+   * cleared the overlay message, and raising it at commit would stamp a
+   * baseline of the still-uncleared partial with the settle's own sequence —
+   * one the consumer would keep over the durable message. No write made
+   * around the runtime settles a message, so they lose nothing by it.
+   *
+   * An event of the runtime's own writing is skipped (see {@link #ownWrites}).
+   * Anything that still arrives both ways is delivered once: the drain dedupes
+   * on sequence.
+   */
+  #committed(event: SessionEvent): void {
+    // No closed check: `close()` unsubscribes as it closes, and a subscriber
+    // set it has cleared feeds nobody.
+    if (this.#writing.has(event.sessionId)) return;
+    const subscribers = this.#subscribers.get(event.sessionId);
+    if (!subscribers) return;
+    for (const subscriber of subscribers) {
+      // `#enqueue` routes a drain failure to `#failSubscriber`, which reports
+      // it and ends the subscription; what can still reject here is that
+      // reporter throwing, and a post-commit listener has no caller to tell.
+      this.#enqueue(subscriber, [event]).catch(() => undefined);
+    }
+  }
+
   async #enqueue(subscriber: Subscriber, events: readonly SessionEvent[]): Promise<void> {
     if (!subscriber.active) return;
     for (const event of events) {
@@ -4885,6 +5055,11 @@ class DefaultSessionRuntime implements SessionRuntime {
           if (!subscriber.active) break;
           await subscriber.listener(frame);
           subscriber.cursor = event.sequence;
+          // The same sequence can be enqueued again while it is being
+          // delivered — the committed stream and the runtime's own publish
+          // both carry it. Drop that copy now: left behind the cursor it would
+          // read as a hole `#nextAfterGap` can never close.
+          subscriber.events.delete(event.sequence);
         }
       })
       .catch((error: unknown) => this.#failSubscriber(subscriber, error));
@@ -4896,22 +5071,29 @@ class DefaultSessionRuntime implements SessionRuntime {
    *
    * The drain above delivers strictly contiguously, which reads as an ordering
    * guarantee but is really a bet: that every durable event reaches a subscriber
-   * through {@link #publish}. The runtime is not the ledger's only writer — a
-   * Session retitle, a terminal's own command bookkeeping, and the agent CLI all
-   * submit straight to the Engine — and each of those appends sequences no
-   * subscriber is ever handed. One of them lands mid-turn and the hole is
-   * permanent: `cursor + 1` never arrives, so every event after it sits in
-   * `events` unread, the Session's own `turn.completed` among them, and it holds
-   * a Stop button nothing will ever clear.
+   * through the runtime. It is not the ledger's only writer — a Session retitle,
+   * a terminal's own command bookkeeping, and the agent CLI all submit straight
+   * to the Engine — and without {@link SessionRuntimePorts.committed} each of
+   * those appends sequences {@link #publish} never hands a subscriber. Were one
+   * to land mid-turn with nothing to close it, `cursor + 1` would never arrive:
+   * every event after it, the Session's own `turn.completed` among them, would
+   * sit in `events` unread behind a Stop button nothing could clear.
    *
    * The ledger is canonical, and already the authority {@link #history} re-reads
    * for exactly this reason, so the hole is closed from it rather than by asking
    * every writer to remember to publish.
    *
+   * With {@link SessionRuntimePorts.committed} composed, those writers' events
+   * arrive on their own, the moment they commit. This stays as
+   * the defensive fallback: for a runtime composed without that port, and for
+   * an event the committed stream has not carried yet (a read-back that failed
+   * is retried only on the next write's drain).
+   *
    * A non-empty buffer is the whole test for "there is a hole", and it is exact
    * rather than a heuristic: {@link #enqueue} admits only sequences above the
-   * cursor, this is reached only when `cursor + 1` is absent, so anything still
-   * buffered is strictly beyond the hole. A healthy stream drains its buffer
+   * cursor and drops a copy of the one it just delivered, this is reached only
+   * when `cursor + 1` is absent, so anything still buffered is strictly beyond
+   * the hole. A healthy stream drains its buffer
    * empty every time and therefore never reads the ledger at all.
    *
    * Returning the event rather than a flag is what bounds the loop: a hole the
@@ -5026,6 +5208,8 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 
   async #failSubscriber(subscriber: Subscriber, error: unknown): Promise<void> {
+    if (subscriber.failed) return;
+    subscriber.failed = true;
     try {
       await this.ports.onSubscriberFailure?.(error);
     } finally {
@@ -5410,9 +5594,14 @@ class DefaultSessionRuntime implements SessionRuntime {
     return history;
   }
 
+  /** The runtime this Session runs on, from its own durable history (VC-916). */
+  #executorFor(projection: SessionProjection): NativeHarnessAdapter {
+    return selectSessionExecutor(this.ports.executors, projection);
+  }
+
   /** How a durable attachment's adapter is stamped on a fact, whoever wrote it. */
   #adapterIdentityFor(adapterId: string): AdapterIdentity {
-    return adapterId === this.ports.executor.id ? this.ports.executor : adapterIdentity(adapterId);
+    return this.ports.executors.runtimes.get(adapterId) ?? adapterIdentity(adapterId);
   }
 
   /**
@@ -5420,15 +5609,16 @@ class DefaultSessionRuntime implements SessionRuntime {
    *
    * A durable attachment names the adapter that opened it, and history outlives
    * the executor that wrote it: a Session bound under a runtime this build no
-   * longer ships cannot be rehydrated by the one it does. Refusing is what turns
+   * longer ships cannot be rehydrated by any runtime it does. Refusing is what turns
    * that into an honest recovery failure rather than a live binding pointed at
    * someone else's native identity.
    */
   #requireExecutorFor(adapterId: string): NativeHarnessAdapter {
-    if (adapterId !== this.ports.executor.id) {
+    const executor = this.ports.executors.runtimes.get(adapterId);
+    if (executor === undefined) {
       throw new SessionRuntimeNotFoundError(`Native adapter ${adapterId} was not found`);
     }
-    return this.ports.executor;
+    return executor;
   }
 
   #commandExists(projection: SessionProjection, commandId: string): boolean {
@@ -5497,7 +5687,7 @@ function foldHistory(
 }
 
 function userProvenance(
-  venue: SessionExecutionVenue | null,
+  venue: RunnerIdentity | null,
   origin?: SessionOrigin,
 ): SessionEventProvenance {
   return {
@@ -5512,7 +5702,7 @@ function userProvenance(
 
 function adapterProvenance(
   adapter: AdapterIdentity,
-  venue: SessionExecutionVenue | null,
+  venue: RunnerIdentity | null,
 ): SessionEventProvenance {
   return {
     source: {

@@ -21,6 +21,7 @@ import type { BusyWorktreeSite } from "./activity";
 import { runGitCapturing, runGitCapturingAsync } from "./git";
 import { setTrimSettings } from "./trim-settings";
 import { listTicketEvents } from "../db/events-repo";
+import { subscribeTicketWake, type TicketWake } from "../ticket-wake";
 import { scriptedGit } from "./scripted-git";
 
 // `computeArchiveReadiness` (+ its ArchiveReadiness*/ types) moved to
@@ -181,6 +182,37 @@ describe("archiveAndClean", () => {
     const result = await archiveAndClean({ db: ctx.db, gitAsync, blobsRoot: "unused" }, "t1");
     expect(result.ok).toBe(true);
     expect(getTicketRow(ctx.db, "t1")!.archived_at).not.toBeNull();
+  });
+
+  // This path reaches `archiveTicketCommand` directly rather than through the
+  // board's command, so nothing else would announce it (VC-837).
+  it("wakes the archive on success and wakes nothing when the removal refuses", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seed(wt);
+    const wakes: TicketWake[] = [];
+    const unsubscribe = subscribeTicketWake((wake) => wakes.push(wake));
+    try {
+      const dirty = statusGit(wt, gitDir, true);
+      const refused = await archiveAndClean(
+        { db: ctx.db, gitAsync: dirty.gitAsync, blobsRoot: "unused" },
+        "t1",
+      );
+      expect(refused.ok).toBe(false);
+      expect(wakes).toEqual([]);
+
+      const clean = statusGit(wt, gitDir, false);
+      const result = await archiveAndClean(
+        { db: ctx.db, gitAsync: clean.gitAsync, blobsRoot: "unused" },
+        "t1",
+      );
+      expect(result.ok).toBe(true);
+    } finally {
+      unsubscribe();
+    }
+    expect(
+      wakes.map((wake) => [wake.event.payload.kind, wake.projectId, wake.event.ticketId]),
+    ).toEqual([["archived", "p1", "t1"]]);
   });
 });
 
@@ -565,7 +597,7 @@ describe("trimFinishedWorktree", () => {
     await trimFinishedWorktree(trimDeps(), "t1");
     const second = await trimFinishedWorktree(trimDeps(), "t1");
 
-    expect(second).toEqual({ kind: "skipped", reason: "nothing to trim" });
+    expect(second).toEqual({ kind: "skipped", reason: "nothing to trim", nothingLeft: true });
     expect(trimEvents()).toHaveLength(1);
   });
 

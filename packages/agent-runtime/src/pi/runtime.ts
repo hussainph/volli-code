@@ -3,7 +3,11 @@
 import { safeStopMessage } from "./safe-diagnostic";
 
 import { ProviderStopCapture, finalStopDetail, safeProviderMessage } from "./provider-stop";
-import { decodeSessionStopDetail, type SessionStopDetail } from "@volli/shared";
+import {
+  decodeSessionStopDetail,
+  RECOVERED_TURN_INTERRUPTED_DETAIL,
+  type SessionStopDetail,
+} from "@volli/shared";
 
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
@@ -96,6 +100,11 @@ import {
   type ConversationReader,
 } from "./compaction";
 import { createContextTokenProjector } from "./token-counting";
+import {
+  ABANDONED_QUESTION_RESULT,
+  interruptedToolResults,
+  resumeBoundary,
+} from "./resume-boundary";
 import { conversationIsEmpty, systemHead, withSystemHead } from "./transcript-context";
 import {
   canAnnounceToolRefresh,
@@ -407,9 +416,10 @@ function resolveModelAccess(options: PiRuntimeHostOptions): PiModelAccessSource 
 }
 
 /**
- * Build the one structured executor port. The models are resolved once rather
- * than per attachment: the credential store behind them serializes this
- * process's writes to Pi's `auth.json`, and a fresh store per attach would not.
+ * Build the Pi executor, the one runtime in the executor slot. The models are
+ * resolved once rather than per attachment: the credential store behind them
+ * serializes this process's writes to Pi's `auth.json`, and a fresh store per
+ * attach would not.
  *
  * Every Session it attaches dispatches a model-issued tool batch sequentially,
  * unless {@link PiRuntimeHostOptions.parallelMcpReads} is on AND that Session's
@@ -1948,7 +1958,7 @@ async function attachSession(
         content: [
           {
             type: "text",
-            text: "The question was abandoned when the runtime restarted. No answer was obtained.",
+            text: ABANDONED_QUESTION_RESULT,
           },
         ],
         isError: true,
@@ -2072,17 +2082,21 @@ async function attachSession(
       });
       activeAttentionReasons.add("runtime-failure");
     }
+    // A turn whose reply had already finished lost only its end marker:
+    // nothing is left to resume, so no warning offers a Resume that could do
+    // nothing (VC-450). The turn is still recorded as interrupted.
+    const replyFinished = resumeBoundary(recoveredMessages, hasFailedStopReason) === "none";
     for (const recoveredTurnId of openTurnIds) {
       // Attention identity is frozen per attachment/reason, not per notice.
       // A generic restart warning must not replace an active diagnostic (such
       // as conflicting settled history) with a warning the host may retire.
       // Still interrupt every open turn even when its warning is already held.
-      if (!activeAttentionReasons.has("partial-turn")) {
+      if (!replyFinished && !activeAttentionReasons.has("partial-turn")) {
         await persistObservation({
           kind: "attention",
           state: "raised",
           reason: "partial-turn",
-          message: "A recovered Pi turn ended before its completion marker was committed.",
+          message: RECOVERED_TURN_INTERRUPTED_DETAIL,
         });
         activeAttentionReasons.add("partial-turn");
       }
@@ -2972,6 +2986,16 @@ async function attachSession(
      */
     const retryFailedTurn = async (commandId: string | null): Promise<DeliveryOutcome> => {
       const messages = [...agent.state.messages];
+      // A turn cut short with a tool in flight — a lost process, or a Stop
+      // partway through a batch, once a reattach drops the aborted reply — can
+      // end on a call with no result. Resuming answers it as cut short —
+      // durably, so a second attach finds the answer — and leaves running it
+      // again to the model (VC-450).
+      for (const result of interruptedToolResults(messages, hasFailedStopReason, host.now())) {
+        await mainBranch.appendMessage(result, piContext());
+        messages.push(result);
+        agent.state.messages = [...messages];
+      }
       const tail = messages.at(-1);
       if (tail?.role === "assistant" && hasFailedStopReason(tail as AssistantMessage)) {
         messages.pop();
@@ -4045,6 +4069,10 @@ async function attachSession(
           agent.state.thinkingLevel = selection.reasoningLevel;
         });
         return { kind: "selected" };
+      },
+
+      resumeBoundary() {
+        return resumeBoundary(agent.state.messages, hasFailedStopReason);
       },
 
       async retry(commandId): Promise<DeliveryOutcome> {

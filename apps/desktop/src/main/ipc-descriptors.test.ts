@@ -1413,8 +1413,8 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
-  describe("volli:venue-snapshot", () => {
-    const { guard, invalidError } = DATA_IPC["volli:venue-snapshot"];
+  describe("volli:working-copy-snapshot", () => {
+    const { guard, invalidError } = DATA_IPC["volli:working-copy-snapshot"];
 
     it("accepts both scopes a Session can have", () => {
       expect(guard([{ projectId: "p1", ticketId: null }])).toBe(true);
@@ -2194,7 +2194,7 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toContain("volli:worktree-change-watch-resume");
       expect(DATA_CHANNELS).toContain("volli:worktree-change-unwatch");
       expect(DATA_CHANNELS).toContain("volli:session-starts");
-      expect(DATA_CHANNELS).toContain("volli:venue-snapshot");
+      expect(DATA_CHANNELS).toContain("volli:working-copy-snapshot");
       // Build artifacts (VC-340): one read, one destructive action, and the
       // settings write. The settings read is `worktree.trimSettings` on the
       // bridge (VC-608), as the rail order is `project.reorder`.

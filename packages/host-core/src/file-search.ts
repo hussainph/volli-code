@@ -12,7 +12,7 @@
  *  1. **The root**, which is never a path the renderer handed over. It comes
  *     from `resolveFileScope`'s `{ projectId, ticketId }` pair in `volli-fs.ts`,
  *     the same seam a file READ resolves through, so Home searches the main
- *     checkout and a Ticket workspace searches its own worktree — and a click
+ *     checkout and a Ticket view searches its own worktree — and a click
  *     on a result can never open a file from the checkout you did not search.
  *  2. **The caps.** A search is an unbounded question asked of a directory an
  *     agent may be writing into. Both bounds are hard: {@link SEARCH_MATCH_CAP}

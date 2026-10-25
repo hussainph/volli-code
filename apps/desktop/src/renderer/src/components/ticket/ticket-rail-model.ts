@@ -90,7 +90,7 @@ export function selectRailMode(chrome: TicketRailChrome, mode: TicketRailMode): 
 /**
  * Deliberate list-item selection: focus (or open) a main-view tab. The page is
  * unchanged — the rail stays on whatever navigator the user was browsing.
- * Files/Diffs navigators call this (via the workspace store's set/open helpers)
+ * Files/Diffs navigators call this (via the project UI store's set/open helpers)
  * when a row is clicked; they must never call it from agent/fs events alone.
  */
 export function selectRailDestination(chrome: TicketRailChrome, tabId: string): TicketRailChrome {

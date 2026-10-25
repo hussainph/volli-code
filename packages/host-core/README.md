@@ -53,26 +53,26 @@ explicit list of re-exports: a name is public because a client (desktop,
 `hostd`, a bench) or a client's test imports it as that cluster's API.
 Everything else is an implementation detail.
 
-| Entry                              | Owns (under `src/`)                                                                                                                                                                                                                                                                                                                                                                                                         | What a client takes from it                                                                                                                                      |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@volli/host-core`                 | `index.ts`, `host-lifecycle.ts`, `db-open-failure.ts`, `runtime-services.ts`, `session-services.ts`                                                                                                                                                                                                                                                                                                                         | `createHostCore`, `HostCore`/`LiveHostCore`, `HostCorePorts`, `defaultDatabasePath`, `DbHandle`, the transaction-guard handlers                                  |
-| `@volli/host-core/ports`           | `ports/`                                                                                                                                                                                                                                                                                                                                                                                                                    | The [ports](#ports) and their headless answers (`HEADLESS_ATTENTION`, `NO_POWER_EVENTS`)                                                                         |
-| `@volli/host-core/db`              | `db/`                                                                                                                                                                                                                                                                                                                                                                                                                       | `openVolliDb`, migrations, the transaction gate, the repositories ([Persistence](#persistence))                                                                  |
-| `@volli/host-core/secrets`         | `secrets/`                                                                                                                                                                                                                                                                                                                                                                                                                  | `SecretStore`, `SecretService`, the file key and the sealed credential module ([Secrets](#secrets))                                                              |
-| `@volli/host-core/sessions`        | `session-control/`, `sessions/`, `session-concurrency.ts`, `session-tokens.ts`                                                                                                                                                                                                                                                                                                                                              | Listing rows, peek content, the concurrency env reader, Session tokens. Never a Session writer ([Session composition](#session-composition))                     |
-| `@volli/host-core/session-runtime` | `session-runtime/`, `shell/`, `model-access/`, `host-sign-ins/`, `decision/`, `session-env.ts`, `pi-session-orphans.ts`, `pi-tool-output.ts`, `verb-input.ts`                                                                                                                                                                                                                                                               | The staged runtime: assembly, facade, agents, Automations adapter, lifecycle; model access preferences; sign-ins on a host; background shells                    |
-| `@volli/host-core/integrations`    | `mcp/`, `codemode/`, `web/`, `observability/`                                                                                                                                                                                                                                                                                                                                                                               | MCP settings and dispatch, Code Mode config and sandbox assets, Web Access, the observability sink and exporters                                                 |
-| `@volli/host-core/log`             | `log/`                                                                                                                                                                                                                                                                                                                                                                                                                      | The structured log: `hostLogger`, `installHostLog`, the trace context (`withTrace`, `withLogContext`) and the sinks ([The log](#the-log))                        |
-| `@volli/host-core/files`           | `volli-fs.ts`, `file-search.ts`, `file-services.ts`, `blob-*.ts`, `turn-attachments.ts`, `prompt-templates.ts`, `skills.ts`                                                                                                                                                                                                                                                                                                 | File reads/writes/watches, search, blobs, templates, skills. Their result types are `@volli/shared` wire types                                                   |
-| `@volli/host-core/worktree`        | `worktree/`, `worktree-runtime.ts`, `credential-helper-diagnostics.ts`                                                                                                                                                                                                                                                                                                                                                      | Git, ensure/trim/remove, snapshots, activity, the cleanup engine and leases                                                                                      |
-| `@volli/host-core/board`           | `board/`, `project-*.ts`, `ticket-*.ts`, `detached-work.ts`                                                                                                                                                                                                                                                                                                                                                                 | Project create/relink/roots, ticket commands, [ticket moves](#ticket-moves) and wakes, [the Board module](#the-board-module)'s feed and receipts                 |
-| `@volli/host-core/handlers`        | `handlers/`                                                                                                                                                                                                                                                                                                                                                                                                                 | `createHostHandlers`, `invokeHandler`, `admittedHandlers`, the door policies: the [one handler map](#the-handler-map) every door projects                        |
-| `@volli/host-core/pty`             | `pty/`                                                                                                                                                                                                                                                                                                                                                                                                                      | `PtyManager` and the warm park ([Terminals](#terminals))                                                                                                         |
-| `@volli/host-core/browser`         | `browser/`                                                                                                                                                                                                                                                                                                                                                                                                                  | The backend interface, `BrowserTabRegistry`, the CDP controller, picture and trace stores ([Browser backend](#browser-backend))                                  |
-| `@volli/host-core/automations`     | `automations/`, `automation-services.ts`                                                                                                                                                                                                                                                                                                                                                                                    | The Automation service and its types                                                                                                                             |
-| `@volli/host-core/agents`          | `agent-*.ts`, `agent-dispatch/`, `watches.ts`, `harness-*.ts`, `host-profile.ts`                                                                                                                                                                                                                                                                                                                                            | The agent socket, its verb door, the CLI shim and app profile lock, harness registry and installs                                                                |
-| `@volli/host-core/maintenance`     | `backup/`, `process/`, `maintenance-services.ts`, `database-recovery.ts`, `retention-runtime.ts`, `orphan-scan.ts`, `quiet-windows.ts`, `login-*.ts`, `host-shutdown.ts`, `shutdown-deadline.ts`                                                                                                                                                                                                                            | Backup documents, database recovery, process reaping, retention, quiet windows, login PATH, the shutdown deadline                                                |
-| `@volli/host-core/testing`         | `testing/`, `db/test-helpers.ts`, `session-control/test-support.ts`, `backup/test-fixture.ts`, `secrets/test-support/`; it also re-exports test-only names of production modules: `db/recovery-pending.ts`, `session-control/sqlite-ledger.ts`, `session-control/checkpoint-diagnostics.ts`, and the `*ForTest` resets of `worktree/deletion-lease.ts`, `worktree/snapshot.ts`, `orphan-scan.ts` and `retention-runtime.ts` | Test fixtures, the standalone Session ledger and test engine, the database-recovery marker, the checkpoint failure reporter, module-state resets. **Tests only** |
+| Entry                              | Owns (under `src/`)                                                                                                                                                                                                                                                                                                                                                                                 | What a client takes from it                                                                                                                                      |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@volli/host-core`                 | `index.ts`, `host-lifecycle.ts`, `db-open-failure.ts`, `runtime-services.ts`, `session-services.ts`                                                                                                                                                                                                                                                                                                 | `createHostCore`, `HostCore`/`LiveHostCore`, `HostCorePorts`, `defaultDatabasePath`, `DbHandle`, the transaction-guard handlers                                  |
+| `@volli/host-core/ports`           | `ports/`                                                                                                                                                                                                                                                                                                                                                                                            | The [ports](#ports) and their headless answers (`HEADLESS_ATTENTION`, `NO_POWER_EVENTS`)                                                                         |
+| `@volli/host-core/db`              | `db/`                                                                                                                                                                                                                                                                                                                                                                                               | `openVolliDb`, migrations, the transaction gate, the repositories ([Persistence](#persistence))                                                                  |
+| `@volli/host-core/secrets`         | `secrets/`                                                                                                                                                                                                                                                                                                                                                                                          | `SecretStore`, `SecretService`, the file key and the sealed credential module ([Secrets](#secrets))                                                              |
+| `@volli/host-core/sessions`        | `session-control/`, `sessions/`, `session-concurrency.ts`, `session-tokens.ts`                                                                                                                                                                                                                                                                                                                      | Listing rows, peek content, the concurrency env reader, Session tokens. Never a Session writer ([Session composition](#session-composition))                     |
+| `@volli/host-core/session-runtime` | `session-runtime/`, `shell/`, `model-access/`, `host-sign-ins/`, `decision/`, `session-env.ts`, `pi-session-orphans.ts`, `pi-tool-output.ts`, `verb-input.ts`                                                                                                                                                                                                                                       | The runner composition and the recovered services it issues; model access preferences; sign-ins on a host; background shells                                     |
+| `@volli/host-core/integrations`    | `mcp/`, `codemode/`, `web/`, `observability/`                                                                                                                                                                                                                                                                                                                                                       | MCP settings and dispatch, Code Mode config and sandbox assets, Web Access, the observability sink and exporters                                                 |
+| `@volli/host-core/log`             | `log/`                                                                                                                                                                                                                                                                                                                                                                                              | The structured log: `hostLogger`, `installHostLog`, the trace context (`withTrace`, `withLogContext`) and the sinks ([The log](#the-log))                        |
+| `@volli/host-core/files`           | `volli-fs.ts`, `file-search.ts`, `file-services.ts`, `blob-*.ts`, `turn-attachments.ts`, `prompt-templates.ts`, `skills.ts`                                                                                                                                                                                                                                                                         | File reads/writes/watches, search, blobs, templates, skills. Their result types are `@volli/shared` wire types                                                   |
+| `@volli/host-core/worktree`        | `worktree/`, `worktree-runtime.ts`, `worktree-reads.ts`, `credential-helper-diagnostics.ts`                                                                                                                                                                                                                                                                                                         | Git, ensure/trim/remove, snapshots, activity, the cleanup engine and leases                                                                                      |
+| `@volli/host-core/board`           | `board/`, `project-*.ts`, `ticket-*.ts`, `detached-work.ts`                                                                                                                                                                                                                                                                                                                                         | Project create/relink/roots, ticket commands, [ticket moves](#ticket-moves) and wakes, [the Board module](#the-board-module)'s feed and receipts                 |
+| `@volli/host-core/handlers`        | `handlers/`                                                                                                                                                                                                                                                                                                                                                                                         | `createHostHandlers`, `invokeHandler`, `admittedHandlers`, the door policies: the [one handler map](#the-handler-map) every door projects                        |
+| `@volli/host-core/pty`             | `pty/`                                                                                                                                                                                                                                                                                                                                                                                              | `PtyManager` and the warm park ([Terminals](#terminals))                                                                                                         |
+| `@volli/host-core/browser`         | `browser/`                                                                                                                                                                                                                                                                                                                                                                                          | The backend interface, `BrowserTabRegistry`, the CDP controller, picture and trace stores ([Browser backend](#browser-backend))                                  |
+| `@volli/host-core/automations`     | `automations/`, `automation-services.ts`                                                                                                                                                                                                                                                                                                                                                            | The Automation service and its types                                                                                                                             |
+| `@volli/host-core/agents`          | `agent-*.ts`, `agent-dispatch/`, `watches.ts`, `harness-*.ts`, `host-profile.ts`                                                                                                                                                                                                                                                                                                                    | The agent socket, its verb door, the CLI shim and app profile lock, harness registry and installs                                                                |
+| `@volli/host-core/maintenance`     | `backup/`, `migration-export/`, `process/`, `maintenance-services.ts`, `database-recovery.ts`, `retention-runtime.ts`, `orphan-scan.ts`, `quiet-windows.ts`, `login-*.ts`, `host-shutdown.ts`, `shutdown-deadline.ts`                                                                                                                                                                               | Backup documents, the Volli Cloud migration export, database recovery, process reaping, retention, quiet windows, login PATH, the shutdown deadline              |
+| `@volli/host-core/testing`         | `testing/`, `db/test-helpers.ts`, `session-control/test-support.ts`, `backup/test-fixture.ts`, `secrets/test-support/`; it also re-exports test-only names of production modules: `db/recovery-pending.ts`, `session-control/sqlite-ledger.ts`, `session-control/checkpoint-diagnostics.ts`, and the `*ForTest` resets of `worktree/deletion-lease.ts`, `orphan-scan.ts` and `retention-runtime.ts` | Test fixtures, the standalone Session ledger and test engine, the database-recovery marker, the checkpoint failure reporter, module-state resets. **Tests only** |
 
 `scripts/` holds `pnpm --filter @volli/host-core migrations:lock` and the N-1
 compatibility driver.
@@ -159,13 +159,22 @@ One convention for what a module asks for and what it is (VC-632):
   process edge: desktop 15 s with an Immediate native exit, `hostd` 30 s.
 - **The live host** owns `maintenance` (one spawn ledger, the orphan-process
   service, retention, automatic reap, and the one-shot SIGCONT at `start()` of
-  terminal trees a previous launch left parked — VC-833), `secretStore`, `worktreeDeps`, and a
+  terminal trees a previous launch left parked — VC-833), `secretStore`, `worktreeDeps`, `worktreeReads`, and a
   lazy `terminals.manager` when a terminal port exists (otherwise an explicit
   unavailable variant). A degraded host carries its classified failure, not
   nullable live services; recovery stays available for it. Desktop starts
   maintenance after first paint and triggers retention on focus; `hostd`
   starts it at readiness. The retention watch is shared per database with
-  IPC, keeping dismissal state and read-only behavior.
+  IPC, keeping dismissal state and read-only behavior. Its cadence is per
+  ticket (VC-686): a quiet or failing ticket's PR read backs off from one
+  minute to fifteen, a changed row or a running check reads at once or every
+  minute, a committed ticket event that can move a retention answer (move,
+  archive, worktree or PR change, signal) wakes it and reads that ticket,
+  focus refreshes anything read over a minute ago, a reclaim never rests on a
+  skipped discovery, and the trim backfill asks a finished worktree again only
+  when its ticket, Keep pin or trim settings change or the memo lapses. It
+  logs each cycle's `gh` reads, trim checks and wall time at debug, and an
+  hourly `retention load` summary at info.
 - **Backup.** Formats, redactions, credential exclusions and the
   minimum-reader marker guard are as shipped. Migration rollback backups and
   backup retention run through the shared open/migration path; there is no
@@ -181,6 +190,16 @@ One convention for what a module asks for and what it is (VC-632):
 
 ### The Session runtime
 
+- **One runner composition.** `session-runtime/runner`'s
+  `createRunnerComposition` (VC-671) is the Session runtime a host assembles:
+  it takes the host as its product store (`local`, the host's SQLite), the
+  ports, and only what the environment answers (venue, `binDir`, a person who
+  answers questions and secret cards, the browser, pre-execution and command
+  environment hooks, the shell feed, what its doors know for the handler map
+  (`doors`), extra producers and the quit hold). It returns the services doors
+  read, the one handler map (`handlers(ready)`), `owner(edge)` for
+  `host.start`, and `ready()`, and drains by the host's own `stopPolicy`. The
+  staging below is private to it; desktop and `hostd` both compose it.
 - **Staged constructors.** `session-runtime/assembly` builds the inert Pi
   attachment over the host's one engine, model access, MCP/Code Mode/Web Access
   owners, secret service and attachment identities. Browser and shell ports
@@ -190,11 +209,13 @@ One convention for what a module asks for and what it is (VC-632):
   `session-runtime/context` resolves attach-time briefs and frozen inputs.
   `session-runtime/facade` and `session-runtime/agents` add skills, model,
   Sessions, titler, peek, the kickoff submit and delegation recovery staging.
-  Desktop and `hostd` use the same constructors; their adapters supply
+  Only the runner composition calls them; a host's adapters supply
   host-owned ports and pre-execution hooks, never separate executors.
 - **Recovery before consumers.** `session-runtime/lifecycle` installs the
   quit hold synchronously, then recovers stale attachments, delegations,
-  durable shell notices and scheduled resume. Only `await lifecycle.ready()`
+  queued follow-ups, the restart resume of turns recovery rebuilt
+  (`session-runtime/restart-resume`, which outlives readiness and is drained
+  on close), durable shell notices and scheduled resume. Only `await lifecycle.ready()`
   issues `RecoveredSessionServices`, the opaque proof that public tool/watch
   doors, CLI Session ports, the renderer's listing/peek/stop hooks, the
   Session RPC edge and runtime Automations require. One idempotent `close()`
@@ -238,13 +259,23 @@ never holds an app lifecycle.
   `worktree/repository-turn.ts` keeps its per-process ordering. Project roots
   stay in desktop's 100% gate: desktop's IPC/PTY tests cover branches this
   package's do not.
+- `host.worktreeReads` (`worktree-reads.ts`, VC-788) is the host's one worktree
+  read pipeline: the change watch, the last-known status/Change Set snapshot
+  and the share-window coalescers, composed once per host. Desktop's rail
+  channels, the agent socket's `worktree status` / `worktree diff` and hostd's
+  socket all read through it, and every worktree-mutating act calls its
+  `invalidate` (or `invalidateAll`). Sharing covers reads that overlap (the
+  share window) and, while a client's watch covers the worktree, the snapshot;
+  two back-to-back reads nobody watches each pay their own git set. There is no
+  process-wide snapshot: a test builds its own service, injecting a snapshot
+  cache when it drives coverage.
 - `secrets/` holds `SecretStore`, the headless file key, and the typed sealed
   credential module: the credential lock, the durable file contract, the key
   id and `VHC1` envelope over the keyring port (`ports/credential-keyring.ts`)
   and the typed inventory. See
   [docs/secrets.md](../../docs/secrets.md#the-typed-credential-module-vc-642).
   Pi's secret-wait publisher type is exported by `secrets`, and its
-  turn-attachment type lives in `session-runtime/turn-attachments`.
+  turn-attachment type lives beside its preparation in `turn-attachments.ts`.
 
 ### What stays in desktop
 
@@ -360,13 +391,20 @@ to the `SecretStore` it builds rather than to `createHostCore`. See
 
 ### Session composition
 
-`createHostCore` returns `sessionLedger`, `hostNoticeOutbox`, `sessionWakeBus`,
-`sessionReadWatch`, `sessionActivityWatch` and `sessionEngine` on the live
-host; a degraded host has none of them. The outbox shares the engine's one
-transaction writer. The wake bus decorates the engine inside the activity
-watch: committed facts fan out before a listing row becomes dirty. Resumption
-history, unattended Run notifications, scheduled resume and read receipts
-observe in their original order, before the row is built.
+`createHostCore` returns `sessionWakeBus`, `sessionReadWatch`, `liveWork`,
+`sessionActivityWatch` and `sessionEngine` on the live host; a degraded host
+has none of them. The Session ledger and the host notice outbox stay inside
+host-core (VC-671): the outbox shares the engine's one transaction writer, and
+only the runner composition's lifecycle delivers it. The wake bus (`session-control/session-wake.ts`) is the
+one decorator over the engine (VC-790): every committed Session Event, whoever
+wrote it, fans out to its subscribers after the write's transaction. The
+activity watch is one of them — it marks the Session's listing row dirty and
+folds it on a 60 ms timer — and the Session runtime is another: the runtime
+assembly hands it `sessionWakeBus.subscribe` as its `committed` port, so a
+write made around the runtime (a retitle, a CLI signal, a terminal's command
+bookkeeping) reaches an open chat stream as it commits. Resumption history,
+unattended Run notifications, scheduled resume and read receipts observe in
+their original order, before the row is built.
 
 `HostCorePorts` extends `HostSessionPorts`, which holds the ports Session
 composition uses: `events`, `attention` and `log`. Its adapters are captured,
@@ -375,8 +413,8 @@ database is known. Desktop wires `onFocusedSessionsChanged` to the returned
 read watch.
 
 The live-work watch (`liveWork`, `session-control/live-work.ts`, VC-577) is
-fed by the activity watch's `observeEvent` port: every committed turn fact,
-synchronously as its write resolves, never the 60 ms coalesced fold (which
+fed by the activity watch's `observeEvent` port: every committed fact,
+synchronously as the wake bus announces it, never the 60 ms coalesced fold (which
 only seeds a Session no fact has reached yet). It counts Sessions with a turn
 open on a binding this process holds, Sessions with work the runtime accepted
 but whose turn has not opened (`HostedSessionRuntime.pendingTurnStarts`:
@@ -388,20 +426,21 @@ same call when nothing is live: new starts are then refused before any effect
 and queued follow-ups wait, durable, for the next launch. Armed Automations
 are deliberately not live work.
 
-Two facts arrive later and are not ports, because host-core answers both
+Facts that arrive later are not ports, because host-core answers them
 itself: which executor bindings are open (a listing row is live only while one
-is) and each folded projection for scheduled resume. They are
-`SessionRuntimeWiring` (`session-services.ts`). The runtime assembly wires the
-open bindings when it builds the Session runtime, and the lifecycle wires
-scheduled resume when it is built, each into the services that own the engine
-it was given. Until then nothing is open and nothing is scheduled. (They were
-ports, `listOpenNativeBindings` and `observeScheduledResume`, that desktop and
-`hostd` late-bound to those same host-core objects; VC-632 removed them.)
+is), which turn starts are pending and the start latch, and each folded
+projection for scheduled resume. They are `SessionRuntimeWiring`
+(`session-services.ts`). The runner composition claims the services' one
+runtime slot (`SESSION_RUNTIME`, in no entry) before it builds anything, and
+binds the runtime's and lifecycle's answers through it once both exist; a
+second runtime over one host is refused. Until then nothing is open and
+nothing is scheduled.
 
 Engine construction is private to the Sessions module (`src/sessions/engine.ts`,
 in no entry). It requires the shared ledger; terminal, data and runtime
 consumers receive the composed engine and never construct a fallback. The wake
-decorator lives beside the activity watch in `src/session-control/`.
+decorator lives beside the activity watch in `src/session-control/`; a new
+post-commit observer subscribes to it rather than wrapping the engine again.
 
 Coverage entries for the activity/read/peek watches, concurrency budget and
 `db/export.ts` run here at unchanged 100% thresholds. The export test and
@@ -815,7 +854,7 @@ and the socket's `ticket.move` all invoke the map.
   (`boardFeed`) and feeds it every `data-changed` its bus carries
   (`noteDataChanged`): desktop through `tapDataChanged` (`broadcast.ts`), hostd
   through `headlessPorts`.
-- `resources.ts`: `boardResourceWorkspace(db)`, the board's half of a root's
+- `resources.ts`: `boardResourceProject(db)`, the board's half of a root's
   `resourceWorkspace` port.
 
 The contract: HP § Command catalog, "The board (VC-565)", and § Workspace
@@ -826,16 +865,32 @@ change feed.
 `createHostHandlers(ports, services)` (`@volli/host-core/handlers`, VC-668)
 builds the host's one map from key to the whole command: every public
 catalog key and every desktop-only key (`DESKTOP_ENTRIES`, VC-608), whose
-policy is its channel's VC-574 placement. A
-composition root calls it once with the recovered services (database, runtime,
-Sessions facade, Model Access, Automations, busy-worktree guard, and
-desktop's experiments and interrupts) and hands the same object to every door:
+policy is its channel's VC-574 placement. The
+runner composition calls it once (`runner.handlers(ready)`, VC-671) with the
+recovered services it owns (database, runtime, Sessions facade, the kickoff
+and title ports, Model Access, Automations, worktree reads, detached work,
+listing rows, ticket signals) plus what only the host's doors know
+(`RunnerDoorCapabilities`: the busy-worktree guard, experiments, terminals'
+interrupts, sign-ins, relays, logs), and every door gets the same object:
 the routers' `ctx.handlers`, the socket's `handlers` option (whose
-`AGENT_VERB_TABLE` binds a catalog key only through `projectHandler`), and
+`AGENT_VERB_TABLE` binds every verb only as a projection of the map), and
 any legacy IPC channel that still serves a catalog command. `HostHandlers` is
-total over both tiers' keys, so a missing handler fails `pnpm typecheck`; a
-service a host lacks makes its handlers throw `OperationUnavailableError`
-rather than leaving a hole.
+total over both tiers' keys and the agent doors' own (`AgentHandlerKey`,
+VC-923), so a missing handler fails `pnpm typecheck`; a service a host lacks
+makes its handlers throw `OperationUnavailableError` rather than leaving a
+hole.
+
+The agent doors' keys are the socket's own verbs (`identify`, `hook`,
+`worktree.sync`, `session.done`, …) and the Agent Tool Surface's
+(`session.send`, `mcp.*`, `watch`, …). Their handlers need the door's ports,
+which a root composes after the map, so the map is sealed without them:
+`createAgentCommandService` (`agent-dispatch/verbs.ts`) and
+`createAgentToolDoor` each serve theirs into the map they are handed, once.
+Until then they answer unavailable, and no catalog policy admits them.
+`session.start`, on both agent doors, is the map's own start command, built
+from the Sessions facade and the kickoff and title ports the runner fills
+(`submitSessionMessage`, `refineAutoTitle`). The runner's agent staging builds
+the tool door over the same map.
 
 Desktop main also passes `remoteHosts` (`RemoteHostsPort`,
 `handlers/remote-hosts-port.ts`, VC-700): its registry of hosts added over
@@ -849,8 +904,9 @@ and the door's `HandlerPolicy` runs first; a refusal throws
 `HandlerRefusedError` and the handler never runs. The policies:
 `ROUTER_POLICY` for a router's context, `DESKTOP_WINDOW_POLICY` for a legacy
 desktop IPC channel (`handlers/policies.ts`), and the socket's per-request
-`socketHandlerPolicy`, its coordination policy judged again at the map
-(`agent-dispatch/admission.ts`). Tests build the real map over a test
+`socketHandlerPolicy`, its coordination policy judged again at the map for
+a key another door also reaches (`agent-dispatch/admission.ts`), and the tool
+door's per-call `agent-tool` policy (`agent-tool-door.ts`). Tests build the real map over a test
 database with `testHostHandlers`, or seal their own entries with
 `sealTestHandlers` (`./testing`). The contract: HP § Command catalog, "One
 handler map".

@@ -2,12 +2,20 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   sessionRootThreadId,
   type NativeAttachmentSpec,
 } from "@volli/session-engine";
-import type { SessionAttentionKind, SessionInteractionPrompt } from "@volli/shared";
+import {
+  readSessionOrigin,
+  RECOVERED_TURN_INTERRUPTED_DETAIL,
+  scrubSessionEvent,
+  restartResumeCommandId,
+  type SessionAttentionKind,
+  type SessionInteractionPrompt,
+} from "@volli/shared";
 import {
   scriptedProvider,
   type ScriptedReply,
@@ -16,7 +24,12 @@ import { insertProject } from "../db/projects-repo";
 import { createSqliteSessionFollowUpLedger } from "../db/session-follow-up-repo";
 import { openRawDb, openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
-import { closeStaleAttachments } from "./boot-recovery";
+import {
+  closeStaleAttachments,
+  type BootRecoveredTurns,
+  type BootRecoveryFailure,
+} from "./boot-recovery";
+import { resumeRecoveredTurns } from "./restart-resume";
 import { createPiNativeAdapter } from "./pi-adapter";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 
@@ -74,12 +87,21 @@ function fixture() {
       attachDelayMs: number;
       /** Set synchronously on entering a gate, before the runtime arms its timer. */
       stalled: boolean;
+      /**
+       * A command whose acceptance every reconcile contradicts with a refusal,
+       * after its replay, so the reconcile fails on its receipts.
+       */
+      contradictAcceptance: string | null;
+      /** Thrown by every reconcile before it reads the executor's record. */
+      reconcileFailure: Error | null;
     } = {
       attachFailure: null,
       attachGate: null,
       admissionGate: null,
       attachDelayMs: 0,
       stalled: false,
+      contradictAcceptance: null,
+      reconcileFailure: null,
     };
     const adapter = createPiNativeAdapter({
       sessionDataDir,
@@ -103,7 +125,7 @@ function fixture() {
     });
     const host = createSessionRuntime({
       engine,
-      executor: {
+      executors: createSessionExecutorSlot({
         ...adapter,
         attach: async (spec, sink) => {
           attachSpecs.push(spec);
@@ -115,6 +137,20 @@ function fixture() {
             await new Promise((resolve) => setTimeout(resolve, control.attachDelayMs));
           if (control.attachFailure) throw control.attachFailure;
           const binding = await adapter.attach(spec, sink);
+          const reconcile = binding.reconcile.bind(binding);
+          binding.reconcile = async (cursor) => {
+            if (control.reconcileFailure) throw control.reconcileFailure;
+            const reconciliation = await reconcile(cursor);
+            const commandId = control.contradictAcceptance;
+            if (commandId === null) return reconciliation;
+            return {
+              ...reconciliation,
+              receipts: [
+                ...reconciliation.receipts,
+                { commandId, status: "rejected", code: "contradicted", detail: null, native: null },
+              ],
+            };
+          };
           const dispatch = binding.dispatch.bind(binding);
           binding.dispatch = async (command) => {
             if (command.kind === "message.submit" && control.admissionGate) {
@@ -125,7 +161,7 @@ function fixture() {
           };
           return binding;
         },
-      },
+      }),
       followUps: createSqliteSessionFollowUpLedger(database.db),
       // Explicit recovery wakes exercise retry; no background backoff races.
       followUpRetryDelaysMs: [],
@@ -179,17 +215,26 @@ function fixture() {
     return launch();
   }
 
-  async function boot(current: ReturnType<typeof launch>) {
+  async function boot(
+    current: ReturnType<typeof launch>,
+    onRecovered?: (recovered: BootRecoveredTurns) => void,
+    onFailure?: (failure: BootRecoveryFailure) => void,
+  ) {
     const errors: unknown[] = [];
     const closed = await closeStaleAttachments({
       engine: current.engine,
       reconcile: (input) => current.host.reconcile(input),
+      // The lifecycle's own reading of a live binding.
+      holdsBinding: (attachmentId) =>
+        current.host.openNativeBindings().some((binding) => binding.attachmentId === attachmentId),
+      ...(onFailure === undefined ? {} : { onFailure }),
       projectIds: ["project"],
       newId: () => `boot-${clock++}`,
       now: () => clock++,
       onError: (_id, error) => {
         errors.push(error);
       },
+      ...(onRecovered === undefined ? {} : { onRecovered }),
     });
     return { closed, errors };
   }
@@ -835,5 +880,265 @@ describe("crash recovery through the durable Pi binding (VC-753)", () => {
     expect(projection.queue).toHaveLength(1);
     expect(f.script.requests).toHaveLength(1);
     await assertNoAnswers(f, sessionId);
+  });
+});
+
+const userTexts = (messages: readonly { role: string }[], text: string) =>
+  messages.filter((message) => message.role === "user" && JSON.stringify(message).includes(text));
+
+// The same production path, continued: a relaunch judges each turn it
+// recovered and continues the safe ones through the retry door (VC-450).
+describe("restart resume through the durable Pi binding (VC-450)", () => {
+  async function resume(current: Launch, recovered: BootRecoveredTurns) {
+    await resumeRecoveredTurns(
+      {
+        projection: async (sessionId) => (await current.host.projection({ sessionId })).projection,
+        ticketSessions: async () => [],
+        resumeBoundary: (input) => current.host.resumeBoundary(input),
+        pendingTurnStarts: () => current.host.pendingTurnStarts(),
+        command: (request) => current.host.command(request),
+        shouldStop: () => false,
+        now: () => clock,
+      },
+      recovered,
+    );
+  }
+
+  it("continues a turn lost while the model was answering, without sending the message again", async () => {
+    const f = fixture();
+    const stalled = Promise.withResolvers<void>();
+    f.replies.splice(
+      0,
+      f.replies.length,
+      {
+        wait: (signal) =>
+          new Promise<void>((resolve) => {
+            stalled.resolve();
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          }),
+      },
+      { text: "Picked up where the lost process stopped." },
+    );
+    const { sessionId } = await f.host.command({
+      commandId: `create-${clock++}`,
+      command: {
+        kind: "session.create",
+        projectId: "project",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Restart resume",
+      },
+    });
+    await f.engine.getOrRecordSessionInput({
+      sessionId,
+      input: { kind: "tool-surface", tools: ["read", "edit", "write", "execute", "ask_user"] },
+      provenance,
+    });
+    await f.host.command({
+      sessionId,
+      commandId: `attach-${clock++}`,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    await f.host.command({
+      sessionId,
+      commandId: `submit-${clock++}`,
+      command: {
+        kind: "message.submit",
+        settle: "opened",
+        message: { id: "m", role: "user", parts: [{ type: "text", text: "Build the thing" }] },
+      },
+    });
+    await stalled.promise;
+
+    const current = await f.restart(f, true);
+    let recovered: BootRecoveredTurns | undefined;
+    expect(await f.boot(current, (turns) => (recovered = turns))).toEqual({
+      closed: 0,
+      errors: [],
+    });
+    const interrupted = (await current.host.projection({ sessionId })).projection;
+    expect(interrupted.lastTurnOutcome).toBe("interrupted");
+    expect(interrupted.attention.active).toContainEqual(
+      expect.objectContaining({ detail: RECOVERED_TURN_INTERRUPTED_DETAIL }),
+    );
+    expect(recovered?.turns).toEqual([{ sessionId, attachmentId: interrupted.liveExecutor!.id }]);
+    await resume(current, recovered!);
+
+    const projection = (await current.host.projection({ sessionId })).projection;
+    expect(projection.lastTurnOutcome).toBe("completed");
+    expect(projection.attention.active).toEqual([]);
+    const resumed = projection.commands.at(-1)!;
+    expect(resumed).toMatchObject({
+      id: restartResumeCommandId(interrupted.liveExecutor!.id, interrupted.latestTurnId!),
+      intent: { kind: "executor.retry" },
+    });
+    // The resumed request carries the person's message once, as context.
+    const last = f.script.requests.at(-1)!;
+    expect(userTexts(last, "Build the thing")).toHaveLength(1);
+    expect(
+      projection.commands.filter(({ intent }) => intent.kind === "message.submit"),
+    ).toHaveLength(1);
+  });
+
+  // VC-926: the production shape. The lost process accepted the message and
+  // its executor saved the interruption, but the ledger never heard of it. The
+  // boot's rebuilt executor replays that end, and only then does its reconcile
+  // fail. Its turn is recovered on the live attachment, not closed by the host.
+  it("continues a turn whose rebuilt executor replayed its end before the reconcile failed", async () => {
+    const f = fixture();
+    const stalled = Promise.withResolvers<void>();
+    f.replies.splice(
+      0,
+      f.replies.length,
+      {
+        wait: (signal) =>
+          new Promise<void>((resolve) => {
+            stalled.resolve();
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          }),
+      },
+      { text: "Picked up after the failed reconcile." },
+    );
+    const { sessionId } = await f.host.command({
+      commandId: `create-${clock++}`,
+      command: {
+        kind: "session.create",
+        projectId: "project",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Failed reconcile",
+      },
+    });
+    await f.engine.getOrRecordSessionInput({
+      sessionId,
+      input: { kind: "tool-surface", tools: ["read", "edit", "write", "execute", "ask_user"] },
+      provenance,
+    });
+    await f.host.command({
+      sessionId,
+      commandId: `attach-${clock++}`,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    const commandId = `submit-${clock++}`;
+    await f.host.command({
+      sessionId,
+      commandId,
+      command: {
+        kind: "message.submit",
+        settle: "opened",
+        message: { id: "m", role: "user", parts: [{ type: "text", text: "Build the thing" }] },
+      },
+    });
+    await stalled.promise;
+
+    const current = await f.restart(f, true);
+    current.control.contradictAcceptance = commandId;
+    const failures: BootRecoveryFailure[] = [];
+    let recovered: BootRecoveredTurns | undefined;
+    expect(
+      await f.boot(
+        current,
+        (turns) => (recovered = turns),
+        (failure) => failures.push(failure),
+      ),
+    ).toEqual({ closed: 0, errors: [] });
+    const attachmentId = (await current.host.projection({ sessionId })).projection.liveExecutor!.id;
+    expect(failures).toEqual([
+      expect.objectContaining({
+        attachmentId,
+        reason: "reconcile_failed",
+        outcome: "recovered",
+        error: expect.objectContaining({ name: "SessionEngineConflictError" }),
+      }),
+    ]);
+    const interrupted = (await current.host.projection({ sessionId })).projection;
+    expect(interrupted.lastTurnOutcome).toBe("interrupted");
+    expect(interrupted.attention.active.map(({ id }) => id)).not.toContain(
+      `${attachmentId}:boot-recovery`,
+    );
+    expect(recovered?.turns).toEqual([{ sessionId, attachmentId }]);
+
+    // The contradiction stands: continuing the turn must not depend on it.
+    await resume(current, recovered!);
+    const projection = (await current.host.projection({ sessionId })).projection;
+    expect(projection.lastTurnOutcome).toBe("completed");
+    expect(projection.liveExecutor?.id).toBe(attachmentId);
+    expect(userTexts(f.script.requests.at(-1)!, "Build the thing")).toHaveLength(1);
+  });
+
+  it("closes a rebuilt attachment that never recorded the turn's end, and says why durably", async () => {
+    const f = fixture();
+    const { sessionId, attachmentId } = await start(f);
+    const current = await f.restart(f, true);
+    current.control.reconcileFailure = Object.assign(new Error("record unreadable at /private"), {
+      name: "PiRecoveryError",
+      code: "sidecar_unreadable",
+    });
+    const failures: BootRecoveryFailure[] = [];
+    expect(await f.boot(current, undefined, (failure) => failures.push(failure))).toEqual({
+      closed: 1,
+      errors: [],
+    });
+    expect(failures).toMatchObject([
+      { attachmentId, reason: "reconcile_failed", outcome: "closed" },
+    ]);
+    const projection = (await current.host.projection({ sessionId })).projection;
+    expect(projection.turnActive).toBe(false);
+    expect(projection.liveExecutor).toBeNull();
+    // Read back through the real SQLite ledger and its codec, then scrubbed
+    // for a client: the reason survives, the origin still reads, no message.
+    const recovery = (await current.engine.listEvents({ sessionId })).filter(
+      (event) => event.provenance.source.id === "desktop-recovery",
+    );
+    expect(recovery.map(({ payload }) => payload.kind)).toEqual([
+      "interaction.cancelled",
+      "attention.raised",
+      "attachment.closed",
+    ]);
+    for (const event of recovery.slice(1)) {
+      const scrubbed = scrubSessionEvent(event);
+      expect(scrubbed.provenance.source.detail).toEqual({
+        sessionOrigin: { kind: "volli", reason: "relaunch-recovery" },
+        bootRecovery: {
+          reason: "reconcile_failed",
+          error: { name: "PiRecoveryError", code: "sidecar_unreadable" },
+        },
+      });
+      expect(
+        readSessionOrigin(
+          (scrubbed.provenance.source.detail as { sessionOrigin: unknown }).sessionOrigin,
+        ),
+      ).toEqual({ kind: "volli", reason: "relaunch-recovery" });
+      expect(JSON.stringify(scrubbed)).not.toContain("/private");
+    }
+  });
+
+  it("leaves a turn lost inside a tool for the person, whose Resume then continues it", async () => {
+    const f = fixture();
+    const { sessionId } = await start(f);
+    const current = await f.restart(f, true);
+    let recovered: BootRecoveredTurns | undefined;
+    await f.boot(current, (turns) => (recovered = turns));
+    const requestsBefore = f.script.requests.length;
+    await resume(current, recovered!);
+    // Nothing ran: the abandoned question is the person's to answer.
+    expect(f.script.requests).toHaveLength(requestsBefore);
+    const waiting = (await current.host.projection({ sessionId })).projection;
+    expect(waiting.lastTurnOutcome).toBe("interrupted");
+
+    const retried = await current.host.command({
+      sessionId,
+      commandId: `resume-${clock++}`,
+      command: { kind: "executor.retry" },
+    });
+    expect(retried.receipt?.status, JSON.stringify(retried.receipt)).toBe("accepted");
+    expect(f.script.requests).toHaveLength(requestsBefore + 1);
+    const answered = (await current.host.projection({ sessionId })).projection;
+    expect(answered.lastTurnOutcome).toBe("completed");
+    expect(
+      answered.attention.active.filter(({ kind }) => kind === "partial_turn_interrupted"),
+    ).toEqual([]);
   });
 });

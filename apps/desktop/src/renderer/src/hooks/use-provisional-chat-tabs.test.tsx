@@ -26,7 +26,7 @@ import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { useProvisionalPaneLayoutStore } from "@renderer/stores/provisional-pane-layout";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
-import { createWorkspaceStore } from "@renderer/stores/workspace";
+import { createProjectUiStore } from "@renderer/stores/project-ui";
 import { useProvisionalChatTabs, type ProvisionalChatTabs } from "./use-provisional-chat-tabs";
 
 vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
@@ -60,7 +60,7 @@ afterEach(() => {
 function surface(ticket: boolean, { oldChat = false } = {}) {
   const data = new Map<string, string>();
   let paneSequence = 0;
-  const store = createWorkspaceStore(
+  const store = createProjectUiStore(
     {
       getItem: (name) => data.get(name) ?? null,
       setItem: (name, value) => {
@@ -100,8 +100,8 @@ function surface(ticket: boolean, { oldChat = false } = {}) {
       ? store.getState().byProject["project-1"]?.ticketTabs[ownerId]?.active
       : store.getState().byProject["project-1"]?.homeActiveTab) ?? permanentTabId;
   const readSplitView = (): SplitViewState | null => {
-    const workspace = store.getState().byProject["project-1"];
-    return (ticket ? workspace?.ticketTabs[ownerId]?.splitView : workspace?.homeSplitView) ?? null;
+    const projectUi = store.getState().byProject["project-1"];
+    return (ticket ? projectUi?.ticketTabs[ownerId]?.splitView : projectUi?.homeSplitView) ?? null;
   };
   const focusPane = (paneId: string) => {
     if (ticket) store.getState().focusTicketPane("project-1", ownerId, paneId);
@@ -275,14 +275,14 @@ function surface(ticket: boolean, { oldChat = false } = {}) {
     browserFlight: () => browserFlight,
     recordedActive,
     restoredSplit: () => {
-      const restored = createWorkspaceStore({
+      const restored = createProjectUiStore({
         getItem: (name) => data.get(name) ?? null,
         setItem: vi.fn(),
         removeItem: vi.fn(),
       });
-      const workspace = restored.getState().byProject["project-1"];
+      const projectUi = restored.getState().byProject["project-1"];
       return (
-        (ticket ? workspace?.ticketTabs[ownerId]?.splitView : workspace?.homeSplitView) ?? null
+        (ticket ? projectUi?.ticketTabs[ownerId]?.splitView : projectUi?.homeSplitView) ?? null
       );
     },
     guarded: () => guarded,
@@ -529,9 +529,7 @@ for (const ticket of [false, true]) {
       act(() => s.provisional().takeActive("draft-1"));
       act(() => {
         if (ticket)
-          s.store
-            .getState()
-            .openTicketWorkspace("project-1", s.ownerId, { tabId: "browser:browser-1" });
+          s.store.getState().openTicketView("project-1", s.ownerId, { tabId: "browser:browser-1" });
         else s.store.getState().openHome("project-1", "browser:browser-1");
       });
       expect(s.provisional().activeOverride).toBeNull();

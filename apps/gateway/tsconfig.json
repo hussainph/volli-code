@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["src", "test", "scripts", "vite.config.ts"],
+  "compilerOptions": {
+    // Web platform globals only: the Worker runs on workerd, and its unit
+    // tests run the same modules under plain Node.
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    // `.ts` specifiers, so `scripts/dev-grant.ts` runs under Node's type
+    // stripper with the same modules the Worker bundles.
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  }
+}

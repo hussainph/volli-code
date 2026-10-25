@@ -139,6 +139,18 @@ branch-summary execution. `Agent`/agent loop are **not** vendored.
    counted in the file's bytes (less a leading BOM), which differs from
    decoding everything only for invalid UTF-8. A negative `limit` now selects
    no lines where `Array.prototype.slice` counted from the end.
+8. **Bounded shell spills (VC-820):** `env/nodejs.ts` uses Volli's owned
+   `ShellSpillBudget` before queueing/writing. Capture metadata carries an optional
+   `spillTruncatedAt` byte cap through updates and completion; `tools/bash.ts`
+   appends a cap notice, including on failure, without changing the inline tail,
+   tool declaration or existing `Full output:` framing. Attachment temp-directory
+   ownership and deletion live outside the vendor in `execution-env.ts`.
+9. **Redacted shell spills (VC-865):** `ShellOutputCaptureOptions.spillRedaction`
+   names a per-execution byte transform. `env/nodejs.ts` passes every spilled
+   byte through it, in stream order and before `ShellSpillBudget`, through
+   Volli's owned `ShellSpillRedactor`, and releases what it held when the command
+   ends. Any failure fails the spill with one fixed message; a spill stopped
+   that way still closes its stream. Without the option, bytes spill unchanged.
 
 ## Compatibility evidence
 

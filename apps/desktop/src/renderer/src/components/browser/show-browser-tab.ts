@@ -3,7 +3,7 @@ import { browserTabId } from "@renderer/components/home/home-tabs";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 /** Reveal the existing tab, pairing it with its owning chat when not already grouped. */
 export async function showBrowserTab(
@@ -19,7 +19,7 @@ export async function showBrowserTab(
   if (!result.ok) throw new Error(result.error);
   const tab = result.tab;
   useBrowserTabsStore.getState().receive(tab);
-  const workspace = useWorkspaceStore.getState();
+  const workspace = useProjectUiStore.getState();
   const id = browserTabId(tabId);
   const ui = workspace.byProject[tab.projectId];
   const split = tab.ticketId === null ? ui?.homeSplitView : ui?.ticketTabs[tab.ticketId]?.splitView;
@@ -39,6 +39,6 @@ export async function showBrowserTab(
     workspace.setNav(tab.projectId, "home");
     workspace.setHomeActiveTab(tab.projectId, id);
   } else {
-    workspace.openTicketWorkspace(tab.projectId, tab.ticketId, { tabId: id });
+    workspace.openTicketView(tab.projectId, tab.ticketId, { tabId: id });
   }
 }

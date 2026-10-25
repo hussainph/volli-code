@@ -18,8 +18,7 @@
  */
 import { describe, expect, it } from "vite-plus/test";
 import {
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   type NativeHarnessAdapter,
@@ -32,6 +31,10 @@ import {
   runAttentionNotification,
   runAttentionTarget,
 } from "./run-attention";
+import {
+  createInMemorySessionLedger,
+  createInMemoryTranscriptArtifactStore,
+} from "@volli/session-engine/testing";
 
 const SESSION_ID = "session-1";
 
@@ -76,7 +79,7 @@ async function attachedRuntime() {
   });
   const runtime = createSessionRuntime({
     engine,
-    executor: adapter,
+    executors: createSessionExecutorSlot(adapter),
     artifacts: createInMemoryTranscriptArtifactStore(),
     locations: {
       resolve: async () => ({ directory: "/fake/project", venue }),

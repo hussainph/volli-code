@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { UIMessage } from "ai";
-import type { RuntimeObservation, SessionLedger } from "@volli/shared";
 import {
-  createInMemorySessionFollowUpLedger,
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
+  RECOVERED_TURN_INTERRUPTED_DETAIL,
+  restartResumeCommandId,
+  type RuntimeObservation,
+  type RuntimeResumeBoundary,
+  type SessionLedger,
+} from "@volli/shared";
+import {
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamQueue,
@@ -20,6 +23,12 @@ import {
   type SessionFollowUpLedger,
   type SessionStreamEmission,
 } from "./index";
+import {
+  createInMemorySessionFollowUpLedger,
+  createInMemorySessionLedger,
+  createInMemoryTranscriptArtifactStore,
+} from "./testing";
+import { createSessionExecutorSlot } from "./executor-slot";
 
 const message = (id: string, text = id): UIMessage => ({
   id,
@@ -50,6 +59,7 @@ class Adapter implements NativeHarnessAdapter {
   reconcileGate: Promise<void> | undefined;
   reconciling = false;
   reconcileStarted?: () => void;
+  boundary: RuntimeResumeBoundary | undefined;
   async attach(
     _spec: Parameters<NativeHarnessAdapter["attach"]>[0],
     sink: ObservationSink,
@@ -116,6 +126,7 @@ class Adapter implements NativeHarnessAdapter {
         this.released++;
         if (this.releaseFailure) throw this.releaseFailure;
       },
+      ...(this.boundary === undefined ? {} : { resumeBoundary: () => this.boundary ?? null }),
     };
   }
   emit(observation: RuntimeObservation) {
@@ -162,7 +173,7 @@ function fixture(
       engine,
       artifacts,
       followUps: withStorage ? followUps : undefined,
-      executor: adapter,
+      executors: createSessionExecutorSlot(adapter),
       clock,
       ids: { next: (kind) => `${kind}-${++sequence}` },
       locations: {
@@ -638,20 +649,6 @@ describe("host follow-up commands", () => {
     await runtime.close();
   });
 
-  it("keeps in-memory storage atomic and refuses transactions that escape across an await", async () => {
-    const ledger = createInMemorySessionFollowUpLedger();
-    expect(await ledger.transaction("session", () => "primitive")).toBe("primitive");
-    await expect(
-      ledger.transaction("session", (() => Promise.resolve(1)) as never),
-    ).rejects.toThrow("must be synchronous");
-    await expect(
-      ledger.transaction("session", (state) => {
-        state.revision = 2;
-        throw new Error("abort");
-      }),
-    ).rejects.toThrow("abort");
-    expect(await ledger.transaction("session", (state) => state.revision)).toBe(0);
-  });
   it("accepts durably without waiting for the active command, then releases without a Client", async () => {
     const f = fixture();
     const runtime = f.runtime();
@@ -2264,6 +2261,73 @@ describe("host follow-ups never strand a row", () => {
     expect(await attentionDetails(runtime, sessionId)).toEqual([]);
     expect(await queueStates(runtime, sessionId)).toEqual([]);
     await runtime.close();
+  });
+
+  describe("a turn recovery found interrupted (VC-450)", () => {
+    async function recovered(f: ReturnType<typeof fixture>) {
+      const runtime = f.runtime();
+      const sessionId = await create(runtime);
+      await attach(runtime, sessionId);
+      await runtime.command({
+        commandId: "active",
+        sessionId,
+        command: { kind: "message.submit", message: message("active") },
+      });
+      await f.adapter.emit({
+        kind: "attention",
+        state: "raised",
+        reason: "partial-turn",
+        message: RECOVERED_TURN_INTERRUPTED_DETAIL,
+      });
+      await f.adapter.emit({ kind: "turn", state: "interrupted", turnId: "turn:active" });
+      const attachmentId = (await f.engine.getSession({ sessionId }))!.liveExecutor!.id;
+      return { runtime, sessionId, attachmentId };
+    }
+
+    it("reads the executor's resume boundary, and null where it cannot say", async () => {
+      const silent = fixture();
+      const unsaid = await recovered(silent);
+      expect(unsaid.runtime.resumeBoundary({ attachmentId: unsaid.attachmentId })).toBeNull();
+      expect(unsaid.runtime.resumeBoundary({ attachmentId: "unknown" })).toBeNull();
+      await unsaid.runtime.close();
+
+      const telling = fixture();
+      telling.adapter.boundary = "tool-in-flight";
+      const said = await recovered(telling);
+      expect(said.runtime.resumeBoundary({ attachmentId: said.attachmentId })).toBe(
+        "tool-in-flight",
+      );
+      await said.runtime.close();
+    });
+
+    it("keeps the restart warning through a Retry, and lets a message answer it", async () => {
+      for (const retry of ["person", "host"] as const) {
+        const f = fixture();
+        const { runtime, sessionId, attachmentId } = await recovered(f);
+        await runtime.command({
+          ...(retry === "host" ? { origin: { kind: "volli", reason: "relaunch-recovery" } } : {}),
+          commandId:
+            retry === "host"
+              ? restartResumeCommandId(attachmentId, "turn:active")
+              : "retry-by-hand",
+          sessionId,
+          command: { kind: "executor.retry", attachmentId },
+        });
+        expect(await attentionDetails(runtime, sessionId)).toEqual([
+          RECOVERED_TURN_INTERRUPTED_DETAIL,
+        ]);
+        await runtime.close();
+      }
+      const f = fixture();
+      const typed = await recovered(f);
+      await typed.runtime.command({
+        commandId: "typed",
+        sessionId: typed.sessionId,
+        command: { kind: "message.submit", message: message("typed") },
+      });
+      expect(await attentionDetails(typed.runtime, typed.sessionId)).toEqual([]);
+      await typed.runtime.close();
+    });
   });
 
   it("bounds workspace resolution and preparation without losing the queued payload", async () => {

@@ -36,8 +36,15 @@ import { materializeBlobs } from "./blob-materialize";
 import { readBlob } from "./blob-store";
 import { getBlob, listMaterializableLinks } from "./db/blobs-repo";
 
-import type { TurnAttachments } from "./session-runtime/turn-attachments";
-export type { TurnAttachments } from "./session-runtime/turn-attachments";
+export interface TurnAttachments {
+  /**
+   * A line per attached file naming where it landed, appended to the prompt.
+   * Empty when the turn carried no files.
+   */
+  note: string;
+  /** Images to hand the model as content for this turn only. */
+  images: RuntimeImageInput[];
+}
 
 const EMPTY: TurnAttachments = { note: "", images: [] };
 

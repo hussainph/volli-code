@@ -8,6 +8,14 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
+    },
+    "./testing": {
+      "types": "./src/testing/index.ts",
+      "import": "./src/testing/index.ts"
+    },
+    "./testing/contracts": {
+      "types": "./src/testing/contracts.ts",
+      "import": "./src/testing/contracts.ts"
     }
   },
   "scripts": {
@@ -19,7 +27,7 @@
     "@volli/shared": "workspace:*"
   },
   "devDependencies": {
-    "ai": "^7.0.83",
+    "ai": "^7.0.142",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   }

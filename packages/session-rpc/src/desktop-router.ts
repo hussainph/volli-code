@@ -30,10 +30,13 @@
  * Every step but the last is checked by `pnpm typecheck` or a test.
  */
 import {
+  BOARD_RESOURCE_KINDS,
   DESKTOP_CATALOG_ENTRIES,
   HOST_LINK_RELAY_EVENT_ID_MAX,
   HOST_LINK_RELAY_PATH_MAX,
   hostLinkRelayEventEnds,
+  type AccountConnection,
+  type AccountSnapshot,
   type ActiveAddHost,
   type AddHostAnswer,
   type AddHostEvent,
@@ -61,12 +64,16 @@ import {
   type RemoteHostsSnapshot,
   type RemoteWorkspaceInput,
   type RenameRemoteHostInput,
+  WORKTREE_SETUP_ANSWERS,
+  type WorktreeSetupAnswer,
+  type WorktreeSetupStatusView,
   type WorktreeTrimSettings,
 } from "@volli/shared";
 import { readHostError, type JsonUnsafeProcedures } from "@volli/host-protocol";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
+import { accountSignInInputSchema, accountSnapshotSchema } from "./account-schema";
 import { AsyncQueue } from "./async-queue";
 import { boardId } from "./board-schema";
 import {
@@ -78,6 +85,7 @@ import {
   type CatalogMismatch,
   type ProcedurePaths,
   type RouterContextPorts,
+  type WorkspaceResource,
 } from "./catalog";
 import { procedureSchemas } from "./procedure-schema";
 import {
@@ -130,6 +138,12 @@ export interface DesktopRouterHandlers {
   readonly "project.reorder": HostHandler<{ orderedIds: readonly string[] }, null>;
   readonly "project.remove": HostHandler<{ projectId: string }, null>;
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
+  /** A ticket's working copy's environment setup (VC-584): where it stands, and a person's answer. */
+  readonly "worktree.setupStatus": HostHandler<{ ticketId: string }, WorktreeSetupStatusView>;
+  readonly "worktree.answerSetup": HostHandler<
+    { ticketId: string; answer: WorktreeSetupAnswer },
+    WorktreeSetupStatusView
+  >;
   /** Remote hosts this desktop added over SSH (VC-700 PR 2): desktop main's registry. */
   readonly "hosts.snapshot": HostHandler<void, RemoteHostsSnapshot>;
   readonly "hosts.subscribe": DesktopSubscriptionHandler<void, RemoteHostsSnapshot>;
@@ -211,6 +225,14 @@ export interface DesktopRouterHandlers {
   /** App shortcuts out of a focused Browser page (VC-301): desktop main's Browser Tab host. */
   readonly "browserShortcuts.subscribe": DesktopSubscriptionHandler<void, BrowserAppShortcutEvent>;
   readonly "browserShortcuts.focusPage": HostHandler<{ tabId: string }, null>;
+  /** The Volli Cloud account on this Mac (VC-884): desktop main's account service. */
+  readonly "account.snapshot": HostHandler<void, AccountSnapshot>;
+  readonly "account.subscribe": DesktopSubscriptionHandler<void, AccountSnapshot>;
+  readonly "account.signIn": HostHandler<{ connection: AccountConnection }, null>;
+  readonly "account.cancelSignIn": HostHandler<void, null>;
+  readonly "account.signOut": HostHandler<void, null>;
+  readonly "account.requestDeletion": HostHandler<void, null>;
+  readonly "account.cancelDeletion": HostHandler<void, null>;
 }
 
 type AssertNever<Type extends never> = Type;
@@ -368,6 +390,34 @@ const trimSettingsSchema = z.object({
   trimOnFinish: z.boolean(),
 });
 
+/** The last setup run a window shows (`WorktreeSetupRunView`): no machine paths. */
+const worktreeSetupRunSchema = z.object({
+  source: z.enum(["repo", "legacyCommand"]),
+  summary: z.string(),
+  exitCode: z.number().int().nullable(),
+  endedAt: z.number(),
+  tail: z.string(),
+});
+
+/**
+ * Where a working copy's setup stands (`WorktreeSetupStatusView`). Closed:
+ * the entry is client-local, so its renderer ships with the main that answers.
+ */
+const worktreeSetupStatusSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("none") }),
+  z.object({ kind: z.literal("pending") }),
+  z.object({ kind: z.literal("running") }),
+  z.object({ kind: z.literal("succeeded"), run: worktreeSetupRunSchema }),
+  z.object({ kind: z.literal("failed"), run: worktreeSetupRunSchema }),
+  z.object({ kind: z.literal("started-anyway"), run: worktreeSetupRunSchema }),
+]);
+
+/** The ticket whose working copy a setup command addresses: its Workspace's resource. */
+const setupTicket = ({ ticketId }: { ticketId: string }): WorkspaceResource => ({
+  kind: BOARD_RESOURCE_KINDS.ticket,
+  id: ticketId,
+});
+
 /** What one desktop-only stream may hold unsent to its window before it ends. */
 export const DESKTOP_STREAM_CAPACITY = 256;
 const SUBSCRIPTION_OVERFLOW_CODE = "SUBSCRIPTION_OVERFLOW";
@@ -481,6 +531,22 @@ export function createDesktopRouter() {
       trimSettings: hostProcedure("worktree.trimSettings")
         .output(trimSettingsSchema)
         .query(({ ctx }) => ctx.handlers["worktree.trimSettings"](undefined, ctx.call)),
+      /** Where the ticket's working copy's environment setup stands on this runner (VC-584). */
+      setupStatus: workspaceProcedure(
+        "worktree.setupStatus",
+        z.strictObject({ ticketId: boardId }),
+        setupTicket,
+      )
+        .output(worktreeSetupStatusSchema)
+        .query(({ ctx, input }) => ctx.handlers["worktree.setupStatus"](input, ctx.call)),
+      /** A person's answer to a failed setup: owe the run again, or start without it. */
+      answerSetup: workspaceProcedure(
+        "worktree.answerSetup",
+        z.strictObject({ ticketId: boardId, answer: z.enum(WORKTREE_SETUP_ANSWERS) }),
+        setupTicket,
+      )
+        .output(worktreeSetupStatusSchema)
+        .mutation(({ ctx, input }) => ctx.handlers["worktree.answerSetup"](input, ctx.call)),
     },
     /**
      * Remote hosts this desktop added over SSH (VC-700 PR 2). No channel
@@ -759,6 +825,39 @@ export function createDesktopRouter() {
         .output(z.null())
         .mutation(({ ctx, input }) => ctx.handlers["browserShortcuts.focusPage"](input, ctx.call)),
     },
+    /**
+     * The Volli Cloud account on this Mac (VC-884). Born on the bridge:
+     * host-placed, the person's own window only; desktop main's account
+     * service answers through the map (only with `cloud` on), and every
+     * other host answers unavailable. No procedure carries a token.
+     */
+    account: {
+      snapshot: hostProcedure("account.snapshot")
+        .output(accountSnapshotSchema)
+        .query(({ ctx }) => ctx.handlers["account.snapshot"](undefined, ctx.call)),
+      /** The current snapshot first, then the whole snapshot again on every change. */
+      subscribe: hostProcedure("account.subscribe").subscription(async function* ({ ctx, signal }) {
+        yield* desktopStream<AccountSnapshot>(ctx, "account.subscribe", signal, (sink) =>
+          ctx.handlers["account.subscribe"](undefined, ctx.call, sink),
+        );
+      }),
+      signIn: hostProcedure("account.signIn")
+        .input(accountSignInInputSchema)
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["account.signIn"](input, ctx.call)),
+      cancelSignIn: hostProcedure("account.cancelSignIn")
+        .output(z.null())
+        .mutation(({ ctx }) => ctx.handlers["account.cancelSignIn"](undefined, ctx.call)),
+      signOut: hostProcedure("account.signOut")
+        .output(z.null())
+        .mutation(({ ctx }) => ctx.handlers["account.signOut"](undefined, ctx.call)),
+      requestDeletion: hostProcedure("account.requestDeletion")
+        .output(z.null())
+        .mutation(({ ctx }) => ctx.handlers["account.requestDeletion"](undefined, ctx.call)),
+      cancelDeletion: hostProcedure("account.cancelDeletion")
+        .output(z.null())
+        .mutation(({ ctx }) => ctx.handlers["account.cancelDeletion"](undefined, ctx.call)),
+    },
   });
 }
 
@@ -783,5 +882,6 @@ export function desktopProcedureSchemas(router: DesktopRouter = createDesktopRou
     "hostLink.subscribe": hostLinkRelayEventSchema,
     "hostScope.subscribe": hostLinkRelayEventSchema,
     "browserShortcuts.subscribe": browserAppShortcutEventSchema,
+    "account.subscribe": accountSnapshotSchema,
   });
 }

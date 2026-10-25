@@ -1,7 +1,7 @@
 /**
  * How a value too long for the box it is drawn in gets read anyway (VC-288).
  *
- * The app truncates a lot, and truncation is usually right: a venue path, a
+ * The app truncates a lot, and truncation is usually right: a working copy path, a
  * branch name, a model name and a tab label are all arbitrarily long values
  * drawn in a pane whose width a person chose for the CONTENT, not for them. The
  * bug is never the ellipsis. It is that the whole value then lived on a

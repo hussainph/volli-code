@@ -30,6 +30,7 @@ import {
 } from "./harness-env";
 import type { SpawnLedgerPort } from "@volli/shared";
 import { refuseDaemonizingExecute } from "../shell/refusal";
+import { ShellSpillBudget, ShellSpillRedactor } from "./shell-spill";
 import {
   scopedEnvironment,
   sessionCommandEnvironment,
@@ -37,7 +38,7 @@ import {
 } from "./execution-env";
 
 const KILL_GRACE_MS = 250;
-/** Prefix and suffix of the spool a truncated command's complete output is preserved in. */
+/** Prefix and suffix of the spool a truncated command's output is preserved in. */
 const SPILL_PREFIX = "bash-";
 const SPILL_SUFFIX = ".log";
 
@@ -161,6 +162,7 @@ function metadataOf(view: ShellOutputView): ShellOutputMetadata {
   return {
     truncation: view.truncation,
     ...(view.spillPath === undefined ? {} : { spillPath: view.spillPath }),
+    ...(view.spillTruncatedAt === undefined ? {} : { spillTruncatedAt: view.spillTruncatedAt }),
     ...(view.lastLineBytes === undefined ? {} : { lastLineBytes: view.lastLineBytes }),
   };
 }
@@ -219,6 +221,7 @@ class BoundedOutput {
   #endsWithNewline = true;
   #currentLineBytes = 0;
   #spillPath: string | undefined;
+  #spillTruncatedAt: number | undefined;
   #published: ShellOutputView | undefined;
 
   constructor(capture: ShellOutputCaptureOptions | undefined) {
@@ -256,9 +259,15 @@ class BoundedOutput {
     return clean;
   }
 
-  /** Name the spool the complete output is being preserved in, once it exists. */
+  /** Name the spool the output is being preserved in, once it exists. */
   setSpillPath(path: string): void {
     this.#spillPath = path;
+  }
+
+  /** Say that the spool stopped at its own byte cap, and where it stopped. */
+  setSpillTruncatedAt(bytes: number): void {
+    if (this.#spillTruncatedAt === bytes) return;
+    this.#spillTruncatedAt = bytes;
   }
 
   /** The bounded view as it stands, with totals taken from what arrived rather than what is kept. */
@@ -281,6 +290,7 @@ class BoundedOutput {
         totalLines,
       },
       ...(this.#spillPath === undefined ? {} : { spillPath: this.#spillPath }),
+      ...(this.#spillTruncatedAt === undefined ? {} : { spillTruncatedAt: this.#spillTruncatedAt }),
       ...(retained.lastLinePartial ? { lastLineBytes: this.#currentLineBytes } : {}),
     };
   }
@@ -788,6 +798,9 @@ export class ScopedExecutionEnv implements ExecutionEnv {
    * Session workspace, which is the one directory this boundary lets a child
    * write — a spool anywhere else would be a file the contained command could
    * not have produced.
+   *
+   * What it preserves is capped by {@link ShellSpillBudget}: the spool stops
+   * there and `spillTruncatedAt` names the byte.
    */
   async exec(
     command: string,
@@ -896,6 +909,19 @@ export class ScopedExecutionEnv implements ExecutionEnv {
       // serialized through one chain and coalesced, because `appendFile` is the
       // only writer this boundary has and two overlapping appends would
       // interleave a command's own output.
+      //
+      // VC-820: the spool is capped by its own byte budget, reserved before the
+      // text is queued, so neither the pending writes nor the file can pass it.
+      // The cut can land inside a multibyte character, so the capped bytes go
+      // through a decoder that is never ended: the partial character is
+      // withheld rather than written back as U+FFFD, bytes the budget had spent.
+      //
+      // VC-865: the caller's spill redaction runs first, in stream order and
+      // before the budget, so a value straddling the cap is replaced whole and
+      // only its marker can be cut. It stops once the budget is spent.
+      const spillRedactor = new ShellSpillRedactor(options.capture?.spillRedaction);
+      const spillBudget = new ShellSpillBudget();
+      const spillDecoder = new StringDecoder("utf8");
       let spillHeld: string[] = [];
       let spillQueue: string[] = [];
       let spillPath: string | undefined;
@@ -935,9 +961,36 @@ export class ScopedExecutionEnv implements ExecutionEnv {
       const pumpSpill = () => {
         spillChain = (spillChain ?? Promise.resolve()).then(drainSpill);
       };
+      const failSpillRedaction = (error: unknown) => {
+        spillError ??= new ExecutionError(
+          "unknown",
+          `Failed to preserve complete shell output: ${asError(error).message}`,
+          asError(error),
+        );
+      };
       const holdForSpill = (text: string) => {
-        spillHeld.push(text);
-        if (!collector.truncated) return;
+        if (spillError !== undefined) return;
+        let safe: Uint8Array = Buffer.alloc(0);
+        if (spillBudget.truncatedAt === undefined) {
+          try {
+            safe = spillRedactor.push(Buffer.from(text, "utf8"));
+          } catch (error) {
+            failSpillRedaction(error);
+            return;
+          }
+        }
+        holdSpillBytes(safe);
+      };
+      const holdSpillBytes = (bytes: Uint8Array) => {
+        const capped = spillBudget.take(bytes);
+        if (spillBudget.truncatedAt !== undefined)
+          collector.setSpillTruncatedAt(spillBudget.truncatedAt);
+        const complete = spillDecoder.write(capped);
+        if (complete !== "") spillHeld.push(complete);
+        // Held text pumps as soon as the caller's window truncates, even when
+        // this chunk added nothing complete: otherwise a window larger than the
+        // cap could spend the whole budget before it truncates and never spool.
+        if (!collector.truncated || spillHeld.length === 0) return;
         spillQueue.push(spillHeld.join(""));
         spillHeld = [];
         pumpSpill();
@@ -1053,6 +1106,13 @@ export class ScopedExecutionEnv implements ExecutionEnv {
           // the metadata names a path, and a caller that reads it immediately
           // must not find a half-written file.
           if (spilling) {
+            if (spillError === undefined && spillBudget.truncatedAt === undefined) {
+              try {
+                holdSpillBytes(spillRedactor.end());
+              } catch (error) {
+                failSpillRedaction(error);
+              }
+            }
             pumpSpill();
             await spillChain;
           }

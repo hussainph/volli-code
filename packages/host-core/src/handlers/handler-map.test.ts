@@ -14,14 +14,17 @@ import { sealTestHandlers } from "../testing/host-handlers";
 import {
   ADMITTED,
   admittedHandlers,
+  HandlerNotServedError,
   invokeHandler,
   isHostHandlerMap,
   refused,
+  serveHostHandlers,
   type AdmissionRecord,
   type AdmissionVerdict,
   type HandlerPolicy,
   type HostHandlerMap,
 } from "./handler-map";
+import { ROUTER_POLICY } from "./policies";
 
 const USER: HandlerCall = { actor: { kind: "user" } };
 const MOVE = { projectId: "p", ticketId: "t", toStatus: "doing" } as const;
@@ -173,6 +176,59 @@ describe("invokeHandler", () => {
     const input = { sessionId: "s", afterSequence: 0 };
     await invokeHandler(map, recordingPolicy([]), "session.subscribe", input, USER, sink);
     expect(subscribe).toHaveBeenCalledExactlyOnceWith(input, USER, sink);
+  });
+});
+
+// The agent doors' own verbs (VC-923): sealed empty, served once by the
+// door that composes their ports, and reached like any other entry.
+describe("a served entry", () => {
+  const answer = { v: 1, ok: true, data: {} } as const;
+
+  it("is reached through the policy once served, and unavailable before", async () => {
+    const log: string[] = [];
+    const map = sealTestHandlers({});
+    const policy = recordingPolicy(log);
+    const call = () =>
+      invokeHandler(map, policy, "identify", {} as never, USER) as Promise<unknown>;
+    await expect(Promise.resolve().then(call)).rejects.toBeInstanceOf(HandlerNotServedError);
+    const identify = vi.fn(async () => answer);
+    serveHostHandlers(map, { identify });
+    await expect(call()).resolves.toBe(answer);
+    expect(identify).toHaveBeenCalledOnce();
+    expect(log).toEqual(["admit identify {} user", "admit identify {} user"]);
+  });
+
+  it("is never served over a sealed entry or a served one, and a refused serve serves nothing", async () => {
+    const identify = vi.fn(async () => answer);
+    const board = vi.fn(async () => answer);
+    const sealed = sealTestHandlers({ identify });
+    expect(() => serveHostHandlers(sealed, { board, identify })).toThrow(
+      "The handler map already serves identify.",
+    );
+    await expect(
+      Promise.resolve().then(() =>
+        invokeHandler(sealed, recordingPolicy([]), "board", {} as never, USER),
+      ),
+    ).rejects.toBeInstanceOf(HandlerNotServedError);
+    const map = sealTestHandlers({});
+    serveHostHandlers(map, { board });
+    expect(() => serveHostHandlers(map, { board })).toThrow(
+      "The handler map already serves board.",
+    );
+    expect(() => serveHostHandlers({} as HostHandlerMap, { board })).toThrow(
+      "Not a host handler map",
+    );
+  });
+
+  it("is never reached past a refusing policy, a router's included", async () => {
+    const identify = vi.fn(async () => answer);
+    const map = sealTestHandlers({});
+    serveHostHandlers(map, { identify });
+    const view = admittedHandlers(map, ROUTER_POLICY);
+    await expect(Promise.resolve().then(() => view.identify({} as never, USER))).rejects.toSatisfy(
+      isHandlerRefused,
+    );
+    expect(identify).not.toHaveBeenCalled();
   });
 });
 

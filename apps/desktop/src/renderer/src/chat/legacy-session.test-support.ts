@@ -15,8 +15,7 @@ import {
   type SessionTodoList,
 } from "@volli/shared";
 import {
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
+  createSessionExecutorSlot,
   createSessionRuntime,
   type BindingHandle,
   type NativeHarnessAdapter,
@@ -27,6 +26,10 @@ import {
   type TranscriptArtifactStore,
 } from "@volli/session-engine";
 import type { UIMessage } from "ai";
+import {
+  createInMemorySessionLedger,
+  createInMemoryTranscriptArtifactStore,
+} from "@volli/session-engine/testing";
 
 /** One recorded assistant message: its prose (blank is silent) and, optionally, a plan call. */
 export interface LegacyMessage {
@@ -125,7 +128,7 @@ export async function openLegacySession(
   const adapter = new TemplateAdapter();
   const live = createSessionRuntime({
     engine,
-    executor: adapter,
+    executors: createSessionExecutorSlot(adapter),
     artifacts,
     locations,
     clock,
@@ -168,7 +171,7 @@ export async function openLegacySession(
   };
   const host = createSessionRuntime({
     engine: legacy,
-    executor: new TemplateAdapter(),
+    executors: createSessionExecutorSlot(new TemplateAdapter()),
     artifacts: memory,
     locations,
     clock,

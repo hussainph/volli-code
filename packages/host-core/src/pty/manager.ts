@@ -1,4 +1,4 @@
-import type { SessionOrigin, SessionExecutionVenue } from "@volli/shared";
+import { LOCAL_RUNNER, type RunnerIdentity, type SessionOrigin } from "@volli/shared";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
@@ -40,7 +40,10 @@ import { isPathWithinRoots } from "../project-roots";
 import { ensureProjectArtifactsDir } from "../volli-fs";
 import {
   acquireWorktreeStartLease,
+  claimFirstRunSetup,
   createSetupRun,
+  terminalSetupCommand,
+  recordSetupFailure,
   ensure,
   runGitCapturingAsync,
   UNDER_DELETION_REFUSAL,
@@ -164,8 +167,8 @@ interface Session {
    *
    * Two occupants, one slot, because the manager's job is identical for both:
    * feed the handle output chunks from `onData` and notify it of a premature
-   * shell death from `onExit`. A freshly-created worktree session's setup
-   * command is the first ({@link createSetupRun}, worktree-support §6), which
+   * shell death from `onExit`. The setup command of a worktree that still
+   * owed it when this terminal started is the first ({@link createSetupRun}, worktree-support §6), which
    * owns tail scanning, that ticket's phase transitions and the
    * `worktree_failed(setup)` event. An offered install is the second
    * ({@link createCommandRun}, VC-156), which owns nothing durable and merely
@@ -176,6 +179,8 @@ interface Session {
    * launches the harness.
    */
   setupRun: SetupRun | null;
+  /** An explicit close is completed even when node-pty reports our kill signal. */
+  killedByVolli: boolean;
   /** The durable terminal attachment, not Session-owned terminal state. */
   attachmentId: string;
   terminalDetail: TerminalAttachmentDetail;
@@ -224,8 +229,8 @@ export interface HarnessWorkspaceFilesInput {
  * passes its own bus, `host.worktrees.deps`, and the same writer once it moves.
  */
 export interface PtyManagerPorts {
-  /** Provenance only; desktop callers retain the local default. */
-  readonly venue?: SessionExecutionVenue;
+  /** The Runner terminal provenance names; desktop callers retain {@link LOCAL_RUNNER}. */
+  readonly venue?: RunnerIdentity;
   /** Announces planning changes (`data-changed`) to every client. */
   readonly events: HostEventBus;
   /** The host's worktree bundle (`host.worktrees.deps`). */
@@ -245,8 +250,6 @@ const NO_SPAWN_LEDGER: TerminalSpawnLedger = {
   markExited: () => {},
   markParked: () => {},
 };
-
-const TERMINAL_VENUE = { id: "local", kind: "local" as const };
 
 /**
  * What a {@link PtyManager} is built from (VC-627: one options object in place
@@ -303,27 +306,27 @@ export interface PtyManagerOptions {
    */
   readonly concurrencyEnvReader?: SessionConcurrencyEnvReader | null;
   /**
-   * The venue terminal provenance records. Wins over {@link PtyManagerPorts.venue};
-   * absent, the host's venue applies, else desktop's `local`/`local`.
+   * The Runner terminal provenance records. Wins over {@link PtyManagerPorts.venue};
+   * absent, the host's Runner applies, else {@link LOCAL_RUNNER}.
    */
-  readonly venue?: SessionExecutionVenue;
+  readonly venue?: RunnerIdentity;
 }
 
-function terminalSystemProvenance(venue: SessionExecutionVenue, origin?: SessionOrigin) {
+function terminalSystemProvenance(runner: RunnerIdentity, origin?: SessionOrigin) {
   return {
     source: {
       kind: "system" as const,
       id: "desktop-terminal",
       detail: origin === undefined ? null : { sessionOrigin: origin },
     },
-    venue,
+    venue: runner,
   };
 }
 
-function terminalAdapterProvenance(venue: SessionExecutionVenue) {
+function terminalAdapterProvenance(runner: RunnerIdentity) {
   return {
     source: { kind: "adapter" as const, id: "terminal", detail: null },
-    venue,
+    venue: runner,
   };
 }
 
@@ -388,7 +391,7 @@ export class PtyManager {
   private readonly blobsRootPath: string;
   private readonly spawnLedger: TerminalSpawnLedger;
   /** The explicit {@link PtyManagerOptions.venue}, when one was given. */
-  private readonly venueOverride: SessionExecutionVenue | undefined;
+  private readonly runnerOverride: RunnerIdentity | undefined;
 
   /** What this supervisor is built from: see {@link PtyManagerOptions}. */
   constructor(options: PtyManagerOptions) {
@@ -402,7 +405,7 @@ export class PtyManager {
     this.blobsRootPath = options.blobsRootPath ?? "";
     this.spawnLedger = options.spawnLedger ?? NO_SPAWN_LEDGER;
     this.concurrencyEnvReader = options.concurrencyEnvReader ?? null;
-    this.venueOverride = options.venue;
+    this.runnerOverride = options.venue;
     // The controller shares this manager's live session map and mutates each
     // session's park fields in place. `flush` and `pushParkState` stay here —
     // they touch the output pipeline and the client — and every current
@@ -422,12 +425,12 @@ export class PtyManager {
   }
 
   /**
-   * The venue this supervisor's terminals record in their provenance: the
-   * explicit option, else the host's, else desktop's `local`/`local`. Read at
-   * call time, as `host.venue` always was.
+   * The Runner this supervisor's terminals record in their provenance: the
+   * explicit option, else the host's, else {@link LOCAL_RUNNER}. Read at call
+   * time, as `host.venue` always was.
    */
-  private get venue(): SessionExecutionVenue {
-    return this.venueOverride ?? this.host.venue ?? TERMINAL_VENUE;
+  private get runner(): RunnerIdentity {
+    return this.runnerOverride ?? this.host.venue ?? LOCAL_RUNNER;
   }
 
   /**
@@ -557,7 +560,7 @@ export class PtyManager {
           role: roleImpliedByTicket(scope.ticketId),
           parentSessionId: null,
           title: scope.title,
-          provenance: terminalSystemProvenance(this.venue, { kind: "user" }),
+          provenance: terminalSystemProvenance(this.runner, { kind: "user" }),
         });
         sessionId = created.session.id;
         if (
@@ -592,12 +595,12 @@ export class PtyManager {
           sessionId,
           ...(startCommandId === undefined ? {} : { commandId: startCommandId }),
           occurredAt: Date.now(),
-          provenance: terminalSystemProvenance(this.venue),
+          provenance: terminalSystemProvenance(this.runner),
           attachment: {
             id: attachmentId,
             sessionId,
             adapterId: "terminal",
-            venue: this.venue,
+            venue: this.runner,
             continuity: scope.resume === null ? "fresh" : "native_resume",
             native: terminalNativeReference(detail),
             // A terminal companion carries no Authority Snapshot, and never
@@ -630,7 +633,7 @@ export class PtyManager {
           adapterId: "terminal",
           continuity: scope.resume === null ? "fresh" : "native_resume",
         },
-        provenance: terminalSystemProvenance(this.venue, { kind: "user" }),
+        provenance: terminalSystemProvenance(this.runner, { kind: "user" }),
       });
       startCommandId = start.command.id;
     } catch (error) {
@@ -891,12 +894,12 @@ export class PtyManager {
           sessionId,
           commandId: start.command.id,
           occurredAt: now,
-          provenance: terminalSystemProvenance(this.venue),
+          provenance: terminalSystemProvenance(this.runner),
           attachment: {
             id: attachmentId,
             sessionId,
             adapterId: "terminal",
-            venue: this.venue,
+            venue: this.runner,
             continuity: scope.resume === null ? "fresh" : "native_resume",
             native: terminalNativeReference(terminalDetail),
             // No Snapshot, for the reason spelled out on the failure path above:
@@ -946,6 +949,7 @@ export class PtyManager {
         quietCpuSamples: 0,
         spawnLedgerId: ledgerId,
         setupRun: null,
+        killedByVolli: false,
         attachmentId,
         terminalDetail,
       };
@@ -991,13 +995,17 @@ export class PtyManager {
       //
       // For a worktree session the harness command opens with the orientation
       // preamble (agents must never re-infer their cwd) — buildable only now
-      // that ensure resolved the identity. When ensure FRESHLY created the
-      // worktree AND the project defines a setup command, that command runs
-      // FIRST, sentinel-gated (§6): the worktree module's `createSetupRun` handle
-      // owns the whole machine (wrapped line, phase `setting-up`, tail scan,
-      // failure event); the manager only writes its command line and holds the
-      // handle in `setupRun` so the onData handler can feed it. A reused worktree (created
-      // false) is already `ready` from ensure and launches immediately.
+      // that ensure resolved the identity. When the worktree still owes its
+      // setup run (a durable fact of the worktree, VC-835 — not whether THIS
+      // ensure created it), this terminal claims it, and if the project defines
+      // a setup command, that command runs FIRST, sentinel-gated (§6): the
+      // worktree module's `createSetupRun` handle owns the whole machine
+      // (wrapped line, phase `setting-up`, tail scan, failure event); the
+      // manager only writes its command line and holds the handle in
+      // `setupRun` so the onData handler can feed it. A worktree whose
+      // setup already ran — here or in a structured Session's start — is
+      // already `ready` from ensure and launches immediately. The claim is a
+      // synchronous unlink so nothing can come between it and the write.
       const worktree = scope.worktree;
       if (worktree !== null && worktreeOutcome !== null) {
         const identity = worktreeOutcome.identity;
@@ -1013,12 +1021,63 @@ export class PtyManager {
           this.adapterFor,
         );
         const setupCommand = worktree.setupCommand?.trim() ?? "";
-        if (worktreeOutcome.created && setupCommand.length > 0) {
+        const deps = this.host.worktreeDeps(db);
+        let claimedSetup = false;
+        if (worktreeOutcome.setupPending && identity.worktreePath !== null) {
+          try {
+            claimedSetup = claimFirstRunSetup(deps, identity.worktreePath);
+          } catch (error) {
+            // Still owed, and said on the ticket; the terminal itself starts.
+            recordSetupFailure(
+              { db, onPhase: deps.onPhase },
+              worktree.ticketId,
+              `[setup command could not be claimed (${errorMessage(error)})]`,
+            );
+          }
+        }
+        // With environment recipes on (VC-584), the claimed run is the working
+        // copy's recipe — its own `.agents/setup` first, else the stored
+        // command — and its outcome is recorded as the working copy's setup
+        // fact. Off, it is the stored command exactly as before.
+        let setup: {
+          command: string;
+          onSettled?: (s: { exitCode: number | null }) => void;
+        } | null = claimedSetup && setupCommand.length > 0 ? { command: setupCommand } : null;
+        if (
+          claimedSetup &&
+          deps.environmentRecipes?.() === true &&
+          identity.worktreePath !== null
+        ) {
+          try {
+            setup = terminalSetupCommand(deps, {
+              ticketId: worktree.ticketId,
+              displayId: worktree.displayId,
+              projectId: scope.projectId,
+              worktreePath: identity.worktreePath,
+              storedCommand: worktree.setupCommand,
+              shellPath: file,
+            });
+          } catch (error) {
+            setup = null;
+            recordSetupFailure(
+              { db, onPhase: deps.onPhase },
+              worktree.ticketId,
+              `[.agents/setup could not be read (${errorMessage(error)})]`,
+            );
+          }
+        }
+        if (setup !== null) {
           // `file` is the resolved shell the PTY was spawned with — the sentinel
           // wrapper is shell-aware (fish is not POSIX), so it must match.
           const setupRun = createSetupRun(
-            { db, onPhase: this.host.worktreeDeps(db).onPhase },
-            { ticketId: worktree.ticketId, setupCommand, shellPath: file, launchCommand },
+            { db, onPhase: deps.onPhase },
+            {
+              ticketId: worktree.ticketId,
+              setupCommand: setup.command,
+              shellPath: file,
+              launchCommand,
+              ...(setup.onSettled === undefined ? {} : { onSettled: setup.onSettled }),
+            },
           );
           session.setupRun = setupRun;
           pty.write(`${setupRun.commandLine}\r`);
@@ -1029,7 +1088,11 @@ export class PtyManager {
         pty.write(`${scope.launchCommand}\r`);
       }
 
-      pty.onExit(({ exitCode }) => {
+      pty.onExit(({ exitCode: reportedExitCode, signal }) => {
+        // node-pty leaves exitCode at 0 for signal deaths. Use the conventional
+        // shell status for both the live pane and the existing durable exit fact,
+        // so older readers also see failure without needing a new event shape.
+        const exitCode = signal === undefined || signal === 0 ? reportedExitCode : 128 + signal;
         // Flush buffered output first so the renderer never sees the exit
         // event ahead of the shell's final bytes.
         session.output.flush();
@@ -1102,8 +1165,8 @@ export class PtyManager {
         sessionId,
         attachmentId: session.attachmentId,
         occurredAt,
-        provenance: terminalSystemProvenance(this.venue),
-        outcome: exitCode === 0 ? "completed" : "failed",
+        provenance: terminalSystemProvenance(this.runner),
+        outcome: session.killedByVolli || exitCode === 0 ? "completed" : "failed",
       });
     } catch (error) {
       log.error("failed to close terminal attachment", {
@@ -1147,7 +1210,7 @@ export class PtyManager {
         sessionId,
         attachmentId: session.attachmentId,
         occurredAt,
-        provenance: terminalAdapterProvenance(this.venue),
+        provenance: terminalAdapterProvenance(this.runner),
         exitCode,
       });
     } catch (error) {
@@ -1465,7 +1528,7 @@ export class PtyManager {
           commandId: randomUUID(),
           sessionId,
           intent: { kind: "executor.interrupt", attachmentId: session.attachmentId },
-          provenance: terminalSystemProvenance(this.venue, {
+          provenance: terminalSystemProvenance(this.runner, {
             kind: "volli",
             reason: "supervision",
           }),
@@ -1476,7 +1539,7 @@ export class PtyManager {
           id: randomUUID(),
           sessionId,
           occurredAt: Date.now(),
-          provenance: terminalAdapterProvenance(this.venue),
+          provenance: terminalAdapterProvenance(this.runner),
           kind: "command.receipt",
           attachmentId: session.attachmentId,
           receipt: {
@@ -1497,7 +1560,7 @@ export class PtyManager {
               id: randomUUID(),
               sessionId,
               occurredAt: Date.now(),
-              provenance: terminalAdapterProvenance(this.venue),
+              provenance: terminalAdapterProvenance(this.runner),
               kind: "command.receipt",
               attachmentId: session.attachmentId,
               receipt: {
@@ -1634,11 +1697,17 @@ export class PtyManager {
     // revocation cannot wait for onExit either: a failed native kill may never
     // produce one.
     this.agentRuntime?.revokeSessionToken?.(session.attachmentId);
+    // Keep the intent on the captured session: onExit runs after forget(), and
+    // may even fire synchronously inside kill(). Its exit status stays factual,
+    // but a requested close must not be recorded as a failed attachment.
+    session.killedByVolli = true;
     this.forget(sessionId);
     try {
       session.pty.kill();
       return { ok: true };
     } catch (error) {
+      // A failed delivery is not evidence that we caused a later signal death.
+      session.killedByVolli = false;
       return { ok: false, error: errorMessage(error) };
     }
   }

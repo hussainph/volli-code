@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { SessionEvent, SessionLedgerIds, SessionProjectionCheckpoint } from "@volli/shared";
 import {
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamFrame,
@@ -17,6 +15,8 @@ import {
   type SessionTranscriptArtifact,
   type TranscriptArtifactStore,
 } from "./index";
+import { createInMemorySessionLedger, createInMemoryTranscriptArtifactStore } from "./testing";
+import { createSessionExecutorSlot } from "./executor-slot";
 
 /**
  * What opening, resuming and scrolling back through a Session costs, by age
@@ -146,7 +146,7 @@ async function seedHistory(events: number): Promise<Seeded> {
   const adapter = new TemplateAdapter();
   const recorder = createSessionRuntime({
     engine,
-    executor: adapter,
+    executors: createSessionExecutorSlot(adapter),
     artifacts: memory,
     locations: fixedLocation("/projects/fake"),
     clock,
@@ -245,7 +245,7 @@ async function seedHistory(events: number): Promise<Seeded> {
   };
   const runtime = createSessionRuntime({
     engine: reader,
-    executor: new TemplateAdapter(),
+    executors: createSessionExecutorSlot(new TemplateAdapter()),
     artifacts: counted,
     locations: fixedLocation("/projects/fake"),
     clock,

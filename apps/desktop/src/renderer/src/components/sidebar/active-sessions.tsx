@@ -96,7 +96,7 @@ import { useRemoteSessionsUnavailable } from "@renderer/stores/remote-session-av
 import { projectBandOrderKey, useHeldSessionOrder } from "@renderer/stores/session-order";
 import { type SessionContainer, useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
-import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, useProjectUiStore } from "@renderer/stores/project-ui";
 import { boardApi } from "@renderer/lib/board-protocol";
 
 const EMPTY_TICKETS: readonly Ticket[] = [];
@@ -411,23 +411,23 @@ export function ActiveSessions({
   // this one has to be handed over on its own key or its live tabs are invisible.
   const projectContainer = containers[project.id];
 
-  const nav = useWorkspaceStore((state) => state.byProject[project.id]?.nav ?? "board");
-  const openTicketId = useWorkspaceStore(
+  const nav = useProjectUiStore((state) => state.byProject[project.id]?.nav ?? "board");
+  const openTicketId = useProjectUiStore(
     (state) => state.byProject[project.id]?.openTicketId ?? null,
   );
-  const ticketTabs = useWorkspaceStore(
+  const ticketTabs = useProjectUiStore(
     (state) => state.byProject[project.id]?.ticketTabs ?? EMPTY_TICKET_TABS,
   );
-  const openTicketWorkspace = useWorkspaceStore((state) => state.openTicketWorkspace);
-  const openTicketSession = useWorkspaceStore((state) => state.openTicketSession);
-  const openHome = useWorkspaceStore((state) => state.openHome);
-  const homeActiveTab = useWorkspaceStore(
-    (state) => state.byProject[project.id]?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab,
+  const openTicketView = useProjectUiStore((state) => state.openTicketView);
+  const openTicketSession = useProjectUiStore((state) => state.openTicketSession);
+  const openHome = useProjectUiStore((state) => state.openHome);
+  const homeActiveTab = useProjectUiStore(
+    (state) => state.byProject[project.id]?.homeActiveTab ?? DEFAULT_PROJECT_UI.homeActiveTab,
   );
-  const expandedGroups = useWorkspaceStore(
+  const expandedGroups = useProjectUiStore(
     (state) => state.byProject[project.id]?.expandedSessionGroups ?? EMPTY_EXPANDED,
   );
-  const setSessionGroupExpanded = useWorkspaceStore((state) => state.setSessionGroupExpanded);
+  const setSessionGroupExpanded = useProjectUiStore((state) => state.setSessionGroupExpanded);
   // Sparse and stable: the store replaces this object only when a marked
   // Session arrives, so a project nobody has automated hands the same empty
   // map to every rebuild and the memo below is never defeated by it (VC-131).
@@ -950,7 +950,7 @@ export function ActiveSessions({
    */
   const toggleGroup = React.useCallback(
     (ticketId: string) => {
-      const open = useWorkspaceStore
+      const open = useProjectUiStore
         .getState()
         .byProject[project.id]?.expandedSessionGroups.includes(ticketId);
       setSessionGroupExpanded(project.id, ticketId, open !== true);
@@ -963,7 +963,7 @@ export function ActiveSessions({
    *
    * The decision is pure and lives with the row model (VC-290): a closed
    * terminal's row now names its own saved record, and the two fallbacks that
-   * used to swallow it — the ticket's workspace, and Home — belong only to a
+   * used to swallow it — the ticket's Ticket view, and Home — belong only to a
    * Session with no surface at all. Splitting them was the fix, not a
    * refactor: while "open the Session" and "open something near the Session"
    * were one function, the second silently answered for the first.
@@ -1000,7 +1000,7 @@ export function ActiveSessions({
             const chat = useChatSessionsStore.getState();
             chat.openChatTab(route.ticketId, route.sessionId);
             chat.setProvisionalActive(route.ticketId, route.sessionId);
-            openTicketWorkspace(project.id, route.ticketId);
+            openTicketView(project.id, route.ticketId);
             return;
           }
           // The two store calls the ticket rail's own chat row makes, for the
@@ -1011,11 +1011,11 @@ export function ActiveSessions({
           const chat = useChatSessionsStore.getState();
           chat.adoptChatSession(route.sessionId);
           chat.openChatTab(route.ticketId, route.sessionId);
-          openTicketWorkspace(project.id, route.ticketId, { tabId: route.tabId });
+          openTicketView(project.id, route.ticketId, { tabId: route.tabId });
           return;
         }
-        case "ticket-workspace": {
-          openTicketWorkspace(project.id, route.ticketId);
+        case "ticket-view": {
+          openTicketView(project.id, route.ticketId);
           return;
         }
         case "home-terminal": {
@@ -1052,7 +1052,7 @@ export function ActiveSessions({
         }
       }
     },
-    [project.id, openHome, openTicketSession, openTicketWorkspace],
+    [project.id, openHome, openTicketSession, openTicketView],
   );
 
   /* ------------------------------------------------------------- the peek */
@@ -1217,7 +1217,7 @@ export function ActiveSessions({
           if (row !== undefined) activate(row);
         },
         openTicket(ticketId) {
-          openTicketWorkspace(project.id, ticketId);
+          openTicketView(project.id, ticketId);
         },
         showConversation(sessionId) {
           setViewedSessionId(sessionId);
@@ -1226,7 +1226,7 @@ export function ActiveSessions({
           void setSessionRead(project.id, sessionId, nowUnread);
         },
       }),
-    [activate, listingRows, openTicketWorkspace, project.id, setSessionRead],
+    [activate, listingRows, openTicketView, project.id, setSessionRead],
   );
 
   const rowOf = React.useCallback((rowId: string) => peekRows.get(rowId), [peekRows]);

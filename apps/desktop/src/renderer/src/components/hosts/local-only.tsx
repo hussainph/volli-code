@@ -1,6 +1,6 @@
 /**
  * Local-only surfaces for a remote project (VC-711). Files, terminals,
- * worktrees and venues, automations, MCP, attachments and the like reach
+ * working copies, automations, MCP, attachments and the like reach
  * THIS Mac's main process through `window.api`, keyed by a project id; a
  * remote project's id means nothing there. So each such surface sits behind
  * {@link LocalOnly}: for a project a remote host serves, its children never

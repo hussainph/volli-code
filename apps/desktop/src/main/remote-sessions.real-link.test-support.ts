@@ -206,6 +206,7 @@ export async function desktopMain(link: HostLink, electron: FakeIpcMain, cleanup
       modelAccess: null,
       experiments: null,
       automations: { kind: "degraded" } as never,
+      worktreeReads: null,
       busyWorktreeSites: async () => [],
       hostLinkRelay: relay,
     },

@@ -33,11 +33,10 @@ function fixture() {
     db: db.db,
     sessionEngine: createTestSessionEngine(db.db),
     appVersion: "test",
-    handlers: testHostHandlers({ db: db.db }),
+    // The map's one start command (VC-923), over the test's facade.
+    handlers: testHostHandlers({ db: db.db, sessions: { start }, submitSessionMessage: kickoff }),
     verifySessionToken: tokens.verify,
     verifyOperatorToken: (token) => (token === "op" ? { login: "ops" } : null),
-    sessions: { start },
-    submitSessionMessage: kickoff,
     onOperatorWrite: audit,
   });
   return { service, tokens, start, kickoff, audit, request };
@@ -129,5 +128,44 @@ describe("operator Session start admission", () => {
       ok: false,
       error: { code: "MODEL_UNAVAILABLE", message: "Sign in required" },
     });
+    f.start.mockRejectedValue(
+      new StructuredSessionsError("DEFAULT_MODEL_REQUIRED", "Choose a default model"),
+    );
+    expect(await f.service.execute(f.request({ operatorToken: "op" }))).toMatchObject({
+      ok: false,
+      error: { code: "MODEL_REQUIRED" },
+    });
+    f.start.mockRejectedValue(new StructuredSessionsError("SKILL_NOT_FOUND", "No such skill"));
+    expect(await f.service.execute(f.request({ operatorToken: "op" }))).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "No such skill" },
+    });
+    f.start.mockRejectedValue(new Error("The disk is full"));
+    expect(await f.service.execute(f.request({ operatorToken: "op" }))).toMatchObject({
+      ok: false,
+      error: { code: "MUTATION_FAILED", message: expect.stringContaining("The disk is full") },
+    });
+  });
+
+  it("answers a launch with no Session runtime as retryable, through the map's start", async () => {
+    db = openTestDb();
+    insertProject(db.db, testProject({ id: "p", ticketPrefix: "VC" }));
+    insertTicket(db.db, testTicket("p", { id: "t", ticketNumber: 1 }));
+    const records: string[] = [];
+    const service = createAgentCommandService({
+      db: db.db,
+      sessionEngine: createTestSessionEngine(db.db),
+      appVersion: "test",
+      handlers: testHostHandlers({
+        db: db.db,
+        onAdmission: ({ door, key, admitted }) => records.push(`${door} ${key} ${admitted}`),
+      }),
+      verifyOperatorToken: (token) => (token === "op" ? { login: "ops" } : null),
+    });
+    expect(await service.execute(request({ operatorToken: "op" }))).toMatchObject({
+      ok: false,
+      error: { code: "APP_UNREACHABLE", message: "The Session runtime is unavailable." },
+    });
+    expect(records).toEqual(["agent-socket session.start true"]);
   });
 });

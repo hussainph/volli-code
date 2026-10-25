@@ -15,9 +15,8 @@ import {
 import legacyLedger from "../../shared/src/fixtures/legacy-authority-ledger.json";
 import type { UIMessage } from "ai";
 import {
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
   createSessionEngine,
+  createSessionExecutorSlot,
   createSessionRuntime,
   isSessionStreamCompactionProgress,
   isSessionStreamFrame,
@@ -41,10 +40,16 @@ import {
   type SessionStreamEmission,
   type SessionStreamFrame,
   type SessionStreamOverlay,
+  type SubscribeCommittedSessionEvents,
   type TranscriptArtifactStore,
   type TranscriptDelta,
 } from "./index";
 import { PROJECTION_CACHE_LIMIT } from "./session-runtime";
+import {
+  createCommittedSessionStream,
+  createInMemorySessionLedger,
+  createInMemoryTranscriptArtifactStore,
+} from "./testing";
 
 const venue = { id: "machine-1", kind: "local" as const };
 
@@ -87,8 +92,8 @@ class Gate {
 }
 
 class FakeAdapter implements NativeHarnessAdapter {
-  readonly id = "fake";
-  readonly durableIdNamespace = "fake";
+  readonly id: string = "fake";
+  readonly durableIdNamespace: string = "fake";
   readonly adapterVersion = "1.0.0";
   readonly runtime = { path: "/trusted/fake", version: "1.0.0", fingerprint: "sha256:fake" };
   attaches = 0;
@@ -193,6 +198,8 @@ class FakeAdapter implements NativeHarnessAdapter {
 function composition(
   options: {
     adapter?: FakeAdapter;
+    /** More runtimes in the executor slot beside `adapter`, which stays its default. */
+    others?: readonly NativeHarnessAdapter[];
     engine?: SessionEngine;
     artifacts?: TranscriptArtifactStore;
     locations?: Parameters<typeof createSessionRuntime>[0]["locations"];
@@ -202,24 +209,34 @@ function composition(
     onSubscriberFailure?: (error: unknown) => void;
     onProjectionCheckpointFailure?: (error: unknown) => void;
     observability?: ObservabilitySink;
+    /**
+     * Where the runtime hears committed events. Absent means what every host
+     * composes (VC-790): {@link createCommittedSessionStream} over the engine,
+     * which the returned `engine` then writes through. `false` composes none, for the
+     * fallback the runtime keeps without it.
+     */
+    committed?: SubscribeCommittedSessionEvents | false;
   } = {},
 ): { runtime: HostedSessionRuntime; engine: SessionEngine; adapter: FakeAdapter } {
   let now = 100;
   const clock = options.clock ?? { now: () => now++ };
-  const engine =
+  const base =
     options.engine ??
     createSessionEngine({
       ledger: createInMemorySessionLedger(),
       clock,
       ids: ids(),
     });
+  const stream = options.committed === undefined ? createCommittedSessionStream(base) : null;
+  const engine = stream?.engine ?? base;
+  const committed = stream?.committed ?? options.committed;
   const adapter = options.adapter ?? new FakeAdapter();
   return {
     engine,
     adapter,
     runtime: createSessionRuntime({
       engine,
-      executor: adapter,
+      executors: createSessionExecutorSlot(adapter, options.others),
       artifacts: options.artifacts ?? createInMemoryTranscriptArtifactStore(),
       locations: options.locations ?? fixedLocation("/projects/fake"),
       clock,
@@ -229,7 +246,23 @@ function composition(
         ? { onProjectionCheckpointFailure: options.onProjectionCheckpointFailure }
         : {}),
       ...(options.observability ? { observability: options.observability } : {}),
+      ...(committed ? { committed } : {}),
     }),
+  };
+}
+
+/** {@link composition} as the host composes it, with the stream's listeners exposed. */
+function committedComposition(
+  options: Omit<NonNullable<Parameters<typeof composition>[0]>, "engine" | "committed"> = {},
+) {
+  let now = 100;
+  const clock = options.clock ?? { now: () => now++ };
+  const stream = createCommittedSessionStream(
+    createSessionEngine({ ledger: createInMemorySessionLedger(), clock, ids: ids() }),
+  );
+  return {
+    ...composition({ ...options, clock, engine: stream.engine, committed: stream.committed }),
+    listeners: stream.listeners,
   };
 }
 
@@ -5212,18 +5245,6 @@ describe("SessionRuntime transient transcript overlay", () => {
   });
 
   /**
-   * The runtime is not the ledger's only writer, and a subscriber that assumed
-   * it was went deaf for the rest of the Session.
-   *
-   * A retitle submitted straight to the Engine — what `volli:session-rename`
-   * does, and what a chat titling itself from its first message now does on
-   * every first turn — appends three events the publish path never sees. The
-   * drain delivers `cursor + 1` and nothing else, so those three were a hole
-   * that never filled: the turn's own `turn.completed` landed behind it and was
-   * never handed over, leaving the Session working forever with a Stop button
-   * nothing could clear.
-   */
-  /**
    * The other way a subscriber went deaf: its own drain failing. A listener
    * that throws — or a frame the artifact store cannot read back yet — used to
    * remove the subscriber and tell no one. The transport's queue stayed open,
@@ -5260,8 +5281,23 @@ describe("SessionRuntime transient transcript overlay", () => {
     expect(delivered).toEqual([]);
   });
 
+  /**
+   * The runtime is not the ledger's only writer, and a subscriber that assumed
+   * it was went deaf for the rest of the Session.
+   *
+   * A retitle submitted straight to the Engine — what `volli:session-rename`
+   * does, and what a chat titling itself from its first message now does on
+   * every first turn — appends three events the publish path never sees. The
+   * drain delivers `cursor + 1` and nothing else, so those three were a hole
+   * that never filled: the turn's own `turn.completed` landed behind it and was
+   * never handed over, leaving the Session working forever with a Stop button
+   * nothing could clear.
+   *
+   * This runtime is composed without the committed stream, so it pins the
+   * defensive fallback (`#nextAfterGap`); the tests after it pin the stream.
+   */
   it("delivers past a gap left by a writer that bypassed the publish path", async () => {
-    const { runtime, engine, adapter } = composition();
+    const { runtime, engine, adapter } = composition({ committed: false });
     const sessionId = await createAndAttach(runtime);
     const kinds: string[] = [];
     const stop = await runtime.subscribe(
@@ -5302,6 +5338,206 @@ describe("SessionRuntime transient transcript overlay", () => {
       "command.receipt.recorded",
       "turn.completed",
     ]);
+  });
+
+  // VC-790: the same out-of-band writers, heard as they commit. Without the
+  // committed stream a retitle at rest reached nobody until some later
+  // published event exposed the gap it left.
+  it("delivers a retitle made around the runtime to an idle subscriber as it commits", async () => {
+    const { runtime, engine } = committedComposition();
+    const sessionId = await createAndAttach(runtime);
+    const frames: SessionStreamFrame[] = [];
+    const failures: unknown[] = [];
+    const stop = await runtime.subscribe(
+      { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+      (emission) => {
+        if (isSessionStreamFrame(emission)) frames.push(emission);
+      },
+      (error) => failures.push(error),
+    );
+
+    // Straight to the Engine, exactly as `volli:session-rename` and the
+    // auto-titler do it — and nothing after it.
+    await engine.submit({
+      commandId: "rename-at-rest",
+      sessionId,
+      intent: { kind: "session.retitle", title: "Titled from its first message" },
+      provenance: { source: { kind: "system", id: "auto-title", detail: null }, venue },
+    });
+    await settleMicrotasks();
+
+    expect(frames.map((frame) => frame.event.payload.kind)).toEqual([
+      "command.recorded",
+      "session.retitled",
+      "command.receipt.recorded",
+    ]);
+    const retitled = frames[1]!.event;
+    expect(retitled.payload).toEqual({
+      kind: "session.retitled",
+      title: "Titled from its first message",
+    });
+    // Durable frames, contiguous with what the subscriber already had.
+    const sequences = frames.map((frame) => frame.sequence);
+    expect(sequences).toEqual([sequences[0]!, sequences[0]! + 1, sequences[0]! + 2]);
+    expect(failures).toEqual([]);
+    stop();
+  });
+
+  it("delivers a mid-turn retitle in ledger order, once each, to a slow consumer", async () => {
+    const { runtime, engine, adapter } = committedComposition();
+    const sessionId = await createAndAttach(runtime);
+    const sequences: number[] = [];
+    const kinds: string[] = [];
+    const failures: unknown[] = [];
+    const stop = await runtime.subscribe(
+      { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+      async (emission) => {
+        if (!isSessionStreamFrame(emission)) return;
+        // A slow consumer keeps each frame in flight while later ones — from
+        // the runtime's publish and from the committed stream — queue behind.
+        await settleMicrotasks();
+        sequences.push(emission.sequence);
+        kinds.push(emission.event.payload.kind);
+      },
+      (error) => failures.push(error),
+    );
+
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-1", occurredAt: 800 });
+    await engine.submit({
+      commandId: "rename-mid-turn",
+      sessionId,
+      intent: { kind: "session.retitle", title: "Mid-turn" },
+      provenance: { source: { kind: "user", id: "renderer", detail: null }, venue },
+    });
+    await adapter.emit({ kind: "turn", state: "completed", turnId: "turn-1", occurredAt: 801 });
+    await settleMicrotasks();
+    stop();
+
+    expect(kinds).toEqual([
+      "turn.started",
+      "command.recorded",
+      "session.retitled",
+      "command.receipt.recorded",
+      "turn.completed",
+    ]);
+    expect(new Set(sequences).size).toBe(sequences.length);
+    expect(failures).toEqual([]);
+  });
+
+  it("leaves the runtime's own events to its publish, so a frame still means it is done", async () => {
+    // Host-notice delivery submits the moment it sees `attachment.opened`, and
+    // must find the binding installed. The runtime publishes that frame only
+    // after installing it; the committed stream must not deliver it earlier.
+    const { runtime } = committedComposition();
+    const created = await runtime.command({
+      commandId: "command-create",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Native Session",
+      },
+    });
+    const { sessionId } = created;
+    const boundAtFrame: boolean[] = [];
+    const sequences: number[] = [];
+    const stop = await runtime.subscribe(
+      { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+      (emission) => {
+        if (!isSessionStreamFrame(emission)) return;
+        sequences.push(emission.sequence);
+        if (emission.event.payload.kind === "attachment.opened") {
+          const attachmentId = emission.event.payload.attachment.id;
+          boundAtFrame.push(
+            runtime.openNativeBindings().some((binding) => binding.attachmentId === attachmentId),
+          );
+        }
+      },
+    );
+
+    await runtime.command({
+      commandId: "command-attach",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    await settleMicrotasks();
+    stop();
+
+    expect(boundAtFrame).toEqual([true]);
+    expect(new Set(sequences).size).toBe(sequences.length);
+  });
+
+  it("ends a subscription whose drain fails on a committed event, even when the reporter throws", async () => {
+    const { runtime, engine } = committedComposition({
+      onSubscriberFailure: () => {
+        throw new Error("reporter down");
+      },
+    });
+    const sessionId = await createAndAttach(runtime);
+    const failures: unknown[] = [];
+    await runtime.subscribe(
+      { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+      () => {
+        throw new Error("listener exploded");
+      },
+      (error) => failures.push(error),
+    );
+
+    // The write itself is untouched: a post-commit listener has no caller.
+    await expect(
+      engine.submit({
+        commandId: "rename-into-a-broken-listener",
+        sessionId,
+        intent: { kind: "session.retitle", title: "Unheard" },
+        provenance: { source: { kind: "user", id: "renderer", detail: null }, venue },
+      }),
+    ).resolves.toMatchObject({ receipt: { status: "completed" } });
+    await settleMicrotasks();
+    // Each of the write's three events was enqueued before the first failed,
+    // and every one of their drain links reaches the failure path; the
+    // subscription is still told once, with the listener's own error.
+    expect(failures).toHaveLength(1);
+    expect(String(failures[0])).toContain("listener exploded");
+  });
+
+  it("feeds only subscribers of the Session that committed, and lets go of the stream on close", async () => {
+    const { runtime, engine, listeners } = committedComposition();
+    const watched = await createAndAttach(runtime);
+    const other = await runtime.command({
+      commandId: "command-create-other",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Other",
+      },
+    });
+    const kinds: string[] = [];
+    await runtime.subscribe(
+      {
+        sessionId: watched,
+        afterSequence: (await runtime.snapshot({ sessionId: watched })).throughSequence,
+      },
+      (emission) => {
+        if (isSessionStreamFrame(emission)) kinds.push(emission.event.payload.kind);
+      },
+    );
+    await engine.submit({
+      commandId: "rename-other",
+      sessionId: other.sessionId,
+      intent: { kind: "session.retitle", title: "Not yours" },
+      provenance: { source: { kind: "user", id: "renderer", detail: null }, venue },
+    });
+    await settleMicrotasks();
+    expect(kinds).toEqual([]);
+
+    expect(listeners.size).toBe(1);
+    await runtime.close();
+    expect(listeners.size).toBe(0);
   });
 
   it("drops live transcript state when the attachment closes and when it is released", async () => {
@@ -6377,13 +6613,34 @@ function historyReply(index: number, chars: number): RuntimeObservation {
   };
 }
 
+/** Seed history, not hundreds of live observation/checkpoint transactions. */
+async function historyTurns(count: number) {
+  const ledger = createInMemorySessionLedger();
+  const engine = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+  const seeded = composition({ engine });
+  const sessionId = await createAndAttach(seeded.runtime);
+  // Keep the real observation codec and ledger validation; only the repeated
+  // fixture writes are batched. In-memory transactions clone the whole ledger
+  // for rollback, and observing each turn also refreshes its projection.
+  await seeded.adapter.emit({ kind: "turn", state: "started", turnId: "turn-0" });
+  await ledger.transaction((transaction) => {
+    const first = transaction.listEvents({ sessionId }).at(-1)!;
+    if (first.payload.kind !== "turn.started") throw new Error("Expected a turn fixture");
+    for (let index = 1; index < count; index += 1) {
+      transaction.appendEvent({
+        ...first,
+        id: `history-turn-${index}`,
+        sequence: first.sequence + index,
+        payload: { ...first.payload, turnId: `turn-${index}` },
+      });
+    }
+  });
+  return { ...seeded, sessionId };
+}
+
 describe("SessionRuntime bounded history window (VC-315)", () => {
   it("snapshots only the newest events, and pages back through every one exactly once", async () => {
-    const { runtime, adapter } = composition();
-    const sessionId = await createAndAttach(runtime);
-    for (let index = 0; index < SESSION_HISTORY_WINDOW.events + 40; index += 1) {
-      await adapter.emit({ kind: "turn", state: "started", turnId: `turn-${index}` });
-    }
+    const { runtime, sessionId } = await historyTurns(SESSION_HISTORY_WINDOW.events + 40);
 
     const snapshot = await runtime.snapshot({ sessionId });
 
@@ -6407,7 +6664,9 @@ describe("SessionRuntime bounded history window (VC-315)", () => {
     };
     const { runtime, adapter } = composition({ artifacts });
     const sessionId = await createAndAttach(runtime);
-    const replies = 80;
+    // About twelve replies fill the byte window. Keep more than that plus
+    // the 32-read allowance below, so reading all history would still fail.
+    const replies = 48;
     for (let index = 0; index < replies; index += 1)
       await adapter.emit(historyReply(index, 40_000));
     reads = 0;
@@ -6424,6 +6683,7 @@ describe("SessionRuntime bounded history window (VC-315)", () => {
     expect(bytes + historyFrameBytes(refused!)).toBeGreaterThan(SESSION_HISTORY_WINDOW.bytes);
     // Lazy: what the snapshot read is bounded by its window, not by the history.
     expect(snapshot.transcript.length).toBeLessThan(replies);
+    expect(replies).toBeGreaterThan(snapshot.transcript.length + 32);
     reads = 0;
     await runtime.snapshot({ sessionId });
     expect(reads).toBeLessThan(snapshot.transcript.length + 32);
@@ -6453,11 +6713,8 @@ describe("SessionRuntime bounded history window (VC-315)", () => {
   it("reads a sparse ledger without repeating a frame", async () => {
     // A ledger that skipped a retired kind has holes in its sequences, and a
     // double that ignores the range read entirely answers with every event.
-    const seeded = composition();
-    const sessionId = await createAndAttach(seeded.runtime);
-    for (let index = 0; index < 70; index += 1) {
-      await seeded.adapter.emit({ kind: "turn", state: "started", turnId: `turn-${index}` });
-    }
+    const seeded = await historyTurns(70);
+    const { sessionId } = seeded;
     const sparse = (await seeded.engine.listEvents({ sessionId })).filter(
       ({ sequence }) => sequence % 3 !== 0,
     );
@@ -6495,5 +6752,113 @@ describe("SessionRuntime bounded history window (VC-315)", () => {
     await expect(runtime.history({ sessionId, before: 2 })).rejects.toThrow(
       "Session runtime is closed",
     );
+  });
+});
+
+/** A second runtime for the executor slot: the same fake under another id. */
+class OtherAdapter extends FakeAdapter {
+  override readonly id = "other";
+  override readonly durableIdNamespace = "other";
+}
+
+async function attachedRuntime(runtime: SessionRuntime, sessionId: string, commandId: string) {
+  await runtime.command({
+    commandId,
+    sessionId,
+    command: { kind: "adapter.attach", continuity: "fresh" },
+  });
+  return (await runtime.snapshot({ sessionId })).projection.liveExecutor!;
+}
+
+async function releaseAttachment(runtime: SessionRuntime, sessionId: string, attachmentId: string) {
+  await runtime.command({
+    commandId: `release-${attachmentId}`,
+    sessionId,
+    command: { kind: "adapter.release", attachmentId },
+  });
+}
+
+describe("SessionRuntime executor slot (VC-916)", () => {
+  it("attaches a new Session on the slot's default runtime and never on another one", async () => {
+    const other = new OtherAdapter();
+    const { runtime, adapter } = composition({ others: [other] });
+    const sessionId = await createAndAttach(runtime);
+
+    expect((await runtime.snapshot({ sessionId })).projection.liveExecutor?.adapterId).toBe("fake");
+    expect(adapter.attaches).toBe(1);
+    expect(other.attaches).toBe(0);
+  });
+
+  it("keeps a Session on the runtime its history recorded, across a relaunch whose default differs", async () => {
+    const fake = new FakeAdapter();
+    const other = new OtherAdapter();
+    // A build whose default is `other` opens the Session's first attachment.
+    const first = composition({ adapter: other, others: [fake] });
+    const sessionId = await createAndAttach(first.runtime);
+    const opened = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!;
+    expect(opened.adapterId).toBe("other");
+    await releaseAttachment(first.runtime, sessionId, opened.id);
+    await first.runtime.close();
+
+    // The next build defaults to `fake`, and still holds `other`: the Session
+    // is persisted on `other`, so it reattaches there.
+    const relaunched = composition({
+      engine: first.engine,
+      adapter: fake,
+      others: [other],
+      runtimeIdPrefix: "relaunched",
+    });
+    const reattached = await attachedRuntime(relaunched.runtime, sessionId, "command-reattach");
+    expect(reattached.adapterId).toBe("other");
+    expect(other.attaches).toBe(2);
+    expect(fake.attaches).toBe(0);
+    await releaseAttachment(relaunched.runtime, sessionId, reattached.id);
+    await relaunched.runtime.close();
+
+    // A build that no longer ships `other` falls back to its default, as a
+    // Session recorded under a retired adapter does.
+    const retired = composition({
+      engine: first.engine,
+      adapter: fake,
+      runtimeIdPrefix: "retired",
+    });
+    const fallback = await attachedRuntime(retired.runtime, sessionId, "command-fallback");
+    expect(fallback.adapterId).toBe("fake");
+    expect(fake.attaches).toBe(1);
+  });
+
+  it("replays a recorded attach on the runtime its intent named, not on the default", async () => {
+    const fake = new FakeAdapter();
+    const other = new OtherAdapter();
+    const { runtime, engine } = composition({ adapter: fake, others: [other] });
+    const created = await runtime.command({
+      commandId: "command-create",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Replayed",
+      },
+    });
+    const sessionId = created.sessionId;
+    // A build whose default was `other` recorded the start and then lost it.
+    await engine.submit({
+      commandId: "command-attach-recorded",
+      sessionId,
+      intent: { kind: "executor.start", adapterId: "other", continuity: "fresh" },
+      provenance: { source: { kind: "user", id: "session-client", detail: null }, venue },
+    });
+
+    const replayed = await runtime.command({
+      commandId: "command-attach-recorded",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+
+    expect(replayed.receipt?.status).not.toBe("completed");
+    expect(fake.attaches).toBe(0);
+    expect(other.attaches).toBe(0);
   });
 });

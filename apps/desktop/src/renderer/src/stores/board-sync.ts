@@ -5,10 +5,10 @@
  * {@link BoardSyncTransport}, built from either board client.
  *
  * **What is on screen is the host's confirmed board plus this window's
- * pending writes (T5).** Per Workspace it holds:
+ * pending writes (T5).** Per project it holds:
  *
  * - **the base**: the rows the host has confirmed, from a snapshot, a roster
- *   read, or the Workspace's change feed (`board.changes`), whose changes
+ *   read, or the project's change feed (`board.changes`), whose changes
  *   inline the committed row and name the `commandId` behind them;
  * - **the pending layer**: every write this window has made and not yet seen
  *   in the base, keyed by the `commandId` it minted for it, each an
@@ -48,11 +48,11 @@
  * - **Reads belong to a generation.** A resnapshot starts a new one: an
  *   older generation's read in flight is dropped when it lands, and never
  *   touches the new generation's queued work.
- * - **Followed means subscribed.** A Workspace this window follows is opened
+ * - **Followed means subscribed.** A project this window follows is opened
  *   until its snapshot lands and its feed is followed: a failed open, a
  *   resnapshot or a feed that ended are retried with backoff, never left. The
  *   one exception is a host whose board is not this window's at all
- *   ({@link isBoardUnavailable}): that open stops, and the Workspace is no
+ *   ({@link isBoardUnavailable}): that open stops, and the project is no
  *   longer followed, until its owner opens it again.
  * - **A project change refreshes the project.** A project change without its
  *   row reads the board's snapshot, which carries the project.
@@ -178,7 +178,7 @@ export interface BoardSyncTransport {
 
 /** Where the engine paints, and what it tells the rest of the renderer. */
 export interface BoardSyncView {
-  /** Paints one Workspace's board: the tickets and labels on screen, and which bodies are placeholders. */
+  /** Paints one project's board: the tickets and labels on screen, and which bodies are placeholders. */
   paint(
     projectId: string,
     tickets: Ticket[],
@@ -189,7 +189,7 @@ export interface BoardSyncView {
   adoptProject(project: Project): void;
   /** Per-ticket surfaces (activity, body) re-read what the board does not hold. */
   notePlanningChange(change: { ticketId?: string; projectId?: string }): void;
-  /** A change moved where a ticket's Sessions run: its venue reading is stale. */
+  /** A change moved where a ticket's Sessions run: its working copy reading is stale. */
   checkoutMoved(ticketId: string): void;
   /** A write was refused, or a read failed: say so (CLAUDE.md, never swallow a failed mutation). */
   failed(message: string): void;
@@ -199,10 +199,10 @@ export interface BoardSyncView {
 
 export interface BoardSyncOptions {
   /**
-   * The host each Workspace's calls go to: one transport for every
-   * Workspace, or one per Workspace (VC-711: a remote project's board goes
-   * over its Workspace link, this Mac's over the IPC bridge). Every call
-   * names its Workspace, so routing needs nothing else.
+   * The host each project's calls go to: one transport for every
+   * project, or one per project (VC-711: a remote project's board goes
+   * over its host link, this Mac's over the IPC bridge). Every call
+   * names its project, so routing needs nothing else.
    */
   readonly transport: BoardSyncTransport | ((projectId: string) => BoardSyncTransport);
   readonly view: BoardSyncView;
@@ -233,11 +233,11 @@ type Outcome<Answer> =
 /** One write of this window's, from the moment it is made until the base holds it. */
 interface Pending {
   readonly commandId: string;
-  /** The Workspace it paints over; undefined for a per-surface command (it paints nothing). */
+  /** The project it paints over; undefined for a per-surface command (it paints nothing). */
   readonly projectId: string | undefined;
   /**
-   * The Workspace a per-surface command was made for, which owns it: closing
-   * that Workspace ends it (VC-711), and it is never sent anywhere else.
+   * The project a per-surface command was made for, which owns it: closing
+   * that project ends it (VC-711), and it is never sent anywhere else.
    */
   readonly owner: string | undefined;
   /** What it sets, as `<kind>:<id>:<aspect>`: a newer write setting all of them supersedes it. */
@@ -284,11 +284,11 @@ interface Reader {
   again: boolean;
 }
 
-interface Workspace {
+interface ProjectBoard {
   readonly projectId: string;
   readonly tickets: Map<string, TicketSummary>;
   readonly labels: Map<string, Label>;
-  /** Every ticket body this window has read for this Workspace: a roster row carries none (VC-387). */
+  /** Every ticket body this window has read for this project: a roster row carries none (VC-387). */
   readonly bodies: Map<string, string>;
   /** The write (`Pending.seq`) whose body each ticket shows: an older write's never replaces it. */
   readonly bodySeq: Map<string, number>;
@@ -344,10 +344,11 @@ export function isAmbiguousBoardFailure(error: unknown): boolean {
 
 /**
  * Whether a host answered that its board is not this window's to read at all:
- * the Workspace's link was not granted the board (an older host,
+ * the project's link was not granted the board (an older host,
  * `verb-refused`), the host has no board (`operation-unavailable`), or it does
- * not know the Workspace (`workspace-unknown`). Asking again changes nothing
- * until the host or the link does, so an open stops retrying on it (VC-711).
+ * not know the project (`workspace-unknown`, the host protocol's code). Asking
+ * again changes nothing until the host or the link does, so an open stops
+ * retrying on it (VC-711).
  */
 export function isBoardUnavailable(error: unknown): boolean {
   const reason = (error as { data?: { hostError?: { reason?: unknown } } } | null)?.data?.hostError
@@ -359,7 +360,7 @@ export function isBoardUnavailable(error: unknown): boolean {
   );
 }
 
-/** Whether a host answered that the resource does not exist (in this Workspace). */
+/** Whether a host answered that the resource does not exist (in this project). */
 export function isNotFound(error: unknown): boolean {
   const hostError = (error as { data?: { hostError?: { code?: unknown } } } | null)?.data
     ?.hostError;
@@ -395,7 +396,7 @@ function reaches(a: string | null, b: string | null): boolean {
 /** How one write is made: what it paints, what it sets, and how it is sent. */
 interface WriteSpec<Answer> {
   readonly projectId: string | undefined;
-  /** A per-surface command's Workspace: closing it ends the command (VC-711). */
+  /** A per-surface command's project: closing it ends the command (VC-711). */
   readonly owner?: string;
   readonly verb: string;
   readonly aspects: readonly string[];
@@ -419,7 +420,7 @@ interface WriteSpec<Answer> {
   readonly quiet?: boolean;
 }
 
-/** The board's sync engine for every Workspace this window follows. */
+/** The board's sync engine for every project this window follows. */
 export class BoardSync {
   readonly #transportFor: (projectId: string) => BoardSyncTransport;
   readonly #view: BoardSyncView;
@@ -433,7 +434,7 @@ export class BoardSync {
   readonly #isAmbiguous: (error: unknown) => boolean;
   readonly #setTimer: (run: () => void, ms: number) => unknown;
   readonly #clearTimer: (timer: unknown) => void;
-  readonly #workspaces = new Map<string, Workspace>();
+  readonly #boards = new Map<string, ProjectBoard>();
   /** Insertion order is the order the writes were made, and the order their edits replay. */
   readonly #pending = new Map<string, Pending>();
   /** Writes made so far: each write's `seq`. */
@@ -457,29 +458,29 @@ export class BoardSync {
     this.#clearTimer = options.clearTimer ?? ((timer) => clearTimeout(timer as number));
   }
 
-  /** Whether this window follows the Workspace: it is open, or being opened until it is. */
+  /** Whether this window follows the project: it is open, or being opened until it is. */
   follows(projectId: string): boolean {
-    return this.#workspaces.has(projectId);
+    return this.#boards.has(projectId);
   }
 
-  /** The Workspace whose board holds this ticket, if any this window follows does. */
-  workspaceOf(ticketId: string): string | undefined {
-    for (const workspace of this.#workspaces.values()) {
-      if (workspace.tickets.has(ticketId)) return workspace.projectId;
+  /** The project whose board holds this ticket, if any this window follows does. */
+  projectOf(ticketId: string): string | undefined {
+    for (const board of this.#boards.values()) {
+      if (board.tickets.has(ticketId)) return board.projectId;
     }
     return undefined;
   }
 
   /**
-   * Reads the Workspace's snapshot, paints it, and follows its feed from the
+   * Reads the project's snapshot, paints it, and follows its feed from the
    * snapshot's cursor. Opening one already open re-reads it (a resnapshot).
    * A snapshot that fails rejects (the caller says so) and is tried again,
-   * with backoff, until it lands or the Workspace is closed.
+   * with backoff, until it lands or the project is closed.
    */
   async open(projectId: string): Promise<void> {
-    let workspace = this.#workspaces.get(projectId);
-    if (workspace === undefined) {
-      workspace = {
+    let board = this.#boards.get(projectId);
+    if (board === undefined) {
+      board = {
         projectId,
         tickets: new Map(),
         labels: new Map(),
@@ -501,14 +502,14 @@ export class BoardSync {
         readProject: false,
         closed: false,
       };
-      this.#workspaces.set(projectId, workspace);
+      this.#boards.set(projectId, board);
     }
-    const generation = ++workspace.generation;
-    workspace.stop?.();
-    workspace.stop = null;
-    if (workspace.openTimer !== undefined) {
-      this.#clearTimer(workspace.openTimer);
-      workspace.openTimer = undefined;
+    const generation = ++board.generation;
+    board.stop?.();
+    board.stop = null;
+    if (board.openTimer !== undefined) {
+      this.#clearTimer(board.openTimer);
+      board.openTimer = undefined;
     }
     // A body adopted while the snapshot was in flight is newer than its.
     const readAt = this.#adoptions;
@@ -516,83 +517,83 @@ export class BoardSync {
     try {
       snapshot = await this.#transportFor(projectId).snapshot(projectId);
     } catch (error) {
-      if (!workspace.closed && workspace.generation === generation) {
+      if (!board.closed && board.generation === generation) {
         // A host whose board is not this window's at all is not followed: it
         // stops here, and its owner opens it again when the host or the link
         // changes (VC-711). Anything else is retried, with backoff.
         if (isBoardUnavailable(error)) this.close(projectId);
-        else this.#reopenLater(workspace);
+        else this.#reopenLater(board);
       }
       throw error;
     }
     // Closed, or opened again since: a newer snapshot owns the base.
-    if (workspace.closed || workspace.generation !== generation) return;
-    workspace.openFailures = 0;
-    const removed = new Set(workspace.tickets.keys());
-    workspace.tickets.clear();
+    if (board.closed || board.generation !== generation) return;
+    board.openFailures = 0;
+    const removed = new Set(board.tickets.keys());
+    board.tickets.clear();
     for (const { body, ...summary } of snapshot.tickets) {
-      workspace.tickets.set(summary.id, summary);
-      this.#readBody(workspace, summary.id, body, readAt);
+      board.tickets.set(summary.id, summary);
+      this.#readBody(board, summary.id, body, readAt);
       removed.delete(summary.id);
     }
-    this.#forgetBodies(workspace, removed);
-    workspace.labels.clear();
-    for (const label of snapshot.labels) workspace.labels.set(label.id, label);
-    workspace.cursor = snapshot.cursor;
-    workspace.projectCursor = snapshot.cursor;
+    this.#forgetBodies(board, removed);
+    board.labels.clear();
+    for (const label of snapshot.labels) board.labels.set(label.id, label);
+    board.cursor = snapshot.cursor;
+    board.projectCursor = snapshot.cursor;
     // A snapshot is the whole board, read while no feed was followed: it
     // covers every rowless change this window had.
-    workspace.dirty = null;
-    workspace.dirtyProject = null;
+    board.dirty = null;
+    board.dirtyProject = null;
     this.#view.adoptProject(snapshot.project);
-    this.#retireHeld(workspace, true);
+    this.#retireHeld(board, true);
     this.#paint(projectId);
-    this.#follow(workspace, snapshot.cursor);
+    this.#follow(board, snapshot.cursor);
   }
 
-  /** Stops following a Workspace (removed, or this window forgot it). */
+  /** Stops following a project (removed, or this window forgot it). */
   close(projectId: string): void {
-    const workspace = this.#workspaces.get(projectId);
-    if (workspace === undefined) return;
-    workspace.closed = true;
-    workspace.stop?.();
-    for (const timer of [workspace.readTimer, workspace.openTimer]) {
+    const board = this.#boards.get(projectId);
+    if (board === undefined) return;
+    board.closed = true;
+    board.stop?.();
+    for (const timer of [board.readTimer, board.openTimer]) {
       if (timer !== undefined) this.#clearTimer(timer);
     }
-    this.#workspaces.delete(projectId);
+    this.#boards.delete(projectId);
     // Its board writes and its per-surface commands alike: a command made for
-    // a Workspace is that Workspace's host's, and goes nowhere once it closes.
+    // a project is that project's host's, and goes nowhere once it closes.
     for (const pending of Array.from(this.#pending.values())) {
       if (pending.owner === projectId) this.#drop(pending, "closed");
     }
   }
 
-  /** Stops following every Workspace. */
+  /** Stops following every project. */
   closeAll(): void {
-    for (const projectId of Array.from(this.#workspaces.keys())) this.close(projectId);
+    for (const projectId of Array.from(this.#boards.keys())) this.close(projectId);
     for (const pending of Array.from(this.#pending.values())) this.#drop(pending, "closed");
   }
 
   /** Records a body read on its own (the open ticket), so repaints keep it. */
   adoptBody(ticketId: string, body: string): void {
-    const projectId = this.workspaceOf(ticketId);
+    const projectId = this.projectOf(ticketId);
     if (projectId === undefined) return;
-    this.#setBody(this.#workspaces.get(projectId)!, ticketId, body);
+    this.#setBody(this.#boards.get(projectId)!, ticketId, body);
   }
 
-  #setBody(workspace: Workspace, ticketId: string, body: string, seq?: number): void {
-    workspace.bodies.set(ticketId, body);
-    workspace.bodyAt.set(ticketId, ++this.#adoptions);
-    if (seq !== undefined) workspace.bodySeq.set(ticketId, seq);
+  #setBody(board: ProjectBoard, ticketId: string, body: string, seq?: number): void {
+    board.bodies.set(ticketId, body);
+    board.bodyAt.set(ticketId, ++this.#adoptions);
+    if (seq !== undefined) board.bodySeq.set(ticketId, seq);
   }
 
   /**
    * Adopts a body a read answered, begun at `startedAt` on the adoption
    * clock: never over a body adopted after the read began, which is newer.
    */
-  #readBody(workspace: Workspace, ticketId: string, body: string, startedAt: number): void {
-    if ((workspace.bodyAt.get(ticketId) ?? 0) > startedAt) return;
-    this.#setBody(workspace, ticketId, body);
+  #readBody(board: ProjectBoard, ticketId: string, body: string, startedAt: number): void {
+    if ((board.bodyAt.get(ticketId) ?? 0) > startedAt) return;
+    this.#setBody(board, ticketId, body);
   }
 
   /**
@@ -601,10 +602,10 @@ export class BoardSync {
    * be ahead of its row), and never over a body a later write set. A ticket
    * that left the board keeps no body, so a late reply cannot put one back.
    */
-  #writtenBody(workspace: Workspace, pending: Pending, ticketId: string, body: string): void {
-    if (!workspace.tickets.has(ticketId) && !pending.revives) return;
-    if ((workspace.bodySeq.get(ticketId) ?? 0) > pending.seq) return;
-    this.#setBody(workspace, ticketId, body, pending.seq);
+  #writtenBody(board: ProjectBoard, pending: Pending, ticketId: string, body: string): void {
+    if (!board.tickets.has(ticketId) && !pending.revives) return;
+    if ((board.bodySeq.get(ticketId) ?? 0) > pending.seq) return;
+    this.#setBody(board, ticketId, body, pending.seq);
   }
 
   // ---- writes ---------------------------------------------------------------
@@ -796,9 +797,9 @@ export class BoardSync {
   async command<Answer>(spec: {
     verb: string;
     /**
-     * The Workspace the command was made for, when it was made for one: it
-     * ends with that Workspace (`close`), and its `send` must go to that
-     * Workspace's host only (VC-711).
+     * The project the command was made for, when it was made for one: it
+     * ends with that project (`close`), and its `send` must go to that
+     * project's host only (VC-711).
      */
     owner?: string;
     send: (commandId: string) => Promise<Answer>;
@@ -824,7 +825,7 @@ export class BoardSync {
       : { ok: false, error: refusal };
   }
 
-  /** The Workspace's archived tickets, newest first, or null when the read failed (said). */
+  /** The project's archived tickets, newest first, or null when the read failed (said). */
   async archivedTickets(projectId: string): Promise<ArchivedTicket[] | null> {
     try {
       return await this.#transportFor(projectId).archivedTickets(projectId);
@@ -844,12 +845,12 @@ export class BoardSync {
 
   /** A ticket as the base holds it, with its body; null when the base does not hold it. */
   #row(projectId: string, ticketId: string): Ticket | null {
-    const workspace = this.#workspaces.get(projectId);
-    const summary = workspace?.tickets.get(ticketId);
+    const board = this.#boards.get(projectId);
+    const summary = board?.tickets.get(ticketId);
     /* v8 ignore if -- a proof by the feed lands its row in the same turn; only a later delete could take it. */
     if (summary === undefined) return null;
     // A proved write's body was adopted on its proof.
-    return { ...summary, body: workspace!.bodies.get(ticketId)! };
+    return { ...summary, body: board!.bodies.get(ticketId)! };
   }
 
   /**
@@ -911,7 +912,7 @@ export class BoardSync {
         break;
       } catch (error) {
         if ((pending.state as Pending["state"]) === "closed") {
-          // Its Workspace closed while this attempt was out, outcome unknown.
+          // Its project closed while this attempt was out, outcome unknown.
           if (spec.quiet !== true) {
             this.#view.failed(`Couldn't ${spec.verb}: ${failureMessage(error)}`);
           }
@@ -978,18 +979,17 @@ export class BoardSync {
     const { throughCursor, ticket } = answer as Partial<BoardWriteAnswer> & {
       ticket?: Ticket | null;
     };
-    const workspace =
-      pending.projectId === undefined ? undefined : this.#workspaces.get(pending.projectId);
-    if (ticket != null && workspace !== undefined) {
+    const board = pending.projectId === undefined ? undefined : this.#boards.get(pending.projectId);
+    if (ticket != null && board !== undefined) {
       // A create's reply names its id; its body is the host's own, unless a
       // later write or read already set a newer one, or the ticket left.
       learnCreated(pending, ticket.id);
-      this.#writtenBody(workspace, pending, ticket.id, ticket.body);
+      this.#writtenBody(board, pending, ticket.id, ticket.body);
       pending.bodies.delete(ticket.id);
     }
     if (pending.state === "accepted") {
       // The feed proved it first: the reply only brings the row.
-      if (workspace !== undefined) this.#paint(workspace.projectId);
+      if (board !== undefined) this.#paint(board.projectId);
       return;
     }
     this.#accept(pending, throughCursor);
@@ -1007,29 +1007,28 @@ export class BoardSync {
     pending.through = through ?? pending.through;
     pending.settle();
     pending.wake?.();
-    const workspace =
-      pending.projectId === undefined ? undefined : this.#workspaces.get(pending.projectId);
-    if (workspace === undefined) {
+    const board = pending.projectId === undefined ? undefined : this.#boards.get(pending.projectId);
+    if (board === undefined) {
       this.#pending.delete(pending.commandId);
       return;
     }
     // The bodies the host took: a summary row never carries one (VC-387).
     for (const [ticketId, body] of pending.bodies) {
-      this.#writtenBody(workspace, pending, ticketId, body);
+      this.#writtenBody(board, pending, ticketId, body);
     }
-    if (pending.through === undefined || reaches(workspace.cursor, pending.through)) {
+    if (pending.through === undefined || reaches(board.cursor, pending.through)) {
       this.#retire(pending);
     } else {
-      this.#armConfirm(workspace, pending);
+      this.#armConfirm(board, pending);
     }
-    this.#paint(workspace.projectId);
+    this.#paint(board.projectId);
   }
 
   /** The feed normally brings an accepted write's cursor; if it does not soon, a read does. */
-  #armConfirm(workspace: Workspace, pending: Pending): void {
+  #armConfirm(board: ProjectBoard, pending: Pending): void {
     pending.confirmTimer = this.#setTimer(() => {
       pending.confirmTimer = undefined;
-      if (this.#pending.get(pending.commandId) === pending) this.#scheduleRead(workspace);
+      if (this.#pending.get(pending.commandId) === pending) this.#scheduleRead(board);
     }, this.#confirmTimeoutMs);
   }
 
@@ -1049,7 +1048,7 @@ export class BoardSync {
     this.#pending.delete(pending.commandId);
   }
 
-  /** Drops a write that will not be proved: refused, or its Workspace closed. */
+  /** Drops a write that will not be proved: refused, or its project closed. */
   #drop(pending: Pending, state: "refused" | "closed"): void {
     if (pending.confirmTimer !== undefined) this.#clearTimer(pending.confirmTimer);
     const wasAccepted = pending.state === "accepted";
@@ -1066,60 +1065,60 @@ export class BoardSync {
    * too: that feed's host took it, and a feed only ever gives way to a later
    * one (a restart, a new epoch), whose snapshot holds what it took.
    */
-  #retireHeld(workspace: Workspace, snapshot = false): void {
+  #retireHeld(board: ProjectBoard, snapshot = false): void {
     for (const pending of Array.from(this.#pending.values())) {
-      if (pending.projectId !== workspace.projectId || pending.state !== "accepted") continue;
+      if (pending.projectId !== board.projectId || pending.state !== "accepted") continue;
       // An accepted write without a cursor retired on its proof.
-      const order = compareBoardCursors(workspace.cursor!, pending.through!);
+      const order = compareBoardCursors(board.cursor!, pending.through!);
       if ((order !== null && order >= 0) || (order === null && snapshot)) this.#retire(pending);
     }
   }
 
   // ---- the feed ---------------------------------------------------------------
 
-  #follow(workspace: Workspace, cursor: string): void {
-    workspace.stop = this.#transportFor(workspace.projectId).changes(workspace.projectId, cursor, {
+  #follow(board: ProjectBoard, cursor: string): void {
+    board.stop = this.#transportFor(board.projectId).changes(board.projectId, cursor, {
       onBatch: (batch) => {
-        if (workspace.closed) return;
-        workspace.feedFailures = 0;
-        this.#apply(workspace, batch);
+        if (board.closed) return;
+        board.feedFailures = 0;
+        this.#apply(board, batch);
       },
       onResnapshot: () => {
-        if (workspace.closed) return;
-        workspace.stop = null;
-        void this.open(workspace.projectId).catch(() => {
+        if (board.closed) return;
+        board.stop = null;
+        void this.open(board.projectId).catch(() => {
           // Retried by `open` itself, with backoff.
         });
       },
       onError: () => {
-        if (workspace.closed) return;
-        this.#feedFailed(workspace);
+        if (board.closed) return;
+        this.#feedFailed(board);
       },
     });
   }
 
   /** A feed that ended in error resumes from the base's cursor, after a pause. */
-  #feedFailed(workspace: Workspace): void {
-    workspace.stop = null;
+  #feedFailed(board: ProjectBoard): void {
+    board.stop = null;
     const delay =
-      this.#feedRetryDelays[Math.min(workspace.feedFailures, this.#feedRetryDelays.length - 1)]!;
-    workspace.feedFailures += 1;
+      this.#feedRetryDelays[Math.min(board.feedFailures, this.#feedRetryDelays.length - 1)]!;
+    board.feedFailures += 1;
     this.#setTimer(() => {
-      if (workspace.closed || workspace.stop !== null || workspace.openTimer !== undefined) return;
-      this.#follow(workspace, workspace.cursor!);
+      if (board.closed || board.stop !== null || board.openTimer !== undefined) return;
+      this.#follow(board, board.cursor!);
     }, delay);
   }
 
   /** A snapshot that failed is read again after a pause, until it lands. */
-  #reopenLater(workspace: Workspace): void {
+  #reopenLater(board: ProjectBoard): void {
     const delay =
-      this.#feedRetryDelays[Math.min(workspace.openFailures, this.#feedRetryDelays.length - 1)]!;
-    workspace.openFailures += 1;
-    workspace.openTimer = this.#setTimer(() => {
-      workspace.openTimer = undefined;
+      this.#feedRetryDelays[Math.min(board.openFailures, this.#feedRetryDelays.length - 1)]!;
+    board.openFailures += 1;
+    board.openTimer = this.#setTimer(() => {
+      board.openTimer = undefined;
       /* v8 ignore if -- closing clears this timer; only a clear that lost its race lands here. */
-      if (workspace.closed) return;
-      void this.open(workspace.projectId).catch(() => {
+      if (board.closed) return;
+      void this.open(board.projectId).catch(() => {
         // Retried again by `open` itself.
       });
     }, delay);
@@ -1130,20 +1129,20 @@ export class BoardSync {
    * base (a read may already hold it); its notices and its proofs count
    * either way, since each is a fact whatever the base became.
    */
-  #apply(workspace: Workspace, batch: BoardFeedBatch): void {
+  #apply(board: ProjectBoard, batch: BoardFeedBatch): void {
     // A feed is followed only from a snapshot's cursor.
-    const order = compareBoardCursors(batch.cursor, workspace.cursor!);
+    const order = compareBoardCursors(batch.cursor, board.cursor!);
     // Another feed's batch on this subscription: nothing it says can be placed.
     if (order === null) return;
     const newer = order > 0;
     let read = false;
     for (const change of batch.changes) {
-      this.#notice(workspace, change, batch.cursor);
+      this.#notice(board, change, batch.cursor);
       if (!newer) continue;
-      if (workspace.reader?.log != null) this.#log(workspace.reader, batch.cursor, change);
-      read = this.#applyChange(workspace, change, batch.cursor) || read;
+      if (board.reader?.log != null) this.#log(board.reader, batch.cursor, change);
+      read = this.#applyChange(board, change, batch.cursor) || read;
     }
-    if (newer) workspace.cursor = batch.cursor;
+    if (newer) board.cursor = batch.cursor;
     // Proofs: the changes naming a write of this window's.
     const named = new Map<Pending, BoardChange[]>();
     for (const change of batch.changes) {
@@ -1152,9 +1151,9 @@ export class BoardSync {
       if (pending !== undefined) named.set(pending, [...(named.get(pending) ?? []), change]);
     }
     for (const [pending, changes] of named) this.#proveFromFeed(pending, batch.cursor, changes);
-    this.#retireHeld(workspace);
-    this.#paint(workspace.projectId);
-    if (read) this.#scheduleRead(workspace);
+    this.#retireHeld(board);
+    this.#paint(board.projectId);
+    if (read) this.#scheduleRead(board);
   }
 
   /** A batch named this write in `named`: the host took it, through this batch's cursor. */
@@ -1171,12 +1170,12 @@ export class BoardSync {
   }
 
   /** What a change tells the rest of the renderer: told once, whether or not the base takes its row. */
-  #notice(workspace: Workspace, change: BoardChange, cursor: string): void {
-    const { projectId } = workspace;
+  #notice(board: ProjectBoard, change: BoardChange, cursor: string): void {
+    const { projectId } = board;
     switch (change.kind) {
       case "project":
-        if (change.project !== undefined && !reaches(workspace.projectCursor, cursor)) {
-          workspace.projectCursor = cursor;
+        if (change.project !== undefined && !reaches(board.projectCursor, cursor)) {
+          board.projectCursor = cursor;
           this.#view.adoptProject(change.project);
         }
         return;
@@ -1200,29 +1199,29 @@ export class BoardSync {
   }
 
   /** Applies one newer change to the base; answers whether it asks for a read. */
-  #applyChange(workspace: Workspace, change: BoardChange, cursor: string): boolean {
+  #applyChange(board: ProjectBoard, change: BoardChange, cursor: string): boolean {
     switch (change.kind) {
       case "project":
         if (change.project !== undefined) return false;
-        workspace.dirtyProject = cursor;
+        board.dirtyProject = cursor;
         return true;
       case "ticket":
         if (change.op === "delete") {
-          workspace.tickets.delete(change.id);
-          this.#forgetBodies(workspace, [change.id]);
+          board.tickets.delete(change.id);
+          this.#forgetBodies(board, [change.id]);
         } else if (change.ticket === undefined) {
-          workspace.dirty = cursor;
+          board.dirty = cursor;
           return true;
         } else {
-          workspace.tickets.set(change.id, change.ticket);
+          board.tickets.set(change.id, change.ticket);
         }
         return false;
       case "label":
-        if (change.op === "delete") workspace.labels.delete(change.id);
+        if (change.op === "delete") board.labels.delete(change.id);
         else if (change.label === undefined) {
-          workspace.dirty = cursor;
+          board.dirty = cursor;
           return true;
-        } else workspace.labels.set(change.id, change.label);
+        } else board.labels.set(change.id, change.label);
         return false;
       default:
         // Comments and ticket events are rows the board does not hold, and a
@@ -1249,61 +1248,61 @@ export class BoardSync {
   }
 
   /** Drops the bodies of tickets that left the board. */
-  #forgetBodies(workspace: Workspace, ticketIds: Iterable<string>): void {
+  #forgetBodies(board: ProjectBoard, ticketIds: Iterable<string>): void {
     for (const ticketId of ticketIds) {
-      workspace.bodies.delete(ticketId);
-      workspace.bodySeq.delete(ticketId);
-      workspace.bodyAt.delete(ticketId);
+      board.bodies.delete(ticketId);
+      board.bodySeq.delete(ticketId);
+      board.bodyAt.delete(ticketId);
     }
   }
 
   // ---- reads ------------------------------------------------------------------
 
   /** One read per burst: coalesced, one in flight, at most one queued behind it. */
-  #scheduleRead(workspace: Workspace): void {
+  #scheduleRead(board: ProjectBoard): void {
     /* v8 ignore if -- closing clears every timer that asks; only a lost race lands here. */
-    if (workspace.closed) return;
+    if (board.closed) return;
     // A read this generation started is asked to go again; one an older
     // generation started counts for nothing here (its answer is dropped).
-    const reader = workspace.reader;
-    if (reader !== null && reader.generation === workspace.generation) {
+    const reader = board.reader;
+    if (reader !== null && reader.generation === board.generation) {
       reader.again = true;
       return;
     }
-    if (workspace.readTimer !== undefined) return;
-    workspace.readTimer = this.#setTimer(() => {
-      workspace.readTimer = undefined;
-      void this.#read(workspace);
+    if (board.readTimer !== undefined) return;
+    board.readTimer = this.#setTimer(() => {
+      board.readTimer = undefined;
+      void this.#read(board);
     }, this.#readCoalesceMs);
   }
 
   /** Whether a rowless change is still uncovered by any read. */
-  #dirty(workspace: Workspace): boolean {
-    return workspace.dirty !== null || workspace.dirtyProject !== null;
+  #dirty(board: ProjectBoard): boolean {
+    return board.dirty !== null || board.dirtyProject !== null;
   }
 
   /**
    * After a read that landed: an accepted write it still did not show (its
    * cursor is on another feed, say) waits for its cursor again, not in a loop.
    */
-  #rearmConfirms(workspace: Workspace): void {
+  #rearmConfirms(board: ProjectBoard): void {
     for (const pending of this.#pending.values()) {
       if (
-        pending.projectId === workspace.projectId &&
+        pending.projectId === board.projectId &&
         pending.state === "accepted" &&
         pending.confirmTimer === undefined
       ) {
-        this.#armConfirm(workspace, pending);
+        this.#armConfirm(board, pending);
       }
     }
   }
 
-  /** Whether the Workspace still needs a read: a rowless change uncovered, or a write unconfirmed. */
-  #needsRead(workspace: Workspace): boolean {
-    if (this.#dirty(workspace)) return true;
+  /** Whether the project still needs a read: a rowless change uncovered, or a write unconfirmed. */
+  #needsRead(board: ProjectBoard): boolean {
+    if (this.#dirty(board)) return true;
     for (const pending of this.#pending.values()) {
       if (
-        pending.projectId === workspace.projectId &&
+        pending.projectId === board.projectId &&
         pending.state === "accepted" &&
         pending.confirmTimer === undefined
       ) {
@@ -1313,23 +1312,23 @@ export class BoardSync {
     return false;
   }
 
-  async #read(workspace: Workspace): Promise<void> {
-    const { projectId } = workspace;
-    const generation = workspace.generation;
-    const withProject = workspace.dirtyProject !== null;
+  async #read(board: ProjectBoard): Promise<void> {
+    const { projectId } = board;
+    const generation = board.generation;
+    const withProject = board.dirtyProject !== null;
     const startedAt = this.#adoptions;
     const reader: Reader = { generation, log: new Map(), again: false };
-    workspace.reader = reader;
+    board.reader = reader;
     let failed = false;
     try {
       const answer = withProject
         ? await this.#transportFor(projectId).snapshot(projectId)
         : await this.#transportFor(projectId).roster(projectId);
-      if (workspace.closed || workspace.generation !== generation || workspace.cursor === null) {
+      if (board.closed || board.generation !== generation || board.cursor === null) {
         return;
       }
-      workspace.readFailures = 0;
-      const order = compareBoardCursors(answer.cursor, workspace.cursor);
+      board.readFailures = 0;
+      const order = compareBoardCursors(answer.cursor, board.cursor);
       // Another feed's answer (the host restarted under it): the feed's own
       // resnapshot replaces the base, never this.
       if (order === null) return;
@@ -1339,63 +1338,63 @@ export class BoardSync {
         return;
       }
       const log = order < 0 ? [...reader.log!.values()] : [];
-      const removed = new Set(workspace.tickets.keys());
-      workspace.tickets.clear();
+      const removed = new Set(board.tickets.keys());
+      board.tickets.clear();
       for (const row of answer.tickets) {
         const { body, ...summary } = row as Ticket;
-        workspace.tickets.set(summary.id, summary);
+        board.tickets.set(summary.id, summary);
         // A snapshot's bodies are confirmed ones, never over one this window
         // adopted after the read began, nor (read older than the base) over any it holds.
-        if (withProject && (order >= 0 || !workspace.bodies.has(summary.id))) {
-          this.#readBody(workspace, summary.id, body, startedAt);
+        if (withProject && (order >= 0 || !board.bodies.has(summary.id))) {
+          this.#readBody(board, summary.id, body, startedAt);
         }
       }
-      workspace.labels.clear();
-      for (const label of answer.labels) workspace.labels.set(label.id, label);
+      board.labels.clear();
+      for (const label of answer.labels) board.labels.set(label.id, label);
       // What the feed delivered after the read's cursor replays over it, so a
       // slow read never moves the board backwards.
       const answered = answer.cursor;
       for (const { cursor, change } of log) {
-        if (this.#after(cursor, answered)) this.#applyChange(workspace, change, cursor);
+        if (this.#after(cursor, answered)) this.#applyChange(board, change, cursor);
       }
-      for (const id of workspace.tickets.keys()) removed.delete(id);
-      this.#forgetBodies(workspace, removed);
-      if (order > 0) workspace.cursor = answered;
-      if (!this.#after(workspace.dirty, answered)) workspace.dirty = null;
+      for (const id of board.tickets.keys()) removed.delete(id);
+      this.#forgetBodies(board, removed);
+      if (order > 0) board.cursor = answered;
+      if (!this.#after(board.dirty, answered)) board.dirty = null;
       if (withProject) {
-        if (!this.#after(workspace.dirtyProject, answered)) workspace.dirtyProject = null;
+        if (!this.#after(board.dirtyProject, answered)) board.dirtyProject = null;
         // Unless the feed already brought a newer project row.
-        if (!this.#after(workspace.projectCursor, answered)) {
-          workspace.projectCursor = answered;
+        if (!this.#after(board.projectCursor, answered)) {
+          board.projectCursor = answered;
           this.#view.adoptProject((answer as unknown as { project: Project }).project);
         }
       }
-      this.#retireHeld(workspace);
+      this.#retireHeld(board);
       this.#paint(projectId);
     } catch (error) {
       failed = true;
-      if (workspace.readFailures === 0) {
+      if (board.readFailures === 0) {
         this.#view.failed(`Couldn't refresh the board: ${failureMessage(error)}`);
       }
-      workspace.readFailures += 1;
+      board.readFailures += 1;
     } finally {
       // Only this read's own state: a newer generation's reader and its
       // queued work are that generation's.
-      if (workspace.reader === reader) workspace.reader = null;
-      if (!workspace.closed && workspace.generation === generation) {
-        if (!failed) this.#rearmConfirms(workspace);
-        if (failed && this.#needsRead(workspace)) {
+      if (board.reader === reader) board.reader = null;
+      if (!board.closed && board.generation === generation) {
+        if (!failed) this.#rearmConfirms(board);
+        if (failed && this.#needsRead(board)) {
           // Retried with backoff until a read lands: a pending edit never sticks.
           const delay =
             this.#feedRetryDelays[
-              Math.min(workspace.readFailures - 1, this.#feedRetryDelays.length - 1)
+              Math.min(board.readFailures - 1, this.#feedRetryDelays.length - 1)
             ]!;
-          workspace.readTimer = this.#setTimer(() => {
-            workspace.readTimer = undefined;
-            void this.#read(workspace);
+          board.readTimer = this.#setTimer(() => {
+            board.readTimer = undefined;
+            void this.#read(board);
           }, delay);
-        } else if (reader.again || (!failed && this.#dirty(workspace))) {
-          this.#scheduleRead(workspace);
+        } else if (reader.again || (!failed && this.#dirty(board))) {
+          this.#scheduleRead(board);
         }
       }
     }
@@ -1405,18 +1404,18 @@ export class BoardSync {
 
   /** Paints the base with every pending edit replayed over it, in the order they were made. */
   #paint(projectId: string): void {
-    const workspace = this.#workspaces.get(projectId);
+    const board = this.#boards.get(projectId);
     // Nothing confirmed yet (its snapshot is in flight): the board keeps what
     // it shows, and a write made meanwhile paints once the snapshot lands.
-    if (workspace === undefined || workspace.cursor === null) return;
+    if (board === undefined || board.cursor === null) return;
     const unloaded = new Set<string>();
     let tickets: Ticket[] = [];
-    for (const summary of Array.from(workspace.tickets.values()).toSorted(byColumn)) {
-      const body = workspace.bodies.get(summary.id);
+    for (const summary of Array.from(board.tickets.values()).toSorted(byColumn)) {
+      const body = board.bodies.get(summary.id);
       if (body === undefined) unloaded.add(summary.id);
       tickets.push(Object.assign({}, summary, { body: body ?? "" }));
     }
-    let labels = [...workspace.labels.values()];
+    let labels = [...board.labels.values()];
     for (const pending of this.#pending.values()) {
       if (pending.projectId !== projectId) continue;
       if (pending.tickets !== undefined) tickets = pending.tickets(tickets);

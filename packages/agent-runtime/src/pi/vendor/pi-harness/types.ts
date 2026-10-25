@@ -313,8 +313,20 @@ export interface ShellOutputLimits {
 /** Bounded shell capture requested by the caller. */
 export interface ShellOutputCaptureOptions {
   limits: ShellOutputLimits;
-  /** Preserve complete output in an execution-environment-local file after the limits are crossed. */
+  /** Preserve output in an execution-environment-local file after the limits are crossed. */
   spill?: boolean;
+  /**
+   * Volli (VC-865): one transform per execution for every spilled byte, before
+   * the spill cap and before disk. A throw fails the spill; nothing it did not
+   * return is written.
+   */
+  spillRedaction?: () => ShellSpillRedaction;
+}
+
+/** Volli (VC-865): bytes in, bytes now safe to write out; `end` releases the rest. */
+export interface ShellSpillRedaction {
+  push(chunk: Uint8Array): Uint8Array;
+  end(): Uint8Array;
 }
 
 /** Truncation metadata without a duplicate copy of the retained text. */
@@ -324,6 +336,8 @@ export type ShellOutputTruncation = Omit<TruncationResult, "content">;
 export interface ShellOutputMetadata {
   truncation: ShellOutputTruncation;
   spillPath?: string;
+  /** Volli (VC-820): the spill hit its byte cap; older readers use the result text. */
+  spillTruncatedAt?: number;
   lastLineBytes?: number;
 }
 

@@ -3,6 +3,7 @@
  * real host-core and the real agent socket. CI's artifact job drives the
  * built binary the same way from outside (README.md, "CI").
  */
+import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import {
   chmodSync,
@@ -39,6 +40,7 @@ import Database from "better-sqlite3";
 import type { AgentRequest, AgentResponse, Project } from "@volli/shared";
 import {
   insertProject,
+  insertTicket,
   listProjects,
   SCHEMA_HEAD,
   MIN_READER_VERSION_KEY,
@@ -46,7 +48,12 @@ import {
 import { SECRET_KEY_FILE_ENV } from "@volli/host-core/secrets";
 import { isLiveHost, type HostCore, type HostCoreOptions } from "@volli/host-core";
 import { BoardChangeFeed, type DetachedWorkPort } from "@volli/host-core/board";
-import { insertSession, resetRetentionWatcherForTest, testSession } from "@volli/host-core/testing";
+import {
+  insertSession,
+  resetRetentionWatcherForTest,
+  testSession,
+  testTicket,
+} from "@volli/host-core/testing";
 
 import { HostdBootError } from "./boot-error";
 import { runOperatorToken, writeTokenAsUser } from "./operator-token";
@@ -71,6 +78,8 @@ const faults = vi.hoisted(() => ({
   socketCloseFails: false,
   busySites: null as ((target: string) => Promise<readonly unknown[]>) | null,
   detachedWork: null as DetachedWorkPort | null,
+  /** The worktree read service hostd handed its handler map and its socket verbs. */
+  worktreeReads: { handlers: null as unknown, commands: null as unknown },
   host: null as HostCore | null,
   hostOptions: null as HostCoreOptions | null,
   projectOptions: null as { projectsRoot?: string | null; userInstall?: boolean } | null,
@@ -133,7 +142,7 @@ vi.mock("../../../packages/host-core/src/index", async (importOriginal) => {
   };
 });
 
-// The handler map hostd builds (VC-668): the move's guard and drain are its.
+// The handler map the runner builds for hostd (VC-668): the move's guard and drain are its.
 vi.mock("../../../packages/host-core/src/handlers/host-handlers", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../../packages/host-core/src/handlers/host-handlers")>();
@@ -142,7 +151,12 @@ vi.mock("../../../packages/host-core/src/handlers/host-handlers", async (importO
     createHostHandlers: (...[ports, options]: Parameters<typeof actual.createHostHandlers>) => {
       faults.busySites = options.busyWorktreeSites;
       faults.detachedWork = options.detachedWork ?? null;
-      return actual.createHostHandlers(ports, options);
+      faults.worktreeReads.handlers = options.worktreeReads;
+      return actual.createHostHandlers(ports, {
+        ...options,
+        ...(faults.noSessionsFacade ? { sessions: null } : {}),
+        onAdmission: (record) => faults.admissions.push(record),
+      });
     },
   };
 });
@@ -155,6 +169,7 @@ vi.mock("../../../packages/host-core/src/agent-services", async (importOriginal)
     createHostAgentCommands: (
       ...[ports, options]: Parameters<typeof actual.createHostAgentCommands>
     ) => {
+      faults.worktreeReads.commands = options.worktreeReads;
       const commands = actual.createHostAgentCommands(ports, options);
       return {
         ...commands,
@@ -198,19 +213,6 @@ vi.mock("../../../packages/host-core/src/agent-socket", async (importOriginal) =
       });
       return failing(await actual.startAgentSocket(options, (server) => claim(failing(server))));
     },
-  };
-});
-
-vi.mock("@volli/host-core/handlers", async (original) => {
-  const actual = await original<typeof import("@volli/host-core/handlers")>();
-  return {
-    ...actual,
-    createHostHandlers: (...[ports, options]: Parameters<typeof actual.createHostHandlers>) =>
-      actual.createHostHandlers(ports, {
-        ...options,
-        ...(faults.noSessionsFacade ? { sessions: null } : {}),
-        onAdmission: (record) => faults.admissions.push(record),
-      }),
   };
 });
 
@@ -273,6 +275,7 @@ afterEach(async () => {
   faults.foreignOwner = null;
   faults.busySites = null;
   faults.detachedWork = null;
+  faults.worktreeReads = { handlers: null, commands: null };
   faults.host = null;
   faults.hostOptions = null;
   faults.projectOptions = null;
@@ -999,6 +1002,62 @@ describe("the host lifecycle hostd composes (VC-627)", () => {
     expect(await stopped).toBe(true);
     expect(live.detachedWork.pending).toBe(0);
     expect(live.database.db.open).toBe(false);
+  });
+
+  it("answers `worktree status` and `worktree diff` through the host's one read service (VC-788)", async () => {
+    const host = await boot();
+    if (!isLiveHost(host.host)) throw new Error("database did not open");
+    const live = host.host;
+    // One service per host: the board's acts invalidate the one the socket reads.
+    expect(faults.worktreeReads.handlers).toBe(live.worktreeReads);
+    expect(faults.worktreeReads.commands).toBe(live.worktreeReads);
+
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    const git = (args: string[]) =>
+      execFileSync("git", args, {
+        cwd: repo,
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "Volli Test",
+          GIT_AUTHOR_EMAIL: "test@volli.local",
+          GIT_COMMITTER_NAME: "Volli Test",
+          GIT_COMMITTER_EMAIL: "test@volli.local",
+        },
+      });
+    git(["init", "-q", "-b", "main"]);
+    writeFileSync(join(repo, "a.txt"), "one\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "fixture"]);
+    writeFileSync(join(repo, "a.txt"), "two\n");
+    insertProject(live.database.db, project("p1"));
+    insertTicket(
+      live.database.db,
+      testTicket("p1", {
+        id: "t1",
+        ticketNumber: 1,
+        worktreePath: repo,
+        branch: "main",
+        baseBranch: "main",
+        usesWorktree: true,
+      }),
+    );
+    const statusReads = vi.spyOn(live.worktreeReads, "readStatus");
+    const diffReads = vi.spyOn(live.worktreeReads, "readDiff");
+    const socketPath = join(root, "data", "volli.sock");
+
+    expect(await ask(socketPath, "worktree.status", { id: "FX-1" })).toMatchObject({
+      ok: true,
+      data: { ticket: "FX-1", worktreePath: repo, uncommitted: true },
+    });
+    expect(await ask(socketPath, "worktree.diff", { id: "FX-1", workingTree: true })).toMatchObject(
+      {
+        ok: true,
+        data: { mode: "working-tree", files: [expect.objectContaining({ path: "a.txt" })] },
+      },
+    );
+    expect(statusReads).toHaveBeenCalledExactlyOnceWith("t1");
+    expect(diffReads).toHaveBeenCalledExactlyOnceWith("t1", "working-tree");
   });
 
   it("starts the host exactly once, and never maintenance on a database it refused", async () => {

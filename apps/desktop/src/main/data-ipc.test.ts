@@ -239,7 +239,7 @@ vi.mock("../../../../packages/host-core/src/worktree/index", async () => ({
 import { flushDataChangedForTest } from "./broadcast";
 import { registerDataIpcHandlers } from "./data-ipc.test-support";
 import type { ProjectLiveWork } from "@volli/host-core/handlers";
-import { watchSessionActivity } from "@volli/host-core/sessions";
+import { createSessionWakeBus, watchSessionActivity } from "@volli/host-core/sessions";
 import {
   createTestSessionEngine,
   insertSession,
@@ -248,7 +248,6 @@ import {
   testSession,
   type TestDb,
   resetOrphanScanForTest,
-  resetWorktreeSnapshotsForTest,
   resetDeletionLeasesForTest,
 } from "@volli/host-core/testing";
 import type { AutoTitleRequest } from "@volli/host-core/session-runtime";
@@ -342,9 +341,8 @@ beforeEach(() => {
   handlers.clear();
   vi.resetAllMocks();
   dataChangedSends.length = 0;
-  // The rail's last-known snapshot is process-wide (VC-372): each test starts
-  // from a clean launch, and from no prior test's watch manager hooks.
-  resetWorktreeSnapshotsForTest();
+  // Each registration builds its own host read service (VC-788), so each test
+  // starts with a clean snapshot; only the captured watch hooks need dropping.
   worktreeWatch.options = undefined;
   // The orphan sweep is cached once per launch (module state) — drop it so each
   // test starts from a clean launch and its own mocked sweep runs.
@@ -1638,6 +1636,22 @@ describe("volli:ticket-create — body, labels, usesWorktree", () => {
 });
 
 describe("volli:ticket-update — worktree identity", () => {
+  it("passes only the channel's declared fields to the handler, never the agent socket's", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+
+    const result = invoke<TicketResult>("volli:ticket-update", {
+      ticketId: ticket.id,
+      title: "Renamed",
+      priority: "high",
+      addLabels: ["smuggled"],
+      bodyMutation: { mode: "edit" },
+    } as never);
+    expect(result).toMatchObject({ ok: true, ticket: { title: "Renamed", labels: [] } });
+    if (!result.ok) return;
+    expect(result.ticket.priority).toBe(ticket.priority);
+  });
+
   it("records one worktree_changed event when all three fields change together", () => {
     const projectId = createProject();
     const ticket = createTicket(projectId);
@@ -1799,6 +1813,7 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
           identity: { worktreePath, branch: "volli/VC-1-a-ticket", baseBranch: "main" },
           created: true,
           restamped: true,
+          setupPending: false,
         },
       };
     });
@@ -1963,6 +1978,7 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
           },
           created: true,
           restamped: true,
+          setupPending: false,
         },
       };
     });
@@ -2008,6 +2024,7 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
         identity: { worktreePath: null, branch: "volli/VC-1", baseBranch: "main" },
         created: false,
         restamped: false,
+        setupPending: false,
       },
     });
 
@@ -2773,19 +2790,22 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
     const ticket = createTicket(projectId);
     const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
     const pushed = new Map<string, SessionListingRow>();
-    const watch = watchSessionActivity(sessionEngine, {
+    // Composed as `session-services.ts` composes it: the watch listens to the
+    // wake bus, and every write goes through the bus's engine.
+    const wake = createSessionWakeBus(sessionEngine, { db: ctx.db });
+    const watch = watchSessionActivity(wake, {
       listOpenNativeBindings: noOpenBindings,
       publish: ({ row }) => pushed.set(rowId(row), row),
       // The expression `index.ts` passes, unchanged.
       provenanceOf: (born) => readSessionProvenance(ctx.db, born),
     });
-    // Created THROUGH the watch, because `createSession` is one of the writes
-    // that marks a Session dirty. Nothing here retitles anything: a rename is a
+    // Created THROUGH the bus, because a committed `createSession` is one of
+    // the writes that marks a Session dirty. Nothing here retitles anything: a rename is a
     // ledger fact and `sessions.title` is only the minted name, so a test that
     // dirtied Sessions by renaming them would be comparing two readers of a
     // title neither of them should still be showing.
     const start = async (title: string, ticketId: string | null): Promise<string> => {
-      const created = await watch.engine.createSession({
+      const created = await wake.engine.createSession({
         commandId: `create-${title}`,
         projectId,
         ticketId,
@@ -4079,6 +4099,7 @@ describe("volli:worktree-recreate", () => {
         },
         created: true,
         restamped: true,
+        setupPending: false,
       },
     });
 

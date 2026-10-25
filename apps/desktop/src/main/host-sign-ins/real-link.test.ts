@@ -155,6 +155,7 @@ async function todaysHost(options: {
       modelAccess: null,
       experiments: null,
       automations: { kind: "degraded" } as never,
+      worktreeReads: null,
       busyWorktreeSites: async () => [],
       signIns,
     }),

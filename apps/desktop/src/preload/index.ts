@@ -213,7 +213,6 @@ import type {
   SessionReadSetResult,
   SessionRenameInput,
   SessionRenameResult,
-  SessionRetitledEvent,
   SessionsInterruptedEvent,
   SessionsResult,
   SessionStartedNotice,
@@ -260,7 +259,7 @@ import type {
   VolliIpcChannel,
   VolliIpcEvent,
   VolliSendContract,
-  VenueSnapshotResult,
+  WorkingCopySnapshotResult,
   WorktreeBaseReadResult,
   WorktreeBranchesResult,
   WorktreeChangeSetResult,
@@ -757,18 +756,6 @@ const api = {
         ipcRenderer.removeListener("volli:sessions-interrupted" satisfies VolliIpcEvent, listener);
     },
     /**
-     * Subscribes to retitles main performed itself (VC-81 auto-titling).
-     * Renderer-originated renames move their own labels and never arrive
-     * here; this carries the ones nothing on screen would otherwise learn.
-     */
-    onRetitled: (callback: (event: SessionRetitledEvent) => void): (() => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, payload: SessionRetitledEvent) =>
-        callback(payload);
-      ipcRenderer.on("volli:session-retitled" satisfies VolliIpcEvent, listener);
-      return () =>
-        ipcRenderer.removeListener("volli:session-retitled" satisfies VolliIpcEvent, listener);
-    },
-    /**
      * Subscribes to canonical harness events (harness-events): a hook the
      * launch wrapper configured fired, and main resolved which session it
      * belongs to. Harness-native event names never arrive here.
@@ -1159,7 +1146,7 @@ const api = {
     write: (input: FileWriteInput): Promise<FileWriteResult> => invoke("volli:file-write", input),
     /**
      * The navigators' creation track (VC-191). Same scoped `{ projectId,
-     * ticketId }` resolution as `read`/`write`, so a Ticket workspace acts on
+     * ticketId }` resolution as `read`/`write`, so a Ticket view acts on
      * its own worktree and Home on the main checkout.
      */
     /** Creates an EMPTY file (missing parent folders included); refuses an occupied path. */
@@ -1231,7 +1218,7 @@ const api = {
     },
   },
   appState: {
-    /** Upserts one `app_state` key — the async write-through the ui/workspace persist stores' storage adapter uses. */
+    /** Upserts one `app_state` key — the async write-through the ui/project-ui persist stores' storage adapter uses. */
     set: (key: string, value: string): Promise<AppStateSetResult> =>
       invoke("volli:app-state-set", key, value),
     /**
@@ -1254,14 +1241,15 @@ const api = {
     },
   },
   /**
-   * The venue a Session runs in, measured (VC-55) — its own door rather than a
-   * `worktree` verb, because the question is not about a worktree: a Project
-   * Session's venue is the project's main checkout, and a ticket's may be too.
+   * The Working copy a Session runs in, measured (VC-55) — its own door rather
+   * than a `worktree` verb, because the question is not about a worktree: a
+   * Project Session's Working copy is the project's main checkout, and a
+   * ticket's may be too.
    */
-  venue: {
+  workingCopy: {
     /** One reading of the checkout `{ projectId, ticketId }` names. `ticketId: null` is a Board Session. */
-    snapshot: (projectId: string, ticketId: string | null): Promise<VenueSnapshotResult> =>
-      invoke("volli:venue-snapshot", { projectId, ticketId }),
+    snapshot: (projectId: string, ticketId: string | null): Promise<WorkingCopySnapshotResult> =>
+      invoke("volli:working-copy-snapshot", { projectId, ticketId }),
   },
   worktree: {
     /** The "Remove worktree…" escape hatch; `force` discards uncommitted work when the caller has confirmed. */

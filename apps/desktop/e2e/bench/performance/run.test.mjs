@@ -415,7 +415,7 @@ describe("whole-report validation and Markdown", () => {
     report.config.streamOnly = false;
     report.config.interactions = ["ticket_switch"];
     report.arms[0].interactions = [
-      aggregateInteraction("ticket_switch", "Switch between ticket workspaces", [
+      aggregateInteraction("ticket_switch", "Switch between Ticket views", [
         streamSample({ latencyMs: 120 }),
         streamSample({ latencyMs: 140 }),
       ]),
@@ -461,7 +461,7 @@ describe("whole-report validation and Markdown", () => {
       name,
       busyCores: 2,
       interactions: [
-        aggregateInteraction("ticket_switch", "Switch between ticket workspaces", [
+        aggregateInteraction("ticket_switch", "Switch between Ticket views", [
           streamSample({ latencyMs: 120 }),
           streamSample({ latencyMs: 140 }),
         ]),
@@ -652,7 +652,7 @@ describe("whole-report validation and Markdown", () => {
       name,
       busyCores: 2,
       interactions: [
-        aggregateInteraction("ticket_switch", "Switch between ticket workspaces", [
+        aggregateInteraction("ticket_switch", "Switch between Ticket views", [
           streamSample({ latencyMs: 120 }),
           streamSample({ latencyMs: 140 }),
         ]),

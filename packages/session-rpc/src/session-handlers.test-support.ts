@@ -232,6 +232,10 @@ export function sessionHandlersFrom(
     "project.remove": (input, call) => need(ports.desktop?.["project.remove"], BOARD)(input, call),
     "worktree.trimSettings": (input, call) =>
       need(ports.desktop?.["worktree.trimSettings"], BOARD)(input, call),
+    "worktree.setupStatus": (input, call) =>
+      need(ports.desktop?.["worktree.setupStatus"], BOARD)(input, call),
+    "worktree.answerSetup": (input, call) =>
+      need(ports.desktop?.["worktree.answerSetup"], BOARD)(input, call),
     "hosts.snapshot": remote("hosts.snapshot"),
     "hosts.subscribe": remote("hosts.subscribe"),
     "hosts.retry": remote("hosts.retry"),
@@ -269,6 +273,13 @@ export function sessionHandlersFrom(
     "hostScope.subscribe": remote("hostScope.subscribe"),
     "browserShortcuts.subscribe": remote("browserShortcuts.subscribe"),
     "browserShortcuts.focusPage": remote("browserShortcuts.focusPage"),
+    "account.snapshot": remote("account.snapshot"),
+    "account.subscribe": remote("account.subscribe"),
+    "account.signIn": remote("account.signIn"),
+    "account.cancelSignIn": remote("account.cancelSignIn"),
+    "account.signOut": remote("account.signOut"),
+    "account.requestDeletion": remote("account.requestDeletion"),
+    "account.cancelDeletion": remote("account.cancelDeletion"),
   };
   return {
     ...handlers,

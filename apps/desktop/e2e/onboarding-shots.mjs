@@ -60,11 +60,7 @@ import {
   typeIntoMonaco,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
-import {
-  openTicketCard,
-  preparedChatSelected,
-  ticketWorkspaceOpen,
-} from "./lib/kickoff-support.mjs";
+import { openTicketCard, preparedChatSelected, ticketViewOpen } from "./lib/kickoff-support.mjs";
 
 /**
  * Where the numbered PNGs land. An explicit argument wins; otherwise a
@@ -276,7 +272,7 @@ try {
     "09 kickoff — composer closes, board stays put, then the card opens on its chat",
     async () => {
       await page.keyboard.press("Meta+Shift+Enter");
-      // VC-491: the kickoff no longer teleports into the ticket workspace — the
+      // VC-491: the kickoff no longer teleports into the Ticket view — the
       // composer closes and the board the user was on stays in front. The
       // walkthrough still wants the workspace shot, so drive the open the way
       // the user now does: find the created ticket and double-click its card.
@@ -289,7 +285,7 @@ try {
       );
       if (
         !(await page.getByRole("button", { name: "New ticket", exact: true }).isVisible()) ||
-        (await ticketWorkspaceOpen(page))
+        (await ticketViewOpen(page))
       ) {
         throw new Error("kickoff navigated away from the Board before explicit open");
       }
@@ -321,7 +317,7 @@ try {
         { timeout: 20000 },
       );
       if (!(await openTicketCard(page, created.displayId))) {
-        throw new Error("ticket workspace did not open after double-click");
+        throw new Error("Ticket view did not open after double-click");
       }
       await waitUntil(
         "the expected Session's prepared chat to be selected",

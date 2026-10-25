@@ -55,6 +55,7 @@
  */
 import type { PromptResource } from "./agent-runtime";
 import { isPromptResource } from "./prompt-resource";
+import { configPlan, resolveConfigEntries, resolveConfigValue } from "./config-resolution";
 
 /**
  * The two independent things a skill may be allowed to do.
@@ -209,23 +210,28 @@ export function compareSkillNames(left: string, right: string): number {
 }
 
 /**
- * The two tiers merged into the one list every surface sees: a project skill
- * wins a slug the personal tier also defines.
+ * The two tiers merged into the one list every surface sees, by the `skills`
+ * surface's precedence ({@link configPlan}): the project's vendored skill wins
+ * a slug the personal tier also defines — unless the `cloud` flag is on, where
+ * the personal skill wins (Volli Cloud's personal > project order).
  *
  * Precedence is by name and it replaces outright, `mergePromptTemplates`'
  * rule for `mergePromptTemplates`' reason — two rows spelled `/review` are
- * two rows the user cannot tell apart, and the one the repository vendored is
- * the one its Sessions mean. Name-sorted so the list does not reorder itself
- * as a tier lands.
+ * two rows the user cannot tell apart. Name-sorted so the list does not
+ * reorder itself as a tier lands.
  */
 export function mergeSkills(input: {
   project: readonly SkillReference[];
   global: readonly SkillReference[];
+  cloud: boolean;
 }): readonly SkillReference[] {
-  const byName = new Map<string, SkillReference>();
-  for (const skill of input.global) byName.set(skill.name, skill);
-  for (const skill of input.project) byName.set(skill.name, skill);
-  return [...byName.values()].toSorted((a, b) => compareSkillNames(a.name, b.name));
+  return resolveConfigEntries(
+    configPlan("skills", input.cloud),
+    { repo: input.project, personal: input.global },
+    (skill) => skill.name,
+  )
+    .map(({ value }) => value)
+    .toSorted((a, b) => compareSkillNames(a.name, b.name));
 }
 
 /**
@@ -339,9 +345,16 @@ export function skillModePolicy(mode: SkillMode): SkillInvocationPolicy {
   }
 }
 
-/** Read an own Project rule without confusing Object prototype names for slugs. */
+/**
+ * The rule in force for one slug, by the `skillMode` surface's precedence
+ * ({@link configPlan}) — today the Project's rule alone, read as an own
+ * property so Object prototype names are never confused for slugs. `undefined`
+ * when no level has a rule: the author's declaration applies.
+ */
 function projectSkillMode(modes: SkillModes, name: string): SkillMode | undefined {
-  return Object.hasOwn(modes, name) ? modes[name] : undefined;
+  return resolveConfigValue<SkillMode>(configPlan("skillMode"), {
+    project: Object.hasOwn(modes, name) ? modes[name] : undefined,
+  })?.value;
 }
 
 /**

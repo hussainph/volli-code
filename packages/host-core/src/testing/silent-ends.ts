@@ -2,12 +2,18 @@
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   sessionRootThreadId,
   readSessionTranscriptTail,
 } from "@volli/session-engine";
-import type { SessionRuntimeSpec, RuntimeAttachmentHandle, McpToolDefinition } from "@volli/shared";
+import {
+  LOCAL_RUNNER,
+  type SessionRuntimeSpec,
+  type RuntimeAttachmentHandle,
+  type McpToolDefinition,
+} from "@volli/shared";
 import { createPiAgentRuntime } from "@volli/agent-runtime";
 import {
   scriptedProvider,
@@ -100,7 +106,7 @@ export async function silentEndsFixture(
   const terminal = Promise.withResolvers<void>();
   const runtime = createSessionRuntime({
     engine,
-    executor: {
+    executors: createSessionExecutorSlot({
       ...adapter,
       attach: async (spec, sink) =>
         adapter.attach(spec, {
@@ -109,12 +115,12 @@ export async function silentEndsFixture(
             if (observation.kind === "turn" && observation.state !== "started") terminal.resolve();
           },
         }),
-    },
+    }),
     artifacts,
     followUps: createSqliteSessionFollowUpLedger(db.db),
     locations: {
-      resolve: async () => ({ directory, venue: { id: "local", kind: "local" } }),
-      prepare: async () => ({ directory, venue: { id: "local", kind: "local" } }),
+      resolve: async () => ({ directory, venue: LOCAL_RUNNER }),
+      prepare: async () => ({ directory, venue: LOCAL_RUNNER }),
       reaffirm: async () => undefined,
     },
     clock: { now },

@@ -25,7 +25,7 @@ import {
 } from "@renderer/components/ticket/rail-read-feedback";
 import { cn } from "@renderer/lib/utils";
 import { TicketFilesList } from "@renderer/components/ticket/ticket-files-panel";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 /** Join one Main-checkout listing entry to the current project-relative folder. */
 function joinRel(parent: string, name: string): string {
@@ -204,8 +204,8 @@ function HomeFilesScope({
     cwd,
     host: {
       refresh: () => void loadDir(cwd),
-      openCreated: (relPath) => useWorkspaceStore.getState().pinHomeFile(project.id, relPath),
-      renameTab: (from, to) => useWorkspaceStore.getState().renameHomeFile(project.id, from, to),
+      openCreated: (relPath) => useProjectUiStore.getState().pinHomeFile(project.id, relPath),
+      renameTab: (from, to) => useProjectUiStore.getState().renameHomeFile(project.id, from, to),
     },
   });
 

@@ -22,8 +22,8 @@ const { mounted, unmounted, focusHomePane, focusTicketPane } = vi.hoisted(() => 
   focusTicketPane: vi.fn(),
 }));
 
-vi.mock("@renderer/stores/workspace", () => ({
-  useWorkspaceStore: { getState: () => ({ focusHomePane, focusTicketPane }) },
+vi.mock("@renderer/stores/project-ui", () => ({
+  useProjectUiStore: { getState: () => ({ focusHomePane, focusTicketPane }) },
 }));
 
 // Keep the real chrome and native-plane controller; count their React lifetime.

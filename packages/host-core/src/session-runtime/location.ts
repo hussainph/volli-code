@@ -2,15 +2,44 @@ import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
 import type { SessionLocation, SessionLocationResolver } from "@volli/session-engine";
-import type { Session, SessionExecutionVenue } from "@volli/shared";
+import {
+  displayTicketId,
+  harnessAdapters,
+  LOCAL_RUNNER,
+  scrubInheritedSessionEnv,
+} from "@volli/shared";
+import type { Session, RunnerIdentity } from "@volli/shared";
 
-import type { HostEventBus } from "../ports";
+import type { HostEventBus, PowerPort } from "../ports";
 import { getProjectById, isProjectAttached } from "../db/projects-repo";
 import { getTicket } from "../db/tickets-repo";
-import { acquireWorktreeStartLease, ensure, UNDER_DELETION_REFUSAL } from "../worktree";
+import {
+  acquireWorktreeStartLease,
+  ensure,
+  runPendingWorktreeSetup,
+  runWorktreeResume,
+  UNDER_DELETION_REFUSAL,
+  watchRunnerWakes,
+} from "../worktree";
 import { worktreeDeps } from "../worktree-runtime";
 
-const LOCAL: SessionLocation["venue"] = { id: "local", kind: "local" };
+/** Where a worktree's setup command runs: `<shellPath> -c <command>` under `env`. */
+export interface WorktreeSetupEnvironment {
+  shellPath: string;
+  env: Record<string, string>;
+}
+
+/**
+ * The host's own environment, less every marker saying an agent session is
+ * already running in it — for a resolver composed without the runtime's
+ * provider (tests, and any host that has nothing to add).
+ */
+async function hostSetupEnvironment(): Promise<WorktreeSetupEnvironment> {
+  return {
+    shellPath: process.env["SHELL"] || "/bin/sh",
+    env: scrubInheritedSessionEnv(process.env, harnessAdapters),
+  };
+}
 
 /** Why a Session of a removed project does not start (VC-822). */
 const PROJECT_REMOVED_REFUSAL =
@@ -32,6 +61,12 @@ const PROJECT_REMOVED_REFUSAL =
  * single-flight and its reconcile already owns "registered, directory missing →
  * prune, then recreate at the same path" — so a worktree comes back where it
  * was, on the branch it was on, with the work that was committed to it intact.
+ *
+ * `prepare` also runs the project's setup command when the worktree still owes
+ * it (VC-835) — the terminal runs it in its shell, and a chat has no shell, so
+ * it runs here, before the binding exists and so before the first turn. A
+ * setup that fails fails the start with its exit code; it is claimed before it
+ * runs, so the Retry starts the agent rather than running it again.
  *
  * Both of them are also agent STARTS, so both take the worktree start lease
  * (VC-284). A Session can be bound to a directory this app now
@@ -60,9 +95,23 @@ async function withStartLease<T>(directory: string, work: () => Promise<T>): Pro
 export function createSessionLocationResolver(
   db: Database.Database,
   ports: { events: HostEventBus },
-  options: { dataDir: string; venue?: SessionExecutionVenue },
+  options: {
+    dataDir: string;
+    venue?: RunnerIdentity;
+    setupEnvironment?: (sessionId: string) => Promise<WorktreeSetupEnvironment>;
+    /**
+     * Whether the working copy's environment recipe runs (VC-584, the `cloud`
+     * flag), read per start: `.agents/setup` before the first turn, the setup
+     * gate, and `.agents/resume`. Absent is off.
+     */
+    environmentRecipes?: () => boolean;
+    /** The machine's wakes, which owe every working copy its resume again. */
+    power?: PowerPort;
+  },
 ): SessionLocationResolver {
-  const venue = options.venue ?? LOCAL;
+  const venue = options.venue ?? LOCAL_RUNNER;
+  const setupEnvironment = options.setupEnvironment ?? hostSetupEnvironment;
+
   const site = (session: Session) => {
     const project = getProjectById(db, session.projectId);
     if (!project) throw new Error(`Project ${session.projectId} was not found`);
@@ -84,7 +133,8 @@ export function createSessionLocationResolver(
     // durable event, and a cleanup must not be able to take the directory
     // between it succeeding and the binding existing.
     return withStartLease(ticket.worktreePath ?? project.path, async () => {
-      const outcome = await ensure(worktreeDeps(db, ports, options), ticket.id);
+      const deps = worktreeDeps(db, ports, options);
+      const outcome = await ensure(deps, ticket.id);
       if (!outcome.ok) {
         // The path is the whole diagnosis when it is a stale stamp pointing at a
         // checkout somebody deleted, so it is named whenever the ticket has one.
@@ -103,6 +153,50 @@ export function createSessionLocationResolver(
           ticketId: ticket.id,
           projectId: project.id,
           kind: "worktree",
+        });
+      }
+      // Asked on every prepare, not only when this `ensure` saw the run
+      // pending: another start that claimed it may still be running it (a
+      // first attach that outlived its ceiling, whose Retry is this call), and
+      // this start waits for it rather than starting its agent in a checkout
+      // still being set up. With nothing pending or running, it is one unlink
+      // that finds no file.
+      // With environment recipes on, the run is the working copy's recipe
+      // (its own `.agents/setup` first), and a failed one keeps refusing
+      // starts until a person answers it (`setup-gate.ts`).
+      const recipe =
+        options.environmentRecipes?.() === true
+          ? {
+              projectId: project.id,
+              ticketDisplayId: displayTicketId(project.ticketPrefix, ticket.ticketNumber),
+            }
+          : undefined;
+      const setup = await runPendingWorktreeSetup(deps, {
+        ticketId: ticket.id,
+        worktreePath: identity.worktreePath,
+        // Read now, not from the Session's start: the command a person sees
+        // in Configure is the one that runs.
+        setupCommand: getProjectById(db, project.id)?.setupCommand ?? null,
+        // Asked only when the run is this call's to make.
+        environment: () => setupEnvironment(session.id),
+        ...(recipe === undefined ? {} : { recipe }),
+      });
+      if (setup.kind === "failed") {
+        throw new Error(
+          `Couldn't prepare the worktree at ${identity.worktreePath} — ${setup.message}`,
+        );
+      }
+      // The first start since this runner started or woke brings the working
+      // copy's services back. Waited on briefly, never a block.
+      if (recipe !== undefined) {
+        // Subscribed on the first recipe start, so a host with recipes off
+        // never listens.
+        if (options.power !== undefined) watchRunnerWakes(options.power);
+        await runWorktreeResume(deps, {
+          ticketId: ticket.id,
+          worktreePath: identity.worktreePath,
+          recipe,
+          environment: () => setupEnvironment(session.id),
         });
       }
       return { directory: identity.worktreePath, venue };

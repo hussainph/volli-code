@@ -26,7 +26,7 @@ import { getComment } from "../db/comments-repo";
 import { listTicketEvents } from "../db/events-repo";
 import { listTicketLabels } from "../db/labels-repo";
 import { detachProject, insertProject } from "../db/projects-repo";
-import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
+import { openTestDb, testProject, testSession, type TestDb } from "../db/test-helpers";
 import { getTicket, getTicketRow, listTicketsByProject } from "../db/tickets-repo";
 import { ADMITTED, admittedHandlers, type HandlerPolicy } from "../handlers/handler-map";
 import {
@@ -36,12 +36,13 @@ import {
 } from "../handlers/host-handlers";
 import * as toolOutput from "../pi-tool-output";
 import type { RuntimeAutomations } from "../session-runtime/automations";
+import { insertSession } from "../session-control/test-support";
 import { archiveTicketCommand, createTicketCommand } from "../ticket-commands";
 import { subscribeTicketWake, type TicketWake } from "../ticket-wake";
 import * as worktreeModule from "../worktree";
 import { runGitCapturingAsync } from "../worktree/git";
 import { resetRepositoryTurnsForTest } from "../worktree/repository-turn";
-import { resetWorktreeSnapshotsForTest } from "../worktree/snapshot";
+import { createWorktreeReadService, type WorktreeReadService } from "../worktree-reads";
 import type { EnsureOutcome } from "../worktree";
 import type { WorktreeResult } from "../worktree/types";
 import { createBoardChangeFeed, type BoardChangeFeed, type BoardFeedBatch } from "./change-feed";
@@ -64,6 +65,8 @@ let publish: Mock<(topic: string, change: unknown) => void>;
 let tempDirs: string[];
 let wakes: TicketWake[];
 let stopWakes: () => void;
+/** The host's worktree read service, built fresh per case: its snapshot is per host. */
+let worktreeReads: WorktreeReadService;
 
 beforeEach(() => {
   ctx = openTestDb();
@@ -79,14 +82,15 @@ beforeEach(() => {
   tempDirs = [];
   wakes = [];
   stopWakes = subscribeTicketWake((wake) => wakes.push(wake));
-  resetWorktreeSnapshotsForTest();
+  worktreeReads = createWorktreeReadService({
+    deps: () => ({ db: ctx.db, gitAsync: runGitCapturingAsync }),
+  });
   resetRepositoryTurnsForTest();
 });
 
 afterEach(() => {
   stopWakes();
   vi.restoreAllMocks();
-  resetWorktreeSnapshotsForTest();
   resetRepositoryTurnsForTest();
   ctx.cleanup();
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
@@ -111,6 +115,7 @@ function handlers(options: Partial<HostHandlerOptions> = {}): HostHandlers {
         experiments: null,
         automations: { kind: "degraded" } as RuntimeAutomations,
         busyWorktreeSites: async () => [],
+        worktreeReads,
         now: () => 50,
         worktree: {
           db: ctx.db,
@@ -405,7 +410,7 @@ describe("reads", () => {
     stop();
   });
 
-  it("follows the Workspace's feed through board.changes, live and resumed", async () => {
+  it("follows the project's feed through board.changes, live and resumed", async () => {
     const map = handlers();
     const emit = vi.fn();
     const sink = { emit, fail: vi.fn() };
@@ -789,6 +794,100 @@ describe("ticket writes", () => {
     ).rejects.toThrow("Unknown ticket");
   });
 
+  it("updates fields, body, priority and labels as one write: one transaction, one wake", async () => {
+    seed("t-1", "todo", { body: "Intro", labels: ["UI", "stale"] });
+    const map = handlers();
+    wakes.length = 0;
+    // The agent socket's `volli ticket update --append … --priority … --label …` (VC-794).
+    const { ticket } = await map["board.updateTicket"](
+      {
+        ticketId: "t-1",
+        title: "Renamed",
+        bodyMutation: { mode: "append", text: "More." },
+        priority: "high",
+        // Matched to the project's labels ignoring case; one the ticket wears is not added twice.
+        addLabels: ["ui", "backend"],
+        removeLabels: ["STALE", "never-worn"],
+      },
+      SESSION,
+    );
+    expect(ticket).toMatchObject({
+      title: "Renamed",
+      body: "Intro\n\nMore.",
+      priority: "high",
+      labels: ["UI", "backend"],
+    });
+    // Every event the one command wrote, woken after its one COMMIT, in write order.
+    expect(wakes.map(({ event }) => event.payload.kind)).toEqual([
+      "retitled",
+      "body_edited",
+      "priority_changed",
+      "labels_changed",
+    ]);
+    expect(wakes.every(({ event }) => event.actor === "session")).toBe(true);
+    // The row inlined, and the labels it names (a new one among them).
+    expect(changes().map(({ kind }) => kind)).toEqual(["label", "label", "ticket", "ticketEvent"]);
+    expect(changes()).toContainEqual(
+      expect.objectContaining({ kind: "ticket", ticket: ticketSummary(ticket) }),
+    );
+    expect(published()).toEqual([{ ticketId: "t-1", projectId: PROJECT, kind: "ticket" }]);
+  });
+
+  it("writes nothing of an update whose later step fails, and refuses a body with a mutation", async () => {
+    seed("t-1", "todo", { body: "Intro" });
+    const map = handlers();
+    const before = counts();
+    wakes.length = 0;
+    // The priority's CHECK fails after the title and body were written in the transaction.
+    await expect(async () =>
+      map["board.updateTicket"](
+        {
+          ticketId: "t-1",
+          title: "Renamed",
+          bodyMutation: { mode: "append", text: "More." },
+          priority: "urgent" as never,
+        },
+        SESSION,
+      ),
+    ).rejects.toThrow();
+    expect(getTicket(ctx.db, "t-1")).toMatchObject({ title: "t-1", body: "Intro" });
+    expect(counts()).toEqual(before);
+    expect(wakes).toEqual([]);
+    expect(changes()).toEqual([]);
+    // A mutation that no longer applies to the body as it stands is refused in the write.
+    await expect(async () =>
+      map["board.updateTicket"](
+        { ticketId: "t-1", bodyMutation: { mode: "edit", oldText: "Gone", newText: "x" } },
+        SESSION,
+      ),
+    ).rejects.toThrow('Body edit expected exactly one match for "Gone".');
+    await expect(async () =>
+      map["board.updateTicket"](
+        { ticketId: "t-1", body: "x", bodyMutation: { mode: "append", text: "y" } },
+        USER,
+      ),
+    ).rejects.toThrow("A ticket update takes a body or a body mutation, not both.");
+    await expect(async () =>
+      map["board.updateTicket"](
+        { ticketId: "nope", bodyMutation: { mode: "append", text: "y" } },
+        USER,
+      ),
+    ).rejects.toThrow("Unknown ticket");
+    expect(counts()).toEqual(before);
+  });
+
+  it("edits labels with additions alone or removals alone", async () => {
+    seed("t-1", "todo", { labels: ["ui"] });
+    const map = handlers();
+    const added = await map["board.updateTicket"]({ ticketId: "t-1", addLabels: ["api"] }, USER);
+    expect(added.ticket.labels).toEqual(["ui", "api"]);
+    const removed = await map["board.updateTicket"](
+      { ticketId: "t-1", removeLabels: ["UI"] },
+      USER,
+    );
+    expect(removed.ticket.labels).toEqual(["api"]);
+  });
+
   it("archives a ticket, stamping its tombstone, and unarchives it", async () => {
     seed("t-1");
     const map = handlers();
@@ -912,7 +1011,7 @@ describe("ticket writes", () => {
     expect(published()).toEqual([]);
   });
 
-  // The receipt is keyed by the ticket's Workspace, which a deleted ticket no
+  // The receipt is keyed by the ticket's project, which a deleted ticket no
   // longer resolves: the repeat misses its receipt and runs the delete again.
   it("answers a repeated delete from its receipt", async () => {
     seed("old");
@@ -930,7 +1029,7 @@ describe("comments", () => {
     seed("t-1");
     const map = handlers();
     const input = { ticketId: "t-1", commandId: "c-com", body: "hello" };
-    const first = await map["board.createComment"](input, SESSION);
+    const first = await map["board.createComment"](input, USER);
     const { comment } = first;
     expect(first.receipt).toEqual(receipt("c-com"));
     expect(comment).toMatchObject({ ticketId: "t-1", body: "hello", actor: "user" });
@@ -955,17 +1054,38 @@ describe("comments", () => {
       },
     ]);
     expect(published()).toEqual([{ ticketId: "t-1", projectId: PROJECT, kind: "comment" }]);
-    // The event is attributed to the door's caller, the comment to the person.
+    expect(listTicketEvents(ctx.db, "t-1").at(-1)).toMatchObject({ actor: "user" });
+    await expectReplay(first, () => map["board.createComment"](input, USER));
+    expect(
+      isCommandIntentConflict(
+        await thrown(() => map["board.createComment"]({ ...input, body: "other" }, USER)),
+      ),
+    ).toBe(true);
+  });
+
+  it("takes a comment's author from the caller, never the input: a Session cites itself", async () => {
+    seed("t-1");
+    insertSession(ctx.db, testSession(PROJECT, null, { id: "s-1" }));
+    const map = handlers();
+    // The agent socket's `volli ticket comment` (VC-794): the Session the
+    // socket authenticated is the author, and the id it cites is its own, not
+    // one the input names.
+    const { comment } = await map["board.createComment"](
+      { ticketId: "t-1", body: "from an agent", sessionId: "someone-else" },
+      SESSION,
+    );
+    expect(comment).toMatchObject({ actor: "session", sessionId: "s-1" });
     expect(listTicketEvents(ctx.db, "t-1").at(-1)).toMatchObject({
       actor: "session",
       actorContext: { sessionId: "s-1" },
     });
-    await expectReplay(first, () => map["board.createComment"](input, SESSION));
-    expect(
-      isCommandIntentConflict(
-        await thrown(() => map["board.createComment"]({ ...input, body: "other" }, SESSION)),
-      ),
-    ).toBe(true);
+    // An unauthenticated caller a project's policy admits is stored as such, and
+    // cites nobody, whatever the input names.
+    const anonymous = await map["board.createComment"](
+      { ticketId: "t-1", body: "anonymous", sessionId: "s-1" },
+      { actor: { kind: "unauthenticated" } },
+    );
+    expect(anonymous.comment).toMatchObject({ actor: "unauthenticated", sessionId: null });
   });
 
   it("edits a comment, recording no event", async () => {
@@ -1027,7 +1147,7 @@ describe("comments", () => {
   });
 
   // As for a deleted ticket: a removed comment no longer resolves the
-  // Workspace its receipt is keyed under, so the repeat runs again and refuses.
+  // project its receipt is keyed under, so the repeat runs again and refuses.
   it("answers a repeated removal from its receipt", async () => {
     seed("t-1");
     const map = handlers();
@@ -1293,6 +1413,7 @@ describe("moves", () => {
       events: { publish } as never,
       feed,
       worktree: () => ({ db: ctx.db }) as never,
+      worktreeReads: () => worktreeReads,
       busyWorktreeSites: async () => [],
       ticketSignals: null,
       // Moves, but ignores the seam: no receipt joins its transaction.
@@ -1345,6 +1466,7 @@ describe("worktree scope", () => {
     );
     feed.subscribe("real", null, (batch) => batches.push(batch));
     seed("t-1", "todo", { projectId: "real" });
+    const invalidate = vi.spyOn(worktreeReads, "invalidate");
     const map = handlers({
       worktree: {
         db: ctx.db,
@@ -1376,6 +1498,8 @@ describe("worktree scope", () => {
     ]);
     // The field write is the window's own; the moved checkout is everyone's.
     expect(published()).toEqual([{ ticketId: "t-1", projectId: "real", kind: "worktree" }]);
+    // A last-known answer taken without the checkout cannot describe it (VC-372).
+    expect(invalidate).toHaveBeenCalledExactlyOnceWith("t-1");
   });
 
   it("reports a failed materialization after saying the scope changed", async () => {

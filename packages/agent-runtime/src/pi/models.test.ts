@@ -39,7 +39,7 @@ const fsHooks = vi.hoisted(() => ({
    * order, so a test can stage a pass a write overtakes and a later pass
    * alongside it. Reads past the end of the queue are not held at all.
    */
-  stalls: [] as Promise<void>[],
+  stalls: [] as { entered: () => void; released: Promise<void> }[],
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -61,7 +61,10 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       if (typeof args[0] !== "string") {
         fsHooks.parsedOpens += 1;
         const stall = fsHooks.stalls.shift();
-        if (stall !== undefined) await stall;
+        if (stall !== undefined) {
+          stall.entered();
+          await stall.released;
+        }
       }
       return (actual.readFile as (...inner: unknown[]) => Promise<unknown>)(...args);
     },
@@ -90,6 +93,14 @@ function agentDirWith(contents: string): string {
 
 function storeIn(dir: string): PiFileCredentialStore {
   return new PiFileCredentialStore(join(dir, "auth.json"));
+}
+
+/** Wait for the intended reader to take the stall before starting a competing pass. */
+function stallNextRead(): { entered: Promise<void>; release: () => void } {
+  const entered = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
+  fsHooks.stalls.push({ entered: entered.resolve, released: released.promise });
+  return { entered: entered.promise, release: released.resolve };
 }
 
 const held = { agentDir: process.env.PI_CODING_AGENT_DIR };
@@ -268,13 +279,13 @@ describe("PiFileCredentialStore caching", () => {
     fsHooks.fstatMtimeMs = statSync(authPath).mtimeMs;
 
     // A read opens the file, and is still reading it when the write lands.
-    const release = Promise.withResolvers<void>();
-    fsHooks.stalls.push(release.promise);
+    const read = stallNextRead();
     const overtaken = store.read("openai-codex");
+    await read.entered;
     await store.modify("openai-codex", async () => ({ ...OAUTH, access: "rotated" }) as const);
 
     // It answers with what the file said when it asked, which is honest...
-    release.resolve();
+    read.release();
     await expect(overtaken).resolves.toMatchObject({ access: "access-token" });
 
     // ...but it must not have left that behind for the next reader, who asked
@@ -286,16 +297,19 @@ describe("PiFileCredentialStore caching", () => {
     const dir = agentDirWith(JSON.stringify({ "openai-codex": OAUTH }));
     const store = storeIn(dir);
 
-    const release = Promise.withResolvers<void>();
-    fsHooks.stalls.push(release.promise);
+    const read = stallNextRead();
     const overtaken = store.read("openai-codex");
+    // Calling read first does not order its async filesystem work before the
+    // write's own read. Without this gate the write can take the stall and
+    // deadlock: the release below waits for that same write to finish.
+    await read.entered;
     await store.modify("openai-codex", async () => ({ ...OAUTH, access: "rotated" }) as const);
 
     // This reader arrives after the write and while the earlier pass is still
     // out. Joining that pass would hand it the credential the write replaced,
     // so it must start a pass of its own.
     const after = store.read("openai-codex");
-    release.resolve();
+    read.release();
     await expect(overtaken).resolves.toMatchObject({ access: "access-token" });
     await expect(after).resolves.toMatchObject({ access: "rotated" });
   });
@@ -307,24 +321,24 @@ describe("PiFileCredentialStore caching", () => {
 
     // Two passes out at once: the one a write overtook, and the one a reader
     // arriving after that write started.
-    const releaseOvertaken = Promise.withResolvers<void>();
-    const releaseCurrent = Promise.withResolvers<void>();
-    fsHooks.stalls.push(releaseOvertaken.promise);
+    const oldRead = stallNextRead();
     const overtaken = store.read("openai-codex");
+    await oldRead.entered;
     // The write's own read is deliberately not held: it happens under the
     // lock, and holding it would just stall the write.
     await store.modify("openai-codex", async () => ({ ...OAUTH, access: "rotated" }) as const);
-    fsHooks.stalls.push(releaseCurrent.promise);
+    const currentRead = stallNextRead();
     const current = store.read("openai-codex");
+    await currentRead.entered;
 
     // The overtaken one settles first. Its slot is not the current one's, so
     // emptying it must not send the reader below to the file again.
-    releaseOvertaken.resolve();
+    oldRead.release();
     await expect(overtaken).resolves.toMatchObject({ access: "access-token" });
     fsHooks.openPaths.length = 0;
     const joined = store.read("openai-codex");
 
-    releaseCurrent.resolve();
+    currentRead.release();
     await expect(current).resolves.toMatchObject({ access: "rotated" });
     await expect(joined).resolves.toMatchObject({ access: "rotated" });
     expect(fsHooks.openPaths.filter((path) => path === authPath)).toHaveLength(0);

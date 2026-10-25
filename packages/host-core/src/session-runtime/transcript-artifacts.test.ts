@@ -50,6 +50,8 @@ const disk = vi.hoisted(() => ({
   directorySyncs: [] as Array<{ startedAt: number; endedAt?: number; ok?: boolean }>,
   /** Paths the store opened for reading, in order. */
   reads: [] as string[],
+  /** Holds a successful read open before the store can verify its bytes. */
+  readGate: undefined as ((path: string) => Promise<void>) | undefined,
   /** Runs before directory sync `index` touches the disk; a rejection is that sync's failure. */
   directoryGate: undefined as ((index: number) => Promise<void>) | undefined,
   /** An error here fails that temporary file's sync instead of performing it. */
@@ -60,6 +62,7 @@ const disk = vi.hoisted(() => ({
     disk.links.length = 0;
     disk.directorySyncs.length = 0;
     disk.reads.length = 0;
+    disk.readGate = undefined;
     disk.directoryGate = undefined;
     disk.fileSyncFault = undefined;
   },
@@ -109,6 +112,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       const handle = await actual.open(...args);
       race.touched(args[0]);
       disk.watch(handle, String(args[0]), args[1]);
+      if (args[1] !== "r" && args[1] !== "wx") await disk.readGate?.(String(args[0]));
       return handle;
     },
     link: async (...args: Parameters<typeof actual.link>) => {
@@ -224,23 +228,47 @@ function ledger() {
   };
 }
 
-/** Hold directory syncs by index until a test releases them, resolving or failing each. */
-function holdDirectorySyncs() {
-  const held = new Map<number, PromiseWithResolvers<void>>();
-  const gate = (index: number) => {
-    const waiter = held.get(index) ?? Promise.withResolvers<void>();
-    held.set(index, waiter);
-    return waiter.promise;
+/** Hold calls by index, with explicit arrival signals instead of timer polling. */
+function holdCalls() {
+  const calls = new Map<
+    number,
+    { arrival: PromiseWithResolvers<void>; release: PromiseWithResolvers<void> }
+  >();
+  let released = false;
+  const callAt = (index: number) => {
+    const call = calls.get(index) ?? {
+      arrival: Promise.withResolvers<void>(),
+      release: Promise.withResolvers<void>(),
+    };
+    calls.set(index, call);
+    return call;
   };
-  disk.directoryGate = gate;
   return {
+    gate(index: number) {
+      const call = callAt(index);
+      call.arrival.resolve();
+      return released ? Promise.resolve() : call.release.promise;
+    },
+    started(index: number) {
+      return callAt(index).arrival.promise;
+    },
     release(index: number, error?: Error) {
-      const waiter = held.get(index) ?? Promise.withResolvers<void>();
-      held.set(index, waiter);
-      if (error) waiter.reject(error);
-      else waiter.resolve();
+      const { release } = callAt(index);
+      if (error) release.reject(error);
+      else release.resolve();
+    },
+    releaseAll() {
+      released = true;
+      for (const call of calls.values()) call.release.resolve();
     },
   };
+}
+
+/** Hold directory syncs by index until a test releases them, resolving or failing each. */
+function holdDirectorySyncs() {
+  const syncs = holdCalls();
+  disk.directoryGate = syncs.gate;
+  return syncs;
 }
 
 function settled<T>(promise: Promise<T>) {
@@ -337,32 +365,57 @@ describe("FileTranscriptArtifactStore group-committed directory syncs (VC-465)",
     const book = ledger();
     const value = artifact("written twice");
     const name = compressedName(referenceFor(value).reference);
+    const reads = holdCalls();
+    let readIndex = 0;
+    disk.readGate = async (path) => {
+      if (path === name) await reads.gate(readIndex++);
+    };
     const publisher = book.commit(artifacts.write(value));
-    await vi.waitFor(() => expect(disk.directorySyncs).toHaveLength(1), SLOW_DISK);
+    let observer: ReturnType<typeof artifacts.write> | undefined;
+    try {
+      await syncs.started(0);
+      expect(disk.directorySyncs).toHaveLength(1);
 
-    // The second write finds the name already there, before its sync finished.
-    // Sync 0's batch was taken before that write began, so only a sync of its
-    // own can answer it: the publisher asks for no other.
-    const observer = book.commit(artifacts.write(value));
-    const observed = settled(observer);
-    await vi.waitFor(() => expect(disk.reads).toContain(name), SLOW_DISK);
-    syncs.release(0);
-    await publisher;
-    await vi.waitFor(() => expect(disk.directorySyncs).toHaveLength(2), SLOW_DISK);
-    // That sync is held at its gate, so the second write cannot have returned.
-    expect(observed.done).toBe(false);
-    expect(book.commits).toHaveLength(1);
+      // An open is not a verified read or a queued directory sync. Delay the
+      // observer's verification past sync 0 to exercise that slow-read ordering.
+      observer = book.commit(artifacts.write(value));
+      const observed = settled(observer);
+      await reads.started(0);
+      expect(disk.reads).toContain(name);
+      expect(survivesCrash(name, disk.clock)).toBe(false);
+      expect(book.commits).toHaveLength(0);
+      syncs.release(0);
 
-    syncs.release(1);
-    await observer;
-    expect(book.commits).toHaveLength(2);
-    book.expectEveryCommitSurvivesACrash();
+      // Hold the publisher's read-back so it cannot cache the name as durable
+      // before the observer verifies it. Otherwise the observer may rightly
+      // skip its own sync, leaving a wait for sync 1 stuck until test timeout.
+      await reads.started(1);
+      reads.release(0);
+      await syncs.started(1);
+      expect(disk.directorySyncs).toHaveLength(2);
+      reads.release(1);
+      await publisher;
+      // Sync 1 is held, so the observer cannot have returned even though the
+      // publisher has. Only a sync begun after the observer asked can answer it.
+      expect(observed.done).toBe(false);
+      expect(book.commits).toHaveLength(1);
 
-    // Once a sync covered the name, a repeat write costs none.
-    const syncsBefore = disk.directorySyncs.length;
-    await book.commit(artifacts.write(value));
-    expect(disk.directorySyncs).toHaveLength(syncsBefore);
-    book.expectEveryCommitSurvivesACrash();
+      syncs.release(1);
+      await observer;
+      expect(book.commits).toHaveLength(2);
+      book.expectEveryCommitSurvivesACrash();
+
+      // Once a sync covered the name, a repeat write costs none.
+      disk.readGate = undefined;
+      const syncsBefore = disk.directorySyncs.length;
+      await book.commit(artifacts.write(value));
+      expect(disk.directorySyncs).toHaveLength(syncsBefore);
+      book.expectEveryCommitSurvivesACrash();
+    } finally {
+      reads.releaseAll();
+      syncs.releaseAll();
+      await Promise.allSettled([publisher, observer]);
+    }
   });
 
   it("syncs a name an earlier process left once before reporting it, then remembers it", async () => {

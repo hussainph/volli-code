@@ -148,6 +148,8 @@ describe("ChatTurn copy control", () => {
   });
 });
 
+const NO_ACT = () => undefined;
+
 describe("SessionBlocker hit testing", () => {
   it("opts back into pointer events within the composer overlay", () => {
     const html = renderToStaticMarkup(
@@ -176,6 +178,27 @@ describe("SessionBlocker hit testing", () => {
     );
     expect(html).toContain('aria-label="Dismiss"');
   });
+
+  // VC-584: the failed environment setup's row, the one with a third act.
+  it("draws every act a blocker offers, in order", () => {
+    const html = renderToStaticMarkup(
+      <SessionBlocker
+        blocker={{
+          message: "Environment setup failed",
+          detail: ".agents/setup exited with code 1: boom",
+          tone: "error",
+          action: { label: "Retry setup", act: NO_ACT },
+          secondaryAction: { label: "Start anyway", act: NO_ACT },
+          tertiaryAction: { label: "Fix with an agent", act: NO_ACT },
+          dismiss: { label: "Dismiss", act: NO_ACT },
+        }}
+      />,
+    );
+    const labels = [...html.matchAll(/<button\b[^>]*>([^<]*)<\/button>/g)].map(
+      ([, label]) => label,
+    );
+    expect(labels).toEqual(["Retry setup", "Start anyway", "Fix with an agent"]);
+  });
 });
 
 describe("VC-758 message and work status rows", () => {
@@ -191,7 +214,6 @@ describe("VC-758 message and work status rows", () => {
         context={{
           ...context,
           deliveryLabels: new Map([["steer", "Pending"]]),
-          steeringMessages: new Set(["steer"]),
         }}
         live={false}
       />,
@@ -212,43 +234,15 @@ describe("VC-758 message and work status rows", () => {
       expect(html).not.toContain("Delivered");
     },
   );
-  it("keeps durable non-delivered states visible", () => {
-    for (const label of ["Not delivered", "Delivery unconfirmed"] as const) {
-      const html = renderToStaticMarkup(
-        <ChatTurn
-          messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
-          context={{ ...context, deliveryLabels: new Map([["user", label]]) }}
-          live={false}
-        />,
-      );
-      expect(html).toContain(`>${label}</span>`);
-    }
-  });
-  it.each(["Delivery unconfirmed", "Not delivered"])(
-    "keeps the explicit %s explanation immediately visible",
-    (label) => {
-      const html = renderToStaticMarkup(
-        <ChatTurn
-          messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
-          context={context}
-          live={false}
-          deliveryLabel={label}
-        />,
-      );
-      expect(html).toContain(`>${label}</span>`);
-    },
-  );
-  it.each(["Delivered", "Recorded"])("does not draw a successful %s footer", (label) => {
+  it("keeps definite durable refusal visible", () => {
     const html = renderToStaticMarkup(
       <ChatTurn
         messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
-        context={{ ...context, deliveryLabels: new Map([["user", "Delivered"]]) }}
+        context={{ ...context, deliveryLabels: new Map([["user", "Not delivered"]]) }}
         live={false}
-        deliveryLabel={label}
       />,
     );
-    expect(html).not.toContain("message-delivery");
-    expect(html).not.toContain(label);
+    expect(html).toContain(">Not delivered</span>");
   });
   it.each(["send", "steer"] as const)(
     "keeps accepted held %s quiet even before durable proof arrives",

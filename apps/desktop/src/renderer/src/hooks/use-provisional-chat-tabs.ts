@@ -1,7 +1,7 @@
 /**
  * What a tab surface needs to know about its Chat Drafts (VC-358).
  *
- * Home and a Ticket workspace are different surfaces with different owners,
+ * Home and a Ticket view are different surfaces with different owners,
  * different stores for their layout and different tab vocabularies — but the
  * rule about a Chat Draft is the same on both, and it was written out twice:
  * the same four readings, the same commit-on-first-content effect, and the same
@@ -11,7 +11,7 @@
  * The rule itself, stated once:
  *
  * An EMPTY Draft is entirely renderer-local. Its `chat:<uuid>` tab may be on
- * screen and focused, but the id must not reach the workspace record — not the
+ * screen and focused, but the id must not reach the project UI record — not the
  * active tab, not the tab order, not a pane assignment — because a person who
  * presses `+ Chat` and changes their mind must leave nothing behind, including
  * nothing to restore at the next relaunch. `activeOverride` is how such a tab
@@ -128,7 +128,7 @@ export interface ProvisionalChatTabs {
   titles: readonly (string | null)[];
   /**
    * Wraps a surface's layout writers so an empty Draft's tab id cannot reach
-   * the workspace record through any of them.
+   * the project UI record through any of them.
    *
    * A reorder or a split carrying that id drops it from the list rather than
    * refusing the whole gesture — the other tabs did nothing wrong. Moving the

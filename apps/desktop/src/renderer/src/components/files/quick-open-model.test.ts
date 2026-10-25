@@ -5,7 +5,7 @@ import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { fileTabId } from "@renderer/components/ticket/ticket-file-tab";
-import { DEFAULT_WORKSPACE_UI, type WorkspaceUiState } from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, type ProjectUiState } from "@renderer/stores/project-ui";
 
 import {
   MAX_QUICK_OPEN_RESULTS,
@@ -23,8 +23,8 @@ function tab(relPath: string, pinned: boolean): FileWorkspaceTab {
   return { relPath, pinned };
 }
 
-function workspace(overrides: Partial<WorkspaceUiState> = {}): WorkspaceUiState {
-  return { ...DEFAULT_WORKSPACE_UI, ...overrides };
+function workspace(overrides: Partial<ProjectUiState> = {}): ProjectUiState {
+  return { ...DEFAULT_PROJECT_UI, ...overrides };
 }
 
 describe("quickOpenScope", () => {
@@ -43,7 +43,7 @@ describe("quickOpenScope", () => {
     expect(quickOpenScope(base)).toEqual({ kind: "home", projectId: "p1" });
   });
 
-  it("searches the ticket's worktree when a Ticket workspace has taken the Board tab over", () => {
+  it("searches the ticket's worktree when a Ticket view has taken the Board tab over", () => {
     expect(quickOpenScope({ ...base, openTicketId: "t1" })).toEqual({
       kind: "ticket",
       projectId: "p1",
@@ -126,7 +126,7 @@ describe("quickOpenSurfaceFiles", () => {
     ).toBeNull();
   });
 
-  it("answers an empty strip for a ticket workspace never opened", () => {
+  it("answers an empty strip for a Ticket view never opened", () => {
     expect(
       quickOpenSurfaceFiles({ kind: "ticket", projectId: "p1", ticketId: "t1" }, workspace()),
     ).toEqual({ tabs: [], activeFileRelPath: null });

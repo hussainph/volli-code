@@ -5,6 +5,7 @@ import type { AgentObservability } from "../observability/settings";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { Delegations } from "./delegate-session";
 import * as control from "../session-control";
+import { SESSION_RUNTIME } from "../session-services";
 import * as notices from "./durable-host-notice-delivery";
 import * as recovery from "./boot-recovery";
 import * as mcp from "../mcp/session-host";
@@ -12,6 +13,7 @@ import * as shell from "../shell/shell-notices";
 import * as resumptions from "./session-resumptions";
 import * as schedules from "../db/scheduled-resume-repo";
 import * as followUps from "../db/session-follow-up-repo";
+import * as restart from "./restart-resume";
 
 vi.mock("../db/session-follow-up-repo", () => ({
   consumeFollowUpCleanClose: vi.fn(() => [] as string[]),
@@ -33,6 +35,7 @@ vi.mock("../session-control", () => ({
 }));
 vi.mock("./durable-host-notice-delivery", () => ({ createHostNoticeDelivery: vi.fn() }));
 vi.mock("./boot-recovery", () => ({ closeStaleAttachments: vi.fn() }));
+vi.mock("./restart-resume", () => ({ resumeRecoveredTurns: vi.fn(async () => {}) }));
 vi.mock("../mcp/session-host", () => ({ closeAllMcpSessionHosts: vi.fn() }));
 vi.mock("./session-resumptions", () => ({ catchUpSessionResumptions: vi.fn(async () => {}) }));
 // The real VC-618 drain still runs, so its RPC/runtime → MCP → flush order is
@@ -118,11 +121,12 @@ function fixture() {
     submit: vi.fn(async () => ({})),
     listSessions: vi.fn(async () => []),
   } as unknown as SessionEngine;
+  const outbox = {};
   const host = {
     kind: "live",
     database: { ok: true, db: {} },
     sessionEngine: engine,
-    hostNoticeOutbox: {},
+    [SESSION_RUNTIME]: { hostNoticeOutbox: outbox },
     sessionWakeBus: { subscribe: vi.fn() },
     detachedWork: { track: vi.fn() },
   } as unknown as LiveHostCore;
@@ -165,6 +169,7 @@ function fixture() {
     stopProducers: () => calls.push("automations.stop"),
   };
   return {
+    outbox,
     options,
     calls,
     services,
@@ -282,7 +287,7 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
       "ready.services",
     ]);
     expect(notices.createHostNoticeDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({ outbox: f.options.host.hostNoticeOutbox, runtime: f.runtime }),
+      expect.objectContaining({ outbox: f.outbox, runtime: f.runtime }),
     );
     await owner.close();
   });
@@ -413,6 +418,139 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     expect(f.calls).toContain("delegations.recover");
     expect(f.calls.slice(-2)).toEqual(["resume.start", "ready.services"]);
     await owner.close();
+  });
+
+  it("classifies each failed reconcile in the log and reports the finished sweep (VC-926)", async () => {
+    const f = fixture();
+    vi.mocked(f.runtime.openNativeBindings).mockReturnValue([
+      {
+        sessionId: "s",
+        attachmentId: "live",
+        directory: "/w",
+        lastProgressAt: 0,
+        inFlightTools: [],
+      },
+    ]);
+    const conflict = Object.assign(new Error("already has a terminal receipt"), {
+      name: "SessionEngineConflictError",
+    });
+    vi.mocked(recovery.closeStaleAttachments).mockImplementation(async (ports) => {
+      expect(ports.holdsBinding!("live")).toBe(true);
+      expect(ports.holdsBinding!("gone")).toBe(false);
+      ports.onFailure!({
+        sessionId: "s",
+        attachmentId: "live",
+        reason: "reconcile_failed",
+        outcome: "recovered",
+        error: conflict,
+      });
+      ports.onFailure!({
+        sessionId: "s",
+        attachmentId: "gone",
+        reason: "binding_unrecoverable",
+        outcome: "closed",
+        error: conflict,
+      });
+      ports.onRecovered!({ turns: [{ sessionId: "s", attachmentId: "live" }], lostAt: 1 });
+      return 2;
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    expect(owner.bootRecovery()).toBeNull();
+    await owner.ready();
+    expect(f.options.ports.log.warn).toHaveBeenCalledWith(
+      "recovered an attachment whose reconcile failed",
+      {
+        sessionId: "s",
+        attachmentId: "live",
+        reason: "reconcile_failed",
+        outcome: "recovered",
+        error: conflict,
+      },
+    );
+    expect(f.options.ports.log.error).toHaveBeenCalledWith("failed to recover attachment", {
+      sessionId: "s",
+      attachmentId: "gone",
+      reason: "binding_unrecoverable",
+      outcome: "closed",
+      error: conflict,
+    });
+    expect(owner.bootRecovery()).toEqual({
+      finishedAt: expect.any(Number),
+      error: null,
+      recovered: 1,
+      closed: 2,
+      failures: [
+        {
+          reason: "reconcile_failed",
+          outcome: "recovered",
+          error: { name: "SessionEngineConflictError" },
+        },
+        {
+          reason: "binding_unrecoverable",
+          outcome: "closed",
+          error: { name: "SessionEngineConflictError" },
+        },
+      ],
+    });
+    await owner.close();
+  });
+
+  it("reports a sweep that threw as failed, keeping what it had seen", async () => {
+    const f = fixture();
+    vi.mocked(recovery.closeStaleAttachments).mockImplementation(async (ports) => {
+      ports.onFailure!({
+        sessionId: "s",
+        attachmentId: "a",
+        reason: "binding_unrecoverable",
+        outcome: "closed",
+        error: new Error("sidecar missing"),
+      });
+      throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    await owner.ready();
+    expect(owner.bootRecovery()).toEqual({
+      finishedAt: expect.any(Number),
+      error: { name: "Error", code: "SQLITE_BUSY" },
+      recovered: 0,
+      closed: 0,
+      failures: [{ reason: "binding_unrecoverable", outcome: "closed", error: { name: "Error" } }],
+    });
+    await owner.close();
+  });
+
+  it("reports no failed sweep once a close has begun", async () => {
+    const f = fixture();
+    const gate = deferred();
+    vi.mocked(recovery.closeStaleAttachments).mockImplementation(async () => {
+      await gate.promise;
+      throw new Error("runtime closed");
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    const refused = expect(owner.ready()).rejects.toBeInstanceOf(SessionRuntimeClosingError);
+    const drain = owner.close();
+    gate.resolve();
+    await refused;
+    await drain;
+    expect(owner.bootRecovery()).toBeNull();
+  });
+
+  it("reads no live binding without a runtime, and reports no sweep a close cut short", async () => {
+    const f = fixture();
+    const gate = deferred();
+    vi.mocked(recovery.closeStaleAttachments).mockImplementation(async (ports) => {
+      expect(ports.holdsBinding!("any")).toBe(false);
+      await gate.promise;
+      return 0;
+    });
+    const owner = createSessionRuntimeLifecycle({ ...f.options, runtime: null });
+    const boot = owner.ready();
+    const refused = expect(boot).rejects.toBeInstanceOf(SessionRuntimeClosingError);
+    const drain = owner.close();
+    gate.resolve();
+    await refused;
+    await drain;
+    expect(owner.bootRecovery()).toBeNull();
   });
 
   it("a close during recovery waits for the sweep and never starts resume or exposes consumers", async () => {
@@ -667,6 +805,8 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     const host: DegradedHostCore = {
       kind: "degraded",
       dataDir: "/data",
+
+      stopPolicy: "drain-and-close",
       dbPath: "/data/volli.db",
       database: { ok: false, error: "unavailable" },
       databaseFailure: { kind: "other" },
@@ -703,8 +843,8 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
 it("passes the host venue into recovery and watchdog and rejects cast/copied proofs", async () => {
   const f = fixture();
   const venue = { id: "headless", kind: "remote" as const };
-  const ownsLegacyVenue = vi.fn(() => true);
-  const owner = createSessionRuntimeLifecycle({ ...f.options, venue, ownsLegacyVenue });
+  const ownsLegacyRunner = vi.fn(() => true);
+  const owner = createSessionRuntimeLifecycle({ ...f.options, venue, ownsLegacyRunner });
   const ready = await owner.ready();
   const { readRecoveredSessionServices, mapRecoveredSessionServices } = await import("./lifecycle");
   expect(readRecoveredSessionServices(ready)).toBe(ready.services);
@@ -718,11 +858,82 @@ it("passes the host venue into recovery and watchdog and rejects cast/copied pro
   );
   expect(() => readRecoveredSessionServices({ ...ready })).toThrow("no recovery proof");
   expect(vi.mocked(recovery.closeStaleAttachments).mock.lastCall![0].venue).toBe(venue);
-  expect(vi.mocked(recovery.closeStaleAttachments).mock.lastCall![0].ownsLegacyVenue).toBe(
-    ownsLegacyVenue,
+  expect(vi.mocked(recovery.closeStaleAttachments).mock.lastCall![0].ownsLegacyRunner).toBe(
+    ownsLegacyRunner,
   );
   expect(vi.mocked(control.createSessionWatchdog).mock.lastCall![0].venue).toBe(venue);
   await owner.close();
   expect(() => readRecoveredSessionServices(ready)).toThrow("closing");
   expect(() => readRecoveredSessionServices(view)).toThrow("closing");
+});
+
+describe("restart resume after recovery (VC-450)", () => {
+  const recovered = { turns: [{ sessionId: "s", attachmentId: "a" }], lostAt: 5 };
+
+  function armed(f: ReturnType<typeof fixture>) {
+    vi.mocked(recovery.closeStaleAttachments).mockImplementation(async (input) => {
+      f.calls.push("attachments");
+      input.onRecovered?.(recovered);
+      return 0;
+    });
+  }
+
+  it("judges recovered turns after the queue, over this host's runtime and engine", async () => {
+    const f = fixture();
+    armed(f);
+    const runs = deferred();
+    let given: Parameters<typeof restart.resumeRecoveredTurns>[0] | undefined;
+    vi.mocked(restart.resumeRecoveredTurns).mockImplementation((ports, input) => {
+      f.calls.push("restart.resume");
+      expect(input).toBe(recovered);
+      given = ports;
+      return runs.promise;
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    await owner.ready();
+    expect(f.calls.indexOf("follow-ups.recover")).toBeLessThan(f.calls.indexOf("restart.resume"));
+    expect(f.calls.indexOf("restart.resume")).toBeLessThan(f.calls.indexOf("notices.recover"));
+    // Every port reaches the runtime or engine it names.
+    const ports = given!;
+    Object.assign(f.runtime, {
+      resumeBoundary: vi.fn(() => "settled"),
+      pendingTurnStarts: vi.fn(() => new Set(["s"])),
+    });
+    vi.mocked(f.runtime.projection).mockResolvedValueOnce({
+      projection: { session: { id: "s" } },
+    } as never);
+    expect(await ports.projection("s")).toEqual({ session: { id: "s" } });
+    await ports.ticketSessions({ projectId: "p", ticketId: "t" });
+    expect(f.engine.listSessions).toHaveBeenCalledWith({
+      projectId: "p",
+      scope: "ticket",
+      ticketId: "t",
+    });
+    expect(ports.resumeBoundary({ attachmentId: "a" })).toBe("settled");
+    expect(ports.pendingTurnStarts()).toEqual(new Set(["s"]));
+    await ports.command({ commandId: "c", sessionId: "s", command: { kind: "executor.retry" } });
+    expect(f.runtime.command).toHaveBeenCalledOnce();
+    expect(ports.shouldStop()).toBe(false);
+    // A resumed run outlives readiness; close waits for it.
+    let closed = false;
+    const closing = owner.close().then(() => {
+      closed = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    expect(ports.shouldStop()).toBe(true);
+    runs.resolve();
+    await closing;
+    expect(closed).toBe(true);
+  });
+
+  it("arms nothing without a runtime", async () => {
+    const bare = fixture();
+    armed(bare);
+    const owner = createSessionRuntimeLifecycle({ ...bare.options, runtime: null });
+    await owner.ready();
+    expect(restart.resumeRecoveredTurns).not.toHaveBeenCalled();
+    await owner.close();
+  });
 });

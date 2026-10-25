@@ -81,6 +81,8 @@ export interface FileIpcOptions {
    * once, in `index.ts`, and handed down rather than read here.
    */
   globalSkillsDir: string;
+  /** Whether the `cloud` flag is on now: it moves a shared skill or template name to the personal tier. */
+  cloudEnabled: () => boolean;
   /** Native app detection/launch, injectable so the IPC boundary stays testable without macOS. */
   externalApps?: ExternalAppGateway;
 }
@@ -114,7 +116,7 @@ export function registerFileIpcHandlers(
 
   const handlers: IpcHandlerTable<FileIpcChannel> = {
     // Scope follows the surface that asked (VC-190): Home hands no ticketId and
-    // gets Main; a Ticket workspace hands its own and gets that worktree —
+    // gets Main; a Ticket view hands its own and gets that worktree —
     // through `resolveFileScope`, the same seam `volli:file-read` resolves
     // through, so quick-open can never offer a row the read then answers from
     // the other checkout.
@@ -355,14 +357,17 @@ export function registerFileIpcHandlers(
     ): Promise<PromptTemplateIndexResult> => {
       const project = getProjectById(db, input.projectId);
       if (!project) return { ok: false, error: "Unknown project" };
+      const cloud = options.cloudEnabled();
       const [loaded, skills] = await Promise.all([
         loadPromptTemplates({
           projectCommandsDir: projectCommandsDir(project.path),
           globalCommandsDir: options.globalCommandsDir,
+          cloud,
         }),
         loadSkills({
           projectSkillsDir: projectSkillsDir(project.path),
           globalSkillsDir: options.globalSkillsDir,
+          cloud,
         }),
       ]);
       if (!loaded.ok) return loaded;

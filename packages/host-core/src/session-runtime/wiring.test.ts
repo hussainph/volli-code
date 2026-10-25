@@ -1,15 +1,13 @@
 /**
- * The Session services learn which bindings are open and observe each folded
- * projection for scheduled resume through two internal wire calls (VC-632):
- * `createRuntimeAssembly` wires its runtime's `openNativeBindings()` reader,
- * and `createSessionRuntimeLifecycle` wires its scheduled-resume observer.
+ * The Session services learn which bindings are open, which turn starts are
+ * pending, and each folded projection for scheduled resume from the runtime
+ * and lifecycle built after them (VC-632). The runner composition binds those
+ * answers once, through the services' runtime slot (VC-671).
  *
- * Both hosts compose the same way: `createHostCore`, then the assembly and the
- * lifecycle over `host.sessionEngine`. This test runs that composition for
- * real, commits a Session through the composed engine, and asserts each wired
- * callback is reached exactly once per fold. Removing either wire call leaves
- * the services on their inert defaults (nothing open, nothing scheduled), and
- * this test fails.
+ * This test runs that composition for real over `createHostCore`, commits a
+ * Session through the composed engine, and asserts each bound callback is
+ * reached exactly once per fold. Without the binding the services stay on
+ * their inert defaults (nothing open, nothing scheduled), and this test fails.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,15 +32,15 @@ import * as control from "../session-control";
 import { createAttachmentIdentities } from "./attachment-identity";
 import { createRuntimeAssembly } from "./assembly";
 import { createTicketSessionDelegationStore } from "./delegation-store";
-import { createSessionRuntimeLifecycle, type SessionRuntimeLifecycle } from "./lifecycle";
 import * as pi from "./pi-adapter";
+import { createRunnerComposition } from "./runner";
 
 let core: LiveHostCore | undefined;
-let lifecycle: SessionRuntimeLifecycle<unknown> | undefined;
+let runner: ReturnType<typeof createRunnerComposition> | undefined;
 let root: string | undefined;
 afterEach(async () => {
-  await lifecycle?.close();
-  lifecycle = undefined;
+  await runner?.owner().close();
+  runner = undefined;
   core?.sessionActivityWatch.stop();
   await core?.stop("test teardown");
   core = undefined;
@@ -101,6 +99,7 @@ function assemble({
   return createRuntimeAssembly({
     dbHandle: host.database,
     sessionEngine: host.sessionEngine,
+    sessionWake: host.sessionWakeBus.subscribe,
     dataDir,
     binDir: join(dataDir, "bin"),
     venue: { id: "test-host", kind: "remote" },
@@ -146,12 +145,8 @@ function assemble({
   });
 }
 
-/** The lifecycle as both hosts build it, with the scheduled-resume observer recorded. */
-function startLifecycle(
-  host: LiveHostCore,
-  ports: HostCorePorts,
-  runtime: ReturnType<typeof assemble>["sessionRuntime"],
-) {
+/** Records each projection scheduled resume observes. */
+function recordScheduledResume() {
   const observe = vi.fn().mockName("scheduled-resume observe");
   const real = control.createScheduledResumeHost;
   vi.spyOn(control, "createScheduledResumeHost").mockImplementation((resumePorts) => {
@@ -164,19 +159,27 @@ function startLifecycle(
       },
     };
   });
-  lifecycle = createSessionRuntimeLifecycle({
-    host,
+  return observe;
+}
+
+/** The runner composition as a host composes it, over the fixture host. */
+function composeRunner({ host, ports, root: dataDir }: Awaited<ReturnType<typeof composedHost>>) {
+  return createRunnerComposition({
+    store: { kind: "local", host },
     ports,
-    runtime,
-    rpc: () => null,
-    observability: null,
-    delegation: null,
-    delegationsFor: () => null,
-    services: () => ({}),
+    version: "0.0.0-test",
+    venue: { id: "test-host", kind: "remote" },
+    homeDir: dataDir,
+    binDir: join(dataDir, "bin"),
+    env: {},
+    packaged: true,
+    cloudEnabled: () => false,
+    secrets: new SecretService(host.secretStore),
+    capabilities: { askUser: false, requestSecret: false },
+    beforeExecution: async () => {},
+    doors: () => ({ experiments: null, busyWorktreeSites: async () => [] }),
     installQuitHold: () => {},
-    stopProducers: () => {},
   });
-  return { observe, lifecycle };
 }
 
 /** Births one Session through the composed engine and waits for its fold to publish. */
@@ -198,18 +201,18 @@ async function commitSession(host: LiveHostCore, commandId: string): Promise<str
 }
 
 describe("Session runtime wiring through the real host composition", () => {
-  it("reaches the assembly's open-bindings reader and the lifecycle's resume observer, once each", async () => {
+  it("binds the runtime's open-bindings reader and the lifecycle's resume observer, once each", async () => {
     const composed = await composedHost();
-    const { host, ports } = composed;
+    const { host } = composed;
 
     // Before the runtime exists the services fold on their inert defaults.
     await commitSession(host, "before-the-runtime");
 
-    const assembled = assemble(composed);
-    const runtime = assembled.sessionRuntime;
-    if (runtime === null) throw new Error("the assembly built no Session runtime");
+    const observe = recordScheduledResume();
+    runner = composeRunner(composed);
+    const runtime = runner.runtime;
+    if (runtime === null) throw new Error("the runner built no Session runtime");
     const openNativeBindings = vi.spyOn(runtime, "openNativeBindings");
-    const { observe } = startLifecycle(host, ports, runtime);
     expect(openNativeBindings).not.toHaveBeenCalled();
     expect(observe).not.toHaveBeenCalled();
 
@@ -220,8 +223,46 @@ describe("Session runtime wiring through the real host composition", () => {
 
     // A closing lifecycle observes nothing more; the runtime is still asked
     // which bindings are open, since the listing row still publishes.
-    await lifecycle!.close();
+    await runner.owner().close();
     await commitSession(host, "after-close");
     expect(observe).toHaveBeenCalledTimes(1);
+
+    // One runtime per host: a second runner over the same engine is refused.
+    expect(() => composeRunner(composed)).toThrow("already claimed");
+  });
+
+  it("feeds the assembled runtime's open chats from the host's wake bus (VC-790)", async () => {
+    const composed = await composedHost();
+    const { host } = composed;
+    const runtime = assemble(composed).sessionRuntime;
+    if (runtime === null) throw new Error("the assembly built no Session runtime");
+    const sessionId = await commitSession(host, "an-open-chat");
+    const kinds: string[] = [];
+    const stop = await runtime.subscribe(
+      { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+      (emission) => {
+        if ("event" in emission && emission.event !== null) {
+          kinds.push(emission.event.payload.kind);
+        }
+      },
+    );
+
+    // Around the runtime, as `volli:session-rename` and the auto-titler write,
+    // with nothing published after it.
+    await host.sessionEngine.submit({
+      commandId: "retitle-at-rest",
+      sessionId,
+      intent: { kind: "session.retitle", title: "Named while idle" },
+      provenance: {
+        source: { kind: "system", id: "auto-title", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(kinds).toEqual(["command.recorded", "session.retitled", "command.receipt.recorded"]),
+    );
+    stop();
+    await runtime.close();
   });
 });

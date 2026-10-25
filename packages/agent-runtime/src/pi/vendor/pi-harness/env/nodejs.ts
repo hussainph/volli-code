@@ -38,13 +38,14 @@ import {
   toError,
 } from "../types";
 import { OutputCapture } from "../execution/output-capture";
+// Volli (VC-820): product-owned disk budget, separate from Pi's inline limits.
+import { ShellSpillBudget, ShellSpillRedactor } from "../../../shell-spill";
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
 const EXIT_STDIO_GRACE_MS = 100;
 const SPILL_HIGH_WATER_MARK = 8 * 1024 * 1024;
-
-type SpillChunk = string | Uint8Array;
+type SpillChunk = Uint8Array;
 
 function resolveTimeoutMs(timeout: number | undefined): Result<number | undefined, ExecutionError> {
   if (timeout === undefined) return ok(undefined);
@@ -632,6 +633,9 @@ export class NodeExecutionEnv implements ExecutionEnv {
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
       const spillPrefix: SpillChunk[] = [];
       let spillPath: string | undefined;
+      const spillBudget = new ShellSpillBudget();
+      // Volli (VC-865): every spilled byte passes this first, in stream order.
+      const spillRedactor = new ShellSpillRedactor(options?.capture?.spillRedaction);
       const spillQueue: SpillChunk[] = [];
       let spillStart: Promise<void> | undefined;
       let spillStream: WriteStream | undefined;
@@ -704,6 +708,12 @@ export class NodeExecutionEnv implements ExecutionEnv {
         });
       };
       const startSpill = (chunk: SpillChunk): void => {
+        // Volli (VC-820): cap before queueing as well as before writing. Keep
+        // draining the process and capturing its tail after the spill is full.
+        chunk = spillBudget.take(chunk);
+        if (spillBudget.truncatedAt !== undefined)
+          capture.setSpillTruncatedAt(spillBudget.truncatedAt);
+        if (chunk.byteLength === 0) return;
         if (spillStream !== undefined) {
           writeSpill(spillStream, chunk);
           return;
@@ -730,10 +740,33 @@ export class NodeExecutionEnv implements ExecutionEnv {
           .catch(failSpill)
           .finally(resumeOutput);
       };
+      // Volli (VC-865): redact before the cap, so a value straddling it is
+      // replaced whole and only its marker can be cut; stop once it is full.
+      const spill = (chunk: SpillChunk): void => {
+        if (spillError !== undefined || spillBudget.truncatedAt !== undefined) return;
+        let safe: SpillChunk;
+        try {
+          safe = spillRedactor.push(chunk);
+        } catch (error) {
+          failSpill(error);
+          return;
+        }
+        startSpill(safe);
+      };
       const finishSpill = async (): Promise<void> => {
+        // Held bytes are released once; nothing was held if nothing spilled.
+        if (spillError === undefined && spillBudget.truncatedAt === undefined) {
+          try {
+            startSpill(spillRedactor.end());
+          } catch (error) {
+            failSpill(error);
+          }
+        }
         await spillStart;
         const stream = spillStream;
-        if (stream === undefined || spillError !== undefined || stream.destroyed) return;
+        // Volli (VC-865): a failed redaction leaves a healthy stream holding
+        // only redacted bytes; close it like any other rather than leak it.
+        if (stream === undefined || stream.destroyed) return;
         await new Promise<void>((resolveFinish) => {
           stream.once("error", () => resolveFinish());
           stream.once("finish", resolveFinish);
@@ -747,11 +780,11 @@ export class NodeExecutionEnv implements ExecutionEnv {
           capture.push(chunk);
           if (!options?.capture?.spill || chunk.length === 0) return;
           if (spillPath !== undefined || wasTruncated) {
-            startSpill(chunk);
+            spill(chunk);
           } else if (capture.truncated) {
-            for (const prefix of spillPrefix) startSpill(prefix);
+            for (const prefix of spillPrefix) spill(prefix);
             spillPrefix.length = 0;
-            startSpill(chunk);
+            spill(chunk);
           } else {
             spillPrefix.push(chunk);
           }
@@ -879,6 +912,9 @@ export class NodeExecutionEnv implements ExecutionEnv {
                 ? { backgroundCaptureIncomplete: true }
                 : {}),
               truncation: output.truncation,
+              ...(output.spillTruncatedAt === undefined
+                ? {}
+                : { spillTruncatedAt: output.spillTruncatedAt }),
               ...(output.spillPath === undefined || spillError !== undefined
                 ? {}
                 : { spillPath: output.spillPath }),

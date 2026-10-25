@@ -14,10 +14,9 @@ import {
   skillPromptResource,
   skillsIndexResource,
   userInvokableSkills,
-  type SessionExecutionVenue,
+  type RunnerIdentity,
 } from "@volli/shared";
 import { isLiveHost, type HostCore } from "../index";
-import type { HostEventBus } from "../ports/events";
 import { getProjectById } from "../db/projects-repo";
 import { getTicket, getTicketBrief } from "../db/tickets-repo";
 import { recordSessionStartedOnce } from "../db/events-repo";
@@ -46,19 +45,13 @@ function assembleSessionServices(options: {
   host: HostCore;
   assembly: ReturnType<typeof createRuntimeAssembly>;
   homeDir: string;
-  venue: SessionExecutionVenue;
-  events: HostEventBus;
+  /** Whether the `cloud` flag is on now; read at every skills load (its precedence). */
+  cloudEnabled: () => boolean;
+  venue: RunnerIdentity;
   decisions: HostDecisions | null;
   delegation: TicketSessionDelegationStore | null;
 }) {
-  const {
-    host,
-    homeDir,
-    venue,
-    events,
-    decisions: hostDecisions,
-    delegation: sessionDelegation,
-  } = options;
+  const { host, homeDir, venue, decisions: hostDecisions, delegation: sessionDelegation } = options;
   const sessionEngine = isLiveHost(host) ? host.sessionEngine : null;
   const sessionDb = isLiveHost(host) ? host.database.db : null;
   const { sessionRuntime, piRuntimeHost, sessionToolSurface } = options.assembly;
@@ -76,6 +69,7 @@ function assembleSessionServices(options: {
             const read = await loadSkills({
               projectSkillsDir: projectSkillsDir(project.path),
               globalSkillsDir: globalSkillsDir(homeDir),
+              cloud: options.cloudEnabled(),
             });
             if (!read.ok) {
               throw new StructuredSessionsError(
@@ -112,6 +106,7 @@ function assembleSessionServices(options: {
             const read = await loadSkills({
               projectSkillsDir: projectSkillsDir(project.path),
               globalSkillsDir: globalSkillsDir(homeDir),
+              cloud: options.cloudEnabled(),
             });
             if (!read.ok) return null;
             // The discoverable index has the same post-I/O policy race.
@@ -266,9 +261,8 @@ function assembleSessionServices(options: {
             if (submitted.receipt?.status !== "completed") {
               throw new Error("Session retitle was not completed");
             }
-            // Direct Engine submission bypasses runtime publication; this
-            // makes the label visible without waiting for an unrelated read.
-            events.publish("session-retitled", { sessionId, title });
+            // Nothing to push: the wake bus carries `session.retitled` to the
+            // runtime's open chat streams and the listing fold (VC-790).
           },
         })
       : null;

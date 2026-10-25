@@ -1,7 +1,7 @@
 /**
  * App boot: reads the SQLite bootstrap payload, runs the one-time
  * localStorage → SQLite import on first run,
- * then hydrates the projects/board/ui/workspace stores from it. Kept out of
+ * then hydrates the projects/board/ui/project-ui stores from it. Kept out of
  * main.tsx so the flow (envelope-unwrap, sanitization, the
  * always-clear-legacy-storage step) is unit-testable without mounting React.
  */
@@ -36,8 +36,8 @@ import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useThemeStore } from "@renderer/stores/theme";
 import { useUiStore } from "@renderer/stores/ui";
-import { useVenueStore } from "@renderer/stores/venue";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useWorkingCopyStore } from "@renderer/stores/working-copy";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 import { restoreRemoteSelection } from "./restore-remote-selection";
 import { isExperimentOn, useExperimentsStore } from "@renderer/stores/experiments";
@@ -46,7 +46,7 @@ let stopSelectionRestore: (() => void) | null = null;
 
 const LEGACY_PROJECTS_KEY = "volli:projects";
 const LEGACY_UI_KEY = "volli:ui";
-const LEGACY_WORKSPACE_KEY = "volli:workspace";
+const LEGACY_PROJECT_UI_KEY = "volli:workspace";
 const LEGACY_PREFIX = "volli:";
 
 /** The subset of the preload API boot() needs — narrow and fake-able for tests. */
@@ -111,26 +111,26 @@ export type BootResult = { ok: true } | { ok: false; error: string };
  * agents commenting once a turn cost a dozen whole-board reads a turn — and the
  * three rules above replace it. VC-387 took the measurements.
  *
- * IT IS ALSO THE VENUE BOUNDARY (VC-286). A `worktree` change is the one kind
+ * IT IS ALSO THE WORKING COPY BOUNDARY (VC-286). A `worktree` change is the one kind
  * that moves WHERE a ticket's Session runs — materialized, removed, recreated,
- * or a creation that failed — so the ticket's cached venue reading is discarded
+ * or a creation that failed — so the ticket's cached working copy reading is discarded
  * on the way in and read again on the way out. Both halves matter and so does
  * their order: discarding first takes the old checkout off screen at the moment
  * it stopped being true, and re-reading only after the hydrate means the new
  * reading is of the checkout the board now names. Every other kind leaves the
- * venue alone; a comment does not move a checkout, and blanking a caption to
- * redraw the identical venue is a flicker with nothing behind it.
+ * working copy alone; a comment does not move a checkout, and blanking a caption to
+ * redraw the identical working copy is a flicker with nothing behind it.
  */
 export async function refreshPlanningData(
   change: { ticketId?: string; projectId?: string; kind?: DataChangeKind } = {},
   gateway: Pick<BootGateway, "bootstrap" | "projectRoster"> = defaultGateway,
 ): Promise<BootResult> {
   // With `cloud` on, the board's own change feed carries every board change
-  // (VC-565): only the list of Workspaces is still this window's to refresh.
+  // (VC-565): only the list of projects is still this window's to refresh.
   const protocol = boardProtocol();
-  if (protocol !== null) return refreshWorkspaceList(change, gateway, protocol.sync);
+  if (protocol !== null) return refreshProjectList(change, gateway, protocol.sync);
   const movedCheckout = change.kind === "worktree";
-  if (movedCheckout) useVenueStore.getState().invalidateTickets(change.ticketId);
+  if (movedCheckout) useWorkingCopyStore.getState().invalidateTickets(change.ticketId);
   if (!movesBoardData(change.kind)) {
     // Nothing the board holds can have moved, so there is no read to make. The
     // signal still goes out: a comment reaches the screen through the Activity
@@ -184,21 +184,21 @@ export async function refreshPlanningData(
     throw error;
   } finally {
     // In a `finally` because a failed hydrate is not a reason to leave a
-    // discarded venue waiting on a read nobody will make: the checkout moved
+    // discarded working copy waiting on a read nobody will make: the checkout moved
     // whatever SQLite just said about the board.
-    if (movedCheckout) void useVenueStore.getState().refreshStale();
+    if (movedCheckout) void useWorkingCopyStore.getState().refreshStale();
   }
 }
 
 /**
- * The `cloud`-on refresh: a change that names a Workspace the board already
+ * The `cloud`-on refresh: a change that names a project the board already
  * follows is the feed's (it stamped the same write), so nothing is read. An
- * untargeted one, or one naming a Workspace this window does not hold, may
+ * untargeted one, or one naming a project this window does not hold, may
  * have added or removed a project: the project list is re-read (the
- * bootstrap's projects; the board slices stay the feed's), a new Workspace is
+ * bootstrap's projects; the board slices stay the feed's), a new project is
  * opened, and a removed one forgotten.
  */
-async function refreshWorkspaceList(
+async function refreshProjectList(
   change: { ticketId?: string; projectId?: string },
   gateway: Pick<BootGateway, "bootstrap">,
   sync: { follows(projectId: string): boolean },
@@ -278,7 +278,7 @@ async function readBootCloudFlag(
 /**
  * With `cloud` on, moves the board onto the host protocol (VC-565): starts
  * the board client and sync engine over the desktop's IPC bridge, and opens
- * every Workspace boot hydrated, from its snapshot, following its feed. With
+ * every project boot hydrated, from its snapshot, following its feed. With
  * it off (or unreadable) the board stays on the legacy IPC, exactly as before.
  * Resolves whether the protocol path started.
  */
@@ -300,8 +300,8 @@ export async function startBoardProtocolIfEnabled(
       adoptProject: (project) => useProjectsStore.getState().adoptProject(project),
       notePlanningChange: (change) => useBoardStore.getState().notePlanningChange(change),
       checkoutMoved: (ticketId) => {
-        useVenueStore.getState().invalidateTickets(ticketId);
-        void useVenueStore.getState().refreshStale();
+        useWorkingCopyStore.getState().invalidateTickets(ticketId);
+        void useWorkingCopyStore.getState().refreshStale();
       },
       failed: (message) => toastError(message),
       // Not a failure: the write keeps being sent under its id until the host answers.
@@ -372,14 +372,14 @@ function buildLegacyImportRequest(
 ): { request: LegacyImportRequest; sourceUnreadable: boolean } | null {
   const rawProjects = storage.getItem(LEGACY_PROJECTS_KEY);
   const rawUi = storage.getItem(LEGACY_UI_KEY);
-  const rawWorkspace = storage.getItem(LEGACY_WORKSPACE_KEY);
-  if (rawProjects === null && rawUi === null && rawWorkspace === null) return null;
+  const rawProjectUi = storage.getItem(LEGACY_PROJECT_UI_KEY);
+  if (rawProjects === null && rawUi === null && rawProjectUi === null) return null;
 
   // The persisted `volli:projects` state is `{ projects: [...], selectedProjectId }`
   // (the old store's `partialize` shape) — sanitize the `projects` array, not
   // the envelope's `state` object itself. Absent `volli:projects` yields an
   // empty project list (a prefs-only migration), which is still worth running
-  // so the ui/workspace prefs below are carried over rather than discarded.
+  // so the ui/project-ui prefs below are carried over rather than discarded.
   const legacyState = rawProjects !== null ? unwrapPersistEnvelope(rawProjects) : undefined;
   const legacyStateRecord =
     typeof legacyState === "object" && legacyState !== null
@@ -403,7 +403,7 @@ function buildLegacyImportRequest(
     ),
   };
   if (rawUi !== null) appState[LEGACY_UI_KEY] = rawUi;
-  if (rawWorkspace !== null) appState[LEGACY_WORKSPACE_KEY] = rawWorkspace;
+  if (rawProjectUi !== null) appState[LEGACY_PROJECT_UI_KEY] = rawProjectUi;
 
   const rawBackup: Record<string, string> = {};
   for (const key of volliKeys(storage)) {
@@ -445,7 +445,7 @@ async function notifyOrphanedWorktrees(): Promise<void> {
 
 /**
  * Runs the full boot sequence: bootstrap SQLite, one-time legacy import on
- * first run, then hydrates the projects/board/ui/workspace stores. Returns
+ * first run, then hydrates the projects/board/ui/project-ui stores. Returns
  * `{ ok: false }` only when `bootstrap()` itself fails — main.tsx renders the
  * DB-failure empty state in that case instead of mounting the app.
  */
@@ -507,8 +507,8 @@ export async function boot(
 
   // The canvas and the appearance, straight off the `app_state` rows the
   // bootstrap already carries — BEFORE the projects store hydrates, because
-  // that hydrate announces the restored workspace and the theme store resolves
-  // a workspace override against the global canvas this line installs.
+  // that hydrate announces the restored project and the theme store resolves
+  // a project override against the global canvas this line installs.
   useThemeStore.getState().hydrateGlobal(payload.appState);
 
   // Resolved BEFORE hydrate (rather than hydrating with `null` and calling
@@ -533,12 +533,12 @@ export async function boot(
   // listener hands it, and `volli:theme-state` for the terminal chain.
   await Promise.all([
     useUiStore.persist.rehydrate(),
-    useWorkspaceStore.persist.rehydrate(),
+    useProjectUiStore.persist.rehydrate(),
     useChatDraftsStore.persist.rehydrate(),
   ]);
   // Typed provisional Drafts are the one chat kind whose identity lives in
   // app_state rather than the Session listing. Reopen their tabs only after
-  // both the Drafts and workspace layout have landed, so recorded `chat:<id>`
+  // both the Drafts and project UI layout have landed, so recorded `chat:<id>`
   // values resolve normally on the app's first render.
   useChatSessionsStore
     .getState()

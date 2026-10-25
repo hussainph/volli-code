@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 const key = (overrides: Partial<BoardCommandKey> = {}): BoardCommandKey => ({
-  workspaceId: "p",
+  projectId: "p",
   commandId: "c-1",
   operation: "board.setPriority",
   intent: { ticketId: "t", priority: "high" },
@@ -77,12 +77,12 @@ describe("board command receipts", () => {
     expect(replayBoardCommand(ctx.db, key({ intent: null }), NOW)).toEqual({ reply: "done" });
   });
 
-  it("keys a receipt by Workspace: the same id in another Workspace is its own command", () => {
+  it("keys a receipt by project: the same id in another project is its own command", () => {
     recordBoardCommand(ctx.db, key(), "p's", 1_000);
-    expect(replayBoardCommand(ctx.db, key({ workspaceId: "q" }), NOW)).toBeUndefined();
+    expect(replayBoardCommand(ctx.db, key({ projectId: "q" }), NOW)).toBeUndefined();
     recordBoardCommand(
       ctx.db,
-      key({ workspaceId: "q", intent: { ticketId: "u", priority: "low" } }),
+      key({ projectId: "q", intent: { ticketId: "u", priority: "low" } }),
       "q's",
       1_000,
     );
@@ -90,7 +90,7 @@ describe("board command receipts", () => {
     expect(
       replayBoardCommand(
         ctx.db,
-        key({ workspaceId: "q", intent: { ticketId: "u", priority: "low" } }),
+        key({ projectId: "q", intent: { ticketId: "u", priority: "low" } }),
         NOW,
       ),
     ).toEqual({ reply: "q's" });

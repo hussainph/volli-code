@@ -1,6 +1,6 @@
 ---
 title: Use terminal companions
-description: Open a shell in Home or a ticket workspace and run your own commands there.
+description: Open a shell in Home or a Ticket view and run your own commands there.
 sidebar:
   label: Terminal companions
 ---
@@ -14,14 +14,14 @@ fails.
 
 ## Open a terminal
 
-1. In Home or a ticket workspace, open the menu beside **Chat**.
+1. In Home or a Ticket view, open the menu beside **Chat**.
 2. Select **Terminal**. You can also use `⌥⌘T`.
 
 A Home terminal starts in the project's main checkout. A ticket terminal uses
 the ticket's selected destination: its worktree, or the project's **Project
 checkout**. If the ticket needs a worktree, Volli creates it when the terminal
-starts. When Volli has just created that worktree, a configured **Then run**
-setup command runs first.
+starts. When that worktree is new and its **Then run** setup command has not run
+yet, the setup command runs first in the terminal.
 
 The terminal opens as a Session with a shell. To use an external TUI, start it
 from that shell yourself. Volli never starts one for you. Choose **Chat** when

@@ -1,5 +1,5 @@
 /**
- * Which right rail ⌥⌘B is talking about — the ticket workspace's, Home's, or
+ * Which right rail ⌥⌘B is talking about — the Ticket view's, Home's, or
  * neither (VC-55).
  *
  * There are two rails now and one chord, and `railCollapsed` is one PERSISTED
@@ -12,7 +12,7 @@
  * The chrome facts are the same ones `terminal-focus.ts` and
  * `new-session-shortcut.ts` resolve against, read the same way and for the same
  * reason — a surface is in front when Home says its tab is. It reads the
- * workspace RECORD, not a second derivation of which tab is in front: the
+ * project UI RECORD, not a second derivation of which tab is in front: the
  * record is what `home-surface.tsx` writes back after resolving, so the two
  * cannot drift for longer than the frame that repairs it, and a rail toggle is
  * not worth a second copy of that resolution.
@@ -21,7 +21,7 @@
  * renderer, so it unit-tests in the node environment with no DOM.
  */
 import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
-import type { NavKey } from "@renderer/stores/workspace";
+import type { NavKey } from "@renderer/stores/project-ui";
 
 /** The chrome facts the rail chord resolves against, read at press time. */
 export interface RailToggleChrome {
@@ -57,10 +57,10 @@ export type RailToggleTarget = "ticket" | "home";
  *
  * The two rails are two HOME TABS and only one of them can be in front:
  *
- *  • Home's Board tab + an open ticket → the ticket workspace's rail.
+ *  • Home's Board tab + an open ticket → the Ticket view's rail.
  *  • a Home Session tab → Home's own rail.
  *
- * `openTicketId` survives leaving the ticket (stores/workspace.ts) — across
+ * `openTicketId` survives leaving the ticket (stores/project-ui.ts) — across
  * Files, Configure, and Home's own Session tabs, which keep the ticket
  * remembered behind them (VC-54 decision 1). So it is true in three places
  * where the ticket is nowhere on screen, and without the tab line a chord

@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import { SecretKeyUnavailableError, type SecretKeyPort } from "../ports/secret-key";
 import { isSecretName, SecretStore } from "./store";
+import { CredentialRedactionStream } from "@volli/shared";
 
 // A real authenticated cipher fixture: unlike base64, neither metadata nor
 // values are recoverable from the file without the injected codec's key.
@@ -442,6 +443,98 @@ describe("redaction", () => {
     store.put({ name: "SECOND", value: "secret", scope: "session", sessionId: "s" });
     expect(store.redact("$& secret")).toBe("‹secret:FIRST› ‹secret:SECOND›");
     expect(store.redact("unmatched")).toBe("unmatched");
+  });
+});
+
+describe("streaming redaction", () => {
+  const utf8 = new TextEncoder();
+  const text = new TextDecoder();
+  function streamed(input: string, cuts: readonly number[]): string {
+    const stream = new CredentialRedactionStream((window, from, final) =>
+      store.redactStreamStep(window, from, final),
+    );
+    const bytes = utf8.encode(input);
+    let out = "";
+    let at = 0;
+    for (const cut of [...cuts, bytes.length]) {
+      out += text.decode(stream.push(bytes.subarray(at, cut)), { stream: true });
+      at = cut;
+    }
+    return out + text.decode(stream.end());
+  }
+
+  it("writes exactly what redact() returns, wherever the bytes are cut", () => {
+    store.put({ name: "SHORT", value: "abc", scope: "always" });
+    store.put({ name: "LONG", value: "abcdef", scope: "session", sessionId: "s" });
+    store.put({ name: "OVERLAP", value: "defg", scope: "session", sessionId: "s" });
+    store.put({ name: "WIDE", value: "é€😀", scope: "session", sessionId: "s" });
+    store.put({ name: "OLD", value: "old-value", scope: "session", sessionId: "s" });
+    store.put({ name: "OLD", value: "new-value", scope: "session", sessionId: "s" });
+    store.endSession("s");
+    const input = "abcdefg abc é€😀 old-value new-value abcde ab";
+    const expected = store.redact(input);
+    expect(expected).toContain("‹secret:WIDE›");
+    const length = utf8.encode(input).length;
+    for (let cut = 0; cut <= length; cut += 1) {
+      expect(streamed(input, [cut])).toBe(expected);
+    }
+    const singles = Array.from({ length }, (_, index) => index + 1);
+    expect(streamed(input, singles)).toBe(expected);
+  });
+
+  it("agrees with redact() for random values, text and cuts", () => {
+    const alphabet = ["a", "b", "é", "😀", "\n"];
+    let state = 865;
+    const next = () => {
+      state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+      return state / 4294967296;
+    };
+    const pick = (length: number) =>
+      Array.from({ length }, () => alphabet[Math.floor(next() * alphabet.length)]).join("");
+    for (let round = 0; round < 150; round += 1) {
+      store = new SecretStore(join(dir, `round-${round}.enc`), encryption);
+      for (let index = 0; index < 1 + Math.floor(next() * 4); index += 1) {
+        const value = pick(1 + Math.floor(next() * 4));
+        store.put({ name: `V${index}`, value, scope: "session", sessionId: "s" });
+      }
+      const input = pick(Math.floor(next() * 50));
+      const length = utf8.encode(input).length;
+      const cuts = Array.from({ length }, (_, at) => at).filter(() => next() < 0.3);
+      expect({ round, out: streamed(input, cuts) }).toEqual({ round, out: store.redact(input) });
+    }
+  });
+
+  it("passes bytes through untouched while nothing is held", () => {
+    const window = new Uint8Array([0xff, 0x00, 0x41]);
+    expect(store.redactStreamStep(window, 0, false)).toEqual({
+      bytes: window,
+      consumed: 3,
+      context: 0,
+    });
+  });
+
+  it("uses a value saved mid-stream for every byte not yet decided", () => {
+    store.put({ name: "FIRST", value: "first-value", scope: "always" });
+    const stream = new CredentialRedactionStream((window, from, final) =>
+      store.redactStreamStep(window, from, final),
+    );
+    // `first-` may still complete FIRST, so it is held, not written.
+    expect(text.decode(stream.push(utf8.encode("log first-")))).toBe("log ");
+    store.put({ name: "LATER", value: "first-later", scope: "session", sessionId: "s" });
+    expect(text.decode(stream.push(utf8.encode("later first-value")))).toBe(
+      "‹secret:LATER› ‹secret:FIRST›",
+    );
+    // A rename of an existing value changes its marker from the next step on.
+    store.put({ name: "RENAMED", value: "first-value", scope: "session", sessionId: "s" });
+    expect(text.decode(stream.push(utf8.encode(" first-value")))).toBe(" ‹secret:RENAMED›");
+    expect(stream.end()).toHaveLength(0);
+  });
+
+  it("learns stored values on its first step, like redact()", () => {
+    store.put({ name: "DURABLE", value: "durable-value", scope: "always" });
+    const relaunched = new SecretStore(path, encryption);
+    const step = relaunched.redactStreamStep(utf8.encode("x durable-value"), 0, true);
+    expect(text.decode(step.bytes)).toBe("x ‹secret:DURABLE›");
   });
 });
 

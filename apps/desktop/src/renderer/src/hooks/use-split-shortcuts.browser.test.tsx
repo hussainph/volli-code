@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * ⌃⌘ + an arrow pressed inside a Browser page (VC-301), through the real split
- * chord listener and the real workspace store.
+ * chord listener and the real project UI store.
  *
  * The subject is the seam: a click into the native page never reaches the
  * renderer, so the split view's focused pane is whichever one was last clicked
@@ -19,7 +19,7 @@ import {
 } from "@renderer/components/browser/browser-app-shortcuts";
 import { browserTabId } from "@renderer/components/home/home-tabs";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, useProjectUiStore } from "@renderer/stores/project-ui";
 
 import { useSplitShortcuts } from "./use-split-shortcuts";
 
@@ -38,7 +38,7 @@ function Probe(): null {
 }
 
 function split() {
-  const state = useWorkspaceStore.getState().byProject[PROJECT]?.homeSplitView;
+  const state = useProjectUiStore.getState().byProject[PROJECT]?.homeSplitView;
   if (state === null || state === undefined) throw new Error("expected a Home split");
   return state;
 }
@@ -72,11 +72,11 @@ function pressLeftInRightPage(): boolean {
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   useProjectsStore.setState({ selectedProjectId: PROJECT });
-  useWorkspaceStore.setState({
-    byProject: { [PROJECT]: { ...DEFAULT_WORKSPACE_UI, nav: "home", homeActiveTab: LEFT } },
+  useProjectUiStore.setState({
+    byProject: { [PROJECT]: { ...DEFAULT_PROJECT_UI, nav: "home", homeActiveTab: LEFT } },
   } as never);
   // One bounded pair. A second split cannot create a third pane (VC-614).
-  const workspace = useWorkspaceStore.getState();
+  const workspace = useProjectUiStore.getState();
   workspace.splitHomePane(PROJECT, SPLIT_VIEW_ROOT_PANE_ID, "right", {
     tabId: RIGHT,
     surfaceTabIds: STRIP,
@@ -96,7 +96,7 @@ afterEach(() => {
   unregister = null;
   act(() => root.unmount());
   container.remove();
-  useWorkspaceStore.setState({ byProject: {} } as never);
+  useProjectUiStore.setState({ byProject: {} } as never);
   useProjectsStore.setState({ selectedProjectId: null });
   vi.unstubAllGlobals();
 });
@@ -107,11 +107,11 @@ describe("⌃⌘ + an arrow from inside a Browser page", () => {
     unregister = registerBrowserPaneCommands("tab-right", {
       close: () => true,
       focusAddress: () => undefined,
-      focusPane: () => useWorkspaceStore.getState().focusHomePane(PROJECT, paneOf(RIGHT)),
+      focusPane: () => useProjectUiStore.getState().focusHomePane(PROJECT, paneOf(RIGHT)),
     });
 
     const focused: string[] = [];
-    const unsubscribe = useWorkspaceStore.subscribe(() => focused.push(split().focusedPaneId));
+    const unsubscribe = useProjectUiStore.subscribe(() => focused.push(split().focusedPaneId));
     const right = paneOf(RIGHT);
     const left = paneOf(LEFT);
     try {
@@ -134,8 +134,8 @@ describe("⌃⌘ + an arrow from inside a Browser page", () => {
   });
 
   it("reports the chord as unclaimed when the surface is not split, so focus goes back to the page", () => {
-    useWorkspaceStore.setState({
-      byProject: { [PROJECT]: { ...DEFAULT_WORKSPACE_UI, nav: "home", homeActiveTab: RIGHT } },
+    useProjectUiStore.setState({
+      byProject: { [PROJECT]: { ...DEFAULT_PROJECT_UI, nav: "home", homeActiveTab: RIGHT } },
     } as never);
 
     expect(pressLeftInRightPage()).toBe(false);

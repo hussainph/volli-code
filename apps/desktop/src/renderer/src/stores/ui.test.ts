@@ -478,7 +478,7 @@ describe("persistence", () => {
     store.getState().setSidebarWidth(500);
     store.getState().setRailWidth(360);
     store.getState().stepUiScale(1);
-    store.getState().toggleWorkspaceRailHidden();
+    store.getState().toggleProjectRailHidden();
     store.getState().setSidebarPinned(false);
     store.getState().toggleRailCollapsed();
     store.getState().setRailMode("files");
@@ -669,20 +669,20 @@ describe("persistence", () => {
     expect(store.getState().sidebarWidth).toBe(320);
   });
 
-  it("rehydrates workspaceRailHidden from storage; corrupt/missing values default to visible", async () => {
+  it("rehydrates projectRailHidden from its stored workspaceRailHidden key; corrupt/missing values default to visible", async () => {
     const storage = createMemoryStorage();
-    createUiStore(storage).getState().setWorkspaceRailHidden(true);
+    createUiStore(storage).getState().setProjectRailHidden(true);
     const reloaded = createUiStore(storage);
     await reloaded.persist.rehydrate();
-    expect(reloaded.getState().workspaceRailHidden).toBe(true);
+    expect(reloaded.getState().projectRailHidden).toBe(true);
 
-    // Older state has no key and keeps the workspace switcher visible.
+    // Older state has no key and keeps the project switcher visible.
     const missing = createMemoryStorage();
     missing.setItem(
       "volli:ui",
       JSON.stringify({ state: { sidebarWidth: 320, uiScale: 1 }, version: 1 }),
     );
-    expect(createUiStore(missing).getState().workspaceRailHidden).toBe(false);
+    expect(createUiStore(missing).getState().projectRailHidden).toBe(false);
 
     const corrupt = createMemoryStorage();
     corrupt.setItem(
@@ -692,7 +692,7 @@ describe("persistence", () => {
         version: 1,
       }),
     );
-    expect(createUiStore(corrupt).getState().workspaceRailHidden).toBe(false);
+    expect(createUiStore(corrupt).getState().projectRailHidden).toBe(false);
   });
 
   it("rehydrates sidebarPinned from storage; corrupt/missing values keep the panel pinned", async () => {

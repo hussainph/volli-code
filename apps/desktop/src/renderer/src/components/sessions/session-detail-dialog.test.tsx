@@ -8,7 +8,7 @@ import { useBoardStore } from "@renderer/stores/board";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 const { resumeTicketSession, startProjectTerminal, startTicketTerminal } = vi.hoisted(() => ({
   resumeTicketSession: vi.fn(async () => "resumed-session"),
@@ -149,8 +149,8 @@ describe("SessionDetailDialog", () => {
       byProject: { [PROJECT.id]: { terminal: [record], chat: [], provenance: {} } },
       listingState: { [PROJECT.id]: "loaded" },
     });
-    const openTicketWorkspace = vi.fn();
-    useWorkspaceStore.setState({ openTicketWorkspace });
+    const openTicketView = vi.fn();
+    useProjectUiStore.setState({ openTicketView });
 
     await act(async () => {
       root?.render(<SessionDetailDialog />);
@@ -162,7 +162,7 @@ describe("SessionDetailDialog", () => {
       button!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     });
 
-    expect(openTicketWorkspace).toHaveBeenCalledWith(PROJECT.id, TICKET.id);
+    expect(openTicketView).toHaveBeenCalledWith(PROJECT.id, TICKET.id);
     expect(startTicketTerminal).toHaveBeenCalledWith(PROJECT.id, TICKET.id);
     expect(resumeTicketSession).not.toHaveBeenCalled();
   });
@@ -178,9 +178,9 @@ describe("SessionDetailDialog", () => {
       byProject: { [PROJECT.id]: { terminal: [record], chat: [], provenance: {} } },
       listingState: { [PROJECT.id]: "loaded" },
     });
-    const openTicketWorkspace = vi.fn();
+    const openTicketView = vi.fn();
     const openTicketSession = vi.fn();
-    useWorkspaceStore.setState({ openTicketWorkspace, openTicketSession });
+    useProjectUiStore.setState({ openTicketView, openTicketSession });
 
     await act(async () => {
       root?.render(<SessionDetailDialog />);
@@ -204,7 +204,7 @@ describe("SessionDetailDialog", () => {
 
   it("moves to Home before starting a new project terminal, so the fresh tab is visible", async () => {
     const openHome = vi.fn();
-    useWorkspaceStore.setState({ openHome });
+    useProjectUiStore.setState({ openHome });
 
     await act(async () => {
       root?.render(<SessionDetailDialog />);

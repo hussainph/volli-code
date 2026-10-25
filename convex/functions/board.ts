@@ -1,0 +1,732 @@
+/**
+ * The board: tickets, their bodies, labels, moves, archive, comments and
+ * signals, written once here for every client and agent.
+ *
+ * Every mutation is `load → decide → apply` over the pure rules in
+ * `@volli/shared/cloud` (`board-rules.ts`), inside one transaction that also
+ * appends the board events recording it (with the next `seq` from the
+ * project's counter), writes the command's receipt (idempotent by
+ * `commandId`, seven days) and turns machine side effects into runner jobs
+ * (`lib/boardEffects.ts`). The local SQLite board keeps its own commands for
+ * signed-out mode; its rules are the ones these were ported from.
+ *
+ * Every function requires a signed-in Member of the ticket's project's
+ * current Workspace: an id that names nothing is `not_found`, and one in a
+ * project the viewer is not a Member of is `not_a_member`, as for projects
+ * (ids are not secrets). A move naming a ticket or neighbour of another
+ * project reads it as `not_found`. An archived project's board takes no
+ * writes.
+ */
+
+import { paginationOptsValidator } from "convex/server";
+import { v } from "convex/values";
+
+import {
+  CHECKOUT_MODES,
+  decideArchiveTicket,
+  decideCreateComment,
+  decideCreateSignal,
+  decideCreateTicket,
+  decideEditComment,
+  decideMoveTickets,
+  decideUnarchiveTicket,
+  decideUpdateTicket,
+  movingTicketIds,
+  BOARD_LIMITS,
+  needsRebalance,
+  newId,
+  normalizeLabelColor,
+  parseId,
+  rebalancedPositions,
+  renderTicketKey,
+  requireCommentEditable,
+  TICKET_PRIORITIES,
+  TICKET_SIGNAL_KINDS,
+  TICKET_SIGNAL_VERDICTS,
+  TICKET_STATUSES,
+  type Actor,
+  type ProjectId,
+  type TicketId,
+  type TicketStatus,
+} from "@volli/shared/cloud";
+
+import { internal } from "./_generated/api.js";
+import type { Doc } from "./_generated/dataModel.js";
+import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server.js";
+import { authError, requireProject, requireSessionScope } from "./lib/auth";
+import {
+  boardActor,
+  boardError,
+  BoardWrite,
+  recordBoardEvents,
+  columnEnd,
+  columnQuery,
+  findTicket,
+  insertLabels,
+  labelFacts,
+  patchTicket,
+  projectLabels,
+  publicRow,
+  requireTicket,
+  requireWritableProject,
+  storedActor,
+  ticketFacts,
+} from "./lib/board";
+import { enqueueSideEffects, hasLiveWorktree } from "./lib/boardEffects";
+import { withBoardReceipt } from "./lib/boardReceipts";
+import { visibleBoardEvents } from "./lib/visibility";
+import { literals, nullable } from "./lib/validators";
+
+const ticketStatus = literals(TICKET_STATUSES);
+const ticketPriority = literals(TICKET_PRIORITIES);
+const checkoutMode = literals(CHECKOUT_MODES);
+const bodyMutation = v.union(
+  v.object({ mode: v.literal("replace"), body: v.string() }),
+  v.object({ mode: v.literal("append"), text: v.string() }),
+  v.object({ mode: v.literal("edit"), oldText: v.string(), newText: v.string() }),
+);
+const moveChoice = v.union(
+  v.object({ kind: v.literal("automation"), automationId: v.string() }),
+  v.object({ kind: v.literal("move-only") }),
+);
+
+// ── reads ────────────────────────────────────────────────────────────────────
+
+/** The board roster: every live ticket (without its body) and every label of a project. */
+export const roster = query({
+  args: { projectId: v.string() },
+  handler: async (ctx, { projectId }) => {
+    await requireProject(ctx, projectId);
+    const tickets = await ctx.db
+      .query("tickets")
+      .withIndex("by_board", (q) => q.eq("projectId", projectId).eq("archivedAt", null))
+      .collect();
+    return {
+      tickets: tickets.filter((ticket) => ticket.deletedAt === null).map(publicRow),
+      labels: (await projectLabels(ctx, projectId)).map(publicRow),
+    };
+  },
+});
+
+/** One ticket and its body (read separately from the roster, so body edits do not re-run it). */
+export const getTicket = query({
+  args: { ticketId: v.string() },
+  handler: async (ctx, { ticketId }) => {
+    const { ticket } = await requireTicket(ctx, ticketId);
+    const body = await ctx.db
+      .query("ticketBodies")
+      .withIndex("by_ticket", (q) => q.eq("ticketId", ticketId))
+      .unique();
+    return { ticket: publicRow(ticket), body: body?.body ?? "", bodyRevision: body?.revision ?? 0 };
+  },
+});
+
+/** A project's Archive, most recently archived first, a page at a time (it only grows). */
+export const archivedTickets = query({
+  args: { projectId: v.string(), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { projectId, paginationOpts }) => {
+    await requireProject(ctx, projectId);
+    const page = await ctx.db
+      .query("tickets")
+      .withIndex("by_project_archived", (q) => q.eq("projectId", projectId).gte("archivedAt", 0))
+      .order("desc")
+      .paginate(paginationOpts);
+    return {
+      ...page,
+      page: page.page.filter((ticket) => ticket.deletedAt === null).map(publicRow),
+    };
+  },
+});
+
+/**
+ * A ticket's history, in `seq` order. An event about a Session the viewer
+ * cannot see (a private one that is not theirs, unless the Workspace shares
+ * everything) is left out.
+ */
+export const ticketEvents = query({
+  args: { ticketId: v.string() },
+  handler: async (ctx, { ticketId }) => {
+    const { project } = await requireTicket(ctx, ticketId);
+    const events = await ctx.db
+      .query("boardEvents")
+      .withIndex("by_ticket_seq", (q) => q.eq("ticketId", ticketId))
+      .collect();
+    const scope = await requireSessionScope(ctx, project.id);
+    return (await visibleBoardEvents(ctx, scope, events)).map(publicRow);
+  },
+});
+
+/** A ticket's comments, oldest first; removed ones are left out. */
+export const comments = query({
+  args: { ticketId: v.string() },
+  handler: async (ctx, { ticketId }) => {
+    await requireTicket(ctx, ticketId);
+    const rows = await ctx.db
+      .query("ticketComments")
+      .withIndex("by_ticket", (q) => q.eq("ticketId", ticketId))
+      .collect();
+    return rows.filter((comment) => comment.deletedAt === null).map(publicRow);
+  },
+});
+
+/** A ticket's signals, by kind then time: the latest of a kind is the one that stands. */
+export const signals = query({
+  args: { ticketId: v.string() },
+  handler: async (ctx, { ticketId }) => {
+    await requireTicket(ctx, ticketId);
+    const rows = await ctx.db
+      .query("ticketSignals")
+      .withIndex("by_ticket_kind", (q) => q.eq("ticketId", ticketId))
+      .collect();
+    return rows.map(publicRow);
+  },
+});
+
+// ── tickets ──────────────────────────────────────────────────────────────────
+
+/** A ticket for a writable project the viewer can see, refused with the shared codes otherwise. */
+async function writableTicket(ctx: MutationCtx, ticketId: string) {
+  const access = await requireTicket(ctx, ticketId);
+  requireWritableProject(access.project);
+  return access;
+}
+
+/** Inserts or rewrites a ticket's body document. */
+async function writeBody(
+  ctx: MutationCtx,
+  ticketId: string,
+  body: string,
+  actor: Actor,
+  now: number,
+): Promise<void> {
+  const existing = await ctx.db
+    .query("ticketBodies")
+    .withIndex("by_ticket", (q) => q.eq("ticketId", ticketId))
+    .unique();
+  if (existing === null) {
+    await ctx.db.insert("ticketBodies", {
+      ticketId,
+      body,
+      revision: 1,
+      updatedBy: actor,
+      updatedAt: now,
+    });
+  } else {
+    await ctx.db.patch(existing._id, {
+      body,
+      revision: existing.revision + 1,
+      updatedBy: actor,
+      updatedAt: now,
+    });
+  }
+}
+
+/** Creates a ticket (caller-minted id) at the end of its column, numbered from the project's counter. */
+export const createTicket = mutation({
+  args: {
+    commandId: v.string(),
+    projectId: v.string(),
+    ticketId: v.string(),
+    status: ticketStatus,
+    title: v.string(),
+    priority: v.optional(ticketPriority),
+    body: v.optional(v.string()),
+    labels: v.optional(v.array(v.string())),
+    checkoutMode: v.optional(checkoutMode),
+    preferredHarnessId: v.optional(v.string()),
+    baseBranch: v.optional(nullable(v.string())),
+  },
+  handler: async (ctx, { commandId, ...intent }) =>
+    withBoardReceipt(
+      ctx,
+      { commandId, operation: "board.createTicket", intent },
+      async (viewer) => {
+        const { project } = await requireProject(ctx, intent.projectId);
+        requireWritableProject(project);
+        const ticketId = parseId("ticket", intent.ticketId);
+        const taken = await ctx.db
+          .query("tickets")
+          .withIndex("by_uuid", (q) => q.eq("id", ticketId))
+          .unique();
+        if (taken !== null) throw boardError("id_taken", "That ticket id is already in use.");
+        const actor = boardActor(viewer);
+        const now = Date.now();
+        const write = await BoardWrite.open(ctx, project.id, actor, now);
+        const decision = decideCreateTicket(
+          {
+            projectId: project.id as ProjectId,
+            number: write.allocateTicketNumber(),
+            columnEnd: await columnEnd(ctx, project.id, intent.status),
+            labels: (await projectLabels(ctx, project.id)).map(labelFacts),
+            mintLabelId: () => newId("label"),
+          },
+          { ...intent, ticketId },
+        );
+        await insertLabels(ctx, decision.createdLabels, now);
+        const { ticket } = decision;
+        await ctx.db.insert("tickets", {
+          id: ticket.id,
+          projectId: ticket.projectId,
+          number: ticket.number,
+          title: ticket.title,
+          status: ticket.status,
+          priority: ticket.priority,
+          position: ticket.position,
+          labelIds: ticket.labelIds,
+          assigneeUserId: null,
+          checkoutMode: ticket.checkoutMode,
+          preferredHarnessId: ticket.preferredHarnessId,
+          branch: null,
+          baseBranch: ticket.baseBranch,
+          pullRequests: [],
+          retentionKeep: false,
+          placeRunnerId: null,
+          createdBy: actor,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          deletedAt: null,
+          purgeAfter: null,
+        });
+        await writeBody(ctx, ticket.id, decision.body, actor, now);
+        await write.append(decision.events);
+        await write.commit();
+        return {
+          projectId: project.id,
+          reply: {
+            ticketId: ticket.id,
+            number: ticket.number,
+            key: renderTicketKey(project, ticket.number),
+          },
+        };
+      },
+    ),
+});
+
+/**
+ * Updates a live ticket's title, body (whole or by mutation), priority,
+ * harness, checkout mode and labels (the whole set, or names to add and
+ * remove) in one write. An unchanged field records nothing. Switching to a
+ * worktree asks the ticket's Place for one; the switch is refused once a
+ * worktree exists.
+ */
+export const updateTicket = mutation({
+  args: {
+    commandId: v.string(),
+    ticketId: v.string(),
+    title: v.optional(v.string()),
+    body: v.optional(v.string()),
+    bodyMutation: v.optional(bodyMutation),
+    priority: v.optional(ticketPriority),
+    preferredHarnessId: v.optional(v.string()),
+    checkoutMode: v.optional(checkoutMode),
+    labels: v.optional(v.array(v.string())),
+    addLabels: v.optional(v.array(v.string())),
+    removeLabels: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, { commandId, ...intent }) =>
+    withBoardReceipt(
+      ctx,
+      { commandId, operation: "board.updateTicket", intent },
+      async (viewer) => {
+        const { ticketId, ...command } = intent;
+        const { project, ticket } = await writableTicket(ctx, ticketId);
+        const actor = boardActor(viewer);
+        const now = Date.now();
+        const body = await ctx.db
+          .query("ticketBodies")
+          .withIndex("by_ticket", (q) => q.eq("ticketId", ticket.id))
+          .unique();
+        const decision = decideUpdateTicket(
+          {
+            ticket: ticketFacts(ticket),
+            body: body?.body ?? "",
+            labels: (await projectLabels(ctx, project.id)).map(labelFacts),
+            hasWorktree:
+              command.checkoutMode !== undefined && (await hasLiveWorktree(ctx, ticket.id)),
+            mintLabelId: () => newId("label"),
+          },
+          command,
+        );
+        await insertLabels(ctx, decision.createdLabels, now);
+        await patchTicket(ctx, ticket, decision.patch, now);
+        if (decision.body !== null) await writeBody(ctx, ticket.id, decision.body, actor, now);
+        await recordBoardEvents(ctx, project.id, actor, now, decision.events);
+        await enqueueSideEffects(
+          { ctx, tickets: new Map([[ticket.id, ticket]]), actor, now },
+          decision.sideEffects,
+        );
+        return {
+          projectId: project.id,
+          reply: { ticketId: ticket.id, changed: decision.events.length > 0 },
+        };
+      },
+    ),
+});
+
+/**
+ * The gap a move lands in, read inside the transaction: right after the
+ * named `after` ticket, else right before the named `before`. A named neighbour
+ * that has since left the column (moved, archived) is ignored rather than
+ * refused, so a move made against a slightly stale board still lands next to
+ * what is there. With no usable neighbour the group goes to the column's
+ * end, or its start when the command named only a ticket to land before.
+ */
+async function moveGap(
+  ctx: MutationCtx,
+  projectId: string,
+  toStatus: TicketStatus,
+  moving: ReadonlySet<string>,
+  afterTicketId: string | null,
+  beforeTicketId: string | null,
+): Promise<{ after: Doc<"tickets"> | null; before: Doc<"tickets"> | null }> {
+  const anchor = async (id: string | null): Promise<Doc<"tickets"> | null> => {
+    if (id === null) return null;
+    const ticket = await findTicket(ctx, parseId("ticket", id));
+    if (ticket === null || ticket.projectId !== projectId) {
+      throw authError("not_found", "A move names a neighbour that does not exist.");
+    }
+    const usable =
+      ticket.archivedAt === null && ticket.status === toStatus && !moving.has(ticket.id);
+    return usable ? ticket : null;
+  };
+  const column = () => columnQuery(ctx, projectId, toStatus);
+  // The first ticket past `from` (in `order`) that is not one of the moved ones.
+  const firstStill = async (rows: AsyncIterable<Doc<"tickets">>) => {
+    for await (const ticket of rows) if (!moving.has(ticket.id)) return ticket;
+    return null;
+  };
+  const after = await anchor(afterTicketId);
+  const before = await anchor(beforeTicketId);
+  // The gap is always read off the column itself, never taken from the two
+  // named rows alone: reading the range next to the anchor is what makes a
+  // concurrent move into the same gap conflict (and retry) instead of
+  // computing the same key. A ticket that arrived between the named pair since
+  // the client looked is respected: the group lands right after `after`.
+  if (after !== null) {
+    const next = columnBeyond(ctx, projectId, toStatus, "after", after.position);
+    return { after, before: await firstStill(next) };
+  }
+  if (before !== null) {
+    const previous = columnBeyond(ctx, projectId, toStatus, "before", before.position);
+    return { after: await firstStill(previous), before };
+  }
+  if (afterTicketId === null && beforeTicketId !== null) {
+    return { after: null, before: await firstStill(column().order("asc")) };
+  }
+  return { after: await firstStill(column().order("desc")), before: null };
+}
+
+/** The live tickets of a column strictly after (or before) `position`, nearest first. */
+function columnBeyond(
+  ctx: MutationCtx,
+  projectId: string,
+  status: TicketStatus,
+  side: "after" | "before",
+  position: string,
+) {
+  return ctx.db
+    .query("tickets")
+    .withIndex("by_board", (q) => {
+      const column = q.eq("projectId", projectId).eq("archivedAt", null).eq("status", status);
+      return side === "after" ? column.gt("position", position) : column.lt("position", position);
+    })
+    .order(side === "after" ? "asc" : "desc");
+}
+
+/**
+ * Moves one or more tickets into a column, between the neighbours the
+ * command names (or to its end). Exactly the moved tickets are written; the
+ * keys are computed here, inside the transaction, so concurrent moves cannot
+ * collide. A ticket that crosses columns records `status_changed`, and its
+ * consequences become runner jobs: a Done move trims its worktrees, leaving
+ * the active columns interrupts its running agents, and an armed column (or
+ * the picker's choice) starts an Automation run after the arming delay.
+ */
+export const moveTickets = mutation({
+  args: {
+    commandId: v.string(),
+    projectId: v.string(),
+    ticketIds: v.array(v.string()),
+    toStatus: ticketStatus,
+    afterTicketId: v.optional(nullable(v.string())),
+    beforeTicketId: v.optional(nullable(v.string())),
+    choice: v.optional(nullable(moveChoice)),
+  },
+  handler: async (ctx, { commandId, ...intent }) =>
+    withBoardReceipt(ctx, { commandId, operation: "board.moveTickets", intent }, async (viewer) => {
+      const { project } = await requireProject(ctx, intent.projectId);
+      requireWritableProject(project);
+      const actor = boardActor(viewer);
+      const now = Date.now();
+      const ids = [...new Set(intent.ticketIds.map((id) => parseId("ticket", id)))];
+      // Bounded before anything is read.
+      if (ids.length > BOARD_LIMITS.ticketsPerMove) {
+        throw boardError(
+          "invalid_argument",
+          `A move takes at most ${BOARD_LIMITS.ticketsPerMove} tickets.`,
+        );
+      }
+      const docs = new Map<string, Doc<"tickets">>();
+      for (const id of ids) {
+        const ticket = await findTicket(ctx, id);
+        // A ticket of another project is not on this board: it reads as absent.
+        if (ticket === null || ticket.projectId !== project.id) {
+          throw authError("not_found", "A move names a ticket that is not on this board.");
+        }
+        docs.set(id, ticket);
+      }
+      const command = {
+        ticketIds: ids as TicketId[],
+        toStatus: intent.toStatus,
+        afterTicketId: (intent.afterTicketId ?? null) as TicketId | null,
+        beforeTicketId: (intent.beforeTicketId ?? null) as TicketId | null,
+        choice: intent.choice ?? null,
+      };
+      const facts = [...docs.values()].map(ticketFacts);
+      // The gap is read around the tickets that actually move: one a
+      // column-only move leaves where it is, is a neighbour like any other.
+      const gap = await moveGap(
+        ctx,
+        project.id,
+        intent.toStatus,
+        new Set(movingTicketIds(command, facts)),
+        command.afterTicketId,
+        command.beforeTicketId,
+      );
+      const decision = decideMoveTickets(
+        {
+          tickets: facts,
+          after: gap.after === null ? null : ticketFacts(gap.after),
+          before: gap.before === null ? null : ticketFacts(gap.before),
+          now,
+        },
+        command,
+      );
+      for (const change of decision.changes) {
+        await patchTicket(ctx, docs.get(change.ticketId)!, change.patch, now);
+      }
+      await recordBoardEvents(ctx, project.id, actor, now, decision.events);
+      const unstarted = await enqueueSideEffects(
+        { ctx, tickets: docs, actor, now },
+        decision.sideEffects,
+      );
+      if (decision.changes.some((change) => needsRebalance(change.patch.position!))) {
+        await ctx.scheduler.runAfter(0, internal.board.rebalanceColumn, {
+          projectId: project.id,
+          status: intent.toStatus,
+        });
+      }
+      return {
+        projectId: project.id,
+        reply: {
+          moved: decision.changes.map((change) => change.ticketId),
+          // Picked Automation runs with nowhere to run yet (no Place).
+          unstartedRuns: unstarted,
+        },
+      };
+    }),
+});
+
+/**
+ * Rewrites a column's keys short and evenly spaced, in their current order,
+ * once a key has grown past the rebalance length (rare: many inserts at one
+ * spot). Order is unchanged, so it records no event.
+ */
+export const rebalanceColumn = internalMutation({
+  args: { projectId: v.string(), status: ticketStatus },
+  handler: async (ctx, { projectId, status }) => {
+    const column = await columnQuery(ctx, projectId, status).collect();
+    if (!column.some((ticket) => needsRebalance(ticket.position))) return { rewritten: 0 };
+    const keys = rebalancedPositions(column.length);
+    for (const [index, ticket] of column.entries()) {
+      await ctx.db.patch(ticket._id, { position: keys[index]! });
+    }
+    return { rewritten: column.length };
+  },
+});
+
+async function archiveWrite(
+  ctx: MutationCtx,
+  ticketId: string,
+  viewerActor: Actor,
+  decide: (ticket: Doc<"tickets">, now: number) => Promise<ReturnType<typeof decideArchiveTicket>>,
+) {
+  const { project, ticket } = await writableTicket(ctx, ticketId);
+  const now = Date.now();
+  const decision = await decide(ticket, now);
+  await patchTicket(ctx, ticket, decision.patch, now);
+  await recordBoardEvents(ctx, project.id, viewerActor, now, decision.events);
+  await enqueueSideEffects(
+    { ctx, tickets: new Map([[ticket.id, ticket]]), actor: viewerActor, now },
+    decision.sideEffects,
+  );
+  return {
+    projectId: project.id,
+    reply: { ticketId: ticket.id, changed: decision.events.length > 0 },
+  };
+}
+
+/** Archives a ticket: off the board, everything kept, its worktrees trimmed. */
+export const archiveTicket = mutation({
+  args: { commandId: v.string(), ticketId: v.string() },
+  handler: async (ctx, { commandId, ...intent }) =>
+    withBoardReceipt(ctx, { commandId, operation: "board.archiveTicket", intent }, (viewer) =>
+      archiveWrite(ctx, intent.ticketId, boardActor(viewer), async (ticket, now) =>
+        decideArchiveTicket(ticketFacts(ticket), now),
+      ),
+    ),
+});
+
+/** Returns an archived ticket to the end of its retained column. */
+export const unarchiveTicket = mutation({
+  args: { commandId: v.string(), ticketId: v.string() },
+  handler: async (ctx, { commandId, ...intent }) =>
+    withBoardReceipt(ctx, { commandId, operation: "board.unarchiveTicket", intent }, (viewer) =>
+      archiveWrite(ctx, intent.ticketId, boardActor(viewer), async (ticket) =>
+        decideUnarchiveTicket(
+          ticketFacts(ticket),
+          await columnEnd(ctx, ticket.projectId, ticket.status),
+        ),
+      ),
+    ),
+});
+
+// ── comments and signals ─────────────────────────────────────────────────────
+
+/** Comments on a live ticket (caller-minted id). An agent's comment cites its Session. */
+export const createComment = mutation({
+  args: { commandId: v.string(), ticketId: v.string(), commentId: v.string(), body: v.string() },
+  handler: async (ctx, { commandId, ...intent }) =>
+    withBoardReceipt(
+      ctx,
+      { commandId, operation: "board.createComment", intent },
+      async (viewer) => {
+        const { project, ticket } = await writableTicket(ctx, intent.ticketId);
+        const commentId = parseId("comment", intent.commentId);
+        const taken = await ctx.db
+          .query("ticketComments")
+          .withIndex("by_uuid", (q) => q.eq("id", commentId))
+          .unique();
+        if (taken !== null) throw boardError("id_taken", "That comment id is already in use.");
+        const actor = boardActor(viewer);
+        const now = Date.now();
+        const decision = decideCreateComment(
+          ticketFacts(ticket),
+          { commentId, body: intent.body },
+          actor,
+        );
+        await ctx.db.insert("ticketComments", {
+          ...decision.comment,
+          author: actor,
+          createdAt: now,
+          editedAt: null,
+          deletedAt: null,
+        });
+        await recordBoardEvents(ctx, project.id, actor, now, decision.events);
+        return { projectId: project.id, reply: { commentId } };
+      },
+    ),
+});
+
+async function ownComment(ctx: MutationCtx, commentId: string) {
+  const comment = await ctx.db
+    .query("ticketComments")
+    .withIndex("by_uuid", (q) => q.eq("id", parseId("comment", commentId)))
+    .unique();
+  if (comment === null) throw authError("not_found", "That comment does not exist.");
+  const { project } = await requireProject(ctx, comment.projectId);
+  requireWritableProject(project);
+  return comment;
+}
+
+/** Edits a comment's body (its author only). Records no board event; the row carries `editedAt`. */
+export const updateComment = mutation({
+  args: { commandId: v.string(), commentId: v.string(), body: v.string() },
+  handler: async (ctx, { commandId, ...intent }) =>
+    withBoardReceipt(
+      ctx,
+      { commandId, operation: "board.updateComment", intent },
+      async (viewer) => {
+        const comment = await ownComment(ctx, intent.commentId);
+        const body = decideEditComment(
+          { author: storedActor(comment.author), deletedAt: comment.deletedAt },
+          intent.body,
+          boardActor(viewer),
+        );
+        if (body !== comment.body) await ctx.db.patch(comment._id, { body, editedAt: Date.now() });
+        return { projectId: comment.projectId, reply: { commentId: comment.id } };
+      },
+    ),
+});
+
+/** Removes a comment (its author only): hidden from every read, kept until the ticket is purged. */
+export const removeComment = mutation({
+  args: { commandId: v.string(), commentId: v.string() },
+  handler: async (ctx, { commandId, ...intent }) =>
+    withBoardReceipt(
+      ctx,
+      { commandId, operation: "board.removeComment", intent },
+      async (viewer) => {
+        const comment = await ownComment(ctx, intent.commentId);
+        requireCommentEditable(
+          { author: storedActor(comment.author), deletedAt: comment.deletedAt },
+          boardActor(viewer),
+        );
+        await ctx.db.patch(comment._id, { deletedAt: Date.now() });
+        return { projectId: comment.projectId, reply: { commentId: comment.id } };
+      },
+    ),
+});
+
+/** Records one typed verdict on a live ticket (caller-minted id). Never a board move. */
+export const createSignal = mutation({
+  args: {
+    commandId: v.string(),
+    ticketId: v.string(),
+    signalId: v.string(),
+    kind: literals(TICKET_SIGNAL_KINDS),
+    verdict: literals(TICKET_SIGNAL_VERDICTS),
+    detail: v.optional(nullable(v.string())),
+  },
+  handler: async (ctx, { commandId, ...intent }) =>
+    withBoardReceipt(
+      ctx,
+      { commandId, operation: "board.createSignal", intent },
+      async (viewer) => {
+        const { project, ticket } = await writableTicket(ctx, intent.ticketId);
+        const signalId = parseId("signal", intent.signalId);
+        const taken = await ctx.db
+          .query("ticketSignals")
+          .withIndex("by_uuid", (q) => q.eq("id", signalId))
+          .unique();
+        if (taken !== null) throw boardError("id_taken", "That signal id is already in use.");
+        const actor = boardActor(viewer);
+        const now = Date.now();
+        const decision = decideCreateSignal(ticketFacts(ticket), { ...intent, signalId }, actor);
+        await ctx.db.insert("ticketSignals", { ...decision.signal, actor, createdAt: now });
+        await recordBoardEvents(ctx, project.id, actor, now, decision.events);
+        return { projectId: project.id, reply: { signalId } };
+      },
+    ),
+});
+
+// ── labels ───────────────────────────────────────────────────────────────────
+
+/** Sets (or clears, with `null`) a label's colour. Records no board event, as on the local board. */
+export const setLabelColor = mutation({
+  args: { commandId: v.string(), labelId: v.string(), color: nullable(v.string()) },
+  handler: async (ctx, { commandId, ...intent }) =>
+    withBoardReceipt(ctx, { commandId, operation: "board.setLabelColor", intent }, async () => {
+      const label = await ctx.db
+        .query("labels")
+        .withIndex("by_uuid", (q) => q.eq("id", parseId("label", intent.labelId)))
+        .unique();
+      if (label === null) throw authError("not_found", "That label does not exist.");
+      const { project } = await requireProject(ctx, label.projectId);
+      requireWritableProject(project);
+      const color = normalizeLabelColor(intent.color);
+      if (color !== label.color) await ctx.db.patch(label._id, { color, updatedAt: Date.now() });
+      return { projectId: project.id, reply: { labelId: label.id } };
+    }),
+});

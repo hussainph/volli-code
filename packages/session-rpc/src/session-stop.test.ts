@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   type HarnessCommand,
@@ -11,6 +10,10 @@ import {
 } from "@volli/session-engine";
 import { createSessionRouter, LOCAL_DESKTOP_CALLER, RpcDiagnosticLog } from "./index";
 import { sessionContext } from "./session-handlers.test-support";
+import {
+  createInMemorySessionLedger,
+  createInMemoryTranscriptArtifactStore,
+} from "@volli/session-engine/testing";
 
 async function fixture(
   options: {
@@ -59,7 +62,7 @@ async function fixture(
   const at = async () => ({ directory: "/fake", venue });
   const runtime = createSessionRuntime({
     engine,
-    executor,
+    executors: createSessionExecutorSlot(executor),
     ids,
     clock,
     artifacts: createInMemoryTranscriptArtifactStore(),

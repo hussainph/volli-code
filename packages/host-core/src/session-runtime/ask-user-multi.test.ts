@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { dirname, join } from "node:path";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
-  createInMemoryTranscriptArtifactStore,
   sessionRootThreadId,
 } from "@volli/session-engine";
 import {
@@ -21,6 +21,7 @@ import { insertProject } from "../db/projects-repo";
 import { openRawDb, openTestDb, testProject } from "../db/test-helpers";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { createPiNativeAdapter } from "./pi-adapter";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 const questions: RuntimeAskUserQuestion[] = [
   {
@@ -159,7 +160,7 @@ async function fixture(input: object = { questions }, batch = true) {
   const venue = { id: "local", kind: "local" as const };
   const host = createSessionRuntime({
     engine,
-    executor: adapter,
+    executors: createSessionExecutorSlot(adapter),
     artifacts: createInMemoryTranscriptArtifactStore(),
     locations: {
       resolve: async () => ({ directory: dirname(db.dbPath), venue }),

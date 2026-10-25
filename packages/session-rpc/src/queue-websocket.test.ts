@@ -17,9 +17,7 @@ import {
 } from "@volli/host-protocol";
 import { expectHostError, ipcContractLink, recordSubscription } from "@volli/host-protocol/testing";
 import {
-  createInMemorySessionFollowUpLedger,
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
 } from "@volli/session-engine";
@@ -49,6 +47,11 @@ import {
   peerInput,
   type PeerExchange,
 } from "./canary-peer.test-support";
+import {
+  createInMemorySessionFollowUpLedger,
+  createInMemorySessionLedger,
+  createInMemoryTranscriptArtifactStore,
+} from "@volli/session-engine/testing";
 const canary = process.env.VOLLI_CANARY_CAPTURE_DIR ? null : loadCanaryPeer();
 
 /** What the Session router alone serves: every v1 feature but the board's (VC-565). */
@@ -86,7 +89,7 @@ async function heldRuntime() {
     ids,
     artifacts: createInMemoryTranscriptArtifactStore(),
     followUps: createInMemorySessionFollowUpLedger(),
-    executor: {
+    executors: createSessionExecutorSlot({
       id: "test",
       durableIdNamespace: "test",
       adapterVersion: "1",
@@ -94,7 +97,7 @@ async function heldRuntime() {
       attach: async () => {
         throw new Error("Attention must hold this queue");
       },
-    },
+    }),
     locations: {
       resolve: async () => ({ directory: "/test", venue: { id: "local", kind: "local" } }),
       prepare: async () => ({ directory: "/test", venue: { id: "local", kind: "local" } }),

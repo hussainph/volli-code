@@ -71,6 +71,8 @@ export class SecretService {
     return {
       redact: (text: string) => this.store.redact(text),
       hasValues: () => this.store.hasValues(),
+      redactStreamStep: (window: Uint8Array, from: number, final: boolean) =>
+        this.store.redactStreamStep(window, from, final),
       request: async (
         input: { name: string; purpose?: string; toolCallId: string },
         signal: AbortSignal,

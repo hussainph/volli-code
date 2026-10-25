@@ -3,7 +3,7 @@
  * plan §4.3).
  *
  * Both strips compose their tabs by concatenating kind groups (Home: Board →
- * terminals → chats → files; a ticket workspace: Body → files → diffs →
+ * terminals → chats → files; a Ticket view: Body → files → diffs →
  * sessions → chats), and every one of those groups is built from a different
  * live source. So arrangement cannot be stored *in* the groups: dragging a file
  * tab in front of a chat tab has no representation there at all. It is stored

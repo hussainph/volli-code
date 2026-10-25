@@ -2,13 +2,11 @@ import type {
   CommandReceipt,
   SessionCommand,
   SessionEvent,
-  SessionLedger,
   SessionOrigin,
   Synchronous,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 import type { SessionRuntimeCommandResult } from "./session-runtime";
-import { canonicalJson } from "./transcript-artifacts";
 
 /** Separate from the event vocabulary: older readers must still open this DB. */
 export interface SessionFollowUpItem {
@@ -91,53 +89,6 @@ export interface SessionFollowUpLedger {
     ) => Synchronous<T>,
   ): Promise<T>;
   pendingSessionIds(): Promise<readonly string[]>;
-}
-
-/** Test adapter; production must inject durable storage, never this fallback. */
-export function createInMemorySessionFollowUpLedger(
-  eventLedger?: SessionLedger,
-): SessionFollowUpLedger {
-  const states = new Map<string, SessionFollowUpState>();
-  return {
-    async transaction<T>(
-      sessionId: string,
-      work: (
-        state: SessionFollowUpState,
-        deliveryProof?: SessionFollowUpDeliveryProof,
-      ) => Synchronous<T>,
-    ) {
-      const apply = (deliveryProof?: SessionFollowUpDeliveryProof): Synchronous<T> => {
-        const state = JSON.parse(
-          canonicalJson(states.get(sessionId) ?? emptySessionFollowUpState()),
-        ) as SessionFollowUpState;
-        const result = work(state, deliveryProof);
-        if (result && typeof result === "object" && "then" in result) {
-          throw new Error("Follow-up ledger transaction must be synchronous");
-        }
-        states.set(sessionId, JSON.parse(canonicalJson(state)) as SessionFollowUpState);
-        return result;
-      };
-      return eventLedger
-        ? eventLedger.transaction((transaction) =>
-            apply((deliveryCommandId) => {
-              const command = transaction.getCommand(deliveryCommandId);
-              return (
-                command !== null &&
-                sessionFollowUpDeliveryEvidence(
-                  sessionId,
-                  command,
-                  transaction.listReceipts(deliveryCommandId),
-                  transaction.listEvents({ sessionId }),
-                ) !== null
-              );
-            }),
-          )
-        : apply();
-    },
-    async pendingSessionIds() {
-      return [...states].filter(([, state]) => state.entries.length > 0).map(([id]) => id);
-    },
-  };
 }
 
 export function projectSessionFollowUps(snapshot: SessionFollowUpState): SessionFollowUpItem[] {

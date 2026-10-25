@@ -7,7 +7,7 @@ import {
   type PromptResource,
   type SessionEvent,
   type SessionInput,
-  type SessionExecutionVenue,
+  type RunnerIdentity,
 } from "@volli/shared";
 import type { PiRuntimeContext } from "./pi-adapter";
 import type { SessionToolSurfacePorts } from "./sessions";
@@ -74,7 +74,7 @@ function toolSurfaceInput(input: SessionInput): Extract<SessionInput, { kind: "t
 export function createRuntimeContextResolver(options: {
   db: Database.Database;
   sessionEngine: SessionEngine;
-  venue: SessionExecutionVenue;
+  venue: RunnerIdentity;
   mcpDispatch: HostMcpDispatch;
   waitForBirth(sessionId: string): Promise<void>;
   toolSurface(): SessionToolSurfacePorts | null;
@@ -119,7 +119,12 @@ export function createRuntimeContextResolver(options: {
             tools: options
               .toolSurface()!
               .resolve(attaching.role, [])
-              .filter((tool) => tool !== "codemode"),
+              .filter(
+                (tool) =>
+                  tool !== "codemode" &&
+                  // VC-861 grants steering only at new Ticket birth, not backfill.
+                  (tool !== "session.send" || attaching.role !== "ticket"),
+              ),
             mcpManagementNames: "server",
           },
           provenance,

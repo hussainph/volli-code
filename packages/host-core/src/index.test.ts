@@ -23,13 +23,16 @@ import { SCHEMA_HEAD } from "./db/migrations";
 import { MIN_READER_VERSION_KEY } from "./db/schema-compatibility";
 import { insertProject } from "./db/projects-repo";
 import { testProject } from "./db/test-helpers";
+import type { SessionLedger } from "@volli/shared";
 import * as sessionLedgerModule from "./session-control/sqlite-ledger";
+import { SESSION_RUNTIME } from "./session-services";
 import * as sessionControl from "./session-control";
 import { createHostSessionRuntime, type HostSessionRuntimeOptions } from "./session-runtime";
 import { PtyManager, type PtyManagerOptions } from "./pty/manager";
 import type { SessionWake } from "./session-control/session-wake";
 import { createHostMaintenance, type HostMaintenanceOptions } from "./maintenance-services";
 import { createHostRuntimeServices } from "./runtime-services";
+import { createSessionExecutorSlot } from "@volli/session-engine";
 
 /**
  * Each mock below passes through to the real module and only RECORDS: the
@@ -217,7 +220,9 @@ describe("createHostCore", () => {
     opened.push(core);
     const db = core.database.db;
     const engine = core.sessionEngine;
-    const writer = vi.spyOn(core.sessionLedger, "transaction");
+    expect(construct).toHaveBeenCalledTimes(1);
+    const ledger = construct.mock.results[0]!.value as SessionLedger;
+    const writer = vi.spyOn(ledger, "transaction");
     const project = testProject();
     insertProject(db, project);
     const wakes: SessionWake[] = [];
@@ -238,7 +243,7 @@ describe("createHostCore", () => {
       dataDir: core.dataDir,
       transcriptDirectory: join(core.dataDir, "transcripts"),
       sessionEngine: engine,
-      executor,
+      executors: createSessionExecutorSlot(executor),
     });
     const manager = new PtyManager({
       host: {
@@ -254,7 +259,6 @@ describe("createHostCore", () => {
     });
     try {
       expect(construct).toHaveBeenCalledTimes(1);
-      expect(construct.mock.results[0]?.value).toBe(core.sessionLedger);
       writer.mockClear();
       const created = await runtime.command({
         commandId: "create-through-runtime",
@@ -280,7 +284,7 @@ describe("createHostCore", () => {
         }),
       );
       writer.mockClear();
-      await core.hostNoticeOutbox.pending();
+      await core[SESSION_RUNTIME].hostNoticeOutbox.pending();
       expect(writer).toHaveBeenCalledTimes(1);
       writer.mockClear();
       await engine.getSession({ sessionId });
@@ -308,7 +312,7 @@ describe("createHostCore", () => {
       dataDir: core.dataDir,
       transcriptDirectory: join(core.dataDir, "transcripts"),
       sessionEngine: core.sessionEngine,
-      executor: {
+      executors: createSessionExecutorSlot({
         id: "test",
         durableIdNamespace: "test",
         adapterVersion: "1",
@@ -316,7 +320,7 @@ describe("createHostCore", () => {
         attach: vi.fn(() => {
           throw new Error("executor offline");
         }),
-      },
+      }),
     });
     try {
       const { sessionId } = await runtime.command({
@@ -431,8 +435,10 @@ describe("createHostCore", () => {
     expect(host.database.ok).toBe(true);
     expect(host).not.toHaveProperty("databaseFailure");
     expect(host.sessionEngine).toBeDefined();
-    expect(host.sessionLedger).toBeDefined();
-    expect(host.hostNoticeOutbox).toBeDefined();
+    // The writer's ledger and outbox stay inside host-core.
+    expect(host).not.toHaveProperty("sessionLedger");
+    expect(host).not.toHaveProperty("hostNoticeOutbox");
+    expect(host[SESSION_RUNTIME].hostNoticeOutbox).toBeDefined();
   });
 
   it("installs the transaction-ownership handler the host chose", () => {
@@ -498,6 +504,7 @@ describe("createHostCore", () => {
       "kind",
       "start",
       "stop",
+      "stopPolicy",
       "warnIfFollowUpCleanCloseSkipped",
     ]);
     for (const field of [
@@ -600,6 +607,17 @@ describe("createHostCore composition", () => {
     const [supplied] = vi.mocked(createHostMaintenance).mock.calls[1]!;
     expect(supplied.processReaders).toBe(processReaders);
     expect(supplied.reclaim).toBe(reclaim);
+  });
+
+  it("reads worktrees through one service over the host's own database", async () => {
+    const core = live(compose({ log: { error: vi.fn() } }, headlessOptions(dataDir())));
+    // Each host owns its read service (VC-788); a read resolves the ticket in
+    // this host's database, which has never heard of this one.
+    expect(await core.worktreeReads.readStatus("no-such-ticket")).toEqual({
+      kind: "missing-ticket",
+    });
+    const other = live(compose({ log: { error: vi.fn() } }, headlessOptions(dataDir())));
+    expect(other.worktreeReads).not.toBe(core.worktreeReads);
   });
 
   it("narrows the host itself with isLiveHost", () => {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 const sync = vi.hoisted(() => ({
-  workspaceOf: vi.fn((_id: string): string | undefined => undefined),
+  projectOf: vi.fn((_id: string): string | undefined => undefined),
 }));
 vi.mock("@renderer/lib/board-protocol", () => ({
   boardProtocol: () => ({ sync }),
@@ -23,7 +23,7 @@ afterEach(() => {
   undo?.();
   undo = null;
   toast.mockClear();
-  sync.workspaceOf.mockReset();
+  sync.projectOf.mockReset();
 });
 
 describe("a remote project, read outside React (VC-711)", () => {
@@ -43,7 +43,7 @@ describe("a remote project, read outside React (VC-711)", () => {
 
   it("finds a ticket's project by the board that holds it", () => {
     undo = remoteProject("r1");
-    sync.workspaceOf.mockImplementation((id) => (id === "rt" ? "r1" : undefined));
+    sync.projectOf.mockImplementation((id) => (id === "rt" ? "r1" : undefined));
     expect(remoteHostOfTicketNow("rt")?.name).toBe("box");
     expect(remoteHostOfTicketNow("local-ticket")).toBeNull();
     expect(remoteHostOfTicketNow(null)).toBeNull();
@@ -52,7 +52,7 @@ describe("a remote project, read outside React (VC-711)", () => {
 
   it("refuses a person's local-only action on one, once, in the host's name", () => {
     undo = remoteProject("r1");
-    sync.workspaceOf.mockImplementation((id) => (id === "rt" ? "r1" : undefined));
+    sync.projectOf.mockImplementation((id) => (id === "rt" ? "r1" : undefined));
     expect(refuseRemote("r1")).toBe(true);
     expect(refuseRemoteTicket("rt")).toBe(true);
     expect(refuseRemote("p1")).toBe(false);

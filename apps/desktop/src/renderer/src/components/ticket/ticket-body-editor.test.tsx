@@ -3,7 +3,7 @@
  * VC-385 — an unsaved description edit belongs to the ticket that wrote it.
  *
  * This is the guarantee `home-surface.tsx` buys today by keying the whole
- * ticket workspace on `ticket.id`: a switch destroys the editor, and the
+ * Ticket view on `ticket.id`: a switch destroys the editor, and the
  * destruction flushes the pending autosave from a closure that still names the
  * old ticket. It works, and it costs a full rebuild of the workspace on every
  * switch — which is the cost VC-385 exists to cut.

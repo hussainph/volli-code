@@ -34,12 +34,12 @@
 import type Database from "better-sqlite3";
 import {
   AGENT_MODEL_TIERS,
-  autoTitleFromKickoff,
-  DEFAULT_KICKOFF_MESSAGE,
   displayTicketId,
   isAgentModelTier,
+  isHandlerRefused,
   REASONING_LEVELS,
   shortSessionId,
+  VERB_TOOL_KEYS,
   VERB_TOOLS,
 } from "@volli/shared";
 import type {
@@ -59,6 +59,20 @@ import type {
 } from "@volli/shared";
 
 import { ticketForDisplayId } from "./agent-dispatch/resolution";
+import {
+  ADMITTED,
+  invokeHandler,
+  isHostHandlerMap,
+  refused,
+  serveHostHandlers,
+  type HandlerPolicy,
+  type HostHandlerMap,
+} from "./handlers/handler-map";
+import {
+  SessionRuntimeUnavailableError,
+  type HostHandlers,
+  type ToolServedKey,
+} from "./handlers/host-handlers";
 import {
   retiredSessionAwaitTool,
   retiredTicketAwaitTool,
@@ -89,14 +103,14 @@ import type { McpSettingsService } from "./mcp/settings";
 import type { McpVerbOptions } from "./mcp/verbs";
 import { optionalVerbText as optionalText, requiredVerbText as requiredText } from "./verb-input";
 import { sessionCreateCommandId } from "./session-runtime/sessions";
-import { startSessionModelOverride, startSessionOperation } from "./session-runtime/start-session";
-import type { StartSessionModelChoice, StartSessionPorts } from "./session-runtime/start-session";
+import { startSessionModelOverride } from "./session-runtime/start-session";
+import type { StartSessionModelChoice } from "./session-runtime/start-session";
 import {
   sendSessionMessageOperation,
   stopSessionOperation,
   SuperviseSessionError,
 } from "./session-runtime/supervise-session";
-import type { SuperviseSessionPorts } from "./session-runtime/supervise-session";
+import type { SendSessionPorts } from "./session-runtime/supervise-session";
 
 /**
  * The Automation half of this door (VC-134): what a project lists, and the one
@@ -126,19 +140,23 @@ export interface AutomationToolPort {
 /**
  * What the door reaches, resolved per call rather than captured.
  *
- * `projects` and `sessions` are functions because both change after this is
- * built: a project can be added while a Session runs, and the facade is
- * composed later in main's own startup order. Capturing either would freeze an
- * answer that is only true at boot.
+ * `projects` and the hosts below are functions because they change after this
+ * is built: a project can be added while a Session runs, and the runtime's
+ * collaborators are composed later in main's own startup order. Capturing
+ * them would freeze an answer that is only true at boot.
  */
-export interface AgentToolDoorOptions extends Omit<
-  StartSessionPorts,
-  "db" | "projects" | "sessions" | "actorTicketDisplay"
-> {
+export interface AgentToolDoorOptions {
   db: Database.Database;
   projects: () => readonly Project[];
-  sessions: () => StartSessionPorts["sessions"] | null;
-  actorTicketDisplay: StartSessionPorts["actorTicketDisplay"];
+  /**
+   * The host's handler map (VC-923), which this door projects: every tool
+   * verb is a key on it. This door serves its own verbs' entries into the
+   * map on construction; `session.start`, which the
+   * person's operator CLI shares, is the map's own start command, with the
+   * facade, the kickoff, the auto-title, the mutation and the start notice.
+   */
+  handlers: HostHandlerMap;
+  now: () => number;
   /** Durable own-ticket claims for Ticket Role's birth grants (VC-183). */
   delegation: TicketSessionDelegationClaims;
   /**
@@ -149,7 +167,7 @@ export interface AgentToolDoorOptions extends Omit<
   /** The caller's project policy, read per call: budgets, and what a watch may be woken by. */
   authorityPolicy: (projectId: string) => AuthorityPolicy;
   /**
-   * The watch registry (VC-457), resolved per call like the Sessions facade:
+   * The watch registry (VC-457), resolved per call like the other hosts here:
    * what `watch`, the retired awaits, and the watches `session_start`,
    * `automation_run` and `session_send` arm for their caller all write to.
    * `null` reads as "no structured runtime this launch".
@@ -157,10 +175,10 @@ export interface AgentToolDoorOptions extends Omit<
   watches: () => Watches | null;
   /**
    * The supervision operations' ports (VC-86), resolved per call like the
-   * Sessions facade: the runtime is composed after this door is. `null` reads
+   * other hosts here: the runtime is composed after this door is. `null` reads
    * as "no structured runtime this launch" and each tool refuses in words.
    */
-  supervise: () => SuperviseSessionPorts | null;
+  supervise: () => SendSessionPorts | null;
   /**
    * The delegation host (VC-9), resolved per call on the same terms: it holds
    * the process's live subagent registry and is composed after this door.
@@ -347,6 +365,7 @@ async function delegationLimitOutcome(
 
 async function startSessionTool(
   options: AgentToolDoorOptions,
+  policy: HandlerPolicy,
   session: RuntimeSessionIdentity,
   request: RuntimeVerbCall,
   // Starting a Session is not withdrawable mid-flight: by the time an abort
@@ -357,10 +376,6 @@ async function startSessionTool(
   signal: AbortSignal,
   budgetAsk?: VerbBudgetAsk,
 ): Promise<RuntimeVerbResult> {
-  const sessions = options.sessions();
-  if (sessions === null) {
-    return refusal("Volli's Session runtime is not available this launch, so nothing was started.");
-  }
   const ticketArg = request.input.ticket;
   if (typeof ticketArg !== "string" || ticketArg.trim().length === 0) {
     return refusal("`ticket` must be a Ticket display id, for example VC-12.");
@@ -450,22 +465,16 @@ async function startSessionTool(
   }
 
   try {
-    const started = await startSessionOperation(
-      {
-        db: options.db,
-        projects: options.projects(),
-        sessions,
-        submitSessionMessage: options.submitSessionMessage,
-        refineAutoTitle: options.refineAutoTitle,
-        onMutation: options.onMutation,
-        onSessionStarted: options.onSessionStarted,
-        actorTicketDisplay: options.actorTicketDisplay,
-        now: options.now,
-      },
+    // The map's start (VC-923), the same command the person's operator CLI
+    // reaches: this door's part was the bound, the Ticket and the claim.
+    const started = await invokeHandler(
+      options.handlers,
+      policy,
+      "session.start",
       {
         operationId,
-        project: resolved.project,
-        ticket: resolved.ticket,
+        projectId: resolved.project.id,
+        ticketId: resolved.ticket.id,
         ...(message.value === undefined ? {} : { message: message.value }),
         ...(title.value === undefined ? {} : { title: title.value }),
         ...(() => {
@@ -473,9 +482,8 @@ async function startSessionTool(
           return built === undefined ? {} : { modelOverride: built };
         })(),
         ...(delegation === undefined ? {} : { delegation }),
-        actor: callerActor(session),
       },
-      { defaultKickoff: DEFAULT_KICKOFF_MESSAGE, autoTitle: autoTitleFromKickoff },
+      { actor: callerActor(session) },
     );
     // The short public handle, exactly as the socket answers with: a full UUID
     // is not a thing any other Volli surface accepts back, so handing one to a
@@ -526,10 +534,17 @@ async function startSessionTool(
     // stored, so this call does not restate how a create id is spelled.
     if (delegation !== undefined) options.delegation.releaseIfUnstarted(claimRef);
     // A refusal the facade named is still an answer about the request, so the
-    // model gets its words. Anything else is a host that could not carry out
-    // the start at all, and that fails the call.
+    // model gets its words; so is a host whose Session runtime did not come up
+    // this launch. Anything else is a host that could not carry out the start
+    // at all, and that fails the call.
     if (error instanceof StructuredSessionsError) {
       return refusal(`Volli refused to start the Session: ${error.message}`);
+    }
+    if (isHandlerRefused(error)) return refusal(error.message);
+    if (error instanceof SessionRuntimeUnavailableError) {
+      return refusal(
+        "Volli's Session runtime is not available this launch, so nothing was started.",
+      );
     }
     throw error;
   }
@@ -618,6 +633,9 @@ async function sendSessionTool(
   const message = requiredText(request.input, "message", "the steering text to deliver.");
   if (!message.ok) return refusal(message.text);
   const operationId = `${session.sessionId}:${request.toolCallId}`;
+  // Snapshot before delivery: a child that answers during the send already
+  // owes its parent a delegation report, not a second turn-watch notice.
+  const delegatedChildren = options.delegate()?.liveChildren(session.sessionId) ?? [];
   const withdrawn = sendWithdrawal(signal);
   try {
     const outcome = await Promise.race([
@@ -645,12 +663,14 @@ async function sendSessionTool(
             : outcome.midTurn === false
               ? "The adapter took it as a new prompt, but did not confirm that a turn opened."
               : "The adapter accepted it but did not report whether it opened or joined a turn.",
-        await watchOpenedSession(
-          watchPorts(options),
-          session,
-          { sessionId: outcome.sessionId, title: outcome.title },
-          "steered",
-        ),
+        delegatedChildren.includes(outcome.sessionId)
+          ? "Its delegation answer reports back; no separate watch was armed."
+          : await watchOpenedSession(
+              watchPorts(options),
+              session,
+              { sessionId: outcome.sessionId, title: outcome.title },
+              "steered",
+            ),
       ].join(" "),
     };
   } catch (error) {
@@ -919,16 +939,20 @@ async function delegateSessionTool(
 }
 
 /**
- * The verb-to-handler binding for this door, total over what a bundle can hold.
+ * The handler behind each of this door's own verbs, total over what a bundle
+ * can hold bar the start (the map's own command, which {@link startSessionTool}
+ * projects).
  *
- * A `Record` over {@link VerbToolKey} rather than a switch with a default, so
- * the day a second verb takes a `tool` access mode this file stops compiling
- * until it has a handler. That is the same discipline `AGENT_VERB_TABLE` holds
- * for the socket, and the reason is the same: a declared verb with no binding
- * is a tool a Session is handed and then cannot call.
+ * A `Record` over the tool door's served keys rather than a switch with a
+ * default, so the day a verb takes a `tool` access mode this file stops
+ * compiling until it has a handler. That is the same discipline the socket's
+ * verbs hold, and the reason is the same: a declared verb with no binding is
+ * a tool a Session is handed and then cannot call. Since VC-923 these are the
+ * map's entries for their keys ({@link toolVerbEntries}), which the door
+ * reaches through the map like every other door.
  */
 type VerbToolHandlers = Record<
-  VerbToolKey,
+  ToolServedKey,
   (
     options: AgentToolDoorOptions,
     session: RuntimeSessionIdentity,
@@ -941,7 +965,6 @@ type VerbToolHandlers = Record<
 // Declaration order follows the registry's, so the table reads as the tool
 // array does.
 const VERB_TOOL_HANDLERS: VerbToolHandlers = {
-  "session.start": startSessionTool,
   "session.stop": stopSessionTool,
   "session.send": sendSessionTool,
   // Retired (VC-457): bound only for Sessions frozen holding it, and it arms
@@ -980,6 +1003,47 @@ const VERB_TOOL_HANDLERS: VerbToolHandlers = {
   watch: (options, session, request) => watchTool(watchPorts(options), session, request),
 };
 
+/**
+ * What a tool verb's map entry is asked (VC-923): the caller the attachment
+ * bound, the call as the model made it, and that attachment's capabilities
+ * for this one call — the turn's withdrawal, and its parked-question binding
+ * when it has one. Nothing in it names an actor the caller chose.
+ */
+export interface ToolVerbInput {
+  readonly session: RuntimeSessionIdentity;
+  readonly request: RuntimeVerbCall;
+  readonly signal: AbortSignal;
+  readonly budgetAsk?: VerbBudgetAsk | undefined;
+}
+
+/** The map's entries for this door's own verbs, over its options: what the door serves. */
+function toolVerbEntries(options: AgentToolDoorOptions): Pick<HostHandlers, ToolServedKey> {
+  const entries: Partial<Record<ToolServedKey, HostHandlers[ToolServedKey]>> = {};
+  for (const key of Object.keys(VERB_TOOL_HANDLERS) as ToolServedKey[]) {
+    const handle = VERB_TOOL_HANDLERS[key];
+    entries[key] = (input) =>
+      handle(options, input.session, input.request, input.signal, input.budgetAsk);
+  }
+  return entries as Pick<HostHandlers, ToolServedKey>;
+}
+
+/**
+ * This door's policy at the map, for one call: only the key the call's own
+ * verb names, and only for a bound Session. What a Session may call at all is
+ * its frozen tool surface's answer, decided before a call reaches this door.
+ */
+function toolDoorPolicy(verb: VerbToolKey): HandlerPolicy {
+  return {
+    door: "agent-tool",
+    admit(key, _input, call) {
+      if (key !== verb) return refused(`${verb} does not reach ${key}.`);
+      return call.actor.kind === "session"
+        ? ADMITTED
+        : refused(`${verb} is open only to the Session an attachment bound.`);
+    },
+  };
+}
+
 /** The watch doors' slice of this door's options, narrowed at the binding. */
 function watchPorts(options: AgentToolDoorOptions): WatchToolPorts {
   return {
@@ -1012,16 +1076,46 @@ export type AgentToolDoor = (
   budgetAsk?: VerbBudgetAsk,
 ) => Promise<RuntimeVerbResult>;
 
-/** Build the one closure the Pi adapter hands every attachment that holds a verb. */
+/** Every verb a bundle can hold: what this door can be asked at all. */
+const TOOL_VERBS: ReadonlySet<string> = new Set(VERB_TOOL_KEYS);
+
+/**
+ * Build the one closure the Pi adapter hands every attachment that holds a
+ * verb, and serve this door's own verbs into the map it projects (VC-923).
+ * Every call reaches `handlers[verb]` through the map, under
+ * {@link toolDoorPolicy}.
+ */
 export function createAgentToolDoor(options: AgentToolDoorOptions): AgentToolDoor {
+  if (!isHostHandlerMap(options.handlers)) {
+    throw new Error("The host's handler map is required.");
+  }
+  serveHostHandlers(options.handlers, toolVerbEntries(options));
   return async (session, request, signal, budgetAsk) => {
-    const handler = VERB_TOOL_HANDLERS[request.verb];
-    if (handler === undefined) {
+    if (!TOOL_VERBS.has(request.verb)) {
       // Unreachable through a resolved surface, and refused rather than
-      // asserted: a tool array is built from the same registry this table is
+      // asserted: a tool array is built from the same registry the map is
       // total over, so arriving here means the two disagreed.
       return refusal(`${request.verb} is not a verb this build can run.`);
     }
-    return handler(options, session, request, signal, budgetAsk);
+    const policy = toolDoorPolicy(request.verb);
+    if (request.verb === "session.start") {
+      return startSessionTool(options, policy, session, request, signal, budgetAsk);
+    }
+    const input: ToolVerbInput = {
+      session,
+      request,
+      signal,
+      ...(budgetAsk === undefined ? {} : { budgetAsk }),
+    };
+    try {
+      return await invokeHandler(options.handlers, policy, request.verb, input, {
+        actor: callerActor(session),
+      });
+    } catch (error) {
+      // The policy's refusal is an answer the model reads; a verb's own throw
+      // is the failed call it always was.
+      if (isHandlerRefused(error)) return refusal(error.message);
+      throw error;
+    }
   };
 }

@@ -3,21 +3,13 @@
  * through (the ticket tab strip, the ticket Sessions rail), the way
  * `renameTerminalSession` is that path for a terminal one.
  *
- * The two optimistic writes below are not a latency nicety, which is the whole
- * reason this is a shared function rather than an inline call: `volli:session-
- * rename` submits `session.retitle` straight to the engine, bypassing the
- * runtime's publish, so no live chat subscriber is told the title changed at the
- * moment it changes. The ledger fold self-heals on the next projection read — an
- * unrelated refresh away — and until then these writes are the only thing moving
- * the labels.
- *
- * The bypass is no longer free elsewhere, and this is the comment that used to
- * undersell it: those three unpublished events are a hole in every live
- * subscriber's stream, and `SessionRuntime` now has to re-read the ledger to
- * deliver past one (`#closeStreamGap`). Before it did, the hole was permanent —
- * a chat titling itself mid-turn swallowed its own `turn.completed` and sat
- * "working" forever. Publishing from here would be the better fix; until then,
- * nothing about this path may assume a subscriber saw it.
+ * `volli:session-rename` submits `session.retitle` straight to the engine.
+ * The durable `session.retitled` it commits reaches every open chat stream and
+ * the listing fold through the host's post-commit wake bus (VC-790) — and so
+ * does a retitle main makes on its own (VC-81's auto-title) or the CLI makes —
+ * so nothing here has to tell anyone else. The writes below are this
+ * window's own action showing at once, ahead of that round trip, and put back
+ * if the store refuses it.
  */
 import { errorMessage } from "@volli/shared";
 
@@ -32,10 +24,10 @@ import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-re
  * blank title. Resolves `true` when the write stuck, `false` on a no-op or a
  * failure (which also toasts — CLAUDE.md: never silently swallow a mutation).
  *
- * A failure puts the old title back. That is not symmetry for its own sake: the
- * optimistic writes above are the ONLY thing moving these labels, so a rename
- * the durable store refused would otherwise leave every chat surface asserting
- * a title the ledger does not have, with nothing on the way to correct it.
+ * A failure puts the old title back. That is not symmetry for its own sake: a
+ * rename the durable store refused commits nothing, so no stream frame or
+ * listing row is on the way to correct the optimistic label, and every chat
+ * surface would go on asserting a title the ledger does not have.
  *
  * `refineFrom` is the automatic path's rider (VC-81): the first user message,
  * passed ONLY by the heuristic auto-title so main can derive a sharper title
@@ -111,24 +103,6 @@ function titlesOf(sessionId: string): ChatTitleSites {
     }
   }
   return { slice, rows };
-}
-
-/**
- * Applies a retitle main performed on its own (VC-81 auto-titling) to every
- * label this process is holding.
- *
- * No optimistic write and no rollback, because this is not this window's
- * mutation: the durable write already succeeded before the push was sent, so
- * there is nothing to be optimistic about and nothing to put back. It exists
- * because the write happened somewhere with no renderer behind it — the CLI
- * door has no window at all — and `session.retitle` bypasses the runtime
- * publish (see this file's header), so no live subscriber would otherwise
- * learn the title changed until an unrelated refresh.
- */
-export function applyRemoteChatTitle(sessionId: string, title: string): void {
-  const trimmed = title.trim();
-  if (trimmed.length === 0) return;
-  writeTitle(sessionId, trimmed, titlesOf(sessionId));
 }
 
 /** Writes `title` to every site {@link titlesOf} found. */

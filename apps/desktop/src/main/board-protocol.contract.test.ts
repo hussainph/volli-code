@@ -25,7 +25,7 @@ import type { IpcEvent, IpcPeer, IpcResponse } from "@volli/host-protocol/ipc";
 import { servedIpcContractLink } from "@volli/host-protocol/testing";
 import { createHostLink, hostLinkTrpcLink, type HostLink } from "@volli/host-protocol/client-link";
 import {
-  boardResourceWorkspace,
+  boardResourceProject,
   createBoardChangeFeed,
   setTicketPriorityCommand,
   type BoardChangeFeed,
@@ -47,7 +47,7 @@ import {
   type HostHandlerMap,
 } from "@volli/host-core/handlers";
 import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/testing";
-import { runGitCapturingAsync } from "@volli/host-core/worktree";
+import { createWorktreeReadService, runGitCapturingAsync } from "@volli/host-core/worktree";
 import { createHostRouter, RpcDiagnosticLog, type DesktopIpcRouter } from "@volli/session-rpc";
 import { startHostProtocolListener } from "@volli/session-rpc/websocket";
 import {
@@ -128,7 +128,7 @@ function openHost(): Host {
   );
   const feed = createBoardChangeFeed({
     projectOfTicket: (ticketId) => getTicketRow(ctx.db, ticketId)?.project_id,
-    workspaces: () => [PROJECT],
+    projects: () => [PROJECT],
   });
   let clock = 10_000;
   const now = () => (clock += 1);
@@ -151,6 +151,7 @@ function openHost(): Host {
       kind: "live",
       execution: { kind: "unavailable", pendingArmedRuns: { noteDeliberateMove: () => {} } },
     } as unknown as Parameters<typeof createHostHandlers>[1]["automations"],
+    worktreeReads: createWorktreeReadService({ deps: () => ({ db: ctx.db }) }),
     busyWorktreeSites: async () => [],
     boardFeed: feed,
     now,
@@ -257,7 +258,7 @@ const webSocket: Door = {
       context: () => ({
         handlers,
         diagnostics,
-        resourceWorkspace: boardResourceWorkspace(host.ctx.db),
+        resourceWorkspace: boardResourceProject(host.ctx.db),
       }),
     });
     const link = createHostLink({

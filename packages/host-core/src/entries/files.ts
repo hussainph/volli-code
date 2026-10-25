@@ -13,7 +13,7 @@ export { blobProtocolResponse } from "../blob-protocol";
 export { blobsRoot, removeBlob } from "../blob-store";
 export { searchFiles } from "../file-search";
 export { createHostFileServices, type HostFileServices } from "../file-services";
-export { loadPromptTemplates, writePromptTemplate } from "../prompt-templates";
+export { globalCommandsRoot, loadPromptTemplates, writePromptTemplate } from "../prompt-templates";
 export { loadSkills } from "../skills";
 export {
   buildFileIndex,

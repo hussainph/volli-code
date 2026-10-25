@@ -57,17 +57,20 @@ export interface SessionScope {
    * everything `create` needs to (a) materialize the worktree via `ensure`
    * before spawn, and (b) compose the launch command afterwards — the raw
    * `kickoff` (harness + prompt, prefixed with the orientation preamble), the
-   * project's `setupCommand` (sentinel-gated after a FRESH create), and the
+   * project's `setupCommand` (sentinel-gated while the worktree still owes
+   * its setup run, `worktree/first-run.ts`), and the
    * main `projectPath` for the preamble. `launchCommand` is `null` in this case.
    *
    * `resumeCommand` is the pre-built harness resume line for a RESUME launch
    * (issue #78): it needs no worktree identity (a resume carries no orientation
    * preamble), so it is composed up front in {@link resolveScope} and
-   * simply written after `ensure` — through the same setup-sentinel gate when a
-   * fresh worktree runs a setup command. Mutually exclusive with `kickoff`.
+   * simply written after `ensure` — through the same setup-sentinel gate when
+   * this terminal claims a pending setup run. Mutually exclusive with `kickoff`.
    */
   worktree: {
     ticketId: string;
+    /** The ticket's display id (`VC-12`), which a recipe script is told (VC-584). */
+    displayId: string;
     projectPath: string;
     setupCommand: string | null;
     kickoff: { harnessId: HarnessId; prompt: string } | null;
@@ -186,6 +189,7 @@ export async function resolveScope(
           worktree: usesWorktree
             ? {
                 ticketId: request.ticket.ticketId,
+                displayId,
                 projectPath: ctx.projectPath,
                 setupCommand: ctx.setupCommand,
                 kickoff: null,
@@ -255,6 +259,7 @@ export async function resolveScope(
         worktree: usesWorktree
           ? {
               ticketId: request.ticket.ticketId,
+              displayId,
               projectPath: ctx.projectPath,
               setupCommand: ctx.setupCommand,
               kickoff: kickoff ?? null,

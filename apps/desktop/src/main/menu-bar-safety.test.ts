@@ -14,8 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { UIMessage } from "ai";
 import type { RuntimeObservation } from "@volli/shared";
 import {
-  createInMemorySessionFollowUpLedger,
-  createInMemoryTranscriptArtifactStore,
+  createSessionExecutorSlot,
   createSessionRuntime,
   SessionRuntimeExitingError,
   type BindingHandle,
@@ -28,12 +27,16 @@ import { insertProject } from "../../../../packages/host-core/src/db/projects-re
 import { openTestDb, testProject } from "../../../../packages/host-core/src/db/test-helpers";
 import {
   createHostSessionServices,
-  wireSessionRuntime,
+  SESSION_RUNTIME,
 } from "../../../../packages/host-core/src/session-services";
 import { prepareDesktopQuit } from "./host-runtime";
 import { createMenuBarHost, trayModel, type MenuBarHostPorts } from "./menu-bar-host";
 import { refuseQuit, registerAcceptedQuitCoordinator } from "./quit-gate";
 import { readUpdateLiveWork } from "./update-ipc";
+import {
+  createInMemorySessionFollowUpLedger,
+  createInMemoryTranscriptArtifactStore,
+} from "@volli/session-engine/testing";
 
 const resources: Array<() => void> = [];
 afterEach(() => {
@@ -140,7 +143,7 @@ async function hostWithRuntime() {
     engine: host.sessionEngine,
     artifacts: createInMemoryTranscriptArtifactStore(),
     followUps: createInMemorySessionFollowUpLedger(),
-    executor,
+    executors: createSessionExecutorSlot(executor),
     clock: { now: () => 1_000 + ++sequence },
     ids: { next: (kind) => `${kind}-${++sequence}` },
     locations: {
@@ -153,7 +156,7 @@ async function hostWithRuntime() {
     },
   });
   resources.push(() => void runtime.close());
-  wireSessionRuntime(host.sessionEngine, {
+  host[SESSION_RUNTIME].claim()({
     openNativeBindings: () => runtime.openNativeBindings(),
     pendingTurnStarts: () => runtime.pendingTurnStarts(),
     holdTurnStarts: () => runtime.holdTurnStarts(),
@@ -213,7 +216,7 @@ describe("VC-577 menu-bar safety, through the real host", () => {
       provenance,
     });
     const sessionId = born.session.id;
-    wireSessionRuntime(engine, {
+    composed[SESSION_RUNTIME].claim()({
       openNativeBindings: () => [{ sessionId, attachmentId: "binding" }],
     });
     await engine.observe({

@@ -75,5 +75,29 @@ It installs the on state for each serial test and restores the prior reader
 on teardown, without editing the environment or database. Keep the existing
 flag-off suite alongside it; do not use concurrent tests with this global fixture.
 
+## What `cloud` changes today
+
+- **Skills and Commands precedence.** A personal Skill (`~/.agents/skills`) or
+  Command (`<userData>/commands`) wins a name the project's
+  `.agents/skills` or `.volli/commands` also defines — Volli Cloud's
+  personal > project > workspace order. Flag off, the project's copy wins, as
+  before. Every configuration surface declares its levels, merge and order in
+  one resolver, `packages/shared/src/config-resolution.ts`; these two are the
+  only surfaces whose order the flag moves so far. The flag is read at each load, so
+  a change applies to the next picker read or Session start.
+- **Environment recipe.** A new worktree's setup runs its own `.agents/setup`
+  when the checkout has one, with the project's **Then run** command as the
+  fallback (never both). It runs with nothing on stdin, under `VOLLI=1`,
+  `VOLLI_RUNNER_KIND` (`mac` or `linux`), `VOLLI_PROJECT`, `VOLLI_TICKET`,
+  `VOLLI_WORKING_COPY` and `VOLLI_SETUP_REASON`. Each run is recorded beside
+  the worktree's first-run markers in `~/.volli/worktree-first-run`. A setup
+  that fails blocks every later chat start of that ticket until you choose
+  **Retry setup**, **Start anyway** or **Fix with an agent** (a new ticket that
+  carries the failure). A terminal runs the same setup in its shell and records
+  it, but is not blocked. `.agents/resume` runs before the first chat start
+  after Volli starts or the Mac wakes; the start waits up to 10 seconds, then
+  lets it finish in the background. Flag off, **Then run** runs exactly as
+  before. Code: `packages/host-core/src/worktree/recipe.ts`.
+
 Settings → Experimental exposes the registry-backed flags. With `cloud` off,
 no cloud service or cloud-only UI is enabled.

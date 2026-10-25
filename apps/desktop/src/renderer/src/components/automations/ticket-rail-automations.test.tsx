@@ -22,7 +22,7 @@ import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider } from "@renderer/lib/model-access-client";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 vi.mock("./run-automation", () => ({
   runAutomationOnTicket: vi.fn(() => Promise.resolve("started")),
@@ -292,7 +292,7 @@ beforeEach(() => {
   vi.mocked(runAutomationOnTicket).mockReset();
   vi.mocked(runAutomationOnTicket).mockResolvedValue("started");
   useProjectsStore.setState({ projects: [PROJECT], selectedProjectId: "p1" });
-  useWorkspaceStore.setState({ byProject: {} });
+  useProjectUiStore.setState({ byProject: {} });
   useAutomationsStore.setState({
     byProject: {},
     armingByProject: {},
@@ -506,7 +506,7 @@ describe("the offer list", () => {
     await act(async () => {
       door.click();
     });
-    expect(useWorkspaceStore.getState().byProject.p1?.nav).toBe("automations");
+    expect(useProjectUiStore.getState().byProject.p1?.nav).toBe("automations");
   });
 
   it("keeps that door when the project HAS automations to arrange", async () => {
@@ -993,7 +993,7 @@ describe("the pending gate and the failure that earns a retry", () => {
     // popover reopened under them, and the workspace did not navigate.
     expect(document.activeElement).toBe(elsewhere);
     expect(inspection()).toBeNull();
-    expect(useWorkspaceStore.getState().byProject.p1?.nav).toBeUndefined();
+    expect(useProjectUiStore.getState().byProject.p1?.nav).toBeUndefined();
     // The row still tells the truth about the launch it started.
     expect(row("Review sweep").dataset.launch).toBe("idle");
     elsewhere.remove();

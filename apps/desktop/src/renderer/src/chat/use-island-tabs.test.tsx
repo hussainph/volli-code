@@ -20,7 +20,7 @@ import type { BrowserTraceRequest } from "@renderer/components/browser/browser-t
 import { BROWSER_NEW_TAB_TITLE, useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { showBrowserTab } from "@renderer/components/browser/show-browser-tab";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 import {
   EMPTY_PROJECT_SESSION_ROWS,
   useProjectSessionsStore,
@@ -346,7 +346,7 @@ describe("verbs", () => {
   it("opens a legacy preview from the Island beside its owner without losing its identity", async () => {
     const legacy = tab({ tabId: "legacy", presentation: "preview" });
     registry([legacy]);
-    useWorkspaceStore.setState({ byProject: {} });
+    useProjectUiStore.setState({ byProject: {} });
     // Session attachment is outside this path; the layout and registry are real.
     const adopt = vi
       .spyOn(useChatSessionsStore.getState(), "adoptChatSession")
@@ -374,13 +374,13 @@ describe("verbs", () => {
       expect(probe.latest().feed.model.tabs).toMatchObject([
         { id: "legacy", promoted: true, surface: "tab" },
       ]);
-      expect(useWorkspaceStore.getState().byProject[PROJECT]?.homeSplitView?.pairs).toMatchObject([
+      expect(useProjectUiStore.getState().byProject[PROJECT]?.homeSplitView?.pairs).toMatchObject([
         { first: { activeTabId: `chat:${SESSION}` }, second: { activeTabId: "browser:legacy" } },
       ]);
-      expect(useWorkspaceStore.getState().byProject[PROJECT]?.homeActiveTab).toBe("browser:legacy");
+      expect(useProjectUiStore.getState().byProject[PROJECT]?.homeActiveTab).toBe("browser:legacy");
     } finally {
       adopt.mockRestore();
-      useWorkspaceStore.setState({ byProject: {} });
+      useProjectUiStore.setState({ byProject: {} });
     }
   });
 

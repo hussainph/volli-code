@@ -22,9 +22,10 @@
  * does not keep a host resident (VC-577 ruling; a later setting may).
  *
  * ── WHERE IT LISTENS ──────────────────────────────────────────────────────
- * Turn facts through the activity watch's `observeEvent` port — the one choke
- * point every durable Session write in this process passes through, called
- * synchronously as each write resolves rather than on the coalesced fold. The
+ * Turn facts through the activity watch's `observeEvent` port, which hands on
+ * every event the post-commit wake bus announces — synchronously, after each
+ * write's transaction and before its caller continues, rather than on the
+ * coalesced fold. Kinds that neither open nor close a turn are ignored. The
  * fold (`observeSession`) only seeds a Session this process has not yet seen
  * a turn fact for, so a slow fold can never overwrite a newer write.
  *
@@ -102,7 +103,7 @@ export interface HostLiveWorkPorts {
 }
 
 export interface HostLiveWorkWatch {
-  /** One committed fact, from the activity watch, as its write resolves. Synchronous and total. */
+  /** One committed fact of any kind, from the activity watch, as its write commits. Synchronous and total. */
   observeEvent(event: Pick<SessionEvent, "sessionId" | "sequence" | "payload">): void;
   /**
    * One folded Session, from the activity watch. Only seeds a Session no

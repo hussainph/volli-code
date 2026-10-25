@@ -59,6 +59,7 @@ const TEST_SUPPORT = [
   "secrets/test-support/**",
   "web/test-support/**",
   "browser/test-support/**",
+  "migration-export/test-support/**",
 ];
 /** Built once, by `createHostCore`; a second one is a second Session writer. */
 const SESSION_WRITER_CONSTRUCTORS = new Set([
@@ -121,8 +122,9 @@ function withFixtureTree(
 
 // --- Names only the handler map may use (VC-668) ---------------------------
 //
-// The move primitive and the map's seal: a production file that imports either
-// could invoke a command without a door's policy. The module edges name the
+// The move primitive, the map's seal and its serve (VC-923): a production
+// file that imports one could invoke a command without a door's policy, or
+// re-point a door at an implementation of its own. The module edges name the
 // importers of each module; the name itself must appear in the importer for it
 // to count, so `entries/board.ts` re-exporting the trim from the same module is
 // not an offender.
@@ -130,11 +132,16 @@ function withFixtureTree(
 /** Module (extension-free, under src/) → the names in it only the map may use. */
 const MAP_ONLY_MODULES: Readonly<Record<string, readonly string[]>> = {
   "ticket-move": ["executeTicketMove"],
-  "handlers/handler-map": ["sealHostHandlers"],
+  "handlers/handler-map": ["sealHostHandlers", "serveHostHandlers"],
 };
 const MAP_ONLY = new Set(Object.values(MAP_ONLY_MODULES).flat());
-/** Where they belong: the handler map's own constructor. */
+/**
+ * Where they belong: the handler map's own constructor, and the two agent
+ * doors, which serve their own verbs into the map they are handed.
+ */
 const MAP_ONLY_HOME = [
+  "agent-commands.ts: serveHostHandlers",
+  "agent-tool-door.ts: serveHostHandlers",
   "handlers/host-handlers.ts: executeTicketMove",
   "handlers/host-handlers.ts: sealHostHandlers",
 ];
@@ -496,7 +503,7 @@ describe("host-core's package interface", () => {
     expect(productionExportsMatching(PACKAGE, (name) => MAP_ONLY.has(name))).toEqual([]);
   });
 
-  it("lets only the handler map import the move primitive or seal a map", () => {
+  it("lets only the handler map import the move primitive or seal a map, and only the agent doors serve one", () => {
     expect(mapOnlyImporters(SRC)).toEqual(MAP_ONLY_HOME);
   });
 
@@ -504,15 +511,19 @@ describe("host-core's package interface", () => {
     withFixtureTree(
       "host-core-map-only-",
       {
+        "agent-commands.ts": 'import { serveHostHandlers } from "./handlers/handler-map";',
+        "agent-tool-door.ts": 'import { serveHostHandlers } from "./handlers/handler-map";',
         "handlers/host-handlers.ts":
           'import { executeTicketMove } from "../ticket-move";\nimport { sealHostHandlers } from "./handler-map";',
         "ticket-move.ts": "export function executeTicketMove() {}",
-        "handlers/handler-map.ts": "export function sealHostHandlers() {}",
+        "handlers/handler-map.ts":
+          "export function sealHostHandlers() {}\nexport function serveHostHandlers() {}",
         "entries/board.ts": 'export { trimFinishedTicketInBackground } from "../ticket-move";',
         "rogue/aliased.ts": 'import { executeTicketMove as move } from "../ticket-move.ts";',
         "rogue/dynamic.ts":
           'export const m = () => import("../ticket-move").then((x) => x.executeTicketMove);',
         "rogue/seal.ts": "import { sealHostHandlers } from '../handlers/handler-map';",
+        "rogue/serve.ts": 'import { serveHostHandlers } from "../handlers/handler-map";',
         "rogue/allowed.test.ts": 'import { executeTicketMove } from "../ticket-move";',
         "testing/support.ts": 'import { sealHostHandlers } from "../handlers/handler-map";',
       },
@@ -522,6 +533,7 @@ describe("host-core's package interface", () => {
           "rogue/aliased.ts: executeTicketMove",
           "rogue/dynamic.ts: executeTicketMove",
           "rogue/seal.ts: sealHostHandlers",
+          "rogue/serve.ts: serveHostHandlers",
         ]);
       },
     );
@@ -532,7 +544,6 @@ describe("host-core's package interface", () => {
     const testing = surfaceOf(join(SRC, "testing/index.ts"));
     for (const reset of [
       "resetDeletionLeasesForTest",
-      "resetWorktreeSnapshotsForTest",
       "resetOrphanScanForTest",
       "resetRetentionWatcherForTest",
     ])

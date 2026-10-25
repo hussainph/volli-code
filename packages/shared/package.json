@@ -12,6 +12,10 @@
     "./native-observation-id": {
       "types": "./src/native-observation-id.ts",
       "import": "./src/native-observation-id.ts"
+    },
+    "./cloud": {
+      "types": "./src/cloud/index.ts",
+      "import": "./src/cloud/index.ts"
     }
   },
   "scripts": {
@@ -20,8 +24,9 @@
     "test:coverage": "vp test run --coverage"
   },
   "dependencies": {
-    "@noble/hashes": "2.3.0",
-    "ajv": "8.20.0"
+    "@noble/hashes": "2.4.0",
+    "ajv": "8.20.0",
+    "fractional-indexing": "3.2.0"
   },
   "devDependencies": {
     "@types/culori": "^4.0.1",

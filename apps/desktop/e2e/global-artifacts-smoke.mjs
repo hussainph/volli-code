@@ -33,7 +33,7 @@
  *      created on disk.
  *   6. Tab persistence — relaunch against the SAME app-data dir: the detail
  *      reopens with the file tabs restored and the last-active file tab
- *      selected (persisted `ticketTabs` in workspace ui state).
+ *      selected (persisted `ticketTabs` in the project UI state).
  *
  * Every assertion polls (expect-style waits); no bare sleeps stand in for a
  * condition (the few fixed sleeps only pace UI settling, never assert).
@@ -581,7 +581,7 @@ async function main() {
     // ===================================================================
     // 6. TAB PERSISTENCE ACROSS RESTART
     // ===================================================================
-    // Make probe.md the active tab, then wait for the workspace persist write.
+    // Make probe.md the active tab, then wait for the project UI persist write.
     await fileTab(page, ARTIFACT_NAME).click();
     await waitUntil("ticketTabs to persist to app_state", async () => {
       const raw = await page.evaluate(async () => {

@@ -19,7 +19,7 @@
  * reducer; the wiring that feeds it live state and applies its output lives in
  * hooks/use-nav-history.ts.
  */
-import type { NavKey } from "@renderer/stores/workspace";
+import type { NavKey } from "@renderer/stores/project-ui";
 
 import { MONACO_SURFACE_SELECTOR } from "./monaco-surface";
 

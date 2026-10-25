@@ -97,7 +97,7 @@ The main content area is a **floating card**: `rounded-xl`, hairline `border-bor
 (8px) on the theme-derived rail backdrop (`--rail`), applied once on `SidebarInset` in
 `app-shell.tsx`. Every page — the always-mounted sessions layer included — renders inside it, so
 the workspace reads as an object with edges instead of an edge-to-edge slab. The chrome bar
-and workspace rail form the surrounding "L", whose color and contrast come from the active theme.
+and project rail form the surrounding "L", whose color and contrast come from the active theme.
 
 ## Composer stack
 
@@ -633,7 +633,7 @@ checkout** (`home-rail-footer.tsx`) is under all three: one 42px row, edge-to-ed
 rail's own gutters, the branch opening the identity and the fact opening the reading, folding
 **upward** into the room the scroller gives back, on the Ticket rail's own `railFolds.worktree`
 preference. Checkout identity remains visible on every rail page. It draws two read states rather than the grammar's four,
-because the venue store keeps no pending flag beside its last-good reading: a first read, and a
+because the working copy store keeps no pending flag beside its last-good reading: a first read, and a
 read that failed.
 
 **Do not duplicate Session identity in the rail.** The tab and composer's pill

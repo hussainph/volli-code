@@ -1,6 +1,8 @@
 import { dirname } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { getRetentionWatcher, resetRetentionWatcherForTest } from "./retention-runtime";
+import { emitTicketWake, type TicketWake } from "./ticket-wake";
+import { retentionConfigFromEnv, runNet } from "./worktree";
 import { HEADLESS_ATTENTION } from "./ports";
 import { worktreeDeps } from "./worktree-runtime";
 import { insertProject } from "./db/projects-repo";
@@ -22,6 +24,7 @@ vi.mock("./worktree", async (original) => ({
 
 let ctx: TestDb | undefined;
 afterEach(() => {
+  vi.useRealTimers();
   resetRetentionWatcherForTest();
   ctx?.cleanup();
 });
@@ -43,6 +46,15 @@ function fixture() {
   const attention = { ...HEADLESS_ATTENTION, deliver: vi.fn(HEADLESS_ATTENTION.deliver) };
   const worktree = () => worktreeDeps(ctx!.db, { events }, { dataDir: dirname(ctx!.dbPath) });
   return { db: ctx.db, events, attention, worktree };
+}
+
+/** Announces one committed event on ticket t1, as a door does after commit. */
+function wake(cursor: string, payload: TicketWake["event"]["payload"]): void {
+  emitTicketWake({
+    projectId: "p1",
+    cursor,
+    event: { id: cursor, ticketId: "t1", actor: "user", createdAt: 1, payload },
+  });
 }
 
 describe("retention runtime ports", () => {
@@ -103,5 +115,30 @@ describe("retention runtime ports", () => {
     expect(getRetentionWatcher(db, { events, attention }, laterWorktree, {})).toBe(watch);
     expect(laterWorktree).not.toHaveBeenCalled();
     expect(watch.getState("t1")?.dismissed).toBe(true);
+  });
+
+  it("wakes on a committed ticket change that can move its answer, not on chatter (VC-686)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { changeDebounceMs } = retentionConfigFromEnv({});
+    const { db, events, attention, worktree } = fixture();
+    const watch = getRetentionWatcher(db, { events, attention }, worktree);
+    vi.mocked(runNet).mockClear();
+    watch.start();
+
+    wake("1", { kind: "commented", commentId: "c1" });
+    await vi.advanceTimersByTimeAsync(changeDebounceMs);
+    await watch.settled();
+    expect(runNet).not.toHaveBeenCalled();
+
+    wake("2", { kind: "status_changed", from: "doing", to: "needs_review" });
+    await vi.advanceTimersByTimeAsync(changeDebounceMs);
+    await watch.settled();
+    expect(runNet).toHaveBeenCalledTimes(1);
+
+    watch.stop();
+    // Stopped, it no longer listens.
+    wake("3", { kind: "status_changed", from: "needs_review", to: "done" });
+    await vi.advanceTimersByTimeAsync(changeDebounceMs);
+    expect(runNet).toHaveBeenCalledTimes(1);
   });
 });

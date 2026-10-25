@@ -1,5 +1,5 @@
 /** One live host runtime-service module. Construction captures ports; credentials remain lazy. */
-import type { SessionExecutionVenue } from "@volli/shared";
+import { LOCAL_RUNNER, type RunnerIdentity } from "@volli/shared";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
@@ -45,12 +45,12 @@ export function createHostRuntimeServices(
   options: {
     dbPath: string;
     modelAccess?: PiModelAccess;
-    venue?: SessionExecutionVenue;
+    venue?: RunnerIdentity;
     webKeySealing?: WebKeySealingOptions;
   },
 ) {
   const modelAccess = options.modelAccess ?? piOwnedModelAccess();
-  const venue = options.venue ?? { id: "local", kind: "local" };
+  const venue = options.venue ?? LOCAL_RUNNER;
   const decisions = createHostDecisions({
     db,
     models: modelAccess.models,

@@ -1,12 +1,12 @@
 /**
- * Home's right rail — the ticket workspace's Calm Stack one scope up (VC-55).
+ * Home's right rail — the Ticket view's Calm Stack one scope up (VC-55).
  *
  * WHY IT EXISTS. The empty chat answers "where does this Session run" only
  * while it is empty, which is exactly as long as it takes to type one message.
  * Everything after that is a transcript, and nothing on the surface said which
  * directory the agent was writing to. This is the mid-session answer, and it is
- * the same ⌥⌘B panel the ticket workspace has — parity rather than a new idea,
- * because Home and a ticket workspace are the same object at two scopes.
+ * the same ⌥⌘B panel the Ticket view has — parity rather than a new idea,
+ * because Home and a Ticket view are the same object at two scopes.
  *
  * THREE PAGES, scoped to the Main checkout and the project's own work:
  *
@@ -35,7 +35,7 @@
  * pages at both scopes' resting width.
  *
  * WHAT NOW NO LONGER DRAWS. The Session-identity card — the model, the tier,
- * the effort of whatever chat is in front — and the venue card under it. The
+ * the effort of whatever chat is in front — and the working copy card under it. The
  * identity was a second answer to a question the tab in front and the
  * composer's own pill already answer, and it was the block standing between
  * the page's title and the roster the page exists for. The tree it named is a
@@ -103,7 +103,7 @@ import {
   type HomeRailMode,
   type HomeSessionRow,
 } from "@renderer/components/home/home-rail-model";
-import { delayUntil } from "@renderer/lib/boundary-timer";
+import { useAgeBoundaryTimer, useBoundaryClock } from "@renderer/lib/use-age-now";
 import { compactAge } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
@@ -115,7 +115,7 @@ import {
 import { useRemoteSessionsUnavailable } from "@renderer/stores/remote-session-availability";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { RAIL_NARROW_MAX_WIDTH, useUiStore } from "@renderer/stores/ui";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { LocalOnly } from "@renderer/components/hosts/local-only";
 
 /**
@@ -212,9 +212,9 @@ export function HomeRail({
             <HomeFilesPanel
               project={project}
               onPreviewFile={(relPath) =>
-                useWorkspaceStore.getState().previewHomeFile(project.id, relPath)
+                useProjectUiStore.getState().previewHomeFile(project.id, relPath)
               }
-              onPinFile={(relPath) => useWorkspaceStore.getState().pinHomeFile(project.id, relPath)}
+              onPinFile={(relPath) => useProjectUiStore.getState().pinHomeFile(project.id, relPath)}
             />
           </LocalOnly>
         ) : null}
@@ -227,7 +227,7 @@ export function HomeRail({
               scope={{ kind: "home", projectId: project.id }}
               root={project.name}
               onOpenMatch={(relPath) =>
-                useWorkspaceStore.getState().previewHomeFile(project.id, relPath)
+                useProjectUiStore.getState().previewHomeFile(project.id, relPath)
               }
             />
           </LocalOnly>
@@ -375,30 +375,19 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
   const harness = useSessionsStore(
     useShallow((state) => homeTerminalIndex(state.harness, terminals)),
   );
-  // The clock the roster's STATE column is read against, advanced only on the
-  // instant a state can change on its own (the working→idle window closing).
-  // Between boundaries it is deliberately behind the wall clock, and no row is
-  // re-derived for the difference, because no row can move in that gap.
-  const [activityNow, setActivityNow] = React.useState(() => Date.now());
-
+  // Status and age share one clock. Between visible boundaries it stays
+  // behind the wall clock, so unrelated renders do not re-derive the roster.
+  const clock = useBoundaryClock();
+  const [now] = clock;
   const panes = React.useMemo(() => homeLivePanes(liveTabs ?? EMPTY_TABS), [liveTabs]);
   const pulse = React.useMemo(
-    () => ({ panes, lastOutputAt, parkState, harness, now: activityNow }),
-    [panes, lastOutputAt, parkState, harness, activityNow],
+    () => ({ panes, lastOutputAt, parkState, harness, now }),
+    [panes, lastOutputAt, parkState, harness, now],
   );
   const rows = React.useMemo(
     () => homeSessionRows(chats, terminals, openChatIds, pulse),
     [chats, terminals, openChatIds, pulse],
   );
-  // One timer on the one instant a word can change by itself, rather than an
-  // interval re-deriving the roster sixty times a minute against the chance
-  // that it has (`lib/boundary-timer.ts`, and the Ticket roster's own pattern).
-  const statusBoundaryAt = nextHomeSessionStatusChangeAt(terminals, pulse);
-  React.useEffect(() => {
-    if (statusBoundaryAt === null) return;
-    const timer = window.setTimeout(() => setActivityNow(Date.now()), delayUntil(statusBoundaryAt));
-    return () => window.clearTimeout(timer);
-  }, [statusBoundaryAt]);
   const [query, setQuery] = React.useState("");
   const searching = query.trim() !== "";
   const { live, earlier } = React.useMemo(
@@ -410,6 +399,14 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
   // who wants the record open wants it open at both.
   const foldOpen = useUiStore((state) => state.railFolds.sessionsRecord);
   const filterable = rows.length > HOME_SESSION_FILTER_THRESHOLD || searching;
+  const visibleRows = searching || foldOpen ? [...live, ...earlier] : live;
+  useAgeBoundaryTimer(
+    visibleRows.map((row) => row.at),
+    clock,
+    // A status transition can make a filtered-out row match (e.g. "idle").
+    // Only ages are visibility-scoped; keep the roster's full status boundary.
+    nextHomeSessionStatusChangeAt(terminals, pulse),
+  );
 
   return (
     <div className={SECTION}>
@@ -466,7 +463,7 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
       {live.length > 0 ? (
         <ul className="flex flex-col" data-testid="home-sessions-live">
           {live.map((row) => (
-            <BoardSessionRow key={row.id} projectId={projectId} row={row} />
+            <BoardSessionRow key={row.id} projectId={projectId} row={row} now={now} />
           ))}
         </ul>
       ) : null}
@@ -475,7 +472,7 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
         // rows behind a caret the reader would have to guess was hiding them.
         <ul className="flex flex-col" data-testid="home-sessions-earlier">
           {earlier.map((row) => (
-            <BoardSessionRow key={row.id} projectId={projectId} row={row} />
+            <BoardSessionRow key={row.id} projectId={projectId} row={row} now={now} />
           ))}
         </ul>
       ) : (
@@ -501,7 +498,7 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
           <RailFoldBody>
             <ul className="flex flex-col" data-testid="home-sessions-earlier">
               {earlier.map((row) => (
-                <BoardSessionRow key={row.id} projectId={projectId} row={row} />
+                <BoardSessionRow key={row.id} projectId={projectId} row={row} now={now} />
               ))}
             </ul>
           </RailFoldBody>
@@ -525,7 +522,15 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
  * and spending the quiet line on a word the mark already carries is what left
  * no room for the state.
  */
-function BoardSessionRow({ projectId, row }: { projectId: string; row: HomeSessionRow }) {
+function BoardSessionRow({
+  projectId,
+  row,
+  now,
+}: {
+  projectId: string;
+  row: HomeSessionRow;
+  now: number;
+}) {
   const provenance = useSessionProvenance(projectId, row.id);
   const provenanceLine = sessionProvenanceHoverLine(provenance);
   const Glyph = row.kind === "chat" ? ChatCircleIcon : TerminalWindowIcon;
@@ -548,7 +553,7 @@ function BoardSessionRow({ projectId, row }: { projectId: string; row: HomeSessi
           <span className="flex min-w-0 items-center gap-1 text-label text-muted-foreground">
             <StatusDot state={row.state} />
             <span className="truncate">{row.stateLabel}</span>
-            <span className="shrink-0">· {compactAge(row.at)}</span>
+            <span className="shrink-0">· {compactAge(row.at, now)}</span>
           </span>
         }
         className={row.live ? undefined : "text-muted-foreground"}
@@ -603,12 +608,12 @@ function homeSessionDragPayload(projectId: string, row: HomeSessionRow): SplitDr
  * target at all rather than by being one that lands nowhere.
  */
 function openSession(projectId: string, row: HomeSessionRow): void {
-  const workspace = useWorkspaceStore.getState();
+  const projectUi = useProjectUiStore.getState();
   if (row.kind === "chat") {
     const chat = useChatSessionsStore.getState();
     chat.adoptChatSession(row.id);
     chat.openChatTab(projectId, row.id);
-    workspace.openHome(projectId, chatTabId(row.id));
+    projectUi.openHome(projectId, chatTabId(row.id));
     return;
   }
   // The TAB the pane belongs to, then the pane inside it: a durable terminal
@@ -618,5 +623,5 @@ function openSession(projectId: string, row: HomeSessionRow): void {
   const sessions = useSessionsStore.getState();
   sessions.setActiveSession(projectId, tabId);
   sessions.setActivePane(projectId, tabId, row.id);
-  workspace.openHome(projectId, tabId);
+  projectUi.openHome(projectId, tabId);
 }

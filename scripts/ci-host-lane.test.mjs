@@ -19,6 +19,7 @@ const required = [
   "test-desktop",
   "coverage-desktop",
   "test-packages",
+  "convex",
   "n1-compat",
 ];
 const conditional = ["host-container", "smoke-boot", "smoke-rest", "smoke-cloud"];
@@ -35,6 +36,7 @@ function results(event = "pull_request", desktop = "true", host = "true", cloud 
     TEST_DESKTOP: "success",
     COVERAGE_DESKTOP: "success",
     TEST_PACKAGES: "success",
+    CONVEX: "success",
     N1_COMPAT: "success",
     HOST_CONTAINER: host === "true" ? "success" : "skipped",
     SMOKE_BOOT: desktop === "true" ? "success" : "skipped",

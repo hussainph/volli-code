@@ -1,7 +1,7 @@
 /**
  * THE STORE WRITES A DROP ASKS FOR, routed once for both surfaces (VC-202).
  *
- * `split-drop.ts` decides what a gesture MEANS; the workspace store's twin
+ * `split-drop.ts` decides what a gesture MEANS; the project UI store's twin
  * actions do the writing. This seam is the routing between the two, which each
  * surface used to carry as its own copy — the same branches, spelled twice, one
  * strip-select bug away from the two surfaces answering the same drop

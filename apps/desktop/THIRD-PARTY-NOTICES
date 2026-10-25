@@ -5,7 +5,7 @@ Generated file. Do not edit by hand.
   verify:      pnpm run check:notices
 
 Scope: the macOS arm64 Volli Code application bundle (app id app.volli.desktop).
-It covers 587 third-party packages: the production dependency closure
+It covers 591 third-party packages: the production dependency closure
 of the desktop app and of the bundled `volli` CLI, the native platform packages
 electron-builder ships as binaries, the build-time sources whose output is part of
 the bundle, and the vendored material recorded in apps/desktop/notices/sources.json.
@@ -53,49 +53,49 @@ they are listed so the index accounts for every module in the bundle.
   @volli/shared
 
 =========================================================================================================
-2. PACKAGE INDEX (587 packages)
+2. PACKAGE INDEX (591 packages)
 =========================================================================================================
 
   <package>@<version>  <licence declared by the package>  [how it reaches the .app]
 
-  @ai-sdk/gateway@4.0.68  Apache-2.0  [bundled into a chunk]
-  @ai-sdk/provider@4.0.8  Apache-2.0  [bundled into a chunk]
-  @ai-sdk/provider-utils@5.0.33  Apache-2.0  [bundled into a chunk]
-  @antfu/install-pkg@1.1.0  MIT  [bundled into a chunk]
-  @anthropic-ai/sandbox-runtime@0.0.74  Apache-2.0  [bundled into a chunk]
+  @ai-sdk/gateway@4.0.115  Apache-2.0  [bundled into a chunk]
+  @ai-sdk/provider@4.0.28  Apache-2.0  [bundled into a chunk]
+  @ai-sdk/provider-utils@5.0.61  Apache-2.0  [bundled into a chunk]
+  @antfu/install-pkg@2.1.0  MIT  [bundled into a chunk]
+  @anthropic-ai/sandbox-runtime@0.0.79  Apache-2.0  [bundled into a chunk]
   @anthropic-ai/sdk@0.124.0  MIT  [bundled into a chunk]
-  @asamuzakjp/css-color@6.0.7  MIT  [node_modules tree]
-  @asamuzakjp/dom-selector@8.3.2  MIT  [node_modules tree]
+  @asamuzakjp/css-color@7.1.6  MIT  [node_modules tree]
+  @asamuzakjp/dom-selector@10.0.3  MIT  [node_modules tree]
   @aws-sdk/client-bedrock-runtime@3.1127.0  Apache-2.0  [bundled into a chunk]
-  @aws-sdk/core@3.978.1  Apache-2.0  [bundled into a chunk]
-  @aws-sdk/credential-provider-env@3.972.72  Apache-2.0  [bundled into a chunk]
-  @aws-sdk/credential-provider-http@3.972.74  Apache-2.0  [bundled into a chunk]
-  @aws-sdk/credential-provider-ini@3.973.17  Apache-2.0  [bundled into a chunk]
-  @aws-sdk/credential-provider-login@3.972.79  Apache-2.0  [bundled into a chunk]
-  @aws-sdk/credential-provider-node@3.972.84  Apache-2.0  [bundled into a chunk]
-  @aws-sdk/credential-provider-process@3.972.72  Apache-2.0  [bundled into a chunk]
-  @aws-sdk/credential-provider-sso@3.973.16  Apache-2.0  [bundled into a chunk]
-  @aws-sdk/credential-provider-web-identity@3.972.78  Apache-2.0  [bundled into a chunk]
-  @aws-sdk/eventstream-handler-node@3.972.35  Apache-2.0  [bundled into a chunk]
-  @aws-sdk/middleware-eventstream@3.972.30  Apache-2.0  [bundled into a chunk]
-  @aws-sdk/middleware-websocket@3.972.54  Apache-2.0  [bundled into a chunk]
-  @aws-sdk/nested-clients@3.997.46  Apache-2.0  [bundled into a chunk]
-  @aws-sdk/signature-v4-multi-region@3.996.47  Apache-2.0  [bundled into a chunk]
+  @aws-sdk/core@3.978.3  Apache-2.0  [bundled into a chunk]
+  @aws-sdk/credential-provider-env@3.972.74  Apache-2.0  [bundled into a chunk]
+  @aws-sdk/credential-provider-http@3.972.76  Apache-2.0  [bundled into a chunk]
+  @aws-sdk/credential-provider-ini@3.973.19  Apache-2.0  [bundled into a chunk]
+  @aws-sdk/credential-provider-login@3.972.81  Apache-2.0  [bundled into a chunk]
+  @aws-sdk/credential-provider-node@3.972.86  Apache-2.0  [bundled into a chunk]
+  @aws-sdk/credential-provider-process@3.972.74  Apache-2.0  [bundled into a chunk]
+  @aws-sdk/credential-provider-sso@3.973.18  Apache-2.0  [bundled into a chunk]
+  @aws-sdk/credential-provider-web-identity@3.972.80  Apache-2.0  [bundled into a chunk]
+  @aws-sdk/eventstream-handler-node@3.972.36  Apache-2.0  [bundled into a chunk]
+  @aws-sdk/middleware-eventstream@3.972.31  Apache-2.0  [bundled into a chunk]
+  @aws-sdk/middleware-websocket@3.972.56  Apache-2.0  [bundled into a chunk]
+  @aws-sdk/nested-clients@3.997.48  Apache-2.0  [bundled into a chunk]
+  @aws-sdk/signature-v4-multi-region@3.996.48  Apache-2.0  [bundled into a chunk]
   @aws-sdk/token-providers@3.1127.0  Apache-2.0  [bundled into a chunk]
-  @aws-sdk/token-providers@3.1138.0  Apache-2.0  [bundled into a chunk]
+  @aws-sdk/token-providers@3.1150.0  Apache-2.0  [bundled into a chunk]
   @aws-sdk/types@3.974.6  Apache-2.0  [bundled into a chunk]
   @aws-sdk/xml-builder@3.972.41  Apache-2.0  [bundled into a chunk]
   @aws/lambda-invoke-store@0.3.0  Apache-2.0  [bundled into a chunk]
-  @babel/runtime@7.29.7  MIT  [bundled into a chunk]
+  @babel/runtime@7.29.10  MIT  [bundled into a chunk]
   @braintree/sanitize-url@7.1.2  MIT  [bundled into a chunk]
   @bramus/specificity@2.4.2  MIT  [node_modules tree]
   @chevrotain/types@11.1.2  Apache-2.0  [bundled into a chunk]
-  @csstools/color-helpers@6.1.1  MIT-0  [node_modules tree]
-  @csstools/css-calc@3.3.0  MIT  [node_modules tree]
-  @csstools/css-color-parser@4.2.0  MIT  [node_modules tree]
-  @csstools/css-parser-algorithms@4.0.0  MIT  [node_modules tree]
-  @csstools/css-syntax-patches-for-csstree@1.1.8  MIT-0  [node_modules tree]
-  @csstools/css-tokenizer@4.0.0  MIT  [node_modules tree]
+  @csstools/color-helpers@6.1.2  MIT-0  [node_modules tree]
+  @csstools/css-calc@3.4.3  MIT  [node_modules tree]
+  @csstools/css-color-parser@4.2.6  MIT  [node_modules tree]
+  @csstools/css-parser-algorithms@4.0.2  MIT  [node_modules tree]
+  @csstools/css-syntax-patches-for-csstree@1.1.15  MIT-0  [node_modules tree]
+  @csstools/css-tokenizer@4.0.2  MIT  [node_modules tree]
   @dnd-kit/accessibility@3.1.1  MIT  [bundled into a chunk]
   @dnd-kit/core@6.3.1  MIT  [bundled into a chunk]
   @dnd-kit/modifiers@9.0.0  MIT  [bundled into a chunk]
@@ -107,7 +107,7 @@ they are listed so the index accounts for every module in the bundle.
   @earendil-works/pi-codemode@1.0.0  MIT  [bundled into a chunk and node_modules tree, unpacked from the asar]
   @earendil-works/pi-mcp@0.99.2  MIT  [bundled into a chunk]
   @earendil-works/pi-telemetry@1.0.0  MIT  [bundled into a chunk]
-  @exodus/bytes@1.15.1  MIT  [node_modules tree]
+  @exodus/bytes@1.16.0  MIT  [node_modules tree]
   @floating-ui/core@1.8.0  MIT  [bundled into a chunk]
   @floating-ui/dom@1.8.0  MIT  [bundled into a chunk]
   @floating-ui/react-dom@2.1.9  MIT  [bundled into a chunk]
@@ -116,26 +116,26 @@ they are listed so the index accounts for every module in the bundle.
   @fontsource-variable/mona-sans@5.3.0  OFL-1.1  [bundled into a chunk]
   @google/genai@2.21.0  Apache-2.0  [bundled into a chunk]
   @iconify/types@2.0.0  MIT  [bundled into a chunk]
-  @iconify/utils@3.1.4  MIT  [bundled into a chunk]
+  @iconify/utils@3.1.7  MIT  [bundled into a chunk]
   @img/colour@1.1.0  MIT  [node_modules tree, unpacked from the asar]
   @img/sharp-darwin-arm64@0.35.5  Apache-2.0  [native binary, unpacked]
   @img/sharp-libvips-darwin-arm64@1.3.4  LGPL-3.0-or-later  [native binary, unpacked]
-  @lezer/common@1.5.2  MIT  [bundled into a chunk]
-  @lezer/highlight@1.2.3  MIT  [bundled into a chunk]
-  @lezer/markdown@1.7.2  MIT  [bundled into a chunk]
-  @mermaid-js/parser@1.2.0  MIT  [bundled into a chunk]
+  @lezer/common@1.5.3  MIT  [bundled into a chunk]
+  @lezer/highlight@1.2.5  MIT  [bundled into a chunk]
+  @lezer/markdown@1.8.0  MIT  [bundled into a chunk]
+  @mermaid-js/parser@1.2.1  MIT  [bundled into a chunk]
   @mixmark-io/domino@2.2.0  BSD-2-Clause  [bundled into a chunk]
   @mozilla/readability@0.6.0  Apache-2.0  [bundled into a chunk]
-  @noble/hashes@2.3.0  MIT  [bundled into a chunk]
+  @noble/hashes@2.4.0  MIT  [bundled into a chunk]
   @opentelemetry/api@1.9.1  Apache-2.0  [bundled into a chunk]
-  @opentelemetry/api-logs@0.221.0  Apache-2.0  [bundled into a chunk]
-  @opentelemetry/core@2.10.0  Apache-2.0  [bundled into a chunk]
-  @opentelemetry/otlp-exporter-base@0.221.0  Apache-2.0  [bundled into a chunk]
-  @opentelemetry/otlp-transformer@0.221.0  Apache-2.0  [bundled into a chunk]
-  @opentelemetry/resources@2.10.0  Apache-2.0  [bundled into a chunk]
-  @opentelemetry/sdk-logs@0.221.0  Apache-2.0  [bundled into a chunk]
-  @opentelemetry/sdk-metrics@2.10.0  Apache-2.0  [bundled into a chunk]
-  @opentelemetry/sdk-trace@2.10.0  Apache-2.0  [bundled into a chunk]
+  @opentelemetry/api-logs@0.223.0  Apache-2.0  [bundled into a chunk]
+  @opentelemetry/core@2.12.0  Apache-2.0  [bundled into a chunk]
+  @opentelemetry/otlp-exporter-base@0.223.0  Apache-2.0  [bundled into a chunk]
+  @opentelemetry/otlp-transformer@0.223.0  Apache-2.0  [bundled into a chunk]
+  @opentelemetry/resources@2.12.0  Apache-2.0  [bundled into a chunk]
+  @opentelemetry/sdk-logs@0.223.0  Apache-2.0  [bundled into a chunk]
+  @opentelemetry/sdk-metrics@2.12.0  Apache-2.0  [bundled into a chunk]
+  @opentelemetry/sdk-trace@2.12.0  Apache-2.0  [bundled into a chunk]
   @opentelemetry/semantic-conventions@1.43.0  Apache-2.0  [bundled into a chunk]
   @phosphor-icons/react@2.1.10  MIT  [bundled into a chunk]
   @pondwader/socks5-server@1.0.10  MIT  [bundled into a chunk]
@@ -150,96 +150,96 @@ they are listed so the index accounts for every module in the bundle.
   @protobufjs/utf8@1.1.2  BSD-3-Clause  [bundled into a chunk]
   @radix-ui/number@1.1.3  MIT  [bundled into a chunk]
   @radix-ui/primitive@1.1.5  MIT  [bundled into a chunk]
-  @radix-ui/primitive@1.1.7  MIT  [bundled into a chunk]
-  @radix-ui/react-accessible-icon@1.1.15  MIT  [bundled into a chunk]
-  @radix-ui/react-accordion@1.2.20  MIT  [bundled into a chunk]
-  @radix-ui/react-alert-dialog@1.1.23  MIT  [bundled into a chunk]
-  @radix-ui/react-arrow@1.1.15  MIT  [bundled into a chunk]
-  @radix-ui/react-aspect-ratio@1.1.15  MIT  [bundled into a chunk]
-  @radix-ui/react-avatar@1.2.6  MIT  [bundled into a chunk]
-  @radix-ui/react-checkbox@1.3.11  MIT  [bundled into a chunk]
-  @radix-ui/react-collapsible@1.1.20  MIT  [bundled into a chunk]
-  @radix-ui/react-collection@1.1.15  MIT  [bundled into a chunk]
+  @radix-ui/primitive@1.2.0  MIT  [bundled into a chunk]
+  @radix-ui/react-accessible-icon@1.2.0  MIT  [bundled into a chunk]
+  @radix-ui/react-accordion@1.3.1  MIT  [bundled into a chunk]
+  @radix-ui/react-alert-dialog@1.2.1  MIT  [bundled into a chunk]
+  @radix-ui/react-arrow@1.1.17  MIT  [bundled into a chunk]
+  @radix-ui/react-aspect-ratio@1.2.0  MIT  [bundled into a chunk]
+  @radix-ui/react-avatar@1.3.1  MIT  [bundled into a chunk]
+  @radix-ui/react-checkbox@1.4.1  MIT  [bundled into a chunk]
+  @radix-ui/react-collapsible@1.2.1  MIT  [bundled into a chunk]
+  @radix-ui/react-collection@1.2.0  MIT  [bundled into a chunk]
   @radix-ui/react-compose-refs@1.1.3  MIT  [bundled into a chunk]
   @radix-ui/react-compose-refs@1.1.5  MIT  [bundled into a chunk]
   @radix-ui/react-context@1.2.0  MIT  [bundled into a chunk]
-  @radix-ui/react-context@1.2.2  MIT  [bundled into a chunk]
-  @radix-ui/react-context-menu@2.3.7  MIT  [bundled into a chunk]
+  @radix-ui/react-context@1.3.0  MIT  [bundled into a chunk]
+  @radix-ui/react-context-menu@2.4.1  MIT  [bundled into a chunk]
   @radix-ui/react-dialog@1.1.19  MIT  [bundled into a chunk]
-  @radix-ui/react-dialog@1.1.23  MIT  [bundled into a chunk]
-  @radix-ui/react-direction@1.1.4  MIT  [bundled into a chunk]
+  @radix-ui/react-dialog@1.3.1  MIT  [bundled into a chunk]
+  @radix-ui/react-direction@1.2.0  MIT  [bundled into a chunk]
   @radix-ui/react-dismissable-layer@1.1.15  MIT  [bundled into a chunk]
-  @radix-ui/react-dismissable-layer@1.1.19  MIT  [bundled into a chunk]
-  @radix-ui/react-dropdown-menu@2.1.24  MIT  [bundled into a chunk]
+  @radix-ui/react-dismissable-layer@1.2.1  MIT  [bundled into a chunk]
+  @radix-ui/react-dropdown-menu@2.2.1  MIT  [bundled into a chunk]
   @radix-ui/react-focus-guards@1.1.4  MIT  [bundled into a chunk]
-  @radix-ui/react-focus-guards@1.1.6  MIT  [bundled into a chunk]
+  @radix-ui/react-focus-guards@1.2.0  MIT  [bundled into a chunk]
   @radix-ui/react-focus-scope@1.1.12  MIT  [bundled into a chunk]
-  @radix-ui/react-focus-scope@1.1.16  MIT  [bundled into a chunk]
-  @radix-ui/react-form@0.1.16  MIT  [bundled into a chunk]
-  @radix-ui/react-hover-card@1.1.23  MIT  [bundled into a chunk]
+  @radix-ui/react-focus-scope@1.3.1  MIT  [bundled into a chunk]
+  @radix-ui/react-form@0.3.0  MIT  [bundled into a chunk]
+  @radix-ui/react-hover-card@1.2.1  MIT  [bundled into a chunk]
   @radix-ui/react-id@1.1.2  MIT  [bundled into a chunk]
   @radix-ui/react-id@1.1.4  MIT  [bundled into a chunk]
-  @radix-ui/react-label@2.1.15  MIT  [bundled into a chunk]
-  @radix-ui/react-menu@2.1.24  MIT  [bundled into a chunk]
-  @radix-ui/react-menubar@1.1.24  MIT  [bundled into a chunk]
-  @radix-ui/react-navigation-menu@1.2.22  MIT  [bundled into a chunk]
-  @radix-ui/react-one-time-password-field@0.1.16  MIT  [bundled into a chunk]
-  @radix-ui/react-password-toggle-field@0.1.11  MIT  [bundled into a chunk]
-  @radix-ui/react-popover@1.1.23  MIT  [bundled into a chunk]
-  @radix-ui/react-popper@1.3.7  MIT  [bundled into a chunk]
+  @radix-ui/react-label@2.1.17  MIT  [bundled into a chunk]
+  @radix-ui/react-menu@2.2.1  MIT  [bundled into a chunk]
+  @radix-ui/react-menubar@1.2.1  MIT  [bundled into a chunk]
+  @radix-ui/react-navigation-menu@1.4.1  MIT  [bundled into a chunk]
+  @radix-ui/react-one-time-password-field@0.2.1  MIT  [bundled into a chunk]
+  @radix-ui/react-password-toggle-field@0.2.1  MIT  [bundled into a chunk]
+  @radix-ui/react-popover@1.3.1  MIT  [bundled into a chunk]
+  @radix-ui/react-popper@1.4.0  MIT  [bundled into a chunk]
   @radix-ui/react-portal@1.1.13  MIT  [bundled into a chunk]
-  @radix-ui/react-portal@1.1.17  MIT  [bundled into a chunk]
-  @radix-ui/react-presence@1.1.10  MIT  [bundled into a chunk]
+  @radix-ui/react-portal@1.2.0  MIT  [bundled into a chunk]
+  @radix-ui/react-presence@1.1.11  MIT  [bundled into a chunk]
   @radix-ui/react-presence@1.1.7  MIT  [bundled into a chunk]
-  @radix-ui/react-primitive@2.1.10  MIT  [bundled into a chunk]
   @radix-ui/react-primitive@2.1.7  MIT  [bundled into a chunk]
-  @radix-ui/react-progress@1.1.16  MIT  [bundled into a chunk]
-  @radix-ui/react-radio-group@1.4.7  MIT  [bundled into a chunk]
-  @radix-ui/react-roving-focus@1.1.19  MIT  [bundled into a chunk]
-  @radix-ui/react-scroll-area@1.2.18  MIT  [bundled into a chunk]
-  @radix-ui/react-select@2.3.7  MIT  [bundled into a chunk]
-  @radix-ui/react-separator@1.1.15  MIT  [bundled into a chunk]
-  @radix-ui/react-slider@1.4.7  MIT  [bundled into a chunk]
+  @radix-ui/react-primitive@2.2.0  MIT  [bundled into a chunk]
+  @radix-ui/react-progress@1.2.1  MIT  [bundled into a chunk]
+  @radix-ui/react-radio-group@1.5.1  MIT  [bundled into a chunk]
+  @radix-ui/react-roving-focus@1.2.1  MIT  [bundled into a chunk]
+  @radix-ui/react-scroll-area@1.4.0  MIT  [bundled into a chunk]
+  @radix-ui/react-select@2.4.1  MIT  [bundled into a chunk]
+  @radix-ui/react-separator@1.2.0  MIT  [bundled into a chunk]
+  @radix-ui/react-slider@1.6.1  MIT  [bundled into a chunk]
   @radix-ui/react-slot@1.3.0  MIT  [bundled into a chunk]
-  @radix-ui/react-slot@1.3.3  MIT  [bundled into a chunk]
-  @radix-ui/react-switch@1.3.7  MIT  [bundled into a chunk]
-  @radix-ui/react-tabs@1.1.21  MIT  [bundled into a chunk]
-  @radix-ui/react-toast@1.2.23  MIT  [bundled into a chunk]
-  @radix-ui/react-toggle@1.1.18  MIT  [bundled into a chunk]
-  @radix-ui/react-toggle-group@1.1.19  MIT  [bundled into a chunk]
-  @radix-ui/react-toolbar@1.1.19  MIT  [bundled into a chunk]
-  @radix-ui/react-tooltip@1.2.16  MIT  [bundled into a chunk]
+  @radix-ui/react-slot@1.5.0  MIT  [bundled into a chunk]
+  @radix-ui/react-switch@1.4.1  MIT  [bundled into a chunk]
+  @radix-ui/react-tabs@1.2.1  MIT  [bundled into a chunk]
+  @radix-ui/react-toast@1.3.1  MIT  [bundled into a chunk]
+  @radix-ui/react-toggle@1.2.1  MIT  [bundled into a chunk]
+  @radix-ui/react-toggle-group@1.2.1  MIT  [bundled into a chunk]
+  @radix-ui/react-toolbar@1.2.1  MIT  [bundled into a chunk]
+  @radix-ui/react-tooltip@1.4.1  MIT  [bundled into a chunk]
   @radix-ui/react-use-callback-ref@1.1.2  MIT  [bundled into a chunk]
-  @radix-ui/react-use-callback-ref@1.1.4  MIT  [bundled into a chunk]
+  @radix-ui/react-use-callback-ref@1.1.5  MIT  [bundled into a chunk]
   @radix-ui/react-use-controllable-state@1.2.3  MIT  [bundled into a chunk]
-  @radix-ui/react-use-controllable-state@1.2.6  MIT  [bundled into a chunk]
+  @radix-ui/react-use-controllable-state@1.3.0  MIT  [bundled into a chunk]
   @radix-ui/react-use-effect-event@0.0.3  MIT  [bundled into a chunk]
   @radix-ui/react-use-effect-event@0.0.5  MIT  [bundled into a chunk]
-  @radix-ui/react-use-escape-keydown@1.1.5  MIT  [bundled into a chunk]
+  @radix-ui/react-use-escape-keydown@1.1.6  MIT  [bundled into a chunk]
   @radix-ui/react-use-is-hydrated@0.1.3  MIT  [bundled into a chunk]
   @radix-ui/react-use-layout-effect@1.1.2  MIT  [bundled into a chunk]
   @radix-ui/react-use-layout-effect@1.1.4  MIT  [bundled into a chunk]
   @radix-ui/react-use-previous@1.1.4  MIT  [bundled into a chunk]
   @radix-ui/react-use-rect@1.1.4  MIT  [bundled into a chunk]
-  @radix-ui/react-use-size@1.1.4  MIT  [bundled into a chunk]
-  @radix-ui/react-visually-hidden@1.2.11  MIT  [bundled into a chunk]
+  @radix-ui/react-use-size@1.1.5  MIT  [bundled into a chunk]
+  @radix-ui/react-visually-hidden@1.2.13  MIT  [bundled into a chunk]
   @radix-ui/rect@1.1.3  MIT  [bundled into a chunk]
   @shikijs/core@3.23.0  MIT  [bundled into a chunk]
-  @shikijs/core@4.4.3  MIT  [bundled into a chunk]
+  @shikijs/core@4.5.0  MIT  [bundled into a chunk]
   @shikijs/engine-javascript@3.23.0  MIT  [bundled into a chunk]
-  @shikijs/engine-javascript@4.4.3  MIT  [bundled into a chunk]
+  @shikijs/engine-javascript@4.5.0  MIT  [bundled into a chunk]
   @shikijs/engine-oniguruma@3.23.0  MIT  [bundled into a chunk]
-  @shikijs/engine-oniguruma@4.4.3  MIT  [bundled into a chunk]
+  @shikijs/engine-oniguruma@4.5.0  MIT  [bundled into a chunk]
   @shikijs/langs@3.23.0  MIT  [bundled into a chunk]
-  @shikijs/langs@4.4.3  MIT  [bundled into a chunk]
-  @shikijs/monaco@4.4.3  MIT  [bundled into a chunk]
-  @shikijs/primitive@4.4.3  MIT  [bundled into a chunk]
+  @shikijs/langs@4.5.0  MIT  [bundled into a chunk]
+  @shikijs/monaco@4.5.0  MIT  [bundled into a chunk]
+  @shikijs/primitive@4.5.0  MIT  [bundled into a chunk]
   @shikijs/themes@3.23.0  MIT  [bundled into a chunk]
-  @shikijs/themes@4.4.3  MIT  [bundled into a chunk]
+  @shikijs/themes@4.5.0  MIT  [bundled into a chunk]
   @shikijs/types@3.23.0  MIT  [bundled into a chunk]
-  @shikijs/types@4.4.3  MIT  [bundled into a chunk]
+  @shikijs/types@4.5.0  MIT  [bundled into a chunk]
   @shikijs/vscode-textmate@10.0.2  MIT  [bundled into a chunk]
-  @smithy/core@3.35.0  Apache-2.0  [bundled into a chunk]
+  @smithy/core@3.36.0  Apache-2.0  [bundled into a chunk]
   @smithy/credential-provider-imds@4.5.2  Apache-2.0  [bundled into a chunk]
   @smithy/fetch-http-handler@5.8.0  Apache-2.0  [bundled into a chunk]
   @smithy/node-http-handler@4.12.1  Apache-2.0  [bundled into a chunk]
@@ -247,11 +247,11 @@ they are listed so the index accounts for every module in the bundle.
   @smithy/types@4.19.0  Apache-2.0  [bundled into a chunk]
   @stablelib/base64@1.0.1  MIT  [bundled into a chunk]
   @standard-schema/spec@1.1.0  MIT  [bundled into a chunk]
-  @streamdown/cjk@1.0.3  Apache-2.0  [bundled into a chunk]
+  @streamdown/cjk@1.0.4  Apache-2.0  [bundled into a chunk]
   @streamdown/code@1.1.1  Apache-2.0  [bundled into a chunk]
-  @streamdown/mermaid@1.0.2  Apache-2.0  [bundled into a chunk]
-  @trpc/client@11.18.0  MIT  [node_modules tree]
-  @trpc/server@11.18.0  MIT  [node_modules tree]
+  @streamdown/mermaid@1.0.3  Apache-2.0  [bundled into a chunk]
+  @trpc/client@11.19.0  MIT  [node_modules tree]
+  @trpc/server@11.19.0  MIT  [node_modules tree]
   @types/d3@7.4.3  MIT  [bundled into a chunk]
   @types/d3-array@3.2.2  MIT  [bundled into a chunk]
   @types/d3-axis@3.0.6  MIT  [bundled into a chunk]
@@ -276,13 +276,13 @@ they are listed so the index accounts for every module in the bundle.
   @types/d3-random@3.0.4  MIT  [bundled into a chunk]
   @types/d3-scale@4.0.9  MIT  [bundled into a chunk]
   @types/d3-scale-chromatic@3.1.0  MIT  [bundled into a chunk]
-  @types/d3-selection@3.0.11  MIT  [bundled into a chunk]
-  @types/d3-shape@3.1.8  MIT  [bundled into a chunk]
+  @types/d3-selection@3.0.12  MIT  [bundled into a chunk]
+  @types/d3-shape@3.2.0  MIT  [bundled into a chunk]
   @types/d3-time@3.0.4  MIT  [bundled into a chunk]
   @types/d3-time-format@4.0.3  MIT  [bundled into a chunk]
   @types/d3-timer@3.0.2  MIT  [bundled into a chunk]
   @types/d3-transition@3.0.9  MIT  [bundled into a chunk]
-  @types/d3-zoom@3.0.8  MIT  [bundled into a chunk]
+  @types/d3-zoom@3.0.9  MIT  [bundled into a chunk]
   @types/debug@4.1.13  MIT  [bundled into a chunk]
   @types/estree@1.0.9  MIT  [bundled into a chunk]
   @types/estree-jsx@1.0.5  MIT  [bundled into a chunk]
@@ -290,12 +290,12 @@ they are listed so the index accounts for every module in the bundle.
   @types/hast@3.0.5  MIT  [bundled into a chunk]
   @types/mdast@4.0.4  MIT  [bundled into a chunk]
   @types/ms@2.1.0  MIT  [bundled into a chunk]
-  @types/node@26.3.0  MIT  [bundled into a chunk]
+  @types/node@26.6.5  MIT  [bundled into a chunk]
   @types/retry@0.12.0  MIT  [bundled into a chunk]
   @types/trusted-types@2.0.7  MIT  [bundled into a chunk]
   @types/unist@2.0.11  MIT  [bundled into a chunk]
   @types/unist@3.0.3  MIT  [bundled into a chunk]
-  @ungap/structured-clone@1.3.3  ISC  [bundled into a chunk]
+  @ungap/structured-clone@1.4.0  ISC  [bundled into a chunk]
   @upsetjs/venn.js@2.0.0  MIT  [bundled into a chunk]
   @vercel/oidc@3.2.0  Apache-2.0  [bundled into a chunk]
   @vscode/ripgrep@1.18.0  MIT  [node_modules tree, unpacked from the asar]
@@ -304,17 +304,17 @@ they are listed so the index accounts for every module in the bundle.
   @xterm/addon-fit@0.12.0-beta.301  MIT  [bundled into a chunk]
   @xterm/addon-unicode11@0.10.0-beta.301  MIT  [bundled into a chunk]
   @xterm/xterm@6.1.0-beta.304  MIT  [bundled into a chunk]
-  acorn@8.18.0  MIT  [bundled into a chunk]
+  acorn@8.19.0  MIT  [bundled into a chunk]
   agent-base@7.1.4  MIT  [bundled into a chunk]
   agent-base@9.0.0  MIT  [bundled into a chunk]
-  ai@7.0.84  Apache-2.0  [bundled into a chunk]
+  ai@7.0.142  Apache-2.0  [bundled into a chunk]
   ajv@8.20.0  MIT  [bundled into a chunk]
   argparse@2.0.1  Python-2.0  [node_modules tree]
   aria-hidden@1.2.6  MIT  [bundled into a chunk]
   bail@2.0.2  MIT  [bundled into a chunk]
   base64-js@1.5.1  MIT  [bundled into a chunk]
   better-sqlite3@13.0.3  MIT  [node_modules tree, unpacked from the asar]
-  bidi-js@1.0.3  MIT  [node_modules tree]
+  bidi-js@1.1.0  MIT  [node_modules tree]
   bignumber.js@9.3.1  MIT  [bundled into a chunk]
   bowser@2.14.1  MIT  [bundled into a chunk]
   buffer-equal-constant-time@1.0.1  BSD-3-Clause  [bundled into a chunk]
@@ -335,7 +335,7 @@ they are listed so the index accounts for every module in the bundle.
   cose-base@2.2.0  MIT  [bundled into a chunk]
   cross-spawn@7.0.6  MIT  [bundled into a chunk]
   css-tree@3.2.1  MIT  [node_modules tree]
-  cytoscape@3.34.0  MIT  [bundled into a chunk]
+  cytoscape@3.34.4  MIT  [bundled into a chunk]
   cytoscape-cose-bilkent@4.1.0  MIT  [bundled into a chunk]
   cytoscape-fcose@2.2.0  MIT  [bundled into a chunk]
   d3@7.9.0  ISC  [bundled into a chunk]
@@ -375,8 +375,8 @@ they are listed so the index accounts for every module in the bundle.
   d3-zoom@3.0.0  ISC  [bundled into a chunk]
   dagre-d3-es@7.0.14  MIT  [bundled into a chunk]
   data-uri-to-buffer@4.0.1  MIT  [bundled into a chunk]
-  data-urls@7.0.0  MIT  [node_modules tree]
-  dayjs@1.11.21  MIT  [bundled into a chunk]
+  data-urls@8.0.0  MIT  [node_modules tree]
+  dayjs@1.11.23  MIT  [bundled into a chunk]
   debug@4.4.3  MIT  [node_modules tree]
   decimal.js@10.6.0  MIT  [node_modules tree]
   decode-named-character-reference@1.3.0  MIT  [bundled into a chunk]
@@ -387,12 +387,13 @@ they are listed so the index accounts for every module in the bundle.
   devlop@1.1.0  MIT  [bundled into a chunk]
   diff@8.0.4  BSD-3-Clause  [bundled into a chunk]
   dompurify@3.4.16  (MPL-2.0 OR Apache-2.0)  [bundled into a chunk]
+  dompurify@3.4.17  (MPL-2.0 OR Apache-2.0)  [bundled into a chunk]
   ecdsa-sig-formatter@1.0.11  Apache-2.0  [bundled into a chunk]
-  electron@44.0.0  MIT  [build-time source]
+  electron@44.8.0  MIT  [build-time source]
   electron-updater@6.8.9  MIT  [node_modules tree]
   entities@6.0.1  BSD-2-Clause  [node_modules tree]
   entities@8.0.0  BSD-2-Clause  [node_modules tree]
-  es-toolkit@1.50.0  MIT  [bundled into a chunk]
+  es-toolkit@1.52.0  MIT  [bundled into a chunk]
   esbuild@0.28.2  MIT  [bundled into a chunk]
   escape-string-regexp@5.0.0  MIT  [bundled into a chunk]
   estree-util-is-identifier-name@3.0.0  MIT  [bundled into a chunk]
@@ -401,17 +402,20 @@ they are listed so the index accounts for every module in the bundle.
   fast-deep-equal@3.1.3  MIT  [bundled into a chunk]
   fast-sha256@1.3.0  Unlicense  [bundled into a chunk]
   fast-uri@3.1.8  BSD-3-Clause  [bundled into a chunk]
+  fastdom@1.0.12  MIT  [bundled into a chunk]
   fetch-blob@3.2.0  MIT  [bundled into a chunk]
   formdata-polyfill@4.0.10  MIT  [bundled into a chunk]
+  fractional-indexing@3.2.0  CC0-1.0  [bundled into a chunk]
   framer-motion@13.1.1  MIT  [bundled into a chunk]
   fs-extra@10.1.0  MIT  [node_modules tree]
-  gaxios@7.3.0  Apache-2.0  [bundled into a chunk]
+  gaxios@7.3.1  Apache-2.0  [bundled into a chunk]
   gcp-metadata@8.1.2  Apache-2.0  [bundled into a chunk]
-  get-east-asian-width@1.6.0  MIT  [bundled into a chunk]
+  get-east-asian-width@1.7.0  MIT  [bundled into a chunk]
   get-nonce@1.0.1  MIT  [bundled into a chunk]
   google-auth-library@10.9.1  Apache-2.0  [bundled into a chunk]
   google-logging-utils@1.1.3  Apache-2.0  [bundled into a chunk]
-  gpt-tokenizer@4.0.0  MIT  [bundled into a chunk]
+  google-logging-utils@1.2.0  Apache-2.0  [bundled into a chunk]
+  gpt-tokenizer@4.0.3  MIT  [bundled into a chunk]
   graceful-fs@4.2.11  ISC  [node_modules tree]
   hachure-fill@0.5.2  MIT  [bundled into a chunk]
   hast-util-from-parse5@8.0.3  MIT  [bundled into a chunk]
@@ -423,7 +427,7 @@ they are listed so the index accounts for every module in the bundle.
   hast-util-to-parse5@8.0.1  MIT  [bundled into a chunk]
   hast-util-whitespace@3.0.0  MIT  [bundled into a chunk]
   hastscript@9.0.1  MIT  [bundled into a chunk]
-  html-encoding-sniffer@6.0.0  MIT  [node_modules tree]
+  html-encoding-sniffer@7.0.0  MIT  [node_modules tree]
   html-url-attributes@3.0.1  MIT  [bundled into a chunk]
   html-void-elements@3.0.0  MIT  [bundled into a chunk]
   http-proxy-agent@9.1.0  MIT  [bundled into a chunk]
@@ -442,7 +446,7 @@ they are listed so the index accounts for every module in the bundle.
   is-potential-custom-element-name@1.0.1  MIT  [node_modules tree]
   isexe@2.0.0  ISC  [bundled into a chunk]
   js-yaml@4.3.2  MIT  [node_modules tree]
-  jsdom@30.0.1  MIT  [node_modules tree]
+  jsdom@30.1.3  MIT  [node_modules tree]
   json-bigint@1.0.0  MIT  [bundled into a chunk]
   json-schema@0.4.0  (AFL-2.1 OR BSD-3-Clause)  [bundled into a chunk]
   json-schema-to-ts@3.1.1  MIT  [bundled into a chunk]
@@ -460,18 +464,17 @@ they are listed so the index accounts for every module in the bundle.
   lodash.isequal@4.5.0  MIT  [node_modules tree]
   long@5.3.2  Apache-2.0  [bundled into a chunk]
   longest-streak@3.1.0  MIT  [bundled into a chunk]
-  lru-cache@11.5.2  BlueOak-1.0.0  [node_modules tree]
+  lru-cache@11.5.3  BlueOak-1.0.0  [node_modules tree]
   markdown-table@3.0.4  MIT  [bundled into a chunk]
   marked@14.0.0  MIT  [bundled into a chunk]
   marked@16.4.2  MIT  [bundled into a chunk]
-  marked@17.0.6  MIT  [bundled into a chunk]
-  marked@18.0.11  MIT  [bundled into a chunk]
-  mdast-util-find-and-replace@3.0.2  MIT  [bundled into a chunk]
-  mdast-util-from-markdown@2.0.3  MIT  [bundled into a chunk]
+  marked@18.1.1  MIT  [bundled into a chunk]
+  mdast-util-find-and-replace@3.0.3  MIT  [bundled into a chunk]
+  mdast-util-from-markdown@2.1.0  MIT  [bundled into a chunk]
   mdast-util-gfm@3.1.0  MIT  [bundled into a chunk]
   mdast-util-gfm-autolink-literal@2.0.1  MIT  [bundled into a chunk]
   mdast-util-gfm-footnote@2.1.0  MIT  [bundled into a chunk]
-  mdast-util-gfm-strikethrough@2.0.0  MIT  [bundled into a chunk]
+  mdast-util-gfm-strikethrough@2.0.1  MIT  [bundled into a chunk]
   mdast-util-gfm-table@2.0.0  MIT  [bundled into a chunk]
   mdast-util-gfm-task-list-item@2.0.0  MIT  [bundled into a chunk]
   mdast-util-mdx-expression@2.0.1  MIT  [bundled into a chunk]
@@ -479,27 +482,27 @@ they are listed so the index accounts for every module in the bundle.
   mdast-util-mdxjs-esm@2.0.1  MIT  [bundled into a chunk]
   mdast-util-phrasing@4.1.0  MIT  [bundled into a chunk]
   mdast-util-to-hast@13.2.1  MIT  [bundled into a chunk]
-  mdast-util-to-markdown@2.1.2  MIT  [bundled into a chunk]
+  mdast-util-to-markdown@2.2.0  MIT  [bundled into a chunk]
   mdast-util-to-markdown-cjk-friendly@1.0.0  MIT  [bundled into a chunk]
   mdast-util-to-markdown-cjk-friendly-gfm-strikethrough@1.0.0  MIT  [bundled into a chunk]
   mdast-util-to-string@4.0.0  MIT  [bundled into a chunk]
   mdn-data@2.27.1  CC0-1.0  [node_modules tree]
-  mermaid@11.16.1  MIT  [bundled into a chunk]
-  micromark@4.0.2  MIT  [bundled into a chunk]
-  micromark-core-commonmark@2.0.3  MIT  [bundled into a chunk]
-  micromark-extension-cjk-friendly@2.0.1  MIT  [bundled into a chunk]
+  mermaid@11.17.2  MIT  [bundled into a chunk]
+  micromark@4.0.3  MIT  [bundled into a chunk]
+  micromark-core-commonmark@2.0.4  MIT  [bundled into a chunk]
+  micromark-extension-cjk-friendly@2.0.2  MIT  [bundled into a chunk]
   micromark-extension-cjk-friendly-gfm-strikethrough@2.0.1  MIT  [bundled into a chunk]
   micromark-extension-cjk-friendly-util@3.0.1  MIT  [bundled into a chunk]
   micromark-extension-gfm@3.0.0  MIT  [bundled into a chunk]
   micromark-extension-gfm-autolink-literal@2.1.0  MIT  [bundled into a chunk]
   micromark-extension-gfm-footnote@2.1.0  MIT  [bundled into a chunk]
   micromark-extension-gfm-strikethrough@2.1.0  MIT  [bundled into a chunk]
-  micromark-extension-gfm-table@2.1.1  MIT  [bundled into a chunk]
+  micromark-extension-gfm-table@2.1.2  MIT  [bundled into a chunk]
   micromark-extension-gfm-tagfilter@2.0.0  MIT  [bundled into a chunk]
   micromark-extension-gfm-task-list-item@2.1.0  MIT  [bundled into a chunk]
   micromark-factory-destination@2.0.1  MIT  [bundled into a chunk]
   micromark-factory-label@2.0.1  MIT  [bundled into a chunk]
-  micromark-factory-space@2.0.1  MIT  [bundled into a chunk]
+  micromark-factory-space@2.1.0  MIT  [bundled into a chunk]
   micromark-factory-title@2.0.1  MIT  [bundled into a chunk]
   micromark-factory-whitespace@2.0.1  MIT  [bundled into a chunk]
   micromark-util-character@2.1.1  MIT  [bundled into a chunk]
@@ -508,6 +511,7 @@ they are listed so the index accounts for every module in the bundle.
   micromark-util-combine-extensions@2.0.1  MIT  [bundled into a chunk]
   micromark-util-decode-numeric-character-reference@2.0.2  MIT  [bundled into a chunk]
   micromark-util-decode-string@2.0.1  MIT  [bundled into a chunk]
+  micromark-util-edit-map@1.0.0  MIT  [bundled into a chunk]
   micromark-util-encode@2.0.1  MIT  [bundled into a chunk]
   micromark-util-html-tag-name@2.0.1  MIT  [bundled into a chunk]
   micromark-util-normalize-identifier@2.0.1  MIT  [bundled into a chunk]
@@ -515,13 +519,13 @@ they are listed so the index accounts for every module in the bundle.
   micromark-util-sanitize-uri@2.0.1  MIT  [bundled into a chunk]
   micromark-util-subtokenize@2.1.0  MIT  [bundled into a chunk]
   micromark-util-symbol@2.0.1  MIT  [bundled into a chunk]
-  micromark-util-types@2.0.2  MIT  [bundled into a chunk]
+  micromark-util-types@2.0.3  MIT  [bundled into a chunk]
   monaco-editor@0.57.0  MIT  [bundled into a chunk]
   motion@13.1.1  MIT  [bundled into a chunk]
   motion-dom@13.1.1  MIT  [bundled into a chunk]
   motion-utils@13.0.0  MIT  [bundled into a chunk]
   ms@2.1.3  MIT  [node_modules tree]
-  nanoid@6.0.1  MIT  [bundled into a chunk]
+  nanoid@6.0.2  MIT  [bundled into a chunk]
   node-addon-api@7.1.1  MIT  [bundled into a chunk]
   node-addon-api@8.9.2  MIT  [bundled into a chunk]
   node-domexception@1.0.0  MIT  [bundled into a chunk]
@@ -532,7 +536,7 @@ they are listed so the index accounts for every module in the bundle.
   oniguruma-to-es@4.3.6  MIT  [bundled into a chunk]
   openai@7.19.0  Apache-2.0  [bundled into a chunk]
   p-retry@4.6.2  MIT  [bundled into a chunk]
-  package-manager-detector@1.8.0  MIT  [bundled into a chunk]
+  package-manager-detector@1.9.0  MIT  [bundled into a chunk]
   parse-entities@4.0.2  MIT  [bundled into a chunk]
   parse5@7.3.0  MIT  [node_modules tree]
   parse5@8.0.1  MIT  [node_modules tree]
@@ -543,13 +547,13 @@ they are listed so the index accounts for every module in the bundle.
   points-on-path@0.2.1  MIT  [bundled into a chunk]
   proper-lockfile@4.1.2  MIT  [bundled into a chunk]
   property-information@7.2.0  MIT  [bundled into a chunk]
-  protobufjs@7.6.5  BSD-3-Clause  [bundled into a chunk]
+  protobufjs@7.6.6  BSD-3-Clause  [bundled into a chunk]
   proxy-agent-negotiate@1.1.0  MIT  [bundled into a chunk]
   punycode@2.3.1  MIT  [node_modules tree]
   quickjs-wasi@3.6.2  MIT  [node_modules tree, unpacked from the asar]
-  radix-ui@1.6.7  MIT  [bundled into a chunk]
-  react@19.2.8  MIT  [bundled into a chunk]
-  react-dom@19.2.8  MIT  [bundled into a chunk]
+  radix-ui@1.8.1  MIT  [bundled into a chunk]
+  react@19.3.1  MIT  [bundled into a chunk]
+  react-dom@19.3.1  MIT  [bundled into a chunk]
   react-remove-scroll@2.7.2  MIT  [bundled into a chunk]
   react-remove-scroll-bar@2.3.8  MIT  [bundled into a chunk]
   react-style-singleton@2.2.3  MIT  [bundled into a chunk]
@@ -559,13 +563,13 @@ they are listed so the index accounts for every module in the bundle.
   rehype-harden@1.1.8  MIT  [bundled into a chunk]
   rehype-raw@7.0.0  MIT  [bundled into a chunk]
   rehype-sanitize@6.0.0  MIT  [bundled into a chunk]
-  remark-cjk-friendly@2.3.1  MIT  [bundled into a chunk]
+  remark-cjk-friendly@2.3.2  MIT  [bundled into a chunk]
   remark-cjk-friendly-gfm-strikethrough@2.3.1  MIT  [bundled into a chunk]
   remark-gfm@4.0.1  MIT  [bundled into a chunk]
   remark-parse@11.0.0  MIT  [bundled into a chunk]
   remark-rehype@11.1.2  MIT  [bundled into a chunk]
   remark-stringify@11.0.0  MIT  [bundled into a chunk]
-  remend@1.3.1  Apache-2.0  [bundled into a chunk]
+  remend@1.4.0  Apache-2.0  [bundled into a chunk]
   require-from-string@2.0.2  MIT  [node_modules tree]
   retry@0.12.0  MIT  [bundled into a chunk]
   retry@0.13.1  MIT  [bundled into a chunk]
@@ -576,33 +580,33 @@ they are listed so the index accounts for every module in the bundle.
   safer-buffer@2.1.2  MIT  [bundled into a chunk]
   sax@1.6.0  BlueOak-1.0.0  [node_modules tree]
   saxes@6.0.0  ISC  [node_modules tree]
-  scheduler@0.27.0  MIT  [bundled into a chunk]
+  scheduler@0.28.0  MIT  [bundled into a chunk]
   semver@7.7.4  ISC  [node_modules tree]
   semver@7.8.5  ISC  [node_modules tree]
   sharp@0.35.5  Apache-2.0  [node_modules tree, unpacked from the asar]
   shebang-command@2.0.0  MIT  [bundled into a chunk]
   shebang-regex@3.0.0  MIT  [bundled into a chunk]
   shiki@3.23.0  MIT  [bundled into a chunk]
-  shiki@4.4.3  MIT  [bundled into a chunk]
+  shiki@4.5.0  MIT  [bundled into a chunk]
   signal-exit@3.0.7  ISC  [bundled into a chunk]
   sonner@2.0.8  MIT  [bundled into a chunk]
   source-map-js@1.2.2  BSD-3-Clause  [node_modules tree]
   space-separated-tokens@2.0.2  MIT  [bundled into a chunk]
   standardwebhooks@1.1.1  MIT  [bundled into a chunk]
-  streamdown@2.6.0  Apache-2.0  [bundled into a chunk]
+  streamdown@2.7.0  Apache-2.0  [bundled into a chunk]
+  strictdom@1.0.1  MIT  [bundled into a chunk]
   stringify-entities@4.0.4  MIT  [bundled into a chunk]
   style-to-js@1.1.21  MIT  [bundled into a chunk]
   style-to-object@1.0.14  MIT  [bundled into a chunk]
   stylis@4.4.0  MIT  [bundled into a chunk]
-  symbol-tree@3.2.4  MIT  [node_modules tree]
-  tailwind-merge@3.6.0  MIT  [bundled into a chunk]
+  tailwind-merge@3.7.0  MIT  [bundled into a chunk]
   tailwindcss@4.3.3  MIT  [build-time source]
   tiny-typed-emitter@2.1.0  MIT  [node_modules tree]
-  tinyexec@1.3.0  MIT  [bundled into a chunk]
+  tinyexec@1.3.1  MIT  [bundled into a chunk]
   tldts@7.4.10  MIT  [node_modules tree]
   tldts-core@7.4.10  MIT  [node_modules tree]
   tough-cookie@6.0.2  BSD-3-Clause  [node_modules tree]
-  tr46@6.0.0  MIT  [node_modules tree]
+  tr46@7.0.0  MIT  [node_modules tree]
   trim-lines@3.0.1  MIT  [bundled into a chunk]
   trough@2.2.0  MIT  [bundled into a chunk]
   ts-algebra@2.0.0  MIT  [bundled into a chunk]
@@ -612,9 +616,9 @@ they are listed so the index accounts for every module in the bundle.
   tw-animate-css@1.4.0  MIT  [build-time source]
   typebox@1.3.27  MIT  [bundled into a chunk]
   typescript@7.0.2  Apache-2.0  [bundled into a chunk]
-  undici@7.29.1  MIT  [node_modules tree]
-  undici@8.10.2  MIT  [node_modules tree]
-  undici-types@8.3.0  MIT  [bundled into a chunk]
+  undici@7.30.1  MIT  [node_modules tree]
+  undici@8.12.2  MIT  [node_modules tree]
+  undici-types@8.9.0  MIT  [bundled into a chunk]
   unified@11.0.5  MIT  [bundled into a chunk]
   unist-util-is@6.0.1  MIT  [bundled into a chunk]
   unist-util-position@5.0.0  MIT  [bundled into a chunk]
@@ -625,24 +629,24 @@ they are listed so the index accounts for every module in the bundle.
   use-callback-ref@1.3.3  MIT  [bundled into a chunk]
   use-sidecar@1.1.3  MIT  [bundled into a chunk]
   use-stick-to-bottom@1.1.6  MIT  [bundled into a chunk]
-  uuid@14.0.1  MIT  [bundled into a chunk]
+  uuid@14.0.3  MIT  [bundled into a chunk]
   vfile@6.0.3  MIT  [bundled into a chunk]
   vfile-location@5.0.3  MIT  [bundled into a chunk]
   vfile-message@4.0.3  MIT  [bundled into a chunk]
-  w3c-xmlserializer@5.0.0  MIT  [node_modules tree]
+  w3c-xmlserializer@6.0.0  MIT  [node_modules tree]
   web-namespaces@2.0.1  MIT  [bundled into a chunk]
   web-streams-polyfill@3.3.3  MIT  [bundled into a chunk]
   webidl-conversions@8.0.1  BSD-2-Clause  [node_modules tree]
   whatwg-mimetype@5.0.0  MIT  [node_modules tree]
-  whatwg-url@16.0.1  MIT  [node_modules tree]
-  whatwg-url@17.1.0  MIT  [node_modules tree]
+  whatwg-url@17.3.0  MIT  [node_modules tree]
   which@2.0.2  ISC  [bundled into a chunk]
-  ws@8.21.3  MIT  [bundled into a chunk]
+  ws@8.22.0  MIT  [bundled into a chunk]
   xml-name-validator@5.0.0  Apache-2.0  [node_modules tree]
   xmlchars@2.2.0  MIT  [node_modules tree]
-  yaml@2.9.0  ISC  [node_modules tree]
+  yaml@2.9.1  ISC  [node_modules tree]
   zod@3.25.76  MIT  [bundled into a chunk]
   zod@4.4.3  MIT  [bundled into a chunk]
+  zod@4.6.7  MIT  [bundled into a chunk]
   zustand@5.0.15  MIT  [bundled into a chunk]
   zwitch@2.0.4  MIT  [bundled into a chunk]
 
@@ -654,7 +658,7 @@ Packages carrying byte-identical terms share one block; the package line names
 every one of them. A block reproduces each licence file the package publishes.
 
 =========================================================================================================
-Packages: @ai-sdk/gateway@4.0.68, @ai-sdk/provider@4.0.8, @streamdown/cjk@1.0.3, @streamdown/code@1.1.1, @streamdown/mermaid@1.0.2, ai@7.0.84, remend@1.3.1, streamdown@2.6.0
+Packages: @ai-sdk/gateway@4.0.115, @ai-sdk/provider@4.0.28, @streamdown/cjk@1.0.4, @streamdown/code@1.1.1, @streamdown/mermaid@1.0.3, ai@7.0.142, remend@1.4.0, streamdown@2.7.0
 SPDX: Apache-2.0
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -673,7 +677,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 =========================================================================================================
-Packages: @antfu/install-pkg@1.1.0
+Packages: @antfu/install-pkg@2.1.0
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -701,7 +705,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: @anthropic-ai/sandbox-runtime@0.0.74
+Packages: @anthropic-ai/sandbox-runtime@0.0.79
 SPDX: Apache-2.0
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -924,7 +928,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 
 =========================================================================================================
-Packages: @asamuzakjp/css-color@6.0.7
+Packages: @asamuzakjp/css-color@7.1.6
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -952,7 +956,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: @asamuzakjp/dom-selector@8.3.2
+Packages: @asamuzakjp/dom-selector@10.0.3
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -1188,7 +1192,7 @@ File: LICENSE
 
 
 =========================================================================================================
-Packages: @aws-sdk/core@3.978.1
+Packages: @aws-sdk/core@3.978.3
 SPDX: Apache-2.0
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -1395,7 +1399,7 @@ Apache License
    limitations under the License.
 
 =========================================================================================================
-Packages: @aws-sdk/credential-provider-env@3.972.72, @aws-sdk/credential-provider-ini@3.973.17, @aws-sdk/credential-provider-node@3.972.84, @aws-sdk/token-providers@3.1127.0, @aws-sdk/token-providers@3.1138.0, @aws-sdk/types@3.974.6, @aws-sdk/xml-builder@3.972.41, @smithy/credential-provider-imds@4.5.2, @smithy/fetch-http-handler@5.8.0, @smithy/node-http-handler@4.12.1, @smithy/signature-v4@5.7.4
+Packages: @aws-sdk/credential-provider-env@3.972.74, @aws-sdk/credential-provider-ini@3.973.19, @aws-sdk/credential-provider-node@3.972.86, @aws-sdk/token-providers@3.1127.0, @aws-sdk/token-providers@3.1150.0, @aws-sdk/types@3.974.6, @aws-sdk/xml-builder@3.972.41, @smithy/credential-provider-imds@4.5.2, @smithy/fetch-http-handler@5.8.0, @smithy/node-http-handler@4.12.1, @smithy/signature-v4@5.7.4
 SPDX: Apache-2.0
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -1602,7 +1606,7 @@ Apache License
    limitations under the License.
 
 =========================================================================================================
-Packages: @aws-sdk/credential-provider-process@3.972.72, @aws-sdk/credential-provider-sso@3.973.16, @aws-sdk/credential-provider-web-identity@3.972.78
+Packages: @aws-sdk/credential-provider-process@3.972.74, @aws-sdk/credential-provider-sso@3.973.18, @aws-sdk/credential-provider-web-identity@3.972.80
 SPDX: Apache-2.0
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -1809,7 +1813,7 @@ Apache License
    limitations under the License.
 
 =========================================================================================================
-Packages: @aws-sdk/eventstream-handler-node@3.972.35, @aws-sdk/middleware-websocket@3.972.54, @aws-sdk/signature-v4-multi-region@3.996.47, @smithy/core@3.35.0, @smithy/types@4.19.0
+Packages: @aws-sdk/eventstream-handler-node@3.972.36, @aws-sdk/middleware-websocket@3.972.56, @aws-sdk/signature-v4-multi-region@3.996.48, @smithy/core@3.36.0, @smithy/types@4.19.0
 SPDX: Apache-2.0
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -2017,7 +2021,7 @@ File: LICENSE
 
 
 =========================================================================================================
-Packages: @aws-sdk/middleware-eventstream@3.972.30
+Packages: @aws-sdk/middleware-eventstream@3.972.31
 SPDX: Apache-2.0
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -2407,7 +2411,7 @@ File: LICENSE
 
 
 =========================================================================================================
-Packages: @babel/runtime@7.29.7
+Packages: @babel/runtime@7.29.10
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -2699,7 +2703,7 @@ File: LICENSE.txt
 
 
 =========================================================================================================
-Packages: @csstools/color-helpers@6.1.1, @csstools/css-syntax-patches-for-csstree@1.1.8
+Packages: @csstools/color-helpers@6.1.2, @csstools/css-syntax-patches-for-csstree@1.1.15
 SPDX: MIT-0
 File: LICENSE.md
 ---------------------------------------------------------------------------------------------------------
@@ -2724,7 +2728,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: @csstools/css-calc@3.3.0, @csstools/css-color-parser@4.2.0, @csstools/css-parser-algorithms@4.0.0, @csstools/css-tokenizer@4.0.0
+Packages: @csstools/css-calc@3.4.3, @csstools/css-color-parser@4.2.6, @csstools/css-parser-algorithms@4.0.2, @csstools/css-tokenizer@4.0.2
 SPDX: MIT
 File: LICENSE.md
 ---------------------------------------------------------------------------------------------------------
@@ -2807,7 +2811,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: @exodus/bytes@1.15.1
+Packages: @exodus/bytes@1.16.0
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -3062,7 +3066,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 
 =========================================================================================================
-Packages: @google/genai@2.21.0, gaxios@7.3.0, gcp-metadata@8.1.2, google-auth-library@10.9.1, google-logging-utils@1.1.3, long@5.3.2
+Packages: @google/genai@2.21.0, gaxios@7.3.1, gcp-metadata@8.1.2, google-auth-library@10.9.1, google-logging-utils@1.1.3, google-logging-utils@1.2.0, long@5.3.2
 SPDX: Apache-2.0
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -3298,7 +3302,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 =========================================================================================================
-Packages: @iconify/utils@3.1.4
+Packages: @iconify/utils@3.1.7
 SPDX: MIT
 File: license.txt
 ---------------------------------------------------------------------------------------------------------
@@ -3414,7 +3418,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 
 =========================================================================================================
-Packages: @lezer/common@1.5.2, @lezer/highlight@1.2.3
+Packages: @lezer/common@1.5.3, @lezer/highlight@1.2.5
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -3442,7 +3446,7 @@ THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: @lezer/markdown@1.7.2
+Packages: @lezer/markdown@1.8.0
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -3470,7 +3474,7 @@ THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: @mermaid-js/parser@1.2.0
+Packages: @mermaid-js/parser@1.2.1
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -3550,7 +3554,7 @@ limitations under the License.
 
 
 =========================================================================================================
-Packages: @noble/hashes@2.3.0
+Packages: @noble/hashes@2.4.0
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -3577,7 +3581,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 =========================================================================================================
-Packages: @opentelemetry/api@1.9.1, @opentelemetry/api-logs@0.221.0, @opentelemetry/core@2.10.0, @opentelemetry/otlp-exporter-base@0.221.0, @opentelemetry/otlp-transformer@0.221.0, @opentelemetry/resources@2.10.0, @opentelemetry/sdk-logs@0.221.0, @opentelemetry/sdk-metrics@2.10.0, @opentelemetry/sdk-trace@2.10.0, @opentelemetry/semantic-conventions@1.43.0
+Packages: @opentelemetry/api@1.9.1, @opentelemetry/api-logs@0.223.0, @opentelemetry/core@2.12.0, @opentelemetry/otlp-exporter-base@0.223.0, @opentelemetry/otlp-transformer@0.223.0, @opentelemetry/resources@2.12.0, @opentelemetry/sdk-logs@0.223.0, @opentelemetry/sdk-metrics@2.12.0, @opentelemetry/sdk-trace@2.12.0, @opentelemetry/semantic-conventions@1.43.0
 SPDX: Apache-2.0
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -3873,7 +3877,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 =========================================================================================================
-Packages: @radix-ui/number@1.1.3, @radix-ui/primitive@1.1.5, @radix-ui/primitive@1.1.7, @radix-ui/react-accessible-icon@1.1.15, @radix-ui/react-accordion@1.2.20, @radix-ui/react-alert-dialog@1.1.23, @radix-ui/react-arrow@1.1.15, @radix-ui/react-aspect-ratio@1.1.15, @radix-ui/react-avatar@1.2.6, @radix-ui/react-checkbox@1.3.11, @radix-ui/react-collapsible@1.1.20, @radix-ui/react-collection@1.1.15, @radix-ui/react-compose-refs@1.1.3, @radix-ui/react-compose-refs@1.1.5, @radix-ui/react-context@1.2.0, @radix-ui/react-context@1.2.2, @radix-ui/react-context-menu@2.3.7, @radix-ui/react-dialog@1.1.19, @radix-ui/react-dialog@1.1.23, @radix-ui/react-direction@1.1.4, @radix-ui/react-dismissable-layer@1.1.15, @radix-ui/react-dismissable-layer@1.1.19, @radix-ui/react-dropdown-menu@2.1.24, @radix-ui/react-focus-guards@1.1.4, @radix-ui/react-focus-guards@1.1.6, @radix-ui/react-focus-scope@1.1.12, @radix-ui/react-focus-scope@1.1.16, @radix-ui/react-form@0.1.16, @radix-ui/react-hover-card@1.1.23, @radix-ui/react-id@1.1.2, @radix-ui/react-id@1.1.4, @radix-ui/react-label@2.1.15, @radix-ui/react-menu@2.1.24, @radix-ui/react-menubar@1.1.24, @radix-ui/react-navigation-menu@1.2.22, @radix-ui/react-one-time-password-field@0.1.16, @radix-ui/react-password-toggle-field@0.1.11, @radix-ui/react-popover@1.1.23, @radix-ui/react-popper@1.3.7, @radix-ui/react-portal@1.1.13, @radix-ui/react-portal@1.1.17, @radix-ui/react-presence@1.1.10, @radix-ui/react-presence@1.1.7, @radix-ui/react-primitive@2.1.10, @radix-ui/react-primitive@2.1.7, @radix-ui/react-progress@1.1.16, @radix-ui/react-radio-group@1.4.7, @radix-ui/react-roving-focus@1.1.19, @radix-ui/react-scroll-area@1.2.18, @radix-ui/react-select@2.3.7, @radix-ui/react-separator@1.1.15, @radix-ui/react-slider@1.4.7, @radix-ui/react-slot@1.3.0, @radix-ui/react-slot@1.3.3, @radix-ui/react-switch@1.3.7, @radix-ui/react-tabs@1.1.21, @radix-ui/react-toast@1.2.23, @radix-ui/react-toggle@1.1.18, @radix-ui/react-toggle-group@1.1.19, @radix-ui/react-toolbar@1.1.19, @radix-ui/react-tooltip@1.2.16, @radix-ui/react-use-callback-ref@1.1.2, @radix-ui/react-use-callback-ref@1.1.4, @radix-ui/react-use-controllable-state@1.2.3, @radix-ui/react-use-controllable-state@1.2.6, @radix-ui/react-use-effect-event@0.0.3, @radix-ui/react-use-effect-event@0.0.5, @radix-ui/react-use-escape-keydown@1.1.5, @radix-ui/react-use-is-hydrated@0.1.3, @radix-ui/react-use-layout-effect@1.1.2, @radix-ui/react-use-layout-effect@1.1.4, @radix-ui/react-use-previous@1.1.4, @radix-ui/react-use-rect@1.1.4, @radix-ui/react-use-size@1.1.4, @radix-ui/react-visually-hidden@1.2.11, @radix-ui/rect@1.1.3, radix-ui@1.6.7
+Packages: @radix-ui/number@1.1.3, @radix-ui/primitive@1.1.5, @radix-ui/primitive@1.2.0, @radix-ui/react-accessible-icon@1.2.0, @radix-ui/react-accordion@1.3.1, @radix-ui/react-alert-dialog@1.2.1, @radix-ui/react-arrow@1.1.17, @radix-ui/react-aspect-ratio@1.2.0, @radix-ui/react-avatar@1.3.1, @radix-ui/react-checkbox@1.4.1, @radix-ui/react-collapsible@1.2.1, @radix-ui/react-collection@1.2.0, @radix-ui/react-compose-refs@1.1.3, @radix-ui/react-compose-refs@1.1.5, @radix-ui/react-context@1.2.0, @radix-ui/react-context@1.3.0, @radix-ui/react-context-menu@2.4.1, @radix-ui/react-dialog@1.1.19, @radix-ui/react-dialog@1.3.1, @radix-ui/react-direction@1.2.0, @radix-ui/react-dismissable-layer@1.1.15, @radix-ui/react-dismissable-layer@1.2.1, @radix-ui/react-dropdown-menu@2.2.1, @radix-ui/react-focus-guards@1.1.4, @radix-ui/react-focus-guards@1.2.0, @radix-ui/react-focus-scope@1.1.12, @radix-ui/react-focus-scope@1.3.1, @radix-ui/react-form@0.3.0, @radix-ui/react-hover-card@1.2.1, @radix-ui/react-id@1.1.2, @radix-ui/react-id@1.1.4, @radix-ui/react-label@2.1.17, @radix-ui/react-menu@2.2.1, @radix-ui/react-menubar@1.2.1, @radix-ui/react-navigation-menu@1.4.1, @radix-ui/react-one-time-password-field@0.2.1, @radix-ui/react-password-toggle-field@0.2.1, @radix-ui/react-popover@1.3.1, @radix-ui/react-popper@1.4.0, @radix-ui/react-portal@1.1.13, @radix-ui/react-portal@1.2.0, @radix-ui/react-presence@1.1.11, @radix-ui/react-presence@1.1.7, @radix-ui/react-primitive@2.1.7, @radix-ui/react-primitive@2.2.0, @radix-ui/react-progress@1.2.1, @radix-ui/react-radio-group@1.5.1, @radix-ui/react-roving-focus@1.2.1, @radix-ui/react-scroll-area@1.4.0, @radix-ui/react-select@2.4.1, @radix-ui/react-separator@1.2.0, @radix-ui/react-slider@1.6.1, @radix-ui/react-slot@1.3.0, @radix-ui/react-slot@1.5.0, @radix-ui/react-switch@1.4.1, @radix-ui/react-tabs@1.2.1, @radix-ui/react-toast@1.3.1, @radix-ui/react-toggle@1.2.1, @radix-ui/react-toggle-group@1.2.1, @radix-ui/react-toolbar@1.2.1, @radix-ui/react-tooltip@1.4.1, @radix-ui/react-use-callback-ref@1.1.2, @radix-ui/react-use-callback-ref@1.1.5, @radix-ui/react-use-controllable-state@1.2.3, @radix-ui/react-use-controllable-state@1.3.0, @radix-ui/react-use-effect-event@0.0.3, @radix-ui/react-use-effect-event@0.0.5, @radix-ui/react-use-escape-keydown@1.1.6, @radix-ui/react-use-is-hydrated@0.1.3, @radix-ui/react-use-layout-effect@1.1.2, @radix-ui/react-use-layout-effect@1.1.4, @radix-ui/react-use-previous@1.1.4, @radix-ui/react-use-rect@1.1.4, @radix-ui/react-use-size@1.1.5, @radix-ui/react-visually-hidden@1.2.13, @radix-ui/rect@1.1.3, radix-ui@1.8.1
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -3901,7 +3905,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: @shikijs/core@3.23.0, @shikijs/core@4.4.3, @shikijs/engine-javascript@3.23.0, @shikijs/engine-javascript@4.4.3, @shikijs/engine-oniguruma@3.23.0, @shikijs/engine-oniguruma@4.4.3, @shikijs/langs@3.23.0, @shikijs/langs@4.4.3, @shikijs/monaco@4.4.3, @shikijs/primitive@4.4.3, @shikijs/themes@3.23.0, @shikijs/themes@4.4.3, @shikijs/types@3.23.0, @shikijs/types@4.4.3, shiki@3.23.0, shiki@4.4.3
+Packages: @shikijs/core@3.23.0, @shikijs/core@4.5.0, @shikijs/engine-javascript@3.23.0, @shikijs/engine-javascript@4.5.0, @shikijs/engine-oniguruma@3.23.0, @shikijs/engine-oniguruma@4.5.0, @shikijs/langs@3.23.0, @shikijs/langs@4.5.0, @shikijs/monaco@4.5.0, @shikijs/primitive@4.5.0, @shikijs/themes@3.23.0, @shikijs/themes@4.5.0, @shikijs/types@3.23.0, @shikijs/types@4.5.0, shiki@3.23.0, shiki@4.5.0
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -4013,7 +4017,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 =========================================================================================================
-Packages: @trpc/client@11.18.0, @trpc/server@11.18.0
+Packages: @trpc/client@11.19.0, @trpc/server@11.19.0
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -4041,7 +4045,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: @types/d3@7.4.3, @types/d3-array@3.2.2, @types/d3-axis@3.0.6, @types/d3-brush@3.0.6, @types/d3-chord@3.0.6, @types/d3-color@3.1.3, @types/d3-contour@3.0.6, @types/d3-delaunay@6.0.4, @types/d3-dispatch@3.0.7, @types/d3-drag@3.0.7, @types/d3-dsv@3.0.7, @types/d3-ease@3.0.2, @types/d3-fetch@3.0.7, @types/d3-force@3.0.10, @types/d3-format@3.0.4, @types/d3-geo@3.1.1, @types/d3-hierarchy@3.1.7, @types/d3-interpolate@3.0.4, @types/d3-path@3.1.1, @types/d3-polygon@3.0.2, @types/d3-quadtree@3.0.6, @types/d3-random@3.0.4, @types/d3-scale@4.0.9, @types/d3-scale-chromatic@3.1.0, @types/d3-selection@3.0.11, @types/d3-shape@3.1.8, @types/d3-time@3.0.4, @types/d3-time-format@4.0.3, @types/d3-timer@3.0.2, @types/d3-transition@3.0.9, @types/d3-zoom@3.0.8, @types/debug@4.1.13, @types/estree@1.0.9, @types/estree-jsx@1.0.5, @types/geojson@7946.0.16, @types/hast@3.0.5, @types/mdast@4.0.4, @types/ms@2.1.0, @types/node@26.3.0, @types/trusted-types@2.0.7, @types/unist@2.0.11, @types/unist@3.0.3
+Packages: @types/d3@7.4.3, @types/d3-array@3.2.2, @types/d3-axis@3.0.6, @types/d3-brush@3.0.6, @types/d3-chord@3.0.6, @types/d3-color@3.1.3, @types/d3-contour@3.0.6, @types/d3-delaunay@6.0.4, @types/d3-dispatch@3.0.7, @types/d3-drag@3.0.7, @types/d3-dsv@3.0.7, @types/d3-ease@3.0.2, @types/d3-fetch@3.0.7, @types/d3-force@3.0.10, @types/d3-format@3.0.4, @types/d3-geo@3.1.1, @types/d3-hierarchy@3.1.7, @types/d3-interpolate@3.0.4, @types/d3-path@3.1.1, @types/d3-polygon@3.0.2, @types/d3-quadtree@3.0.6, @types/d3-random@3.0.4, @types/d3-scale@4.0.9, @types/d3-scale-chromatic@3.1.0, @types/d3-selection@3.0.12, @types/d3-shape@3.2.0, @types/d3-time@3.0.4, @types/d3-time-format@4.0.3, @types/d3-timer@3.0.2, @types/d3-transition@3.0.9, @types/d3-zoom@3.0.9, @types/debug@4.1.13, @types/estree@1.0.9, @types/estree-jsx@1.0.5, @types/geojson@7946.0.16, @types/hast@3.0.5, @types/mdast@4.0.4, @types/ms@2.1.0, @types/node@26.6.5, @types/trusted-types@2.0.7, @types/unist@2.0.11, @types/unist@3.0.3
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -4097,7 +4101,7 @@ File: LICENSE
 
 
 =========================================================================================================
-Packages: @ungap/structured-clone@1.3.3
+Packages: @ungap/structured-clone@1.4.0
 SPDX: ISC
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -4441,7 +4445,7 @@ THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: acorn@8.18.0
+Packages: acorn@8.19.0
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -4900,7 +4904,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: bidi-js@1.0.3
+Packages: bidi-js@1.1.0
 SPDX: MIT
 File: LICENSE.txt
 ---------------------------------------------------------------------------------------------------------
@@ -5437,7 +5441,7 @@ THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: cytoscape@3.34.0
+Packages: cytoscape@3.34.4
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -5973,7 +5977,7 @@ THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: data-urls@7.0.0, html-encoding-sniffer@6.0.0, whatwg-mimetype@5.0.0
+Packages: data-urls@8.0.0, html-encoding-sniffer@7.0.0, whatwg-mimetype@5.0.0
 SPDX: MIT
 File: LICENSE.txt
 ---------------------------------------------------------------------------------------------------------
@@ -5987,7 +5991,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 
 =========================================================================================================
-Packages: dayjs@1.11.21
+Packages: dayjs@1.11.23
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -6072,7 +6076,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: decode-named-character-reference@1.3.0, hast-util-from-parse5@8.0.3, hast-util-raw@9.1.0, hast-util-sanitize@5.0.2, hast-util-to-html@9.0.5, hast-util-to-jsx-runtime@2.3.6, hast-util-to-parse5@8.0.1, hastscript@9.0.1, markdown-table@3.0.4, mdast-util-find-and-replace@3.0.2, mdast-util-from-markdown@2.0.3, mdast-util-gfm@3.1.0, mdast-util-gfm-footnote@2.1.0, mdast-util-to-markdown@2.1.2, micromark@4.0.2, micromark-core-commonmark@2.0.3, micromark-extension-gfm-table@2.1.1, micromark-factory-destination@2.0.1, micromark-factory-label@2.0.1, micromark-factory-space@2.0.1, micromark-factory-title@2.0.1, micromark-factory-whitespace@2.0.1, micromark-util-character@2.1.1, micromark-util-chunked@2.0.1, micromark-util-classify-character@2.0.1, micromark-util-combine-extensions@2.0.1, micromark-util-decode-numeric-character-reference@2.0.2, micromark-util-decode-string@2.0.1, micromark-util-encode@2.0.1, micromark-util-html-tag-name@2.0.1, micromark-util-normalize-identifier@2.0.1, micromark-util-resolve-all@2.0.1, micromark-util-sanitize-uri@2.0.1, micromark-util-subtokenize@2.1.0, micromark-util-symbol@2.0.1, micromark-util-types@2.0.2, remark-gfm@4.0.1, remark-rehype@11.1.2, vfile-message@4.0.3
+Packages: decode-named-character-reference@1.3.0, hast-util-from-parse5@8.0.3, hast-util-raw@9.1.0, hast-util-sanitize@5.0.2, hast-util-to-html@9.0.5, hast-util-to-jsx-runtime@2.3.6, hast-util-to-parse5@8.0.1, hastscript@9.0.1, markdown-table@3.0.4, mdast-util-find-and-replace@3.0.3, mdast-util-from-markdown@2.1.0, mdast-util-gfm@3.1.0, mdast-util-gfm-footnote@2.1.0, mdast-util-gfm-strikethrough@2.0.1, mdast-util-to-markdown@2.2.0, micromark@4.0.3, micromark-core-commonmark@2.0.4, micromark-extension-gfm-table@2.1.2, micromark-factory-destination@2.0.1, micromark-factory-label@2.0.1, micromark-factory-space@2.1.0, micromark-factory-title@2.0.1, micromark-factory-whitespace@2.0.1, micromark-util-character@2.1.1, micromark-util-chunked@2.0.1, micromark-util-classify-character@2.0.1, micromark-util-combine-extensions@2.0.1, micromark-util-decode-numeric-character-reference@2.0.2, micromark-util-decode-string@2.0.1, micromark-util-edit-map@1.0.0, micromark-util-encode@2.0.1, micromark-util-html-tag-name@2.0.1, micromark-util-normalize-identifier@2.0.1, micromark-util-resolve-all@2.0.1, micromark-util-sanitize-uri@2.0.1, micromark-util-subtokenize@2.1.0, micromark-util-symbol@2.0.1, micromark-util-types@2.0.3, remark-gfm@4.0.1, remark-rehype@11.1.2, vfile-message@4.0.3
 SPDX: MIT
 File: license
 ---------------------------------------------------------------------------------------------------------
@@ -6452,7 +6456,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 =========================================================================================================
-Packages: dompurify@3.4.16
+Packages: dompurify@3.4.16, dompurify@3.4.17
 SPDX: (MPL-2.0 OR Apache-2.0)
 File: LICENSE
 File: LICENSE-MPL
@@ -7262,9 +7266,10 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 =========================================================================================================
-Packages: es-toolkit@1.50.0
+Packages: es-toolkit@1.52.0
 SPDX: MIT
 File: LICENSE
+File: NOTICE
 ---------------------------------------------------------------------------------------------------------
 MIT License
 
@@ -7287,6 +7292,46 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+es-toolkit
+
+Parts of the test suite and compatibility layer in es-toolkit/compat are
+derived from Lodash (https://github.com/lodash/lodash).
+
+Lodash copyright notice and MIT permission notice:
+
+Copyright OpenJS Foundation and other contributors <https://openjsf.org/>
+
+Based on Underscore.js, copyright Jeremy Ashkenas,
+DocumentCloud and Investigative Reporters & Editors <http://underscorejs.org/>
+
+This software consists of voluntary contributions made by many
+individuals. For exact contribution history, see the revision history
+available at https://github.com/lodash/lodash
+
+The following license applies to all parts of this software except as
+documented below:
+
+====
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 =========================================================================================================
@@ -7318,7 +7363,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: escape-string-regexp@5.0.0, get-east-asian-width@1.6.0, is-plain-obj@4.1.0
+Packages: escape-string-regexp@5.0.0, get-east-asian-width@1.7.0, is-plain-obj@4.1.0
 SPDX: MIT
 File: license
 ---------------------------------------------------------------------------------------------------------
@@ -7334,7 +7379,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 
 =========================================================================================================
-Packages: estree-util-is-identifier-name@3.0.0, mdast-util-gfm-autolink-literal@2.0.1, mdast-util-gfm-strikethrough@2.0.0, mdast-util-gfm-table@2.0.0, mdast-util-gfm-task-list-item@2.0.0, mdast-util-mdx-expression@2.0.1, mdast-util-mdx-jsx@3.2.0, mdast-util-mdxjs-esm@2.0.1, micromark-extension-gfm@3.0.0, micromark-extension-gfm-autolink-literal@2.1.0, micromark-extension-gfm-strikethrough@2.1.0, micromark-extension-gfm-tagfilter@2.0.0, micromark-extension-gfm-task-list-item@2.1.0
+Packages: estree-util-is-identifier-name@3.0.0, mdast-util-gfm-autolink-literal@2.0.1, mdast-util-gfm-table@2.0.0, mdast-util-gfm-task-list-item@2.0.0, mdast-util-mdx-expression@2.0.1, mdast-util-mdx-jsx@3.2.0, mdast-util-mdxjs-esm@2.0.1, micromark-extension-gfm@3.0.0, micromark-extension-gfm-autolink-literal@2.1.0, micromark-extension-gfm-strikethrough@2.1.0, micromark-extension-gfm-tagfilter@2.0.0, micromark-extension-gfm-task-list-item@2.1.0
 SPDX: MIT
 File: license
 ---------------------------------------------------------------------------------------------------------
@@ -7572,6 +7617,134 @@ SOFTWARE.
 
 
 =========================================================================================================
+Packages: fractional-indexing@3.2.0
+SPDX: CC0-1.0
+File: LICENSE
+---------------------------------------------------------------------------------------------------------
+Creative Commons Legal Code
+
+CC0 1.0 Universal
+
+    CREATIVE COMMONS CORPORATION IS NOT A LAW FIRM AND DOES NOT PROVIDE
+    LEGAL SERVICES. DISTRIBUTION OF THIS DOCUMENT DOES NOT CREATE AN
+    ATTORNEY-CLIENT RELATIONSHIP. CREATIVE COMMONS PROVIDES THIS
+    INFORMATION ON AN "AS-IS" BASIS. CREATIVE COMMONS MAKES NO WARRANTIES
+    REGARDING THE USE OF THIS DOCUMENT OR THE INFORMATION OR WORKS
+    PROVIDED HEREUNDER, AND DISCLAIMS LIABILITY FOR DAMAGES RESULTING FROM
+    THE USE OF THIS DOCUMENT OR THE INFORMATION OR WORKS PROVIDED
+    HEREUNDER.
+
+Statement of Purpose
+
+The laws of most jurisdictions throughout the world automatically confer
+exclusive Copyright and Related Rights (defined below) upon the creator
+and subsequent owner(s) (each and all, an "owner") of an original work of
+authorship and/or a database (each, a "Work").
+
+Certain owners wish to permanently relinquish those rights to a Work for
+the purpose of contributing to a commons of creative, cultural and
+scientific works ("Commons") that the public can reliably and without fear
+of later claims of infringement build upon, modify, incorporate in other
+works, reuse and redistribute as freely as possible in any form whatsoever
+and for any purposes, including without limitation commercial purposes.
+These owners may contribute to the Commons to promote the ideal of a free
+culture and the further production of creative, cultural and scientific
+works, or to gain reputation or greater distribution for their Work in
+part through the use and efforts of others.
+
+For these and/or other purposes and motivations, and without any
+expectation of additional consideration or compensation, the person
+associating CC0 with a Work (the "Affirmer"), to the extent that he or she
+is an owner of Copyright and Related Rights in the Work, voluntarily
+elects to apply CC0 to the Work and publicly distribute the Work under its
+terms, with knowledge of his or her Copyright and Related Rights in the
+Work and the meaning and intended legal effect of CC0 on those rights.
+
+1. Copyright and Related Rights. A Work made available under CC0 may be
+protected by copyright and related or neighboring rights ("Copyright and
+Related Rights"). Copyright and Related Rights include, but are not
+limited to, the following:
+
+  i. the right to reproduce, adapt, distribute, perform, display,
+     communicate, and translate a Work;
+ ii. moral rights retained by the original author(s) and/or performer(s);
+iii. publicity and privacy rights pertaining to a person's image or
+     likeness depicted in a Work;
+ iv. rights protecting against unfair competition in regards to a Work,
+     subject to the limitations in paragraph 4(a), below;
+  v. rights protecting the extraction, dissemination, use and reuse of data
+     in a Work;
+ vi. database rights (such as those arising under Directive 96/9/EC of the
+     European Parliament and of the Council of 11 March 1996 on the legal
+     protection of databases, and under any national implementation
+     thereof, including any amended or successor version of such
+     directive); and
+vii. other similar, equivalent or corresponding rights throughout the
+     world based on applicable law or treaty, and any national
+     implementations thereof.
+
+2. Waiver. To the greatest extent permitted by, but not in contravention
+of, applicable law, Affirmer hereby overtly, fully, permanently,
+irrevocably and unconditionally waives, abandons, and surrenders all of
+Affirmer's Copyright and Related Rights and associated claims and causes
+of action, whether now known or unknown (including existing as well as
+future claims and causes of action), in the Work (i) in all territories
+worldwide, (ii) for the maximum duration provided by applicable law or
+treaty (including future time extensions), (iii) in any current or future
+medium and for any number of copies, and (iv) for any purpose whatsoever,
+including without limitation commercial, advertising or promotional
+purposes (the "Waiver"). Affirmer makes the Waiver for the benefit of each
+member of the public at large and to the detriment of Affirmer's heirs and
+successors, fully intending that such Waiver shall not be subject to
+revocation, rescission, cancellation, termination, or any other legal or
+equitable action to disrupt the quiet enjoyment of the Work by the public
+as contemplated by Affirmer's express Statement of Purpose.
+
+3. Public License Fallback. Should any part of the Waiver for any reason
+be judged legally invalid or ineffective under applicable law, then the
+Waiver shall be preserved to the maximum extent permitted taking into
+account Affirmer's express Statement of Purpose. In addition, to the
+extent the Waiver is so judged Affirmer hereby grants to each affected
+person a royalty-free, non transferable, non sublicensable, non exclusive,
+irrevocable and unconditional license to exercise Affirmer's Copyright and
+Related Rights in the Work (i) in all territories worldwide, (ii) for the
+maximum duration provided by applicable law or treaty (including future
+time extensions), (iii) in any current or future medium and for any number
+of copies, and (iv) for any purpose whatsoever, including without
+limitation commercial, advertising or promotional purposes (the
+"License"). The License shall be deemed effective as of the date CC0 was
+applied by Affirmer to the Work. Should any part of the License for any
+reason be judged legally invalid or ineffective under applicable law, such
+partial invalidity or ineffectiveness shall not invalidate the remainder
+of the License, and in such case Affirmer hereby affirms that he or she
+will not (i) exercise any of his or her remaining Copyright and Related
+Rights in the Work or (ii) assert any associated claims and causes of
+action with respect to the Work, in either case contrary to Affirmer's
+express Statement of Purpose.
+
+4. Limitations and Disclaimers.
+
+ a. No trademark or patent rights held by Affirmer are waived, abandoned,
+    surrendered, licensed or otherwise affected by this document.
+ b. Affirmer offers the Work as-is and makes no representations or
+    warranties of any kind concerning the Work, express, implied,
+    statutory or otherwise, including without limitation warranties of
+    title, merchantability, fitness for a particular purpose, non
+    infringement, or the absence of latent or other defects, accuracy, or
+    the present or absence of errors, whether or not discoverable, all to
+    the greatest extent permissible under applicable law.
+ c. Affirmer disclaims responsibility for clearing rights of other persons
+    that may apply to the Work or any use thereof, including without
+    limitation any person's Copyright and Related Rights in the Work.
+    Further, Affirmer disclaims responsibility for obtaining any necessary
+    consents, permissions or other rights required for any use of the
+    Work.
+ d. Affirmer understands and acknowledges that Creative Commons is not a
+    party to this document and has no duty or obligation with respect to
+    this CC0 or use of the Work.
+
+
+=========================================================================================================
 Packages: framer-motion@13.1.1
 SPDX: MIT
 File: LICENSE.md
@@ -7650,7 +7823,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: gpt-tokenizer@4.0.0
+Packages: gpt-tokenizer@4.0.3
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -8007,7 +8180,7 @@ THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: jsdom@30.0.1
+Packages: jsdom@30.1.3
 SPDX: MIT
 File: LICENSE.txt
 ---------------------------------------------------------------------------------------------------------
@@ -8614,7 +8787,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: lru-cache@11.5.2, sax@1.6.0
+Packages: lru-cache@11.5.3, sax@1.6.0
 SPDX: BlueOak-1.0.0
 File: LICENSE.md
 ---------------------------------------------------------------------------------------------------------
@@ -8676,7 +8849,7 @@ software or this license, under any kind of legal claim.***
 
 
 =========================================================================================================
-Packages: marked@14.0.0, marked@16.4.2, marked@17.0.6
+Packages: marked@14.0.0, marked@16.4.2
 SPDX: MIT
 File: LICENSE.md
 ---------------------------------------------------------------------------------------------------------
@@ -8727,7 +8900,7 @@ This software is provided by the copyright holders and contributors “as is” 
 
 
 =========================================================================================================
-Packages: marked@18.0.11
+Packages: marked@18.1.1
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -8808,7 +8981,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: mdast-util-to-markdown-cjk-friendly@1.0.0, mdast-util-to-markdown-cjk-friendly-gfm-strikethrough@1.0.0, remark-cjk-friendly@2.3.1, remark-cjk-friendly-gfm-strikethrough@2.3.1
+Packages: mdast-util-to-markdown-cjk-friendly@1.0.0, mdast-util-to-markdown-cjk-friendly-gfm-strikethrough@1.0.0, remark-cjk-friendly@2.3.2, remark-cjk-friendly-gfm-strikethrough@2.3.1
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -8966,7 +9139,7 @@ For more information, please see
 
 
 =========================================================================================================
-Packages: mermaid@11.16.1
+Packages: mermaid@11.17.2
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -8994,7 +9167,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: micromark-extension-cjk-friendly@2.0.1
+Packages: micromark-extension-cjk-friendly@2.0.2
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -9212,7 +9385,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: nanoid@6.0.1
+Packages: nanoid@6.0.2
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -10006,7 +10179,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 
 =========================================================================================================
-Packages: package-manager-detector@1.8.0
+Packages: package-manager-detector@1.9.0
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -10173,7 +10346,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: protobufjs@7.6.5
+Packages: protobufjs@7.6.6
 SPDX: BSD-3-Clause
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -10247,7 +10420,7 @@ THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: react@19.2.8, react-dom@19.2.8, scheduler@0.27.0
+Packages: react@19.3.1, react-dom@19.3.1, scheduler@0.28.0
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -10946,35 +11119,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: symbol-tree@3.2.4
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-The MIT License (MIT)
-
-Copyright (c) 2015 Joris van der Wel
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-
-
-=========================================================================================================
-Packages: tailwind-merge@3.6.0
+Packages: tailwind-merge@3.7.0
 SPDX: MIT
 File: LICENSE.md
 ---------------------------------------------------------------------------------------------------------
@@ -11030,7 +11175,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: tinyexec@1.3.0
+Packages: tinyexec@1.3.1
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -11097,7 +11242,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 
 =========================================================================================================
-Packages: tr46@6.0.0
+Packages: tr46@7.0.0
 SPDX: MIT
 File: LICENSE.md
 ---------------------------------------------------------------------------------------------------------
@@ -11756,7 +11901,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: undici@7.29.1, undici@8.10.2, undici-types@8.3.0
+Packages: undici@7.30.1, undici@8.12.2, undici-types@8.9.0
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -11896,7 +12041,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: uuid@14.0.1
+Packages: uuid@14.0.3
 SPDX: MIT
 File: LICENSE.md
 ---------------------------------------------------------------------------------------------------------
@@ -11912,7 +12057,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 
 =========================================================================================================
-Packages: w3c-xmlserializer@5.0.0
+Packages: w3c-xmlserializer@6.0.0
 SPDX: MIT
 File: LICENSE.md
 ---------------------------------------------------------------------------------------------------------
@@ -11992,7 +12137,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 
 =========================================================================================================
-Packages: whatwg-url@16.0.1, whatwg-url@17.1.0
+Packages: whatwg-url@17.3.0
 SPDX: MIT
 File: LICENSE.txt
 ---------------------------------------------------------------------------------------------------------
@@ -12020,7 +12165,7 @@ THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: ws@8.21.3
+Packages: ws@8.22.0
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -12255,7 +12400,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: yaml@2.9.0
+Packages: yaml@2.9.1
 SPDX: ISC
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -12275,7 +12420,7 @@ THIS SOFTWARE.
 
 
 =========================================================================================================
-Packages: zod@3.25.76, zod@4.4.3
+Packages: zod@3.25.76, zod@4.4.3, zod@4.6.7
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -12331,23 +12476,23 @@ SOFTWARE.
 
 
 =========================================================================================================
-4. PACKAGES THAT PUBLISH NO LICENCE FILE (15)
+4. PACKAGES THAT PUBLISH NO LICENCE FILE (17)
 =========================================================================================================
 
 These packages declare a licence in their manifest but ship no licence file in the
 published tarball. The declaration and the upstream source are recorded verbatim;
 no licence text is substituted for them here.
 
-  @ai-sdk/provider-utils@5.0.33
+  @ai-sdk/provider-utils@5.0.61
     declared: Apache-2.0
     source:   https://github.com/vercel/ai
-  @aws-sdk/credential-provider-http@3.972.74
+  @aws-sdk/credential-provider-http@3.972.76
     declared: Apache-2.0
     source:   https://github.com/aws/aws-sdk-js-v3
-  @aws-sdk/credential-provider-login@3.972.79
+  @aws-sdk/credential-provider-login@3.972.81
     declared: Apache-2.0
     source:   https://github.com/aws/aws-sdk-js-v3
-  @aws-sdk/nested-clients@3.997.46
+  @aws-sdk/nested-clients@3.997.48
     declared: Apache-2.0
     source:   https://github.com/aws/aws-sdk-js-v3
   @earendil-works/chord@1.0.0
@@ -12368,6 +12513,9 @@ no licence text is substituted for them here.
   data-uri-to-buffer@4.0.1
     declared: MIT
     source:   git://github.com/TooTallNate/node-data-uri-to-buffer
+  fastdom@1.0.12
+    declared: MIT
+    source:   git://github.com/wilsonpage/fastdom
   lazy-val@1.0.5
     declared: MIT
     source:   develar/lazy-val
@@ -12383,6 +12531,9 @@ no licence text is substituted for them here.
   standardwebhooks@1.1.1
     declared: MIT
     source:   https://github.com/standard-webhooks/standard-webhooks
+  strictdom@1.0.1
+    declared: MIT
+    source:   git://github.com/wilsonpage/strictdom
 
 =========================================================================================================
 5. NATIVE PLATFORM PACKAGES (3)
@@ -12683,7 +12834,7 @@ Development dependencies are not part of the bundle, with these exceptions: thei
 own code or generated output is part of what the build emits into the application.
 
 =========================================================================================================
-Package: electron@44.0.0
+Package: electron@44.8.0
 SPDX: MIT
 Note: The application bundle IS an Electron app: its runtime, helpers and framework are
       the shipped executable, so Electron's own licence belongs here even though the
@@ -13033,7 +13184,7 @@ embedded source. Refresh this notice when Monaco's embedded source changes.
 
 
 =========================================================================================================
-10. DECLARATIONS FLAGGED FOR REVIEW (3)
+10. DECLARATIONS FLAGGED FOR REVIEW (4)
 =========================================================================================================
 
 Declarations above that are not a plain permissive grant, listed so a reviewer can
@@ -13043,4 +13194,5 @@ and apps/desktop/notices/README.md records what is open.
 
   @img/sharp-libvips-darwin-arm64@1.3.4 — LGPL-3.0-or-later
   dompurify@3.4.16 — (MPL-2.0 OR Apache-2.0)
+  dompurify@3.4.17 — (MPL-2.0 OR Apache-2.0)
   node-forge@1.4.0 — (BSD-3-Clause OR GPL-2.0)

@@ -102,7 +102,12 @@ export const CLUSTERS = {
   },
   worktree: {
     doc: "ticket worktrees: git, ensure/trim/remove, snapshots, activity and the cleanup engine",
-    files: ["worktree/**", "worktree-runtime.ts", "credential-helper-diagnostics.ts"],
+    files: [
+      "worktree/**",
+      "worktree-runtime.ts",
+      "worktree-reads.ts",
+      "credential-helper-diagnostics.ts",
+    ],
   },
   board: {
     doc: "Projects and Tickets: create, relink, roots, base branch, ticket commands, moves and wakes",
@@ -164,7 +169,6 @@ export const PRIVATE = {
   // Test-only resets of module state: test support, so `./testing` serves them.
   "worktree/deletion-lease.ts": ["resetDeletionLeasesForTest"],
   "worktree/index.ts": ["resetDeletionLeasesForTest"],
-  "worktree/snapshot.ts": ["resetWorktreeSnapshotsForTest"],
   "orphan-scan.ts": ["resetOrphanScanForTest"],
   "retention-runtime.ts": ["resetRetentionWatcherForTest"],
 };

@@ -4,6 +4,7 @@ import type {
   ModelSelection,
   RuntimeMessageSettle,
   RuntimeObservation,
+  RuntimeResumeBoundary,
   SessionAttachmentContinuity,
   SessionInteraction,
   SessionInteractionResolution,
@@ -198,16 +199,24 @@ export interface BindingHandle {
    * it was asking stays unanswered, and nothing may conclude otherwise.
    */
   withdrawInteraction?(interactionId: string): Promise<void>;
+  /**
+   * Where this idle binding's conversation stands, read before a host
+   * continues a turn a lost process cut short (VC-450). Optional, and `null`
+   * when the executor cannot say: either way nothing is continued on its own.
+   */
+  resumeBoundary?(): RuntimeResumeBoundary | null;
   release(reason: ReleaseReason): Promise<void>;
 }
 
 /**
- * The one structured executor a Session runtime holds.
+ * One structured runtime in a Session runtime's executor slot
+ * (`SessionExecutorSlot`, VC-916).
  *
  * `id` is durable: it is written onto every attachment this adapter opens, as
  * the discriminator between a terminal companion and the structured executor,
  * and history outlives the build that wrote it — so it is read back from disk
- * long after the adapter that wrote it is gone. `adapterVersion` and `runtime`
+ * long after the adapter that wrote it is gone. It is also the runtime id the
+ * executor slot is keyed by and selects on. `adapterVersion` and `runtime`
  * are the identity every durable fact this adapter produces is stamped with,
  * and `runtime` in particular is recorded inside each binding envelope.
  */

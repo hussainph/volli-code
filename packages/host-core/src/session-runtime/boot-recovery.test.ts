@@ -5,6 +5,7 @@ import {
   closeStaleAttachments,
   type BootRecoveryAttachment,
   type BootRecoveryEngine,
+  type BootRecoveryFailure,
   type BootRecoverySession,
 } from "./boot-recovery";
 
@@ -49,6 +50,8 @@ function recorder(
   byProject: Record<string, readonly BootRecoverySession[]>,
   observe?: (observation: SessionObservation) => Promise<void>,
   reconcile?: (input: { sessionId: string; attachmentId: string }) => Promise<void>,
+  /** The ledger as it stands after a reconcile; the listing, by default. */
+  current?: (sessionId: string) => Promise<BootRecoverySession | null>,
 ): Recorder {
   const observed: SessionObservation[] = [];
   const queried: string[] = [];
@@ -70,6 +73,12 @@ function recorder(
         observed.push(observation);
         if (observe) await observe(observation);
       },
+      getSession: async ({ sessionId }) =>
+        current
+          ? current(sessionId)
+          : (Object.values(byProject)
+              .flat()
+              .find((listed) => listed.session.id === sessionId) ?? null),
     },
   };
 }
@@ -126,7 +135,7 @@ describe("closeStaleAttachments", () => {
       await closeStaleAttachments({
         engine: target.engine,
         venue: { id: "host-uuid", kind: "remote" },
-        ownsLegacyVenue: (venue) => venue.kind === "remote" && venue.id === legacy.id,
+        ownsLegacyRunner: (venue) => venue.kind === "remote" && venue.id === legacy.id,
         reconcile: target.reconcile,
         projectIds: ["p"],
         newId: () => `legacy-${++sequence}`,
@@ -160,7 +169,10 @@ describe("closeStaleAttachments", () => {
           source: {
             kind: "system",
             id: "desktop-recovery",
-            detail: { sessionOrigin: { kind: "volli", reason: "relaunch-recovery" } },
+            detail: {
+              sessionOrigin: { kind: "volli", reason: "relaunch-recovery" },
+              bootRecovery: { reason: "not_rebuildable", error: null },
+            },
           },
           venue: { id: "local", kind: "local" },
         },
@@ -182,7 +194,10 @@ describe("closeStaleAttachments", () => {
           source: {
             kind: "system",
             id: "desktop-recovery",
-            detail: { sessionOrigin: { kind: "volli", reason: "relaunch-recovery" } },
+            detail: {
+              sessionOrigin: { kind: "volli", reason: "relaunch-recovery" },
+              bootRecovery: { reason: "not_rebuildable", error: null },
+            },
           },
           venue: { id: "local", kind: "local" },
         },
@@ -618,4 +633,264 @@ it("recovers only the supplied headless venue, leaving other hosts alone", async
       (event) => event.attachmentId === "terminal" && event.provenance.venue?.id === "hostd-one",
     ),
   ).toBe(true);
+});
+
+/** One sweep with the failure hooks a host supplies. */
+function failedSweep(
+  target: Recorder,
+  holdsBinding: ((attachmentId: string) => boolean) | undefined,
+  onError = vi.fn(),
+) {
+  const failures: BootRecoveryFailure[] = [];
+  const onRecovered = vi.fn();
+  const result = closeStaleAttachments({
+    engine: target.engine,
+    reconcile: target.reconcile,
+    ...(holdsBinding === undefined ? {} : { holdsBinding }),
+    projectIds: ["p"],
+    newId: () => "event",
+    now: () => 1,
+    onError,
+    onFailure: (failure) => failures.push(failure),
+    onRecovered,
+  });
+  return { result, failures, onRecovered, onError };
+}
+
+// VC-926: a reconcile can fail after the executor rebuilt the binding and
+// replayed how the lost turn ended. The listing predates that replay, so the
+// sweep reads the ledger again before it decides the turn is lost.
+describe("closeStaleAttachments → a reconcile that failed (VC-926)", () => {
+  const lost = () => session("s", [attachment({ id: "pi-1", adapterId: "pi" })], true);
+  const conflict = Object.assign(new Error("Command c already has a terminal receipt"), {
+    name: "SessionEngineConflictError",
+  });
+
+  it("keeps a rebuilt attachment whose executor already ended the turn, for restart resume", async () => {
+    const target = recorder(
+      { p: [lost()] },
+      undefined,
+      async () => {
+        throw conflict;
+      },
+      async () => ({ ...lost(), turnActive: false }),
+    );
+    const outcome = failedSweep(target, (id) => id === "pi-1");
+    await expect(outcome.result).resolves.toBe(0);
+    expect(target.observed).toEqual([]);
+    expect(outcome.failures).toEqual([
+      {
+        sessionId: "s",
+        attachmentId: "pi-1",
+        reason: "reconcile_failed",
+        outcome: "recovered",
+        error: conflict,
+      },
+    ]);
+    expect(outcome.onError).not.toHaveBeenCalled();
+    expect(outcome.onRecovered).toHaveBeenCalledExactlyOnceWith({
+      turns: [{ sessionId: "s", attachmentId: "pi-1" }],
+      lostAt: null,
+    });
+  });
+
+  it("closes a rebuilt attachment whose turn is still open, saying why", async () => {
+    const target = recorder({ p: [lost()] }, undefined, async () => {
+      throw conflict;
+    });
+    const outcome = failedSweep(target, () => true);
+    await expect(outcome.result).resolves.toBe(1);
+    expect(outcome.failures).toMatchObject([{ reason: "reconcile_failed", outcome: "closed" }]);
+    const why = {
+      sessionOrigin: { kind: "volli", reason: "relaunch-recovery" },
+      bootRecovery: { reason: "reconcile_failed", error: { name: "SessionEngineConflictError" } },
+    };
+    expect(target.observed).toMatchObject([
+      { kind: "attention.raised", provenance: { source: { detail: why } } },
+      { kind: "attachment.closed", provenance: { source: { detail: why } } },
+    ]);
+    expect(outcome.onRecovered).toHaveBeenCalledExactlyOnceWith({ turns: [], lostAt: null });
+  });
+
+  it("closes an attachment the executor could not rebuild, with its error's class and code only", async () => {
+    const timeout = Object.assign(new Error("binding recovery did not finish at /Users/ada/x"), {
+      name: "NativeAttachmentError",
+      code: "queue_admission_timeout",
+    });
+    // Whatever the ledger says now, an executor that is not live recovered nothing.
+    const target = recorder(
+      { p: [lost()] },
+      undefined,
+      async () => {
+        throw timeout;
+      },
+      async () => ({ ...lost(), turnActive: false }),
+    );
+    const outcome = failedSweep(target, () => false);
+    await expect(outcome.result).resolves.toBe(1);
+    expect(outcome.failures).toMatchObject([
+      { reason: "binding_unrecoverable", outcome: "closed" },
+    ]);
+    expect(target.observed.map(({ provenance }) => provenance.source.detail)).toEqual([
+      {
+        sessionOrigin: { kind: "volli", reason: "relaunch-recovery" },
+        bootRecovery: {
+          reason: "binding_unrecoverable",
+          error: { name: "NativeAttachmentError", code: "queue_admission_timeout" },
+        },
+      },
+      {
+        sessionOrigin: { kind: "volli", reason: "relaunch-recovery" },
+        bootRecovery: {
+          reason: "binding_unrecoverable",
+          error: { name: "NativeAttachmentError", code: "queue_admission_timeout" },
+        },
+      },
+    ]);
+    expect(JSON.stringify(target.observed)).not.toContain("/Users/ada");
+  });
+
+  it("counts every failure as unrebuildable when the host cannot say whether a binding is live", async () => {
+    const target = recorder(
+      { p: [lost()] },
+      undefined,
+      async () => {
+        throw conflict;
+      },
+      async () => ({ ...lost(), turnActive: false }),
+    );
+    const outcome = failedSweep(target, undefined);
+    await expect(outcome.result).resolves.toBe(1);
+    expect(outcome.failures).toMatchObject([
+      { reason: "binding_unrecoverable", outcome: "closed" },
+    ]);
+  });
+
+  it.each([
+    ["cannot be read", async () => Promise.reject(new Error("ledger busy"))],
+    ["is gone", async () => null],
+    [
+      "closed the attachment",
+      async () => ({
+        ...lost(),
+        turnActive: false,
+        attachments: [attachment({ id: "pi-1", adapterId: "pi", status: "closed" as const })],
+      }),
+    ],
+  ])("treats the turn as still open when the Session %s", async (_case, current) => {
+    const target = recorder(
+      { p: [lost()] },
+      undefined,
+      async () => {
+        throw conflict;
+      },
+      current,
+    );
+    const outcome = failedSweep(target, () => true);
+    await outcome.result;
+    expect(outcome.failures).toMatchObject([{ reason: "reconcile_failed", outcome: "closed" }]);
+    expect(target.observed.map(({ kind }) => kind)).toEqual([
+      "attention.raised",
+      "attachment.closed",
+    ]);
+  });
+
+  it("starts nothing more when the host closes while it rereads the ledger", async () => {
+    let closing = false;
+    const target = recorder(
+      { p: [lost()] },
+      undefined,
+      async () => {
+        throw conflict;
+      },
+      async () => {
+        closing = true;
+        return lost();
+      },
+    );
+    const failures: BootRecoveryFailure[] = [];
+    await expect(
+      closeStaleAttachments({
+        engine: target.engine,
+        reconcile: target.reconcile,
+        holdsBinding: () => true,
+        projectIds: ["p"],
+        newId: () => "event",
+        now: () => 1,
+        onError: vi.fn(),
+        onFailure: (failure) => failures.push(failure),
+        shouldStop: () => closing,
+      }),
+    ).resolves.toBe(0);
+    expect(failures).toEqual([]);
+    expect(target.observed).toEqual([]);
+  });
+});
+
+function recoverySweep(target: Recorder, shouldStop?: () => boolean) {
+  const onRecovered = vi.fn();
+  const result = closeStaleAttachments({
+    engine: target.engine,
+    reconcile: target.reconcile,
+    projectIds: ["p", "q"],
+    newId: () => "event",
+    now: () => 1,
+    onError: vi.fn(),
+    onRecovered,
+    ...(shouldStop === undefined ? {} : { shouldStop }),
+  });
+  return { result, onRecovered };
+}
+describe("closeStaleAttachments → the turns a restart resume may continue (VC-450)", () => {
+  const pi = (id: string, status: BootRecoveryAttachment["status"] = "open") =>
+    attachment({ id, adapterId: "pi", status });
+
+  it("names every turn it rebuilt, and when the lost process was last alive", async () => {
+    const target = recorder(
+      {
+        p: [
+          { ...session("rebuilt", [pi("pi-1")], true), lastActivityAt: 500 },
+          { ...session("idle", [pi("pi-2")]), lastActivityAt: 900 },
+        ],
+        q: [
+          { ...session("lost", [pi("pi-3")], true), lastActivityAt: 700 },
+          session("unstamped", [pi("pi-4", "closed")]),
+        ],
+      },
+      undefined,
+      async ({ attachmentId }) => {
+        if (attachmentId === "pi-3") throw new Error("sidecar gone");
+      },
+    );
+    const { result, onRecovered } = recoverySweep(target);
+    await result;
+    expect(onRecovered).toHaveBeenCalledExactlyOnceWith({
+      turns: [{ sessionId: "rebuilt", attachmentId: "pi-1" }],
+      lostAt: 900,
+    });
+  });
+
+  it("knows no moment when nothing was stamped, and tells nothing of a sweep a shutdown cut short", async () => {
+    const quiet = recoverySweep(recorder({ p: [session("s", [pi("pi-1", "closed")])] }));
+    await quiet.result;
+    expect(quiet.onRecovered).toHaveBeenCalledExactlyOnceWith({ turns: [], lostAt: null });
+
+    // Cut short at a reconcile, and at the very last close.
+    let stop = false;
+    const target = recorder({ p: [session("s", [pi("pi-1")], true)] }, undefined, async () => {
+      stop = true;
+    });
+    const cut = recoverySweep(target, () => stop);
+    await cut.result;
+    expect(cut.onRecovered).not.toHaveBeenCalled();
+    let late = false;
+    const last = recoverySweep(
+      recorder({ q: [session("terminal", [attachment()])] }, async () => {
+        late = true;
+      }),
+      () => late,
+    );
+    await last.result;
+    expect(last.onRecovered).not.toHaveBeenCalled();
+  });
 });

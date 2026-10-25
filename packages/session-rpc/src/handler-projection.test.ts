@@ -16,7 +16,7 @@ import {
   DOOR_LOCAL_CATALOG_KEYS,
   HANDLER_PROJECTION_KEYS,
   HandlerRefusedError,
-  HOST_HANDLER_KEYS,
+  CATALOG_HANDLER_KEYS,
   OperationUnavailableError,
   type HandlerCall,
   type Ticket,
@@ -70,6 +70,8 @@ const SAMPLE_INPUTS: {
   "project.reorder": { orderedIds: [PROJECT] },
   "project.remove": { projectId: PROJECT },
   "worktree.trimSettings": undefined,
+  "worktree.setupStatus": { ticketId: "ticket-1" },
+  "worktree.answerSetup": { ticketId: "ticket-1", answer: "retry" },
   "hosts.snapshot": undefined,
   "hosts.subscribe": undefined,
   "hosts.retry": { hostId: HOST },
@@ -112,6 +114,13 @@ const SAMPLE_INPUTS: {
   "hostScope.subscribe": { hostId: HOST, path: "logs.follow", lastEventId: "7" },
   "browserShortcuts.subscribe": undefined,
   "browserShortcuts.focusPage": { tabId: "opaque-1" },
+  "account.snapshot": undefined,
+  "account.subscribe": undefined,
+  "account.signIn": { connection: "github" },
+  "account.cancelSignIn": undefined,
+  "account.signOut": undefined,
+  "account.requestDeletion": undefined,
+  "account.cancelDeletion": undefined,
   "ticket.move": { projectId: PROJECT, ticketId: "ticket-1", toStatus: "done" },
   "sessions.create": { operationId: "op", projectId: PROJECT, ticketId: null, title: null },
   "sessions.attach": { operationId: "op", ...SESSION },
@@ -276,7 +285,7 @@ describe("every router procedure projects one declared handler (VC-668, VC-729)"
     expectTypeOf<DesktopRouterHandlersCoverage>().toEqualTypeOf<never>();
   });
 
-  it.each(HOST_HANDLER_KEYS)("%s reaches handlers[%s] and nothing else", async (key) => {
+  it.each(CATALOG_HANDLER_KEYS)("%s reaches handlers[%s] and nothing else", async (key) => {
     const { handlers, reached } = recordingHandlers();
     const callers = routerCallers(handlers);
     // Both tiers (D-A1 = (c)): a desktop-only key is projected by the

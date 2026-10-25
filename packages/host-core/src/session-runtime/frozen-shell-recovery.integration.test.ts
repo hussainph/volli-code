@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type RuntimeShellRecord, type SessionToolId } from "@volli/shared";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   sessionRootThreadId,
@@ -119,13 +120,13 @@ function fixture(replies: ScriptedReply[]) {
     });
     const host = createSessionRuntime({
       engine,
-      executor: {
+      executors: createSessionExecutorSlot({
         ...adapter,
         attach: (spec, sink) => {
           attachSpecs.push(spec);
           return adapter.attach(spec, sink);
         },
-      },
+      }),
       artifacts,
       locations: {
         resolve: async () => ({ directory, venue }),

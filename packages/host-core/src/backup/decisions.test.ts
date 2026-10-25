@@ -11,9 +11,10 @@ import { SECRET_KEY_FILE_NAME, SECRET_STORE_FILE_NAME } from "../secrets";
 import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { volliRuntimePaths } from "../host-profile";
 import { blobsRoot } from "../blob-store";
-import { browserPicturesRoot } from "../browser/picture-disk";
+import { browserTracesRoot } from "../browser/trace-disk";
+import { profileLogsRoot } from "../log/file-sink";
+import { globalCommandsRoot } from "../prompt-templates";
 import { openTestDb } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { sessionTranscriptsRoot } from "../session-runtime/transcript-artifacts";
@@ -226,7 +227,10 @@ describe("profile file decisions", () => {
     const included = PROFILE_FILE_DECISIONS.filter((entry) => entry.decision === "include").map(
       (entry) => entry.area,
     );
-    expect(included).toEqual([blobsRoot(""), sessionTranscriptsRoot("")].map(stripLeadingSlash));
+    expect(included).toEqual([blobsRoot(""), sessionTranscriptsRoot(""), globalCommandsRoot("")]);
+    const byArea = new Map(PROFILE_FILE_DECISIONS.map((entry) => [entry.area, entry]));
+    expect(byArea.get(browserTracesRoot(""))?.decision).toBe("exclude");
+    expect(byArea.get(profileLogsRoot(""))?.decision).toBe("exclude");
   });
 
   it("never backs up the CLI install, the update cache, or a migration safety copy", () => {
@@ -248,35 +252,8 @@ describe("profile file decisions", () => {
     expect(byArea.get(`${SECRET_STORE_FILE_NAME}*`)?.decision).toBe("exclude");
     expect(byArea.get(`${SECRET_KEY_FILE_NAME}*`)?.decision).toBe("exclude");
     expect(SECRET_STORE_FILE_NAME).toBe("session-secrets.enc");
-  });
-
-  it("decides every runtime area the app materialises under the profile root", () => {
-    // Bound to the functions that mint the paths, as the included areas are:
-    // a runtime directory that moves or appears takes its declaration with it.
-    const runtime = volliRuntimePaths({
-      userDataPath: "",
-      appPath: "",
-      mainProcessDir: "",
-      resourcesPath: "",
-      isPackaged: true,
-    });
-    const byArea = new Map(PROFILE_FILE_DECISIONS.map((entry) => [entry.area, entry]));
-    const topLevel = (path: string): string => stripLeadingSlash(path).split("/")[0] ?? "";
-
-    for (const path of [
-      runtime.binDir,
-      runtime.socketPath,
-      runtime.harnessRoot,
-      runtime.zdotDir,
-      browserPicturesRoot(""),
-    ]) {
-      const area = topLevel(path);
-      expect(byArea.get(area)?.decision, `${area} needs a profile-file decision`).toBe("exclude");
-    }
+    expect(byArea.get("credentials")?.decision).toBe("exclude");
+    expect(byArea.get("enrolled-devices.json")?.decision).toBe("exclude");
+    expect(byArea.get("remote-hosts.json")?.decision).toBe("exclude");
   });
 });
-
-/** `blobsRoot("")` is `/blobs`; the register stores profile-relative areas. */
-function stripLeadingSlash(value: string): string {
-  return value.startsWith("/") ? value.slice(1) : value;
-}

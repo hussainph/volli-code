@@ -4,7 +4,7 @@ import {
   CHAT_DRAFTS_APP_STATE_KEY,
   type Project,
   type Ticket,
-  type VenueSnapshot,
+  type WorkingCopyMeasurement,
 } from "@volli/shared";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -16,8 +16,8 @@ import { useHostConnectionStore } from "@renderer/stores/host-connection";
 import { useExperimentsStore } from "@renderer/stores/experiments";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
-import { useVenueStore, venueKey } from "@renderer/stores/venue";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useWorkingCopyStore, workingCopyKey } from "@renderer/stores/working-copy";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 import { BoardSync, type BoardSyncTransport } from "@renderer/stores/board-sync";
 
@@ -87,8 +87,8 @@ function fakeStorage(initial: Record<string, string> = {}): BootStorage {
   };
 }
 
-/** One measured venue, as main answers `venue.snapshot`. */
-function venue(over: Partial<VenueSnapshot> = {}): VenueSnapshot {
+/** One measured working copy, as main answers `workingCopy.snapshot`. */
+function workingCopy(over: Partial<WorkingCopyMeasurement> = {}): WorkingCopyMeasurement {
   return {
     kind: "worktree",
     path: "/worktrees/VC-286",
@@ -99,17 +99,17 @@ function venue(over: Partial<VenueSnapshot> = {}): VenueSnapshot {
   };
 }
 
-/** Stubs the venue door so the singleton store can be driven from these tests. */
-function stubVenueSnapshot(reading: unknown) {
+/** Stubs the working copy door so the singleton store can be driven from these tests. */
+function stubWorkingCopySnapshot(reading: unknown) {
   const snapshot = vi.fn().mockResolvedValue({ ok: true, reading });
-  Object.assign(globalThis, { window: { api: { venue: { snapshot } } } });
+  Object.assign(globalThis, { window: { api: { workingCopy: { snapshot } } } });
   return snapshot;
 }
 
-/** One ticket venue and one project venue, both already read — the state a materialization walks into. */
-async function seedVenues() {
-  await useVenueStore.getState().refresh("p1", "t1");
-  await useVenueStore.getState().refresh("p1", null);
+/** One ticket working copy and one project working copy, both already read — the state a materialization walks into. */
+async function seedWorkingCopies() {
+  await useWorkingCopyStore.getState().refresh("p1", "t1");
+  await useWorkingCopyStore.getState().refresh("p1", null);
 }
 
 describe("boot", () => {
@@ -202,7 +202,7 @@ describe("boot", () => {
     expect(gateway.importLegacy).toHaveBeenCalledTimes(1);
   });
 
-  it("migrates ui/workspace prefs even when volli:projects is absent (prefs-only user)", async () => {
+  it("migrates ui/project-ui prefs even when volli:projects is absent (prefs-only user)", async () => {
     const uiJson = JSON.stringify({ state: { sidebarWidth: 480 }, version: 1 });
     const importLegacy = vi.fn<BootGateway["importLegacy"]>(async () => ({
       ok: true,
@@ -244,7 +244,7 @@ describe("boot", () => {
     expect(takeBootNotice()).toContain("couldn't read");
   });
 
-  it("imports on first run: unwraps the persist envelope, sanitizes projects, synthesizes volli:projects-ui, passes through ui/workspace, and clears localStorage after", async () => {
+  it("imports on first run: unwraps the persist envelope, sanitizes projects, synthesizes volli:projects-ui, passes through ui/project-ui, and clears localStorage after", async () => {
     const legacyProjects = [
       { id: "p1", name: "P1", path: "/p1", ticketPrefix: "P1", colorIndex: 0, createdAt: 1 },
       { id: 2, name: "bad-id-type" }, // fails sanitizeLegacyProjects — dropped
@@ -410,7 +410,7 @@ describe("boot", () => {
     expect(useBoardStore.getState().labelsByProject.p1).toEqual([label]);
   });
 
-  it("rehydrates the ui/workspace stores from the seeded app_state cache", async () => {
+  it("rehydrates the ui/project-ui stores from the seeded app_state cache", async () => {
     const gateway = fakeGateway({
       bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({
         ok: true,
@@ -434,7 +434,7 @@ describe("boot", () => {
 
     expect(useUiStore.getState().sidebarWidth).toBe(500);
     expect(useUiStore.getState().uiScale).toBe(1.25);
-    expect(useWorkspaceStore.getState().byProject.p1?.boardView).toBe("list");
+    expect(useProjectUiStore.getState().byProject.p1?.boardView).toBe("list");
   });
 
   it("reopens a persisted unsent chat Draft without creating a resident Session", async () => {
@@ -519,7 +519,7 @@ describe("boot", () => {
       // renderer-only focus overlay here would make the surface's commit
       // effect overwrite the tab the person actually quit on.
       expect(useChatSessionsStore.getState().provisionalActive).toEqual({});
-      expect(useWorkspaceStore.getState().byProject.p1?.ticketTabs?.t1?.active).toBeUndefined();
+      expect(useProjectUiStore.getState().byProject.p1?.ticketTabs?.t1?.active).toBeUndefined();
     } finally {
       useChatDraftsStore.setState({ drafts: {} });
       useChatSessionsStore.setState({ sessions: {}, openTabs: {}, provisionalActive: {} });
@@ -744,26 +744,26 @@ describe("refreshPlanningData", () => {
 
   /**
    * VC-286. The empty chat used to caption a ticket `Main checkout` because
-   * nothing re-read its venue when the worktree it was waiting for arrived.
-   * This is the boundary that fixes it: one door, so every ticket venue reader
+   * nothing re-read its working copy when the worktree it was waiting for arrived.
+   * This is the boundary that fixes it: one door, so every ticket working copy reader
    * updates at the same moment the board does.
    */
   describe("a worktree change", () => {
     afterEach(() => {
-      useVenueStore.setState({ byScope: {} });
+      useWorkingCopyStore.setState({ byScope: {} });
       Reflect.deleteProperty(globalThis, "window");
     });
 
-    it("discards the ticket's venue before the re-hydrate and re-reads it after", async () => {
-      const snapshot = stubVenueSnapshot({ state: "measured", venue: venue() });
-      await seedVenues();
+    it("discards the ticket's working copy before the re-hydrate and re-reads it after", async () => {
+      const snapshot = stubWorkingCopySnapshot({ state: "measured", workingCopy: workingCopy() });
+      await seedWorkingCopies();
       const seen: unknown[] = [];
       const gateway = fakeGateway({
         bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => {
           // Mid-refresh: the old reading is already gone, and the new one has
           // not been asked for — asking before the board is current would read
           // the checkout the ticket is leaving.
-          seen.push(useVenueStore.getState().byScope[venueKey("p1", "t1")]);
+          seen.push(useWorkingCopyStore.getState().byScope[workingCopyKey("p1", "t1")]);
           seen.push(snapshot.mock.calls.length);
           return { ok: true, data: payload({}) };
         }),
@@ -775,21 +775,21 @@ describe("refreshPlanningData", () => {
       // The re-read is not awaited by the refresh — a git status has no business
       // delaying the board's own answer — so it lands a tick later.
       await vi.waitFor(() => {
-        expect(useVenueStore.getState().byScope[venueKey("p1", "t1")]).toEqual({
+        expect(useWorkingCopyStore.getState().byScope[workingCopyKey("p1", "t1")]).toEqual({
           status: "ready",
-          venue: venue(),
+          workingCopy: workingCopy(),
         });
       });
       expect(snapshot).toHaveBeenLastCalledWith("p1", "t1");
     });
 
-    it("keeps the venue boundary around a scoped roster refresh", async () => {
-      const snapshot = stubVenueSnapshot({ state: "measured", venue: venue() });
-      await seedVenues();
+    it("keeps the working copy boundary around a scoped roster refresh", async () => {
+      const snapshot = stubWorkingCopySnapshot({ state: "measured", workingCopy: workingCopy() });
+      await seedWorkingCopies();
       useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
       const seen: unknown[] = [];
       const projectRoster = vi.fn<BootGateway["projectRoster"]>(async () => {
-        seen.push(useVenueStore.getState().byScope[venueKey("p1", "t1")]);
+        seen.push(useWorkingCopyStore.getState().byScope[workingCopyKey("p1", "t1")]);
         seen.push(snapshot.mock.calls.length);
         return { ok: true, tickets: [], labels: [] };
       });
@@ -801,28 +801,28 @@ describe("refreshPlanningData", () => {
       expect(gateway.bootstrap).not.toHaveBeenCalled();
       expect(projectRoster).toHaveBeenCalledWith({ projectId: "p1" });
       await vi.waitFor(() => {
-        expect(useVenueStore.getState().byScope[venueKey("p1", "t1")]).toMatchObject({
+        expect(useWorkingCopyStore.getState().byScope[workingCopyKey("p1", "t1")]).toMatchObject({
           status: "ready",
         });
       });
     });
 
-    it("leaves Home's project venue card measuring the main checkout", async () => {
-      stubVenueSnapshot({ state: "measured", venue: venue() });
-      await seedVenues();
+    it("leaves Home's project working copy card measuring the main checkout", async () => {
+      stubWorkingCopySnapshot({ state: "measured", workingCopy: workingCopy() });
+      await seedWorkingCopies();
       const gateway = fakeGateway();
 
       await refreshPlanningData({ ticketId: "t1", projectId: "p1", kind: "worktree" }, gateway);
 
-      expect(useVenueStore.getState().byScope[venueKey("p1", null)]).toEqual({
+      expect(useWorkingCopyStore.getState().byScope[workingCopyKey("p1", null)]).toEqual({
         status: "ready",
-        venue: venue(),
+        workingCopy: workingCopy(),
       });
     });
 
     it("holds the ticket at resolving while the worktree is still being made", async () => {
-      stubVenueSnapshot({ state: "pending" });
-      await seedVenues();
+      stubWorkingCopySnapshot({ state: "pending" });
+      await seedWorkingCopies();
 
       await refreshPlanningData(
         { ticketId: "t1", projectId: "p1", kind: "worktree" },
@@ -830,18 +830,18 @@ describe("refreshPlanningData", () => {
       );
 
       await vi.waitFor(() => {
-        expect(useVenueStore.getState().byScope[venueKey("p1", "t1")]).toEqual({
+        expect(useWorkingCopyStore.getState().byScope[workingCopyKey("p1", "t1")]).toEqual({
           status: "resolving",
         });
       });
     });
 
-    it("discards every ticket's venue when the change names none", async () => {
-      stubVenueSnapshot({ state: "measured", venue: venue() });
-      await seedVenues();
+    it("discards every ticket's working copy when the change names none", async () => {
+      stubWorkingCopySnapshot({ state: "measured", workingCopy: workingCopy() });
+      await seedWorkingCopies();
       const gateway = fakeGateway({
         bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => {
-          expect(useVenueStore.getState().byScope[venueKey("p1", "t1")]).toEqual({
+          expect(useWorkingCopyStore.getState().byScope[workingCopyKey("p1", "t1")]).toEqual({
             status: "loading",
           });
           return { ok: true, data: payload({}) };
@@ -852,15 +852,15 @@ describe("refreshPlanningData", () => {
 
       expect(gateway.bootstrap).toHaveBeenCalledTimes(1);
       await vi.waitFor(() => {
-        expect(useVenueStore.getState().byScope[venueKey("p1", "t1")]).toMatchObject({
+        expect(useWorkingCopyStore.getState().byScope[workingCopyKey("p1", "t1")]).toMatchObject({
           status: "ready",
         });
       });
     });
 
-    it("leaves every venue alone for a change that is not about a checkout", async () => {
-      const snapshot = stubVenueSnapshot({ state: "measured", venue: venue() });
-      await seedVenues();
+    it("leaves every working copy alone for a change that is not about a checkout", async () => {
+      const snapshot = stubWorkingCopySnapshot({ state: "measured", workingCopy: workingCopy() });
+      await seedWorkingCopies();
       snapshot.mockClear();
 
       await refreshPlanningData(
@@ -869,16 +869,16 @@ describe("refreshPlanningData", () => {
       );
 
       // A comment does not move a checkout, and blanking the caption to redraw
-      // the identical venue is a flicker with nothing behind it.
+      // the identical working copy is a flicker with nothing behind it.
       expect(snapshot).not.toHaveBeenCalled();
-      expect(useVenueStore.getState().byScope[venueKey("p1", "t1")]).toMatchObject({
+      expect(useWorkingCopyStore.getState().byScope[workingCopyKey("p1", "t1")]).toMatchObject({
         status: "ready",
       });
     });
 
-    it("still re-reads the discarded venue when the re-hydrate itself fails", async () => {
-      const snapshot = stubVenueSnapshot({ state: "measured", venue: venue() });
-      await seedVenues();
+    it("still re-reads the discarded working copy when the re-hydrate itself fails", async () => {
+      const snapshot = stubWorkingCopySnapshot({ state: "measured", workingCopy: workingCopy() });
+      await seedWorkingCopies();
       snapshot.mockClear();
       const gateway = fakeGateway({
         bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({ ok: false, error: "db gone" })),
@@ -889,7 +889,7 @@ describe("refreshPlanningData", () => {
         gateway,
       );
 
-      // The failure is still the caller's answer, but the venue may not be left
+      // The failure is still the caller's answer, but the working copy may not be left
       // waiting on a read nobody will make.
       expect(result).toEqual({ ok: false, error: "db gone" });
       await vi.waitFor(() => {
@@ -1169,7 +1169,7 @@ describe("startBoardProtocolIfEnabled", () => {
 
   it("routes the feed's project rows, ticket changes and moved checkouts to their stores", async () => {
     const { push } = stubBoardBridge({ p1: [boardTicket("a", "p1")], p2: [] });
-    const invalidate = vi.spyOn(useVenueStore.getState(), "invalidateTickets");
+    const invalidate = vi.spyOn(useWorkingCopyStore.getState(), "invalidateTickets");
     await startBoardProtocolIfEnabled(async () => true);
     const renamed = { ...workspace("p1"), name: "Renamed" };
     const version = useBoardStore.getState().lastPlanningChange.version;

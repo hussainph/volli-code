@@ -12,7 +12,13 @@ import type {
   SessionAttention,
   SessionInteractionResolution,
 } from "@volli/shared";
-import { COMPACT_VERB, COPY_VERB, LOGIN_VERB, SETTINGS_VERB } from "@volli/shared";
+import {
+  COMPACT_VERB,
+  COPY_VERB,
+  LOGIN_VERB,
+  RECOVERED_TURN_INTERRUPTED_DETAIL,
+  SETTINGS_VERB,
+} from "@volli/shared";
 import type { BlobLinkView } from "@volli/shared";
 import type { UIMessage } from "ai";
 import type { QueuedMessage } from "@volli/session-presentation";
@@ -127,6 +133,7 @@ import {
   holdList,
   lastAssistantText,
   liveTurnHasProgress,
+  mayBeWorktreeSetupGate,
   messageCopyText,
   messageRoute,
   resolvingWith,
@@ -255,6 +262,8 @@ const ACTS: SessionBlockerActs = {
   dismiss: NO_OP,
   scheduleResume: NO_OP,
   cancelScheduledResume: NO_OP,
+  answerSetup: NO_OP,
+  fixSetup: NO_OP,
 };
 
 function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBlockerInput {
@@ -267,6 +276,8 @@ function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBloc
     sessionModel: { providerId: "openai-codex", providerLabel: "OpenAI Codex", state: "available" },
     signInProviders: [],
     scheduledResume: null,
+    turnActive: false,
+    liveExecutorId: null,
     now: 0,
     ...overrides,
   };
@@ -511,6 +522,106 @@ describe("sessionBlocker", () => {
     });
   });
 
+  // VC-584: a working copy's failed environment setup holds every start.
+  describe("a failed environment setup", () => {
+    const PREPARATION_FAILED =
+      "Couldn't prepare the worktree at /w — .agents/setup exited with code 1: boom";
+    const RUN = {
+      source: "repo" as const,
+      summary: ".agents/setup exited with code 1: boom",
+      exitCode: 1,
+      endedAt: 1_000,
+      tail: "boom",
+    };
+
+    it("is suspected only from the configuration failure a worktree preparation raised", () => {
+      expect(mayBeWorktreeSetupGate(attention("configuration_invalid", PREPARATION_FAILED))).toBe(
+        true,
+      );
+      expect(mayBeWorktreeSetupGate(attention("configuration_invalid", "Bad model"))).toBe(false);
+      // The same preparation failing in git is not the setup's to answer.
+      expect(
+        mayBeWorktreeSetupGate(
+          attention(
+            "configuration_invalid",
+            "Couldn't prepare the worktree at /w — fatal: bad ref",
+          ),
+        ),
+      ).toBe(false);
+      for (const clause of [
+        "Environment setup failed: it broke. Retry setup, or start anyway.",
+        "The project's setup command exited with code 2.",
+      ]) {
+        expect(
+          mayBeWorktreeSetupGate(
+            attention("configuration_invalid", `Couldn't prepare the worktree at /w — ${clause}`),
+          ),
+        ).toBe(true);
+      }
+      expect(mayBeWorktreeSetupGate(attention("configuration_invalid"))).toBe(false);
+      expect(mayBeWorktreeSetupGate(attention("auth_required", PREPARATION_FAILED))).toBe(false);
+      expect(mayBeWorktreeSetupGate(null)).toBe(false);
+    });
+
+    it("replaces the settings row with the setup's three answers", () => {
+      const acted: string[] = [];
+      const dismissed: string[] = [];
+      const acts: SessionBlockerActs = {
+        ...ACTS,
+        answerSetup: (answer) => acted.push(answer),
+        fixSetup: () => acted.push("fix"),
+        dismiss: (key) => dismissed.push(key),
+      };
+      const raisedSetup = attention("configuration_invalid", PREPARATION_FAILED);
+      const blocker = sessionBlocker({ ...raised(raisedSetup), failedSetup: RUN }, acts, false);
+
+      expect(blocker).toMatchObject({
+        message: "Environment setup failed",
+        detail: RUN.summary,
+        tone: "error",
+        placement: "timeline",
+        action: { label: "Retry setup" },
+        secondaryAction: { label: "Start anyway" },
+        tertiaryAction: { label: "Fix with an agent" },
+        dismiss: { label: "Dismiss" },
+      });
+      blocker?.action?.act();
+      blocker?.secondaryAction?.act();
+      blocker?.tertiaryAction?.act();
+      blocker?.dismiss?.act();
+      expect(acted).toEqual(["retry", "start-anyway", "fix"]);
+      expect(dismissed).toEqual([blocker?.dismissKey]);
+      // The same report the plain row would have been: one dismissal hides either.
+      expect(blocker?.dismissKey).toBe(
+        sessionBlocker(raised(raisedSetup), ACTS, false)?.dismissKey,
+      );
+    });
+
+    it("leaves every other row as it was", () => {
+      const plain = sessionBlocker(
+        raised(attention("configuration_invalid", PREPARATION_FAILED)),
+        ACTS,
+        false,
+      );
+      expect(plain).toMatchObject({
+        message: "Configuration invalid",
+        action: { label: "Open settings" },
+      });
+      expect(plain?.tertiaryAction).toBeUndefined();
+      expect(
+        sessionBlocker(
+          { ...raised(attention("configuration_invalid")), failedSetup: null },
+          ACTS,
+          false,
+        ),
+      ).toMatchObject({ message: "Configuration invalid" });
+      // A setup read beside another failure does not speak for it.
+      expect(
+        sessionBlocker({ ...raised(attention("auth_required")), failedSetup: RUN }, ACTS, false),
+      ).toMatchObject({ message: "Sign-in required", action: { label: "Open settings" } });
+    });
+  });
+
   it("offers a Board chat the same retry a Ticket chat gets", () => {
     // The old rule withheld it from a Session with no terminal, on the honest
     // ground that retrying a run whose sign-in could not be reached was a
@@ -741,6 +852,75 @@ describe("sessionBlocker", () => {
       ["Waiting for an answer", null],
       ["Waiting for approval", null],
     ]);
+  });
+
+  it("offers Resume on a turn a lost process cut short, and says when a restart resumed it (VC-450)", () => {
+    const acted: string[] = [];
+    const acts: SessionBlockerActs = { ...ACTS, retryRuntime: () => acted.push("retryRuntime") };
+    const recovered: SessionAttention = {
+      ...attention("partial_turn_interrupted", RECOVERED_TURN_INTERRUPTED_DETAIL),
+      attachmentId: "attachment-1",
+    };
+    const live = (overrides: Partial<SessionBlockerInput>) =>
+      sessionBlocker(
+        {
+          ...raised(recovered),
+          liveExecutorId: "attachment-1",
+          ...overrides,
+        },
+        acts,
+        false,
+      );
+
+    // Idle on the rebuilt attachment: Resume continues it.
+    const idle = live({});
+    expect(idle).toMatchObject({
+      message: "Turn interrupted",
+      detail: RECOVERED_TURN_INTERRUPTED_DETAIL,
+      action: { label: "Resume" },
+      placement: "timeline",
+    });
+    expect(idle).not.toHaveProperty("duringTurn");
+    idle?.action?.act();
+    expect(acted).toEqual(["retryRuntime"]);
+
+    // Running while the warning stands: the restart resume, said while it runs.
+    expect(live({ turnActive: true })).toEqual({
+      message: "Resumed after restart",
+      detail: null,
+      tone: "waiting",
+      action: null,
+      duringTurn: true,
+      placement: "timeline",
+    });
+
+    // A genuine partial-turn diagnostic is neither resumable nor a resume.
+    for (const turnActive of [false, true]) {
+      expect(
+        sessionBlocker(
+          {
+            ...raised({ ...recovered, detail: "Pi recovery history disagreed." }),
+            liveExecutorId: "attachment-1",
+            turnActive,
+          },
+          acts,
+          false,
+        ),
+      ).toMatchObject({ message: "Turn interrupted", action: null });
+    }
+
+    // Once the attachment is gone, typing is the recovery.
+    expect(live({ liveExecutorId: "attachment-2" })).toMatchObject({
+      message: "Turn interrupted",
+      action: null,
+    });
+    expect(
+      sessionBlocker(
+        { ...raised(attention("partial_turn_interrupted")), liveExecutorId: null },
+        acts,
+        false,
+      ),
+    ).toMatchObject({ message: "Turn interrupted", action: null });
   });
 
   it("retries the run itself once the runtime has stopped retrying for you", () => {

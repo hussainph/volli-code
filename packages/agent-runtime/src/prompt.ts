@@ -446,7 +446,7 @@ const RESOURCES_LAYER = [
 
 /**
  * The fields the system prompt actually reads, and nothing else. The full
- * {@link SessionRuntimeSpec} carries model, venue and recovery detail the
+ * {@link SessionRuntimeSpec} carries model, runner and recovery detail the
  * prompt never mentions; a caller measuring the prompt (VC-66's baseline
  * breakdown) supplies exactly these fields without fabricating a Session.
  *

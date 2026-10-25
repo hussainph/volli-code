@@ -22,10 +22,15 @@
 /** A Session's scope, as the empty state cares about it. */
 export type ChatScope = "project" | "ticket";
 
-/** The drawings an empty chat can open on. */
+/**
+ * The drawings an empty chat can open on. `"venue"` is the Working copy
+ * drawing; the value is stored app-wide and older builds read it back, so it
+ * keeps its shipped spelling (an unknown value falls back to Streak there).
+ */
 export type EmptyVisual = "streak" | "board" | "venue";
 
 /** The picker's words. Nouns — the drawing is its own explanation. */
+// The "Venue" label is shipped copy, kept until the place-label copy pass.
 export const EMPTY_VISUAL_LABELS: Record<EmptyVisual, string> = {
   streak: "Streak",
   board: "Board",

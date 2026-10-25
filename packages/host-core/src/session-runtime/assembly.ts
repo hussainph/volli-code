@@ -15,8 +15,10 @@ import { BrowserPictureStore } from "../browser/picture-store";
 import { browserPictureDisk, browserPicturesRoot } from "../browser/picture-disk";
 import type { PiModelAccess, CodeModeSandboxAssets } from "@volli/agent-runtime";
 import { piExecutionEnv, refusingCredentialReads } from "@volli/agent-runtime";
-import type { SessionEngine } from "@volli/session-engine";
+import { createSessionExecutorSlot, type SessionEngine } from "@volli/session-engine";
 import {
+  harnessAdapters,
+  scrubInheritedSessionEnv,
   shortSessionId,
   verbToolsOf,
   verbEntry,
@@ -24,9 +26,10 @@ import {
   type ObservabilitySink,
   type SessionEvent,
   type SessionToolId,
-  type SessionExecutionVenue,
+  type RunnerIdentity,
 } from "@volli/shared";
 import type { DbHandle, HostCorePorts } from "../index";
+import type { PowerPort } from "../ports";
 import { getProjectById } from "../db/projects-repo";
 import { blobsRoot } from "../blob-store";
 import { prepareTurnAttachments } from "../turn-attachments";
@@ -43,6 +46,7 @@ import type { BackgroundShellHost } from "../shell/background-shell-host";
 import { createAgentShellPort } from "../shell/agent-port";
 import { browserAgentPort } from "../browser/agent-port";
 import type { BrowserBackend } from "../browser/backend";
+import type { SubscribeSessionWake } from "../session-control/session-wake";
 import type { AttachmentIdentities } from "./attachment-identity";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { SessionToolSurfacePorts } from "./sessions";
@@ -54,7 +58,6 @@ import {
   sessionTranscriptsRoot,
 } from "./index";
 import { resolveHostToolSurface } from "./host-capabilities";
-import { wireSessionRuntime } from "../session-services";
 import {
   effectiveToolSurface,
   declarationToolSurface,
@@ -67,9 +70,22 @@ export interface RuntimeAssemblyOptions {
   dbHandle: DbHandle;
   /** Receive the host's one engine; never construct another writer. */
   sessionEngine: SessionEngine | null;
+  /**
+   * The host's post-commit stream over that engine (`sessionWakeBus.subscribe`).
+   * Required, `null` only where there is no engine: the Session runtime feeds
+   * open chats from it, so a write made around the runtime reaches them as it
+   * commits (VC-790).
+   */
+  sessionWake: SubscribeSessionWake | null;
   dataDir: string;
   binDir: string;
-  venue: SessionExecutionVenue;
+  /**
+   * Environment recipes (VC-584): whether they run (the `cloud` flag, read per
+   * start) and the machine's wakes, which owe each working copy its resume
+   * again. Absent is off.
+   */
+  environmentRecipes?: { enabled: () => boolean; power: PowerPort };
+  venue: RunnerIdentity;
   hostPorts: Pick<HostCorePorts, "events" | "connectivity" | "log">;
   modelAccess: PiModelAccess | null;
   decisions: HostDecisions | null;
@@ -116,6 +132,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
   const {
     dbHandle,
     sessionEngine,
+    sessionWake,
     dataDir,
     binDir,
     venue,
@@ -458,14 +475,23 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
               const grants = verbToolsOf(current.tools).filter(
                 (tool) => verbEntry(tool)?.retired === undefined,
               );
-              const tools = sessionToolSurface.resolve(
-                session.role,
-                session.role === "subagent" ? [] : grants,
-                parentId === null ? undefined : (parent?.tools ?? []),
-                mcpTools,
-                birth,
-                await sessionToolSurface.resolveClassify?.(session.projectId),
-              );
+              const tools = sessionToolSurface
+                .resolve(
+                  session.role,
+                  session.role === "subagent" ? [] : grants,
+                  parentId === null ? undefined : (parent?.tools ?? []),
+                  mcpTools,
+                  birth,
+                  await sessionToolSurface.resolveClassify?.(session.projectId),
+                )
+                .filter(
+                  // VC-861 is new-birth authority, not an additive refresh grant.
+                  // Preserve old Ticket surfaces across cold turns and reattach.
+                  (tool) =>
+                    tool !== "session.send" ||
+                    session.role !== "ticket" ||
+                    current.tools.includes("session.send"),
+                );
               const candidateCodeMode = codeMode.surfaceFor(birth, tools, mcpTools);
               const candidate = {
                 kind: "tool-surface" as const,
@@ -547,20 +573,43 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           log: options.hostPorts.log,
           dataDir,
           transcriptDirectory,
-          executor: piRuntimeHost.adapter,
+          // The executor slot (VC-916): Pi is its one runtime and the default.
+          // A second runtime registers here, beside it, never instead of it.
+          executors: createSessionExecutorSlot(piRuntimeHost.adapter),
           sessionEngine,
+          ...(sessionWake === null
+            ? {}
+            : {
+                committed: (listener: (event: SessionEvent) => void) =>
+                  sessionWake(({ event }) => listener(event)),
+              }),
           artifacts: transcriptArtifacts,
+          ...(options.environmentRecipes === undefined
+            ? {}
+            : {
+                environmentRecipes: options.environmentRecipes.enabled,
+                power: options.environmentRecipes.power,
+              }),
+          // A worktree's setup command, run before a structured Session's
+          // first turn (VC-835), runs in the environment that Session's own
+          // commands get: after login-PATH adoption has landed, with Volli's bin
+          // dir first and this Session's concurrency budget.
+          setupEnvironment: async (sessionId) => {
+            await options.beforeExecution();
+            const inherited = scrubInheritedSessionEnv(process.env, harnessAdapters);
+            const path = inherited["PATH"];
+            return {
+              shellPath: process.env["SHELL"] || "/bin/sh",
+              env: {
+                ...inherited,
+                ...(await options.concurrencyEnvFor(sessionId)),
+                PATH: path === undefined || path.length === 0 ? binDir : `${binDir}:${path}`,
+              },
+            };
+          },
           ...(agentObservability === null ? {} : { observability: agentObservability }),
         })
       : null;
-  if (sessionEngine !== null && sessionRuntime !== null) {
-    wireSessionRuntime(sessionEngine, {
-      openNativeBindings: () => sessionRuntime.openNativeBindings(),
-      pendingTurnStarts: () => sessionRuntime.pendingTurnStarts(),
-      holdTurnStarts: () => sessionRuntime.holdTurnStarts(),
-      releaseTurnStarts: () => sessionRuntime.releaseTurnStarts(),
-    });
-  }
   return {
     pictures,
     sessionToolSurface,

@@ -33,6 +33,45 @@ function probeGit(gitDir: string, status: string) {
 }
 
 describe("commitRemaining", () => {
+  it("reports success for a real commit whose summary exceeds 1 MiB", async () => {
+    const dir = tempDir("large-commit");
+    const raw = (args: readonly string[]) => runNet("git", args, dir);
+    await raw(["init", "--quiet", "--initial-branch=main", "--template="]);
+    await raw(["config", "user.name", "Test"]);
+    await raw(["config", "user.email", "test@example.com"]);
+    await raw(["config", "commit.gpgsign", "false"]);
+    await raw(["config", "core.hooksPath", join(dir, ".git", "hooks")]);
+    await raw(["config", "core.autocrlf", "false"]);
+
+    // A 200-byte name gives a 221-byte summary line. 5,000 files produce
+    // 1,105,000 bytes: just above the 4,745-file minimum for exceeding 1 MiB,
+    // without the filesystem cost of tens of thousands of short paths.
+    // Identical tiny contents keep object creation cheap too.
+    const fileCount = 5_000;
+    for (let i = 0; i < fileCount; i += 1) {
+      const name = `fixture-${"x".repeat(183)}${String(i).padStart(5, "0")}.txt`;
+      writeFileSync(join(dir, name), "fixture\n");
+    }
+
+    const result = await commitRemaining(runGitCapturingAsync, runNet, {
+      worktreePath: dir,
+      displayId: "VC-12",
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: { committed: true, message: "chore(VC-12): commit remaining work" },
+    });
+    // Check the landed tree as well as the reported result, and measure the
+    // summary suppressed by --quiet rather than assuming the fixture is big.
+    const { stdout: summary } = await raw(["show", "--format=", "--summary", "HEAD"]);
+    expect(Buffer.byteLength(summary)).toBeGreaterThan(1024 * 1024);
+    expect(summary.trim().split("\n")).toHaveLength(fileCount);
+    expect((await raw(["log", "-1", "--format=%s"])).stdout.trim()).toBe(
+      "chore(VC-12): commit remaining work",
+    );
+    expect((await raw(["status", "--porcelain"])).stdout).toBe("");
+  }, 10_000);
+
   it("stages -A and commits (async runner) with the generated chore(<id>) message when no choices are given", async () => {
     const git = probeGit(tempDir("gitdir"), " M src/a.ts\n");
     const { run, calls } = scriptedNet(() => ({}));
@@ -43,11 +82,11 @@ describe("commitRemaining", () => {
       committed: true,
       message: "chore(VC-12): commit remaining work",
     });
-    // add -A precedes commit -m with the exact message, both through the async runner.
+    // add -A precedes a quiet commit with the exact message, both through the async runner.
     expect(calls[0]).toMatchObject({ file: "git", args: ["add", "-A"], cwd: "/wt" });
     expect(calls[1]).toMatchObject({
       file: "git",
-      args: ["commit", "-m", "chore(VC-12): commit remaining work"],
+      args: ["commit", "--quiet", "-m", "chore(VC-12): commit remaining work"],
       cwd: "/wt",
     });
   });
@@ -90,7 +129,12 @@ describe("commitRemaining", () => {
       committed: true,
       message: "fix(VC-12): the thing\n\nwith a body",
     });
-    expect(calls[1]?.args).toEqual(["commit", "-m", "fix(VC-12): the thing\n\nwith a body"]);
+    expect(calls[1]?.args).toEqual([
+      "commit",
+      "--quiet",
+      "-m",
+      "fix(VC-12): the thing\n\nwith a body",
+    ]);
   });
 
   it("falls back to the generated message when the caller's is blank", async () => {
@@ -121,7 +165,12 @@ describe("commitRemaining", () => {
     });
     expect(result.ok).toBe(true);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.args).toEqual(["commit", "-m", "chore(VC-12): commit remaining work"]);
+    expect(calls[0]?.args).toEqual([
+      "commit",
+      "--quiet",
+      "-m",
+      "chore(VC-12): commit remaining work",
+    ]);
   });
 
   it("errs rather than committing nothing when includeUnstaged: false leaves an empty index", async () => {

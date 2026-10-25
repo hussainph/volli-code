@@ -8,6 +8,9 @@
  * Registry's own handler binding. What is left here is the part that is the
  * same for every verb — list the projects, resolve what this verb's table
  * entry asks for, call it — plus the seams the composition root injects.
+ * "Call it" is the map's (VC-923): every verb's handler is an entry of the
+ * host's handler map, and this service serves its own verbs' entries into the
+ * map it is handed (`agent-dispatch/verbs.ts`).
  *
  * It remains the door's one public face. `index.ts` and the tests import from
  * here, and the two Brief compositions are re-exported rather than moved,
@@ -18,19 +21,25 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 
-import { AGENT_COMMAND_BINDINGS, verbEntry, makeAgentError } from "@volli/shared";
+import {
+  AGENT_COMMAND_BINDINGS,
+  SERVED_AGENT_HANDLER_KEYS,
+  verbEntry,
+  makeAgentError,
+} from "@volli/shared";
 import type {
   AgentRequest,
   AgentResponse,
-  SessionProjection,
   SessionReadVerb,
   SessionRecord,
   TicketEventActor,
 } from "@volli/shared";
 
+import { doorCallActor, projectedHandlerKey } from "./agent-dispatch/projection";
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
 import { coordinationRefusal, socketHandlerPolicy } from "./agent-dispatch/admission";
-import { isHostHandlerMap } from "./handlers/handler-map";
+import { isHostHandlerMap, serveHostHandlers } from "./handlers/handler-map";
+import { agentVerbEntries, rosterLoaders } from "./agent-dispatch/verbs";
 import type {
   AgentCommandContext,
   EnvSessionIdentity,
@@ -42,6 +51,7 @@ import type { DoorActor } from "./agent-dispatch/resolution";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
 import { terminalSessionRecord } from "./session-control";
 import { runGitCapturingAsync } from "./worktree";
+import { createWorktreeReadService } from "./worktree-reads";
 
 export {
   composeProjectBrief,
@@ -52,6 +62,9 @@ export { CHAT_PEEK_ENTRIES } from "./agent-dispatch/session-verbs";
 export type { AgentCommandService, AgentCommandServiceOptions } from "./agent-dispatch/context";
 
 import type { AgentCommandService, AgentCommandServiceOptions } from "./agent-dispatch/context";
+
+/** The agent doors' own verbs: keys no door but the one serving them reaches. */
+const SERVED_AGENT_KEYS: ReadonlySet<string> = new Set(SERVED_AGENT_HANDLER_KEYS);
 
 export function createAgentCommandService(
   options: AgentCommandServiceOptions,
@@ -85,6 +98,9 @@ export function createAgentCommandService(
   // serves runs on it, and there is no synchronous runner to fall back to.
   const gitAsync = options.gitAsync ?? runGitCapturingAsync;
   const worktreeExists = options.worktreeExists ?? existsSync;
+  const worktreeReads =
+    options.worktreeReads ??
+    createWorktreeReadService({ deps: () => ({ db: options.db, gitAsync, worktreeExists }) });
   const sessionEngine = options.sessionEngine;
   const terminalUpdateLocks = new Map<string, Promise<void>>();
   /**
@@ -119,6 +135,25 @@ export function createAgentCommandService(
   const readPolicy =
     options.readAuthorityPolicy ??
     ((projectId: string) => getProjectAuthorityPolicy(options.db, projectId));
+
+  // The socket's own verbs are entries of the map (VC-923), over this
+  // service's state: served once, now, so every door that projects the map
+  // reaches them through it, under that door's policy.
+  serveHostHandlers(
+    options.handlers,
+    agentVerbEntries({
+      options,
+      now,
+      newId,
+      gitAsync,
+      worktreeExists,
+      worktreeReads,
+      sessionEngine,
+      watermarks,
+      terminalUpdateLocks,
+      pendingLaunches,
+    }),
+  );
 
   const service = {
     /**
@@ -162,36 +197,13 @@ export function createAgentCommandService(
       );
       // Every Session of every project — lazy and memoized (VC-403). Nothing
       // is folded until a handler calls `context.loadProjections()` or
-      // `context.loadSessions()`, and calling either twice (or calling both —
-      // `loadSessions` is built ON `loadProjections`) still folds it exactly
-      // once. This replaced an eager fold gated by a per-verb table policy:
-      // laziness now makes the opt-out automatic for any verb that never
-      // calls either loader, which is most of them. Identity questions — who
-      // is `VOLLI_SESSION` — are answered by `envSession` below instead, off
-      // its own single-Session lookup rather than this fold.
-      let projectionsPromise: Promise<readonly SessionProjection[]> | null = null;
-      const loadProjections = (): Promise<readonly SessionProjection[]> => {
-        projectionsPromise ??= (async () =>
-          (
-            await Promise.all(
-              projects.map((project) =>
-                sessionEngine.listSessions({ projectId: project.id, scope: "all" }),
-              ),
-            )
-          ).flat())();
-        return projectionsPromise;
-      };
-      let sessionsPromise: Promise<readonly SessionRecord[]> | null = null;
-      // The terminal half of `loadProjections`'s answer: the verbs that need a
-      // PTY (resume, rename, the terminal half of list) have nothing a
-      // structured-only Session can answer, and dropping it there is correct,
-      // not a compatibility gap.
-      const loadSessions = (): Promise<readonly SessionRecord[]> => {
-        sessionsPromise ??= loadProjections().then((projections) =>
-          projections.flatMap((projection) => terminalSessionRecord(projection) ?? []),
-        );
-        return sessionsPromise;
-      };
+      // `context.loadSessions()`. This replaced an eager fold gated by a
+      // per-verb table policy: laziness now makes the opt-out automatic for
+      // any verb that never calls either loader, which is most of them.
+      // Identity questions — who is `VOLLI_SESSION` — are answered by
+      // `envSession` below instead, off its own single-Session lookup rather
+      // than this fold.
+      const { loadProjections, loadSessions } = rosterLoaders(sessionEngine, projects);
       // The `VOLLI_SESSION` identity rung, resolved against the Session Engine
       // rather than the fleet fold above: a structured (chat) Session exports
       // `VOLLI_SESSION` too (VC-51), and it has no terminal attachment for
@@ -244,12 +256,14 @@ export function createAgentCommandService(
         if (!resolved.ok) return resolved.response;
         actor = resolved.actor;
       }
+      const projected = projectedHandlerKey(binding);
       const context: AgentCommandContext = {
         options,
         now,
         newId,
         gitAsync,
         worktreeExists,
+        worktreeReads,
         sessionEngine,
         watermarks,
         terminalUpdateLocks,
@@ -261,8 +275,19 @@ export function createAgentCommandService(
         envSessionTerminal,
         authenticatedSessionId: door.kind === "session" ? door.sessionId : null,
         actor,
-        handlerPolicy: socketHandlerPolicy(request, () =>
-          coordinationRefusal(readPolicy, projects, envSession, request, door),
+        doorActor: doorCallActor(door, envSession),
+        handlerPolicy: socketHandlerPolicy(
+          request,
+          projected,
+          // A key other doors also reach (a catalog or board command) is judged
+          // again at the map. One of this socket's own verbs is reachable
+          // through no other door (the catalog's policies refuse it), and its
+          // map call follows this line with no await between, over a
+          // synchronous store: the verdict above is the map's, so the hot path
+          // (`hook`) reads its project's policy once, as it always has.
+          projected !== undefined && SERVED_AGENT_KEYS.has(projected)
+            ? () => null
+            : () => coordinationRefusal(readPolicy, projects, envSession, request, door),
         ),
       };
       return auditOperatorWrite(door, request, await binding.handle(context, request));

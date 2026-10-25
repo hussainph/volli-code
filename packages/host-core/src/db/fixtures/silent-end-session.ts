@@ -1,12 +1,13 @@
 import { copyFileSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   sessionRootThreadId,
 } from "@volli/session-engine";
 import { createPiAgentRuntime } from "@volli/agent-runtime";
-import type { RuntimeAttachmentHandle, SessionRuntimeSpec } from "@volli/shared";
+import { LOCAL_RUNNER, type RuntimeAttachmentHandle, type SessionRuntimeSpec } from "@volli/shared";
 import { scriptedProvider } from "../../../../agent-runtime/test-fixtures/scripted-provider";
 import { openVolliDb } from "../database-file";
 import { createSqliteSessionLedger } from "../../session-control/sqlite-ledger";
@@ -89,7 +90,7 @@ export async function silentEndSession(input: {
   });
   const runtime = createSessionRuntime({
     engine,
-    executor: {
+    executors: createSessionExecutorSlot({
       ...adapter,
       attach: (spec, sink) =>
         adapter.attach(spec, {
@@ -98,11 +99,11 @@ export async function silentEndSession(input: {
             if (observation.kind === "turn" && observation.state !== "started") terminal.resolve();
           },
         }),
-    },
+    }),
     artifacts: createFileTranscriptArtifactStore(sessionTranscriptsRoot(root)),
     locations: {
-      resolve: async () => ({ directory, venue: { id: "local", kind: "local" } }),
-      prepare: async () => ({ directory, venue: { id: "local", kind: "local" } }),
+      resolve: async () => ({ directory, venue: LOCAL_RUNNER }),
+      prepare: async () => ({ directory, venue: LOCAL_RUNNER }),
       reaffirm: async () => undefined,
     },
     clock: { now },

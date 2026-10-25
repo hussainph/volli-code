@@ -96,6 +96,7 @@ import { toast } from "sonner";
 
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
 import { RunningProcessesSection } from "./processes-section";
+import { parseRetentionDays } from "./retention-days";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { toastError } from "@renderer/lib/toast";
@@ -103,10 +104,11 @@ import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab"
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useRetentionTtlStore } from "@renderer/stores/retention-ttl";
 import { useUiStore } from "@renderer/stores/ui";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 /** Below a week, an automatic deletion is close enough to ask about. */
 const CONFIRM_BELOW_DAYS = 7;
+const RETENTION_DAYS_ERROR = "Enter a whole number of days, at least 1.";
 
 export function StoragePane() {
   // The retention window is what every eligibility date in the orphan list was
@@ -192,20 +194,20 @@ function RetentionSection({ onDays }: { onDays: (days: number) => void }) {
           width="sm"
           value={days}
           disabled={!loaded}
-          validate={(next) => {
-            const parsed = Number.parseInt(next.trim(), 10);
-            return Number.isFinite(parsed) && parsed >= 1
-              ? null
-              : "Enter a whole number of days, at least 1.";
+          validate={(next) => (parseRetentionDays(next) === null ? RETENTION_DAYS_ERROR : null)}
+          confirm={(next) => {
+            const parsed = parseRetentionDays(next);
+            return (
+              parsed !== null &&
+              (parsed >= CONFIRM_BELOW_DAYS ||
+                window.confirm(
+                  `Keep Done worktrees for only ${parsed} day(s)? Folders will be removed sooner.`,
+                ))
+            );
           }}
-          confirm={(next) =>
-            Number.parseInt(next, 10) >= CONFIRM_BELOW_DAYS ||
-            window.confirm(
-              `Keep Done worktrees for only ${next} day(s)? Folders will be removed sooner.`,
-            )
-          }
           onCommit={async (next): Promise<CommitResult> => {
-            const parsed = Number.parseInt(next.trim(), 10);
+            const parsed = parseRetentionDays(next);
+            if (parsed === null) return { ok: false, error: RETENTION_DAYS_ERROR };
             try {
               const result = await window.api.retention.setTtlDays(parsed);
               if (!result.ok) return { ok: false, error: result.error };
@@ -1402,9 +1404,7 @@ function DirtyOrphanItem({
     }
     onFailure(null);
     useProjectsStore.getState().select(projectId);
-    useWorkspaceStore
-      .getState()
-      .openTicketWorkspace(projectId, ticketId, { tabId: TICKET_BODY_TAB_ID });
+    useProjectUiStore.getState().openTicketView(projectId, ticketId, { tabId: TICKET_BODY_TAB_ID });
     useUiStore.getState().setSettingsOpen(false);
   }
 

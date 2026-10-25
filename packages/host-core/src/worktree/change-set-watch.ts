@@ -1,6 +1,6 @@
 /**
  * Debounced worktree filesystem watch for Change Set refresh (CONCEPT #47):
- * while a ticket workspace is live, main emits `volli:worktree-changed`
+ * while a Ticket view is live, main emits `volli:worktree-changed`
  * so the renderer can refetch the snapshot. Follows volli-fs's
  * {@link WATCH_DEBOUNCE_MS} cadence. One refcounted recursive watcher is shared
  * by every window subscribed to the same worktree and closes with its last

@@ -9,9 +9,10 @@
  * and window are doubles. No provider, Electron process or outward connection
  * is needed. HOST health cannot substitute for this Workspace's welcome.
  */
+import { createWorktreeReadService } from "@volli/host-core/worktree";
 import { randomUUID } from "node:crypto";
 
-import { boardResourceWorkspace } from "@volli/host-core/board";
+import { boardResourceProject } from "@volli/host-core/board";
 import { insertProject, insertTicket } from "@volli/host-core/db";
 import { admittedHandlers, createHostHandlers, ROUTER_POLICY } from "@volli/host-core/handlers";
 import {
@@ -20,7 +21,7 @@ import {
   testProject,
   testTicket,
 } from "@volli/host-core/testing";
-import { createSessionRuntime, createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
+import { createSessionExecutorSlot, createSessionRuntime } from "@volli/session-engine";
 import type { FlushHost } from "@volli/session-presentation";
 import { createHostRouter, RpcDiagnosticLog } from "@volli/session-rpc";
 import { startHostProtocolListener } from "@volli/session-rpc/websocket";
@@ -71,6 +72,7 @@ import {
   workspaceLink,
   type Cleanups,
 } from "./remote-sessions.real-link.test-support";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 const electron = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
@@ -181,7 +183,7 @@ async function path(features: readonly string[] = FEATURES) {
   let sequence = 0;
   const runtime = createSessionRuntime({
     engine,
-    executor,
+    executors: createSessionExecutorSlot(executor),
     artifacts: createInMemoryTranscriptArtifactStore(),
     followUps: createSqliteSessionFollowUpLedger(ctx.db),
     locations: {
@@ -196,6 +198,8 @@ async function path(features: readonly string[] = FEATURES) {
   type Sessions = NonNullable<Parameters<typeof createHostHandlers>[1]["sessions"]>;
   const creates: Parameters<Sessions["create"]>[0][] = [];
   const sessions: Sessions = {
+    // The agent doors' start (VC-923) is not what this suite drives.
+    start: () => Promise.reject(new Error("This suite starts no Ticket Session.")),
     async create(input) {
       creates.push(structuredClone(input));
       const created = await runtime.command({
@@ -255,6 +259,7 @@ async function path(features: readonly string[] = FEATURES) {
         kind: "live",
         execution: { kind: "unavailable", pendingArmedRuns: { noteDeliberateMove() {} } },
       } as never,
+      worktreeReads: createWorktreeReadService({ deps: () => ({ db: ctx.db }) }),
       busyWorktreeSites: async () => [],
       sessionListing: {
         db: ctx.db,
@@ -264,7 +269,7 @@ async function path(features: readonly string[] = FEATURES) {
       },
     },
   );
-  const boardWorkspace = boardResourceWorkspace(ctx.db);
+  const boardProject = boardResourceProject(ctx.db);
   const listener = await startHostProtocolListener({
     router: createHostRouter(),
     bind: { host: "127.0.0.1", port: 5388 },
@@ -286,7 +291,7 @@ async function path(features: readonly string[] = FEATURES) {
       resourceWorkspace: async (resource: { kind: string; id: string }) =>
         resource.kind === "session"
           ? ((await engine.getSession({ sessionId: resource.id }))?.session.projectId ?? null)
-          : boardWorkspace(resource),
+          : boardProject(resource),
     }),
   });
   cleanups.push(() => listener.close());

@@ -111,7 +111,7 @@ import {
   type SessionUsageReportQuery,
   type SessionUsageScope,
   type Ticket,
-  type VenueSnapshot,
+  type WorkingCopyMeasurement,
 } from "@volli/shared";
 import { EMPTY_TRANSCRIPT, type ChatSessionSlice } from "@volli/session-presentation";
 
@@ -128,8 +128,8 @@ import { useAutomationsStore } from "@renderer/stores/automations";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
-import { useVenueStore, venueKey } from "@renderer/stores/venue";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useWorkingCopyStore, workingCopyKey } from "@renderer/stores/working-copy";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 import type {
   FileSearchFile,
@@ -190,7 +190,7 @@ const HOME_CHAT_ID = "chat-scratch-a";
 
 // ─── fixtures ───────────────────────────────────────────────────────────────
 
-const VENUE: VenueSnapshot = {
+const WORKING_COPY: WorkingCopyMeasurement = {
   kind: "main-checkout",
   path: "/Users/someone/code/voltaic",
   branch: "main",
@@ -659,7 +659,7 @@ function inScope(entry: SessionUsageEntry, scope: SessionUsageScope): boolean {
 export function seed(): void {
   useProjectsStore.setState({ projects: [project], selectedProjectId: project.id });
   seedBoard();
-  useWorkspaceStore.setState({ byProject: {} });
+  useProjectUiStore.setState({ byProject: {} });
   useUiStore.setState({
     railMode: "now",
     homeRailMode: "now",
@@ -692,8 +692,8 @@ export function seed(): void {
     editor: null,
   });
   useChatSessionsStore.setState({ sessions: { [HOME_CHAT_ID]: HOME_SLICE } });
-  useVenueStore.setState({
-    byScope: { [venueKey(project.id, null)]: { status: "ready", venue: VENUE } },
+  useWorkingCopyStore.setState({
+    byScope: { [workingCopyKey(project.id, null)]: { status: "ready", workingCopy: WORKING_COPY } },
   });
 }
 
@@ -751,8 +751,9 @@ export const api: ApiOverrides = {
     columnOrders: () => Promise.resolve({ ok: true, orders: [] }),
     runsForTicket: () => Promise.resolve({ ok: true, runs: [] }),
   },
-  venue: {
-    snapshot: () => Promise.resolve({ ok: true, reading: { state: "measured", venue: VENUE } }),
+  workingCopy: {
+    snapshot: () =>
+      Promise.resolve({ ok: true, reading: { state: "measured", workingCopy: WORKING_COPY } }),
   },
   worktree: {
     status: () => Promise.resolve({ ok: true, status: WORKTREE_STATUS }),

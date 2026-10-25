@@ -47,9 +47,8 @@ export function relativeTime(epochMs: number, now: number = Date.now()): string 
   if (diff < 45 * SECOND) return "just now";
   // The minute rung opens at 45 seconds, so `Math.floor` alone reads the first
   // fifteen of them as "0m ago" — an age that says nothing happened in no time
-  // at all. The bucket a stamp sits in is unchanged (see `nextAgeChangeAt`,
-  // whose "just now" bucket still closes at 45 seconds); only its WORDS are,
-  // and the first word past "just now" is one minute.
+  // at all. The first word past "just now" is one minute; `nextAgeChangeAt`
+  // keeps that word on screen until it actually becomes two minutes.
   if (diff < HOUR) return `${Math.max(1, Math.floor(diff / MINUTE))}m ago`;
   if (diff < DAY) return `${Math.floor(diff / HOUR)}h ago`;
   if (diff < WEEK) return `${Math.floor(diff / DAY)}d ago`;
@@ -114,7 +113,8 @@ function bucketEnd(diff: number, unit: number): number {
  *
  * It walks {@link relativeTime}'s ladder, and each rung's answer is the end of
  * the bucket the stamp currently sits in — the "just now" bucket closes at 45
- * seconds, every rung after it closes on its own unit. Past the four-week
+ * seconds, the first minute lasts until 120 seconds, and every rung after it
+ * closes on its own unit. Past the four-week
  * rollup the string is an absolute date with exactly one moving part: the year,
  * which {@link compactAge} omits inside the current calendar year and prints
  * outside it, so the next change is the turn of the year.
@@ -131,7 +131,7 @@ export function nextAgeChangeAt(epochMs: number, now: number): number {
   const diff = now - epochMs;
 
   if (diff < 45 * SECOND) return epochMs + 45 * SECOND;
-  if (diff < HOUR) return epochMs + bucketEnd(diff, MINUTE);
+  if (diff < HOUR) return epochMs + Math.max(2 * MINUTE, bucketEnd(diff, MINUTE));
   if (diff < DAY) return epochMs + bucketEnd(diff, HOUR);
   if (diff < WEEK) return epochMs + bucketEnd(diff, DAY);
   if (diff < ROLLUP_AFTER) return epochMs + bucketEnd(diff, WEEK);

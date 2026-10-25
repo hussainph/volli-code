@@ -106,7 +106,7 @@ function ticketFocusElement(ticketId: string): HTMLElement | null {
   return null;
 }
 
-/** The selected tab of the ticket workspace's primary strip, or its first tab. */
+/** The selected tab of the Ticket view's primary strip, or its first tab. */
 function primaryTicketTab(): HTMLElement | null {
   const strip = document.querySelector<HTMLElement>('[role="tablist"][aria-label="Ticket tabs"]');
   if (strip === null) return null;

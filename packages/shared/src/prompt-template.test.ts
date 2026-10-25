@@ -129,6 +129,7 @@ describe("mergePromptTemplates", () => {
     const merged = mergePromptTemplates({
       project: [template({ name: "zeta" })],
       global: [template({ name: "alpha" })],
+      cloud: false,
     });
 
     expect(merged.map((entry) => entry.source)).toEqual(["personal", "project"]);
@@ -138,6 +139,7 @@ describe("mergePromptTemplates", () => {
     const merged = mergePromptTemplates({
       project: [template({ name: "review", content: "project body" })],
       global: [template({ name: "review", content: "global body" })],
+      cloud: false,
     });
 
     expect(merged).toHaveLength(1);
@@ -145,17 +147,30 @@ describe("mergePromptTemplates", () => {
     expect(merged[0]?.source).toBe("project");
   });
 
+  it("lets the personal name replace the project one with the cloud flag on", () => {
+    const merged = mergePromptTemplates({
+      project: [template({ name: "review", content: "project body" })],
+      global: [template({ name: "review", content: "global body" })],
+      cloud: true,
+    });
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.content).toBe("global body");
+    expect(merged[0]?.source).toBe("personal");
+  });
+
   it("keeps both tiers when the names differ, sorted by name", () => {
     const merged = mergePromptTemplates({
       project: [template({ name: "zeta" })],
       global: [template({ name: "alpha" }), template({ name: "middle" })],
+      cloud: false,
     });
 
     expect(merged.map((entry) => entry.name)).toEqual(["alpha", "middle", "zeta"]);
   });
 
   it("is an empty list when neither tier has anything", () => {
-    expect(mergePromptTemplates({ project: [], global: [] })).toEqual([]);
+    expect(mergePromptTemplates({ project: [], global: [], cloud: false })).toEqual([]);
   });
 });
 

@@ -4,7 +4,7 @@
  * The shape (VC-54, VC-42 phase 3). The nav row used to hold a "Board" page and
  * a "Sessions" page, and the second was the app's most confusing taxonomy — it
  * held only ticketless Sessions, auto-opened a chat nobody asked for on first
- * visit, and its tabs were easily mistaken for a ticket workspace's. So the
+ * visit, and its tabs were easily mistaken for a Ticket view's. So the
  * Board nav became **Home**, a tabbed environment in exactly the ticket
  * workspace's grammar: a permanent first tab that cannot be closed (the Board,
  * precisely as a ticket's Body tab), with Board Sessions and Files beside it.
@@ -28,14 +28,14 @@
  * same sentence while nothing is split — the plane below the strip is a split
  * grid, and an unsplit Home resolves to one pane holding the whole strip. The
  * Board rides inside that grid now (it is the primary pane's permanent tab)
- * rather than beside it; a ticket workspace still takes the whole page over.
+ * rather than beside it; a Ticket view still takes the whole page over.
  *
  * A Home SESSION additionally gets the right rail (VC-55) — the ticket
  * workspace's panel at this scope, on the same ⌥⌘B and the same persisted
  * collapse. The board has none: a rail about where this Session runs, over a
  * board, would be about nothing.
  *
- * A ticket workspace TAKES HOME OVER rather than nesting under its strip. The
+ * A Ticket view TAKES HOME OVER rather than nesting under its strip. The
  * alternative puts two tab strips on one screen, which is the very confusion
  * this ticket exists to end. What is deliberately given up is the nav item as a
  * route back to a chat: clicking Home while a ticket is open means "show me
@@ -133,7 +133,7 @@ import { useHomeTabReceipt } from "@renderer/hooks/use-home-tab-receipt";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { sessionPanes, useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
-import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, useProjectUiStore } from "@renderer/stores/project-ui";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { closeTerminalSession, renameTerminalSession } from "@renderer/terminal/session-lifecycle";
 import { useRemoteProjectHost } from "@renderer/components/hosts/use-hosts";
@@ -152,7 +152,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   React.useEffect(
     () =>
       subscribeBrowserTabs(browserApi, (tab) => {
-        const workspace = useWorkspaceStore.getState();
+        const workspace = useProjectUiStore.getState();
         if (tab.ticketId === null)
           workspace.removeHomeTabFromSplit(tab.projectId, browserTabId(tab.tabId));
         else
@@ -210,24 +210,24 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     ),
   );
   // Everything this surface needs to know about its Chat Drafts, and the rule
-  // about them, in one place shared with the Ticket workspace (VC-358).
+  // about them, in one place shared with the Ticket view (VC-358).
   const readSplitView = React.useCallback(
     () =>
       selectedId === null
         ? null
-        : (useWorkspaceStore.getState().byProject[selectedId]?.homeSplitView ?? null),
+        : (useProjectUiStore.getState().byProject[selectedId]?.homeSplitView ?? null),
     [selectedId],
   );
   const claimProvisionalTab = React.useCallback(
     (tabId: string, paneId: string, front: boolean) => {
       if (selectedId !== null)
-        useWorkspaceStore.getState().claimHomeTabInPane(selectedId, tabId, paneId, front);
+        useProjectUiStore.getState().claimHomeTabInPane(selectedId, tabId, paneId, front);
     },
     [selectedId],
   );
   const activateClaimedDraft = React.useCallback(
     (tabId: string) => {
-      if (selectedId !== null) useWorkspaceStore.getState().setHomeActiveTab(selectedId, tabId);
+      if (selectedId !== null) useProjectUiStore.getState().setHomeActiveTab(selectedId, tabId);
     },
     [selectedId],
   );
@@ -236,10 +236,10 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     claimTab: claimProvisionalTab,
     activateTab: activateClaimedDraft,
     focusPane: (paneId) => {
-      if (selectedId !== null) useWorkspaceStore.getState().focusHomePane(selectedId, paneId);
+      if (selectedId !== null) useProjectUiStore.getState().focusHomePane(selectedId, paneId);
     },
     closePane: (paneId) => {
-      if (selectedId !== null) useWorkspaceStore.getState().closeHomePane(selectedId, paneId);
+      if (selectedId !== null) useProjectUiStore.getState().closeHomePane(selectedId, paneId);
     },
   });
   const {
@@ -258,30 +258,30 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       if (selectedId === null) return;
       unpairProvisionalTab(
         id,
-        (tabId) => useWorkspaceStore.getState().unpairHomeTab(selectedId, tabId),
-        (paneId) => useWorkspaceStore.getState().closeHomePane(selectedId, paneId),
+        (tabId) => useProjectUiStore.getState().unpairHomeTab(selectedId, tabId),
+        (paneId) => useProjectUiStore.getState().closeHomePane(selectedId, paneId),
       );
     },
     [selectedId, unpairProvisionalTab],
   );
-  const recordedTab = useWorkspaceStore((state) =>
+  const recordedTab = useProjectUiStore((state) =>
     selectedId === null
-      ? DEFAULT_WORKSPACE_UI.homeActiveTab
-      : (state.byProject[selectedId]?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab),
+      ? DEFAULT_PROJECT_UI.homeActiveTab
+      : (state.byProject[selectedId]?.homeActiveTab ?? DEFAULT_PROJECT_UI.homeActiveTab),
   );
-  const openTicketId = useWorkspaceStore((state) =>
+  const openTicketId = useProjectUiStore((state) =>
     selectedId === null ? null : (state.byProject[selectedId]?.openTicketId ?? null),
   );
   // How Home's strip is ARRANGED and how its plane is SPLIT. Both move only
   // when somebody drags or splits, so subscribing here costs this component
   // (which hosts every live terminal in the app) nothing per frame — unlike the
   // per-token chat reads, which stay one level down in the strips.
-  const tabOrder = useWorkspaceStore(
+  const tabOrder = useProjectUiStore(
     (state) =>
       (selectedId === null ? undefined : state.byProject[selectedId]?.homeTabOrder) ??
       EMPTY_TAB_ORDER,
   );
-  const splitView = useWorkspaceStore((state) =>
+  const splitView = useProjectUiStore((state) =>
     selectedId === null ? null : (state.byProject[selectedId]?.homeSplitView ?? null),
   );
 
@@ -307,7 +307,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     () => [...terminalTabs.map((tab) => tab.sessionId), ...openChatIds.map(chatTabId)],
     [openChatIds, terminalTabs],
   );
-  const closeHomeFile = useWorkspaceStore((state) => state.closeHomeFile);
+  const closeHomeFile = useProjectUiStore((state) => state.closeHomeFile);
   const closeFileFromHome = React.useCallback(
     (relPath: string) => {
       if (selectedId === null) return;
@@ -355,7 +355,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       ).map((tab) => tab.id),
     [tabIds, tabOrder],
   );
-  const recordHomeTabOrder = useWorkspaceStore((state) => state.recordHomeTabOrder);
+  const recordHomeTabOrder = useProjectUiStore((state) => state.recordHomeTabOrder);
   // Which tab is in front, the relaunch that puts the persisted strip back
   // (VC-54, VC-105), and the record it is put back from.
   const { active: activeTabId, restore } = useHomeStripRestore({
@@ -374,12 +374,12 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   });
   const restoreKind = restore.kind;
 
-  const setHomeActiveTab = useWorkspaceStore((state) => state.setHomeActiveTab);
+  const setHomeActiveTab = useProjectUiStore((state) => state.setHomeActiveTab);
   // The receipt for what was derived, and the only write of it: a tab that
   // closed under the recorded id is answered by re-deriving, never by repairing
   // what was stored. Held back while a restore is pending or in flight —
   // writing then would overwrite the very id the restore is about to use.
-  const recordResolvedHomeTab = useWorkspaceStore((state) => state.recordResolvedHomeTab);
+  const recordResolvedHomeTab = useProjectUiStore((state) => state.recordResolvedHomeTab);
   useHomeTabReceipt({
     projectId: selectedId,
     provisionalActive,
@@ -405,7 +405,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       ? state.ticketsByProject[selectedId]?.find((candidate) => candidate.id === openTicketId)
       : undefined,
   );
-  const closeTicket = useWorkspaceStore((state) => state.closeTicket);
+  const closeTicket = useProjectUiStore((state) => state.closeTicket);
   // A stale `openTicketId` — the ticket was archived or deleted, whether just
   // now or in a previous run before restart restored it — falls back to the
   // plain board rather than rendering a detail view for a ticket that no longer
@@ -442,7 +442,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   );
 
   // ⌘\ / ⇧⌘\ / ⌃⌘arrows, for Home. The chord resolves which surface is in
-  // front for itself, so this instance stands down while a ticket workspace has
+  // front for itself, so this instance stands down while a Ticket view has
   // taken Home over (`hooks/use-split-shortcuts.ts`).
   useSplitShortcuts({
     projectId: selectedId,
@@ -452,7 +452,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
 
   // Terminal focus is an in-app zen mode: one terminal takes the whole canvas
   // and every piece of chrome steps aside, this strip included — exactly as the
-  // ticket workspace's does. Any target at all means zen, and a target can only
+  // Ticket view's does. Any target at all means zen, and a target can only
   // ever name a surface that is itself in front.
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
   const zen = terminalFocusTarget !== null;
@@ -510,21 +510,21 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // PANE: the two surfaces own different closes now that the strip lives here,
   // and only one of them can have a confirm up at a time anyway.
   const closeGuard = useCloseGuard();
-  const openHomeBoard = useWorkspaceStore((state) => state.openHomeBoard);
-  const activateHomeFile = useWorkspaceStore((state) => state.activateHomeFile);
-  const pinHomeFile = useWorkspaceStore((state) => state.pinHomeFile);
-  const previewHomeFile = useWorkspaceStore((state) => state.previewHomeFile);
-  const moveHomeTab = useWorkspaceStore((state) => state.moveHomeTab);
+  const openHomeBoard = useProjectUiStore((state) => state.openHomeBoard);
+  const activateHomeFile = useProjectUiStore((state) => state.activateHomeFile);
+  const pinHomeFile = useProjectUiStore((state) => state.pinHomeFile);
+  const previewHomeFile = useProjectUiStore((state) => state.previewHomeFile);
+  const moveHomeTab = useProjectUiStore((state) => state.moveHomeTab);
   // The split view's own writers (VC-202). Every one of them is a no-op while
   // Home is unsplit, which is what keeps the unsplit path untouched.
-  const moveHomeTabInPane = useWorkspaceStore((state) => state.moveHomeTabInPane);
-  const splitHomePane = useWorkspaceStore((state) => state.splitHomePane);
-  const moveHomeTabToPane = useWorkspaceStore((state) => state.moveHomeTabToPane);
-  const focusHomePane = useWorkspaceStore((state) => state.focusHomePane);
-  const setHomeSplitRatio = useWorkspaceStore((state) => state.setHomeSplitRatio);
-  const closeHomePane = useWorkspaceStore((state) => state.closeHomePane);
-  const removeHomeTabFromSplit = useWorkspaceStore((state) => state.removeHomeTabFromSplit);
-  const closeHomeBrowserTab = useWorkspaceStore((state) => state.closeHomeBrowserTab);
+  const moveHomeTabInPane = useProjectUiStore((state) => state.moveHomeTabInPane);
+  const splitHomePane = useProjectUiStore((state) => state.splitHomePane);
+  const moveHomeTabToPane = useProjectUiStore((state) => state.moveHomeTabToPane);
+  const focusHomePane = useProjectUiStore((state) => state.focusHomePane);
+  const setHomeSplitRatio = useProjectUiStore((state) => state.setHomeSplitRatio);
+  const closeHomePane = useProjectUiStore((state) => state.closeHomePane);
+  const removeHomeTabFromSplit = useProjectUiStore((state) => state.removeHomeTabFromSplit);
+  const closeHomeBrowserTab = useProjectUiStore((state) => state.closeHomeBrowserTab);
   const setActiveSession = useSessionsStore((state) => state.setActiveSession);
 
   const handleSelect = React.useCallback(
@@ -593,8 +593,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
           removeHomeTabFromSplit(selectedId, id);
           const sessions = useSessionsStore.getState().byOwner[selectedId]?.tabs ?? [];
           const chats = useChatSessionsStore.getState().openTabs[selectedId] ?? [];
-          const workspace = useWorkspaceStore.getState().byProject[selectedId];
-          const files = workspace?.projectFiles.tabs ?? [];
+          const projectUi = useProjectUiStore.getState().byProject[selectedId];
+          const files = projectUi?.projectFiles.tabs ?? [];
           const browsers = stripBrowserTabs(
             Object.values(useBrowserTabsStore.getState().byId).filter(
               (tab) => tab.projectId === selectedId && tab.ticketId === null,
@@ -687,7 +687,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
    * Home's store twins, and Home's own doors for a native payload. The
    * decisions — pane-or-surface reorder, the unsplit centre's activation door,
    * the first split's strip claim — live in the seam, one copy shared with the
-   * ticket workspace. `null` while no project is selected: there is no surface
+   * Ticket view. `null` while no project is selected: there is no surface
    * for a drop to write to.
    */
   const dropWrites = React.useMemo<SplitSurfaceWrites | null>(() => {
@@ -797,7 +797,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
    *  • absolute under a ticket's worktree → that ticket's file tab, and its
    *    workspace brought to front (the transcript pointed there by name);
    *  • absolute under the main checkout → relativized into a Home File tab;
-   *  • relative → this chat's own venue, the main checkout, as before;
+   *  • relative → this chat's own working copy, the main checkout, as before;
    *  • anything else → a toast, and NO navigation — never a pane whose only
    *    content is an error.
    *
@@ -823,9 +823,9 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         return;
       }
       if (target.kind === "ticket-file") {
-        const workspace = useWorkspaceStore.getState();
-        workspace.openTicketFile(selectedId, target.ticketId, target.relPath);
-        workspace.openTicketWorkspace(selectedId, target.ticketId);
+        const projectUi = useProjectUiStore.getState();
+        projectUi.openTicketFile(selectedId, target.ticketId, target.relPath);
+        projectUi.openTicketView(selectedId, target.ticketId);
         return;
       }
       previewHomeFile(selectedId, target.relPath);
@@ -913,7 +913,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             sessionId={chatSessionId}
             projectId={selected.id}
             // Ticketless by construction: Home hosts the project's OWN
-            // Sessions, which is what makes their venue the main checkout.
+            // Sessions, which is what makes their working copy the main checkout.
             ticketId={null}
             onOpenFile={openProjectFile}
             visible={visible}
@@ -960,7 +960,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     // ONE drag context for the whole surface (VC-202 §4): Home's strip, its
     // panes and their drop zones are one gesture, and the strip is rendered
     // here while the grid is handed to the layer below — so the context has to
-    // sit above both. A ticket workspace nests its OWN inside this one, which
+    // sit above both. A Ticket view nests its OWN inside this one, which
     // is what keeps a ticket tab from ever being dropped on Home.
     <SplitDnd
       // No subject, no origin: with no project selected there is no surface a
@@ -979,7 +979,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       onPairTabs={(first, second) => {
         if (selectedId !== null)
           pairProvisionalTabs(first, second, (firstId, secondId) =>
-            useWorkspaceStore.getState().pairHomeTabs(selectedId, firstId, secondId),
+            useProjectUiStore.getState().pairHomeTabs(selectedId, firstId, secondId),
           );
       }}
       onUnpairTab={unpairLocalTab}
@@ -1037,7 +1037,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       {/* Always mounted: it owns every live terminal in the app, so it is never
           unmounted for a nav, project or tab change. Its box is Home's plane —
           the split grid, the Board included — and it stands down only for a
-          ticket workspace that has taken the whole page over.
+          Ticket view that has taken the whole page over.
 
           Both the rail and the plane are handed DOWN rather than rendered
           beside this layer, so each keeps ONE position in the tree across the

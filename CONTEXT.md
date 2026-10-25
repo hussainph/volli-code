@@ -1,64 +1,120 @@
 # Volli
 
-Local-first planner and execution workspace. This glossary is the canonical project language. Definitions describe domain contracts; code and tests remain authoritative for implemented behavior.
+Planner and execution app for coding agents: one board and one Session history, with agents running on Runners. This glossary is the canonical project language. Definitions describe domain contracts; code and tests remain authoritative for implemented behavior. Volli Cloud terms below name the target architecture; where the code still runs the older local or host model, the entry says so.
 
 ## Language
 
-**Host**:
-The process that is the single authority for one or more Workspaces and serves
-the Host protocol. `hostd` is the headless Node host and imports no Electron APIs.
-_Avoid_: Electron main (one current host, not the product API), relay
+**Workspace**:
+The team container: projects (boards, tickets, history), Members and roles,
+billing, and shared connections (GitHub App, secrets, MCP, skills, plugins,
+agents, instructions, model keys). Every account gets one at signup, named
+after the person; inviting someone just adds a Member. One Workspace is open at
+a time, with a switcher. Projects can move between Workspaces. Not a database
+file, a worktree, or the ticket surface (**Ticket view**). Persisted names
+such as the `volli:workspace` app-state key, the stored `workspaceRailHidden`
+field and the `workspace_id` columns of `board_command_receipts` and
+`workspace_epochs` predate this meaning and hold project state; they are wire
+format, kept for older builds, and code reading them says project.
+_Avoid_: org, personal workspace (the signup Workspace is an ordinary one;
+there are no Workspace types), Ticket workspace
 
-**Worker**:
-A process that executes Sessions for a Host and owns the checkouts it holds
-leases on. Connects outbound to its Host.
-_Avoid_: Host, Client, agent (the Worker hosts the agent loop)
+**Member**:
+A person's membership in one Workspace, with a role; it can be suspended
+without deleting anything they did. The account, its Runners, personal model
+connections and personal secrets belong to the person, not the Workspace.
+_Avoid_: user (for the membership), seat
+
+**Runner**:
+Where a Session's tools and its agent loop (Pi) run: the person's Mac, a Linux
+box they installed with one command, or a **Volli Cloud runner**. A runner
+connects outbound to the backend, holds Working copies and its own Retry
+buffer, and never holds board authority. A Mac runner runs only its owner's
+work. Planned as `apps/runner` (`volli-runner`); today's nearest code is
+`hostd` and the desktop's own host.
+_Avoid_: host, worker, box (in copy), device (that is the viewing machine)
+
+**Volli Cloud runner**:
+A disposable cloud environment run by Volli that acts as a Runner. It sleeps
+when idle and pauses while its agent waits on a person.
+_Avoid_: Orb, sandbox (in copy), VM, managed host
+
+**Place**:
+Where a ticket's or Session's tools run: one Runner, shown as a small label. A
+Session's default Place is its ticket's Place; the composer's environment
+picker and `--env` choose another. When the ticket's Place is someone else's
+Mac, a teammate's Session falls back to their own default Runner.
+_Avoid_: venue, execution venue, location
+
+**Working copy**:
+A ticket's git checkout on one Runner: one per ticket per machine, shared by
+that machine's Sessions. Today it is the **Ticket worktree** (or the **Main
+checkout** for a worktree-opt-out ticket; a Board Session stands in the Main
+checkout). Another Runner starts from what is pushed; uncommitted work is shown as "uncommitted on <machine>", never moved
+behind the person's back.
+_Avoid_: checkout lease, workspace, sandbox
+
+**Retry buffer**:
+A Runner's ordered, crash-safe local queue of durable facts the backend has not
+yet accepted. Each fact is its own mutation, idempotent by `commandId`; the
+agent never waits on it, and the backend assigns final order. Only Runners have
+one; a Client holds no unaccepted facts.
+_Avoid_: offline queue, outbox (in copy), sync
 
 **Client**:
-Anything that reads projections and sends commands over the Host protocol:
-desktop, web/phone client, CLI. Owns no durable workspace state and never talks
-to databases.
-_Avoid_: renderer (only one client), Worker
+Anything a person reads projections and sends commands through: the desktop
+window, a web or phone client, the CLI. Holds no durable facts of its own and
+never talks to databases.
+_Avoid_: renderer (only one client), Runner
 
-**Host link**:
-A Client's one connection to one Workspace's Host: it handshakes before
-anything else, never queues a command while the Host is away, resumes
-subscriptions after the next welcome, and is observable as one connection
-state (`@volli/host-protocol/client-link`, VC-670).
-_Avoid_: socket, sync connection, offline queue
+**Model gateway**:
+The backend service that holds personal API keys and Workspace model keys and hands
+Runners short-lived Runner tokens for inference. Usage is attributed to the
+Session owner's connection. Subscriptions never pass through it: they stay on
+the person's machine.
+_Avoid_: proxy, key store (it does not hand out raw keys)
 
-**Workspace**:
-The portable unit a Host is authoritative for: one database file, its artifacts
-and git refs. Today: one project's board. Not the **Ticket workspace**, which
-names the ticket's UI surface.
-_Avoid_: Ticket workspace, worktree, device-local state
+**Runner token**:
+A short-lived, scoped credential a Runner presents to the backend or the Model
+gateway on behalf of one Session or job, never a long-lived key.
+_Avoid_: API key, device credential
 
-**Host protocol**:
-The versioned, capability-negotiated API every Client and Worker speaks.
-_Avoid_: Electron IPC, database sync
+**Environment recipe**:
+A project's description of how to set up a Runner for it: size, setup and
+resume scripts (`.agents/setup` and `.agents/resume` in the repository, which
+run behind the `cloud` flag today) and the secrets they need.
+An agent usually writes it; a form is the fallback.
+_Avoid_: Dockerfile, image, template
 
-**Execution venue**:
-The Worker a ticket's checkout currently lives on. Not `VenueKind` in
-`packages/shared/src/session-venue.ts`, which describes the checkout type.
-_Avoid_: checkout type, `VenueKind`, client device
+**Config level**:
+One of the four places configuration is defined: personal, Workspace, project,
+and repo files (`AGENTS.md`, `.agents/*`, `.mcp.json`), which always apply.
+Define at the widest level that is true, switch on at the narrowest level that
+is needed. Precedence is personal > project > Workspace; admin policy overrides
+all.
+_Avoid_: scope (overloaded), profile
 
-**Checkout lease / epoch**:
-The Host's grant naming the one Worker allowed to write a ticket's checkout.
-The epoch increments on every transfer and fences older holders.
-_Avoid_: tab hold, unfenced lock
+**Needs-you inbox**:
+One cross-Workspace list of the Attention waiting on this person: questions,
+approvals, failures and reviews, from every Workspace they belong to.
+_Avoid_: notifications (delivery, not the list), activity feed
 
-**Workspace epoch**:
-The same fence one level up: which Host is the authority for a Workspace.
-_Avoid_: Checkout epoch, database version
-
-**Checkpoint ref**:
-`refs/volli/checkpoints/<ticket>`, a commit holding a checkout's uncommitted
-work, pushed to the Host's git store, never the user's origin. Live processes
-and browser sockets do not migrate.
-_Avoid_: user branch, process snapshot
+**Retired terms** (the superseded host model; still in code until deleted):
+**Host** and **Worker** are replaced by the backend (authority) and **Runner**
+(execution). **Host link** and **Host protocol** are superseded by backend
+functions and the Runner connection. **Execution venue** is replaced by
+**Place**; the Runner a Session's facts ran on is a `RunnerIdentity` in code
+(still stored as `venue`). **Checkout lease / epoch** and **Workspace epoch** are dropped:
+authority never moves, and one Working copy per ticket per machine needs no
+fence. **Checkpoint ref** is retired: Volli never pushes uncommitted work.
+Their contracts live in the superseded `docs/host-*.md` until those are
+deleted.
+**Workspace** no longer means one host's database file. Host-protocol code that
+says `workspace` (`workspaceId`, Workspace grants and links, `workspace_epochs`)
+still means the host protocol's Workspace, where a project is its own Workspace
+(`workspace_epochs.workspace_id` references `projects(id)`).
 
 **Ticket**:
-A board card whose Ticket Body can scope a Ticket Session. Opening it shows the Ticket workspace; moving it to Doing records work state but does not start a Session.
+A board card whose Ticket Body can scope a Ticket Session. Opening it shows the Ticket view; moving it to Doing records work state but does not start a Session.
 
 **Ticket Body**:
 The ticket's canonical Markdown scope and starting instruction, authored by a human or agent. It is part of the ticket record, not a file or Artifact.
@@ -72,14 +128,17 @@ _Avoid_: Ticket Body, ticket document
 A Ticket Body file reference that no longer resolves in that ticket's context.
 _Avoid_: missing Attachment, broken Artifact
 
-**Ticket workspace**:
+**Ticket view**:
 The expanded working surface for one ticket. Its main tabs hold the Ticket Body, Sessions, files, and diffs; its Now, Diffs, and Files rail keeps repository state, properties, Session history, and file navigation beside them.
-_Avoid_: ticket worktree, artifact view
+Formerly "Ticket workspace"; renamed because **Workspace** now names the team
+container. Older docs and code identifiers still say ticket workspace; new copy
+says Ticket view.
+_Avoid_: Ticket workspace, ticket worktree, artifact view
 
 **Home**:
 The project-level tabbed workspace, and the app's landing page. Its permanent
 first tab is the Board; the project's own Board Sessions and Project Files
-open as tabs beside it. Opening a ticket takes Home over: the Ticket workspace
+open as tabs beside it. Opening a ticket takes Home over: the Ticket view
 fills the surface and Home's tab bar steps aside, so the two surfaces' tabs
 never stack above one another.
 _Avoid_: Board (for the page), Sessions page, dashboard, Files (as a nav item)
@@ -118,13 +177,13 @@ rail page and tabs are VC-121).
 _Avoid_: global files, project file tab, Files page, Files nav
 
 **Ticket Files**:
-The ticket-workspace view of files in that ticket's worktree.
+The Ticket view's list of files in that ticket's Working copy.
 _Avoid_: Project Files, artifact files
 
 **Session**:
-The durable identity and locally ordered history of an agentic conversation. A
+The durable identity and ordered history of an agentic conversation. A
 Session is created before any executor attaches and outlives terminal panes,
-processes, the Agent Runtime, UI surfaces, and execution venues. It remains
+processes, the Agent Runtime, UI surfaces, and the Runner it ran on. It remains
 openable after an attachment, turn, or Run completes; only explicit archival
 changes its availability. A Session may belong to one Ticket or be
 project-scoped.
@@ -237,7 +296,7 @@ fields in stored overrides are ignored.
 _Avoid_: tool permissions, model judgment, repo instruction file
 
 **Session Event**:
-An immutable fact in a Session's locally ordered ledger: an attachment outcome,
+An immutable fact in a Session's ordered ledger: an attachment outcome,
 native observation, command outcome, message/turn boundary, or recovery signal.
 The Session Engine assigns the per-Session sequence; timestamps are metadata, not
 ledger order. Session Events are not Ticket Events, although a planner event may
@@ -301,6 +360,14 @@ become renderer or Session contracts. The package may
 depend on Node but never Electron or DOM APIs, so Electron main can host it
 locally and a future worker can host the same package elsewhere.
 _Avoid_: harness adapter, provider runtime, Electron service, renderer client
+
+**Executor Slot**:
+The structured runtimes a Session runtime can attach, keyed by each runtime's
+durable adapter id, with one default. A Session runs on the runtime its newest
+attachment by a registered runtime recorded, else on the default; no person or
+caller chooses one. Pi is the only registered runtime; the slot exists so a later
+runtime (a Claude Agent SDK mode) can register beside it.
+_Avoid_: adapter registry, harness profile, runtime picker
 
 **Model Access**:
 One sanitized view of the provider accounts, subscriptions, API credentials,
@@ -510,6 +577,12 @@ A notice is never sent for the Session's own `shell_kill` (its tool
 result is the news), for an exit the model already read, for output `shell_start`
 already returned, or once the Session's attachment has ended; a person's kill
 from the Island is sent, because nothing else would tell the Session.
+A live shell keeps its worktree busy, so a shell never outlives its process
+group (VC-666): it exits when its output pipe closes, or — once the command
+itself has exited — when nothing is left in its group, whichever comes first.
+A grandchild that escaped the group (`setsid`, a daemonizing server) while
+holding the pipe is not signalled, but Volli stops reading that pipe, so its
+next write to it fails with SIGPIPE, which usually ends it.
 _Avoid_: background job, `&` (which loses the handle), terminal (a shell a
 person types into), daemon
 
@@ -710,7 +783,8 @@ _Avoid_: Session, provider session, terminal pane
 **Session Attachment**:
 One historical association between an existing Session and an executor or
 transport: its runtime identity, native recovery reference where available,
-venue, and attach/detach outcome. A Session keeps many historical attachments
+the Runner it ran on (`venue`, a `RunnerIdentity`; the desktop's is the frozen
+`LOCAL_RUNNER`, `{ id: "local", kind: "local" }`), and attach/detach outcome. A Session keeps many historical attachments
 but has at most one live executor attachment. A terminal companion is a workspace
 view, not an alternate structured attachment.
 _Avoid_: Session, terminal, harness state
@@ -791,6 +865,16 @@ a person's work in another Session on its Ticket — another Session's own
 scheduled resume does not count. Never scheduled without being chosen, and never
 re-scheduled on its own.
 _Avoid_: auto-retry, auto-resume, Automation
+
+**Restart Resume**:
+The host continuing, on its own, a turn a lost process cut short, through the
+ordinary retry and never by sending the person's message again. Only when the
+turn stopped at a settled point (a user message, or tool results that answered
+every call) and is still wanted: nobody picked the Session or its Ticket up
+since the loss, the loss is recent, and the turn was not already a restart
+resume. A turn cut short inside a tool waits for the person's **Resume**. One
+attempt per loss; a skip raises nothing new.
+_Avoid_: auto-retry, crash replay, Scheduled Resume
 
 **SessionInteraction**:
 A decision a Session is waiting on — a permission or a question — held in Volli
@@ -930,12 +1014,12 @@ end.
 _Avoid_: idle (for a failed interruption), error, crashed
 
 **Project**:
-A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk. **The one user-facing word for a rail entry** (VC-57 ruling): every surface says "project" — "project switcher", "Project override", "Set by this project" — and it anchors the session language too (project-level vs ticket-level sessions). Internal identifiers (`useWorkspaceStore`, `workspaceRailHidden`) are wire format, not copy.
-_Avoid_: Workspace (the portable host-owned unit), Ticket workspace (the ticket surface), space
+A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk. **The one user-facing word for a rail entry** (VC-57 ruling): every surface says "project" — "project switcher", "Project override", "Set by this project" — and it anchors the session language too (project-level vs ticket-level sessions). Persisted names (`volli:workspace`, `workspaceRailHidden`) are wire format, not copy.
+_Avoid_: Workspace (the team container that owns projects), Ticket view (the ticket surface), space
 
 **Ticket worktree**:
 The isolated git checkout a ticket works in: branch `volli/<DISPLAY-ID>-<slug>`, directory `~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`. App-owned (outside both the repo and Electron's `userData`), named once at creation — neither branch nor directory is renamed when the ticket title changes. The recorded branch follows the checkout only when the ticket's own directory is found on another branch of the same ticket — `volli/<DISPLAY-ID>` or `volli/<DISPLAY-ID>-…` (an agent cut a narrower one, or a stacked-PR slice `volli/VC-627-b-…`), or the same with a one-lowercase-letter slice suffix (`volli/VC-627c` or `volli/VC-627c-…`): the next Session start adopts it as an automation `worktree_changed`. Anything else after the number (`volli/VC-6270`, `volli/VC-627.bak`), another ticket's branch, a non-`volli/` branch or a detached HEAD there is refused, never switched away from, and the refusal names the branch checked out, whether it has uncommitted changes and the branch the ticket expects.
-_Avoid_: Workspace (the portable host-owned unit), Ticket workspace (the ticket surface), checkout (ambiguous with the main checkout)
+_Avoid_: Workspace (the team container), Ticket view (the ticket surface), checkout (ambiguous with the main checkout)
 
 **Artifact**:
 A durable, project-scoped output or reference, stored as a file or bundle and reusable across tickets. Its format determines how Volli presents it.

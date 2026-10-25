@@ -31,6 +31,7 @@ const base = {
   modelAccess: null,
   experiments: null,
   automations: { kind: "degraded" } as never,
+  worktreeReads: null,
   busyWorktreeSites: async () => [],
 };
 function handlers(options: Parameters<typeof createHostHandlers>[1]) {

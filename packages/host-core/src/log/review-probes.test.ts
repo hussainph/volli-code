@@ -4,7 +4,7 @@
  */
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
-  createInMemoryTranscriptArtifactStore,
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   type BindingHandle,
@@ -30,6 +30,7 @@ import {
 } from "./correlation";
 import { createLogger, MAX_LOG_LINE_BYTES } from "./logger";
 import { installHostLog } from "./root";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 const A = { traceId: "a".repeat(32), spanId: "1".repeat(16) };
 const B = { traceId: "b".repeat(32), spanId: "2".repeat(16) };
@@ -186,7 +187,7 @@ async function runtimeHarness(behaviour: {
   const location = async () => ({ directory: "/fixture", venue });
   const runtime = createSessionRuntime({
     engine: createSessionEngine({ ledger: createSqliteSessionLedger(ctx.db), clock, ids }),
-    executor: correlatedExecutor(inner),
+    executors: createSessionExecutorSlot(correlatedExecutor(inner)),
     artifacts: createInMemoryTranscriptArtifactStore(),
     locations: { resolve: location, prepare: location, reaffirm: async () => {} },
     clock,

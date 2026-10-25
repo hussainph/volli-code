@@ -21,15 +21,6 @@ import type { TicketStatus, HarnessId } from "./ticket";
 import type { TicketEventActorKind } from "./ticket-events";
 
 /**
- * A retitle main performed on its own (VC-81 auto-titling), pushed so live
- * surfaces can move their labels the same way a renderer rename does.
- */
-export interface SessionRetitledEvent {
-  sessionId: string;
-  title: string;
-}
-
-/**
  * A run's answer: the durable Run (holding the fresh Session's id and the
  * RESOLVED model), or a coded refusal the caller classifies without string
  * matching. The Session boots detached — VC-16's optimistic open — so an ok
@@ -63,9 +54,9 @@ export type PendingArmedRunSettledNotice =
  *
  * One reader does act on it (VC-286): `worktree` is the kind that can move a
  * ticket's CHECKOUT — materialized, removed, recreated, scope switched — and
- * the renderer's venue boundary (`lib/boot.ts`) discards the ticket's cached
- * venue reading on it. So a producer whose change moves a checkout MUST name
- * `worktree`; one that omits `kind` re-hydrates the board but leaves the venue
+ * the renderer's working copy boundary (`lib/boot.ts`) discards the ticket's cached
+ * working copy reading on it. So a producer whose change moves a checkout MUST name
+ * `worktree`; one that omits `kind` re-hydrates the board but leaves the working copy
  * where it was.
  */
 export type DataChangeKind = "ticket" | "comment" | "session" | "worktree" | "retention";
@@ -92,7 +83,7 @@ export interface DataChangedEvent {
   projectId?: string;
   /**
    * Hint at what changed. Never the basis of whether a reader re-hydrates — but
-   * `worktree` is load-bearing for the venue boundary; see {@link DataChangeKind}.
+   * `worktree` is load-bearing for the working copy boundary; see {@link DataChangeKind}.
    */
   kind?: DataChangeKind;
 }

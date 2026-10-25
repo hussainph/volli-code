@@ -24,7 +24,7 @@
  *      contains r-e-a-d-m-e — `README` puts the README first and Enter opens
  *      THAT file. Through the `@` picker's scorer the artifact led 1030 to 46,
  *      so this is the check that the two surfaces really do rank apart.
- *   6. SCOPE FOLLOWS THE SURFACE: the same chord inside a Ticket workspace
+ *   6. SCOPE FOLLOWS THE SURFACE: the same chord inside a Ticket view
  *      indexes THAT TICKET'S WORKTREE — a file written only into the worktree
  *      is offered, a file written only into Main is not.
  *   7. A pick lands in the surface it was invoked from: Enter previews into the
@@ -346,7 +346,7 @@ async function main() {
     await waitUntil("ticket detail", async () => (await page.getByRole("tablist").count()) >= 1);
 
     // ---- 6. Scope follows the surface ---------------------------------------
-    await attempt(6, "in the Ticket workspace ⌘P indexes THAT WORKTREE, not Main", async () => {
+    await attempt(6, "in the Ticket view ⌘P indexes THAT WORKTREE, not Main", async () => {
       await openQuickOpen(page);
       const rows = await quickOpenRows(page);
       const offersWorktreeFile = rows.some((r) => r.includes(WORKTREE_ONLY));

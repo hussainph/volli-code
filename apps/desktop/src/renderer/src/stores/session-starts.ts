@@ -19,7 +19,7 @@
  * reads are folded into one for the same reason a baseline fetch is elsewhere —
  * two surfaces mounting on one frame is the shape the collision takes.
  *
- * The error is kept rather than toasted (see `stores/venue.ts`): a chart that
+ * The error is kept rather than toasted (see `stores/working-copy.ts`): a chart that
  * cannot be drawn is a chart that does not appear, and a toast over a chat
  * someone is about to type in is the loudest thing on screen for the least
  * useful reason.

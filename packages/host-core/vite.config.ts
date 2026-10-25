@@ -33,6 +33,9 @@ export default defineConfig({
         "src/handlers/handler-map.ts",
         "src/handlers/policies.ts",
         "src/agent-dispatch/projection.ts",
+        // The socket's own verbs as the map's entries (VC-923): what every
+        // socket verb that is no catalog command reaches.
+        "src/agent-dispatch/verbs.ts",
         // File/blob/template services moved with their tests at unchanged 100% (VC-557).
         "src/blob-attach.ts",
         "src/blob-collect.ts",
@@ -94,6 +97,9 @@ export default defineConfig({
         // Recovery-before-consumers and a single drain are now executable port
         // contracts, replacing desktop's source scans (VC-622).
         "src/session-runtime/lifecycle.ts",
+        // Whether a turn a lost process cut short continues on its own (VC-450):
+        // every branch is a Session waking unasked, or one left stranded.
+        "src/session-runtime/restart-resume.ts",
         "src/session-runtime/facade.ts",
         "src/session-runtime/agents.ts",
         "src/session-runtime/context.ts",
@@ -193,6 +199,22 @@ export default defineConfig({
         "src/observability/genai.ts",
         "src/observability/settings.ts",
         "src/observability/sink.ts",
+        // The migration exporter (VC-317): it reads a person's whole history
+        // once, into the format the move to Volli Cloud imports, and nobody
+        // re-runs that move to check it. A branch wrong here is a fact that
+        // silently does not arrive, a path that leaks into a cloud row, or a
+        // cancelled export that reads as complete. `worker-entry.ts` stays
+        // out: its one line only ever runs inside a worker thread, which the
+        // coverage provider does not instrument; `worker.test.ts` drives it.
+        "src/migration-export/errors.ts",
+        "src/migration-export/exporter.ts",
+        "src/migration-export/records.ts",
+        "src/migration-export/sources.ts",
+        "src/migration-export/staging.ts",
+        "src/migration-export/tables.ts",
+        "src/migration-export/transform.ts",
+        "src/migration-export/verify.ts",
+        "src/migration-export/worker.ts",
       ],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
     },

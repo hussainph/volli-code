@@ -8,7 +8,7 @@
  * streaming to settle — is `pi-project-chat-smoke.mjs`'s job now, so
  * it is not repeated here.
  *
- *   (a) **Ticket-orphan reopen.** A chat born inside a ticket workspace
+ *   (a) **Ticket-orphan reopen.** A chat born inside a Ticket view
  *       survives that ticket being hard-deleted (`ON DELETE SET NULL` on
  *       `sessions.ticket_id`, `db/migrations.ts`'s MIGRATION_003 comment: "a
  *       session outlives an archived-then-deleted ticket, purely as
@@ -270,30 +270,26 @@ async function main() {
 
     let orphanTicketId = null;
     let orphanDisplayId = null;
-    await attempt(
-      2,
-      "a chat born in a ticket workspace sends and settles a real message",
-      async () => {
-        const seeded = await seedTicket(page, projectId, PROJECT.prefix, "Orphan chat ticket");
-        orphanDisplayId = seeded.displayId;
-        orphanTicketId = seeded.ticketId;
-        await cardById(page, orphanDisplayId).dblclick();
-        await waitUntil(
-          "the ticket detail to open",
-          async () =>
-            (await page.getByRole("tab", { name: orphanDisplayId, exact: true }).count()) === 1,
-        );
-        await openNewChatTab(page, TICKET_TAB_STRIP);
-        const settled = await runTurnToSettle(page, ORPHAN_PROMPT).catch(async (error) => {
-          await captureFailureEvidence(page, "orphan-chat-turn-failed");
-          throw error;
-        });
-        return {
-          ok: settled.texts.length > 0,
-          detail: `${orphanDisplayId} turn=${(settled.elapsedMs / 1000).toFixed(1)}s`,
-        };
-      },
-    );
+    await attempt(2, "a chat born in a Ticket view sends and settles a real message", async () => {
+      const seeded = await seedTicket(page, projectId, PROJECT.prefix, "Orphan chat ticket");
+      orphanDisplayId = seeded.displayId;
+      orphanTicketId = seeded.ticketId;
+      await cardById(page, orphanDisplayId).dblclick();
+      await waitUntil(
+        "the ticket detail to open",
+        async () =>
+          (await page.getByRole("tab", { name: orphanDisplayId, exact: true }).count()) === 1,
+      );
+      await openNewChatTab(page, TICKET_TAB_STRIP);
+      const settled = await runTurnToSettle(page, ORPHAN_PROMPT).catch(async (error) => {
+        await captureFailureEvidence(page, "orphan-chat-turn-failed");
+        throw error;
+      });
+      return {
+        ok: settled.texts.length > 0,
+        detail: `${orphanDisplayId} turn=${(settled.elapsedMs / 1000).toFixed(1)}s`,
+      };
+    });
 
     await attempt(
       3,

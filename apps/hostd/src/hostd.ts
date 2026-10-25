@@ -88,7 +88,7 @@ import type { LogRing } from "@volli/host-core/log";
 import type { HostdLogger } from "./log";
 import { openOperators } from "./operators";
 import { headlessPorts } from "./ports";
-import { hostdVenue } from "./venue";
+import { hostdRunner } from "./runner-identity";
 import { logCredentials, openHeadlessSecrets, type HeadlessSecrets } from "./secrets";
 import {
   writeStatus,
@@ -335,9 +335,9 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
     const serve = async (host: HostCore, ports: HostCorePorts): Promise<void> => {
       if (isLiveHost(host)) {
         database = { ok: true, path: host.dbPath };
-        const venue = hostdVenue(host.database.db);
+        const runner = hostdRunner(host.database.db);
         boardDb = host.database.db;
-        hostId = venue.id;
+        hostId = runner.id;
         sessionRuntime = createHeadlessSessionRuntime({
           host,
           ports,
@@ -350,7 +350,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           // ownership. Override packaged/source runtime path metadata alike.
           options: {
             ...runtimeOptions,
-            venue,
+            venue: runner,
             // Managed system installs pass a root-owned device store; user
             // installs use their private data-dir store on Linux and macOS.
             projectsRoot: cloud
@@ -376,6 +376,9 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
         };
         const commands = createHostAgentCommands(ports, {
           db: host.database.db,
+          // `worktree status` / `worktree diff` read through the host's one
+          // service (VC-788): the same snapshot and coalescers as every door.
+          worktreeReads: host.worktreeReads,
           ...sessionPorts,
           // The one object every door projects (VC-668). A Done move's trim,
           // its armed arrival and its drain at stop are the handler's.
@@ -396,7 +399,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           try {
             listener = await startHostdProtocolListener({
               db: host.database.db,
-              hostId: venue.id,
+              hostId: runner.id,
               version: options.version,
               bind: listen,
               // Devices enrolled over SSH (VC-700); a test may supply its own.
@@ -404,7 +407,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
                 options.hostProtocolVerifier ??
                 createEnrolledDeviceVerifier({
                   store: deviceStore!,
-                  hostId: venue.id,
+                  hostId: runner.id,
                   onStoreProblem: (problem, reason) =>
                     logger.error("host protocol: the enrolled-devices store admits no one", {
                       problem,
@@ -467,7 +470,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
         // The one sealed store this host opened at boot, never a second handle.
         secretStore: secrets.store,
         modelAccess: () => headlessModelAccess(options.env, runtimeOptions),
-        venue: hostdVenue,
+        venue: hostdRunner,
         // Read on every scan, and only after readiness (maintenance starts
         // there). Fail closed rather than call every recorded process an orphan.
         processReaders: {

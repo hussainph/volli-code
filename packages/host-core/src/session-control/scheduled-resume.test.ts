@@ -5,8 +5,7 @@
  * a relaunch reads too.
  */
 import {
-  createInMemorySessionLedger,
-  createInMemoryTranscriptArtifactStore,
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   type BindingHandle,
@@ -21,6 +20,10 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { NotificationRequest } from "@volli/shared";
 import { createScheduledResumeHost, SCHEDULED_RESUME_TICK_MS } from "./scheduled-resume";
+import {
+  createInMemorySessionLedger,
+  createInMemoryTranscriptArtifactStore,
+} from "@volli/session-engine/testing";
 
 const venue = { id: "machine-1", kind: "local" as const };
 const RESET = 1_000_000;
@@ -95,7 +98,7 @@ function world(): World {
   const at = async () => ({ directory: "/projects/p", venue });
   const runtime = createSessionRuntime({
     engine,
-    executor,
+    executors: createSessionExecutorSlot(executor),
     artifacts: createInMemoryTranscriptArtifactStore(),
     locations: { resolve: at, prepare: at, reaffirm: async () => undefined },
     clock: { now },

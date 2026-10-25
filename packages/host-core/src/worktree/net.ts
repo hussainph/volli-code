@@ -31,6 +31,7 @@ import {
   credentialHelperExplanation,
   type CredentialHelperIssue,
 } from "../credential-helper-diagnostics";
+import { GIT_MAX_BUFFER } from "./git";
 import { err, ok, type WorktreeResult } from "./types";
 
 /**
@@ -64,6 +65,9 @@ export const runNet: RunNet = async (file, args, cwd) => {
   const { stdout, stderr } = await execFileAsync(file, [...args], {
     cwd,
     encoding: "utf8",
+    // add warnings and commit hooks can exceed Node's 1 MiB default; killing
+    // a mutating git child on output alone can report failure after it landed.
+    maxBuffer: GIT_MAX_BUFFER,
     timeout: NET_TIMEOUT_MS,
   });
   return { stdout, stderr };

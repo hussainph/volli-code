@@ -92,7 +92,10 @@ describe("durable host follow-up storage", () => {
     expect(await f.engine.getSession({ sessionId: f.sessionId })).toEqual(history);
   });
 
-  it("rolls back failed work and refuses async transactions without partial writes", async () => {
+  // Rollback and the synchronous-work refusal are the shared contract's
+  // (session-follow-up-repo.contract.test.ts). Storing nothing for a state no
+  // writer changed, and leaving no transaction open, are this adapter's own.
+  it("writes no row for an unchanged state and leaves no transaction open after a failure", async () => {
     const f = await setup();
     expect(await f.ledger.transaction(f.sessionId, (state) => state.revision)).toBe(0);
     expect(f.db.prepare("SELECT * FROM session_follow_up_queue").all()).toEqual([]);
@@ -102,10 +105,7 @@ describe("durable host follow-up storage", () => {
         throw new Error("crash");
       }),
     ).rejects.toThrow("crash");
-    await expect(
-      f.ledger.transaction(f.sessionId, (() => Promise.resolve("not synchronous")) as never),
-    ).rejects.toThrow("must be synchronous");
-    expect(await f.ledger.transaction(f.sessionId, (state) => state.revision)).toBe(0);
+    expect(f.db.prepare("SELECT * FROM session_follow_up_queue").all()).toEqual([]);
     expect(f.db.inTransaction).toBe(false);
   });
 

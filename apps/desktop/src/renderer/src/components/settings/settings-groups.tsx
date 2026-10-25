@@ -32,6 +32,7 @@ import { ModelAccessSettings } from "@renderer/components/pages/model-access-set
 import { WebAccessSettings } from "@renderer/components/pages/web-access-settings";
 import type { PrefGroup } from "@renderer/components/settings/kit";
 import { hasVisibleExperiments } from "@renderer/stores/experiments";
+import { accountCategory } from "./account-category";
 import { hostsCategory } from "./hosts-category";
 import { AboutPane } from "./panes/about-pane";
 import { DisplaySection } from "./panes/display-section";
@@ -78,6 +79,11 @@ export interface SettingsGroupsOptions {
    * with the `cloud` experiment on.
    */
   readonly hosts?: boolean;
+  /**
+   * Shows Services → Account, the Volli Cloud sign-in (VC-884): only with the
+   * `cloud` experiment on.
+   */
+  readonly account?: boolean;
 }
 
 export function settingsGroups(
@@ -179,6 +185,7 @@ export function settingsGroups(
       key: "services",
       label: "Services",
       categories: [
+        ...(options.account === true ? [accountCategory()] : []),
         ...(options.hosts === true ? [hostsCategory()] : []),
         {
           key: MODELS_CATEGORY_KEY,

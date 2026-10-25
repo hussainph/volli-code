@@ -5,7 +5,7 @@
  * dependency-light core:
  *
  *  - the global Done-TTL setting, stored in `app_state` (the existing kv the
- *    ui/workspace persist stores already use);
+ *    ui/project-ui persist stores already use);
  *  - `doneEntryTimestamp`, the event-log read that dates a ticket's LATEST entry
  *    into the Done column — the anchor the TTL counts from;
  *  - `computeArchiveReadiness` (re-exported from `@volli/shared` — it's pure
@@ -30,6 +30,7 @@ import { recordTicketEvent } from "../db/events-repo";
 import { prepared } from "../db/prepared";
 import { getTicketRow } from "../db/tickets-repo";
 import { archiveTicketCommand } from "../ticket-commands";
+import { withTicketWake } from "../ticket-wake";
 import type { WorktreeTrimReport } from "@volli/shared";
 import type { BusyWorktreeSites } from "./activity";
 import type { AgentSiteReleaseReport } from "./agent-sites";
@@ -144,6 +145,11 @@ const USER_ACTOR: TicketEventActor = { kind: "user" };
  * is safely gone is the ticket archived (reversible; branch, `pr_url`, and the
  * event log all survive — #16). Never auto-invoked; the retention watch only
  * ever PROMPTS, the human disposes.
+ *
+ * The archive is announced like the board's own (`withTicketWake`): this path
+ * reaches `archiveTicketCommand` directly, and a committed archive that no
+ * wake names leaves main's post-archive work — closing the Ticket's headless
+ * Browser Tabs, clearing its partition (VC-837) — undone.
  */
 export async function archiveAndClean(
   deps: WorktreePorts,
@@ -161,7 +167,9 @@ export async function archiveAndClean(
   const removed = await remove(deps, ticketId, { ...opts, force: false });
   if (!removed.ok) return removed;
 
-  archiveTicketCommand(deps.db, ticketId, { now: Date.now(), actor: USER_ACTOR });
+  withTicketWake(deps.db, ticketId, () =>
+    archiveTicketCommand(deps.db, ticketId, { now: Date.now(), actor: USER_ACTOR }),
+  );
   return ok(undefined);
 }
 
@@ -283,7 +291,16 @@ export interface TrimFinishPorts {
 /** Why a finished ticket's worktree was or wasn't trimmed — the caller logs it. */
 export type TrimFinishOutcome =
   | { kind: "trimmed"; report: WorktreeTrimReport }
-  | { kind: "skipped"; reason: string };
+  | {
+      kind: "skipped";
+      reason: string;
+      /**
+       * The walk ran and found nothing to take: an answer for this ticket as it
+       * stands, which the watch's backfill need not ask again soon (VC-686).
+       * Absent on every refusal a later cycle could see differently.
+       */
+      nothingLeft?: true;
+    };
 
 const TRIM_SKIP = (reason: string): TrimFinishOutcome => ({ kind: "skipped", reason });
 
@@ -335,7 +352,9 @@ export async function trimFinishedWorktree(
   if (!trimmed.ok) return TRIM_SKIP(trimmed.error);
   // Nothing removed is not an event: a worktree that was already trimmed (or
   // never had artifacts) would otherwise write one of these on every poll.
-  if (trimmed.value.removed.length === 0) return TRIM_SKIP("nothing to trim");
+  if (trimmed.value.removed.length === 0) {
+    return { kind: "skipped", reason: "nothing to trim", nothingLeft: true };
+  }
 
   recordTicketEvent(
     db,

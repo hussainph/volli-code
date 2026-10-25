@@ -68,7 +68,7 @@ function drawColumn(ticketIds: readonly string[], status = "todo"): HTMLElement[
   return ticketIds.map((id) => drawCard(column, id));
 }
 
-/** A ticket workspace's primary strip, as `tab-strip.tsx` draws it. */
+/** A Ticket view's primary strip, as `tab-strip.tsx` draws it. */
 function drawTicketTabs(): { selected: HTMLElement; first: HTMLElement } {
   surface.innerHTML = "";
   const strip = document.createElement("div");

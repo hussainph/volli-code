@@ -373,7 +373,7 @@ async function main() {
     );
 
     // === 2. Workspace B: switch via rail, get its own terminal, probe cwd ===
-    // Nav and the active Home tab are both remembered per-workspace and both
+    // Nav and the active Home tab are both remembered per-project and both
     // default to Home's Board tab, so a fresh workspace opens on the board —
     // click Home to be sure of the page, then mint its own terminal.
     await page.getByText("BC", { exact: true }).click(); // Beta Cove monogram

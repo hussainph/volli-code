@@ -451,7 +451,7 @@ export function ModelName({
                 pointer's alone — on rows a keyboard walks, `Claude Son…` was
                 simply where the fact ended. Every surface drawing this is a row
                 inside a Select or a cmdk list, and both are composite widgets:
-                a focus stop of the kind the venue chips grew would be a nested
+                a focus stop of the kind the working copy chips grew would be a nested
                 interactive control inside a `role="option"`, which breaks the
                 keyboard model of the list to fix the readability of one row in
                 it. A second line costs the list nothing and hides nothing.

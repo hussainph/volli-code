@@ -327,7 +327,7 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     owner: "VC-573",
     reason: `Its scope includes {kind:"all"}, a read across every workspace. ${HOST_SCOPED}`,
   },
-  "volli:venue-snapshot": {
+  "volli:working-copy-snapshot": {
     placement: "workspace",
     owner: "VC-566",
     reason: "Measures a ticket or board checkout on the host.",
@@ -1303,11 +1303,6 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     placement: "workspace",
     owner: "VC-565",
     reason: "Fired by a backward ticket move.",
-  },
-  "volli:session-retitled": {
-    placement: "workspace",
-    owner: "VC-565",
-    reason: "Session listing fact (VC-574 E5).",
   },
   "volli:notification-activated": {
     placement: "client-local",

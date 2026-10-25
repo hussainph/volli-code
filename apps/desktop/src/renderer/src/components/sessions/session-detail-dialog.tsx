@@ -38,7 +38,7 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { launchAdapter, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 export function SessionDetailDialog() {
   const address = useUiStore((state) => state.sessionDetail);
@@ -153,15 +153,15 @@ function SessionDetailBody({
       // from ⌘K). `startProjectTerminal` selects the fresh Home tab but does
       // not change the surface, because its ordinary callers already live on
       // Home. Move there first so this app-wide door cannot create the new PTY
-      // behind Files, Configure, or a ticket workspace.
-      useWorkspaceStore.getState().openHome(projectId);
+      // behind Files, Configure, or a Ticket view.
+      useProjectUiStore.getState().openHome(projectId);
       void startProjectTerminal(projectId);
       return;
     }
     // The workspace first, then the Session: `startTicketTerminal` records the
     // fresh tab as the ticket's active one, and opening the workspace after it
     // would land on whatever tab had been in front before.
-    useWorkspaceStore.getState().openTicketWorkspace(projectId, recreate.ticketId);
+    useProjectUiStore.getState().openTicketView(projectId, recreate.ticketId);
     void startTicketTerminal(projectId, recreate.ticketId);
   };
 
@@ -176,10 +176,10 @@ function SessionDetailBody({
     if (resumable === null) return;
     const ticketId = resumable.ticketId;
     onDone();
-    useWorkspaceStore.getState().openTicketWorkspace(projectId, ticketId);
+    useProjectUiStore.getState().openTicketView(projectId, ticketId);
     void resumeTicketSession(ticketScope(projectId, ticketId), record.id).then((booted) => {
       if (booted === null) return;
-      useWorkspaceStore.getState().openTicketSession(projectId, ticketId, booted);
+      useProjectUiStore.getState().openTicketSession(projectId, ticketId, booted);
     });
   };
 

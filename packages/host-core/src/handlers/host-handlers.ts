@@ -4,7 +4,7 @@ import type {
   HostWorkspaceList,
 } from "@volli/shared";
 /**
- * The host's one handler map: catalog key → the whole command (VC-668; HP §
+ * The host's one handler map: key → the whole command (VC-668; HP §
  * Command catalog, "One handler map").
  *
  * Every door is a projection of this object, and every projection runs the
@@ -12,8 +12,11 @@ import type {
  * ({@link HostHandlerMap}), and its only invocation path takes a policy
  * (`./handler-map`). The tRPC routers (IPC and WebSocket) call
  * `ctx.handlers[key]` on the router policy's view; the agent socket's
- * `AGENT_VERB_TABLE` binds a both-door key only as a projection of
- * `handlers[key]` under its coordination policy (`agent-dispatch/table.ts`);
+ * `AGENT_VERB_TABLE` binds every verb (a both-door key, a ticket write whose
+ * command is a board key, VC-794, and each of its own verbs' keys, VC-923)
+ * only as a projection of `handlers[key]` under its coordination policy
+ * (`agent-dispatch/table.ts`), bar the four Session reads the map delegates
+ * the other way;
  * a legacy per-channel IPC handler that still serves a catalog command
  * invokes the same entry under the desktop window's policy until its area
  * moves. So "both doors reach the same function, admitted" is a fact of the
@@ -30,7 +33,8 @@ import type {
  * {@link HostHandlerKey}, so a catalog key with no handler does not compile,
  * and neither does a handler with no catalog key. What a host lacks this
  * launch is a handler's answer ({@link OperationUnavailableError}), never a
- * missing entry.
+ * missing entry; an agent door's own verb (VC-923) is sealed empty and served
+ * by that door, and answers unavailable until it is (`HandlerNotServedError`).
  */
 import type Database from "better-sqlite3";
 import type {
@@ -45,6 +49,8 @@ import type {
   SessionStreamEmission,
 } from "@volli/session-engine";
 import {
+  autoTitleFromKickoff,
+  DEFAULT_KICKOFF_MESSAGE,
   isOperationUnavailable,
   OperationUnavailableError,
   roleImpliedByTicket,
@@ -54,6 +60,8 @@ import {
   type AddHostFacts,
   type AddHostStartInput,
   type AddHostStepId,
+  type AccountConnection,
+  type AccountSnapshot,
   type AgentResponse,
   type BrowserAppShortcutEvent,
   type CodeModePolicy,
@@ -81,7 +89,10 @@ import {
   type HostSignInUpdate,
   type HostLogsBatch,
   type HostLogsRead,
+  type AgentCommandBindingId,
   type HostHandlerKey,
+  type RuntimeVerbResult,
+  type ServedAgentHandlerKey,
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
   type ModelPickerView,
@@ -98,10 +109,15 @@ import {
   type SessionListingPage,
   type SessionReadVerb,
   type Ticket,
+  type WorktreeSetupAnswer,
+  type WorktreeSetupStatusView,
   type WorktreeTrimSettings,
 } from "@volli/shared";
 
+import type { AgentVerbInput } from "../agent-dispatch/context";
+import type { ToolVerbInput } from "../agent-tool-door";
 import type { DetachedWorkPort } from "../detached-work";
+import type { AccountPort } from "./account-port";
 import type { BrowserShortcutsPort } from "./browser-shortcuts-port";
 import type { BrowserPictureStore } from "../browser/picture-store";
 import type { HostSignIns } from "../host-sign-ins";
@@ -134,10 +150,23 @@ import {
   writeModelPickerView,
 } from "../session-runtime/model-access-preferences";
 import type { PiRuntimeHost } from "../session-runtime/pi-adapter";
-import type { SessionAttachInput, SessionStartInput, Sessions } from "../session-runtime/sessions";
+import type {
+  SessionAttachInput,
+  SessionModelOverride,
+  SessionStartInput,
+  Sessions,
+} from "../session-runtime/sessions";
+import {
+  startSessionOperation,
+  type StartSessionPorts,
+  type StartSessionResult,
+} from "../session-runtime/start-session";
+import type { TicketSessionDelegation } from "../session-runtime/delegation-policy";
+import { actorSessionTicketDisplay } from "../agent-dispatch/resolution";
+import { getTicket } from "../db/tickets-repo";
 import { createBoardHandlers, type BoardHandlerSignatures } from "../board/commands";
 import { createBoardChangeFeed, type BoardChangeFeed } from "../board/change-feed";
-import { reorderProjects } from "../db/projects-repo";
+import { listProjects, reorderProjects } from "../db/projects-repo";
 import { removeProject, type ProjectLiveWork } from "../project-remove";
 import {
   executeTicketMove,
@@ -146,8 +175,15 @@ import {
 } from "../ticket-move";
 import type { BusyWorktreeSites } from "../worktree/activity";
 import { getTrimSettings } from "../worktree/trim-settings";
+import {
+  retryWorktreeSetup,
+  startWorktreeSetupAnyway,
+  worktreeSetupStatus,
+  type WorktreeSetupStatus,
+} from "../worktree/setup-gate";
 import type { WorktreePorts } from "../worktree/types";
 import { worktreeDeps } from "../worktree-runtime";
+import type { WorktreeReadInvalidation } from "../worktree-reads";
 
 /** A subscription's sink: the stream a door turns into its own envelope. */
 export interface HandlerSink<Emission> {
@@ -166,12 +202,12 @@ export type HostSubscriptionHandler<Input, Emission> = (
 export type SessionCreateHandlerInput = Omit<SessionStartInput, "role" | "parentSessionId">;
 
 /**
- * Every handler's signature, by catalog key. A door's projection reads its
+ * Every handler's signature, by key. A door's projection reads its
  * input and output types from here; the router package declares the slice it
  * projects structurally (it cannot import host-core, D2), and a composition
  * root's assignment of this map to that slice is the check that they agree.
  */
-export interface HostHandlerSignatures extends BoardHandlerSignatures {
+export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHandlerSignatures {
   readonly "workspaces.list": HostHandler<void, HostWorkspaceList>;
   readonly "workspaces.create": HostHandler<HostWorkspaceCreateInput, HostWorkspaceCreateResult>;
   readonly "sessions.create": HostHandler<SessionCreateHandlerInput, { sessionId: string }>;
@@ -293,6 +329,13 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
   /** Stops a project's live work, then detaches it (VC-796, VC-822): `../project-remove`. */
   readonly "project.remove": HostHandler<{ projectId: string }, null>;
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
+  /** Where the ticket's working copy's environment setup stands (VC-584). */
+  readonly "worktree.setupStatus": HostHandler<{ ticketId: string }, WorktreeSetupStatusView>;
+  /** A person's answer to a failed environment setup (VC-584). */
+  readonly "worktree.answerSetup": HostHandler<
+    { ticketId: string; answer: WorktreeSetupAnswer },
+    WorktreeSetupStatusView
+  >;
   /**
    * Remote hosts this desktop added over SSH (VC-700 PR 2), all host-placed:
    * {@link HostHandlerOptions.remoteHosts}'s, or unavailable.
@@ -388,7 +431,65 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
    */
   readonly "browserShortcuts.subscribe": HostSubscriptionHandler<void, BrowserAppShortcutEvent>;
   readonly "browserShortcuts.focusPage": HostHandler<{ tabId: string }, null>;
+  /**
+   * The Volli Cloud account on this Mac (VC-884): desktop main's account
+   * service, {@link HostHandlerOptions.account}'s, or unavailable.
+   */
+  readonly "account.snapshot": HostHandler<void, AccountSnapshot>;
+  /** The current snapshot first, then every change. */
+  readonly "account.subscribe": HostSubscriptionHandler<void, AccountSnapshot>;
+  readonly "account.signIn": HostHandler<{ connection: AccountConnection }, null>;
+  readonly "account.cancelSignIn": HostHandler<void, null>;
+  readonly "account.signOut": HostHandler<void, null>;
+  readonly "account.requestDeletion": HostHandler<void, null>;
+  readonly "account.cancelDeletion": HostHandler<void, null>;
 }
+
+/** The agent keys the socket serves: its own verbs, less the start both agent doors share. */
+export type SocketServedKey = Extract<ServedAgentHandlerKey, AgentCommandBindingId>;
+
+/** The agent keys the tool door serves: the Agent Tool Surface's own verbs, less the start. */
+export type ToolServedKey = Exclude<ServedAgentHandlerKey, AgentCommandBindingId>;
+
+/**
+ * What the map's start is asked (VC-923): one Ticket Session's start, whichever
+ * agent door asked. Each door resolves the Ticket, validates its own envelope
+ * and mints the operation id under its own rule (random on the socket, the
+ * caller plus its tool call id on the tool surface); the actor is the call's.
+ */
+export interface SessionStartCommandInput {
+  readonly operationId: string;
+  readonly projectId: string;
+  readonly ticketId: string;
+  readonly message?: string;
+  readonly title?: string;
+  readonly modelOverride?: SessionModelOverride;
+  /** A claimed Ticket caller's frozen ancestry: the tool door's, after its claim. */
+  readonly delegation?: TicketSessionDelegation;
+}
+
+/**
+ * The agent doors' entries (VC-923). Each socket verb that is neither a
+ * catalog command nor a board write, and each tool verb, is its own key.
+ *
+ * - A socket verb is answered by its handler with the socket's wire answer.
+ *   The input is the request as the door resolved it ({@link AgentVerbInput}).
+ * - A tool verb is answered by its handler with the result the model reads.
+ *   The input is the bound caller, the call, and the attachment's
+ *   capabilities for it ({@link ToolVerbInput}).
+ * - `session.start`, on both doors, is one command: the map builds it from
+ *   its own services, as it builds a catalog command.
+ *
+ * The call is who the door authenticated. The two doors serve their own
+ * verbs' entries (`./handler-map`); the map is sealed without them.
+ */
+export type AgentHandlerSignatures = {
+  readonly [Key in SocketServedKey]: HostHandler<AgentVerbInput, AgentResponse>;
+} & {
+  readonly [Key in ToolServedKey]: HostHandler<ToolVerbInput, RuntimeVerbResult>;
+} & {
+  readonly "session.start": HostHandler<SessionStartCommandInput, StartSessionResult>;
+};
 
 /** What a Session read's handler is asked: its Workspace, and the socket verb's args. */
 export interface SessionReadHandlerInput {
@@ -405,6 +506,9 @@ export type SessionReadPort = (
 
 /** The one map: every {@link HostHandlerKey}, and nothing else. */
 export type HostHandlers = { readonly [Key in HostHandlerKey]: HostHandlerSignatures[Key] };
+
+/** What {@link createHostHandlers} seals: every entry but the agent doors' own, which are served. */
+export type SealedHostHandlers = Omit<HostHandlers, ServedAgentHandlerKey>;
 
 type AssertNever<Type extends never> = Type;
 /**
@@ -440,20 +544,41 @@ export interface HostHandlerOptions {
   /** The recovered Session runtime, or null when this launch has none. */
   readonly runtime: SessionRuntime | null;
   /** The recovered Sessions facade, or null when this launch has none. */
-  readonly sessions: Pick<Sessions, "create" | "attach"> | null;
+  readonly sessions: Pick<Sessions, "create" | "attach" | "start"> | null;
+  /**
+   * Delivers a started Session's kickoff turn (`session.start`, VC-923).
+   * Absent means a start lands with no kickoff, as on a socket with none.
+   */
+  readonly submitSessionMessage?: StartSessionPorts["submitSessionMessage"];
+  /** Refines a started Session's heuristic title with a model call. Absent: heuristic only. */
+  readonly refineAutoTitle?: StartSessionPorts["refineAutoTitle"];
   /** Model Access, or null when the Pi runtime did not come up. */
   readonly modelAccess: Pick<PiRuntimeHost, "inspectModelAccess"> | null;
   /** Experimental flags, or null on a host that keeps none. */
   readonly experiments: HostExperiments | null;
+  /**
+   * Whether working copies' environment recipes run (VC-584, the `cloud`
+   * flag), read per call. Off or absent, the setup gate has nothing to show
+   * and nothing to answer.
+   */
+  readonly environmentRecipes?: () => boolean;
   /** Where an armed arrival and a resumed delivery go. */
   readonly automations: RuntimeAutomations;
   /** The same busy-worktree guard every destructive worktree path reads. */
   readonly busyWorktreeSites: BusyWorktreeSites;
+  /**
+   * The host's worktree read service (VC-788), whose last-known answers a
+   * scope switch's materialization and a Done or archive trim retire. Null
+   * only on a host whose database did not open, where no board command runs.
+   */
+  readonly worktreeReads: WorktreeReadInvalidation | null;
   /** Interrupts a ticket's live agent attachments after a committed backward move. */
   readonly interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
   /** Where a Done move's detached trim enrols, so shutdown drains it (VC-627). */
   readonly detachedWork?: DetachedWorkPort;
   readonly now?: () => number;
+  /** Test seam: mints a created ticket's id. Defaults to `randomUUID`. */
+  readonly newId?: () => string;
   /** Test seam: the worktree bundle a Done trim runs through. Defaults to the host's. */
   readonly worktree?: WorktreePorts;
   /** Sees every policy verdict at the map, before the handler it admits. */
@@ -531,11 +656,17 @@ export interface HostHandlerOptions {
    * on hostd: `browserShortcuts.*` answer unavailable.
    */
   readonly browserShortcuts?: BrowserShortcutsPort | null;
+  /**
+   * Desktop main's Volli Cloud account service (VC-884); absent or null on
+   * hostd: `account.*` answer unavailable.
+   */
+  readonly account?: AccountPort | null;
 }
 
 /** Messages a client may show; unchanged from the router's own (VC-564). */
 const SESSIONS_UNAVAILABLE = "Sessions are unavailable on this transport";
 const RUNTIME_UNAVAILABLE = "The Session runtime is unavailable on this host";
+const WORKTREE_READS_UNAVAILABLE = "Worktree reads are unavailable on this host";
 const EXPERIMENTS_UNAVAILABLE = "Experimental settings are unavailable on this transport";
 const MODEL_ACCESS_UNAVAILABLE = "Model Access is unavailable on this transport";
 const PREFERENCES_UNAVAILABLE = "Model Access preferences are unavailable on this transport";
@@ -549,6 +680,7 @@ const SESSION_LISTING_UNAVAILABLE = "The Session listing is unavailable on this 
 const HOST_SCOPE_RELAY_UNAVAILABLE = "Remote host operations are unavailable on this host";
 const HOST_LINK_RELAY_UNAVAILABLE = "Remote projects are unavailable on this host";
 const BROWSER_SHORTCUTS_UNAVAILABLE = "Browser Tab shortcuts are unavailable on this host";
+const ACCOUNT_UNAVAILABLE = "Accounts are unavailable on this host";
 const PROJECT_REMOVAL_UNAVAILABLE = "Removing a project is unavailable on this host";
 
 /**
@@ -567,6 +699,24 @@ function joined<Result>(
 function present<Service>(service: Service | null, message: string): Service {
   if (service === null) throw new OperationUnavailableError(message);
   return service;
+}
+
+const ENVIRONMENT_RECIPES_OFF = "Environment setup is off on this host";
+
+/** The ticket's working copy on this runner, or `null` when it has none; unknown tickets throw. */
+function ticketWorktreePath(database: Database.Database, ticketId: string): string | null {
+  const ticket = getTicket(database, ticketId);
+  if (!ticket) throw new Error("Unknown ticket");
+  return ticket.usesWorktree ? ticket.worktreePath : null;
+}
+
+/** A setup status as a window reads it: the run's ids and machine facts stay on the runner. */
+function setupStatusView(status: WorktreeSetupStatus): WorktreeSetupStatusView {
+  if (status.kind === "none" || status.kind === "pending" || status.kind === "running") {
+    return { kind: status.kind };
+  }
+  const { source, summary, exitCode, endedAt, tail } = status.run;
+  return { kind: status.kind, run: { source, summary, exitCode, endedAt, tail } };
 }
 
 /** Runs a command for its effect: the bridge's answer is `null`. */
@@ -592,6 +742,18 @@ function withoutSecret(error: unknown, secret: string): unknown {
 }
 
 /**
+ * The start's own unavailable (VC-923): this launch has no Sessions facade.
+ * Each agent door words it in its own vocabulary, which it can do only for
+ * this cause; any other unavailable (no database) keeps its own message.
+ */
+export class SessionRuntimeUnavailableError extends OperationUnavailableError {
+  constructor() {
+    super(SESSIONS_UNAVAILABLE);
+    this.name = "SessionRuntimeUnavailableError";
+  }
+}
+
+/**
  * Builds the host's handler map, sealed behind policy. Call it once per
  * composition root, with the recovered services, and hand the same object to
  * every door; each door invokes it through its own policy.
@@ -606,7 +768,7 @@ export function createHostHandlers(
 function hostHandlerEntries(
   ports: Pick<HostSessionPorts, "events" | "attention">,
   options: HostHandlerOptions,
-): HostHandlers {
+): SealedHostHandlers {
   // JS callers must fail closed too: a Done trim without activity evidence
   // could remove a directory a live process is standing in.
   if (typeof options.busyWorktreeSites !== "function") {
@@ -620,6 +782,7 @@ function hostHandlerEntries(
   const modelAccess = () => present(options.modelAccess, MODEL_ACCESS_UNAVAILABLE);
   const preferences = () => present(db, PREFERENCES_UNAVAILABLE);
   const board = () => present(db, BOARD_UNAVAILABLE);
+  const worktreeReads = () => present(options.worktreeReads, WORKTREE_READS_UNAVAILABLE);
   const sessionReads = () => present(options.sessionReads ?? null, SESSION_READS_UNAVAILABLE);
   const signIns = () => present(options.signIns ?? null, SIGN_INS_UNAVAILABLE);
   const remoteHosts = () => present(options.remoteHosts ?? null, REMOTE_HOSTS_UNAVAILABLE);
@@ -631,6 +794,7 @@ function hostHandlerEntries(
   const hostLinkRelay = () => present(options.hostLinkRelay ?? null, HOST_LINK_RELAY_UNAVAILABLE);
   const browserShortcuts = () =>
     present(options.browserShortcuts ?? null, BROWSER_SHORTCUTS_UNAVAILABLE);
+  const account = () => present(options.account ?? null, ACCOUNT_UNAVAILABLE);
   const feed = options.boardFeed ?? createBoardChangeFeed();
 
   const worktree = (database: Database.Database) =>
@@ -650,6 +814,7 @@ function hostHandlerEntries(
         executeTicketMove(
           {
             worktree: worktree(database),
+            worktreeReads: worktreeReads(),
             now,
             busySites: options.busyWorktreeSites,
             interruptTicketSessions: options.interruptTicketSessions,
@@ -680,9 +845,11 @@ function hostHandlerEntries(
     ...createBoardHandlers({
       db,
       now,
+      ...(options.newId === undefined ? {} : { newId: options.newId }),
       events: ports.events,
       feed,
       worktree,
+      worktreeReads,
       busyWorktreeSites: options.busyWorktreeSites,
       detachedWork: options.detachedWork,
       ticketSignals: options.ticketSignals ?? null,
@@ -691,6 +858,48 @@ function hostHandlerEntries(
     }),
     "sessions.create": (input) =>
       sessions().create({ ...input, role: roleImpliedByTicket(input.ticketId) }),
+    // One Ticket Session's start, whichever agent door asked (VC-923): the
+    // person's operator CLI and the named tool resolve their own Ticket and
+    // envelope, and both reach this. The facade, the kickoff, the auto-title
+    // refinement, the mutation and the start notice are its, once.
+    "session.start": (input, call) => {
+      if (options.sessions === null) throw new SessionRuntimeUnavailableError();
+      const facade = options.sessions;
+      const database = board();
+      const projects = listProjects(database);
+      const ticket = getTicket(database, input.ticketId);
+      const project = projects.find(({ id }) => id === input.projectId);
+      if (ticket === undefined || project === undefined || ticket.projectId !== project.id) {
+        throw new Error(`No ticket ${input.ticketId} in project ${input.projectId}.`);
+      }
+      return joined({ ticketId: ticket.id, projectId: project.id }, () =>
+        startSessionOperation(
+          {
+            db: database,
+            projects,
+            sessions: facade,
+            submitSessionMessage: options.submitSessionMessage,
+            refineAutoTitle: options.refineAutoTitle,
+            onMutation: (change) => ports.events.publish("data-changed", change),
+            onSessionStarted: (notice) => ports.events.publish("session-started", notice),
+            actorTicketDisplay: (ticketId) =>
+              actorSessionTicketDisplay(database, projects, ticketId),
+            now,
+          },
+          {
+            operationId: input.operationId,
+            project,
+            ticket,
+            message: input.message,
+            title: input.title,
+            modelOverride: input.modelOverride,
+            delegation: input.delegation,
+            actor: call.actor,
+          },
+          { defaultKickoff: DEFAULT_KICKOFF_MESSAGE, autoTitle: autoTitleFromKickoff },
+        ),
+      );
+    },
     // Every Retry rides this. A ready attachment is the recovery point for an
     // Automation's durable first-message intent; the runner's fixed Session
     // command id reconciles rather than duplicates after a crash.
@@ -859,6 +1068,31 @@ function hostHandlerEntries(
         return null;
       }),
     "worktree.trimSettings": () => getTrimSettings(board()),
+    // The working copy's setup gate (VC-584). A ticket with no working copy
+    // on this runner has nothing to stand on: `none`. With recipes off there
+    // is no gate: nothing to show, and nothing to answer.
+    "worktree.setupStatus": ({ ticketId }) => {
+      if (options.environmentRecipes?.() !== true) return { kind: "none" };
+      const database = board();
+      const path = ticketWorktreePath(database, ticketId);
+      return path === null
+        ? { kind: "none" }
+        : setupStatusView(worktreeSetupStatus(worktree(database), path, ticketId, now()));
+    },
+    "worktree.answerSetup": ({ ticketId, answer }) => {
+      if (options.environmentRecipes?.() !== true) {
+        throw new OperationUnavailableError(ENVIRONMENT_RECIPES_OFF);
+      }
+      const database = board();
+      const path = ticketWorktreePath(database, ticketId);
+      if (path === null) return { kind: "none" };
+      const deps = worktree(database);
+      return setupStatusView(
+        answer === "retry"
+          ? retryWorktreeSetup(deps, path, ticketId, now())
+          : startWorktreeSetupAnyway(deps, path, ticketId, now()),
+      );
+    },
     // Remote hosts (VC-700 PR 2): desktop main's registry, through its port.
     "hosts.snapshot": () => remoteHosts().snapshot(),
     "hosts.subscribe": async (_input, _call, sink) =>
@@ -958,5 +1192,14 @@ function hostHandlerEntries(
     "browserShortcuts.subscribe": async (_input, _call, sink) =>
       browserShortcuts().subscribe((event) => void sink.emit(event)),
     "browserShortcuts.focusPage": ({ tabId }) => done(() => browserShortcuts().focusPage(tabId)),
+    // The Volli Cloud account (VC-884): desktop main's account service, through its port.
+    "account.snapshot": () => account().snapshot(),
+    "account.subscribe": async (_input, _call, sink) =>
+      account().subscribe((snapshot) => void sink.emit(snapshot)),
+    "account.signIn": ({ connection }) => done(() => account().signIn(connection)),
+    "account.cancelSignIn": () => done(() => account().cancelSignIn()),
+    "account.signOut": () => done(() => account().signOut()),
+    "account.requestDeletion": () => done(() => account().requestDeletion()),
+    "account.cancelDeletion": () => done(() => account().cancelDeletion()),
   };
 }

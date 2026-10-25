@@ -1,5 +1,12 @@
 # Host-scoped connection (VC-722)
 
+> **Superseded (VC-869).** Volli Cloud is moving to a design with no host
+> process: the backend is the single authority and Runners execute
+> ([Workspace authority and offline](BOUNDARIES.md#workspace-authority-and-offline)).
+> This document still describes code in this repository. It is kept for
+> maintenance only and goes when that code is deleted or renamed; don't build
+> new work on it.
+
 A host connection is separate from a Workspace connection. Its additive
 hello/welcome never changes the frozen Workspace grammar or feature sets.
 

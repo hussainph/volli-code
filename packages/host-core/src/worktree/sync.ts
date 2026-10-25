@@ -54,6 +54,7 @@ import type { DiffStat } from "@volli/shared";
 import { resolveComparisonRefAsync } from "./comparison-ref";
 import { parseNumstat, total } from "./diff";
 import { runGitCapturingAsync, stderrOf } from "./git";
+import { splitNul } from "./git-output";
 import { resolveWorktreeTarget, type WorktreeReadPorts, type WorktreeReadFailure } from "./read";
 import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";
 
@@ -156,10 +157,7 @@ async function mergeInFlight(git: RunGitAsync, cwd: string): Promise<boolean> {
 /** The unmerged paths git is holding, or none when the failure was something else. */
 async function unmergedPaths(git: RunGitAsync, cwd: string): Promise<string[]> {
   try {
-    return (await git(["diff", "--name-only", "--diff-filter=U"], cwd))
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
+    return splitNul(await git(["diff", "--name-only", "-z", "--diff-filter=U"], cwd));
   } catch {
     return [];
   }
@@ -172,7 +170,7 @@ async function movement(
   from: string,
   to: string,
 ): Promise<DiffStat> {
-  const files = parseNumstat(await git(["diff", "--numstat", `${from}..${to}`], cwd));
+  const files = parseNumstat(await git(["diff", "--numstat", "-z", "-M", `${from}..${to}`], cwd));
   return {
     files,
     insertions: total(files, "insertions"),

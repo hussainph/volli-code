@@ -30,6 +30,7 @@ import {
   type HandlerCall,
   type RemoteHostDevices,
   type RemoteHostsSnapshot,
+  type WorktreeSetupStatusView,
   type WorktreeTrimSettings,
 } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -67,6 +68,16 @@ const SIGN_IN_STATUS = {
   git: [],
 } as const;
 const TRIM: WorktreeTrimSettings = { keepPatterns: [".env"], trimOnFinish: true };
+const SETUP_FAILED: WorktreeSetupStatusView = {
+  kind: "failed",
+  run: {
+    source: "repo",
+    summary: "`.agents/setup` exited with code 1: pnpm: command not found",
+    exitCode: 1,
+    endedAt: 1_000,
+    tail: "pnpm: command not found",
+  },
+};
 const HOST = "0b9e6c1a-2d3f-4a5b-8c7d-6e5f4a3b2c1d";
 const FLOW = "flow-1";
 /** A password no diagnostic, error or log may ever carry. */
@@ -254,6 +265,21 @@ const SHORTCUT = {
   },
 } as const;
 
+/** The account snapshot main hands the window (VC-884): a profile, never a token. */
+const ACCOUNT = {
+  state: "signed-in",
+  provider: "dev",
+  signingInWith: null,
+  account: {
+    displayName: "Dana",
+    email: "dana@example.com",
+    userId: "6b4c3a1e-2a9f-4c3e-9d1b-0f8e7d6c5b4a",
+    deletionPurgeAfter: null,
+    backend: "synced",
+  },
+  failure: null,
+} as const;
+
 function recordingHandlers(fixture: Host): DesktopRouterHandlers {
   const record =
     <Output>(key: string, output: Output) =>
@@ -274,6 +300,8 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "project.reorder": record("project.reorder", null),
     "project.remove": record("project.remove", null),
     "worktree.trimSettings": record("worktree.trimSettings", TRIM),
+    "worktree.setupStatus": record("worktree.setupStatus", SETUP_FAILED),
+    "worktree.answerSetup": record("worktree.answerSetup", { kind: "pending" }),
     "hosts.snapshot": record("hosts.snapshot", SNAPSHOT),
     "hosts.subscribe": stream("hosts.subscribe", SNAPSHOT),
     "hosts.retry": record("hosts.retry", null),
@@ -314,6 +342,13 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "hostScope.subscribe": stream("hostScope.subscribe", { kind: "started" }),
     "browserShortcuts.subscribe": stream("browserShortcuts.subscribe", SHORTCUT),
     "browserShortcuts.focusPage": record("browserShortcuts.focusPage", null),
+    "account.snapshot": record("account.snapshot", ACCOUNT),
+    "account.subscribe": stream("account.subscribe", ACCOUNT),
+    "account.signIn": record("account.signIn", null),
+    "account.cancelSignIn": record("account.cancelSignIn", null),
+    "account.signOut": record("account.signOut", null),
+    "account.requestDeletion": record("account.requestDeletion", null),
+    "account.cancelDeletion": record("account.cancelDeletion", null),
     ...fixture.overrides,
   };
 }
@@ -437,6 +472,53 @@ describeContract<Host, DesktopRouter>(
       expect(
         await expectHostError(client.shells.moveToBackground.mutate({ ...input, toolCallId: "" })),
       ).toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    // VC-584: workspace-placed on the ticket whose working copy it is.
+    it("reads and answers a working copy's setup, validating the answer before the handler", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      expect(await client.worktree.setupStatus.query({ ticketId: "ticket-1" })).toEqual(
+        SETUP_FAILED,
+      );
+      expect(
+        await client.worktree.answerSetup.mutate({ ticketId: "ticket-1", answer: "start-anyway" }),
+      ).toEqual({ kind: "pending" });
+      expect(fixture.calls).toEqual([
+        { key: "worktree.setupStatus", input: { ticketId: "ticket-1" }, call: WINDOW_CALL },
+        {
+          key: "worktree.answerSetup",
+          input: { ticketId: "ticket-1", answer: "start-anyway" },
+          call: WINDOW_CALL,
+        },
+      ]);
+      fixture.calls.length = 0;
+      for (const input of [
+        { ticketId: "ticket-1", answer: "skip" },
+        { ticketId: "", answer: "retry" },
+        { ticketId: "ticket-1", answer: "retry", path: "/tmp" },
+      ]) {
+        expect(
+          await expectHostError(client.worktree.answerSetup.mutate(input as never)),
+        ).toMatchObject({ code: "BAD_REQUEST" });
+      }
+      expect(fixture.calls).toEqual([]);
+    });
+
+    it("refuses a setup answer from a network caller before the handler", async () => {
+      for (const caller of [device, session]) {
+        const fixture = host(caller);
+        const client = await connect(fixture);
+        expect(
+          await expectHostError(client.worktree.setupStatus.query({ ticketId: "ticket-1" })),
+        ).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
+        expect(
+          await expectHostError(
+            client.worktree.answerSetup.mutate({ ticketId: "ticket-1", answer: "retry" }),
+          ),
+        ).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
+        expect(fixture.calls).toEqual([]);
+      }
     });
 
     // Placement-derived policy: host-placed, so device-as-user, and on no
@@ -1113,6 +1195,55 @@ describeContract<Host, DesktopRouter>(
       expect(fixture.calls).toHaveLength(2);
     });
 
+    // The Volli Cloud account (VC-884): desktop main's account service, the window's alone.
+    it("serves the account snapshot and its commands, and streams every change", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      expect(await client.account.snapshot.query()).toEqual(ACCOUNT);
+      const stream = collect((handlers) => client.account.subscribe.subscribe(undefined, handlers));
+      await vi.waitFor(() => expect(stream.values).toEqual([ACCOUNT]));
+      const signedOut = {
+        state: "signed-out",
+        provider: "dev",
+        signingInWith: null,
+        account: null,
+        failure: null,
+      } as const;
+      await fixture.sinks.get("account.subscribe")!.emit(signedOut);
+      await vi.waitFor(() => expect(stream.values).toEqual([ACCOUNT, signedOut]));
+      stream.unsubscribe();
+      await vi.waitFor(() => expect(fixture.unsubscribed).toEqual(["account.subscribe"]));
+
+      expect(await client.account.signIn.mutate({ connection: "github" })).toBeNull();
+      expect(await client.account.cancelSignIn.mutate()).toBeNull();
+      expect(await client.account.signOut.mutate()).toBeNull();
+      expect(await client.account.requestDeletion.mutate()).toBeNull();
+      expect(await client.account.cancelDeletion.mutate()).toBeNull();
+      expect(fixture.calls.map(({ key, input, call }) => [key, input, call])).toEqual([
+        ["account.snapshot", undefined, WINDOW_CALL],
+        ["account.subscribe", undefined, WINDOW_CALL],
+        ["account.signIn", { connection: "github" }, WINDOW_CALL],
+        ["account.cancelSignIn", undefined, WINDOW_CALL],
+        ["account.signOut", undefined, WINDOW_CALL],
+        ["account.requestDeletion", undefined, WINDOW_CALL],
+        ["account.cancelDeletion", undefined, WINDOW_CALL],
+      ]);
+      for (const input of [{ connection: "apple" }, { connection: "github", extra: 1 }, {}]) {
+        expect(await expectHostError(client.account.signIn.mutate(input as never))).toMatchObject({
+          code: "BAD_REQUEST",
+        });
+      }
+      expect(fixture.calls).toHaveLength(7);
+    });
+
+    it("refuses an account snapshot that would carry anything but the profile", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER, {
+        "account.snapshot": () => ({ ...ACCOUNT, state: "signed-in-ish" }) as never,
+      });
+      const client = await connect(fixture);
+      await expect(client.account.snapshot.query()).rejects.toBeDefined();
+    });
+
     it("streams the hosts snapshot, the current first, until the window stops it", async () => {
       const fixture = host(LOCAL_DESKTOP_CALLER);
       const client = await connect(fixture);
@@ -1387,6 +1518,8 @@ describe("the desktop router's grammar", () => {
         "project.reorder",
         "project.remove",
         "worktree.trimSettings",
+        "worktree.setupStatus",
+        "worktree.answerSetup",
         "hosts.snapshot",
         "hosts.subscribe",
         "hosts.retry",
@@ -1424,6 +1557,13 @@ describe("the desktop router's grammar", () => {
         "hostScope.subscribe",
         "browserShortcuts.subscribe",
         "browserShortcuts.focusPage",
+        "account.snapshot",
+        "account.subscribe",
+        "account.signIn",
+        "account.cancelSignIn",
+        "account.signOut",
+        "account.requestDeletion",
+        "account.cancelDeletion",
       ].toSorted(),
     );
     expect(schemas["worktree.trimSettings"]).toMatchObject({

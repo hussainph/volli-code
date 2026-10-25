@@ -4,7 +4,7 @@
  *
  * WHY THIS FILE EXISTS. The two usage blocks were drawn as `rounded-row border-
  * border bg-card` panels under a section heading, which is the treatment
- * `VenueCard` uses for a single fact — while the repository card one block up
+ * the old checkout card used for a single fact — while the repository card one block up
  * the same rail is a `rounded-xl` framed surface of seamed rows on the sidebar's
  * own border and background. Two containers, two radii, two border tokens and
  * two background tokens for two blocks that sit ten pixels apart, and the usage

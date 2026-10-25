@@ -26,7 +26,11 @@
  */
 import * as React from "react";
 
-import { summarizeSessionUsage, type SessionUsage, type VenueSnapshot } from "@volli/shared";
+import {
+  summarizeSessionUsage,
+  type SessionUsage,
+  type WorkingCopyMeasurement,
+} from "@volli/shared";
 
 import {
   HomeSessionCard,
@@ -36,7 +40,7 @@ import { SectionHeading } from "@renderer/components/ui/section-heading";
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { HomeUsageBlock } from "@renderer/components/usage/home-usage-block";
-import type { VenueEntry } from "@renderer/stores/venue";
+import type { WorkingCopyEntry } from "@renderer/stores/working-copy";
 import type { UsageGroupRow, UsageWindow } from "@renderer/usage/usage-format";
 
 export const title = "Home rail · Now page (VC-406)";
@@ -48,7 +52,7 @@ const RAIL_FLOOR = 240;
 
 // ─── fixtures ───────────────────────────────────────────────────────────────
 
-const VENUE: VenueSnapshot = {
+const WORKING_COPY: WorkingCopyMeasurement = {
   kind: "main-checkout",
   path: "/Users/someone/code/volli-code",
   branch: "main",
@@ -56,22 +60,25 @@ const VENUE: VenueSnapshot = {
   diff: { added: 214, removed: 31, base: "main" },
 };
 
-const READY: VenueEntry = { status: "ready", venue: VENUE };
-const CLEAN: VenueEntry = {
+const READY: WorkingCopyEntry = { status: "ready", workingCopy: WORKING_COPY };
+const CLEAN: WorkingCopyEntry = {
   status: "ready",
-  venue: { ...VENUE, files: { committed: 6, modified: 0, added: 0, untracked: 0 } },
+  workingCopy: { ...WORKING_COPY, files: { committed: 6, modified: 0, added: 0, untracked: 0 } },
 };
-const DETACHED: VenueEntry = { status: "ready", venue: { ...VENUE, branch: null } };
-const LONG: VenueEntry = {
+const DETACHED: WorkingCopyEntry = {
   status: "ready",
-  venue: {
-    ...VENUE,
+  workingCopy: { ...WORKING_COPY, branch: null },
+};
+const LONG: WorkingCopyEntry = {
+  status: "ready",
+  workingCopy: {
+    ...WORKING_COPY,
     kind: "worktree",
     path: "/Users/someone/.volli/worktrees/volli-code-f3732f45/VC-406-reorganize-and-redesign-the-in-ticket-right-side",
     branch: "volli/VC-406-reorganize-and-redesign-the-in-ticket-right-side",
   },
 };
-const FAULTED: VenueEntry = {
+const FAULTED: WorkingCopyEntry = {
   status: "error",
   error: "ENOENT: no such file or directory, scandir '/Users/someone/code/volli-code'",
 };
@@ -144,7 +151,7 @@ export default function HomeRailNow() {
 
         <Group heading="1 · The page">
           <Rail>
-            <Now facts={CHAT} venue={READY} window={window} onWindowChange={setWindow} />
+            <Now facts={CHAT} workingCopy={READY} window={window} onWindowChange={setWindow} />
           </Rail>
           <Caption>
             Two cards, nesting the same two scopes twice — Session inside project, once as identity
@@ -159,40 +166,43 @@ export default function HomeRailNow() {
           <Row>
             <Labelled label="A chat">
               <Rail>
-                <Card facts={CHAT} venue={READY} />
+                <Card facts={CHAT} workingCopy={READY} />
               </Rail>
             </Labelled>
             <Labelled label="The same model, another account">
               <Rail>
-                <Card facts={pinnedTo(1, "GitHub Copilot")} venue={READY} />
+                <Card facts={pinnedTo(1, "GitHub Copilot")} workingCopy={READY} />
               </Rail>
             </Labelled>
             <Labelled label="… on another vendor">
               <Rail>
-                <Card facts={pinnedTo(2, "OpenAI")} venue={READY} />
+                <Card facts={pinnedTo(2, "OpenAI")} workingCopy={READY} />
               </Rail>
             </Labelled>
             <Labelled label="… and another">
               <Rail>
-                <Card facts={pinnedTo(3, "Google")} venue={READY} />
+                <Card facts={pinnedTo(3, "Google")} workingCopy={READY} />
               </Rail>
             </Labelled>
             <Labelled label="No model policy yet">
               <Rail>
-                <Card facts={{ ...CHAT, model: null, tier: null, effort: null }} venue={READY} />
+                <Card
+                  facts={{ ...CHAT, model: null, tier: null, effort: null }}
+                  workingCopy={READY}
+                />
               </Rail>
             </Labelled>
             <Labelled label="A terminal">
               <Rail>
                 <Card
                   facts={{ kind: "terminal", running: "Claude Code", activity: "working" }}
-                  venue={READY}
+                  workingCopy={READY}
                 />
               </Rail>
             </Labelled>
             <Labelled label="Nothing (the Board tab)">
               <Rail>
-                <Card facts={null} venue={READY} />
+                <Card facts={null} workingCopy={READY} />
               </Rail>
             </Labelled>
           </Row>
@@ -232,7 +242,10 @@ export default function HomeRailNow() {
             ).map((activity) => (
               <Labelled key={activity} label={activity}>
                 <Rail>
-                  <Card facts={{ ...CHAT, activity: activity as StatusDotState }} venue={CLEAN} />
+                  <Card
+                    facts={{ ...CHAT, activity: activity as StatusDotState }}
+                    workingCopy={CLEAN}
+                  />
                 </Rail>
               </Labelled>
             ))}
@@ -251,22 +264,22 @@ export default function HomeRailNow() {
           <Row>
             <Labelled label="Reading">
               <Rail>
-                <Card facts={CHAT} venue={{ status: "loading" }} />
+                <Card facts={CHAT} workingCopy={{ status: "loading" }} />
               </Rail>
             </Labelled>
             <Labelled label="Faulted">
               <Rail>
-                <Card facts={CHAT} venue={FAULTED} />
+                <Card facts={CHAT} workingCopy={FAULTED} />
               </Rail>
             </Labelled>
             <Labelled label="Detached HEAD">
               <Rail>
-                <Card facts={CHAT} venue={DETACHED} />
+                <Card facts={CHAT} workingCopy={DETACHED} />
               </Rail>
             </Labelled>
             <Labelled label="Clean tree">
               <Rail>
-                <Card facts={CHAT} venue={CLEAN} />
+                <Card facts={CHAT} workingCopy={CLEAN} />
               </Rail>
             </Labelled>
           </Row>
@@ -284,12 +297,12 @@ export default function HomeRailNow() {
           <Row>
             <Labelled label="Long path, long branch">
               <Rail width={RAIL_FLOOR} narrow>
-                <Card facts={CHAT} venue={LONG} />
+                <Card facts={CHAT} workingCopy={LONG} />
               </Rail>
             </Labelled>
             <Labelled label="The whole page">
               <Rail width={RAIL_FLOOR} narrow>
-                <Now facts={CHAT} venue={LONG} window={window} onWindowChange={setWindow} />
+                <Now facts={CHAT} workingCopy={LONG} window={window} onWindowChange={setWindow} />
               </Rail>
             </Labelled>
           </Row>
@@ -324,18 +337,18 @@ function Intro() {
 /** The page: the card, its eyebrow, and the usage card under it. */
 function Now({
   facts,
-  venue,
+  workingCopy,
   window,
   onWindowChange,
 }: {
   facts: HomeSessionFacts;
-  venue: VenueEntry;
+  workingCopy: WorkingCopyEntry;
   window: UsageWindow;
   onWindowChange(next: UsageWindow): void;
 }) {
   return (
     <>
-      <Card facts={facts} venue={venue} />
+      <Card facts={facts} workingCopy={workingCopy} />
       <HomeUsageBlock
         summary={PROJECT}
         models={MODELS}
@@ -350,13 +363,13 @@ function Now({
 }
 
 /** The card as the rail mounts it — eyebrow included, since the pair is the block. */
-function Card({ facts, venue }: { facts: HomeSessionFacts; venue: VenueEntry }) {
+function Card({ facts, workingCopy }: { facts: HomeSessionFacts; workingCopy: WorkingCopyEntry }) {
   return (
     <div className="flex flex-col gap-2 pt-4">
       <div className="px-4 group-data-[narrow=true]/rail:px-3">
         <SectionHeading as="h3">Session</SectionHeading>
       </div>
-      <HomeSessionCard facts={facts} venue={venue} onRetryVenue={() => {}} />
+      <HomeSessionCard facts={facts} workingCopy={workingCopy} onRetryWorkingCopy={() => {}} />
     </div>
   );
 }

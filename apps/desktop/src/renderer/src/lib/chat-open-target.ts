@@ -11,7 +11,7 @@
  *
  * The rules, in order:
  *
- *  1. A RELATIVE path means "in my venue". A ticket chat's venue is its
+ *  1. A RELATIVE path means "in my working copy". A ticket chat's working copy is its
  *     worktree; a Board chat's is the main checkout. The scope answers it —
  *     deliberately no cross-checkout guessing: a bare `src/x.ts` from a project
  *     session that happened to `cd` into a worktree is ambiguous, and a
@@ -20,7 +20,7 @@
  *  2. An ABSOLUTE path is resolved by containment: a known ticket worktree
  *     wins first (most specific root), then the project's main checkout.
  *     Worktree hits carry their ticket, so the caller can land the tab in that
- *     ticket's workspace — the transcript pointed there by name.
+ *     ticket's Ticket view — the transcript pointed there by name.
  *  3. Anything else is `outside`: a path this project cannot open. The caller
  *     says so and navigates nowhere, instead of opening a pane whose only
  *     content is an error.
@@ -55,7 +55,7 @@ export function chatWorktreeRefs(
   );
 }
 
-/** Which venue the chat that named the path runs in. */
+/** Which working copy the chat that named the path runs in. */
 export type ChatOpenScope = { kind: "project" } | { kind: "ticket"; ticketId: string };
 
 export type ChatOpenTarget =
@@ -66,7 +66,7 @@ export type ChatOpenTarget =
   /** Not openable by this project — tell the user, navigate nowhere. */
   | { kind: "outside"; path: string };
 
-/** A single leading `./` stripped — tool inputs spell venue-relative paths both ways. */
+/** A single leading `./` stripped — tool inputs spell working-copy-relative paths both ways. */
 function stripDotSlash(path: string): string {
   return path.startsWith("./") ? path.slice(2) : path;
 }
@@ -78,7 +78,7 @@ const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
  * Lexical `.`/`..` resolution — what `node:path.resolve` does to dot segments,
  * string-only (this is the renderer). Empty segments (`//`) collapse; a `..`
  * above an ABSOLUTE root is dropped exactly as `resolve` drops it; a `..` above
- * a RELATIVE start is kept, so the caller can see the path escapes its venue.
+ * a RELATIVE start is kept, so the caller can see the path escapes its working copy.
  */
 function resolveDotSegments(path: string): string {
   const absolute = path.startsWith("/");
@@ -99,7 +99,7 @@ function resolveDotSegments(path: string): string {
  * The renderer's mirror of Pi's OWN tool-path normalization, for paths that
  * arrive off ACTIVITY rows (tool inputs). Pi's runtime folds Unicode spaces to
  * a plain space and strips one leading `@` (`pi-agent-core` path-utils
- * `normalizeToolPath`), then resolves the rest against the venue with
+ * `normalizeToolPath`), then resolves the rest against the working copy with
  * `path.resolve` — which collapses `.`/`..` segments. So a tool call that
  * successfully read `@src/a.ts` or `src/../a.ts` carries that raw spelling in
  * its descriptor, and WITHOUT this mirror a click on the row would ask main
@@ -131,7 +131,7 @@ export function resolveChatOpenTarget(input: {
     const relPath = stripDotSlash(path);
     // A relative path that strips to nothing ("." / "./") names a directory,
     // not a file — nothing a file tab can show. One that still LEADS with `..`
-    // (post-normalization) climbs out of the venue toward a root nobody named:
+    // (post-normalization) climbs out of the working copy toward a root nobody named:
     // there is no checkout to resolve it against, so it is honestly outside
     // rather than a relPath main would only reject as invalid.
     if (relPath.length === 0 || relPath === ".") return { kind: "outside", path };
@@ -151,7 +151,7 @@ export function resolveChatOpenTarget(input: {
 
   const relPath = toProjectRelPath(projectPath, path);
   if (relPath !== null && relPath.length > 0) {
-    // In a ticket workspace the honest copy of a repo path is the worktree's —
+    // In a Ticket view the honest copy of a repo path is the worktree's —
     // exactly how the same relPath already behaves when spelled relatively.
     return scope.kind === "ticket"
       ? { kind: "ticket-file", ticketId: scope.ticketId, relPath }

@@ -318,7 +318,7 @@ export default defineConfig(({ mode }) => ({
         // Quick-open's three decisions (VC-190): which checkout ⌘P searches,
         // what a query matches, and whether an invocation previews or pins.
         // Pure `.ts` beside the overlay for the gate's sake — a scope that
-        // silently answered "Main" inside a Ticket workspace would open the
+        // silently answered "Main" inside a Ticket view would open the
         // wrong file with no error anywhere.
         "src/components/files/quick-open-model.ts",
         // Search's own decisions (VC-193): the scope pair a query is sent
@@ -699,7 +699,7 @@ export default defineConfig(({ mode }) => ({
         "src/terminal/output-dispatch.ts",
         // How a burst of invalidations becomes one (VC-359). Enrolled because
         // the merge is a SAFETY rule, not an optimisation: it may only ever
-        // widen, and the one kind a venue cache depends on has to survive a
+        // widen, and the one kind a working copy cache depends on has to survive a
         // mixed batch. A branch that quietly narrowed a scope would leave a
         // surface showing yesterday's data with nothing on screen saying so.
         "**/src/main/data-change-coalescer.ts",
@@ -735,7 +735,7 @@ export default defineConfig(({ mode }) => ({
         "**/packages/host-core/src/project-roots.ts",
         // About's support metadata (VC-293). Enrolled on the same argument as
         // the IPC handlers around it: this module is an ALLOWLIST, and the
-        // guarantee it carries — five fields, one pragma, one app_state key,
+        // guarantee it carries — eight fields, one pragma, one app_state key,
         // nothing that could reach a credential — is only as good as the test
         // that walks every branch of it.
         "**/src/main/support-info.ts",

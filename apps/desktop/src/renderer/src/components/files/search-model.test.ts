@@ -40,7 +40,7 @@ describe("searchInput", () => {
     });
   });
 
-  it("sends a Ticket workspace's own pair, so the search runs in its worktree", () => {
+  it("sends a Ticket view's own pair, so the search runs in its worktree", () => {
     expect(searchInput({ kind: "ticket", projectId: "p1", ticketId: "t1" }, "needle")).toEqual({
       projectId: "p1",
       ticketId: "t1",

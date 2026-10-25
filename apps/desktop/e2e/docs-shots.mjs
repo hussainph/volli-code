@@ -240,16 +240,16 @@ try {
     return { ok: shot.ok && fit.overflow === 0, detail: `${shot.detail} · ${fit.trace}` };
   });
 
-  // ---- 2. the ticket workspace -------------------------------------------
+  // ---- 2. the Ticket view -------------------------------------------
   await attempt(5, "ticket-workspace.png", async () => {
     // The board shot may have zoomed out / hidden the sidebar to fit five
-    // columns; the workspace shot wants the released, chat-first default back
+    // columns; the Ticket view shot wants the released, chat-first default back
     // at native scale. Do not open a terminal to make a screenshot: it is an
     // optional companion, not the primary product story.
     await restoreChrome(page);
     await cardById(page, heroId).dblclick();
     await waitUntil(
-      "ticket workspace",
+      "Ticket view",
       async () =>
         (await page.getByRole("tablist", { name: "Ticket tabs", exact: true }).count()) === 1,
     );

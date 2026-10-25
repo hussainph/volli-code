@@ -2,7 +2,7 @@
  * The navigator's create / rename / duplicate / delete controller (VC-191).
  *
  * One hook for both scopes, because there is only one set of rules: Home's
- * Project Files navigator and the Ticket workspace's Files navigator differ by
+ * Project Files navigator and the Ticket view's Files navigator differ by
  * the `{ projectId, ticketId }` pair they pass, which is precisely the seam
  * main resolves the checkout from. Anything else shared between them (which row
  * is being renamed, what a commit means, which failures get said out loud)

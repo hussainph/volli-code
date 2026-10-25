@@ -253,6 +253,7 @@ function handlersFor(fixture: Fixture) {
       modelAccess: null,
       experiments: null,
       automations: { kind: "degraded" } as never,
+      worktreeReads: null,
       busyWorktreeSites: async () => [],
       signIns: fixture.signIns,
     }),

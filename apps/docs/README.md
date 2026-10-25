@@ -23,6 +23,7 @@ src/data/navigation.ts shared sidebar and llms.txt navigation
 src/lib/generated-markdown.ts data-backed Markdown reference expansion
 src/styles/volli.css  the brand layer
 src/components/       Starlight components and overrides
+public/_redirects     old routes kept working after a rename
 scripts/check-docs.mjs built-page integrity checks
 astro.config.mjs      Starlight configuration
 ```
@@ -31,6 +32,11 @@ Add a `.mdx` file and list its route in `src/data/navigation.ts`. Both the
 sidebar and `/llms.txt` use that definition. The build rejects an unlisted or
 missing page. Every page also has a Markdown mirror at `/<slug>.md`, used by
 **Copy page**.
+
+To rename or move a page, add its old route, trailing-slash form, and `.md`
+mirror to `public/_redirects`. Cloudflare Pages serves those as 301s. Astro's
+`redirects` option is not used here: it would emit a stub page that the docs
+checks reject.
 
 The build checks local links and anchors, retained fragments from split pages,
 heading hierarchy, Markdown mirrors, Copy page targets, and the agent index. Data-backed reference components must

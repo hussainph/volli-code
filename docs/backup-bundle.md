@@ -97,7 +97,20 @@ decision in `backup/decisions.ts`, with a reason:
 
 `decisions.test.ts` holds the register against a live migrated schema, so a
 migration that adds a table fails the suite until someone decides what a backup
-does with it.
+does with it. `profile-wiring.test.ts` derives profile areas from the production
+host path wiring rather than maintaining a second list of directories.
+
+Global prompt templates (`commands/`) have an **include requirement**, but
+version 1 does **not** carry or restore them yet (VC-867). Its manifest kinds,
+artifact paths and reference coverage are closed: an added commands artifact
+would cause older readers to reject the whole bundle. This needs a compatible
+format-evolution plan, not just a new kind in the current writer. Until then,
+copy personal templates separately when moving machines; restoring a bundle
+leaves any existing destination templates alone.
+
+Browser Traces and frames (`browser-traces/`) are explicitly excluded: bounded,
+local browser evidence, potentially containing captured page content, does not
+travel. Rotating machine diagnostics (`logs/`) are excluded too.
 
 Redacted values (rows travel, the value does not):
 

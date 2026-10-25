@@ -11,6 +11,7 @@ import {
 import { createEnrolledDeviceVerifier, dataDirDeviceStore, enrollDevice } from "./enrolled-devices";
 import { join } from "node:path";
 import { admittedHandlers, createHostHandlers, ROUTER_POLICY } from "@volli/host-core/handlers";
+import { createWorktreeReadService } from "@volli/host-core/worktree";
 import { openVolliDb, insertProject } from "@volli/host-core/db";
 import { captureHostLog, testProject } from "@volli/host-core/testing";
 import {
@@ -103,6 +104,7 @@ async function fixture(
       experiments: null,
       automations: { kind: "degraded" } as never,
       busyWorktreeSites: async () => [],
+      worktreeReads: createWorktreeReadService({ deps: () => ({ db }) }),
     },
   );
   const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });

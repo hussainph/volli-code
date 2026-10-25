@@ -41,18 +41,37 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   AGENT_COMMAND_BINDINGS,
   AGENT_COMMANDS,
+  AGENT_HANDLER_KEYS,
+  SERVED_AGENT_HANDLER_KEYS,
+  SOCKET_BOARD_PROJECTIONS,
   DEFAULT_AUTHORITY_POLICY,
   HOST_HANDLER_KEYS,
   SOCKET_DELEGATED_HANDLER_KEYS,
   OperationUnavailableError,
   VERB_REGISTRY,
 } from "@volli/shared";
+import type { AgentRequest, HandlerCall } from "@volli/shared";
 
 import { createAgentCommandService } from "./agent-commands";
 import { socketHandlerPolicy } from "./agent-dispatch/admission";
-import { refused } from "./handlers/handler-map";
+import {
+  ADMITTED,
+  HandlerNotServedError,
+  type AdmissionObserver,
+  type HandlerPolicy,
+  type HostHandlerMap,
+  invokeHandler,
+  refused,
+} from "./handlers/handler-map";
+import { agentVerbEntries } from "./agent-dispatch/verbs";
 import { sealTestHandlers, testHostHandlers } from "./testing/host-handlers";
-import { projectedHandlerKey, projectHandler } from "./agent-dispatch/projection";
+import {
+  doorCallActor,
+  projectedHandlerKey,
+  projectHandler,
+  servedVerb,
+} from "./agent-dispatch/projection";
+import type { AgentCommandContext } from "./agent-dispatch/context";
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
 import { getTicket, insertTicket } from "./db/tickets-repo";
 import { insertProject } from "./db/projects-repo";
@@ -69,7 +88,7 @@ afterEach(() => ctx?.cleanup());
 const SESSION_ID = "abcdef12-3456-7890-abcd-ef1234567890";
 
 /** A project with one Board Session, and a service watching both engine doors. */
-function scenario() {
+function scenario(onAdmission?: AdmissionObserver) {
   ctx = openTestDb();
   insertProject(
     ctx.db,
@@ -90,7 +109,10 @@ function scenario() {
     token: tokens.mint({ sessionId: SESSION_ID, attachmentId: "attachment-1" }),
   };
   const service = createAgentCommandService({
-    handlers: testHostHandlers({ db: ctx.db }),
+    handlers: testHostHandlers({
+      db: ctx.db,
+      ...(onAdmission === undefined ? {} : { onAdmission }),
+    }),
     db: ctx.db,
     sessionEngine,
     appVersion: "1.2.3",
@@ -156,7 +178,7 @@ describe("the dispatch table (VC-167)", () => {
   });
 });
 
-describe("a catalog command's socket verb is a projection of the host's map (VC-668)", () => {
+describe("every socket verb is a projection of the host's map (VC-668, VC-923)", () => {
   // The socket's Session reads are delegated the other way round (VC-663, D4):
   // the map runs the socket verb, so the socket keeps its own binding.
   const delegated: readonly string[] = SOCKET_DELEGATED_HANDLER_KEYS;
@@ -164,14 +186,132 @@ describe("a catalog command's socket verb is a projection of the host's map (VC-
     (key) => key in AGENT_VERB_TABLE && !delegated.includes(key),
   );
 
-  it("binds exactly the both-door commands as projections, each of its own key", () => {
-    expect(SOCKET_HANDLER_KEYS).toEqual(["ticket.move"]);
+  // The ticket writes whose command is a board handler under the board's key (VC-794).
+  const BOARD_PROJECTIONS: Readonly<Record<string, string>> = {
+    "ticket.create": "board.createTicket",
+    "ticket.update": "board.updateTicket",
+    "ticket.comment": "board.createComment",
+  };
+
+  it("binds the both-door commands, the board's ticket writes and its own verbs as projections", () => {
+    expect(SOCKET_HANDLER_KEYS).toEqual([
+      "ticket.move",
+      ...AGENT_HANDLER_KEYS.filter((key) => key in AGENT_VERB_TABLE),
+    ]);
+    expect(SOCKET_BOARD_PROJECTIONS).toEqual(BOARD_PROJECTIONS);
     for (const key of delegated) expect(key in AGENT_VERB_TABLE, key).toBe(true);
     for (const [id, binding] of Object.entries(AGENT_VERB_TABLE)) {
       expect(projectedHandlerKey(binding), id).toBe(
-        (SOCKET_HANDLER_KEYS as readonly string[]).includes(id) ? id : undefined,
+        (SOCKET_HANDLER_KEYS as readonly string[]).includes(id) ? id : BOARD_PROJECTIONS[id],
       );
     }
+    // Only the four delegated reads keep a handler of their own.
+    const own = Object.entries(AGENT_VERB_TABLE)
+      .filter(([, binding]) => projectedHandlerKey(binding) === undefined)
+      .map(([id]) => id);
+    expect(own.toSorted()).toEqual([...delegated].toSorted());
+  });
+
+  it("serves one entry for every socket-served agent key, and no other", () => {
+    // The socket's own verbs' handlers, as the map's entries: exactly the
+    // socket's served agent keys, in the registry's order. The start is the
+    // map's own command, shared with the tool door.
+    expect(Object.keys(agentVerbEntries({} as never))).toEqual(
+      SERVED_AGENT_HANDLER_KEYS.filter((key) => key in AGENT_VERB_TABLE),
+    );
+    expect(projectedHandlerKey(AGENT_VERB_TABLE["session.start"])).toBe("session.start");
+  });
+
+  it("serves the socket's own verbs into the map once, and refuses a second service", () => {
+    ctx = openTestDb();
+    const handlers = testHostHandlers({ db: ctx.db });
+    const build = () =>
+      createAgentCommandService({
+        handlers,
+        db: ctx.db,
+        sessionEngine: createTestSessionEngine(ctx.db),
+        appVersion: "1.2.3",
+      });
+    build();
+    expect(build).toThrow("The handler map already serves identify.");
+  });
+
+  it("answers an agent key nothing served as unavailable, after the policy admits it", async () => {
+    ctx = openTestDb();
+    const records: string[] = [];
+    const handlers = testHostHandlers({
+      db: ctx.db,
+      onAdmission: ({ door, key, admitted }) => records.push(`${door} ${key} ${admitted}`),
+    });
+    const policy = { door: "test", admit: () => ADMITTED };
+    const input = {
+      request: { v: 1, cmd: "identify", args: {}, ctx: { cwd: "/", env: {} } },
+      projects: [],
+      envSession: null,
+      envSessionTerminal: null,
+      authenticatedSessionId: null,
+      actor: null,
+    } as const;
+    await expect(
+      Promise.resolve().then(() =>
+        invokeHandler(handlers, policy, "identify", input, { actor: { kind: "unauthenticated" } }),
+      ),
+    ).rejects.toBeInstanceOf(HandlerNotServedError);
+    expect(records).toEqual(["test identify true"]);
+  });
+
+  it("admits a board ticket write at the map under the board's key, and no other key", async () => {
+    const { env, verify } = scenario();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, status: "todo" }),
+    );
+    const log: string[] = [];
+    const note = (name: string) => () => {
+      log.push(`handler ${name}`);
+      throw new Error("stop");
+    };
+    const service = createAgentCommandService({
+      handlers: sealTestHandlers(
+        {
+          "board.createTicket": note("board.createTicket"),
+          "board.updateTicket": note("board.updateTicket"),
+          "board.createComment": note("board.createComment"),
+        },
+        ({ door, key, admitted }) =>
+          log.push(`${door} ${admitted ? "admitted" : "refused"} ${key}`),
+      ),
+      db: ctx.db,
+      sessionEngine: createTestSessionEngine(ctx.db),
+      appVersion: "1.2.3",
+      verifySessionToken: verify,
+    });
+    const run = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env } });
+    await run("ticket.create", { title: "New" });
+    await run("ticket.update", { id: "VC-1", title: "Renamed" });
+    await run("ticket.comment", { id: "VC-1", message: "Hello" });
+    expect(log).toEqual([
+      "agent-socket admitted board.createTicket",
+      "handler board.createTicket",
+      "agent-socket admitted board.updateTicket",
+      "handler board.updateTicket",
+      "agent-socket admitted board.createComment",
+      "handler board.createComment",
+    ]);
+    const policy = socketHandlerPolicy(
+      { v: 1, cmd: "ticket.update", args: {}, ctx: { cwd: "/", env: {} } },
+      "board.updateTicket",
+      () => null,
+    );
+    expect(policy.admit("board.setPriority", {}, { actor: { kind: "user" } })).toEqual({
+      admitted: false,
+      message: "ticket.update does not reach board.setPriority.",
+      hint: null,
+    });
+    expect(policy.admit("board.updateTicket", {}, { actor: { kind: "user" } })).toEqual({
+      admitted: true,
+    });
   });
 
   it("reaches handlers[key] with the decoded input and the attributed actor, admitted first", async () => {
@@ -290,6 +430,7 @@ describe("a catalog command's socket verb is a projection of the host's map (VC-
   it("admits at the map only the key the request's own verb projects", () => {
     const policy = socketHandlerPolicy(
       { v: 1, cmd: "ticket.show", args: {}, ctx: { cwd: "/", env: {} } },
+      undefined,
       () => null,
     );
     expect(policy.door).toBe("agent-socket");
@@ -342,6 +483,172 @@ describe("a catalog command's socket verb is a projection of the host's map (VC-
         appVersion: "1.2.3",
       } as never),
     ).toThrow("The host's handler map is required.");
+  });
+});
+
+describe("how often the coordination policy is read (VC-923)", () => {
+  function counted() {
+    const ctxScenario = scenario();
+    let reads = 0;
+    const service = createAgentCommandService({
+      handlers: testHostHandlers({ db: ctx.db }),
+      db: ctx.db,
+      sessionEngine: createTestSessionEngine(ctx.db),
+      appVersion: "1.2.3",
+      verifySessionToken: ctxScenario.verify,
+      readAuthorityPolicy: () => {
+        reads += 1;
+        return DEFAULT_AUTHORITY_POLICY;
+      },
+    });
+    return { service, env: ctxScenario.env, reads: () => reads };
+  }
+
+  it("reads it once for one of the socket's own verbs, the hot path included", async () => {
+    const { service, env, reads } = counted();
+    const response = await service.execute({
+      v: 1,
+      cmd: "hook",
+      args: { harness: "claude-code", event: "turn.started" },
+      ctx: { cwd: "/repo/volli", env },
+    });
+    expect(response.ok).toBe(true);
+    expect(reads()).toBe(1);
+  });
+
+  it("reads it again at the map for a key another door also reaches", async () => {
+    const { service, env, reads } = counted();
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", { id: "ticket-one", ticketNumber: 1, status: "todo" }),
+    );
+    await service.execute({
+      v: 1,
+      cmd: "ticket.move",
+      args: { id: "VC-1", to: "done" },
+      ctx: { cwd: "/repo/volli", env },
+    });
+    expect(reads()).toBe(2);
+  });
+});
+
+describe("a socket verb the map serves (VC-923)", () => {
+  const REQUEST: AgentRequest = { v: 1, cmd: "identify", args: {}, ctx: { cwd: "/", env: {} } };
+  const UNAUTHENTICATED = { kind: "unauthenticated" } as const;
+
+  /** The door's context for one request, as the dispatch builds it. */
+  function doorContext(handlers: HostHandlerMap, admit: HandlerPolicy["admit"] = () => ADMITTED) {
+    return {
+      options: { handlers },
+      handlerPolicy: { door: "agent-socket", admit },
+      projects: [testProject({ id: "project-one" })],
+      envSession: null,
+      envSessionTerminal: null,
+      authenticatedSessionId: "s-1",
+      actor: null,
+      doorActor: UNAUTHENTICATED,
+    } as unknown as AgentCommandContext;
+  }
+
+  it("hands its entry the request as the door resolved it, and answers the entry's answer", async () => {
+    const seen: unknown[] = [];
+    const answer = { v: 1, ok: true, data: { echoed: true } } as const;
+    const handlers = sealTestHandlers({
+      identify: (input: never, call: HandlerCall) => {
+        seen.push(input, call);
+        return answer;
+      },
+    });
+    const presented: AgentRequest = {
+      ...REQUEST,
+      ctx: { cwd: "/", env: { session: "s-1", token: "secret", operatorToken: "op" } },
+    };
+    const response = await servedVerb("identify", "resolve").handle(
+      doorContext(handlers),
+      presented,
+    );
+    expect(response).toBe(answer);
+    // The claim goes on; the door's credentials stay behind.
+    expect(seen).toEqual([
+      {
+        request: { ...REQUEST, ctx: { cwd: "/", env: { session: "s-1" } } },
+        projects: [expect.objectContaining({ id: "project-one" })],
+        envSession: null,
+        envSessionTerminal: null,
+        authenticatedSessionId: "s-1",
+        actor: null,
+      },
+      { actor: UNAUTHENTICATED },
+    ]);
+  });
+
+  it("answers a refusal at the map as the socket's own refusal", async () => {
+    const handlers = sealTestHandlers({ identify: () => ({ v: 1, ok: true, data: {} }) });
+    const response = await servedVerb("identify", "resolve").handle(
+      doorContext(handlers, () => refused("Not you.", "Ask a person.")),
+      REQUEST,
+    );
+    expect(response).toEqual({
+      v: 1,
+      ok: false,
+      error: expect.objectContaining({
+        code: "FORBIDDEN_ACTOR",
+        message: "Not you.",
+        next: "Ask a person.",
+      }),
+    });
+    const bare = await servedVerb("identify", "resolve").handle(
+      doorContext(handlers, () => refused("Not you.")),
+      REQUEST,
+    );
+    expect(bare).toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN_ACTOR", message: "Not you." },
+    });
+  });
+
+  it("answers an entry nothing served as retryable", async () => {
+    const response = await servedVerb("identify", "resolve").handle(
+      doorContext(sealTestHandlers({})),
+      REQUEST,
+    );
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: "APP_UNREACHABLE", message: "identify is not served on this host." },
+    });
+  });
+
+  it("passes a verb's own throw on to the socket's door, as the table's direct call did", async () => {
+    const handlers = sealTestHandlers({
+      identify: () => {
+        throw new Error("The verb broke.");
+      },
+    });
+    await expect(
+      servedVerb("identify", "resolve").handle(doorContext(handlers), REQUEST),
+    ).rejects.toThrow("The verb broke.");
+  });
+
+  it("calls the map as whoever the door authenticated", () => {
+    const own = { id: "s-1", projectId: "p", ticketId: "t-1", role: "ticket" } as const;
+    expect(doorCallActor({ kind: "operator", login: "me" }, null)).toEqual({ kind: "user" });
+    expect(doorCallActor({ kind: "unauthenticated" }, own)).toEqual(UNAUTHENTICATED);
+    expect(doorCallActor({ kind: "session", sessionId: "s-1" }, own)).toEqual({
+      kind: "session",
+      sessionId: "s-1",
+      ticketId: "t-1",
+    });
+    // Another Session's identity is never cited for this one.
+    expect(doorCallActor({ kind: "session", sessionId: "s-2" }, own)).toEqual({
+      kind: "session",
+      sessionId: "s-2",
+      ticketId: null,
+    });
+    expect(doorCallActor({ kind: "session", sessionId: "s-2" }, null)).toEqual({
+      kind: "session",
+      sessionId: "s-2",
+      ticketId: null,
+    });
   });
 });
 
@@ -544,6 +851,55 @@ describe("which verbs pay for the roster fold (VC-403)", () => {
     }
 
     expect(folded.toSorted()).toEqual(READS_THE_ROSTER.toSorted());
+  });
+
+  // Verb parity at the map (VC-923): every verb the socket answers reaches
+  // the map's entry for its own key (a board write: the board's), once,
+  // admitted by the socket's policy, and no other entry. The four delegated
+  // reads run the socket's own handler and touch no entry, and a verb its
+  // dispatch refused touches none either.
+  it("reaches exactly its own map entry, under the socket's policy, for every verb", async () => {
+    const reached: Record<string, string[]> = {};
+    for (const command of AGENT_COMMANDS) {
+      const records: string[] = [];
+      const { service, env } = scenario(({ door, key, admitted }) =>
+        records.push(`${door} ${key} ${admitted}`),
+      );
+      // A ticket for the ticket writes to resolve before they reach the map.
+      insertTicket(
+        ctx.db,
+        testTicket("project-one", { id: "ticket-one", ticketNumber: 1, status: "todo" }),
+      );
+      const response = await service.execute({
+        v: 1,
+        cmd: command,
+        args:
+          command === "ticket.move"
+            ? { id: "VC-1", to: "done" }
+            : { ...ARGS[AGENT_COMMAND_BINDINGS[command]] },
+        ctx: { cwd: "/repo/volli", env },
+      });
+      // Admitted is not ran: an entry nothing served would answer this.
+      if (!response.ok) expect(response.error.message, command).not.toMatch(/is not served/);
+      reached[command] = records;
+      ctx.cleanup();
+    }
+    const expected: Record<string, string[]> = {};
+    for (const command of AGENT_COMMANDS) {
+      const key = projectedHandlerKey(AGENT_VERB_TABLE[AGENT_COMMAND_BINDINGS[command]]);
+      expected[command] =
+        key === undefined ||
+        // Refused at the door: the person's verbs, which a Session may not
+        // run (`session.start` answers only a hostd operator token).
+        command === "project.add" ||
+        command === "session.start" ||
+        // Refused before the map by its own decode: the comment's text is
+        // `--message`, and these args name none.
+        command === "ticket.comment"
+          ? []
+          : [`agent-socket ${key} true`];
+    }
+    expect(reached).toEqual(expected);
   });
 
   it("folds the roster for cost only when a --session handle has to be resolved", async () => {

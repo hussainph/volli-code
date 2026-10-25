@@ -1,5 +1,12 @@
 # Runbook: a Volli host on Ubuntu
 
+> **Superseded (VC-869).** Volli Cloud is moving to a design with no host
+> process: the backend is the single authority and Runners execute
+> ([Workspace authority and offline](../BOUNDARIES.md#workspace-authority-and-offline)).
+> This document still describes code in this repository. It is kept for
+> maintenance only and goes when that code is deleted or renamed; don't build
+> new work on it.
+
 Install `volli-hostd` on a fresh Ubuntu server and verify a Session
 over SSH with the `volli` CLI: register a small test repository, create a
 Ticket, start a Session with a real model, disconnect while the agent works,

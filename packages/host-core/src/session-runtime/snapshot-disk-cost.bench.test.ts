@@ -21,7 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  createInMemorySessionLedger,
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   SESSION_HISTORY_WINDOW,
@@ -36,6 +36,7 @@ import type { SessionEvent, SessionProjectionCheckpoint } from "@volli/shared";
 import { afterAll, describe, expect, it } from "vite-plus/test";
 
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
+import { createInMemorySessionLedger } from "@volli/session-engine/testing";
 
 /** The ticket's 100, 1,000 and 10,000 events. */
 const SIZES = [100, 1_000, 10_000] as const;
@@ -102,7 +103,7 @@ async function seedSession(events: number) {
   const locations = { resolve: location, prepare: location, reaffirm: async () => undefined };
   const recorder = createSessionRuntime({
     engine,
-    executor: adapter,
+    executors: createSessionExecutorSlot(adapter),
     artifacts: files,
     locations,
     clock,
@@ -204,7 +205,7 @@ async function seedSession(events: number) {
     };
     const runtime = createSessionRuntime({
       engine: reader,
-      executor: new TemplateAdapter(),
+      executors: createSessionExecutorSlot(new TemplateAdapter()),
       artifacts,
       locations,
       clock,

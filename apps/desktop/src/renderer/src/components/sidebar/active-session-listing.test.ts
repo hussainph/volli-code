@@ -879,7 +879,7 @@ describe("buildActiveSessionListing — chat Sessions", () => {
       now: 5_000_000,
     };
 
-    // Its ticket is not on this board, so it has no ticket workspace or
+    // Its ticket is not on this board, so it has no Ticket view or
     // Session 4 chat host. The target identity survives for Session 5.
     expect(buildActiveSessionListing(input).previous).toEqual([]);
     expect(
@@ -1591,7 +1591,7 @@ describe("buildActiveSessionListing — the Previous band", () => {
 /**
  * A closed terminal's row names the terminal, so it has to OPEN the terminal
  * (VC-290). It used to carry no target at all, and the sidebar sent a targetless
- * row to its ticket workspace — or to Home when it had none — so selecting
+ * row to its Ticket view — or to Home when it had none — so selecting
  * "Session 2" landed you in a chat that had nothing to do with it.
  */
 describe("buildActiveSessionListing — a closed terminal's own destination", () => {
@@ -1697,9 +1697,9 @@ describe("sessionRowRoute", () => {
   });
 
   // The bug, stated as a test: a closed terminal that HAS a ticket must not be
-  // answered with that ticket's workspace, which opens whatever tab was last in
+  // answered with that ticket's Ticket view, which opens whatever tab was last in
   // front there and says nothing about the Session that was clicked.
-  it("does not fall back to the ticket workspace for a row that has a ticket", () => {
+  it("does not fall back to the Ticket view for a row that has a ticket", () => {
     const route = sessionRowRoute(
       previousRow({
         id: "session:r1",
@@ -1709,7 +1709,7 @@ describe("sessionRowRoute", () => {
       }),
     );
 
-    expect(route.kind).not.toBe("ticket-workspace");
+    expect(route.kind).not.toBe("ticket-view");
   });
 
   it("opens a ticket terminal's pane", () => {
@@ -1756,7 +1756,7 @@ describe("sessionRowRoute", () => {
 
   it("keeps the old fallbacks for a row that genuinely has no target", () => {
     expect(sessionRowRoute(previousRow({ id: "a", ticket: t1 }))).toEqual({
-      kind: "ticket-workspace",
+      kind: "ticket-view",
       ticketId: "t1",
     });
     expect(sessionRowRoute(previousRow({ id: "b" }))).toEqual({ kind: "home" });

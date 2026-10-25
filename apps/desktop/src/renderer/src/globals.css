@@ -1361,7 +1361,7 @@
 /* The primary sidebar, by its own name rather than by a utility class it
  * happens to wear (app-shell.tsx) — the one thing that distinguishes it from
  * the two other `data-slot="sidebar"` roots in the same tree (the collapsible
- * wrapper and the workspace rail). */
+ * wrapper and the project rail). */
 [data-volli-sidebar] {
   background-image: linear-gradient(var(--lift-2), var(--lift-2));
   /* …and no veil under it, in BOTH modes, so lift owns the tier relationship
@@ -1400,7 +1400,7 @@
  *
  * Built as two half-boxes because the DOM has no element that wraps exactly
  * these two: the sidebar lives inside the collapsible `Sidebar` (with the
- * project rail, which stays OUT on the canvas — it is the workspace switcher,
+ * project rail, which stays OUT on the canvas — it is the project switcher,
  * the thing Slack also keeps outside), and `SidebarInset` is that wrapper's
  * sibling. So each half draws its own outer corners and border and drops the
  * ones that face the seam; abutted, they read as one outline.
@@ -1500,7 +1500,7 @@
  * and clipped the sidebar half's shadow with them, leaving the frame shaded on
  * three sides and bare on the fourth. That wrapper is gone with the icon strip.
  *
- * What still matches this selector is the WORKSPACE RAIL, and that is why
+ * What still matches this selector is the PROJECT RAIL, and that is why
  * app-shell.tsx's `opacity-0` on a hidden rail is load-bearing rather than
  * belt-and-braces: a hidden rail is a 0px box, `ProjectRail` centres a 36px tile
  * inside it, and centring in nothing puts half the tile at negative x. Its own
@@ -1590,7 +1590,7 @@
  * sets that token to 0 at provider level: the rail is a flow sibling of the
  * panel now, so the pane's width calc must stop subtracting it while this rule
  * still has to read the real 60. */
-[data-volli-shell="framed"] [data-workspace-rail] {
+[data-volli-shell="framed"] [data-project-rail] {
   padding-left: min(var(--shell-inset), var(--rail-width));
 }
 
@@ -1693,7 +1693,7 @@
  * Only the bar is gone. `overflow` is untouched, so the wheel, the trackpad,
  * keyboard paging and `scrollIntoView` all behave exactly as before — this is
  * the same pair (`scrollbar-width` plus the `-webkit` pseudo-element) that the
- * tab strip, the board and the workspace rail already use inline, spelled once
+ * tab strip, the board and the project rail already use inline, spelled once
  * here for a subtree instead. */
 [data-volli-rail],
 [data-volli-rail] * {

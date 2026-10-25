@@ -23,7 +23,7 @@ export const DOC_SECTIONS: DocSection[] = [
     items: [
       { label: "The board", slug: "guides/board" },
       { label: "Manage tickets", slug: "guides/manage-tickets" },
-      { label: "Ticket workspace", slug: "guides/ticket-workspace" },
+      { label: "Ticket view", slug: "guides/ticket-view" },
       { label: "Chats and worktrees", slug: "guides/agents-and-worktrees" },
       { label: "Review and publish changes", slug: "guides/review-changes" },
       { label: "Clean up worktrees", slug: "guides/clean-up-worktrees" },

@@ -3,8 +3,8 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  createSessionExecutorSlot,
   createSessionRuntime,
-  createInMemoryTranscriptArtifactStore,
   sessionRootThreadId,
 } from "@volli/session-engine";
 import {
@@ -24,6 +24,7 @@ import { insertProject } from "@volli/host-core/db";
 import { SecretStore, SecretService } from "@volli/host-core/secrets";
 import { keychainSecretCodec } from "./codec";
 import { registerSecretIpc } from "./ipc";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 
 const { handlers } = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
@@ -246,7 +247,7 @@ describe("secure credential through the real Pi / SQLite Session path", () => {
         engine,
         clock: { now: Date.now },
         ids: { next: () => randomUUID() },
-        executor: host.adapter,
+        executors: createSessionExecutorSlot(host.adapter),
         artifacts: createInMemoryTranscriptArtifactStore(),
         locations: {
           resolve: async () => ({ directory: worktree, venue: { id: "local", kind: "local" } }),
@@ -453,7 +454,7 @@ describe("secure credential through the real Pi / SQLite Session path", () => {
         engine,
         clock: { now: Date.now },
         ids: { next: () => randomUUID() },
-        executor: host.adapter,
+        executors: createSessionExecutorSlot(host.adapter),
         artifacts: createInMemoryTranscriptArtifactStore(),
         locations: {
           resolve: async () => ({ directory: worktree, venue: { id: "local", kind: "local" } }),

@@ -7,7 +7,7 @@
  *   `volli:data-bootstrap` and refreshes on `volli:data-changed`.
  * - **`cloud` on: the board router, through a board client.** The board store
  *   paints what {@link BoardSync} holds (the host's confirmed board plus this
- *   window's pending writes, T5), the Workspace's change feed keeps it current,
+ *   window's pending writes, T5), the project's change feed keeps it current,
  *   and every per-surface board read and write (comments, activity, bodies,
  *   project settings, the sidebar's signals) goes through {@link boardApi}'s
  *   protocol facade, each write under a fresh `commandId`.
@@ -20,14 +20,14 @@
  * Nothing above the client knows which.
  *
  * **Routing is per project (VC-711).** One {@link BoardSync} follows every
- * Workspace this window holds, local and remote alike: it already keys every
- * call, base and pending write by Workspace, so it takes a transport per
+ * project this window holds, local and remote alike: it already keys every
+ * call, base and pending write by project, so it takes a transport per
  * project ({@link BoardClientResolver}) rather than one engine per host,
- * which would split its one pending layer, `workspaceOf` and the facade's
+ * which would split its one pending layer, `projectOf` and the facade's
  * commands across engines for nothing. A project the host-connection store
  * claims for a remote host gets that host's client; every other one, this
  * Mac's. The per-surface facade routes the same way: by the project, the
- * ticket's Workspace, or a comment's ticket.
+ * ticket's project, or a comment's ticket.
  */
 import { createTRPCClient, type TRPCClient, type TRPCLink } from "@trpc/client";
 import { hostLinkTrpcLink } from "@volli/host-protocol/client-link";
@@ -158,7 +158,7 @@ export function boardProtocol(): ActiveProtocol | null {
 
 /**
  * Starts the protocol path: builds the client and the sync engine over it.
- * The caller (boot) then opens each Workspace. Tests pass their own client.
+ * The caller (boot) then opens each project. Tests pass their own client.
  */
 export function startBoardProtocol(options: {
   view: BoardSyncView;
@@ -312,20 +312,20 @@ export function protocolBoardApi(
 ): BoardApi {
   /**
    * Where one call goes, decided ONCE, when it is made (VC-711):
-   * the Workspace it was made for (its owner) and that Workspace's client. A
+   * the project it was made for (its owner) and that project's client. A
    * write keeps both for every retry, so it never changes hosts: a remote
-   * write whose Workspace closes ends with it (`BoardSync.close`) rather than
+   * write whose project closes ends with it (`BoardSync.close`) rather than
    * being sent to This Mac. `undefined` is a call no followed board places:
    * This Mac's, as every call was before.
    */
   const place = (owner: string | undefined) => ({ owner, board: clientFor(owner).board });
   const forProject = (projectId: string) => place(projectId);
-  const forTicket = (ticketId: string) => place(sync.workspaceOf(ticketId));
+  const forTicket = (ticketId: string) => place(sync.projectOf(ticketId));
   const forComment = (commentId: string) => {
     const ticketId = comments.get(commentId);
-    return place(ticketId === undefined ? undefined : sync.workspaceOf(ticketId));
+    return place(ticketId === undefined ? undefined : sync.projectOf(ticketId));
   };
-  /** A per-surface command, fenced to the Workspace it was made for. */
+  /** A per-surface command, fenced to the project it was made for. */
   const command = <Answer>(
     at: ReturnType<typeof place>,
     spec: Omit<Parameters<BoardSync["command"]>[0], "owner" | "send"> & {

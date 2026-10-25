@@ -18,7 +18,7 @@ import {
   RAIL_NARROW_MAX_WIDTH,
   useUiStore,
 } from "@renderer/stores/ui";
-import { useVenueStore, venueKey } from "@renderer/stores/venue";
+import { useWorkingCopyStore, workingCopyKey } from "@renderer/stores/working-copy";
 
 /**
  * A mount check, at the store defaults a static render can see (zustand serves
@@ -52,7 +52,7 @@ afterEach(() => {
   useUiStore.getInitialState().railFolds = DEFAULT_RAIL_FOLDS;
   useUiStore.getInitialState().railWidth = RAIL_DEFAULT_WIDTH;
   useChatSessionsStore.getInitialState().sessions = {};
-  useVenueStore.getInitialState().byScope = {};
+  useWorkingCopyStore.getInitialState().byScope = {};
   useProjectSessionsStore.getInitialState().byProject = {};
   useProjectSessionsStore.getInitialState().listingState = {};
   useSessionsStore.getInitialState().byOwner = {};
@@ -118,12 +118,12 @@ function seedTerminals(records: readonly SessionRecord[]): void {
   useProjectSessionsStore.getInitialState().listingState = { p1: "loaded" };
 }
 
-/** A venue with values longer than the rail is wide, which is the ordinary case. */
-function seedVenue(): void {
-  useVenueStore.getInitialState().byScope = {
-    [venueKey("p1", null)]: {
+/** A working copy with values longer than the rail is wide, which is the ordinary case. */
+function seedWorkingCopy(): void {
+  useWorkingCopyStore.getInitialState().byScope = {
+    [workingCopyKey("p1", null)]: {
       status: "ready",
-      venue: {
+      workingCopy: {
         kind: "worktree",
         path: "/Users/someone/.volli/worktrees/volli-code-f3732f45/VC-288-narrow-pane",
         branch: "volli/VC-288-narrow-pane-follow-ups-beyond-vc-264",
@@ -236,7 +236,7 @@ describe("HomeRail", () => {
     // VC-406. Now presents the roster, not a second Session-identity card:
     // the active tab and composer's pill already identify the Session, model,
     // and effort. Duplicating them would separate the title from the roster.
-    seedVenue();
+    seedWorkingCopy();
     const slice = seedSlice("ready");
     slice.projection = {
       session: {
@@ -328,7 +328,7 @@ describe("HomeRail", () => {
   });
 
   it("pins the Main checkout under EVERY page, and cost under Now alone", () => {
-    seedVenue();
+    seedWorkingCopy();
 
     for (const page of ["now", "files", "search"] as const) {
       useUiStore.getInitialState().homeRailMode = page;
@@ -348,10 +348,10 @@ describe("HomeRail", () => {
   });
 
   it("says the checkout's branch on the row and its one fact beside it", () => {
-    seedVenue();
+    seedWorkingCopy();
     const markup = draw("chat:s1");
 
-    // The identity is the branch, drawn from the venue reading rather than
+    // The identity is the branch, drawn from the working copy reading rather than
     // from anything this surface invents.
     expect(markup).toContain("volli/VC-288-narrow-pane-follow-ups-beyond-vc-264");
     // The one fact: what is loose in the tree right now (2 modified + 1 added),
@@ -364,7 +364,7 @@ describe("HomeRail", () => {
     // VC-288. A path truncates in a rail this narrow and its full form was
     // behind a pointer; the reveal is a focus stop Radix opens on focus as well
     // as on hover. It lives in the footer's body now rather than on a card.
-    seedVenue();
+    seedWorkingCopy();
     useUiStore.getInitialState().railFolds = { ...DEFAULT_RAIL_FOLDS, worktree: true };
 
     const markup = draw("chat:s1");
@@ -385,8 +385,8 @@ describe("HomeRail", () => {
     expect(draw("chat:s1")).toContain('data-testid="home-checkout-loading"');
     expect(draw("chat:s1")).not.toContain('data-testid="home-checkout-glance"');
 
-    useVenueStore.getInitialState().byScope = {
-      [venueKey("p1", null)]: { status: "error", error: "not a git repository" },
+    useWorkingCopyStore.getInitialState().byScope = {
+      [workingCopyKey("p1", null)]: { status: "error", error: "not a git repository" },
     };
     const failed = draw("chat:s1");
 

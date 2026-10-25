@@ -6,7 +6,16 @@ import { app } from "electron";
 import type Database from "better-sqlite3";
 import { worktreeDeps as buildWorktreeDeps } from "@volli/host-core/worktree";
 import { windowEventBus } from "./broadcast";
+import { isExperimentEnabled } from "./experiments";
 
 export function worktreeDeps(db: Database.Database) {
-  return buildWorktreeDeps(db, { events: windowEventBus }, { dataDir: app.getPath("userData") });
+  return buildWorktreeDeps(
+    db,
+    { events: windowEventBus },
+    {
+      dataDir: app.getPath("userData"),
+      // A working copy's `.agents/setup` and its setup gate (VC-584).
+      environmentRecipes: () => isExperimentEnabled("cloud"),
+    },
+  );
 }

@@ -14,10 +14,20 @@
 import { randomUUID } from "node:crypto";
 
 import type { IpcResponse } from "@volli/host-protocol/ipc";
-import { listProjects, insertProject } from "@volli/host-core/db";
+import { insertProject, insertTicket, listProjects } from "@volli/host-core/db";
 import { admittedHandlers, createHostHandlers, ROUTER_POLICY } from "@volli/host-core/handlers";
-import { openTestDb, testHostHandlers, testProject, type TestDb } from "@volli/host-core/testing";
-import { getTrimSettings, setTrimSettings } from "@volli/host-core/worktree";
+import {
+  openTestDb,
+  testHostHandlers,
+  testProject,
+  testTicket,
+  type TestDb,
+} from "@volli/host-core/testing";
+import {
+  createWorktreeReadService,
+  getTrimSettings,
+  setTrimSettings,
+} from "@volli/host-core/worktree";
 import { SESSION_RPC_IPC_CHANNEL } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -56,7 +66,10 @@ async function request(path: string, type: string, input: unknown): Promise<IpcR
 beforeEach(() => {
   ctx = openTestDb();
   rpc = registerSessionRpcIpcHandlers({
-    handlers: admittedHandlers(testHostHandlers({ db: ctx.db, now: () => 77 }), ROUTER_POLICY),
+    handlers: admittedHandlers(
+      testHostHandlers({ db: ctx.db, now: () => 77, environmentRecipes: () => true }),
+      ROUTER_POLICY,
+    ),
   });
 });
 
@@ -142,6 +155,7 @@ describe("shells.moveToBackground", () => {
             sessions: null,
             modelAccess: null,
             experiments: null,
+            worktreeReads: createWorktreeReadService({ deps: () => ({ db: ctx.db }) }),
             busyWorktreeSites: async () => [],
             automations: { kind: "degraded", start() {}, stop() {}, settled: async () => {} },
             backgroundShells: { moveForeground },
@@ -171,5 +185,35 @@ describe("shells.moveToBackground", () => {
         toolCallId: "bash-1",
       }),
     ).resolves.toMatchObject({ ok: false, error: { code: "NOT_IMPLEMENTED" } });
+  });
+});
+
+// VC-584: a ticket's working copy's environment setup, workspace-placed on
+// the ticket. The gate itself is host-core's; this is its door.
+describe("worktree.setupStatus and worktree.answerSetup", () => {
+  it("answers through the host's map, and refuses a malformed answer before it", async () => {
+    const project = testProject({ id: randomUUID(), ticketPrefix: "VC", path: "/p/setup" });
+    insertProject(ctx.db, project);
+    const ticket = testTicket(project.id, { usesWorktree: false });
+    insertTicket(ctx.db, ticket);
+
+    await expect(
+      request("worktree.setupStatus", "query", { ticketId: ticket.id }),
+    ).resolves.toEqual({ ok: true, data: { kind: "none" } });
+    await expect(
+      request("worktree.answerSetup", "mutation", { ticketId: ticket.id, answer: "retry" }),
+    ).resolves.toEqual({ ok: true, data: { kind: "none" } });
+    await expect(
+      request("worktree.setupStatus", "query", { ticketId: "unknown" }),
+    ).resolves.toMatchObject({ ok: false });
+    for (const input of [
+      { ticketId: ticket.id, answer: "skip" },
+      { ticketId: ticket.id, answer: "retry", worktreePath: "/elsewhere" },
+    ]) {
+      await expect(request("worktree.answerSetup", "mutation", input)).resolves.toMatchObject({
+        ok: false,
+        error: { code: "BAD_REQUEST" },
+      });
+    }
   });
 });

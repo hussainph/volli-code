@@ -6,8 +6,9 @@
  * Session ports exist (`createHostAgentCommands`); the Session runtime builds the
  * tool door and watches lazily behind recovery (`createHostAgentToolDoor`,
  * `createHostAgentWatches`, called from `session-runtime/agents.ts`). Each captures
- * the event and attention wiring here, so no caller can route a verb's mutation
- * or notification anywhere else. The verb and tool doors hold no timer, bus
+ * the event and attention wiring here (the tool door's start, through the handler
+ * map's own start command), so no caller can route a verb's mutation or
+ * notification anywhere else. The verb and tool doors hold no timer, bus
  * subscription or process, so neither has a stop; the socket's drain is
  * `createHostAgentSocket`'s. Watches subscribe to both wake buses when they are
  * constructed, which the Session runtime defers to the first tool call that
@@ -41,11 +42,17 @@ export function createHostAgentSocket() {
   });
 }
 
-/** What the host routes for the caller; supplying any of it would bypass the ports. */
+/**
+ * What the host routes for the caller; supplying any of it would bypass the
+ * ports. The worktree read service is required here: a host's socket that
+ * built a private one would read past the snapshot and coalescers its other
+ * doors share (VC-788).
+ */
 export type HostAgentCommandOptions = Omit<
   AgentCommandServiceOptions,
-  "notify" | "onMutation" | "onSessionStarted" | "onHarnessEvent" | "onSessionHarness"
->;
+  "notify" | "onMutation" | "onHarnessEvent" | "onSessionHarness"
+> &
+  Required<Pick<AgentCommandServiceOptions, "worktreeReads">>;
 
 /** The verb door the agent socket serves, for desktop and hostd composition. */
 export function createHostAgentCommands(
@@ -56,27 +63,22 @@ export function createHostAgentCommands(
     ...options,
     notify: (request) => ports.attention.deliver(request),
     onMutation: (change) => ports.events.publish("data-changed", change),
-    onSessionStarted: (notice) => ports.events.publish("session-started", notice),
     onHarnessEvent: (notice) => ports.events.publish("harness-event", notice),
     onSessionHarness: (notice) => ports.events.publish("session-harness", notice),
   });
 }
 
-export type HostAgentToolDoorOptions = Omit<
-  AgentToolDoorOptions,
-  "onMutation" | "onSessionStarted"
->;
+export type HostAgentToolDoorOptions = AgentToolDoorOptions;
 
-/** The structured runtime's verb tools; its mutations reach the same event bus. */
-export function createHostAgentToolDoor(
-  ports: Pick<HostCorePorts, "events">,
-  options: HostAgentToolDoorOptions,
-): AgentToolDoor {
-  return createAgentToolDoor({
-    ...options,
-    onMutation: (change) => ports.events.publish("data-changed", change),
-    onSessionStarted: (notice) => ports.events.publish("session-started", notice),
-  });
+/**
+ * The structured runtime's verb tools, served into the host's handler map
+ * (VC-923). The door holds no bus wiring of its own any more: the start's
+ * mutation and notice reach the event bus through the map's own start
+ * command, and the other verbs' through the ports they hold. It stays the
+ * one construction seam `session-runtime/agents.ts` builds the door through.
+ */
+export function createHostAgentToolDoor(options: HostAgentToolDoorOptions): AgentToolDoor {
+  return createAgentToolDoor(options);
 }
 
 export type HostAgentWatchesOptions = Omit<WatchesPorts, "subscribeTicketWake">;

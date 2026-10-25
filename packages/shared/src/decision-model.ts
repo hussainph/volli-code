@@ -37,6 +37,7 @@
  *   entered by a person through Model Access sign-in.
  */
 
+import { configPlan, resolveConfigValue } from "./config-resolution";
 import { classifyWebAddress } from "./web-address-policy";
 
 // ---- purposes ---------------------------------------------------------------
@@ -249,7 +250,12 @@ export function resolveDecisionModelSetting(
   global: DecisionModelSetting,
   project: DecisionModelSetting | null,
 ): DecisionModelSetting {
-  return project ?? global;
+  // The app-wide setting is the personal level and the floor: always set, so
+  // it answers whenever no level above it does.
+  return (
+    resolveConfigValue<DecisionModelSetting>(configPlan("decisionModel"), { project })?.value ??
+    global
+  );
 }
 
 /**
