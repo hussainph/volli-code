@@ -32,6 +32,7 @@ import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { disposeEngine, getOrCreateEngine } from "@renderer/terminal/registry";
 import { refuseRemote, remoteHostNow } from "@renderer/stores/remote-project";
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
+import { launchStore } from "@renderer/stores/launch";
 
 /** Initial PTY grid; the engine re-measures and resizes the shell within a frame. */
 const INITIAL_COLS = 80;
@@ -544,9 +545,12 @@ export async function bootChatSession(
   // runner starts it (VC-895), so the cloud link and its client decide.
   if (!guardSessionSend(scope.projectId)) return null;
   // VC-713 owns create/attach/send on the box, including draft promotion.
-  // Only this project's validated Workspace grant opens these chat doors:
-  // HOST health, another project's welcome, and unknown old DTOs grant nothing.
+  // Only this project's validated Workspace grant opens the legacy remote
+  // chat doors: HOST health, another project's welcome, and unknown old DTOs
+  // grant nothing. A cloud launch has no legacy grant: its authenticated link
+  // was checked above, and this Mac's runner authorizes create and attach.
   if (
+    launchStore() !== "cloud" &&
     remoteHostNow(scope.projectId) !== null &&
     !useHostConnectionStore.getState().projects[scope.projectId]?.granted?.includes("sessions")
   ) {
