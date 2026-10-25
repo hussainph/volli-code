@@ -135,7 +135,7 @@ describe("closeStaleAttachments", () => {
       await closeStaleAttachments({
         engine: target.engine,
         venue: { id: "host-uuid", kind: "remote" },
-        ownsLegacyVenue: (venue) => venue.kind === "remote" && venue.id === legacy.id,
+        ownsLegacyRunner: (venue) => venue.kind === "remote" && venue.id === legacy.id,
         reconcile: target.reconcile,
         projectIds: ["p"],
         newId: () => `legacy-${++sequence}`,

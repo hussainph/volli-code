@@ -417,7 +417,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
   /**
    * Tells the flag-off windows, never twice on the feed. The desktop window
    * that asked holds the answer already, unless the change moved a checkout
-   * (whose venue every reader re-measures).
+   * (whose working copy every reader re-measures).
    */
   const announce = (call: HandlerCall, change: DataChangeScope, always = false): void => {
     if (call.origin === "desktop-window" && !always) return;
@@ -874,7 +874,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
         }));
       }
       // Switching off moves the Session destination to the main checkout, with
-      // nothing async behind it: venue readers stop waiting on a checkout that
+      // nothing async behind it: working copy readers stop waiting on a checkout that
       // will never arrive (VC-286). Only the transition says so.
       const switchedOff =
         before !== undefined && before.uses_worktree !== 0 && ticket.usesWorktree === false;

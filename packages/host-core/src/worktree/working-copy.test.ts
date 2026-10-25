@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { venueFileTotal } from "@volli/shared";
+import { workingCopyFileTotal } from "@volli/shared";
 
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
@@ -12,7 +12,7 @@ import type { TestDb } from "../db/test-helpers";
 import { insertTicket, updateTicketFields } from "../db/tickets-repo";
 import { GitError } from "./git";
 import { scriptedReadOnlyGit } from "./scripted-git";
-import { readVenue, venueSnapshot } from "./venue";
+import { readWorkingCopy, measureWorkingCopy } from "./working-copy";
 
 /** Real git in a temp repo, with an identity so commits do not need the host's. */
 function runRepoGit(cwd: string, args: readonly string[]): string {
@@ -40,10 +40,10 @@ function tracked(code: string, path: string): string {
 }
 
 /**
- * Scripted git for a venue with a base: `main` resolves to `basesha`, and the
+ * Scripted git for a working copy with a base: `main` resolves to `basesha`, and the
  * status/numstat payloads are whatever the case under test needs.
  */
-function scriptedVenueGit(opts: { branch?: string; status?: string; numstat?: string }) {
+function scriptedWorkingCopyGit(opts: { branch?: string; status?: string; numstat?: string }) {
   return scriptedReadOnlyGit((args) => {
     if (args[0] === "branch") return `${opts.branch ?? "volli/VC-81-auto-title"}\n`;
     if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no such ref");
@@ -54,14 +54,14 @@ function scriptedVenueGit(opts: { branch?: string; status?: string; numstat?: st
   });
 }
 
-describe("venueSnapshot", () => {
+describe("measureWorkingCopy", () => {
   it("reads the branch, and calls it null on a detached HEAD", async () => {
-    const onBranch = await venueSnapshot(scriptedVenueGit({ branch: "main" }).gitAsync, {
+    const onBranch = await measureWorkingCopy(scriptedWorkingCopyGit({ branch: "main" }).gitAsync, {
       path: "/repo",
       kind: "main-checkout",
       baseBranch: null,
     });
-    const detached = await venueSnapshot(scriptedVenueGit({ branch: "" }).gitAsync, {
+    const detached = await measureWorkingCopy(scriptedWorkingCopyGit({ branch: "" }).gitAsync, {
       path: "/repo",
       kind: "main-checkout",
       baseBranch: null,
@@ -72,7 +72,7 @@ describe("venueSnapshot", () => {
   });
 
   it("partitions dirty files into the three loose states", async () => {
-    const { gitAsync } = scriptedVenueGit({
+    const { gitAsync } = scriptedWorkingCopyGit({
       status: z(
         tracked(".M", "src/edited.ts"),
         tracked("A.", "src/new.ts"),
@@ -82,7 +82,7 @@ describe("venueSnapshot", () => {
       ),
     });
 
-    const result = await venueSnapshot(gitAsync, {
+    const result = await measureWorkingCopy(gitAsync, {
       path: "/repo",
       kind: "main-checkout",
       baseBranch: null,
@@ -99,12 +99,12 @@ describe("venueSnapshot", () => {
   });
 
   it("counts a file that is both committed and dirty once, as dirty", async () => {
-    const { gitAsync } = scriptedVenueGit({
+    const { gitAsync } = scriptedWorkingCopyGit({
       status: z(tracked(".M", "src/both.ts")),
       numstat: z("10\t2\tsrc/both.ts", "4\t0\tsrc/committed.ts"),
     });
 
-    const result = await venueSnapshot(gitAsync, {
+    const result = await measureWorkingCopy(gitAsync, {
       path: "/wt",
       kind: "worktree",
       baseBranch: "main",
@@ -120,15 +120,15 @@ describe("venueSnapshot", () => {
       added: 0,
       untracked: 0,
     });
-    expect(venueFileTotal(result.value.files)).toBe(2);
+    expect(workingCopyFileTotal(result.value.files)).toBe(2);
   });
 
   it("measures lines against the base and names it", async () => {
-    const { gitAsync, calls } = scriptedVenueGit({
+    const { gitAsync, calls } = scriptedWorkingCopyGit({
       numstat: z("96\t12\tsrc/a.ts", "-\t-\tassets/logo.png", "14\t3\tsrc/b.ts"),
     });
 
-    const result = await venueSnapshot(gitAsync, {
+    const result = await measureWorkingCopy(gitAsync, {
       path: "/wt",
       kind: "worktree",
       baseBranch: "main",
@@ -146,10 +146,10 @@ describe("venueSnapshot", () => {
     expect(diff?.args).toContain("-M");
   });
 
-  it("drops the diff entirely when the venue has no base to measure against", async () => {
-    const { gitAsync, calls } = scriptedVenueGit({ status: z("? loose.md") });
+  it("drops the diff entirely when the working copy has no base to measure against", async () => {
+    const { gitAsync, calls } = scriptedWorkingCopyGit({ status: z("? loose.md") });
 
-    const result = await venueSnapshot(gitAsync, {
+    const result = await measureWorkingCopy(gitAsync, {
       path: "/repo",
       kind: "main-checkout",
       baseBranch: null,
@@ -172,7 +172,7 @@ describe("venueSnapshot", () => {
       return "";
     });
 
-    const result = await venueSnapshot(gitAsync, {
+    const result = await measureWorkingCopy(gitAsync, {
       path: "/wt",
       kind: "worktree",
       baseBranch: "gone",
@@ -184,7 +184,7 @@ describe("venueSnapshot", () => {
   });
 
   it("keeps NUL-delimited paths with spaces intact, and consumes a rename's second token", async () => {
-    const { gitAsync } = scriptedVenueGit({
+    const { gitAsync } = scriptedWorkingCopyGit({
       // `2 ` entries carry the original path as their own NUL-terminated token
       // — read as an entry of its own, `? staged rename` would become an
       // untracked file that does not exist.
@@ -195,7 +195,7 @@ describe("venueSnapshot", () => {
       ),
     });
 
-    const result = await venueSnapshot(gitAsync, {
+    const result = await measureWorkingCopy(gitAsync, {
       path: "/repo",
       kind: "main-checkout",
       baseBranch: null,
@@ -210,11 +210,11 @@ describe("venueSnapshot", () => {
   });
 
   it("reads an unmerged path as in play rather than dropping it", async () => {
-    const { gitAsync } = scriptedVenueGit({
+    const { gitAsync } = scriptedWorkingCopyGit({
       status: z("u UU N... 100644 100644 100644 100644 aaaa bbbb cccc src/conflict.ts"),
     });
 
-    const result = await venueSnapshot(gitAsync, {
+    const result = await measureWorkingCopy(gitAsync, {
       path: "/wt",
       kind: "worktree",
       baseBranch: null,
@@ -223,12 +223,12 @@ describe("venueSnapshot", () => {
     expect(result.ok && result.value.files.modified).toBe(1);
   });
 
-  it("surfaces git's own message rather than a silently empty venue", async () => {
+  it("surfaces git's own message rather than a silently empty working copy", async () => {
     const { gitAsync } = scriptedReadOnlyGit(() => {
       throw new GitError("failed", "fatal: not a git repository", ["status"]);
     });
 
-    const result = await venueSnapshot(gitAsync, {
+    const result = await measureWorkingCopy(gitAsync, {
       path: "/nowhere",
       kind: "main-checkout",
       baseBranch: null,
@@ -239,12 +239,12 @@ describe("venueSnapshot", () => {
 });
 
 /** The measurement inside a reading, or `null` for anything else. */
-function measured(result: Awaited<ReturnType<typeof readVenue>>) {
+function measured(result: Awaited<ReturnType<typeof readWorkingCopy>>) {
   if (!result.ok || result.value.state !== "measured") return null;
-  return result.value.venue;
+  return result.value.workingCopy;
 }
 
-describe("readVenue", () => {
+describe("readWorkingCopy", () => {
   let ctx: TestDb | null = null;
 
   afterEach(() => {
@@ -260,9 +260,12 @@ describe("readVenue", () => {
 
   it("measures the project's main checkout for a Session with no ticket", async () => {
     const { db } = setup();
-    const { gitAsync, calls } = scriptedVenueGit({});
+    const { gitAsync, calls } = scriptedWorkingCopyGit({});
 
-    const result = await readVenue({ db, gitAsync }, { projectId: "project", ticketId: null });
+    const result = await readWorkingCopy(
+      { db, gitAsync },
+      { projectId: "project", ticketId: null },
+    );
 
     expect(measured(result)?.kind).toBe("main-checkout");
     expect(measured(result)?.path).toBe("/repo");
@@ -280,9 +283,12 @@ describe("readVenue", () => {
         baseBranch: "main",
       }),
     );
-    const { gitAsync, calls } = scriptedVenueGit({});
+    const { gitAsync, calls } = scriptedWorkingCopyGit({});
 
-    const result = await readVenue({ db, gitAsync }, { projectId: "project", ticketId: "ticket" });
+    const result = await readWorkingCopy(
+      { db, gitAsync },
+      { projectId: "project", ticketId: "ticket" },
+    );
 
     expect(measured(result)?.kind).toBe("worktree");
     expect(measured(result)?.path).toBe("/worktrees/ticket");
@@ -293,9 +299,12 @@ describe("readVenue", () => {
   it("measures the main checkout for a ticket configured to run in it", async () => {
     const { db } = setup();
     insertTicket(db, testTicket("project", { id: "ticket", usesWorktree: false }));
-    const { gitAsync } = scriptedVenueGit({});
+    const { gitAsync } = scriptedWorkingCopyGit({});
 
-    const result = await readVenue({ db, gitAsync }, { projectId: "project", ticketId: "ticket" });
+    const result = await readWorkingCopy(
+      { db, gitAsync },
+      { projectId: "project", ticketId: "ticket" },
+    );
 
     // Exactly where the Session runtime binds such a Session — and with no
     // hairline, because a main checkout has no branch of its own to measure.
@@ -306,12 +315,15 @@ describe("readVenue", () => {
   it("answers PENDING for a worktree ticket whose checkout has not materialized (VC-286)", async () => {
     const { db } = setup();
     insertTicket(db, testTicket("project", { id: "ticket", usesWorktree: true }));
-    const { gitAsync, calls } = scriptedVenueGit({});
+    const { gitAsync, calls } = scriptedWorkingCopyGit({});
 
-    const result = await readVenue({ db, gitAsync }, { projectId: "project", ticketId: "ticket" });
+    const result = await readWorkingCopy(
+      { db, gitAsync },
+      { projectId: "project", ticketId: "ticket" },
+    );
 
     // The Session runtime refuses to bind such a ticket to the main checkout
-    // (`session-runtime/location.ts`), so measuring it here would put a venue
+    // (`session-runtime/location.ts`), so measuring it here would put a working copy
     // on screen that no Session will ever run in.
     expect(result).toEqual({ ok: true, value: { state: "pending" } });
     // And nothing is measured at all: the tree to measure does not exist yet.
@@ -321,8 +333,8 @@ describe("readVenue", () => {
   it("measures the worktree again once it materializes, with no reading in between", async () => {
     const { db } = setup();
     insertTicket(db, testTicket("project", { id: "ticket", usesWorktree: true }));
-    const before = await readVenue(
-      { db, gitAsync: scriptedVenueGit({}).gitAsync },
+    const before = await readWorkingCopy(
+      { db, gitAsync: scriptedWorkingCopyGit({}).gitAsync },
       { projectId: "project", ticketId: "ticket" },
     );
     updateTicketFields(
@@ -332,8 +344,8 @@ describe("readVenue", () => {
       1,
     );
 
-    const after = await readVenue(
-      { db, gitAsync: scriptedVenueGit({}).gitAsync },
+    const after = await readWorkingCopy(
+      { db, gitAsync: scriptedWorkingCopyGit({}).gitAsync },
       { projectId: "project", ticketId: "ticket" },
     );
 
@@ -355,9 +367,12 @@ describe("readVenue", () => {
       }),
     );
     updateTicketFields(db, "ticket", { worktreePath: null }, 1);
-    const { gitAsync } = scriptedVenueGit({});
+    const { gitAsync } = scriptedWorkingCopyGit({});
 
-    const result = await readVenue({ db, gitAsync }, { projectId: "project", ticketId: "ticket" });
+    const result = await readWorkingCopy(
+      { db, gitAsync },
+      { projectId: "project", ticketId: "ticket" },
+    );
 
     expect(result).toEqual({ ok: true, value: { state: "pending" } });
   });
@@ -367,21 +382,21 @@ describe("readVenue", () => {
     const other = testProject({ id: "other", path: "/other", ticketPrefix: "OT" });
     insertProject(db, other);
     insertTicket(db, testTicket(other.id, { id: "foreign" }));
-    const { gitAsync } = scriptedVenueGit({});
+    const { gitAsync } = scriptedWorkingCopyGit({});
 
     await expect(
-      readVenue({ db, gitAsync }, { projectId: "missing", ticketId: null }),
+      readWorkingCopy({ db, gitAsync }, { projectId: "missing", ticketId: null }),
     ).resolves.toEqual({ ok: false, error: "Unknown project" });
     await expect(
-      readVenue({ db, gitAsync }, { projectId: "project", ticketId: "missing" }),
+      readWorkingCopy({ db, gitAsync }, { projectId: "project", ticketId: "missing" }),
     ).resolves.toEqual({ ok: false, error: "Unknown ticket" });
     await expect(
-      readVenue({ db, gitAsync }, { projectId: "project", ticketId: "foreign" }),
+      readWorkingCopy({ db, gitAsync }, { projectId: "project", ticketId: "foreign" }),
     ).resolves.toEqual({ ok: false, error: "Ticket belongs to another project" });
   });
 });
 
-describe("venueSnapshot — against real git", () => {
+describe("measureWorkingCopy — against real git", () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {
@@ -417,7 +432,7 @@ describe("venueSnapshot — against real git", () => {
     writeFileSync(join(dir, "scratch.md"), "notes\n");
 
     const { runGitCapturingAsync } = await import("./git");
-    const result = await venueSnapshot(runGitCapturingAsync, {
+    const result = await measureWorkingCopy(runGitCapturingAsync, {
       path: dir,
       kind: "worktree",
       baseBranch: "main",
@@ -432,7 +447,7 @@ describe("venueSnapshot — against real git", () => {
       added: 1, // staged-new.ts
       untracked: 1, // scratch.md
     });
-    expect(venueFileTotal(result.value.files)).toBe(5);
+    expect(workingCopyFileTotal(result.value.files)).toBe(5);
     expect(result.value.diff?.base).toBe("main");
     expect(result.value.diff?.added).toBeGreaterThan(0);
   });

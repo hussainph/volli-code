@@ -863,7 +863,7 @@ export function TicketDetail({
    * spelled absolutely) stays here as a file tab; another ticket's worktree
    * opens THAT ticket's Ticket view with the tab in place; a path no checkout
    * contains toasts instead of opening a pane whose only content is an error.
-   * `@file` chips pass through unchanged (already venue-relative). Worktrees
+   * `@file` chips pass through unchanged (already working-copy-relative). Worktrees
    * and the project path are read at click time so this callback — handed to
    * every transcript turn — keeps a stable identity.
    */

@@ -956,8 +956,8 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     },
     invalidError: "Invalid usage query",
   },
-  "volli:venue-snapshot": {
-    guard: (args): args is IpcArgs<"volli:venue-snapshot"> => {
+  "volli:working-copy-snapshot": {
+    guard: (args): args is IpcArgs<"volli:working-copy-snapshot"> => {
       if (args.length !== 1) return false;
       const [input] = args;
       if (!isRecord(input) || typeof input["projectId"] !== "string") return false;
@@ -966,6 +966,7 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       // from one that said "no ticket".
       return input["ticketId"] === null || typeof input["ticketId"] === "string";
     },
+    // Shipped wording; it can reach the Home card's error tooltip.
     invalidError: "Invalid venue",
   },
   "volli:session-rename": {

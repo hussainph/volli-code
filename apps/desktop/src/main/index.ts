@@ -21,6 +21,7 @@ import { realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  LOCAL_RUNNER,
   BLOB_URL_SCHEME,
   CHAT_DRAFTS_APP_STATE_KEY,
   chatDraftAttachmentHashes,
@@ -1189,7 +1190,7 @@ const appStartup = app.whenReady().then(async () => {
     store: { kind: "local", host: hostCore },
     ports: hostPorts,
     version: app.getVersion(),
-    venue: { id: "local", kind: "local" },
+    venue: LOCAL_RUNNER,
     homeDir: fsDeps.homeDir,
     binDir: runtimePaths.binDir,
     env: process.env,

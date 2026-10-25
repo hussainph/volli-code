@@ -6,8 +6,8 @@
  * block asks about the Session in front, Home's Project block asks about the
  * project, and the Ticket rail's card asks about a Ticket. A fetch per surface
  * would mean several indexed reads of the same projection on one frame, and
- * answers that can disagree — the same argument `stores/venue.ts` already
- * settled for venue readings.
+ * answers that can disagree — the same argument `stores/working-copy.ts` already
+ * settled for working copy readings.
  *
  * PULLED, NOT PUSHED, and the push channel is deliberately absent rather than
  * missing. Usage only changes when a turn settles, which the renderer already
@@ -22,7 +22,7 @@
  * cost landed would say otherwise. That is enforced where the fact is written,
  * not here — this module only reads.
  *
- * The error is kept rather than toasted, like the venue's. A rollup that
+ * The error is kept rather than toasted, like the working copy's. A rollup that
  * cannot be read is a block that does not appear; a toast about SQLite over
  * the rail someone is working in would be the loudest thing on screen for the
  * least useful reason.

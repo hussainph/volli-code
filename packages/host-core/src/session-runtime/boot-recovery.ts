@@ -27,9 +27,10 @@
  * later attach is a fresh binding of its own.
  */
 import {
+  LOCAL_RUNNER,
   logErrorSummary,
   type LogErrorSummary,
-  type SessionExecutionVenue,
+  type RunnerIdentity,
   type SessionInteraction,
   type SessionNativeDetail,
   type SessionObservation,
@@ -41,7 +42,7 @@ import { STRUCTURED_ADAPTER_ID } from "./sessions";
 export interface BootRecoveryAttachment {
   readonly id: string;
   readonly adapterId: string;
-  readonly venue: SessionExecutionVenue;
+  readonly venue: RunnerIdentity;
   readonly status: "open" | "failed" | "closed";
 }
 
@@ -76,9 +77,9 @@ export interface BootRecoveryEngine {
 export interface BootRecoveryOptions {
   engine: BootRecoveryEngine;
   /** Only this host's bindings are owned by its restart. Defaults to desktop. */
-  venue?: SessionExecutionVenue;
+  venue?: RunnerIdentity;
   /** Host-specific upgrade ownership; never broadens ordinary runtime authority. */
-  ownsLegacyVenue?(venue: SessionExecutionVenue): boolean;
+  ownsLegacyRunner?(runner: RunnerIdentity): boolean;
   /** Rehydrate and reconcile a structured attachment that lost its process mid-turn. */
   reconcile(input: { sessionId: string; attachmentId: string }): Promise<void>;
   /**
@@ -173,10 +174,10 @@ export interface BootRecoveredTurns {
  */
 export async function closeStaleAttachments(options: BootRecoveryOptions): Promise<number> {
   let closed = 0;
-  const venue = options.venue ?? { id: "local", kind: "local" };
+  const venue = options.venue ?? LOCAL_RUNNER;
   const owns = (attachment: BootRecoveryAttachment) =>
     (attachment.venue.id === venue.id && attachment.venue.kind === venue.kind) ||
-    (options.ownsLegacyVenue?.(attachment.venue) ?? false);
+    (options.ownsLegacyRunner?.(attachment.venue) ?? false);
   // Shutdown is not a failure: once the host is closing, only the attachment
   // already in flight may finish, and a reconcile unblocked by that close is a
   // stop, not a lost sidecar — no durable fact is recorded from it.
@@ -341,7 +342,7 @@ function recoveryProvenance(
         bootRecovery: { reason: detail.reason, error: errorDetail(detail.error) },
       },
     },
-    venue: options.venue ?? { id: "local", kind: "local" },
+    venue: options.venue ?? LOCAL_RUNNER,
   };
 }
 

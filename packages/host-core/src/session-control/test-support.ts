@@ -8,7 +8,7 @@
  * beside the ledger and must never be imported by production modules.
  */
 import type Database from "better-sqlite3";
-import { EMPTY_SESSION_USAGE_SUMMARY, roleImpliedByTicket } from "@volli/shared";
+import { LOCAL_RUNNER, EMPTY_SESSION_USAGE_SUMMARY, roleImpliedByTicket } from "@volli/shared";
 import type { SessionNativeReference, SessionRecord, SessionRole } from "@volli/shared";
 import { internSessionEventProvenance } from "../db/session-event-provenance";
 import {
@@ -19,7 +19,7 @@ import {
 
 const TEST_PROVENANCE = JSON.stringify({
   source: { kind: "system", id: "test-fixture", detail: null },
-  venue: { id: "local", kind: "local" },
+  venue: LOCAL_RUNNER,
 });
 
 function attachmentIdFor(sessionId: string): string {
@@ -79,7 +79,7 @@ export function insertSession(db: Database.Database, record: SessionRecord): voi
     id: attachmentId,
     sessionId: record.id,
     adapterId: "terminal",
-    venue: { id: "local", kind: "local" as const },
+    venue: LOCAL_RUNNER,
     continuity: "fresh" as const,
     native: terminalNativeReference(detail),
   };
@@ -245,7 +245,7 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
         id: attachment.id,
         sessionId,
         adapterId: "terminal",
-        venue: { id: "local", kind: "local" },
+        venue: LOCAL_RUNNER,
         continuity: "fresh",
         native,
         // A terminal companion runs no gate; see `pty/manager.ts`.

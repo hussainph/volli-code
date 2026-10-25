@@ -20,7 +20,7 @@
  * Agent Tool Surface = capability tools ∪ Role verb bundle ∪ Session verb grants
  * ```
  *
- * - **capability tools** — the coding tools this venue loads, plus the
+ * - **capability tools** — the coding tools this runner loads, plus the
  *   port-gated `ask_user` / `web_fetch` / `web_search`. A port *is* the
  *   capability: a Session handed nowhere to send a question is offered no
  *   question tool, rather than one that fails when called.
@@ -172,7 +172,7 @@ const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> =
  *
  * The bundle map above decides the verb half; this decides the other half, and
  * it exists for one Role. A Board Session and a Ticket Session are bounded
- * by nothing but their profile — every coding tool the venue loads and every
+ * by nothing but their profile — every coding tool the runner loads and every
  * port the host wired. A Subagent Session is bounded twice more: by this
  * policy, and by its parent's own frozen surface (`within`, below).
  *
@@ -239,9 +239,9 @@ export function isSessionToolId(value: unknown): value is SessionToolId {
   );
 }
 
-/** What a venue can actually answer, as membership rather than as ports. */
+/** What a runner can actually answer, as membership rather than as ports. */
 export interface AgentToolCapabilities {
-  /** The coding tools this venue loads, in the order it offers them. */
+  /** The coding tools this runner loads, in the order it offers them. */
   coding: readonly CodingToolId[];
   /**
    * The non-coding tools whose port this Session was given. Membership only:

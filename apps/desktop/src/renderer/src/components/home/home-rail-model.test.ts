@@ -3,7 +3,7 @@ import type {
   ChatSessionRecord,
   SessionHarnessState,
   SessionRecord,
-  VenueSnapshot,
+  WorkingCopyMeasurement,
 } from "@volli/shared";
 
 import { WORKING_WINDOW_MS, type SessionTab } from "@renderer/stores/sessions";
@@ -22,7 +22,7 @@ import {
   nextHomeSessionStatusChangeAt,
   partitionHomeSessionRows,
   sanitizeHomeRailMode,
-  venuePathTail,
+  workingCopyPathTail,
   type HomeLivePane,
   type HomeTerminalPulse,
 } from "./home-rail-model";
@@ -173,8 +173,8 @@ function terminalRow(row: SessionRecord, over: Partial<HomeTerminalPulse> = {}) 
   return { state: built?.state, label: built?.stateLabel, live: built?.live };
 }
 
-/** One reading of the Main checkout, as the venue store holds it. */
-function venue(over: Partial<VenueSnapshot> = {}): VenueSnapshot {
+/** One reading of the Main checkout, as the working copy store holds it. */
+function workingCopy(over: Partial<WorkingCopyMeasurement> = {}): WorkingCopyMeasurement {
   return {
     kind: "main-checkout",
     path: "/code/volli-code",
@@ -625,13 +625,13 @@ describe("homeCheckoutGlance", () => {
   it("says nothing before the first read has landed", () => {
     // The row then shows the branch alone, which is true — rather than a
     // placeholder fact, which would not be.
-    expect(homeCheckoutGlance({ venue: null, failed: false })).toBeNull();
+    expect(homeCheckoutGlance({ workingCopy: null, failed: false })).toBeNull();
   });
 
   it("leads with the fault, which outranks every other fact", () => {
     // Every other fact about the tree is unreadable while it stands, and the
     // body under the row is where its Retry lives.
-    expect(homeCheckoutGlance({ venue: venue(), failed: true })).toEqual({
+    expect(homeCheckoutGlance({ workingCopy: workingCopy(), failed: true })).toEqual({
       phrase: "Unreadable",
       tone: "error",
     });
@@ -643,7 +643,7 @@ describe("homeCheckoutGlance", () => {
     // would be lit nearly always.
     expect(
       homeCheckoutGlance({
-        venue: venue({ files: { committed: 9, modified: 2, added: 1, untracked: 3 } }),
+        workingCopy: workingCopy({ files: { committed: 9, modified: 2, added: 1, untracked: 3 } }),
         failed: false,
       }),
     ).toEqual({ phrase: "6 uncommitted", tone: "idle" });
@@ -652,7 +652,7 @@ describe("homeCheckoutGlance", () => {
   it("says a clean tree is clean — committed work is not loose", () => {
     expect(
       homeCheckoutGlance({
-        venue: venue({ files: { committed: 40, modified: 0, added: 0, untracked: 0 } }),
+        workingCopy: workingCopy({ files: { committed: 40, modified: 0, added: 0, untracked: 0 } }),
         failed: false,
       }),
     ).toEqual({ phrase: "Clean", tone: "idle" });
@@ -665,25 +665,25 @@ describe("HOME_SESSION_FILTER_THRESHOLD", () => {
   });
 });
 
-describe("venuePathTail", () => {
-  it("keeps the tail, which is the part that identifies the venue", () => {
-    expect(venuePathTail("/Users/p/Desktop/code/volli-code")).toBe("…/code/volli-code");
-    expect(venuePathTail("/Users/p/.volli/worktrees/volli-code-abc/VC-81-auto-title")).toBe(
+describe("workingCopyPathTail", () => {
+  it("keeps the tail, which is the part that identifies the working copy", () => {
+    expect(workingCopyPathTail("/Users/p/Desktop/code/volli-code")).toBe("…/code/volli-code");
+    expect(workingCopyPathTail("/Users/p/.volli/worktrees/volli-code-abc/VC-81-auto-title")).toBe(
       "…/volli-code-abc/VC-81-auto-title",
     );
   });
 
   it("leaves a path that is already short enough alone", () => {
-    expect(venuePathTail("/repo")).toBe("/repo");
-    expect(venuePathTail("/code/repo")).toBe("/code/repo");
-    expect(venuePathTail("")).toBe("");
+    expect(workingCopyPathTail("/repo")).toBe("/repo");
+    expect(workingCopyPathTail("/code/repo")).toBe("/code/repo");
+    expect(workingCopyPathTail("")).toBe("");
   });
 
   it("survives a trailing slash", () => {
-    expect(venuePathTail("/Users/p/code/volli-code/")).toBe("…/code/volli-code");
+    expect(workingCopyPathTail("/Users/p/code/volli-code/")).toBe("…/code/volli-code");
   });
 
   it("honours a caller's own depth", () => {
-    expect(venuePathTail("/a/b/c/d", 1)).toBe("…/d");
+    expect(workingCopyPathTail("/a/b/c/d", 1)).toBe("…/d");
   });
 });

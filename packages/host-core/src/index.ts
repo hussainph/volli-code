@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
 import type { ConnectivityPort, PiModelAccess } from "@volli/agent-runtime";
-import type { SessionExecutionVenue } from "@volli/shared";
+import type { RunnerIdentity } from "@volli/shared";
 import { openVolliDb } from "./db";
 import { createWorktreeRuntime, type WorktreeRuntime } from "./worktree-runtime";
 import { createWorktreeReadService, type WorktreeReadService } from "./worktree-reads";
@@ -83,7 +83,7 @@ export interface HostCoreOptions {
   /** Lazy so model/catalog construction keeps the host's former boot point. */
   readonly modelAccess?: () => PiModelAccess;
   readonly webKeySealing?: WebKeySealingOptions;
-  readonly venue?: (db: Database.Database) => SessionExecutionVenue;
+  readonly venue?: (db: Database.Database) => RunnerIdentity;
   readonly secretStore?: SecretStore;
   readonly secretKey?: SecretKeyPort;
   readonly terminal?: () => Pick<

@@ -36,7 +36,7 @@ import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useThemeStore } from "@renderer/stores/theme";
 import { useUiStore } from "@renderer/stores/ui";
-import { useVenueStore } from "@renderer/stores/venue";
+import { useWorkingCopyStore } from "@renderer/stores/working-copy";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 import { restoreRemoteSelection } from "./restore-remote-selection";
@@ -111,15 +111,15 @@ export type BootResult = { ok: true } | { ok: false; error: string };
  * agents commenting once a turn cost a dozen whole-board reads a turn — and the
  * three rules above replace it. VC-387 took the measurements.
  *
- * IT IS ALSO THE VENUE BOUNDARY (VC-286). A `worktree` change is the one kind
+ * IT IS ALSO THE WORKING COPY BOUNDARY (VC-286). A `worktree` change is the one kind
  * that moves WHERE a ticket's Session runs — materialized, removed, recreated,
- * or a creation that failed — so the ticket's cached venue reading is discarded
+ * or a creation that failed — so the ticket's cached working copy reading is discarded
  * on the way in and read again on the way out. Both halves matter and so does
  * their order: discarding first takes the old checkout off screen at the moment
  * it stopped being true, and re-reading only after the hydrate means the new
  * reading is of the checkout the board now names. Every other kind leaves the
- * venue alone; a comment does not move a checkout, and blanking a caption to
- * redraw the identical venue is a flicker with nothing behind it.
+ * working copy alone; a comment does not move a checkout, and blanking a caption to
+ * redraw the identical working copy is a flicker with nothing behind it.
  */
 export async function refreshPlanningData(
   change: { ticketId?: string; projectId?: string; kind?: DataChangeKind } = {},
@@ -130,7 +130,7 @@ export async function refreshPlanningData(
   const protocol = boardProtocol();
   if (protocol !== null) return refreshProjectList(change, gateway, protocol.sync);
   const movedCheckout = change.kind === "worktree";
-  if (movedCheckout) useVenueStore.getState().invalidateTickets(change.ticketId);
+  if (movedCheckout) useWorkingCopyStore.getState().invalidateTickets(change.ticketId);
   if (!movesBoardData(change.kind)) {
     // Nothing the board holds can have moved, so there is no read to make. The
     // signal still goes out: a comment reaches the screen through the Activity
@@ -184,9 +184,9 @@ export async function refreshPlanningData(
     throw error;
   } finally {
     // In a `finally` because a failed hydrate is not a reason to leave a
-    // discarded venue waiting on a read nobody will make: the checkout moved
+    // discarded working copy waiting on a read nobody will make: the checkout moved
     // whatever SQLite just said about the board.
-    if (movedCheckout) void useVenueStore.getState().refreshStale();
+    if (movedCheckout) void useWorkingCopyStore.getState().refreshStale();
   }
 }
 
@@ -300,8 +300,8 @@ export async function startBoardProtocolIfEnabled(
       adoptProject: (project) => useProjectsStore.getState().adoptProject(project),
       notePlanningChange: (change) => useBoardStore.getState().notePlanningChange(change),
       checkoutMoved: (ticketId) => {
-        useVenueStore.getState().invalidateTickets(ticketId);
-        void useVenueStore.getState().refreshStale();
+        useWorkingCopyStore.getState().invalidateTickets(ticketId);
+        void useWorkingCopyStore.getState().refreshStale();
       },
       failed: (message) => toastError(message),
       // Not a failure: the write keeps being sent under its id until the host answers.

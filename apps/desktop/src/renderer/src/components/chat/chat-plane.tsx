@@ -267,7 +267,7 @@ export interface ChatPlaneProps {
    *
    * The Session's SCOPE, handed down rather than looked up: both hosts already
    * know it (Home's is ticketless by construction, a Ticket view's is the
-   * ticket it is drawing), and the empty state needs it to know which venue the
+   * ticket it is drawing), and the empty state needs it to know which Working copy the
    * Session stands in and which drawings that scope can offer.
    */
   ticketId: string | null;

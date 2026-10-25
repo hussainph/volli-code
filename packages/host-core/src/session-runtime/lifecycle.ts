@@ -11,7 +11,7 @@ import {
   logErrorSummary,
   type LogErrorSummary,
   type SessionProjection,
-  type SessionExecutionVenue,
+  type RunnerIdentity,
 } from "@volli/shared";
 import { isLiveHost, type HostCore, type HostCorePorts } from "../index";
 import { shutdownNativeSessions } from "../host-shutdown";
@@ -124,9 +124,9 @@ export interface SessionRuntimeLifecycle<Services> {
 
 export function createSessionRuntimeLifecycle<Services>(options: {
   host: HostCore;
-  venue?: SessionExecutionVenue;
+  venue?: RunnerIdentity;
   /** Upgrade-only ownership supplied by the host, not the executor. */
-  ownsLegacyVenue?(venue: SessionExecutionVenue): boolean;
+  ownsLegacyRunner?(runner: RunnerIdentity): boolean;
   ports: Pick<HostCorePorts, "power" | "attention" | "events" | "log">;
   runtime: HostedSessionRuntime | null;
   /** A transport constructed from ready services may bind after recovery. */
@@ -256,9 +256,9 @@ export function createSessionRuntimeLifecycle<Services>(options: {
         const closedAttachments = await closeStaleAttachments({
           engine: sessionEngine,
           ...(options.venue === undefined ? {} : { venue: options.venue }),
-          ...(options.ownsLegacyVenue === undefined
+          ...(options.ownsLegacyRunner === undefined
             ? {}
-            : { ownsLegacyVenue: options.ownsLegacyVenue }),
+            : { ownsLegacyRunner: options.ownsLegacyRunner }),
           shouldStop: () => closing,
           reconcile: (input) =>
             runtime === null

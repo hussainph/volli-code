@@ -25,6 +25,7 @@
  */
 import { describe, expect, it } from "vite-plus/test";
 import {
+  LOCAL_RUNNER,
   createSessionProjectionCheckpoint,
   type CommandReceipt,
   type SessionAttachment,
@@ -966,7 +967,7 @@ function attachment(sessionId: string, attachmentId: string): SessionAttachment 
     id: attachmentId,
     sessionId,
     adapterId: "terminal",
-    venue: { id: "local", kind: "local" },
+    venue: LOCAL_RUNNER,
     continuity: "fresh",
     native: null,
     authority: null,

@@ -756,7 +756,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
    *  • absolute under a ticket's worktree → that ticket's file tab, and its
    *    workspace brought to front (the transcript pointed there by name);
    *  • absolute under the main checkout → relativized into a Home File tab;
-   *  • relative → this chat's own venue, the main checkout, as before;
+   *  • relative → this chat's own working copy, the main checkout, as before;
    *  • anything else → a toast, and NO navigation — never a pane whose only
    *    content is an error.
    *
@@ -872,7 +872,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             sessionId={chatSessionId}
             projectId={selected.id}
             // Ticketless by construction: Home hosts the project's OWN
-            // Sessions, which is what makes their venue the main checkout.
+            // Sessions, which is what makes their working copy the main checkout.
             ticketId={null}
             onOpenFile={openProjectFile}
             visible={visible}

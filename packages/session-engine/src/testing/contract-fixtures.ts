@@ -1,11 +1,12 @@
 import { afterEach } from "vite-plus/test";
-import type {
-  Session,
-  SessionEventProvenance,
-  SessionLedger,
-  SessionOrigin,
-  SessionProjectionEvent,
-  SessionUsage,
+import {
+  LOCAL_RUNNER,
+  type Session,
+  type SessionEventProvenance,
+  type SessionLedger,
+  type SessionOrigin,
+  type SessionProjectionEvent,
+  type SessionUsage,
 } from "@volli/shared";
 import {
   createSessionEngine,
@@ -16,7 +17,7 @@ import {
 /** The audit door every contract fact comes through. */
 export const contractProvenance: SessionEventProvenance = {
   source: { kind: "system", id: "contract", detail: null },
-  venue: { id: "local", kind: "local" },
+  venue: LOCAL_RUNNER,
 };
 
 /** {@link contractProvenance}, naming the origin a trusted door records for a command. */

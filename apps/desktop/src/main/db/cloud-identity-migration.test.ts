@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
-import type { SessionExecutionVenue } from "@volli/shared";
+import type { RunnerIdentity } from "@volli/shared";
 import {
   insertSession,
   openRawDb,
@@ -50,15 +50,15 @@ const IDENTITY_TABLES = IDENTITY_OBJECTS.filter(({ type }) => type === "table").
 );
 
 /**
- * A worker's kind is the `SessionExecutionVenue` kind its attachments record.
- * Adding a venue kind fails to compile here until someone decides whether a
+ * A worker's kind is the `RunnerIdentity` kind its attachments record.
+ * Adding a runner kind fails to compile here until someone decides whether a
  * worker can have it, because the column's CHECK cannot be altered in place.
  */
 const WORKER_KINDS = {
   local: true,
   remote: true,
   cloud: true,
-} as const satisfies Record<Exclude<SessionExecutionVenue["kind"], "unknown">, true>;
+} as const satisfies Record<Exclude<RunnerIdentity["kind"], "unknown">, true>;
 
 let directory: string | undefined;
 let db: Database.Database | undefined;

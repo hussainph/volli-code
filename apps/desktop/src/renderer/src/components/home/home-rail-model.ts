@@ -3,7 +3,7 @@
  *
  * The Ticket view's rail one scope up, and deliberately its own enum
  * rather than a widening of `TicketRailMode`: the two rails answer about
- * different things (a ticket's changes and files against a project's venue and
+ * different things (a ticket's changes and files against a project's working copy and
  * its own Sessions), and `ticket-rail-model.ts` owns a persisted vocabulary
  * with its own retired pages to keep readable. One store key each, so neither
  * can rehydrate the other's page.
@@ -15,11 +15,11 @@
  */
 import {
   isListableSession,
-  venueLooseCount,
+  workingCopyLooseCount,
   type ChatSessionRecord,
   type SessionHarnessState,
   type SessionRecord,
-  type VenueSnapshot,
+  type WorkingCopyMeasurement,
 } from "@volli/shared";
 
 import { SESSION_ROSTER_FILTER_THRESHOLD } from "@renderer/components/ticket/session-history";
@@ -510,12 +510,12 @@ export interface HomeCheckoutGlance {
 }
 
 export function homeCheckoutGlance(input: {
-  venue: VenueSnapshot | null;
+  workingCopy: WorkingCopyMeasurement | null;
   failed: boolean;
 }): HomeCheckoutGlance | null {
   if (input.failed) return { phrase: "Unreadable", tone: "error" };
-  if (input.venue === null) return null;
-  const loose = venueLooseCount(input.venue.files);
+  if (input.workingCopy === null) return null;
+  const loose = workingCopyLooseCount(input.workingCopy.files);
   // "Uncommitted" is the word the Ticket footer uses for the same condition;
   // the count rides it here because Home's body has no state strip to carry it.
   if (loose > 0) return { phrase: `${loose} uncommitted`, tone: "idle" };
@@ -523,23 +523,26 @@ export function homeCheckoutGlance(input: {
 }
 
 /**
- * How many trailing segments of a venue path the rail's card shows.
+ * How many trailing segments of a working copy path the rail's card shows.
  *
- * Two, because that is what tells the two venues apart: a main checkout ends
+ * Two, because that is what tells the two working copies apart: a main checkout ends
  * `…/code/volli-code` and a worktree ends `…/volli-code-f3732f45/VC-81-auto-title`,
  * and the segment above the last is what says which kind of place this is.
  */
-const VENUE_PATH_SEGMENTS = 2;
+const WORKING_COPY_PATH_SEGMENTS = 2;
 
 /**
- * A venue path shortened from the FRONT.
+ * A working copy path shortened from the FRONT.
  *
  * `truncate` cuts the end, which on a path is precisely the part worth reading:
  * `/Users/phalasiya/Desktop/cod…` names the person and hides the project. Every
  * path this card shows starts with the same home prefix and differs at its
  * tail, so the tail is what it shows — with the whole path one hover away.
  */
-export function venuePathTail(path: string, segments: number = VENUE_PATH_SEGMENTS): string {
+export function workingCopyPathTail(
+  path: string,
+  segments: number = WORKING_COPY_PATH_SEGMENTS,
+): string {
   const parts = path.split("/").filter((part) => part.length > 0);
   if (parts.length <= segments) return path;
   return `…/${parts.slice(-segments).join("/")}`;

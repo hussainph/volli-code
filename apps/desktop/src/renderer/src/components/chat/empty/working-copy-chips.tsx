@@ -2,7 +2,7 @@
  * The caption under an empty chat's drawing: two chips, and no sentences
  * (VC-55).
  *
- * What a chip says is a value, not an explanation — the venue's kind and its
+ * What a chip says is a value, not an explanation — the working copy's kind and its
  * branch. Prose was explored and killed: "your working tree — not isolated" is
  * a description of the thing you are already looking at, and CLAUDE.md's "let
  * controls talk" holds here too. If a fact matters, it is drawn.
@@ -23,13 +23,13 @@
  */
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
-import type { VenueSnapshot } from "@volli/shared";
+import type { WorkingCopyMeasurement } from "@volli/shared";
 
 import { ValueReveal } from "@renderer/components/ui/value-reveal";
 
-/** The word for each venue kind. A noun; the drawing above carries the rest. */
-export function venueKindLabel(venue: VenueSnapshot): string {
-  return venue.kind === "main-checkout" ? "Main checkout" : "Worktree";
+/** The word for each working copy kind. A noun; the drawing above carries the rest. */
+export function workingCopyKindLabel(workingCopy: WorkingCopyMeasurement): string {
+  return workingCopy.kind === "main-checkout" ? "Main checkout" : "Worktree";
 }
 
 function ScopeChip({
@@ -62,17 +62,21 @@ function ScopeChip({
   );
 }
 
-export function VenueChips({ venue }: { venue: VenueSnapshot }) {
+export function WorkingCopyChips({ workingCopy }: { workingCopy: WorkingCopyMeasurement }) {
   return (
     <div className="flex flex-wrap items-center justify-center gap-1">
-      <ScopeChip icon={FolderOpenIcon} term={venueKindLabel(venue)} full={venue.path}>
-        {venueKindLabel(venue)}
+      <ScopeChip
+        icon={FolderOpenIcon}
+        term={workingCopyKindLabel(workingCopy)}
+        full={workingCopy.path}
+      >
+        {workingCopyKindLabel(workingCopy)}
       </ScopeChip>
       {/* A detached HEAD has no branch to name, and inventing one ("HEAD",
           "none") would be naming a thing that is not there. */}
-      {venue.branch === null ? null : (
-        <ScopeChip icon={GitBranchIcon} term="Branch" full={venue.branch}>
-          {venue.branch}
+      {workingCopy.branch === null ? null : (
+        <ScopeChip icon={GitBranchIcon} term="Branch" full={workingCopy.branch}>
+          {workingCopy.branch}
         </ScopeChip>
       )}
     </div>

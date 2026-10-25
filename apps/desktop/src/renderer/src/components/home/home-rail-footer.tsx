@@ -23,7 +23,7 @@
  * the Ticket rail's worktree body: a reader who keeps the checkout open keeps
  * it open at both scopes.
  *
- * IT READS THE VENUE, and only the venue. `stores/venue.ts` is the one place
+ * IT READS THE WORKING COPY, and only the working copy. `stores/working-copy.ts` is the one place
  * this question is answered — the empty chat draws the same reading — so a
  * second git read here would be two answers about one tree on one frame. The
  * read is PULLED, so the footer's own Retry is the recovery, exactly as the
@@ -32,7 +32,7 @@
  * IT DRAWS TWO READ STATES, NOT FIVE, and that is the store's shape rather
  * than an omission. `rail-read-feedback.ts` distinguishes a refresh over rows
  * already on screen from a first read, because a list store keeps a `pending`
- * flag beside its last-good rows. The venue store deliberately keeps no such
+ * flag beside its last-good rows. The working copy store deliberately keeps no such
  * flag: only the FIRST read announces itself, and a later one leaves the
  * reading on screen until it is replaced, so "refreshing" is not a state this
  * surface can be in. What is left is the pair the store can actually be in —
@@ -42,10 +42,10 @@
 import * as React from "react";
 import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
 
-import { venueLooseCount } from "@volli/shared";
+import { workingCopyLooseCount } from "@volli/shared";
 
-import { venueKindLabel } from "@renderer/components/chat/empty/venue-chips";
-import { homeCheckoutGlance, venuePathTail } from "@renderer/components/home/home-rail-model";
+import { workingCopyKindLabel } from "@renderer/components/chat/empty/working-copy-chips";
+import { homeCheckoutGlance, workingCopyPathTail } from "@renderer/components/home/home-rail-model";
 import {
   RAIL_CHECKOUT_FACT,
   RAIL_CHECKOUT_IDENTITY,
@@ -65,24 +65,30 @@ import { StatusDot } from "@renderer/components/ui/status-dot";
 import { ValueReveal } from "@renderer/components/ui/value-reveal";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
-import { useVenueStore, venueKey, type VenueEntry } from "@renderer/stores/venue";
+import {
+  useWorkingCopyStore,
+  workingCopyKey,
+  type WorkingCopyEntry,
+} from "@renderer/stores/working-copy";
 
 export function HomeCheckoutFooter({ projectId }: { projectId: string }) {
-  const venue = useVenueStore((state) => state.byScope[venueKey(projectId, null)]);
+  const workingCopy = useWorkingCopyStore(
+    (state) => state.byScope[workingCopyKey(projectId, null)],
+  );
   const open = useUiStore((state) => state.railFolds.worktree);
   React.useEffect(() => {
-    void useVenueStore.getState().ensure(projectId, null);
+    void useWorkingCopyStore.getState().ensure(projectId, null);
   }, [projectId]);
   // `refresh`, not `ensure`: `ensure` answers from the cache, so a retry routed
   // through it would do nothing on exactly the surface that offers it.
   const retry = React.useCallback(
-    () => void useVenueStore.getState().refresh(projectId, null),
+    () => void useWorkingCopyStore.getState().refresh(projectId, null),
     [projectId],
   );
 
-  const snapshot = venue?.status === "ready" ? venue.venue : null;
-  const failed = venue?.status === "error";
-  const glance = homeCheckoutGlance({ venue: snapshot, failed });
+  const snapshot = workingCopy?.status === "ready" ? workingCopy.workingCopy : null;
+  const failed = workingCopy?.status === "error";
+  const glance = homeCheckoutGlance({ workingCopy: snapshot, failed });
   // The branch is the identity, and a detached HEAD has none — the word is the
   // whole value then, exactly as the card said it.
   const branch = snapshot === null ? null : (snapshot.branch ?? "detached");
@@ -102,7 +108,7 @@ export function HomeCheckoutFooter({ projectId }: { projectId: string }) {
               RAIL_PANEL_INSET,
             )}
           >
-            <CheckoutBody venue={venue} onRetry={retry} />
+            <CheckoutBody workingCopy={workingCopy} onRetry={retry} />
           </div>
         </RailFoldBody>
         <div className={RAIL_CHECKOUT_ROW}>
@@ -124,7 +130,7 @@ export function HomeCheckoutFooter({ projectId }: { projectId: string }) {
               <div className="flex flex-col gap-1">
                 <SectionHeading as="p">Checkout</SectionHeading>
                 <span className="px-2 text-ui text-foreground">
-                  {snapshot === null ? "Reading…" : venueKindLabel(snapshot)}
+                  {snapshot === null ? "Reading…" : workingCopyKindLabel(snapshot)}
                 </span>
               </div>
               <div className="flex flex-col gap-1">
@@ -175,8 +181,18 @@ export function HomeCheckoutFooter({ projectId }: { projectId: string }) {
  * is the fold's version of the heading mark and what the fold re-measures
  * around.
  */
-function CheckoutBody({ venue, onRetry }: { venue: VenueEntry | undefined; onRetry(): void }) {
-  if (venue === undefined || venue.status === "loading" || venue.status === "resolving") {
+function CheckoutBody({
+  workingCopy,
+  onRetry,
+}: {
+  workingCopy: WorkingCopyEntry | undefined;
+  onRetry(): void;
+}) {
+  if (
+    workingCopy === undefined ||
+    workingCopy.status === "loading" ||
+    workingCopy.status === "resolving"
+  ) {
     return (
       <div aria-hidden data-testid="home-checkout-loading" className="flex flex-col gap-2">
         {["w-3/5", "w-2/5"].map((width) => (
@@ -185,13 +201,13 @@ function CheckoutBody({ venue, onRetry }: { venue: VenueEntry | undefined; onRet
       </div>
     );
   }
-  if (venue.status === "error") {
+  if (workingCopy.status === "error") {
     // The rail's fault rule: the sentence a person needs on the row, the
     // diagnostic on `title`, and the one action that fixes it beside them.
     return (
       <div
         role="alert"
-        title={venue.error}
+        title={workingCopy.error}
         data-testid="home-checkout-error"
         className="flex items-center gap-2"
       >
@@ -205,16 +221,16 @@ function CheckoutBody({ venue, onRetry }: { venue: VenueEntry | undefined; onRet
     );
   }
 
-  const loose = venueLooseCount(venue.venue.files);
+  const loose = workingCopyLooseCount(workingCopy.workingCopy.files);
   return (
     <>
       <ValueReveal
-        term={venueKindLabel(venue.venue)}
-        full={venue.venue.path}
+        term={workingCopyKindLabel(workingCopy.workingCopy)}
+        full={workingCopy.workingCopy.path}
         side="top"
         className="min-w-0 truncate rounded-sm text-left font-mono text-ui text-muted-foreground"
       >
-        {venuePathTail(venue.venue.path)}
+        {workingCopyPathTail(workingCopy.workingCopy.path)}
       </ValueReveal>
       <div className="flex items-center justify-between gap-2 text-ui text-muted-foreground">
         <span>Working tree</span>

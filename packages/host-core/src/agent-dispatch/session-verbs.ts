@@ -14,6 +14,7 @@
  */
 
 import {
+  LOCAL_RUNNER,
   displayTicketId,
   effectiveHarnessId,
   EMPTY_SESSION_USAGE_SUMMARY,
@@ -903,7 +904,7 @@ async function recordSessionSignal(
         id: "terminal",
         detail: { sessionOrigin: { kind: "session", sessionId: envSession.id } },
       },
-      venue: options.venue ?? { id: "local", kind: "local" },
+      venue: options.venue ?? LOCAL_RUNNER,
     },
   });
   if (submitted.receipt?.status !== "completed") {

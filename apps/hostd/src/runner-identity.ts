@@ -1,46 +1,46 @@
 /**
- * hostd's execution venue: WHICH HOST a Session's attachments ran on, named
+ * hostd's runner: WHICH HOST a Session's attachments ran on, named
  * by this install's stable host id (VC-627).
  *
- * Boot recovery closes only the attachments its own venue owns
- * (`closeStaleAttachments` in host-core). hostd used to name its venue after
+ * Boot recovery closes only the attachments its own runner owns
+ * (`closeStaleAttachments` in host-core). hostd used to name its runner after
  * the agent socket path, so an operator who moved `--socket` turned the host
  * into a stranger to its own ledger: the earlier attachments stopped
  * matching and stayed open forever. An address locates a host; it does not
- * identify one. The venue id is now `host_identity.host_id`, the VC-550
+ * identify one. The runner id is now `host_identity.host_id`, the VC-550
  * singleton, read once the database is open and minted on first use.
  *
  * The id is a UUID v4 from `randomUUID()`, never derived from a hostname,
  * PID, address or path. It survives restarts and socket moves; it is
  * excluded from backups, so a restored profile is a new host. Legacy socket
- * venues are recovered on upgrade, but UUID venues from a restored backup need
+ * runners are recovered on upgrade, but UUID runners from a restored backup need
  * explicit prior-host identity metadata (not present in today's bundles).
  * A stored value that is not
  * a UUID v4 fails closed rather than being reused or replaced.
  *
- * Desktop keeps `{ id: "local", kind: "local" }`; nothing here runs there.
+ * Desktop keeps `LOCAL_RUNNER` (`{ id: "local", kind: "local" }`); nothing here runs there.
  * The kind stays `remote`, as before: only the id changes.
  */
 import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
 
 import type Database from "better-sqlite3";
-import type { SessionExecutionVenue } from "@volli/shared";
+import type { RunnerIdentity } from "@volli/shared";
 import { prepared, withTransaction } from "@volli/host-core/db";
 
-/** hostd's venue kind, unchanged by VC-627. */
-export const HOSTD_VENUE_KIND = "remote" satisfies SessionExecutionVenue["kind"];
+/** hostd's runner kind, unchanged by VC-627. */
+export const HOSTD_RUNNER_KIND = "remote" satisfies RunnerIdentity["kind"];
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 /**
- * Pre-UUID hostd recorded resolved socket paths as remote venue ids. The data
+ * Pre-UUID hostd recorded resolved socket paths as remote runner ids. The data
  * directory's instance lock guarantees one hostd owns those lost processes,
  * even if --socket moved. Claim paths only, never another host/worker UUID or
- * a local desktop venue. This seam is boot recovery only, not live authority.
+ * a local desktop runner. This seam is boot recovery only, not live authority.
  */
-export function ownsLegacyHostdVenue(venue: SessionExecutionVenue): boolean {
-  return venue.kind === HOSTD_VENUE_KIND && isAbsolute(venue.id);
+export function ownsLegacyHostdRunner(runner: RunnerIdentity): boolean {
+  return runner.kind === HOSTD_RUNNER_KIND && isAbsolute(runner.id);
 }
 
 /** How a first boot allocates the host id; tests pin both. */
@@ -80,7 +80,7 @@ export function ensureHostId(db: Database.Database, mint: HostIdMint = {}): stri
   });
 }
 
-/** The venue every hostd Session fact and boot recovery names. */
-export function hostdVenue(db: Database.Database, mint: HostIdMint = {}): SessionExecutionVenue {
-  return { id: ensureHostId(db, mint), kind: HOSTD_VENUE_KIND };
+/** The runner every hostd Session fact and boot recovery names. */
+export function hostdRunner(db: Database.Database, mint: HostIdMint = {}): RunnerIdentity {
+  return { id: ensureHostId(db, mint), kind: HOSTD_RUNNER_KIND };
 }

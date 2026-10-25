@@ -1,4 +1,5 @@
 import {
+  LOCAL_RUNNER,
   COMMAND_INTENT_CONFLICT,
   RECOVERED_TURN_INTERRUPTED_DETAIL,
   type CommandIntentConflict,
@@ -44,7 +45,7 @@ import type {
   SessionEventProvenance,
   RuntimeMessageSettle,
   RuntimeObservation,
-  SessionExecutionVenue,
+  RunnerIdentity,
   SessionInFlightTool,
   SessionInteractionCancelReason,
   SessionInteractionResolution,
@@ -89,8 +90,10 @@ import {
 } from "./transcript-overlay";
 
 export interface SessionLocation {
+  /** The Working copy on disk the Session stands in. */
   directory: string;
-  venue: SessionExecutionVenue;
+  /** The Runner it executes on; named `venue` like the attachment field it becomes. */
+  venue: RunnerIdentity;
 }
 
 export interface SessionLocationResolver {
@@ -793,7 +796,7 @@ interface BindingRecord {
   handle: BindingHandle;
   spec: NativeAttachmentSpec;
   attachment: SessionAttachment;
-  venue: SessionExecutionVenue;
+  venue: RunnerIdentity;
   cursor: SessionNativeDetail | null;
   /** Latest token/tool observation this live binding received, never a durable fact. */
   lastProgressAt: number;
@@ -1606,7 +1609,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         },
         provenance: {
           source: { kind: "user", id: "renderer", detail: { sessionOrigin: { kind: "user" } } },
-          venue: { id: "local", kind: "local" },
+          venue: LOCAL_RUNNER,
         },
       });
       if (replay.receipt?.status !== "completed") {
@@ -3551,7 +3554,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     attachmentId: string;
     projection: SessionProjection;
     adapter: AdapterIdentity;
-    venue: SessionExecutionVenue;
+    venue: RunnerIdentity;
     receipt: CommandReceipt;
   }): Promise<void> {
     if (input.receipt.status !== "accepted") return;
@@ -4231,7 +4234,7 @@ class DefaultSessionRuntime implements SessionRuntime {
   #pipeline(
     adapter: NativeHarnessAdapter,
     spec: NativeAttachmentSpec,
-    venue: SessionExecutionVenue,
+    venue: RunnerIdentity,
   ): { translator: RuntimeObservationTranslator; sink: BufferedObservationSink } {
     const translator = new RuntimeObservationTranslator({
       namespace: adapter.durableIdNamespace,
@@ -4250,7 +4253,7 @@ class DefaultSessionRuntime implements SessionRuntime {
   async #recordFact(
     adapter: NativeHarnessAdapter,
     spec: NativeAttachmentSpec,
-    venue: SessionExecutionVenue,
+    venue: RunnerIdentity,
     observation: TranslatedObservation,
     /** The pipeline this fact came through, re-read for the one write that can outlast it. */
     sink: BufferedObservationSink,
@@ -4854,7 +4857,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     sessionId: string,
     attachmentId: string | null,
     adapter: AdapterIdentity,
-    venue: SessionExecutionVenue,
+    venue: RunnerIdentity,
     receipt: DeliveryReceipt,
     resultKind: DeliveryResultKind,
   ): Promise<CommandReceipt> {
@@ -5684,7 +5687,7 @@ function foldHistory(
 }
 
 function userProvenance(
-  venue: SessionExecutionVenue | null,
+  venue: RunnerIdentity | null,
   origin?: SessionOrigin,
 ): SessionEventProvenance {
   return {
@@ -5699,7 +5702,7 @@ function userProvenance(
 
 function adapterProvenance(
   adapter: AdapterIdentity,
-  venue: SessionExecutionVenue | null,
+  venue: RunnerIdentity | null,
 ): SessionEventProvenance {
   return {
     source: {

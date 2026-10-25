@@ -26,7 +26,7 @@ import {
   type ObservabilitySink,
   type SessionEvent,
   type SessionToolId,
-  type SessionExecutionVenue,
+  type RunnerIdentity,
 } from "@volli/shared";
 import type { DbHandle, HostCorePorts } from "../index";
 import type { PowerPort } from "../ports";
@@ -85,7 +85,7 @@ export interface RuntimeAssemblyOptions {
    * again. Absent is off.
    */
   environmentRecipes?: { enabled: () => boolean; power: PowerPort };
-  venue: SessionExecutionVenue;
+  venue: RunnerIdentity;
   hostPorts: Pick<HostCorePorts, "events" | "connectivity" | "log">;
   modelAccess: PiModelAccess | null;
   decisions: HostDecisions | null;

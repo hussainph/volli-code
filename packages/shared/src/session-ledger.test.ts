@@ -57,10 +57,10 @@ const session: Session = {
 /** What the engine stamps onto a usage fact, standing in for a Session row read. */
 const attribution = { projectId: session.projectId, ticketId: session.ticketId };
 
-const localVenue = { id: "machine-1", kind: "local" as const };
+const localRunner = { id: "machine-1", kind: "local" as const };
 const systemProvenance = {
   source: { kind: "system" as const, id: "session-engine", detail: null },
-  venue: localVenue,
+  venue: localRunner,
 };
 
 function event(sequence: number, payload: SessionEvent["payload"]): SessionEvent {
@@ -343,14 +343,14 @@ describe("observationPayload", () => {
       id: "attachment-1",
       sessionId: session.id,
       adapterId: "opencode",
-      venue: localVenue,
+      venue: localRunner,
       continuity: "fresh" as const,
       native: { id: "native-1", detail: { model: "local" } },
       authority: null,
     };
     const provenance = {
       source: { kind: "adapter" as const, id: "opencode", detail: { plugin: "hook" } },
-      venue: localVenue,
+      venue: localRunner,
     };
     const observations: readonly SessionObservation[] = [
       {
@@ -732,7 +732,7 @@ describe("projectSession", () => {
       id: "attachment-1",
       sessionId: session.id,
       adapterId: "codex",
-      venue: localVenue,
+      venue: localRunner,
       continuity: "native_resume" as const,
       native: null,
       authority: null,
@@ -807,7 +807,7 @@ describe("projectSession", () => {
           id: "attachment-after-stop",
           sessionId: session.id,
           adapterId: "pi",
-          venue: localVenue,
+          venue: localRunner,
           continuity: "fresh" as const,
           native: null,
           authority: null,
@@ -832,7 +832,7 @@ describe("projectSession", () => {
       id: "attachment-1",
       sessionId: session.id,
       adapterId: "codex",
-      venue: localVenue,
+      venue: localRunner,
       continuity: "native_resume" as const,
       native: null,
       authority: null,
@@ -865,7 +865,7 @@ describe("projectSession", () => {
       id: "attachment-1",
       sessionId: session.id,
       adapterId: "claude",
-      venue: localVenue,
+      venue: localRunner,
       continuity: "context_replay" as const,
       native: { id: null, detail: null },
       authority: null,
@@ -930,7 +930,7 @@ describe("projectSession", () => {
       id: "attachment-failed",
       sessionId: session.id,
       adapterId: "codex",
-      venue: localVenue,
+      venue: localRunner,
       continuity: "fresh" as const,
       native: null,
       authority: null,
@@ -979,7 +979,7 @@ describe("projectSession", () => {
       id: "attachment-ordered",
       sessionId: session.id,
       adapterId: "opencode",
-      venue: localVenue,
+      venue: localRunner,
       continuity: "fresh" as const,
       native: null,
       authority: null,
@@ -1044,7 +1044,7 @@ describe("projectSession", () => {
       id: "attachment-start-a",
       sessionId: session.id,
       adapterId: "opencode",
-      venue: localVenue,
+      venue: localRunner,
       continuity: "fresh" as const,
       native: null,
       authority: null,
@@ -1153,7 +1153,7 @@ describe("Session projection checkpoints", () => {
       id: "attachment-checkpoint",
       sessionId: session.id,
       adapterId: "codex",
-      venue: localVenue,
+      venue: localRunner,
       continuity: "fresh" as const,
       native: null,
       authority: null,
@@ -1304,7 +1304,7 @@ describe("projectSession attachment exit", () => {
     id: "attachment-exit",
     sessionId: session.id,
     adapterId: "terminal",
-    venue: localVenue,
+    venue: localRunner,
     continuity: "fresh" as const,
     native: null,
     authority: null,
@@ -1413,7 +1413,7 @@ describe("projectSession turn activity", () => {
     id: "attachment-turn",
     sessionId: session.id,
     adapterId: "opencode",
-    venue: localVenue,
+    venue: localRunner,
     continuity: "fresh" as const,
     native: null,
     authority: null,
@@ -1509,7 +1509,7 @@ describe("projectSession last turn outcome", () => {
     id: "attachment-outcome",
     sessionId: session.id,
     adapterId: "pi",
-    venue: localVenue,
+    venue: localRunner,
     continuity: "fresh" as const,
     native: null,
     authority: null,
@@ -2112,11 +2112,11 @@ describe("sameSessionEventProvenance", () => {
       sameSessionEventProvenance(
         {
           source: { kind: "adapter", id: "claude", detail: { first: 1, second: 2 } },
-          venue: localVenue,
+          venue: localRunner,
         },
         {
           source: { kind: "adapter", id: "claude", detail: { second: 2, first: 1 } },
-          venue: localVenue,
+          venue: localRunner,
         },
       ),
     ).toBe(true);
@@ -2223,7 +2223,7 @@ describe("turn origins and stopped resumption", () => {
           id,
           sessionId: session.id,
           adapterId: "pi",
-          venue: localVenue,
+          venue: localRunner,
           continuity: "context_replay",
           native: null,
           authority: null,

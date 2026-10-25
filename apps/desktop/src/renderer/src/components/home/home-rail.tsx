@@ -35,7 +35,7 @@
  * pages at both scopes' resting width.
  *
  * WHAT NOW NO LONGER DRAWS. The Session-identity card — the model, the tier,
- * the effort of whatever chat is in front — and the venue card under it. The
+ * the effort of whatever chat is in front — and the working copy card under it. The
  * identity was a second answer to a question the tab in front and the
  * composer's own pill already answer, and it was the block standing between
  * the page's title and the roster the page exists for. The tree it named is a

@@ -259,7 +259,7 @@ import type {
   VolliIpcChannel,
   VolliIpcEvent,
   VolliSendContract,
-  VenueSnapshotResult,
+  WorkingCopySnapshotResult,
   WorktreeBaseReadResult,
   WorktreeBranchesResult,
   WorktreeChangeSetResult,
@@ -1241,14 +1241,15 @@ const api = {
     },
   },
   /**
-   * The venue a Session runs in, measured (VC-55) — its own door rather than a
-   * `worktree` verb, because the question is not about a worktree: a Project
-   * Session's venue is the project's main checkout, and a ticket's may be too.
+   * The Working copy a Session runs in, measured (VC-55) — its own door rather
+   * than a `worktree` verb, because the question is not about a worktree: a
+   * Project Session's Working copy is the project's main checkout, and a
+   * ticket's may be too.
    */
-  venue: {
+  workingCopy: {
     /** One reading of the checkout `{ projectId, ticketId }` names. `ticketId: null` is a Board Session. */
-    snapshot: (projectId: string, ticketId: string | null): Promise<VenueSnapshotResult> =>
-      invoke("volli:venue-snapshot", { projectId, ticketId }),
+    snapshot: (projectId: string, ticketId: string | null): Promise<WorkingCopySnapshotResult> =>
+      invoke("volli:working-copy-snapshot", { projectId, ticketId }),
   },
   worktree: {
     /** The "Remove worktree…" escape hatch; `force` discards uncommitted work when the caller has confirmed. */

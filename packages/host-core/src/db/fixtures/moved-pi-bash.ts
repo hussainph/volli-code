@@ -1,3 +1,4 @@
+import { LOCAL_RUNNER } from "@volli/shared";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { piExecutionEnv } from "@volli/agent-runtime";
@@ -151,8 +152,8 @@ export async function movedPiBash(input: {
       executors: createSessionExecutorSlot(adapter),
       artifacts: createFileTranscriptArtifactStore(sessionTranscriptsRoot(root)),
       locations: {
-        resolve: async () => ({ directory: workspace, venue: { id: "local", kind: "local" } }),
-        prepare: async () => ({ directory: workspace, venue: { id: "local", kind: "local" } }),
+        resolve: async () => ({ directory: workspace, venue: LOCAL_RUNNER }),
+        prepare: async () => ({ directory: workspace, venue: LOCAL_RUNNER }),
         reaffirm: async () => undefined,
       },
       clock: { now: () => clock++ },

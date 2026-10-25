@@ -189,7 +189,7 @@ export interface BoardSyncView {
   adoptProject(project: Project): void;
   /** Per-ticket surfaces (activity, body) re-read what the board does not hold. */
   notePlanningChange(change: { ticketId?: string; projectId?: string }): void;
-  /** A change moved where a ticket's Sessions run: its venue reading is stale. */
+  /** A change moved where a ticket's Sessions run: its working copy reading is stale. */
   checkoutMoved(ticketId: string): void;
   /** A write was refused, or a read failed: say so (CLAUDE.md, never swallow a failed mutation). */
   failed(message: string): void;

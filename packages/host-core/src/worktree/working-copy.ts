@@ -1,14 +1,14 @@
 /**
- * The VENUE read (VC-55): what git says is in the checkout a Session runs in.
+ * The WORKING COPY read (VC-55): what git says is in the checkout a Session runs in.
  *
  * The empty chat and the Home rail both ask one question — how much of this
  * tree is in play, and how much work is in it — and neither can be answered by
  * the Change Set. A Change Set folds committed and uncommitted work into one
  * file list on purpose, because it answers "what would the PR contain"; this
  * answers "what is the state of the tree I am standing in", which needs the two
- * kept apart. See {@link import("@volli/shared").VenueFileState}.
+ * kept apart. See {@link import("@volli/shared").WorkingCopyFileState}.
  *
- * WHICH DIRECTORY is not decided here. {@link readVenue} resolves it with
+ * WHICH DIRECTORY is not decided here. {@link readWorkingCopy} resolves it with
  * exactly the rule `session-runtime/location.ts` binds a Session's own
  * directory by, INCLUDING that rule's refusal (VC-286): a ticket that runs in
  * an isolated worktree is measured in that worktree or not at all, because
@@ -21,7 +21,12 @@
  * block a cursor on.
  */
 import type Database from "better-sqlite3";
-import type { VenueFileCounts, VenueKind, VenueReading, VenueSnapshot } from "@volli/shared";
+import type {
+  WorkingCopyFileCounts,
+  WorkingCopyKind,
+  WorkingCopyReading,
+  WorkingCopyMeasurement,
+} from "@volli/shared";
 
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
@@ -30,10 +35,10 @@ import { runGitCapturingAsync, stderrOf } from "./git";
 import { readOnlyGitAsync } from "./scan";
 import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";
 
-export interface VenueSnapshotInput {
+export interface WorkingCopyMeasureInput {
   /** The checkout to measure. */
   path: string;
-  kind: VenueKind;
+  kind: WorkingCopyKind;
   /**
    * The branch committed work is measured against, or `null` for no
    * measurement at all.
@@ -53,11 +58,14 @@ export interface VenueSnapshotInput {
  *
  * A base that cannot be resolved DEGRADES rather than failing the read: the
  * branch a worktree was cut from can be deleted, renamed or never fetched, and
- * none of that makes the tree in front of the user unmeasurable. The venue
+ * none of that makes the tree in front of the user unmeasurable. The working copy
  * simply loses its hairline, which is the same drawing a main checkout gets and
  * already means "no base to compare with".
  */
-async function resolveBase(git: RunGitAsync, input: VenueSnapshotInput): Promise<string | null> {
+async function resolveBase(
+  git: RunGitAsync,
+  input: WorkingCopyMeasureInput,
+): Promise<string | null> {
   if (input.baseBranch === null) return null;
   try {
     const revision = await resolveChangeSetBaseRevision(git, input.path, input.baseBranch);
@@ -67,22 +75,22 @@ async function resolveBase(git: RunGitAsync, input: VenueSnapshotInput): Promise
   }
 }
 
-/** The narrow deps {@link readVenue} needs — a structural subset of `WorktreePorts`. */
-export interface VenueReadPorts {
+/** The narrow deps {@link readWorkingCopy} needs — a structural subset of `WorktreePorts`. */
+export interface WorkingCopyReadPorts {
   db: Database.Database;
   /** The non-blocking runner; defaults to the real one, never to a sync wrapper. */
   gitAsync?: RunGitAsync;
 }
 
-/** Which venue a Session of this scope stands in, before git is asked anything. */
-export interface VenueTarget {
+/** Which working copy a Session of this scope stands in, before git is asked anything. */
+export interface WorkingCopyTarget {
   projectId: string;
   /** The ticket that owns the Session, or `null` for one of the project's own. */
   ticketId: string | null;
 }
 
 /**
- * The venue a Session of this scope runs in — measured, or reported as not yet
+ * The working copy a Session of this scope runs in — measured, or reported as not yet
  * existing.
  *
  * The directory is resolved by the SAME rule the Session runtime binds one by,
@@ -106,10 +114,10 @@ export interface VenueTarget {
  * somebody deleted) surfaces as the error git gave, and the caller draws
  * nothing rather than a shape with no measurement behind it.
  */
-export async function readVenue(
-  deps: VenueReadPorts,
-  target: VenueTarget,
-): Promise<WorktreeResult<VenueReading>> {
+export async function readWorkingCopy(
+  deps: WorkingCopyReadPorts,
+  target: WorkingCopyTarget,
+): Promise<WorktreeResult<WorkingCopyReading>> {
   const project = getProjectById(deps.db, target.projectId);
   if (project === undefined) return err("Unknown project");
   const ticket = target.ticketId === null ? undefined : getTicketRow(deps.db, target.ticketId);
@@ -123,13 +131,13 @@ export async function readVenue(
   if (worktreePath === null && ticket !== undefined && ticket.uses_worktree !== 0) {
     return ok({ state: "pending" });
   }
-  const measured = await venueSnapshot(
+  const measured = await measureWorkingCopy(
     deps.gitAsync ?? runGitCapturingAsync,
     worktreePath === null
       ? { path: project.path, kind: "main-checkout", baseBranch: null }
       : { path: worktreePath, kind: "worktree", baseBranch: ticket?.base_branch ?? null },
   );
-  return measured.ok ? ok({ state: "measured", venue: measured.value }) : measured;
+  return measured.ok ? ok({ state: "measured", workingCopy: measured.value }) : measured;
 }
 
 /** One dirty path and which of the three loose states it is in. */
@@ -139,7 +147,7 @@ interface DirtyEntry {
 }
 
 /**
- * Measures a venue: the branch, the four-state file partition, and the lines
+ * Measures a working copy: the branch, the four-state file partition, and the lines
  * moved against the base.
  *
  * Three git reads, and the two big ones overlap — `status` and the base diff
@@ -147,14 +155,14 @@ interface DirtyEntry {
  * than two, and the tree cannot move between them any more than it could
  * between two sequential spawns.
  *
- * Read-only git ({@link readOnlyGitAsync}): a venue may be the Main checkout
+ * Read-only git ({@link readOnlyGitAsync}): a working copy may be the Main checkout
  * many Sessions share, and a plain `git status` holds its `index.lock` for the
  * whole untracked scan — any of their `git add`/`commit` calls would fail.
  */
-export async function venueSnapshot(
+export async function measureWorkingCopy(
   runGit: RunGitAsync,
-  input: VenueSnapshotInput,
-): Promise<WorktreeResult<VenueSnapshot>> {
+  input: WorkingCopyMeasureInput,
+): Promise<WorktreeResult<WorkingCopyMeasurement>> {
   const git = readOnlyGitAsync(runGit);
   try {
     // `--show-current` rather than `rev-parse --abbrev-ref HEAD`: it prints
@@ -177,7 +185,7 @@ export async function venueSnapshot(
     const changed = parseNumstat(numstatOut);
     const dirtyPaths = new Set(dirty.map((entry) => entry.path));
 
-    const files: VenueFileCounts = {
+    const files: WorkingCopyFileCounts = {
       // Changed against the base and clean in the tree right now. Subtracting
       // the dirty paths is what makes the four states a partition: a file that
       // is both committed and edited is counted once, as edited, because that

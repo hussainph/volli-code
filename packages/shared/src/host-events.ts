@@ -54,9 +54,9 @@ export type PendingArmedRunSettledNotice =
  *
  * One reader does act on it (VC-286): `worktree` is the kind that can move a
  * ticket's CHECKOUT — materialized, removed, recreated, scope switched — and
- * the renderer's venue boundary (`lib/boot.ts`) discards the ticket's cached
- * venue reading on it. So a producer whose change moves a checkout MUST name
- * `worktree`; one that omits `kind` re-hydrates the board but leaves the venue
+ * the renderer's working copy boundary (`lib/boot.ts`) discards the ticket's cached
+ * working copy reading on it. So a producer whose change moves a checkout MUST name
+ * `worktree`; one that omits `kind` re-hydrates the board but leaves the working copy
  * where it was.
  */
 export type DataChangeKind = "ticket" | "comment" | "session" | "worktree" | "retention";
@@ -83,7 +83,7 @@ export interface DataChangedEvent {
   projectId?: string;
   /**
    * Hint at what changed. Never the basis of whether a reader re-hydrates — but
-   * `worktree` is load-bearing for the venue boundary; see {@link DataChangeKind}.
+   * `worktree` is load-bearing for the working copy boundary; see {@link DataChangeKind}.
    */
   kind?: DataChangeKind;
 }

@@ -37,7 +37,7 @@ export {
   liveShellWorktreeSites,
   OrphanCleanupRefused,
   publishTicketBranch,
-  readVenue,
+  readWorkingCopy,
   readWorktreeBaseFile,
   readWorktreeChangeSet,
   readWorktreeDiff,

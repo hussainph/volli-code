@@ -8,7 +8,12 @@ import {
   sessionRootThreadId,
   readSessionTranscriptTail,
 } from "@volli/session-engine";
-import type { SessionRuntimeSpec, RuntimeAttachmentHandle, McpToolDefinition } from "@volli/shared";
+import {
+  LOCAL_RUNNER,
+  type SessionRuntimeSpec,
+  type RuntimeAttachmentHandle,
+  type McpToolDefinition,
+} from "@volli/shared";
 import { createPiAgentRuntime } from "@volli/agent-runtime";
 import {
   scriptedProvider,
@@ -114,8 +119,8 @@ export async function silentEndsFixture(
     artifacts,
     followUps: createSqliteSessionFollowUpLedger(db.db),
     locations: {
-      resolve: async () => ({ directory, venue: { id: "local", kind: "local" } }),
-      prepare: async () => ({ directory, venue: { id: "local", kind: "local" } }),
+      resolve: async () => ({ directory, venue: LOCAL_RUNNER }),
+      prepare: async () => ({ directory, venue: LOCAL_RUNNER }),
       reaffirm: async () => undefined,
     },
     clock: { now },

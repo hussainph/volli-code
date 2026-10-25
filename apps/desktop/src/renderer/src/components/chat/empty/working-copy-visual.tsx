@@ -1,5 +1,5 @@
 /**
- * VENUE — one object, two registers (VC-55).
+ * WORKING COPY — one object, two registers (VC-55).
  *
  * The visual both scopes can draw, and the ticket scope's only one. It answers
  * the question a chat surface never used to: which tree is this Session
@@ -21,24 +21,24 @@
  * Different units on purpose, and that is why the object works: two file-count
  * bars would just be a bar chart with two rows.
  *
- * A VENUE WITH NO BASE DROPS THE HAIRLINE rather than drawing an empty one. An
+ * A WORKING COPY WITH NO BASE DROPS THE HAIRLINE rather than drawing an empty one. An
  * empty diff track reads as "no work", which is the opposite of what a dirty
  * main checkout means — and the missing hairline is the identity signal doing
  * its work for free: a Session in the user's own working tree simply does not
  * have that second register.
  */
 import {
-  venueFileTotal,
-  venueSegments,
-  type VenueFileState,
-  type VenueSnapshot,
+  workingCopyFileTotal,
+  workingCopySegments,
+  type WorkingCopyFileState,
+  type WorkingCopyMeasurement,
 } from "@volli/shared";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
 
 /** The tone each state draws in, and the word its tooltip uses. */
-const STATE_TONE: Record<VenueFileState, string> = {
+const STATE_TONE: Record<WorkingCopyFileState, string> = {
   // Committed work takes the accent: it is the only state that means progress
   // rather than exposure.
   committed: "bg-primary",
@@ -47,17 +47,17 @@ const STATE_TONE: Record<VenueFileState, string> = {
   untracked: "bg-muted-foreground/40",
 };
 
-const STATE_LABEL: Record<VenueFileState, string> = {
+const STATE_LABEL: Record<WorkingCopyFileState, string> = {
   committed: "committed",
   modified: "modified",
   added: "added",
   untracked: "untracked",
 };
 
-export function VenueVisual({ venue }: { venue: VenueSnapshot }) {
-  const total = venueFileTotal(venue.files);
-  const segments = venueSegments(venue.files);
-  const diff = venue.diff;
+export function WorkingCopyVisual({ workingCopy }: { workingCopy: WorkingCopyMeasurement }) {
+  const total = workingCopyFileTotal(workingCopy.files);
+  const segments = workingCopySegments(workingCopy.files);
+  const diff = workingCopy.diff;
   const span = diff === null ? 0 : diff.added + diff.removed;
 
   return (

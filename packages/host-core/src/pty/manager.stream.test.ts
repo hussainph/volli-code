@@ -9,7 +9,7 @@ import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { SessionExecutionVenue, TerminalDataEvent } from "@volli/shared";
+import type { RunnerIdentity, TerminalDataEvent } from "@volli/shared";
 import type { SessionEngine } from "@volli/session-engine";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
@@ -417,12 +417,9 @@ describe("construction options (VC-627)", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  async function venueOf(
-    hostVenue: SessionExecutionVenue | undefined,
-    venue?: SessionExecutionVenue,
-  ) {
+  async function runnerOf(hostRunner: RunnerIdentity | undefined, venue?: RunnerIdentity) {
     const host: PtyManagerPorts = {
-      ...(hostVenue === undefined ? {} : { venue: hostVenue }),
+      ...(hostRunner === undefined ? {} : { venue: hostRunner }),
       events: { publish: () => {} },
       worktreeDeps: () => {
         throw new Error("a Board Session never asks for a worktree");
@@ -456,17 +453,17 @@ describe("construction options (VC-627)", () => {
   }
 
   it("records an explicit venue option over the host's", async () => {
-    expect(await venueOf({ id: "host", kind: "remote" }, { id: "option", kind: "remote" })).toEqual(
-      { attachment: { id: "option", kind: "remote" }, events: ["option"] },
-    );
+    expect(
+      await runnerOf({ id: "host", kind: "remote" }, { id: "option", kind: "remote" }),
+    ).toEqual({ attachment: { id: "option", kind: "remote" }, events: ["option"] });
   });
 
   it("falls back to the host's venue, then to local", async () => {
-    expect(await venueOf({ id: "host", kind: "remote" })).toEqual({
+    expect(await runnerOf({ id: "host", kind: "remote" })).toEqual({
       attachment: { id: "host", kind: "remote" },
       events: ["host"],
     });
-    expect(await venueOf(undefined)).toEqual({
+    expect(await runnerOf(undefined)).toEqual({
       attachment: { id: "local", kind: "local" },
       events: ["local"],
     });

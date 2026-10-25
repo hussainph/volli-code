@@ -54,7 +54,7 @@ export interface BoardProjectChange extends BoardChangeBase {
 export interface BoardTicketChange extends BoardChangeBase {
   readonly kind: "ticket";
   readonly ticket?: TicketSummary;
-  /** The change moved where the ticket's Sessions run (its checkout): re-read its venue. */
+  /** The change moved where the ticket's Sessions run (its checkout): re-read its working copy. */
   readonly checkoutMoved?: boolean;
 }
 
