@@ -71,6 +71,10 @@ export interface CreateSessionRequest {
    * the durable row and refuse a command that arrives naming another id.
    */
   requestedSessionId?: string | null;
+  /** Trusted composition owner; children inherit their parent when absent. */
+  ownerUserId?: string;
+  /** Synchronous machine-state write, atomic with birth (also invoked on replay). */
+  onCreated?(session: Session): void;
   /** Trusted host-supplied audit provenance; renderers never call this module directly. */
   provenance: SessionEventProvenance;
 }
@@ -371,8 +375,25 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
     async createSession(request) {
       return ports.ledger.transaction((transaction) => {
         const createdAt = ports.clock.now();
+        const parentOwner =
+          request.parentSessionId === null
+            ? undefined
+            : transaction.getSession(request.parentSessionId)?.ownerUserId;
+        if (
+          parentOwner !== undefined &&
+          request.ownerUserId !== undefined &&
+          parentOwner !== request.ownerUserId
+        ) {
+          throw new SessionEngineConflictError("A child Session must inherit its parent owner");
+        }
+        const ownerUserId = request.ownerUserId ?? parentOwner;
+        const ownedRequest = ownerUserId === undefined ? request : { ...request, ownerUserId };
         const existing = transaction.getCommand(request.commandId);
-        if (existing) return replayCreate(transaction, request);
+        if (existing) {
+          const replayed = replayCreate(transaction, ownedRequest);
+          runSessionBirthHook(request.onCreated, replayed.session);
+          return replayed;
+        }
 
         const session: Session = {
           id: request.requestedSessionId ?? ports.ids.next("session"),
@@ -380,6 +401,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           ticketId: request.ticketId,
           role: request.role,
           parentSessionId: request.parentSessionId,
+          ...(ownerUserId === undefined ? {} : { ownerUserId }),
           title: request.title,
           createdAt,
         };
@@ -433,6 +455,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         transaction.appendEvent(sessionEvent);
         transaction.appendReceipt(receiptEvent.payload.receipt);
         transaction.appendEvent(receiptEvent);
+        runSessionBirthHook(request.onCreated, session);
         return {
           session,
           command,
@@ -1358,6 +1381,11 @@ function replayCreate(
   if (!receipt) throw new SessionEngineConflictError(`Command ${stored.id} has no create receipt`);
   const session = transaction.getSession(stored.sessionId);
   if (!session) throw new SessionEngineConflictError(`Command ${stored.id} has no Session`);
+  if (session.ownerUserId !== request.ownerUserId) {
+    throw new SessionEngineCommandConflictError(
+      `Command ${stored.id} was accepted for another Session owner`,
+    );
+  }
   if (receipt.result.sessionId !== session.id) {
     throw new SessionEngineConflictError(
       `Command ${stored.id} has a create receipt for another Session`,
@@ -1395,6 +1423,14 @@ function replayCreate(
   return { session, command: stored, commandEvent, event, receipt, receiptEvent };
 }
 
+/** A birth cannot commit while a machine-state hook still has work in flight. */
+function runSessionBirthHook(hook: CreateSessionRequest["onCreated"], session: Session): void {
+  const result: unknown = hook?.(session);
+  if (result !== null && typeof result === "object" && "then" in result) {
+    throw new Error("Session birth hook must be synchronous");
+  }
+}
+
 function sameCreateSessionRequest(command: SessionCommand, request: CreateSessionRequest): boolean {
   return (
     command.id === request.commandId &&
@@ -1414,6 +1450,7 @@ function sameSession(left: Session, right: Session): boolean {
     left.ticketId === right.ticketId &&
     left.role === right.role &&
     left.parentSessionId === right.parentSessionId &&
+    left.ownerUserId === right.ownerUserId &&
     left.title === right.title &&
     left.createdAt === right.createdAt
   );

@@ -15,7 +15,11 @@ import { BrowserPictureStore } from "../browser/picture-store";
 import { browserPictureDisk, browserPicturesRoot } from "../browser/picture-disk";
 import type { PiModelAccess, CodeModeSandboxAssets } from "@volli/agent-runtime";
 import { piExecutionEnv, refusingCredentialReads } from "@volli/agent-runtime";
-import { createSessionExecutorSlot, type SessionEngine } from "@volli/session-engine";
+import {
+  createSessionExecutorSlot,
+  type SessionEngine,
+  type SessionLocationResolver,
+} from "@volli/session-engine";
 import {
   harnessAdapters,
   scrubInheritedSessionEnv,
@@ -70,6 +74,10 @@ export interface RuntimeAssemblyOptions {
   dbHandle: DbHandle;
   /** Receive the host's one engine; never construct another writer. */
   sessionEngine: SessionEngine | null;
+  /** Directory resolution supplied by the chosen store. */
+  locations?: SessionLocationResolver;
+  /** Owner-scoped machine queues use the same selected ledger view. */
+  ownsSession?(sessionId: string): boolean;
   /**
    * The host's post-commit stream over that engine (`sessionWakeBus.subscribe`).
    * Required, `null` only where there is no engine: the Session runtime feeds
@@ -577,6 +585,8 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           // A second runtime registers here, beside it, never instead of it.
           executors: createSessionExecutorSlot(piRuntimeHost.adapter),
           sessionEngine,
+          ...(options.locations === undefined ? {} : { locations: options.locations }),
+          ...(options.ownsSession === undefined ? {} : { ownsSession: options.ownsSession }),
           ...(sessionWake === null
             ? {}
             : {

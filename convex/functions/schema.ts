@@ -497,7 +497,9 @@ export default defineSchema({
   })
     .index("by_uuid", ["id"])
     .index("by_project_seq", ["projectId", "seq"])
-    .index("by_ticket_seq", ["ticketId", "seq"]),
+    .index("by_ticket_seq", ["ticketId", "seq"])
+    // A fresh retention read needs only the latest transition, not the ticket's whole history.
+    .index("by_ticket_kind_seq", ["ticketId", "kind", "seq"]),
   boardReceipts: defineTable({
     commandId: uuid,
     projectId: uuid,
@@ -711,6 +713,8 @@ export default defineSchema({
     projectRepoId: uuid,
     kind: literals(["main", "managed_clone"]),
     headBranch: nullable(v.string()),
+    // Older/migrated reports carry only the branch.
+    headSha: v.optional(nullable(v.string())),
     reportedAt: time,
   })
     .index("by_runner_repo", ["runnerId", "projectRepoId"])

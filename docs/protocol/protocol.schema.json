@@ -17632,6 +17632,9 @@
                                   "id": {
                                     "type": "string"
                                   },
+                                  "ownerUserId": {
+                                    "type": "string"
+                                  },
                                   "parentSessionId": {
                                     "anyOf": [
                                       {
@@ -24360,6 +24363,9 @@
                     "id": {
                       "type": "string"
                     },
+                    "ownerUserId": {
+                      "type": "string"
+                    },
                     "parentSessionId": {
                       "anyOf": [
                         {
@@ -25634,6 +25640,9 @@
                                     "type": "integer"
                                   },
                                   "id": {
+                                    "type": "string"
+                                  },
+                                  "ownerUserId": {
                                     "type": "string"
                                   },
                                   "parentSessionId": {
@@ -30285,6 +30294,9 @@
                     "id": {
                       "type": "string"
                     },
+                    "ownerUserId": {
+                      "type": "string"
+                    },
                     "parentSessionId": {
                       "anyOf": [
                         {
@@ -31525,6 +31537,9 @@
                                   "type": "integer"
                                 },
                                 "id": {
+                                  "type": "string"
+                                },
+                                "ownerUserId": {
                                   "type": "string"
                                 },
                                 "parentSessionId": {
@@ -35632,6 +35647,9 @@
                                   "type": "integer"
                                 },
                                 "id": {
+                                  "type": "string"
+                                },
+                                "ownerUserId": {
                                   "type": "string"
                                 },
                                 "parentSessionId": {

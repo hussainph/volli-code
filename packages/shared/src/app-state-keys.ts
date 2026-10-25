@@ -345,6 +345,18 @@ const EXACT = {
 } as const satisfies Readonly<Record<string, AppStateKeyEntry>>;
 
 const PREFIXES = {
+  "volli:runner-report:": {
+    placement: "client-local",
+    owner: "stays",
+    reason:
+      "Runner-local durable checkout and Working copy reports, keyed by owner, runner and repository or ticket/repository. Path-free machine metadata awaiting backend acknowledgement; never Session facts, a board cache or credentials.",
+  },
+  "volli:runner-site:": {
+    placement: "client-local",
+    owner: "stays",
+    reason:
+      "Runner-local Session location hints keyed by owner and Session: repository identity, checkout mode and git identity only. Lets an already-briefed Session reattach offline using its path registry. Never a board cache or credential.",
+  },
   "volli:vc354-perf:": {
     placement: "client-local",
     owner: "stays",

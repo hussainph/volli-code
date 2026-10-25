@@ -214,7 +214,7 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
       state,
       runnerId: knownRunnerId(),
       runnerName: link?.name ?? null,
-      waitingFacts: 0,
+      waitingFacts: connection?.waitingFacts ?? 0,
       problem: null,
       message: null,
       ...(since === undefined ? {} : { since }),
@@ -287,6 +287,7 @@ export function createMacRunner(options: MacRunnerOptions): MacRunner {
     link = linked;
     connection = options.connect({
       store: fenced(mine),
+      runnerId: linked.runnerId,
       onLost: (reason) => void lost(mine, reason),
       onChange: () => {
         if (mine === epoch) publishLinked();

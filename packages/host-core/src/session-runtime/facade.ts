@@ -5,6 +5,7 @@
  * Callers expose these captured services only through lifecycle.ready().
  */
 import { randomUUID } from "node:crypto";
+import type { SessionEngine } from "@volli/session-engine";
 import {
   acceptsImageInputIn,
   applySkillModes,
@@ -26,7 +27,12 @@ import { loadSkills } from "../skills";
 import { createPeekSummarizer } from "../session-control/peek-summary";
 import { createAutoTitler } from "./auto-title";
 import { readModelAccessDefaults } from "./model-access-preferences";
-import { createSessions, StructuredSessionsError, type SessionSkillPorts } from "./sessions";
+import {
+  createSessions,
+  StructuredSessionsError,
+  type SessionSkillPorts,
+  type SessionsOptions,
+} from "./sessions";
 import { kickoffSubmitter } from "./start-session";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { createRuntimeAssembly } from "./assembly";
@@ -48,9 +54,14 @@ function assembleSessionServices(options: {
   venue: RunnerIdentity;
   decisions: HostDecisions | null;
   delegation: TicketSessionDelegationStore | null;
+  /** Launch-selected view of the host writer. Never selected by lower layers. */
+  sessionEngine?: SessionEngine;
+  sessionBirth?: SessionsOptions["sessionBirth"];
+  /** The frozen board's start event is not a cloud write; its accept fold owns that history. */
+  recordSessionStarted?: SessionsOptions["recordSessionStarted"] | null;
 }) {
   const { host, homeDir, venue, decisions: hostDecisions, delegation: sessionDelegation } = options;
-  const sessionEngine = isLiveHost(host) ? host.sessionEngine : null;
+  const sessionEngine = isLiveHost(host) ? (options.sessionEngine ?? host.sessionEngine) : null;
   const sessionDb = isLiveHost(host) ? host.database.db : null;
   const { sessionRuntime, piRuntimeHost, sessionToolSurface } = options.assembly;
   const sessionSkills: SessionSkillPorts | null =
@@ -135,6 +146,7 @@ function assembleSessionServices(options: {
     sessionDelegation !== null
       ? createSessions({
           runtime: sessionRuntime,
+          ...(options.sessionBirth === undefined ? {} : { sessionBirth: options.sessionBirth }),
           // Explicit/parent choices are resolved by the facade first. A new
           // project's Session then uses its pin before the global tier ladder.
           // null project means a parent's global-fallback path: no project pin.
@@ -195,15 +207,21 @@ function assembleSessionServices(options: {
                 }),
               }),
           // A Session's first start, not each idempotent attach/start call.
-          recordSessionStarted: ({ ticketId, sessionId, actor, origin }) => {
-            recordSessionStartedOnce(sessionDb, {
-              ticketId,
-              sessionId,
-              now: Date.now(),
-              actor,
-              origin,
-            });
-          },
+          ...(options.recordSessionStarted === null
+            ? {}
+            : {
+                recordSessionStarted:
+                  options.recordSessionStarted ??
+                  (({ ticketId, sessionId, actor, origin }) => {
+                    recordSessionStartedOnce(sessionDb, {
+                      ticketId,
+                      sessionId,
+                      now: Date.now(),
+                      actor,
+                      origin,
+                    });
+                  }),
+              }),
         })
       : null;
   const autoTitler =

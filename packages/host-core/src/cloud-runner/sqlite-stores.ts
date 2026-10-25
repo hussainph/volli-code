@@ -103,25 +103,31 @@ function entryOf(row: JournalRow): JobJournalEntry {
   };
 }
 
-export function sqliteJobJournalStore(db: Database.Database): JobJournalStore {
+export function sqliteJobJournalStore(
+  db: Database.Database,
+  ownerUserId?: string,
+): JobJournalStore {
+  const ownerClause = ownerUserId === undefined ? "" : " AND owner_user_id = @ownerUserId";
+  const ownerArgs = ownerUserId === undefined ? {} : { ownerUserId };
   return {
     get(jobId) {
-      const row = prepared(db, "SELECT * FROM job_journal WHERE job_id = ?").get(jobId) as
-        | JournalRow
-        | undefined;
+      const row = prepared(db, `SELECT * FROM job_journal WHERE job_id = @jobId${ownerClause}`).get(
+        { jobId, ...ownerArgs },
+      ) as JournalRow | undefined;
       return row === undefined ? null : entryOf(row);
     },
     save(entry) {
-      prepared(
+      const saved = prepared(
         db,
-        `INSERT INTO job_journal (job_id, kind, lease_boot_id, lease_attempt, state, outcome_json, received_at)
-         VALUES (@jobId, @kind, @bootId, @attempt, @state, @outcome, @receivedAt)
+        `INSERT INTO job_journal (job_id, kind, lease_boot_id, lease_attempt, state, outcome_json, received_at, owner_user_id)
+         VALUES (@jobId, @kind, @bootId, @attempt, @state, @outcome, @receivedAt, @ownerUserId)
          ON CONFLICT (job_id) DO UPDATE SET
            kind = excluded.kind,
            lease_boot_id = excluded.lease_boot_id,
            lease_attempt = excluded.lease_attempt,
            state = excluded.state,
-           outcome_json = excluded.outcome_json`,
+           outcome_json = excluded.outcome_json
+         WHERE job_journal.owner_user_id IS excluded.owner_user_id`,
       ).run({
         jobId: entry.jobId,
         kind: entry.kind,
@@ -130,20 +136,22 @@ export function sqliteJobJournalStore(db: Database.Database): JobJournalStore {
         state: entry.state,
         outcome: entry.outcome === null ? null : JSON.stringify(entry.outcome),
         receivedAt: entry.receivedAt,
+        ownerUserId: ownerUserId ?? null,
       });
+      if (saved.changes === 0) throw new Error("This job journal belongs to another runner owner.");
     },
     unreported: () =>
       (
         prepared(
           db,
-          "SELECT * FROM job_journal WHERE outcome_json IS NOT NULL ORDER BY received_at",
-        ).all() as JournalRow[]
+          `SELECT * FROM job_journal WHERE outcome_json IS NOT NULL${ownerClause} ORDER BY received_at`,
+        ).all(ownerArgs) as JournalRow[]
       ).map(entryOf),
     remove(jobId, attempt) {
-      prepared(db, "DELETE FROM job_journal WHERE job_id = ? AND lease_attempt = ?").run(
-        jobId,
-        attempt,
-      );
+      prepared(
+        db,
+        `DELETE FROM job_journal WHERE job_id = @jobId AND lease_attempt = @attempt${ownerClause}`,
+      ).run({ jobId, attempt, ...ownerArgs });
     },
   };
 }

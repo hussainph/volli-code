@@ -7,6 +7,7 @@ import {
   mapSessionExecutorSlot,
   type SessionExecutorSlot,
   type SessionEngine,
+  type SessionLocationResolver,
   type SubscribeCommittedSessionEvents,
   type TranscriptArtifactStore,
 } from "@volli/session-engine";
@@ -32,6 +33,10 @@ export interface HostSessionRuntimeOptions {
   /** The structured runtimes Sessions run on; Pi is the one that ships (VC-916). */
   executors: SessionExecutorSlot;
   sessionEngine: SessionEngine;
+  /** Launch-selected Session scope for machine-state queues as well as ledger facts. */
+  ownsSession?(sessionId: string): boolean;
+  /** The chosen product store supplies its directory pipeline once, at composition. */
+  locations?: SessionLocationResolver;
   /**
    * Every Session Event `sessionEngine` commits, from the host's wake bus
    * (`session-control/session-wake.ts`). It is how a write made around the
@@ -78,28 +83,30 @@ export function createHostSessionRuntime(options: HostSessionRuntimeOptions): Ho
   return createSessionRuntime({
     engine: options.sessionEngine,
     ...(options.committed === undefined ? {} : { committed: options.committed }),
-    followUps: createSqliteSessionFollowUpLedger(options.db),
+    followUps: createSqliteSessionFollowUpLedger(options.db, options.ownsSession),
     // The payload stays durable and the Session raises Attention; this is the
     // operator's record of why an automatic release did not go out.
     onFollowUpFailure: (error) => options.log.error("follow-up queue release failed", { error }),
     // Attachments start detached, commands run under their own trace (VC-699).
     executors: mapSessionExecutorSlot(options.executors, correlatedExecutor),
     artifacts: options.artifacts ?? createFileTranscriptArtifactStore(options.transcriptDirectory),
-    locations: createSessionLocationResolver(
-      options.db,
-      { events: options.events },
-      {
-        dataDir: options.dataDir,
-        ...(options.venue === undefined ? {} : { venue: options.venue }),
-        ...(options.setupEnvironment === undefined
-          ? {}
-          : { setupEnvironment: options.setupEnvironment }),
-        ...(options.environmentRecipes === undefined
-          ? {}
-          : { environmentRecipes: options.environmentRecipes }),
-        ...(options.power === undefined ? {} : { power: options.power }),
-      },
-    ),
+    locations:
+      options.locations ??
+      createSessionLocationResolver(
+        options.db,
+        { events: options.events },
+        {
+          dataDir: options.dataDir,
+          ...(options.venue === undefined ? {} : { venue: options.venue }),
+          ...(options.setupEnvironment === undefined
+            ? {}
+            : { setupEnvironment: options.setupEnvironment }),
+          ...(options.environmentRecipes === undefined
+            ? {}
+            : { environmentRecipes: options.environmentRecipes }),
+          ...(options.power === undefined ? {} : { power: options.power }),
+        },
+      ),
     clock: { now },
     ids: { next: () => nextId() },
     onProjectionCheckpointFailure,

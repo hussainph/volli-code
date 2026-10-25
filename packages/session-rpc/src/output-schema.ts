@@ -44,6 +44,7 @@ export const sessionSchema = z.object({
   ticketId: nullableText,
   role: z.enum(SESSION_ROLES),
   parentSessionId: nullableText,
+  ownerUserId: text.optional(),
   title: nullableText,
   createdAt: integer,
 });

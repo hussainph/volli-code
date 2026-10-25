@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { ALWAYS_ONLINE, piOwnedModelAccess } from "@volli/agent-runtime";
+import { LOCAL_RUNNER } from "@volli/shared";
 import {
   createHostCore,
   isLiveHost,
@@ -31,7 +32,11 @@ import * as handlerModule from "../handlers/host-handlers";
 import * as boot from "./boot-recovery";
 import { readRecoveredSessionServices, SessionRuntimeClosingError } from "./lifecycle";
 import * as pi from "./pi-adapter";
-import { createRunnerComposition, type RunnerHostEdge } from "./runner";
+import { createRunnerComposition, type RunnerHostEdge, type RunnerProductStore } from "./runner";
+import { createCloudProductStore } from "../cloud-store";
+import { sqliteDrainCursorStore } from "../cloud-runner/sqlite-stores";
+import { insertProject } from "../db/projects-repo";
+import { testProject } from "../db/test-helpers";
 
 const roots: string[] = [];
 const hosts: HostCore[] = [];
@@ -122,7 +127,10 @@ function gateRecovery(calls: string[]): PromiseWithResolvers<void> {
   return gate;
 }
 
-function compose({ host, ports, root }: Awaited<ReturnType<typeof composedHost>>) {
+function compose(
+  { host, ports, root }: Awaited<ReturnType<typeof composedHost>>,
+  store: RunnerProductStore = { kind: "local", host },
+) {
   const calls: string[] = [];
   const transport = {
     close: vi.fn(async () => {
@@ -134,7 +142,7 @@ function compose({ host, ports, root }: Awaited<ReturnType<typeof composedHost>>
     calls.push("quit.hold");
   });
   const runner = createRunnerComposition({
-    store: { kind: "local", host },
+    store,
     ports,
     version: "0.0.0-test",
     venue: { id: "test-host", kind: "remote" },
@@ -142,7 +150,7 @@ function compose({ host, ports, root }: Awaited<ReturnType<typeof composedHost>>
     binDir: join(root, "bin"),
     env: {},
     packaged: true,
-    cloudEnabled: () => false,
+    cloudEnabled: () => store.kind === "cloud",
     secrets: new SecretService(
       isLiveHost(host) ? host.secretStore : new SecretStore(join(root, "s.enc"), noKeys),
     ),
@@ -176,6 +184,129 @@ function compose({ host, ports, root }: Awaited<ReturnType<typeof composedHost>>
 }
 
 describe("runner composition", () => {
+  it("composes the cloud store's owner-scoped ports through assembly, facade, agents and lifecycle", async () => {
+    const fixture = await composedHost("desktop-quit");
+    const { host, root } = fixture;
+    if (!isLiveHost(host)) throw new Error(host.database.error);
+    const cloudProject = testProject({ id: "cloud-project", path: join(root, "cloud-checkout") });
+    const localProject = testProject({ id: "local-project", path: join(root, "local-checkout") });
+    insertProject(host.database.db, cloudProject);
+    insertProject(host.database.db, localProject);
+    host.database.db
+      .prepare("INSERT INTO cloud_shadow_rows(kind,id,owner_user_id) VALUES ('project',?,'a')")
+      .run(cloudProject.id);
+    const provenance = {
+      source: { kind: "system", id: "test", detail: null },
+      venue: LOCAL_RUNNER,
+    } as const;
+    const owned = await host.sessionEngine.createSession({
+      commandId: "cloud-birth",
+      projectId: cloudProject.id,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Owned by A",
+      ownerUserId: "a",
+      provenance,
+    });
+    const foreign = await host.sessionEngine.createSession({
+      commandId: "foreign-birth",
+      projectId: localProject.id,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Owned by B",
+      ownerUserId: "b",
+      provenance,
+    });
+    const local = await host.sessionEngine.createSession({
+      commandId: "local-birth",
+      projectId: localProject.id,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Frozen local",
+      provenance,
+    });
+    const cursors = sqliteDrainCursorStore(host.database.db);
+    for (const [sessionId, ownerUserId] of [
+      [owned.session.id, "a"],
+      [foreign.session.id, "b"],
+    ] as const) {
+      cursors.save({ sessionId, ownerUserId, generation: 1, acceptedThrough: 0, blocked: null });
+    }
+    const cloud = createCloudProductStore({
+      host,
+      ownerUserId: "a",
+      runnerId: () => "runner-a",
+      home: root,
+      busySites: async () => [],
+    });
+    const bindRuntime = vi.spyOn(cloud, "bindRuntime");
+    const bindEnvironment = vi.spyOn(cloud, "bindEnvironment");
+    const dispose = vi.spyOn(cloud, "dispose");
+    const [assemblyModule, facadeModule, agentsModule, lifecycleModule, contextModule] =
+      await Promise.all([
+        import("./assembly"),
+        import("./facade"),
+        import("./agents"),
+        import("./lifecycle"),
+        import("./context"),
+      ]);
+    const buildAssembly = vi.spyOn(assemblyModule, "createRuntimeAssembly");
+    const buildFacade = vi.spyOn(facadeModule, "createRuntimeSessionFacade");
+    const buildAgents = vi.spyOn(agentsModule, "createRuntimeSessionAgents");
+    const buildLifecycle = vi.spyOn(lifecycleModule, "createSessionRuntimeLifecycle");
+    const buildContext = vi.spyOn(contextModule, "createRuntimeContextResolver");
+    const buildHandlers = vi.spyOn(handlerModule, "createHostHandlers");
+    const f = compose(fixture, { kind: "cloud", host, cloud });
+    const assembly = buildAssembly.mock.lastCall![0];
+    expect(assembly.sessionEngine).toBe(cloud.engine);
+    expect(assembly.locations).toBe(cloud.locations);
+    expect(assembly.ownsSession).toBe(cloud.ownsSession);
+    expect(buildContext.mock.lastCall![0].sessionEngine).toBe(cloud.engine);
+    expect(buildContext.mock.lastCall![0].brief).toBe(cloud.brief);
+    expect(assembly.resolveRuntimeContext).toBe(buildContext.mock.results[0]!.value);
+    const facade = buildFacade.mock.lastCall![0];
+    expect(facade.sessionEngine).toBe(cloud.engine);
+    expect(facade.sessionBirth).toBe(cloud.sessionBirth);
+    expect(facade.recordSessionStarted).toBeNull();
+    const lifecycle = buildLifecycle.mock.lastCall![0];
+    expect(lifecycle.sessionEngine).toBe(cloud.engine);
+    expect(lifecycle.ownsSession).toBe(cloud.ownsSession);
+    expect(lifecycle.projectIds).toBe(cloud.projectIds);
+    expect(lifecycle.ownsSession!(owned.session.id)).toBe(true);
+    expect(lifecycle.ownsSession!(foreign.session.id)).toBe(false);
+    expect(lifecycle.ownsSession!(local.session.id)).toBe(false);
+    expect(lifecycle.projectIds!()).toEqual([cloudProject.id]);
+    const agents = buildAgents.mock.lastCall![0];
+    expect(agents.services.sessionEngine).toBe(cloud.engine);
+    expect(agents.inProcessWatches).toBe(false);
+    expect(agents.projects!()).toMatchObject([cloudProject]);
+    expect(bindEnvironment).toHaveBeenCalledExactlyOnceWith(expect.any(Function));
+    expect(bindRuntime).toHaveBeenCalledExactlyOnceWith(
+      f.runner.runtime,
+      f.runner.transcriptArtifacts,
+    );
+
+    await host.start(f.runner.owner());
+    const ready = await f.runner.ready();
+    expect(facadeModule.recoveredRuntimeSessionServices(ready).sessionEngine).toBe(cloud.engine);
+    f.runner.handlers(ready);
+    const listing = buildHandlers.mock.lastCall![1].sessionListing!;
+    expect(
+      (await listing.listSessions({ projectId: cloudProject.id, scope: "all" })).map(
+        (projection) => projection.session.id,
+      ),
+    ).toEqual([owned.session.id]);
+    expect(await listing.listSessions({ projectId: localProject.id, scope: "all" })).toEqual([]);
+    await expect(host.stop("cloud shutdown")).resolves.toEqual({
+      reason: "cloud shutdown",
+      clean: true,
+    });
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
   it("installs the quit hold synchronously and binds the host edge only from recovered readiness", async () => {
     const fixture = await composedHost("desktop-quit");
     const { host } = fixture;

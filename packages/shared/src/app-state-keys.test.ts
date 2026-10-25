@@ -96,6 +96,8 @@ describe("app_state key registry", () => {
       "volli:notification-preferences": "client-local VC-578",
       "volli:cloud-launch": "client-local stays",
       "volli:cloud-runner": "client-local stays",
+      "volli:runner-site:": "client-local stays",
+      "volli:runner-report:": "client-local stays",
       "volli:model-picker-view": "client-local VC-572",
       "volli:vc354-perf:": "client-local stays",
       "volli:experimental-flags": "split VC-577",
@@ -163,6 +165,21 @@ describe("classifyAppStateKey", () => {
         match: "prefix",
       });
     }
+  });
+
+  it("keeps runner reports local and separate from Session location hints", () => {
+    const key = "volli:runner-report:owner:runner:copy:ticket:repo" satisfies AppStateKey;
+    expect(isAppStateKey(key)).toBe(true);
+    expect(classifyAppStateKey(key)).toMatchObject({
+      placement: "client-local",
+      owner: "stays",
+      pattern: "volli:runner-report:",
+      match: "prefix",
+    });
+    expect(classifyAppStateKey("volli:runner-site:owner:session")?.pattern).toBe(
+      "volli:runner-site:",
+    );
+    expect(classifyAppStateKey("volli:runner-report")).toBeUndefined();
   });
 
   it("classifies retired rows as retired, exact and prefixed alike", () => {

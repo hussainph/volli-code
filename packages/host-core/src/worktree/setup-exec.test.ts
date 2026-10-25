@@ -129,6 +129,38 @@ describe("runPendingWorktreeSetup", () => {
     expect(existsSync(join(worktreePath, "ran-again"))).toBe(false);
   });
 
+  it("lets a machine-only reporter replace ticket failure writes without losing the recipe fact or gate", async () => {
+    const { home, worktreePath, deps, params } = pendingWorktree();
+    const reported: { ticketId: string; stderr: string }[] = [];
+    const request = {
+      ...params("echo 'machine-only failure'; exit 4"),
+      recipe: { projectId: "p", ticketDisplayId: "VC-7" },
+      reportFailure: (ticketId: string, stderr: string) => reported.push({ ticketId, stderr }),
+    };
+    const events = listTicketEvents(ctx.db, "t");
+
+    expect(await runPendingWorktreeSetup(deps, request)).toMatchObject({
+      kind: "failed",
+      message: "The project's setup command exited with code 4: machine-only failure",
+    });
+    expect(reported).toEqual([
+      { ticketId: "t", stderr: "machine-only failure\n\n[setup command exited with code 4]" },
+    ]);
+    expect(listTicketEvents(ctx.db, "t")).toEqual(events);
+    expect(readEnvironmentRun({ home }, worktreePath, "setup")).toMatchObject({
+      source: "legacyCommand",
+      outcome: "failed",
+      exitCode: 4,
+    });
+    expect(await runPendingWorktreeSetup(deps, request)).toMatchObject({
+      kind: "failed",
+      message: expect.stringContaining("Retry setup, or start anyway."),
+    });
+    expect(reported).toHaveLength(1);
+    // The override owns the failed phase, not the frozen ticket writer.
+    expect(phases).toEqual(["setting-up"]);
+  });
+
   it("reports a shell that cannot start as a failed setup", async () => {
     const { deps, params } = pendingWorktree();
 

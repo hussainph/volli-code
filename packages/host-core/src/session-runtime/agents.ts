@@ -3,6 +3,7 @@ import { isLiveHost, type HostCore } from "../index";
 import type { Logger } from "../log/logger";
 import type { HostEventBus } from "../ports/events";
 import { getProjectAuthorityPolicy, listProjects } from "../db/projects-repo";
+import type { Project } from "@volli/shared";
 import { listAutomationsForProject } from "../db/automations-repo";
 import { getComment } from "../db/comments-repo";
 import type { AgentToolDoor } from "../agent-tool-door";
@@ -31,6 +32,9 @@ export interface RuntimeSessionAgentOptions {
    * built on first ask, so a tool call never waits on another door to build it.
    */
   handlers: (ready: RecoveredSessionServices<RuntimeSessionFacade>) => HostHandlerMap;
+  projects?(): readonly Project[];
+  /** Cloud watches are backend jobs, never an additional in-process delivery. */
+  inProcessWatches?: boolean;
 }
 
 export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) {
@@ -41,7 +45,7 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
     mcpSettings,
   } = options;
   const liveHost = isLiveHost(hostCore) ? hostCore : undefined;
-  const sessionEngine = liveHost?.sessionEngine ?? null;
+  const sessionEngine = options.services.sessionEngine;
   const sessionWakeBus = liveHost?.sessionWakeBus ?? null;
   const sessionDb = liveHost?.database.db ?? null;
   const {
@@ -106,7 +110,7 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
   };
   let watches: Watches | null = null;
   const watchesFor = (): Watches | null => {
-    if (stopped) return null;
+    if (stopped || options.inProcessWatches === false) return null;
     if (watches !== null) return watches;
     if (
       liveHost === undefined ||
@@ -139,7 +143,7 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
     }
     agentToolDoor = createHostAgentToolDoor({
       db: sessionDb,
-      projects: () => listProjects(sessionDb),
+      projects: options.projects ?? (() => listProjects(sessionDb)),
       handlers: options.handlers(ready),
       delegation: sessionDelegation,
       automations: () => {

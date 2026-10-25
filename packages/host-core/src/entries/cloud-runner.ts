@@ -31,6 +31,11 @@
  * runner closes. `CLOUD_AGENT_ROUTES` says what every agent verb routes to.
  */
 export {
+  createCloudProductStore,
+  type CloudProductStore,
+  type CloudRunnerSyncConnection,
+} from "../cloud-store";
+export {
   type BackendConnection,
   type BackendLink,
   type BackendLinkOptions,

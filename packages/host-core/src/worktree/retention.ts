@@ -232,6 +232,8 @@ export async function reclaimIfStale(
   const db = deps.worktree.db;
   const ticket = getTicketRow(db, ticketId);
   if (!ticket) return SKIP("unknown ticket");
+  if (prepared(db, "SELECT 1 FROM working_copy_paths WHERE ticket_id = ?").get(ticketId))
+    return SKIP("runner-managed working copy");
   if (ticket.worktree_path === null) return SKIP("no worktree");
   // Already gone from disk: leave the stamp alone. Clearing it here would race
   // the recreate path and cost the ticket the only pointer it has left.
@@ -329,6 +331,8 @@ export async function trimFinishedWorktree(
   const db = deps.worktree.db;
   const ticket = getTicketRow(db, ticketId);
   if (!ticket) return TRIM_SKIP("unknown ticket");
+  if (prepared(db, "SELECT 1 FROM working_copy_paths WHERE ticket_id = ?").get(ticketId))
+    return TRIM_SKIP("runner-managed working copy");
   if (ticket.worktree_path === null) return TRIM_SKIP("no worktree");
   if (!existsSync(ticket.worktree_path)) return TRIM_SKIP("worktree already missing");
   if (ticket.retention_keep !== 0) return TRIM_SKIP("kept");

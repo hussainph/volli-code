@@ -14,6 +14,12 @@ function fakeConnections() {
     closed: boolean;
     queries: Map<string, (value: unknown) => void>;
     setUp(up: boolean): void;
+    reads: {
+      name: string;
+      args: unknown;
+      settle(value: unknown): void;
+      fail(error: unknown): void;
+    }[];
     calls: {
       name: string;
       args: unknown;
@@ -37,6 +43,15 @@ function fakeConnections() {
       setUp(up: boolean) {
         connection.up = up;
         listener?.(up);
+      },
+      reads: [] as {
+        name: string;
+        args: unknown;
+        settle(value: unknown): void;
+        fail(error: unknown): void;
+      }[],
+      query(name: string, args: Record<string, unknown>) {
+        return new Promise((settle, fail) => connection.reads.push({ name, args, settle, fail }));
       },
       queries: new Map<string, (value: unknown) => void>(),
       onUpdate(name: string, _args: Record<string, unknown>, update: (value: unknown) => void) {
@@ -317,6 +332,99 @@ describe("the backend link", () => {
     // A subscription asked for after close attaches to nothing.
     link.subscribe("late", {}, () => {})();
     expect(connections.made[1]!.queries.size).toBe(0);
+  });
+
+  it("reads first-attach context on the current connection without consuming the mutation gate", async () => {
+    const connections = fakeConnections();
+    const clock = manualClock();
+    const gate = createMutationGate();
+    const run = vi.spyOn(gate, "run");
+    const link = createBackendLink({ connect: connections.connect, token, gate, ...clock });
+    const input = { sessionId: "s", projectId: "p", ticketId: "t" };
+    const reading = link.query!("runnerContext:forSession", input);
+    expect(connections.made[0]!.reads[0]).toMatchObject({
+      name: "runnerContext:forSession",
+      args: input,
+    });
+    connections.made[0]!.reads[0]!.settle({ body: "cloud brief" });
+    await expect(reading).resolves.toEqual({ body: "cloud brief" });
+    expect(run).not.toHaveBeenCalled();
+    expect(clock.pending()).toBe(0);
+    const refused = link.query!("runnerContext:forSession", input);
+    connections.made[0]!.reads[1]!.fail(new Error("not a member"));
+    await expect(refused).rejects.toThrow("not a member");
+    expect(clock.pending()).toBe(0);
+    await link.close();
+  });
+
+  it("bounds a context read to ten seconds and refuses offline, closed or query-less adapters", async () => {
+    const connections = fakeConnections();
+    const clock = manualClock();
+    const link = createBackendLink({
+      connect: connections.connect,
+      token,
+      gate: createMutationGate(),
+      ...clock,
+    });
+    const reading = link.query!("runnerContext:forSession", {});
+    const timedOut = expect(reading).rejects.toThrow("Volli Cloud is unreachable");
+    clock.advance(9_999);
+    expect(clock.pending()).toBe(1);
+    clock.advance(1);
+    await timedOut;
+    expect(clock.pending()).toBe(0);
+    // A late answer cannot revive a timed-out first attach.
+    connections.made[0]!.reads[0]!.settle({ body: "too late" });
+    connections.made[0]!.setUp(false);
+    await expect(link.query!("runnerContext:forSession", {})).rejects.toThrow(
+      "Volli Cloud is unreachable",
+    );
+    expect(connections.made[0]!.reads).toHaveLength(1);
+    await link.close();
+    await expect(link.query!("runnerContext:forSession", {})).rejects.toThrow(
+      "Volli Cloud is unreachable",
+    );
+
+    const legacy = fakeConnections();
+    const oldLink = createBackendLink({
+      connect: (auth) => {
+        const connection: BackendConnection = legacy.connect(auth);
+        delete connection.query;
+        return connection;
+      },
+      token,
+      gate: createMutationGate(),
+      ...clock,
+    });
+    await expect(oldLink.query!("runnerContext:forSession", {})).rejects.toThrow(
+      "Runner queries are unavailable",
+    );
+    expect(clock.pending()).toBe(0);
+    await oldLink.close();
+  });
+
+  it("strands pending context reads on replacement or close, and clears their deadlines", async () => {
+    const connections = fakeConnections();
+    const clock = manualClock();
+    const link = createBackendLink({
+      connect: connections.connect,
+      token,
+      gate: createMutationGate(),
+      ...clock,
+    });
+    const replaced = link.query!("runnerContext:forSession", {});
+    const replacementError = expect(replaced).rejects.toBeInstanceOf(LinkResetError);
+    link.reconnectNow();
+    await replacementError;
+    expect(clock.pending()).toBe(0);
+    const closed = link.query!("runnerContext:forSession", {});
+    const closeError = expect(closed).rejects.toBeInstanceOf(LinkResetError);
+    await link.close();
+    await closeError;
+    expect(clock.pending()).toBe(0);
+    connections.made[0]!.reads[0]!.settle({ body: "stale connection" });
+    connections.made[1]!.reads[0]!.settle({ body: "closed connection" });
+    expect(clock.pending()).toBe(0);
   });
 
   it("uses real timers by default", async () => {

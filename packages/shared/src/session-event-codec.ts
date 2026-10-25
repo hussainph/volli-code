@@ -1163,6 +1163,7 @@ export function assertSessionEvent(value: SessionEvent, context: string): void {
 }
 
 export function assertSession(value: Session, context: string): void {
+  optionalOwnerUserId(value.ownerUserId, `${context}.ownerUserId`);
   if (!value.id || !value.projectId || !Number.isInteger(value.createdAt)) {
     throw new Error(`${context} is not a valid Session`);
   }
@@ -1204,6 +1205,7 @@ function decodeSessionValue(value: unknown, context: string): Session {
     parentSessionId: readParentSessionId(row.parentSessionId, `${context}.parentSessionId`),
     title: readNullableString(row.title, `${context}.title`),
     createdAt: readInteger(row.createdAt, `${context}.createdAt`),
+    ...optionalOwnerUserId(row.ownerUserId, `${context}.ownerUserId`),
   };
   assertSession(session, context);
   return session;
@@ -2010,4 +2012,12 @@ export function decodeSessionStopDetail(value: unknown, context: string): Sessio
     retry: enumValue(row.retry, ["not-retried", "exhausted"], `${context}.retry`),
     resetsAt: readNullableInteger(row.resetsAt, `${context}.resetsAt`),
   };
+}
+
+/** Missing stays missing: adding a default would change legacy durable bytes. */
+function optionalOwnerUserId(value: unknown, context: string): { ownerUserId?: string } {
+  if (value === undefined) return {};
+  const ownerUserId = readString(value, context);
+  if (ownerUserId.length === 0) throw new Error(`${context} must not be empty`);
+  return { ownerUserId };
 }

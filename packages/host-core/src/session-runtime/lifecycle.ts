@@ -6,7 +6,7 @@
  * port, including the browser backend. Recovery uses the same host engine.
  */
 import { randomUUID } from "node:crypto";
-import type { HostedSessionRuntime } from "@volli/session-engine";
+import type { HostedSessionRuntime, SessionEngine } from "@volli/session-engine";
 import {
   logErrorSummary,
   type LogErrorSummary,
@@ -38,6 +38,7 @@ import {
 } from "./boot-recovery";
 import { resumeRecoveredTurns } from "./restart-resume";
 import { createHostNoticeDelivery } from "./durable-host-notice-delivery";
+import { scopeSqliteHostNoticeOutbox } from "./sqlite-host-notice-outbox";
 import { catchUpSessionResumptions } from "./session-resumptions";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { Delegations } from "./delegate-session";
@@ -124,6 +125,11 @@ export interface SessionRuntimeLifecycle<Services> {
 
 export function createSessionRuntimeLifecycle<Services>(options: {
   host: HostCore;
+  /** Launch-selected engine, used by every ledger consumer during recovery. */
+  sessionEngine?: SessionEngine;
+  /** Filters machine-state queues before they can reach runtime recovery. */
+  ownsSession?(sessionId: string): boolean;
+  projectIds?(): readonly string[];
   venue?: RunnerIdentity;
   /** Upgrade-only ownership supplied by the host, not the executor. */
   ownsLegacyRunner?(runner: RunnerIdentity): boolean;
@@ -151,8 +157,14 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   const { host, ports, runtime, rpc, observability, delegation } = options;
   const { database } = host;
   const liveHost = isLiveHost(host) ? host : undefined;
-  const sessionEngine = liveHost?.sessionEngine ?? null;
-  const hostNoticeOutbox = liveHost?.[SESSION_RUNTIME].hostNoticeOutbox ?? null;
+  const sessionEngine =
+    liveHost === undefined ? null : (options.sessionEngine ?? liveHost.sessionEngine);
+  const ownsSession = options.ownsSession ?? (() => true);
+  const rawNoticeOutbox = liveHost?.[SESSION_RUNTIME].hostNoticeOutbox ?? null;
+  const hostNoticeOutbox =
+    rawNoticeOutbox === null || options.ownsSession === undefined || !database.ok
+      ? rawNoticeOutbox
+      : scopeSqliteHostNoticeOutbox(database.db, rawNoticeOutbox, ownsSession);
   const sessionWakeBus = liveHost?.sessionWakeBus ?? null;
   const notices =
     runtime === null || hostNoticeOutbox === null
@@ -193,7 +205,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   const resume =
     runtime !== null && sessionEngine !== null && database.ok
       ? createScheduledResumeHost({
-          candidates: async () => listScheduledResumeSessionIds(database.db),
+          candidates: async () => listScheduledResumeSessionIds(database.db).filter(ownsSession),
           projection: async (sessionId) => (await runtime.projection({ sessionId })).projection,
           ticketSessions: ({ projectId, ticketId }) =>
             sessionEngine.listSessions({ projectId, scope: "ticket", ticketId }),
@@ -253,8 +265,10 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     if (database.ok && sessionEngine !== null) {
       // Compare before recovery itself can append events. A present watermark
       // is consumed in the same transaction that refuses any stale queued rows.
-      held = consumeFollowUpCleanClose(database.db, (sessionId, error) =>
-        ports.log.error("unreadable follow-up queue", { sessionId, error }),
+      held = consumeFollowUpCleanClose(
+        database.db,
+        (sessionId, error) => ports.log.error("unreadable follow-up queue", { sessionId, error }),
+        options.ownsSession,
       );
       const failures: BootRecoveryReport["failures"][number][] = [];
       let recoveredTurns = 0;
@@ -272,7 +286,8 @@ export function createSessionRuntimeLifecycle<Services>(options: {
                   new Error("The Session runtime is unavailable during boot recovery."),
                 )
               : runtime.reconcile(input),
-          projectIds: listProjects(database.db).map((project) => project.id),
+          projectIds:
+            options.projectIds?.() ?? listProjects(database.db).map((project) => project.id),
           newId: randomUUID,
           now: Date.now,
           // A binding the runtime holds after a failed reconcile was rebuilt.
@@ -324,7 +339,11 @@ export function createSessionRuntimeLifecycle<Services>(options: {
         try {
           // Construct even with nothing unanswered: this arms resumed-child notices.
           const delegateHost = options.delegationsFor();
-          const unanswered = delegation.listUnansweredSubagents();
+          const unanswered = delegation
+            .listUnansweredSubagents()
+            .filter(
+              (child) => ownsSession(child.childSessionId) && ownsSession(child.parentSessionId),
+            );
           if (unanswered.length > 0) {
             const recovered = await delegateHost?.recover(unanswered);
             if (recovered !== undefined) {
@@ -345,7 +364,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
       throw new SessionRuntimeClosingError("The Session runtime closed during recovery.");
     // Explain durable holds after stale bindings are retired, so the Attention
     // belongs to today's executor. Failure cannot unhold a row; retry next boot.
-    for (const sessionId of held) {
+    for (const sessionId of held.filter(ownsSession)) {
       try {
         await runtime?.reportMessageDeliveryFailure({
           sessionId,
@@ -455,7 +474,12 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     return boot;
   }
   const observeScheduledResume = (projection: SessionProjection): void => {
-    if (!closing) resume?.observe(projection);
+    if (
+      !closing &&
+      resume !== null &&
+      (options.ownsSession === undefined || ownsSession(projection.session.id))
+    )
+      resume.observe(projection);
   };
   return {
     ready,
@@ -463,7 +487,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     observeScheduledResume,
     bootRecovery: () => bootRecovery,
     relayShellNotice: (notice) => {
-      if (closing || relay === null) return;
+      if (closing || relay === null || !ownsSession(notice.sessionId)) return;
       // A fresh external notice cannot read the ledger while boot recovery is
       // still reconciling it. Recovery's durable outbox remains an internal port.
       void ready().then(

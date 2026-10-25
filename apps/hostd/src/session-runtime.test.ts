@@ -1,6 +1,15 @@
-/** Composition contract; the integration test drives the real collaborators. */
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+/** Composition contract over the real scoped Session reader; runtime collaborators are mocked. */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import type { SessionProjection } from "@volli/shared";
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
+import { insertProject, insertTicket } from "@volli/host-core/db";
+import {
+  createTestSessionEngine,
+  openTestDb,
+  testProject,
+  testTicket,
+  type TestDb,
+} from "@volli/host-core/testing";
 import type { HeadlessSecrets } from "./secrets";
 import { busyRefusal } from "@volli/host-core/worktree";
 import type { BackgroundShellHostPorts } from "@volli/host-core/session-runtime";
@@ -42,10 +51,14 @@ vi.mock("@volli/agent-runtime", () => ({
   piSignIn: seam.piSignIn,
   piHostCredentials: seam.piHostCredentials,
 }));
-vi.mock("../../../packages/host-core/src/db/projects-repo", () => ({
+vi.mock("../../../packages/host-core/src/db/projects-repo", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../packages/host-core/src/db/projects-repo")>()),
   getProjectById: seam.project,
 }));
-vi.mock("../../../packages/host-core/src/db/tickets-repo", () => ({ getTicket: seam.ticket }));
+vi.mock("../../../packages/host-core/src/db/tickets-repo", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../packages/host-core/src/db/tickets-repo")>()),
+  getTicket: seam.ticket,
+}));
 vi.mock("../../../packages/host-core/src/secrets/service", () => ({
   SecretService: class {
     constructor(public store: unknown) {}
@@ -118,11 +131,20 @@ vi.mock("../../../packages/host-core/src/worktree/agent-sites", () => ({
 }));
 import { createHeadlessSessionRuntime, headlessModelAccess } from "./session-runtime";
 
+const databases: TestDb[] = [];
 beforeEach(() => {
   vi.resetAllMocks();
   seam.shellOptions = null;
 });
+afterEach(() => {
+  vi.restoreAllMocks();
+  for (const database of databases.splice(0)) database.cleanup();
+});
 function fixture() {
+  // The local wrapper selects ids in SQLite before the host engine folds them.
+  const database = openTestDb();
+  databases.push(database);
+  const engine = createTestSessionEngine(database.db);
   const runtime = {
     openNativeBindings: vi.fn(() => []),
     projection: vi.fn(async () => ({ projection: { turnActive: true } })),
@@ -172,8 +194,8 @@ function fixture() {
   const host = {
     kind: "live",
     stopPolicy: "drain-and-close",
-    database: { ok: true, db: {} },
-    sessionEngine: { listAttachedSessions: vi.fn(async () => []) },
+    database: { ok: true, db: database.db },
+    sessionEngine: engine,
     sessionWakeBus: { subscribe: vi.fn(() => () => {}) },
     liveWork: { observeShell: vi.fn(), forgetShell: vi.fn() },
     [SESSION_RUNTIME]: { claim: () => () => {} },
@@ -199,6 +221,7 @@ function fixture() {
   return {
     input,
     host,
+    engine,
     runtimeServices,
     spawnLedger,
     runtime,
@@ -323,7 +346,7 @@ describe("headless runtime ownership", () => {
       PATH: "/service/bin",
       VOLLI_SOCKET: "/run/hostd.sock",
     });
-    await seam.concurrency.mock.lastCall![0].listAttachedSessions();
+    expect(await seam.concurrency.mock.lastCall![0].listAttachedSessions()).toEqual([]);
     const context = seam.context.mock.lastCall![0];
     await context.waitForBirth("s"); // Internal recovery must not wait for itself.
     expect(f.lifecycle.ready).not.toHaveBeenCalled();
@@ -460,22 +483,67 @@ describe("headless runtime ownership", () => {
     expect(seam.handlers.mock.lastCall![1]).toMatchObject({ signIns: null });
   });
 
-  it("lists Sessions from the engine, live by this process's executor bindings (VC-713)", async () => {
+  it("lists scoped Sessions through the host engine, live by this process's executor bindings (VC-713)", async () => {
     const f = fixture();
-    const listSessions = vi.fn(async () => []);
-    (f.host.sessionEngine as unknown as { listSessions: typeof listSessions }).listSessions =
-      listSessions;
+    insertProject(f.host.database.db, testProject({ id: "p" }));
+    insertProject(f.host.database.db, testProject({ id: "other", ticketPrefix: "OTHER" }));
+    insertTicket(f.host.database.db, testTicket("p", { id: "t" }));
+    const provenance = {
+      source: { kind: "system" as const, id: "test", detail: null },
+      venue: f.input.options.venue,
+    };
+    for (const [id, projectId, ticketId, ownerUserId] of [
+      ["s-1", "p", "t", undefined],
+      ["s-cloud", "p", "t", "cloud-owner"],
+      ["s-other", "other", null, undefined],
+    ] as const) {
+      await f.engine.createSession({
+        commandId: `create-${id}`,
+        requestedSessionId: id,
+        projectId,
+        ticketId,
+        role: ticketId === null ? "project" : "ticket",
+        parentSessionId: null,
+        title: id,
+        ...(ownerUserId === undefined ? {} : { ownerUserId }),
+        provenance,
+      });
+      if (ticketId !== null) {
+        await f.engine.submit({
+          commandId: `signal-${id}`,
+          sessionId: id,
+          intent: { kind: "session.signal", signal: "done", reason: id },
+          provenance,
+        });
+      }
+    }
+    const getSession = vi.spyOn(f.engine, "getSession");
+    const listSessions = vi.spyOn(f.engine, "listSessions");
+    const listSignals = vi.spyOn(f.engine, "listLatestTicketSignals");
     const ready = await f.launch().ready();
     const { sessionListing } = seam.handlers.mock.lastCall![1] as {
       sessionListing: {
         db: unknown;
-        listSessions(query: unknown): Promise<unknown>;
+        listSessions(query: unknown): Promise<readonly SessionProjection[]>;
         liveAttachmentIds(): ReadonlySet<string>;
       };
     };
     expect(sessionListing.db).toBe(f.host.database.db);
-    await sessionListing.listSessions({ projectId: "p", scope: "all" });
-    expect(listSessions).toHaveBeenCalledWith({ projectId: "p", scope: "all" });
+    expect(
+      (await sessionListing.listSessions({ projectId: "p", scope: "all" })).map(
+        ({ session }) => session.id,
+      ),
+    ).toEqual(["s-1"]);
+    // The scoped SQLite reader selects first; only local rows reach the host's fold,
+    // including when a cloud birth's runner cursor is absent (for example, a restore).
+    expect(getSession).toHaveBeenCalledExactlyOnceWith({ sessionId: "s-1" });
+    expect(listSessions).not.toHaveBeenCalled();
+    expect(
+      (await sessionListing.listSessions({ projectId: "p", scope: "ticket", ticketId: "t" })).map(
+        ({ session }) => session.id,
+      ),
+    ).toEqual(["s-1"]);
+    expect(await sessionListing.listSessions({ projectId: "p", scope: "project" })).toEqual([]);
     f.runtime.openNativeBindings.mockReturnValue([
       { attachmentId: "a-1", sessionId: "s-1" },
     ] as never);
@@ -485,12 +553,16 @@ describe("headless runtime ownership", () => {
     const handlers = seam.handlers.mock.lastCall![1];
     await handlers.sessionReads("session.show", "p", { session: "s-1" });
     expect(reads).toHaveBeenCalledWith("session.show", "p", { session: "s-1" });
-    const listSignals = vi.fn(async () => []);
-    (
-      f.host.sessionEngine as unknown as { listLatestTicketSignals: typeof listSignals }
-    ).listLatestTicketSignals = listSignals;
-    await handlers.ticketSignals("p");
-    expect(listSignals).toHaveBeenCalledWith({ projectId: "p" });
+    expect(await handlers.ticketSignals("p")).toEqual([
+      {
+        ticketId: "t",
+        sessionId: "s-1",
+        signal: "done",
+        reason: "s-1",
+        createdAt: expect.any(Number),
+      },
+    ]);
+    expect(listSignals).not.toHaveBeenCalled();
   });
 
   it("reads live Sessions from the attachment tokens it minted, on every call", () => {

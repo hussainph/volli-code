@@ -42,6 +42,7 @@ import type * as lib_jobs from "../lib/jobs.js";
 import type * as lib_objectStore from "../lib/objectStore.js";
 import type * as lib_previewAccess from "../lib/previewAccess.js";
 import type * as lib_runnerAuth from "../lib/runnerAuth.js";
+import type * as lib_runnerContext from "../lib/runnerContext.js";
 import type * as lib_runnerSecrets from "../lib/runnerSecrets.js";
 import type * as lib_sealing from "../lib/sealing.js";
 import type * as lib_secrets from "../lib/secrets.js";
@@ -55,7 +56,9 @@ import type * as lib_workspaces from "../lib/workspaces.js";
 import type * as members from "../members.js";
 import type * as migration from "../migration.js";
 import type * as previewAccess from "../previewAccess.js";
+import type * as projectCheckouts from "../projectCheckouts.js";
 import type * as projects from "../projects.js";
+import type * as runnerContext from "../runnerContext.js";
 import type * as runnerHttp from "../runnerHttp.js";
 import type * as runnerJobs from "../runnerJobs.js";
 import type * as runners from "../runners.js";
@@ -70,6 +73,7 @@ import type * as streamChunks from "../streamChunks.js";
 import type * as testJobs from "../testJobs.js";
 import type * as testSeed from "../testSeed.js";
 import type * as transcripts from "../transcripts.js";
+import type * as workingCopies from "../workingCopies.js";
 import type * as workspaces from "../workspaces.js";
 
 import type {
@@ -113,6 +117,7 @@ declare const fullApi: ApiFromModules<{
   "lib/objectStore": typeof lib_objectStore;
   "lib/previewAccess": typeof lib_previewAccess;
   "lib/runnerAuth": typeof lib_runnerAuth;
+  "lib/runnerContext": typeof lib_runnerContext;
   "lib/runnerSecrets": typeof lib_runnerSecrets;
   "lib/sealing": typeof lib_sealing;
   "lib/secrets": typeof lib_secrets;
@@ -126,7 +131,9 @@ declare const fullApi: ApiFromModules<{
   members: typeof members;
   migration: typeof migration;
   previewAccess: typeof previewAccess;
+  projectCheckouts: typeof projectCheckouts;
   projects: typeof projects;
+  runnerContext: typeof runnerContext;
   runnerHttp: typeof runnerHttp;
   runnerJobs: typeof runnerJobs;
   runners: typeof runners;
@@ -141,6 +148,7 @@ declare const fullApi: ApiFromModules<{
   testJobs: typeof testJobs;
   testSeed: typeof testSeed;
   transcripts: typeof transcripts;
+  workingCopies: typeof workingCopies;
   workspaces: typeof workspaces;
 }>;
 

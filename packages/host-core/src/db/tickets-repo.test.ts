@@ -14,6 +14,10 @@ import {
   listArchivedTicketsByProject,
   listTicketRosterByProject,
   listTicketsByProject,
+  listWorktreePaths,
+  listWorktreeRefs,
+  listRetentionCandidates,
+  listTrimCandidates,
   nextTicketNumberForProject,
   updateTicketFields,
 } from "./tickets-repo";
@@ -415,4 +419,30 @@ describe("the VC-387 steady-state roster reads", () => {
     // cannot draw would also be one nobody could recover the text from.
     expect(getTicketBody(ctx.db, bad.id)).toBe("# Still a body");
   });
+});
+
+it("treats registry paths as claimed machine folders, never frozen retention candidates", () => {
+  const { projectId } = setup();
+  insertTicket(
+    ctx.db,
+    testTicket(projectId, {
+      id: "registry-ticket",
+      status: "done",
+      worktreePath: "/registry-copy",
+    }),
+  );
+  ctx.db
+    .prepare(`INSERT INTO working_copy_paths
+    (ticket_id,project_repo_id,runner_id,abs_path) VALUES ('registry-ticket','repo','runner','/registry-copy')`)
+    .run();
+  expect(listWorktreePaths(ctx.db)).toContain("/registry-copy");
+  expect(listWorktreeRefs(ctx.db).filter((ref) => ref.path === "/registry-copy")).toHaveLength(1);
+  expect(listRetentionCandidates(ctx.db)).toEqual([]);
+  expect(listTrimCandidates(ctx.db)).toEqual([]);
+  // Cloud-only rows have no frozen worktree stamp, but their path is still claimed.
+  ctx.db.prepare("UPDATE tickets SET worktree_path = NULL WHERE id = 'registry-ticket'").run();
+  expect(listWorktreePaths(ctx.db)).toContain("/registry-copy");
+  expect(listWorktreeRefs(ctx.db).find((ref) => ref.path === "/registry-copy")?.ticketId).toBe(
+    "registry-ticket",
+  );
 });

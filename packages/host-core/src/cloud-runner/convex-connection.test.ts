@@ -1,6 +1,10 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-const clients = vi.hoisted(() => ({ made: [] as FakeClient[] }));
+const clients = vi.hoisted(() => ({ made: [] as FakeClient[], queriesAvailable: true }));
+afterEach(() => {
+  clients.made.length = 0;
+  clients.queriesAvailable = true;
+});
 
 interface FakeClient {
   url: string;
@@ -9,6 +13,7 @@ interface FakeClient {
   connected: boolean;
   listener: ((state: { isWebSocketConnected: boolean }) => void) | null;
   mutation: ReturnType<typeof vi.fn>;
+  query: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   queries: {
     ref: unknown;
@@ -28,6 +33,7 @@ vi.mock("convex/browser", () => ({
       connected: false,
       listener: null,
       mutation: vi.fn(async (_ref: unknown, args: unknown) => ({ echoed: args })),
+      query: vi.fn(async (_ref: unknown, args: unknown) => ({ context: args })),
       close: vi.fn(async () => {}),
       queries: [],
     };
@@ -35,6 +41,7 @@ vi.mock("convex/browser", () => ({
     return {
       setAuth: (token: unknown) => (client.token = token),
       mutation: client.mutation,
+      ...(clients.queriesAvailable ? { query: client.query } : {}),
       onUpdate: (ref: unknown, args: unknown, callback: (value: unknown) => void) => {
         const off = vi.fn();
         client.queries.push({ ref, args, callback, off });
@@ -72,6 +79,19 @@ describe("the Convex connection", () => {
       echoed: { bootId: "b" },
     });
     expect(getFunctionName(client.mutation.mock.calls[0]![0] as never)).toBe("runners:heartbeat");
+    const context = { sessionId: "session", projectId: "project", ticketId: "ticket" };
+    await expect(connection.query!("runnerContext:forSession", context)).resolves.toEqual({
+      context,
+    });
+    expect(getFunctionName(client.query.mock.calls[0]![0] as never)).toBe(
+      "runnerContext:forSession",
+    );
+    expect(client.query.mock.calls[0]![1]).toBe(context);
+    expect(client.mutation).toHaveBeenCalledOnce();
+    client.query.mockRejectedValueOnce(new Error("membership lost"));
+    await expect(connection.query!("runnerContext:forSession", context)).rejects.toThrow(
+      "membership lost",
+    );
 
     const changes: boolean[] = [];
     const unsubscribe = connection.onConnectionChange((up) => changes.push(up));
@@ -93,5 +113,18 @@ describe("the Convex connection", () => {
     expect(query.off).toHaveBeenCalled();
     await connection.close();
     expect(client.close).toHaveBeenCalled();
+  });
+
+  it("refuses a bounded read when an older injected Convex client has no query port", async () => {
+    clients.queriesAvailable = false;
+    const convex: ConvexClientModule = { ConvexClient, makeFunctionReference };
+    const connection = convexBackendConnection("https://dep.convex.cloud", convex)(token);
+    const client = clients.made[0]!;
+    await expect(
+      connection.query!("runnerContext:forSession", { sessionId: "session" }),
+    ).rejects.toThrow("Runner queries are unavailable.");
+    expect(client.query).not.toHaveBeenCalled();
+    expect(client.mutation).not.toHaveBeenCalled();
+    await connection.close();
   });
 });

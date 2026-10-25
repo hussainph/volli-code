@@ -33,6 +33,8 @@ export type LinkStatus =
 /** One live connection, as the Convex client provides it. */
 export interface BackendConnection {
   mutation(name: string, args: Record<string, unknown>): Promise<unknown>;
+  /** A bounded first-attach read; older adapters may expose subscriptions only. */
+  query?(name: string, args: Record<string, unknown>): Promise<unknown>;
   /** A live query: `listener` gets each new result. Returns the unsubscribe. */
   onUpdate(
     name: string,
@@ -81,6 +83,8 @@ export interface BackendLink {
   ): Promise<unknown>;
   /** `mutate` at control priority: what the presence loop and the inbox call. */
   readonly call: RunnerMutationCaller;
+  /** Reads fail fast while disconnected and never wait indefinitely at first attach. */
+  query?(name: string, args: Record<string, unknown>): Promise<unknown>;
   /** A live query that survives connection replacement. Returns the unsubscribe. */
   subscribe(
     name: string,
@@ -235,6 +239,34 @@ export function createBackendLink(options: BackendLinkOptions): BackendLink {
     },
     mutate,
     call: (name, args) => mutate(name, args, { priority: "control" }),
+    query(name, args) {
+      if (closed || status.state !== "connected") {
+        return Promise.reject(
+          new Error("Volli Cloud is unreachable; this ticket's brief can't be read."),
+        );
+      }
+      const on = connection;
+      if (on.query === undefined)
+        return Promise.reject(new Error("Runner queries are unavailable."));
+      return new Promise((resolve, reject) => {
+        const finish = (error?: unknown, value?: unknown) => {
+          clearTimer(deadline);
+          pending.delete(strand);
+          if (error !== undefined) reject(error);
+          else resolve(value);
+        };
+        const strand = (error: Error) => finish(error);
+        const deadline = setTimer(
+          () => finish(new Error("Volli Cloud is unreachable; this ticket's brief can't be read.")),
+          10_000,
+        );
+        pending.add(strand);
+        on.query!(name, args).then(
+          (value) => finish(undefined, value),
+          (error: unknown) => finish(error),
+        );
+      });
+    },
     subscribe(name, args, listener) {
       const subscription = { name, args, listener, off: () => {} };
       if (!closed) subscription.off = connection.onUpdate(name, args, listener);

@@ -22,6 +22,7 @@ type TokenFetcher = (options: { forceRefreshToken: boolean }) => Promise<string 
 export interface ConvexClientLike {
   setAuth(fetchToken: TokenFetcher): void;
   mutation(reference: never, args: never): Promise<unknown>;
+  query?(reference: never, args: never): Promise<unknown>;
   onUpdate(reference: never, args: never, callback: (value: never) => void): () => void;
   connectionState(): { isWebSocketConnected: boolean };
   subscribeToConnectionState(
@@ -46,6 +47,11 @@ export function convexBackendConnection(url: string, convex: ConvexClientModule)
     const connection: BackendConnection = {
       mutation: (name, args) =>
         client.mutation(convex.makeFunctionReference(name) as never, args as never),
+      query: (name, args) => {
+        if (client.query === undefined)
+          return Promise.reject(new Error("Runner queries are unavailable."));
+        return client.query(convex.makeFunctionReference(name) as never, args as never);
+      },
       onUpdate(name, args, listener) {
         const off = client.onUpdate(
           convex.makeFunctionReference(name) as never,

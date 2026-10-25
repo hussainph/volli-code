@@ -95,6 +95,13 @@ export interface WorktreeSetupExecParams {
   deadlineMs?: number;
   /** Clock for run facts; defaults to `Date.now`. */
   now?: () => number;
+  /**
+   * Store-specific failure reporting, including the `failed` phase. Omitted,
+   * the local runner records its existing SQLite ticket event. Cloud supplies
+   * a machine-only reporter; environment run facts and the setup gate are
+   * recorded independently, whichever reporter is used.
+   */
+  reportFailure?: (ticketId: string, stderr: string) => void;
 }
 
 /** What a recipe run tells its script, beyond the working copy itself. */
@@ -110,7 +117,8 @@ export interface WorktreeRecipeContext {
  * `skipped`: nothing was owed, another door claimed it, or no command is
  * configured (the claim consumed it). `succeeded`: the command exited 0.
  * `failed`: it exited non-zero, died on a signal, ran out of time or never
- * started — already recorded on the ticket; `message` is the one-line reason.
+ * started — already reported through the failure reporter (on the ticket by
+ * default); `message` is the one-line reason.
  * With recipes on, `failed` is also the answer for a working copy whose
  * earlier setup failed and is still unanswered; `run` is that fact.
  */
@@ -433,7 +441,7 @@ function recordFact(
   }
 }
 
-/** Records the failure on the ticket and phrases the start's one-line reason. */
+/** Reports the failure and phrases the start's one-line reason. */
 function fail(
   deps: WorktreePorts,
   params: WorktreeSetupExecParams,
@@ -444,11 +452,9 @@ function fail(
   result?: ExecResult,
 ): WorktreeSetupExecOutcome {
   const what = subject(recipe);
-  recordSetupFailure(
-    deps,
-    params.ticketId,
-    `${tail}\n[${recipe?.source === "repo" ? ".agents/setup" : "setup command"} ${reason}]`,
-  );
+  const stderr = `${tail}\n[${recipe?.source === "repo" ? ".agents/setup" : "setup command"} ${reason}]`;
+  if (params.reportFailure === undefined) recordSetupFailure(deps, params.ticketId, stderr);
+  else params.reportFailure(params.ticketId, stderr);
   const lastLine = lastOutputLine(tail);
   const message = `${what} ${reason}${lastLine === null ? "." : `: ${lastLine}`}`;
   if (start === null) return { kind: "failed", message };

@@ -27,16 +27,69 @@ function pendingWatermarks(db: Database.Database): Array<{ session_id: string; s
   ).all();
 }
 
+/** The launch scope is registered only after boot consumption commits. */
+const cleanCloseScopes = new WeakMap<Database.Database, (sessionId: string) => boolean>();
+
+function cleanCloseStamp(encoded: string | undefined): {
+  sessions: Record<string, unknown>;
+  consumedSessionIds: readonly string[];
+} {
+  let stamp: unknown;
+  try {
+    if (encoded !== undefined) stamp = JSON.parse(encoded);
+  } catch {
+    /* An unreadable marker holds every unconsumed queue, never guesses. */
+  }
+  if (!record(stamp) || stamp.v !== 1 || !record(stamp.sessions)) {
+    return { sessions: {}, consumedSessionIds: [] };
+  }
+  return {
+    sessions: stamp.sessions,
+    consumedSessionIds:
+      Array.isArray(stamp.consumedSessionIds) &&
+      stamp.consumedSessionIds.every((id: unknown) => typeof id === "string")
+        ? stamp.consumedSessionIds
+        : [],
+  };
+}
+
 /** Called only after a clean lifecycle drain, while SQLite is still open. */
 export function stampFollowUpCleanClose(db: Database.Database, now: number): void {
   withTransaction(db, () => {
+    const encoded = getAppState(db, FOLLOW_UP_CLEAN_CLOSE_KEY);
+    const ownsSession = cleanCloseScopes.get(db);
     // A quit before readiness (or failed consumption) must not overwrite the
     // prior process's still-unchecked watermark with this process's history.
-    if (getAppState(db, FOLLOW_UP_CLEAN_CLOSE_KEY) !== undefined) return;
-    const sessions = Object.fromEntries(
-      pendingWatermarks(db).map(({ session_id, sequence }) => [session_id, sequence]),
+    if (ownsSession === undefined && encoded !== undefined) return;
+    const pending = pendingWatermarks(db);
+    if (ownsSession === undefined) {
+      const sessions = Object.fromEntries(
+        pending.map(({ session_id, sequence }) => [session_id, sequence]),
+      );
+      setAppState(db, FOLLOW_UP_CLEAN_CLOSE_KEY, JSON.stringify({ v: 1, sessions }), now);
+      return;
+    }
+    const previous = cleanCloseStamp(encoded);
+    const sessions = new Map(Object.entries(previous.sessions));
+    const consumed = new Set(previous.consumedSessionIds);
+    for (const id of sessions.keys()) if (ownsSession(id)) sessions.delete(id);
+    for (const id of consumed) if (ownsSession(id)) consumed.delete(id);
+    for (const { session_id, sequence } of pending) {
+      if (ownsSession(session_id)) sessions.set(session_id, sequence);
+      // There was no downgrade sentinel at all. Do not invent one for a
+      // different owner's queue just because this launch closes cleanly.
+      else if (encoded === undefined) consumed.add(session_id);
+    }
+    setAppState(
+      db,
+      FOLLOW_UP_CLEAN_CLOSE_KEY,
+      JSON.stringify({
+        v: 1,
+        sessions: Object.fromEntries(sessions),
+        ...(consumed.size === 0 ? {} : { consumedSessionIds: [...consumed] }),
+      }),
+      now,
     );
-    setAppState(db, FOLLOW_UP_CLEAN_CLOSE_KEY, JSON.stringify({ v: 1, sessions }), now);
   });
 }
 
@@ -44,23 +97,21 @@ export function stampFollowUpCleanClose(db: Database.Database, now: number): voi
 export function consumeFollowUpCleanClose(
   db: Database.Database,
   onUnreadable?: (sessionId: string, error: unknown) => void,
+  ownsSession?: (sessionId: string) => boolean,
 ): string[] {
-  return withTransaction(db, () => {
+  const heldSessions = withTransaction(db, () => {
     const encoded = getAppState(db, FOLLOW_UP_CLEAN_CLOSE_KEY);
-    let stamp: unknown;
-    if (encoded !== undefined) {
-      try {
-        stamp = JSON.parse(encoded);
-      } catch {
-        /* Unreadable stamp: hold, never guess. */
-      }
-    }
-    const sessions = record(stamp) && stamp.v === 1 && record(stamp.sessions) ? stamp.sessions : {};
+    const { sessions, consumedSessionIds } = cleanCloseStamp(encoded);
+    const consumed = new Set(consumedSessionIds);
+    const pending = pendingWatermarks(db).filter(
+      ({ session_id }) => ownsSession?.(session_id) ?? true,
+    );
     const held: string[] = [];
-    for (const { session_id, sequence } of pendingWatermarks(db)) {
+    for (const { session_id, sequence } of pending) {
       const previous = Object.hasOwn(sessions, session_id) ? sessions[session_id] : undefined;
       const stale =
         encoded !== undefined &&
+        !consumed.has(session_id) &&
         !(typeof previous === "number" && Number.isSafeInteger(previous) && previous >= sequence);
       const stored = prepared<[string], { state: string }>(
         db,
@@ -107,20 +158,45 @@ export function consumeFollowUpCleanClose(
       )
         held.push(session_id);
     }
-    deleteAppState(db, FOLLOW_UP_CLEAN_CLOSE_KEY);
+    if (ownsSession === undefined) deleteAppState(db, FOLLOW_UP_CLEAN_CLOSE_KEY);
+    else if (encoded !== undefined) {
+      // Additive to the v1 marker. A consumed owner has no active watermark
+      // until clean close; foreign owners keep their original sentinel. This
+      // also preserves the old crash-without-a-watermark behavior per owner.
+      for (const { session_id } of pending) consumed.add(session_id);
+      setAppState(
+        db,
+        FOLLOW_UP_CLEAN_CLOSE_KEY,
+        JSON.stringify({
+          v: 1,
+          sessions,
+          ...(consumed.size === 0 ? {} : { consumedSessionIds: [...consumed] }),
+        }),
+        Date.now(),
+      );
+    }
     return held;
   });
+  if (ownsSession === undefined) cleanCloseScopes.delete(db);
+  else cleanCloseScopes.set(db, ownsSession);
+  return heldSessions;
 }
 
 const log = hostLogger("follow-up");
 
 /** No async work inside the atomic queue command/claim/settlement boundary. */
-export function createSqliteSessionFollowUpLedger(db: Database.Database): SessionFollowUpLedger {
+export function createSqliteSessionFollowUpLedger(
+  db: Database.Database,
+  ownsSession?: (sessionId: string) => boolean,
+): SessionFollowUpLedger {
   return {
     transaction(sessionId, work) {
       let before: ReadonlyMap<string, FollowUpRow> = new Map();
       let after: SessionFollowUpState | null = null;
       const settled = settleTransaction(db, () => {
+        if (ownsSession !== undefined && !ownsSession(sessionId)) {
+          throw new Error("The follow-up queue is outside this launch's Session scope");
+        }
         const stored = prepared<[string], { state: string }>(
           db,
           "SELECT state FROM session_follow_up_queue WHERE session_id = ?",
@@ -168,7 +244,8 @@ export function createSqliteSessionFollowUpLedger(db: Database.Database): Sessio
           "SELECT session_id FROM session_follow_up_queue WHERE pending_count > 0 ORDER BY session_id",
         )
           .all()
-          .map(({ session_id }) => session_id),
+          .map(({ session_id }) => session_id)
+          .filter((sessionId) => ownsSession?.(sessionId) ?? true),
       );
     },
   };
