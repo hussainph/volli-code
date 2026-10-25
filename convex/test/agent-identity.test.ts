@@ -855,12 +855,25 @@ describe("Sessions, read and commanded by an agent", () => {
     });
     expect(listed.page.map((row) => row.id)).toEqual([sessionId]);
     await expect(agent.query(api.sessions.attention, { sessionId })).resolves.toBeTruthy();
+    await expect(
+      agent.query(api.sessionTranscript.artifacts, { sessionId, digests: [] }),
+    ).resolves.toBeTruthy();
+    await expect(agent.query(api.sessionTranscript.segments, { sessionId })).resolves.toMatchObject(
+      { segments: [] },
+    );
+    await expect(
+      agent.action(api.sessionTranscript.presignGet, {
+        sessionId,
+        object: { kind: "spill", digest: `sha256:${"a".repeat(64)}` },
+      }),
+    ).resolves.toEqual({ status: "absent" });
 
     const commandId = newId("command");
     await agent.mutation(api.sessions.command, {
       sessionId,
       commandId,
-      intent: JSON.stringify({ kind: "session.retitle", title: "Renamed by its agent" }),
+      // Its own Session takes only a signal from it (`lib/sessionCommands.ts`).
+      intent: JSON.stringify({ kind: "session.signal", signal: "done", reason: null }),
     });
     const job = await t.run((ctx) =>
       ctx.db
@@ -879,5 +892,8 @@ describe("Sessions, read and commanded by an agent", () => {
       headSequence: events.length,
     });
     await expect(agent.query(api.sessions.snapshot, { sessionId })).rejects.toThrow(code("fenced"));
+    await expect(
+      agent.query(api.sessionTranscript.artifacts, { sessionId, digests: [] }),
+    ).rejects.toThrow(code("fenced"));
   });
 });

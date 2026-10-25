@@ -31,9 +31,18 @@ import { getTrimSettings } from "../worktree/trim-settings";
 import type { BusyWorktreeSites } from "../worktree/activity";
 import { releaseAgentSites } from "../worktree/agent-sites";
 import { hostLogger } from "../log/root";
-import { computeWorktreeReclaim, isTicketStatus } from "@volli/shared";
+import { computeWorktreeReclaim, isTicketStatus, DEFAULT_AUTHORITY_POLICY } from "@volli/shared";
 import { retentionTtlMs } from "../worktree/retention";
 import { createCloudReportPublisher } from "./reports";
+import { createAgentBackend, runnerTokenBefore } from "../cloud-agent/agent-backend";
+import {
+  createCloudFunctionsClient,
+  CloudOfflineError,
+  CloudFunctionError,
+} from "../cloud-agent/functions-client";
+import { createCloudBoardVerbs, CLOUD_VERB_BUDGET_MS } from "../cloud-agent/board-verbs";
+import { createCloudSessionVerbs } from "../cloud-agent/session-verbs";
+import { getProjectById } from "../db/projects-repo";
 
 export interface CloudRunnerSyncConnection {
   start(): void;
@@ -46,6 +55,7 @@ export interface CloudRunnerSyncConnection {
 export function createCloudProductStore(options: {
   host: LiveHostCore;
   ownerUserId: string;
+  backendUrl: string;
   /** Saved registration id remains available during an offline launch. */
   runnerId(): string | null;
   home?: string;
@@ -61,7 +71,11 @@ export function createCloudProductStore(options: {
   const { host, ownerUserId } = options;
   const db = host.database.db;
   const log = hostLogger("cloud-store");
-  let active: { link: BackendLink; runnerId: string } | null = null;
+  let active: {
+    link: BackendLink;
+    runnerId: string;
+    runnerToken?: () => Promise<string | null>;
+  } | null = null;
   let runtime: HostedSessionRuntime | null = null;
   let artifacts: TranscriptArtifactStore | null = null;
   let notices: SessionNoticeOutbox | null = null;
@@ -117,8 +131,74 @@ export function createCloudProductStore(options: {
     adopt: (sessionId) => drain.adopt(sessionId),
     onCreated: context.created,
   });
+  const functions = createCloudFunctionsClient({ url: options.backendUrl });
+  const agentBackend = createAgentBackend({
+    functions,
+    connected: () => active?.link.status.state === "connected",
+    runnerToken: () => active?.runnerToken?.() ?? Promise.resolve(null),
+    nudgeDrain: (sessionId) => drain.nudge(sessionId),
+  });
+  const cloudSessionVerbs = createCloudSessionVerbs({
+    backend: agentBackend,
+    engine: owner.engine,
+    projectIds: owner.projectIds,
+    claimedHere: (sessionId) => {
+      const cursor = sqliteDrainCursorStore(db).get(sessionId);
+      return (
+        owner.owns(sessionId) &&
+        cursor?.blocked?.code !== "fenced" &&
+        cursor?.blocked?.code !== "not_your_runner"
+      );
+    },
+    ticketDisplayIdOf: context.ticketDisplayIdOf,
+    async notify(sessionId, args) {
+      const current = active;
+      if (current?.link.status.state !== "connected")
+        throw new CloudOfflineError("link_down", "This runner is offline.", "not_sent");
+      const cursor = sqliteDrainCursorStore(db).get(sessionId);
+      if (!owner.owns(sessionId) || cursor === null)
+        throw new CloudFunctionError("forbidden", "This Session is not claimed by this runner.");
+      const deadline = Date.now() + CLOUD_VERB_BUDGET_MS;
+      const token = await runnerTokenBefore(
+        () => current.runnerToken?.() ?? Promise.resolve(null),
+        deadline,
+      );
+      if (token == null || active !== current)
+        throw new CloudOfflineError("link_down", "This runner is not linked.", "not_sent");
+      const timeoutMs = deadline - Date.now();
+      if (timeoutMs <= 0)
+        throw new CloudOfflineError(
+          "timeout",
+          "Out of time before queuing the notification.",
+          "not_sent",
+        );
+      return (await functions.call(
+        "mutation",
+        "attention:raiseFromRunner",
+        { sessionId, generation: cursor.generation, ...args },
+        token,
+        { timeoutMs },
+      )) as { displayName: string };
+    },
+  });
+  const agentCommands = {
+    // Cloud project policies have not shipped; never borrow a frozen local policy.
+    readAuthorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
+    projects: () =>
+      owner.projectIds().flatMap((id) => {
+        const project = getProjectById(db, id);
+        return project === undefined ? [] : [project];
+      }),
+    cloudBoardVerbs: createCloudBoardVerbs({ backend: agentBackend }),
+    cloudSessionVerbs,
+  };
   const offWake = host.sessionWakeBus.subscribe(({ event }) => {
-    if (owner.owns(event.sessionId)) drain.nudge(event.sessionId);
+    if (!owner.owns(event.sessionId)) return;
+    drain.nudge(event.sessionId);
+    // Tokens are in-memory only. A closing attachment ends its cached grant;
+    // a subsequent call can mint anew only while this runner still owns the claim.
+    if (event.payload.kind === "attachment.closed" || event.payload.kind === "attachment.failed")
+      agentBackend.forget(event.sessionId);
   });
   const publishers = new Map<string, ReturnType<typeof createCloudReportPublisher>>();
   function publisher(paths: RunnerPathRegistry) {
@@ -192,6 +272,8 @@ export function createCloudProductStore(options: {
     engine: owner.engine,
     ownsSession: owner.owns,
     projectIds: owner.projectIds,
+    agentCommands,
+    cloudSessionVerbs,
     sessionBirth: { beforeCreate: context.beforeCreate },
     ticketDisplayIdOf: context.ticketDisplayIdOf,
     brief: context.brief,
@@ -214,8 +296,13 @@ export function createCloudProductStore(options: {
       presence: RunnerPresence;
       bootId: string;
       runnerId: string;
+      runnerToken?(): Promise<string | null>;
     }): CloudRunnerSyncConnection {
-      active = { link: parts.link, runnerId: parts.runnerId };
+      active = {
+        link: parts.link,
+        runnerId: parts.runnerId,
+        ...(parts.runnerToken === undefined ? {} : { runnerToken: parts.runnerToken }),
+      };
       const reports = publisher(registry());
       const offReports = parts.link.onStatus((status) => {
         if (status.state === "connected") void reports.flush();
@@ -236,6 +323,19 @@ export function createCloudProductStore(options: {
         engine: owner.engine,
         runtime: () => runtime,
         artifacts: () => artifacts,
+        async commandArtifact({ sessionId, digest }) {
+          const cursor = sqliteDrainCursorStore(db).get(sessionId);
+          if (!owner.owns(sessionId) || cursor === null)
+            throw new Error("This runner does not own the command's Session.");
+          if (parts.link.query === undefined)
+            throw new Error("Runner artifact reads are unavailable.");
+          const row = (await parts.link.query("transcripts:commandArtifact", {
+            sessionId,
+            generation: cursor.generation,
+            digest,
+          })) as { body: string } | null;
+          return row?.body ?? null;
+        },
       });
       // A watcher's notice: composed here, then handed to the durable outbox.
       registerSessionNoticeJob(guarded, { outbox: () => notices });

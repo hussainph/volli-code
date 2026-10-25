@@ -10,11 +10,14 @@ import {
   HOST_HANDLER_KEYS,
   PUBLIC_HANDLER_KEYS,
   SERVED_AGENT_HANDLER_KEYS,
+  SERVED_CATALOG_HANDLER_KEYS,
+  SERVED_HANDLER_KEYS,
   SHARED_AGENT_HANDLER_KEYS,
   SOCKET_BOARD_PROJECTIONS,
-  SOCKET_DELEGATED_HANDLER_KEYS,
   type AgentHandlerKey,
   type ServedAgentHandlerKey,
+  type ServedCatalogHandlerKey,
+  type ServedHandlerKey,
   type SharedAgentHandlerKey,
   type SharedAgentHandlerKeysExact,
   type ToolVerbsAreAgentKeys,
@@ -29,10 +32,12 @@ import {
   BOARD_ENTRIES,
   CATALOG_ENTRIES,
   VERB_REGISTRY,
+  SESSION_READ_VERBS,
   VERB_TOOL_KEYS,
   isVerbToolKey,
   verbEntry,
   type AgentCommandBindingId,
+  type SessionReadVerb,
 } from "./verb-registry";
 
 describe("the host handler map's keys", () => {
@@ -97,7 +102,7 @@ describe("the host handler map's keys", () => {
 
   it("name the both-door commands, each bound on the socket under its own key", () => {
     expectTypeOf<SocketHandlerKey>().toEqualTypeOf<
-      "ticket.move" | Extract<AgentHandlerKey, AgentCommandBindingId>
+      "ticket.move" | SessionReadVerb | Extract<AgentHandlerKey, AgentCommandBindingId>
     >();
     for (const key of PUBLIC_HANDLER_KEYS) {
       const entry = verbEntry(key)!;
@@ -109,12 +114,25 @@ describe("the host handler map's keys", () => {
     }
   });
 
-  it("delegate only the socket's Session reads to the socket's own handler (VC-663, D4)", () => {
-    for (const key of SOCKET_DELEGATED_HANDLER_KEYS) {
-      expect(HOST_HANDLER_KEYS, key).toContain(key);
+  it("serve the socket's Session reads as the only served catalog keys (VC-663, VC-894)", () => {
+    expect(SERVED_CATALOG_HANDLER_KEYS).toEqual([...SESSION_READ_VERBS]);
+    expectTypeOf<ServedCatalogHandlerKey>().toEqualTypeOf<SessionReadVerb>();
+    expectTypeOf<
+      Extract<ServedCatalogHandlerKey, SocketHandlerKey>
+    >().toEqualTypeOf<SessionReadVerb>();
+    expectTypeOf<Extract<ServedCatalogHandlerKey, ServedAgentHandlerKey>>().toEqualTypeOf<never>();
+    expectTypeOf<ServedHandlerKey>().toEqualTypeOf<ServedAgentHandlerKey | SessionReadVerb>();
+    for (const key of SERVED_CATALOG_HANDLER_KEYS) {
+      expect(CATALOG_HANDLER_KEYS, key).toContain(key);
       expect(verbEntry(key)!.accessModes, key).toEqual(["cli", "hostApi"]);
+      expect(AGENT_COMMAND_BINDINGS[key], key).toBe(key);
     }
-    expect(Object.isFrozen(SOCKET_DELEGATED_HANDLER_KEYS)).toBe(true);
+    expect(SERVED_HANDLER_KEYS).toEqual([
+      ...SERVED_AGENT_HANDLER_KEYS,
+      ...SERVED_CATALOG_HANDLER_KEYS,
+    ]);
+    expect(Object.isFrozen(SERVED_CATALOG_HANDLER_KEYS)).toBe(true);
+    expect(Object.isFrozen(SERVED_HANDLER_KEYS)).toBe(true);
     // The handshake's own answer is the door's, never a handler's.
     expect(HOST_HANDLER_KEYS).not.toContain("protocol.welcome");
   });

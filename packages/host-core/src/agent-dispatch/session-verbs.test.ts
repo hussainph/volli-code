@@ -12,11 +12,13 @@ import type {
   SessionLedger,
   SessionLedgerTransaction,
   SessionOrigin,
+  SessionReadVerb,
   SessionRole,
 } from "@volli/shared";
 import { RECOVERED_TURN_INTERRUPTED_DETAIL } from "@volli/shared";
 import { SESSION_LISTING_CACHE_LIMIT, type StoredSessionFollowUp } from "@volli/session-engine";
 import { createAgentCommandService } from "../agent-commands";
+import { ADMITTED, invokeHandler } from "../handlers/handler-map";
 import { testHostHandlers } from "../testing/host-handlers";
 import { insertProject } from "../db/projects-repo";
 import { insertTicket } from "../db/tickets-repo";
@@ -67,8 +69,9 @@ function fixture(observeTerminal = false) {
     now: () => clock,
     nextId: () => `${(++nextId).toString(16).padStart(8, "0")}-0000-4000-8000-000000000001`,
   });
+  const handlers = testHostHandlers({ db: db.db });
   const service = createAgentCommandService({
-    handlers: testHostHandlers({ db: db.db }),
+    handlers,
     db: db.db,
     appVersion: "test",
     sessionEngine: engine,
@@ -147,7 +150,21 @@ function fixture(observeTerminal = false) {
   };
   const ids = (response: AgentResponse) =>
     (data(response)["sessions"] as { id: string }[]).map((s) => s.id);
-  return { engine, read, create, active, ids, service };
+  // A router's Workspace-scoped read (VC-663, D4): the map's own entry for the
+  // verb, which the service served (VC-894), under an admit-all policy.
+  const readInWorkspace = (
+    verb: SessionReadVerb,
+    workspaceId: string,
+    args: Record<string, unknown> = {},
+  ) =>
+    invokeHandler(
+      handlers,
+      { door: "test-router", admit: () => ADMITTED },
+      verb,
+      { workspaceId, args },
+      { actor: { kind: "user" } },
+    ) as Promise<AgentResponse>;
+  return { engine, read, readInWorkspace, create, active, ids, service };
 }
 
 describe("session roster and detail", () => {
@@ -1089,30 +1106,27 @@ describe("who started and who resumed a Session", () => {
   });
 });
 
-// VC-663 (D4): the WebSocket's Session reads run these same handlers with the
-// roster forced to the connection's Workspace.
-describe("executeInWorkspace", () => {
+// VC-663 (D4): the WebSocket's Session reads reach the map's one entry for
+// each read (VC-894), the same entry the socket projects, with the roster
+// forced to the connection's Workspace.
+describe("a Session read's map entry, Workspace-scoped", () => {
   it("lists only that Workspace's Sessions, whatever project the caller names", async () => {
-    const { create, service, ids } = fixture();
+    const { create, readInWorkspace, ids } = fixture();
     const mine = await create("mine", 10 * DAY);
     await create("theirs", 10 * DAY, { projectId: "other" });
     for (const args of [{ all: true }, { all: true, project: "other" }]) {
-      expect(ids(await service.executeInWorkspace("session.list", "p", args))).toEqual([
-        mine.slice(0, 8),
-      ]);
+      expect(ids(await readInWorkspace("session.list", "p", args))).toEqual([mine.slice(0, 8)]);
     }
   });
 
   it("answers another Workspace's Session exactly as an absent one, on every read", async () => {
-    const { create, service } = fixture();
+    const { create, readInWorkspace } = fixture();
     const mine = (await create("mine", 10 * DAY)).slice(0, 8);
     const theirs = (await create("theirs", 10 * DAY, { projectId: "other" })).slice(0, 8);
-    expect(data(await service.executeInWorkspace("session.show", "p", { id: mine }))["id"]).toBe(
-      mine,
-    );
+    expect(data(await readInWorkspace("session.show", "p", { id: mine }))["id"]).toBe(mine);
     for (const verb of ["session.show", "session.peek", "session.answer"] as const) {
-      const foreign = await service.executeInWorkspace(verb, "p", { id: theirs });
-      const absent = await service.executeInWorkspace(verb, "p", { id: "ffffffff" });
+      const foreign = await readInWorkspace(verb, "p", { id: theirs });
+      const absent = await readInWorkspace(verb, "p", { id: "ffffffff" });
       expect(foreign).toEqual({
         v: 1,
         ok: false,
@@ -1125,11 +1139,34 @@ describe("executeInWorkspace", () => {
   });
 
   it("refuses a Workspace this host does not have", async () => {
-    const { service } = fixture();
-    expect(await service.executeInWorkspace("session.list", "nowhere", {})).toMatchObject({
+    const { readInWorkspace } = fixture();
+    expect(await readInWorkspace("session.list", "nowhere", {})).toMatchObject({
       ok: false,
       error: { code: "PROJECT_NOT_FOUND" },
     });
+  });
+
+  it("refuses a preview the read never declared, as the socket's preflight does", async () => {
+    const { readInWorkspace } = fixture();
+    expect(await readInWorkspace("session.list", "p", { dryRun: true })).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST" },
+    });
+  });
+
+  // One implementation behind both doors (VC-894): the socket's answer for a
+  // caller in the Workspace's project is the router's for that Workspace.
+  it("answers as the socket answers a caller in that project, on every read", async () => {
+    const { create, read, readInWorkspace } = fixture();
+    const mine = (await create("mine", 10 * DAY)).slice(0, 8);
+    expect(await readInWorkspace("session.list", "p", { all: true })).toEqual(
+      await read("session.list", { all: true }),
+    );
+    for (const verb of ["session.show", "session.peek", "session.answer"] as const) {
+      expect(await readInWorkspace(verb, "p", { id: mine }), verb).toEqual(
+        await read(verb, { id: mine }),
+      );
+    }
   });
 });
 

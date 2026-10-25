@@ -680,6 +680,12 @@ describe("renderCliSuccess", () => {
       ),
     ).toBe("");
     expect(renderCliSuccess("notify", { notified: true }, options)).toBe("notified\n");
+    expect(renderCliSuccess("notify", { notified: true, queuedFor: "Alice" }, options)).toBe(
+      "queued for Alice\n",
+    );
+    expect(
+      renderCliSuccess("notify", { notified: true, queuedFor: "Alice\u001b[2J" }, options),
+    ).toBe("queued for Alice\\x1b[2J\n");
     expect(renderCliSuccess("app.launch", { alreadyRunning: true }, options)).toBe(
       "Volli is already running\n",
     );
@@ -1985,6 +1991,44 @@ describe("renderCliSuccess — Session signals (VC-661)", () => {
         `signal reason:\n  | ${reason}\n`,
       );
     }
+  });
+});
+
+describe("cloud Session read limits", () => {
+  it("names bounded history and unreadable bodies in text output", () => {
+    const data = {
+      session: "abcdef12",
+      state: "idle",
+      status: "idle",
+      turns: null,
+      answer: null,
+      unreadable: true,
+      historyComplete: false,
+      unreadableReason: "Object storage is not configured.",
+    };
+    const answer = renderCliSuccess("session.answer", data, { json: false });
+    expect(answer).toContain("Only recent accepted history was read");
+    expect(answer).toContain("Transcript unavailable: Object storage is not configured.");
+    const peek = renderCliSuccess(
+      "session.peek",
+      { ...data, transcript: [], unreadable: 1 },
+      { json: false },
+    );
+    expect(peek).toContain("Only recent accepted history was read");
+    expect(peek).toContain("Transcript unavailable:");
+    expect(
+      renderCliSuccess("session.list", { sessions: [], truncated: true }, { json: false }),
+    ).toContain("listing limit reached");
+    expect(
+      renderCliSuccess(
+        "session.list",
+        {
+          sessions: [{ id: "abcdef12", kind: "chat", status: "idle", title: "Recent" }],
+          truncated: true,
+        },
+        { json: false },
+      ),
+    ).toContain("\nVolli Cloud listing limit reached");
   });
 });
 

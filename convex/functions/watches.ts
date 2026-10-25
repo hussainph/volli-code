@@ -21,7 +21,12 @@ async function watcher(ctx: Parameters<typeof requireActor>[0], id: string) {
 }
 
 export const watch = mutation({
-  args: { watcherSessionId: v.string(), target, commandId: v.string() },
+  args: {
+    watcherSessionId: v.string(),
+    target,
+    commandId: v.string(),
+    kinds: v.optional(v.array(v.string())),
+  },
   handler: async (ctx, args) => {
     const { caller, session } = await watcher(ctx, args.watcherSessionId);
     const watchId = await armWatch(ctx, {
@@ -30,6 +35,7 @@ export const watch = mutation({
       origin: "explicit",
       actor: caller.actor,
       commandId: args.commandId,
+      ...(args.kinds === undefined ? {} : { kinds: args.kinds }),
     });
     return { watchId };
   },

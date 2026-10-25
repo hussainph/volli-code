@@ -3,8 +3,8 @@
  * handler of its own (VC-668, VC-923; HP § Command catalog, "Doors are
  * projections"): a catalog command's under its key, a board ticket write's
  * under the board's ({@link projectHandler}), and each of the socket's own
- * verbs under its own key ({@link servedVerb}). The four Session reads the
- * map delegates the other way keep the socket's handler.
+ * verbs under its own key ({@link servedVerb}), the four Session reads the
+ * agent command service serves included ({@link servedSessionRead}, VC-894).
  *
  * The projection maps the socket's envelope and nothing else: the request in
  * (display ids to record ids, the attributed actor, a `--dry-run` preview, a
@@ -30,6 +30,7 @@ import type {
   AgentResponse,
   HandlerCall,
   SocketBoardProjections,
+  ServedCatalogHandlerKey,
   SocketHandlerKey,
   TicketEventActor,
 } from "@volli/shared";
@@ -42,7 +43,7 @@ import type {
   SocketServedKey,
 } from "../handlers/host-handlers";
 import type { ServedAgentHandlerKey } from "@volli/shared";
-import { failure, type AgentCommandContext } from "./context";
+import { failure, type AgentCommandContext, type AgentVerbInput } from "./context";
 import type { DoorActor } from "./resolution";
 import { hostLogger } from "../log/root";
 
@@ -156,26 +157,65 @@ export function servedVerb<Key extends SocketServedKey>(
     key,
     envSession,
     (context, request) => ({
-      input: {
-        request: withoutCredentials(request),
-        projects: context.projects,
-        envSession: context.envSession,
-        envSessionTerminal: context.envSessionTerminal,
-        authenticatedSessionId: context.authenticatedSessionId,
-        actor: context.actor,
-      },
+      input: servedInput(context, request),
       call: { actor: context.actor ?? context.doorActor },
       reply: (output) => output,
     }),
-    (error) => {
-      const refusal = mapRefusal(error);
-      if (refusal !== undefined) return refusal;
-      if (error instanceof HandlerNotServedError) {
-        return failure("APP_UNREACHABLE", errorMessage(error));
-      }
-      throw error;
-    },
+    servedFailure,
   );
+}
+
+/**
+ * Binds one of the socket's Session reads to `handlers[key]` (VC-894): the
+ * map's one entry for the read, which the agent command service serves and a
+ * router also reaches, Workspace-scoped. The socket asks it exactly as it asks
+ * one of its own verbs ({@link servedVerb}): the request as the door resolved
+ * it, the answer the verb's own wire answer, untouched. The read resolves the
+ * caller's identity (`VOLLI_SESSION` names the caller's project) and, as a
+ * read, attributes nothing.
+ */
+export function servedSessionRead<Key extends ServedCatalogHandlerKey>(
+  key: Key,
+): ProjectedVerbBinding<Key> {
+  return minted(
+    key,
+    "resolve",
+    (context, request) => ({
+      // The entry's input is a union (a router's Workspace, or this): the
+      // socket's half is the served verbs' input, which the generic key
+      // cannot name.
+      input: servedInput(context, request) as unknown as HostHandlerInput<Key>,
+      call: { actor: context.actor ?? context.doorActor },
+      reply: (output) => output as unknown as AgentResponse,
+    }),
+    servedFailure,
+  );
+}
+
+/** What a served entry is asked: the request the door resolved, without its credentials. */
+function servedInput(context: AgentCommandContext, request: AgentRequest): AgentVerbInput {
+  return {
+    request: withoutCredentials(request),
+    projects: context.projects,
+    envSession: context.envSession,
+    envSessionTerminal: context.envSessionTerminal,
+    authenticatedSessionId: context.authenticatedSessionId,
+    actor: context.actor,
+  };
+}
+
+/**
+ * A served entry's failure: only the map's own answers are mapped (a refusal,
+ * an entry nothing served); anything the verb throws is its own, for the
+ * socket's generic door.
+ */
+function servedFailure(error: unknown): AgentResponse {
+  const refusal = mapRefusal(error);
+  if (refusal !== undefined) return refusal;
+  if (error instanceof HandlerNotServedError) {
+    return failure("APP_UNREACHABLE", errorMessage(error));
+  }
+  throw error;
 }
 
 /** A refusal at the map, as the socket's own refusal; undefined for anything else. */

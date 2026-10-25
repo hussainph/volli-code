@@ -46,6 +46,7 @@ import type * as lib_runnerContext from "../lib/runnerContext.js";
 import type * as lib_runnerSecrets from "../lib/runnerSecrets.js";
 import type * as lib_sealing from "../lib/sealing.js";
 import type * as lib_secrets from "../lib/secrets.js";
+import type * as lib_sessionCommands from "../lib/sessionCommands.js";
 import type * as lib_sessionDerived from "../lib/sessionDerived.js";
 import type * as lib_sessionIntake from "../lib/sessionIntake.js";
 import type * as lib_streamChunks from "../lib/streamChunks.js";
@@ -123,6 +124,7 @@ declare const fullApi: ApiFromModules<{
   "lib/runnerSecrets": typeof lib_runnerSecrets;
   "lib/sealing": typeof lib_sealing;
   "lib/secrets": typeof lib_secrets;
+  "lib/sessionCommands": typeof lib_sessionCommands;
   "lib/sessionDerived": typeof lib_sessionDerived;
   "lib/sessionIntake": typeof lib_sessionIntake;
   "lib/streamChunks": typeof lib_streamChunks;

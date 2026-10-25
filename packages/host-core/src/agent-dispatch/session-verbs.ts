@@ -599,9 +599,9 @@ function usageCells(usage: SessionUsageSummary | undefined): Record<string, unkn
  * its rebuilt attachment is live and idle — the same rule the chat row and the
  * host's restart resume read (`isProcessLossWarning`, VC-450).
  */
-function peekAttention(
+export function sessionPeekAttention(
   attention: SessionAttention,
-  projection: Pick<SessionProjection, "turnActive" | "liveExecutor">,
+  projection: { turnActive: boolean; liveExecutor: { id: string } | null },
 ): { message: string; recovery: string | null } {
   const copy = PEEK_ATTENTION[attention.kind];
   return !projection.turnActive &&
@@ -727,7 +727,7 @@ export async function sessionPeekVerb(
         attention === null
           ? null
           : {
-              ...peekAttention(attention, chat.projection),
+              ...sessionPeekAttention(attention, chat.projection),
               detail:
                 attention.detail === null
                   ? null
@@ -944,6 +944,9 @@ async function recordSessionSignal(
  * reasoning `ticket move` applies to a failed arrival projection after its move
  * has already committed.
  *
+ * Not written here at all in a cloud launch (`cloudSessionVerbs`): the
+ * backend's accept fold derives it from the recorded signal.
+ *
  * Silent in three cases, each for its own reason: a Board Session has no ticket
  * to comment on, a Session that never called `todo_write` has nothing to say,
  * and a Session whose list is EMPTY deliberately cleared it — posting "here is
@@ -956,6 +959,11 @@ async function postFinalTodoList(
 ): Promise<void> {
   const { options, actor } = context;
   const { id: sessionId, ticketId } = session;
+  // A cloud launch's backend derives the same comment from the signal fact in
+  // its accept fold (VC-894 S6-3), as the Session's agent Actor, so `done`
+  // works offline and the comment lands with the drain. Writing it here too
+  // would write it to this host's board as well, or twice.
+  if (options.cloudSessionVerbs !== undefined) return;
   if (ticketId === null) return;
   // Both refusals BEFORE the read, because the read walks the Session's whole
   // transcript: a Session with nowhere to post must not pay for the answer.

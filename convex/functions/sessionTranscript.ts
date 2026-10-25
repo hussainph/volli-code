@@ -18,7 +18,9 @@
  * are signed, never a caller's key.
  *
  * Every function requires that the viewer may see the Session
- * (`requireSessionVisible`); a Session they may not see reads as absent.
+ * (`requireSessionVisible`); a Session they may not see reads as absent. An
+ * agent (an Agent token) reads as its Session's owner would, as it reads
+ * `sessions.history`.
  * What crosses is an allowlist: no object keys, staging bookkeeping, uploader
  * or Convex ids. Bodies are the runner's credential-redacted canonical JSON
  * text (`transcript-spool.ts`), the same text a pack embeds.
@@ -38,6 +40,7 @@ import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel.js";
 import { action, internalQuery, query } from "./_generated/server";
 import { requireSessionVisible } from "./lib/auth";
+import { PERSON_OR_AGENT, requireActor } from "./lib/actorAuth";
 import { PRESIGN_EXPIRES_SECONDS, objectStoreConfig } from "./lib/objectStore";
 
 /** Segments one `segments` call returns by default, and at most. */
@@ -58,6 +61,19 @@ function cursorArg(value: number | undefined, name: string): number | undefined 
     throw invalid(`${name} must be a whole number`);
   }
   return value;
+}
+
+/**
+ * The Session, for a caller that may see it: a person, or an agent reading
+ * as its Session's owner would (an Agent token, `lib/actorAuth.ts`), exactly
+ * as `sessions.history` admits them, so every body a history window names is
+ * readable by whoever could read the window. An action's `runQuery` carries
+ * the caller's identity, so `presignGet` is gated the same way.
+ */
+async function visibleSession(ctx: Parameters<typeof requireSessionVisible>[0], sessionId: string) {
+  const id = sessionIdArg(sessionId);
+  const { viewer } = await requireActor(ctx, PERSON_OR_AGENT);
+  return requireSessionVisible(ctx, id, viewer);
 }
 
 // ── segments ─────────────────────────────────────────────────────────────────
@@ -113,7 +129,7 @@ export const segments = query({
     hasMore: boolean;
     packedThrough: number;
   }> => {
-    const { session } = await requireSessionVisible(ctx, sessionIdArg(args.sessionId));
+    const { session } = await visibleSession(ctx, args.sessionId);
     const before = cursorArg(args.beforeSequence, "beforeSequence");
     const limit = Math.min(
       cursorArg(args.limit, "limit") ?? SEGMENTS_DEFAULT_LIMIT,
@@ -176,7 +192,7 @@ async function stagedRow(
 export const artifacts = query({
   args: { sessionId: v.string(), digests: v.array(v.string()) },
   handler: async (ctx, args): Promise<StagedTranscriptBody[]> => {
-    const { session } = await requireSessionVisible(ctx, sessionIdArg(args.sessionId));
+    const { session } = await visibleSession(ctx, args.sessionId);
     const digests = [...new Set(args.digests)];
     if (digests.length > STAGE_ARTIFACTS_MAX_BATCH) throw invalid("Too many digests in one call");
     if (!digests.every(isArtifactDigest)) throw invalid("digest must be sha256:<hex>");
@@ -216,7 +232,7 @@ type ObjectLocation =
 export const locateSessionObject = internalQuery({
   args: { sessionId: v.string(), object: sessionObject },
   handler: async (ctx, args): Promise<ObjectLocation> => {
-    const { session } = await requireSessionVisible(ctx, sessionIdArg(args.sessionId));
+    const { session } = await visibleSession(ctx, args.sessionId);
     if (args.object.kind === "pack") {
       const segmentId = args.object.segmentId;
       if (!isUuid(segmentId)) throw invalid("segmentId must be a lowercase UUID");

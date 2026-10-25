@@ -3,7 +3,7 @@ import { isLiveHost, type HostCore } from "../index";
 import type { Logger } from "../log/logger";
 import type { HostEventBus } from "../ports/events";
 import { getProjectAuthorityPolicy, listProjects } from "../db/projects-repo";
-import type { Project } from "@volli/shared";
+import { DEFAULT_AUTHORITY_POLICY, type Project } from "@volli/shared";
 import { listAutomationsForProject } from "../db/automations-repo";
 import { getComment } from "../db/comments-repo";
 import type { AgentToolDoor } from "../agent-tool-door";
@@ -35,6 +35,7 @@ export interface RuntimeSessionAgentOptions {
   projects?(): readonly Project[];
   /** Cloud watches are backend jobs, never an additional in-process delivery. */
   inProcessWatches?: boolean;
+  cloudSessionVerbs?: import("../cloud-agent/session-verbs").CloudSessionVerbs;
 }
 
 export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) {
@@ -145,6 +146,9 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
       db: sessionDb,
       projects: options.projects ?? (() => listProjects(sessionDb)),
       handlers: options.handlers(ready),
+      ...(options.cloudSessionVerbs === undefined
+        ? {}
+        : { cloudSessionVerbs: options.cloudSessionVerbs }),
       delegation: sessionDelegation,
       automations: () => {
         if (runtimeAutomations.kind === "degraded") return null;
@@ -156,7 +160,10 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
               run: (input) => execution.runner.run(input),
             };
       },
-      authorityPolicy: (projectId) => getProjectAuthorityPolicy(sessionDb, projectId),
+      authorityPolicy: (projectId) =>
+        options.cloudSessionVerbs === undefined
+          ? getProjectAuthorityPolicy(sessionDb, projectId)
+          : DEFAULT_AUTHORITY_POLICY,
       watches: watchesFor,
       supervise: () =>
         sessionEngine !== null && sessionRuntime !== null

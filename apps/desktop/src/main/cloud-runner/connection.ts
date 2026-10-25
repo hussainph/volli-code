@@ -70,6 +70,7 @@ export interface RunnerConnectionDeps {
     presence: RunnerPresence;
     bootId: string;
     runnerId: string;
+    runnerToken(): Promise<string | null>;
   }): CloudRunnerSyncConnection;
   readLoad(): RunnerLoad | Promise<RunnerLoad>;
   readCapabilities(): RunnerCapabilityReport | Promise<RunnerCapabilityReport>;
@@ -116,6 +117,7 @@ export function runnerConnector(deps: RunnerConnectionDeps): ConnectRunner {
             link,
             presence,
             bootId: deps.bootId,
+            runnerToken: () => tokens.token({ forceRefreshToken: false }),
             runnerId:
               input.runnerId ??
               (() => {

@@ -15,8 +15,7 @@ import type {
  * `AGENT_VERB_TABLE` binds every verb (a both-door key, a ticket write whose
  * command is a board key, VC-794, and each of its own verbs' keys, VC-923)
  * only as a projection of `handlers[key]` under its coordination policy
- * (`agent-dispatch/table.ts`), bar the four Session reads the map delegates
- * the other way;
+ * (`agent-dispatch/table.ts`), the four Session reads included (VC-894);
  * a legacy per-channel IPC handler that still serves a catalog command
  * invokes the same entry under the desktop window's policy until its area
  * moves. So "both doors reach the same function, admitted" is a fact of the
@@ -34,7 +33,9 @@ import type {
  * and neither does a handler with no catalog key. What a host lacks this
  * launch is a handler's answer ({@link OperationUnavailableError}), never a
  * missing entry; an agent door's own verb (VC-923) is sealed empty and served
- * by that door, and answers unavailable until it is (`HandlerNotServedError`).
+ * by that door, and so are the socket's Session reads, which the agent
+ * command service serves (VC-894); each answers unavailable until it is
+ * (`HandlerNotServedError`).
  */
 import type Database from "better-sqlite3";
 import type {
@@ -96,6 +97,7 @@ import {
   type HostHandlerKey,
   type RuntimeVerbResult,
   type ServedAgentHandlerKey,
+  type ServedHandlerKey,
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
   type ModelPickerView,
@@ -110,7 +112,6 @@ import {
   type CreateRemoteProjectInput,
   type CreateRemoteProjectResult,
   type SessionListingPage,
-  type SessionReadVerb,
   type ThisMacRunnerSnapshot,
   type Ticket,
   type WorktreeSetupAnswer,
@@ -290,10 +291,12 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
   >;
   readonly "session.reconcile": HostHandler<{ sessionId: string; attachmentId: string }, void>;
   /**
-   * The socket's Session reads, for a caller bound to one Workspace (VC-663,
-   * D4): the socket verb's own handler, its roster forced to `workspaceId`
-   * (`AgentCommandService.executeInWorkspace`). Socket-delegated keys
-   * (`SOCKET_DELEGATED_HANDLER_KEYS`): the socket serves these verbs itself.
+   * The socket's Session reads (VC-663, D4; VC-894): one entry per read,
+   * which the agent command service serves into the map
+   * (`SERVED_CATALOG_HANDLER_KEYS`, `agent-dispatch/verbs.ts`), and which
+   * every door reaches as a projection: the socket with the request it
+   * resolved, a router with a Workspace the roster is forced to
+   * ({@link SessionReadHandlerInput}). The answer is the socket's envelope.
    */
   readonly "session.list": HostHandler<SessionReadHandlerInput, AgentResponse>;
   readonly "session.show": HostHandler<SessionReadHandlerInput, AgentResponse>;
@@ -521,24 +524,34 @@ export type AgentHandlerSignatures = {
   readonly "session.start": HostHandler<SessionStartCommandInput, StartSessionResult>;
 };
 
-/** What a Session read's handler is asked: its Workspace, and the socket verb's args. */
-export interface SessionReadHandlerInput {
+/**
+ * What a router asks a Session read (VC-663, D4): the Workspace its roster is
+ * forced to, and the socket verb's args. The project is the Workspace's,
+ * never taken from the args, so a handle in any other Workspace resolves
+ * exactly as an absent one does.
+ */
+export interface SessionReadWorkspaceInput {
   readonly workspaceId: string;
   readonly args: Record<string, unknown>;
 }
 
-/** Runs one of the socket's Session reads forced to one Workspace: the agent command service's. */
-export type SessionReadPort = (
-  verb: SessionReadVerb,
-  workspaceId: string,
-  args: Record<string, unknown>,
-) => Promise<AgentResponse>;
+/**
+ * What a Session read's entry is asked: a router's Workspace-scoped call, or
+ * the request the agent socket resolved ({@link AgentVerbInput}), as the
+ * socket's own verbs are asked. Told apart by `request`, which only the
+ * socket's carries.
+ */
+export type SessionReadHandlerInput = SessionReadWorkspaceInput | AgentVerbInput;
 
 /** The one map: every {@link HostHandlerKey}, and nothing else. */
 export type HostHandlers = { readonly [Key in HostHandlerKey]: HostHandlerSignatures[Key] };
 
-/** What {@link createHostHandlers} seals: every entry but the agent doors' own, which are served. */
-export type SealedHostHandlers = Omit<HostHandlers, ServedAgentHandlerKey>;
+/**
+ * What {@link createHostHandlers} seals: every entry but the served ones (the
+ * agent doors' own, and the socket's Session reads), which a door's service
+ * serves.
+ */
+export type SealedHostHandlers = Omit<HostHandlers, ServedHandlerKey>;
 
 type AssertNever<Type extends never> = Type;
 /**
@@ -613,13 +626,6 @@ export interface HostHandlerOptions {
   readonly worktree?: WorktreePorts;
   /** Sees every policy verdict at the map, before the handler it admits. */
   readonly onAdmission?: AdmissionObserver;
-  /**
-   * The socket's Session reads, Workspace-scoped (VC-663, D4), or null where
-   * the host serves them over no network door (the desktop): they answer
-   * unavailable. A root whose agent command service is built after this map
-   * passes a forwarder.
-   */
-  readonly sessionReads?: SessionReadPort | null;
   /** The host's in-memory recent log (VC-699), or null where this host keeps none. */
   readonly logs?: LogRing | null;
   /**
@@ -707,7 +713,6 @@ const EXPERIMENTS_UNAVAILABLE = "Experimental settings are unavailable on this t
 const MODEL_ACCESS_UNAVAILABLE = "Model Access is unavailable on this transport";
 const PREFERENCES_UNAVAILABLE = "Model Access preferences are unavailable on this transport";
 const BOARD_UNAVAILABLE = "The board is unavailable: the database did not open";
-const SESSION_READS_UNAVAILABLE = "Session reads are unavailable on this transport";
 const SIGN_INS_UNAVAILABLE = "Sign-ins are unavailable on this host";
 const REMOTE_HOSTS_UNAVAILABLE = "Remote hosts are unavailable on this host";
 const REMOTE_SIGN_INS_UNAVAILABLE = "Remote host sign-ins are unavailable on this host";
@@ -820,7 +825,6 @@ function hostHandlerEntries(
   const preferences = () => present(db, PREFERENCES_UNAVAILABLE);
   const board = () => present(db, BOARD_UNAVAILABLE);
   const worktreeReads = () => present(options.worktreeReads, WORKTREE_READS_UNAVAILABLE);
-  const sessionReads = () => present(options.sessionReads ?? null, SESSION_READS_UNAVAILABLE);
   const signIns = () => present(options.signIns ?? null, SIGN_INS_UNAVAILABLE);
   const remoteHosts = () => present(options.remoteHosts ?? null, REMOTE_HOSTS_UNAVAILABLE);
   const remoteSignIns = () => present(options.remoteSignIns ?? null, REMOTE_SIGN_INS_UNAVAILABLE);
@@ -1043,11 +1047,6 @@ function hostHandlerEntries(
     "session.cancelInteraction": (input) =>
       runtime().cancelInteraction({ ...input, reason: "abandoned", origin: { kind: "user" } }),
     "session.reconcile": (input) => runtime().reconcile(input),
-    "session.list": ({ workspaceId, args }) => sessionReads()("session.list", workspaceId, args),
-    "session.show": ({ workspaceId, args }) => sessionReads()("session.show", workspaceId, args),
-    "session.peek": ({ workspaceId, args }) => sessionReads()("session.peek", workspaceId, args),
-    "session.answer": ({ workspaceId, args }) =>
-      sessionReads()("session.answer", workspaceId, args),
     "session.listing": async ({ projectId }) =>
       boundedSessionListing(await projectSessionListing(listing(), projectId)),
     "session.listingForTicket": async ({ ticketId }) =>

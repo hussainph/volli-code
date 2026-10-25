@@ -366,8 +366,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           },
           logs: options.logRing ?? null,
         });
-        const { handlers, automationsAvailable, serveSessionReads, ...sessionPorts } =
-          await sessionRuntime.ready();
+        const { handlers, automationsAvailable, ...sessionPorts } = await sessionRuntime.ready();
         capabilities = {
           ...UNAVAILABLE,
           board: "available",
@@ -391,9 +390,9 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
           // attribution (README, "Operators").
           onOperatorWrite: (record) => logger.info("operator write", { ...record }),
         });
-        // The map's Session reads (VC-663, D4) are the socket verbs' own,
-        // Workspace-scoped: the map reaches them once the service exists.
-        serveSessionReads(commands.executeInWorkspace);
+        // The map's Session reads (VC-663, D4; VC-894) are entries the
+        // service served into `handlers` as it was built, before any door
+        // below opens.
         settle(commands.execute);
         if (cloud && listen !== null) {
           try {

@@ -28,7 +28,9 @@
  * serves its own into the map it was handed ({@link serveHostHandlers}).
  * Served or not, a door reaches them exactly as it reaches any other entry,
  * through {@link invokeHandler} and its policy; an entry nothing has served
- * answers {@link HandlerNotServedError}.
+ * answers {@link HandlerNotServedError}. The socket's Session reads
+ * (`SERVED_CATALOG_HANDLER_KEYS`, VC-894) are catalog keys sealed empty the
+ * same way: their ports are the agent command service's, which serves them.
  *
  * `sealHostHandlers` is for {@link createHostHandlers} and test support only,
  * and `serveHostHandlers` for the two agent doors and test support;
@@ -37,10 +39,11 @@
 import {
   HandlerRefusedError,
   OperationUnavailableError,
-  SERVED_AGENT_HANDLER_KEYS,
+  SERVED_CATALOG_HANDLER_KEYS,
+  SERVED_HANDLER_KEYS,
   type HandlerCall,
   type HostHandlerKey,
-  type ServedAgentHandlerKey,
+  type ServedHandlerKey,
 } from "@volli/shared";
 
 import type { HostHandlers, SealedHostHandlers } from "./host-handlers";
@@ -104,7 +107,7 @@ export interface HostHandlerMap {
 
 interface Sealed {
   readonly entries: Partial<HostHandlers>;
-  /** What {@link serveHostHandlers} added since: agent-door keys the seal left empty. */
+  /** What {@link serveHostHandlers} added since: served keys the seal left empty. */
   readonly served: Partial<Record<HostHandlerKey, unknown>>;
   readonly observe: AdmissionObserver | undefined;
 }
@@ -113,11 +116,11 @@ const sealedMaps = new WeakMap<HostHandlerMap, Sealed>();
 
 /**
  * Seals a map's entries behind policy. For `createHostHandlers` and test
- * support only. The agent doors' keys may be left out, for
- * {@link serveHostHandlers} to fill.
+ * support only. The served keys (the agent doors' own, and the socket's
+ * Session reads) may be left out, for {@link serveHostHandlers} to fill.
  */
 export function sealHostHandlers(
-  entries: SealedHostHandlers & Partial<Pick<HostHandlers, ServedAgentHandlerKey>>,
+  entries: SealedHostHandlers & Partial<Pick<HostHandlers, ServedHandlerKey>>,
   observe?: AdmissionObserver,
 ): HostHandlerMap {
   const map = Object.freeze(Object.create(null) as object) as HostHandlerMap;
@@ -126,24 +129,37 @@ export function sealHostHandlers(
 }
 
 /**
- * An agent-door entry no door has served on this map: its host composes no
+ * What an unserved Session read answers: the words the map's own entry used
+ * when it was sealed behind a port (VC-663), which a router carries onto the
+ * wire, so serving the reads from the agent command service (VC-894) changes
+ * no Client's message.
+ */
+const SESSION_READS_UNAVAILABLE = "Session reads are unavailable on this transport";
+
+const servedCatalogKeys: ReadonlySet<string> = new Set(SERVED_CATALOG_HANDLER_KEYS);
+
+/**
+ * A served entry no door's service has served on this map: its host composes no
  * such door, or has not built it yet. Unavailable, never a
  * missing entry: the map is total, and this host cannot answer it now.
  */
 export class HandlerNotServedError extends OperationUnavailableError {
   constructor(readonly key: HostHandlerKey) {
-    super(`${key} is not served on this host.`);
+    super(
+      servedCatalogKeys.has(key) ? SESSION_READS_UNAVAILABLE : `${key} is not served on this host.`,
+    );
     this.name = "HandlerNotServedError";
   }
 }
 
 /**
- * Serves agent-door entries into a sealed map (VC-923): one door's own verbs,
- * built from the ports only it composes. Each key is served
+ * Serves entries into a sealed map (VC-923): one door's own verbs, or the
+ * Session reads the agent command service composes (VC-894), built from the
+ * ports only that service holds. Each key is served
  * once, and never over an entry the map was sealed with, so a second door
  * cannot silently re-point one that already projects the first's.
  */
-export function serveHostHandlers<Key extends ServedAgentHandlerKey>(
+export function serveHostHandlers<Key extends ServedHandlerKey>(
   map: HostHandlerMap,
   entries: Pick<HostHandlers, Key>,
 ): void {
@@ -168,9 +184,9 @@ function opened(map: HostHandlerMap): Sealed {
   return sealed;
 }
 
-const servedKeys: ReadonlySet<string> = new Set(SERVED_AGENT_HANDLER_KEYS);
+const servedKeys: ReadonlySet<string> = new Set(SERVED_HANDLER_KEYS);
 
-function isServedKey(key: HostHandlerKey): key is ServedAgentHandlerKey {
+function isServedKey(key: HostHandlerKey): key is ServedHandlerKey {
   return servedKeys.has(key);
 }
 
@@ -223,7 +239,7 @@ export function admittedHandlers(map: HostHandlerMap, policy: HandlerPolicy): Ho
   const view: Record<string, unknown> = {};
   for (const key of new Set([
     ...(Object.keys(entries) as HostHandlerKey[]),
-    ...SERVED_AGENT_HANDLER_KEYS,
+    ...SERVED_HANDLER_KEYS,
   ])) {
     view[key] = (...args: EntryArgs<typeof key>) => invokeHandler(map, policy, key, ...args);
   }

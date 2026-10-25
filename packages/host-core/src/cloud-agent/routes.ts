@@ -61,6 +61,8 @@ export const AGENT_DOOR_HANDLER_KEYS: readonly AgentDoorHandlerKey[] = Object.fr
 export type CloudRoute =
   | { readonly route: "cloud-board"; readonly access: "read" | "write" }
   | { readonly route: "session-target" }
+  | { readonly route: "cloud-notify" }
+  | { readonly route: "cloud-watch" }
   | { readonly route: "ledger" }
   | { readonly route: "machine" }
   | { readonly route: "person-only" }
@@ -77,24 +79,8 @@ const write = { route: "cloud-board", access: "write" } as const;
 const ledger = { route: "ledger" } as const;
 const machine = { route: "machine" } as const;
 const target = { route: "session-target" } as const;
-const watches = {
-  route: "blocked",
-  // VC-887 built the backend half: durable `watches` rows, auto-arms derived
-  // when a Session-origin start or send is accepted, and `session.notice`
-  // jobs this runner composes and delivers. A cloud launch builds no
-  // in-process watches (`inProcessWatches: false`), so nothing is doubled.
-  //
-  // Receiving wiring (VC-894, S6-3): the explicit verbs call, under the
-  // watcher's Agent token (`AgentBackend`), after the tool door's Role barrier
-  // and project policy have judged each target:
-  // - `watches:watch {watcherSessionId, target: {kind: "session" | "ticket", id}, commandId}`
-  //   once per target, `commandId` minted before the first attempt → `{watchId}`;
-  // - `watches:unwatch {watcherSessionId, targets?: [{kind, id}]}` → `{ended}`;
-  // - `watches:list {watcherSessionId}` → `[{id, target, origin, turnArmed, createdAt}]`.
-  until: "VC-894",
-  interim:
-    "Refused: nothing is watched in-process; Sessions it starts or steers are watched by Volli Cloud from their facts.",
-} as const;
+// B2's durable watch rows and notice jobs, never a second in-process producer.
+const watches = { route: "cloud-watch" } as const;
 
 const ROUTES = {
   identify: machine,
@@ -136,11 +122,8 @@ const ROUTES = {
   "session.blocked": ledger,
   "session.link": ledger,
   "session.harness": ledger,
-  notify: {
-    route: "blocked",
-    until: "VC-578",
-    interim: "A native notification on a Mac; refused on Linux.",
-  },
+  // Runner-only, fenced by this Session's claim; queues attention for its owner.
+  notify: { route: "cloud-notify" },
   hook: ledger,
   doctor: machine,
   "prompt.baseline": machine,

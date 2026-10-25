@@ -22,13 +22,13 @@
  * `startStreamChunks({ link, runtime })` for streamed text;
  * `volli-runner link` calls `linkWithInstallToken` / `linkWithDeviceCode`.
  *
- * Receiving wiring for agent verbs in a cloud launch (VC-894; no production
- * caller yet): the same compositions (VC-895, VC-896) will build
- * `createCloudBoardVerbs` over `createAgentBackend` (the functions client on
- * the deployment URL, the runner token source, the link's status, the
- * drain's nudge), hand it to the agent command service as `cloudBoardVerbs`,
- * and call the backend's `forget` when a Session's last attachment on this
- * runner closes. `CLOUD_AGENT_ROUTES` says what every agent verb routes to.
+ * Agent verbs in a cloud launch: `createCloudProductStore` composes the
+ * HTTP functions client and per-Session Agent-token cache over this same
+ * runner token source, link status and drain. Desktop passes its
+ * `agentCommands` overlay to the socket; the runner composition passes its
+ * Session overlay to the tool door. Local Session targets retain the ordered
+ * ledger, while remote reads and commands use Convex. Attachment close/failure
+ * forgets the cached Agent grant. `CLOUD_AGENT_ROUTES` is the parity guard.
  */
 export {
   createCloudProductStore,

@@ -30,12 +30,14 @@ import {
   isDerivedId,
   isJobKind,
   isTerminalJobStatus,
+  isUuid,
   jobRank,
   newId,
   parseId,
   parseJobPayload,
   type Actor,
   type ClaimedJob,
+  type CommandId,
   type JobId,
   type JobKind,
   type JobPayload,
@@ -131,6 +133,22 @@ function optionalId(kind: Parameters<typeof parseId>[0], value: string | null | 
   return value === null || value === undefined ? null : parseId(kind, value);
 }
 
+/**
+ * The job's command id: a UUID, or, for a `session.command` only, a frozen
+ * derived id (an agent's `<sessionId>:<toolCallId>` operation id, checked by
+ * `sessions.command` before it gets here). A derived command id is also the
+ * job's id; nothing else may be.
+ */
+function commandIdOf(draft: JobDraft): string | null {
+  const value = draft.commandId;
+  if (value === null || value === undefined) return null;
+  if (isUuid(value)) return value;
+  // Notice ids are also frozen (`watch:{session}:{uuid}` / `{parent}:{toolCall}:answer`).
+  if ((draft.kind === "session.command" || draft.kind === "session.notice") && isDerivedId(value))
+    return value;
+  return parseId("command", value);
+}
+
 /** Canonical JSON, keys sorted, so a replayed payload compares equal whatever its key order. */
 function canonical(value: unknown): string {
   return JSON.stringify(value, (_key, item: unknown) =>
@@ -197,16 +215,15 @@ function draftRow(draft: JobDraft, now: number): JobRow {
     throw defect("invalid_job", `Unknown job kind ${String(draft.kind)}.`);
   let row: JobRow;
   try {
-    // Notice delivery ids predate the cloud inbox and are durable opaque ids
-    // (`watch:{session}:{uuid}` and `{parent}:{toolCall}:answer`). Keep those
-    // exact ids so local outbox replay and the second receipt find one job.
-    const noticeCommand = draft.kind === "session.notice" && isDerivedId(draft.commandId);
-    const commandId = noticeCommand ? draft.commandId! : optionalId("command", draft.commandId);
-    const rawId = draft.id ?? commandId ?? newId("job");
-    const id = noticeCommand && rawId === commandId ? rawId : parseId("job", rawId);
-    if (commandId !== null && id !== commandId) {
+    const commandId = commandIdOf(draft) as CommandId | null;
+    const chosen = draft.id ?? commandId ?? newId("job");
+    if (commandId !== null && chosen !== commandId) {
       throw defect("invalid_job", "A job that carries a command takes the command's id.");
     }
+    const id =
+      commandId !== null && !isUuid(commandId)
+        ? (commandId as string as JobId)
+        : parseId("job", chosen);
     const priority = draft.priority ?? "normal";
     row = {
       id,

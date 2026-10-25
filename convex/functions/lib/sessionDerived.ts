@@ -1,19 +1,31 @@
 /**
  * What an accepted fact derives beyond the fold itself: the turn index, the
  * owner's attention items (written through `attention.ts`, their one writer),
- * the second job receipt, and the listing row. Each
- * writer is idempotent (an upsert by a frozen id), so a refold that passes a
- * fact again lands on the same rows.
+ * the second job receipt, the todo-list comment a `done` / `blocked` signal
+ * leaves on its ticket, and the listing row. Each writer is idempotent (an
+ * upsert by a frozen id), so a refold that passes a fact again lands on the
+ * same rows.
  */
 
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
+  readSessionOrigin,
   sessionListingActivity,
   sessionListingWaitingOn,
   type SessionEvent,
   type SessionEventPayload,
 } from "@volli/shared";
-import type { CloudSessionView } from "@volli/shared/cloud";
+import {
+  BoardRuleError,
+  decideCreateComment,
+  sessionSignalBoardEffects,
+  sessionSignalCommentId,
+  type AgentActor,
+  type CloudSessionView,
+  type SessionId,
+  type TicketId,
+  type UserId,
+} from "@volli/shared/cloud";
 
 import type { Doc } from "../_generated/dataModel.js";
 import type { MutationCtx } from "../_generated/server";
@@ -23,6 +35,8 @@ import {
   clearSessionAttention,
   raiseSessionAttention,
 } from "./attention";
+import { findVisibleProject } from "./auth";
+import { findTicket, recordBoardEvents, ticketFacts } from "./board";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -118,6 +132,7 @@ export async function deriveFromFact(
           fact.occurredAt,
         );
       }
+      await commentTodoList(ctx, session, fact, payload.signal, after);
       break;
     case "command.receipt.recorded":
       await mirrorReceipt(ctx, session.id, payload.receipt);
@@ -163,6 +178,83 @@ const ATTENTION_TITLES: Record<string, string> = {
   adapter_disconnected: "Agent disconnected",
   adapter_unrecoverable: "Agent stopped",
 };
+
+// ── the todo list a signal leaves on its ticket ─────────────────────────────
+
+/**
+ * Leaves the Session's last todo list on its ticket when it signals `done` or
+ * `blocked`: the same comment the local agent socket writes after recording
+ * the signal (`sessionSignalBoardEffects`, the shared rule), attributed to the
+ * `agent` Actor. Derived here, from the accepted fact and the fold's todo
+ * list, so a signal made offline leaves its comment when the drain lands.
+ *
+ * A courtesy on top of the signal, never a reason to refuse it: every case the
+ * board would refuse is passed over without a write, so the accept goes on.
+ * Silent, as locally, when:
+ * - the signal was not the Session's own act (the local verb comments only
+ *   for the Session that signalled itself; its origin says so);
+ * - the Session has no ticket, kept no list, or cleared it (the shared rule);
+ * - the ticket is gone or archived, or its project is archived or no longer
+ *   one the owner is an active Member of (what `board.createComment` checks
+ *   for an agent);
+ * - the comment is already there: by its frozen id (a refold), or as the same
+ *   body this Session left on the ticket since the signal (the local board's
+ *   own comment, brought over by the migration import with a minted id).
+ */
+async function commentTodoList(
+  ctx: MutationCtx,
+  session: Doc<"sessions">,
+  fact: SessionEvent,
+  signal: "done" | "blocked",
+  after: CloudSessionView,
+): Promise<void> {
+  const detail = fact.provenance.source.detail;
+  const origin = readSessionOrigin(isRecord(detail) ? detail.sessionOrigin : null);
+  if (origin?.kind !== "session" || origin.sessionId !== session.id) return;
+  const [effect] = sessionSignalBoardEffects({
+    signal,
+    ticketId: session.ticketId as TicketId | null,
+    todoList: after.todoList,
+  });
+  if (effect === undefined) return;
+  const ticket = await findTicket(ctx, effect.ticketId);
+  if (ticket === null) return;
+  const project = await findVisibleProject(ctx, session.ownerUserId as UserId, ticket.projectId);
+  if (project === null || project.archivedAt !== null) return;
+  const commentId = sessionSignalCommentId(session.id, fact.id);
+  const existing = await ctx.db
+    .query("ticketComments")
+    .withIndex("by_uuid", (q) => q.eq("id", commentId))
+    .unique();
+  if (existing !== null) return;
+  for await (const comment of ctx.db
+    .query("ticketComments")
+    .withIndex("by_ticket", (q) => q.eq("ticketId", ticket.id).gte("createdAt", fact.occurredAt))) {
+    if (comment.sessionId === session.id && comment.body === effect.body) return;
+  }
+  const actor: AgentActor = {
+    kind: "agent",
+    userId: session.ownerUserId as UserId,
+    sessionId: session.id as SessionId,
+    ticketId: ticket.id as TicketId,
+  };
+  let decision: ReturnType<typeof decideCreateComment>;
+  try {
+    decision = decideCreateComment(ticketFacts(ticket), { commentId, body: effect.body }, actor);
+  } catch (error) {
+    if (error instanceof BoardRuleError) return;
+    throw error;
+  }
+  const now = Date.now();
+  await ctx.db.insert("ticketComments", {
+    ...decision.comment,
+    author: actor,
+    createdAt: now,
+    editedAt: null,
+    deletedAt: null,
+  });
+  await recordBoardEvents(ctx, project.id, actor, now, decision.events);
+}
 
 /** The second receipt: the engine's verdict on a command, copied onto its job. */
 async function mirrorReceipt(

@@ -30,7 +30,13 @@ describe("the shared Mac runner connection", () => {
       close,
     }));
     let shared:
-      | { link: BackendLink; presence: RunnerPresence; bootId: string; runnerId: string }
+      | {
+          link: BackendLink;
+          presence: RunnerPresence;
+          bootId: string;
+          runnerId: string;
+          runnerToken(): Promise<string | null>;
+        }
       | undefined;
     let startPresence: ReturnType<typeof vi.spyOn>;
     const start = vi.fn(() => {
@@ -96,6 +102,7 @@ describe("the shared Mac runner connection", () => {
     expect(start).toHaveBeenCalledTimes(1);
     expect(startPresence!).toHaveBeenCalledTimes(1);
     expect(shared).toMatchObject({ bootId: "boot-id", runnerId: "runner-id" });
+    expect(await shared!.runnerToken()).toBeNull();
     expect(mutation).toHaveBeenCalledWith(
       "runners:heartbeat",
       expect.objectContaining({ bootId: "boot-id" }),

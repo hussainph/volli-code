@@ -5,8 +5,9 @@
  * - `accept` (runner): the claimed runner's facts, in order, idempotent. The
  *   rules are in `lib/sessionIntake.ts`.
  * - `command` (client): a person's intent for their Session (or an agent's,
- *   acting for the Session owner through its runner), queued as a
- *   `session.command` job for the Session's runner. The job row is the first
+ *   acting for the Session owner through its runner, within its supervision
+ *   scope: `lib/sessionCommands.ts`), queued as a `session.command` job for
+ *   the Session's runner, with a message's body staged beside it. The job row is the first
  *   receipt (`queued`); the engine's own receipt, folded on accept, is the
  *   second.
  * - `snapshot`, `history`, `list`, `attention` (client): the Session's
@@ -37,12 +38,12 @@ import {
   sessionListingActivity,
   sessionListingWaitingOn,
   type SessionAttachmentProjection,
+  type SessionCommandIntent,
 } from "@volli/shared";
 import {
   canSeeSession,
   cloudSessionView,
   SESSION_COMMAND_FORMAT,
-  isUuid,
   type CloudSessionState,
   type UserId,
   type WorkspaceId,
@@ -63,6 +64,13 @@ import { enqueueJob } from "./lib/jobs";
 import { tryArmSessionWatch } from "./lib/watches";
 import { listingOf } from "./lib/sessionDerived";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
+import {
+  checkCommandId,
+  checkSupervision,
+  readCommandArtifact,
+  type CommandArtifact,
+} from "./lib/sessionCommands";
+import { stageArtifactRows } from "./transcripts";
 import {
   acceptFacts,
   catchUpStep,
@@ -169,36 +177,61 @@ export const transferClaim = internalMutation({
 
 // ── commands (client) ───────────────────────────────────────────────────────
 
-/** An intent's JSON text; a message body travels as a transcript artifact, not inline. */
+/** An intent's JSON text; a message body travels as a transcript artifact (`artifact`), not in it. */
 const MAX_INTENT_BYTES = 64 * 1024;
 
 /**
- * A person's command for their own Session, queued for its claimed runner.
- * `intent` is a `SessionCommandIntent`'s JSON text. Idempotent by
+ * A person's command for their own Session, or an agent's for a Session it
+ * may supervise (`lib/sessionCommands.ts`), queued for the target's claimed
+ * runner. `intent` is a `SessionCommandIntent`'s JSON text. Idempotent by
  * `commandId`: a retry with the same intent returns the same job, a
- * different intent under a used id is `id_taken`.
+ * different intent under a used id is `id_taken`. An agent may use its tool
+ * call's frozen `<callerSessionId>:<toolCallId>` operation id.
+ *
+ * `artifact` (optional, additive): a `message.submit`'s body as the canonical
+ * JSON of its `SessionTranscriptArtifact`, at most 64 KB, staged in this
+ * transaction so a runner that never wrote the body can hydrate it
+ * (`transcripts.commandArtifact`). An agent's `message.submit` must carry
+ * it: its target may be on another runner.
  */
 export const command = mutation({
-  args: { sessionId: v.string(), commandId: v.string(), intent: v.string() },
+  args: {
+    sessionId: v.string(),
+    commandId: v.string(),
+    intent: v.string(),
+    artifact: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const caller = await requireActor(ctx, PERSON_OR_AGENT);
     const { viewer, session } = await requireSessionActor(ctx, args.sessionId, caller.viewer);
-    if (!isUuid(args.commandId)) throw fail("invalid_request", "The command id is not a UUID.");
+    checkCommandId(caller, args.commandId);
     if (new TextEncoder().encode(args.intent).length > MAX_INTENT_BYTES) {
       throw fail("invalid_request", `An intent is limited to ${MAX_INTENT_BYTES} bytes.`);
     }
+    let intent: Exclude<SessionCommandIntent, { kind: "session.create" }>;
     let intentJson: string;
     let isMessage = false;
     try {
-      const intent = decodeSessionCommandIntent(JSON.parse(args.intent), "intent");
-      if (intent.kind === "session.create") throw new Error("intent.kind creates a session");
-      intentJson = encodeSessionJson(intent);
-      isMessage = intent.kind === "message.submit";
+      const decoded = decodeSessionCommandIntent(JSON.parse(args.intent), "intent");
+      if (decoded.kind === "session.create") throw new Error("intent.kind creates a session");
+      intent = decoded;
+      intentJson = encodeSessionJson(decoded);
+      isMessage = decoded.kind === "message.submit";
     } catch (error) {
       throw fail(
         "invalid_request",
         `The intent is not a Session command: ${error instanceof Error ? error.message : "unreadable"}.`,
       );
+    }
+    checkSupervision(caller, session, intent);
+    let artifact: CommandArtifact | null = null;
+    if (args.artifact !== undefined) {
+      if (intent.kind !== "message.submit") {
+        throw fail("invalid_request", "Only a message.submit carries a message body.");
+      }
+      artifact = await readCommandArtifact(args.artifact, intent, args.commandId);
+    } else if (caller.kind === "agent" && intent.kind === "message.submit") {
+      throw fail("invalid_request", "An agent's message carries its body (`artifact`).");
     }
     const intake = await ctx.db
       .query("sessionIntake")
@@ -229,6 +262,18 @@ export const command = mutation({
             commandId: args.commandId,
           })
         : null;
+    // Staged in the job's transaction: the job exists exactly when its body
+    // does. Idempotent by digest, so a replay stages nothing twice. No
+    // sequence yet: the referencing event is the target runner's to record.
+    if (artifact !== null) {
+      await stageArtifactRows(
+        ctx,
+        { sessionId: session.id, projectId: session.projectId },
+        [{ ...artifact, spillKey: null, sequence: null }],
+        "client",
+        Date.now(),
+      );
+    }
     const job = (await ctx.db
       .query("runnerJobs")
       .withIndex("by_uuid", (q) => q.eq("id", args.commandId))

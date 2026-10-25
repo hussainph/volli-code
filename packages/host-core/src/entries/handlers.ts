@@ -23,7 +23,6 @@ export {
   type HostSubscriptionHandler,
   type SessionCreateHandlerInput,
   type SessionReadHandlerInput,
-  type SessionReadPort,
 } from "../handlers/host-handlers";
 export type {
   RemoteHostsPort,

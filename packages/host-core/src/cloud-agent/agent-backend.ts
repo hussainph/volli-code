@@ -72,6 +72,12 @@ export interface AgentCallOptions {
 }
 
 export interface AgentBackend {
+  action(
+    sessionId: string,
+    path: string,
+    args: Record<string, unknown>,
+    options?: AgentCallOptions,
+  ): Promise<unknown>;
   query(
     sessionId: string,
     path: string,
@@ -93,6 +99,42 @@ export interface AgentBackend {
 }
 
 const DROPS_TOKEN: ReadonlySet<string> = new Set(["fenced", "revoked", "unauthenticated"]);
+
+/** Refreshing a runner credential must fit inside the verb's bound too. No agent request is sent on timeout. */
+export async function runnerTokenBefore(
+  token: () => Promise<string | null>,
+  deadline: number,
+  now = Date.now,
+): Promise<string | null> {
+  const wait = deadline - now();
+  if (wait <= 0)
+    throw new CloudOfflineError(
+      "timeout",
+      "Out of time before reading the runner token.",
+      "not_sent",
+    );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      token(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new CloudOfflineError(
+                "timeout",
+                "This runner's token source did not answer in time.",
+                "not_sent",
+              ),
+            ),
+          wait,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export function createAgentBackend(options: AgentBackendOptions): AgentBackend {
   const now = options.now ?? Date.now;
@@ -120,7 +162,7 @@ export function createAgentBackend(options: AgentBackendOptions): AgentBackend {
     deadline === undefined ? Number.POSITIVE_INFINITY : deadline - now();
 
   async function mintOnce(sessionId: string, deadline: number | undefined) {
-    const runnerToken = await options.runnerToken();
+    const runnerToken = await runnerTokenBefore(options.runnerToken, now() + budget(deadline), now);
     if (runnerToken === null) {
       throw new CloudFunctionError("revoked", "This runner is no longer linked to Volli Cloud.");
     }
@@ -243,6 +285,8 @@ export function createAgentBackend(options: AgentBackendOptions): AgentBackend {
   }
 
   return {
+    action: (sessionId, path, args, callOptions = {}) =>
+      call("action", sessionId, path, args, callOptions.deadline),
     query: (sessionId, path, args, callOptions = {}) =>
       call("query", sessionId, path, args, callOptions.deadline),
     mutation: (sessionId, path, args, callOptions = {}) =>

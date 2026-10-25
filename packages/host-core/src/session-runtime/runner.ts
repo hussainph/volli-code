@@ -426,6 +426,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     handlers: (ready) => handlersFor(ready),
     ...(product.projects === undefined ? {} : { projects: product.projects }),
     inProcessWatches: product.inProcessWatches,
+    ...(store.kind === "cloud" ? { cloudSessionVerbs: store.cloud.cloudSessionVerbs } : {}),
   });
   let handlerMap: HostHandlerMap | undefined;
   /** Built once, from the first recovered proof a door or the tool door brings. */

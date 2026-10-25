@@ -520,7 +520,7 @@ describe("headless runtime ownership", () => {
     const getSession = vi.spyOn(f.engine, "getSession");
     const listSessions = vi.spyOn(f.engine, "listSessions");
     const listSignals = vi.spyOn(f.engine, "listLatestTicketSignals");
-    const ready = await f.launch().ready();
+    await f.launch().ready();
     const { sessionListing } = seam.handlers.mock.lastCall![1] as {
       sessionListing: {
         db: unknown;
@@ -548,11 +548,10 @@ describe("headless runtime ownership", () => {
       { attachmentId: "a-1", sessionId: "s-1" },
     ] as never);
     expect([...sessionListing.liveAttachmentIds()]).toEqual(["a-1"]);
-    const reads = vi.fn(async () => ({ v: 1 as const, ok: true as const, data: {} }));
-    ready.serveSessionReads(reads);
     const handlers = seam.handlers.mock.lastCall![1];
-    await handlers.sessionReads("session.show", "p", { session: "s-1" });
-    expect(reads).toHaveBeenCalledWith("session.show", "p", { session: "s-1" });
+    // The Session reads are the agent command service's own entries (VC-894):
+    // the host hands the map no forwarder for them.
+    expect(handlers).not.toHaveProperty("sessionReads");
     expect(await handlers.ticketSignals("p")).toEqual([
       {
         ticketId: "t",

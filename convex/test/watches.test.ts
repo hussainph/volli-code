@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { canonicalJson, TRANSCRIPT_ARTIFACT_MEDIA_TYPE } from "@volli/session-engine";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import {
   AGENT_TOKEN_ISSUER,
@@ -47,7 +48,7 @@ const watchRows = (t: Tester, sid: string) =>
       .collect(),
   );
 
-async function world() {
+async function world(boardCaller = false) {
   const t = setup();
   const alice = await boardFixture(t);
   const ticket = await createTicket(alice.as, alice.projectId);
@@ -56,6 +57,19 @@ async function world() {
     { projectId: alice.projectId, ticketId: ticket.ticketId },
     alice.userId,
   );
+  if (boardCaller)
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("sessions")
+        .withIndex("by_uuid", (q) => q.eq("id", watcher.sessionId))
+        .unique();
+      await ctx.db.patch(row!._id, {
+        role: "project",
+        ticketId: null,
+        visibility: "private",
+        visibilityReason: "adhoc",
+      });
+    });
   const target = await writeSession({ projectId: alice.projectId, ticketId: ticket.ticketId });
   const turnEnd = target.events.findIndex((e) => e.payload.kind === "turn.completed");
   await accept(t, watcher.runnerId, target.sessionId, target.events.slice(0, turnEnd));
@@ -73,9 +87,90 @@ async function world() {
   return { t, ...alice, person: alice.as, ticket, watcher, target, turnEnd, as, arm };
 }
 
+function steerArgs(commandId: string) {
+  const artifact = canonicalJson({
+    version: 1,
+    threadId: commandId,
+    branchId: commandId,
+    attemptId: commandId,
+    turnId: null,
+    message: {
+      id: `${commandId}:message`,
+      role: "user",
+      parts: [{ type: "text", text: "Steer from the watcher" }],
+    },
+  });
+  const digest = `sha256:${createHash("sha256").update(artifact).digest("hex")}`;
+  return {
+    artifact,
+    intent: JSON.stringify({
+      kind: "message.submit",
+      reference: { id: digest, digest, mediaType: TRANSCRIPT_ARTIFACT_MEDIA_TYPE },
+    }),
+  };
+}
+
 afterEach(() => vi.useRealTimers());
 
 describe("durable watches", () => {
+  test("retired awaits keep a replay-safe subset of watch kinds", async () => {
+    const w = await world();
+    const args = {
+      watcherSessionId: w.watcher.sessionId,
+      target: { kind: "session" as const, id: w.target.sessionId },
+      commandId: `${w.watcher.sessionId}:retired-await`,
+      kinds: ["verdict"],
+    };
+    const first = await w.as.mutation(api.watches.watch, args);
+    expect((await watchRows(w.t, w.watcher.sessionId))[0]?.kinds).toEqual(["verdict"]);
+    expect(await w.as.mutation(api.watches.watch, args)).toEqual(first);
+    await expect(
+      w.as.mutation(api.watches.watch, { ...args, kinds: ["turn"] }),
+    ).rejects.toMatchObject({ data: { code: "id_taken" } });
+    await expect(
+      w.as.mutation(api.watches.watch, {
+        ...args,
+        commandId: newId("command"),
+        kinds: ["comment"],
+      }),
+    ).rejects.toMatchObject({ data: { code: "invalid_request" } });
+    await accept(
+      w.t,
+      w.watcher.runnerId,
+      w.target.sessionId,
+      w.target.events.slice(w.turnEnd, w.turnEnd + 1),
+    );
+    expect(await notices(w.t, w.watcher.sessionId)).toHaveLength(0);
+  });
+  test("selective awaits add interest without narrowing an existing watch; unwatch resets it", async () => {
+    const w = await world();
+    const first = await w.arm();
+    const fullKinds = (await watchRows(w.t, w.watcher.sessionId))[0]!.kinds!;
+    const args = {
+      watcherSessionId: w.watcher.sessionId,
+      target: { kind: "session" as const, id: w.target.sessionId },
+      commandId: newId("command"),
+      kinds: ["verdict"],
+    };
+    expect(await w.as.mutation(api.watches.watch, args)).toEqual(first);
+    expect((await watchRows(w.t, w.watcher.sessionId))[0]!.kinds).toEqual(fullKinds);
+    expect(await w.as.mutation(api.watches.watch, args)).toEqual(first);
+    await expect(
+      w.as.mutation(api.watches.watch, { ...args, kinds: fullKinds }),
+    ).rejects.toMatchObject(code("id_taken"));
+    await w.as.mutation(api.watches.unwatch, { watcherSessionId: w.watcher.sessionId });
+    await w.as.mutation(api.watches.watch, { ...args, commandId: newId("command") });
+    let active = (await watchRows(w.t, w.watcher.sessionId)).find((row) => row.endedAt === null)!;
+    expect(active.kinds).toEqual(["verdict"]);
+    await w.as.mutation(api.watches.watch, {
+      ...args,
+      commandId: newId("command"),
+      kinds: ["turn"],
+    });
+    active = (await watchRows(w.t, w.watcher.sessionId)).find((row) => row.endedAt === null)!;
+    expect(active.kinds).toEqual(fullKinds.filter((kind) => kind === "verdict" || kind === "turn"));
+  });
+
   test("arm retries do not re-arm a fired turn; new commands do, and unwatch ends intent", async () => {
     const w = await world();
     const commandId = newId("command");
@@ -309,7 +404,7 @@ describe("durable watches", () => {
   });
 
   test("accepted Session-origin starts and steers arm once, but delegated children do not", async () => {
-    const w = await world();
+    const w = await world(true);
     const started = await writeSession({ projectId: w.projectId, ticketId: w.ticket.ticketId });
     const first = started.events[0]!;
     first.provenance = {
@@ -333,10 +428,7 @@ describe("durable watches", () => {
     const args = {
       sessionId: started.sessionId,
       commandId,
-      intent: JSON.stringify({
-        kind: "message.submit",
-        reference: { id: "body", mediaType: null, digest: null },
-      }),
+      ...steerArgs(commandId),
     };
     await w.as.mutation(api.sessions.command, args);
     expect((await watchRows(w.t, w.watcher.sessionId))[0]?.origin).toBe("steered");
@@ -413,7 +505,7 @@ describe("durable watches", () => {
     expect(await notices(w.t, w.watcher.sessionId)).toHaveLength(1);
   });
   test("a refused arm does not roll back an accepted steer", async () => {
-    const w = await world();
+    const w = await world(true);
     await w.t.run(async (ctx) => {
       const row = await ctx.db
         .query("sessions")
@@ -425,10 +517,7 @@ describe("durable watches", () => {
     const reply = await w.as.mutation(api.sessions.command, {
       sessionId: w.target.sessionId,
       commandId,
-      intent: JSON.stringify({
-        kind: "message.submit",
-        reference: { id: "body", mediaType: null, digest: null },
-      }),
+      ...steerArgs(commandId),
     });
     expect(reply).toMatchObject({
       commandId,

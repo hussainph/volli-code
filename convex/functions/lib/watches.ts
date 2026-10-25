@@ -95,6 +95,7 @@ export async function armWatch(
     origin: WatchOrigin;
     actor: Actor;
     commandId: string;
+    kinds?: readonly string[];
     /** Auto-arms happen within a folded batch, before its later facts. */
     armedThroughSequence?: number;
   },
@@ -103,6 +104,14 @@ export async function armWatch(
     throw watchError("invalid_request", "The watch command id is invalid.");
   if (!isUuid(input.target.id))
     throw watchError("invalid_request", "The watch target id is invalid.");
+  const allowed: readonly string[] =
+    input.target.kind === "session" ? SESSION_AWAIT_KINDS : TICKET_AWAIT_KINDS;
+  const kinds =
+    input.kinds === undefined
+      ? [...allowed]
+      : allowed.filter((kind) => input.kinds!.includes(kind));
+  if (kinds.length === 0 || input.kinds?.some((kind) => !allowed.includes(kind)))
+    throw watchError("invalid_request", "The watch kinds do not match its target.");
   const receipt = await ctx.db
     .query("watchReceipts")
     .withIndex("by_command", (q) => q.eq("commandId", input.commandId))
@@ -111,7 +120,8 @@ export async function armWatch(
     if (
       receipt.watcherSessionId !== input.watcher.id ||
       receipt.target.kind !== input.target.kind ||
-      receipt.target.id !== input.target.id
+      receipt.target.id !== input.target.id ||
+      JSON.stringify(receipt.kinds ?? allowed) !== JSON.stringify(kinds)
     ) {
       throw watchError("id_taken", "That command id armed a different watch.");
     }
@@ -146,8 +156,6 @@ export async function armWatch(
   );
   if (existing === undefined && watches.length >= 200)
     throw watchError("watch_limit", "A Session can watch at most 200 targets.");
-  const kinds =
-    input.target.kind === "session" ? [...SESSION_AWAIT_KINDS] : [...TICKET_AWAIT_KINDS];
   const id = existing === undefined ? newId("watch") : parseId("watch", existing.id);
   const intake =
     input.target.kind === "session"
@@ -161,7 +169,11 @@ export async function armWatch(
     await ctx.db.patch(existing._id, {
       origin: input.origin,
       turnArmed: true,
-      kinds,
+      // A selective retired await adds interest; it must not silently remove
+      // notices from an existing explicit or automatic watch. Unwatch resets it.
+      kinds: allowed.filter(
+        (kind) => (existing.kinds ?? allowed).includes(kind) || kinds.includes(kind),
+      ),
       armedThroughSequence,
       lastArmedAt: now,
     });
@@ -185,6 +197,7 @@ export async function armWatch(
     watcherSessionId: input.watcher.id,
     target: input.target,
     watchId: id,
+    kinds,
     expiresAt: now + TERMINAL_JOB_TTL_MS,
   });
   return id;

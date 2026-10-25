@@ -9,8 +9,8 @@
  * same for every verb — list the projects, resolve what this verb's table
  * entry asks for, call it — plus the seams the composition root injects.
  * "Call it" is the map's (VC-923): every verb's handler is an entry of the
- * host's handler map, and this service serves its own verbs' entries into the
- * map it is handed (`agent-dispatch/verbs.ts`).
+ * host's handler map, and this service serves its own verbs' entries, and the
+ * Session reads' (VC-894), into the map it is handed (`agent-dispatch/verbs.ts`).
  *
  * It remains the door's one public face. `index.ts` and the tests import from
  * here, and the two Brief compositions are re-exported rather than moved,
@@ -27,20 +27,14 @@ import {
   verbEntry,
   makeAgentError,
 } from "@volli/shared";
-import type {
-  AgentRequest,
-  AgentResponse,
-  SessionReadVerb,
-  SessionRecord,
-  TicketEventActor,
-} from "@volli/shared";
+import type { AgentRequest, AgentResponse, SessionRecord, TicketEventActor } from "@volli/shared";
 
 import { doorCallActor, projectedHandlerKey } from "./agent-dispatch/projection";
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
 import { cloudBoardVerbOf } from "./cloud-agent/board-verbs";
 import { coordinationRefusal, socketHandlerPolicy } from "./agent-dispatch/admission";
 import { isHostHandlerMap, serveHostHandlers } from "./handlers/handler-map";
-import { agentVerbEntries, rosterLoaders } from "./agent-dispatch/verbs";
+import { agentVerbEntries, rosterLoaders, sessionReadEntries } from "./agent-dispatch/verbs";
 import type {
   AgentCommandContext,
   EnvSessionIdentity,
@@ -49,7 +43,7 @@ import type {
 import { agentCommandPreflight } from "./agent-dispatch/preview";
 import { doorActor, requestActor } from "./agent-dispatch/resolution";
 import type { DoorActor } from "./agent-dispatch/resolution";
-import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
+import { getProjectAuthorityPolicy, listProjects } from "./db/projects-repo";
 import { terminalSessionRecord } from "./session-control";
 import { runGitCapturingAsync } from "./worktree";
 import { createWorktreeReadService } from "./worktree-reads";
@@ -137,36 +131,30 @@ export function createAgentCommandService(
     options.readAuthorityPolicy ??
     ((projectId: string) => getProjectAuthorityPolicy(options.db, projectId));
 
-  // The socket's own verbs are entries of the map (VC-923), over this
-  // service's state: served once, now, so every door that projects the map
-  // reaches them through it, under that door's policy.
-  serveHostHandlers(
-    options.handlers,
-    agentVerbEntries({
-      options,
-      now,
-      newId,
-      gitAsync,
-      worktreeExists,
-      worktreeReads,
-      sessionEngine,
-      watermarks,
-      terminalUpdateLocks,
-      pendingLaunches,
-    }),
-  );
+  // The socket's own verbs are entries of the map (VC-923), and so are its
+  // Session reads (VC-894), over this service's state: served once, now, so
+  // every door that projects the map (this socket, and a router's
+  // Workspace-scoped reads) reaches them through it, under that door's policy.
+  const verbState = {
+    options,
+    now,
+    newId,
+    gitAsync,
+    worktreeExists,
+    worktreeReads,
+    sessionEngine,
+    watermarks,
+    terminalUpdateLocks,
+    pendingLaunches,
+  };
+  serveHostHandlers(options.handlers, {
+    ...agentVerbEntries(verbState),
+    ...sessionReadEntries(verbState),
+  });
 
   const service = {
-    /**
-     * One request, through the one pipeline. `workspaceId` is
-     * `executeInWorkspace`'s alone (the service's type does not offer it):
-     * it scopes the roster to that one project and its Sessions, so a handle
-     * in any other Workspace resolves exactly as an absent one does.
-     */
-    async execute(
-      request: AgentRequest,
-      workspaceId: string | null = null,
-    ): Promise<AgentResponse> {
+    /** One request, through the one pipeline. */
+    async execute(request: AgentRequest): Promise<AgentResponse> {
       // Both answers below precede every read: a preview must be refused before
       // the work that would perform it, and a capability probe must not be able
       // to fail for a reason that has nothing to do with the capability.
@@ -193,9 +181,9 @@ export function createAgentCommandService(
           ),
         };
       }
-      const projects = listProjects(options.db).filter(
-        (project) => workspaceId === null || project.id === workspaceId,
-      );
+      // Machine identity only: a cloud launch's store names its owner's
+      // projects, whose shadow identities this host's own list leaves out.
+      const projects = options.projects?.() ?? listProjects(options.db);
       // Every Session of every project — lazy and memoized (VC-403). Nothing
       // is folded until a handler calls `context.loadProjections()` or
       // `context.loadSessions()`. This replaced an eager fold gated by a
@@ -306,24 +294,6 @@ export function createAgentCommandService(
       };
       return auditOperatorWrite(door, request, await binding.handle(context, request));
     },
-    executeInWorkspace: (
-      verb: SessionReadVerb,
-      workspaceId: string,
-      args: Record<string, unknown>,
-    ) =>
-      service.execute(
-        // No `VOLLI_SESSION`, no token, no cwd: the WebSocket's actor was
-        // authenticated by its own door, and these reads need none of them.
-        // The project is forced, never taken from the caller (VC-663, D4):
-        // named by its path, the one selector no other project can share.
-        {
-          v: 1,
-          cmd: verb,
-          args: { ...args, project: getProjectById(options.db, workspaceId)?.path ?? workspaceId },
-          ctx: { cwd: "/", env: {} },
-        },
-        workspaceId,
-      ),
   };
   return service;
 
