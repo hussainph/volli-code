@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { newId } from "@volli/shared/cloud";
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION, newId } from "@volli/shared/cloud";
 
 import { describe, expect, test } from "vite-plus/test";
 
@@ -33,11 +33,13 @@ describe("workspaces on the pinned local backend", () => {
     const ana = person("Ana");
     const ben = person("Ben");
     const cy = person("Cy");
-    // VC-936: only allowlisted accounts get a personal Workspace and may accept an invite.
+    // VC-936: only allowlisted accounts get a personal Workspace and may accept an invite,
+    // and signing up accepts the current Preview Agreement.
     for (const someone of [ana, ben, cy]) await allow(someone.email);
-    const { userId: anaId } = await ana.client.mutation(api.accounts.ensureViewer, {});
-    const { userId: benId } = await ben.client.mutation(api.accounts.ensureViewer, {});
-    await cy.client.mutation(api.accounts.ensureViewer, {});
+    const acceptance = { acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION };
+    const { userId: anaId } = await ana.client.mutation(api.accounts.ensureViewer, acceptance);
+    const { userId: benId } = await ben.client.mutation(api.accounts.ensureViewer, acceptance);
+    await cy.client.mutation(api.accounts.ensureViewer, acceptance);
 
     // Every account starts with its own Workspace, named after the person.
     const [personal] = await ana.client.query(api.workspaces.listMine, {});

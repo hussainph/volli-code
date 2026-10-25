@@ -242,7 +242,7 @@ export interface DesktopRouterHandlers {
   readonly "account.snapshot": HostHandler<void, AccountSnapshot>;
   readonly "account.subscribe": DesktopSubscriptionHandler<void, AccountSnapshot>;
   readonly "account.signIn": HostHandler<
-    { connection: AccountConnection; inviteCode?: string },
+    { connection: AccountConnection; inviteCode?: string; acceptedAgreementVersion?: string },
     null
   >;
   readonly "account.cancelSignIn": HostHandler<void, null>;

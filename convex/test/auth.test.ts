@@ -184,6 +184,7 @@ describe("accounts.ensureViewer", () => {
       displayName: "Alice",
       primaryEmail: "alice@example.com",
       previewAccess: "waitlisted",
+      previewAgreementAccepted: false,
       status: "active",
       purgeAfter: null,
     });

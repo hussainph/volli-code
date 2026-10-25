@@ -21,7 +21,11 @@ export interface AccountRpc {
       ): { unsubscribe(): void };
     };
     readonly signIn: {
-      mutate(input: { connection: AccountConnection; inviteCode?: string }): Promise<unknown>;
+      mutate(input: {
+        connection: AccountConnection;
+        inviteCode?: string;
+        acceptedAgreementVersion?: string;
+      }): Promise<unknown>;
     };
     readonly cancelSignIn: { mutate(): Promise<unknown> };
     readonly signOut: { mutate(): Promise<unknown> };
@@ -48,7 +52,11 @@ type StreamView<Snapshot> =
   | { readonly kind: "failed"; readonly message: string };
 
 export interface AccountCommands {
-  signIn(connection: AccountConnection, inviteCode?: string): Promise<unknown>;
+  signIn(
+    connection: AccountConnection,
+    inviteCode?: string,
+    acceptedAgreementVersion?: string,
+  ): Promise<unknown>;
   cancelSignIn(): Promise<unknown>;
   signOut(): Promise<unknown>;
   requestDeletion(): Promise<unknown>;
@@ -58,10 +66,11 @@ export interface AccountCommands {
 
 function accountCommands(rpc: AccountRpc): AccountCommands {
   return {
-    signIn: (connection, inviteCode) =>
+    signIn: (connection, inviteCode, acceptedAgreementVersion) =>
       rpc.account.signIn.mutate({
         connection,
         ...(inviteCode === undefined ? {} : { inviteCode }),
+        ...(acceptedAgreementVersion === undefined ? {} : { acceptedAgreementVersion }),
       }),
     cancelSignIn: () => rpc.account.cancelSignIn.mutate(),
     signOut: () => rpc.account.signOut.mutate(),

@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import { beforeAll, describe, expect, test } from "vite-plus/test";
 
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared/cloud";
+
 import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
 
@@ -39,7 +41,9 @@ beforeAll(async () => {
   // Sign-up creates the person's own Workspace; the project goes there.
   const { userId } = await client().mutation(api.accounts.ensureViewer, {});
   await backend.admin(internal.previewAccess.set, { kind: "user", value: userId, enabled: true });
-  await client().mutation(api.accounts.ensureViewer, {});
+  await client().mutation(api.accounts.ensureViewer, {
+    acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+  });
   const [workspace] = await client().query(api.workspaces.listMine, {});
   const workspaceId = workspace!.workspaceId;
   projectId = uuid();

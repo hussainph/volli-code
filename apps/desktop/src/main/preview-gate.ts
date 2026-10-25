@@ -2,8 +2,13 @@
 export function previewAccountGranted(viewer: {
   previewAccess?: unknown;
   status?: unknown;
+  previewAgreementAccepted?: unknown;
 }): boolean {
-  return viewer.previewAccess === "granted" && viewer.status === "active";
+  return (
+    viewer.previewAccess === "granted" &&
+    viewer.status === "active" &&
+    viewer.previewAgreementAccepted === true
+  );
 }
 
 /** Stable preview access is checked once per launch, never trusted from a local marker. */

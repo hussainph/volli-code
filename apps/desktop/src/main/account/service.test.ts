@@ -22,6 +22,7 @@ import { tempInventory, testKeyPair } from "./test-support";
 
 const VIEWER: BackendViewer = {
   previewAccess: "granted",
+  previewAgreementAccepted: true,
   userId: "6b4c3a1e-2a9f-4c3e-9d1b-0f8e7d6c5b4a",
   displayName: "Dana from Volli",
   primaryEmail: "dana@example.com",
@@ -927,7 +928,11 @@ it("passes an invite code only to this sign-in's backend call and surfaces a ref
   const { service } = harness({ backend });
   await service.signIn("github", "preview-code-123456");
   await service.settled();
-  expect(backend.ensureViewer).toHaveBeenCalledWith(expect.any(String), "preview-code-123456");
+  expect(backend.ensureViewer).toHaveBeenCalledWith(
+    expect.any(String),
+    "preview-code-123456",
+    undefined,
+  );
   await service.signOut();
   backend.ensureViewer.mockRejectedValueOnce(
     new BackendRefusedError("This preview invite code is invalid.", "preview_waitlisted"),
@@ -972,7 +977,7 @@ it("retries a transient backend failure with the same in-memory invite code", as
   const backend = backendStandIn();
   backend.ensureViewer.mockRejectedValueOnce(new Error("offline"));
   const { service } = harness({ backend });
-  await service.signIn("github", "preview-code-123456");
+  await service.signIn("github", "preview-code-123456", "current-version");
   await service.settled();
   expect(service.snapshot().account?.backend).toBe("unreachable");
   const unsubscribe = service.subscribe(() => {});
@@ -982,6 +987,35 @@ it("retries a transient backend failure with the same in-memory invite code", as
     2,
     expect.any(String),
     "preview-code-123456",
+    "current-version",
   );
   expect(service.previewUserId()).toBe(VIEWER.userId);
+});
+
+it("sends explicit current-version acceptance only for enrollment, never for restored token refresh", async () => {
+  const temp = tempInventory();
+  cleanups.push(temp.dispose);
+  const backend = backendStandIn();
+  const provider = scriptedProvider();
+  const first = harness({ provider, openBrowser: scriptedBrowser, temp, backend });
+  await first.service.signIn("github", undefined, "current-version");
+  await first.service.settled();
+  expect(backend.ensureViewer).toHaveBeenCalledWith(
+    expect.any(String),
+    undefined,
+    "current-version",
+  );
+  first.service.dispose();
+  const nextBackend = backendStandIn({
+    ensureViewer: async () => ({ ...VIEWER, previewAgreementAccepted: false }),
+  });
+  const next = harness({ provider, temp, backend: nextBackend });
+  next.service.snapshot();
+  await next.service.settled();
+  expect(nextBackend.ensureViewer).toHaveBeenCalledWith(expect.any(String), undefined, undefined);
+  expect(next.service.previewUserId()).toBeNull();
+  expect(next.service.snapshot()).toMatchObject({
+    account: { backend: "refused" },
+    failure: expect.stringContaining("Preview Agreement"),
+  });
 });

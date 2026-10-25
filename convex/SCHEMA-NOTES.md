@@ -416,9 +416,21 @@ Canary sign-ins also require invitation; already invited canary accounts
 retain their existing offline cached-board launch. Invite codes are retained
 only in memory during transient retries, not across app restarts.
 
-Preview agreement acceptance is a separate release prerequisite: the legal
-version and explicit server-recorded acceptance must be wired before preview
-shipping. An invitation is not acceptance of the agreement.
+An invitation is not acceptance of the agreement. Enrollment requires an
+explicit checkbox action acknowledging the linked Preview Agreement and
+Privacy notice; only that action sends `acceptedAgreementVersion` through
+the desktop RPC to `accounts.ensureViewer`. For an invited active account,
+a current-version submission records optional `users.previewAgreementVersion`
+and `users.previewAgreementAcceptedAt` using server time, before Workspace
+setup in the same transaction. Retry and token refresh preserve the original
+receipt; missing, stale or incomplete receipts are never auto-backfilled.
+Waitlisted accounts do not record acceptance. Every Workspace create/accept
+requires the current receipt as well as invitation. Account replies include
+`previewAgreementAccepted`; missing/unknown acceptance fails the desktop gate
+closed and offers sign-out/reacceptance. The temporary enrollment version
+constant has a one-line TODO to switch to the legal pages' shared constant
+once that change lands. Legal text still requires owner approval before the
+preview ships.
 
 CI holds the backend preview gate and the desktop launch gate at 100%
 statements, branches, functions and lines. Backend transport tests also

@@ -8,7 +8,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { AccountGithubSnapshot, AccountSnapshot } from "@volli/shared";
 
-import { LOCAL_LAUNCH } from "@volli/shared";
+import { LOCAL_LAUNCH, PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared";
 
 import { useExperimentsStore } from "@renderer/stores/experiments";
 import { adoptLaunch } from "@renderer/stores/launch";
@@ -139,6 +139,11 @@ afterEach(() => {
   useExperimentsStore.setState({ snapshot: null });
 });
 
+const acceptAgreement = () =>
+  act(() =>
+    container.querySelector<HTMLButtonElement>('[aria-label="Accept Preview Agreement"]')!.click(),
+  );
+
 const button = (label: string): HTMLButtonElement => {
   const found = [...document.querySelectorAll("button")].find((node) =>
     node.textContent?.includes(label),
@@ -154,8 +159,12 @@ describe("Settings → Account", () => {
     expect(container.textContent).toContain("Checking your sign-in…");
     tier.push(SIGNED_OUT);
     expect(container.textContent).toContain("Continue with GitHub");
+    acceptAgreement();
     act(() => button("Continue with Google").click());
-    expect(tier.rpc.account.signIn.mutate).toHaveBeenCalledWith({ connection: "google" });
+    expect(tier.rpc.account.signIn.mutate).toHaveBeenCalledWith({
+      connection: "google",
+      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    });
 
     tier.push({ ...SIGNED_OUT, state: "signing-in", signingInWith: "google" });
     expect(container.textContent).toContain("Waiting for the browser…");
@@ -494,10 +503,12 @@ it("sends the optional preview invite code and leaves a waitlisted sign-in witho
     );
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
+  acceptAgreement();
   act(() => button("Continue with GitHub").click());
   expect(tier.rpc.account.signIn.mutate).toHaveBeenCalledWith({
     connection: "github",
     inviteCode: "preview-code-123456",
+    acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
   });
   tier.push({
     ...SIGNED_IN,
@@ -531,6 +542,18 @@ it("explains a short invite code before making an RPC call", () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "short");
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
+  acceptAgreement();
   act(() => button("Continue with GitHub").click());
   expect(tier.rpc.account.signIn.mutate).not.toHaveBeenCalled();
+});
+
+it("requires explicit agreement acceptance and links the legal pages before sign-in", () => {
+  const tier = standIn();
+  act(() => root.render(<AccountPane rpc={tier.rpc} />));
+  tier.push(SIGNED_OUT);
+  expect(button("Continue with GitHub").disabled).toBe(true);
+  expect(container.querySelector('a[href="https://volli.app/legal/preview/"]')).not.toBeNull();
+  expect(container.querySelector('a[href="https://volli.app/legal/privacy/"]')).not.toBeNull();
+  acceptAgreement();
+  expect(button("Continue with GitHub").disabled).toBe(false);
 });

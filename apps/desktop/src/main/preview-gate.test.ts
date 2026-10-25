@@ -59,9 +59,11 @@ describe("stable preview launch gate", () => {
 it("requires an explicit grant for an active account", () => {
   for (const previewAccess of ["granted", "waitlisted", "future", undefined]) {
     for (const status of ["active", "deletion_pending", "deleted", undefined]) {
-      expect(previewAccountGranted({ previewAccess, status })).toBe(
-        previewAccess === "granted" && status === "active",
-      );
+      for (const previewAgreementAccepted of [true, false, undefined]) {
+        expect(previewAccountGranted({ previewAccess, status, previewAgreementAccepted })).toBe(
+          previewAccess === "granted" && status === "active" && previewAgreementAccepted === true,
+        );
+      }
     }
   }
 });

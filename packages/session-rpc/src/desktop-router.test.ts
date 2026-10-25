@@ -1296,10 +1296,12 @@ describeContract<Host, DesktopRouter>(
       await client.account.signIn.mutate({
         connection: "google",
         inviteCode: "preview-code-123456",
+        acceptedAgreementVersion: "current-version",
       });
       expect(fixture.calls.at(-1)?.input).toEqual({
         connection: "google",
         inviteCode: "preview-code-123456",
+        acceptedAgreementVersion: "current-version",
       });
     });
 

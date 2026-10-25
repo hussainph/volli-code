@@ -45,6 +45,7 @@
 import {
   ACCOUNT_TEXT_MAX,
   PREVIEW_WAITLIST_MESSAGE,
+  PREVIEW_AGREEMENT_REQUIRED_MESSAGE,
   ACCOUNT_TOKEN_RETRY_MS,
   OperationUnavailableError,
   UNCONFIGURED_ACCOUNT,
@@ -119,7 +120,11 @@ export interface AccountService {
   previewUserId(): string | null;
   snapshot(): AccountSnapshot;
   subscribe(listener: (snapshot: AccountSnapshot) => void): () => void;
-  signIn(connection: AccountConnection, inviteCode?: string): Promise<void>;
+  signIn(
+    connection: AccountConnection,
+    inviteCode?: string,
+    acceptedAgreementVersion?: string,
+  ): Promise<void>;
   cancelSignIn(): void;
   signOut(): Promise<void>;
   requestDeletion(): Promise<void>;
@@ -206,6 +211,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
   let syncing: Promise<void> | null = null;
   // Kept only in this sign-in epoch until the backend answers; never sealed or projected.
   let pendingInviteCode: string | undefined;
+  let pendingAgreementVersion: string | undefined;
   let pending: Promise<unknown> = Promise.resolve();
   let refreshing: { epoch: number; token: Promise<string | null> } | null = null;
   let epoch = 0;
@@ -269,6 +275,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     refreshing = null;
     syncing = null;
     pendingInviteCode = undefined;
+    pendingAgreementVersion = undefined;
     return epoch;
   };
 
@@ -369,30 +376,42 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     viewer = answered;
     const granted = previewAccountGranted(answered);
     backendState = granted || answered.status === "deletion_pending" ? "synced" : "refused";
-    failure = granted || answered.status === "deletion_pending" ? null : PREVIEW_WAITLIST_MESSAGE;
+    failure =
+      granted || answered.status === "deletion_pending"
+        ? null
+        : answered.previewAccess === "granted"
+          ? PREVIEW_AGREEMENT_REQUIRED_MESSAGE
+          : PREVIEW_WAITLIST_MESSAGE;
     if (granted) options.marker?.write(answered.userId);
     else options.marker?.clear();
   };
 
   /** Asks the backend for the person; on failure keeps the sign-in and says why. */
-  const syncViewer = (inviteCode?: string): Promise<void> => {
+  const syncViewer = (inviteCode?: string, acceptedAgreementVersion?: string): Promise<void> => {
     if (inviteCode !== undefined) pendingInviteCode = inviteCode;
+    if (acceptedAgreementVersion !== undefined) pendingAgreementVersion = acceptedAgreementVersion;
     if (backend === null) return Promise.resolve();
     if (syncing !== null) return syncing;
     const startedIn = epoch;
     const sentCode = pendingInviteCode;
+    const sentAgreementVersion = pendingAgreementVersion;
     const run = (async () => {
       try {
         const token = await freshToken();
         if (token === null || epoch !== startedIn) return;
-        const answered = await backend.ensureViewer(token, sentCode);
+        const answered = await backend.ensureViewer(token, sentCode, sentAgreementVersion);
         if (epoch !== startedIn) return;
         if (pendingInviteCode === sentCode) pendingInviteCode = undefined;
+        if (pendingAgreementVersion === sentAgreementVersion) pendingAgreementVersion = undefined;
         acceptViewer(answered);
       } catch (error) {
         if (epoch !== startedIn) return;
-        if (error instanceof BackendRefusedError && error.code === "preview_waitlisted") {
+        if (
+          error instanceof BackendRefusedError &&
+          (error.code === "preview_waitlisted" || error.code === "preview_agreement_required")
+        ) {
           pendingInviteCode = undefined;
+          pendingAgreementVersion = undefined;
           backendState = "refused";
           failure = error.message;
           options.marker?.clear();
@@ -484,6 +503,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     verifier: string,
     startedIn: number,
     inviteCode?: string,
+    acceptedAgreementVersion?: string,
   ): Promise<void> => {
     let result: Awaited<LoopbackCallback["result"]>;
     try {
@@ -552,7 +572,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     failure = null;
     log.info("account signed in", { provider: live.kind });
     emit();
-    await syncViewer(inviteCode);
+    await syncViewer(inviteCode, acceptedAgreementVersion);
   };
 
   const signedInBackend = async (): Promise<{ backend: AccountBackend; token: string }> => {
@@ -597,7 +617,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
         listeners.delete(listener);
       };
     },
-    async signIn(connection, inviteCode) {
+    async signIn(connection, inviteCode, acceptedAgreementVersion) {
       const live = requireEnabled();
       if (!isAccountConnection(connection)) throw new Error("Unknown sign-in provider.");
       if (state === "signed-in") throw new Error("Already signed in. Sign out first.");
@@ -632,7 +652,9 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
           callback.close();
           return;
         }
-        void track(runFlow(live, callback, pkce.verifier, startedIn, inviteCode));
+        void track(
+          runFlow(live, callback, pkce.verifier, startedIn, inviteCode, acceptedAgreementVersion),
+        );
         await options.openBrowser(url);
       } catch (error) {
         if (epoch === startedIn) {

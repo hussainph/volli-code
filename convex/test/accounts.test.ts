@@ -2,7 +2,7 @@ import { convexTest } from "convex-test";
 import type { GenericMutationCtx } from "convex/server";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
-import { newId } from "@volli/shared/cloud";
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION, newId } from "@volli/shared/cloud";
 
 import { ACCOUNT_DELETION_GRACE_MS } from "../functions/accounts";
 import { api, internal } from "../functions/_generated/api";
@@ -29,10 +29,13 @@ async function signIn(t: ReturnType<typeof setup>, subject: string): Promise<str
   const client = t.withIdentity(identity(subject));
   const { userId } = await client.mutation(api.accounts.ensureViewer, {});
   // VC-936: an account is waitlisted (and owns no Workspace) until an operator
-  // allowlists it; the next call then sets the account up. These identities
-  // carry no verified email, so the grant names the user id.
+  // allowlists it; the next call accepts the current Preview Agreement and so
+  // sets the account up. These identities carry no verified email, so the
+  // grant names the user id.
   await t.mutation(internal.previewAccess.set, { kind: "user", value: userId, enabled: true });
-  await client.mutation(api.accounts.ensureViewer, {});
+  await client.mutation(api.accounts.ensureViewer, {
+    acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+  });
   return userId;
 }
 
@@ -97,6 +100,7 @@ describe("accounts.ensureViewer", () => {
       status: "active",
       purgeAfter: null,
       previewAccess: "waitlisted",
+      previewAgreementAccepted: false,
     });
   });
 });
@@ -306,6 +310,7 @@ describe("accounts.cancelDeletion", () => {
       purgeAfter: null,
       // Restoring the account is not an allowlist decision.
       previewAccess: "granted",
+      previewAgreementAccepted: true,
     });
     const rows = await t.run(async (ctx) => ({
       requests: await ctx.db.query("deletionRequests").collect(),

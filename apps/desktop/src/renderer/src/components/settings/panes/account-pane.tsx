@@ -28,6 +28,7 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { SignOutIcon } from "@phosphor-icons/react/dist/csr/SignOut";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { UserCircleIcon } from "@phosphor-icons/react/dist/csr/UserCircle";
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared";
 import type {
   AccountConnection,
   AccountGithubInstallation,
@@ -57,6 +58,7 @@ import {
 import { toast } from "sonner";
 
 import { SignOutRestartDialog } from "@renderer/components/cloud/sign-out-restart";
+import { Checkbox } from "@renderer/components/ui/checkbox";
 import { Input } from "@renderer/components/ui/input";
 import { Button } from "@renderer/components/ui/button";
 import { toastError } from "@renderer/lib/toast";
@@ -97,6 +99,7 @@ function Failure({ text }: { text: string | null }) {
 
 function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: AccountCommands }) {
   const [inviteCode, setInviteCode] = React.useState("");
+  const [agreementAccepted, setAgreementAccepted] = React.useState(false);
   const waiting = snapshot.state === "signing-in";
   return (
     <PrefSection
@@ -117,18 +120,45 @@ function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: A
           disabled={waiting}
           maxLength={128}
         />
+        <label className="text-ui flex items-center gap-2">
+          <Checkbox
+            aria-label="Accept Preview Agreement"
+            checked={agreementAccepted}
+            onCheckedChange={(checked) => setAgreementAccepted(checked === true)}
+            disabled={waiting}
+          />
+          <span>
+            I agree to the{" "}
+            <a href="https://volli.app/legal/preview/" target="_blank" rel="noreferrer">
+              Preview Agreement
+            </a>{" "}
+            and acknowledge the{" "}
+            <a href="https://volli.app/legal/privacy/" target="_blank" rel="noreferrer">
+              Privacy notice
+            </a>
+            .
+          </span>
+        </label>
         {BUTTONS.map(({ connection, label, icon: Icon }) => (
           <Button
             key={connection}
             variant="outline"
-            disabled={waiting || snapshot.state === "restoring"}
+            disabled={waiting || snapshot.state === "restoring" || !agreementAccepted}
             onClick={() => {
               const code = inviteCode.trim();
               if (code !== "" && code.length < 16) {
                 toastError("Invite codes are at least 16 characters.");
                 return;
               }
-              act(() => commands.signIn(connection, code || undefined), "Sign-in");
+              act(
+                () =>
+                  commands.signIn(
+                    connection,
+                    code || undefined,
+                    PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+                  ),
+                "Sign-in",
+              );
             }}
           >
             <Icon />

@@ -11,6 +11,7 @@ import type { PreviewAccess } from "@volli/shared/cloud";
 /** What `accounts.ensureViewer` and the deletion mutations answer. */
 export interface BackendViewer {
   readonly previewAccess: PreviewAccess;
+  readonly previewAgreementAccepted: boolean;
   readonly userId: string;
   readonly displayName: string;
   readonly primaryEmail: string | null;
@@ -19,7 +20,11 @@ export interface BackendViewer {
 }
 
 export interface AccountBackend {
-  ensureViewer(accessToken: string, inviteCode?: string): Promise<BackendViewer>;
+  ensureViewer(
+    accessToken: string,
+    inviteCode?: string,
+    acceptedAgreementVersion?: string,
+  ): Promise<BackendViewer>;
   requestDeletion(accessToken: string): Promise<BackendViewer>;
   cancelDeletion(accessToken: string): Promise<BackendViewer>;
 }
@@ -49,7 +54,15 @@ function viewerFrom(value: unknown): BackendViewer {
   }
   // Older or unknown backend replies never grant preview access.
   const previewAccess = record["previewAccess"] === "granted" ? "granted" : "waitlisted";
-  return { userId, displayName, primaryEmail, status, purgeAfter, previewAccess };
+  return {
+    userId,
+    displayName,
+    primaryEmail,
+    status,
+    purgeAfter,
+    previewAccess,
+    previewAgreementAccepted: record["previewAgreementAccepted"] === true,
+  };
 }
 
 /** Which of Convex's HTTP functions endpoints a call goes to. */
@@ -121,8 +134,11 @@ export function convexAccountBackend(options: {
     args: Record<string, string> = {},
   ): Promise<BackendViewer> => viewerFrom(await call("mutation", path, accessToken, args));
   return {
-    ensureViewer: (token, inviteCode) =>
-      mutation("accounts:ensureViewer", token, inviteCode === undefined ? {} : { inviteCode }),
+    ensureViewer: (token, inviteCode, acceptedAgreementVersion) =>
+      mutation("accounts:ensureViewer", token, {
+        ...(inviteCode === undefined ? {} : { inviteCode }),
+        ...(acceptedAgreementVersion === undefined ? {} : { acceptedAgreementVersion }),
+      }),
     // The deletion's Actor names the client it came through.
     requestDeletion: (token) => mutation("accounts:requestDeletion", token, { via: "desktop" }),
     cancelDeletion: (token) => mutation("accounts:cancelDeletion", token, { via: "desktop" }),

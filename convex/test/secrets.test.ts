@@ -1,7 +1,11 @@
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 
-import { newId, parseRunnerSecretSet } from "@volli/shared/cloud";
+import {
+  PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+  newId,
+  parseRunnerSecretSet,
+} from "@volli/shared/cloud";
 
 import { api, internal } from "../functions/_generated/api";
 import { ROOT_KEYS_VARIABLE } from "../functions/lib/sealing";
@@ -46,7 +50,9 @@ async function signIn(t: T, name: string) {
     value: `${name.toLowerCase()}@example.com`,
     enabled: true,
   });
-  const { userId } = await client.mutation(api.accounts.ensureViewer, {});
+  const { userId } = await client.mutation(api.accounts.ensureViewer, {
+    acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+  });
   return { client, userId };
 }
 

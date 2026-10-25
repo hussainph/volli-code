@@ -35,6 +35,7 @@ const text = z.string().max(ACCOUNT_TEXT_MAX);
 export const accountSignInInputSchema = z.strictObject({
   connection: z.enum(ACCOUNT_CONNECTIONS),
   inviteCode: z.string().min(16).max(128).optional(),
+  acceptedAgreementVersion: z.string().min(1).max(128).optional(),
 });
 
 const accountSummarySchema = z.object({

@@ -444,7 +444,7 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
   /** The current snapshot first, then every change. */
   readonly "account.subscribe": HostSubscriptionHandler<void, AccountSnapshot>;
   readonly "account.signIn": HostHandler<
-    { connection: AccountConnection; inviteCode?: string },
+    { connection: AccountConnection; inviteCode?: string; acceptedAgreementVersion?: string },
     null
   >;
   readonly "account.cancelSignIn": HostHandler<void, null>;
@@ -1234,11 +1234,13 @@ function hostHandlerEntries(
     "account.snapshot": () => account().snapshot(),
     "account.subscribe": async (_input, _call, sink) =>
       account().subscribe((snapshot) => void sink.emit(snapshot)),
-    "account.signIn": ({ connection, inviteCode }) =>
+    "account.signIn": ({ connection, inviteCode, acceptedAgreementVersion }) =>
       done(() =>
-        inviteCode === undefined
-          ? account().signIn(connection)
-          : account().signIn(connection, inviteCode),
+        acceptedAgreementVersion !== undefined
+          ? account().signIn(connection, inviteCode, acceptedAgreementVersion)
+          : inviteCode === undefined
+            ? account().signIn(connection)
+            : account().signIn(connection, inviteCode),
       ),
     "account.cancelSignIn": () => done(() => account().cancelSignIn()),
     "account.signOut": () => done(() => account().signOut()),

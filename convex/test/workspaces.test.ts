@@ -1,7 +1,7 @@
 import { convexTest } from "convex-test";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
-import { newId } from "@volli/shared/cloud";
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION, newId } from "@volli/shared/cloud";
 
 import { api, internal } from "../functions/_generated/api";
 import schema from "../functions/schema";
@@ -45,19 +45,24 @@ async function allow(t: T, grant: { kind: "email" | "user"; value: string }) {
 }
 
 /**
- * Signs a person in, allowlisted. A verified address is granted before the
- * account exists, so the first call already sets the account up (its personal
- * Workspace); an address the gate cannot see (none, or unverified) is granted
- * by user id after that first call, and the second call sets the account up.
+ * Signs a person in, allowlisted, accepting the current Preview Agreement. A
+ * verified address is granted before the account exists, so the first call
+ * already sets the account up (its personal Workspace); an address the gate
+ * cannot see (none, or unverified) is granted by user id after that first
+ * call, and the second call sets the account up.
  */
 async function signIn(t: T, identity: Identity) {
   const client = t.withIdentity(identity);
   const email = identity.emailVerified === true ? identity.email : undefined;
   if (email !== undefined) await allow(t, { kind: "email", value: email });
-  const { userId } = await client.mutation(api.accounts.ensureViewer, {});
+  const { userId } = await client.mutation(api.accounts.ensureViewer, {
+    acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+  });
   if (email === undefined) {
     await allow(t, { kind: "user", value: userId });
-    await client.mutation(api.accounts.ensureViewer, {});
+    await client.mutation(api.accounts.ensureViewer, {
+      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    });
   }
   return { client, userId };
 }

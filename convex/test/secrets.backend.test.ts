@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { newId } from "@volli/shared/cloud";
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION, newId } from "@volli/shared/cloud";
 
 import { describe, expect, test } from "vite-plus/test";
 
@@ -21,7 +21,9 @@ describe("team secrets on the pinned local backend", () => {
     const ana = person("Ana");
     const { userId } = await ana.mutation(api.accounts.ensureViewer, {});
     await backend.admin(internal.previewAccess.set, { kind: "user", value: userId, enabled: true });
-    await ana.mutation(api.accounts.ensureViewer, {});
+    await ana.mutation(api.accounts.ensureViewer, {
+      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    });
     const workspaceId = newId("workspace");
     await ana.mutation(api.workspaces.create, { workspaceId, name: "Secrets" });
     const target = { scope: "workspace" as const, workspaceId };

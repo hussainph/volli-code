@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import { describe, expect, test } from "vite-plus/test";
 
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared/cloud";
+
 import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
 
@@ -29,17 +31,21 @@ describe("accounts on the pinned local backend", () => {
     });
     await expect(client.query(api.accounts.viewer, {})).resolves.toBeNull();
 
-    const first = await client.mutation(api.accounts.ensureViewer, {});
+    const first = await client.mutation(api.accounts.ensureViewer, {
+      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    });
     expect(first).toMatchObject({
       displayName: "Dana",
       primaryEmail: "dana@example.com",
       previewAccess: "granted",
+      previewAgreementAccepted: true,
       created: true,
     });
     expect(first.userId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
 
+    // A refresh without the version never infers acceptance: the receipt stands.
     await expect(client.mutation(api.accounts.ensureViewer, {})).resolves.toEqual({
       ...first,
       created: false,
@@ -51,6 +57,7 @@ describe("accounts on the pinned local backend", () => {
       status: "active",
       purgeAfter: null,
       previewAccess: "granted",
+      previewAgreementAccepted: true,
     });
   });
 

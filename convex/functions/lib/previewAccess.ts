@@ -1,5 +1,10 @@
 /** Deployment-admin preview grants. Workspace invites never confer preview access. */
-import { PREVIEW_WAITLIST_MESSAGE, type PreviewAccess } from "@volli/shared/cloud";
+import {
+  PREVIEW_WAITLIST_MESSAGE,
+  PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+  PREVIEW_AGREEMENT_REQUIRED_MESSAGE,
+  type PreviewAccess,
+} from "@volli/shared/cloud";
 import type { GenericDatabaseReader, GenericDatabaseWriter } from "convex/server";
 import { ConvexError } from "convex/values";
 import type { DataModel, Doc } from "../_generated/dataModel.js";
@@ -46,8 +51,39 @@ export async function previewAccess(ctx: Reader, viewer: Viewer): Promise<Previe
   return grants.some(liveGrant) ? "granted" : "waitlisted";
 }
 
+/** A recorded explicit current-version acceptance, never inferred from an auth refresh. */
+export function hasPreviewAgreement(user: Doc<"users">): boolean {
+  return (
+    user.previewAgreementVersion === PREVIEW_ENROLLMENT_AGREEMENT_VERSION &&
+    typeof user.previewAgreementAcceptedAt === "number"
+  );
+}
+
+function agreementRequired() {
+  return new ConvexError({
+    code: "preview_agreement_required",
+    message: PREVIEW_AGREEMENT_REQUIRED_MESSAGE,
+  });
+}
+
+/** Only the person's explicit current-version enrollment action can write this receipt. */
+export async function recordPreviewAgreement(
+  ctx: { db: GenericDatabaseWriter<DataModel> },
+  viewer: Viewer,
+  version: string | undefined,
+): Promise<Viewer> {
+  if (version === undefined) return viewer;
+  if (version !== PREVIEW_ENROLLMENT_AGREEMENT_VERSION) throw agreementRequired();
+  if ((await previewAccess(ctx, viewer)) !== "granted" || hasPreviewAgreement(viewer.user))
+    return viewer;
+  const fields = { previewAgreementVersion: version, previewAgreementAcceptedAt: Date.now() };
+  await ctx.db.patch(viewer.user._id, fields);
+  return { ...viewer, user: { ...viewer.user, ...fields } };
+}
+
 export async function requirePreviewAccess(ctx: Reader, viewer: Viewer): Promise<void> {
   if ((await previewAccess(ctx, viewer)) !== "granted") throw previewError();
+  if (!hasPreviewAgreement(viewer.user)) throw agreementRequired();
 }
 
 /** Single-use, account-bound redemption; retaining the row makes revocation effective. */

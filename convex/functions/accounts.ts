@@ -26,7 +26,12 @@ import type { DataModel, Doc } from "./_generated/dataModel.js";
 import { mutation, query } from "./_generated/server";
 import { authError, ensureViewer as ensureViewerRow, findViewer, type Viewer } from "./lib/auth";
 import { audit } from "./lib/audit";
-import { previewAccess, redeemPreviewCode } from "./lib/previewAccess";
+import {
+  previewAccess,
+  redeemPreviewCode,
+  hasPreviewAgreement,
+  recordPreviewAgreement,
+} from "./lib/previewAccess";
 import { onFirstSignIn } from "./lib/firstSignIn";
 import { literals } from "./lib/validators";
 
@@ -41,6 +46,7 @@ export type ViewerSummary = {
   /** When a pending deletion is purged; `null` for an active account. */
   purgeAfter: number | null;
   previewAccess: PreviewAccess;
+  previewAgreementAccepted: boolean;
 };
 
 export type AccountErrorCode = "sole_owner" | "purge_started";
@@ -74,6 +80,7 @@ async function summary(
   const { user } = viewer;
   return {
     previewAccess: await previewAccess(ctx, viewer),
+    previewAgreementAccepted: hasPreviewAgreement(user),
     userId: viewer.userId,
     displayName: user.displayName,
     primaryEmail: user.primaryEmail,
@@ -90,14 +97,23 @@ async function summary(
  * as it is, so the client can offer to restore it.
  */
 export const ensureViewer = mutation({
-  args: { inviteCode: v.optional(v.string()) },
-  handler: async (ctx, { inviteCode }): Promise<ViewerSummary & { created: boolean }> => {
-    const { created, ...viewer } = await ensureViewerRow(ctx);
+  args: { inviteCode: v.optional(v.string()), acceptedAgreementVersion: v.optional(v.string()) },
+  handler: async (
+    ctx,
+    { inviteCode, acceptedAgreementVersion },
+  ): Promise<ViewerSummary & { created: boolean }> => {
+    const { created, ...found } = await ensureViewerRow(ctx);
+    let viewer = found;
     if (inviteCode !== undefined && (await previewAccess(ctx, viewer)) !== "granted") {
       await redeemPreviewCode(ctx, viewer, inviteCode);
     }
+    viewer = await recordPreviewAgreement(ctx, viewer, acceptedAgreementVersion);
     const result = await summary(ctx, viewer);
-    if (result.previewAccess === "granted" && !viewer.user.previewWorkspaceCreated) {
+    if (
+      result.previewAccess === "granted" &&
+      result.previewAgreementAccepted &&
+      !viewer.user.previewWorkspaceCreated
+    ) {
       // Older accounts already own a Workspace. A waitlisted account has none yet.
       const memberships = await ctx.db
         .query("workspaceMembers")

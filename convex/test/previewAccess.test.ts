@@ -1,6 +1,6 @@
 import { convexTest } from "convex-test";
 import { describe, expect, test } from "vite-plus/test";
-import { newId } from "@volli/shared/cloud";
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION, newId } from "@volli/shared/cloud";
 import { api, internal } from "../functions/_generated/api";
 import schema from "../functions/schema";
 
@@ -20,7 +20,9 @@ describe("preview access", () => {
   test("waitlists a new account without creating a Workspace; a later grant sets it up once", async () => {
     const t = setup();
     const client = t.withIdentity(person("alice"));
-    const first = await client.mutation(api.accounts.ensureViewer, {});
+    const first = await client.mutation(api.accounts.ensureViewer, {
+      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    });
     expect(first.previewAccess).toBe("waitlisted");
     expect(await client.query(api.workspaces.listMine, {})).toEqual([]);
     await expect(
@@ -31,15 +33,29 @@ describe("preview access", () => {
       value: " Alice@Example.com ",
       enabled: true,
     });
-    expect((await client.mutation(api.accounts.ensureViewer, {})).previewAccess).toBe("granted");
-    await client.mutation(api.accounts.ensureViewer, {});
+    expect(
+      (
+        await client.mutation(api.accounts.ensureViewer, {
+          acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+        })
+      ).previewAccess,
+    ).toBe("granted");
+    await client.mutation(api.accounts.ensureViewer, {
+      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    });
     expect(await client.query(api.workspaces.listMine, {})).toHaveLength(1);
     await t.mutation(internal.previewAccess.set, {
       kind: "email",
       value: "alice@example.com",
       enabled: false,
     });
-    expect((await client.mutation(api.accounts.ensureViewer, {})).previewAccess).toBe("waitlisted");
+    expect(
+      (
+        await client.mutation(api.accounts.ensureViewer, {
+          acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+        })
+      ).previewAccess,
+    ).toBe("waitlisted");
     await expect(
       client.mutation(api.workspaces.create, { workspaceId: newId("workspace"), name: "No" }),
     ).rejects.toThrow(refused);
@@ -63,9 +79,13 @@ describe("preview access", () => {
       value: "alice@example.com",
       enabled: true,
     });
-    expect((await changedEmail.mutation(api.accounts.ensureViewer, {})).previewAccess).toBe(
-      "waitlisted",
-    );
+    expect(
+      (
+        await changedEmail.mutation(api.accounts.ensureViewer, {
+          acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+        })
+      ).previewAccess,
+    ).toBe("waitlisted");
     await client.mutation(api.accounts.requestDeletion, {});
     expect((await client.query(api.accounts.viewer, {}))?.previewAccess).toBe("waitlisted");
   });
@@ -78,11 +98,17 @@ describe("preview access", () => {
       enabled: true,
     });
     const unverified = t.withIdentity(person("bob", false));
-    expect((await unverified.mutation(api.accounts.ensureViewer, {})).previewAccess).toBe(
-      "waitlisted",
-    );
+    expect(
+      (
+        await unverified.mutation(api.accounts.ensureViewer, {
+          acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+        })
+      ).previewAccess,
+    ).toBe("waitlisted");
     const noEmail = t.withIdentity({ subject: "no-email", issuer: "https://issuer.test" });
-    const { userId } = await noEmail.mutation(api.accounts.ensureViewer, {});
+    const { userId } = await noEmail.mutation(api.accounts.ensureViewer, {
+      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    });
     // Nullable tombstone-compatible profile fields never manufacture an email grant.
     await t.run(async (ctx) => {
       const user = await ctx.db
@@ -93,11 +119,21 @@ describe("preview access", () => {
     });
     expect((await noEmail.query(api.accounts.viewer, {}))?.previewAccess).toBe("waitlisted");
     await t.mutation(internal.previewAccess.set, { kind: "user", value: userId, enabled: true });
-    expect((await noEmail.mutation(api.accounts.ensureViewer, {})).previewAccess).toBe("granted");
+    expect(
+      (
+        await noEmail.mutation(api.accounts.ensureViewer, {
+          acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+        })
+      ).previewAccess,
+    ).toBe("granted");
     await t.mutation(internal.previewAccess.set, { kind: "user", value: userId, enabled: false });
-    expect((await noEmail.mutation(api.accounts.ensureViewer, {})).previewAccess).toBe(
-      "waitlisted",
-    );
+    expect(
+      (
+        await noEmail.mutation(api.accounts.ensureViewer, {
+          acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+        })
+      ).previewAccess,
+    ).toBe("waitlisted");
   });
 
   test("codes are hashed, single-use, retryable by the same account, expiring and revocable", async () => {
@@ -111,22 +147,36 @@ describe("preview access", () => {
     });
     const alice = t.withIdentity(person("alice"));
     const bob = t.withIdentity(person("bob"));
-    const first = await alice.mutation(api.accounts.ensureViewer, { inviteCode: code });
+    const first = await alice.mutation(api.accounts.ensureViewer, {
+      inviteCode: code,
+      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    });
     expect(first.previewAccess).toBe("granted");
-    expect((await alice.mutation(api.accounts.ensureViewer, { inviteCode: code })).userId).toBe(
-      first.userId,
-    );
-    await expect(bob.mutation(api.accounts.ensureViewer, { inviteCode: code })).rejects.toThrow(
-      refused,
-    );
+    expect(
+      (
+        await alice.mutation(api.accounts.ensureViewer, {
+          inviteCode: code,
+          acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+        })
+      ).userId,
+    ).toBe(first.userId);
+    await expect(
+      bob.mutation(api.accounts.ensureViewer, {
+        inviteCode: code,
+        acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+      }),
+    ).rejects.toThrow(refused);
     const rows = await t.run((ctx) => ctx.db.query("previewAccess").collect());
     expect(rows[0]!.key).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(rows)).not.toContain(code);
     await t.run((ctx) => ctx.db.patch(rows[0]!._id, { expiresAt: 0 }));
     expect((await alice.query(api.accounts.viewer, {}))?.previewAccess).toBe("waitlisted");
-    await expect(alice.mutation(api.accounts.ensureViewer, { inviteCode: code })).rejects.toThrow(
-      refused,
-    );
+    await expect(
+      alice.mutation(api.accounts.ensureViewer, {
+        inviteCode: code,
+        acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+      }),
+    ).rejects.toThrow(refused);
     await t.mutation(internal.previewAccess.set, {
       kind: "code",
       value: code,
@@ -135,12 +185,18 @@ describe("preview access", () => {
     });
     expect((await alice.query(api.accounts.viewer, {}))?.previewAccess).toBe("granted");
     await t.mutation(internal.previewAccess.set, { kind: "code", value: code, enabled: false });
-    await expect(alice.mutation(api.accounts.ensureViewer, { inviteCode: code })).rejects.toThrow(
-      refused,
-    );
+    await expect(
+      alice.mutation(api.accounts.ensureViewer, {
+        inviteCode: code,
+        acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+      }),
+    ).rejects.toThrow(refused);
     for (const invalid of ["short", "x".repeat(129), "missing-code-123456789"]) {
       await expect(
-        bob.mutation(api.accounts.ensureViewer, { inviteCode: invalid }),
+        bob.mutation(api.accounts.ensureViewer, {
+          inviteCode: invalid,
+          acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+        }),
       ).rejects.toThrow(refused);
     }
   });
@@ -155,8 +211,12 @@ describe("preview access", () => {
         value: `${name}@example.com`,
         enabled: true,
       });
-    await alice.mutation(api.accounts.ensureViewer, {});
-    await bob.mutation(api.accounts.ensureViewer, {});
+    await alice.mutation(api.accounts.ensureViewer, {
+      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    });
+    await bob.mutation(api.accounts.ensureViewer, {
+      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    });
     const workspaceId = newId("workspace");
     await alice.mutation(api.workspaces.create, { workspaceId, name: "Team" });
     const link = await alice.mutation(api.invites.create, {
@@ -224,5 +284,118 @@ describe("preview access", () => {
       enabled: false,
     });
     expect(await t.run((ctx) => ctx.db.query("previewAccess").collect())).toHaveLength(1);
+  });
+});
+
+describe("explicit preview agreement acceptance", () => {
+  test("does not infer acceptance from invitation or token refresh, then records server time before setup", async () => {
+    const t = setup();
+    const client = t.withIdentity(person("consent"));
+    await t.mutation(internal.previewAccess.set, {
+      kind: "email",
+      value: "consent@example.com",
+      enabled: true,
+    });
+    const initial = await client.mutation(api.accounts.ensureViewer, {});
+    expect(initial).toMatchObject({ previewAccess: "granted", previewAgreementAccepted: false });
+    await client.mutation(api.accounts.ensureViewer, {});
+    expect(await client.query(api.workspaces.listMine, {})).toEqual([]);
+    await expect(
+      client.mutation(api.workspaces.create, {
+        workspaceId: newId("workspace"),
+        name: "No consent",
+      }),
+    ).rejects.toThrow(
+      expect.objectContaining({
+        data: expect.objectContaining({ code: "preview_agreement_required" }),
+      }),
+    );
+    const before = await t.run((ctx) =>
+      ctx.db
+        .query("users")
+        .withIndex("by_uuid", (q) => q.eq("id", initial.userId))
+        .unique(),
+    );
+    expect(before!.previewAgreementAcceptedAt).toBeUndefined();
+    await expect(
+      client.mutation(api.accounts.ensureViewer, { acceptedAgreementVersion: "old-version" }),
+    ).rejects.toThrow(
+      expect.objectContaining({
+        data: expect.objectContaining({ code: "preview_agreement_required" }),
+      }),
+    );
+    await expect(
+      client.mutation(api.accounts.ensureViewer, {
+        acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+        acceptedAt: 1,
+      } as never),
+    ).rejects.toThrow();
+    const earliest = Date.now();
+    const accepted = await client.mutation(api.accounts.ensureViewer, {
+      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    });
+    expect(accepted.previewAgreementAccepted).toBe(true);
+    const stored = await t.run((ctx) =>
+      ctx.db
+        .query("users")
+        .withIndex("by_uuid", (q) => q.eq("id", initial.userId))
+        .unique(),
+    );
+    expect(stored!.previewAgreementVersion).toBe(PREVIEW_ENROLLMENT_AGREEMENT_VERSION);
+    expect(stored!.previewAgreementAcceptedAt).toBeGreaterThanOrEqual(earliest);
+    expect(stored!.previewAgreementAcceptedAt).toBeLessThanOrEqual(Date.now());
+    expect(await client.query(api.workspaces.listMine, {})).toHaveLength(1);
+    await client.mutation(api.accounts.ensureViewer, {});
+    await client.mutation(api.accounts.ensureViewer, {
+      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    });
+    const replay = await t.run((ctx) => ctx.db.get(stored!._id));
+    expect(replay!.previewAgreementAcceptedAt).toBe(stored!.previewAgreementAcceptedAt);
+    expect(await client.query(api.workspaces.listMine, {})).toHaveLength(1);
+  });
+
+  test("never records waitlisted acceptance and requires reacceptance of stale or incomplete receipts", async () => {
+    const t = setup();
+    const client = t.withIdentity(person("waitlisted-consent"));
+    const result = await client.mutation(api.accounts.ensureViewer, {
+      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    });
+    expect(result.previewAgreementAccepted).toBe(false);
+    const user = await t.run((ctx) =>
+      ctx.db
+        .query("users")
+        .withIndex("by_uuid", (q) => q.eq("id", result.userId))
+        .unique(),
+    );
+    expect(user!.previewAgreementVersion).toBeUndefined();
+    await t.mutation(internal.previewAccess.set, {
+      kind: "user",
+      value: result.userId,
+      enabled: true,
+    });
+    expect((await client.mutation(api.accounts.ensureViewer, {})).previewAgreementAccepted).toBe(
+      false,
+    );
+    await t.run((ctx) =>
+      ctx.db.patch(user!._id, { previewAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION }),
+    );
+    expect((await client.mutation(api.accounts.ensureViewer, {})).previewAgreementAccepted).toBe(
+      false,
+    );
+    await t.run((ctx) =>
+      ctx.db.patch(user!._id, {
+        previewAgreementVersion: "old-version",
+        previewAgreementAcceptedAt: 1,
+      }),
+    );
+    expect((await client.mutation(api.accounts.ensureViewer, {})).previewAgreementAccepted).toBe(
+      false,
+    );
+    const accepted = await client.mutation(api.accounts.ensureViewer, {
+      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    });
+    expect(accepted.previewAgreementAccepted).toBe(true);
+    const stored = await t.run((ctx) => ctx.db.get(user!._id));
+    expect(stored!.previewAgreementAcceptedAt).toBeGreaterThan(1);
   });
 });

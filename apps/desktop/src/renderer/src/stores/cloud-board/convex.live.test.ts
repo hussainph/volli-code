@@ -26,6 +26,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { ConvexHttpClient } from "convex/browser";
 import { ConvexReactClient } from "convex/react";
 import { api } from "@volli/convex/api";
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared";
 import type { AccountAccessToken, Label, Project, Ticket } from "@volli/shared";
 
 import { DEV_AUDIENCE, DEV_ISSUER, DEV_KEY_ID } from "../../../../main/account/dev-issuer";
@@ -252,7 +253,9 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
       const http = new ConvexHttpClient(url!);
       http.setAuth(token(subject));
       await inviteTestEmail(url!, `${subject}@example.com`);
-      await http.mutation(api.accounts.ensureViewer, {});
+      await http.mutation(api.accounts.ensureViewer, {
+        acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+      });
       const [workspace] = await http.query(api.workspaces.listMine, {});
       const projectId = randomUUID();
       await http.mutation(api.projects.create, {
@@ -476,7 +479,9 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
       const http = new ConvexHttpClient(url!);
       http.setAuth(token(subject));
       await inviteTestEmail(url!, `${subject}@example.com`);
-      await http.mutation(api.accounts.ensureViewer, {});
+      await http.mutation(api.accounts.ensureViewer, {
+        acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+      });
       const [workspace] = await http.query(api.workspaces.listMine, {});
       const projectId = randomUUID();
       await http.mutation(api.projects.create, {

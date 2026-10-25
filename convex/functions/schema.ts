@@ -94,6 +94,8 @@ export default defineSchema({
     id: uuid,
     // Nullable because a purge nulls PII and keeps the row as a tombstone.
     previewWorkspaceCreated: v.optional(v.boolean()),
+    previewAgreementVersion: v.optional(v.string()),
+    previewAgreementAcceptedAt: v.optional(time),
     primaryEmail: nullable(v.string()),
     emailVerified: v.boolean(),
     displayName: v.string(),

@@ -1634,6 +1634,11 @@ describe("the Volli Cloud account", () => {
       WINDOW,
     );
     expect(port.signIn).toHaveBeenCalledWith("github", "preview-code-123456");
+    await map["account.signIn"](
+      { connection: "github", acceptedAgreementVersion: "current-version" },
+      WINDOW,
+    );
+    expect(port.signIn).toHaveBeenCalledWith("github", undefined, "current-version");
     for (const key of [
       "account.cancelSignIn",
       "account.signOut",
