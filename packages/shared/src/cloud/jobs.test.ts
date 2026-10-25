@@ -1,11 +1,14 @@
 import { describe, expect, test } from "vite-plus/test";
 
 import {
+  JOB_RESULT_MAX_CHARS,
   JOB_KINDS,
   JOB_STATUSES,
   TERMINAL_JOB_TTL_MS,
   UNSUPPORTED_JOB_KIND,
   isJobKind,
+  isPlainJson,
+  jobResultProblem,
   isTerminalJobStatus,
   jobRank,
   unsupportedJobOutcome,
@@ -38,5 +41,26 @@ describe("runner jobs", () => {
       "expired",
     ]);
     expect(TERMINAL_JOB_TTL_MS).toBe(604_800_000);
+  });
+
+  test("a result is plain JSON within the bound", () => {
+    expect(jobResultProblem({ ok: true, files: [1, "a", null, { nested: false }] })).toBeNull();
+    expect(jobResultProblem(Object.create(null))).toBeNull();
+    for (const bad of [
+      undefined,
+      1n,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      new ArrayBuffer(4),
+      new Date(0),
+      { f: () => 1 },
+      [Symbol("s")],
+    ]) {
+      expect(jobResultProblem(bad)).toBe("The result is not plain JSON.");
+    }
+    expect(jobResultProblem("x".repeat(JOB_RESULT_MAX_CHARS))).toMatch(/larger than 65536/);
+    let deep: unknown = null;
+    for (let index = 0; index < 70; index += 1) deep = [deep];
+    expect(isPlainJson(deep)).toBe(false);
   });
 });

@@ -1,0 +1,195 @@
+import { describe, expect, test } from "vite-plus/test";
+
+import { encodeSessionJson } from "../session-event-codec";
+import {
+  INVALID_JOB_PAYLOAD,
+  InvalidJobPayloadError,
+  JOB_PAYLOAD_MAX_CHARS,
+  SESSION_COMMAND_FORMAT,
+  SESSION_FOLLOW_UP_FORMAT,
+  SESSION_INTERRUPT_FORMAT,
+  parseJobPayload,
+} from "./job-payloads";
+import { JOB_KINDS, type JobKind } from "./jobs";
+
+const TICKET = "6f1c2a4e-8b3d-4c5e-9f60-718293a4b5c6";
+const COPY = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+const SESSION = "11111111-2222-4333-8444-555555555555";
+const AUTOMATION = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+const USER = "99999999-8888-4777-8666-555555555555";
+
+const message = encodeSessionJson({
+  kind: "message.submit",
+  reference: { id: "message-1", mediaType: "application/json", digest: null },
+});
+
+/** One valid payload per typed kind. */
+const VALID: Partial<Record<JobKind, Record<string, unknown>>> = {
+  "workingCopy.materialize": { ticketId: TICKET, reason: "checkout_mode_changed" },
+  "workingCopy.trim": { ticketId: TICKET, workingCopyId: COPY, reason: "done" },
+  "workingCopy.reclaim": { ticketId: TICKET, workingCopyId: COPY, reason: "retention" },
+  "session.command": {
+    format: SESSION_COMMAND_FORMAT,
+    intent: encodeSessionJson({ kind: "session.retitle", title: "New" }),
+  },
+  "session.followUp": { format: SESSION_FOLLOW_UP_FORMAT, intent: message },
+  "session.delegate": {
+    toolCallId: "call-1",
+    childSessionId: SESSION,
+    createCommandId: "op-1:create",
+    depth: 1,
+  },
+  "automation.run": {
+    trigger: "arrival",
+    automationId: AUTOMATION,
+    ticketId: TICKET,
+    from: "todo",
+    status: "doing",
+    origin: "armed",
+    armedByUserId: USER,
+  },
+};
+
+function refusal(kind: JobKind, value: unknown): string {
+  try {
+    parseJobPayload(kind, value);
+  } catch (error) {
+    expect(error).toBeInstanceOf(InvalidJobPayloadError);
+    expect((error as InvalidJobPayloadError).code).toBe(INVALID_JOB_PAYLOAD);
+    return (error as Error).message;
+  }
+  throw new Error(`${kind} accepted ${JSON.stringify(value)}`);
+}
+
+describe("parseJobPayload", () => {
+  test("accepts a valid payload for every typed kind, unchanged", () => {
+    for (const [kind, payload] of Object.entries(VALID)) {
+      expect(parseJobPayload(kind as JobKind, payload)).toEqual(payload);
+    }
+  });
+
+  test("accepts any JSON object for the kinds no ticket has typed yet", () => {
+    const opaque = JOB_KINDS.filter((kind) => VALID[kind] === undefined);
+    expect(opaque).toEqual([
+      "session.start",
+      "session.notice",
+      "session.release",
+      "workingCopy.refresh",
+      "environment.run",
+    ]);
+    for (const kind of opaque) {
+      expect(parseJobPayload(kind, { anything: [1, "two"] })).toEqual({ anything: [1, "two"] });
+      expect(parseJobPayload(kind, Object.create(null))).toEqual({});
+    }
+  });
+
+  test("refuses what is not a bounded JSON object", () => {
+    for (const value of [null, "text", 3, []]) {
+      expect(refusal("session.start", value)).toMatch(/not a JSON object/);
+    }
+    for (const value of [new Date(0), { big: 1n }, { bytes: new ArrayBuffer(8) }]) {
+      expect(refusal("session.start", value)).toMatch(/not plain JSON/);
+    }
+    expect(refusal("session.start", { body: "x".repeat(JOB_PAYLOAD_MAX_CHARS) })).toMatch(
+      /larger than 65536 characters/,
+    );
+  });
+
+  test("refuses extra fields on typed kinds: writers are closed", () => {
+    expect(
+      refusal("workingCopy.trim", { ...VALID["workingCopy.trim"], path: "/Users/me/repo" }),
+    ).toMatch(/unexpected field "path"/);
+  });
+
+  test("checks ids, enums and integers", () => {
+    expect(
+      refusal("workingCopy.materialize", { ticketId: "T-1", reason: "session_start" }),
+    ).toMatch(/ticketId is not a UUID/);
+    expect(refusal("workingCopy.materialize", { ticketId: TICKET, reason: "whim" })).toMatch(
+      /reason is not one of checkout_mode_changed, session_start/,
+    );
+    expect(
+      refusal("workingCopy.reclaim", { ticketId: TICKET, workingCopyId: COPY, reason: 1 }),
+    ).toMatch(/reason is not one of/);
+    const delegate = VALID["session.delegate"]!;
+    expect(refusal("session.delegate", { ...delegate, toolCallId: "" })).toMatch(
+      /toolCallId is not a non-empty id/,
+    );
+    for (const depth of [0, 1.5, "1"]) {
+      expect(refusal("session.delegate", { ...delegate, depth })).toMatch(
+        /depth is not a positive integer/,
+      );
+    }
+  });
+
+  test("session.command carries an encoded intent, never a create", () => {
+    expect(
+      refusal("session.command", { format: SESSION_COMMAND_FORMAT, intent: { kind: "x" } }),
+    ).toMatch(/intent is not encoded JSON text/);
+    expect(refusal("session.command", { format: SESSION_COMMAND_FORMAT, intent: "{" })).toMatch(
+      /intent is not JSON/,
+    );
+    for (const intent of ["null", "[]", JSON.stringify({ kind: "" })]) {
+      expect(refusal("session.command", { format: SESSION_COMMAND_FORMAT, intent })).toMatch(
+        /intent is not a Session command intent/,
+      );
+    }
+    const create = encodeSessionJson({
+      kind: "session.create",
+      projectId: "p",
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: null,
+    });
+    expect(refusal("session.command", { format: SESSION_COMMAND_FORMAT, intent: create })).toMatch(
+      /intent creates a Session; use session.start/,
+    );
+    expect(
+      refusal("session.command", { format: "volli.session-command/2", intent: message }),
+    ).toMatch(/format is not one of/);
+  });
+
+  test("session.command also carries the board's interrupt", () => {
+    const interrupt = {
+      format: SESSION_INTERRUPT_FORMAT,
+      reason: "ticket_left_active_columns",
+      from: "doing",
+      to: "done",
+    };
+    expect(parseJobPayload("session.command", interrupt)).toEqual(interrupt);
+    expect(refusal("session.command", { ...interrupt, to: "shipped" })).toMatch(/to is not one of/);
+    expect(refusal("session.command", { ...interrupt, intent: message })).toMatch(
+      /unexpected field "intent"/,
+    );
+  });
+
+  test("a follow-up is a message, nothing else", () => {
+    const retitle = encodeSessionJson({ kind: "session.retitle", title: null });
+    expect(
+      refusal("session.followUp", { format: SESSION_FOLLOW_UP_FORMAT, intent: retitle }),
+    ).toMatch(/intent is not message.submit/);
+    expect(
+      refusal("session.followUp", { format: SESSION_COMMAND_FORMAT, intent: message }),
+    ).toMatch(/format is not one of/);
+  });
+
+  test("an armed arrival names its armer; a pick may run as the armer's or the picker's", () => {
+    const armed = VALID["automation.run"]!;
+    const chosen = { ...armed, origin: "chosen", armedByUserId: null };
+    expect(parseJobPayload("automation.run", chosen)).toEqual(chosen);
+    expect(refusal("automation.run", { ...armed, armedByUserId: null })).toMatch(
+      /an armed run names its armer/,
+    );
+    expect(parseJobPayload("automation.run", { ...chosen, armedByUserId: USER })).toEqual({
+      ...chosen,
+      armedByUserId: USER,
+    });
+    expect(refusal("automation.run", { ...armed, armedByUserId: "me" })).toMatch(
+      /armedByUserId is not a UUID/,
+    );
+    expect(refusal("automation.run", { ...armed, trigger: "schedule" })).toMatch(
+      /trigger is not one of arrival/,
+    );
+  });
+});

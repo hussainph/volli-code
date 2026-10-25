@@ -155,9 +155,9 @@ Each was a decision made while turning the design into code.
 20. The board's `json` fields are typed at compile time rather than by a
     runtime codec: `boardEvents.payload` is a `BoardEventPayload` built by
     the shared rules, `boardReceipts.reply` is the function's own reply, and
-    `runnerJobs.payload` is provisional until the runner work types each kind
-    in `JobPayloads` (an arrival's `automation.run` carries
-    `trigger: "arrival"`, which is what a later move replaces).
+    `runnerJobs.payload` is checked by `parseJobPayload` inside `enqueueJob`
+    (an arrival's `automation.run` carries `trigger: "arrival"`, which is what
+    a later move replaces).
 21. After a create's receipt has expired (seven days), retrying it answers
     `id_taken` rather than comparing the stored row with the intent: board
     commands from an offline runner fail fast instead of buffering, so a
@@ -201,6 +201,15 @@ Each was a decision made while turning the design into code.
     (`statusReason: credential_reuse`). It raises no Needs-you item yet:
     `attentionItems.projectId` is required, and a runner belongs to no
     project. The attention work decides how person-level items are stored.
+28. `runnerJobs.failure` (optional, added after the first version) holds the
+    job's last failure: what the runner reported, or a lease that ran out
+    (`by: "backend"`). A retry keeps it, so a waiting job and a dead letter both
+    say why, and a repeated failure report is recognised as a duplicate.
+    `runnerJobs.lease` is kept after the lease ends: it names the lease that
+    completed the job, which is what makes `complete` idempotent and fenced.
+    `runnerJobs.result` is checked as plain JSON of at most 64 KiB
+    (`jobResultProblem`); its kind-specific shape is checked by the work that
+    reads it, once a kind has a typed result.
 
 ## Migrated rows
 

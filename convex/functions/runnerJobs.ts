@@ -1,0 +1,349 @@
+/**
+ * The runner inbox, as a runner calls it: claim, renew, complete. One
+ * claim/lease/complete queue replaces the per-feature claim protocols the
+ * host kept locally.
+ *
+ * - `claim` leases this runner's ready jobs, urgent first, then oldest
+ *   `availableAt`. It also takes back the jobs an earlier boot of this runner
+ *   held (a restart; one process runs per runner identity): each comes back
+ *   under a new lease with the next attempt number. A job whose owner may no
+ *   longer work in its project is cancelled instead of handed out.
+ * - `renew` extends a lease (long jobs, like environment setup), re-checks
+ *   the owner's membership, and tells the runner when the job was cancelled
+ *   or its lease replaced.
+ * - `complete` records the outcome, idempotently. It is fenced by the runner
+ *   and the lease (`bootId`, `attempt`): only the job's most recent lease may
+ *   complete it, including late, after that lease ran out, as long as no newer
+ *   lease exists. Work that was done is recorded as done. A retryable failure
+ *   goes back to the queue with a backoff; after {@link JOB_MAX_ATTEMPTS} it
+ *   dead-letters as `failed`, and a last lease that runs out dead-letters as
+ *   `expired`.
+ *
+ * Lease expiry is a scheduled check per lease, so nothing polls. Terminal jobs
+ * are kept for `TERMINAL_JOB_TTL_MS`, then the hourly sweep deletes them.
+ *
+ * The runner keeps each outcome in its local job journal until `complete`
+ * answers; every answer is final for that outcome (see `JobCompleteReply` in
+ * `@volli/shared/cloud` for the journal rules).
+ */
+
+import { ConvexError, v } from "convex/values";
+
+import {
+  INVALID_JOB_RESULT,
+  JOB_CLAIM_MAX,
+  JOB_LEASE_MAX_MS,
+  JOB_LEASE_MS,
+  JOB_PRIORITIES,
+  isTerminalJobStatus,
+  isUuid,
+  jobRank,
+  jobResultProblem,
+  type ClaimedJob,
+  type JobCompleteReply,
+  type JobRenewReply,
+  type JobStatus,
+} from "@volli/shared/cloud";
+
+import { internal } from "./_generated/api";
+import type { Doc } from "./_generated/dataModel.js";
+import { internalMutation, mutation, type MutationCtx } from "./_generated/server";
+import {
+  JOB_MAX_ATTEMPTS,
+  alreadyReported,
+  cancelJob,
+  claimedJob,
+  leaseMayContinue,
+  leaseMayReport,
+  ownerMayWorkOn,
+  retryDelayMs,
+  terminal,
+  type LeaseRef,
+} from "./lib/jobs";
+import { requireRunnerForWrite } from "./lib/runnerAuth";
+
+/** How many of its own leased jobs a claim looks at to take back. A runner holds far fewer. */
+const LEASED_SCAN = 256;
+/** How many terminal jobs one sweep pass deletes before it schedules the next. */
+const SWEEP_BATCH = 256;
+/** Bounds on what a runner reports. */
+const MAX_CODE = 200;
+const MAX_DETAIL = 2_000;
+
+const NOT_A_MEMBER = {
+  code: "not_a_member",
+  detail: "The runner's owner can no longer work in this project.",
+};
+
+/** Whether `ref` can name a lease at all: a lease's boot id is a UUID, its attempt a positive integer. */
+function wellFormed(ref: LeaseRef): boolean {
+  return isUuid(ref.bootId) && Number.isSafeInteger(ref.attempt) && ref.attempt >= 1;
+}
+
+function bounded(value: number | undefined, fallback: number, min: number, max: number): number {
+  const chosen = value !== undefined && Number.isFinite(value) ? value : fallback;
+  return Math.min(Math.max(Math.floor(chosen), min), max);
+}
+
+async function jobOf(ctx: MutationCtx, jobId: string): Promise<Doc<"runnerJobs"> | null> {
+  if (!isUuid(jobId)) return null;
+  return ctx.db
+    .query("runnerJobs")
+    .withIndex("by_uuid", (q) => q.eq("id", jobId))
+    .unique();
+}
+
+/** Leases `job` to `ref` until `expiresAt`, with the scheduled check that expires it. */
+async function lease(
+  ctx: MutationCtx,
+  job: Doc<"runnerJobs">,
+  ref: LeaseRef,
+  expiresAt: number,
+): Promise<Doc<"runnerJobs">> {
+  const patch = { status: "leased" as const, lease: { ...ref, expiresAt } };
+  await ctx.db.patch(job._id, patch);
+  await ctx.scheduler.runAt(expiresAt, internal.runnerJobs.expireLease, {
+    jobId: job.id,
+    attempt: ref.attempt,
+  });
+  return { ...job, ...patch };
+}
+
+/** Leases up to `max` (default and cap {@link JOB_CLAIM_MAX}) of the calling runner's ready jobs. */
+export const claim = mutation({
+  args: { bootId: v.string(), max: v.optional(v.number()) },
+  handler: async (ctx, { bootId, max }): Promise<ClaimedJob[]> => {
+    if (!isUuid(bootId)) {
+      throw new ConvexError({ code: "invalid_request", message: "bootId is this boot's UUID." });
+    }
+    const { runnerId, ownerUserId } = await requireRunnerForWrite(ctx);
+    const limit = bounded(max, JOB_CLAIM_MAX, 1, JOB_CLAIM_MAX);
+    const now = Date.now();
+    const candidates: Doc<"runnerJobs">[] = [];
+
+    // An earlier boot's leases: that process is gone. (This boot's own leases
+    // that run out go back to the queue through their scheduled check.)
+    const leased = await ctx.db
+      .query("runnerJobs")
+      .withIndex("by_runner_ready", (q) => q.eq("runnerId", runnerId).eq("status", "leased"))
+      .take(LEASED_SCAN);
+    for (const job of leased) {
+      const held = job.lease!;
+      if (held.bootId === bootId) continue;
+      if (held.attempt >= JOB_MAX_ATTEMPTS) await deadLetterExpired(ctx, job, now);
+      else candidates.push(job);
+    }
+    for (const priority of JOB_PRIORITIES.toSorted((a, b) => jobRank(a) - jobRank(b))) {
+      if (candidates.length >= limit) break;
+      candidates.push(
+        ...(await ctx.db
+          .query("runnerJobs")
+          .withIndex("by_runner_ready", (q) =>
+            q
+              .eq("runnerId", runnerId)
+              .eq("status", "queued")
+              .eq("rank", jobRank(priority))
+              .lte("availableAt", now),
+          )
+          .take(limit - candidates.length)),
+      );
+    }
+
+    const allowed = new Map<string, boolean>();
+    const claimed: ClaimedJob[] = [];
+    for (const job of candidates.slice(0, limit)) {
+      // The owner may have left the Workspace (or the project gone) while the job waited.
+      let mayWork = allowed.get(job.projectId);
+      if (mayWork === undefined) {
+        mayWork = await ownerMayWorkOn(ctx, ownerUserId, job.projectId);
+        allowed.set(job.projectId, mayWork);
+      }
+      if (!mayWork) {
+        await cancelJob(ctx, job, now, NOT_A_MEMBER);
+        continue;
+      }
+      const ref = { bootId, attempt: (job.lease?.attempt ?? 0) + 1 };
+      claimed.push(claimedJob(await lease(ctx, job, ref, now + JOB_LEASE_MS)));
+    }
+    return claimed;
+  },
+});
+
+/** Extends the calling runner's lease on a job by `extendMs` (default the claim lease, at most 30 min). */
+export const renew = mutation({
+  args: {
+    jobId: v.string(),
+    bootId: v.string(),
+    attempt: v.number(),
+    extendMs: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<JobRenewReply> => {
+    const { runnerId, ownerUserId } = await requireRunnerForWrite(ctx);
+    const ref = { bootId: args.bootId, attempt: args.attempt };
+    const job = await jobOf(ctx, args.jobId);
+    if (job === null || job.runnerId !== runnerId) return { ok: false, reason: "gone" };
+    if (job.status === "cancelled") return { ok: false, reason: "cancelled" };
+    if (!wellFormed(ref) || !leaseMayContinue(job, ref)) return { ok: false, reason: "fenced" };
+    const now = Date.now();
+    if (!(await ownerMayWorkOn(ctx, ownerUserId, job.projectId))) {
+      await cancelJob(ctx, job, now, NOT_A_MEMBER);
+      return { ok: false, reason: "cancelled" };
+    }
+    const extended = now + bounded(args.extendMs, JOB_LEASE_MS, 1_000, JOB_LEASE_MAX_MS);
+    if (job.status === "leased") {
+      // A renew never shortens a lease; the scheduled check moves itself to the new expiry.
+      const expiresAt = Math.max(job.lease!.expiresAt, extended);
+      await ctx.db.patch(job._id, { lease: { ...ref, expiresAt } });
+      return { ok: true, lease: { ...ref, expiresAt } };
+    }
+    // The lease ran out but nothing replaced it: the runner is still at it.
+    await lease(ctx, job, ref, extended);
+    return { ok: true, lease: { ...ref, expiresAt: extended } };
+  },
+});
+
+const outcome = v.union(
+  v.object({ status: v.literal("done"), result: v.any() }),
+  v.object({
+    status: v.literal("failed"),
+    code: v.string(),
+    detail: v.union(v.string(), v.null()),
+    retryable: v.boolean(),
+  }),
+);
+
+type Failure = NonNullable<Doc<"runnerJobs">["failure"]>;
+
+/**
+ * Records the outcome of the calling runner's lease on a job. Idempotent, and
+ * refuses nothing a runner could retry forever: a result that cannot be
+ * stored is recorded as a permanent failure, and a malformed lease reference
+ * is fenced. The work is recorded even if the owner left the Workspace since:
+ * it happened.
+ */
+export const complete = mutation({
+  args: { jobId: v.string(), bootId: v.string(), attempt: v.number(), outcome },
+  handler: async (ctx, args): Promise<JobCompleteReply> => {
+    const { runnerId } = await requireRunnerForWrite(ctx);
+    const ref = { bootId: args.bootId, attempt: args.attempt };
+    const job = await jobOf(ctx, args.jobId);
+    if (job === null || job.runnerId !== runnerId) return { ack: "superseded", reason: "gone" };
+    if (!wellFormed(ref)) return { ack: "superseded", reason: "fenced" };
+    if (alreadyReported(job, ref)) {
+      return { ack: "duplicate", status: job.status };
+    }
+    if (job.status === "cancelled") return { ack: "superseded", reason: "cancelled" };
+    if (!leaseMayReport(job, ref)) return { ack: "superseded", reason: "fenced" };
+
+    const now = Date.now();
+    const reported = args.outcome;
+    if (reported.status === "done") {
+      const problem = jobResultProblem(reported.result);
+      if (problem === null) {
+        await ctx.db.patch(job._id, {
+          status: "done",
+          result: reported.result as Doc<"runnerJobs">["result"],
+          ...terminal(now),
+        });
+        return { ack: "recorded", status: "done" };
+      }
+      return recordFailure(ctx, job, ref, now, {
+        code: INVALID_JOB_RESULT,
+        detail: problem,
+        retryable: false,
+      });
+    }
+    return recordFailure(ctx, job, ref, now, {
+      code: reported.code.slice(0, MAX_CODE) || "unspecified",
+      detail: reported.detail === null ? null : reported.detail.slice(0, MAX_DETAIL),
+      retryable: reported.retryable,
+    });
+  },
+});
+
+async function recordFailure(
+  ctx: MutationCtx,
+  job: Doc<"runnerJobs">,
+  ref: LeaseRef,
+  now: number,
+  reported: Pick<Failure, "code" | "detail" | "retryable">,
+): Promise<JobCompleteReply> {
+  const failure: Failure = { ...reported, attempt: ref.attempt, by: "runner", at: now };
+  const status: JobStatus =
+    reported.retryable && ref.attempt < JOB_MAX_ATTEMPTS && job.status !== "expired"
+      ? "queued"
+      : "failed";
+  await ctx.db.patch(job._id, {
+    status,
+    failure,
+    ...(status === "queued" ? { availableAt: now + retryDelayMs(ref.attempt) } : terminal(now)),
+  });
+  return { ack: "recorded", status };
+}
+
+function leaseExpired(attempt: number, retryable: boolean, at: number): Failure {
+  return { attempt, code: "lease_expired", detail: null, retryable, by: "backend", at };
+}
+
+async function deadLetterExpired(ctx: MutationCtx, job: Doc<"runnerJobs">, now: number) {
+  await ctx.db.patch(job._id, {
+    status: "expired",
+    ...terminal(now),
+    failure: leaseExpired(job.lease!.attempt, false, now),
+  });
+}
+
+/**
+ * The scheduled check behind each lease: when lease `attempt` has run out,
+ * return the job to the queue after a backoff, or dead-letter it after the
+ * last attempt. A renewed lease moves the check to its new expiry; a lease
+ * already replaced or finished leaves nothing to do.
+ */
+export const expireLease = internalMutation({
+  args: { jobId: v.string(), attempt: v.number() },
+  handler: async (ctx, { jobId, attempt }) => {
+    const job = await jobOf(ctx, jobId);
+    if (job === null || job.status !== "leased" || job.lease!.attempt !== attempt) return;
+    const now = Date.now();
+    if (job.lease!.expiresAt > now) {
+      await ctx.scheduler.runAt(job.lease!.expiresAt, internal.runnerJobs.expireLease, {
+        jobId,
+        attempt,
+      });
+      return;
+    }
+    if (attempt >= JOB_MAX_ATTEMPTS) {
+      await deadLetterExpired(ctx, job, now);
+      return;
+    }
+    await ctx.db.patch(job._id, {
+      status: "queued",
+      availableAt: now + retryDelayMs(attempt),
+      failure: leaseExpired(attempt, true, now),
+    });
+  },
+});
+
+/** Deletes terminal jobs past their keep time, a batch at a time. */
+export const sweep = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const due = await ctx.db
+      .query("runnerJobs")
+      .withIndex("by_expiry", (q) => q.gte("expiresAt", 0).lte("expiresAt", now))
+      .take(SWEEP_BATCH);
+    let deleted = 0;
+    for (const job of due) {
+      if (isTerminalJobStatus(job.status)) {
+        await ctx.db.delete(job._id);
+        deleted += 1;
+      } else {
+        // Only finished jobs expire; an expiry on open work is a writer's slip. Clear it.
+        await ctx.db.patch(job._id, { expiresAt: null });
+      }
+    }
+    if (due.length === SWEEP_BATCH) await ctx.scheduler.runAfter(0, internal.runnerJobs.sweep, {});
+    return { deleted };
+  },
+});

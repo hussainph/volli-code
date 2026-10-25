@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
 import { ARMED_RUN_DELAY_MS } from "@volli/shared";
-import { boardReceiptExpiry, newId } from "@volli/shared/cloud";
+import { SESSION_INTERRUPT_FORMAT, boardReceiptExpiry, newId } from "@volli/shared/cloud";
 
 const BOARD_RECEIPT_TTL_MS = boardReceiptExpiry(0);
 
@@ -247,7 +247,7 @@ describe("board.updateTicket", () => {
 
   test("switching to a worktree asks the ticket's Place for one; the switch locks once one exists", async () => {
     const t = setup();
-    const { as, projectId } = await boardFixture(t);
+    const { as, projectId, userId } = await boardFixture(t);
     const ticket = await createTicket(as, projectId);
     await as.mutation(api.board.updateTicket, {
       commandId: command(),
@@ -262,7 +262,7 @@ describe("board.updateTicket", () => {
     });
     expect(await jobs(t, ticket.ticketId)).toEqual([]);
 
-    const placeRunnerId = newId("runner");
+    const placeRunnerId = await seedRunner(t, userId);
     const row = await ticketRow(t, ticket.ticketId);
     await t.run((ctx) => ctx.db.patch(row!._id, { placeRunnerId, checkoutMode: "main_checkout" }));
     await as.mutation(api.board.updateTicket, {
@@ -291,9 +291,9 @@ describe("board.updateTicket", () => {
 
   test("a materialization being made locks the mode; a failed or reclaimed worktree does not", async () => {
     const t = setup();
-    const { as, projectId } = await boardFixture(t);
+    const { as, projectId, userId } = await boardFixture(t);
     const ticket = await createTicket(as, projectId);
-    const placeRunnerId = newId("runner");
+    const placeRunnerId = await seedRunner(t, userId);
     const row = await ticketRow(t, ticket.ticketId);
     await t.run((ctx) => ctx.db.patch(row!._id, { placeRunnerId, checkoutMode: "main_checkout" }));
     const toggle = async (mode: "worktree" | "main_checkout") =>
@@ -577,12 +577,12 @@ describe("board.moveTickets", () => {
         sessionId: running.sessionId,
         priority: "urgent",
         rank: 0,
-        payload: expect.objectContaining({
-          sessionId: running.sessionId,
-          intent: { kind: "executor.interrupt" },
+        payload: {
+          format: SESSION_INTERRUPT_FORMAT,
+          reason: "ticket_left_active_columns",
           from: "doing",
           to: "done",
-        }),
+        },
         createdBy: { kind: "volli", reason: "supervision", onBehalfOf: userId },
       }),
     ]);

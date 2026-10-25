@@ -7,11 +7,15 @@
  * this runner" instead of crashing.
  *
  * A job outcome is a durable fact the runner owes the backend. It waits in the
- * runner's local job journal until `jobs.complete` acknowledges it, and
- * executing a re-leased job after a crash is idempotent by the job id.
+ * runner's local job journal until `runnerJobs.complete` answers, and
+ * executing a re-leased job after a crash is idempotent by the job id: before
+ * a boot's first claim the runner reports every journaled outcome under the
+ * lease that ran it, and a re-leased job whose id is already journaled is
+ * completed with the stored outcome under the new lease, not run again.
  */
 
 import type { Actor } from "./actor";
+import type { JobPayload } from "./job-payloads";
 import type {
   CommandId,
   JobId,
@@ -43,32 +47,6 @@ export function isJobKind(value: unknown): value is JobKind {
   return typeof value === "string" && (JOB_KINDS as readonly string[]).includes(value);
 }
 
-/**
- * Kind-specific payloads. Each is defined by the ticket that owns the kind
- * (the Session ledger and delegation work for the Session kinds, the runner work
- * for the Working copy kinds, project environments, Automations). Until then a
- * payload is an opaque JSON object.
- */
-export interface JobPayloads {
-  "session.start": JobPayloadObject;
-  "session.command": JobPayloadObject;
-  "session.followUp": JobPayloadObject;
-  "session.notice": JobPayloadObject;
-  "session.delegate": JobPayloadObject;
-  "session.release": JobPayloadObject;
-  "workingCopy.materialize": JobPayloadObject;
-  "workingCopy.trim": JobPayloadObject;
-  "workingCopy.reclaim": JobPayloadObject;
-  "workingCopy.refresh": JobPayloadObject;
-  "environment.run": JobPayloadObject;
-  "automation.run": JobPayloadObject;
-}
-
-/** A payload no owning ticket has typed yet. */
-export type JobPayloadObject = { readonly [field: string]: unknown };
-
-export type JobPayload<K extends JobKind> = JobPayloads[K];
-
 export const JOB_PRIORITIES = ["normal", "urgent"] as const;
 export type JobPriority = (typeof JOB_PRIORITIES)[number];
 
@@ -80,7 +58,13 @@ export function jobRank(priority: JobPriority): 0 | 1 {
 export const JOB_STATUSES = ["queued", "leased", "done", "failed", "cancelled", "expired"] as const;
 export type JobStatus = (typeof JOB_STATUSES)[number];
 
-/** Statuses a job never leaves. Terminal jobs are kept {@link TERMINAL_JOB_TTL_MS}. */
+/**
+ * Statuses that end a job. Terminal jobs are kept {@link TERMINAL_JOB_TTL_MS}.
+ * One exception: a job dead-lettered as `expired` because its last lease ran
+ * out still takes that lease's late outcome (it moves to `done` or `failed`),
+ * so work that finished is never reported as lost. Nothing else leaves a
+ * terminal status, and nothing is handed out again.
+ */
 export const TERMINAL_JOB_STATUSES = [
   "done",
   "failed",
@@ -94,6 +78,12 @@ export function isTerminalJobStatus(status: JobStatus): boolean {
 
 /** How long a claim leases a job before it returns to the queue. Long jobs renew. */
 export const JOB_LEASE_MS = 60_000;
+
+/** The longest one renew extends a lease by (environment setup runs up to 20 minutes). */
+export const JOB_LEASE_MAX_MS = 30 * 60_000;
+
+/** The most jobs one claim hands out. */
+export const JOB_CLAIM_MAX = 32;
 
 /** How long a terminal job is kept before it expires. */
 export const TERMINAL_JOB_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -122,16 +112,75 @@ export interface RunnerJob<K extends JobKind = JobKind> {
   availableAt: number;
 }
 
-/** What `jobs.claim` returns: the job plus its lease, which `jobs.complete` must echo. */
+/** What `runnerJobs.claim` returns: the job plus its lease, which `renew` and `complete` echo. */
 export interface ClaimedJob<K extends JobKind = JobKind> {
   job: RunnerJob<K>;
   lease: JobLease;
 }
 
 export type JobOutcome =
-  /** `result` is kind-specific and codec-checked by the owning ticket. */
+  /**
+   * `result` is plain JSON of at most {@link JOB_RESULT_MAX_CHARS}; its shape
+   * is kind-specific and checked by the ticket that reads it. A result that is
+   * not plain JSON, or too large, is recorded as failed with
+   * {@link INVALID_JOB_RESULT}.
+   */
   | { status: "done"; result: unknown }
   | { status: "failed"; code: string; detail: string | null; retryable: boolean };
+
+/**
+ * Why a runner no longer holds a job: the backend cancelled it (stop working
+ * on it), a newer lease or another completion replaced this one (fenced), or
+ * the job is not this runner's or no longer exists (gone). Either way the
+ * runner stops working on it under this lease.
+ */
+export type JobLostReason = "cancelled" | "fenced" | "gone";
+
+/** What `runnerJobs.renew` answers: the extended lease, or why the runner lost the job. */
+export type JobRenewReply = { ok: true; lease: JobLease } | { ok: false; reason: JobLostReason };
+
+/**
+ * What `runnerJobs.complete` answers. Every reply is final for that outcome,
+ * so the runner removes it from its job journal: `recorded` (the job's status
+ * after it; `queued` means a retry is scheduled), `duplicate` (this lease
+ * already reported it), or `superseded`. Only a thrown error (transport,
+ * auth) means try again later: `complete` refuses nothing else.
+ */
+export type JobCompleteReply =
+  | { ack: "recorded"; status: JobStatus }
+  | { ack: "duplicate"; status: JobStatus }
+  | { ack: "superseded"; reason: JobLostReason };
+
+/** The largest `result` a completion may carry, as JSON text. */
+export const JOB_RESULT_MAX_CHARS = 64 * 1024;
+
+/** The failure code recorded for a `done` outcome whose result is not plain JSON or too large. */
+export const INVALID_JOB_RESULT = "invalid_job_result";
+
+/** Why `result` cannot be stored as a job result, or `null` when it can. */
+export function jobResultProblem(result: unknown): string | null {
+  if (!isPlainJson(result)) return "The result is not plain JSON.";
+  if (JSON.stringify(result).length > JOB_RESULT_MAX_CHARS) {
+    return `The result is larger than ${JOB_RESULT_MAX_CHARS} characters of JSON.`;
+  }
+  return null;
+}
+
+/**
+ * Whether `value` is plain JSON: null, booleans, finite numbers, strings,
+ * arrays and plain objects of them. Backend values can also be 64-bit
+ * integers and bytes, which do not survive `JSON.stringify` honestly.
+ */
+export function isPlainJson(value: unknown, depth = 0): boolean {
+  if (depth > 64) return false;
+  if (value === null || typeof value === "boolean" || typeof value === "string") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every((item) => isPlainJson(item, depth + 1));
+  if (typeof value !== "object") return false;
+  const proto = Object.getPrototypeOf(value) as unknown;
+  if (proto !== Object.prototype && proto !== null) return false;
+  return Object.values(value).every((item) => isPlainJson(item, depth + 1));
+}
 
 /** The failure code for a job kind the runner does not know. */
 export const UNSUPPORTED_JOB_KIND = "unsupported_job_kind";

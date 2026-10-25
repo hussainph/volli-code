@@ -13,6 +13,7 @@ export * from "./board-receipts";
 export * from "./board-rules";
 export * from "./gateway";
 export * from "./ids";
+export * from "./job-payloads";
 export * from "./jobs";
 export * from "./members";
 export * from "./migration-import";

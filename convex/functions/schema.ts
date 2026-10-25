@@ -889,6 +889,20 @@ export default defineSchema({
     createdAt: time,
     completedAt: nullable(time),
     expiresAt: nullable(time),
+    // The last failure: reported by the runner, or a lease that ran out (`by: "backend"`).
+    // A retry keeps it, so "retrying after <code>" and the dead letter both say why.
+    failure: v.optional(
+      nullable(
+        v.object({
+          attempt: v.number(),
+          code: v.string(),
+          detail: nullable(v.string()),
+          retryable: v.boolean(),
+          by: literals(["runner", "backend"]),
+          at: time,
+        }),
+      ),
+    ),
   })
     .index("by_uuid", ["id"])
     .index("by_runner_ready", ["runnerId", "status", "rank", "availableAt"])
