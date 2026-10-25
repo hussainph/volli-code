@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   type BindingHandle,
@@ -147,7 +148,7 @@ function ticketLeftOn(checkout: string) {
       clock: { now },
       ids: { next: (kind) => `${kind}-${now()}` },
     }),
-    executor,
+    executors: createSessionExecutorSlot(executor),
     artifacts: createInMemoryTranscriptArtifactStore(),
     locations: createSessionLocationResolver(
       ctx.db,

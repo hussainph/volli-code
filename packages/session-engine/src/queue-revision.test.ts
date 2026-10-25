@@ -6,6 +6,7 @@ import {
   createInMemorySessionLedger,
   createInMemoryTranscriptArtifactStore,
 } from "./testing";
+import { createSessionExecutorSlot } from "./executor-slot";
 
 const message = (text: string) => ({
   id: "queued",
@@ -24,7 +25,7 @@ async function fixture() {
     ids,
     artifacts: createInMemoryTranscriptArtifactStore(),
     followUps: createInMemorySessionFollowUpLedger(),
-    executor: {
+    executors: createSessionExecutorSlot({
       id: "test",
       durableIdNamespace: "test",
       adapterVersion: "1",
@@ -32,7 +33,7 @@ async function fixture() {
       attach: async () => {
         throw new Error("Attention must hold this queue");
       },
-    },
+    }),
     locations: {
       resolve: async () => ({ directory: "/test", venue: { id: "local", kind: "local" } }),
       prepare: async () => ({ directory: "/test", venue: { id: "local", kind: "local" } }),

@@ -2226,7 +2226,10 @@ export interface UtilityCompletion {
   signal?: AbortSignal;
 }
 
-/** The singular runtime port. Not a registry; there is exactly one executor. */
+/**
+ * The Agent Runtime port Pi's executor is built on. Not a registry: the Session
+ * runtime's executor slot is where runtimes sit side by side.
+ */
 export interface AgentRuntime {
   /** Inspect provider accounts and models without exposing runtime credentials or native types. */
   inspectModelAccess(input?: {

@@ -34,7 +34,7 @@ import { admittedHandlers, createHostHandlers, ROUTER_POLICY } from "@volli/host
 import { createTestSessionEngine, openTestDb, testProject } from "@volli/host-core/testing";
 import { createLogRing } from "@volli/host-core/log";
 import { createWorktreeReadService, runGitCapturingAsync } from "@volli/host-core/worktree";
-import { createSessionRuntime } from "@volli/session-engine";
+import { createSessionExecutorSlot, createSessionRuntime } from "@volli/session-engine";
 import {
   createSurfaceStore,
   disposeChatClient,
@@ -159,7 +159,7 @@ async function box(features: readonly string[] = FEATURES) {
   let createHeld: { reached(): void; released: Promise<void> } | null = null;
   const runtime = createSessionRuntime({
     engine,
-    executor,
+    executors: createSessionExecutorSlot(executor),
     artifacts: createInMemoryTranscriptArtifactStore(),
     locations: {
       resolve: async () => ({ directory: "/srv/repo", venue: { id: HOST, kind: "local" } }),

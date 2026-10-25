@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { UIMessage } from "ai";
 import type { RuntimeObservation } from "@volli/shared";
 import {
+  createSessionExecutorSlot,
   createSessionRuntime,
   SessionRuntimeExitingError,
   type BindingHandle,
@@ -142,7 +143,7 @@ async function hostWithRuntime() {
     engine: host.sessionEngine,
     artifacts: createInMemoryTranscriptArtifactStore(),
     followUps: createInMemorySessionFollowUpLedger(),
-    executor,
+    executors: createSessionExecutorSlot(executor),
     clock: { now: () => 1_000 + ++sequence },
     ids: { next: (kind) => `${kind}-${++sequence}` },
     locations: {

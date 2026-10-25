@@ -16,6 +16,7 @@ import legacyLedger from "../../shared/src/fixtures/legacy-authority-ledger.json
 import type { UIMessage } from "ai";
 import {
   createSessionEngine,
+  createSessionExecutorSlot,
   createSessionRuntime,
   isSessionStreamCompactionProgress,
   isSessionStreamFrame,
@@ -91,8 +92,8 @@ class Gate {
 }
 
 class FakeAdapter implements NativeHarnessAdapter {
-  readonly id = "fake";
-  readonly durableIdNamespace = "fake";
+  readonly id: string = "fake";
+  readonly durableIdNamespace: string = "fake";
   readonly adapterVersion = "1.0.0";
   readonly runtime = { path: "/trusted/fake", version: "1.0.0", fingerprint: "sha256:fake" };
   attaches = 0;
@@ -197,6 +198,8 @@ class FakeAdapter implements NativeHarnessAdapter {
 function composition(
   options: {
     adapter?: FakeAdapter;
+    /** More runtimes in the executor slot beside `adapter`, which stays its default. */
+    others?: readonly NativeHarnessAdapter[];
     engine?: SessionEngine;
     artifacts?: TranscriptArtifactStore;
     locations?: Parameters<typeof createSessionRuntime>[0]["locations"];
@@ -233,7 +236,7 @@ function composition(
     adapter,
     runtime: createSessionRuntime({
       engine,
-      executor: adapter,
+      executors: createSessionExecutorSlot(adapter, options.others),
       artifacts: options.artifacts ?? createInMemoryTranscriptArtifactStore(),
       locations: options.locations ?? fixedLocation("/projects/fake"),
       clock,
@@ -6749,5 +6752,113 @@ describe("SessionRuntime bounded history window (VC-315)", () => {
     await expect(runtime.history({ sessionId, before: 2 })).rejects.toThrow(
       "Session runtime is closed",
     );
+  });
+});
+
+/** A second runtime for the executor slot: the same fake under another id. */
+class OtherAdapter extends FakeAdapter {
+  override readonly id = "other";
+  override readonly durableIdNamespace = "other";
+}
+
+async function attachedRuntime(runtime: SessionRuntime, sessionId: string, commandId: string) {
+  await runtime.command({
+    commandId,
+    sessionId,
+    command: { kind: "adapter.attach", continuity: "fresh" },
+  });
+  return (await runtime.snapshot({ sessionId })).projection.liveExecutor!;
+}
+
+async function releaseAttachment(runtime: SessionRuntime, sessionId: string, attachmentId: string) {
+  await runtime.command({
+    commandId: `release-${attachmentId}`,
+    sessionId,
+    command: { kind: "adapter.release", attachmentId },
+  });
+}
+
+describe("SessionRuntime executor slot (VC-916)", () => {
+  it("attaches a new Session on the slot's default runtime and never on another one", async () => {
+    const other = new OtherAdapter();
+    const { runtime, adapter } = composition({ others: [other] });
+    const sessionId = await createAndAttach(runtime);
+
+    expect((await runtime.snapshot({ sessionId })).projection.liveExecutor?.adapterId).toBe("fake");
+    expect(adapter.attaches).toBe(1);
+    expect(other.attaches).toBe(0);
+  });
+
+  it("keeps a Session on the runtime its history recorded, across a relaunch whose default differs", async () => {
+    const fake = new FakeAdapter();
+    const other = new OtherAdapter();
+    // A build whose default is `other` opens the Session's first attachment.
+    const first = composition({ adapter: other, others: [fake] });
+    const sessionId = await createAndAttach(first.runtime);
+    const opened = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!;
+    expect(opened.adapterId).toBe("other");
+    await releaseAttachment(first.runtime, sessionId, opened.id);
+    await first.runtime.close();
+
+    // The next build defaults to `fake`, and still holds `other`: the Session
+    // is persisted on `other`, so it reattaches there.
+    const relaunched = composition({
+      engine: first.engine,
+      adapter: fake,
+      others: [other],
+      runtimeIdPrefix: "relaunched",
+    });
+    const reattached = await attachedRuntime(relaunched.runtime, sessionId, "command-reattach");
+    expect(reattached.adapterId).toBe("other");
+    expect(other.attaches).toBe(2);
+    expect(fake.attaches).toBe(0);
+    await releaseAttachment(relaunched.runtime, sessionId, reattached.id);
+    await relaunched.runtime.close();
+
+    // A build that no longer ships `other` falls back to its default, as a
+    // Session recorded under a retired adapter does.
+    const retired = composition({
+      engine: first.engine,
+      adapter: fake,
+      runtimeIdPrefix: "retired",
+    });
+    const fallback = await attachedRuntime(retired.runtime, sessionId, "command-fallback");
+    expect(fallback.adapterId).toBe("fake");
+    expect(fake.attaches).toBe(1);
+  });
+
+  it("replays a recorded attach on the runtime its intent named, not on the default", async () => {
+    const fake = new FakeAdapter();
+    const other = new OtherAdapter();
+    const { runtime, engine } = composition({ adapter: fake, others: [other] });
+    const created = await runtime.command({
+      commandId: "command-create",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Replayed",
+      },
+    });
+    const sessionId = created.sessionId;
+    // A build whose default was `other` recorded the start and then lost it.
+    await engine.submit({
+      commandId: "command-attach-recorded",
+      sessionId,
+      intent: { kind: "executor.start", adapterId: "other", continuity: "fresh" },
+      provenance: { source: { kind: "user", id: "session-client", detail: null }, venue },
+    });
+
+    const replayed = await runtime.command({
+      commandId: "command-attach-recorded",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+
+    expect(replayed.receipt?.status).not.toBe("completed");
+    expect(fake.attaches).toBe(0);
+    expect(other.attaches).toBe(0);
   });
 });

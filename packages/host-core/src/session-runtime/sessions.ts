@@ -7,9 +7,9 @@ import type { SessionOrigin } from "@volli/shared";
  * stood in for it; a Subagent Session inherits its parent's Ticket without
  * being a Ticket Session, which is what retired that reading.
  *
- * There is one executor, so there is one adapter id; keeping it here rather
- * than at each caller is what stops a second copy from quietly naming a
- * different runtime. The model rule is shared for the same reason: a Session
+ * Pi is the only runtime in the executor slot, so there is one structured
+ * adapter id; keeping it here rather than at each caller is what stops a
+ * second copy from quietly naming a different runtime. The model rule is shared for the same reason: a Session
  * records the configured default as its own durable, observable event before
  * any attachment exists.
  *
@@ -65,11 +65,14 @@ export function sessionCreateCommandId(operationId: string): string {
 }
 
 /**
- * The one adapter id the structured product attaches under.
+ * The adapter id the structured product attaches under: Pi's, the one runtime
+ * in the executor slot (VC-916).
  *
  * The runtime supplies it to the command itself; this constant is what every
  * *other* reader of a durable attachment compares against — including the boot
- * sweep, which retires every local open attachment that does not match. It is
+ * sweep, which retires every local open attachment that does not match. A
+ * second registered runtime must turn those comparisons into slot membership
+ * first, or the sweep would retire that runtime's live attachments. It is
  * declared in this module, which carries no runtime dependency, so those
  * readers can name the id without importing Pi; `PI_ADAPTER_ID` aliases it so
  * the two cannot drift.

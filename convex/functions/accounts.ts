@@ -6,6 +6,7 @@
 
 import { mutation, query } from "./_generated/server";
 import { ensureViewer as ensureViewerRow, findViewer } from "./lib/auth";
+import { onFirstSignIn } from "./lib/firstSignIn";
 
 export type ViewerSummary = {
   userId: string;
@@ -13,11 +14,17 @@ export type ViewerSummary = {
   primaryEmail: string | null;
 };
 
-/** Creates the caller's `users` row on first sign-in; afterwards returns it. Idempotent. */
+/**
+ * Creates the caller's `users` row on first sign-in (and runs the first
+ * sign-in setup, `lib/firstSignIn.ts`, in the same transaction); afterwards
+ * returns it. Idempotent.
+ */
 export const ensureViewer = mutation({
   args: {},
   handler: async (ctx): Promise<ViewerSummary & { created: boolean }> => {
-    const { userId, user, created } = await ensureViewerRow(ctx);
+    const viewer = await ensureViewerRow(ctx);
+    const { userId, user, created } = viewer;
+    if (created) await onFirstSignIn(ctx, viewer);
     return { userId, displayName: user.displayName, primaryEmail: user.primaryEmail, created };
   },
 });

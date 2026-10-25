@@ -16,6 +16,7 @@ import {
   type TranscriptArtifactStore,
 } from "./index";
 import { createInMemorySessionLedger, createInMemoryTranscriptArtifactStore } from "./testing";
+import { createSessionExecutorSlot } from "./executor-slot";
 
 /**
  * A history window's two contracts, held against randomized Sessions (VC-315).
@@ -133,7 +134,7 @@ async function seedHistory(events: number, seed = 1, options: SeedOptions = {}):
   const adapter = new TemplateAdapter();
   const recorder = createSessionRuntime({
     engine,
-    executor: adapter,
+    executors: createSessionExecutorSlot(adapter),
     artifacts: memory,
     locations: fixedLocation("/projects/fake"),
     clock,
@@ -246,7 +247,7 @@ async function seedHistory(events: number, seed = 1, options: SeedOptions = {}):
   };
   const runtime = createSessionRuntime({
     engine: reader,
-    executor: new TemplateAdapter(),
+    executors: createSessionExecutorSlot(new TemplateAdapter()),
     artifacts: counted,
     locations: fixedLocation("/projects/fake"),
     clock,
@@ -444,7 +445,7 @@ async function recordedTurn(
   const adapter = new TemplateAdapter();
   const runtime = createSessionRuntime({
     engine,
-    executor: adapter,
+    executors: createSessionExecutorSlot(adapter),
     artifacts: wrap(createInMemoryTranscriptArtifactStore()),
     locations: fixedLocation("/projects/fake"),
     clock,

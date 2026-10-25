@@ -100,7 +100,10 @@ export const profileFromIdentity: ProfileFromIdentity = (identity) => {
     .find((value) => value !== "");
   return {
     primaryEmail: email,
-    emailVerified: email !== null && identity.emailVerified === true,
+    // A `customJwt` provider passes claims through as named (`email_verified`);
+    // an OIDC provider maps them (`emailVerified`).
+    emailVerified:
+      email !== null && (identity.emailVerified === true || identity["email_verified"] === true),
     displayName: displayName ?? "Volli user",
   };
 };
@@ -193,7 +196,7 @@ export async function ensureViewer(
 
 // ── membership ────────────────────────────────────────────────────────────
 
-function membershipFacts(member: Doc<"workspaceMembers">): MembershipFacts {
+export function membershipFacts(member: Doc<"workspaceMembers">): MembershipFacts {
   return {
     workspaceId: member.workspaceId as WorkspaceId,
     userId: member.userId as UserId,

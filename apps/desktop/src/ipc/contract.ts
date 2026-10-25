@@ -1440,6 +1440,14 @@ export interface SupportInfo {
    * complete without it.
    */
   lastUpdateCheck: string;
+  /**
+   * What this launch's boot recovery did (VC-926) as one line: when it
+   * finished, how many lost turns it recovered and attachments it closed, and
+   * each failed reconcile as its reason, outcome and error class — never an
+   * id, a path or a message. "not finished" before the sweep has run. Not
+   * required: a report is complete without it.
+   */
+  bootRecovery: string;
 }
 
 export type SupportInfoResult = Result<{ info: SupportInfo }>;

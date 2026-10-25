@@ -209,12 +209,14 @@ export interface BindingHandle {
 }
 
 /**
- * The one structured executor a Session runtime holds.
+ * One structured runtime in a Session runtime's executor slot
+ * (`SessionExecutorSlot`, VC-916).
  *
  * `id` is durable: it is written onto every attachment this adapter opens, as
  * the discriminator between a terminal companion and the structured executor,
  * and history outlives the build that wrote it — so it is read back from disk
- * long after the adapter that wrote it is gone. `adapterVersion` and `runtime`
+ * long after the adapter that wrote it is gone. It is also the runtime id the
+ * executor slot is keyed by and selects on. `adapterVersion` and `runtime`
  * are the identity every durable fact this adapter produces is stamped with,
  * and `runtime` in particular is recorded inside each binding envelope.
  */

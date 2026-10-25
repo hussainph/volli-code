@@ -12,6 +12,14 @@
  * rehydration would refuse it as an adapter that was not found rather than
  * reconnect anything, and the attachment would meanwhile project as live.
  *
+ * A reconcile can fail on either side of rebuilding the binding. When the
+ * executor could not be rebuilt, nothing survives and the host closes the
+ * attachment. When it was rebuilt, its replay of the sidecar comes first and
+ * may already have recorded how the lost turn ended — the listing this sweep
+ * read predates that — so the ledger is read again, and a turn the executor
+ * ended stays on its live attachment for restart resume (VC-450, VC-926).
+ * Every close says why in its provenance ({@link BootRecoveryReason}).
+ *
  * Closing them is the durable, observable transition that turns them into
  * history. The invariant is the same in every case: the Session itself stays
  * open and its transcript stays readable; only the binding is over. The
@@ -20,8 +28,11 @@
  */
 import {
   LOCAL_RUNNER,
+  logErrorSummary,
+  type LogErrorSummary,
   type RunnerIdentity,
   type SessionInteraction,
+  type SessionNativeDetail,
   type SessionObservation,
 } from "@volli/shared";
 
@@ -48,9 +59,17 @@ export interface BootRecoverySession {
   };
 }
 
-/** The two Session Engine verbs boot recovery is allowed to reach. */
+/** The Session Engine verbs boot recovery is allowed to reach. */
 export interface BootRecoveryEngine {
   listSessions(query: { projectId: string; scope: "all" }): Promise<readonly BootRecoverySession[]>;
+  /**
+   * One Session as the ledger has it now. Read after a failed reconcile,
+   * because the listing predates it: a rebuilt executor may already have
+   * replayed the lost turn's end before the failure (VC-926).
+   */
+  getSession(query: {
+    sessionId: string;
+  }): Promise<Pick<BootRecoverySession, "attachments" | "turnActive"> | null>;
   /** The recorded event is not read here; only that the fact was accepted. */
   observe(observation: SessionObservation): Promise<unknown>;
 }
@@ -63,6 +82,13 @@ export interface BootRecoveryOptions {
   ownsLegacyRunner?(runner: RunnerIdentity): boolean;
   /** Rehydrate and reconcile a structured attachment that lost its process mid-turn. */
   reconcile(input: { sessionId: string; attachmentId: string }): Promise<void>;
+  /**
+   * Whether the runtime now holds a live binding for the attachment: after a
+   * failed reconcile, the line between an executor that could not be rebuilt
+   * and one that was rebuilt and then failed to reconcile its history.
+   * Absent, every failure counts as a binding that could not be rebuilt.
+   */
+  holdsBinding?(attachmentId: string): boolean;
   projectIds: readonly string[];
   newId: () => string;
   now: () => number;
@@ -72,6 +98,13 @@ export interface BootRecoveryOptions {
    * sweep continues.
    */
   onError: (attachmentId: string, error: unknown) => void;
+  /**
+   * Told about every structured attachment whose reconcile failed, with the
+   * classified reason and what the sweep did about it — the line a support
+   * report and a log need to tell the cases apart. Absent, the failure goes to
+   * {@link onError} unclassified.
+   */
+  onFailure?(failure: BootRecoveryFailure): void;
   /**
    * Whether the host is shutting down. Read at each async boundary: once it
    * answers yes, the sweep starts no new project query or attachment work and
@@ -89,6 +122,44 @@ export interface BootRecoveryOptions {
    * short tells nothing; the next launch recovers the rest.
    */
   onRecovered?(recovered: BootRecoveredTurns): void;
+}
+
+/**
+ * Why boot recovery closed an attachment rather than recovering it (VC-926).
+ *
+ * Recorded on the host's own recovery facts — the `:boot-recovery` Attention
+ * and the close — as `provenance.source.detail.bootRecovery`, so the ledger
+ * alone says why, long after the log that saw it has rotated. The values are
+ * durable: add one, never rename or reuse one.
+ */
+export type BootRecoveryReason =
+  /** The executor could not rebuild the binding: its sidecar, workspace or Session would not open. */
+  | "binding_unrecoverable"
+  /** The executor rebuilt the binding, but reconciling its history failed with the turn still open. */
+  | "reconcile_failed"
+  /** Not the structured executor: a terminal companion or a retired runtime nothing here reconnects. */
+  | "not_rebuildable";
+
+/** The reason a close carries in its provenance, and the error behind it as far as is safe to keep. */
+interface BootRecoveryDetail {
+  readonly reason: BootRecoveryReason;
+  /** The failure's class name and stable code — never its message. `null` when nothing failed. */
+  readonly error: LogErrorSummary | null;
+}
+
+/** One structured attachment whose reconcile failed, and what the sweep did about it. */
+export interface BootRecoveryFailure {
+  readonly sessionId: string;
+  readonly attachmentId: string;
+  readonly reason: Exclude<BootRecoveryReason, "not_rebuildable">;
+  /**
+   * `recovered`: the rebuilt executor had already recorded the lost turn's
+   * end, so the attachment stays open and a restart resume may continue it.
+   * `closed`: the host raised the process-loss Attention and closed it.
+   */
+  readonly outcome: "recovered" | "closed";
+  /** The raw failure, for a log that redacts it; never written to the ledger. */
+  readonly error: unknown;
 }
 
 /** The interrupted turns one sweep recovered onto a live attachment. */
@@ -149,6 +220,9 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
           }
         }
         if (stopping()) return closed;
+        let detail: BootRecoveryDetail;
+        // A failed reconcile is reported once the close it led to was attempted.
+        let reportClosed: (() => void) | undefined;
         if (needsStructuredTurnRecovery(projection, attachment, owns(attachment))) {
           try {
             await options.reconcile({
@@ -159,25 +233,71 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
             continue;
           } catch (error) {
             if (stopping()) return closed;
-            // The host found a turn with no surviving process. Record that
-            // failure predicate even when the runtime could not reconstruct
-            // its own sidecar, then close the unusable attachment so the
+            const reason =
+              (options.holdsBinding?.(attachment.id) ?? false)
+                ? "reconcile_failed"
+                : "binding_unrecoverable";
+            const report = (outcome: BootRecoveryFailure["outcome"]) => {
+              const failure = {
+                sessionId: projection.session.id,
+                attachmentId: attachment.id,
+                reason,
+                outcome,
+                error,
+              } as const;
+              if (options.onFailure) options.onFailure(failure);
+              else options.onError(attachment.id, error);
+            };
+            // A rebuilt executor records its replayed history before the
+            // reconcile's receipts and follow-ups, so when one of those fails
+            // the lost turn's end may already be on the ledger the listing
+            // predates. Then the turn is recovered: the attachment and its live
+            // binding stay, and a restart resume may continue it. Closing it
+            // would strand a turn the executor saved. A turn still open is
+            // closed rather than reconciled again: the failure is as likely to
+            // repeat as the evidence is to change.
+            if (reason === "reconcile_failed") {
+              if (await endedOnLiveAttachment(options, projection.session.id, attachment.id)) {
+                report("recovered");
+                recovered.push({ sessionId: projection.session.id, attachmentId: attachment.id });
+                continue;
+              }
+              if (stopping()) return closed;
+            }
+            // No executor recorded how the turn ended: either none could be
+            // rebuilt, or the one that was did not get that far. Raise the
+            // host's process-loss Attention, then close the attachment so the
             // durable projection no longer claims the turn is active.
-            options.onError(attachment.id, error);
-            await tryRaiseCrashRecoveryAttention(options, projection.session.id, attachment.id);
+            reportClosed = () => report("closed");
+            detail = { reason, error: logErrorSummary(error) };
+            await tryRaiseCrashRecoveryAttention(
+              options,
+              projection.session.id,
+              attachment.id,
+              detail,
+            );
           }
         } else if (!isStaleOnBoot(attachment, owns(attachment))) {
           continue;
-        } else if (projection.turnActive) {
-          await tryRaiseCrashRecoveryAttention(options, projection.session.id, attachment.id);
+        } else {
+          detail = { reason: "not_rebuildable", error: null };
+          if (projection.turnActive) {
+            await tryRaiseCrashRecoveryAttention(
+              options,
+              projection.session.id,
+              attachment.id,
+              detail,
+            );
+          }
         }
         if (stopping()) return closed;
         try {
-          await closeInterrupted(options, projection.session.id, attachment.id);
+          await closeInterrupted(options, projection.session.id, attachment.id, detail);
           closed += 1;
         } catch (error) {
           options.onError(attachment.id, error);
         }
+        reportClosed?.();
       }
     }
   }
@@ -185,13 +305,60 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
   return closed;
 }
 
+/**
+ * Whether the ledger now shows the turn ended with the attachment still open:
+ * the rebuilt executor replayed the turn's end before its reconcile failed.
+ * A read that fails is no evidence, and the turn is treated as still open.
+ */
+async function endedOnLiveAttachment(
+  options: BootRecoveryOptions,
+  sessionId: string,
+  attachmentId: string,
+): Promise<boolean> {
+  try {
+    const current = await options.engine.getSession({ sessionId });
+    return (
+      current !== null &&
+      !current.turnActive &&
+      current.attachments.some(({ id, status }) => id === attachmentId && status === "open")
+    );
+  } catch (error) {
+    options.onError(attachmentId, error);
+    return false;
+  }
+}
+
+/** The host's recovery provenance, carrying why it closed what it closed. */
+function recoveryProvenance(
+  options: BootRecoveryOptions,
+  detail: BootRecoveryDetail,
+): SessionObservation["provenance"] {
+  return {
+    source: {
+      kind: "system",
+      id: "desktop-recovery",
+      detail: {
+        sessionOrigin: { kind: "volli", reason: "relaunch-recovery" },
+        bootRecovery: { reason: detail.reason, error: errorDetail(detail.error) },
+      },
+    },
+    venue: options.venue ?? LOCAL_RUNNER,
+  };
+}
+
+function errorDetail(error: LogErrorSummary | null): SessionNativeDetail {
+  if (error === null) return null;
+  return error.code === undefined ? { name: error.name } : { name: error.name, code: error.code };
+}
+
 async function tryRaiseCrashRecoveryAttention(
   options: BootRecoveryOptions,
   sessionId: string,
   attachmentId: string,
+  detail: BootRecoveryDetail,
 ): Promise<void> {
   try {
-    await raiseCrashRecoveryAttention(options, sessionId, attachmentId);
+    await raiseCrashRecoveryAttention(options, sessionId, attachmentId, detail);
   } catch (error) {
     options.onError(attachmentId, error);
   }
@@ -201,6 +368,7 @@ function raiseCrashRecoveryAttention(
   options: BootRecoveryOptions,
   sessionId: string,
   attachmentId: string,
+  detail: BootRecoveryDetail,
 ): Promise<unknown> {
   return options.engine.observe({
     id: options.newId(),
@@ -208,14 +376,7 @@ function raiseCrashRecoveryAttention(
     sessionId,
     attachmentId,
     occurredAt: options.now(),
-    provenance: {
-      source: {
-        kind: "system",
-        id: "desktop-recovery",
-        detail: { sessionOrigin: { kind: "volli", reason: "relaunch-recovery" } },
-      },
-      venue: options.venue ?? LOCAL_RUNNER,
-    },
+    provenance: recoveryProvenance(options, detail),
     attention: {
       id: `${attachmentId}:boot-recovery`,
       attachmentId,
@@ -230,6 +391,7 @@ function closeInterrupted(
   options: BootRecoveryOptions,
   sessionId: string,
   attachmentId: string,
+  detail: BootRecoveryDetail,
 ): Promise<unknown> {
   return options.engine.observe({
     id: options.newId(),
@@ -237,14 +399,7 @@ function closeInterrupted(
     sessionId,
     attachmentId,
     occurredAt: options.now(),
-    provenance: {
-      source: {
-        kind: "system",
-        id: "desktop-recovery",
-        detail: { sessionOrigin: { kind: "volli", reason: "relaunch-recovery" } },
-      },
-      venue: options.venue ?? LOCAL_RUNNER,
-    },
+    provenance: recoveryProvenance(options, detail),
     outcome: "interrupted",
   });
 }

@@ -7,7 +7,12 @@
  */
 import { randomUUID } from "node:crypto";
 import type { HostedSessionRuntime } from "@volli/session-engine";
-import type { SessionProjection, RunnerIdentity } from "@volli/shared";
+import {
+  logErrorSummary,
+  type LogErrorSummary,
+  type SessionProjection,
+  type RunnerIdentity,
+} from "@volli/shared";
 import { isLiveHost, type HostCore, type HostCorePorts } from "../index";
 import { shutdownNativeSessions } from "../host-shutdown";
 import { SESSION_RUNTIME } from "../session-services";
@@ -25,7 +30,12 @@ import {
 import type { AgentObservability } from "../observability/settings";
 import { relayShellNotices } from "../shell/shell-notices";
 import type { BackgroundShellNotice } from "../shell/background-shell-host";
-import { closeStaleAttachments, type BootRecoveredTurns } from "./boot-recovery";
+import {
+  closeStaleAttachments,
+  type BootRecoveredTurns,
+  type BootRecoveryFailure,
+  type BootRecoveryReason,
+} from "./boot-recovery";
 import { resumeRecoveredTurns } from "./restart-resume";
 import { createHostNoticeDelivery } from "./durable-host-notice-delivery";
 import { catchUpSessionResumptions } from "./session-resumptions";
@@ -75,6 +85,26 @@ export function mapRecoveredSessionServices<Source, Services>(
   return proof;
 }
 
+/**
+ * What this launch's boot recovery did, for a support report (VC-926): when it
+ * finished, how many lost turns it rebuilt onto a live attachment, how many
+ * attachments it closed, and every structured attachment whose reconcile
+ * failed, classified. Counts, reasons and error class names only — never a
+ * Session id, a path or a message: a support report is pasted in public.
+ */
+export interface BootRecoveryReport {
+  readonly finishedAt: number;
+  /** The sweep itself threw, so the counts cover only what it did before. */
+  readonly error: LogErrorSummary | null;
+  readonly recovered: number;
+  readonly closed: number;
+  readonly failures: readonly {
+    readonly reason: Exclude<BootRecoveryReason, "not_rebuildable">;
+    readonly outcome: BootRecoveryFailure["outcome"];
+    readonly error: LogErrorSummary;
+  }[];
+}
+
 /** Only the lifecycle can issue this proof that boot recovery has finished. */
 export interface RecoveredSessionServices<Services> {
   readonly [recoveredServices]: true;
@@ -88,6 +118,8 @@ export interface SessionRuntimeLifecycle<Services> {
   observeScheduledResume(projection: SessionProjection): void;
   /** Starts/joins recovery if needed; fresh external notices never bypass it. */
   relayShellNotice(notice: BackgroundShellNotice): void;
+  /** This launch's stale-attachment sweep, once it has finished; `null` before then. */
+  bootRecovery(): BootRecoveryReport | null;
 }
 
 export function createSessionRuntimeLifecycle<Services>(options: {
@@ -166,6 +198,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   const wake = () => {
     if (!closing) void resume?.pass();
   };
+  let bootRecovery: BootRecoveryReport | null = null;
   let boot: Promise<RecoveredSessionServices<Services>> | undefined;
   let drain: Promise<void> | undefined;
   let closing = false;
@@ -217,8 +250,10 @@ export function createSessionRuntimeLifecycle<Services>(options: {
       held = consumeFollowUpCleanClose(database.db, (sessionId, error) =>
         ports.log.error("unreadable follow-up queue", { sessionId, error }),
       );
+      const failures: BootRecoveryReport["failures"][number][] = [];
+      let recoveredTurns = 0;
       try {
-        await closeStaleAttachments({
+        const closedAttachments = await closeStaleAttachments({
           engine: sessionEngine,
           ...(options.venue === undefined ? {} : { venue: options.venue }),
           ...(options.ownsLegacyRunner === undefined
@@ -234,15 +269,50 @@ export function createSessionRuntimeLifecycle<Services>(options: {
           projectIds: listProjects(database.db).map((project) => project.id),
           newId: randomUUID,
           now: Date.now,
+          // A binding the runtime holds after a failed reconcile was rebuilt.
+          holdsBinding: (attachmentId) =>
+            runtime
+              ?.openNativeBindings()
+              .some((binding) => binding.attachmentId === attachmentId) ?? false,
           onError: (attachmentId, error) =>
             ports.log.error("failed to recover attachment", { attachmentId, error }),
+          onFailure: ({ sessionId, attachmentId, reason, outcome, error }) => {
+            failures.push({ reason, outcome, error: logErrorSummary(error) });
+            const fields = { sessionId, attachmentId, reason, outcome, error };
+            // A recovered turn kept its attachment: worth a look, not an outage.
+            if (outcome === "recovered") {
+              ports.log.warn("recovered an attachment whose reconcile failed", fields);
+            } else {
+              ports.log.error("failed to recover attachment", fields);
+            }
+          },
           onRecovered: (recovered) => {
+            recoveredTurns = recovered.turns.length;
             if (runtime === null) return;
             recovery.resume = () => resumeRestartTurns(runtime, sessionEngine, recovered);
           },
         });
+        if (!closing) {
+          bootRecovery = {
+            finishedAt: Date.now(),
+            error: null,
+            recovered: recoveredTurns,
+            closed: closedAttachments,
+            failures,
+          };
+        }
       } catch (error) {
         ports.log.error("failed to recover stale attachments", { error });
+        // The launch most likely to be reported: say the sweep failed, not "not finished".
+        if (!closing) {
+          bootRecovery = {
+            finishedAt: Date.now(),
+            error: logErrorSummary(error),
+            recovered: recoveredTurns,
+            closed: 0,
+            failures,
+          };
+        }
       }
       if (delegation !== null && !closing) {
         try {
@@ -384,6 +454,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     ready,
     close,
     observeScheduledResume,
+    bootRecovery: () => bootRecovery,
     relayShellNotice: (notice) => {
       if (closing || relay === null) return;
       // A fresh external notice cannot read the ledger while boot recovery is

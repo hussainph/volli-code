@@ -2,6 +2,7 @@ import { LOCAL_RUNNER } from "@volli/shared";
 import { copyFileSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   sessionRootThreadId,
@@ -87,7 +88,7 @@ export async function recoveredPiQuestion(input: {
     });
     host = createSessionRuntime({
       engine,
-      executor: {
+      executors: createSessionExecutorSlot({
         ...adapter,
         attach: (spec, sink) =>
           adapter.attach(spec, {
@@ -97,7 +98,7 @@ export async function recoveredPiQuestion(input: {
                 asked.resolve();
             },
           }),
-      },
+      }),
       artifacts,
       // Deliberately leave the retained queue to N−1's host; this fixture sends
       // the explicit next message, including on releases predating that queue.

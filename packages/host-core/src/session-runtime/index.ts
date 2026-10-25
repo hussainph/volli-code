@@ -4,7 +4,8 @@ import type { ObservabilitySink, RunnerIdentity } from "@volli/shared";
 import {
   createSessionRuntime,
   type HostedSessionRuntime,
-  type NativeHarnessAdapter,
+  mapSessionExecutorSlot,
+  type SessionExecutorSlot,
   type SessionEngine,
   type SubscribeCommittedSessionEvents,
   type TranscriptArtifactStore,
@@ -28,7 +29,8 @@ export interface HostSessionRuntimeOptions {
   log: Pick<Logger, "error">;
   dataDir: string;
   transcriptDirectory: string;
-  executor: NativeHarnessAdapter;
+  /** The structured runtimes Sessions run on; Pi is the one that ships (VC-916). */
+  executors: SessionExecutorSlot;
   sessionEngine: SessionEngine;
   /**
    * Every Session Event `sessionEngine` commits, from the host's wake bus
@@ -77,7 +79,7 @@ export function createHostSessionRuntime(options: HostSessionRuntimeOptions): Ho
     // operator's record of why an automatic release did not go out.
     onFollowUpFailure: (error) => options.log.error("follow-up queue release failed", { error }),
     // Attachments start detached, commands run under their own trace (VC-699).
-    executor: correlatedExecutor(options.executor),
+    executors: mapSessionExecutorSlot(options.executors, correlatedExecutor),
     artifacts: options.artifacts ?? createFileTranscriptArtifactStore(options.transcriptDirectory),
     locations: createSessionLocationResolver(
       options.db,

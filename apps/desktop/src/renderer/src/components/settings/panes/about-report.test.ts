@@ -18,6 +18,7 @@ function support(overrides: Partial<SupportInfo> = {}): SupportInfo {
     schemaVersion: 34,
     migrationHistory: "consistent",
     lastUpdateCheck: "none recorded",
+    bootRecovery: "not finished",
     ...overrides,
   };
 }
@@ -84,7 +85,7 @@ describe("buildAboutReport — support metadata", () => {
   it("starts with when it was taken and what took it", () => {
     const lines = report().split("\n");
 
-    expect(lines.slice(0, 8)).toEqual([
+    expect(lines.slice(0, 9)).toEqual([
       "Volli report",
       `Generated at: ${GENERATED_AT}`,
       "App version: 0.2.0-canary.4",
@@ -93,6 +94,7 @@ describe("buildAboutReport — support metadata", () => {
       "Database schema: 34",
       "Migration history: consistent",
       "Last update check: none recorded",
+      "Boot recovery: not finished",
     ]);
   });
 
@@ -116,7 +118,7 @@ describe("buildAboutReport — support metadata", () => {
 
   /**
    * The allowlist, enforced from the reader's side: the report may consult the
-   * five named fields and nothing else. A support result that also carried a
+   * named fields and nothing else. A support result that also carried a
    * credential — through a widened contract, or a main-process mistake — must
    * not reach the clipboard through this builder.
    */
@@ -139,6 +141,7 @@ describe("buildAboutReport — support metadata", () => {
     expect(read.toSorted()).toEqual([
       "appVersion",
       "arch",
+      "bootRecovery",
       "channel",
       "lastUpdateCheck",
       "migrationHistory",

@@ -13,6 +13,7 @@ import {
   type SessionToolId,
 } from "@volli/shared";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   sessionRootThreadId,
@@ -156,7 +157,7 @@ async function fixture() {
     });
     const host = createSessionRuntime({
       engine,
-      executor: adapter,
+      executors: createSessionExecutorSlot(adapter),
       artifacts: createFileTranscriptArtifactStore(join(root, "transcripts")),
       locations: {
         resolve: async () => ({

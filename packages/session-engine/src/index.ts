@@ -1,5 +1,6 @@
 export * from "./session-engine";
 export * from "./native-adapter";
+export * from "./executor-slot";
 // Only the addressing convention is public. How a runtime observation becomes a
 // Session fact — the translator and the shape it produces — is this package's
 // own business, and a caller that could name it could build against it.

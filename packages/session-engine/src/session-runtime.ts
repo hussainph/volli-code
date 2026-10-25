@@ -72,6 +72,7 @@ import type {
   Reconciliation,
 } from "./native-adapter";
 import { NativeAttachmentError } from "./native-adapter";
+import { selectSessionExecutor, type SessionExecutorSlot } from "./executor-slot";
 import type { TranslatedObservation, TranslatedObservationSink } from "./observation-translation";
 import {
   RuntimeObservationTranslator,
@@ -185,8 +186,12 @@ export interface SessionRuntimePorts {
    * not admission-bounded (VC-799). Ten minutes unless a test says otherwise.
    */
   firstAttachPreparationTimeoutMs?: number;
-  /** The one structured executor this runtime attaches. */
-  executor: NativeHarnessAdapter;
+  /**
+   * Every structured runtime this runtime can attach, and the default a
+   * Session runs on (VC-916). Pi is the one entry that ships; see
+   * {@link SessionExecutorSlot} for how a Session's runtime is selected.
+   */
+  executors: SessionExecutorSlot;
   artifacts: TranscriptArtifactStore;
   locations: SessionLocationResolver;
   clock: SessionRuntimeClock;
@@ -1248,7 +1253,9 @@ class DefaultSessionRuntime implements SessionRuntime {
     this.#assertOpen();
     const attachment = projection.liveExecutor;
     const adapter =
-      attachment === null ? this.ports.executor : this.#adapterIdentityFor(attachment.adapterId);
+      attachment === null
+        ? this.#executorFor(projection)
+        : this.#adapterIdentityFor(attachment.adapterId);
     const attentionId = messageDeliveryFailureAttentionId(
       input.sessionId,
       adapter.id,
@@ -1789,11 +1796,17 @@ class DefaultSessionRuntime implements SessionRuntime {
     location: SessionLocation,
     existed: boolean,
   ): Promise<SessionRuntimeCommandResult> {
-    const adapter = this.ports.executor;
+    // A replay keeps the runtime its recorded intent named, which the Engine
+    // holds it to; only a fresh attach selects (VC-916).
+    const recorded = projection.commands.find(({ id }) => id === request.commandId)?.intent;
+    const adapter =
+      (recorded?.kind === "executor.start"
+        ? this.ports.executors.runtimes.get(recorded.adapterId)
+        : undefined) ?? this.#executorFor(projection);
     const submitted = await this.ports.engine.submit({
       commandId: request.commandId,
       sessionId: request.sessionId,
-      // The route is this runtime's own executor, never a client-supplied id.
+      // The route is the Session's own runtime, never a client-supplied id.
       // The Session Engine holds the route and the attachment to the same
       // adapter id, so anything else would be a conflict thrown mid-attach.
       intent: {
@@ -2415,10 +2428,11 @@ class DefaultSessionRuntime implements SessionRuntime {
     while (this.#followUpDrains.size > 0) await Promise.all(this.#followUpDrains.values());
   }
 
-  #followUpFailureAttentionId(sessionId: string): string {
+  #followUpFailureAttentionId(projection: SessionProjection): string {
+    const sessionId = projection.session.id;
     return messageDeliveryFailureAttentionId(
       sessionId,
-      this.ports.executor.id,
+      this.#executorFor(projection).id,
       `follow-up:${sessionId}`,
     );
   }
@@ -2443,19 +2457,20 @@ class DefaultSessionRuntime implements SessionRuntime {
     const warnings = projection.attention.active.filter(
       ({ id, kind, attachmentId, detail }) =>
         kind === "partial_turn_interrupted" &&
-        projection.attachments.some(
-          (attachment) =>
+        projection.attachments.some((attachment) => {
+          const runtime = this.ports.executors.runtimes.get(attachment.adapterId);
+          return (
             attachment.id === attachmentId &&
             // Host recovery closes a binding it could not reconstruct.
             ((id === `${attachmentId}:boot-recovery` && attachment.status === "closed") ||
               // Successful Pi recovery keeps the binding and interrupts the old
               // turn. Match its frozen id AND legacy recovery sentence, never a
               // genuine partial-turn failure (e.g. conflicting sidecar history).
-              (attachment.adapterId === this.ports.executor.id &&
-                id ===
-                  `${this.ports.executor.durableIdNamespace}:attention:${attachmentId}:partial-turn` &&
-                detail === RECOVERED_TURN_INTERRUPTED_DETAIL)),
-        ),
+              (runtime !== undefined &&
+                id === `${runtime.durableIdNamespace}:attention:${attachmentId}:partial-turn` &&
+                detail === RECOVERED_TURN_INTERRUPTED_DETAIL))
+          );
+        }),
     );
     if (warnings.length === 0) return projection;
     const cleared = [];
@@ -2465,7 +2480,7 @@ class DefaultSessionRuntime implements SessionRuntime {
           id: this.#id("event"),
           sessionId: projection.session.id,
           occurredAt: this.ports.clock.now(),
-          provenance: adapterProvenance(this.ports.executor, null),
+          provenance: adapterProvenance(this.#executorFor(projection), null),
           kind: "attention.cleared",
           attentionId: warning.id,
         }),
@@ -2533,7 +2548,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     if (!pending) return;
     projection = await this.#acknowledgeBootInterruption(projection);
     const startPending = this.#executorStartPending(projection);
-    const ownFailureId = this.#followUpFailureAttentionId(sessionId);
+    const ownFailureId = this.#followUpFailureAttentionId(projection);
     const blockers = projection.attention.active.filter(({ id }) => id !== ownFailureId);
     // Only an in-flight start is normal progress: its completion wakes the
     // queue. A durable orphan has no wake and still needs actionable Attention.
@@ -2862,13 +2877,16 @@ class DefaultSessionRuntime implements SessionRuntime {
       return;
     }
     const projection = await this.#requireSession(sessionId);
-    const failureId = this.#followUpFailureAttentionId(sessionId);
+    const failureId = this.#followUpFailureAttentionId(projection);
     if (!projection.attention.active.some(({ id }) => id === failureId)) return;
     const cleared = await this.ports.engine.observe({
       id: this.#id("event"),
       sessionId,
       occurredAt: this.ports.clock.now(),
-      provenance: adapterProvenance(this.ports.executor, projection.liveExecutor?.venue ?? null),
+      provenance: adapterProvenance(
+        this.#executorFor(projection),
+        projection.liveExecutor?.venue ?? null,
+      ),
       kind: "attention.cleared",
       attentionId: failureId,
     });
@@ -3143,7 +3161,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       const receipt = await this.#recordDelivery(
         request.sessionId,
         attachment.id,
-        this.ports.executor,
+        this.#adapterIdentityFor(attachment.adapterId),
         attachment.venue,
         !existed
           ? {
@@ -5576,9 +5594,14 @@ class DefaultSessionRuntime implements SessionRuntime {
     return history;
   }
 
+  /** The runtime this Session runs on, from its own durable history (VC-916). */
+  #executorFor(projection: SessionProjection): NativeHarnessAdapter {
+    return selectSessionExecutor(this.ports.executors, projection);
+  }
+
   /** How a durable attachment's adapter is stamped on a fact, whoever wrote it. */
   #adapterIdentityFor(adapterId: string): AdapterIdentity {
-    return adapterId === this.ports.executor.id ? this.ports.executor : adapterIdentity(adapterId);
+    return this.ports.executors.runtimes.get(adapterId) ?? adapterIdentity(adapterId);
   }
 
   /**
@@ -5586,15 +5609,16 @@ class DefaultSessionRuntime implements SessionRuntime {
    *
    * A durable attachment names the adapter that opened it, and history outlives
    * the executor that wrote it: a Session bound under a runtime this build no
-   * longer ships cannot be rehydrated by the one it does. Refusing is what turns
+   * longer ships cannot be rehydrated by any runtime it does. Refusing is what turns
    * that into an honest recovery failure rather than a live binding pointed at
    * someone else's native identity.
    */
   #requireExecutorFor(adapterId: string): NativeHarnessAdapter {
-    if (adapterId !== this.ports.executor.id) {
+    const executor = this.ports.executors.runtimes.get(adapterId);
+    if (executor === undefined) {
       throw new SessionRuntimeNotFoundError(`Native adapter ${adapterId} was not found`);
     }
-    return this.ports.executor;
+    return executor;
   }
 
   #commandExists(projection: SessionProjection, commandId: string): boolean {

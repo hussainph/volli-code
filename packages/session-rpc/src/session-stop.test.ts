@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   type HarnessCommand,
@@ -61,7 +62,7 @@ async function fixture(
   const at = async () => ({ directory: "/fake", venue });
   const runtime = createSessionRuntime({
     engine,
-    executor,
+    executors: createSessionExecutorSlot(executor),
     ids,
     clock,
     artifacts: createInMemoryTranscriptArtifactStore(),

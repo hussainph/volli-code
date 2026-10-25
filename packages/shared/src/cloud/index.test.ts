@@ -12,6 +12,7 @@ test("the cloud entry point exposes each module", () => {
     "transcriptPackKey",
     "renderTicketKey",
     "canSeeSession",
+    "decideMemberChange",
   ]) {
     expect(typeof (cloud as Record<string, unknown>)[name]).toBe("function");
   }
