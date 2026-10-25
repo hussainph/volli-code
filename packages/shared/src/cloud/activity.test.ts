@@ -42,8 +42,8 @@ function event(
   };
 }
 
-function fold(events: ActivityEvent[], rules = ACTIVITY_COALESCING): ActivityItem[] {
-  const folded = new ActivityFold(rules);
+function fold(events: ActivityEvent[]): ActivityItem[] {
+  const folded = new ActivityFold();
   for (const next of events) folded.add(next);
   return folded.items;
 }
@@ -273,10 +273,9 @@ describe("ActivityFold", () => {
     // Every step within the gap, but the whole run past the span.
     const steps = Array.from({ length: spanMs / gapMs + 2 }, (_, i) => event(body, (10 - i) * gap));
     expect(fold(steps).map((item) => item.count)).toEqual([spanMs / gapMs + 1, 1]);
-    const small = { ...ACTIVITY_COALESCING, maxEvents: 2 };
-    expect(
-      fold([event(body, 3), event(body, 2), event(body, 1)], small).map((i) => i.count),
-    ).toEqual([2, 1]);
+    const { maxEvents } = ACTIVITY_COALESCING;
+    const many = Array.from({ length: maxEvents + 1 }, () => event(body, 0));
+    expect(fold(many).map((item) => item.count)).toEqual([maxEvents, 1]);
   });
 
   test("joins answers before an event is taken", () => {
@@ -390,8 +389,8 @@ describe("decideSessionOutcomeEvents", () => {
     };
     expect(decideSessionOutcomeEvents(listing, after).map((draft) => draft.payload)).toEqual([
       { kind: "session_signaled", sessionId, signal: "blocked", reason: "needs a key" },
-      { kind: "session_stopped", sessionId, reason: null },
       { kind: "session_failed", sessionId, turnId: "t1", code: null },
+      { kind: "session_stopped", sessionId, reason: null },
     ]);
     // The same listing again records nothing.
     expect(decideSessionOutcomeEvents(after, after)).toEqual([]);

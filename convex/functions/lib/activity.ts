@@ -3,11 +3,12 @@
  * projects of one Workspace, filtered for the viewer and folded into feed
  * items (`ActivityFold` in `@volli/shared/cloud`).
  *
- * There is no feed store (A3 §2.9). A project's history is its
- * `by_project_seq` range; a Workspace's is a k-way merge of its projects'
- * ranges by `occurredAt` (each project's own order stays its `seq`). Every
- * stream is read lazily, one event at a time, so a page reads only what it
- * shows plus each project's next event.
+ * There is no feed store: a project's history is its `by_project_seq`
+ * range; a Workspace's is a k-way merge of its projects' ranges by
+ * `occurredAt` (each project's own order stays its `seq`). Every stream is
+ * read lazily, one event at a time, so a page reads the events it shows, the
+ * hidden ones between them, each project's next event, and the rows that
+ * decide visibility and name its references.
  *
  * Pages follow Convex's pagination contract with a cursor of our own:
  * - `cursor` is where the previous page stopped: per project, the lowest
@@ -21,14 +22,29 @@
  *   next page. A client pins each page once it requests the one after it.
  * - A page ends only where a folded run ends: once `numItems` items are full,
  *   it keeps taking events while they join the last item. So the pages a
- *   client concatenates are exactly the fold of the whole history.
- * - A page reads at most {@link MAX_FEED_SCAN} events (hidden ones count),
- *   and returns what it has with `isDone: false` when it hits that bound.
+ *   client concatenates fold like the whole history, page boundaries
+ *   included. (A run that grows at the top may re-cut the runs below it once
+ *   it passes a span or size bound; that changes how items are cut, never
+ *   which events show.)
+ * - A page reads at most {@link MAX_FEED_SCAN} events (hidden ones count).
+ *   At that bound it stops before its last item, so no run is cut in two
+ *   (unless that item is its only one). An unpinned page then returns what it
+ *   has with `isDone: false`. A pinned page that cannot reach its end returns
+ *   `splitCursor`: the client replaces it with two pinned pages,
+ *   `{cursor, endCursor: splitCursor}` and `{cursor: splitCursor, endCursor}`.
+ * - `since` and the time bound of a newly joined project stop a project's
+ *   stream at its first older event, which assumes a project's `occurredAt`
+ *   rises with its `seq` (both are set by the one mutation that appends).
+ *
+ * Reactivity: a page re-runs when any row it read changes, which includes
+ * the tickets, Sessions and people it names (a ticket drag, a Session's turn
+ * boundary, a person's hourly `lastSeenAt`). Measure before splitting the
+ * references into their own query.
  *
  * What the viewer may see: the caller has already checked that they are an
  * active Member of the Workspace, which covers every board event; an event
- * of a deleted ticket is left out, and so is one naming a Session the
- * viewer cannot see (see {@link sessionVisibility}).
+ * of a deleted ticket or of a removed comment is left out, and so is one
+ * naming a Session the viewer cannot see (see {@link sessionVisibility}).
  */
 
 import type { GenericDatabaseReader } from "convex/server";
@@ -59,8 +75,12 @@ import type { Viewer } from "./auth";
 
 type Reader = { db: GenericDatabaseReader<DataModel> };
 
-/** The most events one page reads, hidden ones included. */
-export const MAX_FEED_SCAN = 2000;
+/**
+ * The most events one page reads, hidden ones included. Each event may also
+ * look up its ticket, Session or comment, so this keeps a page well inside
+ * Convex's per-function bounds on index ranges and documents read.
+ */
+export const MAX_FEED_SCAN = 1000;
 
 /** The most items a page may ask for. */
 export const MAX_FEED_ITEMS = 200;
@@ -80,12 +100,13 @@ export function feedError(
 // ── the cursor ───────────────────────────────────────────────────────────────
 
 /**
- * Where a page stopped. `bounds[projectId]` is the lowest `seq` shown so far
- * (or, for a project with nothing shown, one past its newest event then): the
- * next page shows that project's events below it. `at` is the time of the
- * last event shown. `done` records that nothing was left below.
+ * Where a page stopped. `bounds[projectId]` is the lowest `seq` read so far
+ * (for a project with nothing read yet, one past its next event, or the
+ * previous bound, or 1 when it had none in range): the next page reads that
+ * project's events below it. `at` is the time of the last event read. `done`
+ * records that nothing was left below.
  */
-export interface FeedCursor {
+interface FeedCursor {
   at: number;
   bounds: Record<string, number>;
   done: boolean;
@@ -93,12 +114,12 @@ export interface FeedCursor {
 
 const CURSOR_VERSION = 1;
 
-export function encodeFeedCursor(cursor: FeedCursor): string {
+function encodeFeedCursor(cursor: FeedCursor): string {
   return JSON.stringify({ v: CURSOR_VERSION, at: cursor.at, b: cursor.bounds, d: cursor.done });
 }
 
 /** A cursor this feed minted, or `invalid_cursor`. */
-export function decodeFeedCursor(text: string): FeedCursor {
+function decodeFeedCursor(text: string): FeedCursor {
   const invalid = () => feedError("invalid_cursor", "That page cursor is not valid here.");
   let raw: unknown;
   try {
@@ -128,9 +149,9 @@ export function decodeFeedCursor(text: string): FeedCursor {
  * Actor, a `session` origin) does not hide the change: only the payload's own
  * `sessionId` does. Each Session is read once per page.
  *
- * VC-899 (A4) adds `visibleBoardEvents` with the same rule; once it is on
- * main this check delegates to it, so the feed and a ticket's history filter
- * through one function.
+ * The Session visibility work (VC-899) adds `visibleBoardEvents` with the
+ * same rule; once it is on main this check delegates to it, so the feed and a
+ * ticket's history filter through one function.
  */
 export function sessionVisibility(
   ctx: Reader,
@@ -262,13 +283,35 @@ export async function readFeed(
     if (event === null) return null;
     if (filter.person !== null && actorUserId(event.actor) !== filter.person) return null;
     if (event.ticketId !== null && (await ticketRow(event.ticketId)) === null) return null;
+    if (event.payload.kind === "commented") {
+      const { commentId } = event.payload;
+      const comment = await ctx.db
+        .query("ticketComments")
+        .withIndex("by_uuid", (q) => q.eq("id", commentId))
+        .unique();
+      if (comment === null || comment.deletedAt !== null) return null;
+    }
     return (await scope.canSee(event)) ? event : null;
+  };
+
+  let lastAt: number | null = null;
+  /** Where the page stands now, as the next page's cursor. */
+  const position = (done: boolean): string => {
+    const bounds: Record<string, number> = {};
+    for (const stream of streams) {
+      bounds[stream.project.id] =
+        stream.lowest ??
+        (stream.head === null ? null : stream.head.seq + 1) ??
+        (cursor === null ? 1 : cursor.bounds[stream.project.id]!);
+    }
+    return encodeFeedCursor({ at: lastAt ?? cursor?.at ?? 0, bounds, done });
   };
 
   const fold = new ActivityFold();
   let scanned = 0;
-  let lastAt: number | null = null;
   let exhausted = false;
+  /** Where the page stood before the last item's first event. */
+  let lastItemStart: string | null = null;
   for (;;) {
     let next: Stream | null = null;
     for (const stream of streams) {
@@ -281,9 +324,10 @@ export async function readFeed(
     if (scanned >= MAX_FEED_SCAN) break;
     const row = next.head!;
     const event = await visible(row);
-    // A full page ends where a run ends; a pinned page reads to its end.
-    if (end === null && event !== null && fold.items.length >= numItems && !fold.joins(event)) {
-      break;
+    if (event !== null && !fold.joins(event)) {
+      // A full page ends where a run ends; a pinned page reads to its end.
+      if (end === null && fold.items.length >= numItems) break;
+      lastItemStart = position(false);
     }
     scanned += 1;
     next.lowest = row.seq;
@@ -292,28 +336,33 @@ export async function readFeed(
     await advance(next, filter);
   }
 
+  let items = fold.items;
+  let stoppedAt: string;
+  if (exhausted) {
+    stoppedAt = position(end === null || end.done);
+  } else if (scanned >= MAX_FEED_SCAN && items.length > 1) {
+    // The bound fell inside the last item's run (or might have): leave the
+    // whole item to the next page.
+    items = items.slice(0, -1);
+    stoppedAt = lastItemStart!;
+  } else {
+    stoppedAt = position(false);
+  }
   // A pinned page is done when it reached its end and nothing was left below that end.
   const isDone = exhausted && (end === null || end.done);
-  let continueCursor: string;
-  if (end !== null && exhausted) {
+  let continueCursor = stoppedAt;
+  let split: { splitCursor: string } | null = null;
+  if (end !== null) {
     continueCursor = options.endCursor!;
-  } else {
-    const bounds: Record<string, number> = {};
-    for (const stream of streams) {
-      const bound =
-        stream.lowest ??
-        (stream.head === null ? null : stream.head.seq + 1) ??
-        (cursor === null ? 1 : cursor.bounds[stream.project.id]!);
-      bounds[stream.project.id] = bound;
-    }
-    continueCursor = encodeFeedCursor({ at: lastAt ?? cursor?.at ?? 0, bounds, done: isDone });
+    if (!exhausted) split = { splitCursor: stoppedAt };
   }
 
   return {
-    page: fold.items,
-    ...(await references(ctx, scope, fold.items, ticketRow)),
+    page: items,
+    ...(await references(ctx, scope, items, ticketRow)),
     continueCursor,
     isDone,
+    ...split,
   };
 }
 

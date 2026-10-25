@@ -19,15 +19,18 @@
  *
  * Only ADJACENT events fold (adjacent among the events the viewer sees), and
  * a run breaks after a gap of {@link ACTIVITY_COALESCING}`.gapMs`, a span of
- * `spanMs`, or `maxEvents` events. Folding adjacent runs only is what lets
- * the backend fold page by page: a page never ends inside a run, so the
- * pages a client concatenates are exactly the fold of the whole history.
+ * `spanMs`, or `maxEvents` events, measured from the run's newest event.
+ * Folding adjacent runs only is what lets the backend fold page by page: a
+ * page ends only where a run ends. A run that grows at the top can re-cut
+ * the runs below it once it passes the span or size bound; that changes how
+ * items are cut (and their ids), never which events show.
  *
  * The view-model is open on read: a client older than the backend drops an
  * item whose `what.kind`, or an `event` item whose payload kind, it does not
  * know, rather than failing the feed.
  *
- * Session outcomes reach the feed as board events too (A3 §2.9):
+ * Session outcomes reach the feed as board events too, never from a store of
+ * their own:
  * {@link decideSessionOutcomeEvents} says which listing changes of a Session
  * become `session_started`, `session_signaled`, `session_stopped` and
  * `session_failed`. Wiring requirement: the Session intake's accept fold
@@ -118,8 +121,6 @@ export type ActivityChange =
   | { field: "harness"; from: HarnessId; to: HarnessId }
   | { field: "checkout_mode"; from: CheckoutMode; to: CheckoutMode };
 
-export type ActivityChangeField = ActivityChange["field"];
-
 /** What an item says happened. Open on read: a client drops a kind it does not know. */
 export type ActivityWhat =
   /** The ticket was created (`title` and `status` as created), then edited by its creator. */
@@ -132,7 +133,7 @@ export type ActivityWhat =
 
 /** One row of the feed: one event, or a folded run of one actor's work on one ticket. */
 export interface ActivityItem {
-  /** The oldest event folded in: stable while newer events join at the top. */
+  /** The oldest event folded in, so it holds while newer events join at the top of the run. */
   id: BoardEventId;
   projectId: ProjectId;
   ticketId: TicketId | null;
@@ -177,6 +178,12 @@ export interface ActivityPage {
   people: ActivityPersonRef[];
   continueCursor: string;
   isDone: boolean;
+  /**
+   * Set only on a pinned page that could not read all the way to its end
+   * within one page's bound: replace it with two pinned pages,
+   * `{cursor, endCursor: splitCursor}` and `{cursor: splitCursor, endCursor}`.
+   */
+  splitCursor?: string;
 }
 
 /** The tickets an item names: its own and a link's target. */
@@ -207,23 +214,14 @@ export function activityUserIds(item: ActivityItem): UserId[] {
 // ── folding ──────────────────────────────────────────────────────────────────
 
 /** When a run of one actor's work on one ticket breaks. */
-export interface ActivityCoalescingRules {
-  /** Two events further apart than this never fold. */
-  readonly gapMs: number;
-  /** A run never spans longer than this. */
-  readonly spanMs: number;
-  /** A run never folds more events than this. */
-  readonly maxEvents: number;
-}
-
-export const ACTIVITY_COALESCING: ActivityCoalescingRules = {
+export const ACTIVITY_COALESCING = {
   /** Two events further apart than this never fold. */
   gapMs: 10 * 60 * 1000,
   /** A run never spans longer than this. */
   spanMs: 60 * 60 * 1000,
   /** A run never folds more events than this. */
   maxEvents: 50,
-};
+} as const;
 
 /** The field change an edit event records, or `null` for an event that is not an edit. */
 function changeOf(payload: BoardEventPayload): ActivityChange | null {
@@ -344,8 +342,6 @@ function itemFor(event: ActivityEvent): ActivityItem {
 export class ActivityFold {
   readonly items: ActivityItem[] = [];
 
-  constructor(private readonly rules: ActivityCoalescingRules = ACTIVITY_COALESCING) {}
-
   /** Whether `event` (older than everything folded so far) would join the last item. */
   joins(event: ActivityEvent): boolean {
     const item = this.items.at(-1);
@@ -353,9 +349,9 @@ export class ActivityFold {
     if (event.projectId !== item.projectId || event.ticketId !== item.ticketId) return false;
     const key = actorKey(item.actor);
     if (key === null || key !== actorKey(event.actor)) return false;
-    if (item.count >= this.rules.maxEvents) return false;
-    if (item.since - event.occurredAt > this.rules.gapMs) return false;
-    if (item.at - event.occurredAt > this.rules.spanMs) return false;
+    if (item.count >= ACTIVITY_COALESCING.maxEvents) return false;
+    if (item.since - event.occurredAt > ACTIVITY_COALESCING.gapMs) return false;
+    if (item.at - event.occurredAt > ACTIVITY_COALESCING.spanMs) return false;
     const { what } = item;
     const kind = event.payload.kind;
     switch (what.kind) {
@@ -419,7 +415,7 @@ export interface SessionOutcomeFacts {
 
 /**
  * The board events a Session's listing change appends, in order: its start
- * (no listing before), a new signal, a stop, and a turn that ended failed.
+ * (no listing before), a new signal, a turn that ended failed, and a stop.
  * Repeating the same listing appends nothing, so a refold that rewrites an
  * unchanged listing never duplicates an entry.
  */
@@ -450,18 +446,18 @@ export function decideSessionOutcomeEvents(
       },
     });
   }
-  if (after.stopped !== null && after.stopped.at !== before?.stopped?.at) {
-    drafts.push({
-      ticketId,
-      payload: { kind: "session_stopped", sessionId, reason: after.stopped.reason },
-    });
-  }
   const failedBefore =
     before?.lastTurnOutcome === "failed" && before.latestTurnId === after.latestTurnId;
   if (after.lastTurnOutcome === "failed" && !failedBefore) {
     drafts.push({
       ticketId,
       payload: { kind: "session_failed", sessionId, turnId: after.latestTurnId, code: null },
+    });
+  }
+  if (after.stopped !== null && after.stopped.at !== before?.stopped?.at) {
+    drafts.push({
+      ticketId,
+      payload: { kind: "session_stopped", sessionId, reason: after.stopped.reason },
     });
   }
   return drafts;

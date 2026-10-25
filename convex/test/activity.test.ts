@@ -11,7 +11,7 @@ import {
 } from "@volli/shared/cloud";
 
 import { api } from "../functions/_generated/api";
-import { MAX_FEED_SCAN, encodeFeedCursor } from "../functions/lib/activity";
+import { MAX_FEED_SCAN } from "../functions/lib/activity";
 import { recordBoardEvents } from "../functions/lib/board";
 import {
   code,
@@ -104,6 +104,37 @@ async function sessionStarted(
     await recordBoardEvents(ctx, ticket.projectId, actor, Date.now(), drafts);
   });
   return sessionId;
+}
+
+/** `count` outcomes of a private Session of Alice's: events Bob reads but never sees. */
+async function hiddenEvents(
+  t: Tester,
+  ticket: { ticketId: string; projectId: string },
+  sessionId: string,
+  ownerUserId: string,
+  count: number,
+) {
+  await t.run(async (ctx) => {
+    const actor = { kind: "agent", userId: ownerUserId, sessionId } as Actor;
+    const drafts = Array.from({ length: count }, (_, at) => ({
+      ticketId: ticket.ticketId as TicketId,
+      payload: {
+        kind: "session_stopped" as const,
+        sessionId: sessionId as SessionId,
+        reason: `${at}`,
+      },
+    }));
+    await recordBoardEvents(ctx, ticket.projectId, actor, Date.now(), drafts);
+  });
+}
+
+async function renameProject(t: Tester, projectId: string, userId: string, to: string) {
+  await t.run(async (ctx) => {
+    const actor = { kind: "person", userId } as Actor;
+    await recordBoardEvents(ctx, projectId, actor, Date.now(), [
+      { ticketId: null, payload: { kind: "project_renamed", from: "Volli Code", to } },
+    ]);
+  });
 }
 
 type Page = { numItems: number; cursor: string | null; endCursor?: string | null };
@@ -352,6 +383,72 @@ describe("activity.project", () => {
     expect(await sessionsSeenBy(bob.as)).toBe(2);
   });
 
+  test("an Automation run of a private Session, and a Session of another project, stay hidden", async () => {
+    const t = setup();
+    const { alice, bob, workspaceId, projectId } = await team(t);
+    const { ticketId } = await createTicket(alice.as, projectId);
+    const ticket = { ticketId, projectId };
+    const privateRun = await sessionStarted(t, ticket, alice.userId, "private");
+    const elsewhere = await createProject(alice.as, workspaceId, "Elsewhere");
+    const { ticketId: otherTicket } = await createTicket(alice.as, elsewhere);
+    const foreign = await sessionStarted(
+      t,
+      { ticketId: otherTicket, projectId: elsewhere },
+      alice.userId,
+    );
+    tick(APART);
+    await t.run(async (ctx) => {
+      const actor = { kind: "person", userId: alice.userId } as Actor;
+      await recordBoardEvents(ctx, projectId, actor, now, [
+        {
+          ticketId: ticketId as TicketId,
+          payload: {
+            kind: "automation_run_started",
+            automationId: newId("automation"),
+            runId: "run-1",
+            sessionId: privateRun as SessionId,
+          },
+        },
+        {
+          ticketId: ticketId as TicketId,
+          payload: {
+            kind: "session_resumed",
+            sessionId: foreign as SessionId,
+            attachmentId: "a",
+            origin: null,
+          },
+        },
+      ]);
+    });
+    const kinds = async (as: Client) =>
+      summary(await projectFeed(as, projectId, { numItems: 10, cursor: null }));
+    expect(await kinds(alice.as)).toEqual([
+      "automation_run_started",
+      "session_started",
+      "created×1",
+      "project_created",
+    ]);
+    expect(await kinds(bob.as)).toEqual(["created×1", "project_created"]);
+  });
+
+  test("a removed comment is left out of its run", async () => {
+    const t = setup();
+    const { alice, bob, projectId } = await team(t);
+    const { ticketId } = await createTicket(alice.as, projectId);
+    tick(APART);
+    await comment(bob.as, ticketId, "First");
+    await comment(bob.as, ticketId, "Second");
+    await t.run(async (ctx) => {
+      const [first] = await ctx.db
+        .query("ticketComments")
+        .withIndex("by_ticket", (q) => q.eq("ticketId", ticketId))
+        .collect();
+      await ctx.db.patch(first!._id, { deletedAt: now });
+    });
+    const page = await projectFeed(alice.as, projectId, { numItems: 10, cursor: null });
+    expect(summary(page)).toEqual(["commented×1", "created×1", "project_created"]);
+  });
+
   test("a deleted ticket's events and a deleted Session's are left out", async () => {
     const t = setup();
     const { alice, projectId } = await team(t);
@@ -421,7 +518,9 @@ describe("activity.project", () => {
     const t = setup();
     const { projectId } = await team(t);
     const carol = await signIn(t, "carol");
-    await expect(projectFeed(carol.as, projectId, { numItems: 5, cursor: null })).rejects.toThrow();
+    await expect(
+      projectFeed(carol.as, newId("project"), { numItems: 5, cursor: null }),
+    ).rejects.toMatchObject(code("not_found"));
     await expect(
       projectFeed(carol.as, projectId, { numItems: 5, cursor: null }),
     ).rejects.toMatchObject(code("not_a_member"));
@@ -447,23 +546,11 @@ describe("activity.project", () => {
 
   test("a page reads a bounded number of events", async () => {
     const t = setup();
-    const { alice, projectId } = await team(t);
+    const { alice, bob, projectId } = await team(t);
     const { ticketId } = await createTicket(alice.as, projectId);
-    // More hidden events than one page reads: a private Session's outcomes, to Bob.
-    const bob = await signIn(t, "bob");
-    const sessionId = await sessionStarted(t, { ticketId, projectId }, alice.userId, "private");
-    await t.run(async (ctx) => {
-      const actor = { kind: "agent", userId: alice.userId, sessionId } as Actor;
-      const drafts = Array.from({ length: MAX_FEED_SCAN }, (_, at) => ({
-        ticketId: ticketId as TicketId,
-        payload: {
-          kind: "session_stopped" as const,
-          sessionId: sessionId as SessionId,
-          reason: `${at}`,
-        },
-      }));
-      await recordBoardEvents(ctx, projectId, actor, now, drafts);
-    });
+    const ticket = { ticketId, projectId };
+    const sessionId = await sessionStarted(t, ticket, alice.userId, "private");
+    await hiddenEvents(t, ticket, sessionId, alice.userId, MAX_FEED_SCAN);
     const first = await projectFeed(bob.as, projectId, { numItems: 5, cursor: null });
     expect(first.page).toEqual([]);
     expect(first.isDone).toBe(false);
@@ -473,6 +560,73 @@ describe("activity.project", () => {
     });
     expect(summary(next)).toEqual(["created×1", "project_created"]);
     expect(next.isDone).toBe(true);
+  });
+
+  test("the bound never cuts a run in two: the page stops before the run", async () => {
+    const t = setup();
+    const { alice, bob, projectId } = await team(t);
+    const { ticketId } = await createTicket(alice.as, projectId);
+    const ticket = { ticketId, projectId };
+    const sessionId = await sessionStarted(t, ticket, alice.userId, "private");
+    tick(APART);
+    // Newest first: a rename, then Alice's run of two edits with more hidden
+    // events inside it than one page reads past the run's first edit.
+    await update(alice.as, ticketId, { priority: "high" });
+    await hiddenEvents(t, ticket, sessionId, alice.userId, MAX_FEED_SCAN - 2);
+    await update(alice.as, ticketId, { priority: "low" });
+    await renameProject(t, projectId, alice.userId, "Renamed");
+
+    const first = await projectFeed(bob.as, projectId, { numItems: 10, cursor: null });
+    expect(summary(first)).toEqual(["project_renamed"]);
+    expect(first.isDone).toBe(false);
+    const next = await projectFeed(bob.as, projectId, {
+      numItems: 10,
+      cursor: first.continueCursor,
+    });
+    expect(summary(next)[0]).toBe("changed×2");
+    expect(next.page[0]!.what).toEqual({
+      kind: "changed",
+      changes: [{ field: "priority", from: "medium", to: "low" }],
+    });
+  });
+
+  test("a pinned page that cannot reach its end within the bound asks to be split", async () => {
+    const t = setup();
+    const { alice, bob, projectId } = await team(t);
+    const { ticketId } = await createTicket(alice.as, projectId);
+    const ticket = { ticketId, projectId };
+    const sessionId = await sessionStarted(t, ticket, alice.userId, "private");
+    const first = await projectFeed(bob.as, projectId, { numItems: 1, cursor: null });
+    expect(summary(first)).toEqual(["created×1"]);
+    const pin = first.continueCursor;
+
+    tick(APART);
+    await hiddenEvents(t, ticket, sessionId, alice.userId, MAX_FEED_SCAN);
+    await renameProject(t, projectId, alice.userId, "Renamed");
+    const pinned = await projectFeed(bob.as, projectId, {
+      numItems: 1,
+      cursor: null,
+      endCursor: pin,
+    });
+    expect(pinned.continueCursor).toBe(pin);
+    expect(pinned.isDone).toBe(false);
+    const split = pinned.splitCursor!;
+    expect(typeof split).toBe("string");
+
+    const top = await projectFeed(bob.as, projectId, {
+      numItems: 1,
+      cursor: null,
+      endCursor: split,
+    });
+    const bottom = await projectFeed(bob.as, projectId, {
+      numItems: 1,
+      cursor: split,
+      endCursor: pin,
+    });
+    expect(top).toMatchObject({ continueCursor: split, isDone: false });
+    expect(top).not.toHaveProperty("splitCursor");
+    expect(bottom).toMatchObject({ continueCursor: pin, isDone: false });
+    expect([...summary(top), ...summary(bottom)]).toEqual(["project_renamed", "created×1"]);
   });
 });
 
@@ -522,6 +676,9 @@ describe("activity.workspace", () => {
     await expect(
       workspaceFeed(carol.as, workspaceId, { numItems: 5, cursor: null }),
     ).rejects.toMatchObject(code("not_a_member"));
+    await expect(
+      workspaceFeed(carol.as, newId("workspace"), { numItems: 5, cursor: null }),
+    ).rejects.toMatchObject(code("not_found"));
     await t.run(async (ctx) => {
       const row = await ctx.db
         .query("projects")
@@ -532,7 +689,7 @@ describe("activity.workspace", () => {
     const page = await workspaceFeed(alice.as, workspaceId, { numItems: 5, cursor: null });
     expect(page).toMatchObject({ page: [], tickets: [], people: [], isDone: true });
     // A cursor naming a project that is gone reads on without it.
-    const stale = encodeFeedCursor({ at: now, bounds: { [projectId]: 5 }, done: false });
+    const stale = JSON.stringify({ v: 1, at: now, b: { [projectId]: 5 }, d: false });
     const after = await workspaceFeed(alice.as, workspaceId, { numItems: 5, cursor: stale });
     expect(after).toMatchObject({ page: [], isDone: true });
   });
