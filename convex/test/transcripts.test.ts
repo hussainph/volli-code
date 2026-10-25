@@ -161,7 +161,7 @@ function staged(char: string, sequence: number | null, body = "{}") {
   return {
     digest: digest(char),
     mediaType: "application/x",
-    bytes: body.length,
+    bytes: Buffer.byteLength(body),
     body,
     spillKey: null,
     sequence,
@@ -190,7 +190,7 @@ describe("the producer fence", () => {
     ).rejects.toThrow(code("invalid_argument"));
   });
 
-  test("a Session nobody holds, or one being released, refuses writes", async () => {
+  test("a Session nobody holds, or one released, refuses writes; one being released does not", async () => {
     const w = await world({ intake: false });
     await expect(
       w.asAlice.mutation(api.transcripts.stageArtifacts, {
@@ -200,12 +200,19 @@ describe("the producer fence", () => {
       }),
     ).rejects.toThrow(code("not_claimed"));
     const v = await world();
-    await v.t.run(async (ctx: Ctx) => {
-      const intake = await ctx.db.query("sessionIntake").first();
-      await ctx.db.patch(intake!._id, { state: "releasing" });
-    });
+    const setState = (state: "releasing" | "released") =>
+      v.t.run(async (ctx: Ctx) => {
+        const intake = await ctx.db.query("sessionIntake").first();
+        await ctx.db.patch(intake!._id, { state });
+      });
+    // The handoff packs what the old runner holds.
+    await setState("releasing");
     await expect(
       v.asAlice.mutation(api.transcripts.commitSegment, segment(v, 1, 1)),
+    ).resolves.toEqual({ status: "committed" });
+    await setState("released");
+    await expect(
+      v.asAlice.mutation(api.transcripts.commitSegment, segment(v, 2, 2)),
     ).rejects.toThrow(code("not_claimed"));
   });
 });
@@ -222,7 +229,7 @@ describe("stageArtifacts", () => {
       sessionId: w.sessionId,
       claim: w.claim,
       artifacts: [
-        staged("a", 7, '{"x":"é"}'.replace("é", "e")),
+        staged("a", 7, '{"x":"é"}'),
         {
           digest: digest("b"),
           mediaType: "application/x",
@@ -258,6 +265,45 @@ describe("stageArtifacts", () => {
         [digest("b"), 5, "runner", true],
       ],
     );
+  });
+
+  test("a body referenced again after its pack stages again and stops expiring", async () => {
+    const w = await world();
+    await w.asAlice.mutation(api.transcripts.stageArtifacts, {
+      sessionId: w.sessionId,
+      claim: w.claim,
+      artifacts: [staged("a", 2)],
+    });
+    await w.asAlice.mutation(
+      api.transcripts.commitSegment,
+      segment(w, 1, 5, { artifactCount: 1, digests: [digest("a")] }),
+    );
+    expect((await stagingRows(w.t))[0]!.expiresAt).not.toBeNull();
+    await w.asAlice.mutation(api.transcripts.stageArtifacts, {
+      sessionId: w.sessionId,
+      claim: w.claim,
+      artifacts: [staged("a", 8)],
+    });
+    expect((await stagingRows(w.t))[0]).toMatchObject({
+      firstSequence: 8,
+      packedSegmentId: null,
+      expiresAt: null,
+    });
+    // A pack whose range ends before that reference does not expire it.
+    await w.asAlice.mutation(
+      api.transcripts.commitSegment,
+      segment(w, 6, 7, { artifactCount: 1, digests: [digest("a")] }),
+    );
+    expect((await stagingRows(w.t))[0]!.expiresAt).toBeNull();
+    // The segment id of another range is not reusable.
+    const used = segment(w, 8, 9);
+    await w.asAlice.mutation(api.transcripts.commitSegment, used);
+    await expect(
+      w.asAlice.mutation(api.transcripts.commitSegment, {
+        ...segment(w, 10, 10),
+        segmentId: used.segmentId,
+      }),
+    ).rejects.toThrow(code("conflict"));
   });
 
   test("refuses malformed artifacts", async () => {
@@ -525,7 +571,7 @@ describe("sweepPacked", () => {
       }
     });
     await expect(w.t.mutation(internal.transcripts.sweepPacked, {})).resolves.toEqual({
-      deleted: 256,
+      deleted: 64,
     });
     await w.t.finishAllScheduledFunctions(vi.runAllTimers);
     const left = await stagingRows(w.t);
@@ -552,7 +598,9 @@ describe("files.presignPut", () => {
     vi.stubEnv("VOLLI_S3_BUCKET", "volli-history");
     vi.stubEnv("VOLLI_S3_ACCESS_KEY_ID", "AKID");
     vi.stubEnv("VOLLI_S3_SECRET_ACCESS_KEY", "secret");
-    const signed = await w.asAlice.action(api.files.presignPut, args);
+    const grant = await w.asAlice.action(api.files.presignPut, args);
+    if (grant.status !== "sign") throw new Error("expected a URL");
+    const signed = grant.request;
     const url = new URL(signed.url);
     expect(url.host).toBe("acct.r2.cloudflarestorage.com");
     expect(url.pathname).toBe(`/volli-history/${key}`);
@@ -578,6 +626,74 @@ describe("files.presignPut", () => {
         code("invalid_argument"),
       );
     }
+    const piKey = piLogSegmentKey({
+      projectId: w.projectId,
+      sessionId: w.sessionId,
+      attachmentId: "att-1",
+      piFileId: "2026-10-25T01-02-03-004Z_abc",
+      offset: 0,
+    });
+    const spill = artifactSpillKey({
+      projectId: w.projectId,
+      sessionId: w.sessionId,
+      sha256: hex("c"),
+    });
+    for (const allowed of [piKey, spill]) {
+      await expect(
+        w.asAlice.action(api.files.presignPut, { ...args, key: allowed }),
+      ).resolves.toMatchObject({ status: "sign", request: { method: "PUT" } });
+    }
+    await expect(
+      w.asAlice.action(api.files.presignPut, { ...args, key: piKey.replace("att-1", "a b") }),
+    ).rejects.toThrow(code("invalid_argument"));
     await expect(w.asBob.action(api.files.presignPut, args)).rejects.toThrow(code("forbidden"));
+    await expect(
+      w.asAlice.action(api.files.presignPut, { ...args, claim: { ...w.claim, generation: 9 } }),
+    ).rejects.toThrow(code("stale_claim"));
+
+    // Write-once: a key a committed row names is never signed again.
+    await w.asAlice.mutation(api.transcripts.commitSegment, segment(w, 1, 4));
+    await w.asAlice.mutation(api.transcripts.commitPiLogSegment, {
+      sessionId: w.sessionId,
+      claim: w.claim,
+      attachmentId: "att-1",
+      piFileId: "2026-10-25T01-02-03-004Z_abc",
+      startOffset: 0,
+      endOffset: 10,
+      key: piKey,
+      bytes: 10,
+      sha256: hex("3"),
+    });
+    await w.asAlice.mutation(api.transcripts.stageArtifacts, {
+      sessionId: w.sessionId,
+      claim: w.claim,
+      artifacts: [
+        {
+          digest: digest("c"),
+          mediaType: "m",
+          bytes: 70_000,
+          body: null,
+          spillKey: spill,
+          sequence: 9,
+        },
+      ],
+    });
+    for (const committed of [key, piKey, spill]) {
+      await expect(
+        w.asAlice.action(api.files.presignPut, { ...args, key: committed }),
+      ).resolves.toEqual({ status: "committed" });
+    }
+    // Another range starting at 1 is not the committed key: still refused by its commit, signable here.
+    const other = transcriptPackKey({
+      projectId: w.projectId,
+      sessionId: w.sessionId,
+      firstSequence: 1,
+      lastSequence: 3,
+    });
+    await expect(
+      w.asAlice.action(api.files.presignPut, { ...args, key: other }),
+    ).resolves.toMatchObject({
+      status: "sign",
+    });
   });
 });

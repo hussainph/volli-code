@@ -35,6 +35,37 @@ describe("presignS3Request", () => {
     expect(signed.expiresAt).toBe(Date.UTC(2013, 4, 24) + 86400 * 1000);
   });
 
+  test("matches botocore's presigned PUT with a signed length and checksum", () => {
+    // Generated independently with botocore (`generate_presigned_url("put_object", …)`,
+    // signature_version s3v4, path addressing) for these exact inputs.
+    const signed = presignS3Request({
+      accessKeyId: "AKIDEXAMPLE",
+      secretAccessKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+      region: "auto",
+      method: "PUT",
+      endpoint: "https://acct.r2.cloudflarestorage.com",
+      bucket: "volli-history",
+      key:
+        "v1/p/11111111-1111-4111-8111-111111111111/s/22222222-2222-4222-8222-222222222222" +
+        "/pi/att-1/2026-10-25T01:02:03Z_abc/000000000000000.jsonl.zst",
+      now: Date.UTC(2026, 9, 25, 3, 17, 41),
+      expiresSeconds: 300,
+      headers: {
+        "content-length": "42",
+        "x-amz-checksum-sha256": "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
+      },
+    });
+    expect(signed.url).toBe(
+      "https://acct.r2.cloudflarestorage.com/volli-history/v1/p/11111111-1111-4111-8111-111111111111" +
+        "/s/22222222-2222-4222-8222-222222222222/pi/att-1/2026-10-25T01%3A02%3A03Z_abc/000000000000000.jsonl.zst" +
+        "?X-Amz-Algorithm=AWS4-HMAC-SHA256" +
+        "&X-Amz-Credential=AKIDEXAMPLE%2F20261025%2Fauto%2Fs3%2Faws4_request" +
+        "&X-Amz-Date=20261025T031741Z&X-Amz-Expires=300" +
+        "&X-Amz-SignedHeaders=content-length%3Bhost%3Bx-amz-checksum-sha256" +
+        "&X-Amz-Signature=a078cfb941a9cdf8b34d2fb83c609f249cf5e92c6ceb244347e71210387388fb",
+    );
+  });
+
   test("path-style: the bucket leads the path, key bytes are encoded, headers are signed", () => {
     const base = {
       ...AWS_EXAMPLE,
@@ -79,6 +110,16 @@ describe("presignS3Request", () => {
     }
     expect(() => presignS3Request({ ...base, expiresSeconds: 1, key: "" })).toThrow(RangeError);
     expect(() => presignS3Request({ ...base, expiresSeconds: 1, bucket: "" })).toThrow(RangeError);
+    for (const endpoint of [
+      "https://s3.amazonaws.com/base",
+      "https://s3.amazonaws.com/?x=1",
+      "https://s3.amazonaws.com/#f",
+    ]) {
+      expect(() => presignS3Request({ ...base, expiresSeconds: 1, endpoint })).toThrow(RangeError);
+    }
+    expect(() =>
+      presignS3Request({ ...base, expiresSeconds: 1, headers: { Host: "evil.example" } }),
+    ).toThrow(RangeError);
   });
 });
 

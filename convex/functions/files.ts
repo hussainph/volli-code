@@ -14,14 +14,18 @@ import { ConvexError, v } from "convex/values";
 import {
   presignS3Request,
   sha256ChecksumHeader,
-  type PresignedS3Request,
+  type SessionUploadGrant,
 } from "@volli/shared/cloud";
 
 import { internal } from "./_generated/api";
 import { action } from "./_generated/server";
 import { PRESIGN_EXPIRES_SECONDS, objectStoreConfig } from "./lib/objectStore";
 
-/** A URL for one PUT of exactly `bytes` bytes hashing to `sha256`, valid for five minutes. */
+/**
+ * A URL for one PUT of exactly `bytes` bytes hashing to `sha256`, valid for
+ * five minutes; or `committed` when a committed row already names the key,
+ * whose object is immutable and in place.
+ */
 export const presignPut = action({
   args: {
     sessionId: v.string(),
@@ -30,8 +34,9 @@ export const presignPut = action({
     bytes: v.number(),
     sha256: v.string(),
   },
-  handler: async (ctx, args): Promise<PresignedS3Request> => {
-    const { key } = await ctx.runQuery(internal.transcripts.authorizeSessionUpload, args);
+  handler: async (ctx, args): Promise<SessionUploadGrant> => {
+    const authorization = await ctx.runQuery(internal.transcripts.authorizeSessionUpload, args);
+    if (authorization.status === "committed") return { status: "committed" };
     const config = objectStoreConfig(process.env);
     if (config === null) {
       throw new ConvexError({
@@ -39,10 +44,10 @@ export const presignPut = action({
         message: "Object storage is not configured on this deployment.",
       });
     }
-    return presignS3Request({
+    const request = presignS3Request({
       ...config,
       method: "PUT",
-      key,
+      key: authorization.key,
       now: Date.now(),
       expiresSeconds: PRESIGN_EXPIRES_SECONDS,
       headers: {
@@ -50,5 +55,6 @@ export const presignPut = action({
         "x-amz-checksum-sha256": sha256ChecksumHeader(args.sha256),
       },
     });
+    return { status: "sign", request };
   },
 });

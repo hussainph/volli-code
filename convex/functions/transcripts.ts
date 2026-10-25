@@ -14,8 +14,16 @@
  *
  * Every write is the Session's producer's: its owner's identity (0.3: the
  * owner's runner acts as them) presenting the current claim, so a runner that
- * lost the claim cannot commit. HOOK(N1): when runner tokens land, the caller
- * is the runner itself and its id must equal `claim.runnerId`.
+ * lost the claim cannot commit. A Session being released (moving to another
+ * runner) still accepts its holder's uploads, so the handoff can pack what
+ * the old runner holds. Until N1 this fence is advisory against the owner's
+ * own clients (the runner id is on the listing row, the generation is a small
+ * counter); it orders producers, it does not authenticate them. HOOK(N1):
+ * when runner tokens land, the caller is the runner itself and its id must
+ * equal `claim.runnerId`.
+ *
+ * Objects are write-once: a key a committed row already names is never signed
+ * for upload again (`authorizeSessionUpload` answers `committed`).
  *
  * Commits are idempotent: the same object for the same range or offset is a
  * `duplicate`; a different one is `conflict`.
@@ -75,7 +83,8 @@ type ReadCtx = AuthCtx & { db: GenericDatabaseReader<DataModel> };
 const claim = v.object({ runnerId: v.string(), generation: v.number() });
 
 /** Sweeps per call; a full batch schedules the next one at once. */
-const SWEEP_BATCH = 256;
+// 64 rows of at most 64 KB stay well inside one transaction's read budget.
+const SWEEP_BATCH = 64;
 /** Pi files one `head` call reports on. */
 const HEAD_MAX_PI_FILES = 64;
 
@@ -95,7 +104,7 @@ function positiveInteger(value: number, name: string): number {
  * The Session, its project and its intake head, when the caller is its
  * producer: the Session's owner presenting the current, active claim.
  */
-export async function requireSessionProducer(
+async function requireSessionProducer(
   ctx: ReadCtx,
   sessionId: string,
   fence: { runnerId: string; generation: number },
@@ -106,7 +115,7 @@ export async function requireSessionProducer(
     .query("sessionIntake")
     .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
     .unique();
-  if (intake === null || intake.state !== "active") {
+  if (intake === null || intake.state === "released") {
     throw transcriptError("not_claimed", "No runner holds this session.");
   }
   if (intake.claim.runnerId !== fence.runnerId || intake.claim.generation !== fence.generation) {
@@ -183,7 +192,7 @@ type StagedArtifactArgs = {
  * whose referencing event a committed segment already covers is not staged:
  * it is in that pack. The caller has checked the producer fence.
  */
-export async function stageArtifactRows(
+async function stageArtifactRows(
   ctx: { db: GenericDatabaseWriter<DataModel> },
   scope: { sessionId: string; projectId: string },
   artifacts: readonly StagedArtifactArgs[],
@@ -221,7 +230,15 @@ export async function stageArtifactRows(
       )
       .first();
     if (existing !== null) {
-      if (
+      if (existing.packedSegmentId !== null && artifact.sequence !== null) {
+        // Referenced again after a pack covered it: this reference is in no
+        // pack yet, so the row is staging again and must not expire.
+        await ctx.db.patch(existing._id, {
+          firstSequence: artifact.sequence,
+          packedSegmentId: null,
+          expiresAt: null,
+        });
+      } else if (
         artifact.sequence !== null &&
         (existing.firstSequence === null || artifact.sequence < existing.firstSequence)
       ) {
@@ -308,6 +325,16 @@ export const commitSegment = mutation({
       lastSequence: args.lastSequence,
     });
     if (args.key !== key) throw invalid("key is not this range's key");
+    const taken = await ctx.db
+      .query("transcriptSegments")
+      .withIndex("by_uuid", (q) => q.eq("id", args.segmentId))
+      .unique();
+    if (
+      taken !== null &&
+      (taken.sessionId !== session.id || taken.firstSequence !== args.firstSequence)
+    ) {
+      throw transcriptError("conflict", "That segment id is taken.");
+    }
 
     const same = await ctx.db
       .query("transcriptSegments")
@@ -350,7 +377,9 @@ export const commitSegment = mutation({
         .query("transcriptArtifacts")
         .withIndex("by_session_digest", (q) => q.eq("sessionId", session.id).eq("digest", digest))
         .first();
+      // A row staged for a later reference of the same body is not this pack's.
       if (row === null || row.packedSegmentId !== null) continue;
+      if (row.firstSequence !== null && row.firstSequence > args.lastSequence) continue;
       await ctx.db.patch(row._id, {
         packedSegmentId: args.segmentId,
         expiresAt: now + PACKED_STAGING_TTL_MS,
@@ -449,27 +478,75 @@ export const commitPiLogSegment = mutation({
 
 // ── object writes ────────────────────────────────────────────────────────────
 
-/** The Session-history objects a runner uploads: packs, spilled bodies, Pi log ranges. */
-const SESSION_UPLOAD_KINDS =
-  /^(tx\/[0-9]{12}-[0-9]{12}\.pack\.zst|a\/[0-9a-f]{64}\.json\.zst|pi\/[^/]+\/[^/]+\/[0-9]{15}\.jsonl\.zst)$/;
+/**
+ * The Session-history objects a runner uploads, after the Session's prefix:
+ * packs, spilled bodies and Pi log ranges, each exactly as the key grammar
+ * (`@volli/shared/cloud` `r2-keys.ts`) writes it.
+ */
+const KEY_SEGMENT = "[A-Za-z0-9][A-Za-z0-9._:-]{0,199}";
+const PACK_KEY = /^tx\/([0-9]{12})-[0-9]{12}\.pack\.zst$/u;
+const SPILL_KEY = /^a\/([0-9a-f]{64})\.json\.zst$/u;
+const PI_KEY = new RegExp(`^pi/${KEY_SEGMENT}/(${KEY_SEGMENT})/([0-9]{15})\\.jsonl\\.zst$`, "u");
+
+export type SessionUploadAuthorization = { status: "sign"; key: string } | { status: "committed" };
+
+/** Whether a committed row already names `key`, the Session-relative rest of it parsed. */
+async function committedKey(
+  ctx: { db: GenericDatabaseReader<DataModel> },
+  sessionId: string,
+  key: string,
+  rest: string,
+): Promise<boolean | null> {
+  const pack = PACK_KEY.exec(rest);
+  if (pack !== null) {
+    const row = await ctx.db
+      .query("transcriptSegments")
+      .withIndex("by_session_first", (q) =>
+        q.eq("sessionId", sessionId).eq("firstSequence", Number(pack[1])),
+      )
+      .unique();
+    return row !== null && row.key === key;
+  }
+  const spill = SPILL_KEY.exec(rest);
+  if (spill !== null) {
+    const row = await ctx.db
+      .query("transcriptArtifacts")
+      .withIndex("by_session_digest", (q) =>
+        q.eq("sessionId", sessionId).eq("digest", `sha256:${spill[1]}`),
+      )
+      .first();
+    return row !== null && row.spillKey === key;
+  }
+  const pi = PI_KEY.exec(rest);
+  if (pi !== null && !rest.includes("..")) {
+    const row = await ctx.db
+      .query("piLogSegments")
+      .withIndex("by_session_file_offset", (q) =>
+        q.eq("sessionId", sessionId).eq("piFileId", pi[1]!).eq("startOffset", Number(pi[2])),
+      )
+      .unique();
+    return row !== null && row.key === key;
+  }
+  return null;
+}
 
 /**
- * Whether the caller may upload `key`: it is the Session's producer and the
- * key is one of the Session's own upload kinds. Read by `files.presignPut`.
+ * Whether the caller may upload `key`: it is the Session's producer, the key
+ * is one of the Session's own upload kinds, and no committed row names it yet
+ * (`committed`: the object is in place and immutable). Read by `files.presignPut`.
  */
 export const authorizeSessionUpload = internalQuery({
   args: { sessionId: v.string(), claim, key: v.string(), bytes: v.number(), sha256: v.string() },
-  handler: async (ctx, args): Promise<{ key: string }> => {
+  handler: async (ctx, args): Promise<SessionUploadAuthorization> => {
     const { session } = await requireSessionProducer(ctx, args.sessionId, args.claim);
     positiveInteger(args.bytes, "bytes");
     if (args.bytes > SESSION_OBJECT_MAX_BYTES) throw invalid("The object is too large");
     if (!isSha256Hex(args.sha256)) throw invalid("sha256 must be 64 lowercase hex digits");
     const prefix = sessionPrefix({ projectId: session.projectId, sessionId: session.id });
     const rest = args.key.startsWith(prefix) ? args.key.slice(prefix.length) : null;
-    if (rest === null || !SESSION_UPLOAD_KINDS.test(rest) || rest.includes("..")) {
-      throw invalid("This session cannot upload that key");
-    }
-    return { key: args.key };
+    const committed = rest === null ? null : await committedKey(ctx, session.id, args.key, rest);
+    if (committed === null) throw invalid("This session cannot upload that key");
+    return committed ? { status: "committed" } : { status: "sign", key: args.key };
   },
 });
 

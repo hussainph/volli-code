@@ -9,16 +9,17 @@
  *   exactly like the bucket (`<root>/v1/p/<projectId>/s/<sessionId>/tx/…`), for
  *   a deployment with no object store yet and for tests.
  *
- * Objects are immutable by contract and writes are idempotent: putting the
- * same bytes at the same key again is harmless. What is recorded is decided
- * by the commit that follows the put, never by the put.
+ * Objects are write-once once committed: the backend never signs an upload
+ * to a key a committed row names. Before that, a put may replace an
+ * uncommitted object at its key (a retry after a crash). What is recorded is
+ * decided by the commit that follows the put, never by the put.
  */
 
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import type { PresignedS3Request, SessionClaimFence } from "@volli/shared/cloud";
+import type { SessionClaimFence, SessionUploadGrant } from "@volli/shared/cloud";
 
 /** One object: its key (from the shared key grammar), its bytes and their SHA-256 hex. */
 export interface SessionObject {
@@ -119,35 +120,47 @@ export type PresignPut = (request: {
   key: string;
   bytes: number;
   sha256: string;
-}) => Promise<PresignedS3Request>;
+}) => Promise<SessionUploadGrant>;
+
+/** One upload's longest wait: a 64 MB object over a slow link, not a hung socket. */
+export const OBJECT_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 
 export interface PresignedObjectStoreOptions {
   presignPut: PresignPut;
   fetch?: typeof globalThis.fetch;
+  /** Abort an upload after this long (default {@link OBJECT_UPLOAD_TIMEOUT_MS}). */
+  timeoutMs?: number;
 }
 
 /** Uploads to an S3-compatible store through URLs the backend signs per object. */
 export class PresignedObjectStore implements SessionObjectStore {
   readonly #presignPut: PresignPut;
   readonly #fetch: typeof globalThis.fetch;
+  readonly #timeoutMs: number;
 
   constructor(options: PresignedObjectStoreOptions) {
     this.#presignPut = options.presignPut;
     this.#fetch = options.fetch ?? globalThis.fetch;
+    this.#timeoutMs = options.timeoutMs ?? OBJECT_UPLOAD_TIMEOUT_MS;
   }
 
   async put(object: SessionObject, scope: SessionObjectScope): Promise<void> {
     assertSha(object);
-    const signed = await this.#presignPut({
+    const grant = await this.#presignPut({
       sessionId: scope.sessionId,
       claim: scope.claim,
       key: object.key,
       bytes: object.body.length,
       sha256: object.sha256,
     });
+    // A committed row names this key: its object is in place and immutable.
+    // The commit that follows decides whether these bytes are the same.
+    if (grant.status === "committed") return;
+    const signed = grant.request;
     const response = await this.#fetch(signed.url, {
       method: "PUT",
       headers: signed.headers,
+      signal: AbortSignal.timeout(this.#timeoutMs),
       // A view of exactly the object's bytes, typed as `fetch` takes them.
       body: new Uint8Array(
         object.body.buffer as ArrayBuffer,

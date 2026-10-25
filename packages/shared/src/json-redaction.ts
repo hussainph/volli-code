@@ -7,7 +7,10 @@
  * those values whole. This walks the decoded value instead and runs every
  * string, object keys included, through the bounded streaming redactor
  * ({@link CredentialRedactionStream}) on its own, so each one is matched in
- * its decoded form and the result stays a valid JSON value.
+ * its decoded form and the result stays a valid JSON value. A number whose
+ * text is a value becomes the marker string. Not seen: a value that is only
+ * whole after a SECOND decode (JSON text escaped inside a string), or one
+ * split across two strings.
  *
  * Fails closed exactly as the stream does: any redactor failure throws
  * {@link CredentialRedactionError}, and nothing partially redacted is returned.
@@ -64,6 +67,13 @@ function walk(value: unknown, step: CredentialStreamStepper): unknown {
   if (typeof value === "string") {
     const redacted = redactString(value, step);
     return redacted === value ? value : redacted;
+  }
+  if (typeof value === "number") {
+    // A number that holds a value is replaced by the marker text: the type
+    // changes, but nothing is left in the clear.
+    const text = String(value);
+    const redacted = redactString(text, step);
+    return redacted === text ? value : redacted;
   }
   if (value === null || typeof value !== "object") return value;
   if (Array.isArray(value)) {

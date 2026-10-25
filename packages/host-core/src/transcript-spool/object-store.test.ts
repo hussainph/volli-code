@@ -137,13 +137,14 @@ async function mockStore(credentials: S3Credentials, bucket: string, status = 20
 describe("PresignedObjectStore", () => {
   const credentials = { accessKeyId: "AKID", secretAccessKey: "s3cret", region: "auto" };
 
-  function storeFor(endpoint: string, secret = credentials.secretAccessKey) {
+  function storeFor(endpoint: string, secret = credentials.secretAccessKey, timeoutMs?: number) {
     const asked: unknown[] = [];
     const store = new PresignedObjectStore({
       presignPut: async (request) => {
         asked.push(request);
+        if (request.key.endsWith("committed")) return { status: "committed" as const };
         // What `files.presignPut` signs.
-        return presignS3Request({
+        const signed = presignS3Request({
           ...credentials,
           secretAccessKey: secret,
           method: "PUT",
@@ -157,7 +158,9 @@ describe("PresignedObjectStore", () => {
             "x-amz-checksum-sha256": sha256ChecksumHeader(request.sha256),
           },
         });
+        return { status: "sign" as const, request: signed };
       },
+      timeoutMs,
     });
     return { store, asked };
   }
@@ -198,6 +201,28 @@ describe("PresignedObjectStore", () => {
       await busy.close();
     }
     expect(new ObjectUploadError("k", 429).retriable).toBe(true);
+  });
+
+  test("a key a committed row names is not uploaded again", async () => {
+    const { store, asked } = storeFor("http://127.0.0.1:1");
+    await store.put(
+      object("x", `${KEY.slice(0, -"000000000009.pack.zst".length)}committed`),
+      SCOPE,
+    );
+    expect(asked).toHaveLength(1);
+  });
+
+  test("an upload that hangs is aborted", async () => {
+    const hung = createServer(() => undefined);
+    await new Promise<void>((resolve) => hung.listen(0, "127.0.0.1", resolve));
+    try {
+      const port = (hung.address() as AddressInfo).port;
+      const { store } = storeFor(`http://127.0.0.1:${port}`, undefined, 50);
+      await expect(store.put(object("x"), SCOPE)).rejects.toThrow();
+    } finally {
+      hung.closeAllConnections();
+      await new Promise<void>((resolve) => hung.close(() => resolve()));
+    }
   });
 
   test("refuses bytes that do not match their hash before asking for a URL", async () => {

@@ -149,6 +149,18 @@ describe("SpoolTranscriptArtifactStore", () => {
     await expect(store.flush()).resolves.toBeUndefined();
   });
 
+  test("the first flush syncs what an earlier process left unflushed", async () => {
+    const earlier = new SpoolTranscriptArtifactStore(root);
+    await earlier.write(artifact("before the crash"));
+    // A new process: its in-memory list is empty, the spool is not.
+    const later = new SpoolTranscriptArtifactStore(root);
+    await writeFile(join(root, "unrelated.txt"), "");
+    await expect(later.flush()).resolves.toBeUndefined();
+    await expect(
+      new SpoolTranscriptArtifactStore(join(root, "absent")).flush(),
+    ).resolves.toBeUndefined();
+  });
+
   test("a failed flush keeps its files for the next one", async () => {
     const directory = join(root, "spool");
     const store = new SpoolTranscriptArtifactStore(directory);

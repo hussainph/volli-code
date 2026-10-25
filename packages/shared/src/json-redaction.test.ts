@@ -72,5 +72,14 @@ describe("redactJsonValue", () => {
     expect(result.value).toBe(value);
     expect(redactJsonValue("plain", step)).toEqual({ value: "plain", changed: false });
     expect(redactJsonValue(5, step)).toEqual({ value: 5, changed: false });
+    expect(redactJsonValue(true, step)).toEqual({ value: true, changed: false });
+  });
+
+  test("a number that is a value becomes its marker", () => {
+    const pin = stepperFor({ PIN: "482913" });
+    expect(redactJsonValue({ code: 482913, other: 7 }, pin)).toEqual({
+      value: { code: "‹secret:PIN›", other: 7 },
+      changed: true,
+    });
   });
 });

@@ -154,3 +154,14 @@ Each was a decision made while turning the design into code.
     are not trimmed. A move out of the active columns interrupts every
     running Session on the ticket, whoever owns it: the move is a board fact,
     and the interrupt keeps the Session and its transcript.
+23. Transcript bodies (`transcripts.ts`): the runner stages bodies with its
+    own `stageArtifacts` mutation, called before the `accept` that
+    references them, rather than inside `accept` itself; `stageArtifactRows`
+    is the helper an `accept` can share (export it) if it later carries
+    them. The pack format adds two fields: a header's `missing` (bodies the
+    runner could not read, whose staging rows are kept) and an entry's
+    `redacted` (redaction changed the body, so `digest` is the artifact's
+    identity, not this body's checksum). Pi log objects hold the range's
+    lines after redaction, not its raw bytes; the offsets still name the
+    source file's range. A Session in `releasing` still takes its holder's
+    uploads, so a handoff can pack.

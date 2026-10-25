@@ -23,6 +23,7 @@ import {
 import { SpoolTranscriptArtifactStore } from "./artifact-spool";
 import { LocalObjectStore } from "./object-store";
 import {
+  SpoolRedactionUnavailableError,
   TranscriptSpool,
   piFileIdOf,
   type SpoolEvent,
@@ -163,7 +164,7 @@ function spool(limits: Partial<TranscriptSpoolLimits> = {}) {
     objects,
     backend,
     events: ledger,
-    redact: redactor(),
+    redaction: { step: redactor(), complete: () => true },
     newSegmentId: () => `segment-${++segmentCounter}`,
     limits,
   });
@@ -362,7 +363,7 @@ describe("packTranscript", () => {
       objects,
       backend: lagging,
       events: ledger,
-      redact: redactor(),
+      redaction: { step: redactor(), complete: () => true },
     });
     await expect(again.packTranscript(session)).resolves.toMatchObject([{ status: "duplicate" }]);
     expect(backend.segments).toHaveLength(1);
@@ -522,6 +523,7 @@ describe("packPiLogs", () => {
         },
       ],
       truncated: [],
+      oversized: [],
     });
     const uploaded = await readSegment(0);
     expect(uploaded.startsWith(first)).toBe(true);
@@ -536,6 +538,7 @@ describe("packPiLogs", () => {
     await expect(packer.packPiLogs(session, [file()])).resolves.toEqual({
       segments: [],
       truncated: [],
+      oversized: [],
     });
     // The partial line completes; a non-JSON line is redacted as bytes; a blank line stays.
     await appendFile(file().path, `age","n":1}\nraw ${SECRET} text\n\n`);
@@ -549,7 +552,11 @@ describe("packPiLogs", () => {
   });
 
   test("splits at line boundaries under the cap; one longer line is a segment of its own", async () => {
-    const lines = [jsonLine({ n: 1 }), jsonLine({ n: 2, pad: "p".repeat(100) }), jsonLine({ n: 3 })];
+    const lines = [
+      jsonLine({ n: 1 }),
+      jsonLine({ n: 2, pad: "p".repeat(100) }),
+      jsonLine({ n: 3 }),
+    ];
     await writeFile(file().path, lines.join(""));
     const report = await spool({ piSegmentMaxBytes: 32 }).packPiLogs(session, [file()]);
     const sizes = lines.map((text) => Buffer.byteLength(text));
@@ -568,8 +575,13 @@ describe("packPiLogs", () => {
     await expect(s.packPiLogs(session, [file()])).resolves.toEqual({
       segments: [],
       truncated: [piFileId],
+      oversized: [],
     });
-    await expect(s.packPiLogs(session, [])).resolves.toEqual({ segments: [], truncated: [] });
+    await expect(s.packPiLogs(session, [])).resolves.toEqual({
+      segments: [],
+      truncated: [],
+      oversized: [],
+    });
   });
 
   test("a crash before the commit re-uploads the same range", async () => {
@@ -584,7 +596,7 @@ describe("packPiLogs", () => {
       objects,
       backend: failing,
       events: ledger,
-      redact: redactor(),
+      redaction: { step: redactor(), complete: () => true },
     });
     await expect(crashed.packPiLogs(session, [file()])).rejects.toThrow("connection lost");
     const before = await readSegment(0);
@@ -603,7 +615,82 @@ describe("packPiLogs", () => {
   });
 });
 
+describe("refusals that keep a pass from blocking others", () => {
+  test("nothing is staged or packed while the redactor's history is incomplete", async () => {
+    await turn("turn-1", ["held back"]);
+    ledger.accepted = ledger.events.length;
+    let complete = false;
+    const s = new TranscriptSpool({
+      artifacts,
+      objects,
+      backend,
+      events: ledger,
+      redaction: { step: redactor(), complete: () => complete },
+    });
+    await expect(s.stage(session, ledger.events)).rejects.toBeInstanceOf(
+      SpoolRedactionUnavailableError,
+    );
+    await expect(s.packTranscript(session)).rejects.toBeInstanceOf(SpoolRedactionUnavailableError);
+    expect(backend.staged).toEqual([]);
+    expect(backend.segments).toEqual([]);
+    complete = true;
+    await expect(s.packTranscript(session)).resolves.toHaveLength(1);
+  });
+
+  test("staging does not wait behind a pack in flight", async () => {
+    await turn("turn-1", ["slow pack"]);
+    ledger.accepted = ledger.events.length;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const commit = backend.commitSegment.bind(backend);
+    backend.commitSegment = async (input) => {
+      await gate;
+      return commit(input);
+    };
+    const s = spool();
+    const pack = s.packTranscript(session);
+    await expect(s.stage(session, ledger.events)).resolves.toEqual({ staged: 1, missing: [] });
+    release();
+    await expect(pack).resolves.toHaveLength(1);
+  });
+
+  test("a Pi line too long for one object stops its file only", async () => {
+    const long = join(root, "2026-10-25T01-02-03-004Z_long.jsonl");
+    const fine = join(root, "2026-10-25T01-02-03-004Z_fine.jsonl");
+    await writeFile(long, `${"x".repeat(200)}\n`);
+    await writeFile(fine, jsonLine({ ok: true }));
+    const report = await spool({ piSegmentMaxBytes: 16, piLineMaxBytes: 64 }).packPiLogs(session, [
+      { attachmentId: "att-1", path: long },
+      { attachmentId: "att-1", path: fine },
+    ]);
+    expect(report.oversized).toEqual(["2026-10-25T01-02-03-004Z_long"]);
+    expect(report.segments.map((s) => s.piFileId)).toEqual(["2026-10-25T01-02-03-004Z_fine"]);
+  });
+});
+
 describe("packTurn", () => {
+  test("a failed flush still packs, then reports the failure", async () => {
+    await turn("turn-1", ["packed anyway"]);
+    ledger.accepted = ledger.events.length;
+    const failing = {
+      readCanonicalBytes: artifacts.readCanonicalBytes.bind(artifacts),
+      flush: async () => {
+        throw new Error("disk full");
+      },
+    };
+    const s = new TranscriptSpool({
+      artifacts: failing,
+      objects,
+      backend,
+      events: ledger,
+      redaction: { step: redactor(), complete: () => true },
+    });
+    await expect(s.packTurn(session, [])).rejects.toThrow("disk full");
+    expect(backend.segments).toHaveLength(1);
+  });
+
   test("flushes the spool, then packs the transcript and the Pi logs", async () => {
     await turn("turn-1", ["done"]);
     ledger.accepted = ledger.events.length;

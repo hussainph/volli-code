@@ -90,6 +90,9 @@ export function presignS3Request(input: S3PresignInput): PresignedS3Request {
     throw new RangeError("A presigned URL needs a bucket and a key");
   }
   const endpoint = new URL(input.endpoint);
+  if (endpoint.pathname !== "/" || endpoint.search !== "" || endpoint.hash !== "") {
+    throw new RangeError("An endpoint is an origin, with no path or query");
+  }
   const virtual = input.addressing === "virtual";
   const host = virtual ? `${input.bucket}.${endpoint.host}` : endpoint.host;
   const path = virtual
@@ -101,6 +104,8 @@ export function presignS3Request(input: S3PresignInput): PresignedS3Request {
 
   const headers: Record<string, string> = {};
   for (const [name, value] of Object.entries(input.headers ?? {})) {
+    // `host` is the endpoint's, never a caller's.
+    if (name.toLowerCase() === "host") throw new RangeError("The host header is the endpoint's");
     headers[name.toLowerCase()] = value.trim().replace(/\s+/g, " ");
   }
   const signed: Record<string, string> = { ...headers, host };

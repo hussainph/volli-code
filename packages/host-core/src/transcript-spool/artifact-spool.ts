@@ -4,23 +4,27 @@
  *
  * It answers the same port as the signed-out file store
  * (`TranscriptArtifactStore`: content-addressed, `sha256:<hex>` over the
- * canonical JSON), but makes the durability trade the ledger already makes.
- * The signed-out store syncs every body (a full device flush on macOS) before
- * `write` returns, so each message paid for a flush on the turn's critical
- * path. Here a body is durable to the ledger's own standard: `write` returns
- * once the bytes are in place and verified, and {@link SpoolTranscriptArtifactStore.flush}
- * syncs everything written since the last flush in one pass, off the critical
- * path (the transcript spool calls it before each pack). Permanent durability
- * is the pack's: once a committed segment holds a body, object storage has it.
+ * canonical JSON), with a weaker local guarantee in exchange for taking the
+ * device flush off the turn's critical path. The signed-out store syncs every
+ * body (a full device flush on macOS) before `write` returns. Here `write`
+ * returns once the bytes are in place and verified, and
+ * {@link SpoolTranscriptArtifactStore.flush} syncs what was written since the
+ * last flush in one pass, outside any turn (the transcript spool calls it at
+ * each turn's end). The flush still syncs each file; what moved is when, not
+ * how many. A body's durable home is remote: the backend's staging table once
+ * staged (before its event is accepted), then a committed pack.
  *
  * What that allows, and how each case reads:
- * - A process crash loses nothing: the bytes are in the page cache.
- * - A power loss can lose the bodies written since the last flush, exactly as
- *   it can lose the ledger's last unsynced commits (SQLite WAL with
- *   `synchronous = NORMAL`). A lost or torn body reads as unreadable, never as
- *   other bytes: every read verifies the digest. The pack then names it
- *   `missing`, and the backend's staged copy (sent before the event was
- *   accepted) stays the place to read it.
+ * - A process crash loses nothing: the bytes are in the page cache. The first
+ *   flush after a start syncs every file in the spool, so bodies an earlier
+ *   process wrote and never flushed are covered too.
+ * - A power loss can lose bodies written since the last flush. Nothing orders
+ *   those files against the ledger's own commits (SQLite WAL, `synchronous =
+ *   NORMAL`), so an event that survives can reference a body that did not.
+ *   If that body was staged, the staged copy is the body; if not (the runner
+ *   was offline), it is lost, and reads say so: a lost or torn body reads as
+ *   unreadable, never as other bytes, because every read verifies the digest.
+ *   A pack names it `missing`.
  * - A torn file never blocks its digest: a later write of the same body
  *   replaces whatever fails verification, atomically (temp file + rename).
  *
@@ -31,7 +35,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, rename, unlink } from "node:fs/promises";
+import { mkdir, open, readdir, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { zstdCompress, zstdDecompress, constants as zlib } from "node:zlib";
@@ -70,6 +74,8 @@ export class SpoolTranscriptArtifactStore implements TranscriptArtifactStore {
   #ready: Promise<void> | undefined;
   /** Paths written since the last flush began. */
   #unsynced = new Set<string>();
+  /** Until a flush succeeds once, it syncs the whole spool: an earlier process's writes too. */
+  #syncedOnce = false;
 
   constructor(directory: string) {
     this.#directory = directory;
@@ -147,12 +153,25 @@ export class SpoolTranscriptArtifactStore implements TranscriptArtifactStore {
 
   /**
    * Make every body written before this call durable: one sync per file
-   * written since the last flush, then one of the directory. A failure keeps
-   * those files queued for the next flush and rejects.
+   * written since the last flush (every file, the first time), then one of
+   * the directory. A failure keeps those files queued for the next flush and
+   * rejects.
    */
   async flush(): Promise<void> {
+    if (!this.#syncedOnce) {
+      const names = await readdir(this.#directory).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw error;
+      });
+      for (const name of names) {
+        if (name.endsWith(".spool")) this.#unsynced.add(join(this.#directory, name));
+      }
+    }
     const paths = [...this.#unsynced];
-    if (paths.length === 0) return;
+    if (paths.length === 0) {
+      this.#syncedOnce = true;
+      return;
+    }
     this.#unsynced = new Set();
     try {
       for (const path of paths) {
@@ -178,6 +197,7 @@ export class SpoolTranscriptArtifactStore implements TranscriptArtifactStore {
       for (const path of paths) this.#unsynced.add(path);
       throw error;
     }
+    this.#syncedOnce = true;
   }
 
   #pathFor(reference: TranscriptReference): string {

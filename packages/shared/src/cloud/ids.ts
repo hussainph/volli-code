@@ -63,7 +63,6 @@ export type CommentId = Id<"comment">;
 export type SignalId = Id<"signal">;
 export type BoardEventId = Id<"boardEvent">;
 export type SessionId = Id<"session">;
-export type TranscriptSegmentId = Id<"transcriptSegment">;
 export type RunnerId = Id<"runner">;
 export type WorkingCopyId = Id<"workingCopy">;
 export type JobId = Id<"job">;

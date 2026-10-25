@@ -18,6 +18,8 @@
  * that has shipped is never changed, only added to.
  */
 
+import type { PresignedS3Request } from "./s3-presign";
+
 export const TRANSCRIPT_PACK_FORMAT = "volli.transcript-pack/1";
 
 /**
@@ -215,6 +217,15 @@ export interface PiLogSegmentCommit {
 export interface SegmentCommitResult {
   status: "committed" | "duplicate";
 }
+
+/**
+ * `files.presignPut`'s answer: a URL to upload with, or `committed` when a
+ * committed row already names the key (objects are write-once; skip the PUT
+ * and let the commit decide).
+ */
+export type SessionUploadGrant =
+  | { status: "sign"; request: PresignedS3Request }
+  | { status: "committed" };
 
 /** Where a Session's uploads stand: what a runner resumes from after any crash. */
 export interface SessionUploadHead {
