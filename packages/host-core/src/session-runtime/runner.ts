@@ -1,20 +1,20 @@
 /**
- * The runner composition (VC-671): the one Session runtime both hosts assemble.
+ * The runner composition (VC-671): the Session runtime a host assembles.
  *
- * Desktop's main process (the Mac runner) and `hostd` hand it the host they
- * opened and the adapters only their environment can answer — where a
- * Session's commands find `volli`, what a person can be asked, which browser
- * a Session drives, how the host drains at quit — and get back the services
- * every door reads, the host-runtime owner `host.start` adopts, and the
- * recovered proof every ledger consumer needs. Everything between is private
- * staging: the attachment identities and their tokens, the concurrency
- * budget, the delegation store, observability, the background shells, the
- * attachment assembly, the facade/tool-door cycle, Automations and the
- * recovery lifecycle. Construction is synchronous and inert; the quit hold is
- * installed before anything can yield (`lifecycle.ts`).
+ * A host hands it the host it opened and the adapters only its environment
+ * can answer — where a Session's commands find `volli`, what a person can be
+ * asked, which browser a Session drives, the quit hold — and gets back the
+ * services its doors read, the host-runtime owner `host.start` adopts, and
+ * the recovered proof every ledger consumer needs. Everything between is
+ * private staging: the attachment identities and their tokens, the
+ * concurrency budget, the delegation store, observability, the background
+ * shells, the attachment assembly, the facade/tool-door cycle, Automations
+ * and the recovery lifecycle. Construction is synchronous and inert; the quit
+ * hold is installed before anything can yield (`lifecycle.ts`). The drain
+ * follows the host's own stop policy.
  *
- * The one fork is the product store: where the board, projects and Session
- * history live. Only `local`, the host's own SQLite, composes today.
+ * The one fork is the product store: where projects, the board and Session
+ * history live. `local`, the host's own SQLite, is the only store.
  */
 import type { CodeModeSandboxAssets } from "@volli/agent-runtime";
 import type { HostedSessionRuntime } from "@volli/session-engine";
@@ -24,7 +24,6 @@ import {
   type SessionExecutionVenue,
 } from "@volli/shared";
 import { isLiveHost, type HostCore, type HostCorePorts, type HostRuntimeOwner } from "../index";
-import type { HostStopPolicy } from "../host-lifecycle";
 import { getProjectById } from "../db/projects-repo";
 import { getTicket } from "../db/tickets-repo";
 import { hostLogger } from "../log/root";
@@ -60,9 +59,8 @@ import type { PiRuntimeHost } from "./pi-adapter";
 
 /**
  * Where a runner's product state lives: projects, the board and Session
- * history. `local` is the host's own SQLite, the signed-out store (frozen
- * from 0.3 GA). The backend store joins this union with the cloud Session
- * intake; nothing else forks on it.
+ * history. `local` is the host's own SQLite. A store is chosen here, once;
+ * nothing below it forks on where state lives.
  */
 export type RunnerProductStore = { readonly kind: "local"; readonly host: HostCore };
 
@@ -107,12 +105,6 @@ export interface RunnerCompositionInput {
   /** A client's live feed of background shells; the host's live work is always fed. */
   shellFeed?: Pick<BackgroundShellHostPorts, "publishState" | "publishRemoved">;
   /**
-   * How close drains. `desktop-quit` joins only the Session lifecycle (and
-   * `transport`); `drain-and-close` also closes the background shells before
-   * the database and settles Automations.
-   */
-  stopPolicy: HostStopPolicy;
-  /**
    * The host's one handler map for the recovered services (VC-923): the tool
    * door projects it and serves its own verbs into it.
    */
@@ -153,9 +145,6 @@ export interface RunnerComposition {
   owner(edge?: RunnerHostEdge): HostRuntimeOwner;
   /** The recovered proof; starts or joins recovery. */
   ready(): Promise<RunnerReady>;
-  /** Idempotent; the drain `stopPolicy` names. */
-  close(): Promise<void>;
-  stopProducers(): void;
 }
 
 /** Synchronous and inert: no ledger is read until `owner().start` or `ready()`. */
@@ -309,11 +298,17 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     handlers: (ready) => input.handlers(ready),
   });
   const stopProducers = (): void => {
-    automations.stop();
-    agents.stop();
-    input.stopProducers?.();
+    try {
+      input.stopProducers?.();
+    } finally {
+      automations.stop();
+      agents.stop();
+    }
   };
-  const fullDrain = input.stopPolicy === "drain-and-close";
+  // The host's policy decides the drain: `desktop-quit` joins only the Session
+  // lifecycle (and `transport`); `drain-and-close` also closes the background
+  // shells before the database and settles Automations.
+  const fullDrain = host.stopPolicy === "drain-and-close";
   lifecycle = createSessionRuntimeLifecycle<RuntimeSessionFacade>({
     venue,
     ...(input.ownsLegacyVenue === undefined ? {} : { ownsLegacyVenue: input.ownsLegacyVenue }),
@@ -365,7 +360,13 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
         const ready = await lifecycle.ready();
         // Nothing schedules before runtime recovery.
         automations.start(recoveredSessionAutomationPorts(ready));
-        await edge.bind?.(ready);
+        try {
+          await edge.bind?.(ready);
+        } catch (error) {
+          // A host whose doors never bound runs no scheduler.
+          automations.stop();
+          throw error;
+        }
         agents.toolDoor(ready);
       },
       stopProducers,
@@ -380,7 +381,5 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
       ...(edge.drainRequests === undefined ? {} : { drainRequests: edge.drainRequests }),
     }),
     ready: () => lifecycle.ready(),
-    close,
-    stopProducers,
   };
 }

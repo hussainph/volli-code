@@ -123,10 +123,7 @@ function gateRecovery(calls: string[]): PromiseWithResolvers<void> {
   return gate;
 }
 
-function compose(
-  { host, ports, root }: Awaited<ReturnType<typeof composedHost>>,
-  policy: HostStopPolicy,
-) {
+function compose({ host, ports, root }: Awaited<ReturnType<typeof composedHost>>) {
   const calls: string[] = [];
   const transport = {
     close: vi.fn(async () => {
@@ -152,7 +149,6 @@ function compose(
     ),
     capabilities: { askUser: false, requestSecret: false },
     beforeExecution: async () => {},
-    stopPolicy: policy,
     // The tool door projects the host's one map; nothing here calls a verb.
     handlers: () => {
       if (!isLiveHost(host)) throw new Error("A degraded host has no tool door.");
@@ -164,12 +160,16 @@ function compose(
     },
     installQuitHold,
   });
+  const automationsStart = vi.spyOn(runner.automations, "start").mockImplementation(() => {
+    calls.push("automations.start");
+  });
   const automationsStop = vi.spyOn(runner.automations, "stop");
   const automationsSettled = vi.spyOn(runner.automations, "settled");
   const shellsClose = vi.spyOn(runner.shells, "close");
   return {
     calls,
     runner,
+    automationsStart,
     transport,
     installQuitHold,
     automationsStop,
@@ -185,7 +185,7 @@ describe("runner composition", () => {
     if (!isLiveHost(host)) throw new Error(host.database.error);
     const recoveryCalls: string[] = [];
     const held = gateRecovery(recoveryCalls);
-    const f = compose(fixture, "desktop-quit");
+    const f = compose(fixture);
     // Before anything could yield.
     expect(f.installQuitHold).toHaveBeenCalledOnce();
     expect(f.runner.runtime).not.toBeNull();
@@ -201,26 +201,40 @@ describe("runner composition", () => {
       }),
     );
     await vi.waitFor(() => expect(recoveryCalls).toEqual(["recovery"]));
+    // Recovery is still open: nothing schedules and nothing binds.
+    expect(f.automationsStart).not.toHaveBeenCalled();
     expect(bind).not.toHaveBeenCalled();
     held.resolve();
     await started;
+    expect(f.calls).toEqual(["quit.hold", "automations.start", "bind"]);
     expect(bind).toHaveBeenCalledOnce();
     const proof = bind.mock.calls[0]![0];
     expect(() => readRecoveredSessionServices(proof)).not.toThrow();
     await expect(f.runner.ready()).resolves.toBe(proof);
 
     f.calls.length = 0;
-    await expect(host.stop("quit")).resolves.toEqual({ reason: "quit", clean: true });
-    // The host's producers and the runner's stop first; the transport and the
-    // runtime drain beside the socket. Desktop quit joins no shell close, no
-    // Automation settlement, and leaves the database open for process exit.
+    const checkpoint = vi.spyOn(host.database.db, "pragma");
+    const report = await host.stop("quit");
+    expect(report).toEqual({ reason: "quit", clean: true });
+    // The host's producers stop first (again as the lifecycle's drain begins);
+    // the transport and the runtime drain beside the socket. Desktop quit
+    // joins no shell close, no Automation settlement, no WAL checkpoint, and
+    // leaves the database open for process exit.
     expect(f.calls[0]).toBe("host.producers.stop");
-    expect(f.calls).toContain("transport.close");
-    expect(f.calls).toContain("socket.close");
-    expect(f.automationsStop).toHaveBeenCalled();
+    // The Session drain and the socket close concurrently.
+    expect(f.calls.slice(1).toSorted()).toEqual([
+      "host.producers.stop",
+      "socket.close",
+      "transport.close",
+    ]);
+    expect(f.automationsStop).toHaveBeenCalledTimes(2);
     expect(f.shellsClose).not.toHaveBeenCalled();
     expect(f.automationsSettled).not.toHaveBeenCalled();
+    expect(checkpoint).not.toHaveBeenCalled();
     expect(host.database.db.open).toBe(true);
+    // One drain: a second quit joins it.
+    await expect(host.stop("quit")).resolves.toBe(report);
+    expect(f.transport.close).toHaveBeenCalledOnce();
     await expect(f.runner.ready()).rejects.toBeInstanceOf(SessionRuntimeClosingError);
   });
 
@@ -230,7 +244,7 @@ describe("runner composition", () => {
     if (!isLiveHost(host)) throw new Error(host.database.error);
     const recoveryCalls: string[] = [];
     const held = gateRecovery(recoveryCalls);
-    const f = compose(fixture, "desktop-quit");
+    const f = compose(fixture);
     const bind = vi.fn();
     const started = host.start(f.runner.owner({ bind }));
     const refused = expect(started).rejects.toBeInstanceOf(SessionRuntimeClosingError);
@@ -250,11 +264,28 @@ describe("runner composition", () => {
     expect(host.database.db.open).toBe(true);
   });
 
+  it("stops the scheduler again when the host's edge fails to bind", async () => {
+    const fixture = await composedHost("desktop-quit");
+    const f = compose(fixture);
+    const failure = new Error("bind failed");
+    await expect(
+      fixture.host.start(
+        f.runner.owner({
+          bind: () => {
+            throw failure;
+          },
+        }),
+      ),
+    ).rejects.toBe(failure);
+    expect(f.automationsStart).toHaveBeenCalledOnce();
+    expect(f.automationsStop).toHaveBeenCalledOnce();
+  });
+
   it("composes a degraded host with no runtime, through the same start and stop", async () => {
     const fixture = await composedHost("desktop-quit", { degraded: true });
     const { host } = fixture;
     expect(host.kind).toBe("degraded");
-    const f = compose(fixture, "desktop-quit");
+    const f = compose(fixture);
     expect(f.runner.runtime).toBeNull();
     expect(f.runner.concurrency).toBeNull();
     expect(f.runner.observability).toBeNull();
@@ -270,7 +301,7 @@ describe("runner composition", () => {
     const fixture = await composedHost("drain-and-close");
     const { host } = fixture;
     if (!isLiveHost(host)) throw new Error(host.database.error);
-    const f = compose(fixture, "drain-and-close");
+    const f = compose(fixture);
     f.shellsClose.mockImplementation(async () => {
       f.calls.push(`shells.close (database ${host.database.db.open ? "open" : "closed"})`);
     });

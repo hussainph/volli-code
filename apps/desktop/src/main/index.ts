@@ -1172,9 +1172,39 @@ const appStartup = app.whenReady().then(async () => {
   let sessionRpc: ReturnType<typeof registerSessionRpcIpcHandlers> | null = null;
   // Set once the host begins stopping: a quit then is never offered menu-bar mode.
   let hostClosing = false;
+  // The quit path the runner's accepted-quit hold calls (below): declared
+  // before the runner, so the hold never reaches a binding that is not yet live.
+  let terminalQuit: (event: { preventDefault(): void }) => void = noQuitAction;
+  let unsavedQuit: (event: { preventDefault(): void }) => void = noQuitAction;
+  let abortRepack = noQuitAction;
+  /** Flag on, system shutdown (VC-577): what the two confirms would have torn down, unasked. */
+  let systemShutdownTeardown = noQuitAction;
   /**
-   * This Mac's runner (VC-671): the Session runtime host-core composes for
-   * desktop and hostd alike, over the host built above. Desktop answers what
+   * The flag-on shutdown's draft flush (VC-577), joined into the accepted
+   * quit's host shutdown below so `app.exit` waits for it — bounded, so
+   * power-off is never stalled. Resolved unless a shutdown teardown ran.
+   */
+  let systemShutdownFlush: Promise<unknown> = Promise.resolve();
+  /** Menu-bar mode (VC-577). Built once the window factory and updater exist. */
+  let menuBarHost: MenuBarHost | null = null;
+  const prepareHostQuit = (event: { preventDefault(): void }) => {
+    // Flag off: the former listener order, including the two unconditional
+    // stops on a refused attempt. Only the quit trigger is registered. Flag
+    // on: the menu-bar branch decides after the confirms, and a host already
+    // stopping is never offered it.
+    prepareDesktopQuit(event, {
+      stopAutomations: runtimeAutomations.stop,
+      unsavedQuit,
+      terminalQuit,
+      abortRepack,
+      ...(menuBarHost !== null && !hostClosing && isExperimentEnabled("cloud")
+        ? { menuBar: menuBarHost, systemShutdownTeardown }
+        : {}),
+    });
+  };
+  /**
+   * This Mac's runner (VC-671): host-core's Session runtime composition,
+   * over the host built above. Desktop answers what
    * only a Mac can: its browser, the person who answers questions and secret
    * cards, login-PATH adoption before a command runs, the renderer's shell
    * feed, and the accepted-quit hold.
@@ -1202,7 +1232,6 @@ const appStartup = app.whenReady().then(async () => {
       publishState: (started) => publishBackgroundShellEvent({ shell: started }),
       publishRemoved: (removedShellId) => publishBackgroundShellEvent({ removedShellId }),
     },
-    stopPolicy: "desktop-quit",
     // The tool door projects the same one map as every other door (VC-923).
     handlers: (ready) => handlersFor(ready),
     transport: () => sessionRpc,
@@ -1529,34 +1558,6 @@ const appStartup = app.whenReady().then(async () => {
       notifications.reportActiveTarget(window.id, args[0]);
     },
   );
-  let terminalQuit: (event: { preventDefault(): void }) => void = noQuitAction;
-  let unsavedQuit: (event: { preventDefault(): void }) => void = noQuitAction;
-  let abortRepack = noQuitAction;
-  /** Flag on, system shutdown (VC-577): what the two confirms would have torn down, unasked. */
-  let systemShutdownTeardown = noQuitAction;
-  /**
-   * The flag-on shutdown's draft flush (VC-577), joined into the accepted
-   * quit's host shutdown below so `app.exit` waits for it — bounded, so
-   * power-off is never stalled. Resolved unless a shutdown teardown ran.
-   */
-  let systemShutdownFlush: Promise<unknown> = Promise.resolve();
-  /** Menu-bar mode (VC-577). Built once the window factory and updater exist. */
-  let menuBarHost: MenuBarHost | null = null;
-  const prepareHostQuit = (event: { preventDefault(): void }) => {
-    // Flag off: the former listener order, including the two unconditional
-    // stops on a refused attempt. Only the quit trigger is registered. Flag
-    // on: the menu-bar branch decides after the confirms, and a host already
-    // stopping is never offered it.
-    prepareDesktopQuit(event, {
-      stopAutomations: runtimeAutomations.stop,
-      unsavedQuit,
-      terminalQuit,
-      abortRepack,
-      ...(menuBarHost !== null && !hostClosing && isExperimentEnabled("cloud")
-        ? { menuBar: menuBarHost, systemShutdownTeardown }
-        : {}),
-    });
-  };
   // The host adopts the runner: recovery, Automations, the Session RPC edge
   // over the handler map, then the tool door. The socket drains beside it.
   await hostCore.start(

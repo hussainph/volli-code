@@ -841,7 +841,7 @@ function callsToMember(name: string): AstNode[] {
 }
 
 describe("index.ts desktop host runtime wiring", () => {
-  it("builds the host core and its runner with desktop's quit stop policy", () => {
+  it("builds the host core with desktop's quit stop policy, and the runner over it", () => {
     const hostCoreCall = initializerOf("hostCore");
     expect(isCallTo(hostCoreCall, "createHostCore")).toBe(true);
     expect(evaluate(objectProperty(argument(hostCoreCall, 1), "stopPolicy"), {})).toBe(
@@ -849,10 +849,7 @@ describe("index.ts desktop host runtime wiring", () => {
     );
     const runnerCall = initializerOf("runner");
     expect(isCallTo(runnerCall, "createRunnerComposition")).toBe(true);
-    expect(evaluate(objectProperty(argument(runnerCall, 0), "stopPolicy"), {})).toBe(
-      "desktop-quit",
-    );
-    // The runner's store is the host index.ts built.
+    // The runner's drain follows the host's policy; its store is the host index.ts built.
     const hostCore = { kind: "host" };
     expect(evaluate(objectProperty(argument(runnerCall, 0), "store"), { hostCore })).toEqual({
       kind: "local",
@@ -860,10 +857,57 @@ describe("index.ts desktop host runtime wiring", () => {
     });
   });
 
+  it("hands the runner the late-bound Session RPC and desktop's own producer stops", () => {
+    const runnerInput = argument(initializerOf("runner"), 0);
+    const rpc = { kind: "session-rpc" };
+    const transport = evaluate<() => unknown>(objectProperty(runnerInput, "transport"), {
+      sessionRpc: rpc,
+    });
+    expect(transport()).toBe(rpc);
+    const scope: Record<string, unknown> = {
+      hostClosing: false,
+      ptyManagerRef: { stopParkSweep: vi.fn() },
+    };
+    evaluate<() => void>(objectProperty(runnerInput, "stopProducers"), scope)();
+    expect(scope["hostClosing"]).toBe(true);
+    expect(
+      (scope["ptyManagerRef"] as { stopParkSweep: ReturnType<typeof vi.fn> }).stopParkSweep,
+    ).toHaveBeenCalledOnce();
+  });
+
+  it("declares everything the accepted-quit hold reaches before the runner installs it", () => {
+    const runner = initializerOf("runner");
+    for (const name of [
+      "prepareHostQuit",
+      "systemShutdownFlush",
+      "menuBarHost",
+      "hostClosing",
+      "unsavedQuit",
+      "terminalQuit",
+      "abortRepack",
+      "systemShutdownTeardown",
+    ]) {
+      expect(initializerOf(name).start, name).toBeLessThan(runner.start);
+    }
+  });
+
   it("starts the host over the runner's owner, binding the Session RPC and the agent socket", async () => {
     const ready = initializerOf("readyRuntimeServices");
     expect(sourceOf(ready)).toBe("await runner.ready()");
     expect(isCallTo(initializerOf("agentSocket"), "createHostAgentSocket")).toBe(true);
+    const shutdown = Symbol("agentSocket.shutdown");
+    expect(evaluate(initializerOf("shutdownAgentSocket"), { agentSocket: { shutdown } })).toBe(
+      shutdown,
+    );
+    // The host adopts exactly the runner's owner.
+    const hostStart = exactlyOne(
+      nodesWhere(
+        (node) =>
+          node.type === "CallExpression" && sourceOf(child(node, "callee")) === "hostCore.start",
+      ),
+      "hostCore.start(...) call",
+    );
+    expect(sourceOf(argument(hostStart, 0)).startsWith("runner.owner(")).toBe(true);
     const ownerCall = exactlyOne(
       nodesWhere(
         (node) =>

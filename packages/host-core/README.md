@@ -183,13 +183,13 @@ One convention for what a module asks for and what it is (VC-632):
 
 - **One runner composition.** `session-runtime/runner`'s
   `createRunnerComposition` (VC-671) is the Session runtime a host assembles:
-  it takes the host as its product store (`local`, the host's SQLite; the
-  backend store joins the union with the cloud Session intake), the ports,
-  and only what the environment answers (venue, `binDir`, a person who answers
-  questions and secret cards, the browser, pre-execution and command
-  environment hooks, the shell feed, the stop policy and the quit hold). It
+  it takes the host as its product store (`local`, the host's SQLite), the
+  ports, and only what the environment answers (venue, `binDir`, a person who
+  answers questions and secret cards, the browser, pre-execution and command
+  environment hooks, the shell feed, extra producers and the quit hold). It
   returns the services doors read, `owner(edge)` for `host.start`, and
-  `ready()`. The staging below is private to it; desktop composes it today.
+  `ready()`, and drains by the host's own `stopPolicy`. The staging below is
+  private to it; desktop composes it.
 - **Staged constructors.** `session-runtime/assembly` builds the inert Pi
   attachment over the host's one engine, model access, MCP/Code Mode/Web Access
   owners, secret service and attachment identities. Browser and shell ports
