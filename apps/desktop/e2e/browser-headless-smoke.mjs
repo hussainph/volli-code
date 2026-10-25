@@ -44,6 +44,7 @@ import {
   makeScratch,
   seedDefaultModel,
   seedProjects,
+  sleep,
   tabStrip,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
@@ -187,6 +188,40 @@ async function ungroupByDrag(page, paneTab) {
     async () => (await page.locator('[data-slot="split-view-pane"][data-pane-id]').count()) === 1,
     { timeout: 6000 },
   );
+  await dragSettled(page);
+}
+
+/**
+ * Select the owning chat's top-strip tab, so its pane — and the Island above
+ * its composer, the only place a headless tab is reached from — is on screen.
+ */
+async function showOwningChat(page, sessionId) {
+  await chatStripTab(page, sessionId).click();
+  await waitUntil("the chat's Island", async () =>
+    (await tabsCluster(page).count()) === 1 ? true : null,
+  );
+}
+
+/**
+ * A drag's tail. dnd-kit's pointer sensor stops every `click` for 50ms after a
+ * drag ends (so the release is not also a click), and its ghost flies home
+ * over 150ms: a click the smoke sends sooner is eaten, which a hand never is.
+ */
+async function dragSettled(page) {
+  await waitUntil("the drag ghost to land", async () =>
+    (await page.getByTestId("tab-drag-ghost").count()) === 0 ? true : null,
+  );
+  await sleep(100);
+}
+
+/** Whether the focused pane's front tab is the agent's (Session-marked) browser. */
+function focusedPaneFrontsAgent(page) {
+  return page.evaluate(
+    () =>
+      document.querySelector(
+        '[data-slot="split-view-pane"][data-focused="true"] > [data-slot="tab-strip"] [data-testid="home-browser-tab"][aria-selected="true"] [data-browser-tab-mark="session"]',
+      ) !== null,
+  );
 }
 
 /** Exercise the real top-strip tab-edge grouping gesture; no store or layout injection. */
@@ -228,6 +263,7 @@ async function groupBrowsers(page, agentTab, personTab) {
   } finally {
     await page.mouse.up();
   }
+  await dragSettled(page);
 }
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-browser-headless-");
@@ -473,9 +509,11 @@ async function main() {
           (await attachedViews(app)).includes(agentUrl),
       ).catch(() => false);
       // Dragged from its pane's strip up to the top strip, it leaves the group;
-      // Show tab now SELECTS it full width and never pulls it back in.
+      // Show tab now SELECTS it full width and never pulls it back in. The
+      // Island lives above its chat's composer, so the chat's segment is what
+      // brings it back on screen to ask from.
       await ungroupByDrag(page, agentPaneTab(page));
-      await tabStrip(page, HOME_TAB_STRIP).getByRole("tab", { name: "Board", exact: true }).click();
+      await showOwningChat(page, sessionId);
       await showBeside(page, agentTabId, "Show tab");
       const selected = await waitUntil(
         "Show tab to bring the ordinary browser forward full width",
@@ -505,13 +543,16 @@ async function main() {
           ? attached
           : null;
       });
-      // Away to the board, then Show tab: a grouped tab shows its group.
-      await tabStrip(page, HOME_TAB_STRIP).getByRole("tab", { name: "Board", exact: true }).click();
+      // Focus back on the chat, then Show tab: a grouped tab shows its group,
+      // with the browser's pane in focus.
+      await showOwningChat(page, sessionId);
       await showBeside(page, agentTabId, "Show tab");
       const reusedGroupId = await waitUntil("Show tab to show the browser's group", async () =>
-        activeGroup(page)
-          .getAttribute("data-group-id")
-          .catch(() => null),
+        (await focusedPaneFrontsAgent(page))
+          ? activeGroup(page)
+              .getAttribute("data-group-id")
+              .catch(() => null)
+          : null,
       );
       const before = (await hostTabs(app)).find((tab) => tab.tabId === agentTabId);
       // Hide is no longer a miniature-preview control. Retain its compatibility
