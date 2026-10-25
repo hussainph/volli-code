@@ -71,7 +71,7 @@ export function canSeeProject(
   viewer: Viewer,
   project: { workspaceId: WorkspaceId },
   membership: MembershipFacts | null,
-): boolean {
+): membership is MembershipFacts {
   return isActiveMember(viewer, project.workspaceId, membership);
 }
 

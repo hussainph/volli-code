@@ -39,6 +39,7 @@ export type AuthErrorCode =
   | "unauthenticated"
   | "no_viewer"
   | "account_deleted"
+  | "identity_conflict"
   | "not_found"
   | "not_a_member"
   | "forbidden";
@@ -94,13 +95,13 @@ export const profileFromIdentity: ProfileFromIdentity = (identity) => {
     typeof identity.email === "string" && identity.email.trim() !== ""
       ? normalizeEmail(identity.email)
       : null;
-  const name = [identity.name, identity.nickname].find(
-    (value): value is string => typeof value === "string" && value.trim() !== "",
-  );
+  const displayName = [identity.name, identity.nickname, email?.split("@")[0]]
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .find((value) => value !== "");
   return {
     primaryEmail: email,
     emailVerified: email !== null && identity.emailVerified === true,
-    displayName: name?.trim() ?? email?.split("@")[0] ?? "Volli user",
+    displayName: displayName ?? "Volli user",
   };
 };
 
@@ -113,10 +114,16 @@ async function userOf(ctx: ReadCtx, identity: UserIdentity): Promise<Doc<"users"
     .withIndex("by_token", (q) => q.eq("tokenIdentifier", identity.tokenIdentifier))
     .unique();
   if (link === null) return null;
-  return ctx.db
+  const user = await ctx.db
     .query("users")
     .withIndex("by_uuid", (q) => q.eq("id", link.userId))
     .unique();
+  // A link to no user is corruption: minting a second user (and a second link
+  // for the same token) would make every later lookup ambiguous.
+  if (user === null) {
+    throw authError("identity_conflict", "This sign-in is linked to an account that is missing.");
+  }
+  return user;
 }
 
 function liveViewer(user: Doc<"users">): Viewer {
@@ -261,51 +268,76 @@ export async function requireManage(
   return access;
 }
 
-/** A live project the viewer can see (active member of its CURRENT Workspace). */
-export async function requireProject(
+type ProjectAccess =
+  | { kind: "ok"; project: Doc<"projects">; membership: MembershipFacts }
+  | { kind: "not_found" }
+  | { kind: "not_a_member" };
+
+async function projectAccess(
   ctx: ReadCtx,
-  projectId: ProjectId | string,
-): Promise<{ viewer: Viewer; project: Doc<"projects">; membership: MembershipFacts | null }> {
-  const viewer = await requireViewer(ctx);
+  viewer: Viewer,
+  projectId: string,
+): Promise<ProjectAccess> {
   const project = await ctx.db
     .query("projects")
     .withIndex("by_uuid", (q) => q.eq("id", projectId))
     .unique();
-  if (project === null || project.deletedAt !== null) {
-    throw authError("not_found", "That project does not exist.");
-  }
+  if (project === null || project.deletedAt !== null) return { kind: "not_found" };
+  // A deleted Workspace hides everything in it at once.
+  const workspace = await ctx.db
+    .query("workspaces")
+    .withIndex("by_uuid", (q) => q.eq("id", project.workspaceId))
+    .unique();
+  if (workspace === null || workspace.deletedAt !== null) return { kind: "not_found" };
   const membership = await findMembership(ctx, project.workspaceId, viewer.userId);
   if (!canSeeProject(viewer, { workspaceId: project.workspaceId as WorkspaceId }, membership)) {
-    throw authError("not_a_member", "You are not a member of this project's workspace.");
+    return { kind: "not_a_member" };
   }
-  return { viewer, project, membership };
+  return { kind: "ok", project, membership };
 }
 
-/** A live Session the viewer can see: owner, shared, or the Workspace shares everything. */
+/** A live project (in a live Workspace) the viewer can see: an active Member of its CURRENT Workspace. */
+export async function requireProject(
+  ctx: ReadCtx,
+  projectId: ProjectId | string,
+): Promise<{ viewer: Viewer; project: Doc<"projects">; membership: MembershipFacts }> {
+  const viewer = await requireViewer(ctx);
+  const access = await projectAccess(ctx, viewer, projectId);
+  if (access.kind === "not_found") throw authError("not_found", "That project does not exist.");
+  if (access.kind === "not_a_member") {
+    throw authError("not_a_member", "You are not a member of this project's workspace.");
+  }
+  return { viewer, project: access.project, membership: access.membership };
+}
+
+/**
+ * A live Session the viewer can see: owner, shared, or the Workspace shares
+ * everything. Whether a Session exists is part of what may be private, so
+ * every refusal after sign-in reads the same: `not_found`.
+ */
 export async function requireSessionVisible(
   ctx: ReadCtx,
   sessionId: SessionId | string,
 ): Promise<{ viewer: Viewer; session: Doc<"sessions">; project: Doc<"projects"> }> {
+  const absent = () => authError("not_found", "That session does not exist.");
+  const viewer = await requireViewer(ctx);
   const session = await ctx.db
     .query("sessions")
     .withIndex("by_uuid", (q) => q.eq("id", sessionId))
     .unique();
-  if (session === null || session.deletedAt !== null) {
-    throw authError("not_found", "That session does not exist.");
-  }
-  const { viewer, project, membership } = await requireProject(ctx, session.projectId);
-  const policy = await findPolicy(ctx, project.workspaceId);
+  if (session === null || session.deletedAt !== null) throw absent();
+  const access = await projectAccess(ctx, viewer, session.projectId);
+  if (access.kind !== "ok") throw absent();
+  const policy = await findPolicy(ctx, access.project.workspaceId);
   const visible = canSeeSession(
     viewer,
     { ownerUserId: session.ownerUserId as UserId, visibility: session.visibility },
-    { workspaceId: project.workspaceId as WorkspaceId },
-    membership,
+    { workspaceId: access.project.workspaceId as WorkspaceId },
+    access.membership,
     policy,
   );
-  // A private Session is reported as absent rather than forbidden: its
-  // existence is part of what is private.
-  if (!visible) throw authError("not_found", "That session does not exist.");
-  return { viewer, session, project };
+  if (!visible) throw absent();
+  return { viewer, session, project: access.project };
 }
 
 /** A Session the viewer may act on (0.3: its owner only). */

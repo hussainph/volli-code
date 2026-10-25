@@ -119,9 +119,9 @@ export default defineSchema({
   userPrefs: defineTable({
     userId: uuid,
     defaultRunnerId: nullable(uuid),
-    notification: v.optional(json),
-    modelPickerView: v.optional(json),
-    railOrder: v.optional(json),
+    notification: nullable(json),
+    modelPickerView: nullable(json),
+    railOrder: nullable(json),
   }).index("by_user", ["userId"]),
 
   // ── Workspaces and Members ─────────────────────────────────────────────────
@@ -282,8 +282,8 @@ export default defineSchema({
     commitEmail: nullable(v.string()),
     coAuthor: nullable(v.boolean()),
     railPosition: v.string(),
-    themeCanvas: v.optional(json),
-    themeAppearance: v.optional(v.string()),
+    themeCanvas: nullable(json),
+    themeAppearance: nullable(v.string()),
   })
     .index("by_user_project", ["userId", "projectId"])
     .index("by_project", ["projectId"]),
@@ -341,7 +341,7 @@ export default defineSchema({
     color: nullable(v.string()),
     mergedIntoId: nullable(uuid),
     mergedAt: nullable(time),
-    mergedBy: v.optional(actor),
+    mergedBy: nullable(actor),
     createdAt: time,
     updatedAt: time,
   })
@@ -452,10 +452,10 @@ export default defineSchema({
     version: v.string(),
     platform: v.object({
       os: v.string(),
-      distro: v.optional(v.string()),
-      kernel: v.optional(v.string()),
+      distro: nullable(v.string()),
+      kernel: nullable(v.string()),
       arch: v.string(),
-      glibc: v.optional(v.string()),
+      glibc: nullable(v.string()),
     }),
     // Versioned capability report (git, docker, terminals, browser, maxConcurrentSessions, …).
     capabilities: json,
@@ -467,7 +467,7 @@ export default defineSchema({
       channel: v.string(),
       pinnedVersion: nullable(v.string()),
     }),
-    update: v.optional(json),
+    update: nullable(json),
     revokedAt: nullable(time),
     createdAt: time,
   })
@@ -576,7 +576,7 @@ export default defineSchema({
     projectRepoId: uuid,
     kind: literals(["worktree", "main_checkout", "clone", "sandbox"]),
     state: literals(WORKING_COPY_STATES),
-    failure: v.optional(json),
+    failure: nullable(json),
     branch: nullable(v.string()),
     baseBranch: nullable(v.string()),
     headSha: nullable(v.string()),
@@ -634,18 +634,18 @@ export default defineSchema({
     status: literals(["open", "archived"]),
     turnActive: v.boolean(),
     lastTurnOutcome: nullable(v.string()),
-    signal: v.optional(
+    signal: nullable(
       v.object({
         signal: literals(["done", "blocked"]),
         reason: nullable(v.string()),
         at: time,
       }),
     ),
-    stopped: v.optional(v.object({ at: time, reason: nullable(v.string()) })),
+    stopped: nullable(v.object({ at: time, reason: nullable(v.string()) })),
     needsUser: v.boolean(),
     attentionCount: v.number(),
     placeRunnerId: uuid,
-    model: v.optional(
+    model: nullable(
       v.object({
         providerId: v.string(),
         modelId: v.string(),
@@ -691,7 +691,7 @@ export default defineSchema({
     eventId: v.string(),
     kind: v.string(),
     kindKnown: v.boolean(),
-    quarantine: v.optional(v.object({ code: v.string(), detail: v.string() })),
+    quarantine: nullable(v.object({ code: v.string(), detail: v.string() })),
     occurredAt: time,
     recordedAt: time,
     acceptedAt: time,
@@ -711,10 +711,10 @@ export default defineSchema({
     startedSequence: v.number(),
     endedSequence: nullable(v.number()),
     outcome: nullable(v.string()),
-    origin: v.optional(json),
+    origin: nullable(json),
     startedAt: time,
     endedAt: nullable(time),
-    usage: v.optional(json),
+    usage: nullable(json),
     segmentId: nullable(uuid),
   })
     .index("by_session_started", ["sessionId", "startedSequence"])
@@ -811,7 +811,7 @@ export default defineSchema({
     toolCallId: v.string(),
     createCommandId: v.string(),
     status: literals(["starting", "running", "answered", "failed", "stopped"]),
-    answerRef: v.optional(json),
+    answerRef: nullable(json),
     createdAt: time,
     settledAt: nullable(time),
   })
@@ -867,9 +867,9 @@ export default defineSchema({
     rank: v.number(),
     status: literals(JOB_STATUSES),
     availableAt: time,
-    lease: v.optional(v.object({ bootId: v.string(), expiresAt: time, attempt: v.number() })),
+    lease: nullable(v.object({ bootId: v.string(), expiresAt: time, attempt: v.number() })),
     // The engine's receipt, mirrored by the accept fold (the second stage).
-    receipt: v.optional(
+    receipt: nullable(
       v.object({
         status: literals(["accepted", "rejected", "completed", "unreconciled"]),
         code: nullable(v.string()),
@@ -877,7 +877,7 @@ export default defineSchema({
         at: time,
       }),
     ),
-    result: v.optional(json),
+    result: nullable(json),
     createdBy: actor,
     createdAt: time,
     completedAt: nullable(time),
@@ -913,7 +913,7 @@ export default defineSchema({
     detail: nullable(v.string()),
     raisedAt: time,
     clearedAt: nullable(time),
-    clearedReason: v.optional(literals(["resolved", "access_lost", "superseded", "deleted"])),
+    clearedReason: nullable(literals(["resolved", "access_lost", "superseded", "deleted"])),
     seenAt: nullable(time),
   })
     .index("by_uuid", ["id"])
@@ -933,10 +933,10 @@ export default defineSchema({
     kind: v.string(),
     name: v.string(),
     state: literals(["on", "off", "inherit"]),
-    definition: v.optional(json),
+    definition: nullable(json),
     bundleKey: nullable(v.string()),
     digest: nullable(v.string()),
-    required: v.optional(v.boolean()),
+    required: nullable(v.boolean()),
     revision: v.number(),
     updatedBy: actor,
     updatedAt: time,
@@ -950,10 +950,10 @@ export default defineSchema({
     name: v.string(),
     kind: literals(["env", "secret"]),
     plain: nullable(v.string()),
-    sealed: v.optional(sealed),
+    sealed: nullable(sealed),
     exposure: literals(["setup", "session"]),
     requestedBySessionId: nullable(uuid),
-    last4: v.optional(v.string()),
+    last4: nullable(v.string()),
     createdBy: actor,
     updatedAt: time,
     lastUsedAt: nullable(time),
@@ -970,7 +970,7 @@ export default defineSchema({
     label: v.string(),
     upstreamBaseUrl: v.string(),
     api: v.string(),
-    extraHeaders: v.optional(json),
+    extraHeaders: nullable(json),
     sealedKey: sealed,
     keyVersion: v.number(),
     delivery: literals(["relay", "direct"]),
@@ -1108,7 +1108,7 @@ export default defineSchema({
     cancelAtPeriodEnd: v.boolean(),
     canceledAt: nullable(time),
     pastDueSince: nullable(time),
-    latestInvoice: v.optional(json),
+    latestInvoice: nullable(json),
     stripeObjectUpdatedAt: time,
     syncedAt: time,
   })
@@ -1159,8 +1159,8 @@ export default defineSchema({
     projectId: uuid,
     name: v.string(),
     instructions: v.string(),
-    runtime: v.optional(json),
-    triggerSpec: v.optional(json),
+    runtime: nullable(json),
+    triggerSpec: nullable(json),
     createdBy: actor,
     createdAt: time,
     updatedAt: time,
@@ -1205,10 +1205,10 @@ export default defineSchema({
     sessionId: nullable(uuid),
     trigger: literals(["arrival", "schedule", "manual"]),
     status: literals(["queued", "started", "skipped", "failed"]),
-    skipReason: v.optional(json),
+    skipReason: nullable(json),
     missedCount: nullable(v.number()),
     dueAt: nullable(time),
-    model: v.optional(json),
+    model: nullable(json),
     attendance: nullable(v.string()),
     armedByUserId: nullable(uuid),
     runnerId: nullable(uuid),
@@ -1228,8 +1228,8 @@ export default defineSchema({
     requestedAt: time,
     purgeAfter: time,
     status: literals(["pending", "cancelled", "purging", "purged", "blocked"]),
-    blockedBy: v.optional(v.string()),
-    cursor: v.optional(json),
+    blockedBy: nullable(v.string()),
+    cursor: nullable(json),
   })
     .index("by_uuid", ["id"])
     .index("by_status_purge", ["status", "purgeAfter"])

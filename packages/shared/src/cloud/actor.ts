@@ -9,7 +9,7 @@
  *
  * - `person`: a person acting through a client.
  * - `agent`: an agent acting for the Session owner. `userId` IS the owner, so
- *   "Hussain · via agent" filters with Hussain's own work.
+ *   "Ana · via agent" filters with Ana's own work.
  * - `automation`: an Automation run, acting with its armer's credentials.
  * - `volli`: Volli's own machinery. `runnerId` is set when a runner did it on
  *   its own (a Working copy report, a trim it ran) and `onBehalfOf` names the
@@ -94,11 +94,17 @@ export interface LegacyActor {
 
 export type Actor = PersonActor | AgentActor | AutomationActor | VolliActor | LegacyActor;
 
-/** An actor arm written by a newer build. Renders as "Unknown"; never written. */
+/** An actor arm (or Volli reason) written by a newer build. Renders as "Unknown"; never written. */
 export interface UnknownActor {
   kind: "unknown";
-  /** The stored kind, when it was a string. */
-  storedKind: string | null;
+  /** The stored kind. */
+  storedKind: string;
+  /**
+   * The person the fact is attributed to, when the stored row names one in a
+   * field this build understands (`userId`, else `onBehalfOf`), so filtering
+   * by person keeps working across a newer arm.
+   */
+  userId: UserId | null;
 }
 
 /** Thrown for a malformed field inside a known actor arm: corruption, not evolution. */
@@ -157,6 +163,7 @@ export function readActor(value: unknown): Actor | UnknownActor {
   }
   const row = value as Record<string, unknown>;
   const kind = row["kind"];
+  if (typeof kind !== "string") throw new MalformedActorError("kind must be a string");
   switch (kind) {
     case "person": {
       const userId = requireUser(row, "userId");
@@ -199,7 +206,7 @@ export function readActor(value: unknown): Actor | UnknownActor {
       const runnerId = optionalId(row, "runnerId", "runner");
       // A reason this build does not know is a newer variant: read it as
       // Unknown rather than guess which of ours it is closest to.
-      if (!includes(VOLLI_REASONS, reason)) return { kind: "unknown", storedKind: "volli" };
+      if (!includes(VOLLI_REASONS, reason)) return unknownActor(row, kind);
       return {
         kind: "volli",
         reason,
@@ -219,8 +226,16 @@ export function readActor(value: unknown): Actor | UnknownActor {
       return { kind: "legacy", was, ...(sessionId === undefined ? {} : { sessionId }) };
     }
     default:
-      return { kind: "unknown", storedKind: typeof kind === "string" ? kind : null };
+      return unknownActor(row, kind);
   }
+}
+
+function unknownActor(row: Record<string, unknown>, storedKind: string): UnknownActor {
+  return {
+    kind: "unknown",
+    storedKind,
+    userId: readId("user", row["userId"]) ?? readId("user", row["onBehalfOf"]),
+  };
 }
 
 function parseAgentSession(row: Record<string, unknown>): SessionId {
@@ -242,8 +257,9 @@ export function actorUserId(actor: Actor | UnknownActor): UserId | null {
       return actor.userId;
     case "volli":
       return actor.onBehalfOf ?? null;
-    case "legacy":
     case "unknown":
+      return actor.userId;
+    case "legacy":
       return null;
   }
 }

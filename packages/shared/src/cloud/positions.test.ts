@@ -37,6 +37,8 @@ describe("positionBetween", () => {
   test("refuses neighbours out of order or malformed, with a typed error", () => {
     expect(() => positionBetween("a1", "a0")).toThrow(InvalidPositionError);
     expect(() => positionBetween("a1", "a1")).toThrow(/a1 >= a1/);
+    expect(() => positionBetween("a0", "a0!")).toThrow(InvalidPositionError);
+    expect(() => positionsBetween("a0 ", null, 2)).toThrow(InvalidPositionError);
     expect(() => positionBetween("!!", null)).toThrow(
       expect.objectContaining({ code: "invalid_position" }),
     );
@@ -64,6 +66,8 @@ describe("validation and order", () => {
     expect(isPositionKey("Zz")).toBe(true);
     expect(isPositionKey("a0V")).toBe(true);
     expect(isPositionKey("a00")).toBe(false); // trailing zero
+    // Outside the alphabet: the generator alone would accept these.
+    for (const key of ["a0!", "a0 ", "a0\n", "a!"]) expect(isPositionKey(key)).toBe(false);
     expect(isPositionKey("")).toBe(false);
     expect(isPositionKey(7)).toBe(false);
   });

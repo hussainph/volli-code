@@ -24,19 +24,25 @@ that writes one.
   does not re-run every time one changes.
 - **No machine paths.** Absolute paths stay in the runner's local SQLite. The
   schema test fails on any field named like a path.
-- **Closed vocabularies come from `@volli/shared/cloud`** (ticket statuses,
-  board event kinds, job kinds, the Actor's arms and reasons, member roles, …)
-  through `literals(...)`, so the schema and the shared types cannot drift.
-  Adding a value is an additive schema change made in the same commit;
-  removing one is not possible while a document still holds it. Open sets
-  (`billingTier`, `configEntries.kind`, `sessionEvents.kind`, `runnerEvents.kind`,
-  attention `kind`, Stripe statuses) stay `v.string()`.
+- **Closed vocabularies are literal unions built with `literals(...)`.** The
+  ones a runner or client also reads (ticket statuses and priorities, board
+  event kinds, job kinds and statuses, the Actor's arms and reasons, member
+  roles and statuses, Session visibility, Working copy states, link kinds) come
+  from `@volli/shared/cloud`, so the schema and the shared types cannot drift.
+  The rest are inline in `schema.ts` for now; move a list to the shared
+  package when something outside `convex/` needs to read it. Adding a value is
+  an additive schema change; removing one is not possible while a document
+  still holds it. Open sets (`billingTier`, `configEntries.kind`,
+  `sessionEvents.kind`, `runnerEvents.kind`, attention `kind`, Stripe statuses)
+  stay `v.string()`.
 - **`json` fields** (`v.any()`) are validated by a shared codec inside the
   writing mutation.
-- **Null, not undefined.** An absent value is `null` (`nullable(...)`). The
-  `v.optional` fields in this first version are slots for later features and
-  JSON bags; a field added to an existing table later is `v.optional`, because
-  older rows do not have it.
+- **Null, not undefined.** An absent value is `null` (`nullable(...)`),
+  including every field the design marks optional. Only the four slots for
+  later features are `v.optional` in this first version
+  (`workspaces.ssoOrganizationId`, `workspaces.overage`, `projects.cloudSize`,
+  `workspacePolicies.slots`). A field added to an existing table later is
+  `v.optional`, because older rows do not have it.
 - **The Actor** (`actor` in `lib/validators.ts`) mirrors `Actor` from
   `@volli/shared/cloud`; a type-level test holds them equal and a runtime test
   proves every arm is storable and an unknown arm is refused. Closed on write;
@@ -63,7 +69,8 @@ Each was a decision made while turning the design into code.
    Automation run trigger and status; deletion target kind and status; billing
    merchant mode; GitHub repository selection; MCP credential kind; local
    credential kind; environment `runsOn` and `requiresOs`; client kind; board
-   event kind; job kind; the Actor's `via`, `reason` and `was`.
+   event kind; job kind; Session `visibilityReason`; the Actor's `via`,
+   `reason` and `was`.
 4. Where the design gives a shape, the field is an object rather than `json`:
    `runners.platform`, `runners.autoUpdate`, `runnerPresence.load`,
    `runnerLinkRequests.host`, `workingCopies.firstRun`, `runnerJobs.receipt`,
@@ -85,10 +92,19 @@ Each was a decision made while turning the design into code.
    export and migration parts) accept one safe path segment
    (`[A-Za-z0-9][A-Za-z0-9._:-]{0,199}`, no `..`). Config bundle revisions are
    unpadded, as designed.
-8. A Session the caller may not see is reported `not_found`, not `forbidden`:
-   whether a private Session exists is part of what is private.
-9. `ensureViewer` creates the person only. Creating their first Workspace
-   belongs to the Workspaces work, which calls it.
+8. A Session the caller may not see is reported `not_found`, not `forbidden`
+   or `not_a_member`: whether a private Session exists is part of what is
+   private. A project or Session in a deleted Workspace is `not_found` too.
+9. Fields the design sketched as `v.optional` (for example `labels.mergedBy`,
+   `sessions.signal`, `runnerJobs.lease`, `secrets.sealed`,
+   `attentionItems.clearedReason`, `runners.platform.distro`) are `nullable`,
+   per the null-not-undefined rule above. Switching later would need a
+   migration; switching now costs nothing.
+10. Besides `ensureViewer`, `accounts.viewer` is a read-only query for the
+    signed-in person's own account (or `null` before the first
+    `ensureViewer`), so a client can tell "signed in, not set up" from "set up".
+11. `ensureViewer` creates the person only. Creating their first Workspace
+    belongs to the Workspaces work, which calls it.
 
 ## Auth hook
 

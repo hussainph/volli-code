@@ -34,6 +34,7 @@ const ALICE = {
 };
 const BOB = { subject: "user:bob", issuer: "https://issuer.test" };
 const CAROL = { subject: "user:carol", issuer: "https://issuer.test" };
+const OUTSIDER = { subject: "user:outsider", issuer: "https://issuer.test" };
 
 function setup() {
   return convexTest(schema, modules);
@@ -131,9 +132,12 @@ async function seedSession(
     status: "open",
     turnActive: false,
     lastTurnOutcome: null,
+    signal: null,
+    stopped: null,
     needsUser: false,
     attentionCount: 0,
     placeRunnerId: newId("runner"),
+    model: null,
     usageTotals: {},
     createdAt: 0,
     lastActivityAt: 0,
@@ -235,6 +239,18 @@ describe("accounts.ensureViewer", () => {
     );
   });
 
+  test("refuses, rather than duplicates, an identity linked to a missing user", async () => {
+    const t = setup();
+    await signIn(t, BOB);
+    await t.run(async (ctx) => {
+      await ctx.db.delete((await ctx.db.query("users").first())!._id);
+    });
+    await expect(t.withIdentity(BOB).mutation(api.accounts.ensureViewer, {})).rejects.toThrow(
+      code("identity_conflict"),
+    );
+    expect(await t.run((ctx) => ctx.db.query("authIdentities").collect())).toHaveLength(1);
+  });
+
   test("accepts a profile hook in place of the default claim mapping", async () => {
     const t = setup();
     const viewer = await t.withIdentity(BOB).mutation((ctx) =>
@@ -261,6 +277,7 @@ describe("profileFromIdentity", () => {
       "annie",
     );
     expect(profileFromIdentity({ ...base, email: "Ann.B@X.test" }).displayName).toBe("ann.b");
+    expect(profileFromIdentity({ ...base, email: "@x.test" }).displayName).toBe("Volli user");
   });
 
   test("works without an email, and never claims an absent email verified", () => {
@@ -372,6 +389,16 @@ describe("membership checks", () => {
       code("not_found"),
     );
 
+    // A deleted Workspace hides its projects at once.
+    const hidden = await t.run(async (ctx) => {
+      const gone = await seedWorkspace(ctx, { deletedAt: 1 });
+      await seedMember(ctx, gone, bob);
+      return seedProject(ctx, gone);
+    });
+    await expect(asBob.query((ctx) => requireProject(ctx, hidden))).rejects.toThrow(
+      code("not_found"),
+    );
+
     // Move the project to a Workspace Bob is not in: he loses access at once.
     await t.run(async (ctx) => {
       const row = (await ctx.db
@@ -422,6 +449,15 @@ describe("membership checks", () => {
     ).rejects.toThrow(code("not_found"));
     await expect(
       asBob.query((ctx) => requireSessionVisible(ctx, newId("session"))),
+    ).rejects.toThrow(code("not_found"));
+
+    // Nobody can tell a real Session from a missing one without access to it.
+    await expect(t.query((ctx) => requireSessionVisible(ctx, ids.sharedSession))).rejects.toThrow(
+      code("unauthenticated"),
+    );
+    await signIn(t, OUTSIDER);
+    await expect(
+      t.withIdentity(OUTSIDER).query((ctx) => requireSessionVisible(ctx, ids.sharedSession)),
     ).rejects.toThrow(code("not_found"));
 
     await t.run(async (ctx) => {

@@ -33,7 +33,17 @@ export class InvalidPositionError extends Error {
   }
 }
 
-function guarded<T>(generate: () => T): T {
+// The base-62 alphabet the keys are drawn from. The generator only checks a
+// key's head, length and trailing zero, so a neighbour holding any other
+// character would yield a key that sorts outside the gap: refuse it here.
+const BASE_62_KEY = /^[0-9A-Za-z]+$/;
+
+function guarded<T>(neighbours: (PositionKey | null)[], generate: () => T): T {
+  for (const key of neighbours) {
+    if (key !== null && !BASE_62_KEY.test(key)) {
+      throw new InvalidPositionError(`invalid order key: ${JSON.stringify(key)}`);
+    }
+  }
   try {
     return generate();
   } catch (error) {
@@ -49,7 +59,7 @@ export function positionBetween(
   after: PositionKey | null,
   before: PositionKey | null,
 ): PositionKey {
-  return guarded(() => generateKeyBetween(after, before));
+  return guarded([after, before], () => generateKeyBetween(after, before));
 }
 
 /** `count` ascending keys strictly between `after` and `before`, spaced evenly (for moving a group). */
@@ -61,12 +71,12 @@ export function positionsBetween(
   if (!Number.isSafeInteger(count) || count < 0) {
     throw new InvalidPositionError(`count must be a non-negative integer, got ${count}`);
   }
-  return guarded(() => generateNKeysBetween(after, before, count));
+  return guarded([after, before], () => generateNKeysBetween(after, before, count));
 }
 
 /** Whether `value` is a valid position key. */
 export function isPositionKey(value: unknown): value is PositionKey {
-  if (typeof value !== "string") return false;
+  if (typeof value !== "string" || !BASE_62_KEY.test(value)) return false;
   try {
     // The generator validates both neighbours before it computes anything.
     generateKeyBetween(value, null);
