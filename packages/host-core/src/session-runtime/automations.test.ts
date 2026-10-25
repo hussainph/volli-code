@@ -65,7 +65,7 @@ afterEach(async () => {
 const db = { name: "live" };
 const moduleInput = () => vi.mocked(createHostAutomations).mock.calls[0]![0];
 
-function fixture(options: { db?: boolean; piRuntime?: boolean } = {}) {
+function fixture(options: { db?: boolean; piRuntime?: boolean; cloud?: boolean } = {}) {
   const live = options.db ?? true;
   const service = { kind: "service" };
   const runner = { kind: "runner" };
@@ -104,6 +104,7 @@ function fixture(options: { db?: boolean; piRuntime?: boolean } = {}) {
     events,
     piRuntimeHost: (options.piRuntime ?? true) ? (pi as unknown as PiRuntimeHost) : null,
     homeDir: "/home",
+    cloudEnabled: () => options.cloud ?? false,
     log,
   });
   // Real issued/revocable proof, with a port-only view over the degraded owner.
@@ -235,13 +236,26 @@ describe("live runtime automations", () => {
     expect(loadPromptTemplates).toHaveBeenCalledWith({
       projectCommandsDir: "/repo/.volli/commands",
       globalCommandsDir: "/data/commands",
+      cloud: false,
     });
     expect(loadSkills).toHaveBeenCalledWith({
       projectSkillsDir: "/repo/.agents/skills",
       globalSkillsDir: "/home/.agents/skills",
+      cloud: false,
     });
     vi.mocked(getProjectById).mockReturnValueOnce(project).mockReturnValueOnce(undefined);
     await expect(f.ports().promptSupply("p1")).rejects.toThrow("Unknown project");
+  });
+
+  it("hands the cloud flag to both prompt supply reads", async () => {
+    const f = fixture({ cloud: true });
+    f.owner.start(f.ready());
+    vi.mocked(getProjectById).mockReturnValue(project);
+    vi.mocked(loadPromptTemplates).mockResolvedValue({ ok: true, templates: [] });
+    vi.mocked(loadSkills).mockResolvedValue({ ok: true, skills: [] });
+    await f.ports().promptSupply("p1");
+    expect(loadPromptTemplates).toHaveBeenCalledWith(expect.objectContaining({ cloud: true }));
+    expect(loadSkills).toHaveBeenCalledWith(expect.objectContaining({ cloud: true }));
   });
 
   it("refuses prompt supply when the project or either disk read cannot be used", async () => {

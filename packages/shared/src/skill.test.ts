@@ -93,25 +93,38 @@ describe("mergeSkills", () => {
       root: "/home/.agents/skills/shared",
     });
 
-    expect(mergeSkills({ project: [project], global: [global] })).toEqual([project]);
+    expect(mergeSkills({ project: [project], global: [global], cloud: false })).toEqual([project]);
+  });
+
+  it("lets the personal skill win a shared slug with the cloud flag on (Q57)", () => {
+    const project = skill({ name: "shared", description: "vendored" });
+    const global = skill({
+      name: "shared",
+      description: "personal",
+      root: "/home/.agents/skills/shared",
+    });
+
+    expect(mergeSkills({ project: [project], global: [global], cloud: true })).toEqual([global]);
   });
 
   it("keeps both tiers when their slugs differ, name-sorted", () => {
     const project = skill({ name: "vendored" });
     const global = skill({ name: "personal", root: "/home/.agents/skills/personal" });
 
-    expect(mergeSkills({ project: [project], global: [global] })).toEqual([global, project]);
+    for (const cloud of [false, true]) {
+      expect(mergeSkills({ project: [project], global: [global], cloud })).toEqual([
+        global,
+        project,
+      ]);
+    }
   });
 
   it("uses one locale-independent order for valid mixed-case names", () => {
     const mixed = ["i", "J", "I", "j"].map((name) => skill({ name }));
 
-    expect(mergeSkills({ project: mixed, global: [] }).map((candidate) => candidate.name)).toEqual([
-      "I",
-      "J",
-      "i",
-      "j",
-    ]);
+    expect(
+      mergeSkills({ project: mixed, global: [], cloud: false }).map((candidate) => candidate.name),
+    ).toEqual(["I", "J", "i", "j"]);
   });
 });
 

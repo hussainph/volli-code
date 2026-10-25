@@ -35,10 +35,23 @@ import {
 import {
   payloadSecretSpans,
   pemSecretSpans,
+  resolveConfigEntries,
+  type ConfigPlan,
   type SecretMetadata,
   type SecretScope,
 } from "@volli/shared";
 export type { SecretMetadata, SecretScope } from "@volli/shared";
+
+/**
+ * Nearest scope wins: session > project > always, by name. These are the
+ * store's own local scopes, resolved through the one config resolver; they
+ * become config levels (personal-for-project > personal > project >
+ * workspace) when secrets move to the backend (P4).
+ */
+const SECRET_SCOPE_PLAN: ConfigPlan<"union", SecretScope> = {
+  merge: "union",
+  order: ["session", "project", "always"],
+};
 
 export interface SecretInput {
   name: string;
@@ -352,19 +365,22 @@ export class SecretStore {
     sessionId: string,
     projectId: string,
   ): Map<string, SecretRecord> {
-    const selected = new Map<string, SecretRecord>();
-    for (const scope of ["always", "project", "session"] as const) {
-      for (const item of [...persistent, ...this.#sessions]) {
-        if (
-          item.scope === scope &&
-          (scope !== "project" || item.projectId === projectId) &&
-          (scope !== "session" || item.sessionId === sessionId) &&
-          (scope !== "session" || item.projectId === undefined || item.projectId === projectId)
-        )
-          selected.set(item.name, item);
-      }
-    }
-    return selected;
+    const records = [...persistent, ...this.#sessions];
+    const selected = resolveConfigEntries(
+      SECRET_SCOPE_PLAN,
+      {
+        always: records.filter((item) => item.scope === "always"),
+        project: records.filter((item) => item.scope === "project" && item.projectId === projectId),
+        session: records.filter(
+          (item) =>
+            item.scope === "session" &&
+            item.sessionId === sessionId &&
+            (item.projectId === undefined || item.projectId === projectId),
+        ),
+      },
+      (item) => item.name,
+    );
+    return new Map(selected.map(({ key, value }) => [key, value]));
   }
 
   /**

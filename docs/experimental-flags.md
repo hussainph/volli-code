@@ -75,5 +75,16 @@ It installs the on state for each serial test and restores the prior reader
 on teardown, without editing the environment or database. Keep the existing
 flag-off suite alongside it; do not use concurrent tests with this global fixture.
 
+## What `cloud` changes today
+
+- **Skills and Commands precedence.** A personal Skill (`~/.agents/skills`) or
+  Command (`<userData>/commands`) wins a name the project's
+  `.agents/skills` or `.volli/commands` also defines — Volli Cloud's
+  personal > project > workspace order. Flag off, the project's copy wins, as
+  before. Every configuration surface declares its levels, merge and order in
+  one resolver, `packages/shared/src/config-resolution.ts`; these two are the
+  only surfaces whose order the flag moves so far. The flag is read at each load, so
+  a change applies to the next picker read or Session start.
+
 Settings → Experimental exposes the registry-backed flags. With `cloud` off,
 no cloud service or cloud-only UI is enabled.

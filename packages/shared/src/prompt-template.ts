@@ -25,6 +25,7 @@
  */
 import type { PromptResource } from "./agent-runtime";
 import { isComposerVerbName } from "./composer-verb";
+import { configPlan, resolveConfigEntries } from "./config-resolution";
 import { resolveSlashNamespace, slashTargets } from "./slash-namespace";
 import { isSlashNameCharacter } from "./slash-name";
 import { skillPromptResource, type SkillReference } from "./skill";
@@ -177,25 +178,31 @@ export function promptTemplateDescription(input: {
 }
 
 /**
- * The two tiers merged into the one list the picker shows: the project's
+ * The two tiers merged into the one list the picker shows, by the
+ * `promptTemplates` surface's precedence ({@link configPlan}): the project's
  * `.volli/commands/` wins a name the global `<userData>/commands/` also
- * defines.
+ * defines — unless the `cloud` flag is on, where the personal template wins
+ * (Volli Cloud's personal > project order, Q57).
  *
- * Precedence is by name, not by file: a project template named `review`
- * replaces the global `review` outright rather than joining it, because two
- * rows spelled `/review` are two rows the user cannot tell apart. Sorted by
- * name so the list does not reorder itself when a tier loads.
+ * Precedence is by name, not by file: one template named `review` replaces
+ * the other `review` outright rather than joining it, because two rows
+ * spelled `/review` are two rows the user cannot tell apart. Sorted by name so
+ * the list does not reorder itself when a tier loads.
  */
 export function mergePromptTemplates(input: {
   project: readonly PromptTemplate[];
   global: readonly PromptTemplate[];
+  cloud: boolean;
 }): readonly PromptTemplate[] {
-  const byName = new Map<string, PromptTemplate>();
-  for (const template of input.global)
-    byName.set(template.name, { ...template, source: "personal" });
-  for (const template of input.project)
-    byName.set(template.name, { ...template, source: "project" });
-  return [...byName.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+  const merged: PromptTemplate[] = [];
+  for (const { value, level } of resolveConfigEntries(
+    configPlan("promptTemplates", input.cloud),
+    { repo: input.project, personal: input.global },
+    (template) => template.name,
+  )) {
+    merged.push({ ...value, source: level === "repo" ? "project" : "personal" });
+  }
+  return merged.toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
 /** A `/name args` invocation split into the parts expansion needs. */

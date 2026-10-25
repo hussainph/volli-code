@@ -25,8 +25,10 @@
  */
 
 import {
+  configPlan,
   generateVeilTokens,
   resolveAppearance,
+  resolveConfigValue,
   THEME_TOKEN_NAMES,
   THEME_VEIL_TOKEN_NAMES,
 } from "@volli/shared";
@@ -182,7 +184,10 @@ function overridden<T>(value: T): ResolvedThemeSurface<T> {
  * the `Canvas` reference itself.
  */
 function pick<T>(override: T | null, global: T): ResolvedThemeSurface<T> {
-  return override === null ? inherited(global) : overridden(override);
+  // The `theme` surface's precedence (project over the global choice); the
+  // global choice is the floor, so "no override" is the inherited answer.
+  const set = resolveConfigValue<T>(configPlan("theme"), { project: override });
+  return set === null ? inherited(global) : overridden(set.value);
 }
 
 /**

@@ -145,6 +145,7 @@ function makeWebContents(id = 1) {
 function setupDbAndHandlers(
   projectPath: string = makeGitRepoDir(),
   externalApps?: ExternalAppGateway,
+  cloud = false,
 ): {
   ctx: TestDb;
   projectId: string;
@@ -170,6 +171,7 @@ function setupDbAndHandlers(
     {
       globalCommandsDir,
       globalSkillsDir,
+      cloudEnabled: () => cloud,
       externalApps,
     },
     createTestFileServices(),
@@ -1428,6 +1430,36 @@ describe("registerFileIpcHandlers", () => {
     expect(result.templates?.find((entry) => entry.name === "review")?.content).toBe("Review $1.");
   });
 
+  it("lets the personal tier win a shared template and skill name with the cloud flag on", async () => {
+    const setup = setupDbAndHandlers(undefined, undefined, true);
+    ctx = setup.ctx;
+    mkdirSync(join(setup.projectPath, ".volli", "commands"), { recursive: true });
+    writeFileSync(join(setup.projectPath, ".volli", "commands", "review.md"), "Project\n", "utf8");
+    mkdirSync(setup.globalCommandsDir, { recursive: true });
+    writeFileSync(join(setup.globalCommandsDir, "review.md"), "Personal\n", "utf8");
+    mkdirSync(join(setup.projectPath, ".agents", "skills", "pdf"), { recursive: true });
+    writeFileSync(
+      join(setup.projectPath, ".agents", "skills", "pdf", "SKILL.md"),
+      "---\ndescription: Project PDFs\n---\n# PDF\n",
+      "utf8",
+    );
+    mkdirSync(join(setup.globalSkillsDir, "pdf"), { recursive: true });
+    writeFileSync(
+      join(setup.globalSkillsDir, "pdf", "SKILL.md"),
+      "---\ndescription: Personal PDFs\n---\n# PDF\n",
+      "utf8",
+    );
+
+    const result = await invoke<{
+      ok: boolean;
+      templates?: { name: string; content: string }[];
+      skills?: { name: string; description: string }[];
+    }>("volli:prompt-templates", {}, { projectId: setup.projectId });
+
+    expect(result.templates?.map((entry) => entry.content.trim())).toEqual(["Personal"]);
+    expect(result.skills?.map((entry) => entry.description)).toEqual(["Personal PDFs"]);
+  });
+
   it("answers prompt-templates with BOTH skill tiers beside the templates", async () => {
     const setup = setupDbAndHandlers();
     ctx = setup.ctx;
@@ -1520,7 +1552,11 @@ describe("registerFileIpcHandlers", () => {
     handlers.clear();
     registerFileIpcHandlers(
       { ok: false, error: "disk full" },
-      { globalCommandsDir: "/nowhere", globalSkillsDir: "/nowhere/skills" },
+      {
+        globalCommandsDir: "/nowhere",
+        globalSkillsDir: "/nowhere/skills",
+        cloudEnabled: () => false,
+      },
       createTestFileServices(),
     );
     const result = await invoke<{ ok: boolean; error?: string }>(

@@ -151,6 +151,7 @@ async function fixture() {
     host,
     assembly,
     homeDir: "/home",
+    cloudEnabled: () => false,
     venue: { id: "remote", kind: "remote" },
     decisions: null,
     delegation,
@@ -483,6 +484,7 @@ describe("lifted Session facade and recovered agent staging", () => {
         sessionToolSurface: null,
       },
       homeDir: "/home",
+      cloudEnabled: () => false,
       venue: { id: "local", kind: "local" },
       decisions: null,
       delegation: null,
@@ -532,6 +534,7 @@ async function alternate(
     host: f.host,
     assembly: f.assembly,
     homeDir: "/home",
+    cloudEnabled: () => false,
     venue: { id: "remote", kind: "remote" },
     decisions: null,
     delegation: f.delegation,
@@ -566,6 +569,19 @@ describe("facade captured ports and capability degradations", () => {
     expect(await skills.index("p", [])).toBeNull();
     vi.mocked(getProjectById).mockReturnValue({ path: "/repo", skillModes: { a: "off" } } as never);
     expect(await skills.index("p", [])).toBeNull();
+  });
+  it("reads the cloud flag at every skills load", async () => {
+    const f = await fixture();
+    let cloud = false;
+    const { ready } = await alternate(f, { cloudEnabled: () => cloud });
+    const skills = recoveredRuntimeSessionServices(ready).sessionSkills!;
+    vi.mocked(getProjectById).mockReturnValue({ path: "/repo" } as never);
+    vi.mocked(loadSkills).mockResolvedValue({ ok: true, skills: [SKILL] });
+    await skills.index("p", []);
+    expect(vi.mocked(loadSkills).mock.lastCall?.[0]).toMatchObject({ cloud: false });
+    cloud = true;
+    await skills.resolve("p", ["a"]);
+    expect(vi.mocked(loadSkills).mock.lastCall?.[0]).toMatchObject({ cloud: true });
   });
   it("covers ledger birth absence, current anchors, automatic metadata and default ladders", async () => {
     const f = await fixture();
