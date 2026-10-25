@@ -68,16 +68,30 @@ function newChat(container: HTMLElement): HTMLButtonElement {
 }
 
 describe("NewSessionControl host read-only", () => {
-  it("disables creation in a cloud launch and never creates a local Session", async () => {
+  it("offers cloud chat but refuses unconnected starts and keeps terminal creation unavailable", async () => {
     adoptLaunch({ store: "cloud", userId: "u", backendUrl: "https://example.convex.cloud" });
     world = hostWorld({ cloud: true });
-    const container = await world.render(control("local"));
-    expect(newChat(container).disabled).toBe(true);
-    expect(container.textContent).toBeTruthy();
-    expect(container.querySelector('[aria-label="Not available yet in cloud"]')).not.toBeNull();
+    const onNewChat = vi.fn();
+    const container = await world.render(control("local", onNewChat));
+    expect(newChat(container).disabled).toBe(false);
+    expect(container.querySelector('[aria-label="Not available yet in cloud"]')).toBeNull();
+    newChat(container).click();
+    expect(onNewChat).toHaveBeenCalledOnce();
+    // The control follows the cloud link. The semantic start also checks the
+    // actual client at the press; this fixture has none, so it opens no draft
+    // and never falls back to a local durable Session or terminal.
+    const durableCreate = vi.spyOn(useChatSessionsStore.getState(), "createChatSession");
     await startProjectChat("local");
     expect(await createTerminalSession(projectScope("local"))).toBeNull();
+    expect(useChatDraftsStore.getState().drafts).toEqual({});
+    expect(durableCreate).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith("Volli Cloud is not connected", {
+      id: "cloud-session-not-connected",
+    });
+    expect(toast).toHaveBeenCalledWith("Not available yet in cloud", {
+      id: "cloud-session-read-only",
+    });
   });
   it("disables and marks the wrapper offline, then restores it when the host opens", async () => {
     world = hostWorld({ hetzner: { link: OFFLINE } });
