@@ -19,9 +19,9 @@
  * port, no shared path, nothing to collide.
  *
  * Usage:
- *   node apps/desktop/scripts/run-smokes.mjs                  # every gating probe
+ *   node apps/desktop/scripts/run-smokes.mjs                  # every runnable probe (core + rest)
  *   node apps/desktop/scripts/run-smokes.mjs --tier core      # core e2e (boot is an alias)
- *   node apps/desktop/scripts/run-smokes.mjs --tier rest      # extended gating journeys
+ *   node apps/desktop/scripts/run-smokes.mjs --tier rest      # extended journeys (ci-extended.yml)
  *   node apps/desktop/scripts/run-smokes.mjs --tier quarantine # nightly observations
  *   node apps/desktop/scripts/run-smokes.mjs --shard 1/3      # one shard of a matrix
  *   node apps/desktop/scripts/run-smokes.mjs --jobs 4         # concurrency (default 4)
@@ -43,7 +43,7 @@ const REPO_ROOT = resolve(E2E_DIR, "..", "..", "..");
 /**
  * Probes this lane will not run, each with the reason it cannot.
  *
- * Anything NOT listed here, credential-gated or in SMOKE_QUARANTINE gates by
+ * Anything NOT listed here, credential-gated or in SMOKE_QUARANTINE runs by
  * default. This legacy deny-list is distinct from the measured nightly lane.
  * Adding a name is deliberate, not a way to hide an inconvenient red.
  */
@@ -174,7 +174,8 @@ const DENY = new Map([
 /**
  * Clearly named core e2e: gates every desktop PR AND runs after each main merge.
  * Boot/board, session/composer, terminal/worktree, CLI round-trip, DB recovery
- * and theming. Extended journeys stay gating in the rest shards.
+ * and theming. Extended journeys run as the rest tier in ci-extended.yml
+ * (every main merge, nightly, on dispatch; required for release).
  * `boot` remains a CLI alias for `core`, not a smaller hidden selection.
  */
 export const CORE_E2E = new Set([

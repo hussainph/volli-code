@@ -507,7 +507,10 @@ until its remaining desktop dependencies move.
   previous build, from its own shipped sources, against a profile this build
   migrated to head (`src/db/n1-compatibility.test.ts`, driven by
   `scripts/n1/`): the newest `vX.Y.Z` release, the newest `vX.Y.Z-canary.N`
-  canary (what a canary tester drops back to) and the PR's base. N-1 must
+  canary (what a canary tester drops back to) and the PR's base — plus the
+  fixed `v0.2.1` / `v0.2.2-canary.1` promises. A PR runs the base lane alone
+  unless it touches `src/db/` or the N-1 harness, which run every lane; main
+  pushes and the nightly run always run every lane. N-1 must
   open the profile, save and clear a credential, create and move a ticket,
   create a Session and make a bundle, and this build must read and back up
   what it left; or, when the floor is above N-1's head, N-1 must refuse with

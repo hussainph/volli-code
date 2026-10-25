@@ -5,10 +5,10 @@ New `*-smoke.mjs` files join automatically unless explicitly excluded for
 credentials, a runner limitation or measured quarantine. Filename count is not
 coverage; retain unique assertions and reload/isolation boundaries.
 
-## CI gate
+## CI lanes
 
-Core e2e gates every desktop-relevant PR and runs after main merges. `--tier boot`
-is a compatibility alias for `--tier core`.
+Core e2e gates every desktop-relevant PR (`ci.yml`, `Smoke (core e2e)`) and runs
+after main merges. `--tier boot` is a compatibility alias for `--tier core`.
 
 | Journey | Core probes (`-smoke.mjs` omitted) |
 |---|---|
@@ -19,8 +19,11 @@ is a compatibility alias for `--tier core`.
 | Degraded database, restore and relaunch | database-recovery |
 | Tokens, appearance, inheritance and persistence | canvas-theming |
 
-Other non-quarantined probes gate desktop PRs in the rest shards. Core and rest
-run alongside each other. The runner's `SERIAL` set runs one probe at a time
+Other non-quarantined probes are the rest tier: `ci-extended.yml` runs it as one
+macOS job (`Smoke (rest tier)`) after every main merge, nightly, and on demand
+for any branch (`gh workflow run ci-extended.yml --ref <branch>`). It does not
+gate PRs, but the release guard requires it green on the released commit.
+Dispatch it before merging a PR that changes a journey's area. The runner's `SERIAL` set runs one probe at a time
 after its lane's concurrent work drains. Do not quarantine a sole core journey
 based on historical flakes or weaken graceful-exit assertions.
 

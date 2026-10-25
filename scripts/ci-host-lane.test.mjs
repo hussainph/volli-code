@@ -11,6 +11,8 @@ import { parse } from "yaml";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workflow = parse(readFileSync(join(root, ".github/workflows/ci.yml"), "utf8"));
 const jobs = workflow.jobs;
+const extended = parse(readFileSync(join(root, ".github/workflows/ci-extended.yml"), "utf8"));
+const n1All = '["release","latest-canary","base","v0.2.1","v0.2.2-canary.1"]';
 const gate = jobs.gate.steps.find((step) => step.id === "require-lanes");
 const filter = jobs.changes.steps.find((step) => step.id === "filter");
 const required = [
@@ -22,15 +24,13 @@ const required = [
   "convex",
   "n1-compat",
 ];
-const conditional = ["host-container", "smoke-boot", "smoke-rest", "smoke-cloud"];
+const conditional = ["host-container", "smoke-boot"];
 
-function results(event = "pull_request", desktop = "true", host = "true", cloud = "true") {
+function results(desktop = "true", host = "true", n1 = '["base"]') {
   return {
-    EVENT: event,
     DESKTOP: desktop,
     HOST_CONTAINER_REQUIRED: host,
-    CLOUD_SMOKE_REQUIRED: cloud,
-    SMOKE_CLOUD: cloud === "true" ? "success" : "skipped",
+    N1_LANES: n1,
     SCOPE: "success",
     CHECK: "success",
     TEST_DESKTOP: "success",
@@ -40,7 +40,6 @@ function results(event = "pull_request", desktop = "true", host = "true", cloud 
     N1_COMPAT: "success",
     HOST_CONTAINER: host === "true" ? "success" : "skipped",
     SMOKE_BOOT: desktop === "true" ? "success" : "skipped",
-    SMOKE_REST: desktop === "true" && event === "pull_request" ? "success" : "skipped",
   };
 }
 
@@ -72,31 +71,36 @@ test("gate names every job and always runs, even on failure/cancellation", () =>
   for (const job of jobs.gate.needs) resultVariable(job);
   assert.equal(jobs["host-container"].if, "needs.changes.outputs.host-container == 'true'");
   assert.equal(jobs["smoke-boot"].if, "needs.changes.outputs.desktop == 'true'");
-  assert.equal(jobs["smoke-cloud"].if, "needs.changes.outputs.cloud-smoke == 'true'");
-  assert.equal(
-    jobs["smoke-rest"].if,
-    "needs.changes.outputs.desktop == 'true' && github.event_name == 'pull_request'",
-  );
+  assert.equal(jobs["n1-compat"].needs, "changes");
+  assert.equal(jobs["n1-compat"].if, undefined);
+});
+
+test("a PR runs exactly one macOS job; the extended lanes left ci.yml", () => {
+  const macos = Object.entries(jobs)
+    .filter(([, job]) => String(job["runs-on"]).startsWith("macos"))
+    .map(([name]) => name);
+  assert.deepEqual(macos, ["smoke-boot"]);
+  assert.equal(jobs["smoke-rest"], undefined);
+  assert.equal(jobs["smoke-cloud"], undefined);
+  assert.equal(workflow.concurrency["cancel-in-progress"], true);
 });
 
 test("gate accepts only success or the precise conditional skip", () => {
-  for (const event of ["pull_request", "push", "workflow_dispatch", "schedule"]) {
-    for (const desktop of ["true", "false"]) {
-      for (const host of ["true", "false"]) {
-        for (const cloud of ["true", "false"]) {
-          const env = results(event, desktop, host, cloud);
-          const green = runGate(env);
-          assert.equal(green.status, 0, green.stdout + green.stderr);
-          for (const job of jobs.gate.needs) {
-            const variable = resultVariable(job);
-            for (const state of ["success", "failure", "cancelled", "skipped", "", "unknown"]) {
-              const outcome = runGate({ ...env, [variable]: state });
-              assert.equal(
-                outcome.status === 0,
-                state === env[variable],
-                `${event}/${desktop}/${host}/${cloud}: ${job}=${state}\n${outcome.stdout}${outcome.stderr}`,
-              );
-            }
+  for (const desktop of ["true", "false"]) {
+    for (const host of ["true", "false"]) {
+      for (const n1 of ['["base"]', n1All]) {
+        const env = results(desktop, host, n1);
+        const green = runGate(env);
+        assert.equal(green.status, 0, green.stdout + green.stderr);
+        for (const job of jobs.gate.needs) {
+          const variable = resultVariable(job);
+          for (const state of ["success", "failure", "cancelled", "skipped", "", "unknown"]) {
+            const outcome = runGate({ ...env, [variable]: state });
+            assert.equal(
+              outcome.status === 0,
+              state === env[variable],
+              `${desktop}/${host}/${n1}: ${job}=${state}\n${outcome.stdout}${outcome.stderr}`,
+            );
           }
         }
       }
@@ -105,61 +109,74 @@ test("gate accepts only success or the precise conditional skip", () => {
 });
 
 test("empty or malformed Scope outputs cannot authorize skips", () => {
-  for (const variable of ["DESKTOP", "HOST_CONTAINER_REQUIRED", "CLOUD_SMOKE_REQUIRED"]) {
+  for (const variable of ["DESKTOP", "HOST_CONTAINER_REQUIRED"]) {
     for (const flag of ["", "unknown", "FALSE", "0"]) {
-      assert.notEqual(
-        runGate({ ...results("pull_request", "false", "false"), [variable]: flag }).status,
-        0,
-      );
+      assert.notEqual(runGate({ ...results("false", "false"), [variable]: flag }).status, 0);
     }
+  }
+  for (const lanes of ["", "[]", '["release"]', "base", "unknown"]) {
+    assert.notEqual(runGate({ ...results("false", "false"), N1_LANES: lanes }).status, 0, lanes);
   }
 });
 
-test("actual path classifier selects host/container inputs and fails safe", () => {
+test("actual path classifier selects lanes and fails safe", () => {
   // Stub just git diff; all classification and output code comes from ci.yml.
   mkdirSync(join(root, ".tmp"), { recursive: true });
   const temporary = mkdtempSync(join(root, ".tmp/ci-host-test-"));
+  // A long diff whose one app-affecting file is last: the classifier must read
+  // all of it, not stop (or SIGPIPE) at the first inert match.
+  const longDiff = [
+    ...Array.from({ length: 4000 }, (_, i) => `docs/generated/page-${i}.md`),
+    "apps/desktop/src/main/index.ts",
+  ].join("\n");
   try {
+    // [changed, desktop (core e2e), host container, N-1 lanes on a PR]
     const cases = [
-      ["docs/guide.md", "false", "false", "false"],
-      ["apps/website/src/index.ts", "false", "false", "false"],
-      ["apps/desktop/src/main/index.ts", "true", "false", "false"],
-      ["packages/host-core/src/index.ts", "true", "true", "true"],
-      ["packages/host-protocol/src/index.ts", "true", "true", "true"],
-      ["packages/host-install/src/artifact.ts", "true", "true", "true"],
-      ["packages/host-future/src/index.ts", "true", "true", "true"],
-      ["packages/session-rpc/src/index.ts", "true", "true", "true"],
-      ["apps/hostd/src/index.ts", "true", "true", "true"],
-      ["apps/desktop/src/main/remote-hosts.ts", "true", "false", "true"],
-      ["apps/desktop/src/main/remote-hosts.test.ts", "true", "false", "true"],
-      ["apps/desktop/src/main/host-sign-ins/nested/link.ts", "true", "false", "true"],
-      ["apps/desktop/src/renderer/src/components/hosts/AddHost.tsx", "true", "false", "true"],
-      ["apps/desktop/src/renderer/src/stores/remote-hosts-store.ts", "true", "false", "true"],
-      ["apps/desktop/src/renderer/src/stores/host-store.ts", "true", "false", "true"],
-      ["apps/desktop/src/renderer/src/stores/session-store.ts", "true", "false", "false"],
-      ["apps/desktop/src/renderer/src/lib/board-protocol.ts", "true", "false", "true"],
-      ["apps/desktop/src/renderer/src/lib/board-protocol.test.ts", "true", "false", "false"],
-      ["apps/desktop/e2e/volli-drive/remote-acceptance-smoke.mjs", "true", "false", "true"],
-      ["apps/desktop/e2e/volli-drive/lib/core.mjs", "true", "false", "true"],
-      ["apps/desktop/e2e/lib/smoke-kit.mjs", "true", "false", "true"],
-      ["apps/desktop/src/main/harness/containment.ts", "true", "false", "true"],
-      ["apps/desktop/package.json", "true", "false", "true"],
-      ["packages/session-engine/src/index.ts", "true", "true", "false"],
-      ["packages/shared/src/index.ts\ndocs/DESIGN.md", "true", "true", "false"],
-      ["docs/DESIGN.md\npackages/session-rpc/src/index.ts", "true", "true", "true"],
-      [".devcontainer/host/Dockerfile", "true", "true", "false"],
-      [".devcontainer/host/devcontainer.json", "true", "true", "false"],
-      [".github/workflows/ci.yml", "true", "true", "true"],
-      ["scripts/ci-host-lane.test.mjs", "true", "true", "true"],
-      ["scripts/check-host-electron-imports.mjs", "true", "true", "false"],
-      [".nvmrc", "true", "true", "true"],
-      ["package.json", "true", "true", "true"],
-      ["pnpm-lock.yaml", "true", "true", "true"],
-      ["pnpm-workspace.yaml", "true", "true", "true"],
-      ["", "true", "true", "true"],
+      ["docs/guide.md", "false", "false", "base"],
+      ["apps/website/src/index.ts", "false", "false", "base"],
+      ["apps/desktop/src/main/index.ts", "true", "false", "base"],
+      ["packages/host-core/src/index.ts", "true", "true", "base"],
+      ["packages/host-protocol/src/index.ts", "true", "true", "base"],
+      ["packages/host-install/src/artifact.ts", "true", "true", "base"],
+      ["packages/host-future/src/index.ts", "true", "true", "base"],
+      ["packages/session-rpc/src/index.ts", "true", "true", "base"],
+      ["apps/hostd/src/index.ts", "true", "true", "base"],
+      ["apps/desktop/src/main/remote-hosts.ts", "true", "false", "base"],
+      ["apps/desktop/e2e/lib/smoke-kit.mjs", "true", "false", "base"],
+      ["apps/desktop/package.json", "true", "false", "base"],
+      ["packages/session-engine/src/index.ts", "true", "true", "base"],
+      // convex/ and packages/shared sources: unit suites own them on a PR.
+      ["convex/functions/accounts.ts", "false", "false", "base"],
+      ["convex/functions/accounts.ts\ndocs/DESIGN.md", "false", "false", "base"],
+      ["packages/shared/src/index.ts", "false", "true", "base"],
+      ["packages/shared/src/index.ts\ndocs/DESIGN.md", "false", "true", "base"],
+      ["packages/shared/src/index.ts\nconvex/functions/accounts.ts", "false", "true", "base"],
+      ["packages/shared/src/index.ts\napps/desktop/src/main/index.ts", "true", "true", "base"],
+      // ...but never a manifest: a dependency change always runs core e2e.
+      ["packages/shared/package.json", "true", "true", "base"],
+      ["convex/package.json", "true", "false", "base"],
+      ["docs/DESIGN.md\npackages/session-rpc/src/index.ts", "true", "true", "base"],
+      [longDiff, "true", "false", "base"],
+      // Migration and N-1 harness inputs run every N-1 lane on the PR.
+      ["packages/host-core/src/db/migrations.ts", "true", "true", "all"],
+      ["packages/host-core/src/db/migrations.lock.json", "true", "true", "all"],
+      ["packages/host-core/scripts/n1/prepare.mjs", "true", "true", "all"],
+      ["packages/host-core/src/web/test-support/n1-child.ts", "true", "true", "all"],
+      ["packages/host-core/src/web/server.ts", "true", "true", "base"],
+      [".devcontainer/host/Dockerfile", "true", "true", "base"],
+      [".devcontainer/host/devcontainer.json", "true", "true", "base"],
+      [".github/workflows/ci.yml", "true", "true", "all"],
+      [".github/workflows/ci-extended.yml", "true", "false", "base"],
+      ["scripts/ci-host-lane.test.mjs", "true", "true", "all"],
+      ["scripts/check-host-electron-imports.mjs", "true", "true", "base"],
+      [".nvmrc", "true", "true", "base"],
+      ["package.json", "true", "true", "base"],
+      ["pnpm-lock.yaml", "true", "true", "base"],
+      ["pnpm-workspace.yaml", "true", "true", "base"],
+      ["", "true", "true", "all"],
     ];
     for (const event of ["pull_request", "push", "workflow_dispatch", "schedule"]) {
-      for (const [changed, desktop, host, cloud] of cases) {
+      for (const [changed, desktop, host, n1] of cases) {
         const output = join(temporary, "output");
         const run = spawnSync(
           "bash",
@@ -178,10 +195,12 @@ test("actual path classifier selects host/container inputs and fails safe", () =
           },
         );
         assert.equal(run.status, 0, run.stdout + run.stderr);
+        const pr = event === "pull_request";
+        const lanes = !pr || n1 === "all" ? n1All : '["base"]';
         assert.equal(
           readFileSync(output, "utf8"),
-          `desktop=${event === "pull_request" ? desktop : "true"}\nhost-container=${event === "pull_request" ? host : "true"}\ncloud-smoke=${event === "pull_request" ? cloud : "true"}\n`,
-          `${event}: ${changed}`,
+          `desktop=${pr ? desktop : "true"}\nhost-container=${pr ? host : "true"}\nn1-lanes=${lanes}\n`,
+          `${event}: ${changed.slice(0, 200)}`,
         );
         rmSync(output);
       }
@@ -191,11 +210,56 @@ test("actual path classifier selects host/container inputs and fails safe", () =
   }
 });
 
-test("cloud acceptance is nightly, macOS-only and separate from flag-off core e2e", () => {
+test("extended lanes run after merge, nightly and on demand — never as a PR gate", () => {
   assert.deepEqual(workflow.on.schedule, [{ cron: "30 7 * * *" }]);
-  const job = jobs["smoke-cloud"];
+  assert.deepEqual(extended.on.push, { branches: ["main"] });
+  assert.equal(extended.on.schedule.length, 1);
+  assert.ok("workflow_dispatch" in extended.on);
+  // PRs run it only to prove an edit to the lane's own definition.
+  assert.deepEqual(extended.on.pull_request, {
+    paths: [
+      ".github/workflows/ci-extended.yml",
+      "apps/desktop/scripts/run-smokes.mjs",
+      "apps/desktop/scripts/smoke-quiet-check.mjs",
+    ],
+  });
+  // A main run is never cancelled by the next merge; a PR's newer push may.
+  assert.equal(
+    extended.concurrency["cancel-in-progress"],
+    "${{ github.event_name == 'pull_request' }}",
+  );
+  // The summary waits on every lane and accepts only success.
+  const summary = extended.jobs.summary;
+  assert.equal(summary.if, "always()");
+  assert.deepEqual(
+    summary.needs.toSorted(),
+    Object.keys(extended.jobs)
+      .filter((job) => job !== "summary")
+      .toSorted(),
+  );
+  const report = summary.steps.find((step) => step.id === "report");
+  for (const job of summary.needs) {
+    const variable = Object.entries(report.env).find(
+      ([, value]) => value === `\${{ needs.${job}.result }}`,
+    )?.[0];
+    assert.ok(variable, `${job} is not reported`);
+    const green = Object.fromEntries(Object.keys(report.env).map((name) => [name, "success"]));
+    for (const state of ["success", "failure", "cancelled", "skipped", ""]) {
+      const outcome = spawnSync("bash", ["-c", report.run], {
+        cwd: root,
+        env: { ...process.env, ...green, [variable]: state, GITHUB_STEP_SUMMARY: "" },
+        encoding: "utf8",
+      });
+      assert.equal(outcome.status === 0, state === "success", `${job}=${state}`);
+    }
+  }
+});
+
+test("cloud acceptance is macOS-only and separate from flag-off core e2e", () => {
+  const job = extended.jobs["smoke-cloud"];
   assert.equal(job["runs-on"], "macos-15");
-  assert.equal(job.needs, "changes");
+  assert.equal(job.needs, undefined);
+  assert.equal(job.if, undefined);
   assert.equal(
     job.steps.find((step) => step.name === "Checkout").with.ref,
     "${{ github.event.pull_request.head.sha || github.sha }}",
@@ -210,9 +274,10 @@ test("cloud acceptance is nightly, macOS-only and separate from flag-off core e2
   assert.equal(upload.with["retention-days"], 30);
   // Cloud env must not leak through a workflow/global env to existing smokes.
   assert.equal(workflow.env?.VOLLI_EXPERIMENTAL, undefined);
-  for (const name of ["smoke-boot", "smoke-rest"]) {
-    assert.equal(jobs[name].env?.VOLLI_EXPERIMENTAL, undefined);
-    for (const step of jobs[name].steps) {
+  assert.equal(extended.env?.VOLLI_EXPERIMENTAL, undefined);
+  for (const lane of [jobs["smoke-boot"], extended.jobs["smoke-rest"]]) {
+    assert.equal(lane.env?.VOLLI_EXPERIMENTAL, undefined);
+    for (const step of lane.steps) {
       assert.equal(step.env?.VOLLI_EXPERIMENTAL, undefined);
       assert.doesNotMatch(step.run ?? "", /VOLLI_EXPERIMENTAL/);
     }
@@ -220,7 +285,7 @@ test("cloud acceptance is nightly, macOS-only and separate from flag-off core e2
 });
 
 test("cloud hostd is pinned and packaged before the Electron desktop install", () => {
-  const steps = jobs["smoke-cloud"].steps;
+  const steps = extended.jobs["smoke-cloud"].steps;
   const setup = steps.find((step) => step.name === "Setup Vite+");
   assert.equal(setup.with["node-version-file"], ".nvmrc");
   assert.equal(setup.with["run-install"], false);
@@ -246,7 +311,9 @@ test("cloud hostd is pinned and packaged before the Electron desktop install", (
 });
 
 test("cloud artifact export uses the desktop version and requires archive plus checksum", () => {
-  const packaging = jobs["smoke-cloud"].steps.find((step) => step.name.startsWith("Package hostd"));
+  const packaging = extended.jobs["smoke-cloud"].steps.find((step) =>
+    step.name.startsWith("Package hostd"),
+  );
   mkdirSync(join(root, ".tmp"), { recursive: true });
   const temporary = mkdtempSync(join(root, ".tmp/ci-cloud-artifact-"));
   // Stub only the expensive packager and version read; execute the real export shell.
@@ -374,13 +441,16 @@ test("workspace globs discover a newly added host package and require its covera
 
 test("N-1 compatibility runs rolling and fixed downgrade promises from full history", () => {
   const job = jobs["n1-compat"];
-  assert.deepEqual(job.strategy.matrix.lane, [
+  // The lanes come from Scope: every one off-PR, `base` alone on most PRs.
+  assert.equal(job.strategy.matrix.lane, "${{ fromJSON(needs.changes.outputs.n1-lanes) }}");
+  assert.deepEqual(JSON.parse(n1All), [
     "release",
     "latest-canary",
     "base",
     "v0.2.1",
     "v0.2.2-canary.1",
   ]);
+  assert.ok(filter.run.includes(`n1_all='${n1All}'`));
   const prepare = job.steps.find((step) => step.id === "prepare").run;
   assert.match(prepare, /"\$LANE" == "release" \]\]; then\s+args=\(--release\)/);
   assert.match(prepare, /"\$LANE" == "latest-canary" \]\]; then\s+args=\(--canary\)/);
