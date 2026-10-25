@@ -24,7 +24,7 @@ import {
 } from "@volli/shared/cloud";
 
 import { api, internal } from "../functions/_generated/api";
-import type { Doc } from "../functions/_generated/dataModel";
+import type { Doc } from "../functions/_generated/dataModel.js";
 import { connectBackend } from "../fixture/testing";
 import {
   CANARY,
