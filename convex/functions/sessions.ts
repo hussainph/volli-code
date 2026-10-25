@@ -36,8 +36,8 @@ import {
 import {
   canSeeSession,
   cloudSessionView,
+  SESSION_COMMAND_FORMAT,
   isUuid,
-  jobRank,
   type UserId,
   type WorkspaceId,
 } from "@volli/shared/cloud";
@@ -53,6 +53,7 @@ import {
   requireSessionVisible,
   requireViewer,
 } from "./lib/auth";
+import { enqueueJob } from "./lib/jobs";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
 import {
   acceptFacts,
@@ -160,7 +161,6 @@ export const transferClaim = internalMutation({
 
 // ── commands (client) ───────────────────────────────────────────────────────
 
-const COMMAND_JOB_FORMAT = "volli.session-command/1";
 /** An intent's JSON text; a message body travels as a transcript artifact, not inline. */
 const MAX_INTENT_BYTES = 64 * 1024;
 
@@ -194,44 +194,24 @@ export const command = mutation({
       .withIndex("by_session", (q) => q.eq("sessionId", session.id))
       .unique();
     if (intake === null) throw fail("not_found", "That session does not exist.");
-    const existing = await ctx.db
+    // The inbox's own rules: idempotent by id (`id_taken` for another intent),
+    // routed to the claimed runner, which must be the owner's.
+    await enqueueJob(ctx, {
+      id: args.commandId,
+      runnerId: intake.claim.runnerId,
+      kind: "session.command",
+      projectId: session.projectId,
+      sessionId: session.id,
+      ticketId: session.ticketId,
+      commandId: args.commandId,
+      payload: { format: SESSION_COMMAND_FORMAT, intent: intentJson },
+      createdBy: { kind: "person", userId: viewer.userId },
+      onBehalfOf: viewer.userId,
+    });
+    const job = (await ctx.db
       .query("runnerJobs")
       .withIndex("by_uuid", (q) => q.eq("id", args.commandId))
-      .unique();
-    let job: Doc<"runnerJobs">;
-    if (existing !== null) {
-      const same =
-        existing.kind === "session.command" &&
-        existing.sessionId === session.id &&
-        (existing.payload as { intent?: unknown }).intent === intentJson;
-      if (!same) throw fail("id_taken", "That command id was used for another command.");
-      job = existing;
-    } else {
-      const now = Date.now();
-      const docId = await ctx.db.insert("runnerJobs", {
-        id: args.commandId,
-        runnerId: intake.claim.runnerId,
-        kind: "session.command",
-        projectId: session.projectId,
-        sessionId: session.id,
-        ticketId: session.ticketId,
-        workingCopyId: null,
-        commandId: args.commandId,
-        payload: { format: COMMAND_JOB_FORMAT, intent: intentJson },
-        priority: "normal",
-        rank: jobRank("normal"),
-        status: "queued",
-        availableAt: now,
-        lease: null,
-        receipt: null,
-        result: null,
-        createdBy: { kind: "person", userId: viewer.userId },
-        createdAt: now,
-        completedAt: null,
-        expiresAt: null,
-      });
-      job = (await ctx.db.get(docId))!;
-    }
+      .unique())!;
     const runner = await ctx.db
       .query("runners")
       .withIndex("by_uuid", (q) => q.eq("id", job.runnerId))
