@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "volli-gateway",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["enable_request_signal"],
+  "workers_dev": false,
+  "observability": {
+    "enabled": true,
+    "logs": { "invocation_logs": false }
+  },
+  "kv_namespaces": [{ "binding": "REVOCATIONS" }],
+  "queues": {
+    "producers": [{ "binding": "USAGE_QUEUE", "queue": "volli-gateway-usage" }],
+    "consumers": [
+      {
+        "queue": "volli-gateway-usage",
+        "max_batch_size": 100,
+        "max_batch_timeout": 5,
+        "max_retries": 10,
+        "dead_letter_queue": "volli-gateway-usage-dlq"
+      }
+    ]
+  }
+}

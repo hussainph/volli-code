@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
- * Keep Electron out of workspace packages, the Linux host app and convex/.
+ * Keep Electron out of workspace packages, the Linux host app, convex/ and
+ * the model gateway Worker.
  *
- *   node scripts/check-host-electron-imports.mjs             # gate packages/*, apps/hostd and convex/
+ *   node scripts/check-host-electron-imports.mjs             # gate packages/*, apps/hostd, convex/ and apps/gateway
  *   node scripts/check-host-electron-imports.mjs --self-test # scanner + failing CLI fixture
  *   node scripts/check-host-electron-imports.mjs --report    # inventory main-process reachability
  *
@@ -124,9 +125,12 @@ function enumerateGuardFiles(repoRoot) {
     // The Convex backend (VC-882): its functions run on Convex and its test
     // fixture under plain Node, so neither may reach Electron. Required too.
     ...sourceFilesBelow(repoRoot, "convex"),
+    // The model gateway Worker (VC-572) runs on workerd. Required too.
+    ...sourceFilesBelow(repoRoot, "apps/gateway"),
   ];
   const unique = [...new Set(files)].toSorted();
-  if (unique.length === 0) fail("no source files found under packages/, apps/hostd or convex/");
+  if (unique.length === 0)
+    fail("no source files found under packages/, apps/hostd, convex/ or apps/gateway");
   return unique;
 }
 
@@ -885,6 +889,7 @@ function selfTest() {
     "apps/desktop/src/main/broadcast.ts",
     "apps/desktop/src/main/worktree-runtime.ts",
     "convex/functions/leak.ts",
+    "apps/gateway/src/leak.ts",
   ]) {
     if (!cliOutput.includes(expected)) failures.push(`fixture CLI output omitted ${expected}`);
   }

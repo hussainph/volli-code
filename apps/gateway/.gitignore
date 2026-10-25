@@ -1,0 +1,4 @@
+# Local `wrangler dev` state and the throwaway keys `pnpm dev:grant` writes.
+.wrangler/
+.dev.vars
+.dev-issuer.json
