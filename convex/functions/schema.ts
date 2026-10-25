@@ -33,6 +33,11 @@ import {
   JOB_STATUSES,
   MEMBER_ROLES,
   MEMBER_STATUSES,
+  RUNNER_INSTALL_MODES,
+  RUNNER_KINDS,
+  RUNNER_LINK_METHODS,
+  RUNNER_LOCAL_CREDENTIAL_KINDS,
+  RUNNER_STATUSES,
   SESSION_VISIBILITIES,
   SESSION_VISIBILITY_REASONS,
   TICKET_LINK_KINDS,
@@ -437,18 +442,9 @@ export default defineSchema({
   runners: defineTable({
     id: uuid,
     ownerUserId: uuid,
-    kind: literals(["mac", "linux", "cloud"]),
+    kind: literals(RUNNER_KINDS),
     name: v.string(),
-    status: literals([
-      "online",
-      "offline",
-      "draining",
-      "updating",
-      "degraded",
-      "upgrade_required",
-      "stopped",
-      "revoked",
-    ]),
+    status: literals(RUNNER_STATUSES),
     statusReason: nullable(v.string()),
     statusChangedAt: time,
     version: v.string(),
@@ -461,8 +457,8 @@ export default defineSchema({
     }),
     // Versioned capability report (git, docker, terminals, browser, maxConcurrentSessions, …).
     capabilities: json,
-    installMode: literals(["system", "user", "app", "cloud"]),
-    linkedVia: literals(["desktop", "install_token", "device_code", "provider"]),
+    installMode: literals(RUNNER_INSTALL_MODES),
+    linkedVia: literals(RUNNER_LINK_METHODS),
     linkedAt: time,
     autoUpdate: v.object({
       enabled: v.boolean(),
@@ -535,11 +531,19 @@ export default defineSchema({
     runnerId: nullable(uuid),
     expiresAt: time,
     createdAt: time,
+    // How the box was installed, so the runner row starts right (added with the link flow).
+    installMode: v.optional(literals(RUNNER_INSTALL_MODES)),
   })
     .index("by_uuid", ["id"])
     .index("by_code", ["userCodeHash", "status"])
     .index("by_poll_secret", ["pollSecretHash"])
     .index("by_expiry", ["expiresAt"]),
+  // Failed device-code entries per person in a fixed window, so a code cannot be guessed.
+  runnerLinkAttempts: defineTable({
+    userId: uuid,
+    windowStartedAt: time,
+    failures: v.number(),
+  }).index("by_user", ["userId"]),
   runnerEvents: defineTable({
     runnerId: uuid,
     // Open set: linked, token_reuse, revoked, ip_changed, update_*, rolled_back.
@@ -560,7 +564,7 @@ export default defineSchema({
   runnerLocalCredentials: defineTable({
     runnerId: uuid,
     providerId: v.string(),
-    kind: literals(["subscription", "api_key"]),
+    kind: literals(RUNNER_LOCAL_CREDENTIAL_KINDS),
     expiresAt: nullable(time),
   }).index("by_runner", ["runnerId"]),
   runnerPrefs: defineTable({

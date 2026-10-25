@@ -47,8 +47,10 @@ that writes one.
   `@volli/shared/cloud`; a type-level test holds them equal and a runtime test
   proves every arm is storable and an unknown arm is refused. Closed on write;
   clients read it with `readActor`, which turns an unknown arm into "Unknown".
-- **Every public function requires an identity.** Start with the helpers in
-  `lib/auth.ts`; the decisions are the pure predicates in
+- **Every public function requires an identity.** The exceptions are the
+  `/runner/*` HTTP routes a box calls before it has one; each proves itself
+  with a one-time secret instead. Start with the helpers in `lib/auth.ts`
+  (`lib/runnerAuth.ts` for a runner caller); the decisions are the pure predicates in
   `@volli/shared/cloud` (`canSeeProject`, `canSeeSession`, `canManage`, …).
 - **Session visibility is decided in one place.** A Session-creating write takes
   `visibility`, `visibilityReason` and `sharedAt` from `visibilityForNewSession`
@@ -85,7 +87,8 @@ Each was a decision made while turning the design into code.
 5. Extra indexes for lookups the design describes: `workspaceInvites.by_email`
    (matching invites at sign-in), `clientSessions.by_provider_session`,
    `memberProjectPrefs.by_project` (project purge),
-   `runnerCredentials.by_current_hash` / `by_previous_hash` (token exchange),
+   `runnerCredentials.by_current_hash` / `by_previous_hash` (unused: the
+   token exchange names its runner and reads `by_runner`),
    `runnerLinkRequests.by_poll_secret`, `runnerEvents.by_at` and
    `stripeEvents.by_received` (TTL sweeps), `billingAccounts.by_stripe_customer`
    and `subscriptions.by_stripe_subscription` (webhooks), and `by_uuid` on
@@ -186,3 +189,15 @@ Each was a decision made while turning the design into code.
     (`share_parent`); sharing its root carries down. `sessions.sharedAt` is
     when a Session became shared: its creation time when born shared, the
     flip's time otherwise.
+25. Runner vocabularies (kind, status, install mode, link method, local
+    credential kind) come from `@volli/shared/cloud` (`runners.ts`), which
+    the runner-side client reads too.
+26. `runnerLinkAttempts` (one row per person: a fixed window of failed
+    device-code entries) is added so a code cannot be guessed, and
+    `runnerLinkRequests.installMode` (optional, added with the link flow) so
+    a runner linked by a device code starts with the right install mode.
+27. A runner cut off for credential reuse is recorded as a `token_reuse`
+    runner event and shown in the owner's runner list
+    (`statusReason: credential_reuse`). It raises no Needs-you item yet:
+    `attentionItems.projectId` is required, and a runner belongs to no
+    project. The attention work decides how person-level items are stored.

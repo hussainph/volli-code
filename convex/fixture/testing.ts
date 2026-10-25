@@ -21,6 +21,9 @@ export function connectBackend() {
   const url = required("VOLLI_CONVEX_URL");
   const privateKeyPem = required("VOLLI_CONVEX_TEST_PRIVATE_KEY");
   return {
+    url,
+    /** The HTTP actions origin (`/runner/*`). */
+    siteUrl: required("VOLLI_CONVEX_SITE_URL"),
     /** An HTTP client, signed in as `subject` (through the test issuer) when given. */
     client(subject?: string, options?: MintOptions): ConvexHttpClient {
       const client = new ConvexHttpClient(url);

@@ -35,7 +35,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 
-import type { TestIssuer } from "./jwt.ts";
+import { createRunnerIssuerKeys, type TestIssuer } from "./jwt.ts";
 
 export const PACKAGE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -515,15 +515,21 @@ async function deployFunctions(
 }
 
 /**
- * Trust `issuer` on `backend`, push `functions/`, and return the environment
- * `fixture/testing.ts` reads. The JWKS variable is set before the push because
- * the auth config is evaluated at push time.
+ * Trust `issuer` on `backend`, give it a fresh runner-token signing key (so
+ * `/runner/token` works and its tokens are trusted), push `functions/`, and
+ * return the environment `fixture/testing.ts` reads. The JWKS variables are
+ * set before the push because the auth config is evaluated at push time.
  */
 export async function deployForTests(
   backend: Pick<RunningBackend, "url" | "siteUrl" | "adminKey" | "cliEnv">,
   issuer: TestIssuer,
 ): Promise<Record<string, string>> {
-  await setDeploymentEnv(backend, { VOLLI_TEST_JWKS: issuer.jwksDataUri });
+  const runnerIssuer = createRunnerIssuerKeys();
+  await setDeploymentEnv(backend, {
+    VOLLI_TEST_JWKS: issuer.jwksDataUri,
+    VOLLI_RUNNER_JWKS: runnerIssuer.jwksDataUri,
+    VOLLI_RUNNER_SIGNING_KEY: runnerIssuer.signingKey,
+  });
   await deployFunctions(backend);
   return {
     VOLLI_CONVEX_URL: backend.url,

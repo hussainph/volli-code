@@ -12,7 +12,10 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
   Convex `_id`s.
 - Every public function requires an identity. A local backend reflects any
   CORS origin, so an unauthenticated public function can be called by any page
-  that can reach it.
+  that can reach it. The `/runner/*` HTTP routes are the deliberate exception:
+  a box calls them before it has an identity, and each proves itself with a
+  one-time secret (install token, poll secret, refresh credential), takes JSON
+  only, and sends no CORS headers.
 - No Electron imports. `scripts/check-host-electron-imports.mjs` enforces this.
 
 ## Layout
@@ -36,11 +39,15 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 | `functions/lib/boardEffects.ts`                    | A board write's machine side effects (Done/archive trim, interrupts, armed arrivals, worktree materialization) as `runnerJobs` rows for the runner that holds the work.                                                                            |
 | `functions/activity.ts`                            | The activity feed: `project` and `workspace`, newest first, with our own page cursor (see **The activity feed**).                                                                                                                                  |
 | `functions/lib/activity.ts`                        | The feed reader: the k-way merge, the cursor, visibility, folding and the tickets and people a page names.                                                                                                                                         |
-| `functions/boardReceipts.ts`, `functions/crons.ts` | The scheduled sweeps (receipts hourly, packed transcript staging every 15 min).                                                                                                                                                                    |
+| `functions/boardReceipts.ts`, `functions/crons.ts` | The scheduled sweeps (receipts hourly, packed transcript staging every 15 min, the runner offline sweep every minute, runner link/audit expiry hourly).                                                                                            |
 | `functions/transcripts.ts`                         | Transcript bodies and Pi logs: `stageArtifacts`, `commitSegment`, `commitPiLogSegment`, `head` (where a runner resumes), the producer fence and `sweepPacked`.                                                                                     |
 | `functions/files.ts`                               | `presignPut`: a SigV4 URL bound to one key, length and SHA-256 (signed by `presignS3Request` in `@volli/shared/cloud`).                                                                                                                            |
 | `functions/lib/objectStore.ts`                     | The S3-compatible store the backend signs for (`VOLLI_S3_*` variables; unset refuses with `storage_unconfigured`).                                                                                                                                 |
 | `functions/lib/visibility.ts`                      | The visibility writes and filters: `visibilityForNewSession` (every Session-creating write), `shareSession`, `visibleBoardEvents` (every read of board events that may name a Session). The decisions are the predicates in `@volli/shared/cloud`. |
+| `functions/runners.ts`                             | Runners: linking (desktop, install token, device code), the rotated credential with reuse detection, heartbeat and capabilities, the offline sweep, the Settings list.                                                                             |
+| `functions/runnerHttp.ts`, `functions/http.ts`     | `/runner/link`, `/runner/link/start`, `/runner/link/poll`, `/runner/token` (HTTP actions; secrets are minted here, mutations see hashes) and the deployment's HTTP router.                                                                         |
+| `functions/lib/runnerAuth.ts`                      | `requireRunner`: the check every runner-called function starts with. A runner token is never a person.                                                                                                                                             |
+| `functions/lib/runnerSecrets.ts`                   | Minting runner secrets and signing runner tokens (ES256), for actions only.                                                                                                                                                                        |
 | `functions/_generated/`                            | Output of `convex codegen`, **committed**. CI regenerates it and fails on any drift. Never edit or format it by hand.                                                                                                                              |
 | `fixture/backend.json`                             | The pin: one backend release, the `convex` npm version that goes with it, and a sha256 for each platform's zip.                                                                                                                                    |
 | `fixture/backend.ts`                               | Downloads and verifies the binary, then starts a backend: free loopback ports, a fresh data dir, a random instance secret, beacon off. `stop()` kills it and deletes the dir.                                                                      |
@@ -152,6 +159,24 @@ VOLLI_ACCOUNT_PROVIDER=dev pnpm -C convex with-backend --deploy -- pnpm -C .. de
 `VOLLI_CONVEX_TEST_PRIVATE_KEY`; Settings → Account (with `cloud` on) then
 signs in through the browser and `accounts.ensureViewer` runs on the
 throwaway backend.
+
+### Runner tokens
+
+Runners do not sign in as people. A linked runner exchanges its refresh
+credential at `POST /runner/token` for a 15-minute ES256 JWT that this
+deployment signs itself (issuer `https://runners.volli.app`, audience
+`volli-runner`, subject `runner:<uuid>`), and `auth.config.ts` trusts it as
+a second `customJwt` provider. Every deployment that serves runners sets two
+variables:
+
+- `VOLLI_RUNNER_SIGNING_KEY`: the private P-256 key as a JWK, with its `kid`;
+- `VOLLI_RUNNER_JWKS`: the public JWKS as a `data:` URI. Set it before the
+  push; the auth config is evaluated then.
+
+To rotate, add the next public key to `VOLLI_RUNNER_JWKS`, push, then switch
+`VOLLI_RUNNER_SIGNING_KEY`. Without a signing key, `/runner/token` answers
+`issuer_unconfigured` and spends no credential. The fixture gives each run
+a fresh pair; `connectBackend().siteUrl` is where `/runner/*` lives.
 
 ### Bumping the pin
 

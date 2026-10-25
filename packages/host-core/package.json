@@ -17,6 +17,10 @@
       "types": "./src/entries/automations.ts",
       "import": "./src/entries/automations.ts"
     },
+    "./cloud-runner": {
+      "types": "./src/entries/cloud-runner.ts",
+      "import": "./src/entries/cloud-runner.ts"
+    },
     "./board": {
       "types": "./src/entries/board.ts",
       "import": "./src/entries/board.ts"
