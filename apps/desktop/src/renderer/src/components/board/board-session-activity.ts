@@ -20,7 +20,7 @@
  * would make the signal mean nothing.
  *
  * WAITING OUTRANKS WORKING, which is main's own precedence for a single chat
- * (`chatActivity` in `session-control/chat-attachment.ts`) applied to a ticket:
+ * (`sessionListingActivity` in `@volli/shared`) applied to a ticket:
  * an agent that has asked a question is still inside an open turn, and a card
  * that said "working" there would hide the one thing the user could act on. A
  * ticket with one Session blocked and another producing is a ticket that needs

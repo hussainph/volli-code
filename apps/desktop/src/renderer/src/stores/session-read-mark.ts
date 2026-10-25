@@ -30,6 +30,8 @@ import { errorMessage, type SessionReadState } from "@volli/shared";
 import { notAvailableOn } from "@renderer/components/hosts/use-remote-project";
 import { remoteHostOfSession } from "@renderer/lib/session-project";
 import { toastError } from "@renderer/lib/toast";
+import { guardSessionWrite } from "@renderer/lib/cloud-session-read-only";
+import { launchStore } from "@renderer/stores/launch";
 
 export interface SessionReadMarkPorts {
   /**
@@ -55,6 +57,12 @@ export async function markSessionRead(
 ): Promise<void> {
   // A remote Session's read receipt is its host's (VC-713), and this Mac's
   // `volli:session-read-set` writes only its own: say so, and mark nothing.
+  if (launchStore() === "cloud") {
+    // Opening a read-only cloud Session is a read, not an attempted command.
+    // An explicit unread request still explains why its receipt cannot change.
+    if (input.unread) guardSessionWrite(null);
+    return;
+  }
   const host = remoteHostOfSession(input.sessionId);
   if (host !== null) {
     toastError(`Couldn't mark the session: ${notAvailableOn(host)}`);

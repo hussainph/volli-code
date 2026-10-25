@@ -6,7 +6,13 @@
  * fact again lands on the same rows.
  */
 
-import type { SessionEvent, SessionEventPayload } from "@volli/shared";
+import {
+  EMPTY_SESSION_USAGE_SUMMARY,
+  sessionListingActivity,
+  sessionListingWaitingOn,
+  type SessionEvent,
+  type SessionEventPayload,
+} from "@volli/shared";
 import type { CloudSessionView } from "@volli/shared/cloud";
 
 import type { Doc } from "../_generated/dataModel.js";
@@ -285,6 +291,8 @@ interface UsageTotals {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   coverage: CloudSessionView["usage"]["costCoverage"];
+  /** Additive: older clients keep reading the coarse totals above. */
+  summary: CloudSessionView["usage"];
 }
 
 export const EMPTY_USAGE_TOTALS: UsageTotals = {
@@ -294,6 +302,7 @@ export const EMPTY_USAGE_TOTALS: UsageTotals = {
   cacheReadTokens: 0,
   cacheWriteTokens: 0,
   coverage: "unavailable",
+  summary: EMPTY_SESSION_USAGE_SUMMARY,
 };
 
 type ListingFields = Pick<
@@ -307,7 +316,20 @@ type ListingFields = Pick<
   | "needsUser"
   | "attentionCount"
   | "model"
+  | "listing"
 >;
+
+/** The listing rule's answer for a fold, as the row stores it (`sessions.listing`). */
+export function listingOf(view: CloudSessionView): NonNullable<Doc<"sessions">["listing"]> {
+  // On the ledger the executor binding is the fold's open attachment.
+  const live = view.liveAttachment !== null;
+  return {
+    activity: sessionListingActivity(view, live),
+    waitingOn: sessionListingWaitingOn(view),
+    live,
+    bornTicketless: view.bornTicketless,
+  };
+}
 
 /** The listing-visible fields of a fold, as the row stores them. */
 function listingFieldsOf(view: CloudSessionView): ListingFields {
@@ -333,6 +355,7 @@ function listingFieldsOf(view: CloudSessionView): ListingFields {
             // The model gateway adds backend connections; today every selection is local.
             connectionId: "local",
           },
+    listing: listingOf(view),
   };
 }
 
@@ -344,6 +367,7 @@ function usageTotalsOf(view: CloudSessionView): UsageTotals {
     cacheReadTokens: view.usage.cacheReadTokens,
     cacheWriteTokens: view.usage.cacheWriteTokens,
     coverage: view.usage.costCoverage,
+    summary: view.usage,
   };
 }
 

@@ -21,6 +21,8 @@ import type { RendererSessionInteraction } from "./session-event-codec";
  * glance at what a Session is doing, and the conversation is one press away.
  */
 export const SESSION_PEEK_ENTRIES = 6;
+/** Maximum prose per local or cloud hover excerpt. */
+export const PEEK_EXCERPT_CHARS = 2_000;
 
 /** A later glance may refresh a throttled/refused summary; never a background timer. */
 export const SESSION_PEEK_REFRESH_MS = 60_000;
@@ -42,8 +44,9 @@ export interface SessionPeekContent {
   readonly summary?: string | null;
   /** The open question, scrubbed; `null` when nothing is being asked. */
   readonly question: RendererSessionInteraction | null;
-  readonly turns: number;
-  readonly turnDepth: number;
+  /** Lifelong counts; null when a cloud read holds only a bounded tail. */
+  readonly turns: number | null;
+  readonly turnDepth: number | null;
   /** Tail messages whose artifact could not be read — counted, never faked. */
   readonly unreadable: number;
   readonly lastActivityAt: number;

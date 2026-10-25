@@ -8,7 +8,7 @@
  * - `settle` (runner): the message settled as a Session fact at `sequence`;
  *   its chunks go once the backend has accepted that fact.
  * - `since` (client): the cursor read a viewer folds with the transcript
- *   overlay fold.
+ *   overlay fold, and the streams of its cursors that have ended.
  * - `cleanupMessage`, `cleanupTurn`, `sweep` (internal): bounded deletes.
  *   The accept fold schedules the first two (`lib/streamChunks.ts`); a cron
  *   runs the sweep, which removes any row older than 15 minutes.
@@ -218,6 +218,19 @@ export interface StreamChunkStream {
 }
 
 /**
+ * A stream the reader holds a cursor for that has no rows left: it ended
+ * (settled, its turn ended, or swept), so whatever the reader drew of it is
+ * stale. `throughSequence` is the Session's accepted cursor when this was
+ * read: a settled message's rows are deleted only once its fact is accepted,
+ * so the fact that replaces the stream is at or below it, and a reader that
+ * removes the stream once its history reaches it never shows a gap.
+ */
+export interface StreamChunkRetired {
+  messageId: string;
+  throughSequence: number;
+}
+
+/**
  * The chunks a viewer has not folded yet, per open stream of a Session.
  *
  * The open streams are the ones among the Session's newest rows, plus the
@@ -229,15 +242,25 @@ export interface StreamChunkStream {
  * has no cursor for. Rows come in seq order; a reader that finds a gap
  * ignores the stream until its next baseline.
  *
+ * A cursor whose stream has no rows at all is answered in `retired`
+ * instead (`StreamChunkRetired`): the stream ended, and the reader removes
+ * what it drew of it. Streams it may never have seen end (its `reset` and
+ * `message.remove` chunks deleted before it read them) are why this exists.
+ *
  * Every read is bounded: a few newest rows, then for each stream one
- * baseline lookup and at most {@link SINCE_MAX_ROWS} rows.
+ * existence check (for a cursor), one baseline lookup and at most
+ * {@link SINCE_MAX_ROWS} rows, and the accepted cursor only when a stream
+ * retired.
  */
 export const since = query({
   args: {
     sessionId: v.string(),
     cursors: v.array(v.object({ messageId: v.string(), seq: v.number() })),
   },
-  handler: async (ctx, args): Promise<{ streams: StreamChunkStream[] }> => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ streams: StreamChunkStream[]; retired: StreamChunkRetired[] }> => {
     await requireSessionVisible(ctx, args.sessionId);
     if (args.cursors.length > SINCE_MAX_STREAMS) {
       throw streamError("invalid_chunk", `A read follows at most ${SINCE_MAX_STREAMS} streams.`);
@@ -253,8 +276,21 @@ export const since = query({
       ...new Set([...newest.map((row) => row.messageId), ...cursors.keys()]),
     ].slice(0, SINCE_MAX_STREAMS);
     const streams: StreamChunkStream[] = [];
+    const ended: string[] = [];
     for (const messageId of messageIds) {
       const cursor = cursors.get(messageId);
+      if (cursor !== undefined) {
+        const any = await ctx.db
+          .query("streamChunks")
+          .withIndex("by_session_message_seq", (q) =>
+            q.eq("sessionId", args.sessionId).eq("messageId", messageId),
+          )
+          .first();
+        if (any === null) {
+          ended.push(messageId);
+          continue;
+        }
+      }
       const latestBaseline = await ctx.db
         .query("streamChunks")
         .withIndex("by_session_message_baseline", (q) =>
@@ -285,6 +321,11 @@ export const since = query({
         })),
       });
     }
-    return { streams };
+    // Read only when a stream ended, so a reader's live query does not re-run on every accept.
+    const through = ended.length === 0 ? 0 : await acceptedThrough(ctx.db, args.sessionId);
+    return {
+      streams,
+      retired: ended.map((messageId) => ({ messageId, throughSequence: through })),
+    };
   },
 });

@@ -41,7 +41,9 @@ import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 
-import { readOnlyMark, useCanWrite } from "@renderer/components/hosts/use-hosts";
+import { readOnlyMark } from "@renderer/components/hosts/use-hosts";
+import { useCanWriteSession, CLOUD_SESSION_READ_ONLY } from "@renderer/lib/cloud-session-read-only";
+import { launchStore } from "@renderer/stores/launch";
 import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
@@ -205,8 +207,9 @@ export function NewSessionControl({
   onNewTerminal(): void;
 }) {
   const drawing = DRAWING[placement];
-  const canWrite = useCanWrite(projectId);
+  const canWrite = useCanWriteSession(projectId);
   const disabled = booting || !canWrite;
+  const cloudReason = launchStore() === "cloud" ? CLOUD_SESSION_READ_ONLY : undefined;
 
   // Whether the menu that is closing should keep its hands off the caret.
   //
@@ -253,6 +256,9 @@ export function NewSessionControl({
             too (and the halves cancel their own `disabled:opacity-50`, which
             would otherwise multiply into an unreadable 25%). */}
         <div
+          title={cloudReason}
+          role={cloudReason === undefined ? undefined : "group"}
+          aria-label={cloudReason}
           {...readOnlyMark(canWrite)}
           className={cn(
             // `transition-transform` already covers `scale` (v4 expands it to

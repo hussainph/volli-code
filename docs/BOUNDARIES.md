@@ -199,9 +199,13 @@ shared `decide…` rules over the client's own rows, never durable) and is
 refused, not queued, while the window cannot reach the backend. That client authenticates with a short-lived access
 token main hands it on demand (`account.accessToken`, a desktop-only entry),
 held in memory only and never logged; the refresh token never leaves main.
-The window's CSP lets it connect only to its own origin, plus the loopback a
-local backend runs on in a dev build; a deployment's exact origin joins that
-list when one exists.
+The window's CSP permits its own origin, the loopback a local backend runs
+on in a dev build, and the exact HTTPS transcript-store origin named at build
+time by `VOLLI_CLOUD_STORAGE_ORIGIN` (never a wildcard). A deployment's exact
+backend origin joins that list when one exists. Session listings, settled
+history and live chunks use the same client directly; transcript packs and
+spilled bodies use visibility-authorized signed GETs to that store. Viewer
+leases are held only while a Session's chat surface is visible.
 A launch's product store (this Mac's SQLite, or the backend) is chosen once
 by main before the window opens, and never changes in a live window.
 The last board a cloud launch saw live (projects, cards and labels; no

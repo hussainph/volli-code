@@ -14,6 +14,40 @@ function cspOf(html: string): string {
 }
 
 describe("the main window's connections (VC-889)", () => {
+  it("permits only the configured exact HTTPS transcript-store origin", () => {
+    const sources = rendererConnectSources({
+      serve: false,
+      env: { VOLLI_CLOUD_STORAGE_ORIGIN: "https://history.example.com/" },
+    });
+    expect(sources).toEqual(["https://history.example.com"]);
+    expect(cspOf(withConnectSources(page, sources))).toContain(
+      "connect-src 'self' https://history.example.com;",
+    );
+    expect(
+      rendererConnectSources({
+        serve: true,
+        env: { VOLLI_CLOUD_STORAGE_ORIGIN: "https://history.example.com" },
+      }),
+    ).toEqual([...LOOPBACK_CONNECT_SOURCES, "https://history.example.com"]);
+    expect(
+      rendererConnectSources({ serve: false, env: { VOLLI_CLOUD_STORAGE_ORIGIN: "" } }),
+    ).toEqual([]);
+    for (const value of [
+      "http://bucket.example.com",
+      "https://*.example.com",
+      "https://:pass@bucket.example.com",
+      "https://user@bucket.example.com",
+      "https://user:pass@bucket.example.com",
+      "https://bucket.example.com/path",
+      "https://bucket.example.com?key=value",
+      "https://bucket.example.com/#hash",
+      "not a URL",
+    ]) {
+      expect(() =>
+        rendererConnectSources({ serve: false, env: { VOLLI_CLOUD_STORAGE_ORIGIN: value } }),
+      ).toThrow();
+    }
+  });
   it("reach only its own origin in a build that asked for nothing", () => {
     expect(rendererConnectSources({ serve: false, env: {} })).toEqual([]);
     expect(withConnectSources(page, [])).toBe(page);

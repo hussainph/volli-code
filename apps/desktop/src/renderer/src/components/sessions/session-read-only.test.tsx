@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { LOCAL_LAUNCH } from "@volli/shared";
+import { adoptLaunch } from "@renderer/stores/launch";
 
 import { hostWorld, type HostWorld } from "@renderer/components/hosts/hosts.test-support";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
@@ -37,6 +39,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  adoptLaunch(LOCAL_LAUNCH);
   await world?.cleanup();
   world = null;
   useChatSessionsStore.setState(originalChat, true);
@@ -65,6 +68,17 @@ function newChat(container: HTMLElement): HTMLButtonElement {
 }
 
 describe("NewSessionControl host read-only", () => {
+  it("disables creation in a cloud launch and never creates a local Session", async () => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "https://example.convex.cloud" });
+    world = hostWorld({ cloud: true });
+    const container = await world.render(control("local"));
+    expect(newChat(container).disabled).toBe(true);
+    expect(container.textContent).toBeTruthy();
+    expect(container.querySelector('[aria-label="Not available yet in cloud"]')).not.toBeNull();
+    await startProjectChat("local");
+    expect(await createTerminalSession(projectScope("local"))).toBeNull();
+    expect(create).not.toHaveBeenCalled();
+  });
   it("disables and marks the wrapper offline, then restores it when the host opens", async () => {
     world = hostWorld({ hetzner: { link: OFFLINE } });
     const onNewChat = vi.fn();

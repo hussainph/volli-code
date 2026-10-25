@@ -11,7 +11,7 @@
  */
 import { errorMessage, type HarnessId, type ModelSelection, type Project } from "@volli/shared";
 
-import { guardWrite } from "@renderer/components/hosts/use-hosts";
+import { guardSessionWrite } from "@renderer/lib/cloud-session-read-only";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
@@ -182,7 +182,7 @@ async function bootSession(
   resume?: SessionResume,
 ): Promise<string | null> {
   // Terminals too: a new or resumed Session is a write to the project's host.
-  if (!guardWrite(scope.projectId)) return null;
+  if (!guardSessionWrite(scope.projectId)) return null;
   // A terminal runs on this Mac: a remote project's is not available yet (VC-711).
   if (refuseRemote(scope.projectId)) return null;
   return underOwnerGuard(scope, terminalStarting, async (project) => {
@@ -540,7 +540,7 @@ export async function bootChatSession(
 ): Promise<string | null> {
   // Every chat door — the strips, an empty pane, ⌘T, a kickoff — comes through
   // here. A project whose host cannot serve (VC-576) starts none, and says why.
-  if (!guardWrite(scope.projectId)) return null;
+  if (!guardSessionWrite(scope.projectId)) return null;
   // VC-713 owns create/attach/send on the box, including draft promotion.
   // Only this project's validated Workspace grant opens these chat doors:
   // HOST health, another project's welcome, and unknown old DTOs grant nothing.

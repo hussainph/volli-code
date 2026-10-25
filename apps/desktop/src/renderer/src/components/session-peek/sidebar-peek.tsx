@@ -47,6 +47,11 @@ import { SESSION_ACTIVITY_LABEL } from "@renderer/components/ui/session-activity
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useSessionOrderStore } from "@renderer/stores/session-order";
+import { launchStore } from "@renderer/stores/launch";
+import { guardSessionWrite } from "@renderer/lib/cloud-session-read-only";
+import { cloudSession } from "@renderer/lib/cloud-client";
+import { cloudChatTransport } from "@renderer/lib/cloud-session-transport";
+import { readCloudSessionPeek } from "@renderer/lib/cloud-session-peek";
 
 import { peekSessionId } from "./peek-subject";
 import type { SessionPeekPorts } from "./use-session-peek";
@@ -72,6 +77,12 @@ export interface SidebarPeekSurface {
 
 /** Independent of the surface: rebuilding its action ports must not invalidate peek reads. */
 const readContent: SessionPeekPorts["readContent"] = async (sessionId, refine = false) => {
+  if (launchStore() === "cloud") {
+    return readCloudSessionPeek(
+      sessionId,
+      cloudChatTransport(cloudSession()).rpc.session.snapshot.query,
+    );
+  }
   // A remote Session's transcript is its host's (VC-713); this Mac's peek
   // reads only its own ledger.
   const host = remoteHostOfSession(sessionId);
@@ -91,6 +102,7 @@ export function createSidebarPeekPorts(surface: SidebarPeekSurface): SessionPeek
     readContent,
 
     async answer(sessionId, interactionId, submission: InteractionSubmission) {
+      if (launchStore() === "cloud" && !guardSessionWrite(null)) return false;
       const client = adopt(sessionId);
       // A Session this window cannot hold a client for — a Draft, or one closed
       // between the pull and the press — is refused rather than silently dropped.

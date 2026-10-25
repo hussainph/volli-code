@@ -23,7 +23,25 @@ export function rendererConnectSources(input: {
   readonly serve: boolean;
   readonly env: Readonly<Record<string, string | undefined>>;
 }): readonly string[] {
-  return input.serve || input.env["VOLLI_CLOUD_LOOPBACK"] === "1" ? LOOPBACK_CONNECT_SOURCES : [];
+  const sources =
+    input.serve || input.env["VOLLI_CLOUD_LOOPBACK"] === "1" ? LOOPBACK_CONNECT_SOURCES : [];
+  // Public build configuration, never an S3 credential or a wildcard. Signed
+  // transcript GETs reach precisely this bucket origin in a packaged build.
+  const storage = input.env["VOLLI_CLOUD_STORAGE_ORIGIN"];
+  if (storage === undefined || storage === "") return sources;
+  const url = new URL(storage);
+  if (
+    url.protocol !== "https:" ||
+    !/^[a-z0-9.-]+$/u.test(url.hostname) ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.pathname !== "/" ||
+    url.search !== "" ||
+    url.hash !== ""
+  ) {
+    throw new Error("VOLLI_CLOUD_STORAGE_ORIGIN must be an exact HTTPS origin");
+  }
+  return [...sources, url.origin];
 }
 
 /**

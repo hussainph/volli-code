@@ -155,7 +155,18 @@ export interface SessionRecord {
  * subset a person can clear by doing something, which is the only distinction a
  * row prompting them to act needs to draw.
  */
-export type ChatWaitingReason = "question" | "permission" | "auth";
+export const CHAT_WAITING_REASONS = ["question", "permission", "auth"] as const;
+export type ChatWaitingReason = (typeof CHAT_WAITING_REASONS)[number];
+
+/** Structured Sessions have neither a parked PTY nor an exited identity. */
+export const CHAT_SESSION_ACTIVITIES = [
+  "working",
+  "waiting",
+  "idle",
+  "stopped",
+  "interrupted",
+] as const;
+export type ChatSessionActivity = (typeof CHAT_SESSION_ACTIVITIES)[number];
 
 /**
  * The honest record for a Session that {@link SessionRecord} cannot describe:
@@ -188,10 +199,7 @@ export interface ChatSessionRecord {
    * whose work was deliberately ended is "stopped" (VC-86), and one whose last
    * turn died is "interrupted" (VC-324).
    */
-  activity: Extract<
-    SessionActivityState,
-    "working" | "waiting" | "idle" | "stopped" | "interrupted"
-  >;
+  activity: ChatSessionActivity;
   /**
    * What the Session is waiting on, when `activity` is `"waiting"`; `null` in
    * every other state. The two move together by construction — a waiting row

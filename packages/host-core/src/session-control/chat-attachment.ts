@@ -1,13 +1,7 @@
-import {
-  SESSION_USER_BLOCKING_ATTENTION_KINDS,
-  sessionAwaitsUser,
-  sessionEndedInterrupted,
-} from "@volli/shared";
+import { sessionListingActivity, sessionListingWaitingOn } from "@volli/shared";
 import type {
   ChatSessionRecord,
-  ChatWaitingReason,
   SessionAttachmentProjection,
-  SessionAttentionKind,
   SessionProjection,
 } from "@volli/shared";
 
@@ -51,8 +45,9 @@ export function chatSessionRecord(
     createdAt: projection.session.createdAt,
     adapterId: attachment?.adapterId ?? null,
     live,
-    activity: chatActivity(projection, live),
-    waitingOn: chatWaitingOn(projection),
+    // The listing rule is shared with the cloud listing row (`syncListing`).
+    activity: sessionListingActivity(projection, live),
+    waitingOn: sessionListingWaitingOn(projection),
     // Verbatim from the fold (VC-269): the projection already folds the
     // attachment's failure into the turn's outcome, so there is nothing for
     // this row to re-derive and no second reading of "failed" to drift.
@@ -66,84 +61,6 @@ export function chatSessionRecord(
     // Session is pinned to whether or not anything is attached to it now.
     model: projection.modelSelection,
   };
-}
-
-/**
- * Stopped outranks everything (VC-86): a Session whose work was deliberately
- * ended cannot be helped by answering its stale question and is not "working"
- * however the turn flag was left — the stop fact is the newer truth, and a
- * fresh attachment explicitly clears it when work genuinely resumes.
- *
- * Waiting outranks working, because an agent that has asked a question is still
- * inside an open turn: a row that said "working" there would hide the one thing
- * the user could actually do about it.
- *
- * Working then needs a process-local executor binding as well as the turn, so
- * a durable turn and open attachment that survived relaunch read as what they
- * are — nothing running — instead of a Session that spins forever.
- *
- * Interrupted (VC-324) is asked LAST of the four, and only of a Session that
- * is none of them: `stopped` > `waiting` > `working` > `interrupted` > `idle`.
- *  - A stopped Session stays `stopped` even though its turn was interrupted on
- *    the way down — the stop is the newer truth AND names who did it, which is
- *    strictly more than the interruption says.
- *  - A Session that resumed and is working says `working`; the predicate agrees
- *    on its own, because a fresh `turn.started` resets the outcome it reads.
- *  - Everything left is a Session that is quiet — and `interrupted` is the half
- *    of that quiet whose turn DIED, which is exactly what `idle` used to hide.
- *
- * Transport Attentions still fold into `idle` for a person's row (see
- * `WAITING_ON_BY_ATTENTION`): nobody is being asked to do anything. What
- * changed is that the row no longer calls a dead turn quiet.
- */
-function chatActivity(
-  projection: SessionProjection,
-  executorBound: boolean,
-): ChatSessionRecord["activity"] {
-  if (projection.stopped !== null) return "stopped";
-  if (sessionAwaitsUser(projection)) return "waiting";
-  if (projection.turnActive && executorBound) return "working";
-  if (sessionEndedInterrupted(projection)) return "interrupted";
-  return "idle";
-}
-
-/**
- * The user-blocking Attention kinds, in the coarser vocabulary a row can say.
- * Only the three {@link SESSION_USER_BLOCKING_ATTENTION_KINDS} appear: the rest
- * of the Attention vocabulary is the world blocking the agent, which no row
- * should ask a person to go fix.
- */
-const WAITING_ON_BY_ATTENTION: Readonly<Partial<Record<SessionAttentionKind, ChatWaitingReason>>> =
-  {
-    input_required: "question",
-    permission_required: "permission",
-    auth_required: "auth",
-    // `satisfies` against the shared list is the completeness pin: a fourth
-    // user-blocking kind added there fails to compile here until it is given a
-    // word, rather than silently reading as "not waiting".
-  } satisfies Record<(typeof SESSION_USER_BLOCKING_ATTENTION_KINDS)[number], ChatWaitingReason>;
-
-/**
- * What the Session is waiting on, in the same order {@link sessionAwaitsUser}
- * decides THAT it is waiting: an open Interaction is a question already asked
- * and outranks any Attention, then the first user-blocking Attention speaks.
- *
- * Reads the same two projection fields as `sessionAwaitsUser` in the same
- * precedence, so `activity === "waiting"` and `waitingOn !== null` cannot come
- * apart — one saying a human is needed while the other has nothing to tell them
- * to do is exactly the drift the shared predicate exists to prevent. Pinned by
- * a test rather than by comment alone.
- */
-function chatWaitingOn(projection: SessionProjection): ChatWaitingReason | null {
-  // A stopped Session is not waiting on anyone — the reason must go with the
-  // state, or a row would say "Stopped" while handing the reader an errand.
-  if (projection.stopped !== null) return null;
-  if (projection.interactions.active.length > 0) return "question";
-  for (const attention of projection.attention.active) {
-    const reason = WAITING_ON_BY_ATTENTION[attention.kind];
-    if (reason !== undefined) return reason;
-  }
-  return null;
 }
 
 /** The newest attachment that is not the terminal adapter, or `null` if none has ever attached. */

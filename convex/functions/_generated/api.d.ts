@@ -62,6 +62,7 @@ import type * as runners from "../runners.js";
 import type * as secretKeys from "../secretKeys.js";
 import type * as secrets from "../secrets.js";
 import type * as secretsDelivery from "../secretsDelivery.js";
+import type * as sessionTranscript from "../sessionTranscript.js";
 import type * as sessionViewers from "../sessionViewers.js";
 import type * as sessionVisibility from "../sessionVisibility.js";
 import type * as sessions from "../sessions.js";
@@ -132,6 +133,7 @@ declare const fullApi: ApiFromModules<{
   secretKeys: typeof secretKeys;
   secrets: typeof secrets;
   secretsDelivery: typeof secretsDelivery;
+  sessionTranscript: typeof sessionTranscript;
   sessionViewers: typeof sessionViewers;
   sessionVisibility: typeof sessionVisibility;
   sessions: typeof sessions;

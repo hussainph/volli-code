@@ -30,6 +30,8 @@ import {
   ATTENTION_SOURCES,
   BOARD_EVENT_KINDS,
   CHECKOUT_MODES,
+  CHAT_SESSION_ACTIVITIES,
+  CHAT_WAITING_REASONS,
   GITHUB_ACCOUNT_TYPES,
   GITHUB_CONNECTION_STATUSES,
   GITHUB_DELIVERY_OUTCOMES,
@@ -753,6 +755,17 @@ export default defineSchema({
       }),
     ),
     usageTotals: json,
+    // The listing rule's answer over the fold (`sessionListingActivity` in
+    // `@volli/shared`), so no client restates it. Optional: rows written
+    // before it have none until their next listing sync.
+    listing: v.optional(
+      v.object({
+        activity: literals(CHAT_SESSION_ACTIVITIES),
+        waitingOn: nullable(literals(CHAT_WAITING_REASONS)),
+        live: v.boolean(),
+        bornTicketless: v.boolean(),
+      }),
+    ),
     createdAt: time,
     // Coarse: refreshed at turn boundaries, signals and attention changes.
     lastActivityAt: time,

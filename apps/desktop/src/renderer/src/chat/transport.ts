@@ -11,6 +11,10 @@ import { racingFlushScheduler, type ChatSessionTransport } from "@volli/session-
 import { hostNotConnected, remoteOwnerOf } from "@renderer/lib/remote-owners";
 import { closedRemoteTransport, type RemoteSessionClient } from "@renderer/lib/remote-session-wire";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
+import { cloudSession } from "@renderer/lib/cloud-client";
+import { cloudChatTransport } from "@renderer/lib/cloud-session-transport";
+import { CLOUD_SESSION_READ_ONLY } from "@renderer/lib/cloud-session-read-only";
+import { launchStore } from "@renderer/stores/launch";
 
 /** The app's transport. Built per call; the RPC client underneath is a singleton. */
 export function browserChatTransport(): ChatSessionTransport {
@@ -84,6 +88,7 @@ export function setRemoteChatTransports(transports: RemoteChatTransports): () =>
  * closed in the host's name; it never falls to This Mac's IPC (VC-713, B1).
  */
 export function chatTransportFor(projectId: string | null): ChatSessionTransport {
+  if (launchStore() === "cloud") return cloudChatTransport(cloudSession());
   const owner = remoteOwnerOf(projectId);
   if (owner === null) return browserChatTransport();
   return remoteTransports?.forProject(projectId!) ?? closedRemoteTransport(owner.hostName, window);
@@ -101,6 +106,7 @@ export type SessionCommandDoor = (
  * chat core that command a Session by id (the Island's subagent Stop).
  */
 export function sessionCommandFor(projectId: string | null): SessionCommandDoor {
+  if (launchStore() === "cloud") return () => Promise.reject(new Error(CLOUD_SESSION_READ_ONLY));
   const owner = remoteOwnerOf(projectId);
   if (owner === null) return (input) => sessionRpcClient().session.command.mutate(input);
   const client = remoteTransports?.clientFor(projectId!) ?? null;
@@ -114,6 +120,8 @@ export function sessionCommandFor(projectId: string | null): SessionCommandDoor 
 export function sessionPictureFor(
   projectId: string | null,
 ): RemoteSessionClient["session"]["picture"]["query"] {
+  if (launchStore() === "cloud")
+    return () => Promise.reject(new Error("Saved pictures are not available yet in cloud"));
   const owner = remoteOwnerOf(projectId);
   if (owner === null) return (input) => sessionRpcClient().session.picture.query(input);
   const client = remoteTransports?.clientFor(projectId!) ?? null;
