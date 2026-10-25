@@ -33,6 +33,8 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 | `functions/lib/board.ts`                           | What board writes share: the actor, the project counter (`BoardWrite`: ticket numbers and the board event `seq`), row ↔ rule-fact mapping, typed errors.                                |
 | `functions/lib/boardReceipts.ts`                   | `withBoardReceipt`: every board mutation is idempotent by `commandId` for seven days; another intent under the same id is `command_conflict`.                                           |
 | `functions/lib/boardEffects.ts`                    | A board write's machine side effects (Done/archive trim, interrupts, armed arrivals, worktree materialization) as `runnerJobs` rows for the runner that holds the work.                 |
+| `functions/activity.ts`                            | The activity feed: `project` and `workspace`, newest first, with our own page cursor (see **The activity feed**).                                                                       |
+| `functions/lib/activity.ts`                        | The feed reader: the k-way merge, the cursor, visibility, folding and the tickets and people a page names.                                                                              |
 | `functions/boardReceipts.ts`, `functions/crons.ts` | The scheduled sweeps (receipts hourly, packed transcript staging every 15 min).                                                                                                         |
 | `functions/transcripts.ts`                         | Transcript bodies and Pi logs: `stageArtifacts`, `commitSegment`, `commitPiLogSegment`, `head` (where a runner resumes), the producer fence and `sweepPacked`.                          |
 | `functions/files.ts`                               | `presignPut`: a SigV4 URL bound to one key, length and SHA-256 (signed by `presignS3Request` in `@volli/shared/cloud`).                                                                 |
@@ -159,6 +161,20 @@ update `package.json`'s `convex` to the same version as `convexNpm`, run
 `pnpm install`, `pnpm -C convex codegen`, and commit the regenerated
 `_generated/`. A unit test fails when the npm pin and the installed version
 disagree.
+
+## The activity feed
+
+The feed has no store of its own: it is the board events of a project (its
+`by_project_seq` range) or of a Workspace (a k-way merge of its live
+projects' ranges by `occurredAt`), newest first. Each page leaves out what
+the viewer may not see (a deleted ticket's events, and those naming a
+Session they cannot see) and folds one actor's consecutive work on one
+ticket into one item (`ActivityFold` in `@volli/shared/cloud`). Pages follow
+Convex's pagination contract with a cursor of our own (per-project `seq`
+bounds), so `usePaginatedQuery` does not drive them: a client pins each
+loaded page to its `continueCursor` (`endCursor`) once it asks for the next
+one. A page ends only where a folded run ends, so concatenated pages are the
+fold of the whole history.
 
 ## CI
 
