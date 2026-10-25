@@ -29,6 +29,7 @@ import type {
   SkillModes,
 } from "@volli/shared";
 import { prepared } from "./prepared";
+import { localProductRow } from "./local-product";
 
 interface ProjectRow {
   id: string;
@@ -189,7 +190,7 @@ function readDecisionModelColumn(value: string | null): DecisionModelSetting | n
 export function listProjects(db: Database.Database): Project[] {
   const rows = prepared<[], ProjectRow>(
     db,
-    "SELECT * FROM projects WHERE removed_at IS NULL ORDER BY sort_order",
+    `SELECT * FROM projects WHERE removed_at IS NULL AND ${localProductRow("projects", "project")} ORDER BY sort_order`,
   ).all();
   return rows.map(mapProject);
 }
@@ -207,7 +208,7 @@ export function countProjects(
     db,
     scope === "all"
       ? "SELECT COUNT(*) as count FROM projects"
-      : "SELECT COUNT(*) as count FROM projects WHERE removed_at IS NULL",
+      : `SELECT COUNT(*) as count FROM projects WHERE removed_at IS NULL AND ${localProductRow("projects", "project")}`,
   ).get();
   return row?.count ?? 0;
 }

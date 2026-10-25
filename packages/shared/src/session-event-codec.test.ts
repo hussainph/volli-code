@@ -2429,3 +2429,37 @@ it("retains birth refresh wording markers without defaulting historical records"
     ),
   ).toThrow("must be true");
 });
+
+describe("additive Session birth owner", () => {
+  it("round-trips an owner through the durable event and command codecs without changing legacy bytes", () => {
+    for (const owner of [{}, { ownerUserId: "person-a" }]) {
+      const payload = { kind: "session.created", session: { ...session, ...owner } };
+      expect(decodeSessionEventPayload(JSON.parse(encodeSessionJson(payload)), "birth")).toEqual(
+        payload,
+      );
+      const intent = {
+        kind: "session.create",
+        projectId: session.projectId,
+        ticketId: session.ticketId,
+        role: session.role,
+        parentSessionId: session.parentSessionId,
+        title: session.title,
+        ...owner,
+      };
+      expect(decodeSessionCommandIntent(JSON.parse(encodeSessionJson(intent)), "create")).toEqual(
+        intent,
+      );
+    }
+  });
+  it.each([null, 1, false, ""])("refuses a malformed known owner field: %s", (ownerUserId) => {
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "session.created", session: { ...session, ownerUserId } },
+        "birth",
+      ),
+    ).toThrow("ownerUserId");
+    expect(() =>
+      decodeSessionCommandIntent({ kind: "session.create", ...session, ownerUserId }, "create"),
+    ).toThrow("ownerUserId");
+  });
+});

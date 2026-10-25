@@ -305,3 +305,50 @@ describe("queue transitions as log lines (VC-699)", () => {
     expect(JSON.stringify(records)).not.toContain("private words");
   });
 });
+
+describe("launch-scoped follow-up storage", () => {
+  it("enumerates only owned queues and rejects foreign queue reads/mutations before decoding", async () => {
+    const f = await setup();
+    const other = await f.engine.createSession({
+      commandId: "other",
+      projectId: "project",
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: null,
+      provenance: {
+        source: { kind: "system", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    for (const sessionId of [f.sessionId, other.session.id])
+      await f.ledger.transaction(sessionId, (state) => {
+        state.revision = 1;
+        state.entries.push({
+          id: sessionId,
+          commandId: `queue-${sessionId}`,
+          deliveryCommandId: `delivery-${sessionId}`,
+          state: "queued",
+          message: { id: sessionId, role: "user", parts: [{ type: "text", text: "queue" }] },
+        });
+      });
+    const scoped = createSqliteSessionFollowUpLedger(f.db, (id) => id === f.sessionId);
+    expect(await scoped.pendingSessionIds()).toEqual([f.sessionId]);
+    f.db
+      .prepare("UPDATE session_follow_up_queue SET state = '{}' WHERE session_id = ?")
+      .run(other.session.id);
+    let called = false;
+    await expect(
+      scoped.transaction(other.session.id, () => {
+        called = true;
+      }),
+    ).rejects.toThrow("outside this launch");
+    expect(called).toBe(false);
+    expect(
+      f.db
+        .prepare("SELECT state FROM session_follow_up_queue WHERE session_id = ?")
+        .get(other.session.id),
+    ).toEqual({ state: "{}" });
+    expect(await scoped.transaction(f.sessionId, (state) => state.entries.length)).toBe(1);
+  });
+});

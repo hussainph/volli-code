@@ -624,3 +624,34 @@ describe("trimFinishedWorktree", () => {
     });
   });
 });
+
+it("keeps registry-managed copies out of the frozen automatic retention paths", async () => {
+  insertProject(ctx.db, testProject({ id: "registry-project", path: "/registry-main" }));
+  insertTicket(
+    ctx.db,
+    testTicket("registry-project", {
+      id: "registry-ticket",
+      status: "done",
+      worktreePath: "/registry-copy",
+    }),
+  );
+  ctx.db
+    .prepare(`INSERT INTO working_copy_paths
+    (ticket_id,project_repo_id,runner_id,abs_path) VALUES ('registry-ticket','repo','runner','/registry-copy')`)
+    .run();
+  const worktree = {
+    db: ctx.db,
+    blobsRoot: "unused",
+    gitAsync: async (): Promise<string> => {
+      throw new Error("retention must not touch runner git");
+    },
+  };
+  expect(await reclaimIfStale({ worktree, now: Date.now }, "registry-ticket", "merged")).toEqual({
+    kind: "skipped",
+    reason: "runner-managed working copy",
+  });
+  expect(await trimFinishedWorktree({ worktree, now: Date.now }, "registry-ticket")).toEqual({
+    kind: "skipped",
+    reason: "runner-managed working copy",
+  });
+});

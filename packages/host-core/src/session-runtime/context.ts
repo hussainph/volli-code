@@ -7,6 +7,7 @@ import {
   type PromptResource,
   type SessionEvent,
   type SessionInput,
+  type Session,
   type RunnerIdentity,
 } from "@volli/shared";
 import type { PiRuntimeContext } from "./pi-adapter";
@@ -78,6 +79,8 @@ export function createRuntimeContextResolver(options: {
   mcpDispatch: HostMcpDispatch;
   waitForBirth(sessionId: string): Promise<void>;
   toolSurface(): SessionToolSurfacePorts | null;
+  /** The chosen store's first-attach brief. Never called again once recorded. */
+  brief?(session: Session): Promise<string>;
 }): (sessionId: string) => Promise<PiRuntimeContext | null> {
   const { db, sessionEngine, mcpDispatch } = options;
   return async (sessionId) => {
@@ -85,8 +88,9 @@ export function createRuntimeContextResolver(options: {
     const projection = await sessionEngine.getSession({ sessionId });
     const attaching = projection?.session;
     if (!attaching || projection.modelSelection === null) return null;
-    const project = getProjectById(db, attaching.projectId);
-    if (!project) return null;
+    const project =
+      options.brief === undefined ? getProjectById(db, attaching.projectId) : undefined;
+    if (options.brief === undefined && project === undefined) return null;
     const provenance = {
       source: { kind: "system", id: "pi-runtime", detail: null },
       venue: options.venue,
@@ -140,7 +144,7 @@ export function createRuntimeContextResolver(options: {
     }
     const shared = {
       toolRefreshAnnouncements: foldToolRefreshes(events).announcements,
-      projectId: project.id,
+      projectId: attaching.projectId,
       rootThreadId: sessionRootThreadId(sessionId),
       model: projection.modelSelection,
       toolSurface,
@@ -161,6 +165,36 @@ export function createRuntimeContextResolver(options: {
       // first attach did, whatever `.agents/skills/` says today.
       promptResources: recordedPromptResources(events),
     };
+    if (options.brief !== undefined) {
+      const recorded = events.find(
+        (event) =>
+          event.payload.kind === "session.input.recorded" &&
+          event.payload.input.kind === "runtime-brief",
+      );
+      const text =
+        recorded?.payload.kind === "session.input.recorded"
+          ? briefText(recorded.payload.input)
+          : await options.brief(attaching);
+      const brief = await sessionEngine.getOrRecordSessionInput({
+        sessionId,
+        input: { kind: "runtime-brief", text },
+        provenance,
+      });
+      const frozen = { ...shared, brief: briefText(brief) };
+      if (attaching.role === "subagent") {
+        if (attaching.parentSessionId === null) return null;
+        return {
+          ...frozen,
+          role: "subagent",
+          ticketId: attaching.ticketId,
+          parentSessionId: attaching.parentSessionId,
+        };
+      }
+      if (attaching.role === "ticket" && attaching.ticketId !== null)
+        return { ...frozen, role: "ticket", ticketId: attaching.ticketId };
+      return { ...frozen, role: "project", ticketId: null };
+    }
+    if (!project) return null;
     // The Role is the Session's own statement (VC-9), never read off
     // the Ticket: a subagent may carry its parent's Ticket, and a
     // Ticket Session whose Ticket was deleted is still not a project

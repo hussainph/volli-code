@@ -56,7 +56,7 @@ Everything else is an implementation detail.
 | Entry                              | Owns (under `src/`)                                                                                                                                                                                                                                                                                                                                                                                 | What a client takes from it                                                                                                                                                                                                                                                                                                                                           |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@volli/host-core`                 | `index.ts`, `host-lifecycle.ts`, `db-open-failure.ts`, `runtime-services.ts`, `session-services.ts`                                                                                                                                                                                                                                                                                                 | `createHostCore`, `HostCore`/`LiveHostCore`, `HostCorePorts`, `defaultDatabasePath`, `DbHandle`, the transaction-guard handlers                                                                                                                                                                                                                                       |
-| `@volli/host-core/cloud-runner`    | `cloud-runner/`, `cloud-agent/`                                                                                                                                                                                                                                                                                                                                                                     | A runner's Volli Cloud registration and sync: link, the rotating runner token, heartbeat and capabilities, the sleep/wake sequence (`wake.ts`); the backend link, the fact drain over cursor rows, the inbox worker and job journal (migration 65); agent verbs in a cloud launch: the route table, the HTTP functions client, Agent tokens and the cloud board verbs |
+| `@volli/host-core/cloud-runner`    | `cloud-runner/`, `cloud-agent/`, `cloud-store/`                                                                                                                                                                                                                                                                                                                                                     | A runner's Volli Cloud registration and sync: link, the rotating runner token, heartbeat and capabilities, the sleep/wake sequence (`wake.ts`); the backend link, the fact drain over cursor rows, the inbox worker and job journal (migration 65); agent verbs in a cloud launch: the route table, the HTTP functions client, Agent tokens and the cloud board verbs |
 | `@volli/host-core/ports`           | `ports/`                                                                                                                                                                                                                                                                                                                                                                                            | The [ports](#ports) and their headless answers (`HEADLESS_ATTENTION`, `NO_POWER_EVENTS`)                                                                                                                                                                                                                                                                              |
 | `@volli/host-core/db`              | `db/`                                                                                                                                                                                                                                                                                                                                                                                               | `openVolliDb`, migrations, the transaction gate, the repositories ([Persistence](#persistence))                                                                                                                                                                                                                                                                       |
 | `@volli/host-core/secrets`         | `secrets/`                                                                                                                                                                                                                                                                                                                                                                                          | `SecretStore`, `SecretService`, the file key and the sealed credential module ([Secrets](#secrets))                                                                                                                                                                                                                                                                   |
@@ -564,9 +564,34 @@ local adapter supplies SQLite reads and event publication, while the core owns
 the same git/reconcile/copy sequence. `reclaimExplicit` keeps its dirty, busy,
 Keep, git-lock and unpushed-work checks without requiring a board row.
 
-Receiving wiring (VC-895, cloud-store composition): use this registry and the
-explicit cores for Session locations and the four Working copy inbox jobs.
-The registry is not a second board and has no absolute-path report to the backend.
+`cloud-store/index.ts` now composes the cloud arm of `RunnerProductStore` over
+these ports. Desktop main supplies the Mac runner's existing link/presence and
+per-boot UUID; another runner can compose the same Electron-free store.
+
+Cloud Session birth stamps its owner and adopts its drain cursor atomically.
+Owner-scoped reads, recovery, follow-up queues and notices cannot borrow another
+account's Sessions; restored owner-stamped history stays hidden from local mode
+even when a backup deliberately omitted runner cursors. Identity-only shadow
+rows satisfy the existing Session/delegation foreign keys. Their negative,
+machine-only ticket numbers cannot collide with a diverged local board; real
+display identity comes from the cloud brief/site hints.
+
+A new Session is durable offline, but its first attach clearly refuses when its
+brief cannot be read. The brief is recorded once in the ledger. Later attaches
+use runner-local location hints and registry paths, retaining setup gates and
+wake resume. Machine checkout/Working-copy observations are durably coalesced
+under the `volli:runner-report:` app-state prefix and retried over the shared
+link without blocking local preparation. No absolute path enters these reports
+or journaled job failure outcomes; full diagnostics stay on the runner.
+
+The four Working-copy inbox executors use the same git safeguards. Automatic
+reclaim uses fresh backend Done/PR facts and the shared retention rule with this
+machine's existing TTL; the frozen retention watch never acts on registry rows.
+S5's `session.followUp`/`session.notice` implementations are not present yet:
+VC-696/VC-887 must pass their executors through `sessionJobs`, behind the same
+owner guard. Remote message-body hydration remains the transcript-delivery
+composition's responsibility; the Session command executor reads the supplied
+artifact store rather than inventing another body store.
 
 ### Secrets
 

@@ -531,6 +531,8 @@ export type SessionDefaultModelRole = SessionRole;
 
 export interface SessionsOptions {
   runtime: StructuredSessionCommands;
+  /** Composition preparation (for example runner-local FK identities), before any birth write. */
+  sessionBirth?: { beforeCreate?(input: SessionStartInput): Promise<void> };
   /**
    * The configured default for one tier, resolved through the inheritance
    * chain the app documents (VC-112, VC-259): the project's own runtime
@@ -847,6 +849,7 @@ export function createSessions(options: SessionsOptions): Sessions {
   async function mint(
     input: SessionStartInput,
   ): Promise<SessionCreateResult & { model: ModelSelection }> {
+    await options.sessionBirth?.beforeCreate?.(input);
     if (
       input.ticketId !== null &&
       !options.ticketBelongsToProject(input.projectId, input.ticketId)

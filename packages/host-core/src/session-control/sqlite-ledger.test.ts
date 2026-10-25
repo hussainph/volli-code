@@ -13,6 +13,7 @@ import type { TestDb } from "../db/test-helpers";
 import { insertTicket } from "../db/tickets-repo";
 import { workingSessionCount } from "../session-concurrency";
 import { createSqliteSessionLedger } from "./sqlite-ledger";
+import { localSessionRow, sessionBirthOwnerCompatible } from "../db/local-product";
 
 let ctx: TestDb;
 
@@ -2007,5 +2008,114 @@ describe("origin storage and checkpoint upgrade", () => {
     expect(rebuilt?.latestTurnOrigin).toEqual(origin);
     expect(rebuilt?.resumptions).toEqual([{ attachmentId: "origin-b", origin, startedAt: 29 }]);
     expect(rebuilt).toEqual(createSessionProjectionCheckpoint(created.session, audit).projection);
+  });
+});
+
+describe("additive birth owner without a Session SQL column", () => {
+  it("retains ownership in base reads, listings, and replay via the birth fact", async () => {
+    const { control, projectId } = setup();
+    const request = {
+      commandId: "owner-birth",
+      projectId,
+      ticketId: null,
+      role: "project" as const,
+      parentSessionId: null,
+      title: null,
+      ownerUserId: "owner-a",
+      provenance,
+    };
+    const created = await control.createSession(request);
+    expect((await control.getBaseSession({ sessionId: created.session.id }))?.ownerUserId).toBe(
+      "owner-a",
+    );
+    expect((await control.listSessions({ projectId, scope: "all" }))[0]?.session.ownerUserId).toBe(
+      "owner-a",
+    );
+    expect((await control.createSession(request)).session).toEqual(created.session);
+    expect(ctx.db.prepare("PRAGMA table_info(sessions)").all()).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "owner_user_id" })]),
+    );
+  });
+});
+
+describe("generic SQL Session scopes", () => {
+  it("binds scope values and applies the predicate to the actual source id column", async () => {
+    const { control, projectId } = setup();
+    const wantedId = "bound-' OR 1=1 --";
+    const wanted = await control.createSession({
+      commandId: "wanted",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: null,
+      requestedSessionId: wantedId,
+      provenance,
+    });
+    const hidden = await control.createSession({
+      commandId: "hidden",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: null,
+      provenance,
+    });
+    const scoped = createSqliteSessionLedger(ctx.db, {
+      predicate: (idColumn) => `${idColumn} = @scopeSessionId`,
+      bindings: { scopeSessionId: wantedId },
+    });
+    await scoped.transaction((tx) => {
+      expect(tx.getSession(wantedId)).toEqual(wanted.session);
+      expect(tx.getSession(hidden.session.id)).toBeNull();
+      expect(tx.listSessions({ projectId, scope: "all" })).toEqual([wanted.session]);
+      expect(tx.countSessions({ projectId, scope: "all" })).toBe(1);
+      expect(tx.listSessionStarts({ sinceMs: 0 })).toEqual([wanted.session.createdAt]);
+    });
+  });
+});
+
+describe("birth-owner SQL filtering before decoding", () => {
+  it("keeps cursorless stamped/restored history out of local reads and only accepts compatible cloud birth owners", async () => {
+    const { control, projectId } = setup();
+    const create = (commandId: string, ownerUserId?: string) =>
+      control.createSession({
+        commandId,
+        projectId,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: null,
+        ...(ownerUserId === undefined ? {} : { ownerUserId }),
+        provenance,
+      });
+    const legacy = await create("legacy");
+    const own = await create("cloud-a", "a");
+    const foreign = await create("cloud-b", "b");
+    const malformed = await create("malformed", "a");
+    ctx.db
+      .prepare(`UPDATE session_events SET payload = json_set(payload, '$.session.ownerUserId', NULL)
+      WHERE session_id = ? AND json_extract(payload, '$.kind') = 'session.created'`)
+      .run(malformed.session.id);
+    const local = createSqliteSessionLedger(ctx.db, { predicate: localSessionRow });
+    await local.transaction((tx) => {
+      expect(tx.listSessions({ projectId, scope: "all" })).toEqual([legacy.session]);
+      expect(tx.countSessions({ projectId, scope: "all" })).toBe(1);
+      expect(tx.getSession(own.session.id)).toBeNull();
+      expect(tx.getSession(foreign.session.id)).toBeNull();
+      // A present JSON null is not an absent/importable owner. Filter it
+      // before the known-kind codec would correctly report corruption.
+      expect(tx.getSession(malformed.session.id)).toBeNull();
+    });
+    const compatible = createSqliteSessionLedger(ctx.db, {
+      predicate: (idColumn) => sessionBirthOwnerCompatible(idColumn, "@scopeOwner"),
+      bindings: { scopeOwner: "a" },
+    });
+    await compatible.transaction((tx) => {
+      expect(tx.listSessions({ projectId, scope: "all" })).toEqual([own.session, legacy.session]);
+      expect(tx.countSessions({ projectId, scope: "all" })).toBe(2);
+      expect(tx.getSession(foreign.session.id)).toBeNull();
+      expect(tx.getSession(malformed.session.id)).toBeNull();
+    });
   });
 });

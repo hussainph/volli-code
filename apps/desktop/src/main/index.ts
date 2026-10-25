@@ -185,6 +185,8 @@ import {
 import { ACCOUNT_CLOUD_OFF } from "./account/service";
 import { previewAtLaunch } from "./preview-gate";
 import { CLOUD_SNAPSHOT_DIRECTORY, cloudSnapshotFiles } from "./cloud-snapshot";
+import { createCloudProductStore } from "@volli/host-core/cloud-runner";
+import { decodeRunnerRecords } from "./cloud-runner/record";
 import {
   CLOUD_RUNNER_APP_STATE_KEY,
   createDesktopMacRunner,
@@ -1071,11 +1073,28 @@ const appStartup = app.whenReady().then(async () => {
           makeFunctionReference: (await import("convex/server")).makeFunctionReference,
         }
       : null;
+  const cloudStore =
+    launch.store === "cloud" && liveHost !== undefined
+      ? createCloudProductStore({
+          host: liveHost,
+          ownerUserId: launch.userId,
+          runnerId: () =>
+            macRunner?.snapshot().runnerId ??
+            decodeRunnerRecords(getAppState(liveHost.database.db, CLOUD_RUNNER_APP_STATE_KEY))[
+              launch.userId
+            ]?.runnerId ??
+            null,
+          home: fsDeps.homeDir,
+          busySites: (target) => busyWorktreeSites(target),
+          environmentRecipes: () => isExperimentEnabled("cloud"),
+        })
+      : null;
   const macRunner: MacRunner | null =
     runnerLaunch !== null && liveHost !== undefined && convexClient !== null
       ? createDesktopMacRunner({
           ...runnerLaunch,
           convex: convexClient,
+          ...(cloudStore === null ? {} : { sync: cloudStore.connect }),
           account: {
             subscribe: (listener) => account.subscribe(listener),
             accessToken: () => account.accessToken(),
@@ -1110,7 +1129,6 @@ const appStartup = app.whenReady().then(async () => {
   }
   const sessionWakeBus = liveHost?.sessionWakeBus ?? null;
   const sessionReadWatch = liveHost?.sessionReadWatch ?? null;
-  const sessionEngine = liveHost?.sessionEngine ?? null;
   // The ONE notification door (VC-295). Every native alert this process posts —
   // this file's five, the retention watch's three — goes through `deliver`,
   // which is what makes "no alert escapes the preferences" structural rather
@@ -1390,7 +1408,10 @@ const appStartup = app.whenReady().then(async () => {
    * feed, and the accepted-quit hold.
    */
   const runner = createRunnerComposition({
-    store: { kind: "local", host: hostCore },
+    store:
+      cloudStore === null
+        ? { kind: "local", host: hostCore }
+        : { kind: "cloud", host: hostCore, cloud: cloudStore },
     ports: hostPorts,
     version: app.getVersion(),
     venue: LOCAL_RUNNER,
@@ -2026,7 +2047,7 @@ const appStartup = app.whenReady().then(async () => {
   // one question about one machine, asked once.
   const ptyManager = registerTerminalIpcHandlers(
     dbHandle,
-    sessionEngine,
+    recoveredRuntimeSessionServices(readyRuntimeServices).sessionEngine,
     agentRuntime,
     concurrencyEnvReader,
     {

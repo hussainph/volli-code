@@ -29,7 +29,7 @@ import { OperationUnavailableError, THIS_MAC_RUNNER_OFF, type CloudLaunch } from
 import type { RunnerBrowserCapability } from "@volli/shared/cloud";
 
 import { convexMacRunnerBackend } from "./backend";
-import { runnerConnector } from "./connection";
+import { runnerConnector, type RunnerConnectionDeps } from "./connection";
 import { inventoryRunnerLinkStore, type RunnerLinkInventory } from "./identity-store";
 import { createMacRunner, type MacRunner, type MacRunnerAccount } from "./mac-runner";
 import { runnerRecordStore, type RunnerRecordRow } from "./record";
@@ -142,6 +142,7 @@ export interface DesktopMacRunnerInput {
   readonly packaged: boolean;
   /** The agent browser, as Sessions here can use it now (closed while in the menu bar). */
   readonly browser: () => RunnerBrowserCapability;
+  readonly sync?: RunnerConnectionDeps["sync"];
   readonly log: {
     info(message: string, fields?: Record<string, unknown>): void;
     warn(message: string, fields?: Record<string, unknown>): void;
@@ -159,6 +160,7 @@ export function createDesktopMacRunner(input: DesktopMacRunnerInput): MacRunner 
       siteUrl: input.siteUrl,
       connect: convexBackendConnection(input.backendUrl, input.convex),
       bootId: randomUUID(),
+      ...(input.sync === undefined ? {} : { sync: input.sync }),
       readLoad: () => {
         const work = input.liveWork();
         return readRunnerLoad(

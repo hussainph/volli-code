@@ -9,7 +9,7 @@ import type { SessionToolSurfacePorts } from "./sessions";
 
 let db: TestDb;
 afterEach(() => db?.cleanup());
-function fixture() {
+function fixture(brief?: Parameters<typeof createRuntimeContextResolver>[0]["brief"]) {
   db = openTestDb();
   insertProject(db.db, testProject({ id: "p", path: "/repo", ticketPrefix: "VC" }));
   insertTicket(db.db, testTicket("p", { id: "t", ticketNumber: 1 }));
@@ -29,6 +29,7 @@ function fixture() {
     mcpDispatch: hostMcpDispatch({ env: {}, packaged: true, log: vi.fn() }),
     waitForBirth,
     toolSurface: () => surface as unknown as SessionToolSurfacePorts,
+    ...(brief === undefined ? {} : { brief }),
   });
   return {
     context,
@@ -309,4 +310,89 @@ it("refuses unavailable project/model, orphan tickets and malformed subagent anc
     modelSelection: {},
   });
   expect(await f.context("s")).toMatchObject({ role: "project" });
+});
+
+it("uses the chosen store's first brief without a SQLite project, and then binds only the durable winner", async () => {
+  const brief = vi.fn(async () => "cloud brief");
+  const f = fixture(brief);
+  db.db.prepare("DELETE FROM tickets").run();
+  db.db.prepare("DELETE FROM projects").run();
+  expect(await f.context("s")).toMatchObject({
+    role: "ticket",
+    ticketId: "t",
+    brief: "cloud brief",
+  });
+  expect(brief).toHaveBeenCalledTimes(1);
+  f.listEvents.mockResolvedValue([
+    {
+      payload: { kind: "session.input.recorded", input: { kind: "tool-surface", tools: ["read"] } },
+    },
+    {
+      payload: {
+        kind: "session.input.recorded",
+        input: { kind: "runtime-brief", text: "frozen cloud brief" },
+      },
+    },
+  ]);
+  brief.mockRejectedValue(new Error("offline"));
+  expect(await f.context("s")).toMatchObject({ brief: "frozen cloud brief" });
+  expect(brief).toHaveBeenCalledTimes(1);
+  f.listEvents.mockResolvedValue([]);
+  brief.mockResolvedValue("proposed brief");
+  f.getOrRecordSessionInput.mockImplementation(async ({ input }) =>
+    input.kind === "runtime-brief"
+      ? { kind: "runtime-brief", text: "competing durable winner" }
+      : input,
+  );
+  expect(await f.context("s")).toMatchObject({ brief: "competing durable winner" });
+});
+
+it.each([
+  {
+    role: "project",
+    ticketId: null,
+    parentSessionId: null,
+    expected: { role: "project", ticketId: null },
+  },
+  {
+    role: "ticket",
+    ticketId: null,
+    parentSessionId: null,
+    expected: { role: "project", ticketId: null },
+  },
+  {
+    role: "subagent",
+    ticketId: "t",
+    parentSessionId: "parent",
+    expected: { role: "subagent", ticketId: "t", parentSessionId: "parent" },
+  },
+  {
+    role: "subagent",
+    ticketId: null,
+    parentSessionId: "parent",
+    expected: { role: "subagent", ticketId: null, parentSessionId: "parent" },
+  },
+  { role: "subagent", ticketId: "t", parentSessionId: null, expected: null },
+])("preserves cloud attach identity for $role/$ticketId/$parentSessionId", async (input) => {
+  const f = fixture(async () => "brief");
+  f.getSession.mockResolvedValue({
+    session: {
+      id: "s",
+      projectId: "p",
+      role: input.role,
+      ticketId: input.ticketId,
+      parentSessionId: input.parentSessionId,
+    },
+    modelSelection: { providerId: "scripted", modelId: "test", reasoningLevel: "off" },
+  });
+  const attached = await f.context("s");
+  if (input.expected === null) expect(attached).toBeNull();
+  else expect(attached).toMatchObject(input.expected);
+});
+
+it("refuses first attach clearly when the selected store cannot read its brief", async () => {
+  const f = fixture(async () => {
+    throw new Error("Volli Cloud is unreachable; this ticket's brief can't be read.");
+  });
+  await expect(f.context("s")).rejects.toThrow("Volli Cloud is unreachable");
 });

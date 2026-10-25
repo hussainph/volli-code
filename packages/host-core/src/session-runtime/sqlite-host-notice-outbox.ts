@@ -9,6 +9,7 @@ import type Database from "better-sqlite3";
 import type { SessionLedger } from "@volli/shared";
 import type { HostNotice, HostNoticeOutbox, HostNoticeReceipt } from "@volli/session-engine";
 import { prepared } from "../db/prepared";
+import { settleTransaction } from "../db/transaction-gate";
 
 export function createSqliteHostNoticeOutbox(
   db: Database.Database,
@@ -47,5 +48,51 @@ export function createSqliteHostNoticeOutbox(
            WHERE command_id = ? AND receipt IS NULL`,
         ).run(JSON.stringify(receipt), commandId);
       }),
+  };
+}
+
+/**
+ * Scope the machine-state outbox without creating another writer. Candidate
+ * session ids are filtered BEFORE decoding notice text, so another owner's
+ * malformed payload cannot break this launch's recovery. All mutations still
+ * go through the original outbox and its Session transaction owner.
+ */
+export function scopeSqliteHostNoticeOutbox(
+  db: Database.Database,
+  outbox: HostNoticeOutbox,
+  ownsSession: (sessionId: string) => boolean,
+): HostNoticeOutbox {
+  const assertOwner = (sessionId: string) => {
+    if (!ownsSession(sessionId))
+      throw new Error("The host notice is outside this launch's Session scope");
+  };
+  return {
+    async put(notice) {
+      assertOwner(notice.sessionId);
+      return outbox.put(notice);
+    },
+    pending: () =>
+      settleTransaction(db, () => {
+        const rows = prepared<[], { session_id: string; notice: string }>(
+          db,
+          "SELECT session_id, notice FROM host_notice_outbox WHERE receipt IS NULL ORDER BY ordinal",
+        ).all();
+        return rows
+          .filter((row) => ownsSession(row.session_id))
+          .map((row) => {
+            const notice = JSON.parse(row.notice) as HostNotice;
+            if (notice.sessionId !== row.session_id)
+              throw new Error("Host notice belongs to a different Session");
+            return notice;
+          });
+      }),
+    async settle(commandId, receipt) {
+      const row = prepared<[string], { session_id: string }>(
+        db,
+        "SELECT session_id FROM host_notice_outbox WHERE command_id = ?",
+      ).get(commandId);
+      if (row !== undefined) assertOwner(row.session_id);
+      return outbox.settle(commandId, receipt);
+    },
   };
 }

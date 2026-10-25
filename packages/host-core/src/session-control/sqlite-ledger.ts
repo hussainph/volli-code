@@ -40,7 +40,8 @@ import {
 } from "@volli/shared";
 import { internSessionEventProvenance } from "../db/session-event-provenance";
 import { prepared } from "../db/prepared";
-import { settleTransaction } from "../db/transaction-gate";
+import { settleTransaction, withTransaction } from "../db/transaction-gate";
+import type { DrainLedger } from "../cloud-runner/drain";
 import { logSessionEvents } from "./session-event-log";
 import { hostLogger } from "../log/root";
 
@@ -48,18 +49,34 @@ const log = hostLogger("session-ledger");
 
 type SqlRow = Record<string, unknown>;
 
+/** Generic SQL scope; store selection stays in composition, never in the ledger. */
+export interface SqliteSessionLedgerScope {
+  /** Source-code SQL only; the ledger supplies its known Session id column. */
+  predicate(idColumn: string): string;
+  /** Keep scope names distinct from the ledger query's own parameters. */
+  bindings?: Readonly<Record<`scope${string}`, string | number | null>>;
+}
+
+function birthPayload(sessionId: string): string {
+  return `(SELECT e.payload FROM session_events e WHERE e.session_id = ${sessionId}
+    AND json_extract(e.payload, '$.kind') = 'session.created' ORDER BY e.sequence LIMIT 1) AS birth_payload`;
+}
+
 /**
  * The desktop's sole durable Session writer. Transaction work is synchronous:
  * no client or repo call can interleave with a partial fact set.
  */
 export class SqliteSessionLedger implements SessionLedger {
-  constructor(private readonly db: Database.Database) {}
+  constructor(
+    private readonly db: Database.Database,
+    private readonly scope?: SqliteSessionLedgerScope,
+  ) {}
 
   transaction<T>(work: (transaction: SessionLedgerTransaction) => Synchronous<T>): Promise<T> {
     let appended: readonly SessionEvent[] = [];
     const settled = settleTransaction(this.db, () => {
       let open = true;
-      const transaction = new SqliteSessionLedgerTransaction(this.db, () => open);
+      const transaction = new SqliteSessionLedgerTransaction(this.db, () => open, this.scope);
       try {
         const value = work(transaction);
         transaction.assertReceiptEventPairs();
@@ -77,8 +94,11 @@ export class SqliteSessionLedger implements SessionLedger {
   }
 }
 
-export function createSqliteSessionLedger(db: Database.Database): SessionLedger {
-  return new SqliteSessionLedger(db);
+export function createSqliteSessionLedger(
+  db: Database.Database,
+  scope?: SqliteSessionLedgerScope,
+): SessionLedger {
+  return new SqliteSessionLedger(db, scope);
 }
 
 /** Read-only delivery evidence from an already-owned synchronous DB transaction. */
@@ -100,6 +120,22 @@ export function readSqliteSessionCommandEvidence(
   };
 }
 
+/** S2's synchronous drain reads over the same codec and guarded database, never another writer. */
+export function sqliteDrainLedger(db: Database.Database): DrainLedger {
+  return {
+    listEvents: (query) =>
+      withTransaction(db, () =>
+        new SqliteSessionLedgerTransaction(db, () => db.inTransaction).listEvents(query),
+      ),
+    latestEventSequence: (sessionId) =>
+      withTransaction(db, () =>
+        new SqliteSessionLedgerTransaction(db, () => db.inTransaction).latestEventSequence(
+          sessionId,
+        ),
+      ),
+  };
+}
+
 class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
   readonly #touchedSessionIds = new Set<string>();
   /** Every fact this transaction appended, in order: logged once it commits. */
@@ -108,14 +144,24 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
   constructor(
     private readonly db: Database.Database,
     private readonly isOpen: () => boolean,
-  ) {}
+    private readonly scope?: SqliteSessionLedgerScope,
+  ) {
+    this.scopeBindings = { ...scope?.bindings };
+  }
+
+  private readonly scopeBindings: Readonly<Record<`scope${string}`, string | number | null>>;
+
+  private scopeSql(id: string): string {
+    return this.scope === undefined ? "" : ` AND (${this.scope.predicate(id)})`;
+  }
 
   getSession(sessionId: string): Session | null {
     this.assertOpen();
     const row = prepared(
       this.db,
-      "SELECT id, project_id, ticket_id, role, parent_session_id, title, created_at FROM sessions WHERE id = ?",
-    ).get(sessionId) as unknown;
+      `SELECT id, project_id, ticket_id, role, parent_session_id, title, created_at,
+        ${birthPayload("sessions.id")} FROM sessions WHERE id = @sessionId${this.scopeSql("sessions.id")}`,
+    ).get({ sessionId, ...this.scopeBindings }) as unknown;
     return row === undefined ? null : decodeSession(row, "sessions row");
   }
 
@@ -129,11 +175,15 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
           : "";
     const rows = prepared(
       this.db,
-      `SELECT id, project_id, ticket_id, role, parent_session_id, title, created_at
+      `SELECT id, project_id, ticket_id, role, parent_session_id, title, created_at,
+                ${birthPayload("sessions.id")}
            FROM sessions
-          WHERE project_id = @projectId${scope}
+          WHERE project_id = @projectId${scope}${this.scopeSql("sessions.id")}
           ORDER BY created_at DESC, id COLLATE BINARY DESC`,
-    ).all(query.scope === "ticket" ? query : { projectId: query.projectId }) as unknown[];
+    ).all({
+      ...(query.scope === "ticket" ? query : { projectId: query.projectId }),
+      ...this.scopeBindings,
+    }) as unknown[];
     return rows.map((row) => decodeSession(row, "sessions row"));
   }
 
@@ -149,8 +199,11 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       this.db,
       `SELECT COUNT(*) AS count
            FROM sessions
-          WHERE project_id = @projectId${scope}`,
-    ).get(query.scope === "ticket" ? query : { projectId: query.projectId }) as unknown;
+          WHERE project_id = @projectId${scope}${this.scopeSql("sessions.id")}`,
+    ).get({
+      ...(query.scope === "ticket" ? query : { projectId: query.projectId }),
+      ...this.scopeBindings,
+    }) as unknown;
     return readInteger(rowValue(row, "count", "session count"), "session count");
   }
 
@@ -165,9 +218,9 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       this.db,
       `SELECT created_at
            FROM sessions
-          WHERE created_at >= @sinceMs
+          WHERE created_at >= @sinceMs${this.scopeSql("sessions.id")}
           ORDER BY created_at ASC`,
-    ).all(query) as unknown[];
+    ).all({ ...query, ...this.scopeBindings }) as unknown[];
     return rows.map((row) =>
       readInteger(rowValue(row, "created_at", "session start"), "session start"),
     );
@@ -207,7 +260,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
              FROM sessions s
              JOIN session_events e ON e.session_id = s.id
              JOIN session_event_sequence es ON es.event_id = e.id
-            WHERE s.project_id = @projectId
+            WHERE s.project_id = @projectId${this.scopeSql("s.id")}
               AND s.ticket_id IS NOT NULL
               AND json_extract(e.payload, '$.kind') = 'session.signaled'
               AND json_extract(e.payload, '$.signal') IN ('done', 'blocked')
@@ -228,7 +281,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
            FROM latest_ticket_signals
           WHERE ticket_rank = 1
           ORDER BY ticket_id COLLATE BINARY ASC`,
-    ).all(query) as unknown[];
+    ).all({ ...query, ...this.scopeBindings }) as unknown[];
     return rows.map((row) => {
       const value = asRecord(row, "latest ticket signal row");
       return {
@@ -262,9 +315,10 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
                 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
                 cost_usd, cost_basis
            FROM session_usage
-          WHERE 1 = 1${scope}${window}
+          WHERE 1 = 1${scope}${window}${this.scopeSql("session_usage.session_id")}
           ORDER BY occurred_at DESC, event_id COLLATE BINARY DESC`,
     ).all({
+      ...this.scopeBindings,
       ...(query.scope.kind === "project" ? { projectId: query.scope.projectId } : {}),
       ...(query.scope.kind === "ticket" ? { ticketId: query.scope.ticketId } : {}),
       ...(query.scope.kind === "session" ? { sessionId: query.scope.sessionId } : {}),
@@ -897,9 +951,10 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     this.assertOpen();
     const rows = prepared(
       this.db,
-      `SELECT s.id, s.project_id, s.ticket_id, s.role, s.parent_session_id, s.title, s.created_at
+      `SELECT s.id, s.project_id, s.ticket_id, s.role, s.parent_session_id, s.title, s.created_at,
+                ${birthPayload("s.id")}
            FROM sessions s
-          WHERE EXISTS (
+          WHERE 1 = 1${this.scopeSql("s.id")} AND EXISTS (
                 SELECT 1
                   FROM session_attachments a
                  WHERE a.session_id = s.id
@@ -907,7 +962,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
                    AND a.closed_sequence IS NULL
                 )
           ORDER BY s.created_at DESC, s.id COLLATE BINARY DESC`,
-    ).all() as unknown[];
+    ).all(this.scopeBindings) as unknown[];
     return rows.map((row) => decodeSession(row, "sessions row"));
   }
 
@@ -982,7 +1037,16 @@ function decodeUsageEntry(row: unknown, context: string): SessionUsageEntry {
 
 function decodeSession(row: unknown, context: string): Session {
   const value = asRecord(row, context);
+  const birth =
+    value.birth_payload === null || value.birth_payload === undefined
+      ? null
+      : decodeSessionEventPayload(
+          parseJson(value.birth_payload, `${context}.birth_payload`),
+          `${context}.birth_payload`,
+        );
+  const ownerUserId = birth?.kind === "session.created" ? birth.session.ownerUserId : undefined;
   const session: Session = {
+    ...(ownerUserId === undefined ? {} : { ownerUserId }),
     id: readString(value.id, `${context}.id`),
     projectId: readString(value.project_id, `${context}.project_id`),
     ticketId: readNullableString(value.ticket_id, `${context}.ticket_id`),

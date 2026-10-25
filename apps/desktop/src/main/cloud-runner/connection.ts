@@ -19,6 +19,9 @@ import {
   createRunnerTokenSource,
   runnerPresenceBackend,
   type ConnectBackend,
+  type BackendLink,
+  type RunnerPresence,
+  type CloudRunnerSyncConnection,
   type LinkStatus,
   type RunnerLinkLoss,
   type RunnerLinkStore,
@@ -31,6 +34,7 @@ export interface RunnerConnection {
   readonly status: LinkStatus;
   /** Whether the last beat reached the backend. */
   readonly beating: boolean;
+  readonly waitingFacts?: number;
   /** Connects, publishes capabilities and state, and starts beating. */
   start(): void;
   readonly power: RunnerPowerCycle;
@@ -44,6 +48,7 @@ export interface RunnerConnection {
 
 export interface ConnectRunnerInput {
   readonly store: RunnerLinkStore;
+  readonly runnerId?: string;
   /** The link ended: removed, cut off, or its credential is gone. Called at most once. */
   onLost(reason: RunnerLinkLoss): void;
   /** The link's status or the beat's outcome changed. */
@@ -59,6 +64,13 @@ export interface RunnerConnectionDeps {
   readonly connect: ConnectBackend;
   /** New on every process start. */
   readonly bootId: string;
+  /** Shares this connection's link and presence with the selected cloud product store. */
+  sync?(parts: {
+    link: BackendLink;
+    presence: RunnerPresence;
+    bootId: string;
+    runnerId: string;
+  }): CloudRunnerSyncConnection;
   readLoad(): RunnerLoad | Promise<RunnerLoad>;
   readCapabilities(): RunnerCapabilityReport | Promise<RunnerCapabilityReport>;
   readonly log: { warn(message: string, fields?: Record<string, unknown>): void };
@@ -97,6 +109,19 @@ export function runnerConnector(deps: RunnerConnectionDeps): ConnectRunner {
       presence,
       onError: (error) => deps.log.warn("runner wake step failed", { error }),
     });
+    const sync =
+      deps.sync === undefined
+        ? null
+        : deps.sync({
+            link,
+            presence,
+            bootId: deps.bootId,
+            runnerId:
+              input.runnerId ??
+              (() => {
+                throw new Error("A cloud runner needs its registered identity.");
+              })(),
+          });
     let offStatus: (() => void) | null = null;
     return {
       get status() {
@@ -105,20 +130,26 @@ export function runnerConnector(deps: RunnerConnectionDeps): ConnectRunner {
       get beating() {
         return presence.connected;
       },
+      get waitingFacts() {
+        return sync?.waiting() ?? 0;
+      },
       power,
       start() {
         offStatus = link.onStatus(() => input.onChange());
-        void presence.start();
+        if (sync === null) void presence.start();
+        else sync.start();
       },
       refreshCapabilities: () => void presence.refreshCapabilities(),
       async stop() {
         offStatus?.();
+        if (sync !== null) return sync.stop();
         await presence.stop();
         await link.close().catch(() => {});
       },
       async close() {
         offStatus?.();
         lost = true;
+        if (sync !== null) return sync.close();
         // Closed first, so the presence loop's last report fails at once rather than going out.
         await link.close().catch(() => {});
         await presence.stop();

@@ -7,6 +7,7 @@ import type { Delegations } from "./delegate-session";
 import * as control from "../session-control";
 import { SESSION_RUNTIME } from "../session-services";
 import * as notices from "./durable-host-notice-delivery";
+import { scopeSqliteHostNoticeOutbox } from "./sqlite-host-notice-outbox";
 import * as recovery from "./boot-recovery";
 import * as mcp from "../mcp/session-host";
 import * as shell from "../shell/shell-notices";
@@ -34,6 +35,15 @@ vi.mock("../session-control", () => ({
   createSuspendClock: vi.fn(() => ({ suspendedMsWithin: () => 0, close: vi.fn() })),
 }));
 vi.mock("./durable-host-notice-delivery", () => ({ createHostNoticeDelivery: vi.fn() }));
+vi.mock("./sqlite-host-notice-outbox", () => ({
+  scopeSqliteHostNoticeOutbox: vi.fn((_db, outbox, ownsSession) => ({
+    ...outbox,
+    pending: async () =>
+      (await outbox.pending()).filter((notice: { sessionId: string }) =>
+        ownsSession(notice.sessionId),
+      ),
+  })),
+}));
 vi.mock("./boot-recovery", () => ({ closeStaleAttachments: vi.fn() }));
 vi.mock("./restart-resume", () => ({ resumeRecoveredTurns: vi.fn(async () => {}) }));
 vi.mock("../mcp/session-host", () => ({ closeAllMcpSessionHosts: vi.fn() }));
@@ -170,6 +180,8 @@ function fixture() {
   };
   return {
     outbox,
+    delegation,
+    delegateHost,
     options,
     calls,
     services,
@@ -949,6 +961,64 @@ describe("restart resume after recovery (VC-450)", () => {
     const owner = createSessionRuntimeLifecycle({ ...bare.options, runtime: null });
     await owner.ready();
     expect(restart.resumeRecoveredTurns).not.toHaveBeenCalled();
+    await owner.close();
+  });
+});
+
+describe("launch-selected Session recovery scope", () => {
+  it("uses the injected engine and owner projects, and filters machine-state candidates before recovery", async () => {
+    const f = fixture();
+    const scoped = { ...f.engine, listSessions: vi.fn(async () => []) } as SessionEngine;
+    const ownedSessionIds = new Set(["owned", "owned-parent"]);
+    const ownsSession = (id: string) => ownedSessionIds.has(id);
+    vi.mocked(schedules.listScheduledResumeSessionIds).mockReturnValue(["owned", "foreign"]);
+    const ownedChild = {
+      childSessionId: "owned",
+      parentSessionId: "owned-parent",
+      operationId: "delegation-owned",
+      projectId: "cloud-project",
+      title: "Owned child",
+    };
+    vi.mocked(f.delegation.listUnansweredSubagents).mockReturnValue([
+      ownedChild,
+      { ...ownedChild, childSessionId: "foreign", operationId: "foreign-child" },
+      { ...ownedChild, parentSessionId: "foreign", operationId: "foreign-parent" },
+    ]);
+    Object.assign(f.outbox, {
+      pending: async () => [{ sessionId: "owned" }, { sessionId: "foreign" }],
+    });
+    const owner = createSessionRuntimeLifecycle({
+      ...f.options,
+      sessionEngine: scoped,
+      ownsSession,
+      projectIds: () => ["cloud-project"],
+    });
+    await owner.ready();
+    expect(vi.mocked(recovery.closeStaleAttachments).mock.lastCall![0]).toMatchObject({
+      engine: scoped,
+      projectIds: ["cloud-project"],
+    });
+    const resumePorts = vi.mocked(control.createScheduledResumeHost).mock.lastCall![0];
+    expect(await resumePorts.candidates()).toEqual(["owned"]);
+    await resumePorts.ticketSessions({ projectId: "p", ticketId: "t" });
+    expect(scoped.listSessions).toHaveBeenCalledWith({
+      projectId: "p",
+      scope: "ticket",
+      ticketId: "t",
+    });
+    expect(f.delegateHost.recover).toHaveBeenCalledWith([ownedChild]);
+    const noticePorts = vi.mocked(notices.createHostNoticeDelivery).mock.lastCall![0];
+    expect(await noticePorts.outbox.pending()).toEqual([{ sessionId: "owned" }]);
+    expect(scopeSqliteHostNoticeOutbox).toHaveBeenCalledWith(
+      f.options.host.database.ok ? f.options.host.database.db : undefined,
+      f.outbox,
+      ownsSession,
+    );
+    expect(followUps.consumeFollowUpCleanClose).toHaveBeenCalledWith(
+      f.options.host.database.ok ? f.options.host.database.db : undefined,
+      expect.any(Function),
+      ownsSession,
+    );
     await owner.close();
   });
 });
