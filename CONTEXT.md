@@ -80,7 +80,8 @@ _Avoid_: API key, device credential
 
 **Environment recipe**:
 A project's description of how to set up a Runner for it: size, setup and
-resume scripts (planned as `.agents/setup` and `.agents/resume`) and the secrets they need.
+resume scripts (`.agents/setup` and `.agents/resume` in the repository, which
+run behind the `cloud` flag today) and the secrets they need.
 An agent usually writes it; a form is the fallback.
 _Avoid_: Dockerfile, image, template
 

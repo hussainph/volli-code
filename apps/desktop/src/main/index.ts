@@ -855,6 +855,8 @@ const appStartup = app.whenReady().then(async () => {
   const hostCore = createHostCore(hostPorts, {
     dataDir: app.getPath("userData"),
     stopPolicy: "desktop-quit",
+    // A working copy's `.agents/setup` and its setup gate (VC-584).
+    environmentRecipes: () => isExperimentEnabled("cloud"),
     databasePath: dbPath,
     onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
     devDiagnostics: isDev,

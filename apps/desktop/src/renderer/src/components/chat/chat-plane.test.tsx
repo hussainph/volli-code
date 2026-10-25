@@ -148,6 +148,8 @@ describe("ChatTurn copy control", () => {
   });
 });
 
+const NO_ACT = () => undefined;
+
 describe("SessionBlocker hit testing", () => {
   it("opts back into pointer events within the composer overlay", () => {
     const html = renderToStaticMarkup(
@@ -175,6 +177,27 @@ describe("SessionBlocker hit testing", () => {
       /^<div class="pointer-events-none"><div\b[^>]*\bdata-slot="session-blocker"[^>]*\bclass="[^"]*\bpointer-events-auto\b/,
     );
     expect(html).toContain('aria-label="Dismiss"');
+  });
+
+  // VC-584: the failed environment setup's row, the one with a third act.
+  it("draws every act a blocker offers, in order", () => {
+    const html = renderToStaticMarkup(
+      <SessionBlocker
+        blocker={{
+          message: "Environment setup failed",
+          detail: ".agents/setup exited with code 1: boom",
+          tone: "error",
+          action: { label: "Retry setup", act: NO_ACT },
+          secondaryAction: { label: "Start anyway", act: NO_ACT },
+          tertiaryAction: { label: "Fix with an agent", act: NO_ACT },
+          dismiss: { label: "Dismiss", act: NO_ACT },
+        }}
+      />,
+    );
+    const labels = [...html.matchAll(/<button\b[^>]*>([^<]*)<\/button>/g)].map(
+      ([, label]) => label,
+    );
+    expect(labels).toEqual(["Retry setup", "Start anyway", "Fix with an agent"]);
   });
 });
 

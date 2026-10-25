@@ -9,14 +9,21 @@
  */
 
 import type * as accounts from "../accounts.js";
+import type * as board from "../board.js";
+import type * as boardReceipts from "../boardReceipts.js";
+import type * as crons from "../crons.js";
 import type * as health from "../health.js";
 import type * as invites from "../invites.js";
 import type * as lib_audit from "../lib/audit.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_board from "../lib/board.js";
+import type * as lib_boardEffects from "../lib/boardEffects.js";
+import type * as lib_boardReceipts from "../lib/boardReceipts.js";
 import type * as lib_firstSignIn from "../lib/firstSignIn.js";
 import type * as lib_validators from "../lib/validators.js";
 import type * as lib_workspaces from "../lib/workspaces.js";
 import type * as members from "../members.js";
+import type * as projects from "../projects.js";
 import type * as workspaces from "../workspaces.js";
 
 import type {
@@ -27,14 +34,21 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   accounts: typeof accounts;
+  board: typeof board;
+  boardReceipts: typeof boardReceipts;
+  crons: typeof crons;
   health: typeof health;
   invites: typeof invites;
   "lib/audit": typeof lib_audit;
   "lib/auth": typeof lib_auth;
+  "lib/board": typeof lib_board;
+  "lib/boardEffects": typeof lib_boardEffects;
+  "lib/boardReceipts": typeof lib_boardReceipts;
   "lib/firstSignIn": typeof lib_firstSignIn;
   "lib/validators": typeof lib_validators;
   "lib/workspaces": typeof lib_workspaces;
   members: typeof members;
+  projects: typeof projects;
   workspaces: typeof workspaces;
 }>;
 

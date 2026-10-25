@@ -185,12 +185,24 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
   }
 
   async function scan(): Promise<void> {
-    for (const binding of ports.listBindings()) {
+    const bindings = ports.listBindings();
+    // Nothing live, nothing to read: an idle host's tick ends here.
+    if (bindings.length === 0) return;
+    const startedAt = performance.now();
+    for (const binding of bindings) {
       try {
         await inspect(binding);
       } catch (error) {
         onError(error);
       }
+    }
+    // The scan's cost on an always-on host (VC-686): one projection read per
+    // live Session per interval, measured where it runs.
+    if (log.enabled("debug")) {
+      log.debug("watchdog scan", {
+        sessions: bindings.length,
+        scanMs: Math.round(performance.now() - startedAt),
+      });
     }
   }
 

@@ -42,6 +42,7 @@ import {
   modelTierRow,
   offeredComposerVerbs,
   resolveDefaultModel,
+  revealedSessionAttention,
   roleImpliedByTicket,
   readSkillResources,
   type ComposerVerbMoment,
@@ -155,7 +156,8 @@ import {
 } from "@renderer/components/chat/transcript-window";
 import { HostNoticeRow } from "@renderer/components/chat/host-notice-ui";
 import { RunningOnLabel } from "@renderer/components/hosts/running-on-label";
-import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
+import { guardWrite, useCanWrite, useCloudEnabled } from "@renderer/components/hosts/use-hosts";
+import { useWorktreeSetupGate } from "@renderer/components/chat/use-worktree-setup-gate";
 import { notAvailableOn, useRemoteHostName } from "@renderer/components/hosts/use-remote-project";
 import { useRemoteSessionOnScreen } from "@renderer/lib/remote-sessions";
 import { ChatEmptyState } from "@renderer/components/chat/empty/chat-empty-state";
@@ -1055,6 +1057,25 @@ export function ChatPlane({
     setDismissedBlockerKey(dismissKey);
   }, []);
 
+  // A failed environment setup holding the ticket's starts (VC-584): read
+  // only with `cloud` on, for This Mac's project, while the row draws the
+  // configuration failure a worktree preparation raised.
+  const cloud = useCloudEnabled();
+  const setupGate = useWorktreeSetupGate({
+    enabled: cloud && remoteHost === null,
+    projectId,
+    ticketId,
+    attention:
+      revealedSessionAttention(
+        projection?.attention.active ?? EMPTY_ATTENTION.active,
+        revealed?.attentionId ?? null,
+      ) ??
+      projection?.attention.primary ??
+      null,
+    recover,
+  });
+  const { answerSetup, fixSetup } = setupGate;
+
   const blockerActs = React.useMemo<SessionBlockerActs>(
     () => ({
       recover: () => void recover(),
@@ -1073,11 +1094,15 @@ export function ChatPlane({
       dismiss: dismissBlocker,
       scheduleResume: (request) => void scheduleResume(request),
       cancelScheduledResume: (scheduleId) => void cancelScheduledResume(scheduleId),
+      answerSetup,
+      fixSetup,
     }),
     [
+      answerSetup,
       cancelScheduledResume,
       dismissBlocker,
       dismissError,
+      fixSetup,
       liveExecutorId,
       recover,
       retryRuntime,
@@ -1129,6 +1154,7 @@ export function ChatPlane({
       turnActive: projection?.turnActive ?? false,
       liveExecutorId,
       now: resumeNow,
+      failedSetup: setupGate.failedSetup,
     },
     blockerActs,
     interactions.length > 0,
@@ -2193,6 +2219,11 @@ export function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
           onClick={blocker.secondaryAction.act}
         >
           {blocker.secondaryAction.label}
+        </Button>
+      ) : null}
+      {blocker.tertiaryAction ? (
+        <Button size="xs" variant="ghost" className="shrink-0" onClick={blocker.tertiaryAction.act}>
+          {blocker.tertiaryAction.label}
         </Button>
       ) : null}
       {/* Every error can be retired locally without claiming its recovery has

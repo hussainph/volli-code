@@ -2,17 +2,24 @@ import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
 import type { SessionLocation, SessionLocationResolver } from "@volli/session-engine";
-import { harnessAdapters, LOCAL_RUNNER, scrubInheritedSessionEnv } from "@volli/shared";
+import {
+  displayTicketId,
+  harnessAdapters,
+  LOCAL_RUNNER,
+  scrubInheritedSessionEnv,
+} from "@volli/shared";
 import type { Session, RunnerIdentity } from "@volli/shared";
 
-import type { HostEventBus } from "../ports";
+import type { HostEventBus, PowerPort } from "../ports";
 import { getProjectById, isProjectAttached } from "../db/projects-repo";
 import { getTicket } from "../db/tickets-repo";
 import {
   acquireWorktreeStartLease,
   ensure,
   runPendingWorktreeSetup,
+  runWorktreeResume,
   UNDER_DELETION_REFUSAL,
+  watchRunnerWakes,
 } from "../worktree";
 import { worktreeDeps } from "../worktree-runtime";
 
@@ -92,10 +99,19 @@ export function createSessionLocationResolver(
     dataDir: string;
     venue?: RunnerIdentity;
     setupEnvironment?: (sessionId: string) => Promise<WorktreeSetupEnvironment>;
+    /**
+     * Whether the working copy's environment recipe runs (VC-584, the `cloud`
+     * flag), read per start: `.agents/setup` before the first turn, the setup
+     * gate, and `.agents/resume`. Absent is off.
+     */
+    environmentRecipes?: () => boolean;
+    /** The machine's wakes, which owe every working copy its resume again. */
+    power?: PowerPort;
   },
 ): SessionLocationResolver {
   const venue = options.venue ?? LOCAL_RUNNER;
   const setupEnvironment = options.setupEnvironment ?? hostSetupEnvironment;
+
   const site = (session: Session) => {
     const project = getProjectById(db, session.projectId);
     if (!project) throw new Error(`Project ${session.projectId} was not found`);
@@ -145,6 +161,16 @@ export function createSessionLocationResolver(
       // this start waits for it rather than starting its agent in a checkout
       // still being set up. With nothing pending or running, it is one unlink
       // that finds no file.
+      // With environment recipes on, the run is the working copy's recipe
+      // (its own `.agents/setup` first), and a failed one keeps refusing
+      // starts until a person answers it (`setup-gate.ts`).
+      const recipe =
+        options.environmentRecipes?.() === true
+          ? {
+              projectId: project.id,
+              ticketDisplayId: displayTicketId(project.ticketPrefix, ticket.ticketNumber),
+            }
+          : undefined;
       const setup = await runPendingWorktreeSetup(deps, {
         ticketId: ticket.id,
         worktreePath: identity.worktreePath,
@@ -153,11 +179,25 @@ export function createSessionLocationResolver(
         setupCommand: getProjectById(db, project.id)?.setupCommand ?? null,
         // Asked only when the run is this call's to make.
         environment: () => setupEnvironment(session.id),
+        ...(recipe === undefined ? {} : { recipe }),
       });
       if (setup.kind === "failed") {
         throw new Error(
           `Couldn't prepare the worktree at ${identity.worktreePath} — ${setup.message}`,
         );
+      }
+      // The first start since this runner started or woke brings the working
+      // copy's services back. Waited on briefly, never a block.
+      if (recipe !== undefined) {
+        // Subscribed on the first recipe start, so a host with recipes off
+        // never listens.
+        if (options.power !== undefined) watchRunnerWakes(options.power);
+        await runWorktreeResume(deps, {
+          ticketId: ticket.id,
+          worktreePath: identity.worktreePath,
+          recipe,
+          environment: () => setupEnvironment(session.id),
+        });
       }
       return { directory: identity.worktreePath, venue };
     });

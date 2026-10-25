@@ -54,6 +54,13 @@ export interface SetupRunParams {
   shellPath: string;
   /** The harness/resume line to type once setup succeeds, or `null` (bare shell). */
   launchCommand: string | null;
+  /**
+   * Told once, when the run settles: the setup's exit code (`null` when the
+   * shell died before the sentinel) and the output's tail. The environment
+   * recipe records its run fact here (VC-584). Must not throw into the pty
+   * hot path; a throw is caught and logged.
+   */
+  onSettled?: (settled: { exitCode: number | null; tail: string }) => void;
 }
 
 /**
@@ -120,6 +127,13 @@ export function createSetupRun(deps: SetupRunPorts, params: SetupRunParams): Set
   setPhase(params.ticketId, "setting-up", deps.onPhase);
 
   const recordFailure = (stderr: string): void => recordSetupFailure(deps, params.ticketId, stderr);
+  const announce = (exitCode: number | null): void => {
+    try {
+      params.onSettled?.({ exitCode, tail });
+    } catch (error) {
+      log.error("setup run settle hook failed", { ticketId: params.ticketId, error });
+    }
+  };
 
   return {
     commandLine: buildSetupSentinelLine(params.setupCommand, params.shellPath),
@@ -129,6 +143,7 @@ export function createSetupRun(deps: SetupRunPorts, params: SetupRunParams): Set
       const exitCode = parseSetupSentinel(tail);
       if (exitCode === null) return { status: "pending" };
       settled = true;
+      announce(exitCode);
       if (exitCode === 0) {
         setPhase(params.ticketId, "ready", deps.onPhase);
         return { status: "ready", launchCommand: params.launchCommand };
@@ -139,6 +154,7 @@ export function createSetupRun(deps: SetupRunPorts, params: SetupRunParams): Set
     handleExit(exitCode: number): void {
       if (settled) return;
       settled = true;
+      announce(null);
       recordFailure(`${tail}\n[shell exited (${exitCode}) before the setup sentinel]`);
     },
   };

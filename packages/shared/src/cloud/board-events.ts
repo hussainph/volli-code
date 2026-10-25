@@ -19,11 +19,13 @@
  * is optional, anything else is a new kind. Readers drop a kind they do not
  * know ({@link isBoardEventKind}).
  *
- * The payloads of the kinds new to the cloud are provisional until their first
- * writer ships (board commands, the activity feed, assignees and links,
- * projects and environments, Session outcomes, Automations): nothing has written one yet,
- * so the owning ticket may still reshape its kinds here. Once a kind is written
- * by a deployed backend it is frozen.
+ * The board functions write the ticket kinds and the project kinds
+ * (`project_created`, `project_renamed`, `project_archived`,
+ * `project_unarchived`). The payloads of the other kinds new to the cloud are
+ * provisional until their first writer ships (the activity feed, assignees and
+ * links, project moves and environments, Session outcomes, Automations), so
+ * the owning ticket may still reshape them here. Once a kind is written by a
+ * deployed backend it is frozen.
  */
 
 import type { SessionOrigin } from "../session-origin";
@@ -81,6 +83,8 @@ export const BOARD_EVENT_WRITE_KINDS = [
   "project_created",
   "project_moved",
   "project_renamed",
+  "project_archived",
+  "project_unarchived",
   "label_merged",
   "automation_changed",
   "automation_armed",
@@ -205,6 +209,8 @@ export type BoardEventPayload =
   | { kind: "project_created"; name: string; ticketPrefix: string }
   | { kind: "project_moved"; fromWorkspaceId: WorkspaceId; toWorkspaceId: WorkspaceId }
   | { kind: "project_renamed"; from: string; to: string }
+  | { kind: "project_archived" }
+  | { kind: "project_unarchived" }
   | { kind: "label_merged"; labelId: LabelId; intoLabelId: LabelId }
   | {
       kind: "automation_changed";

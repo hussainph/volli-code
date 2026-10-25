@@ -71,8 +71,27 @@ function markerDir(deps: HomePorts): string {
  * before the add) and the same worktree afterwards name one file.
  */
 function markerPath(deps: HomePorts, worktreePath: string, step: FirstRunStep): string {
+  return workingCopyRecordPath(deps, worktreePath, step);
+}
+
+/**
+ * A file of this machine's record about one working copy, beside its first-run
+ * markers: `<home>/.volli/worktree-first-run/<key>.<suffix>`. The environment
+ * recipe's run facts (`environment-runs.ts`) live here too, so one record
+ * outlives and is keyed exactly like the markers.
+ */
+export function workingCopyRecordPath(
+  deps: HomePorts,
+  worktreePath: string,
+  suffix: string,
+): string {
   const key = createHash("sha256").update(canonicalize(worktreePath)).digest("hex").slice(0, 32);
-  return join(markerDir(deps), `${key}.${step}`);
+  return join(markerDir(deps), `${key}.${suffix}`);
+}
+
+/** Creates the record directory; idempotent. */
+export function ensureWorkingCopyRecordDir(deps: HomePorts): void {
+  mkdirSync(markerDir(deps), { recursive: true });
 }
 
 function isMissing(error: unknown): boolean {
@@ -100,7 +119,13 @@ export function markFirstRunPending(
     if (steps.includes(step)) writeFileSync(markerPath(deps, worktreePath, step), body, "utf8");
     else unlinkMarker(markerPath(deps, worktreePath, step));
   }
+  // A new working copy at this path owes nothing an earlier one's recipe runs
+  // recorded (`environment-runs.ts`): neither its outcome nor its failure.
+  for (const record of RUN_RECORDS) unlinkMarker(workingCopyRecordPath(deps, worktreePath, record));
 }
+
+/** The environment recipe's run records (`environment-runs.ts`, `resume-exec.ts`), by suffix. */
+const RUN_RECORDS = ["setup-run.json", "resume-run.json", "resume.log"] as const;
 
 /** Removes one marker; `true` when this call removed it, `false` when it was already gone. */
 function unlinkMarker(path: string): boolean {
@@ -141,4 +166,18 @@ export function completeFirstRunCopy(deps: HomePorts, worktreePath: string): voi
  */
 export function claimFirstRunSetup(deps: HomePorts, worktreePath: string): boolean {
   return unlinkMarker(markerPath(deps, worktreePath, "setup"));
+}
+
+/**
+ * Owes the worktree's setup run again: a person's explicit Retry after a
+ * failed run (VC-584). The next door to start work claims it exactly as it
+ * claims a new worktree's — this is intent, never an automatic retry.
+ */
+export function rearmFirstRunSetup(deps: HomePorts, worktreePath: string, ticketId: string): void {
+  mkdirSync(markerDir(deps), { recursive: true });
+  writeFileSync(
+    markerPath(deps, worktreePath, "setup"),
+    `${JSON.stringify({ worktreePath, ticketId })}\n`,
+    "utf8",
+  );
 }

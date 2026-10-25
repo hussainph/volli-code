@@ -17,25 +17,31 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 
 ## Layout
 
-| Path                                            | What it holds                                                                                                                                                                           |
-| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `functions/`                                    | The Convex functions directory (`convex.json` → `"functions"`). `schema.ts`, `auth.config.ts`, function modules.                                                                        |
-| `functions/schema.ts`                           | Every table, its validators and indexes. Conventions and the recorded deviations: `SCHEMA-NOTES.md`.                                                                                    |
-| `functions/lib/validators.ts`                   | Validator building blocks (`uuid`, `nullable`, `literals`, the `actor` union), built from the shared vocabulary in `@volli/shared/cloud`.                                               |
-| `functions/lib/auth.ts`                         | Identity and membership checks: `requireIdentity`, `ensureViewer`, `requireViewer`, `requireMember`, `requireManage`, `requireProject`, `requireSessionVisible`, `requireSessionActor`. |
-| `functions/accounts.ts`                         | `ensureViewer` (the first call after sign-in; creates the person's own Workspace through `lib/firstSignIn.ts`) and `viewer`.                                                            |
-| `functions/workspaces.ts`                       | The switcher (`listMine`), `get`, `create`, `rename`, and the admin policy (`policy`, `setPolicy`: `shareAll`, `whoCanInvite`).                                                         |
-| `functions/members.ts`                          | The roster, `setRole`, `suspend` / `unsuspend`, `remove`, `leave`. The rules are `decideMemberChange` in `@volli/shared/cloud`.                                                         |
-| `functions/invites.ts`                          | Email and single-use link invites: `create`, `revoke`, `list`, `listMine`, `preview`, `accept` (by id) and `acceptLink` (by token).                                                     |
-| `functions/lib/workspaces.ts`                   | Creating a Workspace (the personal one at sign-up too), joining, the seat count. `lib/audit.ts` writes the `auditLog` row each change leaves.                                           |
-| `functions/_generated/`                         | Output of `convex codegen`, **committed**. CI regenerates it and fails on any drift. Never edit or format it by hand.                                                                   |
-| `fixture/backend.json`                          | The pin: one backend release, the `convex` npm version that goes with it, and a sha256 for each platform's zip.                                                                         |
-| `fixture/backend.ts`                            | Downloads and verifies the binary, then starts a backend: free loopback ports, a fresh data dir, a random instance secret, beacon off. `stop()` kills it and deletes the dir.           |
-| `fixture/jwt.ts`                                | The test issuer: a fresh ES256 key per run, and `mintTestToken(pem, subject)`.                                                                                                          |
-| `fixture/with-backend.ts`                       | Runs one command against a throwaway backend, then stops it.                                                                                                                            |
-| `fixture/global-setup.ts`, `fixture/testing.ts` | Vitest wiring for `test:backend`: `connectBackend().client("user:alice")`.                                                                                                              |
-| `test/*.test.ts`                                | Unit tests: functions run in-process under [`convex-test`](https://docs.convex.dev/testing/convex-test). No backend.                                                                    |
-| `test/*.backend.test.ts`                        | Integration tests against the real pinned backend.                                                                                                                                      |
+| Path                                               | What it holds                                                                                                                                                                           |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `functions/`                                       | The Convex functions directory (`convex.json` → `"functions"`). `schema.ts`, `auth.config.ts`, function modules.                                                                        |
+| `functions/schema.ts`                              | Every table, its validators and indexes. Conventions and the recorded deviations: `SCHEMA-NOTES.md`.                                                                                    |
+| `functions/lib/validators.ts`                      | Validator building blocks (`uuid`, `nullable`, `literals`, the `actor` union), built from the shared vocabulary in `@volli/shared/cloud`.                                               |
+| `functions/lib/auth.ts`                            | Identity and membership checks: `requireIdentity`, `ensureViewer`, `requireViewer`, `requireMember`, `requireManage`, `requireProject`, `requireSessionVisible`, `requireSessionActor`. |
+| `functions/accounts.ts`                            | `ensureViewer` (the first call after sign-in; creates the person's own Workspace through `lib/firstSignIn.ts`) and `viewer`.                                                            |
+| `functions/workspaces.ts`                          | The switcher (`listMine`), `get`, `create`, `rename`, and the admin policy (`policy`, `setPolicy`: `shareAll`, `whoCanInvite`).                                                         |
+| `functions/members.ts`                             | The roster, `setRole`, `suspend` / `unsuspend`, `remove`, `leave`. The rules are `decideMemberChange` in `@volli/shared/cloud`.                                                         |
+| `functions/invites.ts`                             | Email and single-use link invites: `create`, `revoke`, `list`, `listMine`, `preview`, `accept` (by id) and `acceptLink` (by token).                                                     |
+| `functions/lib/workspaces.ts`                      | Creating a Workspace (the personal one at sign-up too), joining, the seat count. `lib/audit.ts` writes the `auditLog` row each change leaves.                                           |
+| `functions/projects.ts`                            | Projects in a Workspace: `create` (caller-minted id, fixed ticket prefix, its counter document), `rename`, `archive`, `unarchive`, `list`, `get`.                                       |
+| `functions/board.ts`                               | The board: tickets (`createTicket`, `updateTicket`, `moveTickets`, `archiveTicket`, `unarchiveTicket`), comments, signals, label colours, and the roster/ticket/history reads.          |
+| `functions/lib/board.ts`                           | What board writes share: the actor, the project counter (`BoardWrite`: ticket numbers and the board event `seq`), row ↔ rule-fact mapping, typed errors.                                |
+| `functions/lib/boardReceipts.ts`                   | `withBoardReceipt`: every board mutation is idempotent by `commandId` for seven days; another intent under the same id is `command_conflict`.                                           |
+| `functions/lib/boardEffects.ts`                    | A board write's machine side effects (Done/archive trim, interrupts, armed arrivals, worktree materialization) as `runnerJobs` rows for the runner that holds the work.                 |
+| `functions/boardReceipts.ts`, `functions/crons.ts` | The hourly sweep of expired receipts.                                                                                                                                                   |
+| `functions/_generated/`                            | Output of `convex codegen`, **committed**. CI regenerates it and fails on any drift. Never edit or format it by hand.                                                                   |
+| `fixture/backend.json`                             | The pin: one backend release, the `convex` npm version that goes with it, and a sha256 for each platform's zip.                                                                         |
+| `fixture/backend.ts`                               | Downloads and verifies the binary, then starts a backend: free loopback ports, a fresh data dir, a random instance secret, beacon off. `stop()` kills it and deletes the dir.           |
+| `fixture/jwt.ts`                                   | The test issuer: a fresh ES256 key per run, and `mintTestToken(pem, subject)`.                                                                                                          |
+| `fixture/with-backend.ts`                          | Runs one command against a throwaway backend, then stops it.                                                                                                                            |
+| `fixture/global-setup.ts`, `fixture/testing.ts`    | Vitest wiring for `test:backend`: `connectBackend().client("user:alice")`.                                                                                                              |
+| `test/*.test.ts`                                   | Unit tests: functions run in-process under [`convex-test`](https://docs.convex.dev/testing/convex-test). No backend.                                                                    |
+| `test/*.backend.test.ts`                           | Integration tests against the real pinned backend.                                                                                                                                      |
 
 ## Running it locally
 
@@ -96,6 +102,20 @@ backend.client("user:alice", { claims: { email: "alice@example.com", name: "Alic
 
 The backend is shared by every file in a run, so each test signs in as fresh
 subjects rather than expecting an empty database.
+
+## The board
+
+A board write is `load → decide → apply`. The decision is a pure function in
+`@volli/shared/cloud` (`board-rules.ts`, `project-rules.ts`) that a client can
+also run for an optimistic update; the mutation loads its facts, applies the
+answer, appends the board events (one per fact, `seq` from the project's
+counter, so a project's history is a gapless total order), records the
+receipt and enqueues runner jobs, all in one transaction. A move names
+neighbours (`afterTicketId` / `beforeTicketId`) and the key is computed
+inside the transaction from the column itself, so concurrent moves into the
+same gap conflict and retry instead of colliding (`board.backend.test.ts`).
+The local SQLite board (signed-out mode) keeps its own commands; it was not
+rewritten onto these decisions, because its dense integer positions differ.
 
 **No cloud deployment may ever set `VOLLI_TEST_JWKS`.** Without it, the
 deployment trusts no test issuer.

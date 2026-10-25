@@ -21,6 +21,18 @@ import { pathToFileURL } from "node:url";
 
 const n1 = (path) => import(`n1:${path}`);
 
+/**
+ * N-1's executor port, under both names a shipped build reads: `executor` (one
+ * adapter) before VC-916, `executors` (the executor slot) since. Each build
+ * reads only its own name, so passing both fits every N-1.
+ */
+function executorPorts(adapter) {
+  return {
+    executor: adapter,
+    executors: { runtimes: new Map([[adapter.id, adapter]]), defaultRuntime: adapter },
+  };
+}
+
 /** N-1's module at `path`, or null when that build has no such file. */
 async function optional(path) {
   try {
@@ -285,13 +297,13 @@ const steps = {
           }),
           reaffirm: async () => undefined,
         },
-        executor: {
+        ...executorPorts({
           ...adapter,
           attach: (spec, sink) => {
             attachSpecs.push(spec);
             return adapter.attach(spec, sink);
           },
-        },
+        }),
       });
       // The host's real cold-recovery path calls the adapter with native_resume
       // and the durable binding's locator, then replays its receipts/markers.
@@ -696,13 +708,13 @@ const steps = {
           }),
           reaffirm: async () => undefined,
         },
-        executor: {
+        ...executorPorts({
           ...adapter,
           attach: (spec, sink) => {
             attachSpecs.push(spec);
             return adapter.attach(spec, sink);
           },
-        },
+        }),
       });
       await runtime.reconcile({ sessionId: step.sessionId, attachmentId: before.liveExecutor.id });
       const attached = await engine.getSession({ sessionId: step.sessionId });

@@ -29,6 +29,7 @@ import {
   type RunnerIdentity,
 } from "@volli/shared";
 import type { DbHandle, HostCorePorts } from "../index";
+import type { PowerPort } from "../ports";
 import { getProjectById } from "../db/projects-repo";
 import { blobsRoot } from "../blob-store";
 import { prepareTurnAttachments } from "../turn-attachments";
@@ -78,6 +79,12 @@ export interface RuntimeAssemblyOptions {
   sessionWake: SubscribeSessionWake | null;
   dataDir: string;
   binDir: string;
+  /**
+   * Environment recipes (VC-584): whether they run (the `cloud` flag, read per
+   * start) and the machine's wakes, which owe each working copy its resume
+   * again. Absent is off.
+   */
+  environmentRecipes?: { enabled: () => boolean; power: PowerPort };
   venue: RunnerIdentity;
   hostPorts: Pick<HostCorePorts, "events" | "connectivity" | "log">;
   modelAccess: PiModelAccess | null;
@@ -577,6 +584,12 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                   sessionWake(({ event }) => listener(event)),
               }),
           artifacts: transcriptArtifacts,
+          ...(options.environmentRecipes === undefined
+            ? {}
+            : {
+                environmentRecipes: options.environmentRecipes.enabled,
+                power: options.environmentRecipes.power,
+              }),
           // A worktree's setup command, run before a structured Session's
           // first turn (VC-835), runs in the environment that Session's own
           // commands get: after login-PATH adoption has landed, with Volli's bin

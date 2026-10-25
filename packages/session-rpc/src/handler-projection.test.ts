@@ -70,6 +70,8 @@ const SAMPLE_INPUTS: {
   "project.reorder": { orderedIds: [PROJECT] },
   "project.remove": { projectId: PROJECT },
   "worktree.trimSettings": undefined,
+  "worktree.setupStatus": { ticketId: "ticket-1" },
+  "worktree.answerSetup": { ticketId: "ticket-1", answer: "retry" },
   "hosts.snapshot": undefined,
   "hosts.subscribe": undefined,
   "hosts.retry": { hostId: HOST },
