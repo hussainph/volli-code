@@ -166,13 +166,15 @@ One convention for what a module asks for and what it is (VC-632):
   maintenance after first paint and triggers retention on focus; `hostd`
   starts it at readiness. The retention watch is shared per database with
   IPC, keeping dismissal state and read-only behavior. Its cadence is per
-  ticket (VC-686): a quiet ticket's PR read backs off from one minute to
-  fifteen, a changed row or a running check reads at once or every minute,
-  committed ticket changes (the ticket wake bus) wake it, focus refreshes
-  anything read over a minute ago, and the trim backfill walks a finished
-  worktree again only when its ticket changes or the memo lapses. It logs
-  each cycle's `gh` reads, trim walks and scan time at debug, and an hourly
-  `retention load` summary at info.
+  ticket (VC-686): a quiet or failing ticket's PR read backs off from one
+  minute to fifteen, a changed row or a running check reads at once or every
+  minute, a committed ticket event that can move a retention answer (move,
+  archive, worktree or PR change, signal) wakes it and reads that ticket,
+  focus refreshes anything read over a minute ago, a reclaim never rests on a
+  skipped discovery, and the trim backfill asks a finished worktree again only
+  when its ticket, Keep pin or trim settings change or the memo lapses. It
+  logs each cycle's `gh` reads, trim checks and wall time at debug, and an
+  hourly `retention load` summary at info.
 - **Backup.** Formats, redactions, credential exclusions and the
   minimum-reader marker guard are as shipped. Migration rollback backups and
   backup retention run through the shared open/migration path; there is no

@@ -12,6 +12,7 @@
  * if each entrypoint built its own.
  */
 import type Database from "better-sqlite3";
+import type { TicketEventPayload } from "@volli/shared";
 
 import type { AttentionDeliveryPort, HostEventBus } from "./ports";
 import { subscribeTicketWake } from "./ticket-wake";
@@ -23,6 +24,38 @@ import {
   type TrimFinishPorts,
   type WorktreePorts,
 } from "./worktree";
+
+/**
+ * Which committed ticket events can move a retention answer (VC-686): a move,
+ * an archive, a worktree or PR change, or a Session's signal (an agent that
+ * just opened a PR usually says so). Everything else is board chatter the
+ * watch need not wake for. A record, so a new event kind must decide here.
+ */
+const RETENTION_WAKES: Record<TicketEventPayload["kind"], boolean> = {
+  created: true,
+  status_changed: true,
+  archived: true,
+  unarchived: true,
+  signaled: true,
+  worktree_changed: true,
+  worktree_scope_changed: true,
+  pr_opened: true,
+  pr_merged: true,
+  priority_changed: false,
+  harness_changed: false,
+  retitled: false,
+  body_edited: false,
+  labels_changed: false,
+  commented: false,
+  worktree_failed: false,
+  worktree_committed: false,
+  worktree_reclaimed: false,
+  worktree_trimmed: false,
+  attachment_added: false,
+  attachment_removed: false,
+  session_started: false,
+  session_resumed: false,
+};
 
 let watchers = new WeakMap<Database.Database, RetentionWatcher>();
 let watcher: RetentionWatcher | null = null;
@@ -88,9 +121,14 @@ export function getRetentionWatcher(
       trim: reclaimSeams === undefined ? undefined : trimSeams(worktree, reclaimSeams),
     },
     retentionConfigFromEnv(process.env),
-    // Event-driven (VC-686): a committed ticket change wakes the watch, so it
-    // can sleep through a quiet board instead of re-reading it every minute.
-    (listener) => subscribeTicketWake(() => listener()),
+    // Event-driven (VC-686): a committed ticket change that can move a
+    // retention answer wakes the watch and reads that ticket, so it can sleep
+    // through a quiet board instead of re-reading it every minute.
+    (listener) =>
+      subscribeTicketWake(({ event }) => {
+        // Tolerant on read: a kind this build does not know wakes nobody.
+        if (RETENTION_WAKES[event.payload.kind] === true) listener(event.ticketId);
+      }),
   );
   watchers.set(db, watcher);
   return watcher;

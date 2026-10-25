@@ -597,7 +597,7 @@ describe("trimFinishedWorktree", () => {
     await trimFinishedWorktree(trimDeps(), "t1");
     const second = await trimFinishedWorktree(trimDeps(), "t1");
 
-    expect(second).toEqual({ kind: "skipped", reason: "nothing to trim", settled: true });
+    expect(second).toEqual({ kind: "skipped", reason: "nothing to trim", nothingLeft: true });
     expect(trimEvents()).toHaveLength(1);
   });
 

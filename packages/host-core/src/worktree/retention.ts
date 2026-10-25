@@ -295,11 +295,11 @@ export type TrimFinishOutcome =
       kind: "skipped";
       reason: string;
       /**
-       * The walk ran and found nothing to take: a settled answer for this
-       * ticket as it stands, which the watch's backfill need not re-ask soon
-       * (VC-686). Absent on every refusal a later cycle could see differently.
+       * The walk ran and found nothing to take: an answer for this ticket as it
+       * stands, which the watch's backfill need not ask again soon (VC-686).
+       * Absent on every refusal a later cycle could see differently.
        */
-      settled?: true;
+      nothingLeft?: true;
     };
 
 const TRIM_SKIP = (reason: string): TrimFinishOutcome => ({ kind: "skipped", reason });
@@ -353,7 +353,7 @@ export async function trimFinishedWorktree(
   // Nothing removed is not an event: a worktree that was already trimmed (or
   // never had artifacts) would otherwise write one of these on every poll.
   if (trimmed.value.removed.length === 0) {
-    return { kind: "skipped", reason: "nothing to trim", settled: true };
+    return { kind: "skipped", reason: "nothing to trim", nothingLeft: true };
   }
 
   recordTicketEvent(
