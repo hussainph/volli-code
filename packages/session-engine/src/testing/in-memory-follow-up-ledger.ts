@@ -1,6 +1,7 @@
 import type { SessionLedger, Synchronous } from "@volli/shared";
 import {
   emptySessionFollowUpState,
+  pruneSessionFollowUpState,
   sessionFollowUpDeliveryEvidence,
   type SessionFollowUpDeliveryProof,
   type SessionFollowUpLedger,
@@ -27,6 +28,7 @@ export function createInMemorySessionFollowUpLedger(
         state: SessionFollowUpState,
         deliveryProof?: SessionFollowUpDeliveryProof,
       ) => Synchronous<T>,
+      options?: { mode: "read" },
     ) {
       const apply = (deliveryProof?: SessionFollowUpDeliveryProof): Synchronous<T> => {
         const state = JSON.parse(
@@ -36,6 +38,8 @@ export function createInMemorySessionFollowUpLedger(
         if (result && typeof result === "object" && "then" in result) {
           throw new Error("Follow-up ledger transaction must be synchronous");
         }
+        if (options?.mode === "read") return result;
+        pruneSessionFollowUpState(state, Date.now());
         // As the SQLite queue does: a Session nobody has written keeps no row
         // until a writer moves its revision.
         if (states.has(sessionId) || state.revision > 0) {

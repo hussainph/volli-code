@@ -228,6 +228,18 @@ async function attach(
 }
 
 const deliveryId = (sessionId: string, id: string) => `follow-up:${sessionId}:${id}`;
+async function releaseEvidence(f: ReturnType<typeof fixture>, sessionId: string, id: string) {
+  const projection = (await f.engine.getSession({ sessionId }))!;
+  const command = projection.commands.find(
+    ({ id: commandId }) => commandId === deliveryId(sessionId, id),
+  )!;
+  return sessionFollowUpDeliveryEvidence(
+    sessionId,
+    command,
+    projection.receipts,
+    await f.engine.listEvents({ sessionId }),
+  );
+}
 
 describe("host follow-up commands", () => {
   async function queuedActive(f: ReturnType<typeof fixture>) {
@@ -469,6 +481,39 @@ describe("host follow-up commands", () => {
     expect(f.adapter.commands).toHaveLength(2);
   });
 
+  it("refuses a steer of an old delivered message after its queue reply is pruned and runtime restarts", async () => {
+    const f = fixture();
+    const active = await queuedActive(f);
+    await f.adapter.complete("active");
+    await active.runtime.recoverFollowUps();
+    await active.runtime.close();
+    await f.followUps.transaction(active.sessionId, (state) => {
+      const old = Date.now() - 8 * 24 * 60 * 60_000;
+      state.commands.queued.result.receipt!.recordedAt = old;
+      for (let i = 0; i < 64; i++) {
+        const result = structuredClone(state.commands.queued.result);
+        if (result.command.intent.kind === "message.queue")
+          result.command.intent.message.id = `other-${i}`;
+        result.receipt!.recordedAt = old + i + 1;
+        state.commands[`newer-${i}`] = { signature: `newer-${i}`, result };
+      }
+    });
+    expect(
+      await f.followUps.transaction(
+        active.sessionId,
+        (state) => Object.hasOwn(state.commands, "queued"),
+        { mode: "read" },
+      ),
+    ).toBe(false);
+    const runtime = f.runtime();
+    await expect(runtime.command(active.steer)).rejects.toThrow("already been submitted");
+    expect(f.adapter.commands).toHaveLength(2);
+    expect(
+      await f.followUps.transaction(active.sessionId, (state) => state.releases, { mode: "read" }),
+    ).toEqual({});
+    await runtime.close();
+  });
+
   it("continues at the next idle boundary after recovering a settled previous delivery", async () => {
     const storage = createInMemorySessionFollowUpLedger();
     let crash = true;
@@ -476,8 +521,11 @@ describe("host follow-up commands", () => {
       ...storage,
       transaction: (id, work) =>
         storage.transaction(id, (state) => {
+          const claimed = state.entries.some(
+            (entry) => entry.commandId === "first" && entry.state === "releasing",
+          );
           const result = work(state);
-          if (crash && Object.hasOwn(state.releases, "first"))
+          if (crash && claimed && !state.entries.some((entry) => entry.commandId === "first"))
             throw new Error("crash before settlement");
           return result;
         }),
@@ -681,9 +729,7 @@ describe("host follow-up commands", () => {
       deliveryId(sessionId, "queued"),
     ]);
     expect((await runtime.projection({ sessionId })).projection.queue).toEqual([]);
-    expect(
-      await f.followUps.transaction(sessionId, (state) => state.releases.queued.receipt.status),
-    ).toBe("accepted");
+    expect((await releaseEvidence(f, sessionId, "queued"))?.status).toBe("accepted");
   });
 
   it("releases two queued messages in order, only one per turn end, including duplicate end evidence", async () => {
@@ -827,9 +873,7 @@ describe("host follow-up commands", () => {
     await runtime.recoverFollowUps();
     expect(adapter.commands).toHaveLength(1);
     expect((await runtime.projection({ sessionId })).projection.queue).toEqual([]);
-    expect(
-      await f.followUps.transaction(sessionId, (state) => state.releases.first.receipt.status),
-    ).toBe("accepted");
+    expect((await releaseEvidence(f, sessionId, "first"))?.status).toBe("accepted");
   });
 
   it("replays a crash after durable receipt but before queue settlement without losing or duplicating", async () => {
@@ -839,8 +883,11 @@ describe("host follow-up commands", () => {
       ...storage,
       transaction: (id, work) =>
         storage.transaction(id, (state) => {
+          const claimed = state.entries.some(
+            (entry) => entry.commandId === "first" && entry.state === "releasing",
+          );
           const result = work(state);
-          if (crash && Object.hasOwn(state.releases, "first"))
+          if (crash && claimed && !state.entries.some((entry) => entry.commandId === "first"))
             throw new Error("crash before settling queue");
           return result;
         }),
@@ -1719,9 +1766,10 @@ describe("host follow-ups never strand a row", () => {
     await runtime.recoverFollowUps();
     f.adapter.ambiguous = false;
     expect(await queueStates(runtime, sessionId)).toEqual(["second:queued"]);
-    expect(
-      await f.followUps.transaction(sessionId, (state) => state.releases.first.receipt),
-    ).toMatchObject({ status: "accepted", id: `${deliveryId(sessionId, "first")}:turn-evidence` });
+    expect(await releaseEvidence(f, sessionId, "first")).toMatchObject({
+      status: "accepted",
+      id: `${deliveryId(sessionId, "first")}:turn-evidence`,
+    });
     expect(await attentionDetails(runtime, sessionId)).toEqual([]);
     await f.adapter.complete(deliveryId(sessionId, "first"));
     await runtime.recoverFollowUps();
@@ -1961,8 +2009,11 @@ describe("host follow-ups never strand a row", () => {
       ...storage,
       transaction: (id, work) =>
         storage.transaction(id, (state, proof) => {
+          const claimed = state.entries.some(
+            (entry) => entry.commandId === "first" && entry.state === "releasing",
+          );
           const result = work(state, proof);
-          if (crash && Object.hasOwn(state.releases, "first"))
+          if (crash && claimed && !state.entries.some((entry) => entry.commandId === "first"))
             throw new Error("crash before settling queue");
           return result;
         }),

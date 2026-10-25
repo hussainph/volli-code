@@ -7,6 +7,7 @@ import { SESSION_FOLLOW_UP_MIGRATION } from "./session-follow-up-migration";
 import { MIGRATIONS, migrate } from "./migrations";
 import { readMinReaderVersion } from "./schema-compatibility";
 import { openRawDb, openTestDb, testProject, type TestDb } from "./test-helpers";
+import { readPreviousFollowUpState } from "./fixtures/follow-up-reader-v0-2-2-canary-1";
 
 let fixture: TestDb | undefined;
 afterEach(() => {
@@ -107,6 +108,110 @@ describe("durable host follow-up storage", () => {
     ).rejects.toThrow("crash");
     expect(f.db.prepare("SELECT * FROM session_follow_up_queue").all()).toEqual([]);
     expect(f.db.inTransaction).toBe(false);
+  });
+
+  it("uses deferred snapshot reads while another connection holds the writer lock, with no writes", async () => {
+    const f = await setup();
+    f.db.pragma("journal_mode = WAL");
+    const encoded = JSON.stringify({ ...emptySessionFollowUpState(), revision: 1 });
+    f.db
+      .prepare("INSERT INTO session_follow_up_queue VALUES (?, ?, ?)")
+      .run(f.sessionId, encoded, 0);
+    const before = f.db.prepare("SELECT total_changes() AS changes").get();
+    const second = openRawDb(fixture!.dbPath);
+    try {
+      second.exec("BEGIN IMMEDIATE");
+      const read = await f.ledger.transaction(
+        f.sessionId,
+        (state) => {
+          state.revision = 99;
+          return state.revision;
+        },
+        { mode: "read" },
+      );
+      expect(read).toBe(99);
+      expect(await f.ledger.pendingSessionIds()).toEqual([]);
+      expect(f.db.prepare("SELECT total_changes() AS changes").get()).toEqual(before);
+      expect(f.db.prepare("SELECT state FROM session_follow_up_queue").get()).toEqual({
+        state: encoded,
+      });
+      expect(f.db.inTransaction).toBe(false);
+    } finally {
+      second.exec("ROLLBACK");
+      second.close();
+    }
+  });
+
+  it("reads legacy release history without rewriting it, but writes the N−1-required empty record", async () => {
+    const f = await setup();
+    const legacy = {
+      ...emptySessionFollowUpState(),
+      revision: 1,
+      releases: { old: { command: {}, receipt: {} } },
+    };
+    f.db
+      .prepare("INSERT INTO session_follow_up_queue VALUES (?, ?, ?)")
+      .run(f.sessionId, JSON.stringify(legacy), 0);
+    expect(
+      await f.ledger.transaction(f.sessionId, (state) => Object.keys(state.releases), {
+        mode: "read",
+      }),
+    ).toEqual(["old"]);
+    await f.ledger.transaction(f.sessionId, (state) => {
+      state.revision += 1;
+      state.entries.push({
+        id: "kept",
+        commandId: "pending",
+        deliveryCommandId: "delivery-pending",
+        state: "queued",
+        message: { id: "kept", role: "user", parts: [] },
+      });
+      const old = Date.now() - 8 * 24 * 60 * 60_000;
+      for (let i = 0; i < 70; i++) {
+        const id = `settled-${i}`;
+        state.commands[id] = {
+          signature: id,
+          result: {
+            sessionId: f.sessionId,
+            command: {
+              id,
+              sessionId: f.sessionId,
+              createdAt: old + i,
+              route: null,
+              intent: { kind: "message.cancel", messageId: id },
+            },
+            receipt: {
+              id,
+              commandId: id,
+              status: "accepted",
+              acceptedAt: old + i,
+              recordedAt: old + i,
+              sequence: 0,
+              result: { kind: "message.submitted", sessionId: f.sessionId },
+            },
+            throughSequence: 0,
+            refusal: null,
+          },
+        };
+      }
+    });
+    const stored = JSON.parse(
+      (f.db.prepare("SELECT state FROM session_follow_up_queue").get() as { state: string }).state,
+    );
+    // The previous reader requires a record here, not an omitted field/null.
+    expect(Object.hasOwn(stored, "releases")).toBe(true);
+    expect(stored.releases).toEqual({});
+    expect(Object.keys(stored.commands)).toHaveLength(64);
+    expect(stored.entries).toMatchObject([{ id: "kept", state: "queued" }]);
+    expect(readPreviousFollowUpState(JSON.stringify(stored))).toEqual(stored);
+    expect(() =>
+      readPreviousFollowUpState(JSON.stringify({ ...stored, releases: undefined })),
+    ).toThrow("unsupported");
+    expect(
+      await createSqliteSessionFollowUpLedger(f.db).transaction(f.sessionId, (state) => state, {
+        mode: "read",
+      }),
+    ).toEqual(stored);
   });
 
   it("fails loudly on unsupported/corrupt state and cascades only with its Session", async () => {
@@ -253,6 +358,54 @@ function entry(state: "queued" | "releasing", id: string) {
 }
 
 describe("queue transitions as log lines (VC-699)", () => {
+  it("logs committed removal dispositions from transactional event evidence, not release history", async () => {
+    const f = await setup();
+    await f.ledger.transaction(f.sessionId, (state) => {
+      state.entries = ["delivered", "withdrawn"].map((id) => ({
+        id,
+        commandId: `queue-${id}`,
+        deliveryCommandId: `delivery-${id}`,
+        state: "queued" as const,
+        message: { id, role: "user" as const, parts: [{ type: "text" as const, text: "private" }] },
+      }));
+      state.revision = 1;
+    });
+    await f.engine.submit({
+      commandId: "delivery-delivered",
+      sessionId: f.sessionId,
+      intent: { kind: "session.retitle", title: "Accepted" },
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+    });
+    const { installHostLog } = await import("../log/root");
+    const records: Record<string, unknown>[] = [];
+    const undo = installHostLog({
+      level: "info",
+      sink: { write: (record) => records.push(record) },
+    });
+    try {
+      await expect(
+        f.ledger.transaction(f.sessionId, (state) => {
+          state.entries = [];
+          throw new Error("rollback");
+        }),
+      ).rejects.toThrow("rollback");
+      expect(records).toEqual([]);
+      await f.ledger.transaction(f.sessionId, (state) => {
+        state.entries = [];
+        state.revision += 1;
+      });
+      expect(records.map(({ msg, messageId }) => [msg, messageId])).toEqual([
+        ["follow-up delivered", "delivered"],
+        ["follow-up withdrawn", "withdrawn"],
+      ]);
+      expect(
+        await f.ledger.transaction(f.sessionId, (state) => state.releases, { mode: "read" }),
+      ).toEqual({});
+    } finally {
+      undo();
+    }
+  });
+
   it("says what happened to each message and why, by identifiers only", async () => {
     const { installHostLog } = await import("../log/root");
     const { logQueueChanges } = await import("./session-follow-up-repo");
@@ -276,7 +429,7 @@ describe("queue transitions as log lines (VC-699)", () => {
           revision: 7,
           releasedBoundary: "idle:turn-1",
           commands: {},
-          releases: { "d-delivered": { command: {}, receipt: { status: "accepted" } } },
+          releases: {},
           entries: [
             entry("queued", "new"),
             entry("releasing", "claimed"),
@@ -284,6 +437,7 @@ describe("queue transitions as log lines (VC-699)", () => {
             entry("queued", "unchanged"),
           ],
         } as never,
+        new Map([["d-delivered", { status: "accepted" } as never]]),
       );
     } finally {
       undo();

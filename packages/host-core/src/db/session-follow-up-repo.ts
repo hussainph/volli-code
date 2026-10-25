@@ -2,10 +2,12 @@ import type Database from "better-sqlite3";
 import {
   canonicalJson,
   emptySessionFollowUpState,
+  pruneSessionFollowUpState,
   sessionFollowUpDeliveryEvidence,
   type SessionFollowUpLedger,
   type SessionFollowUpState,
 } from "@volli/session-engine";
+import type { CommandReceipt, Synchronous } from "@volli/shared";
 import { logContext, withRootLogContext } from "../log/context";
 import { commandTrace, rememberCommandTrace } from "../log/correlation";
 import { hostLogger } from "../log/root";
@@ -146,6 +148,7 @@ export function consumeFollowUpCleanClose(
       }
       if (changed) {
         state.revision += 1;
+        pruneSessionFollowUpState(state, Date.now());
         prepared<[string, string]>(
           db,
           "UPDATE session_follow_up_queue SET state = ? WHERE session_id = ?",
@@ -190,10 +193,13 @@ export function createSqliteSessionFollowUpLedger(
   ownsSession?: (sessionId: string) => boolean,
 ): SessionFollowUpLedger {
   return {
-    transaction(sessionId, work) {
+    transaction(sessionId, work, options) {
       let before: ReadonlyMap<string, FollowUpRow> = new Map();
       let after: SessionFollowUpState | null = null;
-      const settled = settleTransaction(db, () => {
+      const delivered = new Map<string, CommandReceipt>();
+      const readOnly = options?.mode === "read";
+      const settle = readOnly ? readTransaction : settleTransaction;
+      const settled = settle(db, () => {
         if (ownsSession !== undefined && !ownsSession(sessionId)) {
           throw new Error("The follow-up queue is outside this launch's Session scope");
         }
@@ -202,21 +208,25 @@ export function createSqliteSessionFollowUpLedger(
           "SELECT state FROM session_follow_up_queue WHERE session_id = ?",
         ).get(sessionId);
         const state = stored ? readState(stored.state) : emptySessionFollowUpState();
-        before = rowsOf(state);
-        const result = work(state, (deliveryCommandId) => {
+        if (!readOnly) before = rowsOf(state);
+        const evidence = (deliveryCommandId: string): CommandReceipt | null => {
           const { command, receipts, events } = readSqliteSessionCommandEvidence(
             db,
             sessionId,
             deliveryCommandId,
           );
-          return (
-            command !== null &&
-            sessionFollowUpDeliveryEvidence(sessionId, command, receipts, events) !== null
-          );
-        });
+          return command === null
+            ? null
+            : sessionFollowUpDeliveryEvidence(sessionId, command, receipts, events);
+        };
+        const result = work(state, (deliveryCommandId) => evidence(deliveryCommandId) !== null);
         if (result && typeof result === "object" && "then" in result) {
           throw new Error("Follow-up ledger transaction must be synchronous");
         }
+        // Snapshot reads neither serialize/prune state nor acquire a writer lock.
+        // Even accidental callback mutations are discarded, as the port promises.
+        if (readOnly) return result;
+        pruneSessionFollowUpState(state, Date.now());
         const encoded = canonicalJson(state);
         // Ordinary projections do not create rows or rewrite unchanged state.
         if (encoded !== stored?.state && (stored || state.revision > 0)) {
@@ -228,17 +238,23 @@ export function createSqliteSessionFollowUpLedger(
           `,
           ).run(sessionId, encoded, state.entries.length);
           after = state;
+          const remaining = new Set(state.entries.map(({ id }) => id));
+          for (const [messageId, row] of before) {
+            if (remaining.has(messageId)) continue;
+            const receipt = evidence(row.deliveryCommandId);
+            if (receipt !== null) delivered.set(row.deliveryCommandId, receipt);
+          }
         }
         return result;
       });
       // Each committed queue transition, with why, inside the operation that made it (VC-699).
       return settled.then((result) => {
-        if (after !== null) logQueueChanges(sessionId, before, after);
+        if (after !== null) logQueueChanges(sessionId, before, after, delivered);
         return result;
       });
     },
     pendingSessionIds() {
-      return settleTransaction(db, () =>
+      return readTransaction(db, () =>
         prepared<[], { session_id: string }>(
           db,
           "SELECT session_id FROM session_follow_up_queue WHERE pending_count > 0 ORDER BY session_id",
@@ -249,6 +265,15 @@ export function createSqliteSessionFollowUpLedger(
       );
     },
   };
+}
+
+/** Native deferred transactions participate in the existing ownership guard. */
+function readTransaction<T>(db: Database.Database, work: () => Synchronous<T>): Promise<T> {
+  try {
+    return Promise.resolve(db.transaction(work).deferred());
+  } catch (error) {
+    return Promise.reject(error);
+  }
 }
 
 interface FollowUpRow {
@@ -285,6 +310,7 @@ export function logQueueChanges(
   sessionId: string,
   before: ReadonlyMap<string, FollowUpRow>,
   after: SessionFollowUpState,
+  delivered: ReadonlyMap<string, CommandReceipt>,
 ): void {
   const now = rowsOf(after);
   const base = { sessionId, revision: after.revision, pending: after.entries.length };
@@ -320,9 +346,9 @@ export function logQueueChanges(
   }
   for (const [messageId, row] of before) {
     if (now.has(messageId)) continue;
-    const release = after.releases[row.deliveryCommandId];
+    const receipt = delivered.get(row.deliveryCommandId);
     const ids = { ...base, messageId, commandId: row.commandId };
-    if (release === undefined) {
+    if (receipt === undefined) {
       underTrace(row.commandId, () =>
         log.info("follow-up withdrawn", { ...ids, reason: "cancelled" }),
       );
@@ -331,7 +357,7 @@ export function logQueueChanges(
         log.info("follow-up delivered", {
           ...ids,
           deliveryCommandId: row.deliveryCommandId,
-          status: release.receipt.status,
+          status: receipt.status,
         }),
       );
     }

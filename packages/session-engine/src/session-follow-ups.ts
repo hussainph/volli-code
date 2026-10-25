@@ -44,7 +44,7 @@ export interface StoredSessionFollowUp extends SessionFollowUpItem {
   refusedDetail?: string;
 }
 
-/** Every command reply survives removal of the corresponding queue item. */
+/** Replies outlive queue items for the retry window, plus a recent-reply floor. */
 export interface SessionFollowUpState {
   version: 1;
   revision: number;
@@ -52,7 +52,7 @@ export interface SessionFollowUpState {
   commands: Record<string, { signature: string; result: SessionRuntimeCommandResult }>;
   /** One release per durable idle boundary, including across process restarts. */
   releasedBoundary: string | null;
-  /** Terminal release evidence, retained after removing its payload. */
+  /** N−1 requires this record; new writers always persist it empty. */
   releases: Record<string, { command: SessionCommand; receipt: CommandReceipt }>;
 }
 
@@ -87,8 +87,49 @@ export interface SessionFollowUpLedger {
       state: SessionFollowUpState,
       deliveryProof?: SessionFollowUpDeliveryProof,
     ) => Synchronous<T>,
+    /** A snapshot-only transaction: mutations to its private state are discarded. */
+    options?: { mode: "read" },
   ): Promise<T>;
   pendingSessionIds(): Promise<readonly string[]>;
+}
+
+/** At least the backend's seven-day terminal-job dedupe window. */
+export const FOLLOW_UP_COMMAND_RETENTION_MS = 7 * 24 * 60 * 60_000;
+const FOLLOW_UP_RECENT_COMMANDS = 64;
+
+/** Applied by each adapter inside the write transaction, never on a pure read. */
+export function pruneSessionFollowUpState(state: SessionFollowUpState, now: number): void {
+  // Keep writing the v1 field: older readers require a record, even when empty.
+  state.releases = {};
+  const commands = Object.entries(state.commands).toSorted(
+    ([, left], [, right]) =>
+      (right.result.receipt?.recordedAt ?? right.result.command.createdAt) -
+      (left.result.receipt?.recordedAt ?? left.result.command.createdAt),
+  );
+  const pendingMessages = new Set(state.entries.map(({ id }) => id));
+  const pendingCommands = new Set(
+    state.entries.flatMap(({ commandId, deliveryCommandId }) => [commandId, deliveryCommandId]),
+  );
+  for (const [index, [id, { result }]] of commands.entries()) {
+    if (index < FOLLOW_UP_RECENT_COMMANDS || pendingCommands.has(id)) continue;
+    const receipt = result.receipt;
+    if (
+      !receipt ||
+      receipt.status === "unreconciled" ||
+      !Number.isFinite(receipt.recordedAt) ||
+      receipt.recordedAt >= now - FOLLOW_UP_COMMAND_RETENTION_MS
+    )
+      continue;
+    const intent = result.command.intent;
+    const messageId =
+      intent.kind === "message.queue"
+        ? intent.message.id
+        : intent.kind === "message.edit" || intent.kind === "message.cancel"
+          ? intent.messageId
+          : undefined;
+    if (messageId !== undefined && pendingMessages.has(messageId)) continue;
+    delete state.commands[id];
+  }
 }
 
 export function projectSessionFollowUps(snapshot: SessionFollowUpState): SessionFollowUpItem[] {
