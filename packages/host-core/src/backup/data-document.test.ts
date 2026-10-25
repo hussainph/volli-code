@@ -115,6 +115,21 @@ describe("validateBackupDataDocument", () => {
     expect(older.ok).toBe(true);
   });
 
+  it("requires identity proofs from schema 67 bundles but accepts their absence before that migration", () => {
+    const document = emptyDocument();
+    const tables = { ...document.tables };
+    delete tables.session_follow_up_identities;
+    expect(validateBackupDataDocument({ ...document, tables })).toMatchObject({
+      ok: false,
+      problems: [
+        { kind: "shape", message: "Data document is missing table session_follow_up_identities." },
+      ],
+    });
+    expect(validateBackupDataDocument({ ...document, schemaVersion: 66, tables }).ok).toBe(true);
+    expect(tablesAtVersion(66).has("session_follow_up_identities")).toBe(false);
+    expect(tablesAtVersion(67).has("session_follow_up_identities")).toBe(true);
+  });
+
   it("reads the table set for a version off a database migrated exactly that far", () => {
     ctx = openTestDb();
 
@@ -138,6 +153,19 @@ describe("validateRecordLinks", () => {
     expect(problems).toHaveLength(1);
     expect(problems[0]?.kind).toBe("link");
     expect(problems[0]?.message).toContain("no-such-project");
+  });
+
+  it("rejects an identity proof whose Session did not travel with it", () => {
+    const document = emptyDocument();
+    (document.tables.session_follow_up_identities as unknown as { rows: unknown[] }).rows = [
+      ["missing-session", "message-id"],
+    ];
+    const problems = validateRecordLinks(document);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({
+      kind: "link",
+      message: expect.stringContaining("missing-session"),
+    });
   });
 
   it("leaves a NULL reference alone, the way the database does", () => {

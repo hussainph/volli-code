@@ -108,6 +108,14 @@ describe("table decisions", () => {
     }
   });
 
+  it("includes exact follow-up identity proofs rather than treating them as a rebuildable cache", () => {
+    ctx = openTestDb();
+    expect(tableBackupDecision("session_follow_up_identities")?.decision).toBe("include");
+    expect(BACKUP_INCLUDED_TABLES.indexOf("session_follow_up_identities")).toBeGreaterThan(
+      BACKUP_INCLUDED_TABLES.indexOf("sessions"),
+    );
+  });
+
   it("rebuilds the two usage projections rather than including or dropping them", () => {
     expect(tableBackupDecision("session_usage")?.decision).toBe("rebuild");
     expect(tableBackupDecision("session_usage_coverage")?.decision).toBe("rebuild");
@@ -124,6 +132,8 @@ describe("table decisions", () => {
       "ticket_event_sequence",
       "ticket_signals",
       "sessions",
+      "session_follow_up_queue",
+      "session_follow_up_identities",
       "session_events",
       "session_commands",
       "session_command_receipts",

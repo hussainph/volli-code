@@ -804,12 +804,13 @@ export class FollowUpQueue {
       if (!entry) {
         // A turn-end release that already won must not be followed by a second send.
         if (
-          queuedMessageProof?.(request.command.message.id) ||
-          Object.values(state.commands).some(
-            ({ result }) =>
-              result.command.intent.kind === "message.queue" &&
-              result.command.intent.message.id === request.command.message.id,
-          )
+          queuedMessageProof !== undefined
+            ? queuedMessageProof(request.command.message.id)
+            : Object.values(state.commands).some(
+                ({ result }) =>
+                  result.command.intent.kind === "message.queue" &&
+                  result.command.intent.message.id === request.command.message.id,
+              )
         )
           throw new SessionRuntimeConflictError(
             "This queued message has already been delivered or removed",
@@ -967,7 +968,9 @@ export class FollowUpQueue {
           writable: true,
         });
       state.entries = state.entries.filter((candidate) => candidate.commandId !== commandId);
-      // Delivery proof lives in the event ledger, not a second unbounded map.
+      // Ephemeral transaction outcome for logging; adapters serialize releases
+      // as {}, so neither a second ledger nor diagnostic history reads grow here.
+      state.releases[entry?.deliveryCommandId ?? command.id] = { command, receipt };
       state.revision += 1;
     });
     this.#resetRetry(sessionId);

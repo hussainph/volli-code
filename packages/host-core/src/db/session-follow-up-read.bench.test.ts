@@ -79,8 +79,8 @@ function fixture(pruned: boolean): SessionFollowUpState {
         },
       };
   }
-  // Price the real payload-retention policy. Compact identity proofs live
-  // outside this JSON row and do not participate in these projection reads.
+  // Price the real payload-retention policy, including the N−1 compatibility
+  // identity tombstones that remain in this row after full replies expire.
   if (pruned) pruneSessionFollowUpState(state, Date.now());
   return state;
 }

@@ -206,10 +206,14 @@ export function describeSessionFollowUpLedgerContract(
       const stored = await followUps.transaction("session-retention", (state) => state, {
         mode: "read",
       });
-      expect(Object.keys(stored.commands)).toHaveLength(66);
-      for (const id of ["queued-0", "queued-1", "queued-2", "queued-99"])
+      expect(Object.keys(stored.commands)).toHaveLength(67);
+      for (const id of ["queued-0", "queued-1", "queued-2", "queued-3", "queued-99"])
         expect(stored.commands).toHaveProperty(id);
-      expect(stored.commands).not.toHaveProperty("queued-3");
+      expect(stored.commands["queued-3"]?.signature).not.toBe("queued-3");
+      expect(stored.commands["queued-3"]?.result.command.intent).toEqual({
+        kind: "message.queue",
+        message: { id: "old-queue-identity", role: "user", parts: [] },
+      });
       expect(
         await followUps.transaction(
           "session-retention",

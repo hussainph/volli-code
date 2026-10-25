@@ -516,7 +516,11 @@ describe("host follow-up commands", () => {
       const retained = await f.followUps.transaction(active.sessionId, (state) => state.commands, {
         mode: "read",
       });
-      expect(retained).not.toHaveProperty("queued");
+      expect(retained.queued?.result.command.intent).toEqual({
+        kind: "message.queue",
+        message: { id: "queued", role: "user", parts: [] },
+      });
+      expect(retained.queued?.signature).not.toContain("message.submit");
       expect(retained).not.toHaveProperty("arbitrary-delivery-id");
       expect(
         await f.followUps.transaction(
@@ -534,6 +538,13 @@ describe("host follow-up commands", () => {
       await expect(runtime.command(active.steer)).rejects.toThrow(
         "already been delivered or removed",
       );
+      await expect(
+        runtime.command({
+          commandId: "queued",
+          sessionId: active.sessionId,
+          command: { kind: "message.submit", delivery: "queue", message: message("queued") },
+        }),
+      ).rejects.toBeInstanceOf(SessionRuntimeCommandConflictError);
       expect(reads).toBe(0);
       expect(f.adapter.commands).toHaveLength(2);
       expect(

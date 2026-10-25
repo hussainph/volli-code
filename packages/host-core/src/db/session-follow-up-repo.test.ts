@@ -284,7 +284,12 @@ describe("durable host follow-up storage", () => {
       await f.ledger.transaction(f.sessionId, (state) => Object.keys(state.commands).length, {
         mode: "read",
       }),
-    ).toBe(64);
+    ).toBe(70);
+    expect(
+      await f.ledger.transaction(f.sessionId, (state) => state.commands["queue-0"]?.signature, {
+        mode: "read",
+      }),
+    ).not.toBe("queue-0");
     const second = openRawDb(fixture!.dbPath);
     try {
       const reopened = createSqliteSessionFollowUpLedger(second);
@@ -494,8 +499,8 @@ describe("queue transitions as log lines (VC-699)", () => {
             return "committed";
           }),
         ).resolves.toBe("committed");
-        expect(evidenceReads).toBe(level === "info" ? 1 : 0);
-        expect(records).toEqual([]);
+        expect(evidenceReads).toBe(0);
+        expect(records).toMatchObject(level === "info" ? [{ msg: "follow-up withdrawn" }] : []);
         expect(
           await ledger.transaction(f.sessionId, (state) => state.entries, { mode: "read" }),
         ).toEqual([]);
@@ -558,7 +563,7 @@ describe("queue transitions as log lines (VC-699)", () => {
     }
   });
 
-  it("logs committed removal dispositions from transactional event evidence, not release history", async () => {
+  it("logs committed removal dispositions from ephemeral transaction outcomes, never history reads", async () => {
     const f = await setup();
     await f.ledger.transaction(f.sessionId, (state) => {
       state.entries = ["delivered", "withdrawn"].map((id) => ({
@@ -570,7 +575,7 @@ describe("queue transitions as log lines (VC-699)", () => {
       }));
       state.revision = 1;
     });
-    await f.engine.submit({
+    const accepted = await f.engine.submit({
       commandId: "delivery-delivered",
       sessionId: f.sessionId,
       intent: { kind: "session.retitle", title: "Accepted" },
@@ -592,6 +597,10 @@ describe("queue transitions as log lines (VC-699)", () => {
       expect(records).toEqual([]);
       await f.ledger.transaction(f.sessionId, (state) => {
         state.entries = [];
+        state.releases["delivery-delivered"] = {
+          command: accepted.command,
+          receipt: accepted.receipt!,
+        };
         state.revision += 1;
       });
       expect(records.map(({ msg, messageId }) => [msg, messageId])).toEqual([

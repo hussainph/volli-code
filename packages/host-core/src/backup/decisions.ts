@@ -138,6 +138,12 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
       "Pending follow-ups, mutation receipts and release evidence cannot be rebuilt; omitting them loses accepted work or duplicates replay.",
   },
   {
+    table: "session_follow_up_identities",
+    decision: "include",
+    reason:
+      "Exact queued-message identities survive reply pruning; dropping them can resend an old message after restore.",
+  },
+  {
     table: "host_notice_outbox",
     decision: "include",
     reason:
@@ -499,6 +505,7 @@ export const BACKUP_INCLUDED_TABLES: readonly string[] = [
   "ticket_event_sequence",
   "sessions",
   "session_follow_up_queue",
+  "session_follow_up_identities",
   "host_notice_outbox",
   "session_delegations",
   "session_verb_grants",

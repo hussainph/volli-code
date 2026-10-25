@@ -27,7 +27,7 @@ import { packArchive, unpackArchive } from "./archive";
 import { MIGRATIONS } from "../db/migrations";
 import { createSqliteSessionFollowUpLedger } from "../db/session-follow-up-repo";
 import { openRawDb } from "../db/test-helpers";
-import { MIN_READER_VERSION_KEY } from "../db/schema-compatibility";
+import { MIN_READER_VERSION_KEY, readMinReaderVersion } from "../db/schema-compatibility";
 import {
   FileTranscriptArtifactStore,
   sessionTranscriptsRoot,
@@ -169,6 +169,103 @@ describe("restoreBackupBundle — a clean restore", () => {
         ],
         boundary: "idle:previous-turn",
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("round-trips exact follow-up identity proofs after their reply payloads are pruned", async () => {
+    source = createFixtureProfile();
+    const ledger = createSqliteSessionFollowUpLedger(source.db);
+    const old = Date.now() - 8 * 24 * 60 * 60_000;
+    const messageId = "delivered:/% exact identity 雪";
+    await ledger.transaction("session-root", (state) => {
+      for (let i = 0; i < 70; i++) {
+        const id = `old-queue-${i}`;
+        const message = {
+          id: i === 0 ? messageId : `message-${i}`,
+          role: "user" as const,
+          parts: [{ type: "text" as const, text: `private-old-body-${i}|`.repeat(100) }],
+        };
+        state.commands[id] = {
+          signature: JSON.stringify(message),
+          result: {
+            sessionId: "session-root",
+            command: {
+              id,
+              sessionId: "session-root",
+              createdAt: old + i,
+              route: null,
+              intent: { kind: "message.queue", message },
+            },
+            receipt: {
+              id,
+              commandId: id,
+              status: "accepted",
+              acceptedAt: old + i,
+              recordedAt: old + i,
+              sequence: 0,
+              result: { kind: "message.submitted", sessionId: "session-root" },
+            },
+            throughSequence: 0,
+            refusal: null,
+          },
+        };
+      }
+      state.revision++;
+    });
+    const before = source.db
+      .prepare(
+        "SELECT session_id, message_id FROM session_follow_up_identities ORDER BY session_id, message_id",
+      )
+      .all();
+    expect(before).toHaveLength(70);
+    const pruned = await ledger.transaction("session-root", (state) => state, { mode: "read" });
+    expect(pruned.commands["old-queue-0"]?.result.command.intent).toEqual({
+      kind: "message.queue",
+      message: { id: messageId, role: "user", parts: [] },
+    });
+    expect(JSON.stringify(pruned)).not.toContain("private-old-body-0|");
+    expect(pruned.releases).toEqual({});
+    const target = targetProfile();
+    const bytes = createBackupBundle({
+      db: source.db,
+      blobsRoot: source.blobsRoot,
+      transcriptsRoot: source.transcriptsRoot,
+      appVersion: "test",
+      now: 1_700_000_000_000,
+    }).bytes;
+    const restored = await restoreBackupBundle({
+      bundle: bytes,
+      profileRoot: target.root,
+      projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+      now: 1_800_000_000_000,
+    });
+    expect(restored.ok ? "restored" : restored.problems).toBe("restored");
+    const db = restoredDb(target.root);
+    try {
+      expect(
+        db
+          .prepare(
+            "SELECT session_id, message_id FROM session_follow_up_identities ORDER BY session_id, message_id",
+          )
+          .all(),
+      ).toEqual(before);
+      // Read-only: this proves the index travelled, rather than rebuilding it
+      // from the compatibility tombstone as a side effect of a later write.
+      expect(
+        await createSqliteSessionFollowUpLedger(db).transaction(
+          "session-root",
+          (state, _proof, queued) => ({
+            duplicate: queued?.(messageId),
+            fresh: queued?.("never-queued"),
+            releases: state.releases,
+          }),
+          { mode: "read" },
+        ),
+      ).toEqual({ duplicate: true, fresh: false, releases: {} });
+      expect(readMinReaderVersion(db)).toBe(58);
+      expect(db.pragma("foreign_key_check")).toEqual([]);
     } finally {
       db.close();
     }

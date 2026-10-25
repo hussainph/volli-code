@@ -212,7 +212,11 @@ export function createSqliteSessionFollowUpLedger(
         const state = stored ? readState(stored.state) : emptySessionFollowUpState();
         // An older build can restore full replies without populating this
         // index. Backfill in the same write transaction, before any pruning.
-        if (!readOnly) indexQueuedMessageIdentities(db, sessionId, state);
+        if (!readOnly) {
+          indexQueuedMessageIdentities(db, sessionId, state);
+          // Old persisted releases are not this transaction's outcomes.
+          state.releases = {};
+        }
         if (logChanges) before = rowsOf(state);
         const evidence = (deliveryCommandId: string): CommandReceipt | null => {
           const { command, receipts, events } = readSqliteSessionCommandEvidence(
@@ -240,6 +244,15 @@ export function createSqliteSessionFollowUpLedger(
         // Even accidental callback mutations are discarded, as the port promises.
         if (readOnly) return result;
         if (stored || state.revision > 0) indexQueuedMessageIdentities(db, sessionId, state);
+        if (logChanges) {
+          try {
+            for (const [deliveryCommandId, outcome] of Object.entries(state.releases))
+              delivered.set(deliveryCommandId, outcome.receipt);
+          } catch {
+            // Diagnostics never authorize the mutation or make it fail.
+            logChanges = false;
+          }
+        }
         pruneSessionFollowUpState(state, Date.now());
         const encoded = canonicalJson(state);
         // Ordinary projections do not create rows or rewrite unchanged state.
@@ -252,22 +265,6 @@ export function createSqliteSessionFollowUpLedger(
           `,
           ).run(sessionId, encoded, state.entries.length);
           after = state;
-          if (logChanges) {
-            try {
-              const remaining = new Set(state.entries.map(({ id }) => id));
-              for (const [messageId, row] of before) {
-                if (remaining.has(messageId)) continue;
-                const receipt = evidence(row.deliveryCommandId);
-                if (receipt !== null) delivered.set(row.deliveryCommandId, receipt);
-              }
-            } catch {
-              // These reads describe a committed change; they do not authorize
-              // it. Lose this diagnostic, never roll back valid queue work or
-              // guess "withdrawn" when delivery evidence could not be decoded.
-              // The deliveryProof passed to work above remains fail-closed.
-              logChanges = false;
-            }
-          }
         }
         return result;
       });
