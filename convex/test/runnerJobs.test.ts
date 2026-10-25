@@ -1056,6 +1056,18 @@ describe("runnerJobs.complete", () => {
       }),
     ).resolves.toEqual({ ack: "recorded", status: "failed" });
     expect((await job(w, blank.jobId))!.failure!.code).toBe("unspecified");
+    // A missing result (a client drops `undefined`) is an unusable result, not a refusal.
+    const missing = await enqueue(w, materialize(w));
+    await claim(w);
+    await expect(
+      runner(w).mutation(api.runnerJobs.complete, {
+        jobId: missing.jobId,
+        bootId: BOOT,
+        attempt: 1,
+        outcome: { status: "done" },
+      }),
+    ).resolves.toEqual({ ack: "recorded", status: "failed" });
+    expect((await job(w, missing.jobId))!.failure!.code).toBe("invalid_job_result");
     // A lease reference that cannot name a lease is fenced.
     await expect(done(w, blank.jobId, 1.5)).resolves.toEqual({
       ack: "superseded",
@@ -1270,7 +1282,7 @@ describe("inbox helpers for in-place edits and settled commands", () => {
       expired: 1,
     });
     expect(await job(w, old.jobId)).toMatchObject({
-      status: "expired",
+      status: "cancelled",
       failure: expect.objectContaining({ code: "notice_expired", by: "backend" }),
     });
     expect((await job(w, fresh.jobId))!.status).toBe("queued");
@@ -1344,6 +1356,21 @@ describe("inbox helpers for in-place edits and settled commands", () => {
     );
     await expect(enqueue(w, delegate(newId("session"), newId("session")))).rejects.toThrow(
       code("invalid_job"),
+    );
+    // A parent of someone else's never has its child routed onto this owner's runner.
+    const theirs = newId("session");
+    await w.t.run(async (ctx) => {
+      const parent = (await ctx.db
+        .query("sessions")
+        .withIndex("by_uuid", (q) => q.eq("id", parentSessionId))
+        .unique())!;
+      const { _id, _creationTime, ...fields } = parent;
+      void _id;
+      void _creationTime;
+      await ctx.db.insert("sessions", { ...fields, id: theirs, ownerUserId: w.otherUserId });
+    });
+    await expect(enqueue(w, delegate(newId("session"), theirs))).rejects.toThrow(
+      code("not_your_runner"),
     );
   });
 });

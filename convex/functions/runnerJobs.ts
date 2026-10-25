@@ -3,6 +3,8 @@
  * claim/lease/complete queue replaces the per-feature claim protocols the
  * host kept locally.
  *
+ * - `wake` (a query) tells a subscribed runner how many jobs are ready and when
+ *   the next one comes due.
  * - `claim` leases this runner's ready jobs, urgent first, then oldest
  *   `availableAt`. It also takes back the jobs an earlier boot of this runner
  *   held (a restart; one process runs per runner identity): each comes back
@@ -20,7 +22,8 @@
  *   `expired`.
  *
  * Lease expiry is a scheduled check per lease, so nothing polls. Terminal jobs
- * are kept for `TERMINAL_JOB_TTL_MS`, then the hourly sweep deletes them.
+ * are kept for `TERMINAL_JOB_TTL_MS`, then the hourly sweep deletes them; the
+ * same sweep cancels notices that waited `NOTICE_MAX_WAIT_MS` unclaimed.
  *
  * The runner keeps each outcome in its local job journal until `complete`
  * answers; every answer is final for that outcome (see `JobCompleteReply` in
@@ -204,7 +207,9 @@ export const renew = mutation({
 });
 
 const outcome = v.union(
-  v.object({ status: v.literal("done"), result: v.any() }),
+  // Optional: a client drops an `undefined` result, which is recorded as an
+  // unusable result rather than refused at the door (a refusal would be retried).
+  v.object({ status: v.literal("done"), result: v.optional(v.any()) }),
   v.object({
     status: v.literal("failed"),
     code: v.string(),
@@ -335,6 +340,9 @@ export const wake = query({
   args: {},
   handler: async (ctx): Promise<{ ready: number; nextAvailableAt: number | null }> => {
     const { runnerId } = await requireRunner(ctx);
+    // A query's clock may be stale while its result is cached. That only moves
+    // a job that is already due into `nextAvailableAt` (at or before now), and
+    // the runner's timer for a past time claims at once, so it is safe here.
     const now = Date.now();
     let ready = 0;
     let nextAvailableAt: number | null = null;
@@ -385,17 +393,9 @@ export const sweep = internalMutation({
       )
       .take(SWEEP_BATCH);
     for (const notice of stale) {
-      await ctx.db.patch(notice._id, {
-        status: "expired",
-        ...terminal(now),
-        failure: {
-          attempt: notice.lease?.attempt ?? 0,
-          code: "notice_expired",
-          detail: "No runner claimed this notice in time.",
-          retryable: false,
-          by: "backend",
-          at: now,
-        },
+      await cancelJob(ctx, notice, now, {
+        code: "notice_expired",
+        detail: "The notice waited too long for its runner.",
       });
     }
     const due = await ctx.db

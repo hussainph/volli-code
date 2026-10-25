@@ -177,8 +177,10 @@ export function jobResultProblem(result: unknown): string | null {
  * Whether `value` is plain JSON the backend can store: null, booleans, finite
  * numbers, strings, arrays and plain objects of them. Backend values can also
  * be 64-bit integers and bytes, which do not survive `JSON.stringify`
- * honestly, and the backend refuses an object key that is empty, starts with
- * `$` (a JSON Schema's `$ref`) or holds anything but printable ASCII.
+ * honestly, and the backend refuses an object key that is empty, longer than
+ * 1024 characters, starts with `$` (a JSON Schema's `$ref`) or holds anything
+ * but printable ASCII. A runner checks a result with `jobResultProblem`
+ * before it sends one: the backend client cannot even encode such keys.
  */
 export function isPlainJson(value: unknown, depth = 0): boolean {
   if (depth > 64) return false;
@@ -193,8 +195,8 @@ export function isPlainJson(value: unknown, depth = 0): boolean {
   );
 }
 
-/** An object key the backend stores: printable ASCII, not empty, not starting with `$`. */
-const STORABLE_KEY = /^[\x20-\x23\x25-\x7e][\x20-\x7e]*$/;
+/** An object key the backend stores: 1 to 1024 printable ASCII characters, not starting with `$`. */
+const STORABLE_KEY = /^[\x20-\x23\x25-\x7e][\x20-\x7e]{0,1023}$/;
 
 /** The failure code for a job kind the runner does not know. */
 export const UNSUPPORTED_JOB_KIND = "unsupported_job_kind";

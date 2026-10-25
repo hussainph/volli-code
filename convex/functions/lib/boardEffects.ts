@@ -12,7 +12,9 @@
  * payload against `JobPayloads` and applies the routing rules: a runner only
  * runs its owner's work, in projects its owner is still a Member of. A job the
  * inbox will not route is skipped rather than failing the board write; the
- * board fact stands, and a pick that cannot run is reported in the reply.
+ * board fact stands, and what did not start is reported in the reply (a
+ * picked run that cannot run, a worktree that was not asked for). A malformed
+ * job (a defect, not a routing refusal) still fails the write, loudly.
  */
 
 import {
@@ -26,7 +28,7 @@ import {
 
 import type { Doc } from "../_generated/dataModel.js";
 import type { MutationCtx } from "../_generated/server.js";
-import { cancelJob, tryEnqueueJob, type JobDraft } from "./jobs";
+import { cancelJob, tryEnqueueJob, type JobDraft, type JobRefusalCode } from "./jobs";
 
 /** A job this module builds; the project and ticket are the effect's ticket's. */
 type EffectJob = Omit<JobDraft, "projectId" | "ticketId">;
@@ -43,51 +45,77 @@ export interface EffectContext {
 }
 
 /**
- * An Automation run a person picked that has nowhere to run: the pick is not
- * the column's armed Automation, and the ticket has no Place or its Place is
- * someone else's runner. Reported in
- * the move's reply rather than dropped silently.
+ * An Automation run a person picked that has nowhere to run, reported in the
+ * move's reply rather than dropped silently.
  */
 interface UnstartedRun {
   ticketId: string;
   automationId: string;
-  /** No Place yet, or the Place is another person's runner (a pick never runs on a teammate's machine). */
-  reason: "no_place" | "place_not_yours";
+  /**
+   * `no_place`: the ticket has no Place yet. `place_not_yours`: its Place is
+   * another person's runner (a pick never runs on a teammate's machine).
+   * `runner_unavailable`: the runner it would run on was removed.
+   * `not_a_member`: the person whose work it is left the Workspace.
+   */
+  reason: "no_place" | "place_not_yours" | "runner_unavailable" | "not_a_member";
 }
 
-/** Inserts the jobs a write's side effects need; returns the runs it could not place. */
+export interface SideEffectReport {
+  /** Picked Automation runs that could not start. */
+  unstartedRuns: UnstartedRun[];
+  /**
+   * Tickets switched to a worktree whose Working copy was not asked for: the
+   * Place is not the switcher's runner. The Place's owner makes it when they
+   * next work on the ticket there (the runner reports the Working copy it
+   * makes, with the runner registration work).
+   */
+  deferredWorktrees: string[];
+}
+
+function unstartedReason(refused: JobRefusalCode): UnstartedRun["reason"] {
+  if (refused === "runner_unavailable" || refused === "not_a_member") return refused;
+  return "place_not_yours";
+}
+
+/** Inserts the jobs a write's side effects need; reports what did not start. */
 export async function enqueueSideEffects(
   context: EffectContext,
   effects: readonly BoardSideEffect[],
-): Promise<UnstartedRun[]> {
-  const unstarted: UnstartedRun[] = [];
+): Promise<SideEffectReport> {
+  const report: SideEffectReport = { unstartedRuns: [], deferredWorktrees: [] };
   for (const effect of effects) {
     const ticket = context.tickets.get(effect.ticketId);
     if (ticket === undefined)
       throw new Error(`Side effect for an unloaded ticket ${effect.ticketId}`);
-    for (const job of await jobsFor(context, ticket, effect, unstarted)) {
+    for (const job of await jobsFor(context, ticket, effect, report.unstartedRuns)) {
       const outcome = await tryEnqueueJob(context.ctx, {
         ...job,
         projectId: ticket.projectId,
         ticketId: ticket.id,
-      } as JobDraft);
-      if (
-        "refused" in outcome &&
-        job.kind === "automation.run" &&
-        effect.kind === "column_arrival"
-      ) {
+      });
+      if (!("refused" in outcome)) continue;
+      // Work no one is waiting on (a trim, an interrupt, an armed run) has no
+      // one to tell; the log keeps why it did not start.
+      console.warn("board side effect not routed", {
+        effect: effect.kind,
+        job: job.kind,
+        ticketId: ticket.id,
+        refused: outcome.refused,
+      });
+      if (job.kind === "automation.run") {
         const payload = job.payload as { automationId: string; origin: string };
         if (payload.origin === "chosen") {
-          unstarted.push({
+          report.unstartedRuns.push({
             ticketId: ticket.id,
             automationId: payload.automationId,
-            reason: "place_not_yours",
+            reason: unstartedReason(outcome.refused),
           });
         }
       }
+      if (job.kind === "workingCopy.materialize") report.deferredWorktrees.push(ticket.id);
     }
   }
-  return unstarted;
+  return report;
 }
 
 async function ticketJobs(ctx: MutationCtx, ticketId: string): Promise<Doc<"runnerJobs">[]> {
@@ -224,6 +252,7 @@ async function jobsFor(
       // An armed run goes to the runner its armer chose (their own). A pick of
       // another Automation runs on the ticket's Place only when that runner
       // is the picker's own: work never lands on a teammate's machine.
+      const picker = actorUserId(actor);
       let runnerId: string;
       if (armed) {
         runnerId = arming.runnerId;
@@ -237,7 +266,7 @@ async function jobsFor(
           .query("runners")
           .withIndex("by_uuid", (q) => q.eq("id", place))
           .unique();
-        if (runner === null || runner.ownerUserId !== actorUserId(actor)) {
+        if (runner === null || runner.ownerUserId !== picker) {
           unstarted.push({ ticketId: ticket.id, automationId, reason: "place_not_yours" });
           return [];
         }
@@ -259,7 +288,7 @@ async function jobsFor(
           availableAt: effect.notBefore,
           createdBy: actor,
           // Armed: the armer's work, with their credentials. Picked: the picker's.
-          onBehalfOf: armed ? arming.armedByUserId : actorUserId(actor),
+          onBehalfOf: armed ? arming.armedByUserId : picker,
         },
       ];
     }
@@ -270,6 +299,8 @@ async function jobsFor(
       // being made (`hasLiveWorktree`), so there is none to duplicate.
       if (ticket.placeRunnerId === null) return [];
       const runnerId = ticket.placeRunnerId;
+      const switcher = actorUserId(actor);
+      if (switcher === null) return [];
       return [
         {
           runnerId,
@@ -277,10 +308,10 @@ async function jobsFor(
           payload: { ticketId: ticket.id, reason: "checkout_mode_changed" },
           availableAt: now,
           createdBy: actor,
-          // The switch is the switcher's request: it materializes only on their
-          // own runner. A teammate's Place makes its worktree at its owner's
-          // next Session start instead.
-          onBehalfOf: actorUserId(actor),
+          // The switch is the switcher's request, and making a worktree runs
+          // the project's setup: it happens only on the switcher's own runner.
+          // Elsewhere it is reported as deferred (`SideEffectReport`).
+          onBehalfOf: switcher,
         },
       ];
     }

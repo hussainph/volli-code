@@ -328,6 +328,10 @@ async function checkRouting(
     if (parent === null || parent.projectId !== row.projectId) {
       throw defect("invalid_job", "A delegation's parent is a session in the job's project.");
     }
+    // A child runs on its parent owner's runner, never rerouted to anyone else's.
+    if (parent.ownerUserId !== runner.ownerUserId) {
+      throw new JobRefusal("not_your_runner", "A subagent runs on its parent owner's runner.");
+    }
   }
   if (!(await ownerMayWorkOn(ctx, runner.ownerUserId, row.projectId))) {
     throw new JobRefusal(

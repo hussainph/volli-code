@@ -30,6 +30,8 @@
  * "update this runner" instead of crashing.
  */
 import {
+  INVALID_JOB_RESULT,
+  jobResultProblem,
   unsupportedJobOutcome,
   type ClaimedJob,
   type JobLease,
@@ -62,6 +64,19 @@ export interface InboxBackend {
     attempt: number;
     outcome: JobOutcome;
   }): Promise<JobCompleteAnswer>;
+}
+
+/**
+ * The outcome as the backend can take it. A `done` result the backend cannot
+ * store (not plain JSON, a key it refuses, too large) could never be sent, and
+ * would wait in the journal forever: it is reported as a permanent failure.
+ */
+function deliverable(outcome: JobOutcome): JobOutcome {
+  if (outcome.status !== "done") return outcome;
+  const problem = jobResultProblem(outcome.result);
+  return problem === null
+    ? outcome
+    : { status: "failed", code: INVALID_JOB_RESULT, detail: problem, retryable: false };
 }
 
 /** One job the runner received, as the runner-local journal keeps it. */
@@ -248,7 +263,8 @@ export function createInboxWorker(options: InboxWorkerOptions): InboxWorker {
       .catch((error: unknown) => options.onError?.(error));
   }
 
-  function finish(claimed: ClaimedJob, outcome: JobOutcome) {
+  function finish(claimed: ClaimedJob, reported: JobOutcome) {
+    const outcome = deliverable(reported);
     const entry = running.get(claimed.job.id);
     if (entry !== undefined) {
       clearTimer(entry.timer);

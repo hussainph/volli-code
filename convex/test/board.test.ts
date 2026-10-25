@@ -289,6 +289,30 @@ describe("board.updateTicket", () => {
     ).rejects.toThrow(code("checkout_mode_locked"));
   });
 
+  test("a switch on a teammate's Place asks for no worktree there, says so, and does not lock", async () => {
+    const t = setup();
+    const { as, projectId } = await boardFixture(t);
+    const ticket = await createTicket(as, projectId);
+    const teammate = await signIn(t, "teammate");
+    const placeRunnerId = await seedRunner(t, teammate.userId);
+    const row = await ticketRow(t, ticket.ticketId);
+    await t.run((ctx) => ctx.db.patch(row!._id, { placeRunnerId, checkoutMode: "main_checkout" }));
+    const reply = await as.mutation(api.board.updateTicket, {
+      commandId: command(),
+      ticketId: ticket.ticketId,
+      checkoutMode: "worktree",
+    });
+    expect(reply).toMatchObject({ changed: true, worktreeDeferred: true });
+    expect(await jobs(t, ticket.ticketId)).toEqual([]);
+    await expect(
+      as.mutation(api.board.updateTicket, {
+        commandId: command(),
+        ticketId: ticket.ticketId,
+        checkoutMode: "main_checkout",
+      }),
+    ).resolves.toMatchObject({ changed: true, worktreeDeferred: false });
+  });
+
   test("a materialization being made locks the mode; a failed or reclaimed worktree does not", async () => {
     const t = setup();
     const { as, projectId, userId } = await boardFixture(t);
@@ -774,6 +798,44 @@ describe("board.moveTickets", () => {
     expect((await jobs(t, ids["A"]!)).map((job) => [job.id, job.status])).toEqual([
       [scheduled, "queued"],
     ]);
+  });
+
+  test("work the inbox will not route is skipped, and the move still commits", async () => {
+    const t = setup();
+    const { as, projectId, userId, ids } = await board(t);
+    // A worktree on a runner that was removed since, and the armer's runner removed too.
+    const copy = await seedWorkingCopy(t, { ticketId: ids["A"]!, projectId });
+    const armed = await seedAutomation(t, projectId, userId, { status: "needs_review" });
+    await t.run(async (ctx) => {
+      for (const runnerId of [copy.runnerId, armed.runnerId]) {
+        const runner = await ctx.db
+          .query("runners")
+          .withIndex("by_uuid", (q) => q.eq("id", runnerId))
+          .unique();
+        await ctx.db.patch(runner!._id, { revokedAt: 1 });
+      }
+    });
+    const done = await as.mutation(api.board.moveTickets, {
+      commandId: command(),
+      projectId,
+      ticketIds: [ids["A"]!],
+      toStatus: "done",
+    });
+    expect(done.moved).toEqual([ids["A"]]);
+    expect(await jobs(t, ids["A"]!)).toEqual([]);
+    // A pick of the armed Automation runs on the armer's runner, which is gone: reported.
+    const picked = await as.mutation(api.board.moveTickets, {
+      commandId: command(),
+      projectId,
+      ticketIds: [ids["B"]!],
+      toStatus: "needs_review",
+      choice: { kind: "automation", automationId: armed.automationId },
+    });
+    expect(picked.unstartedRuns).toEqual([
+      { ticketId: ids["B"], automationId: armed.automationId, reason: "runner_unavailable" },
+    ]);
+    expect((await ticketRow(t, ids["B"]!))!.status).toBe("needs_review");
+    expect(await jobs(t, ids["B"]!)).toEqual([]);
   });
 
   test("an Automation of another project is never started", async () => {
