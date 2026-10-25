@@ -24,6 +24,7 @@ import type * as lib_board from "../lib/board.js";
 import type * as lib_boardEffects from "../lib/boardEffects.js";
 import type * as lib_boardReceipts from "../lib/boardReceipts.js";
 import type * as lib_firstSignIn from "../lib/firstSignIn.js";
+import type * as lib_jobs from "../lib/jobs.js";
 import type * as lib_objectStore from "../lib/objectStore.js";
 import type * as lib_runnerAuth from "../lib/runnerAuth.js";
 import type * as lib_runnerSecrets from "../lib/runnerSecrets.js";
@@ -34,8 +35,10 @@ import type * as members from "../members.js";
 import type * as migration from "../migration.js";
 import type * as projects from "../projects.js";
 import type * as runnerHttp from "../runnerHttp.js";
+import type * as runnerJobs from "../runnerJobs.js";
 import type * as runners from "../runners.js";
 import type * as sessionVisibility from "../sessionVisibility.js";
+import type * as testJobs from "../testJobs.js";
 import type * as transcripts from "../transcripts.js";
 import type * as workspaces from "../workspaces.js";
 
@@ -62,6 +65,7 @@ declare const fullApi: ApiFromModules<{
   "lib/boardEffects": typeof lib_boardEffects;
   "lib/boardReceipts": typeof lib_boardReceipts;
   "lib/firstSignIn": typeof lib_firstSignIn;
+  "lib/jobs": typeof lib_jobs;
   "lib/objectStore": typeof lib_objectStore;
   "lib/runnerAuth": typeof lib_runnerAuth;
   "lib/runnerSecrets": typeof lib_runnerSecrets;
@@ -72,8 +76,10 @@ declare const fullApi: ApiFromModules<{
   migration: typeof migration;
   projects: typeof projects;
   runnerHttp: typeof runnerHttp;
+  runnerJobs: typeof runnerJobs;
   runners: typeof runners;
   sessionVisibility: typeof sessionVisibility;
+  testJobs: typeof testJobs;
   transcripts: typeof transcripts;
   workspaces: typeof workspaces;
 }>;
