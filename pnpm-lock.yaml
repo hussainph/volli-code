@@ -497,6 +497,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.5
+      '@volli/host-core':
+        specifier: workspace:*
+        version: link:../packages/host-core
       convex-test:
         specifier: 0.0.65
         version: 0.0.65(convex@1.48.0(react@19.3.1))

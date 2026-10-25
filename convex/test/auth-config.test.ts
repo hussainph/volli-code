@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
+import { RUNNER_TOKEN_AUDIENCE, RUNNER_TOKEN_ISSUER } from "@volli/shared/cloud";
+
+import { RUNNER_AUDIENCE, RUNNER_ISSUER } from "../functions/auth.config";
+
 async function loadAuthConfig() {
   vi.resetModules();
   return (await import("../functions/auth.config")).default;
@@ -63,10 +67,34 @@ describe("auth.config", () => {
     expect((await loadAuthConfig()).providers).toEqual([]);
   });
 
+  test("trusts the deployment's own runner tokens when VOLLI_RUNNER_JWKS is set", async () => {
+    process.env = { ...originalEnv, VOLLI_RUNNER_JWKS: "data:application/json;base64,e30=" };
+    delete process.env["VOLLI_TEST_JWKS"];
+    delete process.env["WORKOS_CLIENT_ID"];
+    expect((await loadAuthConfig()).providers).toEqual([
+      {
+        type: "customJwt",
+        issuer: RUNNER_TOKEN_ISSUER,
+        applicationID: RUNNER_TOKEN_AUDIENCE,
+        algorithm: "ES256",
+        jwks: "data:application/json;base64,e30=",
+      },
+    ]);
+  });
+
+  test("names the runner issuer exactly as the shared vocabulary does", () => {
+    expect(RUNNER_ISSUER).toBe(RUNNER_TOKEN_ISSUER);
+    expect(RUNNER_AUDIENCE).toBe(RUNNER_TOKEN_AUDIENCE);
+  });
+
   test("trusts nothing where reading an unset variable throws, as the backend does", async () => {
     process.env = new Proxy({} as NodeJS.ProcessEnv, {
       get(_target, name) {
-        if (name === "VOLLI_TEST_JWKS" || name === "WORKOS_CLIENT_ID") {
+        if (
+          name === "VOLLI_TEST_JWKS" ||
+          name === "WORKOS_CLIENT_ID" ||
+          name === "VOLLI_RUNNER_JWKS"
+        ) {
           throw new Error("used in auth config file but not set");
         }
         return originalEnv[name as string];

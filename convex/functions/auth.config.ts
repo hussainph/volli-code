@@ -15,12 +15,24 @@ import type { AuthConfig } from "convex/server";
  *   user. A deployment without that variable trusts no test issuer, and no
  *   cloud deployment may ever set it.
  *
+ * - **Runners** sign in with runner tokens this deployment issues itself
+ *   (`runnerHttp.ts`, `/runner/token`). `VOLLI_RUNNER_JWKS` is the public
+ *   half of `VOLLI_RUNNER_SIGNING_KEY`, as a `data:` URI; every deployment
+ *   that serves runners sets both. `lib/runnerAuth.ts` tells runners from
+ *   people.
+ *
  * A token's profile claims (`email`, `email_verified`, `name`) are read by
  * `profileFromIdentity` in `lib/auth.ts`. WorkOS adds them through the
  * environment's JWT template; see `README.md`, "Sign-in provider".
  */
 export const TEST_ISSUER = "https://test.volli.invalid";
 export const TEST_AUDIENCE = "volli-test";
+
+// `RUNNER_TOKEN_ISSUER` / `RUNNER_TOKEN_AUDIENCE` from `@volli/shared/cloud`,
+// repeated because the fixture loads this file under Node's type stripper,
+// which cannot resolve the shared package. A unit test holds them equal.
+export const RUNNER_ISSUER = "https://runners.volli.app";
+export const RUNNER_AUDIENCE = "volli-runner";
 
 /** Where WorkOS's API and JWKS live. */
 const WORKOS_API_BASE = "https://api.workos.com";
@@ -60,6 +72,7 @@ function workosProviders(clientId: string): Provider[] {
 
 const workosClientId = optionalEnv("WORKOS_CLIENT_ID");
 const testJwks = optionalEnv("VOLLI_TEST_JWKS");
+const runnerJwks = optionalEnv("VOLLI_RUNNER_JWKS");
 
 export default {
   providers: [
@@ -72,6 +85,17 @@ export default {
             applicationID: TEST_AUDIENCE,
             algorithm: "ES256",
             jwks: testJwks,
+          } satisfies Provider,
+        ]
+      : []),
+    ...(runnerJwks
+      ? [
+          {
+            type: "customJwt",
+            issuer: RUNNER_ISSUER,
+            applicationID: RUNNER_AUDIENCE,
+            algorithm: "ES256",
+            jwks: runnerJwks,
           } satisfies Provider,
         ]
       : []),
