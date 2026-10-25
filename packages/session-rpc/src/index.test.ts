@@ -623,7 +623,9 @@ describe("Session tRPC router", () => {
       cloud: { enabled: true, source: "storage" },
     });
     expect(writes).toEqual([{ id: "cloud", enabled: true }]);
-    experimentSnapshot = { cloud: { enabled: false, source: "default", visible: false } };
+    experimentSnapshot = {
+      cloud: { enabled: false, source: "default", visible: false, enrollment: true },
+    };
     await expect(caller.settings.experiments()).resolves.toEqual(experimentSnapshot);
   });
 

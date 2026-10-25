@@ -6,9 +6,11 @@
  * Convex client library rides in main for them.
  */
 
+import type { PreviewAccess } from "@volli/shared/cloud";
+
 /** What `accounts.ensureViewer` and the deletion mutations answer. */
 export interface BackendViewer {
-  readonly previewAccess: "granted" | "waitlisted";
+  readonly previewAccess: PreviewAccess;
   readonly userId: string;
   readonly displayName: string;
   readonly primaryEmail: string | null;

@@ -27,6 +27,7 @@ export * from "./desktop-entries";
 export * from "./environment-recipe";
 export * from "./account";
 export * from "./this-mac-runner";
+export { PREVIEW_WAITLIST_MESSAGE } from "./cloud/preview-access";
 export type * from "./browser-app-shortcut";
 export * from "./host-link-relay";
 export * from "./agent-surface";

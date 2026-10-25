@@ -957,7 +957,8 @@ it("keeps deletion and restoration answers behind the same preview gate", async 
   await service.signIn("github");
   await service.settled();
   await service.requestDeletion();
-  expect(service.snapshot().account?.backend).toBe("refused");
+  expect(service.snapshot().account?.backend).toBe("synced");
+  expect(service.snapshot().failure).toBeNull();
   await service.cancelDeletion();
   expect(service.snapshot()).toMatchObject({
     account: { backend: "refused" },
@@ -965,4 +966,22 @@ it("keeps deletion and restoration answers behind the same preview gate", async 
   });
   expect(service.previewUserId()).toBeNull();
   expect(marker.write).not.toHaveBeenCalled();
+});
+
+it("retries a transient backend failure with the same in-memory invite code", async () => {
+  const backend = backendStandIn();
+  backend.ensureViewer.mockRejectedValueOnce(new Error("offline"));
+  const { service } = harness({ backend });
+  await service.signIn("github", "preview-code-123456");
+  await service.settled();
+  expect(service.snapshot().account?.backend).toBe("unreachable");
+  const unsubscribe = service.subscribe(() => {});
+  await service.settled();
+  unsubscribe();
+  expect(backend.ensureViewer).toHaveBeenNthCalledWith(
+    2,
+    expect.any(String),
+    "preview-code-123456",
+  );
+  expect(service.previewUserId()).toBe(VIEWER.userId);
 });

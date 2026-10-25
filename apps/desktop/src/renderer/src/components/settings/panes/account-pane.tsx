@@ -11,7 +11,7 @@
  * pending (requesting one revokes GitHub); main follows each browser round
  * trip and this pane follows main's snapshot.
  *
- * Shown only with `cloud` on: the category does not exist otherwise. Main
+ * Shown with cloud on or for configured stable preview enrollment. Main
  * owns the sign-in; this pane reads its snapshot and never sees a token.
  *
  * **The launch (VC-889).** Signing in or out restarts Volli into the other
@@ -60,6 +60,7 @@ import { SignOutRestartDialog } from "@renderer/components/cloud/sign-out-restar
 import { Input } from "@renderer/components/ui/input";
 import { Button } from "@renderer/components/ui/button";
 import { toastError } from "@renderer/lib/toast";
+import { isExperimentOn, useExperimentsStore } from "@renderer/stores/experiments";
 import { launchStore } from "@renderer/stores/launch";
 
 import {
@@ -121,9 +122,14 @@ function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: A
             key={connection}
             variant="outline"
             disabled={waiting || snapshot.state === "restoring"}
-            onClick={() =>
-              act(() => commands.signIn(connection, inviteCode.trim() || undefined), "Sign-in")
-            }
+            onClick={() => {
+              const code = inviteCode.trim();
+              if (code !== "" && code.length < 16) {
+                toastError("Invite codes are at least 16 characters.");
+                return;
+              }
+              act(() => commands.signIn(connection, code || undefined), "Sign-in");
+            }}
           >
             <Icon />
             {waiting && snapshot.signingInWith === connection ? "Waiting for the browser…" : label}
@@ -150,7 +156,12 @@ function purgeDate(at: number): string {
 
 /** Whether this signed-in account opens Volli Cloud on the next launch, from a local one. */
 function restartOffered(account: AccountSummary): boolean {
-  return launchStore() === "local" && account.backend === "synced" && account.userId !== null;
+  return (
+    launchStore() === "local" &&
+    account.backend === "synced" &&
+    account.userId !== null &&
+    account.deletionPurgeAfter === null
+  );
 }
 
 const SELECTION = {
@@ -327,6 +338,7 @@ function SignedIn({
   const [confirming, setConfirming] = React.useState(false);
   const [signingOut, setSigningOut] = React.useState(false);
   const cloudLaunch = launchStore() === "cloud";
+  const cloudEnabled = useExperimentsStore((state) => isExperimentOn(state.snapshot, "cloud"));
   return (
     <>
       <PrefSection
@@ -366,7 +378,8 @@ function SignedIn({
       </PrefSection>
       {/* Keyed by the person: another sign-in reads its own connection. A
           pending deletion has revoked GitHub; a restore reads it afresh. */}
-      {account.backend === "synced" &&
+      {(cloudLaunch || cloudEnabled) &&
+      account.backend === "synced" &&
       account.userId !== null &&
       account.deletionPurgeAfter === null ? (
         <Github key={account.userId} rpc={rpc} />

@@ -725,6 +725,7 @@ const experimentFlagSchema = z.object({
   enabled: z.boolean(),
   source: z.enum(["default", "storage", "environment"]),
   visible: z.boolean().optional(),
+  enrollment: z.boolean().optional(),
 });
 const experimentSnapshotSchema = z.object(
   Object.fromEntries(EXPERIMENTS.map(({ id }) => [id, experimentFlagSchema])) as Record<

@@ -10,6 +10,7 @@ import type { AccountGithubSnapshot, AccountSnapshot } from "@volli/shared";
 
 import { LOCAL_LAUNCH } from "@volli/shared";
 
+import { useExperimentsStore } from "@renderer/stores/experiments";
 import { adoptLaunch } from "@renderer/stores/launch";
 import { AccountPane } from "./account-pane";
 import type { AccountRpc } from "./use-account";
@@ -126,6 +127,7 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  useExperimentsStore.setState({ snapshot: { cloud: { enabled: true, source: "storage" } } });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -134,6 +136,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  useExperimentsStore.setState({ snapshot: null });
 });
 
 const button = (label: string): HTMLButtonElement => {
@@ -504,4 +507,30 @@ it("sends the optional preview invite code and leaves a waitlisted sign-in witho
   });
   expect(container.textContent).toContain("waitlist");
   expect(container.textContent).not.toContain("Restart to open");
+});
+
+it("does not read GitHub before stable enrollment restarts into cloud", () => {
+  useExperimentsStore.setState({
+    snapshot: { cloud: { enabled: false, source: "default", visible: false, enrollment: true } },
+  });
+  const tier = standIn();
+  act(() => root.render(<AccountPane rpc={tier.rpc} />));
+  tier.push(SIGNED_IN);
+  expect(container.textContent).toContain("Restart to open Volli Cloud");
+  expect(tier.rpc.account.githubSubscribe.subscribe).not.toHaveBeenCalled();
+});
+
+it("explains a short invite code before making an RPC call", () => {
+  const tier = standIn();
+  act(() => root.render(<AccountPane rpc={tier.rpc} />));
+  tier.push(SIGNED_OUT);
+  const input = container.querySelector<HTMLInputElement>(
+    'input[aria-label="Preview invite code"]',
+  )!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "short");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  act(() => button("Continue with GitHub").click());
+  expect(tier.rpc.account.signIn.mutate).not.toHaveBeenCalled();
 });

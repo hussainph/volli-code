@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { ExperimentSnapshot } from "@volli/shared";
 
-import { createExperimentsStore, hasVisibleExperiments, isExperimentOn } from "./experiments";
+import {
+  createExperimentsStore,
+  hasAccountEnrollment,
+  hasVisibleExperiments,
+  isExperimentOn,
+} from "./experiments";
 
 function snapshot(enabled: boolean): ExperimentSnapshot {
   return { cloud: { enabled, source: "storage" } };
@@ -85,4 +90,21 @@ describe("experiments store", () => {
     await store.getState().ensure();
     expect(store.getState().snapshot).toBeNull();
   });
+});
+
+it("does not expose enrollment on unconfigured stable or older hosts", () => {
+  expect(hasAccountEnrollment(null)).toBe(false);
+  expect(
+    hasAccountEnrollment({ cloud: { enabled: false, source: "default", visible: false } }),
+  ).toBe(false);
+  expect(
+    hasAccountEnrollment({
+      cloud: { enabled: false, source: "default", visible: false, enrollment: false },
+    }),
+  ).toBe(false);
+  expect(
+    hasAccountEnrollment({
+      cloud: { enabled: false, source: "default", visible: false, enrollment: true },
+    }),
+  ).toBe(true);
 });

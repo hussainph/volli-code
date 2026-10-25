@@ -870,8 +870,10 @@ const appStartup = app.whenReady().then(async () => {
   // and canary refuse with the flag off. A stable sign-in marker permits a
   // bounded launch-time check; other account reads are on demand.
   const buildKind = runningBuildKind(app.isPackaged, autoUpdater.currentVersion);
-  const accountEnrollmentEnabled = () => buildKind === "stable" || isExperimentEnabled("cloud");
   const accountConfig = resolveAccountConfig({ env: process.env, packaged: app.isPackaged });
+  const enrollmentAvailable =
+    buildKind === "stable" && accountConfig.provider !== null && accountConfig.backendUrl !== null;
+  const accountEnrollmentEnabled = () => enrollmentAvailable || isExperimentEnabled("cloud");
   // The next launch's product store (VC-889): written when a sign-in
   // completes, cleared when it ends. A row in this Mac's database, reached
   // once the database below is open; a degraded one launches local.
@@ -1029,13 +1031,10 @@ const appStartup = app.whenReady().then(async () => {
     },
   });
   installExperimentalSettings(
-    new ExperimentalSettings(
-      watchedDb,
-      process.env["VOLLI_EXPERIMENTAL"],
-      buildKind,
-      Date.now,
-      previewGranted,
-    ),
+    new ExperimentalSettings(watchedDb, process.env["VOLLI_EXPERIMENTAL"], buildKind, Date.now, {
+      granted: previewGranted,
+      enrollment: enrollmentAvailable,
+    }),
   );
   const launch = chooseProductStore({
     cloudFlag: isExperimentEnabled("cloud"),

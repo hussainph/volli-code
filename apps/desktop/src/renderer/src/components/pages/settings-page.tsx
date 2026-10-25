@@ -12,7 +12,7 @@
  */
 import * as React from "react";
 
-import { useExperimentsStore } from "@renderer/stores/experiments";
+import { hasAccountEnrollment, useExperimentsStore } from "@renderer/stores/experiments";
 import { launchStore } from "@renderer/stores/launch";
 
 import { useCloudEnabled } from "@renderer/components/hosts/use-hosts";
@@ -33,7 +33,7 @@ export function SettingsPage({
   const runners = launchStore() === "cloud";
   const experiments = useExperimentsStore((state) => state.snapshot);
   // Stable hides the experiment, but retains enrollment into the invite-only preview.
-  const account = hosts || experiments?.cloud.visible === false;
+  const account = hosts || hasAccountEnrollment(experiments);
   React.useEffect(() => {
     void useExperimentsStore.getState().ensure();
   }, []);

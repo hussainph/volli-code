@@ -407,10 +407,18 @@ the local app from opening.
 Missing, waitlisted, expired, deleted, mismatched, or unreachable accounts
 leave every cloud product surface off and the local board unchanged. Offline
 stable launches fail closed (canary's cached-board behavior is unchanged).
-The Account sign-in pane is the sole stable pre-enrollment exception: it
+The Account sign-in pane is the sole stable pre-enrollment exception on a
+build with a configured provider and backend: it
 shows the waitlist message without enabling cloud. Signing in or out still
 requires a restart to change stores; a running window never hot-swaps.
 Dev/canary flag-off launches do not read the account or launch marker.
+Canary sign-ins also require invitation; already invited canary accounts
+retain their existing offline cached-board launch. Invite codes are retained
+only in memory during transient retries, not across app restarts.
+
+Preview agreement acceptance is a separate release prerequisite: the legal
+version and explicit server-recorded acceptance must be wired before preview
+shipping. An invitation is not acceptance of the agreement.
 
 CI holds the backend preview gate and the desktop launch gate at 100%
 statements, branches, functions and lines. Backend transport tests also

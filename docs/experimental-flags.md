@@ -32,7 +32,9 @@ portable workspace preferences; the registry carries each flag's scope.
 Cloud's experimental switch is available in dev and canary builds. Stable
 builds hide it and ignore stored intent. Only a fresh backend preview grant
 for the signed-in account enables cloud for a stable launch; the Account
-pane remains available for enrollment and a waitlist message. Verification
+pane is available for enrollment and a waitlist message only when the host
+has a configured sign-in provider and backend. The host advertises that
+capability as `cloud.enrollment`; a hidden switch is not evidence of it. Verification
 has a two-second launch deadline: failure or timeout opens the unchanged
 local board, never a cached grant. An account check that finishes later may
 offer a restart, but never changes stores in a running window. See

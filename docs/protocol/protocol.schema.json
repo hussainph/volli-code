@@ -39186,6 +39186,9 @@
                 "enabled": {
                   "type": "boolean"
                 },
+                "enrollment": {
+                  "type": "boolean"
+                },
                 "source": {
                   "enum": [
                     "default",
@@ -39243,6 +39246,9 @@
               "additionalProperties": false,
               "properties": {
                 "enabled": {
+                  "type": "boolean"
+                },
+                "enrollment": {
                   "type": "boolean"
                 },
                 "source": {

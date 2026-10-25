@@ -44,6 +44,7 @@
  */
 import {
   ACCOUNT_TEXT_MAX,
+  PREVIEW_WAITLIST_MESSAGE,
   ACCOUNT_TOKEN_RETRY_MS,
   OperationUnavailableError,
   UNCONFIGURED_ACCOUNT,
@@ -84,9 +85,6 @@ const UNAVAILABLE_TOKEN: AccountAccessToken = Object.freeze({
   kind: "unavailable",
   retryAfterMs: ACCOUNT_TOKEN_RETRY_MS,
 });
-
-export const PREVIEW_WAITLIST =
-  "Volli Cloud is invite-only. You're on the waitlist; your local projects are unchanged.";
 
 export const ACCOUNT_CLOUD_OFF = "Volli Cloud is off. Turn it on in Settings → Experimental.";
 
@@ -206,6 +204,8 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
   let flow: Flow | null = null;
   let restore: Promise<void> | null = null;
   let syncing: Promise<void> | null = null;
+  // Kept only in this sign-in epoch until the backend answers; never sealed or projected.
+  let pendingInviteCode: string | undefined;
   let pending: Promise<unknown> = Promise.resolve();
   let refreshing: { epoch: number; token: Promise<string | null> } | null = null;
   let epoch = 0;
@@ -267,6 +267,8 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
   const advance = (): number => {
     epoch += 1;
     refreshing = null;
+    syncing = null;
+    pendingInviteCode = undefined;
     return epoch;
   };
 
@@ -366,27 +368,31 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
   const acceptViewer = (answered: BackendViewer): void => {
     viewer = answered;
     const granted = previewAccountGranted(answered);
-    backendState = granted ? "synced" : "refused";
-    failure = granted || answered.status === "deletion_pending" ? null : PREVIEW_WAITLIST;
+    backendState = granted || answered.status === "deletion_pending" ? "synced" : "refused";
+    failure = granted || answered.status === "deletion_pending" ? null : PREVIEW_WAITLIST_MESSAGE;
     if (granted) options.marker?.write(answered.userId);
     else options.marker?.clear();
   };
 
   /** Asks the backend for the person; on failure keeps the sign-in and says why. */
   const syncViewer = (inviteCode?: string): Promise<void> => {
+    if (inviteCode !== undefined) pendingInviteCode = inviteCode;
     if (backend === null) return Promise.resolve();
     if (syncing !== null) return syncing;
     const startedIn = epoch;
+    const sentCode = pendingInviteCode;
     const run = (async () => {
       try {
         const token = await freshToken();
         if (token === null || epoch !== startedIn) return;
-        const answered = await backend.ensureViewer(token, inviteCode);
+        const answered = await backend.ensureViewer(token, sentCode);
         if (epoch !== startedIn) return;
+        if (pendingInviteCode === sentCode) pendingInviteCode = undefined;
         acceptViewer(answered);
       } catch (error) {
         if (epoch !== startedIn) return;
         if (error instanceof BackendRefusedError && error.code === "preview_waitlisted") {
+          pendingInviteCode = undefined;
           backendState = "refused";
           failure = error.message;
           options.marker?.clear();
@@ -406,7 +412,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
       }
       emit();
     })().finally(() => {
-      syncing = null;
+      if (syncing === run) syncing = null;
     });
     syncing = run;
     return run;

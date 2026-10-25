@@ -1,16 +1,13 @@
 /** Deployment-admin preview grants. Workspace invites never confer preview access. */
+import { PREVIEW_WAITLIST_MESSAGE, type PreviewAccess } from "@volli/shared/cloud";
 import type { GenericDatabaseReader, GenericDatabaseWriter } from "convex/server";
 import { ConvexError } from "convex/values";
-import type { DataModel } from "../_generated/dataModel.js";
+import type { DataModel, Doc } from "../_generated/dataModel.js";
 import type { Viewer } from "./auth";
 
-export type PreviewAccess = "granted" | "waitlisted";
 type Reader = { db: GenericDatabaseReader<DataModel> };
 
-export const PREVIEW_WAITLIST_MESSAGE =
-  "Volli Cloud is invite-only. You're on the waitlist; your local projects are unchanged.";
-
-export function previewError(message = PREVIEW_WAITLIST_MESSAGE) {
+function previewError(message = PREVIEW_WAITLIST_MESSAGE) {
   return new ConvexError({ code: "preview_waitlisted", message });
 }
 
@@ -19,6 +16,14 @@ export async function codeHash(code: string): Promise<string> {
     throw previewError("This preview invite code is invalid.");
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(code));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function liveGrant(grant: Doc<"previewAccess"> | null): grant is Doc<"previewAccess"> {
+  return (
+    grant !== null &&
+    grant.revokedAt === null &&
+    (grant.expiresAt === null || grant.expiresAt > Date.now())
+  );
 }
 
 export async function previewAccess(ctx: Reader, viewer: Viewer): Promise<PreviewAccess> {
@@ -38,14 +43,7 @@ export async function previewAccess(ctx: Reader, viewer: Viewer): Promise<Previe
       .withIndex("by_redeemed_user", (q) => q.eq("redeemedByUserId", viewer.userId))
       .collect()),
   );
-  return grants.some(
-    (grant) =>
-      grant !== null &&
-      grant.revokedAt === null &&
-      (grant.expiresAt === null || grant.expiresAt > Date.now()),
-  )
-    ? "granted"
-    : "waitlisted";
+  return grants.some(liveGrant) ? "granted" : "waitlisted";
 }
 
 export async function requirePreviewAccess(ctx: Reader, viewer: Viewer): Promise<void> {
@@ -63,14 +61,8 @@ export async function redeemPreviewCode(
     .query("previewAccess")
     .withIndex("by_kind_key", (q) => q.eq("kind", "code").eq("key", key))
     .unique();
-  if (
-    grant === null ||
-    grant.revokedAt !== null ||
-    (grant.expiresAt !== null && grant.expiresAt <= Date.now()) ||
-    (grant.redeemedByUserId !== null && grant.redeemedByUserId !== viewer.userId)
-  ) {
+  if (!liveGrant(grant) || grant.redeemedByUserId !== null) {
     throw previewError("This preview invite code is invalid or has already been used.");
   }
-  if (grant.redeemedByUserId === null)
-    await ctx.db.patch(grant._id, { redeemedByUserId: viewer.userId });
+  await ctx.db.patch(grant._id, { redeemedByUserId: viewer.userId });
 }

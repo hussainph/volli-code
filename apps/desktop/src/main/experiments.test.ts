@@ -255,10 +255,22 @@ describe("after the flag-on suite", () => {
 
 describe("stable preview grants", () => {
   it("enables only the launch-granted account, without changing persisted intent", () => {
-    const settings = new ExperimentalSettings(null, undefined, "stable", Date.now, true);
+    const settings = new ExperimentalSettings(null, undefined, "stable", Date.now, {
+      granted: true,
+    });
     expect(settings.snapshot()).toEqual({
       cloud: { enabled: true, source: "default", visible: false },
     });
     expect(new ExperimentalSettings(null, "cloud", "stable").isEnabled("cloud")).toBe(false);
   });
+});
+
+it("exposes enrollment only when the host has configured it", () => {
+  expect(
+    new ExperimentalSettings(null, undefined, "stable").snapshot().cloud.enrollment,
+  ).toBeUndefined();
+  expect(
+    new ExperimentalSettings(null, undefined, "stable", Date.now, { enrollment: true }).snapshot()
+      .cloud,
+  ).toEqual({ enabled: false, source: "default", visible: false, enrollment: true });
 });

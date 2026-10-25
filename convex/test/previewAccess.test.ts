@@ -49,6 +49,9 @@ describe("preview access", () => {
       enabled: true,
     });
     expect((await client.query(api.accounts.viewer, {}))?.previewAccess).toBe("granted");
+    expect(
+      (await client.mutation(api.accounts.ensureViewer, { inviteCode: "bad" })).previewAccess,
+    ).toBe("granted");
     const changedEmail = t.withIdentity({ ...person("alice"), email: "changed@example.com" });
     await t.mutation(internal.previewAccess.set, {
       kind: "user",

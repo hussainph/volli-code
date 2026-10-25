@@ -2,9 +2,9 @@
  * What a person's first sign-in sets up, beyond their `users` row.
  *
  * `accounts.ensureViewer` calls {@link onFirstSignIn} inside its own
- * transaction, exactly once per person: when it has just created the row. So
- * whatever this writes commits with the account or not at all, and a retried
- * first call (which finds the row) never runs it twice.
+ * transaction on the first granted sign-in. The optional user setup marker
+ * is committed with the Workspace, so retries never create a second one;
+ * waitlisted accounts create no Workspace.
  *
  * Today that is the person's own Workspace, named after them, with them as
  * its one owner (there are no Workspace types: inviting someone just adds a

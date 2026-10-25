@@ -38,6 +38,8 @@ export type ExperimentSnapshot = Record<
     source: "default" | "storage" | "environment";
     /** Absent on older hosts means visible; false hides this setting. */
     visible?: boolean;
+    /** Host-configured stable preview enrollment; absent on older or unconfigured hosts. */
+    enrollment?: boolean;
   }
 >;
 
@@ -116,7 +118,7 @@ export function resolveExperiments(
   buildKind: ExperimentBuildKind,
   previewGranted = false,
 ): ExperimentSnapshot {
-  return Object.fromEntries(
+  const snapshot = Object.fromEntries(
     EXPERIMENTS.map((entry) => {
       const fromEnvironment = buildKind !== "stable" && environment.includes(entry.id);
       const available = (entry.availableOn as readonly ExperimentBuildKind[]).includes(buildKind);
@@ -124,11 +126,14 @@ export function resolveExperiments(
       return [
         entry.id,
         {
-          enabled: fromEnvironment || (available ? (saved ?? entry.default) : previewGranted),
+          enabled: fromEnvironment || (available && (saved ?? entry.default)),
           source: fromEnvironment ? "environment" : saved === undefined ? "default" : "storage",
           ...(!available && !fromEnvironment ? { visible: false } : {}),
         },
       ];
     }),
   ) as ExperimentSnapshot;
+  // A preview invitation grants cloud, never another experimental feature.
+  if (buildKind === "stable") snapshot.cloud.enabled = previewGranted;
+  return snapshot;
 }

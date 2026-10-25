@@ -13,14 +13,20 @@
 import type { GenericDatabaseReader } from "convex/server";
 import { ConvexError, v } from "convex/values";
 
-import { CLIENT_KINDS, newId, type ClientKind, type PersonActor } from "@volli/shared/cloud";
+import {
+  CLIENT_KINDS,
+  newId,
+  type ClientKind,
+  type PersonActor,
+  type PreviewAccess,
+} from "@volli/shared/cloud";
 
 import { internal } from "./_generated/api.js";
 import type { DataModel, Doc } from "./_generated/dataModel.js";
 import { mutation, query } from "./_generated/server";
 import { authError, ensureViewer as ensureViewerRow, findViewer, type Viewer } from "./lib/auth";
 import { audit } from "./lib/audit";
-import { previewAccess, redeemPreviewCode, type PreviewAccess } from "./lib/previewAccess";
+import { previewAccess, redeemPreviewCode } from "./lib/previewAccess";
 import { onFirstSignIn } from "./lib/firstSignIn";
 import { literals } from "./lib/validators";
 
@@ -78,16 +84,18 @@ async function summary(
 }
 
 /**
- * Creates the caller's `users` row on first sign-in (and runs the first
- * sign-in setup, `lib/firstSignIn.ts`, in the same transaction); afterwards
- * returns it. Idempotent. An account whose deletion is pending is returned
+ * Creates the caller's `users` row on first sign-in. The first granted
+ * sign-in runs Workspace setup in the same transaction; waitlisted accounts
+ * retain only their account until invited. Idempotent. An account whose deletion is pending is returned
  * as it is, so the client can offer to restore it.
  */
 export const ensureViewer = mutation({
   args: { inviteCode: v.optional(v.string()) },
   handler: async (ctx, { inviteCode }): Promise<ViewerSummary & { created: boolean }> => {
     const { created, ...viewer } = await ensureViewerRow(ctx);
-    if (inviteCode !== undefined) await redeemPreviewCode(ctx, viewer, inviteCode);
+    if (inviteCode !== undefined && (await previewAccess(ctx, viewer)) !== "granted") {
+      await redeemPreviewCode(ctx, viewer, inviteCode);
+    }
     const result = await summary(ctx, viewer);
     if (result.previewAccess === "granted" && !viewer.user.previewWorkspaceCreated) {
       // Older accounts already own a Workspace. A waitlisted account has none yet.
