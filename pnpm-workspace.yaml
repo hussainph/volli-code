@@ -1,6 +1,7 @@
 packages:
   - apps/*
   - packages/*
+  - convex
 
 # Hard-fail `pnpm install` when the running Node is outside the root
 # `engines.node` pin (^24.16.0). Without this, an install under a stray older
