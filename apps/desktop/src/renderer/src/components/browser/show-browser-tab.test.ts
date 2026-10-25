@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { emptySplitView, groupTabs, type SplitViewState } from "@volli/shared";
 import type { BrowserTabState } from "../../../../ipc/contract";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
-import { showBrowserTab } from "./show-browser-tab";
+import { revealIslandBrowserTab, showBrowserTab } from "./show-browser-tab";
 
 const stores = vi.hoisted(() => ({
   workspace: {
@@ -137,5 +137,34 @@ describe("showBrowserTab", () => {
     ).rejects.toThrow("gone");
     expect(stores.workspace.groupHomeTabs).not.toHaveBeenCalled();
     expect(stores.workspace.setHomeActiveTab).not.toHaveBeenCalled();
+  });
+});
+
+describe("revealIslandBrowserTab", () => {
+  it("opens a headless tab BESIDE its owning chat — the Island's Open beside chat", async () => {
+    useBrowserTabsStore.getState().receive(tab({ presentation: "headless" }));
+    await revealIslandBrowserTab(api(tab()), "b");
+    expect(stores.workspace.groupHomeTabs).toHaveBeenCalledWith(
+      "p",
+      "chat:s",
+      "browser:b",
+      "right",
+    );
+    expect(stores.workspace.setHomeActiveTab).toHaveBeenCalledWith("p", "browser:b");
+  });
+
+  it("opens a tab the store has not seen yet beside its chat too", async () => {
+    await revealIslandBrowserTab(api(tab()), "b");
+    expect(stores.workspace.groupHomeTabs).toHaveBeenCalledOnce();
+  });
+
+  it("only SELECTS a tab already in a strip — the Island's Show tab", async () => {
+    useBrowserTabsStore.getState().receive(tab());
+    const bridge = api(tab());
+    await revealIslandBrowserTab(bridge, "b");
+    expect(bridge.setPresentation).toHaveBeenCalledWith({ tabId: "b", presentation: "tab" });
+    expect(stores.workspace.groupHomeTabs).not.toHaveBeenCalled();
+    expect(stores.chats.openChatTab).not.toHaveBeenCalled();
+    expect(stores.workspace.setHomeActiveTab).toHaveBeenCalledWith("p", "browser:b");
   });
 });

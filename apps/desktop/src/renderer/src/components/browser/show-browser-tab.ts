@@ -56,3 +56,19 @@ export async function showBrowserTab(
     workspace.openTicketView(tab.projectId, tab.ticketId, { tabId: id });
   }
 }
+
+/**
+ * The Activity Island's one reveal door, which names its action by where the
+ * tab already is: a tab already in a strip says **Show tab** and is selected
+ * (`show`); a headless or legacy-preview tab says **Open beside chat** and is
+ * grouped beside its owning chat (`beside-owner`). Read from the same
+ * `presentation` the Island's row reads for its label, so the label and the
+ * act cannot disagree.
+ */
+export function revealIslandBrowserTab(
+  api: Pick<BrowserApi, "setPresentation">,
+  tabId: string,
+): Promise<void> {
+  const shown = useBrowserTabsStore.getState().byId[tabId]?.presentation === "tab";
+  return showBrowserTab(api, tabId, shown ? "show" : "beside-owner");
+}

@@ -175,7 +175,10 @@ import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { delayUntil } from "@renderer/lib/boundary-timer";
 
-import { showBrowserTab } from "@renderer/components/browser/show-browser-tab";
+import {
+  revealIslandBrowserTab,
+  showBrowserTab,
+} from "@renderer/components/browser/show-browser-tab";
 import { BrowserCardHostContext } from "@renderer/components/browser/browser-tab-card";
 import { BrowserTraceDialog } from "@renderer/components/browser/browser-trace-dialog";
 import type { BrowserTraceRequest } from "@renderer/components/browser/browser-trace-model";
@@ -335,9 +338,11 @@ export function ChatPlane({
     [projectId, sessionId],
   );
   const cardHost = browser?.cardHost ?? null;
+  // The Island's row says "Show tab" or "Open beside chat" by where the tab is
+  // now, and this does what it says — never a bare show for both.
   const revealBrowserTab = React.useCallback(
     async (tabId: string) => {
-      if (cardHost !== null) await showBrowserTab(cardHost.api, tabId);
+      if (cardHost !== null) await revealIslandBrowserTab(cardHost.api, tabId);
     },
     [cardHost],
   );
