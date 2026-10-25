@@ -222,7 +222,15 @@ export function registerAcceptedQuitCoordinator(options: {
         return;
       }
       shutdownInFlight = true;
-      options.onQuitAccepted?.();
+      try {
+        options.onQuitAccepted?.();
+      } catch (error) {
+        try {
+          options.reportFailure(error);
+        } catch {
+          // A reporter that throws cannot hold the quit open either.
+        }
+      }
       try {
         options.stopBackgroundWork?.();
       } catch (error) {

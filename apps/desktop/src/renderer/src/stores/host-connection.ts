@@ -62,6 +62,8 @@ export type HostOs = "macos" | "linux";
  *   fault, so a host's own link never reads it. Manage hosts.
  * - `sign-in-refused`: Volli Cloud did not accept this Mac's sign-in (VC-889).
  *   Sign in again.
+ * - `writes-unavailable`: Volli Cloud serves the board, and this build does not
+ *   write to it yet (VC-889). Read-only, quietly said; no recovery.
  * - `signed-out`: the Volli Cloud sign-in ended in a launch that shows its
  *   board (VC-889). Restart Volli after a sign-out the person chose, or sign
  *   in again after one that expired ({@link HostLinkView}'s `recovery`).
@@ -74,7 +76,8 @@ export type HostIncompatibility =
   | "fenced"
   | "too-many-projects"
   | "sign-in-refused"
-  | "signed-out";
+  | "signed-out"
+  | "writes-unavailable";
 
 /**
  * A host's link as the UI reads it — a projection of the client host link's
@@ -494,6 +497,7 @@ const INCOMPATIBILITY_RANK: Readonly<Record<HostIncompatibility, number>> = {
   "host-too-new": 5,
   "host-too-old": 6,
   "too-many-projects": 7,
+  "writes-unavailable": 8,
 };
 const STATUS_RANK: Readonly<Record<HostLinkStatus, number>> = {
   incompatible: 0,

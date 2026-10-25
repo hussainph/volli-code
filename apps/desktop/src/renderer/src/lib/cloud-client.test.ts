@@ -4,7 +4,6 @@ import type { AccountAccessToken, AccountSnapshot } from "@volli/shared";
 import {
   closeCloudClient,
   cloudSession,
-  CloudClientClosedError,
   createTokenFetcher,
   createWaiter,
   followCloudSession,
@@ -75,12 +74,10 @@ describe("the token fetcher (VC-889)", () => {
     expect(asked).toEqual([false, false, false, false]);
   });
 
-  it("gives up only when the client closes, before or after an answer", async () => {
+  it("gives up with null only when the client closes, before or after an answer", async () => {
     let closed = true;
     const before = fetcher([], () => closed);
-    await expect(before.fetch({ forceRefreshToken: false })).rejects.toBeInstanceOf(
-      CloudClientClosedError,
-    );
+    await expect(before.fetch({ forceRefreshToken: false })).resolves.toBeNull();
     expect(before.asked).toEqual([]);
     closed = false;
     const after = createTokenFetcher({
@@ -92,7 +89,7 @@ describe("the token fetcher (VC-889)", () => {
       closed: () => closed,
       retryMs: 1,
     });
-    await expect(after({ forceRefreshToken: false })).rejects.toThrow("closed");
+    await expect(after({ forceRefreshToken: false })).resolves.toBeNull();
   });
 
   it("wakes a wait early, and lets one end on its own", async () => {
@@ -266,7 +263,7 @@ describe("the cloud launch's client", () => {
     expect(h.inputs.getState().input.resumedAt).toBe(Date.now());
   });
 
-  it("closes for good on a sign-out the person chose, and says so", async () => {
+  it("closes for good when the sign-out confirm closes it, and says so", async () => {
     const h = harness();
     const seen: unknown[] = [];
     followCloudSession((session) => seen.push(session));
@@ -274,6 +271,10 @@ describe("the cloud launch's client", () => {
     const client = FakeConvexClient.made[0]!;
     h.emit(signedIn());
     h.emit(signedOut(null));
+    // The account signing out alone clears auth; the confirm closes the client.
+    expect(client.closed).toBe(0);
+    expect(client.cleared).toBe(1);
+    closeCloudClient();
     expect(client.closed).toBe(1);
     expect(client.stoppedConnection).toBe(true);
     expect(h.unsubscribed()).toBe(true);
@@ -290,7 +291,43 @@ describe("the cloud launch's client", () => {
     closeCloudClient();
     expect(h.inputs.getState().input.authenticated).toBeNull();
     expect(client.closed).toBe(1);
-    await expect(client.fetchToken!({ forceRefreshToken: false })).rejects.toThrow("closed");
+    await expect(client.fetchToken!({ forceRefreshToken: false })).resolves.toBeNull();
+  });
+
+  it("wakes a waiting token fetch for a real account change, not a repeated snapshot", async () => {
+    const h = harness();
+    let asks = 0;
+    h.deps.account.accessToken = async () => {
+      asks += 1;
+      return { kind: "unavailable", retryAfterMs: 60_000 };
+    };
+    await startCloudClient(LAUNCH, h.deps);
+    const client = FakeConvexClient.made[0]!;
+    h.emit(signedIn());
+    void client.fetchToken!({ forceRefreshToken: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(asks).toBe(1);
+    h.emit(signedIn());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(asks).toBe(1);
+    h.emit({ ...signedIn(), account: { ...signedIn().account!, backend: "unreachable" } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(asks).toBe(2);
+  });
+
+  it("waits for the person's id before restoring auth: someone else never gets the board", async () => {
+    const h = harness();
+    await startCloudClient(LAUNCH, h.deps);
+    const client = FakeConvexClient.made[0]!;
+    h.emit(signedOut("Your sign-in expired. Sign in again."));
+    // A cancelled re-sign-in is still the same launch, waiting.
+    h.emit(signedOut(null));
+    expect(client.closed).toBe(0);
+    h.emit(signedIn(null));
+    expect(client.setAuthCalls).toBe(1);
+    h.emit(signedIn("someone-else"));
+    expect(client.setAuthCalls).toBe(1);
+    expect(client.closed).toBe(1);
   });
 
   it("closes when someone else signs in, and on the window's unload", async () => {
@@ -328,7 +365,7 @@ describe("the cloud launch's client", () => {
     const second = harness();
     await startCloudClient(LAUNCH, second.deps);
     expect(FakeConvexClient.made[0]!.closed).toBe(1);
-    const ended = harness({ firstSnapshot: signedOut(null) });
+    const ended = harness({ firstSnapshot: signedIn("someone-else") });
     const session = await startCloudClient(LAUNCH, ended.deps);
     expect(FakeConvexClient.made[2]!.closed).toBe(1);
     expect(ended.unsubscribed()).toBe(true);

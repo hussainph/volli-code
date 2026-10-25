@@ -1617,6 +1617,7 @@ describe("a cloud launch's boot (VC-889)", () => {
         }),
       })),
     });
+    const restore = vi.spyOn(useChatSessionsStore.getState(), "restoreProvisionalChatTabs");
     expect(
       await boot(
         gateway,
@@ -1628,6 +1629,10 @@ describe("a cloud launch's boot (VC-889)", () => {
       ok: true,
     });
     expect(launchStore()).toBe("cloud");
+    // Every board write goes to Volli Cloud's source from the first frame.
+    expect(cloudBoardSource()).not.toBeNull();
+    // This Mac's provisional Drafts are neither reopened nor discarded.
+    expect(restore).not.toHaveBeenCalled();
     expect(useProjectsStore.getState().projects).toEqual([]);
     expect(useBoardStore.getState().ticketsByProject).toEqual({});
     expect(useCloudWorkspaceStore.getState().localProjects).toBe(2);

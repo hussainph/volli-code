@@ -9,6 +9,7 @@ import type { PackUserConfig } from "vite-plus/pack";
 
 import { RENDERER_DEV_PORT } from "./scripts/dev-constants.mjs";
 import { SHARED_MACHINE_TEST_WORKERS } from "../../vitest.workers";
+import { rendererConnectSources, withConnectSources } from "./src/main/renderer-csp";
 
 // Launch Electron after a pack only when BOTH hold:
 //  1. dev.mjs opted in by injecting VOLLI_DESKTOP_DEV=1 into the pack child's
@@ -107,7 +108,7 @@ const packedElectronDeps = {
   neverBundle: ["electron", "jsdom", "sharp", "@vscode/ripgrep"],
 };
 
-export default defineConfig(({ mode }) => ({
+export default defineConfig(({ mode, command }) => ({
   // Renderer (React) app build. `root` points Vite at the renderer's index.html.
   root: "src/renderer",
   // THE LAB GETS ITS OWN DEP CACHE. Everything rooted at apps/desktop defaults
@@ -130,7 +131,26 @@ export default defineConfig(({ mode }) => ({
   // CRITICAL: assets stay relative so the built index and worker chunks resolve
   // beneath volli-app://bundle/ in packaged builds. Plain Vite defaults to "/".
   base: "./",
-  plugins: [tailwindcss(), react()],
+  plugins: [
+    tailwindcss(),
+    react(),
+    // The main window's connections (VC-889, src/main/renderer-csp.ts): the
+    // loopback a local Volli Cloud backend runs on, for the dev server only
+    // (or a build that asks), never a packaged one by default.
+    {
+      name: "volli-renderer-connect-src",
+      transformIndexHtml: {
+        order: "pre" as const,
+        handler: (html: string, context: { filename: string }) =>
+          context.filename.endsWith("/src/renderer/index.html")
+            ? withConnectSources(
+                html,
+                rendererConnectSources({ serve: command === "serve", env: process.env }),
+              )
+            : html,
+      },
+    },
+  ],
   resolve: {
     alias: {
       "@renderer": fileURLToPath(new URL("./src/renderer/src", import.meta.url)),
@@ -748,6 +768,7 @@ export default defineConfig(({ mode }) => ({
         // Which product store a launch uses, its marker, and the restart into
         // the other one through the quit gates (VC-889).
         "**/src/main/cloud-launch.ts",
+        "**/src/main/renderer-csp.ts",
         "**/src/main/host-runtime.ts",
         // Menu-bar mode's whole decision and lifecycle (VC-577).
         "**/src/main/menu-bar-host.ts",

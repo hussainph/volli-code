@@ -907,10 +907,19 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         // placeholder after a wholesale hydrate — and this read is also the one
         // that heals a board a failed refresh may have left stale, which is what
         // retires `planningRecoveryNeeded`.
+        // A followed board's placeholder bodies are still placeholders: its
+        // marks stay, or a "" would read as a body a person wrote.
+        const marks = get().unloadedTicketBodies;
+        const kept: Record<string, true> = {};
+        for (const projectId of followed) {
+          for (const ticket of previous[projectId]!) {
+            if (marks[ticket.id] !== undefined) kept[ticket.id] = true;
+          }
+        }
         set({
           ticketsByProject,
           labelsByProject,
-          unloadedTicketBodies: {},
+          unloadedTicketBodies: kept,
           planningRecoveryNeeded: false,
         });
         // The removal path `reconcileSlice` cannot see: a CLI archive, a

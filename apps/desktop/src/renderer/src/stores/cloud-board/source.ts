@@ -71,7 +71,8 @@ function gone(code: string | null): boolean {
   return code === "not_a_member" || code === "not_found";
 }
 
-interface Watched<T> {
+/** A live query as the board reads it: its answer now, and a call on every change. */
+export interface Watched<T> {
   onUpdate(callback: () => void): () => void;
   localQueryResult(): T | undefined;
 }

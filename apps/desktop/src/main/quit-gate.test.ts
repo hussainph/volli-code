@@ -398,6 +398,36 @@ describe("registerAcceptedQuitCoordinator", () => {
     await vi.runAllTimersAsync();
   });
 
+  it("reports a relaunch hook that throws, and the accepted quit goes on", async () => {
+    vi.useFakeTimers();
+    let quit!: (event: { preventDefault(): void }) => void;
+    const exit = vi.fn();
+    const failure = new Error("relaunch failed");
+    for (const reporterThrows of [false, true]) {
+      const reportFailure = vi.fn(() => {
+        if (reporterThrows) throw new Error("reporter failed");
+      });
+      registerAcceptedQuitCoordinator({
+        lifecycle: {
+          on: (_event, listener) => {
+            quit = listener;
+          },
+          exit,
+        },
+        shutdownNativeSessions: async () => {},
+        shutdownAgentSocket: async () => {},
+        reportFailure,
+        onQuitAccepted: () => {
+          throw failure;
+        },
+      });
+      quit({ preventDefault: vi.fn() });
+      await vi.runAllTimersAsync();
+      expect(reportFailure).toHaveBeenCalledWith(failure);
+    }
+    expect(exit).toHaveBeenCalledTimes(2);
+  });
+
   it("still forces an accepted quit when deadline failure reporting throws", async () => {
     vi.useFakeTimers();
     const handlers = new Map<string, (event: { preventDefault(): void }) => void>();

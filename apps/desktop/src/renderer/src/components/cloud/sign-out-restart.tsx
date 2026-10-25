@@ -13,6 +13,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@renderer/components/ui/alert-dialog";
+import { closeCloudClient } from "@renderer/lib/cloud-client";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { toastError } from "@renderer/lib/toast";
 
@@ -22,15 +23,29 @@ export interface SignOutRestartRpc {
   readonly cloud: { readonly relaunch: { mutate(): Promise<unknown> } };
 }
 
-/** Signs out, then asks for the restart; a failure says what main said. */
+function failed(error: unknown, fallback: string): void {
+  toastError(error instanceof Error && error.message !== "" ? error.message : fallback);
+}
+
+/**
+ * Signs out, closes this window's Volli Cloud client (its cache and token go
+ * now, before the restart), then asks for the restart. A failure says what
+ * main said.
+ */
 export async function signOutAndRestart(
   rpc: SignOutRestartRpc = sessionRpcClient(),
 ): Promise<void> {
   try {
     await rpc.account.signOut.mutate();
+  } catch (error) {
+    failed(error, "Sign out failed.");
+    return;
+  }
+  closeCloudClient();
+  try {
     await rpc.cloud.relaunch.mutate();
   } catch (error) {
-    toastError(error instanceof Error && error.message !== "" ? error.message : "Sign out failed.");
+    failed(error, "Couldn’t restart Volli.");
   }
 }
 

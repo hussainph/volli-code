@@ -3215,10 +3215,13 @@ describe("the board store for a board the protocol engine follows (a remote host
     startProtocol();
     const store = createBoardStore(fakeGateway());
     const remote = ticket({ id: "r", status: "todo" });
-    store.getState().paintBoard("p1", [remote], [labelNamed("bug")], new Set());
+    const read = ticket({ id: "read", status: "todo" });
+    store.getState().paintBoard("p1", [remote, read], [labelNamed("bug")], new Set(["r"]));
     const local = ticket({ id: "l", status: "doing" });
     store.getState().hydrate({ mine: [local] }, { mine: [] });
-    expect(store.getState().ticketsByProject).toEqual({ mine: [local], p1: [remote] });
+    expect(store.getState().ticketsByProject).toEqual({ mine: [local], p1: [remote, read] });
+    // Its unread body stays a placeholder: no surface may take "" for a written body.
+    expect(store.getState().unloadedTicketBodies).toEqual({ r: true });
     expect(store.getState().labelsByProject.p1).toEqual([labelNamed("bug")]);
     // A board with tickets but no label slice keeps an empty one.
     store.setState({ labelsByProject: {} });

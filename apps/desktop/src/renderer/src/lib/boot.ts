@@ -31,7 +31,7 @@ import {
   type CloudSelection,
 } from "@renderer/stores/projects";
 import { useBoardStore } from "@renderer/stores/board";
-import { installCloudBoardSource } from "@renderer/stores/board-source";
+import { cloudBoardSource, installCloudBoardSource } from "@renderer/stores/board-source";
 import { ConvexBoardSource } from "@renderer/stores/cloud-board/source";
 import {
   followCloudWorkspace,
@@ -228,19 +228,23 @@ async function readCloudFlag(signal?: AbortSignal): Promise<boolean> {
   return experiments.cloud.enabled;
 }
 
-/** A stalled flag read must not strand a fresh window before its first paint. */
-async function readBootCloudFlag(
-  read: (signal: AbortSignal) => Promise<boolean>,
-): Promise<boolean> {
+/**
+ * A boot read that may not strand a fresh window before its first paint:
+ * a read that fails, or takes longer than a second, answers `fallback`.
+ */
+async function readBeforeDeadline<Answer>(
+  read: (signal: AbortSignal) => Promise<Answer>,
+  fallback: Answer,
+): Promise<Answer> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       Promise.resolve()
         .then(() => read(controller.signal))
-        .catch(() => false),
-      new Promise<boolean>((resolve) => {
-        timer = setTimeout(() => resolve(false), 1_000);
+        .catch(() => fallback),
+      new Promise<Answer>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), 1_000);
       }),
     ]);
   } finally {
@@ -295,27 +299,6 @@ async function readCloudLaunch(signal?: AbortSignal): Promise<CloudLaunch> {
   return sessionRpcClient().cloud.launch.query(undefined, { signal });
 }
 
-/** A stalled or failed launch read is a local launch: the one that always works. */
-async function readBootLaunch(
-  read: (signal: AbortSignal) => Promise<CloudLaunch>,
-): Promise<CloudLaunch> {
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      Promise.resolve()
-        .then(() => read(controller.signal))
-        .catch(() => LOCAL_LAUNCH),
-      new Promise<CloudLaunch>((resolve) => {
-        timer = setTimeout(() => resolve(LOCAL_LAUNCH), 1_000);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-    controller.abort();
-  }
-}
-
 /** The cloud selection the last cloud launch left, read at boot for {@link startCloudBoard}. */
 let bootCloudSelection: CloudSelection | null = null;
 
@@ -335,20 +318,7 @@ export async function startCloudBoard(
 ): Promise<boolean> {
   const launch = cloudLaunchNow();
   if (launch === null) return false;
-  const source = new ConvexBoardSource({
-    paint: (projectId, tickets, labels, unloaded) =>
-      useBoardStore.getState().paintBoard(projectId, tickets, labels, unloaded),
-    notePlanningChange: (change) => useBoardStore.getState().notePlanningChange(change),
-    failed: (message) => toastError(message),
-    refused: (message) => toast(message, { id: "host-local-only" }),
-    dropped: (projectId, message) => {
-      const project = useProjectsStore.getState().projects.find(({ id }) => id === projectId);
-      useBoardStore.getState().forget(projectId);
-      useProjectsStore.getState().dropRemoteProject(projectId);
-      toast.warning(`${project?.name ?? "A project"} isn’t available any more: ${message}`);
-    },
-  });
-  installCloudBoardSource(source);
+  const source = cloudBoardSource()!;
   useHostConnectionStore.getState().attach(createCloudHostSource({ projects: useProjectsStore }));
   // The source first: a project the follower seeds opens on a running client.
   followCloudSession((session) => source.attach(session));
@@ -561,16 +531,21 @@ export async function boot(
   // Resolved BEFORE hydrate (rather than hydrating with `null` and calling
   // `select` afterward) so boot never fires a redundant appState.set — the
   // value already came FROM app_state, there's nothing new to persist.
-  const cloud = await readBootCloudFlag(readCloud);
+  const cloud = await readBeforeDeadline(readCloud, false);
   // Which store this launch shows (VC-889): asked only with the flag on, so
   // a flag-off boot makes no new call.
-  const launch = cloud ? await readBootLaunch(readLaunch) : LOCAL_LAUNCH;
+  // A stalled or failed read is a local launch: the one that always works.
+  const launch = cloud ? await readBeforeDeadline(readLaunch, LOCAL_LAUNCH) : LOCAL_LAUNCH;
   adoptLaunch(launch);
   const selectedProjectId = resolveSelectedProjectId(payload.appState, payload.projects);
   if (launch.store === "cloud") {
     return bootCloudLaunch(payload, selectedProjectId);
   }
   const remote = cloud ? decodeRemoteSelection(payload.appState[PROJECTS_UI_APP_STATE_KEY]) : null;
+  // The last cloud launch's selection survives this launch's own (VC-889).
+  useProjectsStore
+    .getState()
+    .keepCloudSelection(decodeCloudSelection(payload.appState[PROJECTS_UI_APP_STATE_KEY]));
   useProjectsStore.setState({ pendingRemoteSelection: null });
   useProjectsStore
     .getState()
@@ -659,15 +634,29 @@ async function bootCloudLaunch(
     .getState()
     .beginCloudLaunch({ local: localSelection, remote: decodeRemoteSelection(raw) });
   useCloudWorkspaceStore.setState({ localProjects: payload.projects.length });
+  // Every board write of this launch goes to Volli Cloud's source from the
+  // first frame, never to this Mac's database, even before its client runs.
+  const source = new ConvexBoardSource({
+    paint: (projectId, tickets, labels, unloaded) =>
+      useBoardStore.getState().paintBoard(projectId, tickets, labels, unloaded),
+    notePlanningChange: (change) => useBoardStore.getState().notePlanningChange(change),
+    failed: (message) => toastError(message),
+    refused: (message) => toast(message, { id: "host-local-only" }),
+    dropped: (projectId, message) => {
+      const project = useProjectsStore.getState().projects.find(({ id }) => id === projectId);
+      useBoardStore.getState().forget(projectId);
+      useProjectsStore.getState().dropRemoteProject(projectId);
+      toast.warning(`${project?.name ?? "A project"} isn’t available any more: ${message}`);
+    },
+  });
+  installCloudBoardSource(source);
   await Promise.all([
     useUiStore.persist.rehydrate(),
     useProjectUiStore.persist.rehydrate(),
     useChatDraftsStore.persist.rehydrate(),
   ]);
   // A provisional Draft belongs to one of this Mac's tickets or projects,
-  // none of which this launch shows: they wait for a local launch.
-  useChatSessionsStore
-    .getState()
-    .restoreProvisionalChatTabs(useChatDraftsStore.getState().drafts, new Set(), new Set());
+  // none of which this launch shows: it is not reopened, and stays saved for
+  // the next local launch.
   return { ok: true };
 }

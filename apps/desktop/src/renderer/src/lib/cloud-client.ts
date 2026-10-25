@@ -18,11 +18,12 @@
  *   read-only.
  *
  * **Its end.** One client per process: signing in or out relaunches the app,
- * so nothing from one account survives into the next by construction. It
- * follows the account only to notice the end: a sign-out the person chose,
- * or a different person signed in, closes the client (cache and token go
- * with it) and the window waits for its restart; a sign-in that expired
- * clears its auth until the same person signs in again.
+ * so nothing from one account survives into the next by construction. A
+ * sign-out the person chose closes the client before the restart
+ * ({@link closeCloudClient}, from the sign-out confirm), and so does a
+ * different person signing in: its cache and token go with it. Any other end
+ * of the sign-in (it expired, or was never restored) clears its auth until
+ * the same person signs in again.
  *
  * **What the link reads.** It feeds `stores/cloud-link.ts`'s inputs: the
  * connection, the auth, the account, the OS's online state, and a wake from
@@ -104,18 +105,11 @@ export function createWaiter(clock: Pick<CloudClock, "setTimeout" | "clearTimeou
   };
 }
 
-/** The client closed while its token fetch waited: nothing will use the token. */
-export class CloudClientClosedError extends Error {
-  constructor() {
-    super("The Volli Cloud client closed.");
-    this.name = "CloudClientClosedError";
-  }
-}
-
 /**
  * The client's `fetchToken`: main's answer, with `unavailable` waited out
  * rather than reported as signed out (module comment). A call that fails in
- * transit is `unavailable` too.
+ * transit is `unavailable` too. Once the client closes there is nothing to
+ * keep: `null`, never a rejection nobody would catch.
  */
 export function createTokenFetcher(deps: {
   ask(force: boolean): Promise<AccountAccessToken>;
@@ -125,14 +119,14 @@ export function createTokenFetcher(deps: {
 }): (args: { forceRefreshToken: boolean }) => Promise<string | null> {
   return async ({ forceRefreshToken }) => {
     for (;;) {
-      if (deps.closed()) throw new CloudClientClosedError();
+      if (deps.closed()) return null;
       let answer: AccountAccessToken;
       try {
         answer = await deps.ask(forceRefreshToken);
       } catch {
         answer = { kind: "unavailable", retryAfterMs: deps.retryMs };
       }
-      if (deps.closed()) throw new CloudClientClosedError();
+      if (deps.closed()) return null;
       if (answer.kind === "token") return answer.token;
       if (answer.kind === "signed-out") return null;
       await deps.wait(Math.max(answer.retryAfterMs, 250));
@@ -275,33 +269,33 @@ export async function startCloudClient(
     lastTick = now;
   }, WAKE_TICK_MS);
 
-  // Cleared by an expired sign-in; the same person signing in again restores it.
+  // Cleared once the sign-in ends; the same person signing in again restores it.
   let authCleared = false;
   let stopAccount: () => void = NOTHING;
+  let lastAccount: { state: string; backend: string | null } | null = null;
   const account = deps.account.subscribe({
     onData(snapshot) {
       if (closed) return;
       const signedIn = snapshot.account;
+      const backend = signedIn?.backend ?? null;
       inputs.update({
-        account: {
-          state: snapshot.state,
-          backend: signedIn?.backend ?? null,
-          failure: snapshot.failure,
-        },
+        account: { state: snapshot.state, backend, failure: snapshot.failure },
       });
-      waiter.wake();
+      // A token wait wakes for a real change, not for every repeat of the same snapshot.
+      if (lastAccount?.state !== snapshot.state || lastAccount.backend !== backend) waiter.wake();
+      lastAccount = { state: snapshot.state, backend };
       if (snapshot.state === "signed-out") {
-        if (snapshot.failure === null) {
-          // The person signed out: the restart follows.
-          close();
-        } else if (!authCleared) {
+        // Main's token door answers signed-out now; the board stays on screen,
+        // read-only, until the person signs in again or the window restarts
+        // (a chosen sign-out closes this client itself, `closeCloudClient`).
+        if (!authCleared) {
           authCleared = true;
           client.clearAuth();
         }
         return;
       }
-      if (snapshot.state !== "signed-in" || signedIn === null) return;
-      if (signedIn.userId !== null && signedIn.userId !== launch.userId) {
+      if (snapshot.state !== "signed-in" || signedIn === null || signedIn.userId === null) return;
+      if (signedIn.userId !== launch.userId) {
         // Someone else: this process never shows a second account's board.
         close();
         return;

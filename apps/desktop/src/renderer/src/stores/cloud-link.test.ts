@@ -26,6 +26,9 @@ const UP: CloudConnection = {
 
 const SIGNED_IN = { state: "signed-in", backend: "synced", failure: null } as const;
 
+/** What a serving link reads while this build writes nothing to a cloud board. */
+const SERVING = { status: "incompatible", reason: "writes-unavailable" } as const;
+
 function input(patch: Partial<CloudLinkInput> = {}): CloudLinkInput {
   return {
     ...INITIAL_CLOUD_LINK_INPUT,
@@ -40,12 +43,12 @@ function input(patch: Partial<CloudLinkInput> = {}): CloudLinkInput {
 const at = (now: number, downSince: number | null = null) => ({ now, downSince });
 
 describe("Volli Cloud's link view (VC-889)", () => {
-  it("is open while the socket is up, the sign-in accepted and the OS online", () => {
-    expect(cloudLinkView(input(), at(0))).toEqual({ status: "open" });
+  it("serves read-only while the socket is up, the sign-in accepted and the OS online", () => {
+    expect(cloudLinkView(input(), at(0))).toEqual(SERVING);
+    // A build that writes to the board reads it open.
+    expect(cloudLinkView(input({ writes: true }), at(0))).toEqual({ status: "open" });
     // Before auth has said anything, an open socket still serves.
-    expect(cloudLinkView(input({ authenticated: null, account: null }), at(0))).toEqual({
-      status: "open",
-    });
+    expect(cloudLinkView(input({ authenticated: null, account: null }), at(0))).toEqual(SERVING);
   });
 
   it("is connecting until the client has connected once", () => {
@@ -53,9 +56,14 @@ describe("Volli Cloud's link view (VC-889)", () => {
     expect(cloudLinkView(input({ connection: null }), at(0))).toEqual({ status: "connecting" });
     const never = { ...UP, everConnected: false };
     expect(cloudLinkView(input({ connection: never }), at(0))).toEqual({ status: "connecting" });
-    expect(
-      cloudLinkView(input({ connection: { ...never, connected: false } }), at(10_000, 0)),
-    ).toEqual({ status: "connecting" });
+    const unreached = input({ connection: { ...never, connected: false } });
+    expect(cloudLinkView(unreached, at(1_000, 0))).toEqual({ status: "connecting" });
+    // A backend never reached reads offline past the grace: the Island says so.
+    expect(cloudLinkView(unreached, at(HOST_OFFLINE_AFTER_MS, 0))).toEqual({
+      status: "offline",
+      since: 0,
+      retryAt: null,
+    });
   });
 
   it("reconnects for the grace after the socket drops, then reads offline", () => {
@@ -83,15 +91,15 @@ describe("Volli Cloud's link view (VC-889)", () => {
 
   it("counts a write unanswered past the stall as a drop, and a fresh wake as one", () => {
     const stalled = input({ connection: { ...UP, inflightMutations: 1, oldestInflightAt: 0 } });
-    expect(cloudLinkView(stalled, at(CLOUD_STALL_AFTER_MS - 1))).toEqual({ status: "open" });
+    expect(cloudLinkView(stalled, at(CLOUD_STALL_AFTER_MS - 1))).toEqual(SERVING);
     expect(cloudLinkView(stalled, at(CLOUD_STALL_AFTER_MS, CLOUD_STALL_AFTER_MS))).toEqual({
       status: "reconnecting",
     });
     const unknownAge = input({ connection: { ...UP, inflightMutations: 1 } });
-    expect(cloudLinkView(unknownAge, at(60_000))).toEqual({ status: "open" });
+    expect(cloudLinkView(unknownAge, at(60_000))).toEqual(SERVING);
     const woke = input({ resumedAt: 100 });
     expect(cloudLinkView(woke, at(100, 100))).toEqual({ status: "reconnecting" });
-    expect(cloudLinkView(woke, at(100 + CLOUD_RESUME_SETTLE_MS))).toEqual({ status: "open" });
+    expect(cloudLinkView(woke, at(100 + CLOUD_RESUME_SETTLE_MS))).toEqual(SERVING);
   });
 
   it("refuses writes when Volli Cloud refused the sign-in", () => {
@@ -105,7 +113,7 @@ describe("Volli Cloud's link view (VC-889)", () => {
     });
   });
 
-  it("is signed out once the sign-in ends: a restart after a chosen sign-out, sign in again after an expired one", () => {
+  it("is signed out once the sign-in ends: a restart once the client closed, sign in again otherwise", () => {
     expect(cloudLinkView(input({ client: "closed" }), at(0))).toEqual({
       status: "incompatible",
       reason: "signed-out",
@@ -114,7 +122,7 @@ describe("Volli Cloud's link view (VC-889)", () => {
     expect(
       cloudLinkView(
         input({
-          account: { state: "signed-out", backend: null, failure: "Your sign-in expired." },
+          account: { state: "signed-out", backend: null, failure: null },
         }),
         at(0),
       ),
@@ -139,7 +147,7 @@ describe("Volli Cloud's link view (VC-889)", () => {
   it("tracks one outage from its start, keeping the same view object while it holds", () => {
     const tracker = createCloudLinkTracker();
     const open = tracker.view(input(), 0);
-    expect(open.link).toEqual({ status: "open" });
+    expect(open.link).toEqual(SERVING);
     expect(tracker.view(input(), 1).link).toBe(open.link);
     const down = input({ connection: { ...UP, connected: false } });
     const first = tracker.view(down, 100);
@@ -153,7 +161,7 @@ describe("Volli Cloud's link view (VC-889)", () => {
       since: 100,
       retryAt: null,
     });
-    expect(tracker.view(input(), 9_000).link).toEqual({ status: "open" });
+    expect(tracker.view(input(), 9_000).link).toEqual(SERVING);
     expect(tracker.view(down, 9_001).link).toEqual({ status: "reconnecting" });
   });
 
@@ -229,7 +237,7 @@ describe("the cloud host source", () => {
     expect(hosts.getState().projects.a!.link).toEqual({ status: "connecting" });
 
     inputs.getState().update({ client: "running", connection: UP, authenticated: true });
-    expect(hosts.getState().projects.a!.link).toEqual({ status: "open" });
+    expect(hosts.getState().projects.a!.link).toEqual(SERVING);
     const snapshot = source.getSnapshot();
     projects.set(["a", "b"]);
     expect(source.getSnapshot()).toBe(snapshot);

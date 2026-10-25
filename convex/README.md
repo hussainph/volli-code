@@ -154,6 +154,8 @@ key:
 VOLLI_ACCOUNT_PROVIDER=dev pnpm -C convex with-backend --deploy -- pnpm -C .. dev
 ```
 
+The dev server lets the window connect to the loopback backend; a built app
+needs `VOLLI_CLOUD_LOOPBACK=1` at build time for the same (VC-889).
 `with-backend` hands the app `VOLLI_CONVEX_URL` and
 `VOLLI_CONVEX_TEST_PRIVATE_KEY`; Settings → Account (with `cloud` on) then
 signs in through the browser and `accounts.ensureViewer` runs on the

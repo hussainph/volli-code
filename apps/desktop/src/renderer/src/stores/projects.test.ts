@@ -1995,6 +1995,37 @@ describe("a cloud launch's projects (VC-889)", () => {
     expect(gateway.remove).not.toHaveBeenCalled();
   });
 
+  it("clears the rail when the client closes without persisting anything", () => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    const gateway = fakeGateway();
+    const announced = vi.fn();
+    const store = createProjectsStore(gateway, announced);
+    store.getState().hydrateCloud("w1", [project({ id: "a", path: "" })], "a");
+    store.getState().clearCloud();
+    expect(store.getState().projects).toEqual([]);
+    expect(store.getState().selectedProjectId).toBeNull();
+    expect(announced).toHaveBeenLastCalledWith(null);
+    expect(gateway.setSelection).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the cloud selection through a local launch's own selection changes", () => {
+    const gateway = fakeGateway();
+    const store = createProjectsStore(
+      gateway,
+      vi.fn(),
+      (id) => id === "remote",
+      (id) => (id === "remote" ? remote : null),
+    );
+    const cloud = { workspaceId: "w1", projectId: "c" };
+    store.getState().keepCloudSelection(cloud);
+    store.getState().hydrate([project({ id: "mine", path: "/m" })], "mine");
+    store.getState().adoptProject(project({ id: "remote", path: "" }));
+    store.getState().select("remote");
+    expect(gateway.setSelection).toHaveBeenLastCalledWith("mine", remote, cloud);
+    store.getState().select("mine");
+    expect(gateway.setSelection).toHaveBeenLastCalledWith("mine", undefined, cloud);
+  });
+
   it("encodes and decodes the cloud selection beside the others", () => {
     const raw = encodeProjectsUiState("mine", remote, { workspaceId: "w1", projectId: null });
     expect(decodeProjectsUiState(raw)).toBe("mine");

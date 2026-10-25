@@ -51,6 +51,8 @@ function harness(
      * `answerAfterMs` (it sends its draft, then acks), or never.
      */
     renderer?: { answerAfterMs: number } | "silent";
+    /** A restart into another product store waiting on this quit (VC-889). */
+    relaunch?: { pending(): boolean; quitAccepted(): void; quitRefused(): void };
   } = {},
 ) {
   const calls: string[] = [];
@@ -100,6 +102,7 @@ function harness(
     },
     createSessionRpc,
     closeSocket,
+    ...(options.relaunch === undefined ? {} : { relaunch: options.relaunch }),
   });
 
   // The one window, through the real draft flush (VC-577): its renderer is
@@ -440,6 +443,41 @@ describe("the accepted-quit hold the runner installs", () => {
     ]);
     expect(menuBar.enter).not.toHaveBeenCalled();
     expect(quitAlreadyRefused(event)).toBe(true);
+  });
+
+  // VC-889: a restart asks every confirm first and is never menu-bar mode.
+  it("a restart over live work: a Cancel stops nothing and says so; an accept quits and relaunches", async () => {
+    const relaunch = { pending: () => true, quitAccepted: vi.fn(), quitRefused: vi.fn() };
+    const kept = harness({ cloud: true, unsaved: "keep", relaunch });
+    kept.boot();
+    const menuBar = menuBarFake("menu-bar", kept.calls, { tabs: "cancel" });
+    kept.edge.bind({ menuBar });
+    const event = kept.quit();
+    await nextImmediate();
+    expect(quitAlreadyRefused(event)).toBe(true);
+    expect(kept.calls).not.toContain("automations.stop");
+    expect(kept.calls).not.toContain("menu-bar.enter");
+    expect(menuBar.branch).not.toHaveBeenCalled();
+    expect(relaunch.quitRefused).toHaveBeenCalled();
+
+    const accepted = harness({ cloud: true, relaunch });
+    accepted.boot();
+    accepted.edge.bind({ menuBar: menuBarFake("menu-bar", accepted.calls) });
+    accepted.quit();
+    expect(accepted.calls.slice(0, 4)).toEqual([
+      "unsaved.confirm:draft.md:Quit",
+      "terminal.gate",
+      "automations.stop",
+      "repack.abort",
+    ]);
+    expect(await accepted.exited).toBe(0);
+    expect(relaunch.quitAccepted).toHaveBeenCalledOnce();
+
+    // Before menu-bar mode is built, a restart still keeps the confirms first.
+    const early = harness({ cloud: true, relaunch });
+    early.boot();
+    early.quit();
+    expect(early.calls[0]).toBe("unsaved.confirm:draft.md:Quit");
   });
 
   it("flag on, but the host is already stopping: never offered menu-bar mode", () => {

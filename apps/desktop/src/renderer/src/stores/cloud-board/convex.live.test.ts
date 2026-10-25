@@ -82,6 +82,8 @@ function cuttableWebSocket() {
   };
 }
 
+const SERVING = { status: "incompatible", reason: "writes-unavailable" } as const;
+
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).toReversed()) await cleanup();
@@ -220,7 +222,8 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
         ticketNumber: 1,
         worktreePath: null,
       });
-      await vi.waitFor(() => expect(link()).toEqual({ status: "open" }), { timeout: 15_000 });
+      // Serving, read-only until this build writes to cloud boards.
+      await vi.waitFor(() => expect(link()).toEqual(SERVING), { timeout: 15_000 });
       expect(hosts.getState().hosts[0]!.id).toBe(CLOUD_HOST_ID);
 
       // A change made elsewhere reaches both.
@@ -259,10 +262,10 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
       expect(painted.get(projectId)!.tickets.find(({ id }) => id === first)?.status).toBe("todo");
       expect(painted.get(projectId)?.tickets).toHaveLength(2);
 
-      // Restore: Mac A re-authenticates, reconnects, catches up, and is open again.
+      // Restore: Mac A re-authenticates, reconnects, catches up, and serves again.
       offlineTokens = false;
       socket.restore();
-      await vi.waitFor(() => expect(link()).toEqual({ status: "open" }), { timeout: 30_000 });
+      await vi.waitFor(() => expect(link()).toEqual(SERVING), { timeout: 30_000 });
       await vi.waitFor(
         () =>
           expect(painted.get(projectId)!.tickets.find(({ id }) => id === first)?.status).toBe(

@@ -92,6 +92,12 @@ export interface CloudLinkInput {
   readonly online: boolean;
   /** When the machine last woke (epoch ms), `null` if it has not this launch. */
   readonly resumedAt: number | null;
+  /**
+   * Whether this build writes to a cloud board. Until optimistic writes land
+   * it does not, and a serving link reads `writes-unavailable` (read-only,
+   * quietly said), so the board never invites a write it would refuse.
+   */
+  readonly writes: boolean;
 }
 
 export const INITIAL_CLOUD_LINK_INPUT: CloudLinkInput = Object.freeze({
@@ -101,6 +107,7 @@ export const INITIAL_CLOUD_LINK_INPUT: CloudLinkInput = Object.freeze({
   account: null,
   online: true,
   resumedAt: null,
+  writes: false,
 });
 
 /** Why the link cannot serve right now, before any grace; `null` while it can. */
@@ -136,9 +143,10 @@ export function cloudLinkView(
     return {
       status: "incompatible",
       reason: "signed-out",
-      // A sign-out the person chose restarts into this Mac's projects; one
-      // that expired gets the same person back without a restart.
-      recovery: input.account?.failure ? "sign-in" : "relaunch",
+      // A closed client (the person signed out, or someone else signed in)
+      // waits for its restart; a sign-in that ended on its own gets the same
+      // person back without one.
+      recovery: input.client === "closed" ? "relaunch" : "sign-in",
     };
   }
   if (input.authenticated === false || input.account?.backend === "refused") {
@@ -147,12 +155,17 @@ export function cloudLinkView(
   if (input.client === "starting" || input.connection === null) return { status: "connecting" };
   const problem = trouble(input, context.now);
   if (problem === null) {
-    return input.connection.everConnected ? { status: "open" } : { status: "connecting" };
+    if (!input.connection.everConnected) return { status: "connecting" };
+    return input.writes
+      ? { status: "open" }
+      : { status: "incompatible", reason: "writes-unavailable" };
   }
   const since = context.downSince ?? context.now;
   if (problem === "os-offline") return { status: "offline", since, retryAt: null };
-  if (!input.connection.everConnected) return { status: "connecting" };
-  if (context.now - since < HOST_OFFLINE_AFTER_MS) return { status: "reconnecting" };
+  if (context.now - since < HOST_OFFLINE_AFTER_MS) {
+    // A first connection still being made is connecting; one that served before is coming back.
+    return input.connection.everConnected ? { status: "reconnecting" } : { status: "connecting" };
+  }
   return { status: "offline", since, retryAt: null };
 }
 

@@ -239,6 +239,13 @@ interface ProjectsState {
    * launch must keep as they were, for the next local launch.
    */
   beginCloudLaunch(kept: { local: string | null; remote: RemoteSelection | null }): void;
+  /** A local launch's boot (VC-889): the cloud selection to keep for the next cloud launch. */
+  keepCloudSelection(selection: CloudSelection | null): void;
+  /**
+   * A cloud launch's client closed (VC-889): no project is shown, and nothing
+   * is persisted, so the next cloud launch returns to the selection it had.
+   */
+  clearCloud(): void;
   /**
    * The current Volli Cloud Workspace's projects, from its `projects.list`
    * (VC-889): the rail's whole list in a cloud launch. `selectedProjectId` is
@@ -405,6 +412,8 @@ export function createProjectsStore(
   // selection a later local launch restores, kept untouched meanwhile.
   let cloudWorkspaceId: string | null = null;
   let keptRemoteSelection: RemoteSelection | null = null;
+  // A local launch keeps the last cloud launch's selection for the next one.
+  let keptCloudSelection: CloudSelection | null = null;
   // Only This Mac's bootstrap and successful local creates establish provenance.
   // A vanished remote claim must never turn its still-resident row into a local one.
   let localProjectIds = new Set<string>();
@@ -436,10 +445,17 @@ export function createProjectsStore(
     if (selectedProjectId === null || localProjectIds.has(selectedProjectId)) {
       localSelection = selectedProjectId;
     }
+    const cloud = keptCloudSelection;
     const write =
-      remote === null
-        ? gateway.setSelection(selectedProjectId)
-        : gateway.setSelection(localSelection, remote);
+      cloud !== null
+        ? gateway.setSelection(
+            remote === null ? selectedProjectId : localSelection,
+            remote ?? undefined,
+            cloud,
+          )
+        : remote === null
+          ? gateway.setSelection(selectedProjectId)
+          : gateway.setSelection(localSelection, remote);
     write
       .then((result) => {
         if (!result.ok) toastError(`Couldn't save selected project: ${result.error}`);
@@ -563,6 +579,16 @@ export function createProjectsStore(
       beginCloudLaunch(kept) {
         localSelection = kept.local;
         keptRemoteSelection = kept.remote;
+      },
+
+      keepCloudSelection(selection) {
+        keptCloudSelection = selection;
+      },
+
+      clearCloud() {
+        const previous = get().selectedProjectId;
+        set({ projects: [], selectedProjectId: null });
+        announceSelection(previous, null);
       },
 
       hydrateCloud(workspaceId, projects, selectedProjectId) {

@@ -1,0 +1,33 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vite-plus/test";
+
+import {
+  LOOPBACK_CONNECT_SOURCES,
+  rendererConnectSources,
+  withConnectSources,
+} from "./renderer-csp";
+
+const page = readFileSync(new URL("../renderer/index.html", import.meta.url), "utf8");
+
+function cspOf(html: string): string {
+  return /http-equiv="Content-Security-Policy"\s+content="([^"]*)"/u.exec(html)![1]!;
+}
+
+describe("the main window's connections (VC-889)", () => {
+  it("reach only its own origin in a build that asked for nothing", () => {
+    expect(rendererConnectSources({ serve: false, env: {} })).toEqual([]);
+    expect(withConnectSources(page, [])).toBe(page);
+    expect(cspOf(page)).not.toContain("connect-src");
+    expect(cspOf(page)).toContain("default-src 'self'");
+  });
+
+  it("add the loopback for the dev server, or a build that asks for it", () => {
+    expect(rendererConnectSources({ serve: true, env: {} })).toBe(LOOPBACK_CONNECT_SOURCES);
+    expect(rendererConnectSources({ serve: false, env: { VOLLI_CLOUD_LOOPBACK: "1" } })).toBe(
+      LOOPBACK_CONNECT_SOURCES,
+    );
+    expect(cspOf(withConnectSources(page, LOOPBACK_CONNECT_SOURCES))).toBe(
+      "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: volli-blob:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*; form-action 'none'",
+    );
+  });
+});

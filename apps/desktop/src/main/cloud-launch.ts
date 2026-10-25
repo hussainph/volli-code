@@ -46,16 +46,20 @@ export function decodeLaunchMarker(raw: string | undefined): LaunchMarker | null
 }
 
 /**
- * The launch's store: `cloud` only with the flag on, a marker present and a
- * backend configured; `local` otherwise. The marker is read only with the
- * flag on, so a flag-off boot touches nothing of Volli Cloud's.
+ * The launch's store: `cloud` only with the flag on, a marker present, and a
+ * backend and a sign-in configured (with no sign-in there would be no way to
+ * sign out of it); `local` otherwise. The marker is read only then, so a
+ * flag-off boot touches nothing of Volli Cloud's.
  */
 export function chooseProductStore(input: {
   readonly cloudFlag: boolean;
   readonly readMarker: () => LaunchMarker | null;
   readonly backendUrl: string | null;
+  readonly signInConfigured: boolean;
 }): CloudLaunch {
-  if (!input.cloudFlag || input.backendUrl === null) return LOCAL_LAUNCH;
+  if (!input.cloudFlag || input.backendUrl === null || !input.signInConfigured) {
+    return LOCAL_LAUNCH;
+  }
   const marker = input.readMarker();
   if (marker === null) return LOCAL_LAUNCH;
   return { store: "cloud", userId: marker.userId, backendUrl: input.backendUrl };

@@ -33,6 +33,10 @@ function harness(persisted: CloudWorkspaceDeps["persisted"] = null) {
       state.projects = projects;
       state.selectedProjectId = selected;
     }),
+    clearCloud: vi.fn(() => {
+      state.projects = [];
+      state.selectedProjectId = null;
+    }),
   };
   const deps: CloudWorkspaceDeps = {
     follow: (next) => {
@@ -148,7 +152,8 @@ describe("the current Volli Cloud Workspace (VC-889)", () => {
     h.cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("a")]);
     h.close();
     expect(h.deps.board.forget).toHaveBeenCalledWith("a");
-    expect(h.state.hydrateCloud).toHaveBeenLastCalledWith("w1", [], null);
+    expect(h.state.clearCloud).toHaveBeenCalledOnce();
+    expect(h.state.hydrateCloud).toHaveBeenCalledOnce();
     expect(h.cloud.watchers("workspaces:listMine", {})).toBe(0);
     h.connect();
     h.stop();

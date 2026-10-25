@@ -17,32 +17,42 @@ const URL = "http://127.0.0.1:3210";
 describe("the launch's product store (VC-889)", () => {
   it("is cloud only with the flag on, a marker and a backend", () => {
     const marker = () => ({ userId: USER });
-    expect(chooseProductStore({ cloudFlag: true, readMarker: marker, backendUrl: URL })).toEqual({
+    expect(
+      chooseProductStore({
+        cloudFlag: true,
+        readMarker: marker,
+        backendUrl: URL,
+        signInConfigured: true,
+      }),
+    ).toEqual({
       store: "cloud",
       userId: USER,
       backendUrl: URL,
     });
-    const table: [boolean, boolean, string | null][] = [
-      [true, false, URL],
-      [true, true, null],
-      [false, true, URL],
-      [false, false, null],
+    const table: [boolean, boolean, string | null, boolean][] = [
+      [true, false, URL, true],
+      [true, true, null, true],
+      [true, true, URL, false],
+      [false, true, URL, true],
+      [false, false, null, false],
     ];
-    for (const [cloudFlag, signedIn, backendUrl] of table) {
+    for (const [cloudFlag, signedIn, backendUrl, signInConfigured] of table) {
       expect(
         chooseProductStore({
           cloudFlag,
           readMarker: () => (signedIn ? { userId: USER } : null),
           backendUrl,
+          signInConfigured,
         }),
       ).toEqual({ store: "local" });
     }
   });
 
-  it("never reads the marker with the flag off, or with no backend to launch into", () => {
+  it("never reads the marker with the flag off, or with no backend or sign-in to launch into", () => {
     const readMarker = vi.fn(() => ({ userId: USER }));
-    chooseProductStore({ cloudFlag: false, readMarker, backendUrl: URL });
-    chooseProductStore({ cloudFlag: true, readMarker, backendUrl: null });
+    chooseProductStore({ cloudFlag: false, readMarker, backendUrl: URL, signInConfigured: true });
+    chooseProductStore({ cloudFlag: true, readMarker, backendUrl: null, signInConfigured: true });
+    chooseProductStore({ cloudFlag: true, readMarker, backendUrl: URL, signInConfigured: false });
     expect(readMarker).not.toHaveBeenCalled();
   });
 

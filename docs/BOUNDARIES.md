@@ -197,7 +197,9 @@ reads its board from the backend with its own Convex client; main never
 proxies board data. That client authenticates with a short-lived access
 token main hands it on demand (`account.accessToken`, a desktop-only entry),
 held in memory only and never logged; the refresh token never leaves main.
-The window's CSP lets it connect only to its own origin and the backend's.
+The window's CSP lets it connect only to its own origin, plus the loopback a
+local backend runs on in a dev build; a deployment's exact origin joins that
+list when one exists.
 A launch's product store (this Mac's SQLite, or the backend) is chosen once
 by main before the window opens, and never changes in a live window.
 

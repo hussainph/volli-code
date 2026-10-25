@@ -176,15 +176,31 @@ export function createDesktopRunnerEdge<T extends QuitTerminals>(
     // stops on a refused attempt. Flag on: the menu-bar branch decides after
     // the confirms, and a host already stopping is never offered it.
     const menuBar = bound.menuBar;
+    // A restart into another product store (VC-889) keeps the flag-on order
+    // (every confirm first, so a Cancel stops nothing) but is a quit, never
+    // menu-bar mode.
+    if (ports.relaunch?.pending() === true) {
+      prepareDesktopQuit(event, {
+        stopAutomations,
+        unsavedQuit,
+        terminalQuit,
+        abortRepack,
+        menuBar: {
+          branch: () => "quit",
+          confirmEnter: () => true,
+          enter: () => {},
+          systemShuttingDown: () => menuBar?.systemShuttingDown() ?? false,
+        },
+        systemShutdownTeardown,
+      });
+      return;
+    }
     prepareDesktopQuit(event, {
       stopAutomations,
       unsavedQuit,
       terminalQuit,
       abortRepack,
-      ...(menuBar !== undefined &&
-      !hostClosing &&
-      ports.cloudEnabled() &&
-      ports.relaunch?.pending() !== true
+      ...(menuBar !== undefined && !hostClosing && ports.cloudEnabled()
         ? { menuBar, systemShutdownTeardown }
         : {}),
     });

@@ -22,6 +22,7 @@ import {
 import { readdHostToUpdate, remoteHosts } from "@renderer/stores/remote-hosts";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
+import { toastError } from "@renderer/lib/toast";
 import { useUiStore } from "@renderer/stores/ui";
 
 import {
@@ -314,7 +315,7 @@ export function runHostAction(action: HostSurfaceAction, host: HostRecord): void
       void sessionRpcClient()
         .cloud.relaunch.mutate()
         .catch((error: unknown) => {
-          toast.error(error instanceof Error ? error.message : "Couldn’t restart Volli.");
+          toastError(error instanceof Error ? error.message : "Couldn’t restart Volli.");
         });
       return;
     case "forget-project":

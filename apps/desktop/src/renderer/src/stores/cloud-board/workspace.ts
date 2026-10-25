@@ -20,7 +20,7 @@ import { create } from "zustand";
 import type { CloudSession } from "@renderer/lib/cloud-client";
 
 import type { CloudSelection } from "../projects";
-import { cloudFailure } from "./source";
+import { cloudFailure, type Watched } from "./source";
 import { projectRows, type CloudProjectRow } from "./projection";
 
 /** What the rail's head and foot read in a cloud launch. */
@@ -42,11 +42,6 @@ interface WorkspaceRow {
   readonly name: string;
 }
 
-interface Watched<T> {
-  onUpdate(callback: () => void): () => void;
-  localQueryResult(): T | undefined;
-}
-
 /** Everything the follower reaches. */
 export interface CloudWorkspaceDeps {
   follow(listener: (session: CloudSession | null) => void): () => void;
@@ -59,6 +54,7 @@ export interface CloudWorkspaceDeps {
         projects: Project[],
         selectedProjectId: string | null,
       ): void;
+      clearCloud(): void;
     };
   };
   board: { seedProject(projectId: string): void; forget(projectId: string): void };
@@ -99,7 +95,8 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
     stopAll();
     const { projects } = deps.projects.getState();
     for (const project of projects) deps.board.forget(project.id);
-    if (workspaceId !== null) deps.projects.getState().hydrateCloud(workspaceId, [], null);
+    // Never persisted: the next cloud launch returns to the selection it had.
+    if (workspaceId !== null) deps.projects.getState().clearCloud();
     workspaceId = null;
     answered = false;
   }

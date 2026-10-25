@@ -36,6 +36,7 @@ import {
   resolveShell,
   ticketBranchName,
   NEW_TICKET_DRAFT_APP_STATE_KEY,
+  OperationUnavailableError,
   VOLLI_USER_ZDOTDIR_ENV,
   workspaceInstallCommand,
 } from "@volli/shared";
@@ -175,6 +176,7 @@ import {
 import { observeKeychainUse, webSealingLifecycle } from "./web/sealing-lifecycle";
 import { createDesktopRemoteHosts, remoteHostsPort } from "./remote-hosts";
 import { accountPort, createDesktopAccount, resolveAccountConfig } from "./account";
+import { ACCOUNT_CLOUD_OFF } from "./account/service";
 import {
   CLOUD_LAUNCH_APP_STATE_KEY,
   chooseProductStore,
@@ -971,6 +973,7 @@ const appStartup = app.whenReady().then(async () => {
     cloudFlag: isExperimentEnabled("cloud"),
     readMarker: () => launchMarker.read(),
     backendUrl: accountConfig.backendUrl,
+    signInConfigured: accountConfig.provider !== null,
   });
   // Signing in or out restarts into the other store, through every quit gate.
   const relaunch = createRelaunchController({
@@ -1463,7 +1466,11 @@ const appStartup = app.whenReady().then(async () => {
       // The Volli Cloud account (VC-884).
       account: accountPort(account, {
         launch: () => launch,
-        relaunch: () => relaunch.request(),
+        relaunch: () => {
+          // Like every other account entry, nothing with `cloud` off.
+          if (!isExperimentEnabled("cloud")) throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
+          relaunch.request();
+        },
       }),
     };
   };

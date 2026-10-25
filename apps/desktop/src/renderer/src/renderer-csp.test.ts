@@ -33,22 +33,3 @@ describe("renderer CSP", () => {
     expect(directives(cspOf(page)).get("form-action")).toBe("'none'");
   });
 });
-
-/**
- * Where the main window may open a connection (VC-889): its own origin, and
- * the loopback a Volli Cloud backend runs on for an unpackaged build (the
- * pinned local fixture). A packaged build names no backend yet; when one
- * exists, its exact deployment origin joins this list, and nothing broader.
- * No remote image source either: injected script cannot carry the window's
- * short-lived Volli Cloud token anywhere else.
- */
-describe("the main window's connections", () => {
-  it("reach only its own origin and the loopback", () => {
-    const csp = directives(cspOf("index.html"));
-    expect(csp.get("connect-src")).toBe(
-      "'self' http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*",
-    );
-    expect(csp.get("img-src")).toBe("'self' data: volli-blob:");
-    expect(csp.get("default-src")).toBe("'self'");
-  });
-});
