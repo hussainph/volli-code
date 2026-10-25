@@ -480,8 +480,17 @@ Exact occurrences become `‹secret:NAME›` in tool results and updates, errors
 read-back text, background-shell output (including the person's shell tail),
 and saved MCP/Code Mode output. Matching numeric and boolean primitive
 representations are scrubbed too, including structured data and details. Scrubbing precedes Pi activity, transcript and
-sidecar persistence. Shell output spilling to a plaintext temp log is disabled
-while the launch holds credential values. Image data in tool-result content is
+sidecar persistence. A long shell command's full-output log (the `Full output:`
+file beside its truncated tail) is redacted on its way to disk with the same
+exact values and markers, whether or not values are held when the command
+starts: the bytes are matched as they stream, a credential split across output
+chunks, a UTF-8 character or the log's 64 MiB cap is replaced whole, and an
+undecided credential prefix is held in memory (at most about twice the longest value)
+rather than written. A value saved while a command runs applies to every byte
+not yet written; bytes written before it existed are not rewritten. If
+redaction fails, the log stops and the command fails with "Failed to preserve
+complete shell output"; nothing unredacted is written. The inline tail is
+unchanged. Image data in tool-result content is
 not scrubbed: a credential rendered as pixels is outside exact-text redaction.
 Image metadata and structured data still go through normal redaction.
 
@@ -523,6 +532,12 @@ submission enables a command and background shell, echo/read results are
 scrubbed, and a sentinel is absent from transcript, ledger/events, captured
 logs, provider requests, sidecars, and IPC results. Runtime tests also cover
 long saved output and shell spilling, schema/prefill refusal, and cancellation.
+`packages/agent-runtime/src/pi/spill-redaction.test.ts` drives both shell
+paths (the host's foreground executor and a spawned child) with values split
+across chunks and across the spill cap, a value saved mid-command, and a
+failing redactor; `packages/shared/src/credential-stream-redaction.test.ts`
+checks the streaming redactor against whole-string redaction for random text,
+values and chunk cuts.
 Store tests (`packages/host-core/src/secrets/store.test.ts`) exercise
 authenticated ciphertext, scope, revocation, file modes, symlinks, and
 sanitized failures. `file-key.test.ts` beside them runs the headless adapter

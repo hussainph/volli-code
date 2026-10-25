@@ -1,7 +1,11 @@
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExecutionEnv, ShellExecOptions } from "./harness-env";
 import { Type } from "@earendil-works/pi-ai";
-import type { NonCodingToolId, SessionRuntimeSpec } from "@volli/shared";
+import {
+  CredentialRedactionStream,
+  type NonCodingToolId,
+  type SessionRuntimeSpec,
+} from "@volli/shared";
 
 export type SecretPort = NonNullable<SessionRuntimeSpec["secret"]>;
 type RedactionPort = NonNullable<SessionRuntimeSpec["credentialRedaction"]>;
@@ -120,9 +124,17 @@ function scrub(value: unknown, port: RedactionPort): unknown {
   return value;
 }
 
-/** Shell spills happen below the tool wrapper. Do not write an unredacted
- * output log when credentials are held; inline output still goes through the
- * result scrubber. A deliberately written project file is not a shell spill.
+/**
+ * Shell spills happen below the tool wrapper, so their bytes never pass the
+ * result scrubber. With a streaming step on the port, every spill is redacted
+ * on its way to disk: the same exact values and markers as tool results,
+ * read from the live history at each step (a credential saved while the
+ * command runs applies to every byte not yet written), with an undecided
+ * credential prefix held back in memory rather than written. It is attached
+ * whether or not values are held now. Any redaction failure fails the spill
+ * closed. A port without the step keeps the older guard: no spill while
+ * credentials are held, decided at command start (and on a failing check).
+ * A deliberately written project file is not a shell spill.
  */
 export function privateSecretExecution(
   env: ExecutionEnv,
@@ -137,6 +149,19 @@ export function privateSecretExecution(
           options: ShellExecOptions | undefined,
           context: Parameters<ExecutionEnv["exec"]>[2],
         ) => {
+          if (options?.capture === undefined) return target.exec(command, options, context);
+          const step = port.redactStreamStep;
+          if (typeof step === "function") {
+            const spillRedaction = (): CredentialRedactionStream =>
+              new CredentialRedactionStream((window, from, final) =>
+                step.call(port, window, from, final),
+              );
+            return target.exec(
+              command,
+              { ...options, capture: { ...options.capture, spillRedaction } },
+              context,
+            );
+          }
           let sensitive = true;
           try {
             sensitive = port.hasValues?.() ?? true;
@@ -145,9 +170,7 @@ export function privateSecretExecution(
           }
           return target.exec(
             command,
-            sensitive && options?.capture !== undefined
-              ? { ...options, capture: { ...options.capture, spill: false } }
-              : options,
+            sensitive ? { ...options, capture: { ...options.capture, spill: false } } : options,
             context,
           );
         };

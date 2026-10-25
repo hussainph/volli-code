@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { expect, it, vi } from "vite-plus/test";
 import {
+  ExactValueByteRedactor,
   mcpProviderToolName,
   type RuntimeObservation,
   type SessionRuntimeSpec,
@@ -154,6 +155,76 @@ it("redacts successful real bash/read activity and sidecars, including long save
     expect(files.some((file) => file.name.endsWith(".jsonl"))).toBe(true);
     expect(files.some((file) => file.name.endsWith(".txt"))).toBe(true);
     expect(files.map((file) => file.text).join("\n")).not.toContain(value);
+  } finally {
+    await handle?.close();
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("saves a long real bash output with credentials held through the streaming redactor, never in plaintext", async () => {
+  const root = mkdtempSync(join(process.cwd(), ".secret-spill-test-"));
+  const workspace = join(root, "worktree");
+  mkdirSync(workspace);
+  const spills = join(root, "tmp");
+  mkdirSync(spills);
+  vi.stubEnv("TMPDIR", spills);
+  const value = "runtime-spill-sentinel-865";
+  const marker = "‹secret:API_TOKEN›";
+  let supplied = false;
+  const seen: Parameters<typeof secretFixtureProvider>[1] = [];
+  const runtime = createPiAgentRuntime({
+    sessionDataDir: join(root, "sessions"),
+    models: secretFixtureProvider(
+      [
+        { name: "request_secret", args: { name: "API_TOKEN" } },
+        {
+          name: "bash",
+          args: { command: `for ((i=0; i<2100; i++)); do printf '%s\\n' "$API_TOKEN"; done` },
+        },
+      ],
+      seen,
+    ),
+    executionEnvFactory: (cwd) =>
+      piExecutionEnv(cwd, {
+        secretEnvironment: (): Readonly<Record<string, string>> =>
+          supplied ? { API_TOKEN: value } : {},
+      }),
+  });
+  const redactor = new ExactValueByteRedactor([[value, marker]]);
+  let handle: Awaited<ReturnType<typeof runtime.startSession>> | undefined;
+  try {
+    handle = await runtime.startSession({
+      identity,
+      workspacePath: workspace,
+      venue: "local",
+      model,
+      brief: { text: "Credential spill test" },
+      tools: { tools: ["execute"] },
+      observer: async () => {},
+      secret: {
+        request: async () => {
+          supplied = true;
+          return "signed in";
+        },
+        hasValues: () => true,
+        redact: (text) => text.replaceAll(value, marker),
+        redactStreamStep: (window, from, final) => redactor.step(window, from, final),
+      },
+    });
+    await handle.submitUserMessage("Run fixture");
+    const output = seen.at(-1)!.filter((message) => message.role === "toolResult");
+    expect(output.map((message) => message.toolName)).toEqual(["request_secret", "bash"]);
+    const truncated = output[1]!;
+    expect(truncated.isError).toBe(false);
+    const fullOutputPath = (truncated.details as { fullOutputPath?: string }).fullOutputPath;
+    expect(fullOutputPath).toBeDefined();
+    expect(JSON.stringify(truncated.content)).toContain(`Full output: ${fullOutputPath}`);
+    expect(JSON.stringify(truncated.content)).not.toContain(value);
+    expect(readFileSync(fullOutputPath!, "utf8")).toBe(`${marker}\n`.repeat(2100));
+    const saved = scan(spills);
+    expect(saved).toHaveLength(1);
+    expect(saved.map((file) => file.text).join("\n")).not.toContain(value);
   } finally {
     await handle?.close();
     vi.unstubAllEnvs();

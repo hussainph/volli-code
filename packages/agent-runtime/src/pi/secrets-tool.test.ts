@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { type AgentTool, type AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   BACKGROUND_CONTEXT,
+  ExecutionError,
   NodeExecutionEnv,
   withAbortSignal,
   type ExecutionEnv,
@@ -11,6 +12,7 @@ import {
 import { Type } from "@earendil-works/pi-ai";
 import {
   codeModeSurfaceFor,
+  ExactValueByteRedactor,
   NON_CODING_TOOL_IDS,
   resolveAgentToolSurface,
   sessionToolBindings,
@@ -778,6 +780,46 @@ describe("credential output privacy before disk spill", () => {
     expect(exec.mock.calls.at(-1)?.[1]).toBeUndefined();
     await privateSecretExecution(env, secretPort()).exec("x", options, BACKGROUND_CONTEXT);
     expect(exec.mock.calls.at(-1)?.[1]).toMatchObject({ capture: { spill: false } });
+  });
+  it("redacts spills through the port's streaming step instead, whatever values are held", async () => {
+    const exec = vi.fn<ExecutionEnv["exec"]>(async () => ({
+      ok: false,
+      error: new ExecutionError("unknown", "not run"),
+    }));
+    const env = { cwd: "/workspace", exec } as unknown as ExecutionEnv;
+    const hasValues = vi.fn(() => {
+      throw new Error("must not decide the spill");
+    });
+    const port = {
+      ...secretPort(),
+      hasValues,
+      redactStreamStep(window: Uint8Array, from: number, final: boolean) {
+        // Called as the port's own method, so a class-backed port keeps `this`.
+        expect(this).toBe(port);
+        return new ExactValueByteRedactor([[SECRET, "[redacted]"]]).step(window, from, final);
+      },
+    };
+    const wrapped = privateSecretExecution(env, port);
+    const options = { capture: { limits: { maxBytes: 10, maxLines: 1 }, spill: true } };
+    await wrapped.exec("x", options, BACKGROUND_CONTEXT);
+    const forwarded = exec.mock.calls.at(-1)?.[1];
+    expect(forwarded).toMatchObject({ capture: { ...options.capture, spill: true } });
+    expect(options.capture).not.toHaveProperty("spillRedaction");
+    expect(hasValues).not.toHaveBeenCalled();
+    // One fresh stream per call: a split value is withheld, then redacted whole.
+    const encoder = new TextEncoder();
+    const first = forwarded!.capture!.spillRedaction!();
+    const second = forwarded!.capture!.spillRedaction!();
+    expect(first).not.toBe(second);
+    const half = SECRET.length / 2;
+    const out = [
+      first.push(encoder.encode(`a ${SECRET.slice(0, half)}`)),
+      first.push(encoder.encode(`${SECRET.slice(half)} b`)),
+      first.end(),
+    ].map((part) => new TextDecoder().decode(part));
+    expect(out).toEqual(["a ", "[redacted] b", ""]);
+    await wrapped.exec("x", undefined, BACKGROUND_CONTEXT);
+    expect(exec.mock.calls.at(-1)?.[1]).toBeUndefined();
   });
   it("scrubs saved output before writing and refuses a file when redaction fails", async () => {
     const root = await mkdtemp(join(process.cwd(), ".secret-save-test-"));

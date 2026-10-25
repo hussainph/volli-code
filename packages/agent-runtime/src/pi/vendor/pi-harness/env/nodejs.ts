@@ -39,7 +39,7 @@ import {
 } from "../types";
 import { OutputCapture } from "../execution/output-capture";
 // Volli (VC-820): product-owned disk budget, separate from Pi's inline limits.
-import { ShellSpillBudget } from "../../../shell-spill";
+import { ShellSpillBudget, ShellSpillRedactor } from "../../../shell-spill";
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
@@ -634,6 +634,9 @@ export class NodeExecutionEnv implements ExecutionEnv {
       const spillPrefix: SpillChunk[] = [];
       let spillPath: string | undefined;
       const spillBudget = new ShellSpillBudget();
+      // Volli (VC-865): every spilled byte passes this first, in stream order.
+      const spillRedactor = new ShellSpillRedactor(options?.capture?.spillRedaction);
+      let spillFed = false;
       const spillQueue: SpillChunk[] = [];
       let spillStart: Promise<void> | undefined;
       let spillStream: WriteStream | undefined;
@@ -738,10 +741,36 @@ export class NodeExecutionEnv implements ExecutionEnv {
           .catch(failSpill)
           .finally(resumeOutput);
       };
+      // Volli (VC-865): redact before the cap, so a value straddling it is
+      // replaced whole and only its marker can be cut; stop once it is full.
+      const spill = (chunk: SpillChunk): void => {
+        if (spillError !== undefined || spillBudget.truncatedAt !== undefined) return;
+        spillFed = true;
+        let safe: SpillChunk;
+        try {
+          safe = spillRedactor.push(chunk);
+        } catch (error) {
+          failSpill(error);
+          return;
+        }
+        startSpill(safe);
+      };
       const finishSpill = async (): Promise<void> => {
+        if (spillFed) {
+          spillFed = false;
+          if (spillError === undefined && spillBudget.truncatedAt === undefined) {
+            try {
+              startSpill(spillRedactor.end());
+            } catch (error) {
+              failSpill(error);
+            }
+          }
+        }
         await spillStart;
         const stream = spillStream;
-        if (stream === undefined || spillError !== undefined || stream.destroyed) return;
+        // Volli (VC-865): a failed redaction leaves a healthy stream holding
+        // only redacted bytes; close it like any other rather than leak it.
+        if (stream === undefined || stream.destroyed) return;
         await new Promise<void>((resolveFinish) => {
           stream.once("error", () => resolveFinish());
           stream.once("finish", resolveFinish);
@@ -755,11 +784,11 @@ export class NodeExecutionEnv implements ExecutionEnv {
           capture.push(chunk);
           if (!options?.capture?.spill || chunk.length === 0) return;
           if (spillPath !== undefined || wasTruncated) {
-            startSpill(chunk);
+            spill(chunk);
           } else if (capture.truncated) {
-            for (const prefix of spillPrefix) startSpill(prefix);
+            for (const prefix of spillPrefix) spill(prefix);
             spillPrefix.length = 0;
-            startSpill(chunk);
+            spill(chunk);
           } else {
             spillPrefix.push(chunk);
           }
