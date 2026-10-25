@@ -21,8 +21,9 @@ and from your personal Skills directory:
 | Personal | `~/.agents/skills/<slug>/SKILL.md` |
 
 The directory name is the Skill’s `/slug`. If a project Skill and a personal
-Skill share a slug, the project Skill wins. If a Command uses the same name,
-the Command keeps `/slug` and the Skill appears as `/skill:slug`.
+Skill share a slug, the project Skill wins. With the **Volli Cloud (unstable)**
+experimental flag on, the personal Skill wins instead. If a Command uses the same
+name, the Command keeps `/slug` and the Skill appears as `/skill:slug`.
 
 Choose a mode for each Skill:
 
@@ -44,7 +45,8 @@ instructions without leaving Volli. Previewing does not change the Skill’s mod
 
 Open **Configure → Commands** to see the project and personal Commands
 available in a composer. A project Command takes precedence over a personal
-Command with the same name.
+Command with the same name. With the **Volli Cloud (unstable)** experimental flag on, the
+personal Command takes precedence instead.
 
 1. In **Configure → Commands**, select **New command**.
 2. Enter a **Name** and **Prompt**. Optional: Add a **Description**.

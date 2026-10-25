@@ -305,8 +305,12 @@ describe("headless runtime ownership", () => {
       events: f.input.ports.events,
       piRuntimeHost: f.assembly.piRuntimeHost,
       homeDir: "/home/service",
+      cloudEnabled: expect.any(Function),
       log: f.log,
     });
+    // Skills/templates precedence follows the environment's `cloud` opt-in.
+    expect(seam.automations.mock.lastCall![0].cloudEnabled()).toBe(false);
+    expect(seam.facade.mock.lastCall![0].cloudEnabled()).toBe(false);
     expect(input).not.toHaveProperty("browser");
     await input.beforeExecution();
     // The agent's `volli` reaches this host, beside the budget (VC-563).
@@ -559,6 +563,9 @@ describe("headless runtime ownership", () => {
     });
     expect(seam.assembly.mock.lastCall![0].codeModeSandbox).toEqual({ wasmPath: "/wasm" });
     expect(seam.automations.mock.lastCall![0].homeDir).toMatch(/.+/);
+    createHeadlessSessionRuntime({ ...f.input, env: { VOLLI_EXPERIMENTAL: "cloud" } });
+    expect(seam.automations.mock.lastCall![0].cloudEnabled()).toBe(true);
+    expect(seam.facade.mock.lastCall![0].cloudEnabled()).toBe(true);
     f.automations.execution = { kind: "idle" } as never;
     const ready = await owner.ready();
     expect(ready.automationsAvailable).toBe(false);

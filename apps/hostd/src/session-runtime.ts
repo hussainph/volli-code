@@ -9,7 +9,12 @@ import {
   type PiModelAccess,
   type CodeModeSandboxAssets,
 } from "@volli/agent-runtime";
-import { displayTicketId, VOLLI_SOCKET_ENV, type SessionExecutionVenue } from "@volli/shared";
+import {
+  displayTicketId,
+  parseExperimentEnvironment,
+  VOLLI_SOCKET_ENV,
+  type SessionExecutionVenue,
+} from "@volli/shared";
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { RetentionReclaimSeams } from "@volli/host-core/maintenance";
 import { getProjectById, getTicket } from "@volli/host-core/db";
@@ -117,6 +122,11 @@ export function createHeadlessSessionRuntime(input: {
   const db = host.database.db;
   const sessionEngine = host.sessionEngine;
   const homeDir = headlessHomeDir(env);
+  // hostd keeps no stored experiments: the `cloud` flag is the environment's
+  // opt-in, read once at boot. (Not `host-protocol.ts`' twin: that module is
+  // the superseded WebSocket surface, and this one must not load it.)
+  const cloud = parseExperimentEnvironment(env["VOLLI_EXPERIMENTAL"]).ids.includes("cloud");
+  const cloudFlag = (): boolean => cloud;
   // One lazy module: its model access is `headlessModelAccess`, handed to host-core.
   const { modelAccess, decisions, mcp: mcpSettings, webAccess } = host.runtimeServices;
   const mcpDispatch = hostMcpDispatch({
@@ -225,12 +235,14 @@ export function createHeadlessSessionRuntime(input: {
     events: ports.events,
     piRuntimeHost: assembly.piRuntimeHost,
     homeDir,
+    cloudEnabled: cloudFlag,
     log: ports.log,
   });
   const facade = createRuntimeSessionFacade({
     host,
     assembly,
     homeDir,
+    cloudEnabled: cloudFlag,
     venue: options.venue,
     decisions,
     delegation,

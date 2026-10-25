@@ -235,7 +235,11 @@ describe("loadPromptTemplates", () => {
     const projectCommandsDir = makeCommandsDir({ "review.md": "project body" });
     const globalCommandsDir = makeCommandsDir({ "review.md": "global body", "ship.md": "ship" });
 
-    const result = await loadPromptTemplates({ projectCommandsDir, globalCommandsDir });
+    const result = await loadPromptTemplates({
+      projectCommandsDir,
+      globalCommandsDir,
+      cloud: false,
+    });
 
     expect(result.ok).toBe(true);
     expect(result.ok && result.templates.map((entry) => entry.name)).toEqual(["review", "ship"]);
@@ -246,10 +250,27 @@ describe("loadPromptTemplates", () => {
     ]);
   });
 
+  it("lets the personal tier win a shared name with the cloud flag on", async () => {
+    const projectCommandsDir = makeCommandsDir({ "review.md": "project body" });
+    const globalCommandsDir = makeCommandsDir({ "review.md": "global body" });
+
+    const result = await loadPromptTemplates({
+      projectCommandsDir,
+      globalCommandsDir,
+      cloud: true,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      templates: [{ name: "review", content: "global body", source: "personal" }],
+    });
+  });
+
   it("is an empty list when neither directory exists", async () => {
     const result = await loadPromptTemplates({
       projectCommandsDir: missingDir(),
       globalCommandsDir: missingDir(),
+      cloud: false,
     });
 
     expect(result).toEqual({ ok: true, templates: [] });
@@ -262,6 +283,7 @@ describe("loadPromptTemplates", () => {
       const result = await loadPromptTemplates({
         projectCommandsDir,
         globalCommandsDir: missingDir(),
+        cloud: false,
       });
       expect(result.ok).toBe(false);
     } finally {
@@ -276,6 +298,7 @@ describe("loadPromptTemplates", () => {
       const result = await loadPromptTemplates({
         projectCommandsDir: missingDir(),
         globalCommandsDir,
+        cloud: false,
       });
       expect(result.ok).toBe(false);
     } finally {

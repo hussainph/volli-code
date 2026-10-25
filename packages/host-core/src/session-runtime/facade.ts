@@ -45,6 +45,8 @@ function assembleSessionServices(options: {
   host: HostCore;
   assembly: ReturnType<typeof createRuntimeAssembly>;
   homeDir: string;
+  /** Whether the `cloud` flag is on now; read at every skills load (its precedence). */
+  cloudEnabled: () => boolean;
   venue: SessionExecutionVenue;
   decisions: HostDecisions | null;
   delegation: TicketSessionDelegationStore | null;
@@ -67,6 +69,7 @@ function assembleSessionServices(options: {
             const read = await loadSkills({
               projectSkillsDir: projectSkillsDir(project.path),
               globalSkillsDir: globalSkillsDir(homeDir),
+              cloud: options.cloudEnabled(),
             });
             if (!read.ok) {
               throw new StructuredSessionsError(
@@ -103,6 +106,7 @@ function assembleSessionServices(options: {
             const read = await loadSkills({
               projectSkillsDir: projectSkillsDir(project.path),
               globalSkillsDir: globalSkillsDir(homeDir),
+              cloud: options.cloudEnabled(),
             });
             if (!read.ok) return null;
             // The discoverable index has the same post-I/O policy race.

@@ -25,8 +25,10 @@
  */
 
 import {
+  configPlan,
   generateVeilTokens,
   resolveAppearance,
+  resolveConfigValue,
   THEME_TOKEN_NAMES,
   THEME_VEIL_TOKEN_NAMES,
 } from "@volli/shared";
@@ -168,8 +170,9 @@ function overridden<T>(value: T): ResolvedThemeSurface<T> {
 }
 
 /**
- * Picks one surface: the workspace's value when it has one, the global
- * otherwise.
+ * Resolves one surface: the workspace's value when it has one, the global
+ * otherwise — the one place a theme surface's precedence is computed, so the
+ * settings pages that show an effective value read it here too.
  *
  * It PICKS rather than builds, and that is load-bearing for the canvas. The
  * result is read through a zustand selector, and zustand v5 routes selectors
@@ -181,8 +184,11 @@ function overridden<T>(value: T): ResolvedThemeSurface<T> {
  * selector that wraps this in `{canvas, scope}` reintroduces it exactly. Return
  * the `Canvas` reference itself.
  */
-function pick<T>(override: T | null, global: T): ResolvedThemeSurface<T> {
-  return override === null ? inherited(global) : overridden(override);
+export function resolveThemeSurface<T>(override: T | null, global: T): ResolvedThemeSurface<T> {
+  // The `theme` surface's precedence: the project's override over the global
+  // (personal) choice. Nothing set at all is only the terminal's null global.
+  const set = resolveConfigValue<T>(configPlan("theme"), { project: override, personal: global });
+  return set?.level === "project" ? overridden(set.value) : inherited(global);
 }
 
 /**
@@ -201,11 +207,11 @@ export function resolveActiveTheme(
   systemPrefersDark: boolean,
 ): ActiveTheme {
   const override = projectOverride ?? EMPTY_SURFACE_OVERRIDE;
-  const appearance = pick(override.appearance, globalAppearance);
+  const appearance = resolveThemeSurface(override.appearance, globalAppearance);
   return {
-    canvas: pick(override.canvas, globalCanvas),
+    canvas: resolveThemeSurface(override.canvas, globalCanvas),
     appearance,
     resolved: resolveAppearance(appearance.value, systemPrefersDark),
-    terminal: pick(override.terminalThemeName, null),
+    terminal: resolveThemeSurface(override.terminalThemeName, null),
   };
 }

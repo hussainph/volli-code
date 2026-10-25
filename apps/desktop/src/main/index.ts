@@ -1422,12 +1422,14 @@ const appStartup = app.whenReady().then(async () => {
     events: hostPorts.events,
     piRuntimeHost,
     homeDir: fsDeps.homeDir,
+    cloudEnabled: () => isExperimentEnabled("cloud"),
     log: hostLogger("automations"),
   });
   const preparedSessionFacade = createRuntimeSessionFacade({
     host: hostCore,
     assembly: assembledRuntime,
     homeDir: fsDeps.homeDir,
+    cloudEnabled: () => isExperimentEnabled("cloud"),
     venue: runtimeInputs.venue,
     decisions: desktopDecisions,
     delegation: sessionDelegation,
@@ -1914,6 +1916,7 @@ const appStartup = app.whenReady().then(async () => {
     {
       globalCommandsDir: globalCommandsRoot(fsDeps.userDataDir),
       globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
+      cloudEnabled: () => isExperimentEnabled("cloud"),
     },
     liveHost?.fileServices ?? createHostFileServices(hostPorts),
   );

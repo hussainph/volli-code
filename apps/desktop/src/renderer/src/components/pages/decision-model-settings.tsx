@@ -28,6 +28,7 @@ import {
   decisionCloudDisclosure,
   DEFAULT_LOCAL_DECISION_URL,
   errorMessage,
+  resolveDecisionModelSetting,
   type DecisionModelCatalogEntry,
   type DecisionModelSetting,
   type Project,
@@ -574,7 +575,7 @@ export function ProjectDecisionModelRow({
   }
   const { view } = state;
   const override = view.project ?? null;
-  const effective = override ?? view.global;
+  const effective = resolveDecisionModelSetting(view.global, override);
 
   async function save(setting: DecisionModelSetting | null): Promise<boolean> {
     if (busy) return false;
