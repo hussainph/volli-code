@@ -684,6 +684,58 @@ describe("the inbox worker", () => {
     expect(off).toHaveBeenCalledTimes(1);
   });
 
+  it("claims again when a wake lands while a claim is in flight, so a notice is never stranded", async () => {
+    const inbox = fakeInbox();
+    let answer!: (jobs: ClaimedJob[]) => void;
+    const answers = [
+      () => new Promise<ClaimedJob[]>((done) => (answer = done)),
+      async () => [job("notice", "session.notice")],
+    ];
+    inbox.backend.claim = vi.fn(() => answers.shift()?.() ?? Promise.resolve([]));
+    let wake!: (value: { ready: number; nextAvailableAt: number | null }) => void;
+    const worker = createInboxWorker({
+      backend: inbox.backend,
+      journal: memoryJournal().store,
+      bootId: BOOT,
+      ...manualTimers(),
+      wake: (listener) => {
+        wake = listener;
+        return () => {};
+      },
+    });
+    const executor = vi.fn(async () => DONE);
+    worker.register("session.notice", executor);
+    const started = worker.start();
+    // The job is queued after the start's claim was read: its wake comes mid-claim.
+    wake({ ready: 1, nextAvailableAt: null });
+    answer([]);
+    await started;
+    await flush();
+    expect(executor).toHaveBeenCalledOnce();
+    // The start's claim, the one more the wake asked for, and the one after the job finished.
+    expect(inbox.backend.claim).toHaveBeenCalledTimes(3);
+    worker.stop();
+  });
+
+  it("does not claim again for a mid-claim wake once it has stopped", async () => {
+    const inbox = fakeInbox();
+    let answer!: (jobs: ClaimedJob[]) => void;
+    inbox.backend.claim = vi.fn(() => new Promise<ClaimedJob[]>((done) => (answer = done)));
+    const worker = createInboxWorker({
+      backend: inbox.backend,
+      journal: memoryJournal().store,
+      bootId: BOOT,
+      ...manualTimers(),
+      wake: () => () => {},
+    });
+    const started = worker.start();
+    void worker.claimNow();
+    worker.stop();
+    answer([]);
+    await started;
+    expect(inbox.backend.claim).toHaveBeenCalledOnce();
+  });
+
   it("uses real timers by default", async () => {
     vi.useFakeTimers();
     try {

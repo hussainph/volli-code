@@ -452,3 +452,30 @@ liveness and birth scope. It is written with the shared Session listing rules,
 not re-derived by clients. Existing rows without it are read through their stored
 fold until their next accepted fact materializes it. The optional field keeps
 older deployments and stored rows valid.
+
+## Durable watches and notices
+
+`watches` gains optional origin, arming, policy-kind and terminal-reason fields;
+older rows read with the shared default kinds and an armed next turn. Arm
+commands have separate seven-day `watchReceipts`, so retrying a command never
+re-arms a turn already reported or resurrects an ended watch. Ticket watches
+expire after fourteen days without a notice or a deliberate re-arm. A Session
+arm records its accepted-sequence watermark, so a delayed catch-up/refold never
+reports history accepted before that arm; an auto-arm inside an accepted batch
+uses its own command sequence so the batch's later facts still report.
+The hourly paged sweep also ends
+watches whose owner lost access; producers re-check access before each fire.
+
+The accepted-fact hook and `BoardWrite.append` produce structured notice jobs,
+coalescing per watcher with `patchQueuedJob` only while a job was never leased.
+The watcher's claim determines routing, so queued work follows a claim move.
+`session.notice` is the exception to UUID job/command ids: it keeps the frozen
+local `watch:{watcher}:{uuid}` and `{parent}:{toolCall}:answer` command ids as
+its job id, for outbox dedupe and the final accepted-message receipt. Other
+job kinds still require UUID ids. Subagent answer production belongs to the
+delegation fold; the same typed notice executor handles its payload.
+
+The runner's `host_notice_outbox` is retained, not replaced: it owns delivery
+timing and first-writer-wins replay after the job reaches the runner. Cloud
+Sessions do not arm process-memory watches. Machine-local notices still use
+the outbox directly, and the signed-out watch path keeps its existing rules.

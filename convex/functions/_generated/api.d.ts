@@ -52,6 +52,7 @@ import type * as lib_streamChunks from "../lib/streamChunks.js";
 import type * as lib_testWorld from "../lib/testWorld.js";
 import type * as lib_validators from "../lib/validators.js";
 import type * as lib_visibility from "../lib/visibility.js";
+import type * as lib_watches from "../lib/watches.js";
 import type * as lib_workspaces from "../lib/workspaces.js";
 import type * as members from "../members.js";
 import type * as migration from "../migration.js";
@@ -73,6 +74,7 @@ import type * as streamChunks from "../streamChunks.js";
 import type * as testJobs from "../testJobs.js";
 import type * as testSeed from "../testSeed.js";
 import type * as transcripts from "../transcripts.js";
+import type * as watches from "../watches.js";
 import type * as workingCopies from "../workingCopies.js";
 import type * as workspaces from "../workspaces.js";
 
@@ -127,6 +129,7 @@ declare const fullApi: ApiFromModules<{
   "lib/testWorld": typeof lib_testWorld;
   "lib/validators": typeof lib_validators;
   "lib/visibility": typeof lib_visibility;
+  "lib/watches": typeof lib_watches;
   "lib/workspaces": typeof lib_workspaces;
   members: typeof members;
   migration: typeof migration;
@@ -148,6 +151,7 @@ declare const fullApi: ApiFromModules<{
   testJobs: typeof testJobs;
   testSeed: typeof testSeed;
   transcripts: typeof transcripts;
+  watches: typeof watches;
   workingCopies: typeof workingCopies;
   workspaces: typeof workspaces;
 }>;

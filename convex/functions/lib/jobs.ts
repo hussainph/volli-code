@@ -27,6 +27,7 @@ import {
   InvalidJobPayloadError,
   TERMINAL_JOB_TTL_MS,
   isActiveMember,
+  isDerivedId,
   isJobKind,
   isTerminalJobStatus,
   jobRank,
@@ -196,8 +197,13 @@ function draftRow(draft: JobDraft, now: number): JobRow {
     throw defect("invalid_job", `Unknown job kind ${String(draft.kind)}.`);
   let row: JobRow;
   try {
-    const commandId = optionalId("command", draft.commandId);
-    const id = parseId("job", draft.id ?? commandId ?? newId("job"));
+    // Notice delivery ids predate the cloud inbox and are durable opaque ids
+    // (`watch:{session}:{uuid}` and `{parent}:{toolCall}:answer`). Keep those
+    // exact ids so local outbox replay and the second receipt find one job.
+    const noticeCommand = draft.kind === "session.notice" && isDerivedId(draft.commandId);
+    const commandId = noticeCommand ? draft.commandId! : optionalId("command", draft.commandId);
+    const rawId = draft.id ?? commandId ?? newId("job");
+    const id = noticeCommand && rawId === commandId ? rawId : parseId("job", rawId);
     if (commandId !== null && id !== commandId) {
       throw defect("invalid_job", "A job that carries a command takes the command's id.");
     }

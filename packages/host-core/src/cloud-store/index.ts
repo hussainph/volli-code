@@ -25,6 +25,7 @@ import { createCloudSessionOwner } from "./owner";
 import { createCloudSessionLocationResolver, type CloudSessionLocationOptions } from "./location";
 import { registerWorkingCopyJobs } from "./jobs";
 import { registerSessionCommandJob, ownerGuardedInbox } from "./session-jobs";
+import { registerSessionNoticeJob, type SessionNoticeOutbox } from "./notice-jobs";
 import { runGitCapturingAsync } from "../worktree/git";
 import { getTrimSettings } from "../worktree/trim-settings";
 import type { BusyWorktreeSites } from "../worktree/activity";
@@ -51,8 +52,11 @@ export function createCloudProductStore(options: {
   busySites: BusyWorktreeSites;
   prepareEnvironment?: CloudSessionLocationOptions["prepareEnvironment"];
   environmentRecipes?: () => boolean;
-  /** Receiving seam: S5 supplies these executors when its implementations land. */
-  sessionJobs?: Partial<Record<"session.followUp" | "session.notice", JobExecutor>>;
+  /**
+   * Receiving seam: S5 supplies the follow-up executor when it lands. The
+   * notice executor is this store's own (`notice-jobs.ts`).
+   */
+  sessionJobs?: Partial<Record<"session.followUp", JobExecutor>>;
 }) {
   const { host, ownerUserId } = options;
   const db = host.database.db;
@@ -60,6 +64,7 @@ export function createCloudProductStore(options: {
   let active: { link: BackendLink; runnerId: string } | null = null;
   let runtime: HostedSessionRuntime | null = null;
   let artifacts: TranscriptArtifactStore | null = null;
+  let notices: SessionNoticeOutbox | null = null;
   let prepareEnvironment = options.prepareEnvironment;
   const registries = new Map<string, RunnerPathRegistry>();
   const registry = () => {
@@ -200,6 +205,10 @@ export function createCloudProductStore(options: {
       runtime = value;
       artifacts = store;
     },
+    /** The runtime lifecycle's durable outbox door, for `session.notice` jobs. */
+    bindNotices(outbox: SessionNoticeOutbox): void {
+      notices = outbox;
+    },
     connect(parts: {
       link: BackendLink;
       presence: RunnerPresence;
@@ -228,8 +237,10 @@ export function createCloudProductStore(options: {
         runtime: () => runtime,
         artifacts: () => artifacts,
       });
-      // S5 follow-up/notice executors are intentionally not invented here. Its
-      // production composition passes them through this same owner gate.
+      // A watcher's notice: composed here, then handed to the durable outbox.
+      registerSessionNoticeJob(guarded, { outbox: () => notices });
+      // S5's follow-up executor is not invented here; its production
+      // composition passes it through this same owner gate.
       for (const [kind, executor] of Object.entries(options.sessionJobs ?? {}))
         guarded.register(kind, executor);
       registerWorkingCopyJobs(inbox, {

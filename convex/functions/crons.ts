@@ -26,6 +26,7 @@ crons.interval("runners: offline sweep", { minutes: 1 }, internal.runners.sweepO
 crons.interval("runners: expiry cleanup", { hours: 1 }, internal.runners.sweepExpired, {});
 // Runner inbox: delete finished jobs once their keep time has passed.
 crons.interval("purge finished runner jobs", { hours: 1 }, internal.runnerJobs.sweep, {});
+crons.interval("watches: expiry and access sweep", { hours: 1 }, internal.watches.sweep, {});
 // GitHub: redeliver webhook deliveries that never arrived (GitHub does not
 // retry), purge old delivery ids and finished flows, and once a day compare
 // the App's installations with the table.

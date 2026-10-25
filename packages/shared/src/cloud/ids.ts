@@ -48,7 +48,8 @@ export type IdKind =
   | "secret"
   | "secretKey"
   | "githubFlow"
-  | "githubInstallation";
+  | "githubInstallation"
+  | "watch";
 
 declare const ID_KIND: unique symbol;
 
@@ -78,6 +79,7 @@ export type DeletionRequestId = Id<"deletionRequest">;
 export type AuditEntryId = Id<"auditEntry">;
 export type GithubFlowId = Id<"githubFlow">;
 export type GithubInstallationId = Id<"githubInstallation">;
+export type WatchId = Id<"watch">;
 
 /** Whether `value` is a lowercase canonical UUID string (any version). */
 export function isUuid(value: unknown): value is string {

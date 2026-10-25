@@ -186,6 +186,8 @@ export function createInboxWorker(options: InboxWorkerOptions): InboxWorker {
   const reportRetries = new Map<string, { failures: number; timer: unknown }>();
   let stopped = true;
   let claiming: Promise<void> | null = null;
+  /** A claim was asked for while one was in flight. */
+  let claimAgain = false;
   let poll: unknown = null;
   let due: unknown = null;
   let unsubscribeWake: (() => void) | null = null;
@@ -371,15 +373,27 @@ export function createInboxWorker(options: InboxWorkerOptions): InboxWorker {
 
   function claimNow(): Promise<void> {
     if (stopped) return Promise.resolve();
-    claiming ??= (async () => {
+    if (claiming !== null) {
+      // A wake that lands while a claim is in flight may name jobs that claim
+      // never saw, and the subscription will not say so again: claim once more.
+      claimAgain = true;
+      return claiming;
+    }
+    claiming = (async () => {
       try {
-        const room = INBOX_LIMITS.concurrent - running.size;
-        if (room <= 0) return;
-        const claimed = await options.backend.claim({ bootId: options.bootId, max: room });
-        for (const job of claimed) if (!running.has(job.job.id)) execute(job);
+        do {
+          claimAgain = false;
+          // `stop()` may have run while the last claim was in flight.
+          if (stopped) return;
+          const room = INBOX_LIMITS.concurrent - running.size;
+          if (room <= 0) return;
+          const claimed = await options.backend.claim({ bootId: options.bootId, max: room });
+          for (const job of claimed) if (!running.has(job.job.id)) execute(job);
+        } while (claimAgain);
       } catch (error) {
         options.onError?.(error);
       } finally {
+        claimAgain = false;
         claiming = null;
       }
     })();

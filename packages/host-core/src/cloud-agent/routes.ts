@@ -79,9 +79,21 @@ const machine = { route: "machine" } as const;
 const target = { route: "session-target" } as const;
 const watches = {
   route: "blocked",
-  until: "VC-887",
+  // VC-887 built the backend half: durable `watches` rows, auto-arms derived
+  // when a Session-origin start or send is accepted, and `session.notice`
+  // jobs this runner composes and delivers. A cloud launch builds no
+  // in-process watches (`inProcessWatches: false`), so nothing is doubled.
+  //
+  // Receiving wiring (VC-894, S6-3): the explicit verbs call, under the
+  // watcher's Agent token (`AgentBackend`), after the tool door's Role barrier
+  // and project policy have judged each target:
+  // - `watches:watch {watcherSessionId, target: {kind: "session" | "ticket", id}, commandId}`
+  //   once per target, `commandId` minted before the first attempt → `{watchId}`;
+  // - `watches:unwatch {watcherSessionId, targets?: [{kind, id}]}` → `{ended}`;
+  // - `watches:list {watcherSessionId}` → `[{id, target, origin, turnArmed, createdAt}]`.
+  until: "VC-894",
   interim:
-    "Session targets on this runner work locally; ticket targets wait for Volli Cloud watches.",
+    "Refused: nothing is watched in-process; Sessions it starts or steers are watched by Volli Cloud from their facts.",
 } as const;
 
 const ROUTES = {

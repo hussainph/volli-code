@@ -40,6 +40,7 @@ import {
   JOB_PRIORITIES,
   NOTICE_MAX_WAIT_MS,
   isTerminalJobStatus,
+  isDerivedId,
   isUuid,
   jobRank,
   jobResultProblem,
@@ -90,7 +91,7 @@ function bounded(value: number | undefined, fallback: number, min: number, max: 
 }
 
 async function jobOf(ctx: MutationCtx, jobId: string): Promise<Doc<"runnerJobs"> | null> {
-  if (!isUuid(jobId)) return null;
+  if (!isDerivedId(jobId)) return null;
   return ctx.db
     .query("runnerJobs")
     .withIndex("by_uuid", (q) => q.eq("id", jobId))

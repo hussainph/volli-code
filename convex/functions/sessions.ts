@@ -60,6 +60,7 @@ import {
 import { attentionVisibility } from "./lib/attention";
 import { PERSON_OR_AGENT, requireActor } from "./lib/actorAuth";
 import { enqueueJob } from "./lib/jobs";
+import { armWatch } from "./lib/watches";
 import { listingOf } from "./lib/sessionDerived";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
 import {
@@ -216,6 +217,20 @@ export const command = mutation({
       createdBy: caller.actor,
       onBehalfOf: viewer.userId,
     });
+    if (
+      caller.kind === "agent" &&
+      JSON.parse(intentJson).kind === "message.submit" &&
+      caller.agent.sessionId !== session.id &&
+      !(session.role === "subagent" && session.parentSessionId === caller.agent.sessionId)
+    ) {
+      await armWatch(ctx, {
+        watcher: caller.agent.session,
+        target: { kind: "session", id: session.id },
+        origin: "steered",
+        actor: caller.actor,
+        commandId: args.commandId,
+      });
+    }
     const job = (await ctx.db
       .query("runnerJobs")
       .withIndex("by_uuid", (q) => q.eq("id", args.commandId))

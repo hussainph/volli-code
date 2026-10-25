@@ -61,6 +61,11 @@
  * move plus a comment from one command, cost the watcher one turn rather than
  * five.
  *
+ * The rules (what a fact reports, deferral, the watcher's own acts) and the
+ * notice's words live once in `@volli/shared` (`watch-rules.ts`,
+ * `session-notice.ts`), shared with the cloud backend's durable watches; this
+ * module is the in-process registry, coalescing and delivery around them.
+ *
  * ## Process memory, deliberately
  *
  * Watches live here and a relaunch forgets them, which is the same bargain the
@@ -78,23 +83,26 @@
  * Volli's.
  */
 
-import { sessionStopSummary } from "@volli/shared";
-
 import { randomUUID } from "node:crypto";
 import {
-  sessionHostNoticeMetadata,
+  composeWatchNotice,
+  noticeProse,
+  sessionWatchChanges,
   shortSessionId,
-  untrustedProseLines,
+  ticketEventWatchActor,
+  ticketWatchChanges,
+  ticketWatchHears,
+  watchStoppedBy,
+  WATCH_ANSWER_NOTICE_LIMIT,
+  type NoticeAnswer,
   type SessionAwaitKind,
   type SessionEvent,
   type SessionStopActor,
   type TicketAwaitKind,
-  type TicketEvent,
-  type TicketEventKind,
   type TranscriptReference,
-  type WatchNoticeEvent,
-  TICKET_AWAIT_EVENT_KINDS,
+  type WatchChangeV1,
 } from "@volli/shared";
+import { watchNoticeCommandId } from "@volli/shared/cloud";
 import type {
   SessionEngine,
   SessionRuntime,
@@ -105,11 +113,7 @@ import { readSessionAnswer } from "@volli/session-engine";
 import type { SubscribeSessionWake } from "./session-control/session-wake";
 import type { TicketWake } from "./ticket-wake";
 import type { DetachedWorkPort } from "./detached-work";
-import {
-  cutAtCodePoint,
-  deliverHostNotice,
-  errorText,
-} from "./session-runtime/host-notice-delivery";
+import { deliverHostNotice, errorText } from "./session-runtime/host-notice-delivery";
 import { hostLogger } from "./log/root";
 
 const log = hostLogger("watches");
@@ -118,7 +122,7 @@ const log = hostLogger("watches");
 export const WATCH_COALESCE_MS = 1_500;
 
 /** How much of a watched Session's last message a notice carries inline. */
-export const WATCH_ANSWER_NOTICE_LIMIT = 4_000;
+export { WATCH_ANSWER_NOTICE_LIMIT };
 
 export interface WatchesPorts {
   /** A timer's in-flight delivery must finish before the host closes SQLite. */
@@ -188,66 +192,24 @@ interface SessionWatch {
 interface TicketWatch {
   ticketId: string;
   display: string;
-  eventKinds: Set<TicketEventKind>;
-}
-
-/** One change, as its metadata row and as the lines the model reads. */
-interface Change {
-  event: WatchNoticeEvent;
-  lines: string[];
-  /** A Session whose last message this change should quote at delivery. */
-  answerOf?: string;
+  kinds: Set<TicketAwaitKind>;
 }
 
 interface Watcher {
   sessionId: string;
   sessions: Map<string, SessionWatch>;
   tickets: Map<string, TicketWatch>;
-  outbox: Change[];
+  outbox: WatchChangeV1[];
   timer: unknown;
-}
-
-function untrustedProse(kind: string, text: string): string[] {
-  return untrustedProseLines({ kind, text, id: randomUUID(), delivery: "notice" });
-}
-
-function sessionLabel(targetSessionId: string, title: string | null): string {
-  const handle = shortSessionId(targetSessionId);
-  return title === null || title.trim().length === 0
-    ? `Session ${handle}`
-    : `Session ${handle} (${JSON.stringify(title)})`;
 }
 
 /**
  * Who stopped a watched Session, as the reader reads it. A notice never names
- * a stop by its watcher ({@link onSessionWake} does not report one), so only
+ * a stop by its watcher (the shared watch rules do not report one), so only
  * the watch receipt passes `readerSessionId` to say "by this Session".
  */
 export function stoppedBy(by: SessionStopActor, readerSessionId?: string): string {
-  if (by.kind === "user") return "by the user";
-  if (by.kind === "watchdog") return "by Volli's watchdog";
-  if (by.sessionId === readerSessionId) return "by this Session";
-  return `by Session ${shortSessionId(by.sessionId)}`;
-}
-
-/** The line that tells a watcher its target is not finished, only between turns. */
-function waitingLine(pending: readonly string[]): string[] {
-  if (pending.length === 0) return [];
-  const names = pending.map((id) => shortSessionId(id)).join(", ");
-  return [
-    `  It is waiting on ${pending.length} ${pending.length === 1 ? "subagent" : "subagents"}: ${names}.`,
-  ];
-}
-
-function ticketActor(event: TicketEvent, watcherSessionId: string): string {
-  const session = event.actorContext?.sessionId;
-  if (event.actor === "session" && session !== undefined) {
-    return session === watcherSessionId ? "by you" : `by Session ${shortSessionId(session)}`;
-  }
-  if (event.actor === "automation") return "by an automation";
-  if (event.actor === "session") return "by a Session";
-  if (event.actor === "unauthenticated") return "by an unauthenticated caller";
-  return "by the user";
+  return watchStoppedBy(by, readerSessionId);
 }
 
 export function createWatches(ports: WatchesPorts): Watches {
@@ -287,7 +249,7 @@ export function createWatches(ports: WatchesPorts): Watches {
     }
   }
 
-  function enqueue(watcher: Watcher, changes: readonly Change[]): void {
+  function enqueue(watcher: Watcher, changes: readonly WatchChangeV1[]): void {
     if (changes.length === 0) return;
     watcher.outbox.push(...changes);
     if (watcher.timer !== undefined) return;
@@ -300,11 +262,9 @@ export function createWatches(ports: WatchesPorts): Watches {
     }, coalesceMs);
   }
 
-  async function answerLines(sessionId: string): Promise<string[]> {
-    const handle = shortSessionId(sessionId);
-    if (ports.readTranscriptArtifact === undefined) {
-      return [`\`volli session answer ${handle}\` reads what it said last.`];
-    }
+  /** A watched Session's last message, read at delivery. */
+  async function lastMessageOf(sessionId: string): Promise<NoticeAnswer> {
+    if (ports.readTranscriptArtifact === undefined) return { state: "unread" };
     try {
       const answer = await readSessionAnswer(
         {
@@ -314,127 +274,44 @@ export function createWatches(ports: WatchesPorts): Watches {
         { sessionId },
       );
       if (answer.text === null) {
-        return answer.unreadable
-          ? [
-              `Its last message could not be read; \`volli session answer ${handle}\` retries the read.`,
-            ]
-          : ["It left no message."];
+        return answer.unreadable ? { state: "unreadable", error: null } : { state: "none" };
       }
-      const shown = cutAtCodePoint(answer.text, WATCH_ANSWER_NOTICE_LIMIT);
-      return [
-        "What it said last follows.",
-        ...untrustedProse(`Session ${handle} message`, shown),
-        ...(shown.length < answer.text.length
-          ? [
-              `Cut at ${shown.length} of ${answer.text.length} characters; \`volli session answer ${handle}\` prints all of it.`,
-            ]
-          : []),
-      ];
+      return { state: "text", message: noticeProse(answer.text, WATCH_ANSWER_NOTICE_LIMIT) };
     } catch (error) {
-      return [
-        `Its last message could not be read (${errorText(error)}); \`volli session answer ${handle}\` retries the read.`,
-      ];
+      return { state: "unreadable", error: errorText(error) };
     }
   }
 
   async function flush(watcher: Watcher): Promise<void> {
-    const changes = watcher.outbox.splice(0);
+    const gathered = watcher.outbox.splice(0);
     prune(watcher);
-    if (changes.length === 0) return;
-    const lines = [
-      `[Volli: ${changes.length === 1 ? "a change" : `${changes.length} changes`} on work you are watching. This notice is from Volli, not your user.]`,
-    ];
-    for (const change of changes) {
-      lines.push(...change.lines);
-      if (change.answerOf !== undefined) lines.push(...(await answerLines(change.answerOf)));
+    if (gathered.length === 0) return;
+    const changes: WatchChangeV1[] = [];
+    for (const change of gathered) {
+      changes.push(
+        change.subject === "session" &&
+          (change.fact === "turn-completed" || change.fact === "turn-interrupted")
+          ? { ...change, lastMessage: await lastMessageOf(change.sessionId) }
+          : change,
+      );
     }
-    const id = newId();
+    const notice = composeWatchNotice({
+      watcherSessionId: watcher.sessionId,
+      changes,
+      nonce: randomUUID,
+    });
+    const commandId = watchNoticeCommandId(watcher.sessionId, newId());
     await deliverHostNotice(
       { runtime: ports.runtime, report },
       {
         sessionId: watcher.sessionId,
-        commandId: `watch:${watcher.sessionId}:${id}`,
-        messageId: `watch:${watcher.sessionId}:${id}:message`,
-        metadata: sessionHostNoticeMetadata({
-          kind: "watch",
-          events: changes.map((change) => change.event),
-        }),
-        text: lines.join("\n"),
+        commandId,
+        messageId: `${commandId}:message`,
+        metadata: notice.metadata,
+        text: notice.text,
         label: `watch notice to ${shortSessionId(watcher.sessionId)}`,
       },
     );
-  }
-
-  function sessionChange(watch: SessionWatch, event: SessionEvent): Change | null {
-    const payload = event.payload;
-    const label = sessionLabel(watch.targetSessionId, watch.title);
-    const waiting = () => waitingLine(pendingSubagents(watch.targetSessionId));
-    const base = {
-      subject: "session" as const,
-      id: watch.targetSessionId,
-      label: shortSessionId(watch.targetSessionId),
-    };
-    switch (payload.kind) {
-      case "turn.completed":
-        return {
-          event: { ...base, fact: "turn-completed", detail: null },
-          lines: [`- ${label} finished its turn.`, ...waiting()],
-          answerOf: watch.targetSessionId,
-        };
-      case "turn.interrupted":
-        return {
-          event: {
-            ...base,
-            fact: "turn-interrupted",
-            detail: payload.stopDetail?.category ?? null,
-          },
-          lines: [
-            `- ${label} was interrupted mid-turn; its work did not finish. session_send can continue it while its executor is available; otherwise a person can reattach it in the app.`,
-            ...waiting(),
-            ...(payload.stopDetail === undefined
-              ? []
-              : [
-                  `${sessionStopSummary(payload.stopDetail)} (${payload.stopDetail.category}); retry: ${payload.stopDetail.retry}; reset: ${payload.stopDetail.resetsAt ?? "not stated"}.`,
-                  ...untrustedProse(
-                    "provider stop detail",
-                    JSON.stringify({
-                      type: payload.stopDetail.providerType,
-                      message: payload.stopDetail.message,
-                      httpStatus: payload.stopDetail.httpStatus,
-                    }),
-                  ),
-                ]),
-          ],
-          answerOf: watch.targetSessionId,
-        };
-      case "session.signaled":
-        return {
-          event: {
-            ...base,
-            fact: payload.signal === "done" ? "signaled-done" : "signaled-blocked",
-            detail: null,
-          },
-          lines: [
-            `- ${label} signaled ${payload.signal}.`,
-            ...waiting(),
-            ...(payload.reason !== null && payload.reason.trim().length > 0
-              ? untrustedProse("signal reason", payload.reason)
-              : []),
-          ],
-        };
-      case "session.stopped":
-        return {
-          event: { ...base, fact: "stopped", detail: null },
-          lines: [
-            `- ${label} was stopped ${stoppedBy(payload.by)}; its work has ended and this watch with it.`,
-            ...(payload.reason !== null && payload.reason.trim().length > 0
-              ? untrustedProse("stop reason", payload.reason)
-              : []),
-          ],
-        };
-      default:
-        return null;
-    }
   }
 
   function onSessionWake(event: SessionEvent): void {
@@ -451,88 +328,40 @@ export function createWatches(ports: WatchesPorts): Watches {
     for (const watcher of watchers.values()) {
       const watch = watcher.sessions.get(event.sessionId);
       if (watch === undefined) continue;
-      switch (payload.kind) {
-        case "turn.completed":
-        case "turn.interrupted": {
-          if (!watch.turnArmed || !watch.kinds.has("turn")) break;
-          // Between turns, not done: the target's subagents will open its next
-          // turn. Keep the arm so the end that really is the end is heard.
-          if (payload.kind === "turn.completed" && pendingSubagents(event.sessionId).length > 0) {
-            break;
-          }
-          watch.turnArmed = false;
-          enqueue(watcher, [sessionChange(watch, event)!]);
-          break;
-        }
-        case "session.signaled": {
-          if (watch.kinds.has("verdict")) enqueue(watcher, [sessionChange(watch, event)!]);
-          break;
-        }
-        case "session.stopped": {
-          watcher.sessions.delete(event.sessionId);
-          // The watcher's own `session_stop` was confirmed by its tool result.
-          const bySelf =
-            payload.by.kind === "session" && payload.by.sessionId === watcher.sessionId;
-          if (watch.kinds.has("stopped") && !bySelf) {
-            enqueue(watcher, [sessionChange(watch, event)!]);
-          }
-          prune(watcher);
-          break;
-        }
-        default:
-          break;
-      }
+      // The pending set is read when the change is seen, and only for a fact
+      // that defers on it or names it.
+      const readsPending =
+        payload.kind === "session.signaled"
+          ? watch.kinds.has("verdict")
+          : (payload.kind === "turn.completed" || payload.kind === "turn.interrupted") &&
+            watch.turnArmed &&
+            watch.kinds.has("turn");
+      const step = sessionWatchChanges(payload, watch, {
+        watcherSessionId: watcher.sessionId,
+        pendingChildren: readsPending ? pendingSubagents(event.sessionId) : [],
+      });
+      watch.turnArmed = step.turnArmed;
+      if (step.ended) watcher.sessions.delete(event.sessionId);
+      if (step.change !== null) enqueue(watcher, [step.change]);
+      if (step.ended) prune(watcher);
     }
-  }
-
-  function ticketChange(watcher: Watcher, watch: TicketWatch, event: TicketEvent): Change | null {
-    const payload = event.payload;
-    const by = ticketActor(event, watcher.sessionId);
-    const base = { subject: "ticket" as const, id: watch.ticketId, label: watch.display };
-    if (payload.kind === "status_changed") {
-      return {
-        event: { ...base, fact: "ticket-moved", detail: payload.to },
-        lines: [`- Ticket ${watch.display} moved from ${payload.from} to ${payload.to}, ${by}.`],
-      };
-    }
-    if (payload.kind === "commented") {
-      const body = ports.readComment(payload.commentId);
-      return {
-        event: { ...base, fact: "ticket-commented", detail: null },
-        lines: [
-          `- Ticket ${watch.display} received a comment ${by}.`,
-          ...(body === null
-            ? ["  The comment was deleted before this notice was written."]
-            : untrustedProse("ticket comment", body)),
-        ],
-      };
-    }
-    if (payload.kind === "signaled") {
-      return {
-        event: {
-          ...base,
-          fact: "ticket-signaled",
-          detail: `${payload.signalKind}: ${payload.verdict}`,
-        },
-        lines: [
-          `- Ticket ${watch.display} signaled ${payload.signalKind}: ${payload.verdict}, ${by}.`,
-          ...(payload.detail !== null && payload.detail.trim().length > 0
-            ? untrustedProse("signal detail", payload.detail)
-            : []),
-        ],
-      };
-    }
-    return null;
   }
 
   function onTicketWake(wake: TicketWake): void {
     const event = wake.event;
     for (const watcher of watchers.values()) {
       const watch = watcher.tickets.get(event.ticketId);
-      if (watch === undefined || !watch.eventKinds.has(event.payload.kind)) continue;
+      if (watch === undefined) continue;
+      const actorSessionId = event.actorContext?.sessionId;
       // What the watcher did itself is not news to it.
-      if (event.actorContext?.sessionId === watcher.sessionId) continue;
-      const change = ticketChange(watcher, watch, event);
+      if (!ticketWatchHears(watch, event.payload.kind, actorSessionId, watcher.sessionId)) continue;
+      const change = ticketWatchChanges(event.payload, watch, {
+        watcherSessionId: watcher.sessionId,
+        actorSessionId,
+        by: ticketEventWatchActor(event),
+        comment:
+          event.payload.kind === "commented" ? ports.readComment(event.payload.commentId) : null,
+      });
       if (change !== null) enqueue(watcher, [change]);
     }
   }
@@ -561,16 +390,15 @@ export function createWatches(ports: WatchesPorts): Watches {
     watchTicket(input) {
       if (input.kinds.length === 0) return;
       const watcher = watcherFor(input.watcherSessionId);
-      const eventKinds = input.kinds.map((kind) => TICKET_AWAIT_EVENT_KINDS[kind]);
       const existing = watcher.tickets.get(input.ticketId);
       if (existing !== undefined) {
-        for (const kind of eventKinds) existing.eventKinds.add(kind);
+        for (const kind of input.kinds) existing.kinds.add(kind);
         return;
       }
       watcher.tickets.set(input.ticketId, {
         ticketId: input.ticketId,
         display: input.display,
-        eventKinds: new Set(eventKinds),
+        kinds: new Set(input.kinds),
       });
     },
     unwatch(watcherSessionId, targets) {

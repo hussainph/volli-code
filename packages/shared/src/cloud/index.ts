@@ -19,6 +19,7 @@ export * from "./ids";
 export * from "./job-payloads";
 export * from "./jobs";
 export * from "./members";
+export * from "./notices";
 export * from "./migration-import";
 export * from "./positions";
 export * from "./preview-access";

@@ -96,3 +96,33 @@ export function scopeSqliteHostNoticeOutbox(
     },
   };
 }
+
+/** What the machine-state outbox already holds for one notice id. */
+export type StoredHostNotice =
+  | { state: "absent" }
+  | { state: "pending"; notice: HostNotice }
+  | { state: "settled" };
+
+/**
+ * Reads one notice id before a producer composes it, so a replayed producer
+ * (a re-leased `session.notice` job) neither rebuilds the text nor mints a
+ * new nonce for an id the outbox already holds or has settled. A read, not a
+ * claim: the put that follows an `absent` answer is still first-writer-wins.
+ */
+export function readSqliteHostNotice(
+  db: Database.Database,
+  commandId: string,
+  sessionId: string,
+): StoredHostNotice {
+  // One statement: a consistent read without taking the Session writer.
+  const row = prepared<[string], { session_id: string; notice: string | null }>(
+    db,
+    "SELECT session_id, notice FROM host_notice_outbox WHERE command_id = ?",
+  ).get(commandId);
+  if (row === undefined) return { state: "absent" };
+  if (row.session_id !== sessionId)
+    throw new Error(`Host notice ${commandId} belongs to a different Session`);
+  return row.notice === null
+    ? { state: "settled" }
+    : { state: "pending", notice: JSON.parse(row.notice) as HostNotice };
+}

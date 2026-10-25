@@ -221,6 +221,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
             }),
           inProcessWatches: false,
           bindRuntime: store.cloud.bindRuntime,
+          bindNotices: store.cloud.bindNotices,
           bindEnvironment: store.cloud.bindEnvironment,
           dispose: store.cloud.dispose,
         }
@@ -246,6 +247,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
           projects: undefined,
           inProcessWatches: true,
           bindRuntime: undefined,
+          bindNotices: undefined,
           bindEnvironment: undefined,
           dispose: undefined,
         };
@@ -514,6 +516,9 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     stopProducers,
     installQuitHold: (close) => input.installQuitHold(close),
   });
+  // Backend-queued notices (`session.notice` jobs) enter the same owner-scoped
+  // outbox and delivery as this machine's own producers (VC-887).
+  product.bindNotices?.({ enqueue: (intent) => lifecycle.enqueueHostNotice(intent) });
   // The host's Session services hear what only the runtime and its lifecycle
   // know: open bindings, pending starts and the start latch (VC-577), and
   // every folded projection, for scheduled resume.

@@ -944,7 +944,8 @@ export default defineSchema({
     settledAt: nullable(time),
   })
     .index("by_child", ["childSessionId"])
-    .index("by_parent_call", ["parentSessionId", "toolCallId"]),
+    .index("by_parent_call", ["parentSessionId", "toolCallId"])
+    .index("by_parent_status", ["parentSessionId", "status"]),
   delegationExtensions: defineTable({
     parentSessionId: uuid,
     toolCallId: v.string(),
@@ -965,10 +966,32 @@ export default defineSchema({
     createdBy: actor,
     createdAt: time,
     endedAt: nullable(time),
+    origin: v.optional(literals(["explicit", "started", "steered", "delegation"])),
+    turnArmed: v.optional(v.boolean()),
+    // Never report a fact already accepted before this arm (including catch-up/refold).
+    armedThroughSequence: v.optional(v.number()),
+    kinds: v.optional(v.array(v.string())),
+    lastNoticeAt: v.optional(time),
+    lastArmedAt: v.optional(time),
+    endedReason: v.optional(
+      literals(["unwatched", "watcher_stopped", "target_stopped", "access_lost", "expired"]),
+    ),
   })
     .index("by_uuid", ["id"])
     .index("by_target", ["target.kind", "target.id", "endedAt"])
-    .index("by_watcher", ["watcherSessionId", "endedAt"]),
+    .index("by_watcher", ["watcherSessionId", "endedAt"])
+    .index("by_open", ["endedAt"]),
+  // Arming receipts are independent of watch lifetime: a retried arm must not
+  // re-arm a turn that fired, or resurrect a watch ended since that command.
+  watchReceipts: defineTable({
+    commandId: v.string(),
+    watcherSessionId: uuid,
+    target: v.object({ kind: literals(["session", "ticket"]), id: uuid }),
+    watchId: uuid,
+    expiresAt: time,
+  })
+    .index("by_command", ["commandId"])
+    .index("by_expiry", ["expiresAt"]),
   readMarkers: defineTable({
     userId: uuid,
     sessionId: uuid,
@@ -1028,6 +1051,7 @@ export default defineSchema({
     .index("by_uuid", ["id"])
     .index("by_runner_ready", ["runnerId", "status", "rank", "availableAt"])
     .index("by_session", ["sessionId", "createdAt"])
+    .index("by_session_kind_status", ["sessionId", "kind", "status"])
     .index("by_ticket", ["ticketId", "createdAt"])
     .index("by_expiry", ["expiresAt"])
     // Queued work of one kind by age (the notice expiry sweep).

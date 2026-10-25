@@ -6,7 +6,7 @@
  * port, including the browser backend. Recovery uses the same host engine.
  */
 import { randomUUID } from "node:crypto";
-import type { HostedSessionRuntime, SessionEngine } from "@volli/session-engine";
+import type { HostNotice, HostedSessionRuntime, SessionEngine } from "@volli/session-engine";
 import {
   logErrorSummary,
   type LogErrorSummary,
@@ -38,7 +38,7 @@ import {
 } from "./boot-recovery";
 import { resumeRecoveredTurns } from "./restart-resume";
 import { createHostNoticeDelivery } from "./durable-host-notice-delivery";
-import { scopeSqliteHostNoticeOutbox } from "./sqlite-host-notice-outbox";
+import { readSqliteHostNotice, scopeSqliteHostNoticeOutbox } from "./sqlite-host-notice-outbox";
 import { catchUpSessionResumptions } from "./session-resumptions";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { Delegations } from "./delegate-session";
@@ -112,6 +112,13 @@ export interface RecoveredSessionServices<Services> {
   readonly services: Services;
 }
 
+/** A notice by its ids, composed only if the outbox has never held them. */
+export interface HostNoticeIntent {
+  sessionId: string;
+  commandId: string;
+  compose(): HostNotice;
+}
+
 export interface SessionRuntimeLifecycle<Services> {
   /** No raw services on this owner: ledger consumers must await recovery. */
   ready(): Promise<RecoveredSessionServices<Services>>;
@@ -119,6 +126,20 @@ export interface SessionRuntimeLifecycle<Services> {
   observeScheduledResume(projection: SessionProjection): void;
   /** Starts/joins recovery if needed; fresh external notices never bypass it. */
   relayShellNotice(notice: BackgroundShellNotice): void;
+  /**
+   * Commits one host notice to this launch's (owner-scoped) durable outbox and
+   * resolves once that put has committed: the stored first payload, or `null`
+   * when the id already has a terminal receipt. `compose` runs only for an id
+   * the outbox has never held, so a replayed producer never rebuilds the text
+   * or mints a second nonce. Delivery then runs behind boot recovery, exactly
+   * as for a recovered notice: live → steer, idle → a turn, detached → parked,
+   * stopped → dropped. Rejects when this launch has no delivery (no runtime),
+   * is closing, or does not own the Session; nothing was stored.
+   *
+   * Production caller: the cloud product store's `session.notice` inbox
+   * executor (`cloud-store/notice-jobs.ts`), bound by the runner composition.
+   */
+  enqueueHostNotice(input: HostNoticeIntent): Promise<HostNotice | null>;
   /** This launch's stale-attachment sweep, once it has finished; `null` before then. */
   bootRecovery(): BootRecoveryReport | null;
 }
@@ -499,6 +520,37 @@ export function createSessionRuntimeLifecycle<Services>(options: {
           ports.log.error("failed to ready a shell notice", { error });
         },
       );
+    },
+    enqueueHostNotice: async ({ sessionId, commandId, compose }) => {
+      if (closing) throw new SessionRuntimeClosingError("The Session runtime is closing.");
+      if (hostNoticeOutbox === null || notices === null || !database.ok)
+        throw new Error("This launch has no host notice delivery.");
+      if (!ownsSession(sessionId))
+        throw new Error("The host notice is outside this launch's Session scope");
+      const known = readSqliteHostNotice(database.db, commandId, sessionId);
+      if (known.state === "settled") return null;
+      let stored: HostNotice | null;
+      if (known.state === "pending") stored = known.notice;
+      else {
+        const notice = compose();
+        if (notice.sessionId !== sessionId || notice.commandId !== commandId)
+          throw new Error(`Host notice ${commandId} was composed for another id`);
+        // Committed before anything else: the caller may report success from here.
+        stored = await hostNoticeOutbox.put(notice);
+      }
+      if (stored === null) return null;
+      const committed = stored;
+      // Delivery reads the ledger, so it waits for boot recovery like every
+      // fresh producer. `deliver` re-puts the same id and gets the same first
+      // payload back, so the stored text and nonce are what is sent.
+      void ready()
+        .then(() => notices.deliver(committed))
+        .catch((error: unknown) => {
+          // A close that won: the payload stays durable for the next launch.
+          if (closing) return;
+          ports.log.error("host notice delivery failed", { detail: committed.label, error });
+        });
+      return committed;
     },
   };
 }

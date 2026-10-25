@@ -587,9 +587,20 @@ or journaled job failure outcomes; full diagnostics stay on the runner.
 The four Working-copy inbox executors use the same git safeguards. Automatic
 reclaim uses fresh backend Done/PR facts and the shared retention rule with this
 machine's existing TTL; the frozen retention watch never acts on registry rows.
-S5's `session.followUp`/`session.notice` implementations are not present yet:
-VC-696/VC-887 must pass their executors through `sessionJobs`, behind the same
-owner guard. Remote message-body hydration remains the transcript-delivery
+The `session.notice` executor (VC-887, `cloud-store/notice-jobs.ts`) is the
+store's own, behind the same owner guard: it parses the payload, composes the
+text with the shared composer only for a notice id the runner's
+`host_notice_outbox` has never held (one nonce per notice, never re-minted on a
+re-lease), commits it through the runtime lifecycle's `enqueueHostNotice`
+(bound by the runner composition), and answers `done {stage: "on_runner"}`;
+the outbox's delivery owns timing from there. A cloud launch builds no
+in-process watches (`inProcessWatches: false`): the backend arms started and
+steered watches from accepted Session-origin facts, so no notice is doubled.
+The explicit `watch` verb stays refused until VC-894 (S6-3) routes it to
+`watches:watch` / `unwatch` / `list` under the watcher's Agent token; the exact
+args are in `cloud-agent/routes.ts`. S5's `session.followUp`
+implementation is not present yet: VC-696 must pass it through `sessionJobs`,
+behind the same owner guard. Remote message-body hydration remains the transcript-delivery
 composition's responsibility; the Session command executor reads the supplied
 artifact store rather than inventing another body store.
 
