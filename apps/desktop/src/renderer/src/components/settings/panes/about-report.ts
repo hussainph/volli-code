@@ -33,7 +33,7 @@ export interface AboutReportInput {
  * place. What it must never grow is the other direction — no credential or
  * secret-store value, no environment, no database contents beyond the schema
  * number. `support` is an allowlist assembled in main for exactly that reason,
- * and this reader touches only its seven fields.
+ * and this reader touches only its eight fields.
  */
 export function buildAboutReport({
   generatedAt,
@@ -51,6 +51,7 @@ export function buildAboutReport({
     `Database schema: ${support.schemaVersion}`,
     `Migration history: ${support.migrationHistory}`,
     `Last update check: ${support.lastUpdateCheck}`,
+    `Boot recovery: ${support.bootRecovery}`,
   ];
 
   if (rows.length > 0) {

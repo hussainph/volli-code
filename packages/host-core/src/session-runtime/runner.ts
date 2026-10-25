@@ -54,6 +54,7 @@ import {
 } from "./facade";
 import {
   createSessionRuntimeLifecycle,
+  type BootRecoveryReport,
   type RecoveredSessionServices,
   type SessionRuntimeLifecycle,
 } from "./lifecycle";
@@ -170,6 +171,8 @@ export interface RunnerComposition {
   owner(edge?: RunnerHostEdge): HostRuntimeOwner;
   /** The recovered proof; starts or joins recovery. */
   ready(): Promise<RunnerReady>;
+  /** What this launch's boot recovery did, for a support report; `null` until it finished. */
+  bootRecovery(): BootRecoveryReport | null;
 }
 
 /** Synchronous and inert: no ledger is read until `owner().start` or `ready()`. */
@@ -470,5 +473,6 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
       ...(edge.drainRequests === undefined ? {} : { drainRequests: edge.drainRequests }),
     }),
     ready: () => lifecycle.ready(),
+    bootRecovery: () => lifecycle.bootRecovery(),
   };
 }

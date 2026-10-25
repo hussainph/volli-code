@@ -420,6 +420,139 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     await owner.close();
   });
 
+  it("classifies each failed reconcile in the log and reports the finished sweep (VC-926)", async () => {
+    const f = fixture();
+    vi.mocked(f.runtime.openNativeBindings).mockReturnValue([
+      {
+        sessionId: "s",
+        attachmentId: "live",
+        directory: "/w",
+        lastProgressAt: 0,
+        inFlightTools: [],
+      },
+    ]);
+    const conflict = Object.assign(new Error("already has a terminal receipt"), {
+      name: "SessionEngineConflictError",
+    });
+    vi.mocked(recovery.closeStaleAttachments).mockImplementation(async (ports) => {
+      expect(ports.holdsBinding!("live")).toBe(true);
+      expect(ports.holdsBinding!("gone")).toBe(false);
+      ports.onFailure!({
+        sessionId: "s",
+        attachmentId: "live",
+        reason: "reconcile_failed",
+        outcome: "recovered",
+        error: conflict,
+      });
+      ports.onFailure!({
+        sessionId: "s",
+        attachmentId: "gone",
+        reason: "binding_unrecoverable",
+        outcome: "closed",
+        error: conflict,
+      });
+      ports.onRecovered!({ turns: [{ sessionId: "s", attachmentId: "live" }], lostAt: 1 });
+      return 2;
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    expect(owner.bootRecovery()).toBeNull();
+    await owner.ready();
+    expect(f.options.ports.log.warn).toHaveBeenCalledWith(
+      "recovered an attachment whose reconcile failed",
+      {
+        sessionId: "s",
+        attachmentId: "live",
+        reason: "reconcile_failed",
+        outcome: "recovered",
+        error: conflict,
+      },
+    );
+    expect(f.options.ports.log.error).toHaveBeenCalledWith("failed to recover attachment", {
+      sessionId: "s",
+      attachmentId: "gone",
+      reason: "binding_unrecoverable",
+      outcome: "closed",
+      error: conflict,
+    });
+    expect(owner.bootRecovery()).toEqual({
+      finishedAt: expect.any(Number),
+      error: null,
+      recovered: 1,
+      closed: 2,
+      failures: [
+        {
+          reason: "reconcile_failed",
+          outcome: "recovered",
+          error: { name: "SessionEngineConflictError" },
+        },
+        {
+          reason: "binding_unrecoverable",
+          outcome: "closed",
+          error: { name: "SessionEngineConflictError" },
+        },
+      ],
+    });
+    await owner.close();
+  });
+
+  it("reports a sweep that threw as failed, keeping what it had seen", async () => {
+    const f = fixture();
+    vi.mocked(recovery.closeStaleAttachments).mockImplementation(async (ports) => {
+      ports.onFailure!({
+        sessionId: "s",
+        attachmentId: "a",
+        reason: "binding_unrecoverable",
+        outcome: "closed",
+        error: new Error("sidecar missing"),
+      });
+      throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    await owner.ready();
+    expect(owner.bootRecovery()).toEqual({
+      finishedAt: expect.any(Number),
+      error: { name: "Error", code: "SQLITE_BUSY" },
+      recovered: 0,
+      closed: 0,
+      failures: [{ reason: "binding_unrecoverable", outcome: "closed", error: { name: "Error" } }],
+    });
+    await owner.close();
+  });
+
+  it("reports no failed sweep once a close has begun", async () => {
+    const f = fixture();
+    const gate = deferred();
+    vi.mocked(recovery.closeStaleAttachments).mockImplementation(async () => {
+      await gate.promise;
+      throw new Error("runtime closed");
+    });
+    const owner = createSessionRuntimeLifecycle(f.options);
+    const refused = expect(owner.ready()).rejects.toBeInstanceOf(SessionRuntimeClosingError);
+    const drain = owner.close();
+    gate.resolve();
+    await refused;
+    await drain;
+    expect(owner.bootRecovery()).toBeNull();
+  });
+
+  it("reads no live binding without a runtime, and reports no sweep a close cut short", async () => {
+    const f = fixture();
+    const gate = deferred();
+    vi.mocked(recovery.closeStaleAttachments).mockImplementation(async (ports) => {
+      expect(ports.holdsBinding!("any")).toBe(false);
+      await gate.promise;
+      return 0;
+    });
+    const owner = createSessionRuntimeLifecycle({ ...f.options, runtime: null });
+    const boot = owner.ready();
+    const refused = expect(boot).rejects.toBeInstanceOf(SessionRuntimeClosingError);
+    const drain = owner.close();
+    gate.resolve();
+    await refused;
+    await drain;
+    expect(owner.bootRecovery()).toBeNull();
+  });
+
   it("a close during recovery waits for the sweep and never starts resume or exposes consumers", async () => {
     const f = fixture();
     const gate = deferred();
