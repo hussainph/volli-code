@@ -306,10 +306,12 @@ const MAX_INTENT_BYTES = 64 * 1024;
  *   `<commandId>:message`, text parts only. An agent's `message.submit` must
  *   carry it (never `body`): its target may be on another runner.
  *
- * A person's message without either is queued as before: its reference
+ * Follow-up queue/edit controls use `artifact` with their queued message id,
+ * preserving rich parts; they do not use the ordinary message's `body` door.
+ * A person's ordinary message without either is queued as before: its reference
  * names a body the runner holds itself. An interaction answer carries none:
- * its reference must be the one its intent derives. No other intent takes a
- * body. A new interaction answer must name an open, ordinary question
+ * its reference must be the one its intent derives. Other ordinary intents
+ * take no body. A new interaction answer must name an open, ordinary question
  * (`requireAnswerableInteraction`) before anything is persisted.
  */
 export const command = mutation({

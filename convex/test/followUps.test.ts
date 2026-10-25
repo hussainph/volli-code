@@ -167,6 +167,47 @@ describe("follow-up intent routing", () => {
     expect(sendNow.status).toBe("queued");
   });
 
+  test("queue controls cannot borrow the ordinary message body door", async () => {
+    const w = await world();
+    for (const intent of [
+      w.submit(),
+      { kind: "message.edit", messageId: "m", reference: w.reference },
+      { kind: "message.cancel", messageId: "m" },
+      { kind: "message.submit", delivery: "steer", messageId: "m" },
+    ]) {
+      await expect(
+        w.person.mutation(api.sessions.command, {
+          sessionId: w.sessionId,
+          commandId: randomUUID(),
+          intent: JSON.stringify(intent),
+          body: "{}",
+        }),
+      ).rejects.toMatchObject({
+        data: {
+          code: "invalid_request",
+          message: "A queue control carries its canonical body as `artifact`.",
+        },
+      });
+    }
+    await expect(
+      w.person.mutation(api.sessions.command, {
+        sessionId: w.sessionId,
+        commandId: randomUUID(),
+        intent: JSON.stringify(w.submit()),
+        artifact: "{}",
+        body: "{}",
+      }),
+    ).rejects.toMatchObject({
+      data: {
+        code: "invalid_request",
+        message: "A message carries its body once: `body` or `artifact`.",
+      },
+    });
+    expect((await w.person.query(api.followUps.queue, { sessionId: w.sessionId })).items).toEqual(
+      [],
+    );
+  });
+
   test("backend-held edits advance the combined revision and stale clients conflict", async () => {
     const w = await world();
     await w.command(w.submit());
