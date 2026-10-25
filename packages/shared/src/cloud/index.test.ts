@@ -20,6 +20,7 @@ test("the cloud entry point exposes each module", () => {
     "boardIntentDigest",
     "parseRunnerCapabilities",
     "migrationDocument",
+    "foldCloudSessionState",
   ]) {
     expect(typeof (cloud as Record<string, unknown>)[name]).toBe("function");
   }
