@@ -291,7 +291,8 @@ async function fakeBackend(): Promise<FakeBackend> {
         token: (incoming.headers.authorization ?? "").replace("Bearer ", ""),
       };
       calls.push(call);
-      const result = (override.get(call.path) ?? answer)(call);
+      const custom = override.get(call.path);
+      const result = typeof custom === "function" ? custom(call) : answer(call);
       if (result === "hang") return;
       response.writeHead("value" in result ? 200 : 400, { "content-type": "application/json" });
       response.end(
