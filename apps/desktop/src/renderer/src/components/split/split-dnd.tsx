@@ -33,6 +33,7 @@
 import * as React from "react";
 import {
   closestCenter,
+  defaultDropAnimationSideEffects,
   DndContext,
   DragOverlay,
   KeyboardSensor,
@@ -44,6 +45,7 @@ import {
   type DragEndEvent,
   type DragStartEvent,
   type DragMoveEvent,
+  type DropAnimation,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { SPLIT_VIEW_ROOT_PANE_ID } from "@volli/shared";
@@ -151,6 +153,22 @@ const splitCollision: CollisionDetection = (args) => {
     (container) => String(container.id) === TOP_STRIP_DROP_ID,
   );
   return pointerWithin({ ...args, droppableContainers: strip });
+};
+
+/**
+ * The ghost's flight home once it is let go. INERT from the release: until the
+ * flight ends it still sits over the strip — usually over the very tab it is
+ * returning to — and a press there is meant for that tab, not for a picture of
+ * it. dnd-kit's own side effect (the source hidden while its ghost lands) is
+ * kept, composed rather than replaced.
+ */
+const GHOST_DROP_ANIMATION: DropAnimation = {
+  duration: 150,
+  easing: "cubic-bezier(0.23, 1, 0.32, 1)",
+  sideEffects: (parameters) => {
+    parameters.dragOverlay.node.style.pointerEvents = "none";
+    return defaultDropAnimationSideEffects({ styles: { active: { opacity: "0" } } })(parameters);
+  },
 };
 
 /**
@@ -291,9 +309,7 @@ export function SplitDnd({
         // The tab returns to its slot in the time a dropdown opens. `null`
         // under reduced motion: a drop that lands is a state change, and the
         // flight back is the decoration the flag turns off.
-        dropAnimation={
-          reducedMotion ? null : { duration: 150, easing: "cubic-bezier(0.23, 1, 0.32, 1)" }
-        }
+        dropAnimation={reducedMotion ? null : GHOST_DROP_ANIMATION}
       >
         {ghostLabel === null ? null : <TabDragGhost label={ghostLabel} />}
       </DragOverlay>

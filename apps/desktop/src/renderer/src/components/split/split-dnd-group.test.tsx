@@ -5,14 +5,21 @@ import type {
   CollisionDetection,
   DndContextProps,
   DragEndEvent,
+  DragOverlayProps,
   DragStartEvent,
+  DropAnimation,
+  DropAnimationFunction,
+  DropAnimationFunctionArguments,
 } from "@dnd-kit/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { SplitDnd } from "./split-dnd";
 import { splitZoneId, TOP_STRIP_DROP_ID, type SplitDropOperation } from "./split-drop";
 import { Tab, TabStrip, TabStripSurface } from "@renderer/components/ui/tab-strip";
 
-const harness = vi.hoisted(() => ({ props: null as DndContextProps | null }));
+const harness = vi.hoisted(() => ({
+  props: null as DndContextProps | null,
+  overlay: null as DragOverlayProps | null,
+}));
 vi.mock("@dnd-kit/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@dnd-kit/core")>();
   return {
@@ -21,7 +28,10 @@ vi.mock("@dnd-kit/core", async (importOriginal) => {
       harness.props = props;
       return props.children;
     },
-    DragOverlay: () => null,
+    DragOverlay: (props: DragOverlayProps) => {
+      harness.overlay = props;
+      return null;
+    },
   };
 });
 vi.mock("@dnd-kit/sortable", async (importOriginal) => {
@@ -285,5 +295,26 @@ describe("the top strip as a drop target", () => {
       active: { id: "source" },
     } as unknown as Parameters<CollisionDetection>[0]);
     expect(hits).toEqual([]);
+  });
+});
+
+describe("the ghost's flight home", () => {
+  it("is inert from the release, and still hides the source while it lands", () => {
+    mountPairSurface();
+    const animation = harness.overlay!.dropAnimation as Exclude<
+      DropAnimation,
+      DropAnimationFunction
+    >;
+    const ghost = document.createElement("div");
+    const source = document.createElement("div");
+    const cleanup = animation.sideEffects!({
+      active: { node: source },
+      dragOverlay: { node: ghost },
+    } as unknown as DropAnimationFunctionArguments);
+    // A press on the ghost's spot is meant for the tab under it.
+    expect(ghost.style.pointerEvents).toBe("none");
+    expect(source.style.opacity).toBe("0");
+    cleanup?.();
+    expect(source.style.opacity).toBe("");
   });
 });
