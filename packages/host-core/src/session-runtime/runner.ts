@@ -272,7 +272,8 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
         })
       : createRuntimeAssembly({ ...assemblyInputs, resolveRuntimeContext: async () => null });
   const automations = createRuntimeAutomations({
-    host,
+    // Its metadata, never the host bag.
+    host: { database: host.database, dataDir: host.dataDir },
     events: ports.events,
     piRuntimeHost: assembly.piRuntimeHost,
     homeDir: input.homeDir,
@@ -322,7 +323,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
       return {
         close: async () => {
           try {
-            await transport?.close();
+            if (transport !== null) await transport.close();
           } finally {
             await shells.close();
           }

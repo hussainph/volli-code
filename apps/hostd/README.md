@@ -214,10 +214,10 @@ In order; each refusal is logged as one JSON line and exits **78**
    verb answers `DB_UNAVAILABLE` with the reason, and the status file carries
    the typed `databaseFailure`. That includes a database from a newer Volli
    (VC-602), which is left byte-identical.
-7. **Session recovery**, before commands or `serving`: the shared assembly,
-   facade and lifecycle reconcile this host's persisted remote venue (plus
-   legacy socket-path venues in this data directory), recover delegations and
-   notices, then start Automations. Other UUID hosts/workers and desktop's
+7. **Session recovery**, before commands or `serving`: the runner
+   composition desktop also composes (VC-671) reconciles this host's
+   persisted remote venue (plus legacy socket-path venues in this data
+   directory), recovers delegations and notices, then starts Automations. Other UUID hosts/workers and desktop's
    attachments are not closed by this host. A failed runtime startup settles
    waiting requests with `APP_UNREACHABLE`, drains what opened and exits 1.
 
