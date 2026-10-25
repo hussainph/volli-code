@@ -428,7 +428,7 @@ describe.skipIf(!fixture)(
           // Mac B is not this Session's Place.
           viewerRunnerId: null,
           now: Date.now(),
-          formatSince: (at) => new Date(at).toISOString(),
+          formatSince: (at) => new Date(at).toISOString().slice(11, 16),
         });
       };
       await vi.waitFor(

@@ -1793,6 +1793,7 @@ export function ChatPlane({
       {launchStore() === "cloud" ? (
         <CloudPlaceLabel
           sessionId={sessionId}
+          turnActive={projection?.turnActive}
           className="absolute top-3 right-4 z-10 bg-background"
         />
       ) : (
@@ -1968,7 +1969,7 @@ export function ChatPlane({
                 for a runner that is away. A secret is entered on the machine
                 that asked for it, never here for another runner. */}
             {cloudLaunch ? (
-              <CloudComposerStatus sessionId={sessionId} />
+              <CloudComposerStatus sessionId={sessionId} turnActive={projection?.turnActive} />
             ) : (
               <SecretCards sessionId={sessionId} interactions={interactions} />
             )}

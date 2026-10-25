@@ -508,6 +508,15 @@ describe("bindCloudPlaces", () => {
     ]);
     expect(placeOf(useCloudPlacesStore.getState(), "s9", 0)).not.toBeNull();
 
+    // An already-open chat's authoritative projection knows its turn even
+    // while the project listing has not loaded (or doesn't contain it).
+    expect(placeOf(useCloudPlacesStore.getState(), "s9", 0, true)?.label).toBe(
+      "Paused — box is asleep",
+    );
+    expect(placeOf(useCloudPlacesStore.getState(), "s9", 0, false)?.label).toContain(
+      "Waiting for box",
+    );
+
     // Listed after all: the listing's row answers for it (its live turn too),
     // and it now witnesses its runner as a listed Session; the read is the same.
     noteProjectPlaces("p", [

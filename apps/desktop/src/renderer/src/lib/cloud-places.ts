@@ -390,6 +390,7 @@ export function placeOf(
   state: CloudPlacesState,
   sessionId: string | null,
   now: number,
+  turnActive?: boolean,
 ): SessionPlaceState | null {
   if (sessionId === null) return null;
   const facts = factsOf(state, sessionId);
@@ -397,7 +398,9 @@ export function placeOf(
   const runner = state.runners[facts.placeRunnerId];
   if (runner === undefined) return null;
   return sessionPlaceState({
-    session: facts,
+    // A drawn Session already has its authoritative snapshot, even when no
+    // listing holds it. Prefer that turn state over the listing's fallback.
+    session: turnActive === undefined ? facts : { ...facts, turnActive },
     runner,
     viewerRunnerId: state.thisRunnerId,
     now,
@@ -411,8 +414,13 @@ export function placeOf(
  * the clock at that moment, and compared field by field, so it re-renders
  * only when the words change.
  */
-export function useSessionPlace(sessionId: string | null): SessionPlaceState | null {
-  return useCloudPlacesStore(useShallow((state) => placeOf(state, sessionId, Date.now())));
+export function useSessionPlace(
+  sessionId: string | null,
+  turnActive?: boolean,
+): SessionPlaceState | null {
+  return useCloudPlacesStore(
+    useShallow((state) => placeOf(state, sessionId, Date.now(), turnActive)),
+  );
 }
 
 /**
@@ -420,13 +428,16 @@ export function useSessionPlace(sessionId: string | null): SessionPlaceState | n
  * its composer): the Session is opened while mounted, so its Place is
  * followed even when no listing holds it. Opens nothing in a local launch.
  */
-export function useOpenSessionPlace(sessionId: string | null): SessionPlaceState | null {
+export function useOpenSessionPlace(
+  sessionId: string | null,
+  turnActive?: boolean,
+): SessionPlaceState | null {
   const cloud = launchStore() === "cloud";
   React.useEffect(
     () => (cloud && sessionId !== null ? openSessionPlace(sessionId) : undefined),
     [cloud, sessionId],
   );
-  return useSessionPlace(sessionId);
+  return useSessionPlace(sessionId, turnActive);
 }
 
 /**

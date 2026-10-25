@@ -21,12 +21,14 @@ import { cn } from "@renderer/lib/utils";
 /** The Session header's corner: nothing for a Session running on this Mac. */
 export function CloudPlaceLabel({
   sessionId,
+  turnActive,
   className,
 }: {
   sessionId: string | null;
+  turnActive: boolean | undefined;
   className?: string;
 }) {
-  const place = useOpenSessionPlace(sessionId);
+  const place = useOpenSessionPlace(sessionId, turnActive);
   if (place === null || place.kind === "here") return null;
   return (
     <span
@@ -53,8 +55,14 @@ export function CloudPlaceLabel({
  * else nothing. The composer below stays, so a message can be queued for a
  * runner that is away.
  */
-export function CloudComposerStatus({ sessionId }: { sessionId: string | null }) {
-  const place = useOpenSessionPlace(sessionId);
+export function CloudComposerStatus({
+  sessionId,
+  turnActive,
+}: {
+  sessionId: string | null;
+  turnActive: boolean | undefined;
+}) {
+  const place = useOpenSessionPlace(sessionId, turnActive);
   const pending = useSessionPendingLine(sessionId);
   const away = place !== null && (place.kind === "waiting" || place.kind === "removed");
   const line = pending.label ?? (away ? place.label : null);
