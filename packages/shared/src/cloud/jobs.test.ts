@@ -46,6 +46,7 @@ describe("runner jobs", () => {
   test("a result is plain JSON within the bound", () => {
     expect(jobResultProblem({ ok: true, files: [1, "a", null, { nested: false }] })).toBeNull();
     expect(jobResultProblem(Object.create(null))).toBeNull();
+    expect(jobResultProblem({ _private: 1, a$b: 2, "with space": 3 })).toBeNull();
     for (const bad of [
       undefined,
       1n,
@@ -55,6 +56,10 @@ describe("runner jobs", () => {
       new Date(0),
       { f: () => 1 },
       [Symbol("s")],
+      { $schema: "https://json-schema.org/draft/2020-12/schema" },
+      { "": 1 },
+      { naïve: 1 },
+      { nested: [{ $ref: "#/x" }] },
     ]) {
       expect(jobResultProblem(bad)).toBe("The result is not plain JSON.");
     }

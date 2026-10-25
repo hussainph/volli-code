@@ -167,9 +167,11 @@ export function jobResultProblem(result: unknown): string | null {
 }
 
 /**
- * Whether `value` is plain JSON: null, booleans, finite numbers, strings,
- * arrays and plain objects of them. Backend values can also be 64-bit
- * integers and bytes, which do not survive `JSON.stringify` honestly.
+ * Whether `value` is plain JSON the backend can store: null, booleans, finite
+ * numbers, strings, arrays and plain objects of them. Backend values can also
+ * be 64-bit integers and bytes, which do not survive `JSON.stringify`
+ * honestly, and the backend refuses an object key that is empty, starts with
+ * `$` (a JSON Schema's `$ref`) or holds anything but printable ASCII.
  */
 export function isPlainJson(value: unknown, depth = 0): boolean {
   if (depth > 64) return false;
@@ -179,8 +181,13 @@ export function isPlainJson(value: unknown, depth = 0): boolean {
   if (typeof value !== "object") return false;
   const proto = Object.getPrototypeOf(value) as unknown;
   if (proto !== Object.prototype && proto !== null) return false;
-  return Object.values(value).every((item) => isPlainJson(item, depth + 1));
+  return Object.entries(value).every(
+    ([key, item]) => STORABLE_KEY.test(key) && isPlainJson(item, depth + 1),
+  );
 }
+
+/** An object key the backend stores: printable ASCII, not empty, not starting with `$`. */
+const STORABLE_KEY = /^[\x20-\x23\x25-\x7e][\x20-\x7e]*$/;
 
 /** The failure code for a job kind the runner does not know. */
 export const UNSUPPORTED_JOB_KIND = "unsupported_job_kind";
