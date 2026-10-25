@@ -11,7 +11,7 @@ import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { getTicketRow, insertTicket } from "../db/tickets-repo";
 import { updateTicketFieldsCommand } from "../ticket-commands";
-import { ensure } from "./ensure";
+import { ensure, ensureExplicit, reclaimExplicit, type EnsureFacts } from "./ensure";
 import { claimFirstRunSetup } from "./first-run";
 import { GitError, runGitCapturing, runGitCapturingAsync } from "./git";
 import { resetPhasesForTest } from "./phase";
@@ -1076,5 +1076,130 @@ describe("ensure — the ticket's worktree on another branch, against a real rep
     });
     expect(repoGitOut(worktreePath, ["branch", "--show-current"])).toBe("volli/VC-120-lookalike");
     expect(repoGitOut(worktreePath, ["status", "--porcelain"])).toBe("M README.md");
+  });
+});
+
+describe("explicit-input materialization", () => {
+  function facts(checkoutPath: string, worktreePath: string): EnsureFacts {
+    return {
+      ticketId: "cloud-only-ticket",
+      projectId: "cloud-only-project",
+      checkoutPath,
+      displayId: "VC-12",
+      title: "MCP server",
+      usesWorktree: true,
+      worktreePath,
+      branch: BRANCH,
+      baseBranch: "main",
+      projectBaseBranch: "main",
+      setupCommand: null,
+    };
+  }
+
+  it("runs the real git/copy pipeline with no board rows and reuses its stamp", async () => {
+    const checkoutPath = tempDir("explicit-repo");
+    const home = tempDir("explicit-home");
+    const worktreePath = join(home, "copy");
+    runRepoGit(checkoutPath, ["init", "-b", "main"]);
+    writeFileSync(join(checkoutPath, "README.md"), "initial\n");
+    writeFileSync(join(checkoutPath, ".env"), "LOCAL=1\n");
+    runRepoGit(checkoutPath, ["add", "README.md"]);
+    runRepoGit(checkoutPath, ["commit", "-m", "initial"]);
+    const identities: unknown[] = [];
+    const ports = {
+      gitAsync: runGitCapturingAsync,
+      home,
+      persistIdentity: (identity: unknown) => {
+        identities.push(identity);
+      },
+    };
+    const result = await ensureExplicit(ports, facts(checkoutPath, worktreePath));
+    expect(result).toMatchObject({ ok: true, value: { created: true, setupPending: false } });
+    expect(readFileSync(join(worktreePath, ".env"), "utf8")).toBe("LOCAL=1\n");
+    const second = await ensureExplicit(ports, {
+      ...facts(checkoutPath, worktreePath),
+      title: "Retitled",
+    });
+    expect(second).toMatchObject({ ok: true, value: { created: false, restamped: false } });
+    expect(identities).toEqual([
+      { worktreePath, branch: BRANCH, baseBranch: "main" },
+      { worktreePath, branch: BRANCH, baseBranch: "main" },
+    ]);
+    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM tickets").get()).toEqual({ n: 0 });
+    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM ticket_events").get()).toEqual({ n: 0 });
+  });
+
+  it("shares one flight and exposes failures through ports rather than ticket events", async () => {
+    const checkoutPath = tempDir("explicit-project");
+    const home = tempDir("explicit-home");
+    const git = parkingGit();
+    const ports = { gitAsync: git.gitAsync, home };
+    const input = facts(checkoutPath, join(home, "copy"));
+    const first = ensureExplicit(ports, input);
+    // Session and inbox compositions have different port objects but one path.
+    const second = ensureExplicit({ ...ports }, input);
+    await settlePipelines();
+    expect(git.changes()).toHaveLength(1);
+    git.releaseNext();
+    expect(await first).toMatchObject({ ok: true, value: { created: true } });
+    expect(await second).toMatchObject({ ok: true, value: { created: false } });
+    const failures: string[] = [];
+    const broken = await ensureExplicit(
+      {
+        gitAsync: async () => {
+          throw new Error("unreadable git");
+        },
+        home,
+        onFailure: (_ticket, stage) => {
+          failures.push(stage);
+        },
+      },
+      input,
+    );
+    expect(broken.ok).toBe(false);
+    expect(failures).toEqual(["create"]);
+    expect(listTicketEvents(ctx.db, input.ticketId)).toEqual([]);
+  });
+
+  it("does not invoke git for main-checkout facts", async () => {
+    const project = tempDir("explicit-main");
+    const git = scriptedGit(() => {
+      throw new Error("should not run");
+    });
+    expect(
+      await ensureExplicit(
+        { gitAsync: git.gitAsync },
+        { ...facts(project, "unused"), usesWorktree: false },
+      ),
+    ).toMatchObject({ ok: true, value: { created: false, identity: { worktreePath: null } } });
+    expect(git.calls).toEqual([]);
+  });
+
+  it("reclaims only clean registered worktrees, preserving the branch and refusing dirty/Keep/main", async () => {
+    const checkoutPath = tempDir("explicit-reclaim-repo");
+    const home = tempDir("explicit-reclaim-home");
+    const worktreePath = join(home, "copy");
+    runRepoGit(checkoutPath, ["init", "-b", "main"]);
+    writeFileSync(join(checkoutPath, "README.md"), "initial\n");
+    runRepoGit(checkoutPath, ["add", "README.md"]);
+    runRepoGit(checkoutPath, ["commit", "-m", "initial"]);
+    await ensureExplicit(
+      { gitAsync: runGitCapturingAsync, home },
+      facts(checkoutPath, worktreePath),
+    );
+    const ports = { gitAsync: runGitCapturingAsync, busySites: async () => [] };
+    const input = { checkoutPath, worktreePath, baseBranch: "main", keep: false };
+    expect((await reclaimExplicit(ports, { ...input, keep: true })).ok).toBe(false);
+    expect((await reclaimExplicit(ports, { ...input, worktreePath: checkoutPath })).ok).toBe(false);
+    writeFileSync(join(worktreePath, "precious.txt"), "work\n");
+    expect((await reclaimExplicit(ports, input)).ok).toBe(false);
+    expect(existsSync(worktreePath)).toBe(true);
+    rmSync(join(worktreePath, "precious.txt"));
+    expect(await reclaimExplicit(ports, input)).toEqual({ ok: true, value: undefined });
+    expect(existsSync(worktreePath)).toBe(false);
+    expect(repoGitOut(checkoutPath, ["show-ref", "--verify", `refs/heads/${BRANCH}`])).toContain(
+      BRANCH,
+    );
+    expect(await reclaimExplicit(ports, input)).toEqual({ ok: true, value: undefined });
   });
 });

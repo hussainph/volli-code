@@ -550,6 +550,24 @@ until its remaining desktop dependencies move.
   dependency here must also be a desktop dependency, whitelisted for
   packaging. `verify-packed-requires.mjs` fails the build otherwise.
 
+### Runner-local paths
+
+`cloud-store/paths.ts` keeps checkout and Working copy directories per runner
+identity. It adopts matching frozen project/ticket pointers without changing
+them, and refuses paths assigned to another runner. Migration 066 adds these
+machine tables and shadow-identity provenance, plus an optional owner on the
+job journal; it does not raise the reader floor. Working-copy branch/head
+metadata stays local alongside the path.
+
+`worktree/ensure.ts` takes explicit facts through `ensureExplicit`; the frozen
+local adapter supplies SQLite reads and event publication, while the core owns
+the same git/reconcile/copy sequence. `reclaimExplicit` keeps its dirty, busy,
+Keep, git-lock and unpushed-work checks without requiring a board row.
+
+Receiving wiring (VC-895, cloud-store composition): use this registry and the
+explicit cores for Session locations and the four Working copy inbox jobs.
+The registry is not a second board and has no absolute-path report to the backend.
+
 ### Secrets
 
 `SecretStore` keeps persistent Session secrets in `session-secrets.enc` beside

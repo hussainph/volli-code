@@ -5,8 +5,8 @@
  * stage). Internals live in focused, unit-tested files; this barrel is the
  * seam everything outside the module imports from.
  */
-export { ensure } from "./ensure";
-export type { EnsureOutcome } from "./ensure";
+export { ensure, ensureExplicit, reclaimExplicit } from "./ensure";
+export type { EnsureOutcome, EnsureFacts, EnsureExplicitPorts, EnsureStage } from "./ensure";
 export { remove } from "./remove";
 export type { WorktreeRemoveOptions } from "./remove";
 export { listBranches } from "./state";
