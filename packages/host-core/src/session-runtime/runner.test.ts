@@ -27,6 +27,7 @@ import type { HostStopPolicy } from "../host-lifecycle";
 import { HEADLESS_ATTENTION, NO_POWER_EVENTS } from "../ports";
 import { SecretStore } from "../secrets";
 import { SecretService } from "../secrets/service";
+import * as handlerModule from "../handlers/host-handlers";
 import * as boot from "./boot-recovery";
 import { readRecoveredSessionServices, SessionRuntimeClosingError } from "./lifecycle";
 import * as pi from "./pi-adapter";
@@ -262,6 +263,57 @@ describe("runner composition", () => {
     await expect(stopping).resolves.toEqual({ reason: "quit", clean: true });
     expect(bind).not.toHaveBeenCalled();
     expect(host.database.db.open).toBe(true);
+  });
+
+  it("fills the handler map's host-owned options itself, beside the host's door capabilities", async () => {
+    const fixture = await composedHost("desktop-quit");
+    const { host } = fixture;
+    if (!isLiveHost(host)) throw new Error(host.database.error);
+    const build = vi.spyOn(handlerModule, "createHostHandlers");
+    const f = compose(fixture);
+    await host.start(f.runner.owner());
+    const proof = await f.runner.ready();
+    const map = f.runner.handlers(proof);
+    expect(build).toHaveBeenCalledOnce();
+    const [, options] = build.mock.calls[0]!;
+    expect(build.mock.results[0]!.value).toBe(map);
+    expect(options).toMatchObject({
+      db: host.database.db,
+      dataDir: host.dataDir,
+      runtime: f.runner.runtime,
+      pictures: f.runner.pictures,
+      modelAccess: f.runner.piRuntimeHost,
+      automations: f.runner.automations,
+      worktreeReads: host.worktreeReads,
+      detachedWork: host.detachedWork,
+      // The door's own answer passes straight through.
+      experiments: null,
+    });
+    expect(options.sessions).not.toBeNull();
+    expect(options.submitSessionMessage).toBeTypeOf("function");
+    expect(options.refineAutoTitle).toBeTypeOf("function");
+    // Listing rows are live only while this process holds a binding.
+    expect(options.sessionListing?.db).toBe(host.database.db);
+    expect(options.sessionListing?.liveAttachmentIds()).toEqual(new Set());
+    await expect(options.ticketSignals?.("project")).resolves.toEqual([]);
+  });
+
+  it("gives a degraded host's map no database, readers or listing", async () => {
+    const fixture = await composedHost("desktop-quit", { degraded: true });
+    const build = vi.spyOn(handlerModule, "createHostHandlers");
+    const f = compose(fixture);
+    await fixture.host.start(f.runner.owner());
+    f.runner.handlers(await f.runner.ready());
+    const [, options] = build.mock.calls[0]!;
+    expect(options).toMatchObject({
+      db: null,
+      runtime: null,
+      sessions: null,
+      worktreeReads: null,
+      sessionListing: null,
+      ticketSignals: null,
+    });
+    expect(options).not.toHaveProperty("detachedWork");
   });
 
   it("stops the scheduler again when the host's edge fails to bind", async () => {

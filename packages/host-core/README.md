@@ -186,10 +186,11 @@ One convention for what a module asks for and what it is (VC-632):
   it takes the host as its product store (`local`, the host's SQLite), the
   ports, and only what the environment answers (venue, `binDir`, a person who
   answers questions and secret cards, the browser, pre-execution and command
-  environment hooks, the shell feed, extra producers and the quit hold). It
-  returns the services doors read, `owner(edge)` for `host.start`, and
-  `ready()`, and drains by the host's own `stopPolicy`. The staging below is
-  private to it; desktop and `hostd` both compose it.
+  environment hooks, the shell feed, what its doors know for the handler map
+  (`doors`), extra producers and the quit hold). It returns the services doors
+  read, the one handler map (`handlers(ready)`), `owner(edge)` for
+  `host.start`, and `ready()`, and drains by the host's own `stopPolicy`. The
+  staging below is private to it; desktop and `hostd` both compose it.
 - **Staged constructors.** `session-runtime/assembly` builds the inert Pi
   attachment over the host's one engine, model access, MCP/Code Mode/Web Access
   owners, secret service and attachment identities. Browser and shell ports
@@ -422,8 +423,7 @@ projection for scheduled resume. They are `SessionRuntimeWiring`
 runtime slot (`SESSION_RUNTIME`, in no entry) before it builds anything, and
 binds the runtime's and lifecycle's answers through it once both exist; a
 second runtime over one host is refused. Until then nothing is open and
-nothing is scheduled. (They were late-bound ports, then a module-level
-`WeakMap` keyed by the engine; VC-632 and VC-671 removed each.)
+nothing is scheduled.
 
 Engine construction is private to the Sessions module (`src/sessions/engine.ts`,
 in no entry). It requires the shared ledger; terminal, data and runtime

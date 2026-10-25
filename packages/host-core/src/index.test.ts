@@ -219,6 +219,7 @@ describe("createHostCore", () => {
     opened.push(core);
     const db = core.database.db;
     const engine = core.sessionEngine;
+    expect(construct).toHaveBeenCalledTimes(1);
     const ledger = construct.mock.results[0]!.value as SessionLedger;
     const writer = vi.spyOn(ledger, "transaction");
     const project = testProject();

@@ -57,8 +57,8 @@ const NO_PENDING_STARTS: ReadonlySet<string> = new Set();
 
 /**
  * The key of the services' one runtime slot. Package-private: no entry
- * exports it, so only host-core's runner composition (and `./testing`) can
- * bind a runtime to the host's Session services.
+ * exports it, so only host-core's runner composition (and host-core's own
+ * tests) can bind a runtime to the host's Session services.
  */
 export const SESSION_RUNTIME: unique symbol = Symbol("host-core Session runtime wiring");
 
@@ -66,8 +66,9 @@ export const SESSION_RUNTIME: unique symbol = Symbol("host-core Session runtime 
 export interface SessionRuntimeSlot {
   /**
    * Once per host, before anything is composed: a second runtime over one
-   * engine is a composition error. Answers the binder the runtime's answers
-   * go through once they exist.
+   * engine is a composition error, even after a first composition threw
+   * (its claim is not returned). Answers the binder the runtime's answers go
+   * through once they exist.
    */
   claim(): (wiring: Partial<SessionRuntimeWiring>) => void;
   /** The durable shell-notice outbox, which only the runtime's lifecycle delivers. */
@@ -174,10 +175,13 @@ export function createHostSessionServices(
   let claimed = false;
   const slot: SessionRuntimeSlot = {
     claim() {
-      if (claimed) throw new Error("A Session runtime is already bound to these Session services.");
+      if (claimed) throw new Error("A Session runtime already claimed these Session services.");
       claimed = true;
       return (wiring) => {
-        Object.assign(runtime, wiring);
+        // Only the answers given replace the inert defaults.
+        for (const [key, answer] of Object.entries(wiring)) {
+          if (answer !== undefined) Object.assign(runtime, { [key]: answer });
+        }
       };
     },
     hostNoticeOutbox,

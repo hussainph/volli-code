@@ -268,7 +268,7 @@ describe("host Session composition", () => {
     // One runtime binds once, every answer together; a second is refused.
     const late = runtimeWiring();
     services[SESSION_RUNTIME].claim()(late);
-    expect(() => services[SESSION_RUNTIME].claim()).toThrow("already bound");
+    expect(() => services[SESSION_RUNTIME].claim()).toThrow("already claimed");
     expect(services.liveWork.tryBeginIdleExit()).toBe(true);
     services.liveWork.abandonIdleExit();
     expect(late.pendingTurnStarts).toHaveBeenCalled();

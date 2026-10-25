@@ -36,8 +36,11 @@ import * as pi from "./pi-adapter";
 import { createRunnerComposition } from "./runner";
 
 let core: LiveHostCore | undefined;
+let runner: ReturnType<typeof createRunnerComposition> | undefined;
 let root: string | undefined;
 afterEach(async () => {
+  await runner?.owner().close();
+  runner = undefined;
   core?.sessionActivityWatch.stop();
   await core?.stop("test teardown");
   core = undefined;
@@ -206,7 +209,7 @@ describe("Session runtime wiring through the real host composition", () => {
     await commitSession(host, "before-the-runtime");
 
     const observe = recordScheduledResume();
-    const runner = composeRunner(composed);
+    runner = composeRunner(composed);
     const runtime = runner.runtime;
     if (runtime === null) throw new Error("the runner built no Session runtime");
     const openNativeBindings = vi.spyOn(runtime, "openNativeBindings");
@@ -225,7 +228,7 @@ describe("Session runtime wiring through the real host composition", () => {
     expect(observe).toHaveBeenCalledTimes(1);
 
     // One runtime per host: a second runner over the same engine is refused.
-    expect(() => composeRunner(composed)).toThrow("already bound");
+    expect(() => composeRunner(composed)).toThrow("already claimed");
   });
 
   it("feeds the assembled runtime's open chats from the host's wake bus (VC-790)", async () => {
