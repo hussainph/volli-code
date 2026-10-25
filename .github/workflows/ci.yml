@@ -56,9 +56,10 @@ name: CI
 #     visible on the commit, they do not gate PRs, and the release workflow
 #     requires them green on the commit it releases. N-1's fixed and rolling
 #     tags (release, latest-canary, v0.2.1, v0.2.2-canary.1) run here on main
-#     pushes and nightly, and on a PR only when it touches the database
-#     migrations or the N-1 harness — the only PR-side inputs that can break an
-#     older build but not the base. Measured repeat flakers stay in
+#     pushes and nightly, and on a PR only when it touches the data layer the
+#     older builds read back (migrations, backup/restore, ledger, blobs) or the
+#     N-1 harness — where a change can break an older build yet pass against
+#     the base. Anything else is caught on the merge. Measured repeat flakers stay in
 #     smoke-quarantine.yml (nightly, non-gating). Quarantine policy: AGENTS.md.
 #     Every failed smoke retries ONCE in a fresh profile; retry-green is FLAKY
 #     in the job summary, and both attempts' evidence is uploaded for 30 days.
@@ -148,7 +149,9 @@ jobs:
             exit 0
           fi
 
-          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          # --no-renames: a move lists BOTH paths, so code moved out of the app
+          # into a skipped directory still counts as an app change.
+          changed="$(git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA")"
           if [[ -z "$changed" ]]; then
             echo "desktop=true" >> "$GITHUB_OUTPUT"
             echo "host-container=true" >> "$GITHUB_OUTPUT"
@@ -168,14 +171,16 @@ jobs:
           inert='^(docs/|reference/|lessons/|assets/|apps/website/|apps/docs/|\.github/ISSUE_TEMPLATE/|[^/]*\.md$|LICENSE$)'
           # Paths whose PR-time proof is the unit suites, which always run:
           # convex/ and apps/gateway/ (the desktop imports neither; convex's
-          # sign-in seam is tested in the Convex lane) and packages/shared's
-          # sources. Not a manifest — a dependency change is never skipped.
-          unit_owned='^(convex/|apps/gateway/|packages/shared/)'
+          # sign-in seam is tested in the Convex lane) and packages/shared/src.
+          # Not a manifest — a dependency change is never skipped.
+          unit_owned='^(convex/|apps/gateway/|packages/shared/src/)'
           manifest='(^|/)package\.json$'
 
-          # Plain greps into variables, not `grep -q` mid-pipeline: an early
-          # exit there can SIGPIPE the grep before it and, under pipefail,
-          # read as "nothing matched" — a skip in the unsafe direction.
+          # Never `producer | grep -q` under pipefail: grep -q exits at its first
+          # match, a producer still writing (a diff past the 64 KB pipe buffer)
+          # dies of SIGPIPE, and the `if` reads that as "nothing matched" — a
+          # skip in the unsafe direction. Full greps into variables, or here-
+          # strings (no producer process) for the -q tests below.
           app="$(echo "$changed" | grep -vE "$inert" | grep -vE "$unit_owned" || true)"
           manifests="$(echo "$changed" | grep -E "$unit_owned" | grep -E "$manifest" || true)"
           if [[ -n "$app" || -n "$manifests" ]]; then
@@ -189,20 +194,22 @@ jobs:
           # Container inputs and host code. Workflow edits run it too, so the
           # job and gate are exercised on the PR changing their own definition.
           host='^(packages/|apps/hostd/|\.devcontainer/host/|\.nvmrc$|package\.json$|pnpm-(lock\.yaml|workspace\.yaml)$|\.github/workflows/ci\.yml$|scripts/(check-host-electron-imports|ci-host-lane)[./])'
-          if echo "$changed" | grep -qE "$host"; then
+          if grep -qE "$host" <<<"$changed"; then
             echo "host-container=true" >> "$GITHUB_OUTPUT"
           else
             echo "host-container=false" >> "$GITHUB_OUTPUT"
           fi
 
-          # N-1 breadth: the older builds differ from the base only in what
-          # they are, so a PR can break one of them but not the base lane only
-          # through what is written for them to read — the migrations and the
-          # data layer — or through the harness itself. Those PRs run every
-          # lane, which also holds the release policy (no floor raise while the
-          # latest release predates the guard) at PR time.
-          n1='^(packages/host-core/src/db/|packages/host-core/scripts/n1/|packages/host-core/src/web/test-support/n1-|\.github/workflows/ci\.yml$|scripts/ci-host-lane\.test\.mjs$)'
-          if echo "$changed" | grep -qE "$n1"; then
+          # N-1 breadth: every lane runs this build against an older one, so a
+          # PR most plausibly passes `base` yet breaks an OLDER build through
+          # what this build writes for it or reads back from it — migrations,
+          # backup bundles and restore, the Session ledger, transcripts, blobs,
+          # ticket commands (what src/db/n1-compatibility.test.ts drives) — or
+          # through the harness. Those PRs run every lane, which also holds the
+          # release policy (no floor raise while the latest release predates
+          # the guard) at PR time. The merge runs every lane regardless.
+          n1='^(packages/host-core/src/(db|backup|session-control|session-runtime)/|packages/host-core/src/(blob-store|ticket-commands)|packages/host-core/scripts/n1/|\.github/workflows/ci\.yml$|scripts/ci-host-lane\.test\.mjs$)'
+          if grep -qE "$n1" <<<"$changed"; then
             echo "n1-lanes=$n1_all" >> "$GITHUB_OUTPUT"
             echo "-> migration or N-1 inputs changed; running every N-1 lane"
           else
@@ -965,9 +972,9 @@ jobs:
       # are seconds. It is BEFORE the smokes so a compliance failure is not
       # buried under a boot-tier timeout.
       #
-      # Gated with the rest of the desktop lanes: `changes` classifies the
-      # lockfile and every manifest as desktop-affecting, so any change that
-      # could move the dependency tree reaches this step.
+      # Gated by Scope's desktop flag: the lockfile and every manifest always
+      # set it, so any change that could move the dependency tree reaches
+      # this step.
       - name: Check platform-specific license assertions
         run: |
           vp run --filter @volli/desktop check:licenses
@@ -1049,6 +1056,7 @@ jobs:
         id: require-lanes
         shell: bash
         env:
+          EVENT: ${{ github.event_name }}
           DESKTOP: ${{ needs.changes.outputs.desktop }}
           HOST_CONTAINER_REQUIRED: ${{ needs.changes.outputs.host-container }}
           N1_LANES: ${{ needs.changes.outputs.n1-lanes }}
@@ -1085,6 +1093,14 @@ jobs:
           if [[ "$N1_LANES" != \[*\] || "$N1_LANES" != *'"base"'* ]]; then
             echo "::error::invalid Scope n1-lanes '$N1_LANES'"
             status=1
+          fi
+          # Path scoping is for PRs only: anything else must run every lane.
+          if [[ "$EVENT" != "pull_request" ]]; then
+            n1_all='["release","latest-canary","base","v0.2.1","v0.2.2-canary.1"]'
+            if [[ "$DESKTOP" != true || "$HOST_CONTAINER_REQUIRED" != true || "$N1_LANES" != "$n1_all" ]]; then
+              echo "::error::a $EVENT run must run every lane (desktop=$DESKTOP host-container=$HOST_CONTAINER_REQUIRED n1-lanes=$N1_LANES)"
+              status=1
+            fi
           fi
 
           # Mirrors each conditional job's `if:`. Failed and cancelled are

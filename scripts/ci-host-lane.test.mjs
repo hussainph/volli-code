@@ -26,8 +26,9 @@ const required = [
 ];
 const conditional = ["host-container", "smoke-boot"];
 
-function results(desktop = "true", host = "true", n1 = '["base"]') {
+function results(desktop = "true", host = "true", n1 = '["base"]', event = "pull_request") {
   return {
+    EVENT: event,
     DESKTOP: desktop,
     HOST_CONTAINER_REQUIRED: host,
     N1_LANES: n1,
@@ -86,23 +87,28 @@ test("a PR runs exactly one macOS job; the extended lanes left ci.yml", () => {
 });
 
 test("gate accepts only success or the precise conditional skip", () => {
+  const shapes = [];
   for (const desktop of ["true", "false"]) {
     for (const host of ["true", "false"]) {
-      for (const n1 of ['["base"]', n1All]) {
-        const env = results(desktop, host, n1);
-        const green = runGate(env);
-        assert.equal(green.status, 0, green.stdout + green.stderr);
-        for (const job of jobs.gate.needs) {
-          const variable = resultVariable(job);
-          for (const state of ["success", "failure", "cancelled", "skipped", "", "unknown"]) {
-            const outcome = runGate({ ...env, [variable]: state });
-            assert.equal(
-              outcome.status === 0,
-              state === env[variable],
-              `${desktop}/${host}/${n1}: ${job}=${state}\n${outcome.stdout}${outcome.stderr}`,
-            );
-          }
-        }
+      for (const n1 of ['["base"]', n1All]) shapes.push([desktop, host, n1, "pull_request"]);
+    }
+  }
+  // Off a PR, Scope runs everything, so that is the only accepted shape.
+  for (const event of ["push", "workflow_dispatch", "schedule"])
+    shapes.push(["true", "true", n1All, event]);
+  for (const [desktop, host, n1, event] of shapes) {
+    const env = results(desktop, host, n1, event);
+    const green = runGate(env);
+    assert.equal(green.status, 0, green.stdout + green.stderr);
+    for (const job of jobs.gate.needs) {
+      const variable = resultVariable(job);
+      for (const state of ["success", "failure", "cancelled", "skipped", "", "unknown"]) {
+        const outcome = runGate({ ...env, [variable]: state });
+        assert.equal(
+          outcome.status === 0,
+          state === env[variable],
+          `${event}/${desktop}/${host}/${n1}: ${job}=${state}\n${outcome.stdout}${outcome.stderr}`,
+        );
       }
     }
   }
@@ -117,18 +123,34 @@ test("empty or malformed Scope outputs cannot authorize skips", () => {
   for (const lanes of ["", "[]", '["release"]', "base", "unknown"]) {
     assert.notEqual(runGate({ ...results("false", "false"), N1_LANES: lanes }).status, 0, lanes);
   }
+  // A non-PR run that was scoped down (any flag or lane missing) is refused,
+  // even when every lane result matches the narrowed scope.
+  for (const event of ["push", "workflow_dispatch", "schedule"]) {
+    for (const [desktop, host, n1] of [
+      ["false", "true", n1All],
+      ["true", "false", n1All],
+      ["true", "true", '["base"]'],
+    ]) {
+      const outcome = runGate(results(desktop, host, n1, event));
+      assert.notEqual(outcome.status, 0, `${event}/${desktop}/${host}/${n1}`);
+    }
+  }
 });
 
 test("actual path classifier selects lanes and fails safe", () => {
   // Stub just git diff; all classification and output code comes from ci.yml.
+  // Renames must list both paths, so a move out of the app is an app change.
+  assert.match(filter.run, /git diff --name-only --no-renames "\$BASE_SHA" "\$HEAD_SHA"/);
   mkdirSync(join(root, ".tmp"), { recursive: true });
   const temporary = mkdtempSync(join(root, ".tmp/ci-host-test-"));
   // A long diff whose one app-affecting file is last: the classifier must read
   // all of it, not stop (or SIGPIPE) at the first inert match.
-  const longDiff = [
-    ...Array.from({ length: 4000 }, (_, i) => `docs/generated/page-${i}.md`),
-    "apps/desktop/src/main/index.ts",
-  ].join("\n");
+  const docs = Array.from({ length: 6000 }, (_, i) => `docs/generated/page-${i}.md`);
+  const longDiff = [...docs, "apps/desktop/src/main/index.ts"].join("\n");
+  // ...and one whose host/N-1 match comes FIRST, so `grep -q` would exit while
+  // a producer was still writing past the pipe buffer (the SIGPIPE skip).
+  const longDiffMatchFirst = ["packages/host-core/src/db/migrations.ts", ...docs].join("\n");
+  assert.ok(longDiffMatchFirst.length > 128 * 1024);
   try {
     // [changed, desktop (core e2e), host container, N-1 lanes on a PR]
     const cases = [
@@ -154,16 +176,24 @@ test("actual path classifier selects lanes and fails safe", () => {
       ["packages/shared/src/index.ts\napps/desktop/src/main/index.ts", "true", "true", "base"],
       // ...but never a manifest: a dependency change always runs core e2e.
       ["packages/shared/package.json", "true", "true", "base"],
+      ["packages/shared/tsconfig.json", "true", "true", "base"],
       ["convex/package.json", "true", "false", "base"],
       ["apps/gateway/src/gateway.ts", "false", "false", "base"],
       ["apps/gateway/package.json", "true", "false", "base"],
       ["docs/DESIGN.md\npackages/session-rpc/src/index.ts", "true", "true", "base"],
       [longDiff, "true", "false", "base"],
+      [longDiffMatchFirst, "true", "true", "all"],
       // Migration and N-1 harness inputs run every N-1 lane on the PR.
       ["packages/host-core/src/db/migrations.ts", "true", "true", "all"],
       ["packages/host-core/src/db/migrations.lock.json", "true", "true", "all"],
       ["packages/host-core/scripts/n1/prepare.mjs", "true", "true", "all"],
-      ["packages/host-core/src/web/test-support/n1-child.ts", "true", "true", "all"],
+      ["packages/host-core/src/backup/bundle.ts", "true", "true", "all"],
+      ["packages/host-core/src/session-control/sqlite-ledger.ts", "true", "true", "all"],
+      ["packages/host-core/src/session-runtime/transcript-artifacts.ts", "true", "true", "all"],
+      ["packages/host-core/src/blob-store.ts", "true", "true", "all"],
+      ["packages/host-core/src/ticket-commands.ts", "true", "true", "all"],
+      // web/n1-compatibility.test.ts is a unit test in Test (packages).
+      ["packages/host-core/src/web/test-support/n1-child.ts", "true", "true", "base"],
       ["packages/host-core/src/web/server.ts", "true", "true", "base"],
       [".devcontainer/host/Dockerfile", "true", "true", "base"],
       [".devcontainer/host/devcontainer.json", "true", "true", "base"],
@@ -260,8 +290,9 @@ test("extended lanes run after merge, nightly and on demand — never as a PR ga
 test("cloud acceptance is macOS-only and separate from flag-off core e2e", () => {
   const job = extended.jobs["smoke-cloud"];
   assert.equal(job["runs-on"], "macos-15");
-  assert.equal(job.needs, undefined);
-  assert.equal(job.if, undefined);
+  // One macOS slot at a time, and a red rest tier still runs it.
+  assert.equal(job.needs, "smoke-rest");
+  assert.equal(job.if, "${{ !cancelled() }}");
   assert.equal(
     job.steps.find((step) => step.name === "Checkout").with.ref,
     "${{ github.event.pull_request.head.sha || github.sha }}",

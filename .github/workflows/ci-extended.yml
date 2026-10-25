@@ -19,9 +19,11 @@ name: CI extended
 # it. A red on main is a regression to triage (AGENTS.md, CI is the gate);
 # measured repeat flakers belong in smoke-quarantine.yml, not in a re-run.
 #
-# The rest tier is ONE macOS job, not the three shards it was on PRs: here
-# latency matters less than slots, and one job leaves the PR lanes four of
-# the five. The runner still globs apps/desktop/e2e/*-smoke.mjs and subtracts
+# The rest tier is ONE macOS job, not the three shards it was on PRs, and
+# cloud acceptance waits for it rather than running beside it: here latency
+# matters less than slots, so this workflow holds one macOS slot at a time
+# (main's own core e2e in ci.yml holds a second), leaving the PR lanes three
+# of the five. The runner still globs apps/desktop/e2e/*-smoke.mjs and subtracts
 # core, credential/legacy exclusions and measured quarantine, so a new smoke
 # joins this lane with no registration step.
 on:
@@ -39,11 +41,12 @@ on:
 permissions:
   contents: read
 
-# On main, never cancel a run in progress — a lane this long, cancelled by
-# every merge in a burst, would never report. GitHub keeps at most ONE pending
-# run per group, replacing an older pending one, so a burst of merges costs
-# one in-flight run plus one run of the newest commit. A PR's newer push does
-# supersede its older run.
+# On main, a RUNNING run is never cancelled — a lane this long, cancelled by
+# every merge in a burst, would never report. GitHub keeps at most ONE queued
+# run per group and replaces it with the newer commit's (the replaced one
+# shows as cancelled on its commit, which the release guard therefore
+# refuses), so a burst of merges costs one in-flight run plus one run of the
+# newest commit. A PR's newer push does supersede its older run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -89,8 +92,13 @@ jobs:
   # CI-only: install/start use the disposable macOS runner's launchd and home.
   # Package hostd BEFORE the desktop install can rebuild native dependencies
   # for Electron; the delivered archive must contain the exact .nvmrc Node.
+  #
+  # After the rest tier, not beside it (one macOS slot at a time), and whatever
+  # its outcome: a red rest tier must not hide the cloud result.
   smoke-cloud:
     name: Smoke (cloud acceptance)
+    needs: smoke-rest
+    if: ${{ !cancelled() }}
     runs-on: macos-15
     timeout-minutes: 45
     env:
