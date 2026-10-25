@@ -287,6 +287,21 @@ export const MIGRATION_TABLE_DECISIONS: readonly MigrationTableDecision[] = [
     reason: "The runner's own accepted cursors; the import writes the backend's side.",
   },
   {
+    table: "project_checkout_paths",
+    disposition: "runner",
+    reason: "Absolute checkout folders belong to the runner, not the cloud project.",
+  },
+  {
+    table: "working_copy_paths",
+    disposition: "runner",
+    reason: "Absolute Working-copy paths and observed git metadata stay on this runner.",
+  },
+  {
+    table: "cloud_shadow_rows",
+    disposition: "runner",
+    reason: "Runner-local identity provenance, never authoritative cloud board rows.",
+  },
+  {
     table: "job_journal",
     disposition: "runner",
     reason: "Outcomes owed under this runner's leases.",
