@@ -1,5 +1,7 @@
 /** The cloud product store: one owner-scoped local ledger, one shared runner link. No Electron. */
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import type {
   HostedSessionRuntime,
   SessionLocationResolver,
@@ -43,6 +45,9 @@ import {
 import { createCloudBoardVerbs, CLOUD_VERB_BUDGET_MS } from "../cloud-agent/board-verbs";
 import { createCloudSessionVerbs } from "../cloud-agent/session-verbs";
 import { getProjectById } from "../db/projects-repo";
+import { createCloudRestartRecovery } from "./recovery";
+import { prepared } from "../db/prepared";
+import type { CloudLocationRequest } from "./location";
 
 export interface CloudRunnerSyncConnection {
   start(): void;
@@ -50,6 +55,9 @@ export interface CloudRunnerSyncConnection {
   /** Close a lost identity without attempting one last presence report. */
   close(): Promise<void>;
   waiting(): number;
+  /** Sleep fences new inbox claims until the wake presence sequence finishes. */
+  suspend?(): void;
+  resume?(): Promise<void>;
 }
 
 export function createCloudProductStore(options: {
@@ -97,6 +105,8 @@ export function createCloudProductStore(options: {
       throw new Error("Volli Cloud is unreachable; this ticket's brief can't be read.");
     return active.link;
   };
+  // A restart resume's first-connect wait and sibling reads (N2-3).
+  const recovery = createCloudRestartRecovery({ currentLink: () => active?.link ?? null });
   const drain = createFactDrain({
     ownerUserId,
     ledger: sqliteDrainLedger(db),
@@ -112,17 +122,18 @@ export function createCloudProductStore(options: {
       log.warn("Session cloud drain stopped", { sessionId, code: block.code }),
     onRetry: (sessionId) => log.warn("Session cloud drain will retry", { sessionId }),
   });
+  const readContext = async (input: CloudLocationRequest, over?: BackendLink) => {
+    const live = over ?? link();
+    if (live.query === undefined) throw new Error("Runner context reads are unavailable.");
+    return (await live.query("runnerContext:forSession", { ...input })) as CloudRunnerContext;
+  };
   const context = createCloudContext({
     db,
     ownerUserId,
     engine: host.sessionEngine,
     registry,
     runnerId: () => active?.runnerId ?? options.runnerId(),
-    query: async (input) => {
-      const live = link();
-      if (live.query === undefined) throw new Error("Runner context reads are unavailable.");
-      return (await live.query("runnerContext:forSession", { ...input })) as CloudRunnerContext;
-    },
+    query: (input) => readContext(input),
   });
   const owner = createCloudSessionOwner({
     db,
@@ -277,9 +288,86 @@ export function createCloudProductStore(options: {
     sessionBirth: { beforeCreate: context.beforeCreate },
     ticketDisplayIdOf: context.ticketDisplayIdOf,
     brief: context.brief,
+    recovery,
     locations,
     drain,
     registry,
+    /**
+     * "Choose the folder for <project> on this Mac" (N2-3): the checkout a
+     * cloud project's Sessions start from. The path stays in this runner's
+     * registry; the backend hears only path-free checkout metadata.
+     */
+    checkouts: {
+      /**
+       * Whether this runner can locate the project's folder: registered, or
+       * adoptable from a frozen local project with the same id, and still on
+       * disk. `null` when this Mac has no runner identity to hold one.
+       */
+      located(projectId: string): boolean | null {
+        const runnerId = active?.runnerId ?? options.runnerId();
+        if (runnerId === null) return null;
+        const registered = prepared<[string, string], { abs_path: string }>(
+          db,
+          "SELECT abs_path FROM project_checkout_paths WHERE runner_id = ? AND project_id = ? ORDER BY project_repo_id",
+        ).all(runnerId, projectId);
+        if (registered.length > 0) return registered.every((row) => existsSync(row.abs_path));
+        const frozen = prepared<[string], { path: string }>(
+          db,
+          `SELECT path FROM projects WHERE id = ? AND NOT EXISTS
+          (SELECT 1 FROM cloud_shadow_rows WHERE kind = 'project' AND id = projects.id)`,
+        ).get(projectId);
+        return frozen !== undefined && isAbsolute(frozen.path) && existsSync(frozen.path);
+      },
+      /**
+       * The project and its primary repository as Volli Cloud answers this
+       * runner: owner membership checked by `runnerContext.forSession`. A fresh
+       * id names no Session, so the query takes its new-birth path (membership
+       * alone authorizes it) and reserves nothing.
+       */
+      async site(
+        projectId: string,
+      ): Promise<{ projectId: string; projectRepoId: string; projectName: string }> {
+        if (active === null)
+          throw new Error("Volli Cloud is unreachable. Choose the folder once this Mac connects.");
+        const facts = await readContext(
+          { sessionId: randomUUID(), projectId, ticketId: null },
+          active.link,
+        );
+        if (
+          facts.ownerUserId !== ownerUserId ||
+          facts.project.id !== projectId ||
+          facts.primaryRepo.projectId !== projectId
+        )
+          throw new Error("Volli Cloud returned another owner's project.");
+        return { projectId, projectRepoId: facts.primaryRepo.id, projectName: facts.project.name };
+      },
+      /** Registers the folder locally, then queues its path-free checkout report. */
+      async choose(input: {
+        projectId: string;
+        projectRepoId: string;
+        absPath: string;
+      }): Promise<void> {
+        const paths = registry();
+        const checkout = paths.checkouts.register({ ...input, adoptedFromFrozen: false });
+        const read = (args: readonly string[]) =>
+          runGitCapturingAsync(args, input.absPath).then(
+            (out) => out.trim() || null,
+            () => null,
+          );
+        // A folder project may be no repository at all: unknown, never guessed.
+        const [headSha, headBranch] = await Promise.all([
+          read(["rev-parse", "HEAD"]),
+          read(["branch", "--show-current"]),
+        ]);
+        await publisher(paths).reports.checkout({
+          projectId: input.projectId,
+          projectRepoId: input.projectRepoId,
+          kind: checkout.kind,
+          headBranch,
+          headSha,
+        });
+      },
+    },
     bindEnvironment(prepare: NonNullable<CloudSessionLocationOptions["prepareEnvironment"]>): void {
       prepareEnvironment = prepare;
     },
@@ -303,6 +391,7 @@ export function createCloudProductStore(options: {
         runnerId: parts.runnerId,
         ...(parts.runnerToken === undefined ? {} : { runnerToken: parts.runnerToken }),
       };
+      recovery.observe(parts.link);
       const reports = publisher(registry());
       const offReports = parts.link.onStatus((status) => {
         if (status.state === "connected") void reports.flush();
@@ -335,6 +424,18 @@ export function createCloudProductStore(options: {
             digest,
           })) as { body: string } | null;
           return row?.body ?? null;
+        },
+        // A message a client sent: its body is staged with the command, fenced by this claim.
+        messageBody: async (args) => {
+          if (parts.link.query === undefined) throw new Error("Message reads are unavailable.");
+          const reply = (await parts.link.query("sessionMessages:forRunner", { ...args })) as {
+            status?: unknown;
+            body?: unknown;
+          } | null;
+          if (reply?.status === "missing") return null;
+          if (reply?.status !== "staged" || typeof reply.body !== "string")
+            throw new Error("Volli Cloud returned an unreadable message.");
+          return reply.body;
         },
       });
       // A watcher's notice: composed here, then handed to the durable outbox.
@@ -393,6 +494,10 @@ export function createCloudProductStore(options: {
           void reports.flush();
         },
         waiting: () => drain.status().waiting + reports.pending(),
+        suspend: () => sync?.suspend(),
+        resume: async () => {
+          await sync?.resume();
+        },
         async stop() {
           offReports();
           try {

@@ -136,7 +136,11 @@ function fakeTimers() {
   };
 }
 
-function harness(initial: HostLiveWork = ONE_TURN, settleMs?: number) {
+function harness(
+  initial: HostLiveWork = ONE_TURN,
+  settleMs?: number,
+  availability?: { enabled: boolean },
+) {
   const calls: string[] = [];
   let work = initial;
   const listeners = new Set<(work: HostLiveWork) => void>();
@@ -152,6 +156,9 @@ function harness(initial: HostLiveWork = ONE_TURN, settleMs?: number) {
   const trays: TrayModel[] = [];
   const clock = fakeTimers();
   const ports = {
+    ...(availability === undefined
+      ? {}
+      : { residentRunner: () => availability.enabled, runnerLine: () => "Connected as studio" }),
     liveWork: {
       current: vi.fn(() => work),
       subscribe: (listener: (work: HostLiveWork) => void) => {
@@ -762,5 +769,65 @@ describe("menuBarSmokeSettleMs — the mechanics smoke's settle window (VC-709)"
     expect(h.ports.quit).not.toHaveBeenCalled();
     h.clock.advance(1);
     expect(h.ports.quit).toHaveBeenCalledOnce();
+  });
+});
+
+describe("cloud resident-runner policy", () => {
+  it("stays available while idle without taking the start latch or holding power", () => {
+    const h = harness(IDLE, undefined, { enabled: true });
+    expect(h.host.branch()).toBe("menu-bar");
+    expect(h.latched()).toBe(false);
+    h.host.enter();
+    h.clock.advance(MENU_BAR_POLL_MS * 3);
+    expect(h.ports.quit).not.toHaveBeenCalled();
+    expect(h.calls).not.toContain("power.hold");
+    expect(h.trays.at(-1)?.items.find((item) => item.id === "runner")?.label).toBe(
+      "Connected as studio",
+    );
+    h.setWork(ONE_TURN);
+    h.setWork(IDLE);
+    h.clock.advance(MENU_BAR_SETTLE_MS * 2);
+    expect(h.ports.quit).not.toHaveBeenCalled();
+    h.host.quitFromTray();
+    expect(h.ports.quit).toHaveBeenCalledOnce();
+  });
+
+  it("honours Wait and Quit and install-when-idle even with the preference on", () => {
+    const h = harness(ONE_TURN, undefined, { enabled: true });
+    h.host.enter();
+    h.host.quitFromTray();
+    h.setWork(IDLE);
+    h.clock.advance(MENU_BAR_SETTLE_MS);
+    expect(h.ports.quit).toHaveBeenCalledOnce();
+    expect(h.host.branch()).toBe("quit");
+
+    const update = harness(IDLE, undefined, { enabled: true });
+    update.stage();
+    update.host.enter();
+    update.host.toggleInstallWhenIdle();
+    update.clock.advance(MENU_BAR_SETTLE_MS);
+    expect(update.calls).toContain("update.install");
+  });
+
+  it("rechecks a preference changed during a settle window and opts out on the next poll", () => {
+    const availability = { enabled: false };
+    const h = harness(IDLE, undefined, availability);
+    h.host.enter();
+    availability.enabled = true;
+    h.clock.advance(MENU_BAR_SETTLE_MS);
+    expect(h.ports.quit).not.toHaveBeenCalled();
+    availability.enabled = false;
+    h.host.refresh();
+    h.clock.advance(MENU_BAR_SETTLE_MS);
+    expect(h.ports.quit).toHaveBeenCalledOnce();
+  });
+
+  it("never overrides an explicit install or shutdown", () => {
+    const h = harness(IDLE, undefined, { enabled: true });
+    h.setInstallInFlight(true);
+    expect(h.host.branch()).toBe("quit");
+    h.setInstallInFlight(false);
+    h.host.noteSystemShutdown();
+    expect(h.host.branch()).toBe("quit");
   });
 });

@@ -601,6 +601,26 @@ export const DESKTOP_ENTRIES = [
     idempotency: "natural",
     summary: "Remove this Mac from the person's runners until it is added again.",
   },
+  // A cloud project's folder on this Mac (VC-895 N2-3; wire types in
+  // `./cloud-checkout`). Host-placed: the folder is this device's, held only in
+  // its runner's local path registry, and only its own window picks it.
+  // Desktop main serves them through the map's `CloudCheckoutPort`
+  // (`@volli/host-core/handlers`), only with `cloud` on; hostd has none.
+  {
+    key: "checkouts.status",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "Whether this Mac knows a Volli Cloud project's folder: never the path.",
+  },
+  {
+    // `natural`: choosing the same folder again registers the same checkout.
+    key: "checkouts.chooseFolder",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Pick a Volli Cloud project's folder on this Mac with the system folder picker.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];

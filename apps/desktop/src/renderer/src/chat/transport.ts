@@ -60,6 +60,22 @@ export function browserChatTransport(): ChatSessionTransport {
 }
 
 /**
+ * This Mac's own create and attach, for a cloud launch's chats: a chat started
+ * here is runner-originated (this Mac's runner mints it and its first accept
+ * registers it with Volli Cloud), so it is minted through the same two
+ * semantic doors as a local launch's. Main runs them against the cloud product
+ * store and refuses what this Mac's runner may not start. Nothing else of the
+ * IPC transport is handed over: every read and every command of an existing
+ * Session stays Volli Cloud's.
+ */
+function thisMacStarts(): Pick<ChatSessionTransport, "createSession" | "attachSession"> {
+  return {
+    createSession: (input) => browserChatTransport().createSession(input),
+    attachSession: (input) => browserChatTransport().attachSession(input),
+  };
+}
+
+/**
  * The transports for Sessions on a remote host (VC-713): one per Workspace,
  * over its link, with the `"host-link"` stream recovery. Registered by
  * whoever owns the Workspace links (the relay binding, behind `cloud`); with
@@ -88,7 +104,7 @@ export function setRemoteChatTransports(transports: RemoteChatTransports): () =>
  * closed in the host's name; it never falls to This Mac's IPC (VC-713, B1).
  */
 export function chatTransportFor(projectId: string | null): ChatSessionTransport {
-  if (launchStore() === "cloud") return cloudChatTransport(cloudSession());
+  if (launchStore() === "cloud") return cloudChatTransport(cloudSession(), thisMacStarts());
   const owner = remoteOwnerOf(projectId);
   if (owner === null) return browserChatTransport();
   return remoteTransports?.forProject(projectId!) ?? closedRemoteTransport(owner.hostName, window);

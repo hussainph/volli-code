@@ -157,3 +157,70 @@ describe("the relaunch", () => {
     expect(lifecycle.quit).toHaveBeenCalledTimes(2);
   });
 });
+
+function turnFeed(answer: "wait" | "now" | "cancel") {
+  let turns = 2;
+  let changed: (() => void) | null = null;
+  let tick: (() => void) | null = null;
+  const off = vi.fn(() => {
+    changed = null;
+  });
+  const ports = {
+    turns: () => turns,
+    subscribe: (listener: () => void) => {
+      changed = listener;
+      return off;
+    },
+    choose: vi.fn(() => answer),
+    setInterval: (run: () => void) => {
+      tick = run;
+      return "timer";
+    },
+    clearInterval: vi.fn(() => {
+      tick = null;
+    }),
+  };
+  return {
+    ports,
+    off,
+    set: (count: number) => {
+      turns = count;
+      changed?.();
+    },
+    tick: () => tick?.(),
+  };
+}
+
+describe("switching stores over running turns", () => {
+  it("waits for turns without stopping anything, then uses every normal quit gate once", () => {
+    const lifecycle = app();
+    const work = turnFeed("wait");
+    const control = createRelaunchController(lifecycle, work.ports);
+    control.request();
+    control.request();
+    expect(work.ports.choose).toHaveBeenCalledExactlyOnceWith(2);
+    expect(lifecycle.quit).not.toHaveBeenCalled();
+    work.set(1);
+    expect(lifecycle.quit).not.toHaveBeenCalled();
+    work.set(0);
+    work.tick();
+    expect(lifecycle.quit).toHaveBeenCalledOnce();
+    expect(work.off).toHaveBeenCalledOnce();
+    expect(control.pending()).toBe(true);
+    control.quitAccepted();
+    expect(lifecycle.relaunch).toHaveBeenCalledOnce();
+  });
+  it("can switch now or cancel, without arming an eventual unrelated relaunch", () => {
+    const lifecycle = app();
+    const cancelled = createRelaunchController(lifecycle, turnFeed("cancel").ports);
+    cancelled.request();
+    expect(cancelled.pending()).toBe(false);
+    expect(lifecycle.quit).not.toHaveBeenCalled();
+    const now = createRelaunchController(lifecycle, turnFeed("now").ports);
+    now.request();
+    expect(lifecycle.quit).toHaveBeenCalledOnce();
+    now.quitRefused();
+    now.quitAccepted();
+    expect(lifecycle.relaunch).not.toHaveBeenCalled();
+  });
+});

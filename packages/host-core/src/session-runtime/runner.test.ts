@@ -304,6 +304,8 @@ describe("runner composition", () => {
     expect(lifecycle.sessionEngine).toBe(cloud.engine);
     expect(lifecycle.ownsSession).toBe(cloud.ownsSession);
     expect(lifecycle.projectIds).toBe(cloud.projectIds);
+    // Its own interrupted turns resume behind its first connect (N2-3).
+    expect(lifecycle.cloudRecovery).toBe(cloud.recovery);
     expect(lifecycle.ownsSession!(owned.session.id)).toBe(true);
     expect(lifecycle.ownsSession!(foreign.session.id)).toBe(false);
     expect(lifecycle.ownsSession!(local.session.id)).toBe(false);

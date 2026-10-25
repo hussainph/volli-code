@@ -14,8 +14,10 @@
  */
 import * as React from "react";
 import type { ThisMacRunnerSnapshot } from "@volli/shared";
+import { runnerPlaceAvailability } from "@volli/shared/cloud";
 
 import { NOT_CONNECTED } from "@renderer/lib/cloud-board-api";
+import { sinceLabel } from "@renderer/lib/cloud-places";
 import { cloudSession, followCloudSession, type CloudSession } from "@renderer/lib/cloud-client";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { cloudFailure, type Watched } from "@renderer/stores/cloud-board/source";
@@ -171,56 +173,60 @@ export function useRunners({
 
 /* ── Status words ───────────────────────────────────────────────────────── */
 
-/** `14:02` today, a date before that. */
-export function sinceLabel(at: number, now: number = Date.now()): string {
-  const then = new Date(at);
-  const today = new Date(now);
-  const sameDay =
-    then.getFullYear() === today.getFullYear() &&
-    then.getMonth() === today.getMonth() &&
-    then.getDate() === today.getDate();
-  return sameDay
-    ? then.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
-    : then.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
+/** `14:02` today, a date before that: the same "since" a Session's Place reads. */
+export { sinceLabel };
 
 export interface StatusWord {
   readonly state: StatusDotState;
   readonly label: string;
 }
 
-/** A runner's status as one short word or phrase, with its dot. Unknown statuses read as written. */
+/**
+ * A runner's status as one short word or phrase, with its dot. Whether it is
+ * serving, waiting or removed (and why) is the same rule a Session's Place
+ * reads (`runnerPlaceAvailability` in `@volli/shared/cloud`); the words are
+ * this list's own. Unknown statuses read as written.
+ */
 export function runnerStatus(
   runner: Pick<RunnerRow, "status" | "statusReason" | "statusChangedAt">,
   now?: number,
 ): StatusWord {
-  switch (runner.status) {
-    case "online":
+  const availability = runnerPlaceAvailability(runner);
+  switch (availability.kind) {
+    case "removed":
+      return {
+        state: "error",
+        label: availability.reason === "cut_off" ? "Used from two places" : "Removed",
+      };
+    case "serving":
+      if (runner.status === "draining") return { state: "parked", label: "Finishing its work" };
+      if (runner.status === "degraded")
+        return {
+          state: "error",
+          label: runner.statusReason === null ? "Degraded" : `Degraded: ${runner.statusReason}`,
+        };
       return { state: "ready", label: "Online" };
-    case "offline":
-      return { state: "idle", label: `Offline since ${sinceLabel(runner.statusChangedAt, now)}` };
-    case "asleep":
-      return { state: "parked", label: `Asleep since ${sinceLabel(runner.statusChangedAt, now)}` };
-    case "stopped":
-      return { state: "exited", label: "Volli is closed" };
-    case "updating":
-      return { state: "starting", label: "Updating" };
-    case "draining":
-      return { state: "parked", label: "Finishing its work" };
-    case "degraded":
-      return {
-        state: "error",
-        label: runner.statusReason === null ? "Degraded" : `Degraded: ${runner.statusReason}`,
-      };
-    case "upgrade_required":
-      return { state: "error", label: "Needs an update" };
-    case "revoked":
-      return {
-        state: "error",
-        label: runner.statusReason === "credential_reuse" ? "Used from two places" : "Removed",
-      };
-    default:
-      return { state: "idle", label: runner.status };
+    case "waiting":
+      switch (availability.reason) {
+        case "offline":
+          return {
+            state: "idle",
+            label: `Offline since ${sinceLabel(runner.statusChangedAt, now)}`,
+          };
+        case "asleep":
+          return {
+            state: "parked",
+            label: `Asleep since ${sinceLabel(runner.statusChangedAt, now)}`,
+          };
+        case "closed":
+          return { state: "exited", label: "Volli is closed" };
+        case "updating":
+          return { state: "starting", label: "Updating" };
+        case "needs_update":
+          return { state: "error", label: "Needs an update" };
+        default:
+          return { state: "idle", label: runner.status };
+      }
   }
 }
 

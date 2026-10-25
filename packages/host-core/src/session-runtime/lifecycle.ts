@@ -36,7 +36,7 @@ import {
   type BootRecoveryFailure,
   type BootRecoveryReason,
 } from "./boot-recovery";
-import { resumeRecoveredTurns } from "./restart-resume";
+import { resumeRecoveredTurns, type RestartResumeCloud } from "./restart-resume";
 import { createHostNoticeDelivery } from "./durable-host-notice-delivery";
 import { readSqliteHostNotice, scopeSqliteHostNoticeOutbox } from "./sqlite-host-notice-outbox";
 import { catchUpSessionResumptions } from "./session-resumptions";
@@ -174,6 +174,12 @@ export function createSessionRuntimeLifecycle<Services>(options: {
    * shows it, and is not resumed on its own. Absent is a local launch.
    */
   cloudLaunch?(): boolean;
+  /**
+   * A cloud store's restart-resume reads: its own interrupted turns resume
+   * once the runner first connects and the backend's Ticket siblings allow
+   * it, and `cloudLaunch` no longer suppresses them (`restart-resume.ts`).
+   */
+  cloudRecovery?: RestartResumeCloud;
 }): SessionRuntimeLifecycle<Services> {
   const { host, ports, runtime, rpc, observability, delegation } = options;
   const { database } = host;
@@ -246,11 +252,14 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   // Turns a restart resume continued, which outlive readiness (never rejects).
   let restartResumeRuns: Promise<void> | undefined;
   const closed = Promise.withResolvers<false>();
+  // Ends a restart resume's wait for the runner's first connect.
+  const closingSignal = new AbortController();
 
   function close(): Promise<void> {
     if (drain !== undefined) return drain;
     closing = true;
     closed.resolve(false);
+    closingSignal.abort();
     options.stopProducers();
     suspendClock?.close();
     ports.power.removeListener("resume", wake);
@@ -455,6 +464,9 @@ export function createSessionRuntimeLifecycle<Services>(options: {
         command: (request) => hosted.command(request),
         shouldStop: () => closing,
         ...(options.cloudLaunch === undefined ? {} : { cloudLaunch: options.cloudLaunch }),
+        ...(options.cloudRecovery === undefined
+          ? {}
+          : { cloud: options.cloudRecovery, ownsSession, closing: closingSignal.signal }),
       },
       recovered,
     );

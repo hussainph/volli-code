@@ -176,6 +176,12 @@ const EXACT = {
     reason:
       "Which product store this device's next launch uses (main/cloud-launch.ts, VC-889): the signed-in person's user id, written when a Volli Cloud sign-in completes and removed when it ends. A non-secret marker, never a token; main reads it before the window opens.",
   },
+  "volli:runner-resident": {
+    placement: "client-local",
+    owner: "stays",
+    reason:
+      "This device's cloud runner availability when its windows close (VC-895). Explicit false selects quit-when-done; absent defaults on only in a cloud launch. Never Workspace configuration.",
+  },
   "volli:cloud-runner": {
     placement: "client-local",
     owner: "stays",

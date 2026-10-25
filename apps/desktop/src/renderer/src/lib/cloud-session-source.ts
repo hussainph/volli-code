@@ -15,7 +15,12 @@ export class CloudSessionSource {
 
   constructor(
     private readonly session: CloudSession,
-    private readonly paint: (projectId: string, rows: CloudListingRow[]) => void,
+    private readonly paint: (
+      projectId: string,
+      rows: CloudListingRow[],
+      /** The same rows as the backend sent them, for what the listing shape drops (the Place). */
+      sent: readonly CloudSessionRow[],
+    ) => void,
     private readonly failed: (error: unknown) => void,
   ) {}
 
@@ -83,8 +88,9 @@ export class CloudSessionSource {
           for (const row of pages.flatMap((part) => part.rows)) {
             if (!unique.has(row.id)) unique.set(row.id, row);
           }
-          entry.rows = [...unique.values()].map(cloudSessionListing);
-          this.paint(projectId, entry.rows);
+          const sent = [...unique.values()];
+          entry.rows = sent.map(cloudSessionListing);
+          this.paint(projectId, entry.rows, sent);
           resolve(entry.rows);
         },
         (error) => {
@@ -92,7 +98,7 @@ export class CloudSessionSource {
           const code = (error as { data?: { code?: string } } | null)?.data?.code;
           if (code === "not_found" || code === "not_a_member" || code === "unauthenticated") {
             entry.rows = [];
-            this.paint(projectId, []);
+            this.paint(projectId, [], []);
           }
           reject(error);
           this.failed(error);

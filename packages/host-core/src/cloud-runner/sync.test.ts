@@ -89,7 +89,7 @@ describe("the runner's cloud sync", () => {
     listener({ state: "connecting" });
     listener({ state: "connected" });
     await new Promise((done) => setTimeout(done, 0));
-    expect(order).toEqual(["drain.resumeAll", "inbox.renew", "inbox.claim"]);
+    expect(order).toEqual(["inbox.renew", "inbox.claim", "drain.resumeAll"]);
     order.length = 0;
     await sync.stop();
     expect(off).toHaveBeenCalled();

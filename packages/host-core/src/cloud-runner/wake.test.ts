@@ -46,7 +46,7 @@ describe("runner power cycle", () => {
   it("wakes in order: reconnect, fresh token, online, beat", async () => {
     const p = parts();
     await p.cycle.resume();
-    expect(p.calls).toEqual(["reconnect", "state online", "token force=true", "beat"]);
+    expect(p.calls).toEqual(["reconnect", "token force=true", "state online", "beat"]);
   });
 
   it("keeps waking when the token exchange fails offline", async () => {
@@ -89,4 +89,33 @@ describe("watchSleep", () => {
     expect(seen).toHaveLength(4);
     expect(power.listenerCount("suspend")).toBe(0);
   });
+});
+
+it("does not publish online until the forced token exchange settles", async () => {
+  const token = Promise.withResolvers<string>();
+  const calls: string[] = [];
+  const cycle = createRunnerPowerCycle({
+    link: {
+      reconnectNow: () => {
+        calls.push("reconnect");
+      },
+    },
+    token: async () => {
+      calls.push("token");
+      return token.promise;
+    },
+    presence: {
+      setState: async () => {
+        calls.push("online");
+      },
+      beatNow: async () => {
+        calls.push("beat");
+      },
+    },
+  });
+  const waking = cycle.resume();
+  expect(calls).toEqual(["reconnect", "token"]);
+  token.resolve("fresh");
+  await waking;
+  expect(calls).toEqual(["reconnect", "token", "online", "beat"]);
 });

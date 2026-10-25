@@ -148,13 +148,63 @@ export interface RelaunchController {
  * Electron would keep that request and honour it on whatever quit came next,
  * long after the person cancelled this one.
  */
-export function createRelaunchController(app: RelaunchLifecycle): RelaunchController {
+export function createRelaunchController(
+  app: RelaunchLifecycle,
+  live?: {
+    turns(): number;
+    subscribe(listener: () => void): () => void;
+    choose(turns: number): "wait" | "now" | "cancel";
+    setInterval?(run: () => void): unknown;
+    clearInterval?(handle: unknown): void;
+  },
+): RelaunchController {
   let requested = false;
+  let waiting = false;
+  let unsubscribe: (() => void) | null = null;
+  let poll: unknown = null;
+  const clear = () => {
+    waiting = false;
+    unsubscribe?.();
+    unsubscribe = null;
+    if (poll !== null) {
+      if (live?.clearInterval !== undefined) live.clearInterval(poll);
+      else clearInterval(poll as ReturnType<typeof setInterval>);
+      poll = null;
+    }
+  };
+  const quit = () => {
+    clear();
+    requested = true;
+    app.quit();
+  };
   return {
     request() {
-      if (requested) return;
-      requested = true;
-      app.quit();
+      if (requested || waiting) return;
+      const turns = live?.turns() ?? 0;
+      if (turns > 0 && live !== undefined) {
+        const answer = live.choose(turns);
+        if (answer === "cancel") return;
+        if (answer === "wait") {
+          waiting = true;
+          const check = () => {
+            if (waiting && live.turns() === 0) quit();
+          };
+          const off = live.subscribe(check);
+          // A primed subscription may already have observed zero.
+          if (!waiting) {
+            off();
+            return;
+          }
+          unsubscribe = off;
+          // Live bindings can close without a fold; keep the same fallback
+          // as menu-bar mode's live-work feed. No work is started by this clock.
+          poll =
+            live.setInterval === undefined ? setInterval(check, 1_000) : live.setInterval(check);
+          check();
+          return;
+        }
+      }
+      quit();
     },
     pending: () => requested,
     quitAccepted() {
@@ -163,6 +213,7 @@ export function createRelaunchController(app: RelaunchLifecycle): RelaunchContro
       app.relaunch();
     },
     quitRefused() {
+      clear();
       requested = false;
     },
   };

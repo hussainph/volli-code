@@ -69,6 +69,8 @@ import {
   type RemoteWorkspaceInput,
   type RenameRemoteHostInput,
   type ThisMacRunnerSnapshot,
+  type CloudCheckoutChoice,
+  type CloudCheckoutStatus,
   WORKTREE_SETUP_ANSWERS,
   type WorktreeSetupAnswer,
   type WorktreeSetupStatusView,
@@ -88,6 +90,11 @@ import {
 } from "./account-schema";
 import { AsyncQueue } from "./async-queue";
 import { thisMacRunnerSnapshotSchema } from "./runners-schema";
+import {
+  cloudCheckoutChoiceSchema,
+  cloudCheckoutInputSchema,
+  cloudCheckoutStatusSchema,
+} from "./checkouts-schema";
 import { boardId } from "./board-schema";
 import {
   createCatalogBuilders,
@@ -267,6 +274,9 @@ export interface DesktopRouterHandlers {
   readonly "runners.subscribeThisMac": DesktopSubscriptionHandler<void, ThisMacRunnerSnapshot>;
   readonly "runners.addThisMac": HostHandler<void, null>;
   readonly "runners.removeThisMac": HostHandler<void, null>;
+  /** A Volli Cloud project's folder on this Mac (VC-895 N2-3): never a path. */
+  readonly "checkouts.status": HostHandler<{ projectId: string }, CloudCheckoutStatus>;
+  readonly "checkouts.chooseFolder": HostHandler<{ projectId: string }, CloudCheckoutChoice>;
 }
 
 type AssertNever<Type extends never> = Type;
@@ -979,6 +989,21 @@ export function createDesktopRouter() {
       removeThisMac: hostProcedure("runners.removeThisMac")
         .output(z.null())
         .mutation(({ ctx }) => ctx.handlers["runners.removeThisMac"](undefined, ctx.call)),
+    },
+    /**
+     * A Volli Cloud project's folder on this Mac (VC-895 N2-3). Host-placed:
+     * the folder lives in this Mac's runner-local registry, and main shows the
+     * system folder picker. No procedure carries a path either way.
+     */
+    checkouts: {
+      status: hostProcedure("checkouts.status")
+        .input(cloudCheckoutInputSchema)
+        .output(cloudCheckoutStatusSchema)
+        .query(({ ctx, input }) => ctx.handlers["checkouts.status"](input, ctx.call)),
+      chooseFolder: hostProcedure("checkouts.chooseFolder")
+        .input(cloudCheckoutInputSchema)
+        .output(cloudCheckoutChoiceSchema)
+        .mutation(({ ctx, input }) => ctx.handlers["checkouts.chooseFolder"](input, ctx.call)),
     },
   });
 }

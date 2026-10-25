@@ -1060,6 +1060,10 @@ describe("restart resume after recovery (VC-450)", () => {
     expect(ports.shouldStop()).toBe(false);
     // A local launch names no cloud-launch port: the verdict reads it as local.
     expect(ports.cloudLaunch).toBeUndefined();
+    // Nor a cloud store's reads: the local path is unchanged.
+    expect(ports.cloud).toBeUndefined();
+    expect(ports.ownsSession).toBeUndefined();
+    expect(ports.closing).toBeUndefined();
     // A resumed run outlives readiness; close waits for it.
     let closed = false;
     const closing = owner.close().then(() => {
@@ -1085,6 +1089,33 @@ describe("restart resume after recovery (VC-450)", () => {
     await owner.ready();
     expect(given!.cloudLaunch?.()).toBe(true);
     await owner.close();
+  });
+
+  it("hands a cloud store's reads, its owner scope and the close signal to the resume (N2-3)", async () => {
+    const f = fixture();
+    armed(f);
+    let given: Parameters<typeof restart.resumeRecoveredTurns>[0] | undefined;
+    vi.mocked(restart.resumeRecoveredTurns).mockImplementation(async (ports) => {
+      given = ports;
+    });
+    const cloudRecovery = {
+      firstConnect: vi.fn(async () => true),
+      ticketSiblings: vi.fn(async () => ({ siblings: [], complete: true })),
+    };
+    const owner = createSessionRuntimeLifecycle({
+      ...f.options,
+      cloudLaunch: () => true,
+      ownsSession: (sessionId) => sessionId === "s",
+      cloudRecovery,
+    });
+    await owner.ready();
+    expect(given!.cloud).toBe(cloudRecovery);
+    expect(given!.ownsSession?.("s")).toBe(true);
+    expect(given!.ownsSession?.("other")).toBe(false);
+    expect(given!.closing?.aborted).toBe(false);
+    await owner.close();
+    // Closing ends a wait for the runner's first connect.
+    expect(given!.closing?.aborted).toBe(true);
   });
 
   it("arms nothing without a runtime", async () => {
@@ -1130,6 +1161,10 @@ describe("launch-selected Session recovery scope", () => {
       engine: scoped,
       projectIds: ["cloud-project"],
     });
+    const ownedProjection = { session: { id: "owned" } } as SessionProjection;
+    owner.observeScheduledResume(ownedProjection);
+    owner.observeScheduledResume({ session: { id: "foreign" } } as SessionProjection);
+    expect(f.resume.observe).toHaveBeenCalledExactlyOnceWith(ownedProjection);
     const resumePorts = vi.mocked(control.createScheduledResumeHost).mock.lastCall![0];
     expect(await resumePorts.candidates()).toEqual(["owned"]);
     await resumePorts.ticketSessions({ projectId: "p", ticketId: "t" });

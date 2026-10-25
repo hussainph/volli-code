@@ -31,6 +31,12 @@ vi.mock("@renderer/stores/ticket-session-records", () => ({
   useTicketSessionRecordsStore: mocks.tickets,
 }));
 vi.mock("@renderer/stores/chat-sessions", () => ({ useChatSessionsStore: mocks.chat }));
+vi.mock("./session-rpc-ipc-link", () => ({
+  sessionRpcClient: () => ({
+    runners: { subscribeThisMac: { subscribe: () => ({ unsubscribe: () => {} }) } },
+  }),
+}));
+import { useCloudPlacesStore } from "./cloud-places";
 import { bindCloudSessions, cloudSessionReader } from "./cloud-sessions";
 
 let stop: (() => void) | null = null;
@@ -94,6 +100,10 @@ describe("cloud Session binding", () => {
       },
     });
     expect(mocks.tickets.getState().byTicket.t).toHaveLength(1);
+    // The Place the listing shape drops is kept for "Waiting for <Mac>".
+    expect(useCloudPlacesStore.getState().sessions).toEqual({
+      s: { placeRunnerId: "r", turnActive: false },
+    });
     expect(await cloudSessionReader("p").listForTicket({ ticketId: "t" })).toMatchObject({
       ok: true,
       sessions: [{ record: { sessionId: "s" } }],
@@ -111,6 +121,7 @@ describe("cloud Session binding", () => {
     mocks.projects.setState({ projects: [] });
     expect(fake.watchers("sessions:list", args)).toBe(0);
     expect(mocks.rows.getState().byProject).toMatchObject({ p: { chat: [] } });
+    expect(useCloudPlacesStore.getState().sessions).toEqual({});
     mocks.projects.setState({ projects: [{ id: "p" }] });
     mocks.follow!(null);
     expect(mocks.tickets.getState().byTicket.t).toEqual([]);

@@ -37,6 +37,7 @@ import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-m
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
+import { CloudCheckoutControl } from "@renderer/components/cloud-checkout/cloud-checkout-control";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import {
   runOnLivePanes,
@@ -505,6 +506,7 @@ export function TicketTabStrip({
                 ticket they start exactly what this control starts.
                 `align="end"` because the control sits at the strip's right edge
                 — the menu hangs back into the window rather than off it. */}
+            <CloudCheckoutControl projectId={list.projectId} />
             <NewSessionControl
               projectId={list.projectId}
               disabled={creating}

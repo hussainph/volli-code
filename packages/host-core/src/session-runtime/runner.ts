@@ -120,7 +120,9 @@ export interface RunnerCompositionInput {
   cloudEnabled(): boolean;
   /**
    * Whether this launch shows Volli Cloud's board rather than this host's
-   * (VC-889): its interrupted turns are then not resumed on their own.
+   * (VC-889): a local store's interrupted turns are then not resumed on their
+   * own. A cloud store ignores it: its own turns resume once the runner has
+   * connected and the backend's Ticket siblings allow it (`restart-resume.ts`).
    */
   cloudLaunch?(): boolean;
   /** Where Code Mode's worker and WebAssembly are; absent offers no Code Mode. */
@@ -220,6 +222,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
               return project === undefined ? [] : [project];
             }),
           inProcessWatches: false,
+          recovery: store.cloud.recovery,
           bindRuntime: store.cloud.bindRuntime,
           bindNotices: store.cloud.bindNotices,
           bindEnvironment: store.cloud.bindEnvironment,
@@ -246,6 +249,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
           projectIds: undefined,
           projects: undefined,
           inProcessWatches: true,
+          recovery: undefined,
           bindRuntime: undefined,
           bindNotices: undefined,
           bindEnvironment: undefined,
@@ -490,6 +494,9 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     venue,
     ...(input.ownsLegacyRunner === undefined ? {} : { ownsLegacyRunner: input.ownsLegacyRunner }),
     ...(input.cloudLaunch === undefined ? {} : { cloudLaunch: input.cloudLaunch }),
+    // The cloud store's own Sessions resume behind its first connect and the
+    // backend's siblings; `cloudLaunch` then suppresses nothing it owns.
+    ...(product.recovery === undefined ? {} : { cloudRecovery: product.recovery }),
     host,
     ports,
     ...(sessionEngine === null ? {} : { sessionEngine }),

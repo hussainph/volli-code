@@ -110,6 +110,8 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
     () => handlers["runners.subscribeThisMac"](undefined, CALL, sink),
     () => handlers["runners.addThisMac"](undefined, CALL),
     () => handlers["runners.removeThisMac"](undefined, CALL),
+    () => handlers["checkouts.status"]({ projectId: "project-1" }, CALL),
+    () => handlers["checkouts.chooseFolder"]({ projectId: "project-1" }, CALL),
     () => handlers["hostLink.query"]({ workspaceId: HOST, path: "board.snapshot" }, CALL),
     () => handlers["hostLink.mutate"]({ workspaceId: HOST, path: "board.setPriority" }, CALL),
     () => handlers["hostLink.subscribe"]({ workspaceId: HOST, path: "board.changes" }, CALL, sink),
@@ -251,10 +253,12 @@ describe("sessionHandlersFrom", () => {
         "runners.subscribeThisMac": port as never,
         "runners.addThisMac": port as never,
         "runners.removeThisMac": port as never,
+        "checkouts.status": port as never,
+        "checkouts.chooseFolder": port as never,
       },
     };
     for (const call of callAll(sessionHandlersFrom(ports))) await call();
-    expect(port).toHaveBeenCalledTimes(68);
+    expect(port).toHaveBeenCalledTimes(70);
     expect(port).toHaveBeenCalledWith({ flowId: "f", questionId: "q1", password: "p" }, CALL);
     expect(runtime.command).toHaveBeenCalledWith({
       commandId: "cancel",
@@ -305,7 +309,8 @@ describe("sessionHandlersFrom", () => {
     // Volli Cloud account's seven (VC-884), the window's Cloud client's token,
     // the launch's store and restart, its unanswered board writes, and its
     // last-seen board (VC-889), the account's GitHub half's five (VC-897),
-    // and this Mac's runner's four (VC-895).
-    expect(Object.keys(context.handlers)).toHaveLength(111);
+    // this Mac's runner's four (VC-895), and a cloud project's folder's two
+    // (VC-895 N2-3).
+    expect(Object.keys(context.handlers)).toHaveLength(113);
   });
 });

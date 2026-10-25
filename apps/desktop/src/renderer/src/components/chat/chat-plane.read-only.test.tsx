@@ -22,6 +22,7 @@ import {
   EMPTY_PROJECT_SESSION_ROWS,
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
+import { useCloudPlacesStore } from "@renderer/lib/cloud-places";
 import { ChatPlane } from "./chat-plane";
 
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { error: vi.fn() }));
@@ -145,12 +146,48 @@ async function mountPlane(cloud = true) {
   return { container, holdMessage };
 }
 
-it("shows the cloud read-only explanation instead of local command controls", async () => {
+it("keeps the composer in a cloud launch, with where the Session runs above it", async () => {
   adoptLaunch({ store: "cloud", userId: "u", backendUrl: "https://example.convex.cloud" });
-  const { container, holdMessage } = await mountPlane();
-  expect(container.textContent).toContain("Not available yet in cloud");
-  expect(container.querySelector("textarea")).toBeNull();
-  expect(holdMessage).not.toHaveBeenCalled();
+  useCloudPlacesStore.setState({
+    sessions: { [SESSION]: { placeRunnerId: "r1", turnActive: true } },
+    runners: {
+      r1: {
+        id: "r1",
+        name: "hp-mac",
+        kind: "mac",
+        status: "stopped",
+        statusChangedAt: 0,
+        statusReason: null,
+        owned: false,
+      },
+    },
+  });
+  try {
+    const { container, holdMessage } = await mountPlane();
+    // The header's corner names the Place, in place of the host pill.
+    const pill = container.querySelector('[data-slot="cloud-place"]');
+    expect(pill?.textContent).toBe("Paused — Volli is closed on hp-mac");
+    expect(container.querySelector('[data-slot="running-on"]')).toBeNull();
+    // The box stays, so a message can wait for the runner; the line rides above it.
+    expect(container.textContent).not.toContain("Not available yet in cloud");
+    const textarea = message(container);
+    const status = container.querySelector('[data-slot="cloud-composer-status"]');
+    expect(status?.textContent).toBe("Paused — Volli is closed on hp-mac");
+    const dock = container.querySelector('[data-slot="chat-composer-dock"]');
+    expect(
+      status!.compareDocumentPosition(textarea) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(dock?.contains(textarea)).toBe(true);
+    // No window client is connected in this test: a press keeps its words.
+    typeDraft(textarea);
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(holdMessage).not.toHaveBeenCalled();
+    expect(textarea.value).toBe(DRAFT);
+  } finally {
+    act(() => useCloudPlacesStore.setState({ sessions: {}, runners: {} }));
+  }
 });
 
 function message(container: HTMLElement): HTMLTextAreaElement {

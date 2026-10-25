@@ -17,6 +17,7 @@ import { BrowserHolderDot } from "@renderer/components/browser/browser-holder-do
 import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-menu-item";
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
+import { CloudCheckoutControl } from "@renderer/components/cloud-checkout/cloud-checkout-control";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import {
@@ -192,6 +193,9 @@ export function HomeTabStrip({
               tab as well as from a Session tab. `align="end"` so the menu hangs
               back into the window rather than off its edge. */}
           <div className="flex items-center gap-1">
+            {/* A Volli Cloud project with no folder on this Mac starts nothing
+                until one is chosen; outside that case this draws nothing. */}
+            <CloudCheckoutControl projectId={list.projectId} />
             <NewSessionControl
               projectId={list.projectId}
               disabled={creating}

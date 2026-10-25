@@ -761,3 +761,47 @@ describe("the inbox worker", () => {
     }
   });
 });
+
+it("fences wake/poll claims during sleep and ignores a claim answer crossing the fence", async () => {
+  const backend = fakeInbox();
+  const journal = memoryJournal();
+  const timers = manualTimers();
+  let wake: ((value: { ready: number; nextAvailableAt: number | null }) => void) | undefined;
+  const worker = createInboxWorker({
+    backend: backend.backend,
+    journal: journal.store,
+    bootId: BOOT,
+    wake: (listener) => {
+      wake = listener;
+      return () => {};
+    },
+    ...timers,
+  });
+  const execute = vi.fn(async () => DONE);
+  worker.register("workingCopy.refresh", execute);
+  worker.pauseClaims!();
+  await worker.start();
+  wake!({ ready: 1, nextAvailableAt: 0 });
+  timers.fireAll();
+  await flush();
+  expect(backend.backend.claim).not.toHaveBeenCalled();
+  worker.resumeClaims!();
+  let answer: ((jobs: ClaimedJob[]) => void) | undefined;
+  backend.backend.claim = vi.fn(
+    () =>
+      new Promise<ClaimedJob[]>((done) => {
+        answer = done;
+      }),
+  );
+  const pending = worker.claimNow();
+  worker.pauseClaims!();
+  answer!([job("crossed")]);
+  await pending;
+  expect(execute).not.toHaveBeenCalled();
+  expect(journal.rows.size).toBe(0);
+  worker.resumeClaims!();
+  backend.backend.claim = vi.fn(async () => []);
+  await worker.claimNow();
+  expect(backend.backend.claim).toHaveBeenCalledOnce();
+  worker.stop();
+});

@@ -21,6 +21,7 @@ import {
   readRunnerLoad,
   runnerHostFacts,
   type ConvexClientModule,
+  type ConnectBackend,
 } from "@volli/host-core/cloud-runner";
 import type { RunnerAccountPort } from "@volli/host-core/handlers";
 import type { PowerPort } from "@volli/host-core/ports";
@@ -143,6 +144,8 @@ export interface DesktopMacRunnerInput {
   /** The agent browser, as Sessions here can use it now (closed while in the menu bar). */
   readonly browser: () => RunnerBrowserCapability;
   readonly sync?: RunnerConnectionDeps["sync"];
+  /** Dual-locked power acceptance seam; absent in ordinary launches. */
+  readonly connectionTransform?: (connect: ConnectBackend) => ConnectBackend;
   readonly log: {
     info(message: string, fields?: Record<string, unknown>): void;
     warn(message: string, fields?: Record<string, unknown>): void;
@@ -158,7 +161,10 @@ export function createDesktopMacRunner(input: DesktopMacRunnerInput): MacRunner 
     backend: convexMacRunnerBackend({ url: input.backendUrl }),
     connect: runnerConnector({
       siteUrl: input.siteUrl,
-      connect: convexBackendConnection(input.backendUrl, input.convex),
+      connect:
+        input.connectionTransform === undefined
+          ? convexBackendConnection(input.backendUrl, input.convex)
+          : input.connectionTransform(convexBackendConnection(input.backendUrl, input.convex)),
       bootId: randomUUID(),
       ...(input.sync === undefined ? {} : { sync: input.sync }),
       readLoad: () => {

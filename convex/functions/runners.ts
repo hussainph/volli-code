@@ -52,6 +52,7 @@ import {
   RUNNER_INSTALL_TOKEN_TTL_MS,
   RUNNER_LINK_REQUEST_TTL_MS,
   RUNNER_OFFLINE_AFTER_MS,
+  RUNNER_PLACES_MAX_SESSIONS,
   RUNNER_REPORTED_STATES,
   RUNNER_SECRET_PREFIXES,
   RUNNER_STATUS_REASONS,
@@ -72,15 +73,23 @@ import {
   type RunnerKind,
   type RunnerLinkGrant,
   type RunnerLinkMethod,
+  type RunnerPlace,
   type RunnerStatus,
   type UserId,
 } from "@volli/shared/cloud";
 
 import { internal } from "./_generated/api";
 import type { DataModel, Doc } from "./_generated/dataModel.js";
-import { action, internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
+import {
+  action,
+  internalMutation,
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server";
 import { clearRunnerAlert, raiseRunnerAlert } from "./lib/attention";
-import { authError, requireViewer } from "./lib/auth";
+import { authError, requireSessionVisible, requireViewer, type Viewer } from "./lib/auth";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
 import { mintSecret } from "./lib/runnerSecrets";
 import { nullable } from "./lib/validators";
@@ -351,6 +360,81 @@ export const list = query({
     return owned.filter((runner) => !isGone(runner)).map(summary);
   },
 });
+
+/**
+ * The Places of Sessions the caller can see: for each Session id, the runner
+ * it lives on as "Waiting for <Mac>" reads it (`sessionPlaceState` in
+ * `@volli/shared/cloud`), or `null` when the caller cannot see that Session
+ * (absent, deleted, private to someone else, or no longer a Member: all read
+ * the same). Keyed by Session, never by runner, so a teammate learns of a
+ * runner only through a Session they can already see, and the read is bounded
+ * by {@link RUNNER_PLACES_MAX_SESSIONS}. A removed runner is still answered
+ * (`revoked`), so its Sessions can say so.
+ */
+export const places = query({
+  args: { sessionIds: v.array(v.string()) },
+  handler: async (ctx, { sessionIds }): Promise<SessionPlaceRow[]> => {
+    const viewer = await requireViewer(ctx);
+    const unique = [...new Set(sessionIds)];
+    if (unique.length > RUNNER_PLACES_MAX_SESSIONS) {
+      throw new ConvexError({
+        code: "invalid_request",
+        message: `At most ${RUNNER_PLACES_MAX_SESSIONS} sessions per read.`,
+      });
+    }
+    const runners = new Map<string, Doc<"runners"> | null>();
+    const answer: SessionPlaceRow[] = [];
+    for (const sessionId of unique) {
+      const runnerId = await visiblePlace(ctx, viewer, sessionId);
+      if (runnerId === null) {
+        answer.push({ sessionId, place: null });
+        continue;
+      }
+      if (!runners.has(runnerId)) runners.set(runnerId, await runnerById(ctx, runnerId));
+      const runner = runners.get(runnerId)!;
+      answer.push({
+        sessionId,
+        place:
+          runner === null
+            ? null
+            : {
+                id: runner.id,
+                name: runner.name,
+                kind: runner.kind,
+                status: runner.status,
+                statusChangedAt: runner.statusChangedAt,
+                statusReason: runner.statusReason,
+                owned: runner.ownerUserId === viewer.userId,
+              },
+      });
+    }
+    return answer;
+  },
+});
+
+/** One `runners.places` answer. */
+export interface SessionPlaceRow {
+  sessionId: string;
+  place: RunnerPlace | null;
+}
+
+/** The Place of a Session the viewer can see, else `null` (every refusal reads the same). */
+async function visiblePlace(
+  ctx: QueryCtx,
+  viewer: Viewer,
+  sessionId: string,
+): Promise<string | null> {
+  if (!isUuid(sessionId)) return null;
+  try {
+    const { session } = await requireSessionVisible(ctx, sessionId, viewer);
+    return session.placeRunnerId;
+  } catch (error) {
+    if (error instanceof ConvexError && (error.data as { code?: unknown }).code === "not_found") {
+      return null;
+    }
+    throw error;
+  }
+}
 
 /** One of the caller's own runners, or `not_found` (someone else's reads the same). */
 async function requireOwnRunner(ctx: MutationCtx, runnerId: string) {

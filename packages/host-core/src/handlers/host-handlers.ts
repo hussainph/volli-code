@@ -113,6 +113,8 @@ import {
   type CreateRemoteProjectResult,
   type SessionListingPage,
   type ThisMacRunnerSnapshot,
+  type CloudCheckoutChoice,
+  type CloudCheckoutStatus,
   type Ticket,
   type WorktreeSetupAnswer,
   type WorktreeSetupStatusView,
@@ -125,6 +127,7 @@ import type { DetachedWorkPort } from "../detached-work";
 import type { AccountPort } from "./account-port";
 import type { BrowserShortcutsPort } from "./browser-shortcuts-port";
 import type { RunnerAccountPort } from "./runner-account-port";
+import type { CloudCheckoutPort } from "./cloud-checkout-port";
 import type { BrowserPictureStore } from "../browser/picture-store";
 import type { HostSignIns } from "../host-sign-ins";
 import { withLogContext } from "../log/context";
@@ -476,6 +479,12 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
   readonly "runners.subscribeThisMac": HostSubscriptionHandler<void, ThisMacRunnerSnapshot>;
   readonly "runners.addThisMac": HostHandler<void, null>;
   readonly "runners.removeThisMac": HostHandler<void, null>;
+  /**
+   * A Volli Cloud project's folder on this Mac (VC-895 N2-3): desktop main's
+   * {@link HostHandlerOptions.checkouts}, or unavailable. Never a path.
+   */
+  readonly "checkouts.status": HostHandler<{ projectId: string }, CloudCheckoutStatus>;
+  readonly "checkouts.chooseFolder": HostHandler<{ projectId: string }, CloudCheckoutChoice>;
 }
 
 /** The agent keys the socket serves: its own verbs, less the start both agent doors share. */
@@ -703,6 +712,12 @@ export interface HostHandlerOptions {
    * unavailable.
    */
   readonly runners?: RunnerAccountPort | null;
+  /**
+   * Desktop main's cloud project folders (VC-895 N2-3): the runner-local
+   * registry and the folder picker; absent or null on hostd: `checkouts.*`
+   * answer unavailable.
+   */
+  readonly checkouts?: CloudCheckoutPort | null;
 }
 
 /** Messages a client may show; unchanged from the router's own (VC-564). */
@@ -723,6 +738,7 @@ const HOST_LINK_RELAY_UNAVAILABLE = "Remote projects are unavailable on this hos
 const BROWSER_SHORTCUTS_UNAVAILABLE = "Browser Tab shortcuts are unavailable on this host";
 const ACCOUNT_UNAVAILABLE = "Accounts are unavailable on this host";
 const RUNNERS_UNAVAILABLE = "Runners are unavailable on this host";
+const CHECKOUTS_UNAVAILABLE = "Project folders are unavailable on this host";
 const PROJECT_REMOVAL_UNAVAILABLE = "Removing a project is unavailable on this host";
 
 /**
@@ -837,6 +853,7 @@ function hostHandlerEntries(
     present(options.browserShortcuts ?? null, BROWSER_SHORTCUTS_UNAVAILABLE);
   const account = () => present(options.account ?? null, ACCOUNT_UNAVAILABLE);
   const runners = () => present(options.runners ?? null, RUNNERS_UNAVAILABLE);
+  const checkouts = () => present(options.checkouts ?? null, CHECKOUTS_UNAVAILABLE);
   const feed = options.boardFeed ?? createBoardChangeFeed();
 
   const worktree = (database: Database.Database) =>
@@ -1263,5 +1280,8 @@ function hostHandlerEntries(
       runners().subscribeThisMac((snapshot) => void sink.emit(snapshot)),
     "runners.addThisMac": () => done(() => runners().addThisMac()),
     "runners.removeThisMac": () => done(() => runners().removeThisMac()),
+    // A cloud project's folder on this Mac (VC-895 N2-3): desktop main, through its port.
+    "checkouts.status": ({ projectId }) => checkouts().status(projectId),
+    "checkouts.chooseFolder": ({ projectId }) => checkouts().chooseFolder(projectId),
   };
 }
