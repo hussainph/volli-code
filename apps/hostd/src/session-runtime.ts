@@ -309,11 +309,9 @@ export function createHeadlessSessionRuntime(input: {
     // Built before the tool door serves its verbs into it (VC-923).
     handlers: handlersFor(ready),
   });
-  let served: ReturnType<typeof serve> | undefined;
   const owner = runner.owner({
-    bind: (ready) => {
-      served = serve(ready);
-    },
+    // The map is built before the tool door serves its verbs into it.
+    bind: (ready) => void handlersFor(ready),
     // The Workspace service closes before the Session drain it reads through.
     beforeClose: async () => {
       await workspaces?.close();
@@ -332,7 +330,7 @@ export function createHeadlessSessionRuntime(input: {
     ready(): Promise<ReturnType<typeof serve>> {
       starting ??= (async () => {
         await owner.start();
-        return served!;
+        return serve(await runner.ready());
       })();
       return starting;
     },

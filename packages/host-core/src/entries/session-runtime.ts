@@ -42,7 +42,6 @@ export {
 } from "../session-runtime/lifecycle";
 export {
   assertDefaultModelAvailable,
-  readCodeModePolicy,
   readCompactionPolicy,
   readHiddenModels,
   readModelAccessDefaults,
