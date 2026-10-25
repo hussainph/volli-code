@@ -8,7 +8,7 @@ import {
   cloudFrames,
   cloudLatestReply,
   cloudProjection,
-  cloudSnapshotUnfolded,
+  cloudSnapshotSettled,
   readCloudHistory,
   readCloudSnapshot,
   readTranscriptMessage,
@@ -173,6 +173,7 @@ describe("CloudChunkFold", () => {
           ],
         },
       ]),
+      0,
     );
     expect(first.moved).toBe(true);
     expect(first.overlays).toEqual([
@@ -194,7 +195,10 @@ describe("CloudChunkFold", () => {
     expect(fold.cursors()).toEqual([{ messageId: "m1", seq: 4 }]);
     // The same answer again folds nothing.
     expect(
-      fold.read(chunksAnswer([{ messageId: "m1", chunks: [{ seq: 4, ops: [appendOp("lo")] }] }])),
+      fold.read(
+        chunksAnswer([{ messageId: "m1", chunks: [{ seq: 4, ops: [appendOp("lo")] }] }]),
+        0,
+      ),
     ).toEqual({ overlays: [], moved: false });
   });
 
@@ -204,6 +208,7 @@ describe("CloudChunkFold", () => {
       chunksAnswer([
         { messageId: "m1", chunks: [{ seq: 0, baseline: true, ops: [resetOp("m1", "a")] }] },
       ]),
+      0,
     );
     const gapped = fold.read(
       chunksAnswer([
@@ -215,6 +220,7 @@ describe("CloudChunkFold", () => {
           ],
         },
       ]),
+      0,
     );
     expect(gapped).toEqual({ overlays: [], moved: false });
     const healed = fold.read(
@@ -227,6 +233,7 @@ describe("CloudChunkFold", () => {
           ],
         },
       ]),
+      0,
     );
     expect(healed.overlays.map((overlay) => overlay.delta.op)).toEqual(["reset", "part.append"]);
     expect(fold.cursors()).toEqual([{ messageId: "m1", seq: 6 }]);
@@ -235,12 +242,13 @@ describe("CloudChunkFold", () => {
   it("does not start a stream without a baseline, and treats an unreadable chunk as a gap", () => {
     const fold = new CloudChunkFold(SESSION_ID);
     expect(
-      fold.read(chunksAnswer([{ messageId: "m1", chunks: [{ seq: 1, ops: [appendOp("x")] }] }])),
+      fold.read(chunksAnswer([{ messageId: "m1", chunks: [{ seq: 1, ops: [appendOp("x")] }] }]), 0),
     ).toEqual({ overlays: [], moved: false });
     fold.read(
       chunksAnswer([
         { messageId: "m2", chunks: [{ seq: 0, baseline: true, ops: [resetOp("m2", "a")] }] },
       ]),
+      0,
     );
     // A non-baseline chunk that starts with a reset is refused by the shared check.
     const refused = fold.read(
@@ -253,23 +261,30 @@ describe("CloudChunkFold", () => {
           ],
         },
       ]),
+      0,
     );
     expect(refused).toEqual({ overlays: [], moved: false });
     expect(fold.cursors()).toEqual([{ messageId: "m2", seq: 0 }]);
   });
 
-  it("keeps at most the backend's stream limit of cursors, newest first", () => {
+  it("keeps at most the backend's stream limit of cursors, newest first, removing what it drops", () => {
     const fold = new CloudChunkFold(SESSION_ID);
+    const removed: string[] = [];
     for (let index = 0; index < CHUNK_STREAMS_MAX + 3; index += 1) {
-      fold.read(
+      const { overlays } = fold.read(
         chunksAnswer([
           {
             messageId: `m${index}`,
             chunks: [{ seq: 0, baseline: true, ops: [resetOp(`m${index}`, "x")] }],
           },
         ]),
+        0,
       );
+      for (const overlay of overlays) {
+        if (overlay.delta.op === "message.remove") removed.push(overlay.messageId);
+      }
     }
+    expect(removed).toEqual(["m0", "m1", "m2"]);
     const cursors = fold.cursors();
     expect(cursors).toHaveLength(CHUNK_STREAMS_MAX);
     expect(cursors[0]!.messageId).toBe(`m${CHUNK_STREAMS_MAX + 2}`);
@@ -278,7 +293,7 @@ describe("CloudChunkFold", () => {
 
   it("fails on a malformed answer", () => {
     const fold = new CloudChunkFold(SESSION_ID);
-    expect(() => fold.read({ streams: [{ messageId: "m1", chunks: [{ seq: "1" }] }] })).toThrow(
+    expect(() => fold.read({ streams: [{ messageId: "m1", chunks: [{ seq: "1" }] }] }, 0)).toThrow(
       /malformed/u,
     );
   });
@@ -314,10 +329,16 @@ describe("the cloud reads' remaining shapes", () => {
     expect("todoList" in projection).toBe(false);
   });
 
-  it("tells a snapshot before the first fold from one with a state", () => {
-    expect(cloudSnapshotUnfolded(snapshotAnswer(0, null))).toBe(true);
-    expect(cloudSnapshotUnfolded(snapshotAnswer(1))).toBe(false);
-    expect(cloudSnapshotUnfolded(null)).toBe(false);
+  it("settles a snapshot only once it is folded, caught up, and through what was seen", () => {
+    expect(cloudSnapshotSettled(snapshotAnswer(0, null), 0)).toBe(false);
+    expect(cloudSnapshotSettled({ ...(snapshotAnswer(4) as object), catchingUp: true }, 0)).toBe(
+      false,
+    );
+    expect(cloudSnapshotSettled(snapshotAnswer(4), 5)).toBe(false);
+    expect(cloudSnapshotSettled(snapshotAnswer(4), 4)).toBe(true);
+    expect(cloudSnapshotSettled({ state: "{}" }, 9)).toBe(true);
+    // Not a snapshot: settled, so its reading refuses it.
+    expect(cloudSnapshotSettled(null, 0)).toBe(true);
   });
 
   it("refuses a snapshot that is not one", () => {
@@ -336,12 +357,34 @@ describe("the cloud reads' remaining shapes", () => {
     });
   });
 
-  it("names no body for an event the renderer codec refuses", () => {
-    const read = readCloudHistory(
-      historyAnswer([{ sequence: 1, event: { payload: { kind: "x" } } }]),
+  it("keeps an event of a kind this build does not know, and refuses a malformed known one", () => {
+    const future = { ...turnEvent(1, "turn.started"), payload: { kind: "future.kind" } };
+    const read = readCloudHistory(historyAnswer([{ sequence: 1, event: future }]));
+    expect(read.entries[0]).toEqual({
+      sequence: 1,
+      event: future,
+      reference: null,
+      endsTurn: null,
+    });
+    const broken = { ...turnEvent(2, "turn.started"), payload: { kind: "turn.started" } };
+    expect(() => readCloudHistory(historyAnswer([{ sequence: 2, event: broken }]))).toThrow(
+      /Session event 2 is malformed/u,
     );
-    expect(read.entries[0]).toMatchObject({ sequence: 1, reference: null });
-    expect(read.entries[0]!.event).not.toBeNull();
+  });
+
+  it("names the turn a fact ends", () => {
+    const interrupted = {
+      ...turnEvent(3, "turn.started"),
+      payload: { kind: "turn.interrupted", attachmentId: "attach-1", turnId: "turn-9" },
+    };
+    const read = readCloudHistory(
+      historyAnswer([
+        { sequence: 1, event: turnEvent(1, "turn.started") },
+        { sequence: 2, event: turnEvent(2, "turn.completed") },
+        { sequence: 3, event: interrupted },
+      ]),
+    );
+    expect(read.entries.map((entry) => entry.endsTurn)).toEqual([null, "turn-1", "turn-9"]);
   });
 
   it("names the body a submitted message or an answered question records", () => {
@@ -378,6 +421,7 @@ describe("the cloud reads' remaining shapes", () => {
       chunksAnswer([
         { messageId: "m1", chunks: [{ seq: 0, baseline: true, ops: [resetOp("m1", "a")] }] },
       ]),
+      0,
     );
     const refused = fold.read(
       chunksAnswer([
@@ -389,6 +433,7 @@ describe("the cloud reads' remaining shapes", () => {
           ],
         },
       ]),
+      0,
     );
     expect(refused).toEqual({ overlays: [], moved: false });
     // A first chunk that cannot be read starts nothing.
@@ -397,6 +442,7 @@ describe("the cloud reads' remaining shapes", () => {
         chunksAnswer([
           { messageId: "m2", chunks: [{ seq: 0, baseline: true, ops: [appendOp("x")] }] },
         ]),
+        0,
       ),
     ).toEqual({ overlays: [], moved: false });
     expect(fold.cursors()).toEqual([{ messageId: "m1", seq: 0 }]);
@@ -404,9 +450,194 @@ describe("the cloud reads' remaining shapes", () => {
 
   it("fails on answers that are not chunk streams", () => {
     const fold = new CloudChunkFold(SESSION_ID);
-    expect(() => fold.read(null)).toThrow(/stream chunk answer is malformed/u);
-    expect(() => fold.read({ streams: [{ messageId: 1, chunks: [] }] })).toThrow(
+    expect(() => fold.read(null, 0)).toThrow(/stream chunk answer is malformed/u);
+    expect(() => fold.read({ streams: [{ messageId: 1, chunks: [] }] }, 0)).toThrow(
       /stream chunk answer is malformed/u,
     );
+  });
+});
+
+/* Fixtures for the stream-ending tests. */
+function removal(messageId: string, throughSequence: number) {
+  return {
+    kind: "overlay",
+    sessionId: SESSION_ID,
+    throughSequence,
+    messageId,
+    delta: { op: "message.remove" },
+  };
+}
+
+function started(turnId = "turn-1") {
+  const fold = new CloudChunkFold(SESSION_ID);
+  for (const messageId of ["s1", "s2"]) {
+    fold.read(
+      {
+        streams: [
+          {
+            messageId,
+            turnId: messageId === "s2" ? null : turnId,
+            chunks: [
+              {
+                seq: 0,
+                baseline: true,
+                throughSequence: 4,
+                ops: JSON.stringify([resetOp(messageId, "x")]),
+              },
+            ],
+          },
+        ],
+      },
+      4,
+    );
+  }
+  return fold;
+}
+
+/** A `since` answer holding one baseline chunk of a stream with no turn. */
+function baselineAnswer(messageId: string, seq: number, throughSequence: number) {
+  return {
+    streams: [
+      {
+        messageId,
+        turnId: null,
+        chunks: [
+          { seq, baseline: true, throughSequence, ops: JSON.stringify([resetOp(messageId, "x")]) },
+        ],
+      },
+    ],
+  };
+}
+
+describe("CloudChunkFold ends streams", () => {
+  it("removes a retired stream once the history reaches its replacing fact", () => {
+    const fold = started();
+    const read = fold.read({ streams: [], retired: [{ messageId: "s1", throughSequence: 7 }] }, 5);
+    expect(read).toEqual({ overlays: [], moved: true });
+    expect(fold.cursors().map((cursor) => cursor.messageId)).toEqual(["s2"]);
+    expect(fold.due(6)).toEqual([]);
+    expect(fold.due(7)).toEqual([removal("s1", 7)]);
+    expect(fold.due(9)).toEqual([]);
+    // Already caught up: removed in the same answer.
+    expect(
+      fold.read({ streams: [], retired: [{ messageId: "s2", throughSequence: 7 }] }, 8).overlays,
+    ).toEqual([removal("s2", 7)]);
+  });
+
+  it("ignores a retirement of a stream it holds no cursor for, or that started again", () => {
+    const fold = started();
+    expect(
+      fold.read({ streams: [], retired: [{ messageId: "other", throughSequence: 1 }] }, 9),
+    ).toEqual({ overlays: [], moved: false });
+    fold.read({ streams: [], retired: [{ messageId: "s1", throughSequence: 7 }] }, 5);
+    fold.read(
+      chunksAnswer([
+        {
+          messageId: "s1",
+          chunks: [{ seq: 3, baseline: true, throughSequence: 7, ops: [resetOp("s1", "again")] }],
+        },
+      ]),
+      5,
+    );
+    expect(fold.due(7)).toEqual([]);
+  });
+
+  it("refuses a malformed retirement list", () => {
+    const fold = new CloudChunkFold(SESSION_ID);
+    expect(() => fold.read({ streams: [], retired: {} }, 0)).toThrow(/malformed/u);
+    expect(() => fold.read({ streams: [], retired: [{ messageId: "m" }] }, 0)).toThrow(
+      /malformed/u,
+    );
+  });
+
+  it("still removes a message past a gap", () => {
+    const fold = started();
+    const read = fold.read(
+      chunksAnswer([
+        {
+          messageId: "s1",
+          chunks: [
+            { seq: 2, throughSequence: 6, ops: [{ op: "message.remove" }] },
+            { seq: 3, ops: [appendOp("late")] },
+          ],
+        },
+      ]),
+      6,
+    );
+    expect(read).toEqual({ overlays: [removal("s1", 6)], moved: true });
+    expect(fold.cursors()).toContainEqual({ messageId: "s1", seq: 2 });
+  });
+
+  it("removes an ended turn's streams and ignores its late chunks", () => {
+    const fold = started();
+    expect(fold.turnEnded("turn-1", 9)).toEqual({ overlays: [removal("s1", 9)], moved: true });
+    expect(fold.cursors().map((cursor) => cursor.messageId)).toEqual(["s2"]);
+    expect(fold.turnEnded("turn-1", 10)).toEqual({ overlays: [], moved: false });
+    const late = fold.read(
+      {
+        streams: [
+          {
+            messageId: "s1",
+            turnId: "turn-1",
+            chunks: [
+              {
+                seq: 4,
+                baseline: true,
+                throughSequence: 8,
+                ops: JSON.stringify([resetOp("s1", "x")]),
+              },
+            ],
+          },
+        ],
+      },
+      9,
+    );
+    expect(late).toEqual({ overlays: [], moved: false });
+  });
+
+  it("ignores a delayed chunk of an ended stream, and draws one written after it", () => {
+    const fold = started();
+    fold.read({ streams: [], retired: [{ messageId: "s1", throughSequence: 7 }] }, 8);
+    // A stale baseline a late read still serves: not drawn again.
+    expect(fold.read(baselineAnswer("s1", 5, 4), 8)).toEqual({ overlays: [], moved: false });
+    // Written at the watermark: the stream started again.
+    expect(fold.read(baselineAnswer("s1", 6, 7), 8).moved).toBe(true);
+  });
+
+  it("remembers only the most recent ended streams", () => {
+    const fold = new CloudChunkFold(SESSION_ID);
+    for (let index = 0; index <= 256; index += 1) {
+      fold.read(baselineAnswer(`r${index}`, 0, 0), 0);
+      fold.read({ streams: [], retired: [{ messageId: `r${index}`, throughSequence: 9 }] }, 9);
+    }
+    // r0's watermark was forgotten: its delayed baseline draws; r1's is still remembered.
+    expect(fold.read(baselineAnswer("r0", 0, 1), 9).moved).toBe(true);
+    expect(fold.read(baselineAnswer("r1", 0, 1), 9).moved).toBe(false);
+  });
+
+  it("remembers only the most recent ended turns", () => {
+    const fold = new CloudChunkFold(SESSION_ID);
+    for (let index = 0; index <= 64; index += 1) fold.turnEnded(`turn-${index}`, index);
+    // turn-0 was forgotten: its chunks are read again.
+    const read = fold.read(
+      {
+        streams: [
+          {
+            messageId: "s1",
+            turnId: "turn-0",
+            chunks: [
+              {
+                seq: 0,
+                baseline: true,
+                throughSequence: 1,
+                ops: JSON.stringify([resetOp("s1", "x")]),
+              },
+            ],
+          },
+        ],
+      },
+      70,
+    );
+    expect(read.moved).toBe(true);
   });
 });

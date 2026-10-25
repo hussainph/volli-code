@@ -110,6 +110,53 @@ afterEach(() => {
 });
 
 describe("sessions.accept", () => {
+  test("listing presentation is authoritative and older rows read through their fold", async () => {
+    const { t, runner, projectId, ticketId } = await world();
+    const { sessionId, events } = await writeSession({ projectId, ticketId });
+    // Stop at the open input attention so its waiting reason is observable.
+    const asking = events.findIndex((event) => event.payload.kind === "attention.raised");
+    await accept(t, runner, sessionId, events.slice(0, asking + 1));
+    const read = () =>
+      asUser(t, "alice").query(api.sessions.list, {
+        projectId,
+        paginationOpts: { cursor: null, numItems: 100 },
+      });
+    const stored = (await read()).page[0]!.listing;
+    expect(stored).toMatchObject({
+      activity: "waiting",
+      waitingOn: "question",
+      live: true,
+      bornTicketless: false,
+    });
+    await t.run(async (ctx) => {
+      const session = await ctx.db
+        .query("sessions")
+        .withIndex("by_uuid", (q) => q.eq("id", sessionId))
+        .unique();
+      await ctx.db.patch(session!._id, { listing: undefined });
+    });
+    expect((await read()).page[0]!.listing).toEqual(stored);
+    expect((await snapshot(t, "alice", sessionId)).session.listing).toEqual(stored);
+    await t.run(async (ctx) => {
+      const state = await ctx.db
+        .query("sessionStates")
+        .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+        .unique();
+      await ctx.db.delete(state!._id);
+    });
+    expect((await read()).page[0]!.listing).toEqual({
+      activity: "idle",
+      waitingOn: null,
+      live: false,
+      bornTicketless: false,
+    });
+    expect((await snapshot(t, "alice", sessionId)).session.listing).toEqual({
+      activity: "idle",
+      waitingOn: null,
+      live: false,
+      bornTicketless: false,
+    });
+  });
   test("a runner's first accept creates the Session for its owner, claimed by that runner", async () => {
     const { t, alice, runner, projectId, ticketId } = await world();
     const { sessionId, events } = await writeSession({ projectId, ticketId });
@@ -209,6 +256,7 @@ describe("sessions.accept", () => {
     const row = () => t.run(async (ctx) => JSON.stringify(await ctx.db.query("sessions").first()));
     let previous = "";
     let writes = 0;
+    let attachmentWrites = 0;
     let turnActive = false;
     for (const event of events) {
       await accept(t, runner, sessionId, [event]);
@@ -217,6 +265,11 @@ describe("sessions.accept", () => {
       if (changed) writes += 1;
       const kind = event.payload.kind;
       if (kind === "turn.started" || kind === "turn.completed") expect(changed).toBe(true);
+      if (kind === "attachment.opened") {
+        // Liveness is now a listing-visible field too, independent of a turn.
+        expect(changed).toBe(true);
+        attachmentWrites += 1;
+      }
       // Spend inside a running turn, and bookkeeping, do not churn the list.
       if (
         (kind === "usage.recorded" && turnActive) ||
@@ -228,7 +281,9 @@ describe("sessions.accept", () => {
       if (kind === "turn.completed") turnActive = false;
       previous = current;
     }
-    expect(writes).toBeLessThan(events.length / 2);
+    // Keep the original churn bound for the existing fields, plus the one
+    // deliberate liveness transition introduced by the attachment listing.
+    expect(writes - attachmentWrites).toBeLessThan(events.length / 2);
   });
 
   test("refuses a gap, and a batch that is not contiguous, naming the head", async () => {

@@ -11,7 +11,7 @@
  * same way; `projection` re-reads the fold alone.
  *
  * **The stream.** One subscription per open Session holds exactly two live
- * queries and one viewer:
+ * queries:
  *
  * - `sessions.history` after the stream's cursor, a bounded page at a time.
  *   Each new page is hydrated, delivered in sequence order, and the query
@@ -19,21 +19,23 @@
  *   chat core for a fresh snapshot (`subscription-resnapshot-required`), which
  *   it makes quietly a few times before it shows the failure.
  * - `streamChunks.since` from the chunk cursors (`CloudChunkFold`): streamed
- *   text as transcript overlays, which the chat core's fold drops once the
- *   settled message they would overwrite has arrived. Best effort, like the
- *   chunks themselves: a failed read is logged and retried when the history
- *   next moves.
- * - A `sessionViewers` viewer, opened with the stream, renewed on the lease's
- *   heartbeat and closed with it, so the runner streams text only while
- *   someone watches. A close that lands while the open is still in flight
- *   waits for it, so no viewer outlives its stream.
+ *   text as transcript overlays. A stream is drawn under the runner's
+ *   streaming id, so it is taken away here, not by the settled message: once
+ *   the backend reports its rows gone and the history has reached the fact
+ *   that replaced it, or once its turn's end is delivered. Best effort, like
+ *   the chunks themselves: a failed read is logged and retried when the
+ *   history next moves.
  *
- * The stream lives as long as the chat core's client for the Session: the
- * client registry keeps a client resident after its view is closed or moved
- * away from (a tab still open, a Session kept warm), so a Session stays
- * "watched" — and its runner keeps streaming text to it — until that client
- * is disposed, not merely until it leaves the screen. Each window's viewer
- * also lapses on its own a minute after its last renewal.
+ * **Presence is separate.** The runner streams text only for a Session
+ * someone watches (`sessionViewers`). The chat core keeps a Session's client,
+ * and so this stream, resident after its view leaves the screen, so the
+ * stream never claims a viewer: the surface that shows the Session does,
+ * with {@link showCloudSession}, for as long as it is on screen.
+ *
+ * **Projection.** A projection is read only once the backend's fold has
+ * caught up (`catchingUp` cleared) and reached the last fact this stream
+ * delivered, so the state drawn beside the transcript is never older than it.
+ * A fold that does not get there in time fails the read as still arriving.
  *
  * Convex resumes its own socket and queries, so this edge declares
  * `"host-link"` recovery: what reaches the chat core is the backend's answer.
@@ -53,6 +55,7 @@ import {
   type FlushScheduler,
 } from "@volli/session-presentation";
 import { SESSION_VIEWER_HEARTBEAT_MS } from "@volli/shared/cloud";
+import type { SessionStreamOverlay } from "@volli/session-engine";
 import { decompress } from "fzstd";
 import type { UIMessage } from "ai";
 
@@ -61,7 +64,7 @@ import {
   CLOUD_SESSION_ARRIVING,
   CLOUD_SESSION_UNAVAILABLE,
   CloudChunkFold,
-  cloudSnapshotUnfolded,
+  cloudSnapshotSettled,
   cloudFrames,
   cloudLatestReply,
   readCloudHistory,
@@ -84,8 +87,11 @@ export const CLOUD_NOT_CONNECTED = "Volli Cloud is not connected";
 const SNAPSHOT_WINDOW = 50;
 const OLDER_PAGE = 50;
 const LIVE_PAGE = 100;
-/** How long a read waits for a Session's first fold before it says the history is still arriving. */
-const FIRST_FOLD_WAIT_MS = 15_000;
+/**
+ * How long a read waits for the backend's fold to catch up. Past it, the read
+ * fails as still arriving: a stale state is never drawn as the current one.
+ */
+const FOLD_WAIT_MS = 15_000;
 /** The shortest renewal a lease may ask for; anything shorter is a malformed lease. */
 const MIN_HEARTBEAT_MS = 1_000;
 
@@ -200,17 +206,19 @@ export function cloudTranscriptSource(
 
 /* ------------------------------------------------------------- the edge */
 
+/** The clock the edge waits on; injectable for tests. */
+export interface CloudClock {
+  setTimeout(run: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+}
+
 export interface CloudSessionTransportDeps {
   port: CloudSessionPort;
   readTranscripts: CloudTranscriptReader;
   scheduler: FlushScheduler;
   newCommandId(): string;
-  /** A viewer id: a UUID (`sessionViewers.open` refuses anything else). */
-  newViewerId(): string;
-  /** This window, as `sessionViewers.open` records it. */
-  clientSessionId: string;
-  clock: { setTimeout(run: () => void, ms: number): unknown; clearTimeout(handle: unknown): void };
-  /** Background failures nobody is waiting on: presence and streamed text. */
+  clock: CloudClock;
+  /** Background failures nobody is waiting on: streamed text. */
   warn(message: string, error?: unknown): void;
 }
 
@@ -268,90 +276,8 @@ function readOnlyWrites(message: string) {
   };
 }
 
-/** A viewer of one Session: open, renew, close. Background work: failures are logged. */
-class ViewerPresence {
-  readonly #deps: CloudSessionTransportDeps;
-  readonly #sessionId: string;
-  readonly #viewerId: string;
-  #timer: unknown = null;
-  #stopped = false;
-  /** Whether an open was ever sent, so a close has something to close. */
-  #sent = false;
-  /** The viewer's mutations, in order; a close waits for whatever is in flight. */
-  #last: Promise<unknown> = Promise.resolve();
-
-  constructor(deps: CloudSessionTransportDeps, sessionId: string) {
-    this.#deps = deps;
-    this.#sessionId = sessionId;
-    this.#viewerId = deps.newViewerId();
-    this.#open();
-  }
-
-  /** Called once, by the stream's own (idempotent) close. */
-  stop(): void {
-    this.#stopped = true;
-    this.#clear();
-    this.#last = this.#last
-      .then(() => (this.#sent ? this.#deps.port.closeViewer(this.#viewerId) : undefined))
-      .catch((error: unknown) => this.#deps.warn("[cloud-session] couldn't close a viewer", error));
-  }
-
-  #open(): void {
-    this.#run(async () => {
-      this.#sent = true;
-      const lease = await this.#deps.port.openViewer({
-        viewerId: this.#viewerId,
-        sessionId: this.#sessionId,
-        clientSessionId: this.#deps.clientSessionId,
-      });
-      this.#schedule(heartbeatMs(lease));
-    });
-  }
-
-  #beat(): void {
-    this.#run(async () => {
-      const answer = await this.#deps.port.heartbeatViewer(this.#viewerId);
-      // Lapsed, closed, or no longer visible: open it again.
-      if (isRecord(answer) && answer.open === true) this.#schedule(heartbeatMs(answer));
-      else this.#open();
-    });
-  }
-
-  #run(step: () => Promise<void>): void {
-    this.#last = this.#last
-      .then(() => (this.#stopped ? undefined : step()))
-      .catch((error: unknown) => {
-        if (this.#stopped) return;
-        this.#deps.warn("[cloud-session] couldn't keep a viewer open", error);
-        this.#schedule(SESSION_VIEWER_HEARTBEAT_MS);
-      });
-  }
-
-  #schedule(ms: number): void {
-    if (this.#stopped) return;
-    this.#clear();
-    this.#timer = this.#deps.clock.setTimeout(() => {
-      this.#timer = null;
-      this.#beat();
-    }, ms);
-  }
-
-  #clear(): void {
-    if (this.#timer === null) return;
-    this.#deps.clock.clearTimeout(this.#timer);
-    this.#timer = null;
-  }
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function heartbeatMs(lease: unknown): number {
-  const ms = isRecord(lease) ? lease.heartbeatMs : undefined;
-  return typeof ms === "number" && Number.isSafeInteger(ms) && ms >= MIN_HEARTBEAT_MS
-    ? ms
-    : SESSION_VIEWER_HEARTBEAT_MS;
 }
 
 const NOTHING = (): void => {};
@@ -362,13 +288,13 @@ interface StreamHandlers {
   onError(error: unknown): void;
 }
 
-/** One subscription: the history query, the chunk query, and the viewer. */
+/** One subscription: the history query and the chunk query. */
 class CloudSessionStream {
   readonly #deps: CloudSessionTransportDeps;
   readonly #sessionId: string;
   readonly #handlers: StreamHandlers;
+  readonly #delivered: (sequence: number) => void;
   readonly #chunks: CloudChunkFold;
-  readonly #presence: ViewerPresence;
   #closed = false;
   #started = false;
   /** The last sequence delivered (or passed over as unreadable). */
@@ -382,13 +308,18 @@ class CloudSessionStream {
   #stopChunks: () => void = NOTHING;
   #chunksStopped = false;
 
-  constructor(deps: CloudSessionTransportDeps, cursor: ChatStreamCursor, handlers: StreamHandlers) {
+  constructor(
+    deps: CloudSessionTransportDeps,
+    cursor: ChatStreamCursor,
+    handlers: StreamHandlers,
+    delivered: (sequence: number) => void,
+  ) {
     this.#deps = deps;
     this.#sessionId = cursor.sessionId;
     this.#handlers = handlers;
+    this.#delivered = delivered;
     this.#cursor = cursor.afterSequence ?? 0;
     this.#chunks = new CloudChunkFold(cursor.sessionId);
-    this.#presence = new ViewerPresence(deps, cursor.sessionId);
     this.#watchHistory();
     this.#watchChunks();
   }
@@ -399,7 +330,6 @@ class CloudSessionStream {
     this.#pending = null;
     this.#stopHistory();
     this.#stopChunks();
-    this.#presence.stop();
   }
 
   #fail(error: unknown): void {
@@ -430,7 +360,7 @@ class CloudSessionStream {
     if (this.#applying) return;
     this.#applying = true;
     try {
-      while (this.#pending !== null && !this.#closed) {
+      while (this.#pending !== null) {
         const { value } = this.#pending;
         this.#pending = null;
         await this.#apply(value);
@@ -458,6 +388,8 @@ class CloudSessionStream {
       throw resnapshotRequired(failure);
     }
     if (this.#closed) return;
+    // Before any delivery: a projection asked for from inside one waits for the whole page.
+    this.#delivered(fresh.at(-1)!.sequence);
     for (const frame of cloudFrames(this.#sessionId, fresh, messages) as {
       sequence: number;
     }[]) {
@@ -467,10 +399,31 @@ class CloudSessionStream {
     }
     this.#cursor = fresh.at(-1)!.sequence;
     this.#watchHistory();
-    if (this.#chunksStopped) {
+    // What the delivered facts end: their turns' streams, and streams whose
+    // replacing fact has now been delivered.
+    let moved = false;
+    const overlays: SessionStreamOverlay[] = [];
+    for (const entry of fresh) {
+      if (entry.endsTurn === null) continue;
+      const ended = this.#chunks.turnEnded(entry.endsTurn, entry.sequence);
+      moved ||= ended.moved;
+      overlays.push(...ended.overlays);
+    }
+    overlays.push(...this.#chunks.due(this.#cursor));
+    if (!this.#emit(overlays)) return;
+    if (this.#chunksStopped || moved) {
       this.#chunksStopped = false;
       this.#watchChunks();
     }
+  }
+
+  /** Delivers overlays; false once the subscriber let go. */
+  #emit(overlays: readonly SessionStreamOverlay[]): boolean {
+    for (const overlay of overlays) {
+      this.#handlers.onData({ id: String(this.#cursor), data: overlay });
+      if (this.#closed) return false;
+    }
+    return true;
   }
 
   #watchChunks(): void {
@@ -487,16 +440,12 @@ class CloudSessionStream {
         }
         let read: ReturnType<CloudChunkFold["read"]>;
         try {
-          read = this.#chunks.read(result.value);
+          read = this.#chunks.read(result.value, this.#cursor);
         } catch (failure) {
           this.#stopStreamedText(failure);
           return;
         }
-        for (const overlay of read.overlays) {
-          this.#handlers.onData({ id: String(this.#cursor), data: overlay });
-          if (this.#closed) return;
-        }
-        if (read.moved) this.#watchChunks();
+        if (this.#emit(read.overlays) && read.moved) this.#watchChunks();
       },
     );
   }
@@ -513,15 +462,18 @@ class CloudSessionStream {
 /** The Session edge over `deps`; {@link cloudChatTransport} is the app's. */
 export function createCloudSessionTransport(deps: CloudSessionTransportDeps): ChatSessionTransport {
   const { port } = deps;
+  /** The last fact any stream delivered, per Session: what a projection must have folded. */
+  const delivered = new Map<string, number>();
 
   /**
-   * The snapshot, once it has a fold: a Session whose first facts the backend
-   * has not folded yet (just created, or catching up) is watched for a while
-   * rather than refused at once.
+   * The snapshot once the backend's fold is settled through `through`: a
+   * Session whose facts it has not folded yet (just created, catching up, or
+   * behind the stream) is watched for a while rather than read stale.
    */
-  async function foldedSnapshot(sessionId: string): Promise<CloudSnapshotRead> {
+  async function settledSnapshot(sessionId: string, through: number): Promise<CloudSnapshotRead> {
     const answer = await port.snapshot(sessionId);
-    if (!cloudSnapshotUnfolded(answer)) return readCloudSnapshot(answer);
+    if (cloudSnapshotSettled(answer, through)) return readCloudSnapshot(answer);
+    let latest = answer;
     return new Promise((resolve, reject) => {
       let done = false;
       const finish = (settle: () => void) => {
@@ -531,9 +483,16 @@ export function createCloudSessionTransport(deps: CloudSessionTransportDeps): Ch
         stop();
         settle();
       };
+      const read = () => {
+        try {
+          resolve(readCloudSnapshot(latest));
+        } catch (failure) {
+          reject(failure);
+        }
+      };
       const timer = deps.clock.setTimeout(
         () => finish(() => reject(new Error(CLOUD_SESSION_ARRIVING))),
-        FIRST_FOLD_WAIT_MS,
+        FOLD_WAIT_MS,
       );
       const stop = port.watchSnapshot(sessionId, (result) => {
         if (result.kind === "loading") return;
@@ -541,14 +500,8 @@ export function createCloudSessionTransport(deps: CloudSessionTransportDeps): Ch
           finish(() => reject(result.error));
           return;
         }
-        if (cloudSnapshotUnfolded(result.value)) return;
-        finish(() => {
-          try {
-            resolve(readCloudSnapshot(result.value));
-          } catch (failure) {
-            reject(failure);
-          }
-        });
+        latest = result.value;
+        if (cloudSnapshotSettled(latest, through)) finish(read);
       });
     });
   }
@@ -562,7 +515,7 @@ export function createCloudSessionTransport(deps: CloudSessionTransportDeps): Ch
     session: {
       snapshot: {
         async query({ sessionId }) {
-          const snapshot = await foldedSnapshot(sessionId);
+          const snapshot = await settledSnapshot(sessionId, 0);
           const { page, requests }: { page: CloudHistoryRead; requests: CloudTranscriptRequest[] } =
             snapshot.throughSequence === 0
               ? { page: { entries: [], hasMore: false }, requests: [] }
@@ -603,12 +556,15 @@ export function createCloudSessionTransport(deps: CloudSessionTransportDeps): Ch
       },
       projection: {
         async query({ sessionId }) {
-          return { projection: (await foldedSnapshot(sessionId)).projection };
+          const through = delivered.get(sessionId) ?? 0;
+          return { projection: (await settledSnapshot(sessionId, through)).projection };
         },
       },
       subscribe: {
         subscribe(input, handlers) {
-          const stream = new CloudSessionStream(deps, input, handlers);
+          const stream = new CloudSessionStream(deps, input, handlers, (sequence) => {
+            delivered.set(input.sessionId, Math.max(sequence, delivered.get(input.sessionId) ?? 0));
+          });
           return { unsubscribe: () => stream.close() };
         },
       },
@@ -647,6 +603,93 @@ export function disconnectedCloudTransport(scheduler: FlushScheduler): ChatSessi
   };
 }
 
+/* ---------------------------------------------------------- presence */
+
+export interface CloudViewerDeps {
+  port: Pick<CloudSessionPort, "openViewer" | "heartbeatViewer" | "closeViewer">;
+  /** A viewer id: a UUID (`sessionViewers.open` refuses anything else). */
+  newViewerId(): string;
+  /** This window, as `sessionViewers.open` records it. */
+  clientSessionId: string;
+  clock: CloudClock;
+  /** Presence is background work: its failures are logged. */
+  warn(message: string, error?: unknown): void;
+}
+
+function heartbeatMs(lease: unknown): number {
+  const ms = isRecord(lease) ? lease.heartbeatMs : undefined;
+  return typeof ms === "number" && Number.isSafeInteger(ms) && ms >= MIN_HEARTBEAT_MS
+    ? ms
+    : SESSION_VIEWER_HEARTBEAT_MS;
+}
+
+/**
+ * One viewer of one Session: opened now, renewed on the lease's heartbeat
+ * (opened again when it lapsed), and closed by the function this returns.
+ * Its mutations run in order, so a close waits for an open still in flight
+ * and no viewer outlives its surface; a viewer never opened is not closed.
+ * Calling the returned function again does nothing.
+ */
+export function createCloudViewer(deps: CloudViewerDeps, sessionId: string): () => void {
+  const viewerId = deps.newViewerId();
+  let timer: unknown = null;
+  let stopped = false;
+  let sent = false;
+  let last: Promise<unknown> = Promise.resolve();
+
+  const clear = () => {
+    if (timer === null) return;
+    deps.clock.clearTimeout(timer);
+    timer = null;
+  };
+  const schedule = (ms: number) => {
+    if (stopped) return;
+    clear();
+    timer = deps.clock.setTimeout(() => {
+      timer = null;
+      beat();
+    }, ms);
+  };
+  const run = (step: () => Promise<void>) => {
+    last = last
+      .then(() => (stopped ? undefined : step()))
+      .catch((error: unknown) => {
+        if (stopped) return;
+        deps.warn("[cloud-session] couldn't keep a viewer open", error);
+        schedule(SESSION_VIEWER_HEARTBEAT_MS);
+      });
+  };
+  const open = () =>
+    run(async () => {
+      sent = true;
+      const lease = await deps.port.openViewer({
+        viewerId,
+        sessionId,
+        clientSessionId: deps.clientSessionId,
+      });
+      schedule(heartbeatMs(lease));
+    });
+  const beat = () =>
+    run(async () => {
+      const answer = await deps.port.heartbeatViewer(viewerId);
+      // Lapsed, closed, or no longer visible: open it again.
+      if (isRecord(answer) && answer.open === true) schedule(heartbeatMs(answer));
+      else open();
+    });
+
+  open();
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    clear();
+    last = last
+      .then(() => (sent ? deps.port.closeViewer(viewerId) : undefined))
+      .catch((error: unknown) => deps.warn("[cloud-session] couldn't close a viewer", error));
+  };
+}
+
+/* ---------------------------------------------------------- the app's */
+
 let windowClientSessionId: string | null = null;
 
 /** This window's id for `sessionViewers.open`, minted once per renderer. */
@@ -654,6 +697,13 @@ function clientSessionId(): string {
   windowClientSessionId ??= crypto.randomUUID();
   return windowClientSessionId;
 }
+
+const SYSTEM_CLOCK: CloudClock = {
+  setTimeout: (run, ms) => setTimeout(run, ms),
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+const warn = (message: string, error?: unknown): void => console.warn(message, error);
 
 /**
  * Readers kept per running client, so every Session's transport in this
@@ -682,12 +732,26 @@ export function cloudChatTransport(session: CloudSession | null): ChatSessionTra
     readTranscripts: transcriptReaderFor(session),
     scheduler,
     newCommandId: () => crypto.randomUUID(),
-    newViewerId: () => crypto.randomUUID(),
-    clientSessionId: clientSessionId(),
-    clock: {
-      setTimeout: (run, ms) => setTimeout(run, ms),
-      clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-    },
-    warn: (message, error) => console.warn(message, error),
+    clock: SYSTEM_CLOCK,
+    warn,
   });
+}
+
+/**
+ * Marks `sessionId` as on screen in this window, so its runner streams text
+ * to it; the returned function marks it off screen (idempotent). For the
+ * surface that shows the Session, while it shows it — never for a resident
+ * client that is not drawn.
+ */
+export function showCloudSession(session: CloudSession, sessionId: string): () => void {
+  return createCloudViewer(
+    {
+      port: cloudSessionPort(session),
+      newViewerId: () => crypto.randomUUID(),
+      clientSessionId: clientSessionId(),
+      clock: SYSTEM_CLOCK,
+      warn,
+    },
+    sessionId,
+  );
 }

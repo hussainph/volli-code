@@ -628,6 +628,8 @@ export default defineConfig(({ mode, command }) => ({
         "src/lib/cloud-board-api.ts",
         "src/lib/cloud-session-listing.ts",
         "src/lib/cloud-session-source.ts",
+        "src/lib/cloud-session-peek.ts",
+        "src/lib/use-cloud-session-on-screen.ts",
         "src/lib/cloud-sessions.ts",
         "src/lib/cloud-session-read-only.ts",
         "src/lib/cloud-session-view.ts",

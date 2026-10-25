@@ -63,6 +63,7 @@ const row = {
   placeRunnerId: "r",
   model: null,
   usageTotals: EMPTY_SESSION_USAGE_SUMMARY,
+  listing: { activity: "waiting", waitingOn: "question", live: false, bornTicketless: false },
   createdAt: 1,
   lastActivityAt: 2,
 };

@@ -120,7 +120,8 @@ export function sessionCommandFor(projectId: string | null): SessionCommandDoor 
 export function sessionPictureFor(
   projectId: string | null,
 ): RemoteSessionClient["session"]["picture"]["query"] {
-  if (launchStore() === "cloud") return () => Promise.reject(new Error(CLOUD_SESSION_READ_ONLY));
+  if (launchStore() === "cloud")
+    return () => Promise.reject(new Error("Saved pictures are not available yet in cloud"));
   const owner = remoteOwnerOf(projectId);
   if (owner === null) return (input) => sessionRpcClient().session.picture.query(input);
   const client = remoteTransports?.clientFor(projectId!) ?? null;

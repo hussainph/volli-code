@@ -57,7 +57,12 @@ export async function markSessionRead(
 ): Promise<void> {
   // A remote Session's read receipt is its host's (VC-713), and this Mac's
   // `volli:session-read-set` writes only its own: say so, and mark nothing.
-  if (launchStore() === "cloud" && !guardSessionWrite(null)) return;
+  if (launchStore() === "cloud") {
+    // Opening a read-only cloud Session is a read, not an attempted command.
+    // An explicit unread request still explains why its receipt cannot change.
+    if (input.unread) guardSessionWrite(null);
+    return;
+  }
   const host = remoteHostOfSession(input.sessionId);
   if (host !== null) {
     toastError(`Couldn't mark the session: ${notAvailableOn(host)}`);

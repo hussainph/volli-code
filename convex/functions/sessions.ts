@@ -34,6 +34,8 @@ import {
   scrubSessionAttention,
   scrubSessionEvent,
   scrubSessionInteraction,
+  sessionListingActivity,
+  sessionListingWaitingOn,
   type SessionAttachmentProjection,
 } from "@volli/shared";
 import {
@@ -41,12 +43,13 @@ import {
   cloudSessionView,
   SESSION_COMMAND_FORMAT,
   isUuid,
+  type CloudSessionState,
   type UserId,
   type WorkspaceId,
 } from "@volli/shared/cloud";
 
 import type { Doc } from "./_generated/dataModel.js";
-import { internalMutation, mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server";
 import {
   findMembership,
   findPolicy,
@@ -57,6 +60,7 @@ import {
 import { attentionVisibility } from "./lib/attention";
 import { PERSON_OR_AGENT, requireActor } from "./lib/actorAuth";
 import { enqueueJob } from "./lib/jobs";
+import { listingOf } from "./lib/sessionDerived";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
 import {
   acceptFacts,
@@ -234,8 +238,46 @@ export const command = mutation({
 
 // ── reads (client) ──────────────────────────────────────────────────────────
 
+type SessionListing = NonNullable<Doc<"sessions">["listing"]>;
+
+/**
+ * A row's listing: as stored, or for a row written before `listing` existed,
+ * answered from its fold (read only for such a row, so a current page reads
+ * nothing more). With no fold yet the Session is as born: no fact has moved it.
+ */
+async function listingFor(
+  ctx: QueryCtx,
+  session: Doc<"sessions">,
+  folded?: CloudSessionState | null,
+): Promise<SessionListing> {
+  if (session.listing !== undefined) return session.listing;
+  const state =
+    folded !== undefined
+      ? folded
+      : readStoredState(
+          await ctx.db
+            .query("sessionStates")
+            .withIndex("by_session", (q) => q.eq("sessionId", session.id))
+            .unique(),
+        );
+  if (state !== null) return listingOf(cloudSessionView(state));
+  const born = {
+    stopped: null,
+    turnActive: false,
+    lastTurnOutcome: null,
+    attention: { active: [], primary: null },
+    interactions: { active: [] },
+  };
+  return {
+    activity: sessionListingActivity(born, false),
+    waitingOn: sessionListingWaitingOn(born),
+    live: false,
+    bornTicketless: session.ticketId === null,
+  };
+}
+
 /** A Session's listing row, as a list or a card shows it. */
-function sessionSummary(session: Doc<"sessions">) {
+function sessionSummary(session: Doc<"sessions">, listing: SessionListing) {
   return {
     id: session.id,
     projectId: session.projectId,
@@ -256,6 +298,7 @@ function sessionSummary(session: Doc<"sessions">) {
     placeRunnerId: session.placeRunnerId,
     model: session.model,
     usageTotals: session.usageTotals as unknown,
+    listing,
     createdAt: session.createdAt,
     lastActivityAt: session.lastActivityAt,
   };
@@ -287,7 +330,7 @@ export const snapshot = query({
     const state = readStoredState(doc);
     const view = state === null ? null : cloudSessionView(state);
     return {
-      session: sessionSummary(session),
+      session: sessionSummary(session, await listingFor(ctx, session, state)),
       foldedThrough: state?.throughSequence ?? 0,
       catchingUp: (doc?.catchUpAt ?? null) !== null,
       state:
@@ -471,7 +514,7 @@ export const list = query({
         session.projectId === project.id &&
         viewerCanSee(viewer.userId, session, project.workspaceId, membership, policy)
       ) {
-        visible.push(sessionSummary(session));
+        visible.push(sessionSummary(session, await listingFor(ctx, session)));
       }
     }
     return { page: visible, isDone: page.isDone, continueCursor: page.continueCursor };

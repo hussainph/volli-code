@@ -42,10 +42,7 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 
 import { readOnlyMark } from "@renderer/components/hosts/use-hosts";
-import {
-  useCanWriteSession as useCanWrite,
-  CLOUD_SESSION_READ_ONLY,
-} from "@renderer/lib/cloud-session-read-only";
+import { useCanWriteSession, CLOUD_SESSION_READ_ONLY } from "@renderer/lib/cloud-session-read-only";
 import { launchStore } from "@renderer/stores/launch";
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -210,7 +207,7 @@ export function NewSessionControl({
   onNewTerminal(): void;
 }) {
   const drawing = DRAWING[placement];
-  const canWrite = useCanWrite(projectId);
+  const canWrite = useCanWriteSession(projectId);
   const disabled = booting || !canWrite;
   const cloudReason = launchStore() === "cloud" ? CLOUD_SESSION_READ_ONLY : undefined;
 
@@ -260,6 +257,7 @@ export function NewSessionControl({
             would otherwise multiply into an unreadable 25%). */}
         <div
           title={cloudReason}
+          role={cloudReason === undefined ? undefined : "group"}
           aria-label={cloudReason}
           {...readOnlyMark(canWrite)}
           className={cn(

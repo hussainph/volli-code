@@ -48,7 +48,10 @@ import type { StatusDotState } from "@renderer/components/ui/status-dot";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useSessionOrderStore } from "@renderer/stores/session-order";
 import { launchStore } from "@renderer/stores/launch";
-import { CLOUD_SESSION_READ_ONLY, guardSessionWrite } from "@renderer/lib/cloud-session-read-only";
+import { guardSessionWrite } from "@renderer/lib/cloud-session-read-only";
+import { cloudSession } from "@renderer/lib/cloud-client";
+import { cloudChatTransport } from "@renderer/lib/cloud-session-transport";
+import { readCloudSessionPeek } from "@renderer/lib/cloud-session-peek";
 
 import { peekSessionId } from "./peek-subject";
 import type { SessionPeekPorts } from "./use-session-peek";
@@ -74,7 +77,12 @@ export interface SidebarPeekSurface {
 
 /** Independent of the surface: rebuilding its action ports must not invalidate peek reads. */
 const readContent: SessionPeekPorts["readContent"] = async (sessionId, refine = false) => {
-  if (launchStore() === "cloud") throw new Error(CLOUD_SESSION_READ_ONLY);
+  if (launchStore() === "cloud") {
+    return readCloudSessionPeek(
+      sessionId,
+      cloudChatTransport(cloudSession()).rpc.session.snapshot.query,
+    );
+  }
   // A remote Session's transcript is its host's (VC-713); this Mac's peek
   // reads only its own ledger.
   const host = remoteHostOfSession(sessionId);

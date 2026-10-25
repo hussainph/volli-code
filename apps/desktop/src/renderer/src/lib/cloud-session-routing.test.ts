@@ -53,24 +53,31 @@ describe("cloud Session routing", () => {
       } as never),
     ).rejects.toThrow("Not available yet in cloud");
     await expect(sessionPictureFor("p")({ sessionId: "s", name: "p" } as never)).rejects.toThrow(
-      "Not available yet in cloud",
+      "Saved pictures are not available yet in cloud",
     );
     subscribeProjectSessionActivity()();
     subscribeTicketSessionActivity()();
     expect(await renameChatSession("s", "New title")).toBe(false);
     const write = vi.fn();
+    toast.mockClear();
     await markSessionRead(
       { sessionId: "s", unread: false },
       { readState: () => ({ unreadSince: null }), write },
     );
     expect(write).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
+    await markSessionRead(
+      { sessionId: "s", unread: true },
+      { readState: () => ({ unreadSince: null }), write },
+    );
+    expect(toast).toHaveBeenCalled();
     const peek = createSidebarPeekPorts({
       openRow: vi.fn(),
       openTicket: vi.fn(),
       showConversation: vi.fn(),
       setRead: vi.fn(),
     });
-    await expect(peek.readContent("s")).rejects.toThrow("Not available yet in cloud");
+    await expect(peek.readContent("s")).rejects.toThrow("not connected");
     expect(await peek.answer("s", "i", {} as never)).toBe(false);
     expect(local).not.toHaveBeenCalled();
   });

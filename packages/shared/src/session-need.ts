@@ -110,7 +110,7 @@ export type SessionPersonNeed = (typeof SESSION_PERSON_NEEDS)[number];
  *
  * 1. **A stopped Session needs nobody.** Its work was ended on purpose — by a
  *    supervisor, the person, or the watchdog (VC-86) — so there is nothing to
- *    rescue and nothing to answer. This is the same first clause `chatActivity`
+ *    rescue and nothing to answer. This is the same first clause `sessionListingActivity`
  *    uses for the listing row, kept in the same position so a row that reads
  *    "Stopped" can never be the row that raised a notification.
  *

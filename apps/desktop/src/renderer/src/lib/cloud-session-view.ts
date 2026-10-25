@@ -69,11 +69,16 @@ export interface CloudSnapshotRead {
 export const CLOUD_SESSION_ARRIVING = "This Session's history is still arriving";
 
 /**
- * Whether `sessions.snapshot` answered before the backend folded any fact of
- * the Session: a state to wait for, not one to draw.
+ * Whether a `sessions.snapshot` answer is one to draw for a reader that has
+ * seen the facts through `through`: the backend has folded a state, is not
+ * catching up, and its fold has reached `through`. Anything else is a state
+ * to wait for. An answer that is not a snapshot at all is settled — its
+ * reading fails it.
  */
-export function cloudSnapshotUnfolded(value: unknown): boolean {
-  return isRecord(value) && value.state === null;
+export function cloudSnapshotSettled(value: unknown, through: number): boolean {
+  if (!isRecord(value)) return true;
+  if (value.state === null || value.catchingUp === true) return false;
+  return !(typeof value.foldedThrough === "number" && value.foldedThrough < through);
 }
 
 /**
@@ -196,6 +201,8 @@ export interface CloudHistoryEntry {
   event: unknown;
   /** The transcript body this fact records, when it records one. */
   reference: TranscriptReference | null;
+  /** The turn this fact ends (`turn.completed`, `turn.interrupted`), when it ends one. */
+  endsTurn: string | null;
 }
 
 export interface CloudHistoryRead {
@@ -212,7 +219,7 @@ export function readCloudHistory(value: unknown): CloudHistoryRead {
     if (!isRecord(row) || !isSequence(row.sequence) || row.sequence === 0)
       throw malformed("Session history");
     if (row.status !== "ok" || typeof row.event !== "string") {
-      return { sequence: row.sequence, event: null, reference: null };
+      return { sequence: row.sequence, event: null, reference: null, endsTurn: null };
     }
     let event: unknown;
     try {
@@ -221,10 +228,16 @@ export function readCloudHistory(value: unknown): CloudHistoryRead {
       throw malformed(`Session event ${row.sequence}`);
     }
     const parsed = parseRendererSessionEvent(event, "cloud.history.event");
+    // A kind this build does not know keeps its envelope; a known kind that
+    // does not read is corruption.
+    if (!parsed.ok && parsed.reason === "malformed") {
+      throw new Error(`The cloud Session event ${row.sequence} is malformed: ${parsed.message}`);
+    }
     return {
       sequence: row.sequence,
       event,
       reference: parsed.ok ? transcriptReferenceOf(parsed.event) : null,
+      endsTurn: parsed.ok ? endedTurnOf(parsed.event) : null,
     };
   });
   entries.sort((left, right) => left.sequence - right.sequence);
@@ -247,6 +260,14 @@ export function transcriptReferenceOf(event: RendererSessionEvent): TranscriptRe
     }
   }
   return null;
+}
+
+/** The turn a renderer-safe event ends, as the backend's stream cleanup reads it. */
+export function endedTurnOf(event: RendererSessionEvent): string | null {
+  const payload = event.payload;
+  return payload.kind === "turn.completed" || payload.kind === "turn.interrupted"
+    ? payload.turnId
+    : null;
 }
 
 /**
@@ -307,21 +328,70 @@ interface StreamCursor {
   /** A seq went missing after it: ignore the stream until its next baseline. */
   gap: boolean;
   touched: number;
+  turnId: string | null;
+}
+
+/** Ended turns remembered, so a late chunk of one is not drawn again. */
+const ENDED_TURNS_KEPT = 64;
+/** Ended streams whose watermark is remembered, so a delayed chunk of one is not drawn again. */
+const RETIRED_STREAMS_KEPT = 256;
+
+function readRetired(value: unknown): { messageId: string; throughSequence: number }[] {
+  // Absent from a backend that predates it.
+  if (value === undefined) return [];
+  if (
+    !Array.isArray(value) ||
+    !value.every(
+      (entry) =>
+        isRecord(entry) && typeof entry.messageId === "string" && isSequence(entry.throughSequence),
+    )
+  ) {
+    throw malformed("stream chunk answer");
+  }
+  return value as { messageId: string; throughSequence: number }[];
+}
+
+/** Whether a chunk's operations remove the message it streams. */
+function removesMessage(ops: string): boolean {
+  const parsed = parseStreamChunkOps(ops, false);
+  return parsed.ok && parsed.ops.some((entry) => entry.op === "message.remove");
 }
 
 /**
  * The reader's side of streamed text: which chunk of each stream it folded
- * last, and the overlays each new answer of `streamChunks.since` adds.
+ * last, the overlays each new answer of `streamChunks.since` adds, and the
+ * removals that end a stream.
  *
  * A chunk is folded only right after the one before it, or when it is a
  * baseline (a `reset` of the whole message). Anything else is a gap, and the
  * stream is ignored until its next baseline, which the backend serves from
- * the cursor on its own. The cursors sent back are bounded by the backend's
- * own limit, the least recently moved stream dropped first.
+ * the cursor on its own — except a chunk that removes the message, which
+ * still removes it.
+ *
+ * A stream is drawn under the runner's streaming id, which need not be the
+ * id of the message that settles it, so nothing in the transcript fold ends
+ * it. It ends here, as a `message.remove` overlay:
+ * - when the backend says its rows are gone (`retired`), once the history
+ *   has reached the accepted cursor it names, so the settled message is
+ *   drawn before the stream is taken away;
+ * - when its turn ends ({@link CloudChunkFold.turnEnded}); a late chunk of
+ *   that turn is ignored;
+ * - when its cursor is dropped to stay within the backend's limit (the least
+ *   recently moved stream goes first).
+ *
+ * An ended stream (retired, or its turn ended) keeps a watermark: a delayed
+ * chunk of it written before that point — a stale baseline a late read still
+ * serves — is ignored rather than drawn again. A baseline written at or after
+ * it is a stream that legitimately started again.
  */
 export class CloudChunkFold {
   readonly #sessionId: string;
   readonly #streams = new Map<string, StreamCursor>();
+  /** Ended streams, by the history cursor their removal waits for. */
+  readonly #retiring = new Map<string, number>();
+  readonly #endedTurns: string[] = [];
+  /** Ended streams, by the durable sequence a chunk must reach to draw them again. */
+  readonly #watermarks = new Map<string, number>();
   #tick = 0;
 
   constructor(sessionId: string) {
@@ -337,10 +407,15 @@ export class CloudChunkFold {
 
   /**
    * The overlays one answer adds, in order, and whether the cursors moved (so
-   * the caller re-reads from them).
+   * the caller re-reads from them). `historyCursor` is the last fact the
+   * reader has delivered.
    */
-  read(value: unknown): { overlays: SessionStreamOverlay[]; moved: boolean } {
+  read(
+    value: unknown,
+    historyCursor: number,
+  ): { overlays: SessionStreamOverlay[]; moved: boolean } {
     if (!isRecord(value) || !Array.isArray(value.streams)) throw malformed("stream chunk answer");
+    const retired = readRetired(value.retired);
     const overlays: SessionStreamOverlay[] = [];
     let moved = false;
     for (const stream of value.streams) {
@@ -350,6 +425,8 @@ export class CloudChunkFold {
         !Array.isArray(stream.chunks)
       )
         throw malformed("stream chunk answer");
+      const turnId = typeof stream.turnId === "string" ? stream.turnId : null;
+      if (turnId !== null && this.#endedTurns.includes(turnId)) continue;
       for (const chunk of stream.chunks) {
         if (
           !isRecord(chunk) ||
@@ -360,7 +437,7 @@ export class CloudChunkFold {
         ) {
           throw malformed("stream chunk");
         }
-        const folded = this.#fold(stream.messageId, {
+        const folded = this.#fold(stream.messageId, turnId, {
           seq: chunk.seq,
           baseline: chunk.baseline,
           throughSequence: chunk.throughSequence,
@@ -371,21 +448,67 @@ export class CloudChunkFold {
         overlays.push(...folded);
       }
     }
-    this.#bound();
+    for (const { messageId, throughSequence } of retired) {
+      if (!this.#streams.delete(messageId)) continue;
+      moved = true;
+      this.#retiring.set(messageId, throughSequence);
+      this.#ended(messageId, throughSequence);
+    }
+    overlays.push(...this.#bound(), ...this.due(historyCursor));
     return { overlays, moved };
+  }
+
+  /** The removals of ended streams the history has now caught up with. */
+  due(historyCursor: number): SessionStreamOverlay[] {
+    const overlays: SessionStreamOverlay[] = [];
+    for (const [messageId, through] of this.#retiring) {
+      if (through > historyCursor) continue;
+      this.#retiring.delete(messageId);
+      overlays.push(this.#removal(messageId, through));
+    }
+    return overlays;
+  }
+
+  /**
+   * A turn's end was delivered: its streams are over. Their removals, and
+   * whether the cursors moved.
+   */
+  turnEnded(
+    turnId: string,
+    throughSequence: number,
+  ): { overlays: SessionStreamOverlay[]; moved: boolean } {
+    this.#endedTurns.push(turnId);
+    if (this.#endedTurns.length > ENDED_TURNS_KEPT) this.#endedTurns.shift();
+    const overlays: SessionStreamOverlay[] = [];
+    for (const [messageId, cursor] of this.#streams) {
+      if (cursor.turnId !== turnId) continue;
+      this.#streams.delete(messageId);
+      this.#ended(messageId, throughSequence);
+      overlays.push(this.#removal(messageId, throughSequence));
+    }
+    return { overlays, moved: overlays.length > 0 };
   }
 
   #fold(
     messageId: string,
+    turnId: string | null,
     chunk: { seq: number; baseline: boolean; throughSequence: number; ops: string },
   ): SessionStreamOverlay[] | null {
+    // Written before the stream ended: a delayed chunk, not a restart.
+    if (chunk.throughSequence < (this.#watermarks.get(messageId) ?? 0)) return null;
     const cursor = this.#streams.get(messageId);
     // Already folded: the same answer again, or a re-read that overlaps.
     if (cursor !== undefined && chunk.seq <= cursor.seq) return null;
     const next = cursor !== undefined && !cursor.gap && chunk.seq === cursor.seq + 1;
     if (!chunk.baseline && !next) {
-      if (cursor !== undefined) cursor.gap = true;
-      return null;
+      // Nothing drawn of a stream never started; a gapped one waits for a baseline.
+      if (cursor === undefined) return null;
+      cursor.gap = true;
+      if (!removesMessage(chunk.ops)) return null;
+      // A removal past the gap still ends what was drawn.
+      cursor.seq = chunk.seq;
+      cursor.touched = this.#tick += 1;
+      return [this.#removal(messageId, chunk.throughSequence)];
     }
     const overlays = this.#overlays(messageId, chunk);
     if (overlays === null) {
@@ -394,7 +517,13 @@ export class CloudChunkFold {
       if (cursor !== undefined) cursor.gap = true;
       return null;
     }
-    this.#streams.set(messageId, { seq: chunk.seq, gap: false, touched: (this.#tick += 1) });
+    this.#retiring.delete(messageId);
+    this.#streams.set(messageId, {
+      seq: chunk.seq,
+      gap: false,
+      touched: (this.#tick += 1),
+      turnId,
+    });
     return overlays;
   }
 
@@ -419,10 +548,31 @@ export class CloudChunkFold {
     return overlays;
   }
 
-  #bound(): void {
-    if (this.#streams.size <= CHUNK_STREAMS_MAX) return;
-    for (const { messageId } of this.cursors().slice(CHUNK_STREAMS_MAX)) {
-      this.#streams.delete(messageId);
+  #ended(messageId: string, throughSequence: number): void {
+    this.#watermarks.delete(messageId);
+    this.#watermarks.set(messageId, throughSequence);
+    if (this.#watermarks.size > RETIRED_STREAMS_KEPT) {
+      this.#watermarks.delete(this.#watermarks.keys().next().value as string);
     }
+  }
+
+  #removal(messageId: string, throughSequence: number): SessionStreamOverlay {
+    return {
+      kind: "overlay",
+      sessionId: this.#sessionId,
+      throughSequence,
+      messageId,
+      delta: { op: "message.remove" },
+    };
+  }
+
+  /** Drops the least recently moved cursors past the backend's limit, and what they drew. */
+  #bound(): SessionStreamOverlay[] {
+    return this.cursors()
+      .slice(CHUNK_STREAMS_MAX)
+      .map(({ messageId }) => {
+        this.#streams.delete(messageId);
+        return this.#removal(messageId, 0);
+      });
   }
 }

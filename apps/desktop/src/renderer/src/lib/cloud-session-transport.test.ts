@@ -23,6 +23,8 @@ import {
   cloudSessionPort,
   cloudTranscriptSource,
   createCloudSessionTransport,
+  createCloudViewer,
+  showCloudSession,
   type CloudSessionPort,
   type CloudSessionTransportDeps,
   type CloudWatchResult,
@@ -219,7 +221,6 @@ function harness() {
   const warnings: string[] = [];
   const reads: CloudTranscriptRequest[][] = [];
   let reader: CloudTranscriptReader = everyBody;
-  let viewers = 0;
   const deps: CloudSessionTransportDeps = {
     port,
     readTranscripts: (sessionId, requests) => {
@@ -229,8 +230,6 @@ function harness() {
     },
     scheduler,
     newCommandId: () => "command-1",
-    newViewerId: () => `viewer-${(viewers += 1)}`,
-    clientSessionId: "window-1",
     clock,
     warn: (message) => warnings.push(message),
   };
@@ -392,6 +391,14 @@ describe("the cloud Session reads", () => {
     await expect(snapshot).rejects.toBe(error);
     expect(failing.clock.pending()).toEqual([]);
 
+    const stale = harness();
+    stale.port.snapshotAnswer = { ...(snapshotAnswer(3) as object), catchingUp: true };
+    const behind = stale.transport.rpc.session.snapshot.query({ sessionId: SESSION_ID });
+    await settle();
+    stale.clock.fire();
+    // Past the wait, a state still catching up is not drawn as the current one.
+    await expect(behind).rejects.toThrow("This Session's history is still arriving");
+
     const corrupt = harness();
     corrupt.port.snapshotAnswer = snapshotAnswer(0, null);
     const broken = corrupt.transport.rpc.session.snapshot.query({ sessionId: SESSION_ID });
@@ -412,6 +419,50 @@ describe("the cloud Session reads", () => {
     expect(await transport.rpc.session.history.query({ sessionId: SESSION_ID, before: 3 })).toEqual(
       { frames: [], before: null },
     );
+  });
+
+  it("reads a projection only once the fold has caught up with what the stream delivered", async () => {
+    const { port, clock, transport } = harness();
+    transport.rpc.session.subscribe.subscribe(
+      { sessionId: SESSION_ID, afterSequence: 2 },
+      recorder().handlers,
+    );
+    port.historyWatch.push(
+      value(historyAnswer([{ sequence: 3, event: turnEvent(3, "turn.started") }])),
+    );
+    await settle();
+    port.snapshotAnswer = snapshotAnswer(2);
+    const reading = transport.rpc.session.projection.query({ sessionId: SESSION_ID });
+    await settle();
+    const watch = port.snapshotWatches[0]!;
+    watch.push(
+      value({ ...(snapshotAnswer(3, viewJson({ turnActive: true })) as object), catchingUp: true }),
+    );
+    watch.push(value(snapshotAnswer(3, viewJson({ turnActive: true }))));
+    expect((await reading).projection.turnActive).toBe(true);
+    expect(clock.pending()).toEqual([]);
+  });
+
+  it("makes a projection asked for mid-page wait for the whole page", async () => {
+    const { port, transport } = harness();
+    let reading: ReturnType<typeof transport.rpc.session.projection.query> | null = null;
+    transport.rpc.session.subscribe.subscribe(
+      { sessionId: SESSION_ID, afterSequence: 0 },
+      {
+        onStarted: () => undefined,
+        onData: () => {
+          reading ??= transport.rpc.session.projection.query({ sessionId: SESSION_ID });
+        },
+        onError: () => undefined,
+        onComplete: () => undefined,
+      },
+    );
+    port.snapshotAnswer = snapshotAnswer(1);
+    port.historyWatch.push(value(historyAnswer(rows(1, 2))));
+    await settle();
+    // Asked while frame 1 was being delivered, it still waits for frame 2.
+    port.snapshotWatches[0]!.push(value(snapshotAnswer(2, viewJson({ turnActive: true }))));
+    expect((await reading!).projection.turnActive).toBe(true);
   });
 
   it("re-reads the projection alone", async () => {
@@ -456,6 +507,30 @@ describe("the cloud Session reads", () => {
 });
 
 /* ----------------------------------------------------------------- stream */
+
+/** One stream's baseline chunk, of `turnId`. */
+function baselineOf(messageId: string, turnId: string) {
+  return {
+    messageId,
+    turnId,
+    chunks: [
+      {
+        seq: 0,
+        baseline: true,
+        throughSequence: 4,
+        ops: JSON.stringify([resetOp(messageId, "x")]),
+      },
+    ],
+  };
+}
+
+/** A `turn.completed` fact of `turnId`. */
+function endedAt(sequence: number, turnId: string) {
+  return {
+    ...turnEvent(sequence, "turn.completed"),
+    payload: { kind: "turn.completed", attachmentId: "attach-1", turnId },
+  };
+}
 
 describe("the cloud Session stream", () => {
   it("delivers new facts in order, hydrated, and moves its query to the new cursor", async () => {
@@ -535,11 +610,11 @@ describe("the cloud Session stream", () => {
     expect(log.errors).toHaveLength(1);
     expect(isResnapshotRequired(log.errors[0])).toBe(true);
     expect((log.errors[0] as Error).message).toBe("Session history could not be read: store down");
-    // The stream is over: its queries and its viewer with it.
+    // The stream is over: its queries with it. It never held a viewer.
     expect(port.historyWatch.stopped).toBe(true);
     expect(port.chunkWatch.stopped).toBe(true);
     await settle();
-    expect(port.viewer).toEqual(["open viewer-1 window-1", "close viewer-1"]);
+    expect(port.viewer).toEqual([]);
 
     const other = harness();
     const second = recorder();
@@ -673,6 +748,112 @@ describe("the cloud Session stream", () => {
     expect(port.chunkWatches).toHaveLength(2);
   });
 
+  it("removes a stream whose rows are gone only once the history reaches its replacing fact", async () => {
+    const { port, transport } = harness();
+    const { log, handlers } = recorder();
+    transport.rpc.session.subscribe.subscribe(
+      { sessionId: SESSION_ID, afterSequence: 4 },
+      handlers,
+    );
+    port.chunkWatch.push(
+      value(
+        chunksAnswer([
+          {
+            messageId: "s1",
+            chunks: [{ seq: 0, baseline: true, throughSequence: 4, ops: [resetOp("s1", "Hi")] }],
+          },
+        ]),
+      ),
+    );
+    port.chunkWatch.push(
+      value({ streams: [], retired: [{ messageId: "s1", throughSequence: 6 }] }),
+    );
+    expect(log.data).toHaveLength(1);
+    expect(port.chunkWatch.args.cursors).toEqual([]);
+    port.historyWatch.push(value(historyAnswer(rows(5))));
+    await settle();
+    expect(log.data.map((event) => event.id)).toEqual(["4", "5"]);
+    port.historyWatch.push(value(historyAnswer(rows(6))));
+    await settle();
+    expect(log.data.slice(2)).toEqual([
+      expect.objectContaining({ id: "6", data: expect.objectContaining({ sequence: 6 }) }),
+      {
+        id: "6",
+        data: {
+          kind: "overlay",
+          sessionId: SESSION_ID,
+          throughSequence: 6,
+          messageId: "s1",
+          delta: { op: "message.remove" },
+        },
+      },
+    ]);
+  });
+
+  it("removes an ended turn's streams once its end is delivered", async () => {
+    const { port, transport } = harness();
+    const { log, handlers } = recorder();
+    transport.rpc.session.subscribe.subscribe(
+      { sessionId: SESSION_ID, afterSequence: 4 },
+      handlers,
+    );
+    port.chunkWatch.push(
+      value({ streams: [baselineOf("s1", "turn-1"), baselineOf("s2", "turn-2")] }),
+    );
+    const watching = port.chunkWatch;
+    port.historyWatch.push(
+      value(
+        historyAnswer([
+          { sequence: 5, event: endedAt(5, "turn-1") },
+          { sequence: 6, event: endedAt(6, "turn-2") },
+        ]),
+      ),
+    );
+    await settle();
+    expect(
+      log.data
+        .map((event) => event.data as { kind?: string; messageId?: string; delta?: { op: string } })
+        .filter((data) => data.delta?.op === "message.remove")
+        .map((data) => data.messageId),
+    ).toEqual(["s1", "s2"]);
+    expect(watching.stopped).toBe(true);
+    expect(port.chunkWatch.args.cursors).toEqual([]);
+  });
+
+  it("stops at once when its subscriber lets go from inside a removal", async () => {
+    const { port, transport } = harness();
+    let subscription: { unsubscribe(): void } | null = null;
+    const delivered: unknown[] = [];
+    subscription = transport.rpc.session.subscribe.subscribe(
+      { sessionId: SESSION_ID, afterSequence: 4 },
+      {
+        onStarted: () => undefined,
+        onData: (event) => {
+          delivered.push(event.data);
+          if ((event.data as { delta?: { op: string } }).delta?.op === "message.remove") {
+            subscription?.unsubscribe();
+          }
+        },
+        onError: () => undefined,
+        onComplete: () => undefined,
+      },
+    );
+    port.chunkWatch.push(
+      value(
+        chunksAnswer([
+          { messageId: "s1", chunks: [{ seq: 0, baseline: true, ops: [resetOp("s1", "x")] }] },
+        ]),
+      ),
+    );
+    port.historyWatch.push(
+      value(historyAnswer([{ sequence: 5, event: turnEvent(5, "turn.completed") }])),
+    );
+    await settle();
+    expect(delivered).toHaveLength(3);
+    expect(port.chunkWatches).toHaveLength(2);
+    expect(port.chunkWatch.stopped).toBe(true);
+  });
+
   it("stops at once when its subscriber lets go from inside an overlay", () => {
     const { port, transport } = harness();
     let subscription: { unsubscribe(): void } | null = null;
@@ -736,13 +917,29 @@ describe("the cloud Session stream", () => {
 
 /* ---------------------------------------------------------------- viewer */
 
-describe("the stream's viewer", () => {
-  it("opens with the stream, renews on the lease's heartbeat, and closes with it", async () => {
-    const { port, clock, warnings, transport } = harness();
-    const subscription = transport.rpc.session.subscribe.subscribe(
-      { sessionId: SESSION_ID, afterSequence: 0 },
-      recorder().handlers,
+function viewerOf(port: FakePort) {
+  const clock = new FakeClock();
+  const warnings: string[] = [];
+  let viewers = 0;
+  const show = () =>
+    createCloudViewer(
+      {
+        port,
+        newViewerId: () => `viewer-${(viewers += 1)}`,
+        clientSessionId: "window-1",
+        clock,
+        warn: (message) => warnings.push(message),
+      },
+      SESSION_ID,
     );
+  return { clock, warnings, show };
+}
+
+describe("createCloudViewer", () => {
+  it("opens, renews on the lease's heartbeat, and closes once", async () => {
+    const port = new FakePort();
+    const { clock, warnings, show } = viewerOf(port);
+    const hide = show();
     await settle();
     expect(port.viewer).toEqual(["open viewer-1 window-1"]);
     expect(clock.pending()).toEqual([5_000]);
@@ -766,22 +963,21 @@ describe("the stream's viewer", () => {
     await settle();
     expect(warnings).toEqual(["[cloud-session] couldn't keep a viewer open"]);
     expect(clock.pending()).toEqual([20_000]);
-    subscription.unsubscribe();
+    hide();
+    hide();
     expect(clock.pending()).toEqual([]);
     await settle();
-    expect(port.viewer.at(-1)).toBe("close viewer-1");
+    expect(port.viewer.filter((entry) => entry.startsWith("close"))).toEqual(["close viewer-1"]);
   });
 
   it("closes a viewer whose open was still in flight, after the open lands", async () => {
-    const { port, clock, warnings, transport } = harness();
+    const port = new FakePort();
+    const { clock, warnings, show } = viewerOf(port);
     const opening = deferred<unknown>();
     port.open = () => opening.promise;
-    const subscription = transport.rpc.session.subscribe.subscribe(
-      { sessionId: SESSION_ID, afterSequence: 0 },
-      recorder().handlers,
-    );
+    const hide = show();
     await settle();
-    subscription.unsubscribe();
+    hide();
     await settle();
     expect(port.viewer).toEqual(["open viewer-1 window-1"]);
     opening.resolve({ heartbeatMs: 5_000 });
@@ -792,30 +988,36 @@ describe("the stream's viewer", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("says nothing of an open that fails after the stream ended, and still closes", async () => {
-    const { port, warnings, transport } = harness();
+  it("says nothing of an open that fails after it was hidden, and still closes", async () => {
+    const port = new FakePort();
+    const { warnings, show } = viewerOf(port);
     const opening = deferred<unknown>();
     port.open = () => opening.promise;
     port.shut = async () => {
       throw new Error("close failed");
     };
-    const subscription = transport.rpc.session.subscribe.subscribe(
-      { sessionId: SESSION_ID, afterSequence: 0 },
-      recorder().handlers,
-    );
+    const hide = show();
     await settle();
-    subscription.unsubscribe();
+    hide();
     opening.reject(new Error("too_many_viewers"));
     await settle();
     expect(port.viewer).toEqual(["open viewer-1 window-1", "close viewer-1"]);
     expect(warnings).toEqual(["[cloud-session] couldn't close a viewer"]);
   });
 
-  it("sends nothing for a stream let go before its viewer opened", async () => {
+  it("sends nothing for a viewer hidden before it opened", async () => {
+    const port = new FakePort();
+    viewerOf(port).show()();
+    await settle();
+    expect(port.viewer).toEqual([]);
+  });
+
+  it("is never opened by a stream", async () => {
     const { port, transport } = harness();
-    transport.rpc.session.subscribe
-      .subscribe({ sessionId: SESSION_ID, afterSequence: 0 }, recorder().handlers)
-      .unsubscribe();
+    transport.rpc.session.subscribe.subscribe(
+      { sessionId: SESSION_ID, afterSequence: 0 },
+      recorder().handlers,
+    );
     await settle();
     expect(port.viewer).toEqual([]);
   });
@@ -877,7 +1079,7 @@ describe("under the chat core", () => {
     client.dispose();
     await settle();
     expect(port.historyWatches.every((watch) => watch.stopped)).toBe(true);
-    expect(port.viewer.filter((entry) => entry.startsWith("close"))).toHaveLength(2);
+    expect(port.viewer).toEqual([]);
   });
 });
 
@@ -1097,10 +1299,8 @@ describe("cloudChatTransport", () => {
     expect(transport.newCommandId()).toMatch(/^[0-9a-f-]{36}$/u);
   });
 
-  it("runs over the client, one body cache per client, one window id", async () => {
-    vi.useFakeTimers();
+  it("runs over the client, one body cache per client", async () => {
     vi.stubGlobal("window", {});
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const { session, calls, answers } = fakeClient();
     answers.set("sessions.snapshot", snapshotAnswer(1));
     answers.set("sessions.history", historyAnswer(rows(1)));
@@ -1113,7 +1313,6 @@ describe("cloudChatTransport", () => {
         body: JSON.stringify(messageOf("m1", "hi")),
       },
     ]);
-    answers.set("sessionViewers.open", { heartbeatMs: 1_000 });
     const first = cloudChatTransport(session);
     const second = cloudChatTransport(session);
     expect(first.newCommandId()).toMatch(/^[0-9a-f-]{36}$/u);
@@ -1122,18 +1321,49 @@ describe("cloudChatTransport", () => {
       expect(snapshot.frames).toHaveLength(1);
     }
     expect(calls.filter((call) => call.ref === "sessionTranscript.artifacts")).toHaveLength(1);
+  });
 
-    const subscriptions = [first, second].map((transport) =>
-      transport.rpc.session.subscribe.subscribe(
-        { sessionId: SESSION_ID, afterSequence: 1 },
-        recorder().handlers,
-      ),
+  it("waits on the window's clock for a fold, and logs streamed text it drops", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("window", {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { session, watches, answers } = fakeClient();
+    answers.set("sessions.snapshot", snapshotAnswer(0, null));
+    const transport = cloudChatTransport(session);
+    const reading = transport.rpc.session.projection.query({ sessionId: SESSION_ID });
+    const refused = expect(reading).rejects.toThrow("This Session's history is still arriving");
+    await vi.advanceTimersByTimeAsync(15_000);
+    await refused;
+    transport.rpc.session.subscribe.subscribe(
+      { sessionId: SESSION_ID, afterSequence: 0 },
+      recorder().handlers,
     );
+    const chunks = watches.find((watch) => watch.ref === "streamChunks.since")!;
+    chunks.result = () => {
+      throw new Error("since failed");
+    };
+    chunks.update!();
+    expect(warn).toHaveBeenCalledWith(
+      "[cloud-session] streamed text stopped; it resumes with the next fact",
+      expect.any(Error),
+    );
+  });
+});
+
+describe("showCloudSession", () => {
+  it("watches a Session in this window until hidden, with one window id", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { session, calls, answers } = fakeClient();
+    answers.set("sessionViewers.open", { heartbeatMs: 1_000 });
+    const hides = [showCloudSession(session, SESSION_ID), showCloudSession(session, SESSION_ID)];
     await vi.advanceTimersByTimeAsync(0);
     const opens = calls.filter((call) => call.ref === "sessionViewers.open");
     const [one, two] = opens.map(
-      (call) => call.args as { viewerId: string; clientSessionId: string },
+      (call) => call.args as { viewerId: string; sessionId: string; clientSessionId: string },
     );
+    expect(one!.sessionId).toBe(SESSION_ID);
+    expect(one!.viewerId).toMatch(/^[0-9a-f-]{36}$/u);
     expect(one!.viewerId).not.toBe(two!.viewerId);
     expect(one!.clientSessionId).toBe(two!.clientSessionId);
     answers.set("sessionViewers.heartbeat", { open: true, heartbeatMs: 1_000 });
@@ -1142,7 +1372,7 @@ describe("cloudChatTransport", () => {
     session.client.mutation = (async () => {
       throw new Error("offline");
     }) as unknown as CloudClient["mutation"];
-    for (const subscription of subscriptions) subscription.unsubscribe();
+    for (const hide of hides) hide();
     await vi.advanceTimersByTimeAsync(0);
     expect(vi.getTimerCount()).toBe(0);
     expect(warn).toHaveBeenCalledWith("[cloud-session] couldn't close a viewer", expect.any(Error));

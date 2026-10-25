@@ -753,6 +753,17 @@ export default defineSchema({
       }),
     ),
     usageTotals: json,
+    // The listing rule's answer over the fold (`sessionListingActivity` in
+    // `@volli/shared`), so no client restates it. Optional: rows written
+    // before it have none until their next listing sync.
+    listing: v.optional(
+      v.object({
+        activity: literals(["working", "waiting", "idle", "stopped", "interrupted"]),
+        waitingOn: nullable(literals(["question", "permission", "auth"])),
+        live: v.boolean(),
+        bornTicketless: v.boolean(),
+      }),
+    ),
     createdAt: time,
     // Coarse: refreshed at turn boundaries, signals and attention changes.
     lastActivityAt: time,

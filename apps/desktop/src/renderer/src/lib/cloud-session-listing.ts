@@ -12,21 +12,14 @@ import type { CloudApi } from "./cloud-client";
 
 export type CloudSessionRow = FunctionReturnType<CloudApi["sessions"]["list"]>["page"][number];
 
-/** Listing fields are backend projections; `needsUser` is its attention badge. */
+/** Listing fields are backend projections, `listing` among them. */
 export type CloudListingRow = Extract<SessionListingRow, { kind: "chat" }>;
 
 export function cloudSessionListing(row: CloudSessionRow): CloudListingRow {
   const origin = readSessionOrigin(row.origin);
-  const activity: ChatSessionRecord["activity"] =
-    row.stopped !== null
-      ? "stopped"
-      : row.needsUser
-        ? "waiting"
-        : row.turnActive
-          ? "working"
-          : row.lastTurnOutcome === "interrupted"
-            ? "interrupted"
-            : "idle";
+  // The backend answers the listing rule (`sessionListingActivity` over its
+  // fold); this window restates none of it.
+  const { activity, waitingOn, live, bornTicketless } = row.listing;
   return {
     kind: "chat",
     record: {
@@ -38,12 +31,11 @@ export function cloudSessionListing(row: CloudSessionRow): CloudListingRow {
       parentSessionId: row.parentSessionId,
       createdAt: row.createdAt,
       lastActivityAt: row.lastActivityAt,
-      bornTicketless: row.role === "project",
+      bornTicketless,
       adapterId: null,
-      // The backend knows the runner's turn, not this window's process bindings.
-      live: row.turnActive && row.stopped === null,
+      live,
       activity,
-      waitingOn: activity === "waiting" ? "question" : null,
+      waitingOn,
       outcome: row.lastTurnOutcome as ChatSessionRecord["outcome"],
       model: parseSessionModel(row.model),
     },

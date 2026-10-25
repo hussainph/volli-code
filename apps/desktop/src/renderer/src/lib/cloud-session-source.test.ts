@@ -24,6 +24,7 @@ export const row = (patch: Partial<CloudSessionRow> = {}): CloudSessionRow => ({
   placeRunnerId: "r",
   model: null,
   usageTotals: { summary: EMPTY_SESSION_USAGE_SUMMARY },
+  listing: { activity: "idle", waitingOn: null, live: false, bornTicketless: true },
   createdAt: 1,
   lastActivityAt: 2,
   ...patch,
@@ -53,14 +54,21 @@ describe("cloud listing projection", () => {
       usage: EMPTY_SESSION_USAGE_SUMMARY,
       provenance: { kind: "user" },
     });
+    // The backend's listing is carried verbatim; no row field is re-read for it.
     expect(
       cloudSessionListing(
         row({
           title: "Named",
           role: "ticket",
           ticketId: "t",
-          needsUser: true,
-          turnActive: true,
+          needsUser: false,
+          turnActive: false,
+          listing: {
+            activity: "waiting",
+            waitingOn: "permission",
+            live: true,
+            bornTicketless: true,
+          },
           model: { providerId: "a", modelId: "b", reasoningLevel: "high", connectionId: "local" },
         }),
       ),
@@ -68,21 +76,27 @@ describe("cloud listing projection", () => {
       record: {
         title: "Named",
         activity: "waiting",
-        waitingOn: "question",
+        waitingOn: "permission",
         live: true,
-        bornTicketless: false,
+        bornTicketless: true,
         model: { modelId: "b" },
       },
     });
     expect(
       cloudSessionListing(
-        row({ stopped: { at: 5, reason: null }, needsUser: true, turnActive: true }),
+        row({
+          stopped: { at: 5, reason: null },
+          lastTurnOutcome: "interrupted",
+          listing: { activity: "stopped", waitingOn: null, live: false, bornTicketless: false },
+        }),
       ).record,
-    ).toMatchObject({ activity: "stopped", waitingOn: null, live: false });
-    expect(cloudSessionListing(row({ turnActive: true })).record.activity).toBe("working");
-    expect(cloudSessionListing(row({ lastTurnOutcome: "interrupted" })).record.activity).toBe(
-      "interrupted",
-    );
+    ).toMatchObject({
+      activity: "stopped",
+      waitingOn: null,
+      live: false,
+      bornTicketless: false,
+      outcome: "interrupted",
+    });
     expect(
       cloudSessionListing(
         row({ origin: { kind: "automation", automationRunId: "run", automationName: null } }),
@@ -109,7 +123,25 @@ describe("cloud Session source", () => {
     fake.answer("sessions:list", args("next"), page([row(), row({ id: "older" })]));
     expect(await ready).toHaveLength(2);
     expect(await source.open("p")).toHaveLength(2);
-    fake.answer("sessions:list", args(), page([row({ needsUser: true })], false, "next"));
+    fake.answer(
+      "sessions:list",
+      args(),
+      page(
+        [
+          row({
+            needsUser: true,
+            listing: {
+              activity: "waiting",
+              waitingOn: "question",
+              live: true,
+              bornTicketless: true,
+            },
+          }),
+        ],
+        false,
+        "next",
+      ),
+    );
     expect(paint.mock.lastCall?.[1][0].record.activity).toBe("waiting");
     fake.answer("sessions:list", args(), page([row({ id: "new" })], false, "changed"));
     expect(fake.watchers("sessions:list", args("next"))).toBe(0);

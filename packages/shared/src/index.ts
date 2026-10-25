@@ -119,6 +119,7 @@ export * from "./session-read";
 export * from "./session-order";
 export * from "./session-peek";
 export * from "./session-need";
+export * from "./session-listing-activity";
 export * from "./notification-preferences";
 export * from "./notification-catalog";
 export * from "./host-events";

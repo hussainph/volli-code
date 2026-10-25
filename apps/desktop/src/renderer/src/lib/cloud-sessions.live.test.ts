@@ -60,7 +60,7 @@ import { DEV_AUDIENCE, DEV_ISSUER, DEV_KEY_ID } from "../../../main/account/dev-
 import { signEs256Jwt } from "../../../main/account/jwt";
 import type { CloudSession } from "./cloud-client";
 import { CloudSessionSource } from "./cloud-session-source";
-import { cloudChatTransport } from "./cloud-session-transport";
+import { cloudChatTransport, showCloudSession } from "./cloud-session-transport";
 
 const url = process.env["VOLLI_CONVEX_URL"];
 const siteUrl = process.env["VOLLI_CONVEX_SITE_URL"];
@@ -322,6 +322,8 @@ describe.skipIf(!fixture)("the cloud Session view against the pinned local backe
     // `cloudChatTransport` paces its folds on the window's frame callbacks.
     vi.stubGlobal("window", flushHost);
     const transport = cloudChatTransport(sessionB);
+    const hideSession = showCloudSession(sessionB, sessionId);
+    cleanups.push(hideSession);
     vi.unstubAllGlobals();
     const store = createSurfaceStore();
     store.getState().seed(sessionId, "ready");
@@ -348,12 +350,14 @@ describe.skipIf(!fixture)("the cloud Session view against the pinned local backe
     // Its viewer reaches the runner's subscription: now the runner streams.
     await vi.waitFor(() => expect(watched.read()?.sessionIds).toContain(sessionId), WAIT);
 
-    const messageId = `reply-${randomUUID()}`;
-    const shown = () => slice().transcript.messages.filter(({ id }) => id === messageId);
-    const append = (seq: number, ops: object[], throughSequence = head) =>
+    const messageId = `stream-${randomUUID()}`;
+    const settledMessageId = `reply-${randomUUID()}`;
+    const shown = () =>
+      slice().transcript.messages.filter(({ id }) => id === messageId || id === settledMessageId);
+    const append = (seq: number, ops: object[], throughSequence = head, streamId = messageId) =>
       runner.client.mutation(api.streamChunks.append, {
         sessionId,
-        messageId,
+        messageId: streamId,
         turnId,
         seq,
         baseline: (ops[0] as { op: string }).op === "reset",
@@ -385,8 +389,10 @@ describe.skipIf(!fixture)("the cloud Session view against the pinned local backe
 
     // The message settles: its body staged by the runner's owner under the
     // claim, then the fact that references it accepted, then the settle.
+    // The real runner replaces a temporary stream id with an executor message
+    // id. Deliberately omit message.remove: cleanup can overtake that row.
     const settled: UIMessage = {
-      id: messageId,
+      id: settledMessageId,
       role: "assistant",
       parts: [{ type: "text", text: "Hello, world." }],
     };
@@ -440,7 +446,7 @@ describe.skipIf(!fixture)("the cloud Session view against the pinned local backe
     await vi.waitFor(() => {
       expect(shown().map(textOf)).toEqual(["Hello, world."]);
       expect(slice().transcript.overlay.size).toBe(0);
-      expect(slice().transcript.durableSequences.get(messageId)).toBe(settledAt);
+      expect(slice().transcript.durableSequences.get(settledMessageId)).toBe(settledAt);
     }, WAIT);
     expect(slice().transcript.messages.filter(({ role }) => role === "assistant")).toHaveLength(1);
     await vi.waitFor(async () => {
@@ -448,27 +454,55 @@ describe.skipIf(!fixture)("the cloud Session view against the pinned local backe
         person.query(api.streamChunks.since, { sessionId, cursors: [] }),
       ).resolves.toEqual({
         streams: [],
+        retired: [],
       });
       await expect(
         person.query(api.streamChunks.since, { sessionId, cursors: [{ messageId, seq: 0 }] }),
-      ).resolves.toEqual({ streams: [] });
+      ).resolves.toEqual({ streams: [], retired: [{ messageId, throughSequence: settledAt }] });
     }, WAIT);
 
     // A chunk emitted before the settle but arriving after it is stale: it
     // reaches window B's chunk query and changes nothing on screen.
+    const streamWrites = vi.spyOn(store.getState(), "applyStream");
     await expect(
-      append(2, [{ op: "part.append", key: "text-0", text: " again" }]),
+      append(
+        0,
+        [
+          {
+            op: "reset",
+            message: {
+              id: settledMessageId,
+              role: "assistant",
+              parts: [{ key: "text-0", part: { type: "text", text: "late obsolete words" } }],
+            },
+          },
+        ],
+        head,
+        settledMessageId,
+      ),
     ).resolves.toEqual({
       written: true,
     });
     await vi.waitFor(async () => {
       const late = await person.query(api.streamChunks.since, {
         sessionId,
-        cursors: [{ messageId, seq: 1 }],
+        cursors: [],
       });
-      expect(late.streams.map(({ chunks }) => chunks.map(({ seq }) => seq))).toEqual([[2]]);
+      expect(
+        late.streams
+          .filter((stream) => stream.messageId === settledMessageId)
+          .map(({ chunks }) => chunks.map(({ seq }) => seq)),
+      ).toEqual([[0]]);
     }, WAIT);
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    // Wait for the actual fold boundary, not a grace period that could pass
+    // before the socket delivered the late chunk.
+    await vi.waitFor(() => {
+      expect(
+        streamWrites.mock.calls.some(([, , overlays]) =>
+          overlays.some((overlay) => overlay.messageId === settledMessageId),
+        ),
+      ).toBe(true);
+    }, WAIT);
     expect(shown().map(textOf)).toEqual(["Hello, world."]);
     expect(slice().transcript.overlay.size).toBe(0);
 
@@ -506,7 +540,8 @@ describe.skipIf(!fixture)("the cloud Session view against the pinned local backe
         () =>
           expect(rowIn(listing)).toMatchObject({
             activity: "idle",
-            live: false,
+            // The turn ended, but its runner attachment is still open.
+            live: true,
             outcome: "completed",
           }),
         WAIT,
@@ -522,6 +557,10 @@ describe.skipIf(!fixture)("the cloud Session view against the pinned local backe
     expect(listings.C.get(projectId)).toHaveLength(1);
 
     // Window B lets go: its viewer closes, and the runner stops streaming.
+    // Hiding the surface, not disposing its warm client, must release presence.
+    hideSession();
+    await vi.waitFor(() => expect(watched.read()?.sessionIds).not.toContain(sessionId), WAIT);
+    expect(store.getState().sessions[sessionId]).toBeDefined();
     chat.dispose();
     disposed = true;
     await vi.waitFor(() => expect(watched.read()?.sessionIds).not.toContain(sessionId), WAIT);

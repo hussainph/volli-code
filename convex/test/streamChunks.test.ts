@@ -363,6 +363,8 @@ describe("streamChunks.since", () => {
       ],
     });
     expect(caughtUp.streams).toEqual([]);
+    // Caught up is not ended: both streams still have rows.
+    expect(caughtUp.retired).toEqual([]);
 
     await send("m1", [chunk(4, [append("e")])]);
     const next = await teammate.query(api.streamChunks.since, {
@@ -387,6 +389,39 @@ describe("streamChunks.since", () => {
       cursors: [{ messageId: "m9", seq: 4 }],
     });
     expect(gone.streams.map((s) => s.messageId)).toEqual(["m1", "m2"]);
+    // …and names it as ended, with the accepted cursor its fact is at or below.
+    expect(gone.retired).toEqual([{ messageId: "m9", throughSequence: 10 }]);
+    expect(joined.retired).toEqual([]);
+  });
+
+  test("a cursor's stream whose rows were all deleted is retired at the accepted cursor", async () => {
+    const t = setup();
+    const w = await world(t);
+    await streamed(w, "m1");
+    await streamed(w, "m2");
+    const teammate = t.withIdentity(TEAMMATE);
+    const cursors = [
+      { messageId: "m1", seq: 1 },
+      { messageId: "m2", seq: 1 },
+    ];
+    expect(
+      await teammate.query(api.streamChunks.since, { sessionId: w.sessionId, cursors }),
+    ).toEqual({ streams: [], retired: [] });
+    // m1 settled at 12 and its rows went once 12 was accepted.
+    await setAccepted(t, w.sessionId, 12);
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db
+        .query("streamChunks")
+        .withIndex("by_session_message_seq", (q) =>
+          q.eq("sessionId", w.sessionId).eq("messageId", "m1"),
+        )
+        .collect()) {
+        await ctx.db.delete(row._id);
+      }
+    });
+    expect(
+      await teammate.query(api.streamChunks.since, { sessionId: w.sessionId, cursors }),
+    ).toEqual({ streams: [], retired: [{ messageId: "m1", throughSequence: 12 }] });
   });
 
   test("a stream with no baseline yet is read only from a cursor", async () => {

@@ -444,3 +444,11 @@ CI holds the backend preview gate and the desktop launch gate at 100%
 statements, branches, functions and lines. Backend transport tests also
 prove that clients cannot call the internal admin mutation and concurrent
 code redemption admits only one account.
+
+## Session listing presentation
+
+`sessions.listing` is an additive optional projection of activity, waiting reason,
+liveness and birth scope. It is written with the shared Session listing rules,
+not re-derived by clients. Existing rows without it are read through their stored
+fold until their next accepted fact materializes it. The optional field keeps
+older deployments and stored rows valid.

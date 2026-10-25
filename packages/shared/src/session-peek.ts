@@ -42,8 +42,9 @@ export interface SessionPeekContent {
   readonly summary?: string | null;
   /** The open question, scrubbed; `null` when nothing is being asked. */
   readonly question: RendererSessionInteraction | null;
-  readonly turns: number;
-  readonly turnDepth: number;
+  /** Lifelong counts; null when a cloud read holds only a bounded tail. */
+  readonly turns: number | null;
+  readonly turnDepth: number | null;
   /** Tail messages whose artifact could not be read — counted, never faked. */
   readonly unreadable: number;
   readonly lastActivityAt: number;

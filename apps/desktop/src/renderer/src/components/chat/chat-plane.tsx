@@ -158,14 +158,15 @@ import { HostNoticeRow } from "@renderer/components/chat/host-notice-ui";
 import { RunningOnLabel } from "@renderer/components/hosts/running-on-label";
 import { useCloudEnabled } from "@renderer/components/hosts/use-hosts";
 import {
-  guardSessionWrite as guardWrite,
-  useCanWriteSession as useCanWrite,
+  guardSessionWrite,
+  useCanWriteSession,
   CLOUD_SESSION_READ_ONLY,
 } from "@renderer/lib/cloud-session-read-only";
 import { launchStore } from "@renderer/stores/launch";
 import { useWorktreeSetupGate } from "@renderer/components/chat/use-worktree-setup-gate";
 import { notAvailableOn, useRemoteHostName } from "@renderer/components/hosts/use-remote-project";
 import { useRemoteSessionOnScreen } from "@renderer/lib/remote-sessions";
+import { useCloudSessionOnScreen } from "@renderer/lib/use-cloud-session-on-screen";
 import { ChatEmptyState } from "@renderer/components/chat/empty/chat-empty-state";
 import { TranscriptSkeleton } from "@renderer/components/chat/transcript-skeleton";
 import { ContentColumn } from "@renderer/components/layout/content-column";
@@ -304,6 +305,7 @@ export function ChatPlane({
   // the Workspace link carries a handful of streams, and a chat off screen
   // keeps what it shows while the listing says whether it waits on anyone.
   useRemoteSessionOnScreen(surfaceVisible ? projectId : null, sessionId);
+  useCloudSessionOnScreen(surfaceVisible ? sessionId : null);
   const browser = useChatBrowserTabs(sessionId, projectId);
   // Where a background shell's tail opens (VC-270's hand-off): a modal over
   // this chat, mounted only while open — see `ShellOutputDialog`. The shells
@@ -513,7 +515,7 @@ export function ChatPlane({
     !holdingFirstImport;
   // The project's host cannot serve (VC-576): the box stands down like any
   // other write, the draft kept in it.
-  const canWrite = useCanWrite(projectId);
+  const canWrite = useCanWriteSession(projectId);
   // What this picker may offer (VC-53), decided in one place because the
   // New-ticket composer asks the same question — see `offerableModels`.
   const composerModels = React.useMemo(
@@ -1639,7 +1641,7 @@ export function ChatPlane({
     (text: string, intent: ComposerIntent) => {
       // Read-only (VC-576): the box is already inert; a press that raced the
       // host going away keeps its draft and says why.
-      if (!guardWrite(projectId)) return;
+      if (!guardSessionWrite(projectId)) return;
       const press = composerPress(text);
       if (press.kind === "verb") verbPress(press);
       else send(text, intent);
