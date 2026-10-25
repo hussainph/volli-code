@@ -214,22 +214,18 @@ test("actual path classifier selects lanes and fails safe", () => {
         // 128 KB (MAX_ARG_STRLEN), and the long diffs are past that.
         const diff = join(temporary, "diff");
         writeFileSync(diff, `${changed}\n`);
-        const run = spawnSync(
-          "bash",
-          ["-c", 'git() { cat "$CHANGED_FILE"; }\n' + filter.run],
-          {
-            cwd: root,
-            env: {
-              ...process.env,
-              EVENT: event,
-              CHANGED_FILE: diff,
-              BASE_SHA: "base",
-              HEAD_SHA: "head",
-              GITHUB_OUTPUT: output,
-            },
-            encoding: "utf8",
+        const run = spawnSync("bash", ["-c", 'git() { cat "$CHANGED_FILE"; }\n' + filter.run], {
+          cwd: root,
+          env: {
+            ...process.env,
+            EVENT: event,
+            CHANGED_FILE: diff,
+            BASE_SHA: "base",
+            HEAD_SHA: "head",
+            GITHUB_OUTPUT: output,
           },
-        );
+          encoding: "utf8",
+        });
         assert.equal(run.status, 0, `${run.error ?? ""}${run.stdout}${run.stderr}`);
         const pr = event === "pull_request";
         const lanes = !pr || n1 === "all" ? n1All : '["base"]';
