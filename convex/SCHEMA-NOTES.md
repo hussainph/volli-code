@@ -298,3 +298,32 @@ Each was a decision made while turning the design into code.
   the intake stores JSON text (note 32); the intake reads both. A payload with
   a key a Convex value refuses (`$schema`, non-ASCII) cannot be imported that
   way, so the import should send them as text.
+
+## Streamed text
+
+Where `streamChunks` and `sessionViewers` depart from the data-model design:
+
+- `streamChunks` gains `baseline` and `throughSequence`, and the
+  `by_session_message_baseline` and `by_session_created` indexes, before
+  its first writer. `baseline` marks a chunk that starts with a `reset`,
+  where a late joiner starts and a reader that missed rows restarts;
+  `throughSequence` is the overlay's staleness guard. Both are required,
+  not `v.optional`: no row was ever written without them. `delta` is
+  `v.string()`, the operations' JSON text, because their payloads carry
+  object keys a Convex value refuses. An increment is capped at 16 KB as
+  designed; a baseline (one `reset` of the whole message) at 64 KB, the
+  inline cap of a settled body. A larger message stops streaming and shows
+  whole when it settles.
+- The cursor read is per Session, not `chunksSince(messageId, seq)`: one
+  `streamChunks.since` finds the open streams among the Session's newest
+  rows plus the reader's cursors, and starts a stream without a cursor (or
+  with one a newer baseline overtook) at its latest baseline rather than at
+  seq 0, so a late joiner reads at most ~10 s of rows per stream.
+- `streamChunks` rows are deleted by the runner's `settle`, which names the
+  settling fact's sequence and deletes once `acceptedThrough` reaches it
+  — the runner knows which streams a settled fact ends, including a
+  streamed text message that settles under its executor's own id; the
+  accept fold learns message ids only once transcript bodies arrive with
+  `accept`, and then calls the same cleanup through
+  `scheduleStreamCleanup` — by the accept fold at turn end, and by a
+  15-minute sweep.

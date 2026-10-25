@@ -12,6 +12,7 @@ test("the cloud entry point exposes each module", () => {
     "isJobKind",
     "positionBetween",
     "transcriptPackKey",
+    "parseStreamChunkOps",
     "renderTicketKey",
     "canSeeSession",
     "decideMemberChange",
