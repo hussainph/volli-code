@@ -3996,6 +3996,50 @@ describe.each(["Home", "Ticket"] as const)("group pane bookkeeping — %s", (sur
   });
 });
 
+describe.each(["Home", "Ticket"] as const)("a group's last tab closing — %s", (surface) => {
+  it("falls back to the permanent tab, and a later hidden resize selects nothing", () => {
+    const store = splitStore();
+    const permanent = surface === "Home" ? HOME_BOARD_TAB_ID : TICKET_BODY_TAB_ID;
+    const ws = store.getState();
+    if (surface === "Home") {
+      ws.groupHomeTabs("project-a", "chat:y", "chat:z");
+      ws.setHomeActiveTab("project-a", "chat:x");
+      ws.splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right");
+      ws.removeHomeTabFromSplit("project-a", "chat:x");
+    } else {
+      ws.groupTicketTabs("project-a", "ticket-1", "chat:y", "chat:z");
+      ws.setTicketActiveTab("project-a", "ticket-1", "chat:x");
+      ws.splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "right");
+      ws.removeTicketTabFromSplit("project-a", "ticket-1", "chat:x");
+    }
+    const read = () => (surface === "Home" ? homeSplit(store) : ticketSplit(store));
+    const active = () =>
+      surface === "Home"
+        ? store.getState().byProject["project-a"]?.homeActiveTab
+        : store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active;
+    expect(active()).toBe(permanent);
+    expect(read()?.pairs).toHaveLength(1);
+    expect(read()?.selectedTabId).toBeNull();
+    const groupId = read()!.pairs[0]!.id;
+    if (surface === "Home") ws.setHomeSplitRatio("project-a", groupId, 0.3);
+    else ws.setTicketSplitRatio("project-a", "ticket-1", groupId, 0.3);
+    expect(read()?.pairs[0]?.ratio).toBe(0.3);
+    expect(active()).toBe(permanent);
+  });
+});
+
+describe("closing a grouped Home file that hands over to a chat", () => {
+  it("returns to the chat its group leaves on screen", () => {
+    const store = splitStore();
+    store.getState().previewHomeFile("project-a", "a.ts");
+    store.getState().groupHomeTabs("project-a", "chat:one", "file:a.ts");
+    store.getState().closeHomeFile("project-a", "a.ts", ["chat:one"]);
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe("chat:one");
+    expect(store.getState().byProject["project-a"]?.projectFiles.activeRelPath).toBeNull();
+    expect(homeSplit(store)).toBeNull();
+  });
+});
+
 describe("Home Browser Tab close with groups", () => {
   it("returns through MRU and shows the group the returned tab belongs to", () => {
     const store = splitStore();

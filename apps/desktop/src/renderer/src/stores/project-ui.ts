@@ -586,7 +586,7 @@ function homeActiveAfterFocus(
   current: ProjectUiState,
   next: SplitViewState,
 ): Partial<ProjectUiState> {
-  const active = activeTabInSplitView(next) ?? next.selectedTabId ?? null;
+  const active = activeTabInSplitView(next) ?? next.selectedTabId;
   if (active === null) return {};
   return {
     ...(active === current.homeActiveTab
@@ -601,7 +601,7 @@ function ticketActiveAfterFocus(
   existing: TicketTabsState,
   next: SplitViewState,
 ): Partial<TicketTabsState> {
-  const active = activeTabInSplitView(next) ?? next.selectedTabId ?? null;
+  const active = activeTabInSplitView(next) ?? next.selectedTabId;
   return active === null || active === existing.active ? {} : { active };
 }
 
