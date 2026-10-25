@@ -23,7 +23,7 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 | `functions/_generated/`                         | Output of `convex codegen`, **committed**. CI regenerates it and fails on any drift. Never edit or format it by hand.                                                         |
 | `fixture/backend.json`                          | The pin: one backend release, the `convex` npm version that goes with it, and a sha256 for each platform's zip.                                                               |
 | `fixture/backend.ts`                            | Downloads and verifies the binary, then starts a backend: free loopback ports, a fresh data dir, a random instance secret, beacon off. `stop()` kills it and deletes the dir. |
-| `fixture/jwt.ts`                                | The test issuer: a fresh ES256 key per run, and `mintTestToken(sub)`.                                                                                                         |
+| `fixture/jwt.ts`                                | The test issuer: a fresh ES256 key per run, and `mintTestToken(pem, subject)`.                                                                                                |
 | `fixture/with-backend.ts`                       | Runs one command against a throwaway backend, then stops it.                                                                                                                  |
 | `fixture/global-setup.ts`, `fixture/testing.ts` | Vitest wiring for `test:backend`: `connectBackend().client("user:alice")`.                                                                                                    |
 | `test/*.test.ts`                                | Unit tests: functions run in-process under [`convex-test`](https://docs.convex.dev/testing/convex-test). No backend.                                                          |
@@ -47,14 +47,25 @@ pnpm -C convex with-backend --deploy -- convex run health:whoami '{}' --identity
 pnpm -C convex with-backend --deploy -- node my-probe.mjs
 ```
 
-The command gets `CONVEX_SELF_HOSTED_URL` and `CONVEX_SELF_HOSTED_ADMIN_KEY`
-(what the CLI reads) and `VOLLI_CONVEX_URL` / `VOLLI_CONVEX_SITE_URL`.
-`CONVEX_DEPLOYMENT`, `CONVEX_DEPLOY_KEY` and every other cloud pointer are
-removed from its environment, so the fixture cannot reach a cloud deployment.
-With `--deploy`, the command also gets `VOLLI_CONVEX_TEST_PRIVATE_KEY`, which
-`connectBackend()` reads.
+Any command gets `CONVEX_SELF_HOSTED_URL` and `CONVEX_SELF_HOSTED_ADMIN_KEY`
+(what the CLI reads). A non-`convex` command also gets `VOLLI_CONVEX_URL` and
+`VOLLI_CONVEX_SITE_URL`, and with `--deploy` it gets
+`VOLLI_CONVEX_TEST_PRIVATE_KEY`, which `connectBackend()` reads.
 
-The binary is about 190 MB unpacked. It is cached outside the repository, in
+The fixture cannot reach a cloud deployment, even with a deploy key in
+`convex/.env.local`:
+
+- `CONVEX_DEPLOYMENT`, `CONVEX_DEPLOY_KEY` and `CONVEX_DEPLOYMENT_TOKEN` are
+  set to empty. The CLI reads env files from its working directory and never
+  overwrites a variable that is already present, so leaving them unset would
+  let a file fill them back in.
+- The control plane is pointed at a dead loopback port.
+- `deploy`, `codegen`, `run`, `env`, `data`, `import` and `export` also get
+  explicit `--url` and `--admin-key`.
+
+A unit test runs the real CLI against a stand-in control plane to prove this.
+
+The binary is about 174 MB unpacked. It is cached outside the repository, in
 `$VOLLI_CONVEX_BACKEND_CACHE`, or else `${XDG_CACHE_HOME:-~/.cache}/volli/convex-local-backend/<release>/<platform>/`.
 Each run starts one backend and stops it when the run ends. Set
 `VOLLI_CONVEX_KEEP_DATA=1` to keep the data dir (its `backend.log` included)
@@ -92,21 +103,13 @@ disagree.
 `Convex (codegen + backend)` in `.github/workflows/ci.yml` runs on Linux,
 beside the desktop lanes and never inside them. It restores the binary cache
 (keyed on `backend.json`), regenerates the code and requires that nothing
-changed, typechecks, and runs both test suites. `CI gate` requires it.
+changed, and runs both test suites. `CI gate` requires it. `Check + Build`
+typechecks this package along with the rest of the workspace.
 
 ## Deployments (not yet)
 
-Dev, staging and prod deployments need the Convex account, and object storage
-(R2) needs the Cloudflare account. Both are added once those accounts exist.
-The intended shape:
-
-- One Convex project with `dev`, `staging` and `prod` deployments. Deploy CI
-  pushes this package with `npx convex deploy`, using a per-environment
-  `CONVEX_DEPLOY_KEY` from GitHub environment secrets: staging on merge to
-  `main`, prod on a release tag with manual approval. Every deploy first runs
-  the same codegen-drift check and test suites.
-- Deploy CI refuses a target that has `VOLLI_TEST_JWKS` set.
-- R2 buckets per environment, with lifecycle rules, for bulk history.
-- Scheduled backups through `npx convex export`, plus a restore drill into a
-  scratch deployment.
-- Full-workspace export tooling.
+There are no cloud deployments yet. Dev, staging and prod deployments, deploy
+CI, object storage (R2), backups and export are added once the Convex and
+Cloudflare accounts exist. Deploy CI will push this package with
+`npx convex deploy` and a per-environment deploy key. It will refuse any
+target that has `VOLLI_TEST_JWKS` set.

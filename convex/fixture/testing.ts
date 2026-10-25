@@ -1,6 +1,6 @@
 /**
  * What a `test:backend` file (or a command under `with-backend.ts --deploy`)
- * uses: the deployed fixture backend and a way to sign in as anyone.
+ * uses: the deployed fixture backend, signed in as anyone.
  */
 
 import { ConvexHttpClient } from "convex/browser";
@@ -19,15 +19,9 @@ function required(name: string): string {
 
 export function connectBackend() {
   const url = required("VOLLI_CONVEX_URL");
-  const siteUrl = required("VOLLI_CONVEX_SITE_URL");
   const privateKeyPem = required("VOLLI_CONVEX_TEST_PRIVATE_KEY");
   return {
-    url,
-    siteUrl,
-    /** A token for `subject` the backend accepts. */
-    mint: (subject: string, options?: MintOptions) =>
-      mintTestToken(privateKeyPem, subject, options),
-    /** An HTTP client, signed in as `subject` when given. */
+    /** An HTTP client, signed in as `subject` (through the test issuer) when given. */
     client(subject?: string, options?: MintOptions): ConvexHttpClient {
       const client = new ConvexHttpClient(url);
       if (subject !== undefined) client.setAuth(mintTestToken(privateKeyPem, subject, options));

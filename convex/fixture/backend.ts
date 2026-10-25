@@ -4,7 +4,7 @@
  * One backend release and one `convex` npm version are pinned together in
  * `backend.json`; nothing here lets the CLI pick a binary. `ensureBackendBinary`
  * downloads the release zip for this platform once, verifies its sha256, and
- * keeps the unpacked binary in a cache OUTSIDE the repository (it is ~190 MB).
+ * keeps the unpacked binary in a cache OUTSIDE the repository (~174 MB).
  * `startBackend` runs one backend on free loopback ports with a fresh data dir
  * and a random instance secret, and `stop()` kills it and removes that dir.
  *
@@ -14,11 +14,22 @@
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { createWriteStream, existsSync, readFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { closeSync, createWriteStream, existsSync, openSync, readFileSync } from "node:fs";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer, type AddressInfo } from "node:net";
-import { homedir, tmpdir } from "node:os";
+import { constants, homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -37,11 +48,6 @@ export type BackendPin = {
 
 export function readPin(): BackendPin {
   return JSON.parse(readFileSync(join(PACKAGE_DIR, "fixture/backend.json"), "utf8")) as BackendPin;
-}
-
-/** `${process.platform}-${process.arch}`, the key `backend.json` lists assets under. */
-export function platformKey(platform = process.platform, arch = process.arch): string {
-  return `${platform}-${arch}`;
 }
 
 /** Where unpacked binaries live: never inside the repository. */
@@ -66,6 +72,12 @@ export function assertConvexNpmPinned(pin: BackendPin = readPin()): void {
   }
 }
 
+/** `code` of a child's exit, or 128 + the signal number, as a shell reports it. */
+export function exitStatus(code: number | null, signal: NodeJS.Signals | null): number {
+  if (code !== null) return code;
+  return signal ? 128 + (constants.signals[signal] ?? 0) : 1;
+}
+
 async function sha256File(path: string): Promise<string> {
   const hash = createHash("sha256");
   const handle = await open(path, "r");
@@ -77,17 +89,38 @@ async function sha256File(path: string): Promise<string> {
   return hash.digest("hex");
 }
 
+async function markerMatches(marker: string, sha256: string): Promise<boolean> {
+  try {
+    return (await readFile(marker, "utf8")).trim() === sha256;
+  } catch {
+    return false;
+  }
+}
+
+/** Remove download staging dirs a killed process left behind (an hour is far past any download). */
+async function sweepStaleDownloads(root: string): Promise<void> {
+  for (const name of await readdir(root).catch(() => [] as string[])) {
+    if (!name.startsWith(".download-") && !name.startsWith(".replaced-")) continue;
+    const path = join(root, name);
+    const info = await stat(path).catch(() => undefined);
+    if (info && Date.now() - info.mtimeMs > 3_600_000) {
+      await rm(path, { recursive: true, force: true });
+    }
+  }
+}
+
 /**
  * The verified binary for this platform, downloading and unpacking it into the
  * cache on first use. A `.verified` marker records the zip digest it came from,
- * so a cache entry from another pin is never reused.
+ * so a cache entry from another pin is never reused. Concurrent first runs are
+ * safe: an install that already matches is never replaced.
  */
 export async function ensureBackendBinary(
-  options: { pin?: BackendPin; log?: (line: string) => void } = {},
+  options: { log?: (line: string) => void } = {},
 ): Promise<string> {
-  const pin = options.pin ?? readPin();
+  const pin = readPin();
   const log = options.log ?? (() => {});
-  const key = platformKey();
+  const key = `${process.platform}-${process.arch}`;
   const asset = pin.assets[key];
   if (!asset) {
     throw new Error(
@@ -98,11 +131,10 @@ export async function ensureBackendBinary(
   const dir = join(root, pin.release, key);
   const binary = join(dir, "convex-local-backend");
   const marker = join(dir, ".verified");
-  if (existsSync(binary) && existsSync(marker)) {
-    if ((await readFile(marker, "utf8")).trim() === asset.sha256) return binary;
-  }
+  if (existsSync(binary) && (await markerMatches(marker, asset.sha256))) return binary;
 
   await mkdir(root, { recursive: true });
+  await sweepStaleDownloads(root);
   const staging = await mkdtemp(join(root, `.download-${key}-`));
   try {
     const url = `${pin.downloadBase}/${pin.release}/${asset.file}`;
@@ -126,13 +158,18 @@ export async function ensureBackendBinary(
     if (!existsSync(unpackedBinary)) throw new Error(`${asset.file} holds no convex-local-backend`);
     await chmod(unpackedBinary, 0o755);
     await writeFile(join(unpacked, ".verified"), `${asset.sha256}\n`);
-    await rm(dir, { recursive: true, force: true });
+
+    // Another process may have installed the same pin while this one downloaded.
+    if (existsSync(binary) && (await markerMatches(marker, asset.sha256))) return binary;
     await mkdir(dirname(dir), { recursive: true });
+    if (existsSync(dir)) {
+      // An unverified or partial install: move it aside, never delete in place.
+      await rename(dir, join(root, `.replaced-${key}-${randomBytes(4).toString("hex")}`));
+    }
     try {
       await rename(unpacked, dir);
     } catch (error) {
-      // Another process unpacked the same pin first; its copy is just as good.
-      if (!existsSync(marker)) throw error;
+      if (!(await markerMatches(marker, asset.sha256))) throw error;
     }
     log(`cached ${binary}`);
     return binary;
@@ -141,7 +178,7 @@ export async function ensureBackendBinary(
   }
 }
 
-/** Two distinct free loopback ports, held open together so they cannot repeat. */
+/** `count` distinct free loopback ports, held open together so none repeats. */
 export async function freePorts(count: number): Promise<number[]> {
   const servers = await Promise.all(
     Array.from(
@@ -167,49 +204,105 @@ export type RunningBackend = {
   /** HTTP actions URL. */
   siteUrl: string;
   adminKey: string;
-  dataDir: string;
   pid: number;
   /** Environment for the `convex` CLI against this backend and nothing else. */
   cliEnv(): NodeJS.ProcessEnv;
   stop(): Promise<void>;
 };
 
-export const INSTANCE_NAME = "volli-test";
+const INSTANCE_NAME = "volli-test";
+
+/** Nothing listens on the discard port; the CLI's control-plane calls fail there. */
+const DEAD_CONTROL_PLANE = "http://127.0.0.1:9";
 
 /**
- * Variables that would point the `convex` CLI at a cloud deployment. They are
- * removed from every CLI child, so the fixture can only ever talk to its own
- * loopback backend.
+ * Environment for the `convex` CLI that can only reach `url`.
+ *
+ * The CLI reads `.env.local` and `.env` from its working directory and lets a
+ * deploy key outrank `CONVEX_SELF_HOSTED_URL`. dotenv never overwrites a
+ * variable that is already present, so the cloud pointers are set to EMPTY
+ * (an unset one would be refilled from those files), and the control plane is
+ * pointed at a dead loopback port. `runConvexCli` also passes `--url` and
+ * `--admin-key` where the command accepts them.
  */
-const FOREIGN_DEPLOYMENT_ENV = [
-  "CONVEX_DEPLOYMENT",
-  "CONVEX_DEPLOY_KEY",
-  "CONVEX_URL",
-  "CONVEX_SELF_HOSTED_URL",
-  "CONVEX_SELF_HOSTED_ADMIN_KEY",
-];
-
 export function cliEnvFor(
   url: string,
   adminKey: string,
   base: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  const env = { ...base };
-  for (const name of FOREIGN_DEPLOYMENT_ENV) delete env[name];
-  env["CONVEX_SELF_HOSTED_URL"] = url;
-  env["CONVEX_SELF_HOSTED_ADMIN_KEY"] = adminKey;
-  return env;
+  return {
+    ...base,
+    CONVEX_DEPLOYMENT: "",
+    CONVEX_DEPLOY_KEY: "",
+    CONVEX_DEPLOYMENT_TOKEN: "",
+    CONVEX_URL: "",
+    CONVEX_PROVISION_HOST: DEAD_CONTROL_PLANE,
+    CONVEX_SELF_HOSTED_URL: url,
+    CONVEX_SELF_HOSTED_ADMIN_KEY: adminKey,
+  };
 }
 
-async function waitForVersion(url: string, child: ChildProcess, timeoutMs: number): Promise<void> {
+const DATA_DIR_PREFIX = "volli-convex-";
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Clean up after runs that died without `stop()` (SIGKILL, or a signal handler
+ * that exits without teardown): each data dir records its owner and backend
+ * pids, so a dir whose owner is gone has its backend killed and is removed.
+ */
+async function sweepOrphans(): Promise<void> {
+  for (const name of await readdir(tmpdir()).catch(() => [] as string[])) {
+    if (!name.startsWith(DATA_DIR_PREFIX)) continue;
+    const dir = join(tmpdir(), name);
+    let owner: { ownerPid: number; backendPid: number } | undefined;
+    try {
+      owner = JSON.parse(await readFile(join(dir, "owner.json"), "utf8")) as typeof owner;
+    } catch {
+      // Still starting (the owner is written once the backend answers), or
+      // abandoned before that: only the latter is old.
+      const info = await stat(dir).catch(() => undefined);
+      if (info && Date.now() - info.mtimeMs > 3_600_000) {
+        await rm(dir, { recursive: true, force: true });
+      }
+      continue;
+    }
+    if (!owner || isAlive(owner.ownerPid)) continue;
+    const command = spawnSync("ps", ["-p", String(owner.backendPid), "-o", "args="], {
+      encoding: "utf8",
+    }).stdout;
+    // `args`, not `comm`: Linux truncates `comm` to 15 characters.
+    if (command.includes("convex-local-backend") && command.includes(dir)) {
+      process.kill(owner.backendPid, "SIGKILL");
+    }
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+function hasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+/** Wait for `/version`; false if the child exited first (a lost port race), throws on timeout. */
+async function waitForVersion(
+  url: string,
+  child: ChildProcess,
+  timeoutMs: number,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error(`backend exited during startup (${child.exitCode ?? child.signalCode})`);
-    }
+    if (hasExited(child)) return false;
     try {
-      const response = await fetch(`${url}/version`);
-      if (response.ok) return;
+      const response = await fetch(`${url}/version`, { signal: AbortSignal.timeout(1_000) });
+      // Re-check: if another process won the port, it answered, not ours.
+      if (response.ok) return !hasExited(child);
     } catch {
       // Not listening yet.
     }
@@ -219,7 +312,7 @@ async function waitForVersion(url: string, child: ChildProcess, timeoutMs: numbe
 }
 
 function stopChild(child: ChildProcess, graceMs: number): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  if (hasExited(child) || child.pid === undefined) return Promise.resolve();
   return new Promise((done) => {
     const kill = setTimeout(() => child.kill("SIGKILL"), graceMs);
     child.once("exit", () => {
@@ -232,13 +325,15 @@ function stopChild(child: ChildProcess, graceMs: number): Promise<void> {
 
 /**
  * Start one backend on free loopback ports with an empty data dir. The beacon
- * is off and nothing listens beyond 127.0.0.1. A process-exit hook kills it if
- * the caller dies before `stop()`.
+ * is off and nothing listens beyond 127.0.0.1. A process-exit hook kills it on
+ * a normal exit of the caller; a caller killed outright leaves it for the next
+ * run's orphan sweep.
  */
 export async function startBackend(
-  options: { binary?: string; startupTimeoutMs?: number; log?: (line: string) => void } = {},
+  options: { log?: (line: string) => void } = {},
 ): Promise<RunningBackend> {
-  const binary = options.binary ?? (await ensureBackendBinary({ log: options.log }));
+  const binary = await ensureBackendBinary(options);
+  await sweepOrphans();
   const instanceSecret = randomBytes(32).toString("hex");
   const keygen = spawnSync(
     binary,
@@ -246,67 +341,87 @@ export async function startBackend(
     { encoding: "utf8" },
   );
   if (keygen.status !== 0) {
-    throw new Error(`keygen admin-key failed (${keygen.status}): ${keygen.stderr}`);
+    throw new Error(
+      `keygen admin-key failed (${keygen.status}): ${keygen.stderr || keygen.error?.message}`,
+    );
   }
   const adminKey = keygen.stdout.trim();
 
-  const dataDir = await mkdtemp(join(tmpdir(), "volli-convex-"));
+  const dataDir = await mkdtemp(join(tmpdir(), DATA_DIR_PREFIX));
   const logPath = join(dataDir, "backend.log");
+  const logTail = () => (existsSync(logPath) ? readFileSync(logPath, "utf8").slice(-4_000) : "");
   // A just-freed port can be taken before the backend binds it; retry with new ones.
   for (let attempt = 1; ; attempt += 1) {
     const [port, sitePort] = await freePorts(2);
     const url = `http://127.0.0.1:${port}`;
     const siteUrl = `http://127.0.0.1:${sitePort}`;
-    const logFile = createWriteStream(logPath, { flags: "a" });
-    const child = spawn(
-      binary,
-      [
-        "--instance-name",
-        INSTANCE_NAME,
-        "--instance-secret",
-        instanceSecret,
-        "--interface",
-        "127.0.0.1",
-        "--port",
-        String(port),
-        "--site-proxy-port",
-        String(sitePort),
-        "--disable-beacon",
-        "--local-storage",
-        join(dataDir, "storage"),
-        join(dataDir, "convex_local_backend.sqlite3"),
-      ],
-      { cwd: dataDir, stdio: ["ignore", "pipe", "pipe"] },
-    );
-    child.stdout?.pipe(logFile);
-    child.stderr?.pipe(logFile);
+    // One descriptor for both streams, so neither can close the log on the other.
+    const logFd = openSync(logPath, "a");
+    let child: ChildProcess;
+    try {
+      child = spawn(
+        binary,
+        [
+          "--instance-name",
+          INSTANCE_NAME,
+          "--instance-secret",
+          instanceSecret,
+          "--interface",
+          "127.0.0.1",
+          "--port",
+          String(port),
+          "--site-proxy-port",
+          String(sitePort),
+          "--disable-beacon",
+          "--local-storage",
+          join(dataDir, "storage"),
+          join(dataDir, "convex_local_backend.sqlite3"),
+        ],
+        { cwd: dataDir, stdio: ["ignore", logFd, logFd] },
+      );
+    } finally {
+      closeSync(logFd);
+    }
+    const spawnFailed = new Promise<never>((_, reject) => child.once("error", reject));
+    spawnFailed.catch(() => {});
     const killOnExit = () => child.kill("SIGKILL");
     process.once("exit", killOnExit);
+    let ready: boolean;
     try {
-      await waitForVersion(url, child, options.startupTimeoutMs ?? 30_000);
+      ready = await Promise.race([waitForVersion(url, child, 30_000), spawnFailed]);
     } catch (error) {
       process.off("exit", killOnExit);
       await stopChild(child, 2_000);
-      if (attempt < 3) continue;
-      const tail = existsSync(logPath) ? readFileSync(logPath, "utf8").slice(-4_000) : "";
       await rm(dataDir, { recursive: true, force: true });
-      throw new Error(`${(error as Error).message}\n--- backend.log (tail) ---\n${tail}`, {
+      throw new Error(`${(error as Error).message}\n--- backend.log (tail) ---\n${logTail()}`, {
         cause: error,
       });
     }
+    if (!ready) {
+      process.off("exit", killOnExit);
+      await stopChild(child, 2_000);
+      if (attempt < 3) continue;
+      const tail = logTail();
+      await rm(dataDir, { recursive: true, force: true });
+      throw new Error(
+        `backend exited during startup three times\n--- backend.log (tail) ---\n${tail}`,
+      );
+    }
+    await writeFile(
+      join(dataDir, "owner.json"),
+      JSON.stringify({ ownerPid: process.pid, backendPid: child.pid }),
+    );
     let stopped: Promise<void> | undefined;
     return {
       url,
       siteUrl,
       adminKey,
-      dataDir,
       pid: child.pid ?? -1,
       cliEnv: () => cliEnvFor(url, adminKey),
       stop() {
         stopped ??= (async () => {
-          process.off("exit", killOnExit);
           await stopChild(child, 5_000);
-          logFile.end();
+          process.off("exit", killOnExit);
           if (!process.env["VOLLI_CONVEX_KEEP_DATA"]) {
             await rm(dataDir, { recursive: true, force: true });
           }
@@ -334,30 +449,59 @@ async function setDeploymentEnv(
   }
 }
 
-/** The `convex` CLI from this package's pinned dependency, aimed at `backend`. */
-export function runConvexCli(
-  backend: Pick<RunningBackend, "cliEnv">,
+/**
+ * CLI commands that take `--url`/`--admin-key`. Passing them short-circuits
+ * the CLI's own deployment selection, so no env file can redirect the command.
+ */
+const TARGETED_COMMANDS = new Set(["codegen", "data", "deploy", "env", "export", "import", "run"]);
+
+/** `args` with `--url`/`--admin-key` for `backend` added where the command takes them. */
+export function convexCliArgs(
+  backend: Pick<RunningBackend, "url" | "adminKey">,
   args: string[],
-  options: { stdio?: "inherit" | "pipe" } = {},
+): string[] {
+  const [subcommand, ...rest] = args;
+  return subcommand !== undefined && TARGETED_COMMANDS.has(subcommand)
+    ? [subcommand, "--url", backend.url, "--admin-key", backend.adminKey, ...rest]
+    : args;
+}
+
+/**
+ * The `convex` CLI from this package's pinned dependency, aimed at `backend`.
+ * Killed after `timeoutMs` (default 5 min): some commands retry a socket forever.
+ */
+export function runConvexCli(
+  backend: Pick<RunningBackend, "url" | "adminKey" | "cliEnv">,
+  args: string[],
+  options: { stdio?: "inherit" | "pipe"; timeoutMs?: number } = {},
 ): Promise<{ code: number; output: string }> {
   const require = createRequire(join(PACKAGE_DIR, "package.json"));
   const cli = join(dirname(require.resolve("convex/package.json")), "bin/main.js");
   return new Promise((done, reject) => {
-    const child = spawn(process.execPath, [cli, ...args], {
+    const child = spawn(process.execPath, [cli, ...convexCliArgs(backend, args)], {
       cwd: PACKAGE_DIR,
       env: backend.cliEnv(),
       stdio: options.stdio === "inherit" ? "inherit" : ["ignore", "pipe", "pipe"],
     });
+    const kill = setTimeout(() => child.kill("SIGKILL"), options.timeoutMs ?? 300_000);
     let output = "";
     child.stdout?.on("data", (chunk: Buffer) => (output += chunk.toString()));
     child.stderr?.on("data", (chunk: Buffer) => (output += chunk.toString()));
-    child.once("error", reject);
-    child.once("exit", (code, signal) => done({ code: code ?? (signal ? 128 : 1), output }));
+    child.once("error", (error) => {
+      clearTimeout(kill);
+      reject(error);
+    });
+    child.once("exit", (code, signal) => {
+      clearTimeout(kill);
+      done({ code: exitStatus(code, signal), output });
+    });
   });
 }
 
 /** Push `functions/` to `backend`, leaving the committed `_generated/` untouched. */
-async function deployFunctions(backend: Pick<RunningBackend, "cliEnv">): Promise<void> {
+async function deployFunctions(
+  backend: Pick<RunningBackend, "url" | "adminKey" | "cliEnv">,
+): Promise<void> {
   const result = await runConvexCli(backend, [
     "deploy",
     "--yes",
@@ -370,13 +514,6 @@ async function deployFunctions(backend: Pick<RunningBackend, "cliEnv">): Promise
     throw new Error(`convex deploy failed (${result.code}):\n${result.output}`);
 }
 
-/** What a test or command needs to reach a deployed fixture backend. */
-export type BackendTestEnv = {
-  VOLLI_CONVEX_URL: string;
-  VOLLI_CONVEX_SITE_URL: string;
-  VOLLI_CONVEX_TEST_PRIVATE_KEY: string;
-};
-
 /**
  * Trust `issuer` on `backend`, push `functions/`, and return the environment
  * `fixture/testing.ts` reads. The JWKS variable is set before the push because
@@ -385,7 +522,7 @@ export type BackendTestEnv = {
 export async function deployForTests(
   backend: Pick<RunningBackend, "url" | "siteUrl" | "adminKey" | "cliEnv">,
   issuer: TestIssuer,
-): Promise<BackendTestEnv> {
+): Promise<Record<string, string>> {
   await setDeploymentEnv(backend, { VOLLI_TEST_JWKS: issuer.jwksDataUri });
   await deployFunctions(backend);
   return {

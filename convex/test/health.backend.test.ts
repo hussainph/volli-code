@@ -25,11 +25,11 @@ describe("health.whoami on the pinned local backend", () => {
     const forged = mintTestToken(createTestIssuer().privateKeyPem, "user:mallory");
     const client = backend.client();
     client.setAuth(forged);
-    await expect(client.query(api.health.whoami, {})).rejects.toThrow();
+    await expect(client.query(api.health.whoami, {})).rejects.toThrow(/InvalidAuthHeader/);
   });
 
   test("rejects an expired token", async () => {
-    const client = backend.client("user:alice", { ttlSeconds: -60 });
-    await expect(client.query(api.health.whoami, {})).rejects.toThrow();
+    const client = backend.client("user:alice", { ttlSeconds: -3600 });
+    await expect(client.query(api.health.whoami, {})).rejects.toThrow(/InvalidAuthHeader/);
   });
 });

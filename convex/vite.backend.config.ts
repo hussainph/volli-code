@@ -9,7 +9,5 @@ export default defineConfig({
     include: ["test/**/*.backend.test.ts"],
     globalSetup: ["fixture/global-setup.ts"],
     maxWorkers: 1,
-    // A first exec of the ~190 MB binary can take seconds on macOS.
-    hookTimeout: 60_000,
   },
 });

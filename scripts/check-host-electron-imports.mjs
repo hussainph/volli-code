@@ -666,7 +666,7 @@ function runGuard(repoRoot) {
     return 1;
   }
   console.log(
-    `[host-electron-imports] passed: ${entries.length} packages/host source modules and their relative dependencies do not reach electron.`,
+    `[host-electron-imports] passed: ${entries.length} packages/host/convex source modules and their relative dependencies do not reach electron.`,
   );
   return 0;
 }

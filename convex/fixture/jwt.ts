@@ -15,7 +15,7 @@ import { createPrivateKey, generateKeyPairSync, sign } from "node:crypto";
 
 import { TEST_AUDIENCE, TEST_ISSUER } from "../functions/auth.config.ts";
 
-export const TEST_KEY_ID = "volli-test-1";
+const TEST_KEY_ID = "volli-test-1";
 
 export type TestIssuer = {
   /** The value for the `VOLLI_TEST_JWKS` deployment variable. */
@@ -25,9 +25,8 @@ export type TestIssuer = {
 };
 
 export type MintOptions = {
+  /** Lifetime from now; negative mints an already-expired token. */
   ttlSeconds?: number;
-  /** Extra claims (e.g. `name`, `email`); `iss`/`aud`/`sub`/`iat`/`exp` are fixed. */
-  claims?: Record<string, unknown>;
 };
 
 const base64url = (value: string | Buffer) => Buffer.from(value).toString("base64url");
@@ -57,7 +56,6 @@ export function mintTestToken(
   const header = base64url(JSON.stringify({ alg: "ES256", typ: "JWT", kid: TEST_KEY_ID }));
   const body = base64url(
     JSON.stringify({
-      ...options.claims,
       iss: TEST_ISSUER,
       aud: TEST_AUDIENCE,
       sub: subject,

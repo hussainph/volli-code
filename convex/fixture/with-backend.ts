@@ -5,17 +5,26 @@
  *   node fixture/with-backend.ts -- convex codegen --typecheck disable
  *   node fixture/with-backend.ts --deploy -- node my-probe.mjs
  *
- * `convex …` runs this package's pinned CLI. Any other command runs as given.
- * The command sees `CONVEX_SELF_HOSTED_URL` / `CONVEX_SELF_HOSTED_ADMIN_KEY`
- * (what the CLI reads) and `VOLLI_CONVEX_URL` / `VOLLI_CONVEX_SITE_URL`, with
- * every cloud deployment variable removed. `--deploy` first pushes
- * `functions/` with the test issuer trusted, and hands the command its signing
- * key as `VOLLI_CONVEX_TEST_PRIVATE_KEY`.
+ * `convex …` runs this package's pinned CLI, aimed at the backend (see
+ * `runConvexCli`). Any other command runs as given, with
+ * `CONVEX_SELF_HOSTED_URL` / `CONVEX_SELF_HOSTED_ADMIN_KEY` and
+ * `VOLLI_CONVEX_URL` / `VOLLI_CONVEX_SITE_URL` set and every cloud deployment
+ * pointer blanked. `--deploy` first pushes `functions/` with the test issuer
+ * trusted, and hands such a command its signing key as
+ * `VOLLI_CONVEX_TEST_PRIVATE_KEY`.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
+import { constants } from "node:os";
 
-import { assertConvexNpmPinned, deployForTests, runConvexCli, startBackend } from "./backend.ts";
+import {
+  assertConvexNpmPinned,
+  deployForTests,
+  exitStatus,
+  runConvexCli,
+  startBackend,
+  type RunningBackend,
+} from "./backend.ts";
 import { createTestIssuer } from "./jwt.ts";
 
 // Leading `--flags` belong to this script; a `--` (which pnpm may or may not
@@ -37,25 +46,35 @@ if (command.length === 0 || unknown.length > 0) {
   process.exit(2);
 }
 
-assertConvexNpmPinned();
 const log = (line: string) => console.error(`[convex-fixture] ${line}`);
-const backend = await startBackend({ log });
-log(`backend ${backend.url} (pid ${backend.pid})`);
+let backend: RunningBackend | undefined;
+let child: ChildProcess | undefined;
+let finishing: Promise<never> | undefined;
 
-let stopping = false;
-async function finish(code: number): Promise<never> {
-  if (!stopping) {
-    stopping = true;
-    await backend.stop();
-    log("backend stopped");
-  }
-  process.exit(code);
+/** Stop the backend exactly once, whoever asks first, and exit only after it is down. */
+function finish(code: number): Promise<never> {
+  finishing ??= (async () => {
+    if (backend) {
+      await backend.stop();
+      log("backend stopped");
+    }
+    process.exit(code);
+  })();
+  return finishing;
 }
-for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.on(signal, () => void finish(130));
+
+// Installed before the backend starts, so a signal during startup still stops it.
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.on(signal, () => {
+    child?.kill(signal);
+    void finish(128 + constants.signals[signal]);
+  });
 }
 
 try {
+  assertConvexNpmPinned();
+  backend = await startBackend({ log });
+  log(`backend ${backend.url} (pid ${backend.pid})`);
   const env: NodeJS.ProcessEnv = {
     ...backend.cliEnv(),
     VOLLI_CONVEX_URL: backend.url,
@@ -71,12 +90,9 @@ try {
     code = (await runConvexCli(backend, command.slice(1), { stdio: "inherit" })).code;
   } else {
     code = await new Promise<number>((done, reject) => {
-      const child = spawn(command[0] as string, command.slice(1), {
-        env,
-        stdio: "inherit",
-      });
+      child = spawn(command[0] as string, command.slice(1), { env, stdio: "inherit" });
       child.once("error", reject);
-      child.once("exit", (exitCode, signal) => done(exitCode ?? (signal ? 128 : 1)));
+      child.once("exit", (exitCode, signal) => done(exitStatus(exitCode, signal)));
     });
   }
   await finish(code);
