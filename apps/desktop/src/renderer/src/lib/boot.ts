@@ -33,7 +33,10 @@ import {
 import { useBoardStore } from "@renderer/stores/board";
 import { installCloudBoardSource } from "@renderer/stores/board-source";
 import { ConvexBoardSource } from "@renderer/stores/cloud-board/source";
-import { followCloudWorkspace, useCloudWorkspaceStore } from "@renderer/stores/cloud-board/workspace";
+import {
+  followCloudWorkspace,
+  useCloudWorkspaceStore,
+} from "@renderer/stores/cloud-board/workspace";
 import { createCloudHostSource } from "@renderer/stores/cloud-link";
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
 import { adoptLaunch, cloudLaunchNow, launchStore } from "@renderer/stores/launch";
@@ -361,7 +364,9 @@ export async function startCloudBoard(
   try {
     await deps.start(launch);
   } catch (error) {
-    toastError(`Couldn’t start Volli Cloud: ${error instanceof Error ? error.message : String(error)}`);
+    toastError(
+      `Couldn’t start Volli Cloud: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   return true;
 }
@@ -661,10 +666,8 @@ async function bootCloudLaunch(
   ]);
   // A provisional Draft belongs to one of this Mac's tickets or projects,
   // none of which this launch shows: they wait for a local launch.
-  useChatSessionsStore.getState().restoreProvisionalChatTabs(
-    useChatDraftsStore.getState().drafts,
-    new Set(),
-    new Set(),
-  );
+  useChatSessionsStore
+    .getState()
+    .restoreProvisionalChatTabs(useChatDraftsStore.getState().drafts, new Set(), new Set());
   return { ok: true };
 }

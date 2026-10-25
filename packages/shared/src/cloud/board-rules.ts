@@ -224,10 +224,7 @@ function normalizeLabelName(name: string): string {
 /** The live label a stored one stands for: itself, or the end of its merge chain. */
 function canonicalLabel<
   Label extends { readonly id: string; readonly mergedIntoId: string | null },
->(
-  labels: ReadonlyMap<string, Label>,
-  label: Label,
-): Label {
+>(labels: ReadonlyMap<string, Label>, label: Label): Label {
   let current = label;
   const seen = new Set<string>([current.id]);
   while (current.mergedIntoId !== null) {
@@ -246,7 +243,11 @@ function canonicalLabel<
  */
 export function labelNamesOf(
   labelIds: readonly string[],
-  labels: readonly { readonly id: string; readonly name: string; readonly mergedIntoId: string | null }[],
+  labels: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly mergedIntoId: string | null;
+  }[],
 ): string[] {
   const byId = new Map(labels.map((label) => [label.id, label]));
   const seen = new Set<string>();

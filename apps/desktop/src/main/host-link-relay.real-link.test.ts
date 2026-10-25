@@ -60,8 +60,8 @@ import {
 import { createTRPCClient } from "@trpc/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { boardApi } from "../renderer/src/lib/board-api";
 import {
-  boardApi,
   boardProtocol,
   boardSyncTransport,
   createBoardClient,

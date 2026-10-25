@@ -35,26 +35,26 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("the token fetcher (VC-889)", () => {
-  function fetcher(answers: (AccountAccessToken | Error)[], closed = () => false) {
-    const asked: boolean[] = [];
-    const waits: number[] = [];
-    const fetch = createTokenFetcher({
-      ask: async (force) => {
-        asked.push(force);
-        const next = answers.shift()!;
-        if (next instanceof Error) throw next;
-        return next;
-      },
-      wait: async (ms) => {
-        waits.push(ms);
-      },
-      closed,
-      retryMs: 5_000,
-    });
-    return { fetch, asked, waits };
-  }
+function fetcher(answers: (AccountAccessToken | Error)[], closed = () => false) {
+  const asked: boolean[] = [];
+  const waits: number[] = [];
+  const fetch = createTokenFetcher({
+    ask: async (force) => {
+      asked.push(force);
+      const next = answers.shift()!;
+      if (next instanceof Error) throw next;
+      return next;
+    },
+    wait: async (ms) => {
+      waits.push(ms);
+    },
+    closed,
+    retryMs: 5_000,
+  });
+  return { fetch, asked, waits };
+}
 
+describe("the token fetcher (VC-889)", () => {
   it("answers a token, and null only when signed out", async () => {
     const token = fetcher([{ kind: "token", token: "jwt", expiresAt: 1 }]);
     await expect(token.fetch({ forceRefreshToken: true })).resolves.toBe("jwt");
@@ -150,9 +150,7 @@ class FakeConvexClient {
   }
 }
 
-function harness(
-  options: { firstSnapshot?: AccountSnapshot; online?: boolean } = {},
-): {
+function harness(options: { firstSnapshot?: AccountSnapshot; online?: boolean } = {}): {
   deps: CloudClientDeps;
   inputs: ReturnType<typeof createCloudLinkInputStore>;
   emit(snapshot: AccountSnapshot): void;

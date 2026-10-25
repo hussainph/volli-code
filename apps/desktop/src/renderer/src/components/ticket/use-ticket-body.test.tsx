@@ -10,7 +10,11 @@ import type { Ticket } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { TicketBodyResult } from "../../../../ipc/contract";
 
+import { LOCAL_LAUNCH } from "@volli/shared";
+
 import { useBoardStore } from "@renderer/stores/board";
+import { installCloudBoardSource } from "@renderer/stores/board-source";
+import { adoptLaunch } from "@renderer/stores/launch";
 
 import { useTicketBody, type TicketBodyStatus } from "./use-ticket-body";
 
@@ -244,5 +248,58 @@ describe("useTicketBody", () => {
       // the placeholder, and a ticket left marked is one nobody can ever edit.
       expect(lastStatus).toBe("ready");
     });
+  });
+});
+
+// VC-889: a cloud project's open ticket keeps its body live over its own watch.
+describe("useTicketBody in a cloud launch", () => {
+  let handlers: { onBody(body: string): void; onError(message: string): void } | null = null;
+  const stop = vi.fn();
+  const followTicket = vi.fn(
+    (_ticketId: string, next: { onBody(body: string): void; onError(message: string): void }) => {
+      handlers = next;
+      return stop;
+    },
+  );
+
+  beforeEach(() => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    installCloudBoardSource({ followTicket, adoptBody: vi.fn() } as never);
+    useBoardStore.setState({ unloadedTicketBodies: { t1: true } });
+    followTicket.mockClear();
+    stop.mockClear();
+    handlers = null;
+  });
+
+  afterEach(() => {
+    adoptLaunch(LOCAL_LAUNCH);
+    installCloudBoardSource(null);
+  });
+
+  it("follows the ticket instead of reading it, ready at the first answer", async () => {
+    await mount();
+    expect(body).not.toHaveBeenCalled();
+    expect(followTicket).toHaveBeenCalledWith("t1", expect.anything());
+    expect(lastStatus).toBe("loading");
+    await act(async () => handlers!.onBody("# From Volli Cloud"));
+    expect(lastStatus).toBe("ready");
+    expect(useBoardStore.getState().ticketsByProject.p1?.[0]?.body).toBe("# From Volli Cloud");
+    // A planning change re-reads nothing: the watch is live.
+    await act(async () => {
+      useBoardStore.setState({
+        lastPlanningChange: { version: 3, ticketId: "t1", projectId: "p1" },
+      });
+    });
+    expect(body).not.toHaveBeenCalled();
+  });
+
+  it("fails a first read with its retry, which follows again", async () => {
+    await mount();
+    await act(async () => handlers!.onError("No such ticket."));
+    expect(lastStatus).toBe("failed");
+    await act(async () => lastRetry!());
+    expect(stop).toHaveBeenCalledOnce();
+    expect(followTicket).toHaveBeenCalledTimes(2);
+    expect(lastStatus).toBe("loading");
   });
 });

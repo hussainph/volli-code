@@ -54,7 +54,11 @@ export interface CloudWorkspaceDeps {
     getState(): {
       readonly projects: readonly Project[];
       readonly selectedProjectId: string | null;
-      hydrateCloud(workspaceId: string, projects: Project[], selectedProjectId: string | null): void;
+      hydrateCloud(
+        workspaceId: string,
+        projects: Project[],
+        selectedProjectId: string | null,
+      ): void;
     };
   };
   board: { seedProject(projectId: string): void; forget(projectId: string): void };
@@ -125,7 +129,8 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
       deps.notice(`${project.name} isn’t available any more`);
     }
     for (const project of next) deps.board.seedProject(project.id);
-    const wanted = !answered && deps.persisted?.workspaceId === id ? deps.persisted.projectId : null;
+    const wanted =
+      !answered && deps.persisted?.workspaceId === id ? deps.persisted.projectId : null;
     answered = true;
     state.hydrateCloud(id, next, resolveSelection(next, state.selectedProjectId, wanted));
   }

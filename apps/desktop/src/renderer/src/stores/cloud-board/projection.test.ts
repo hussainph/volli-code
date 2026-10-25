@@ -303,7 +303,15 @@ describe("a ticket's history and comments from Volli Cloud", () => {
         },
       ]),
     ).toEqual([
-      { id: "c1", ticketId: "t1", sessionId: null, actor: "user", body: "hi", createdAt: 1, updatedAt: 1 },
+      {
+        id: "c1",
+        ticketId: "t1",
+        sessionId: null,
+        actor: "user",
+        body: "hi",
+        createdAt: 1,
+        updatedAt: 1,
+      },
       {
         id: "c2",
         ticketId: "t1",

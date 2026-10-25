@@ -143,10 +143,9 @@ export function createTokenFetcher(deps: {
 /** The account doors the client uses, over the desktop bridge. */
 export interface CloudAccountDoor {
   accessToken(force: boolean): Promise<AccountAccessToken>;
-  subscribe(handlers: {
-    onData(snapshot: AccountSnapshot): void;
-    onError(error: unknown): void;
-  }): { unsubscribe(): void };
+  subscribe(handlers: { onData(snapshot: AccountSnapshot): void; onError(error: unknown): void }): {
+    unsubscribe(): void;
+  };
 }
 
 /** Everything {@link startCloudClient} reaches outside itself. */
@@ -180,6 +179,8 @@ function defaultDeps(): CloudClientDeps {
     clock: SYSTEM_CLOCK,
   };
 }
+
+const NOTHING = (): void => {};
 
 /** How often the wake detector ticks. */
 const WAKE_TICK_MS = 5_000;
@@ -276,7 +277,7 @@ export async function startCloudClient(
 
   // Cleared by an expired sign-in; the same person signing in again restores it.
   let authCleared = false;
-  let stopAccount = (): void => {};
+  let stopAccount: () => void = NOTHING;
   const account = deps.account.subscribe({
     onData(snapshot) {
       if (closed) return;

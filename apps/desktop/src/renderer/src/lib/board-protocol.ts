@@ -1,16 +1,16 @@
 /**
- * Which door the renderer's board goes through (VC-565).
+ * The board protocol path (VC-565), which a local launch with `cloud` on
+ * keeps for the projects a remote host serves (VC-711) until that host model
+ * is retired. This Mac's own projects stay on the legacy per-channel IPC with
+ * the flag on as with it off, and a cloud launch's board is Volli Cloud's
+ * (VC-889, `stores/board-source.ts`).
  *
- * - **`cloud` off: the legacy per-channel IPC, exactly as before.** Nothing
- *   here runs: {@link boardApi} answers with `window.api`'s own functions, the
- *   board store keeps its write-through gateway, and boot hydrates from
- *   `volli:data-bootstrap` and refreshes on `volli:data-changed`.
- * - **`cloud` on: the board router, through a board client.** The board store
- *   paints what {@link BoardSync} holds (the host's confirmed board plus this
- *   window's pending writes, T5), the project's change feed keeps it current,
- *   and every per-surface board read and write (comments, activity, bodies,
- *   project settings, the sidebar's signals) goes through {@link boardApi}'s
- *   protocol facade, each write under a fresh `commandId`.
+ * For a board it follows, the board store paints what {@link BoardSync}
+ * holds (the host's confirmed board plus this window's pending writes, T5),
+ * the project's change feed keeps it current, and every per-surface board
+ * read and write (comments, activity, bodies, project settings, the
+ * sidebar's signals) goes through {@link protocolBoardApi}, each write under
+ * a fresh `commandId` (`board-api.ts` routes them here).
  *
  * The client is the board router's procedures over either link: the desktop's
  * generic IPC bridge for this Mac's in-process host (`sessionRpcClient()`,
@@ -20,14 +20,12 @@
  * Nothing above the client knows which.
  *
  * **Routing is per project (VC-711).** One {@link BoardSync} follows every
- * project this window holds, local and remote alike: it already keys every
- * call, base and pending write by project, so it takes a transport per
- * project ({@link BoardClientResolver}) rather than one engine per host,
- * which would split its one pending layer, `projectOf` and the facade's
- * commands across engines for nothing. A project the host-connection store
- * claims for a remote host gets that host's client; every other one, this
- * Mac's. The per-surface facade routes the same way: by the project, the
- * ticket's project, or a comment's ticket.
+ * board it is opened for: it already keys every call, base and pending write
+ * by project, so it takes a transport per project ({@link BoardClientResolver})
+ * rather than one engine per host. A project the host-connection store claims
+ * for a remote host gets that host's client; every other one, this Mac's. The
+ * per-surface facade routes the same way: by the project, the ticket's
+ * project, or a comment's ticket.
  */
 import { createTRPCClient, type TRPCClient, type TRPCLink } from "@trpc/client";
 import { hostLinkTrpcLink } from "@volli/host-protocol/client-link";

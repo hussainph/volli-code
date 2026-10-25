@@ -65,7 +65,7 @@ export interface BoardSource {
 let cloudSource: ConvexBoardSource | null = null;
 
 /** Boot's one call in a cloud launch: the source every project's board goes through. */
-export function installCloudBoardSource(source: ConvexBoardSource): void {
+export function installCloudBoardSource(source: ConvexBoardSource | null): void {
   cloudSource = source;
 }
 

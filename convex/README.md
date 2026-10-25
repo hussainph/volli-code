@@ -124,6 +124,12 @@ same gap conflict and retry instead of colliding (`board.backend.test.ts`).
 The local SQLite board (signed-out mode) keeps its own commands; it was not
 rewritten onto these decisions, because its dense integer positions differ.
 
+**Public function arguments are a cross-version contract.** A shipped
+desktop calls these functions directly from its window (VC-889), through the
+generated references this package exports as `@volli/convex/api` (the only
+import a client takes from here). Change a public function's arguments
+additively only: a new optional argument, never a removed or retyped one.
+
 **No cloud deployment may ever set `VOLLI_TEST_JWKS`.** Without it, the
 deployment trusts no test issuer.
 

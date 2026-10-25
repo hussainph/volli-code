@@ -153,8 +153,8 @@ export class ConvexBoardSource implements BoardSource {
   }
 
   #read(projectId: string, watch: Watched<CloudRoster>): void {
-    const board = this.#boards.get(projectId);
-    if (board === undefined) return;
+    // A closed board's watch is stopped with it, so a board is always here.
+    const board = this.#boards.get(projectId)!;
     let roster: CloudRoster | undefined;
     try {
       roster = watch.localQueryResult();

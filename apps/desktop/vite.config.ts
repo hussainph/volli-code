@@ -595,6 +595,11 @@ export default defineConfig(({ mode }) => ({
         // or a failure no screenshot shows. (Its engine, `stores/board-sync.ts`,
         // is gated by `src/stores/**` above.)
         "src/lib/board-protocol.ts",
+        // The board's per-surface door, routed by each call's project, and
+        // Volli Cloud's half of it (VC-889): a misrouted call reads or writes
+        // the wrong store, and nothing on screen says so.
+        "src/lib/board-api.ts",
+        "src/lib/cloud-board-api.ts",
         // When a remote project's Session listing is read again (VC-713): a
         // missed branch is a question nobody sees on reopen, or a poll that
         // never stops.
@@ -740,6 +745,9 @@ export default defineConfig(({ mode }) => ({
         // that walks every branch of it.
         "**/src/main/support-info.ts",
         "**/src/main/quit-gate.ts",
+        // Which product store a launch uses, its marker, and the restart into
+        // the other one through the quit gates (VC-889).
+        "**/src/main/cloud-launch.ts",
         "**/src/main/host-runtime.ts",
         // Menu-bar mode's whole decision and lifecycle (VC-577).
         "**/src/main/menu-bar-host.ts",

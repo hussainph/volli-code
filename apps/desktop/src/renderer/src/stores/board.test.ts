@@ -20,6 +20,11 @@ import {
 import { startBoardProtocol, stopBoardProtocol } from "@renderer/lib/board-protocol";
 import type { BoardSyncTransport } from "./board-sync";
 import { useChatSessionsStore } from "./chat-sessions";
+import { remoteProject } from "./remote-project.test-support";
+import { LOCAL_LAUNCH } from "@volli/shared";
+import { installCloudBoardSource } from "./board-source";
+import { ConvexBoardSource } from "./cloud-board/source";
+import { adoptLaunch } from "./launch";
 import { ticketScope, useSessionsStore, type SessionLaunch } from "./sessions";
 
 /** A bare shell launch: no harness command line was written, so no expectation. */
@@ -2784,12 +2789,7 @@ describe("paintBoard", () => {
 
     store
       .getState()
-      .paintBoard(
-        "p1",
-        [{ ...a!, status: "done" }, { ...b! }],
-        [labelNamed("bug")],
-        new Set(),
-      );
+      .paintBoard("p1", [{ ...a!, status: "done" }, { ...b! }], [labelNamed("bug")], new Set());
 
     const [nextA, nextB] = store.getState().ticketsByProject.p1!;
     expect(nextA?.status).toBe("done");
@@ -2801,12 +2801,7 @@ describe("paintBoard", () => {
     const store = createBoardStore(fakeGateway());
     store
       .getState()
-      .paintBoard(
-        "p1",
-        [ticket({ id: "a", status: "doing" })],
-        [labelNamed("bug")],
-        new Set(),
-      );
+      .paintBoard("p1", [ticket({ id: "a", status: "doing" })], [labelNamed("bug")], new Set());
     const ticketsBefore = store.getState().ticketsByProject;
 
     store
@@ -2901,6 +2896,8 @@ function startProtocol() {
   };
   const transport = unusedTransport();
   const { sync } = startBoardProtocol({ view, client: {} as never, sync: { transport } });
+  // The engine follows a remote host's board (VC-711): "p1" stands for one.
+  vi.spyOn(sync, "follows").mockImplementation((projectId) => projectId === "p1");
   return { sync, transport };
 }
 
@@ -2912,7 +2909,7 @@ function gatewayCalls(gateway: BoardGateway): number {
   );
 }
 
-describe("the board store on the protocol path (cloud on)", () => {
+describe("the board store for a board the protocol engine follows (a remote host's)", () => {
   afterEach(() => {
     stopBoardProtocol();
   });
@@ -3039,6 +3036,7 @@ describe("the board store on the protocol path (cloud on)", () => {
 
   it("loads the archive through the engine", async () => {
     const { sync } = startProtocol();
+    vi.spyOn(sync, "follows").mockImplementation((id) => id === "p1" || id === "gone");
     const archived = [archivedTicket({ id: "x", status: "done" })];
     const archivedTickets = vi.spyOn(sync, "archivedTickets");
     const gateway = fakeGateway();
@@ -3188,16 +3186,22 @@ describe("the board store on the protocol path (cloud on)", () => {
     expect(store.getState().archivedByProject.p1?.map(({ id }) => id)).toEqual(["w", "x"]);
   });
 
-  it("opens a new Workspace's board once, and says so when it cannot", async () => {
+  it("opens a remote host's new board once, and says so when it cannot", async () => {
     const { sync } = startProtocol();
     const open = vi.spyOn(sync, "open").mockResolvedValueOnce();
     vi.spyOn(sync, "follows").mockImplementation((projectId) => projectId === "followed");
     const store = createBoardStore(fakeGateway());
 
+    // This Mac's own project stays on the legacy path, flag on as off (VC-889).
+    store.getState().seedProject("local");
+    const undoP1 = remoteProject("p1");
     store.getState().seedProject("p1");
+    undoP1();
     store.getState().seedProject("followed");
     open.mockRejectedValueOnce(new Error("host gone"));
+    const undoP2 = remoteProject("p2");
     store.getState().seedProject("p2");
+    undoP2();
     await vi.waitFor(() => expect(vi.mocked(toast.error)).toHaveBeenCalled());
 
     expect(open.mock.calls).toEqual([["p1"], ["p2"]]);
@@ -3205,6 +3209,32 @@ describe("the board store on the protocol path (cloud on)", () => {
       duration: 8000,
       closeButton: true,
     });
+  });
+
+  it("keeps a followed board's slices when this Mac's bootstrap re-hydrates", () => {
+    startProtocol();
+    const store = createBoardStore(fakeGateway());
+    const remote = ticket({ id: "r", status: "todo" });
+    store.getState().paintBoard("p1", [remote], [labelNamed("bug")], new Set());
+    const local = ticket({ id: "l", status: "doing" });
+    store.getState().hydrate({ mine: [local] }, { mine: [] });
+    expect(store.getState().ticketsByProject).toEqual({ mine: [local], p1: [remote] });
+    expect(store.getState().labelsByProject.p1).toEqual([labelNamed("bug")]);
+    // A board with tickets but no label slice keeps an empty one.
+    store.setState({ labelsByProject: {} });
+    store.getState().hydrate({ mine: [local] }, {});
+    expect(store.getState().labelsByProject).toEqual({ p1: [] });
+  });
+
+  it("keeps this Mac's own projects on the legacy write-through with the flag on (VC-889)", async () => {
+    startProtocol();
+    const gateway = fakeGateway({
+      moveTicket: vi.fn().mockResolvedValue({ ok: true, tickets: [] }),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ mine: [ticket({ id: "a", status: "todo" })] }, { mine: [] });
+    await store.getState().moveTicket("mine", "a", "doing", 0);
+    expect(gateway.moveTicket).toHaveBeenCalledOnce();
   });
 
   it("stops following a forgotten Workspace", () => {
@@ -3222,9 +3252,7 @@ describe("the board store on the protocol path (cloud on)", () => {
     const { sync } = startProtocol();
     const adoptBody = vi.spyOn(sync, "adoptBody");
     const store = createBoardStore(fakeGateway());
-    store
-      .getState()
-      .paintBoard("p1", [ticket({ id: "a", status: "doing" })], [], new Set(["a"]));
+    store.getState().paintBoard("p1", [ticket({ id: "a", status: "doing" })], [], new Set(["a"]));
 
     store.getState().adoptTicketBody("p1", "a", "# Read");
 
@@ -3335,4 +3363,32 @@ it("preserves 599 of 600 ticket identities on both board paths", () => {
     new Set(),
   );
   expect(store.getState().ticketsByProject.p1).toBe(off);
+});
+
+describe("the board store in a cloud launch (VC-889)", () => {
+  afterEach(() => {
+    adoptLaunch(LOCAL_LAUNCH);
+    installCloudBoardSource(null);
+  });
+
+  it("sends every project's board through Volli Cloud's source, never this Mac's", async () => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    const source = new ConvexBoardSource({
+      paint: vi.fn(),
+      notePlanningChange: vi.fn(),
+      failed: vi.fn(),
+      refused: vi.fn(),
+      dropped: vi.fn(),
+    });
+    installCloudBoardSource(source);
+    const move = vi.spyOn(source, "moveTickets");
+    const open = vi.spyOn(source, "open");
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().seedProject("cloud-project");
+    await store.getState().moveTicket("cloud-project", "a", "doing", 0);
+    expect(open).toHaveBeenCalledWith("cloud-project");
+    expect(move).toHaveBeenCalledWith("cloud-project", ["a"], "doing", 0, undefined);
+    expect(gatewayCalls(gateway)).toBe(0);
+  });
 });

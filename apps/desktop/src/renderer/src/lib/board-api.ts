@@ -66,27 +66,29 @@ export interface BoardApi {
   };
 }
 
-/** The legacy door: `window.api`'s own functions, untouched. */
+/**
+ * The legacy door: `window.api`'s own functions, untouched, each read when
+ * called (a door built for a remote host's call never touches `window.api`).
+ */
 export function legacyBoardApi(): BoardApi {
-  const { tickets, comments, projects } = window.api;
   return {
     tickets: {
-      events: (input) => tickets.events(input),
-      body: (input) => tickets.body(input),
-      latestSignals: (input) => tickets.latestSignals(input),
-      statusEntries: (input) => tickets.statusEntries(input),
+      events: (input) => window.api.tickets.events(input),
+      body: (input) => window.api.tickets.body(input),
+      latestSignals: (input) => window.api.tickets.latestSignals(input),
+      statusEntries: (input) => window.api.tickets.statusEntries(input),
     },
     comments: {
-      list: (input) => comments.list(input),
-      create: (input) => comments.create(input),
-      update: (input) => comments.update(input),
-      remove: (input) => comments.remove(input),
+      list: (input) => window.api.comments.list(input),
+      create: (input) => window.api.comments.create(input),
+      update: (input) => window.api.comments.update(input),
+      remove: (input) => window.api.comments.remove(input),
     },
     projects: {
-      update: (input) => projects.update(input),
-      setSkillModes: (input) => projects.setSkillModes(input),
-      setSessionDefaults: (input) => projects.setSessionDefaults(input),
-      checkFolder: (projectId) => projects.checkFolder(projectId),
+      update: (input) => window.api.projects.update(input),
+      setSkillModes: (input) => window.api.projects.setSkillModes(input),
+      setSessionDefaults: (input) => window.api.projects.setSessionDefaults(input),
+      checkFolder: (projectId) => window.api.projects.checkFolder(projectId),
     },
   };
 }

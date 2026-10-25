@@ -137,9 +137,7 @@ function SignedIn({
           <SectionAction
             label="Sign out"
             icon={SignOutIcon}
-            onAct={() =>
-              cloudLaunch ? setSigningOut(true) : act(commands.signOut, "Sign out")
-            }
+            onAct={() => (cloudLaunch ? setSigningOut(true) : act(commands.signOut, "Sign out"))}
           />
         }
       >

@@ -281,7 +281,11 @@ const ACCOUNT = {
 } as const;
 
 /** The window's Volli Cloud client's token (VC-889): an access JWT, never the refresh token. */
-const TOKEN = { kind: "token", token: "header.payload.signature", expiresAt: 1_900_000_000_000 } as const;
+const TOKEN = {
+  kind: "token",
+  token: "header.payload.signature",
+  expiresAt: 1_900_000_000_000,
+} as const;
 
 const CLOUD_LAUNCH = {
   store: "cloud",

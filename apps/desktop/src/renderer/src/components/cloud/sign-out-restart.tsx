@@ -23,7 +23,9 @@ export interface SignOutRestartRpc {
 }
 
 /** Signs out, then asks for the restart; a failure says what main said. */
-export async function signOutAndRestart(rpc: SignOutRestartRpc = sessionRpcClient()): Promise<void> {
+export async function signOutAndRestart(
+  rpc: SignOutRestartRpc = sessionRpcClient(),
+): Promise<void> {
   try {
     await rpc.account.signOut.mutate();
     await rpc.cloud.relaunch.mutate();

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  CLOUD_HOST,
   THIS_MAC_HOST,
   type HostLinkView,
   type HostRecord,
@@ -359,5 +360,62 @@ describe("the Running on dot", () => {
     expect(
       hostDotState(host({ status: "open" }, { expiredSignIns: [{ providerId: "x", name: "X" }] })),
     ).toBe("waiting");
+  });
+});
+
+const cloud = (link: HostLinkView) => ({ ...CLOUD_HOST, link });
+
+// VC-889: Volli Cloud, as a cloud launch's one host.
+describe("Volli Cloud's words", () => {
+  it("says it cannot reach Volli Cloud, with no Retry and no countdown: it reconnects on its own", () => {
+    const surface = hostSurface(cloud({ status: "offline", since: SINCE, retryAt: null }), NOW);
+    expect(surface).toEqual({
+      tone: "quiet",
+      icon: "offline",
+      line: "Can’t reach Volli Cloud · Read-only",
+      graced: false,
+    });
+  });
+
+  it("asks to sign in again when Volli Cloud refused the sign-in", () => {
+    const refused: HostLinkView = { status: "incompatible", reason: "sign-in-refused" };
+    expect(hostSurface(cloud(refused), NOW)).toMatchObject({
+      tone: "error",
+      line: "Volli Cloud didn’t accept this sign-in · Read-only",
+      action: { kind: "sign-in-again", label: "Sign in again" },
+    });
+    expect(hostDetail(cloud(refused))).toEqual({
+      kind: "incompatible",
+      text: "Didn’t accept this sign-in",
+      action: { kind: "sign-in-again", label: "Sign in again" },
+    });
+  });
+
+  it("is signed out: Restart Volli after a chosen sign-out, Sign in again after an expired one", () => {
+    const chosen: HostLinkView = {
+      status: "incompatible",
+      reason: "signed-out",
+      recovery: "relaunch",
+    };
+    const expired: HostLinkView = {
+      status: "incompatible",
+      reason: "signed-out",
+      recovery: "sign-in",
+    };
+    expect(hostSurface(cloud(chosen), NOW)).toMatchObject({
+      line: "Signed out of Volli Cloud",
+      action: { kind: "relaunch", label: "Restart Volli" },
+    });
+    expect(hostSurface(cloud(expired), NOW)?.action).toEqual({
+      kind: "sign-in-again",
+      label: "Sign in again",
+    });
+    expect(hostDetail(cloud(chosen))).toEqual({
+      kind: "incompatible",
+      text: "Signed out",
+      action: { kind: "relaunch", label: "Restart Volli" },
+    });
+    expect(hostDetail(cloud(expired))).toMatchObject({ action: { kind: "sign-in-again" } });
+    expect(hostBadge(cloud(chosen))).toBe("fail");
   });
 });

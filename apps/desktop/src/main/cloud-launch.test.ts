@@ -56,22 +56,22 @@ describe("the launch's product store (VC-889)", () => {
   });
 });
 
-describe("the launch marker's row", () => {
-  function row(initial?: string) {
-    let value = initial;
-    const live = {
-      read: vi.fn(() => value),
-      write: vi.fn((next: string) => {
-        value = next;
-      }),
-      remove: vi.fn(() => {
-        value = undefined;
-      }),
-    } satisfies LaunchMarkerRow;
-    return live;
-  }
-  const log = () => ({ warn: vi.fn() });
+function row(initial?: string) {
+  let value = initial;
+  const live = {
+    read: vi.fn(() => value),
+    write: vi.fn((next: string) => {
+      value = next;
+    }),
+    remove: vi.fn(() => {
+      value = undefined;
+    }),
+  } satisfies LaunchMarkerRow;
+  return live;
+}
+const log = () => ({ warn: vi.fn() });
 
+describe("the launch marker's row", () => {
   it("writes and clears the marker, touching the row only when it changes", () => {
     const live = row();
     const store = launchMarkerStore(() => live, log());
@@ -115,11 +115,11 @@ describe("the launch marker's row", () => {
   });
 });
 
-describe("the relaunch", () => {
-  function app() {
-    return { quit: vi.fn(), relaunch: vi.fn() };
-  }
+function app() {
+  return { quit: vi.fn(), relaunch: vi.fn() };
+}
 
+describe("the relaunch", () => {
   it("goes through the quit path and starts a new process only once the quit is accepted", () => {
     const lifecycle = app();
     const relaunch = createRelaunchController(lifecycle);

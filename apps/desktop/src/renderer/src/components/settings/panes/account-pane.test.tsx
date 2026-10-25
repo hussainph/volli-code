@@ -8,10 +8,19 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { AccountSnapshot } from "@volli/shared";
 
+import { LOCAL_LAUNCH } from "@volli/shared";
+
+import { adoptLaunch } from "@renderer/stores/launch";
 import { AccountPane } from "./account-pane";
 import type { AccountRpc } from "./use-account";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// The toast itself is callable (the restart offer); its methods stay sonner's.
+vi.mock("sonner", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("sonner")>();
+  return { ...actual, toast: Object.assign(vi.fn(), actual.toast) };
+});
 
 const SIGNED_OUT: AccountSnapshot = {
   state: "signed-out",
@@ -190,5 +199,54 @@ describe("Settings → Account", () => {
     tier.push(SIGNED_IN);
     await act(async () => button("Sign out").click());
     expect(error).toHaveBeenCalledWith("Disk full.", expect.anything());
+  });
+});
+
+// VC-889: signing in or out restarts Volli into the other product store.
+describe("Settings → Account and the launch", () => {
+  afterEach(() => adoptLaunch(LOCAL_LAUNCH));
+
+  it("offers the restart into Volli Cloud once a sign-in completes in a local launch", async () => {
+    const { toast } = await import("sonner");
+    const shown = vi.mocked(toast as unknown as (...args: unknown[]) => void);
+    shown.mockClear();
+    const tier = standIn();
+    act(() => root.render(<AccountPane rpc={tier.rpc} />));
+    tier.push({ ...SIGNED_OUT, state: "signing-in", signingInWith: "github" });
+    tier.push(SIGNED_IN);
+    expect(shown).toHaveBeenCalledOnce();
+    const [message, options] = shown.mock.calls[0] as [
+      string,
+      { action: { label: string; onClick(): void }; cancel: { label: string; onClick(): void } },
+    ];
+    expect(message).toBe("Restart to open Volli Cloud");
+    expect(options.action.label).toBe("Restart now");
+    expect(options.cancel.label).toBe("Later");
+    options.cancel.onClick();
+    expect(tier.rpc.cloud.relaunch.mutate).not.toHaveBeenCalled();
+    options.action.onClick();
+    expect(tier.rpc.cloud.relaunch.mutate).toHaveBeenCalledOnce();
+    // The same account again offers nothing new; the row stays until the restart.
+    tier.push({ ...SIGNED_IN });
+    expect(shown).toHaveBeenCalledOnce();
+    act(() => button("Restart to open Volli Cloud").click());
+    expect(tier.rpc.cloud.relaunch.mutate).toHaveBeenCalledTimes(2);
+  });
+
+  it("in a cloud launch, signs out only after the confirm, then restarts", async () => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    const tier = standIn();
+    act(() => root.render(<AccountPane rpc={tier.rpc} />));
+    tier.push(SIGNED_IN);
+    expect(container.textContent).not.toContain("Restart to open Volli Cloud");
+    act(() => button("Sign out").click());
+    expect(tier.rpc.account.signOut.mutate).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Sign out and restart Volli?");
+    const confirm = [...document.querySelectorAll("[role=alertdialog] button")].find(
+      (node) => node.textContent === "Sign out and restart",
+    ) as HTMLButtonElement;
+    await act(async () => confirm.click());
+    expect(tier.rpc.account.signOut.mutate).toHaveBeenCalledOnce();
+    expect(tier.rpc.cloud.relaunch.mutate).toHaveBeenCalledOnce();
   });
 });

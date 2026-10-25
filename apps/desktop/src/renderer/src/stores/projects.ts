@@ -378,7 +378,6 @@ export function createProjectsStore(
   onSelectedProjectChange: SelectedProjectListener = defaultSelectedProjectListener,
   isRemote: RemoteProjectTest = defaultIsRemote,
   selectionHost: (id: string) => RemoteSelection | null = (id) => {
-    if (launchStore() === "cloud") return null;
     if (!isExperimentOn(useExperimentsStore.getState().snapshot, "cloud")) return null;
     const state = useHostConnectionStore.getState();
     if (!isRemoteProject(state, id)) return null;

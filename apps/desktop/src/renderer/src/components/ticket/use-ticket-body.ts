@@ -95,8 +95,7 @@ export function useTicketBody(ticket: Pick<Ticket, "id" | "projectId">): TicketB
     if (source === null) return undefined;
     setFailed(false);
     return source.followTicket(openTicketId, {
-      onBody: (body) =>
-        useBoardStore.getState().adoptTicketBody(openProjectId, openTicketId, body),
+      onBody: (body) => useBoardStore.getState().adoptTicketBody(openProjectId, openTicketId, body),
       onError: () => setFailed(true),
     });
   }, [cloud, openTicketId, openProjectId, cloudAttempt]);

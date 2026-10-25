@@ -21,4 +21,3 @@ export function launchStore(): CloudLaunch["store"] {
 export function cloudLaunchNow(): Extract<CloudLaunch, { store: "cloud" }> | null {
   return launch.store === "cloud" ? launch : null;
 }
-
