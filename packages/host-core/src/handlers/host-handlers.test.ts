@@ -50,6 +50,7 @@ import {
   type HostHandlers,
 } from "./host-handlers";
 import type { AccountPort } from "./account-port";
+import type { RunnerAccountPort } from "./runner-account-port";
 import type { BrowserShortcutsPort } from "./browser-shortcuts-port";
 import type { RemoteHostsPort } from "./remote-hosts-port";
 
@@ -1712,5 +1713,57 @@ describe("the Volli Cloud account", () => {
     for (const method of ["connect", "install", "cancel", "disconnect"] as const) {
       expect(github[method]).toHaveBeenCalledOnce();
     }
+  });
+});
+
+// This Mac as a runner (VC-895): desktop main's Mac runner, through its port;
+// absent everywhere else.
+describe("this Mac as a runner", () => {
+  const SNAPSHOT = {
+    state: "online",
+    runnerId: "runner-1",
+    runnerName: "Dana's MacBook",
+    since: 1_700_000_000_000,
+    waitingFacts: 0,
+    problem: null,
+    message: null,
+  } as const;
+
+  const everyCall = (map: ReturnType<typeof handlers>): (() => unknown)[] => [
+    () => map["runners.thisMac"](undefined, WINDOW),
+    () => map["runners.subscribeThisMac"](undefined, WINDOW, sink()),
+    () => map["runners.addThisMac"](undefined, WINDOW),
+    () => map["runners.removeThisMac"](undefined, WINDOW),
+  ];
+
+  it("answers unavailable for every key on a host with no Mac runner (hostd)", async () => {
+    for (const map of [handlers(), handlers({ runners: null })]) {
+      for (const call of everyCall(map)) {
+        expect(await unavailable(call)).toBe("Runners are unavailable on this host");
+      }
+    }
+  });
+
+  it("forwards each command to the port and feeds the window every snapshot", async () => {
+    const unsubscribe = vi.fn();
+    const port = {
+      thisMac: vi.fn(() => SNAPSHOT),
+      subscribeThisMac: vi.fn((listener: (snapshot: typeof SNAPSHOT) => void) => {
+        listener(SNAPSHOT);
+        return unsubscribe;
+      }),
+      addThisMac: vi.fn(async () => {}),
+      removeThisMac: vi.fn(),
+    } satisfies RunnerAccountPort;
+    const map = handlers({ runners: port });
+    const snapshots = sink();
+
+    expect(await map["runners.thisMac"](undefined, WINDOW)).toEqual(SNAPSHOT);
+    expect(await map["runners.subscribeThisMac"](undefined, WINDOW, snapshots)).toBe(unsubscribe);
+    expect(snapshots.emit).toHaveBeenCalledWith(SNAPSHOT);
+    expect(await map["runners.addThisMac"](undefined, WINDOW)).toBeNull();
+    expect(port.addThisMac).toHaveBeenCalledOnce();
+    expect(await map["runners.removeThisMac"](undefined, WINDOW)).toBeNull();
+    expect(port.removeThisMac).toHaveBeenCalledOnce();
   });
 });

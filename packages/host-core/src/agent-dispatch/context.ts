@@ -139,6 +139,12 @@ export interface AgentCommandServiceOptions {
    */
   sessionEnv?: (cwd: string, projectRoot: string) => Promise<SessionEnvReport>;
   /**
+   * This machine as a Volli Cloud runner (VC-895), as `volli identify`
+   * reports it: its name and state, never its id or credential. Absent, or
+   * `null` (not a runner this launch), means identify prints no runner line.
+   */
+  cloudRunner?: () => { readonly name: string | null; readonly state: string } | null;
+  /**
    * The host's handler map (VC-668), which this door projects: every verb is
    * bound in `table.ts` as a projection of `handlers[key]`, never as a
    * handler of its own — a catalog command's under its key, the ticket

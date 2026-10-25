@@ -111,6 +111,7 @@ import {
   type CreateRemoteProjectResult,
   type SessionListingPage,
   type SessionReadVerb,
+  type ThisMacRunnerSnapshot,
   type Ticket,
   type WorktreeSetupAnswer,
   type WorktreeSetupStatusView,
@@ -122,6 +123,7 @@ import type { ToolVerbInput } from "../agent-tool-door";
 import type { DetachedWorkPort } from "../detached-work";
 import type { AccountPort } from "./account-port";
 import type { BrowserShortcutsPort } from "./browser-shortcuts-port";
+import type { RunnerAccountPort } from "./runner-account-port";
 import type { BrowserPictureStore } from "../browser/picture-store";
 import type { HostSignIns } from "../host-sign-ins";
 import { withLogContext } from "../log/context";
@@ -459,6 +461,15 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
   readonly "account.githubInstall": HostHandler<void, null>;
   readonly "account.githubCancel": HostHandler<void, null>;
   readonly "account.githubDisconnect": HostHandler<void, null>;
+  /**
+   * This Mac as one of the person's runners (VC-895): desktop main's Mac
+   * runner, {@link HostHandlerOptions.runners}'s, or unavailable.
+   */
+  readonly "runners.thisMac": HostHandler<void, ThisMacRunnerSnapshot>;
+  /** The current snapshot first, then every change. */
+  readonly "runners.subscribeThisMac": HostSubscriptionHandler<void, ThisMacRunnerSnapshot>;
+  readonly "runners.addThisMac": HostHandler<void, null>;
+  readonly "runners.removeThisMac": HostHandler<void, null>;
 }
 
 /** The agent keys the socket serves: its own verbs, less the start both agent doors share. */
@@ -677,6 +688,12 @@ export interface HostHandlerOptions {
    * hostd: `account.*` answer unavailable.
    */
   readonly account?: AccountPort | null;
+  /**
+   * Desktop main's Mac runner (VC-895): this Mac's registration as one of
+   * the person's runners; absent or null on hostd: `runners.*` answer
+   * unavailable.
+   */
+  readonly runners?: RunnerAccountPort | null;
 }
 
 /** Messages a client may show; unchanged from the router's own (VC-564). */
@@ -697,6 +714,7 @@ const HOST_SCOPE_RELAY_UNAVAILABLE = "Remote host operations are unavailable on 
 const HOST_LINK_RELAY_UNAVAILABLE = "Remote projects are unavailable on this host";
 const BROWSER_SHORTCUTS_UNAVAILABLE = "Browser Tab shortcuts are unavailable on this host";
 const ACCOUNT_UNAVAILABLE = "Accounts are unavailable on this host";
+const RUNNERS_UNAVAILABLE = "Runners are unavailable on this host";
 const PROJECT_REMOVAL_UNAVAILABLE = "Removing a project is unavailable on this host";
 
 /**
@@ -811,6 +829,7 @@ function hostHandlerEntries(
   const browserShortcuts = () =>
     present(options.browserShortcuts ?? null, BROWSER_SHORTCUTS_UNAVAILABLE);
   const account = () => present(options.account ?? null, ACCOUNT_UNAVAILABLE);
+  const runners = () => present(options.runners ?? null, RUNNERS_UNAVAILABLE);
   const feed = options.boardFeed ?? createBoardChangeFeed();
 
   const worktree = (database: Database.Database) =>
@@ -1229,5 +1248,11 @@ function hostHandlerEntries(
     "account.githubInstall": () => done(() => account().github.install()),
     "account.githubCancel": () => done(() => account().github.cancel()),
     "account.githubDisconnect": () => done(() => account().github.disconnect()),
+    // This Mac as a runner (VC-895): desktop main's Mac runner, through its port.
+    "runners.thisMac": () => runners().thisMac(),
+    "runners.subscribeThisMac": async (_input, _call, sink) =>
+      runners().subscribeThisMac((snapshot) => void sink.emit(snapshot)),
+    "runners.addThisMac": () => done(() => runners().addThisMac()),
+    "runners.removeThisMac": () => done(() => runners().removeThisMac()),
   };
 }

@@ -105,6 +105,13 @@ export interface RunnerPresence {
   setState(state: RunnerReportedState, reason?: string | null): Promise<void>;
   /** Re-reads the capability report and sends it if it changed. */
   refreshCapabilities(): Promise<void>;
+  /**
+   * Beats now rather than at the next interval (on wake: the runner reads
+   * `online` again within one round trip). A beat already in flight, which
+   * may have been sent before a sleep, is waited out first, then one more is
+   * sent.
+   */
+  beatNow(): Promise<void>;
   /** A clean stop: no more beats, and `stopped` so the owner does not see `offline` 90 s later. */
   stop(): Promise<void>;
   readonly connected: boolean;
@@ -220,6 +227,10 @@ export function createRunnerPresence(options: RunnerPresenceOptions): RunnerPres
       } catch (error) {
         fail(error);
       }
+    },
+    async beatNow() {
+      if (beating !== null) await beating;
+      await beat();
     },
     async stop() {
       stopped = true;

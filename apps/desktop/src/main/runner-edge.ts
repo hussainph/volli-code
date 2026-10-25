@@ -56,6 +56,8 @@ export interface DesktopRunnerEdgePorts<T extends QuitTerminals> {
   };
   /** Hosts added over SSH (VC-700): their tunnels and links close with the host. */
   remoteHosts: { close(): Promise<unknown> };
+  /** This Mac's Volli Cloud runner (VC-895), in a cloud launch: it reports `stopped` with the host. */
+  cloudRunner?: { stop(): Promise<unknown> };
   /** Background work that must not start during teardown (VC-643). */
   stopBackgroundWork(): void;
   /** Whether the `cloud` flag is on now; read at each quit. */
@@ -215,6 +217,7 @@ export function createDesktopRunnerEdge<T extends QuitTerminals>(
             ports.host.stop("quit"),
             systemShutdownFlush,
             ports.remoteHosts.close(),
+            ports.cloudRunner?.stop(),
           ]);
         },
         // The agent socket closes inside the host's stop (the owner's `closeSocket`).

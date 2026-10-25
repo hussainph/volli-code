@@ -2048,6 +2048,34 @@ describe("agent command service", () => {
     expect(missing).toMatchObject({ v: 1, ok: false, error: { code: "PROJECT_NOT_FOUND" } });
   });
 
+  it("reports this machine as a Volli Cloud runner only when it is one", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "p1", name: "Alpha", path: "/repo/alpha", ticketPrefix: "AL" }),
+    );
+    const request: Parameters<ReturnType<typeof createAgentCommandService>["execute"]>[0] = {
+      v: 1,
+      cmd: "identify",
+      args: { project: "AL" },
+      ctx: { cwd: "/repo/alpha", env: {} },
+    };
+    let runner: { name: string | null; state: string } | null = null;
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      cloudRunner: () => runner,
+    });
+    const off = await service.execute(request);
+    expect(off).toMatchObject({ ok: true });
+    expect(off).not.toHaveProperty("data.runner");
+    runner = { name: "danas-mac", state: "online" };
+    expect(await service.execute(request)).toMatchObject({
+      ok: true,
+      data: { runner: { name: "danas-mac", state: "online" } },
+    });
+  });
+
   it("enumerates the priority vocabulary on raw create/update/list rejections", async () => {
     ctx = openTestDb();
     insertProject(

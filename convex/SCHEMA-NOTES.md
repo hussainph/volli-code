@@ -277,6 +277,14 @@ Each was a decision made while turning the design into code.
     (optional: rows the migration importer writes need not carry them; absent
     reads as not yet checked) and two indexes, `by_github_repo` (webhook
     routing) and `by_installation` (an installation's removal or reconcile).
+39. `sessions.by_place_runner` (added with Mac re-registration) finds the
+    Sessions placed on a runner, so a Mac that lost its credential and
+    registers again as its successor (`registerThisMac` with
+    `replacesRunnerId`) moves them in the same transaction. The predecessor
+    is revoked with reason `replaced` and, like a removed runner, leaves the
+    owner's list and frees its name; its Session claims pass on at the next
+    generation. `runners.status` gains `asleep` (a Mac whose lid closed),
+    which the offline sweep does not watch.
 
 ## Migrated rows
 

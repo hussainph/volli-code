@@ -176,6 +176,12 @@ const EXACT = {
     reason:
       "Which product store this device's next launch uses (main/cloud-launch.ts, VC-889): the signed-in person's user id, written when a Volli Cloud sign-in completes and removed when it ends. A non-secret marker, never a token; main reads it before the window opens.",
   },
+  "volli:cloud-runner": {
+    placement: "client-local",
+    owner: "stays",
+    reason:
+      "This Mac's own Volli Cloud runner per signed-in person (main/cloud-runner/record.ts, VC-895): the runner's id, the host it was written on, and a tombstone once it was removed. Non-secret; the credential is sealed in the host credential inventory. Lets a Mac that lost its keychain item register as its own replacement, and keeps a removed Mac from adding itself back.",
+  },
   "volli:model-picker-view": {
     placement: "client-local",
     owner: "VC-572",

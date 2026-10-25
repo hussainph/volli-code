@@ -138,6 +138,10 @@ describe("the desktop's IPC exposure", () => {
       "account.githubInstall",
       "account.githubCancel",
       "account.githubDisconnect",
+      "runners.thisMac",
+      "runners.subscribeThisMac",
+      "runners.addThisMac",
+      "runners.removeThisMac",
     ]);
   });
 

@@ -34,6 +34,7 @@ import type { PrefGroup } from "@renderer/components/settings/kit";
 import { hasVisibleExperiments } from "@renderer/stores/experiments";
 import { accountCategory } from "./account-category";
 import { hostsCategory } from "./hosts-category";
+import { runnersCategory } from "./runners-category";
 import { AboutPane } from "./panes/about-pane";
 import { DisplaySection } from "./panes/display-section";
 import { GeneralPane } from "./panes/general-pane";
@@ -84,6 +85,11 @@ export interface SettingsGroupsOptions {
    * `cloud` experiment on.
    */
   readonly account?: boolean;
+  /**
+   * Shows Services → Runners, the person's runners with this Mac among them
+   * (VC-895): only in a Volli Cloud launch.
+   */
+  readonly runners?: boolean;
 }
 
 export function settingsGroups(
@@ -186,6 +192,7 @@ export function settingsGroups(
       label: "Services",
       categories: [
         ...(options.account === true ? [accountCategory()] : []),
+        ...(options.runners === true ? [runnersCategory()] : []),
         ...(options.hosts === true ? [hostsCategory()] : []),
         {
           key: MODELS_CATEGORY_KEY,

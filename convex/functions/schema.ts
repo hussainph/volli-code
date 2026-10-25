@@ -745,7 +745,9 @@ export default defineSchema({
     .index("by_project_activity", ["projectId", "lastActivityAt"])
     .index("by_ticket_activity", ["ticketId", "lastActivityAt"])
     .index("by_owner_activity", ["ownerUserId", "lastActivityAt"])
-    .index("by_parent", ["parentSessionId"]),
+    .index("by_parent", ["parentSessionId"])
+    // A replaced runner's Sessions move to its successor (`runners.linkFromDesktop`).
+    .index("by_place_runner", ["placeRunnerId"]),
   // The per-Session head document: the claim and the accepted cursor.
   sessionIntake: defineTable({
     sessionId: uuid,

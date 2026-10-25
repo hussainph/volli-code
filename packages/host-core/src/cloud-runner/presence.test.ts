@@ -322,6 +322,26 @@ describe("the backend's revoked refusal", () => {
     expect(isRevokedError("revoked")).toBe(false);
   });
 
+  it("beatNow waits out a beat in flight, then beats once more", async () => {
+    const h = harness();
+    await h.presence.start();
+    await h.presence.beatNow();
+    expect(h.calls.slice(3)).toEqual(["heartbeat boot"]);
+    h.failNext("heartbeat", new Error("socket slept"));
+    const stale = h.tick();
+    const now = h.presence.beatNow();
+    await stale;
+    await now;
+    // The stale beat failed; the next one re-publishes and beats.
+    expect(h.calls.slice(4)).toEqual([
+      "heartbeat boot",
+      "capabilities 0.3.0",
+      "state online",
+      "heartbeat boot",
+    ]);
+    expect(h.presence.connected).toBe(true);
+  });
+
   it("the backend port calls the runner mutations by name", async () => {
     const call = vi.fn(async (_name: string, _args: Record<string, unknown>) => REPLY);
     const backend = runnerPresenceBackend(call);

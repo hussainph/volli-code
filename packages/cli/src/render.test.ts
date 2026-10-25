@@ -1266,6 +1266,35 @@ describe("renderCliSuccess", () => {
     );
   });
 
+  it("renders identify's runner line when this machine is a Volli Cloud runner", () => {
+    expect(
+      renderCliSuccess(
+        "identify",
+        {
+          project: { name: "Volli Code", prefix: "VC", path: "/repo/volli" },
+          ticket: null,
+          session: null,
+          appVersion: "1.0.0",
+          runner: { name: "danas-mac", state: "online" },
+        },
+        { json: false },
+      ),
+    ).toBe(
+      "project  Volli Code (VC)\n" +
+        "ticket  -\n" +
+        "session  -\n" +
+        "appVersion  1.0.0\n" +
+        "runner  danas-mac (online)\n",
+    );
+    expect(
+      renderCliSuccess(
+        "identify",
+        { project: null, appVersion: "1.0.0", runner: { name: null, state: 7 } },
+        { json: false },
+      ),
+    ).toContain("runner  - (-)\n");
+  });
+
   // VC-94's acceptance: an agent discovers its environment from this block,
   // not from the first command that fails. A missing tool renders as `-` —
   // measured and not found — rather than the line disappearing.

@@ -368,6 +368,326 @@ describe("the desktop's own Mac", () => {
   });
 });
 
+function registerMac(
+  t: T,
+  replacesRunnerId?: string | null,
+  { identity = ALICE, name = null }: { identity?: typeof ALICE; name?: string | null } = {},
+) {
+  return t.withIdentity(identity).action(api.runners.registerThisMac, {
+    host: MAC_HOST,
+    name,
+    ...(replacesRunnerId === undefined ? {} : { replacesRunnerId }),
+  });
+}
+
+/** A Session claimed by and placed on `runnerId`, a viewer of it, and jobs for the runner. */
+async function seedWork(t: T, runnerId: string, ownerUserId: string, generation = 3) {
+  const sessionId = newId("session");
+  const projectId = newId("project");
+  const viewerId = crypto.randomUUID();
+  const jobs = {
+    queued: newId("job"),
+    leased: newId("job"),
+    workingCopy: newId("job"),
+    done: newId("job"),
+  };
+  const lease = { bootId: crypto.randomUUID(), expiresAt: Date.now() + 60_000, attempt: 2 };
+  await t.run(async (ctx) => {
+    await ctx.db.insert("sessions", {
+      id: sessionId,
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      ownerUserId,
+      origin: { kind: "user" },
+      title: null,
+      visibility: "private",
+      visibilityReason: "adhoc",
+      sharedAt: null,
+      status: "open",
+      turnActive: true,
+      lastTurnOutcome: null,
+      signal: null,
+      stopped: null,
+      needsUser: false,
+      attentionCount: 0,
+      placeRunnerId: runnerId,
+      model: null,
+      usageTotals: {},
+      createdAt: 0,
+      lastActivityAt: 0,
+      deletedAt: null,
+      purgeAfter: null,
+    });
+    await ctx.db.insert("sessionIntake", {
+      sessionId,
+      claim: { runnerId, generation },
+      acceptedThrough: 7,
+      lastEventId: null,
+      lastAcceptedAt: null,
+      state: "active",
+    });
+    await ctx.db.insert("sessionViewers", {
+      id: viewerId,
+      sessionId,
+      runnerId,
+      userId: ownerUserId,
+      clientSessionId: "desktop-1",
+      openedAt: 0,
+    });
+    const job = {
+      runnerId,
+      projectId,
+      ticketId: null,
+      commandId: null,
+      priority: "normal" as const,
+      rank: 1,
+      availableAt: 0,
+      receipt: null,
+      result: null,
+      createdBy: { kind: "person" as const, userId: ownerUserId, via: "desktop" as const },
+      createdAt: 0,
+      completedAt: null,
+      expiresAt: null,
+      failure: null,
+    };
+    const notice = { kind: "session.notice" as const, sessionId, payload: { text: "hi" } };
+    await ctx.db.insert("runnerJobs", {
+      ...job,
+      ...notice,
+      id: jobs.queued,
+      workingCopyId: null,
+      status: "queued",
+      lease: null,
+    });
+    await ctx.db.insert("runnerJobs", {
+      ...job,
+      ...notice,
+      id: jobs.leased,
+      workingCopyId: null,
+      status: "leased",
+      lease,
+    });
+    await ctx.db.insert("runnerJobs", {
+      ...job,
+      ...notice,
+      id: jobs.done,
+      workingCopyId: null,
+      status: "done",
+      lease,
+      completedAt: 1,
+      expiresAt: Date.now() + 60_000,
+    });
+    const workingCopyId = newId("workingCopy");
+    const ticketId = newId("ticket");
+    await ctx.db.insert("runnerJobs", {
+      ...job,
+      id: jobs.workingCopy,
+      kind: "workingCopy.trim",
+      sessionId: null,
+      ticketId,
+      workingCopyId,
+      payload: { ticketId, workingCopyId, reason: "done" },
+      status: "queued",
+      lease: null,
+    });
+  });
+  return { sessionId, viewerId, jobs, lease };
+}
+
+async function workOf(t: T, work: Awaited<ReturnType<typeof seedWork>>) {
+  return t.run(async (ctx) => {
+    const job = (id: string) =>
+      ctx.db
+        .query("runnerJobs")
+        .withIndex("by_uuid", (q) => q.eq("id", id))
+        .unique();
+    return {
+      session: await ctx.db
+        .query("sessions")
+        .withIndex("by_uuid", (q) => q.eq("id", work.sessionId))
+        .unique(),
+      intake: await ctx.db
+        .query("sessionIntake")
+        .withIndex("by_session", (q) => q.eq("sessionId", work.sessionId))
+        .unique(),
+      viewer: await ctx.db
+        .query("sessionViewers")
+        .withIndex("by_uuid", (q) => q.eq("id", work.viewerId))
+        .unique(),
+      queued: await job(work.jobs.queued),
+      leased: await job(work.jobs.leased),
+      workingCopy: await job(work.jobs.workingCopy),
+      done: await job(work.jobs.done),
+    };
+  });
+}
+
+describe("a Mac that lost its credential", () => {
+  beforeEach(() => {
+    vi.stubEnv("VOLLI_RUNNER_SIGNING_KEY", issuerKeys().signingKey);
+  });
+
+  test("registering again as its old runner succeeds it: same name, the old one revoked, its work moved", async () => {
+    const t = setup();
+    const alice = await signIn(t);
+    const old = await registerMac(t, undefined, { name: "Studio" });
+    await asRunner(t, old.runnerId).mutation(api.runners.heartbeat, { bootId: "b", load: LOAD });
+    const otherMac = await registerMac(t, null, { name: "Laptop" });
+    const work = await seedWork(t, old.runnerId, alice);
+    const untouched = await seedWork(t, otherMac.runnerId, alice);
+    const untouchedBefore = await workOf(t, untouched);
+
+    const next = await registerMac(t, old.runnerId, { name: "ignored" });
+    expect(next).toMatchObject({ name: "studio", generation: 1 });
+    expect(next.runnerId).not.toBe(old.runnerId);
+    const created = await rows(t, next.runnerId);
+    expect(created.runner).toMatchObject({ kind: "mac", status: "offline", linkedVia: "desktop" });
+    expect(created.credentials?.currentHash).toBe(secretHash(next.credential));
+    expect(created.events).toEqual([
+      expect.objectContaining({
+        kind: "linked",
+        detail: { via: "desktop", hostname: MAC_HOST.hostname, replaces: old.runnerId },
+      }),
+    ]);
+
+    // The old runner is cut off and gone from the list; its credential is refused.
+    const replaced = await rows(t, old.runnerId);
+    expect(replaced.runner).toMatchObject({ status: "revoked", statusReason: "replaced" });
+    expect(replaced.credentials).toBeNull();
+    expect(replaced.presence).toBeNull();
+    expect(replaced.events.map((event) => [event.kind, event.detail])).toEqual([
+      ["linked", expect.anything()],
+      ["revoked", { reason: "replaced", by: alice, successor: next.runnerId }],
+    ]);
+    const exchanged = await post(t, RUNNER_HTTP_PATHS.token, {
+      runnerId: old.runnerId,
+      credential: old.credential,
+    });
+    expect(exchanged.status).toBe(403);
+    expect(readRunnerHttpError(exchanged.body)?.code).toBe("revoked");
+    await expect(
+      asRunner(t, old.runnerId).mutation(api.runners.heartbeat, { bootId: "b", load: LOAD }),
+    ).rejects.toThrow(code("revoked"));
+    const listed = await t.withIdentity(ALICE).query(api.runners.list, {});
+    expect(listed.map((runner) => [runner.id, runner.name])).toEqual([
+      [otherMac.runnerId, "laptop"],
+      [next.runnerId, "studio"],
+    ]);
+    // Already replaced: removing it is a no-op, and naming it again makes a plain runner.
+    await t.withIdentity(ALICE).mutation(api.runners.remove, { runnerId: old.runnerId });
+    expect((await rows(t, old.runnerId)).runner?.statusReason).toBe("replaced");
+    expect((await registerMac(t, old.runnerId)).name).toBe("alices-macbook-pro");
+
+    // Its work follows: the claim at the next generation, the Place, the viewer, open jobs.
+    const moved = await workOf(t, work);
+    expect(moved.intake).toMatchObject({
+      claim: { runnerId: next.runnerId, generation: 4 },
+      acceptedThrough: 7,
+      state: "active",
+    });
+    expect(moved.session?.placeRunnerId).toBe(next.runnerId);
+    expect(moved.viewer?.runnerId).toBe(next.runnerId);
+    expect(moved.queued).toMatchObject({ runnerId: next.runnerId, status: "queued" });
+    // A lease keeps its boot and attempt: the successor's next claim takes it back.
+    expect(moved.leased).toMatchObject({
+      runnerId: next.runnerId,
+      status: "leased",
+      lease: work.lease,
+    });
+    // A Working copy stays on the runner that reported it, and so do its jobs; finished jobs stay.
+    expect(moved.workingCopy?.runnerId).toBe(old.runnerId);
+    expect(moved.done?.runnerId).toBe(old.runnerId);
+    // Another runner's work is not touched.
+    expect(await workOf(t, untouched)).toEqual(untouchedBefore);
+  });
+
+  test("anything but the caller's own live Mac runner registers a plain new runner and touches nothing", async () => {
+    const t = setup();
+    const alice = await signIn(t);
+    const bob = await signIn(t, BOB);
+    const bobsMac = await registerMac(t, null, { identity: BOB, name: "studio" });
+    const linux = await linkLinux(t, ALICE, "studio");
+    const removed = await registerMac(t, null, { name: "gone" });
+    await t.withIdentity(ALICE).mutation(api.runners.remove, { runnerId: removed.runnerId });
+    const work = {
+      bob: await seedWork(t, bobsMac.runnerId, bob),
+      linux: await seedWork(t, linux.runnerId, alice),
+      removed: await seedWork(t, removed.runnerId, alice),
+    };
+    const snapshot = async () => ({
+      runners: await Promise.all(
+        [bobsMac, linux, removed].map(async (grant) => {
+          const { runner, credentials, events } = await rows(t, grant.runnerId);
+          return { runner, credentials, events };
+        }),
+      ),
+      work: await Promise.all(Object.values(work).map((seeded) => workOf(t, seeded))),
+    });
+    const before = await snapshot();
+
+    const names: string[] = [];
+    for (const replacesRunnerId of [
+      undefined,
+      null,
+      "not-a-runner-id",
+      newId("runner"),
+      bobsMac.runnerId,
+      linux.runnerId,
+      removed.runnerId,
+    ]) {
+      const grant = await registerMac(t, replacesRunnerId, { name: "studio" });
+      names.push(grant.name);
+      const { events } = await rows(t, grant.runnerId);
+      expect(events).toEqual([
+        expect.objectContaining({
+          kind: "linked",
+          detail: { via: "desktop", hostname: MAC_HOST.hostname },
+        }),
+      ]);
+    }
+    // Alice's Linux box already holds `studio`.
+    expect(names).toEqual([
+      "studio-2",
+      "studio-3",
+      "studio-4",
+      "studio-5",
+      "studio-6",
+      "studio-7",
+      "studio-8",
+    ]);
+    expect(await snapshot()).toEqual(before);
+  });
+
+  test("a runner with more than a page of Sessions hands every one over, once", async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    await signIn(t);
+    const old = await registerMac(t);
+    await t.run(async (ctx) => {
+      for (let n = 0; n <= SWEEP_PAGE_SIZE; n += 1) {
+        await ctx.db.insert("sessionIntake", {
+          sessionId: newId("session"),
+          claim: { runnerId: old.runnerId, generation: 1 },
+          acceptedThrough: 0,
+          lastEventId: null,
+          lastAcceptedAt: null,
+          state: "active",
+        });
+      }
+    });
+    const next = await registerMac(t, old.runnerId);
+    await t.finishAllScheduledFunctions(() => vi.runAllTimers());
+    const claims = await t.run(async (ctx) =>
+      (await ctx.db.query("sessionIntake").collect()).map((intake) => intake.claim),
+    );
+    expect(claims).toHaveLength(SWEEP_PAGE_SIZE + 1);
+    expect(claims.every((claim) => claim.runnerId === next.runnerId)).toBe(true);
+    expect(claims.every((claim) => claim.generation === 2)).toBe(true);
+  });
+});
+
 describe("device-code linking", () => {
   async function start(t: T, ip?: string) {
     const result = await post(
@@ -868,6 +1188,27 @@ describe("the runner's own calls", () => {
     expect((await rows(t, grant.runnerId)).runner).toEqual(before);
   });
 
+  test("a Mac going to sleep says so, and its first heartbeat after wake brings it online", async () => {
+    const t = setup();
+    await signIn(t);
+    const grant = await t
+      .withIdentity(ALICE)
+      .action(api.runners.registerThisMac, { host: MAC_HOST, name: null });
+    const runner = asRunner(t, grant.runnerId);
+    await runner.mutation(api.runners.heartbeat, { bootId: "b", load: LOAD });
+    await expect(
+      runner.mutation(api.runners.reportState, { state: "asleep", reason: null }),
+    ).resolves.toEqual({ status: "asleep" });
+    expect((await rows(t, grant.runnerId)).runner).toMatchObject({
+      status: "asleep",
+      statusReason: null,
+    });
+    await expect(
+      runner.mutation(api.runners.heartbeat, { bootId: "b", load: LOAD }),
+    ).resolves.toMatchObject({ status: "online" });
+    expect((await rows(t, grant.runnerId)).runner?.status).toBe("online");
+  });
+
   test("capabilities are written on change only, and local credentials replaced wholesale", async () => {
     const t = setup();
     await signIn(t);
@@ -937,6 +1278,12 @@ describe("the offline sweep", () => {
       state: "stopped",
       reason: null,
     });
+    // A sleeping Mac is not expected to beat: it stays asleep, however long.
+    const asleep = await online(t);
+    await asRunner(t, asleep).mutation(api.runners.reportState, {
+      state: "asleep",
+      reason: null,
+    });
     vi.advanceTimersByTime(RUNNER_OFFLINE_AFTER_MS / 2);
     const chatty = await online(t);
     vi.advanceTimersByTime(RUNNER_OFFLINE_AFTER_MS / 2 + 1_000);
@@ -950,6 +1297,7 @@ describe("the offline sweep", () => {
     });
     expect((await rows(t, draining)).runner).toMatchObject({ status: "offline" });
     expect((await rows(t, stopped)).runner).toMatchObject({ status: "stopped" });
+    expect((await rows(t, asleep)).runner).toMatchObject({ status: "asleep", statusReason: null });
     expect((await rows(t, chatty)).runner).toMatchObject({ status: "online" });
     // Offline is a status like any other: the next heartbeat brings it back.
     await expect(
@@ -1151,6 +1499,35 @@ describe("Settings → Runners", () => {
     ).rejects.toThrow(code("not_found"));
     // Linking the box again reuses its name.
     expect((await linkLinux(t)).name).toBe("hetzner-1");
+  });
+
+  test("a replaced Mac leaves the list like a removed one; a runner cut off for reuse stays", async () => {
+    const t = setup();
+    await signIn(t);
+    const asAlice = t.withIdentity(ALICE);
+    const old = await registerMac(t, null, { name: "studio" });
+    const cutOff = await linkLinux(t, ALICE, "box");
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("runners")
+        .withIndex("by_uuid", (q) => q.eq("id", cutOff.runnerId))
+        .unique();
+      await ctx.db.patch(row!._id, {
+        status: "revoked",
+        statusReason: "credential_reuse",
+        revokedAt: 1,
+      });
+    });
+    const next = await registerMac(t, old.runnerId);
+    const listed = await asAlice.query(api.runners.list, {});
+    expect(listed.map((runner) => [runner.id, runner.name, runner.status])).toEqual([
+      [cutOff.runnerId, "box", "revoked"],
+      [next.runnerId, "studio", "offline"],
+    ]);
+    // Its name is the successor's, and the predecessor can no longer be renamed.
+    await expect(
+      asAlice.mutation(api.runners.rename, { runnerId: old.runnerId, name: "back" }),
+    ).rejects.toThrow(code("not_found"));
   });
 });
 

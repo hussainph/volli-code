@@ -1448,6 +1448,12 @@ export interface SupportInfo {
    * required: a report is complete without it.
    */
   bootRecovery: string;
+  /**
+   * This Mac as a Volli Cloud runner (VC-895) as one line: its state, why it
+   * is blocked, and how many facts wait to be accepted — never its id, name
+   * or credential. "off" outside a Volli Cloud launch. Not required.
+   */
+  cloudRunner: string;
 }
 
 export type SupportInfoResult = Result<{ info: SupportInfo }>;

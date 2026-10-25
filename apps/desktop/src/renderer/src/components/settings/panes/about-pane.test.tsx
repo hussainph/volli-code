@@ -97,6 +97,7 @@ const SUPPORT: SupportInfoResult = {
     migrationHistory: "consistent",
     lastUpdateCheck: "none recorded",
     bootRecovery: "not finished",
+    cloudRunner: "off",
   },
 };
 

@@ -138,6 +138,8 @@ export async function identifyVerb(
   request: AgentRequest,
 ): Promise<AgentResponse> {
   const { options, projects, envSession, envSessionTerminal, sessionEngine } = context;
+  const cloudRunner = options.cloudRunner?.() ?? null;
+  const runner = cloudRunner === null ? {} : { runner: cloudRunner };
   const envSessionId = request.ctx.env.session;
   if (envSessionId) {
     if (!envSession) {
@@ -201,6 +203,7 @@ export async function identifyVerb(
         // dryRun request to a build that does not answer this marker,
         // because an older build would run the real write instead.
         previewContract: MUTATION_PLAN_CONTRACT,
+        ...runner,
         ...(frozenTools === null
           ? {}
           : {
@@ -250,6 +253,7 @@ export async function identifyVerb(
       socket: request.ctx.env.socket ?? null,
       appVersion: options.appVersion,
       previewContract: MUTATION_PLAN_CONTRACT,
+      ...runner,
       ...(env === undefined ? {} : { env }),
     },
   };

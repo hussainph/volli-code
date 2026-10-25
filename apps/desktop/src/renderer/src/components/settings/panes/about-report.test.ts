@@ -19,6 +19,7 @@ function support(overrides: Partial<SupportInfo> = {}): SupportInfo {
     migrationHistory: "consistent",
     lastUpdateCheck: "none recorded",
     bootRecovery: "not finished",
+    cloudRunner: "off",
     ...overrides,
   };
 }
@@ -143,6 +144,7 @@ describe("buildAboutReport — support metadata", () => {
       "arch",
       "bootRecovery",
       "channel",
+      "cloudRunner",
       "lastUpdateCheck",
       "migrationHistory",
       "platform",

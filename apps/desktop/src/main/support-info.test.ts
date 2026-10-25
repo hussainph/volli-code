@@ -23,6 +23,7 @@ import { writeSecret } from "@volli/host-core/db";
 import {
   collectSupportInfo,
   describeBootRecovery,
+  describeCloudRunner,
   describeLastUpdateCheck,
   registerSupportIpcHandlers,
   type SupportInfoDeps,
@@ -34,6 +35,7 @@ const ALLOWLIST = [
   "arch",
   "bootRecovery",
   "channel",
+  "cloudRunner",
   "lastUpdateCheck",
   "migrationHistory",
   "platform",
@@ -358,5 +360,33 @@ describe("registerSupportIpcHandlers", () => {
       ok: false,
       error: "database is closed",
     });
+  });
+});
+
+describe("describeCloudRunner", () => {
+  it("names the state, a problem and the waiting count, never the runner's id or name", () => {
+    const base = {
+      state: "online" as const,
+      runnerId: "22222222-2222-4222-8222-222222222222",
+      runnerName: "danas-mac",
+      since: 1,
+      waitingFacts: 0,
+      problem: null,
+      message: null,
+    };
+    expect(describeCloudRunner(null)).toBe("off");
+    expect(describeCloudRunner({ ...base, state: "off" })).toBe("off");
+    expect(describeCloudRunner(base)).toBe("online · 0 updates waiting");
+    expect(describeCloudRunner({ ...base, state: "offline", waitingFacts: 1 })).toBe(
+      "offline · 1 update waiting",
+    );
+    const removed = describeCloudRunner({
+      ...base,
+      state: "removed",
+      problem: "credential_reuse",
+      message: "danas-mac was used from two places.",
+    });
+    expect(removed).toBe("removed (credential_reuse) · 0 updates waiting");
+    expect(removed).not.toContain("danas-mac");
   });
 });

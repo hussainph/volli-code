@@ -68,6 +68,7 @@ import {
   type RemoteHostsSnapshot,
   type RemoteWorkspaceInput,
   type RenameRemoteHostInput,
+  type ThisMacRunnerSnapshot,
   WORKTREE_SETUP_ANSWERS,
   type WorktreeSetupAnswer,
   type WorktreeSetupStatusView,
@@ -86,6 +87,7 @@ import {
   cloudLaunchSchema,
 } from "./account-schema";
 import { AsyncQueue } from "./async-queue";
+import { thisMacRunnerSnapshotSchema } from "./runners-schema";
 import { boardId } from "./board-schema";
 import {
   createCatalogBuilders,
@@ -257,6 +259,11 @@ export interface DesktopRouterHandlers {
   readonly "account.githubInstall": HostHandler<void, null>;
   readonly "account.githubCancel": HostHandler<void, null>;
   readonly "account.githubDisconnect": HostHandler<void, null>;
+  /** This Mac as one of the person's runners (VC-895): desktop main's Mac runner. */
+  readonly "runners.thisMac": HostHandler<void, ThisMacRunnerSnapshot>;
+  readonly "runners.subscribeThisMac": DesktopSubscriptionHandler<void, ThisMacRunnerSnapshot>;
+  readonly "runners.addThisMac": HostHandler<void, null>;
+  readonly "runners.removeThisMac": HostHandler<void, null>;
 }
 
 type AssertNever<Type extends never> = Type;
@@ -941,6 +948,35 @@ export function createDesktopRouter() {
         .output(z.object({ text: z.string().max(CLOUD_SNAPSHOT_TEXT_MAX).nullable() }))
         .query(({ ctx }) => ctx.handlers["cloud.readSnapshot"](undefined, ctx.call)),
     },
+    /**
+     * This Mac as one of the person's runners (VC-895). Born on the bridge:
+     * host-placed, the person's own window only; desktop main's Mac runner
+     * answers through the map (only with `cloud` on), and every other host
+     * answers unavailable. No procedure carries the runner's credential.
+     */
+    runners: {
+      thisMac: hostProcedure("runners.thisMac")
+        .output(thisMacRunnerSnapshotSchema)
+        .query(({ ctx }) => ctx.handlers["runners.thisMac"](undefined, ctx.call)),
+      /** The current snapshot first, then the whole snapshot again on every change. */
+      subscribeThisMac: hostProcedure("runners.subscribeThisMac").subscription(async function* ({
+        ctx,
+        signal,
+      }) {
+        yield* desktopStream<ThisMacRunnerSnapshot>(
+          ctx,
+          "runners.subscribeThisMac",
+          signal,
+          (sink) => ctx.handlers["runners.subscribeThisMac"](undefined, ctx.call, sink),
+        );
+      }),
+      addThisMac: hostProcedure("runners.addThisMac")
+        .output(z.null())
+        .mutation(({ ctx }) => ctx.handlers["runners.addThisMac"](undefined, ctx.call)),
+      removeThisMac: hostProcedure("runners.removeThisMac")
+        .output(z.null())
+        .mutation(({ ctx }) => ctx.handlers["runners.removeThisMac"](undefined, ctx.call)),
+    },
   });
 }
 
@@ -967,5 +1003,6 @@ export function desktopProcedureSchemas(router: DesktopRouter = createDesktopRou
     "browserShortcuts.subscribe": browserAppShortcutEventSchema,
     "account.subscribe": accountSnapshotSchema,
     "account.githubSubscribe": accountGithubSnapshotSchema,
+    "runners.subscribeThisMac": thisMacRunnerSnapshotSchema,
   });
 }
