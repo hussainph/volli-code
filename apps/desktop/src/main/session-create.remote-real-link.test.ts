@@ -12,7 +12,7 @@
 import { createWorktreeReadService } from "@volli/host-core/worktree";
 import { randomUUID } from "node:crypto";
 
-import { boardResourceWorkspace } from "@volli/host-core/board";
+import { boardResourceProject } from "@volli/host-core/board";
 import { insertProject, insertTicket } from "@volli/host-core/db";
 import { admittedHandlers, createHostHandlers, ROUTER_POLICY } from "@volli/host-core/handlers";
 import {
@@ -266,7 +266,7 @@ async function path(features: readonly string[] = FEATURES) {
       },
     },
   );
-  const boardWorkspace = boardResourceWorkspace(ctx.db);
+  const boardProject = boardResourceProject(ctx.db);
   const listener = await startHostProtocolListener({
     router: createHostRouter(),
     bind: { host: "127.0.0.1", port: 5388 },
@@ -288,7 +288,7 @@ async function path(features: readonly string[] = FEATURES) {
       resourceWorkspace: async (resource: { kind: string; id: string }) =>
         resource.kind === "session"
           ? ((await engine.getSession({ sessionId: resource.id }))?.session.projectId ?? null)
-          : boardWorkspace(resource),
+          : boardProject(resource),
     }),
   });
   cleanups.push(() => listener.close());

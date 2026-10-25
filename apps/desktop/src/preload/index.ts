@@ -1146,7 +1146,7 @@ const api = {
     write: (input: FileWriteInput): Promise<FileWriteResult> => invoke("volli:file-write", input),
     /**
      * The navigators' creation track (VC-191). Same scoped `{ projectId,
-     * ticketId }` resolution as `read`/`write`, so a Ticket workspace acts on
+     * ticketId }` resolution as `read`/`write`, so a Ticket view acts on
      * its own worktree and Home on the main checkout.
      */
     /** Creates an EMPTY file (missing parent folders included); refuses an occupied path. */

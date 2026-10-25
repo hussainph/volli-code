@@ -22,7 +22,7 @@ export {
   type BoardWriteResult,
 } from "../board/commands";
 export { BOARD_RECEIPT_RETENTION_MS, BoardCommandIntentConflictError } from "../board/receipts";
-export { boardResourceWorkspace } from "../board/resources";
+export { boardResourceProject } from "../board/resources";
 export type { DetachedWorkPort } from "../detached-work";
 export { createProject } from "../project-create";
 export { inspectProjectFolder, relinkProject } from "../project-relink";

@@ -14,6 +14,10 @@
  * BOARD_RECEIPT_RETENTION_MS} a receipt never answers (an expired row is
  * read as absent, whether or not a later write has pruned it yet), and a
  * backup leaves them behind.
+ *
+ * The table's `workspace_id` column holds the command's project id. The name
+ * predates "Workspace" meaning the team container and is kept: it is a
+ * persisted SQLite column that N-1 builds read and write.
  */
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -27,7 +31,7 @@ export const BOARD_RECEIPT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** One command's identity: who it was for, which operation, and what it asked. */
 export interface BoardCommandKey {
-  readonly workspaceId: string;
+  readonly projectId: string;
   readonly commandId: string;
   readonly operation: string;
   /** The command's input, without its `commandId`. */
@@ -69,7 +73,7 @@ export function replayBoardCommand(
     db,
     `SELECT intent_digest, reply FROM board_command_receipts
      WHERE workspace_id = ? AND command_id = ? AND created_at >= ?`,
-  ).get(key.workspaceId, key.commandId, liveSince(now));
+  ).get(key.projectId, key.commandId, liveSince(now));
   if (row === undefined) return undefined;
   if (row.intent_digest !== intentDigest(key)) {
     throw new BoardCommandIntentConflictError(key.commandId);
@@ -78,26 +82,26 @@ export function replayBoardCommand(
 }
 
 /**
- * The recorded answer of a command whose resource is gone, so its Workspace
+ * The recorded answer of a command whose resource is gone, so its project
  * can no longer be read off it: a repeated delete. Looked up by its id and
- * operation in whichever Workspace recorded it; the intent must still match.
- * Only the desktop's own window reaches this (it owns every Workspace): a
+ * operation in whichever project recorded it; the intent must still match.
+ * Only the desktop's own window reaches this (it owns every project): a
  * network caller naming a resource that is gone is refused by the router
  * before any handler runs.
  */
 export function replayOrphanedBoardCommand(
   db: Database.Database,
-  key: Omit<BoardCommandKey, "workspaceId">,
+  key: Omit<BoardCommandKey, "projectId">,
   now: number,
-): { readonly reply: unknown; readonly workspaceId: string } | undefined {
+): { readonly reply: unknown; readonly projectId: string } | undefined {
   const row = prepared<[string, string, number], { workspace_id: string }>(
     db,
     `SELECT workspace_id FROM board_command_receipts
      WHERE command_id = ? AND operation = ? AND created_at >= ? LIMIT 1`,
   ).get(key.commandId, key.operation, liveSince(now));
   if (row === undefined) return undefined;
-  const { reply } = replayBoardCommand(db, { ...key, workspaceId: row.workspace_id }, now)!;
-  return { reply, workspaceId: row.workspace_id };
+  const { reply } = replayBoardCommand(db, { ...key, projectId: row.workspace_id }, now)!;
+  return { reply, projectId: row.workspace_id };
 }
 
 /**
@@ -120,7 +124,7 @@ export function recordBoardCommand(
        (workspace_id, command_id, operation, intent_digest, reply, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`,
   ).run(
-    key.workspaceId,
+    key.projectId,
     key.commandId,
     key.operation,
     intentDigest(key),

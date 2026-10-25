@@ -1,4 +1,4 @@
-/** The board's Workspace change feed (VC-565, F1): stamp, resume or resnapshot, the bus tap. */
+/** The board's per-project change feed (VC-565, F1): stamp, resume or resnapshot, the bus tap. */
 import { isFeedResnapshotRequired, type BoardChange, type LogRecord } from "@volli/shared";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
@@ -24,9 +24,9 @@ const ticketChange = (id: string, projectId = "p", title = id): BoardChange => (
   ticket: { id, title } as never,
 });
 
-function capture(feed: BoardChangeFeed, workspaceId: string, after: string | null = null) {
+function capture(feed: BoardChangeFeed, projectId: string, after: string | null = null) {
   const batches: BoardFeedBatch[] = [];
-  const unsubscribe = feed.subscribe(workspaceId, after, (batch) => batches.push(batch));
+  const unsubscribe = feed.subscribe(projectId, after, (batch) => batches.push(batch));
   return { batches, unsubscribe };
 }
 
@@ -41,11 +41,11 @@ function resnapshot(run: () => unknown): void {
 }
 
 /** A subscriber that also hears its feed end. */
-function following(feed: BoardChangeFeed, workspaceId: string, after: string | null = null) {
+function following(feed: BoardChangeFeed, projectId: string, after: string | null = null) {
   const batches: BoardFeedBatch[] = [];
   const ended: unknown[] = [];
   feed.subscribe(
-    workspaceId,
+    projectId,
     after,
     (batch) => batches.push(batch),
     (error) => ended.push(error),
@@ -77,7 +77,7 @@ describe("stamp and cursor", () => {
     const feed = createBoardChangeFeed();
     const start = feed.cursor("p");
     expect(start).toMatch(/^0:[0-9a-f-]{36}:0$/);
-    // The same Workspace answers the same instance until it stamps.
+    // The same project answers the same instance until it stamps.
     expect(feed.cursor("p")).toBe(start);
     feed.stamp("p", [ticketChange("a"), ticketChange("b")]);
     expect(seqOf(feed.cursor("p"))).toBe(2);
@@ -86,7 +86,7 @@ describe("stamp and cursor", () => {
     expect(feed.cursor("p").split(":")[1]).toBe(start.split(":")[1]);
   });
 
-  it("keeps one feed per Workspace, each with its own instance and seq", () => {
+  it("keeps one feed per project, each with its own instance and seq", () => {
     const feed = createBoardChangeFeed();
     feed.stamp("p", [ticketChange("a")]);
     expect(seqOf(feed.cursor("q"))).toBe(0);
@@ -215,20 +215,20 @@ describe("subscribe: resume or resnapshot", () => {
     resnapshot(() => feed.subscribe("p", cursor, () => {}));
   });
 
-  it("refuses a cursor from another feed instance, even of the same Workspace", () => {
+  it("refuses a cursor from another feed instance, even of the same project", () => {
     const old = createBoardChangeFeed();
     const cursor = old.cursor("p");
     const restarted = createBoardChangeFeed();
     resnapshot(() => restarted.subscribe("p", cursor, () => {}));
   });
 
-  it("refuses a cursor from another Workspace", () => {
+  it("refuses a cursor from another project", () => {
     const feed = createBoardChangeFeed();
     resnapshot(() => feed.subscribe("p", feed.cursor("q"), () => {}));
   });
 
   it("refuses a cursor from another epoch", () => {
-    const feed = createBoardChangeFeed({ epochOf: (workspaceId) => (workspaceId === "p" ? 3 : 0) });
+    const feed = createBoardChangeFeed({ epochOf: (projectId) => (projectId === "p" ? 3 : 0) });
     const cursor = feed.cursor("p");
     expect(cursor.startsWith("3:")).toBe(true);
     const instance = cursor.split(":")[1];
@@ -302,7 +302,7 @@ describe("epoch and lifecycle", () => {
     expect(feed.cursor("p")).toMatch(/^5:[^:]+:1$/);
   });
 
-  it("disposes a removed Workspace's feed, telling its subscribers to resnapshot", () => {
+  it("disposes a removed project's feed, telling its subscribers to resnapshot", () => {
     const feed = createBoardChangeFeed();
     feed.stamp("p", [ticketChange("a")]);
     const old = feed.cursor("p");
@@ -317,9 +317,9 @@ describe("epoch and lifecycle", () => {
     resnapshot(() => feed.subscribe("p", old, () => {}));
   });
 
-  it("releases the feeds of Workspaces the host no longer holds", () => {
+  it("releases the feeds of projects the host no longer holds", () => {
     let held = ["p", "gone"];
-    const feed = createBoardChangeFeed({ workspaces: () => held });
+    const feed = createBoardChangeFeed({ projects: () => held });
     feed.stamp("gone", [ticketChange("a", "gone")]);
     const live = following(feed, "gone");
     feed.cursor("p");
@@ -328,7 +328,7 @@ describe("epoch and lifecycle", () => {
     feed.noteDataChanged({});
     expect(feed.size).toBe(1);
     expect(live.ended).toHaveLength(1);
-    // ...and so does the next Workspace the feed first meets.
+    // ...and so does the next project the feed first meets.
     held = ["p", "new"];
     feed.stamp("gone-too", [ticketChange("b", "gone-too")]);
     expect(feed.size).toBe(2);
@@ -338,7 +338,7 @@ describe("epoch and lifecycle", () => {
 });
 
 describe("untapped and noteDataChanged", () => {
-  it("maps an untargeted data-changed to a project change on every known Workspace", () => {
+  it("maps an untargeted data-changed to a project change on every known project", () => {
     const feed = createBoardChangeFeed();
     feed.cursor("p");
     feed.cursor("q");
@@ -353,8 +353,8 @@ describe("untapped and noteDataChanged", () => {
     ]);
   });
 
-  it("uses the host's own Workspace list when it is given one", () => {
-    const feed = createBoardChangeFeed({ workspaces: () => ["held"] });
+  it("uses the host's own project list when it is given one", () => {
+    const feed = createBoardChangeFeed({ projects: () => ["held"] });
     const known = capture(feed, "known");
     const held = capture(feed, "held");
     feed.noteDataChanged({});
@@ -457,7 +457,7 @@ describe("untapped and noteDataChanged", () => {
 });
 
 describe("ticket removal (VC-837)", () => {
-  it("tells the host once per Ticket tombstone, naming its Workspace and its id", () => {
+  it("tells the host once per Ticket tombstone, naming its project and its id", () => {
     const { feed, told } = removals();
     // The batch an archive or a hard delete stamps: one tombstone, its row done.
     feed.stamp("p", [tombstone("a"), ticketChange("b")]);

@@ -20,7 +20,7 @@
  * main process, each bounded at `GIT_COMMAND_TIMEOUT_MS` (8s). A probe measured
  * the main event loop starved for the read's entire duration — a 10ms timer
  * fired zero times across 1.6s against a slow git — which is the whole-app
- * rainbow wheel when a ticket workspace opens. The reads stay SERIAL, exactly
+ * rainbow wheel when a Ticket view opens. The reads stay SERIAL, exactly
  * as they were: the fix is that main keeps turning between them, not that the
  * read got faster, and spawning five git children at once is the wrong answer
  * on the loaded machine where this hurts most.

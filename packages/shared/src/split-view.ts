@@ -2,7 +2,7 @@
  * SPLIT VIEW — how one tabbed surface's tabs are spread over several panes
  * (VC-202).
  *
- * Both tabbed surfaces (Home, and a ticket workspace) already own one ordered
+ * Both tabbed surfaces (Home, and a Ticket view) already own one ordered
  * strip of tabs and one active tab. A split view sits BESIDE that, exactly as
  * an arrangement does (`tab-order.ts`): a binary tree whose leaves are panes,
  * each pane naming a subset of the surface's tab ids and its own front tab. The

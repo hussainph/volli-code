@@ -25,7 +25,7 @@ import type { IpcEvent, IpcPeer, IpcResponse } from "@volli/host-protocol/ipc";
 import { servedIpcContractLink } from "@volli/host-protocol/testing";
 import { createHostLink, hostLinkTrpcLink, type HostLink } from "@volli/host-protocol/client-link";
 import {
-  boardResourceWorkspace,
+  boardResourceProject,
   createBoardChangeFeed,
   setTicketPriorityCommand,
   type BoardChangeFeed,
@@ -128,7 +128,7 @@ function openHost(): Host {
   );
   const feed = createBoardChangeFeed({
     projectOfTicket: (ticketId) => getTicketRow(ctx.db, ticketId)?.project_id,
-    workspaces: () => [PROJECT],
+    projects: () => [PROJECT],
   });
   let clock = 10_000;
   const now = () => (clock += 1);
@@ -258,7 +258,7 @@ const webSocket: Door = {
       context: () => ({
         handlers,
         diagnostics,
-        resourceWorkspace: boardResourceWorkspace(host.ctx.db),
+        resourceWorkspace: boardResourceProject(host.ctx.db),
       }),
     });
     const link = createHostLink({

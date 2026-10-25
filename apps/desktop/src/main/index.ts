@@ -1409,7 +1409,7 @@ const appStartup = app.whenReady().then(async () => {
   const boardFeed = createBoardChangeFeed({
     projectOfTicket: (ticketId) =>
       sessionDb === null ? undefined : getTicketRow(sessionDb, ticketId)?.project_id,
-    workspaces: () => (sessionDb === null ? [] : listProjects(sessionDb).map(({ id }) => id)),
+    projects: () => (sessionDb === null ? [] : listProjects(sessionDb).map(({ id }) => id)),
     // Tombstones cover hard deletion too, which cannot emit a Ticket Event
     // after its history is gone. This feed sees every command door.
     onTicketRemoved: (projectId, ticketId) => {

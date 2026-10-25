@@ -30,7 +30,7 @@
  *   the flag). Raising it is promotion's (VC-591), never a connection's.
  */
 import {
-  boardResourceWorkspace,
+  boardResourceProject,
   createBoardChangeFeed,
   type BoardChangeFeed,
 } from "@volli/host-core/board";
@@ -189,7 +189,7 @@ export function hostResourceWorkspace(
   sessionEngine: Pick<SessionEngine, "getSession">,
 ): (resource: WorkspaceResource) => Promise<string | null> {
   const sessions = sessionWorkspace(sessionEngine);
-  const board = boardResourceWorkspace(db);
+  const board = boardResourceProject(db);
   return async (resource) =>
     resource.kind === SESSION_RESOURCE ? sessions(resource) : board(resource);
 }
@@ -211,7 +211,7 @@ export function hostdBoardFeed(db: () => Database.Database | undefined): BoardCh
       const open = db();
       return open === undefined ? undefined : getTicketRow(open, ticketId)?.project_id;
     },
-    workspaces: () => {
+    projects: () => {
       const open = db();
       return open === undefined ? [] : listProjects(open).map(({ id }) => id);
     },

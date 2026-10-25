@@ -365,7 +365,7 @@ Options:
 
 Effects:
 - Durable write: Update the requested Ticket fields and append attributed Ticket events for changes.
-- Human sees: Updated fields appear on the Ticket card and in its Ticket workspace.
+- Human sees: Updated fields appear on the Ticket card and in its Ticket view.
 - Does not: The Ticket does not move, no Session starts, and no worktree is materialized.
 
 Example: volli ticket update VC-12 --edit "old" "new"

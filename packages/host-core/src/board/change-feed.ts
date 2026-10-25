@@ -1,6 +1,9 @@
 /**
- * The Workspace change feed for the board (VC-565; HP § Workspace change
- * feed, F1): one feed per Workspace, a tracked cursor, resume or resnapshot.
+ * The board's per-project change feed (VC-565; HP § Workspace change feed,
+ * F1): one feed per project, a tracked cursor, resume or resnapshot.
+ *
+ * The host protocol called a project a "Workspace"; that word now names the
+ * team container (CONTEXT.md), so this module says project throughout.
  *
  * - **Stamp.** Every board command stamps the rows it committed, naming the
  *   Client's `commandId` (T5), in the synchronous turn of its COMMIT; the
@@ -14,13 +17,13 @@
  *   that stamps its own rows announces its `data-changed` through
  *   {@link BoardChangeFeed.untapped}, so it is not stamped twice.
  * - **Cursor.** Opaque to Clients: `epoch:instance:seq`. `seq` rises by one
- *   per stamp within one instance (this process's feed for one Workspace).
- *   Never compared across Workspaces, instances or epochs: a cursor from
+ *   per stamp within one instance (this process's feed for one project).
+ *   Never compared across projects, instances or epochs: a cursor from
  *   another is `subscription-resnapshot-required`.
- * - **Epoch.** Read on every use, never cached: when a Workspace's authority
+ * - **Epoch.** Read on every use, never cached: when a project's authority
  *   epoch changes, its feed ends (every subscriber is told to resnapshot) and
  *   a new instance starts, so no cursor minted under the old epoch resumes and
- *   no new cursor carries it. A Workspace the host no longer holds has its
+ *   no new cursor carries it. A project the host no longer holds has its
  *   feed ended the same way ({@link BoardChangeFeed.dispose}).
  * - **Retention.** A bounded window compacted to the latest change per
  *   entity, tombstones included. A cursor older than what the window still
@@ -52,17 +55,17 @@ export type BoardFeedListener = (batch: BoardFeedBatch) => void;
 /** Told once when a subscription's feed ends under it: the error says resnapshot. */
 export type BoardFeedEnded = (error: FeedResnapshotRequiredError) => void;
 
-/** Entities a Workspace's window answers for before it compacts the oldest away. */
+/** Entities a project's window answers for before it compacts the oldest away. */
 export const BOARD_FEED_RETENTION = 2_048;
 
 export interface BoardChangeFeedOptions {
-  /** The Workspace's authority epoch (VC-550); 0 on a host that never served it. */
-  readonly epochOf?: (workspaceId: string) => number;
+  /** The project's authority epoch (VC-550); 0 on a host that never served it. */
+  readonly epochOf?: (projectId: string) => number;
   /** The project a ticket belongs to, for a `data-changed` that names only the ticket. */
   readonly projectOfTicket?: (ticketId: string) => string | undefined;
-  /** Every Workspace the host holds, for an untargeted `data-changed`. */
-  readonly workspaces?: () => readonly string[];
-  /** Entities retained per Workspace; {@link BOARD_FEED_RETENTION} by default. */
+  /** Every project the host holds, for an untargeted `data-changed`. */
+  readonly projects?: () => readonly string[];
+  /** Entities retained per project; {@link BOARD_FEED_RETENTION} by default. */
   readonly retention?: number;
   /**
    * Told once per Ticket a committed stamp removed from the board: the
@@ -80,7 +83,7 @@ interface Stamped {
   readonly change: BoardChange;
 }
 
-class WorkspaceFeed {
+class ProjectFeed {
   readonly instance = randomUUID();
   seq = 0;
   /** Changes past this seq were compacted away: a cursor below it cannot resume. */
@@ -96,9 +99,9 @@ function entityKey(change: BoardChange): string {
   return `${change.kind}:${change.id}`;
 }
 
-/** The board's change feeds, one per Workspace, created on first use. */
+/** The board's change feeds, one per project, created on first use. */
 export class BoardChangeFeed {
-  readonly #feeds = new Map<string, WorkspaceFeed>();
+  readonly #feeds = new Map<string, ProjectFeed>();
   readonly #options: BoardChangeFeedOptions;
   readonly #retention: number;
   #untapped = 0;
@@ -109,66 +112,66 @@ export class BoardChangeFeed {
   }
 
   /**
-   * The Workspace's live feed, under its epoch as it stands now: a feed made
+   * The project's live feed, under its epoch as it stands now: a feed made
    * under another epoch ends here and a new instance takes its place.
    */
-  #feed(workspaceId: string): WorkspaceFeed {
-    const epoch = this.#options.epochOf?.(workspaceId) ?? 0;
-    const held = this.#feeds.get(workspaceId);
+  #feed(projectId: string): ProjectFeed {
+    const epoch = this.#options.epochOf?.(projectId) ?? 0;
+    const held = this.#feeds.get(projectId);
     if (held !== undefined && held.epoch === epoch) return held;
     if (held === undefined) this.#prune();
-    else this.#end(workspaceId, held);
-    const feed = new WorkspaceFeed(epoch);
-    this.#feeds.set(workspaceId, feed);
+    else this.#end(projectId, held);
+    const feed = new ProjectFeed(epoch);
+    this.#feeds.set(projectId, feed);
     return feed;
   }
 
   /** Drops a feed and tells each of its subscribers to resnapshot. */
-  #end(workspaceId: string, feed: WorkspaceFeed): void {
-    // Every caller ends the feed the map holds for this Workspace.
-    this.#feeds.delete(workspaceId);
+  #end(projectId: string, feed: ProjectFeed): void {
+    // Every caller ends the feed the map holds for this project.
+    this.#feeds.delete(projectId);
     const ended = [...feed.listeners.values()];
     feed.listeners.clear();
     for (const onEnded of ended) onEnded?.(new FeedResnapshotRequiredError());
   }
 
-  /** Ends the feeds of Workspaces the host no longer holds, when it can say which it holds. */
+  /** Ends the feeds of projects the host no longer holds, when it can say which it holds. */
   #prune(): void {
-    if (this.#options.workspaces === undefined || this.#feeds.size === 0) return;
-    const held = new Set(this.#options.workspaces());
+    if (this.#options.projects === undefined || this.#feeds.size === 0) return;
+    const held = new Set(this.#options.projects());
     // Deleting the entry being visited is safe in a Map's own iteration.
-    for (const [workspaceId, feed] of this.#feeds) {
-      if (!held.has(workspaceId)) this.#end(workspaceId, feed);
+    for (const [projectId, feed] of this.#feeds) {
+      if (!held.has(projectId)) this.#end(projectId, feed);
     }
   }
 
   /**
-   * Ends one Workspace's feed (it was removed): its cache is released and its
+   * Ends one project's feed (it was removed): its cache is released and its
    * subscribers told to resnapshot. A later use starts a new instance.
    */
-  dispose(workspaceId: string): void {
-    const feed = this.#feeds.get(workspaceId);
-    if (feed !== undefined) this.#end(workspaceId, feed);
+  dispose(projectId: string): void {
+    const feed = this.#feeds.get(projectId);
+    if (feed !== undefined) this.#end(projectId, feed);
   }
 
-  /** How many Workspaces have a feed in memory (a test's view of disposal). */
+  /** How many projects have a feed in memory (a test's view of disposal). */
   get size(): number {
     return this.#feeds.size;
   }
 
-  /** The Workspace's current cursor: what a snapshot read in the same turn reflects. */
-  cursor(workspaceId: string): string {
-    return cursorOf(this.#feed(workspaceId));
+  /** The project's current cursor: what a snapshot read in the same turn reflects. */
+  cursor(projectId: string): string {
+    return cursorOf(this.#feed(projectId));
   }
 
   /**
-   * Stamps one committed write's changes, all of one Workspace, and delivers
+   * Stamps one committed write's changes, all of one project, and delivers
    * them to its subscribers at once. Call it in the synchronous turn of the
    * write's COMMIT, after it.
    */
-  stamp(workspaceId: string, changes: readonly BoardChange[]): void {
+  stamp(projectId: string, changes: readonly BoardChange[]): void {
     if (changes.length === 0) return;
-    const feed = this.#feed(workspaceId);
+    const feed = this.#feed(projectId);
     for (const change of changes) {
       const key = entityKey(change);
       feed.latest.delete(key);
@@ -236,11 +239,9 @@ export class BoardChangeFeed {
       (ticketId === undefined ? undefined : this.#options.projectOfTicket?.(ticketId));
     if (projectId === undefined) {
       this.#prune();
-      const every = this.#options.workspaces?.() ?? [...this.#feeds.keys()];
-      for (const workspaceId of every) {
-        this.stamp(workspaceId, [
-          { kind: "project", op: "upsert", id: workspaceId, projectId: workspaceId },
-        ]);
+      const every = this.#options.projects?.() ?? [...this.#feeds.keys()];
+      for (const id of every) {
+        this.stamp(id, [{ kind: "project", op: "upsert", id, projectId: id }]);
       }
       return;
     }
@@ -267,21 +268,21 @@ export class BoardChangeFeed {
   }
 
   /**
-   * Follows one Workspace's feed. With `after`, first delivers (as one batch)
+   * Follows one project's feed. With `after`, first delivers (as one batch)
    * the latest change of every entity stamped after that cursor, then live;
    * without one, live only (a Client that read a snapshot in this turn).
    * Throws {@link FeedResnapshotRequiredError} for a cursor this feed cannot
    * resume: another epoch or instance, compacted past, or never minted. Once
    * following, `onEnded` hears the same error if the feed ends under it (an
-   * epoch change, or the Workspace removed). Returns the unsubscribe.
+   * epoch change, or the project removed). Returns the unsubscribe.
    */
   subscribe(
-    workspaceId: string,
+    projectId: string,
     after: string | null,
     listener: BoardFeedListener,
     onEnded?: BoardFeedEnded,
   ): () => void {
-    const feed = this.#feed(workspaceId);
+    const feed = this.#feed(projectId);
     if (after !== null) {
       const seq = this.#resumable(feed, after);
       const replay = [...feed.latest.values()]
@@ -295,7 +296,7 @@ export class BoardChangeFeed {
     };
   }
 
-  #resumable(feed: WorkspaceFeed, cursor: string): number {
+  #resumable(feed: ProjectFeed, cursor: string): number {
     const [epoch, instance, seqText, ...rest] = cursor.split(":");
     const seq = Number(seqText);
     if (
@@ -312,7 +313,7 @@ export class BoardChangeFeed {
   }
 }
 
-function cursorOf(feed: WorkspaceFeed): string {
+function cursorOf(feed: ProjectFeed): string {
   return `${feed.epoch}:${feed.instance}:${feed.seq}`;
 }
 

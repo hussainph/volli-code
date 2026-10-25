@@ -410,7 +410,7 @@ describe("reads", () => {
     stop();
   });
 
-  it("follows the Workspace's feed through board.changes, live and resumed", async () => {
+  it("follows the project's feed through board.changes, live and resumed", async () => {
     const map = handlers();
     const emit = vi.fn();
     const sink = { emit, fail: vi.fn() };
@@ -1011,7 +1011,7 @@ describe("ticket writes", () => {
     expect(published()).toEqual([]);
   });
 
-  // The receipt is keyed by the ticket's Workspace, which a deleted ticket no
+  // The receipt is keyed by the ticket's project, which a deleted ticket no
   // longer resolves: the repeat misses its receipt and runs the delete again.
   it("answers a repeated delete from its receipt", async () => {
     seed("old");
@@ -1147,7 +1147,7 @@ describe("comments", () => {
   });
 
   // As for a deleted ticket: a removed comment no longer resolves the
-  // Workspace its receipt is keyed under, so the repeat runs again and refuses.
+  // project its receipt is keyed under, so the repeat runs again and refuses.
   it("answers a repeated removal from its receipt", async () => {
     seed("t-1");
     const map = handlers();
