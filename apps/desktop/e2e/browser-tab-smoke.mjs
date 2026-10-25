@@ -1211,8 +1211,9 @@ async function main() {
       const restored = await restoredNativePlane(secondUrl, before.contentsId);
       // Close only the fixture transcript, leaving the original Browser journey
       // and its two tabs untouched for the teardown assertion below.
-      // The lower partner shares Home's single strip. Closing its member
-      // dissolves this pair without closing either original Browser Tab.
+      // The transcript is the lower pane's only tab, and its top-strip chip
+      // segment closes it: the emptied pane collapses and the group of two
+      // dissolves, closing neither original Browser Tab (VC-614).
       await transcriptTab.getByTestId("tab-close").click();
       await waitUntil(
         "the original unsplit Browser surface",

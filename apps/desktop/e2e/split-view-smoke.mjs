@@ -1,36 +1,40 @@
 /**
- * End-to-end acceptance smoke for GROUPED TAB PAIRS (VC-614), retaining the
- * original split-view (VC-202) journey numbering. Drives the REAL packaged renderer
- * through Playwright against a scratch SQLite database (`VOLLI_DB_PATH`) + an
- * isolated user-data dir, over a REAL git repository and a REAL ticket
- * worktree cut from it.
+ * End-to-end acceptance smoke for TAB GROUPS (VC-614), keeping the split-view
+ * (VC-202) journey's numbering where a check still means the same thing.
+ * Drives the REAL packaged renderer through Playwright against a scratch
+ * SQLite database (`VOLLI_DB_PATH`) + an isolated user-data dir, over a REAL
+ * git repository and a REAL ticket worktree cut from it.
  *
  * The unit tests own every pure decision: the model (`packages/shared/
  * split-view.test.ts`), what a drop means (`components/split/split-drop.test.ts`)
  * and what the chords mean (`lib/split-shortcut.test.ts`). What only a running
  * app can answer is everything between them —
  *
- *   1. An unsplit workspace is one UNNAMED plane with one area strip.
- *   2. ⌘\ opens a temporary empty partner, focused and named "Pane 2 of 2".
- *   3. The partner offers the surface menu, keyboard on its first row.
- *   4. New terminal fills that partner, making ONE chip with TWO members in
- *      the SAME strip. An unrelated file fills the plane; returning to either
- *      member restores the pair, its identities and geometry.
- *   5. A tab dragged onto a pane's right edge lights the right zone and forms
- *      a bounded pair, focused on the dropped tab (the original pointer path).
- *   6. ⇧⌘\ cannot nest a third pane into a complete pair. After unpairing,
- *      it opens an empty partner below; Close pane collapses without closing tabs.
- *   7. A tab-edge drop pairs two tabs; closing one dissolves the chip and
- *      returns to one unnamed plane without closing the survivor.
- *   8. A FILE ROW native HTML5 drag opens a pair with no file tab first,
- *      retaining its DataTransfer type, zone feedback and focused destination.
- *   9. A centre drop dissolves the pair without closing either tab (the old
- *      move-and-collapse path). Left AND right tab-edge drops restore ordered
- *      two-member chips; explicit Unpair tabs also collapses without closing.
- *  10. A centre-of-tab within-strip drag still reorders, not pairs (VC-189).
- *  11. The same keyboard/menu/one-area-strip wiring works on HOME.
- *  12. Clicking a live terminal's overlaid canvas focuses its pair member
- *      after selecting Board, without hiding or recreating that terminal.
+ *   1. An ungrouped workspace is one UNNAMED plane under one top strip.
+ *   2. ⌘\ makes a GROUP of two: the new pane empty, focused and named "Pane 2
+ *      of 2"; the top strip draws ONE chip, and every pane draws its own strip.
+ *   3. The empty pane offers the surface menu, keyboard on its first row.
+ *   4. New terminal OPENS into that pane; a file opened from the rail stacks in
+ *      front of it in the same pane; the terminal comes back unremounted. The
+ *      file dragged from its pane strip up to the top strip leaves the group
+ *      and shows full width; clicking the chip restores the group exactly.
+ *   5. A tab dragged onto a pane's right edge lights that zone and adds a THIRD
+ *      pane to the group, focused on the dropped tab.
+ *   6. ⇧⌘\ splits the focused pane again (four panes); Close pane on the empty
+ *      one hands the layout back without closing a tab.
+ *   7. A centre drop moves a tab into that pane's stack; the pane it left
+ *      collapses.
+ *   8. A FILE ROW native HTML5 drag onto a pane's right edge opens the file in a
+ *      new pane of the group, retaining its DataTransfer type and zone feedback.
+ *   9. The chip's right-click menu lists the whole group and Ungroups it, every
+ *      tab staying open. Left AND right top-strip tab-edge drops group two tabs
+ *      in order; closing a tab of a group of two dissolves it, keeping the other.
+ *  10. A centre-of-tab drag inside the top strip still reorders (VC-189).
+ *  11. ⌘\ groups on HOME too, the Board in the group's first pane.
+ *  12. Clicking a live terminal's overlaid canvas focuses its pane after the
+ *      Board's pane took focus, without hiding or recreating that terminal.
+ *  13. ⌘T while the group is shown opens the new chat INTO the focused pane's
+ *      stack, in front — never as a full-width tab beside the group.
  *
  * Every assertion polls (expect-style waits); no bare sleep stands in for a
  * condition (the few fixed sleeps only pace UI settling, never assert).
@@ -93,18 +97,12 @@ const SECOND_ROW = `[data-testid="ticket-files-row"][data-path="${SECOND_FILE}"]
 // ---- DOM probes ------------------------------------------------------------
 
 /**
- * Visible cells only: resident, hidden browser wrappers deliberately have no
- * data-pane-id. Tabs live in ONE area strip, not in cells or pane segments.
- * The active chip's member order names the two cells in reading order; while
- * a keyboard partner is empty, the selected ordinary tab names its owner.
+ * Visible cells only, in reading order. A shown group's cell draws its OWN
+ * strip (its stack, front selected); the one full-width cell draws none, and
+ * then holds the top strip's selected tab.
  */
 function readPanes(page) {
   return page.evaluate(() => {
-    const members = Array.from(
-      document.querySelectorAll(
-        '[data-slot="grouped-tab-chip"][data-active="true"] [data-slot="grouped-tab-member"] [role="tab"]',
-      ),
-    );
     const selected = document.querySelector(
       '[data-slot="split-view-tab-bar"] [role="tab"][aria-selected="true"]',
     );
@@ -114,50 +112,137 @@ function readPanes(page) {
         const b = second.getBoundingClientRect();
         return Math.abs(a.y - b.y) > 2 ? a.y - b.y : a.x - b.x;
       })
-      .map((cell, index) => {
+      .map((cell) => {
         const empty = cell.querySelector('[data-slot="pane-empty-state"]') !== null;
-        const tab = empty ? null : (members[index] ?? selected);
-        const tabs = tab === null ? [] : [(tab.getAttribute("aria-label") ?? "").trim()];
+        const strip = cell.querySelector(':scope > [data-slot="tab-strip"]');
+        const tabs =
+          strip === null
+            ? empty || selected === null
+              ? []
+              : [(selected.getAttribute("aria-label") ?? "").trim()]
+            : Array.from(strip.querySelectorAll('[role="tab"]')).map((tab) =>
+                (tab.getAttribute("aria-label") ?? "").trim(),
+              );
+        const front =
+          strip === null
+            ? (tabs[0] ?? null)
+            : (
+                strip
+                  .querySelector('[role="tab"][aria-selected="true"]')
+                  ?.getAttribute("aria-label") ?? ""
+              ).trim() || null;
         return {
           paneId: cell.getAttribute("data-pane-id"),
           focused: cell.getAttribute("data-focused") === "true",
           label: cell.getAttribute("aria-label"),
           empty,
+          strip: strip !== null,
           tabs,
-          closable: tab?.querySelector('[data-testid="tab-close"]') ? tabs : [],
+          front,
         };
       });
   });
 }
 
-/** One full-width area strip in either surface, even while a pair is selected. */
-async function hasOneAreaStrip(page, label = "Ticket tabs") {
+/**
+ * One top strip across the whole surface, named `label`; and a pane strip in
+ * every cell of a shown group (none while one tab is shown full width).
+ */
+async function hasOneTopStrip(page, label = "Ticket tabs") {
   return page.evaluate((name) => {
     const bars = document.querySelectorAll('[data-slot="split-view-tab-bar"]');
+    const cells = document.querySelectorAll('[data-slot="split-view-pane"][data-pane-id]');
+    const stripped = Array.from(cells).filter(
+      (cell) => cell.querySelector(':scope > [data-slot="tab-strip"]') !== null,
+    ).length;
+    const empties = Array.from(cells).filter(
+      (cell) => cell.querySelector('[data-slot="pane-empty-state"]') !== null,
+    ).length;
     return (
       bars.length === 1 &&
       bars[0].querySelectorAll('[role="tablist"]').length === 1 &&
       bars[0].querySelector('[role="tablist"]')?.getAttribute("aria-label") === name &&
-      document.querySelectorAll('[data-slot="split-view-tab-pane"]').length === 0 &&
-      document.querySelectorAll('[data-slot="split-view-pane"] [role="tablist"]').length === 0
+      (cells.length === 1 ? stripped === 0 : stripped === cells.length - empties)
     );
   }, label);
 }
 
+/** Every group chip on the top strip: its id, whether it is shown, its segments. */
 function readGroups(page) {
   return page.evaluate(() =>
-    Array.from(document.querySelectorAll('[data-slot="grouped-tab-chip"]')).map((chip) => ({
-      id: chip.getAttribute("data-pair-id"),
+    Array.from(
+      document.querySelectorAll('[data-slot="split-view-tab-bar"] [data-slot="grouped-tab-chip"]'),
+    ).map((chip) => ({
+      id: chip.getAttribute("data-group-id"),
       active: chip.getAttribute("data-active") === "true",
       tabs: Array.from(chip.querySelectorAll('[data-slot="grouped-tab-member"] [role="tab"]')).map(
-        (tab) => tab.getAttribute("aria-label"),
+        (tab) => (tab.getAttribute("aria-label") ?? "").trim(),
       ),
     })),
   );
 }
 
-async function pairAtTabEdge(page, movingLabel, targetLabel, edge) {
-  const target = page.getByRole("tab", { name: targetLabel, exact: true }).first();
+/** A tab on the TOP strip — an ordinary tab, or a group chip's segment. */
+function topTab(page, label) {
+  return page
+    .locator('[data-slot="split-view-tab-bar"]')
+    .getByRole("tab", { name: label, exact: true })
+    .first();
+}
+
+/**
+ * The tab a drag picks up: a grouped tab drags from its pane's strip (a chip
+ * segment does not drag), an ordinary one from the top strip.
+ */
+async function draggableTab(page, label) {
+  const inPane = page
+    .locator('[data-slot="split-view-pane"] > [data-slot="tab-strip"]')
+    .getByRole("tab", { name: label, exact: true })
+    .first();
+  return (await inPane.count()) > 0 ? inPane : topTab(page, label);
+}
+
+/** A point on the top strip's bar past its tabs — the bar's own drop target. */
+async function topStripPoint(page) {
+  const bar = await page.locator('[data-slot="split-view-tab-bar"]').first().boundingBox();
+  if (bar === null) throw new Error("no top strip bar");
+  return { x: Math.round(bar.x + bar.width * 0.6), y: Math.round(bar.y + bar.height / 2) };
+}
+
+/** Right-click a group chip and choose a row of its menu. */
+async function chipMenu(page, groupId, item) {
+  await page
+    .locator(`[data-slot="grouped-tab-chip"][data-group-id="${groupId}"]`)
+    .click({ button: "right" });
+  await page.getByRole("menuitem", { name: item, exact: true }).click();
+}
+
+/** The labels a chip's menu lists, pane by pane, with which are checked. */
+async function readChipMenu(page, groupId) {
+  await page
+    .locator(`[data-slot="grouped-tab-chip"][data-group-id="${groupId}"]`)
+    .click({ button: "right" });
+  const rows = await waitUntil(
+    "the chip's menu",
+    async () => {
+      const seen = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('[data-slot="context-menu-radio-item"]')).map(
+          (row) => ({
+            label: (row.textContent ?? "").trim(),
+            checked: row.getAttribute("aria-checked") === "true",
+          }),
+        ),
+      );
+      return seen.length > 0 ? seen : null;
+    },
+    { timeout: 4000 },
+  );
+  await page.keyboard.press("Escape");
+  return rows;
+}
+
+async function groupAtTabEdge(page, movingLabel, targetLabel, edge) {
+  const target = topTab(page, targetLabel);
   await dragTabTo(
     page,
     movingLabel,
@@ -167,9 +252,9 @@ async function pairAtTabEdge(page, movingLabel, targetLabel, edge) {
         const rect = tab.closest("[data-pair-target-id]")?.getBoundingClientRect();
         return rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
       });
-      if (box === null) throw new Error(`no bounds for pair target ${targetLabel}`);
+      if (box === null) throw new Error(`no bounds for group target ${targetLabel}`);
       return {
-        x: box.x + box.width * (edge === "left" ? 0.1 : 0.9),
+        x: box.x + box.width * (edge === "left" ? 0.12 : 0.88),
         y: box.y + box.height / 2,
       };
     },
@@ -178,7 +263,7 @@ async function pairAtTabEdge(page, movingLabel, targetLabel, edge) {
   let highlighted = false;
   try {
     highlighted = await waitUntil(
-      "tab edge pairing preview",
+      "tab edge grouping preview",
       async () =>
         await target.evaluate(
           (tab, expected) =>
@@ -191,7 +276,7 @@ async function pairAtTabEdge(page, movingLabel, targetLabel, edge) {
     await page.mouse.up();
   }
   await waitUntil(
-    `paired tab chip (${movingLabel} → ${edge} edge of ${targetLabel}; preview=${highlighted})`,
+    `grouped chip (${movingLabel} → ${edge} edge of ${targetLabel}; preview=${highlighted})`,
     async () =>
       (await readGroups(page)).some(
         (group) =>
@@ -261,7 +346,7 @@ async function openTicketViaCard(page, displayId) {
  * pointer sensor to activate (4px) and to measure a hover before the release.
  */
 async function dragTabTo(page, tabLabel, target, { drop = true } = {}) {
-  const source = page.getByRole("tab", { name: tabLabel, exact: true }).first();
+  const source = await draggableTab(page, tabLabel);
   await source.scrollIntoViewIfNeeded();
   const from = await source.boundingBox();
   if (from === null) throw new Error(`no bounding box for tab ${tabLabel}`);
@@ -275,7 +360,7 @@ async function dragTabTo(page, tabLabel, target, { drop = true } = {}) {
   if (drop) await page.mouse.up();
 }
 
-/** The ticket area's ONLY strip: ordinary tabs and grouped members together. */
+/** The ticket's TOP strip: ordinary tabs and each group chip's segments. */
 function readSurfaceStrip(page) {
   return page.evaluate(() =>
     Array.from(
@@ -335,40 +420,47 @@ async function main() {
     );
     await openTicketViaCard(page, displayId);
 
-    // An unsplit workspace draws ONE pane and names it nothing: "Pane 1 of 1"
-    // would be chrome about a choice nobody has made.
-    await must(1, "an unsplit workspace is one unnamed plane", async () => {
+    // An ungrouped workspace draws ONE pane and names it nothing: "Pane 1 of
+    // 1" would be chrome about a choice nobody has made.
+    await must(1, "an ungrouped workspace is one unnamed plane", async () => {
       const panes = await readPanes(page);
       return {
         ok:
           panes.length === 1 &&
           panes[0]?.label === null &&
           !panes[0]?.focused &&
-          (await hasOneAreaStrip(page)),
-        detail: JSON.stringify(panes.map((pane) => ({ label: pane.label, focused: pane.focused }))),
+          !panes[0]?.strip &&
+          (await readGroups(page)).length === 0 &&
+          (await hasOneTopStrip(page)),
+        detail: JSON.stringify(panes),
       };
     });
 
-    // ---- 2. ⌘\ opens a second pane -----------------------------------------
+    // ---- 2. ⌘\ makes a group of two -----------------------------------------
     await must(
       2,
-      "⌘\\ splits the workspace into two named panes, the new one focused",
+      "⌘\\ groups the full-width tab with a new, focused, empty pane under one chip",
       async () => {
         await page.keyboard.press("Meta+\\");
         await waitUntil("two panes", async () => (await paneCount(page)) === 2);
         const panes = await readPanes(page);
+        const groups = await readGroups(page);
         return {
           ok:
             panes.length === 2 &&
             panes[0]?.label === "Pane 1 of 2" &&
             panes[1]?.label === "Pane 2 of 2" &&
             panes[1]?.focused === true &&
+            panes[1]?.empty === true &&
             panes[0]?.focused === false &&
-            panes[0]?.paneId !== panes[1]?.paneId &&
-            (await hasOneAreaStrip(page)),
-          detail: JSON.stringify(
-            panes.map((pane) => ({ label: pane.label, focused: pane.focused })),
-          ),
+            panes[0]?.strip === true &&
+            JSON.stringify(panes[0]?.tabs) === JSON.stringify([displayId]) &&
+            panes[0]?.paneId !== "root" &&
+            groups.length === 1 &&
+            groups[0].active &&
+            JSON.stringify(groups[0].tabs) === JSON.stringify([displayId]) &&
+            (await hasOneTopStrip(page)),
+          detail: JSON.stringify({ panes, groups }),
         };
       },
     );
@@ -390,14 +482,14 @@ async function main() {
       };
     });
 
-    // ---- 4. New terminal fills the pair; unrelated selection is full width --
+    // ---- 4. Open into the focused pane; leave the group; come back ----------
     await must(
       4,
-      "New terminal fills one grouped chip; unrelated tabs hide and restore the pair",
+      "New terminal and a file OPEN into the focused pane's stack; a dragged-out tab shows full width and the chip restores the group",
       async () => {
         await paneMenuRow(page, "New terminal").click();
         const panes = await waitUntil(
-          "the session tab and grouped chip to fill partner 2",
+          "the terminal to open into pane 2",
           async () => {
             const seen = await readPanes(page);
             const groups = await readGroups(page);
@@ -412,7 +504,8 @@ async function main() {
           },
           { timeout: 20_000 },
         );
-        const groups = await readGroups(page);
+        const terminal = panes[1].tabs[0];
+        const groupId = (await readGroups(page))[0].id;
         const terminalScreen = page.locator(
           '[data-slot="terminal-viewport-box"]:visible .xterm-screen',
         );
@@ -420,104 +513,114 @@ async function main() {
         await terminalScreen.evaluate((screen) => {
           window.volliSmokeTicketTerminalScreen = screen;
         });
-        const terminalAnchor = await page
-          .locator(
-            `[data-slot="split-view-pane"][data-pane-id="${panes[1].paneId}"] [data-slot="terminal-pane-anchor"]`,
-          )
-          .count();
-        const labels = groups[0].tabs;
         const originalBoxes = await Promise.all(panes.map((pane) => paneBox(page, pane.paneId)));
+
+        // A file OPENED from the rail while the group is shown joins the
+        // focused pane — pane 2 — in front of the terminal.
         const aside = page.locator("aside");
         await aside.getByTestId("ticket-rail-tab-files").click();
         await waitUntil(
-          "the unrelated file row",
+          "the second file row",
           async () => (await aside.locator(SECOND_ROW).count()) === 1,
           { timeout: 10_000 },
         );
         await aside.locator(SECOND_ROW).dblclick();
-        const fullWidth = await waitUntil(
-          "unrelated file to fill the plane",
+        const stacked = await waitUntil(
+          "the file to stack in front of the terminal",
           async () => {
-            if ((await paneCount(page)) !== 1) return null;
-            const only = (await readPanes(page))[0];
-            if (only.tabs[0] !== SECOND_FILE) return null;
-            const box = await paneBox(page, only.paneId);
-            const plane = await page.locator('[data-slot="pair-plane"]').boundingBox();
-            return plane !== null &&
-              Math.abs(box.width - plane.width) < 2 &&
-              only.label === null &&
-              (await readGroups(page)).every((group) => !group.active)
-              ? box
+            const seen = await readPanes(page);
+            return seen.length === 2 &&
+              JSON.stringify(seen[1]?.tabs) === JSON.stringify([terminal, SECOND_FILE]) &&
+              seen[1]?.front === SECOND_FILE
+              ? seen
               : null;
           },
           { timeout: 8000 },
+        ).catch(() => null);
+        // Back to the terminal through its pane's own strip: the same screen.
+        await (await draggableTab(page, terminal)).click();
+        await waitUntil(
+          "the terminal in front again",
+          async () => (await readPanes(page))[1]?.front === terminal,
+          { timeout: 4000 },
         );
-        // Return through BOTH members: selection is a pair, focus is a member.
-        let restored = true;
-        for (const [index, label] of labels.entries()) {
-          await page.getByRole("tab", { name: label, exact: true }).first().click();
-          await waitUntil(
-            "the original pair and member focus to return",
-            async () => {
-              const seen = await readPanes(page);
-              return (
-                seen.length === 2 &&
-                seen[index]?.focused &&
-                seen.every((pane, i) => pane.paneId === panes[i].paneId)
-              );
-            },
-            { timeout: 6000 },
-          );
-          const boxes = await Promise.all(panes.map((pane) => paneBox(page, pane.paneId)));
-          restored &&= boxes.every(
-            (box, i) =>
-              Math.abs(box.width - originalBoxes[i].width) < 2 &&
-              Math.abs(box.height - originalBoxes[i].height) < 2,
-          );
-        }
+        const sameTerminal = await terminalScreen.evaluate(
+          (screen) => screen === window.volliSmokeTicketTerminalScreen,
+        );
+
+        // The file dragged from its pane strip up onto the top strip leaves
+        // the group — an ordinary tab again, shown full width.
+        await dragTabTo(page, SECOND_FILE, () => topStripPoint(page));
+        const fullWidth = await waitUntil(
+          "the file to leave the group and fill the plane",
+          async () => {
+            const seen = await readPanes(page);
+            const groups = await readGroups(page);
+            return seen.length === 1 &&
+              seen[0].tabs[0] === SECOND_FILE &&
+              seen[0].label === null &&
+              groups.length === 1 &&
+              !groups[0].active &&
+              !groups[0].tabs.includes(SECOND_FILE)
+              ? seen
+              : null;
+          },
+          { timeout: 8000 },
+        ).catch(() => null);
+        const fullBox = fullWidth === null ? null : await paneBox(page, fullWidth[0].paneId);
+
+        // The chip's terminal segment brings the group back exactly.
+        await topTab(page, terminal).click();
+        await waitUntil(
+          "the group, its panes and its focus to return",
+          async () => {
+            const seen = await readPanes(page);
+            return (
+              seen.length === 2 &&
+              seen[1]?.focused &&
+              seen.every((pane, i) => pane.paneId === panes[i].paneId)
+            );
+          },
+          { timeout: 6000 },
+        );
+        const boxes = await Promise.all(panes.map((pane) => paneBox(page, pane.paneId)));
+        const restored = boxes.every(
+          (box, i) =>
+            Math.abs(box.width - originalBoxes[i].width) < 2 &&
+            Math.abs(box.height - originalBoxes[i].height) < 2,
+        );
         return {
           ok:
+            stacked !== null &&
+            sameTerminal &&
+            fullWidth !== null &&
+            fullBox !== null &&
+            fullBox.width > originalBoxes[0].width &&
             restored &&
-            terminalAnchor === 1 &&
             (await terminalScreen.evaluate(
               (screen) => screen === window.volliSmokeTicketTerminalScreen,
             )) &&
-            fullWidth.width > originalBoxes[0].width &&
-            labels[0] !== labels[1] &&
-            panes[1].focused &&
-            (await readGroups(page))[0]?.id === groups[0].id &&
-            (await hasOneAreaStrip(page)),
-          detail: `groups=${JSON.stringify(groups)} restored=${restored} fullWidth=${fullWidth.width}`,
+            (await readGroups(page))[0]?.id === groupId &&
+            (await hasOneTopStrip(page)),
+          detail: `stacked=${JSON.stringify(stacked)} fullWidth=${JSON.stringify(fullWidth)} restored=${restored} same=${sameTerminal}`,
         };
       },
     );
 
-    // ---- 5. Dragging a tab onto a pane's right edge splits it ---------------
-    //
-    // Unpair first, leaving both tabs open. A content-edge drop then creates
-    // a fresh pair rather than silently reusing the already-identical pair.
+    // ---- 5. A content-edge drop adds a third pane ---------------------------
     await attempt(
       5,
-      "a tab dragged to a pane's right edge lights that zone and splits it open",
+      "a tab dragged to a pane's right edge lights that zone and adds a third pane",
       async () => {
-        const panes = await readPanes(page);
-        const sessionTab = panes[1]?.tabs[0];
-        if (sessionTab === undefined) return { ok: false, detail: "no session tab to drag" };
-        await page.getByRole("button", { name: "Unpair tabs", exact: true }).click();
-        await waitUntil(
-          "unpair before the content-edge drop",
-          async () => (await paneCount(page)) === 1,
-        );
-        // Unpair retains the focused member. Select its former partner as
-        // the content-edge target before carrying the terminal beside it.
-        await page.getByRole("tab", { name: panes[0].tabs[0], exact: true }).first().click();
-        const primaryId = (await readPanes(page))[0].paneId;
+        const before = await readPanes(page);
+        const groupId = (await readGroups(page))[0]?.id;
+        const primaryId = before[0].paneId;
         const primary = await paneBox(page, primaryId);
-        // Deep into the primary pane's right band, vertically centred.
+        // Deep into the Body pane's right band, vertically centred.
         const target = { x: primary.x + primary.width - 24, y: primary.y + primary.height / 2 };
-        await dragTabTo(page, sessionTab, target, { drop: false });
+        await dragTabTo(page, SECOND_FILE, target, { drop: false });
         const lit = await waitUntil(
-          "the primary pane's right zone to light up",
+          "the Body pane's right zone to light up",
           async () => {
             const zones = await readActiveZones(page);
             return zones.length > 0 ? zones : null;
@@ -529,147 +632,135 @@ async function main() {
           "the tab to land in a pane the drop opened",
           async () => {
             const seen = await readPanes(page);
-            const landed = seen.find((pane) => pane.tabs.includes(sessionTab));
-            return landed !== undefined && landed.paneId !== panes[1].paneId ? seen : null;
+            return seen.length === 3 ? seen : null;
           },
           { timeout: 6000 },
         ).catch(() => readPanes(page));
+        const groups = await readGroups(page);
         return {
           ok:
             lit.length === 1 &&
             lit[0]?.zone === "right" &&
             lit[0]?.paneId === primaryId &&
-            after.length === 2 &&
+            after.length === 3 &&
             after[0]?.paneId === primaryId &&
-            (await readGroups(page)).length === 1 &&
-            (await hasOneAreaStrip(page)) &&
-            // The dropped tab is the one you meant to look at: its pane is focused.
             after[1]?.focused === true &&
-            after[1]?.paneId !== panes[1].paneId &&
-            after[1]?.tabs.includes(sessionTab),
-          detail: `lit=${JSON.stringify(lit)} panes=${JSON.stringify(
-            after.map((pane) => ({ id: pane.paneId, focused: pane.focused, tabs: pane.tabs })),
-          )}`,
+            JSON.stringify(after[1]?.tabs) === JSON.stringify([SECOND_FILE]) &&
+            after[2]?.paneId === before[1].paneId &&
+            after[2]?.label === "Pane 3 of 3" &&
+            groups.length === 1 &&
+            groups[0].id === groupId &&
+            groups[0].tabs.length === 3 &&
+            (await hasOneTopStrip(page)),
+          detail: `lit=${JSON.stringify(lit)} panes=${JSON.stringify(after)} groups=${JSON.stringify(groups)}`,
         };
       },
     );
 
-    // ---- 6. Max two; a fresh lower partner can still be closed ---------------
+    // ---- 6. A fourth pane, and Close pane on it -------------------------------
     await attempt(
       6,
-      "⇧⌘\\ cannot add pane three; an unpaired tab's lower partner can be closed",
+      "⇧⌘\\ splits the focused pane again; Close pane on the empty one closes no tab",
       async () => {
         const before = await readPanes(page);
-        const pair = await readGroups(page);
-        await page.keyboard.press("Shift+Meta+\\");
-        // A refused split has no positive UI event; cross a render boundary
-        // before reading the unchanged pair rather than sleeping for a guess.
-        await page.evaluate(
-          () =>
-            new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
-        );
-        const atCapacity = await readPanes(page);
-        const capped =
-          atCapacity.length === 2 &&
-          atCapacity.every((pane, i) => pane.paneId === before[i].paneId) &&
-          (await readGroups(page))[0]?.id === pair[0]?.id;
-        await page.getByRole("button", { name: "Unpair tabs", exact: true }).click();
-        await waitUntil(
-          "one plane before the fresh lower partner",
-          async () => (await paneCount(page)) === 1,
-        );
-        await page.getByRole("tab", { name: before[1].tabs[0], exact: true }).first().click();
         const strip = await readSurfaceStrip(page);
         await page.keyboard.press("Shift+Meta+\\");
         await waitUntil(
-          "focus in the temporary partner",
+          "focus in the new empty pane",
           async () => (await readFocus(page)).slot === "pane-empty-row",
           { timeout: 4000 },
         );
         const opened = await readPanes(page);
-        const boxes = await Promise.all(opened.map((pane) => paneBox(page, pane.paneId)));
-        const bounded =
-          opened.length === 2 &&
-          opened[1]?.empty &&
-          opened[1]?.focused &&
-          opened[0]?.tabs[0] === before[1]?.tabs[0] &&
+        const lower = opened.find((pane) => pane.empty);
+        const above = opened.find((pane) => pane.paneId === before[1].paneId);
+        const boxes =
+          lower === undefined || above === undefined
+            ? null
+            : [await paneBox(page, above.paneId), await paneBox(page, lower.paneId)];
+        const grew =
+          opened.length === 4 &&
+          lower?.focused === true &&
+          boxes !== null &&
           boxes[1].y > boxes[0].y &&
           Math.abs(boxes[0].x - boxes[1].x) < 2;
         let closed = null;
         for (let tries = 0; tries < 3 && closed === null; tries += 1) {
           await paneMenuRow(page, "Close pane").click({ timeout: 8000 });
           closed = await waitUntil(
-            "the temporary pair to collapse",
+            "the empty pane to close",
             async () => {
               const seen = await readPanes(page);
-              return seen.length === 1 ? seen : null;
+              return seen.length === 3 ? seen : null;
             },
             { timeout: 2500 },
           ).catch(() => null);
         }
         return {
           ok:
-            capped &&
-            bounded &&
+            grew &&
             closed !== null &&
-            closed[0].label === null &&
-            (await readGroups(page)).length === 0 &&
+            closed.every((pane, i) => pane.paneId === before[i].paneId) &&
             JSON.stringify(await readSurfaceStrip(page)) === JSON.stringify(strip) &&
-            (await hasOneAreaStrip(page)),
-          detail: `capped=${capped} opened=${JSON.stringify(opened)} closed=${JSON.stringify(closed)}`,
+            (await hasOneTopStrip(page)),
+          detail: `opened=${JSON.stringify(opened)} closed=${JSON.stringify(closed)}`,
         };
       },
     );
 
-    // ---- 7. Closing a member dissolves the pair, not the surviving tab ------
+    // ---- 7. A centre drop moves a tab into that pane's stack -----------------
     await attempt(
       7,
-      "closing a paired tab returns to one unnamed plane and preserves its partner",
+      "a centre drop stacks the tab in that pane, and the pane it left collapses",
       async () => {
         const before = await readPanes(page);
-        const terminal = before[0]?.tabs[0];
-        const body = (await readSurfaceStrip(page))[0];
-        if (!terminal || !body || terminal === body)
-          return { ok: false, detail: "no terminal to pair" };
-        const preview = await pairAtTabEdge(page, terminal, body, "right");
-        const pair = await readGroups(page);
-        await page
-          .getByRole("tab", { name: terminal, exact: true })
-          .first()
-          .getByTestId("tab-close")
-          .click();
-        // A shell at its prompt closes directly; a foreground process may ask.
-        await waitUntil(
-          "terminal close or confirmation",
-          async () =>
-            (await page.getByRole("tab", { name: terminal, exact: true }).count()) === 0 ||
-            (await page.getByRole("button", { name: "Close Anyway" }).count()) > 0,
-          { timeout: 8000 },
+        const primary = await paneBox(page, before[0].paneId);
+        await dragTabTo(
+          page,
+          SECOND_FILE,
+          {
+            x: Math.round(primary.x + primary.width / 2),
+            y: Math.round(primary.y + primary.height / 2),
+          },
+          { drop: false },
         );
-        const confirm = page.getByRole("button", { name: "Close Anyway" });
-        if ((await confirm.count()) > 0) await confirm.click();
-        await waitUntil(
-          "terminal gone and pair collapsed",
-          async () =>
-            (await paneCount(page)) === 1 &&
-            (await page.getByRole("tab", { name: terminal, exact: true }).count()) === 0,
-          { timeout: 8000 },
-        );
-        const panes = await readPanes(page);
+        let centre = null;
+        try {
+          centre = await waitUntil(
+            "centre zone feedback",
+            async () =>
+              (await readActiveZones(page)).find(
+                (zone) => zone.zone === "center" && zone.paneId === before[0].paneId,
+              ),
+            { timeout: 4000 },
+          ).catch(() => null);
+        } finally {
+          await page.mouse.up();
+        }
+        const after = await waitUntil(
+          "the file to join the Body's stack",
+          async () => {
+            const seen = await readPanes(page);
+            return seen.length === 2 &&
+              JSON.stringify(seen[0]?.tabs) === JSON.stringify([displayId, SECOND_FILE])
+              ? seen
+              : null;
+          },
+          { timeout: 6000 },
+        ).catch(() => readPanes(page));
         return {
           ok:
-            preview &&
-            pair.length === 1 &&
-            pair[0].tabs.length === 2 &&
-            panes[0]?.label === null &&
-            !panes[0]?.focused &&
-            (await readGroups(page)).length === 0 &&
-            (await readSurfaceStrip(page)).includes(body) &&
-            (await hasOneAreaStrip(page)),
-          detail: `paired=${JSON.stringify(pair)} panes=${JSON.stringify(panes)}`,
+            centre != null &&
+            after.length === 2 &&
+            after[0]?.front === SECOND_FILE &&
+            after[0]?.focused === true &&
+            after[1]?.paneId === before[2]?.paneId &&
+            (await readSurfaceStrip(page)).length === 2 &&
+            (await hasOneTopStrip(page)),
+          detail: `centre=${JSON.stringify(centre)} panes=${JSON.stringify(after)}`,
         };
       },
     );
+
     // ---- 8. A rail row drags onto the plane ---------------------------------
     //
     // The native transport, which Playwright's mouse cannot drive: Chromium
@@ -679,7 +770,7 @@ async function main() {
     // and the drop reads it back exactly as a hand-dragged one would.
     await attempt(
       8,
-      "a file row dragged from the rail opens a split, with no tab first",
+      "a file row dragged from the rail onto a pane's right edge opens it in a new pane",
       async () => {
         const aside = page.locator("aside");
         await aside.getByTestId("ticket-rail-tab-files").click();
@@ -693,8 +784,8 @@ async function main() {
         });
 
         const panes = await readPanes(page);
-        const box = await paneBox(page, panes[0].paneId);
-        // Deep into the primary pane's right band.
+        const box = await paneBox(page, panes[1].paneId);
+        // Deep into the terminal pane's right band.
         const point = {
           x: Math.round(box.x + box.width - 24),
           y: Math.round(box.y + box.height / 2),
@@ -772,7 +863,7 @@ async function main() {
           "the file to open in a pane of its own",
           async () => {
             const seen = await readPanes(page);
-            return seen.length === 2 && seen[1]?.tabs.some((tab) => tab.includes(DRAGGED_FILE))
+            return seen.length === 3 && seen[2]?.tabs.some((tab) => tab.includes(DRAGGED_FILE))
               ? seen
               : null;
           },
@@ -783,96 +874,108 @@ async function main() {
           ok:
             started.types?.includes("application/x-volli-file") === true &&
             zone?.zone === "right" &&
-            zone?.paneId === panes[0].paneId &&
-            after.length === 2 &&
-            after[1]?.focused === true &&
-            after[1].tabs.some((tab) => tab.includes(DRAGGED_FILE)) &&
+            zone?.paneId === panes[1].paneId &&
+            after.length === 3 &&
+            after[2]?.focused === true &&
+            after[2].tabs.some((tab) => tab.includes(DRAGGED_FILE)) &&
+            // Opened from a pane, the file never ALSO stays in the pane that
+            // had focus when it opened.
+            !after[0].tabs.some((tab) => tab.includes(DRAGGED_FILE)) &&
             (await readGroups(page)).length === 1 &&
-            (await hasOneAreaStrip(page)),
+            (await hasOneTopStrip(page)),
           detail: `types=${JSON.stringify(started.types)} zone=${JSON.stringify(zone)} panes=${JSON.stringify(
             after.map((pane) => pane.tabs),
           )}`,
         };
       },
     );
-    // ---- 9. Centre drop unpairs; explicit unpair and both tab edges ----------
+
+    // ---- 9. The chip's menu, Ungroup, and both top-strip tab edges -----------
     await attempt(
       9,
-      "centre drops unpair without closing; explicit unpair and both tab edges work",
+      "the chip menu lists and ungroups the group; left and right tab edges group in order; closing a tab of two dissolves",
       async () => {
+        const groupId = (await readGroups(page))[0]?.id;
         const panes = await readPanes(page);
-        const beforeStrip = await readSurfaceStrip(page);
-        const tab = panes[1]?.tabs[0];
-        const partner = panes[0]?.tabs[0];
-        if (!tab || !partner) return { ok: false, detail: "no pair for centre drop" };
-        const primary = await paneBox(page, panes[0].paneId);
-        await dragTabTo(
-          page,
-          tab,
-          {
-            x: Math.round(primary.x + primary.width / 2),
-            y: Math.round(primary.y + primary.height / 2),
+        const terminal = panes[1]?.tabs[0];
+        if (!groupId || !terminal) return { ok: false, detail: "no group to ungroup" };
+        const menu = await readChipMenu(page, groupId);
+        const listed =
+          JSON.stringify(menu.map((row) => row.label)) ===
+            JSON.stringify(panes.flatMap((pane) => pane.tabs)) &&
+          menu.filter((row) => row.checked).length === panes.length;
+        await chipMenu(page, groupId, "Ungroup");
+        const ungrouped = await waitUntil(
+          "Ungroup to leave one plane and every tab open",
+          async () => {
+            const strip = await readSurfaceStrip(page);
+            return (await paneCount(page)) === 1 &&
+              (await readGroups(page)).length === 0 &&
+              [displayId, terminal, SECOND_FILE].every((tab) => strip.includes(tab)) &&
+              strip.some((tab) => tab.includes(DRAGGED_FILE))
+              ? strip
+              : null;
           },
-          { drop: false },
-        );
-        let centre = null;
-        try {
-          centre = await waitUntil(
-            "centre zone feedback",
-            async () =>
-              (await readActiveZones(page)).find(
-                (zone) => zone.zone === "center" && zone.paneId === panes[0].paneId,
-              ),
-            { timeout: 4000 },
-          ).catch(() => null);
-        } finally {
-          await page.mouse.up();
-        }
-        await waitUntil(
-          "centre drop to collapse the pair",
-          async () => (await paneCount(page)) === 1 && (await readGroups(page)).length === 0,
           { timeout: 6000 },
-        );
-        const after = await readPanes(page);
-        const strip = await readSurfaceStrip(page);
-        const collapsed =
-          after[0].label === null &&
-          !after[0].focused &&
-          JSON.stringify(strip.toSorted()) === JSON.stringify(beforeStrip.toSorted());
+        ).catch(() => null);
+
         let edges = true;
+        const previews = [];
         for (const edge of ["left", "right"]) {
-          const preview = await pairAtTabEdge(page, tab, partner, edge);
-          const expected = edge === "left" ? [tab, partner] : [partner, tab];
-          const paired = await readGroups(page);
+          const preview = await groupAtTabEdge(page, terminal, displayId, edge);
+          previews.push(preview);
+          const expected = edge === "left" ? [terminal, displayId] : [displayId, terminal];
+          const grouped = await readGroups(page);
           const cells = await readPanes(page);
           const boxes = await Promise.all(cells.map((pane) => paneBox(page, pane.paneId)));
           edges &&=
             preview &&
             cells.length === 2 &&
-            paired.length === 1 &&
-            JSON.stringify(paired[0].tabs) === JSON.stringify(expected) &&
+            grouped.length === 1 &&
+            JSON.stringify(grouped[0].tabs) === JSON.stringify(expected) &&
             boxes[1].x > boxes[0].x &&
             Math.abs(boxes[1].y - boxes[0].y) < 2 &&
             cells.filter((cell) => cell.focused).length === 1 &&
-            (await hasOneAreaStrip(page));
-          await page.getByRole("button", { name: "Unpair tabs", exact: true }).click();
-          await waitUntil(
-            "explicit unpair to collapse",
-            async () => (await paneCount(page)) === 1 && (await readGroups(page)).length === 0,
-          );
-          edges &&=
-            JSON.stringify(await readSurfaceStrip(page)) === JSON.stringify(strip) &&
-            (await readPanes(page))[0].label === null;
+            cells.find((cell) => cell.focused)?.tabs[0] === terminal &&
+            (await hasOneTopStrip(page));
+          if (edge === "left") {
+            await chipMenu(page, grouped[0].id, "Ungroup");
+            await waitUntil(
+              "Ungroup to collapse",
+              async () => (await paneCount(page)) === 1 && (await readGroups(page)).length === 0,
+            );
+          }
         }
+
+        // Closing one tab of a group of two dissolves it and keeps the other.
+        await (await draggableTab(page, terminal)).getByTestId("tab-close").click();
+        await waitUntil(
+          "terminal close or confirmation",
+          async () =>
+            (await page.getByRole("tab", { name: terminal, exact: true }).count()) === 0 ||
+            (await page.getByRole("button", { name: "Close Anyway" }).count()) > 0,
+          { timeout: 8000 },
+        );
+        const confirm = page.getByRole("button", { name: "Close Anyway" });
+        if ((await confirm.count()) > 0) await confirm.click();
+        const dissolved = await waitUntil(
+          "terminal gone and group dissolved",
+          async () =>
+            (await paneCount(page)) === 1 &&
+            (await readGroups(page)).length === 0 &&
+            (await page.getByRole("tab", { name: terminal, exact: true }).count()) === 0 &&
+            (await readSurfaceStrip(page)).includes(displayId),
+          { timeout: 8000 },
+        ).catch(() => false);
         return {
-          ok: centre !== null && collapsed && edges && (await hasOneAreaStrip(page)),
-          detail: `centre=${JSON.stringify(centre)} collapsed=${collapsed} edges=${edges} strip=${JSON.stringify(strip)}`,
+          ok: listed && ungrouped !== null && edges && dissolved && (await hasOneTopStrip(page)),
+          detail: `menu=${JSON.stringify(menu)} ungrouped=${JSON.stringify(ungrouped)} previews=${JSON.stringify(previews)} edges=${edges} dissolved=${dissolved}`,
         };
       },
     );
 
     // ---- 10. A within-strip reorder still means what it meant ---------------
-    await attempt(10, "a drag inside one strip reorders it, exactly as before panes", async () => {
+    await attempt(10, "a drag inside the top strip reorders it, exactly as before", async () => {
       const aside = page.locator("aside");
       // Pin both files so neither can replace the other as a preview.
       await aside.locator(FILE_ROW).dblclick();
@@ -892,12 +995,9 @@ async function main() {
       const trailing = leading === DRAGGED_FILE ? SECOND_FILE : DRAGGED_FILE;
       const expected = [...before];
       [expected[before.indexOf(leading)], expected[before.indexOf(trailing)]] = [trailing, leading];
-      const target = await page
-        .getByRole("tab", { name: leading, exact: true })
-        .first()
-        .boundingBox();
+      const target = await topTab(page, leading).boundingBox();
       if (target === null) return { ok: false, detail: "no box for the leading tab" };
-      // Drag the trailing tab onto the leading one: the pair swaps.
+      // Drag the trailing tab onto the leading one: the two swap.
       await dragTabTo(page, trailing, {
         x: Math.round(target.x + target.width / 2),
         y: Math.round(target.y + target.height / 2),
@@ -914,17 +1014,16 @@ async function main() {
         ok:
           JSON.stringify(after) === JSON.stringify(expected) &&
           (await readGroups(page)).length === 0 &&
-          (await hasOneAreaStrip(page)),
+          (await hasOneTopStrip(page)),
         detail: `before=${JSON.stringify(before)} after=${JSON.stringify(after)}`,
       };
     });
     // ---- 11. The other surface ---------------------------------------------
     //
-    // Home splits through the same grid, the same store twins and the same
+    // Home groups through the same grid, the same store twins and the same
     // chord, so this is a WIRING check rather than a second feature: the chord
-    // has to resolve Home when Home is what is in front, and Home's plane has
-    // to be the thing that splits.
-    await attempt(11, "⌘\\ splits HOME too, once Home is the surface in front", async () => {
+    // has to resolve Home when Home is what is in front.
+    await attempt(11, "⌘\\ groups on HOME too, once Home is the surface in front", async () => {
       await page.keyboard.press("Escape");
       await waitUntil("the board", async () => (await cardById(page, displayId).count()) === 1, {
         timeout: 6000,
@@ -943,12 +1042,12 @@ async function main() {
           panes.length === 2 &&
           panes[1]?.focused === true &&
           panes[1]?.empty === true &&
-          // The Board rides in the primary pane, which is why it is not empty.
+          // The Board rides in the group's first pane, under its own strip.
           panes[0]?.empty === false &&
-          (await hasOneAreaStrip(page, "Home tabs")),
-        detail: JSON.stringify(
-          panes.map((pane) => ({ label: pane.label, empty: pane.empty, focused: pane.focused })),
-        ),
+          JSON.stringify(panes[0]?.tabs) === JSON.stringify(["Board"]) &&
+          (await readGroups(page)).length === 1 &&
+          (await hasOneTopStrip(page, "Home tabs")),
+        detail: JSON.stringify(panes),
       };
     });
 
@@ -961,10 +1060,10 @@ async function main() {
     // rail and every surface chord keep reading the OTHER pane while you type
     // in this one — for exactly the tab kind this product centres on.
     await attempt(12, "clicking a live terminal's canvas focuses the pane under it", async () => {
-      // Check 11 left Home split with an empty, focused second pane. Wait for
-      // the split to SETTLE (the keyboard split's own focus handoff — check
-      // 6's discipline), then boot a terminal into it. Retrying the row click
-      // retains the existing loaded-machine input-delivery tolerance.
+      // Check 11 left Home grouped with an empty, focused second pane. Wait for
+      // the split to SETTLE (the keyboard split's own focus handoff), then boot
+      // a terminal into it. Retrying the row click retains the existing
+      // loaded-machine input-delivery tolerance.
       await waitUntil(
         "focus to land in Home's new pane",
         async () => (await readFocus(page)).slot === "pane-empty-row",
@@ -992,11 +1091,11 @@ async function main() {
       await screen.evaluate((node) => {
         window.volliSmokeHomeTerminalScreen = node;
       });
-      // Board is a MEMBER now: selecting it focuses the first pane, but must
-      // leave the second member's live terminal visible in the same pair.
-      await page.getByRole("tab", { name: "Board", exact: true }).first().click();
+      // The Board is a group tab: selecting it focuses the first pane, and
+      // must leave the second pane's live terminal visible in the same group.
+      await topTab(page, "Board").click();
       const primaryTookFocus = await waitUntil(
-        "the primary pane to take focus from its tab",
+        "the Board's pane to take focus from its tab",
         async () => {
           const seen = await readPanes(page);
           return seen.length === 2 && seen[0]?.focused === true;
@@ -1004,7 +1103,7 @@ async function main() {
         { timeout: 4000 },
       ).catch(() => false);
       if (primaryTookFocus === false) {
-        return { ok: false, detail: "primary pane never took focus from its Board tab" };
+        return { ok: false, detail: "the Board's pane never took focus from its tab" };
       }
       // Now click INSIDE the second pane's content — the terminal's canvas,
       // which is the viewport box overlaid on that pane's anchor.
@@ -1039,10 +1138,51 @@ async function main() {
           groups[0].tabs.length === 2 &&
           (await readGroups(page))[0]?.id === groups[0].id &&
           (await screen.evaluate((node) => node === window.volliSmokeHomeTerminalScreen)) &&
-          (await hasOneAreaStrip(page, "Home tabs")),
-        detail: JSON.stringify(
-          after.map((pane) => ({ id: pane.paneId, focused: pane.focused, tabs: pane.tabs })),
-        ),
+          (await hasOneTopStrip(page, "Home tabs")),
+        detail: JSON.stringify(after),
+      };
+    });
+
+    // ---- 13. A new chat OPENS into the focused pane --------------------------
+    //
+    // The owner's report this whole change answers: with a group on screen a
+    // new chat used to become a full-width tab of its own, hiding the group.
+    await attempt(13, "⌘T opens the new chat into the focused pane's stack", async () => {
+      const before = await readPanes(page);
+      const groupId = (await readGroups(page))[0]?.id;
+      const terminal = before[1]?.tabs[0];
+      if (before.length !== 2 || !groupId || !terminal) {
+        return { ok: false, detail: `no Home group to open into: ${JSON.stringify(before)}` };
+      }
+      // Keyboard on the terminal's own strip tab: the second pane is focused,
+      // and the chord is not swallowed by a canvas.
+      await (await draggableTab(page, terminal)).click();
+      await page.keyboard.press("Meta+t");
+      const after = await waitUntil(
+        "the chat to stack in front of the terminal",
+        async () => {
+          const seen = await readPanes(page);
+          return seen.length === 2 &&
+            seen[1]?.tabs.length === 2 &&
+            seen[1]?.tabs[0] === terminal &&
+            seen[1]?.front === "Chat"
+            ? seen
+            : null;
+        },
+        { timeout: 8000 },
+      ).catch(() => readPanes(page));
+      const groups = await readGroups(page);
+      return {
+        ok:
+          after.length === 2 &&
+          after[1]?.focused === true &&
+          after[1]?.front === "Chat" &&
+          groups.length === 1 &&
+          groups[0].id === groupId &&
+          groups[0].active &&
+          JSON.stringify(groups[0].tabs) === JSON.stringify(["Board", "Chat"]) &&
+          (await hasOneTopStrip(page, "Home tabs")),
+        detail: `panes=${JSON.stringify(after)} groups=${JSON.stringify(groups)}`,
       };
     });
   } finally {

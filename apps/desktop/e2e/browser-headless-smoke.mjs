@@ -1,7 +1,7 @@
 /**
  * Acceptance smoke for headless agent Browser Tabs (VC-238, driven from the
  * Activity Island since VC-268), against the BUILT app:
- * headless → open beside chat → close/Undo → show existing pair → close.
+ * headless → open beside chat → close/Undo → show and group → close.
  *
  * A Session-owned tab is born headless — in no strip, attached to no window —
  * and the only place a person sees it is the chat that owns it: the island
@@ -13,12 +13,14 @@
  *
  *   1. the island's tabs cluster counts it, it is in NO strip, and no native
  *      view is attached;
- *   2. Open beside chat reveals a grouped chat/browser pair, never a miniature
- *      preview; the person's tab remains available in the area strip;
+ *   2. Open beside chat opens it in the chat's tab group, the chat's pane split
+ *      with the browser on its right (VC-614) — never a miniature preview; the
+ *      person's tab stays where it was in the same group;
  *   3. Close hides it without changing its page or owner, and Undo restores it;
- *   4. Show tab focuses the existing pair. An explicit browser/browser pair
- *      attaches both native views together, then the chat's row restores its
- *      own pair. The compatibility hide bridge still preserves agent state;
+ *   4. Show tab SELECTS it — full width while it is ordinary, never pulled into
+ *      a group. A tab-edge drop onto the person's tab groups the two browsers,
+ *      attaching both native views together, and Show tab then shows that
+ *      group. The compatibility hide bridge still preserves agent state;
  *   5. Close removes the row immediately, destroys the tab after five seconds,
  *      and leaves the other Session's tab and the person's tab alone.
  *
@@ -70,14 +72,20 @@ async function startFixtureServer() {
   };
 }
 
-// One area strip holds both ordinary tabs and grouped pair members.
-const browserStripTabs = (page) => page.getByTestId("home-browser-tab");
-/** Tabs live in the area strip, not inside pair panes. Identity survives auto-title and SessionGlyph names. */
+// The TOP strip holds ordinary tabs and one chip per group, whose segments are
+// each pane's front tab; a shown group's panes also draw strips of their own,
+// so every probe here is scoped to the top strip.
+const browserStripTabs = (page) => tabStrip(page, HOME_TAB_STRIP).getByTestId("home-browser-tab");
+/** A chat's top-strip tab. Identity survives auto-title and SessionGlyph names. */
 const chatStripTab = (page, sessionId) =>
   tabStrip(page, HOME_TAB_STRIP)
     .locator(`[data-pair-target-id="chat:${sessionId}"]`)
     .getByRole("tab");
-const activePair = (page) => page.locator('[data-slot="grouped-tab-chip"][data-active="true"]');
+const activeGroup = (page) =>
+  tabStrip(page, HOME_TAB_STRIP).locator('[data-slot="grouped-tab-chip"][data-active="true"]');
+/** How many shown panes draw a strip of their own. */
+const paneStrips = (page) =>
+  page.locator('[data-slot="split-view-pane"] > [data-slot="tab-strip"]').count();
 const island = (page) => page.locator("[data-activity-island]");
 const tabsCluster = (page) => page.locator('[data-island-cluster="tabs"]');
 const tabsCount = (page) => tabsCluster(page).locator("[data-island-count]");
@@ -149,8 +157,40 @@ async function closeFromCard(page, tabId) {
   await page.keyboard.press("Escape");
 }
 
-/** Exercise the real tab-edge pairing gesture; no store or layout injection. */
-async function pairBrowsers(page, agentTab, personTab) {
+/** The agent browser's tab in its group pane's own strip. */
+const agentPaneTab = (page) =>
+  page
+    .locator('[data-slot="split-view-pane"] > [data-slot="tab-strip"]')
+    .getByTestId("home-browser-tab")
+    .filter({ has: page.locator('[data-browser-tab-mark="session"]') })
+    .first();
+
+/** Drag a pane strip's tab up onto the top strip, past its tabs: it leaves its group. */
+async function ungroupByDrag(page, paneTab) {
+  await paneTab.scrollIntoViewIfNeeded();
+  const from = await paneTab.boundingBox();
+  const bar = await page.locator('[data-slot="split-view-tab-bar"]').first().boundingBox();
+  if (from === null || bar === null) throw new Error("no bounds to drag a tab out of its group");
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  try {
+    await page.mouse.move(from.x + from.width / 2 + 12, from.y + from.height / 2 + 12, {
+      steps: 4,
+    });
+    await page.mouse.move(bar.x + bar.width * 0.6, bar.y + bar.height / 2, { steps: 12 });
+    await page.mouse.move(bar.x + bar.width * 0.6, bar.y + bar.height / 2, { steps: 2 });
+  } finally {
+    await page.mouse.up();
+  }
+  await waitUntil(
+    "the dragged tab to leave its group",
+    async () => (await page.locator('[data-slot="split-view-pane"][data-pane-id]').count()) === 1,
+    { timeout: 6000 },
+  );
+}
+
+/** Exercise the real top-strip tab-edge grouping gesture; no store or layout injection. */
+async function groupBrowsers(page, agentTab, personTab) {
   await agentTab.scrollIntoViewIfNeeded();
   const from = await agentTab.boundingBox();
   if (from === null) throw new Error("browser source tab has no bounds");
@@ -167,9 +207,9 @@ async function pairBrowsers(page, agentTab, personTab) {
       const box = tab.closest("[data-pair-target-id]")?.getBoundingClientRect();
       return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null;
     });
-    if (to === null) throw new Error("browser pair target has no bounds");
+    if (to === null) throw new Error("browser group target has no bounds");
     await page.mouse.move(to.x + to.width * 0.9, to.y + to.height / 2, { steps: 12 });
-    await waitUntil("browser tab's right-edge pairing preview", () =>
+    await waitUntil("browser tab's right-edge grouping preview", () =>
       personTab.evaluate(
         (tab) =>
           tab.closest("[data-pair-target-id]")?.getAttribute("data-pair-drop-edge") === "right",
@@ -225,7 +265,7 @@ async function main() {
   await page.waitForLoadState("domcontentloaded");
   assertBuiltRendererLoaded(page);
   // Keep the short-window collision regression: Island controls must remain
-  // reachable with a full browser/chat pair, not just on a developer display.
+  // reachable beside a browser/chat group, not just on a developer display.
   await app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
     window?.setSize(1000, 700);
@@ -254,11 +294,11 @@ async function main() {
     },
   );
 
-  // A second pane with a chat in it. Since VC-358 a New chat is a
+  // A group of the person's tab over a chat. Since VC-358 a New chat is a
   // provisional Draft, not a Session — so Send one message to promote it:
   // promotion mints the durable row (and its id, which is what the agent tab
   // is owned by) before the turn runs, and the turn itself fails on the
-  // placeholder key, which nothing below depends on. The split is what lets
+  // placeholder key, which nothing below depends on. The group is what lets
   // the chat and the person's tab share the screen, which is the
   // multi-attach proof below.
   await page.keyboard.press("Shift+Meta+\\");
@@ -330,8 +370,9 @@ async function main() {
 
   await must(
     2,
-    "Open beside chat reveals the owner/browser pair in the area strip, with no miniature preview",
+    "Open beside chat splits the owning chat's pane in its group, with no miniature preview",
     async () => {
+      const groupId = await activeGroup(page).getAttribute("data-group-id");
       await showBeside(page, agentTabId, "Open beside chat");
       const state = await waitUntil(
         "the browser to attach beside its owning chat",
@@ -340,8 +381,9 @@ async function main() {
           const attached = await attachedViews(app);
           return mine?.presentation === "tab" &&
             attached.includes(agentUrl) &&
-            (await activePair(page).getByRole("tab").count()) === 2 &&
-            (await activePair(page)
+            attached.includes(personUrl) &&
+            (await activeGroup(page).getByRole("tab").count()) === 3 &&
+            (await activeGroup(page)
               .locator(`[data-pair-target-id="chat:${sessionId}"]`)
               .count()) === 1
             ? { mine, attached }
@@ -349,13 +391,34 @@ async function main() {
         },
         { timeout: 20000 },
       );
+      // The chat and the browser beside it share a row: the browser on its right.
+      const beside = await page.evaluate(() => {
+        const cells = Array.from(
+          document.querySelectorAll('[data-slot="split-view-pane"][data-pane-id]'),
+        );
+        const holding = (mark) =>
+          cells.find((cell) =>
+            cell.querySelector(
+              `:scope > [data-slot="tab-strip"] [data-browser-tab-mark="${mark}"]`,
+            ),
+          );
+        const agent = holding("session");
+        const person = holding("user");
+        const chat = cells.find((cell) => cell !== agent && cell !== person);
+        if (!agent || !chat) return false;
+        const a = agent.getBoundingClientRect();
+        const c = chat.getBoundingClientRect();
+        return a.x > c.x && Math.abs(a.y - c.y) < 2;
+      });
       return {
         ok:
           (await preview(page).count()) === 0 &&
           state.mine.ownerSessionId === sessionId &&
+          (await activeGroup(page).getAttribute("data-group-id")) === groupId &&
           (await browserStripTabs(page).count()) === 2 &&
-          (await page.locator('[data-slot="split-view-pane"] [role="tablist"]').count()) === 0,
-        detail: `attached=${JSON.stringify(state.attached)} owner=${state.mine.ownerSessionId} strip=${await browserStripTabs(page).count()}`,
+          (await paneStrips(page)) === 3 &&
+          beside,
+        detail: `attached=${JSON.stringify(state.attached)} owner=${state.mine.ownerSessionId} strip=${await browserStripTabs(page).count()} paneStrips=${await paneStrips(page)} beside=${beside}`,
       };
     },
   );
@@ -396,12 +459,31 @@ async function main() {
 
   await must(
     4,
-    "Show tab reuses its marked pair; explicit browser/browser pairing attaches both planes; hiding keeps ownership",
+    "Show tab selects without grouping; a tab-edge drop groups both browsers; Show tab then shows that group; hiding keeps ownership",
     async () => {
       await chatStripTab(page, sessionId).click();
-      const pairId = await activePair(page).getAttribute("data-pair-id");
+      const groupId = await activeGroup(page).getAttribute("data-group-id");
+      // Close and Undo kept the tab in its pane beside the chat: Show tab shows
+      // that group, with the browser's pane in focus.
       await showBeside(page, agentTabId, "Show tab");
-      const reusedPairId = await activePair(page).getAttribute("data-pair-id");
+      const grouped = await waitUntil(
+        "Show tab to show the browser's group",
+        async () =>
+          (await activeGroup(page).getAttribute("data-group-id")) === groupId &&
+          (await attachedViews(app)).includes(agentUrl),
+      ).catch(() => false);
+      // Dragged from its pane's strip up to the top strip, it leaves the group;
+      // Show tab now SELECTS it full width and never pulls it back in.
+      await ungroupByDrag(page, agentPaneTab(page));
+      await tabStrip(page, HOME_TAB_STRIP).getByRole("tab", { name: "Board", exact: true }).click();
+      await showBeside(page, agentTabId, "Show tab");
+      const selected = await waitUntil(
+        "Show tab to bring the ordinary browser forward full width",
+        async () =>
+          (await activeGroup(page).count()) === 0 &&
+          (await page.locator('[data-slot="split-view-pane"][data-pane-id]').count()) === 1 &&
+          (await attachedViews(app)).includes(agentUrl),
+      ).catch(() => false);
       const marks = await browserStripTabs(page).evaluateAll((tabs) =>
         tabs.map((tab) =>
           tab.querySelector("[data-browser-tab-mark]")?.getAttribute("data-browser-tab-mark"),
@@ -413,25 +495,23 @@ async function main() {
       const personTab = browserStripTabs(page).filter({
         has: page.locator('[data-browser-tab-mark="user"]'),
       });
-      await pairBrowsers(page, agentTab, personTab);
-      const both = await waitUntil("both native browser planes in the explicit pair", async () => {
+      await groupBrowsers(page, agentTab, personTab);
+      const both = await waitUntil("both native browser planes in one group", async () => {
         const attached = await attachedViews(app);
         return attached.includes(agentUrl) &&
           attached.includes(personUrl) &&
-          (await activePair(page).getByTestId("home-browser-tab").count()) === 2
+          (await activeGroup(page).getAttribute("data-group-id")) === groupId &&
+          (await activeGroup(page).getByTestId("home-browser-tab").count()) === 2
           ? attached
           : null;
       });
-      await activePair(page).getByRole("button", { name: "Unpair tabs", exact: true }).click();
-      await chatStripTab(page, sessionId).click();
-      // Show respects an existing pair. Once explicitly unpaired, it pairs the
-      // already-shown browser with its owner again rather than duplicating it.
+      // Away to the board, then Show tab: a grouped tab shows its group.
+      await tabStrip(page, HOME_TAB_STRIP).getByRole("tab", { name: "Board", exact: true }).click();
       await showBeside(page, agentTabId, "Show tab");
-      await waitUntil(
-        "the restored owning pair",
-        async () =>
-          (await activePair(page).locator(`[data-pair-target-id="chat:${sessionId}"]`).count()) ===
-          1,
+      const reusedGroupId = await waitUntil("Show tab to show the browser's group", async () =>
+        activeGroup(page)
+          .getAttribute("data-group-id")
+          .catch(() => null),
       );
       const before = (await hostTabs(app)).find((tab) => tab.tabId === agentTabId);
       // Hide is no longer a miniature-preview control. Retain its compatibility
@@ -451,14 +531,16 @@ async function main() {
       });
       return {
         ok:
-          pairId !== null &&
-          pairId === reusedPairId &&
+          grouped !== false &&
+          selected !== false &&
+          groupId !== null &&
+          groupId === reusedGroupId &&
           marks.toSorted().join(",") === "session,user" &&
           mine.ownerSessionId === sessionId &&
           mine.generation === before.generation &&
           mine.url === before.url &&
           (await preview(page).count()) === 0,
-        detail: `marks=${JSON.stringify(marks)} reusedPair=${pairId === reusedPairId} both=${JSON.stringify(both)} presentation=${mine.presentation}`,
+        detail: `grouped=${grouped} selected=${selected} marks=${JSON.stringify(marks)} reusedGroup=${groupId === reusedGroupId} both=${JSON.stringify(both)} presentation=${mine.presentation}`,
       };
     },
   );
