@@ -60,8 +60,14 @@ const shouldLaunchElectronAfterPack = process.env.VOLLI_DESKTOP_DEV === "1" && i
 // is ESM-only, exporting no `require` condition, so the `require()` main.cjs
 // would be left with fails at boot. `verify-packed-requires.mjs` fails the
 // build if a chunk ever requires it.
+//
+// The Convex client (VC-895) is bundled too: main loads `convex/browser` and
+// `convex/server` only in a Volli Cloud launch, for this Mac's runner
+// connection, and inlined they add nothing the packaged app must ship.
 const bundleWorkspacePackages = (id: string): boolean =>
   id.startsWith("@volli/") ||
+  id === "convex" ||
+  id.startsWith("convex/") ||
   id.startsWith("@opentelemetry/") ||
   id.startsWith("@earendil-works/pi-mcp") ||
   id === "@earendil-works/pi-codemode" ||
