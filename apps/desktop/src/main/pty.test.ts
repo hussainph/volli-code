@@ -33,6 +33,7 @@ const {
   ensureWorktree,
   onWorktreePhase,
   userDataPathRef,
+  worktreeHomeRef,
 } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
   listeners: new Map<string, (...args: never[]) => unknown>(),
@@ -49,6 +50,9 @@ const {
   // `app.getPath("userData")`; mutable so beforeAll can point it at a real
   // temp dir once one exists.
   userDataPathRef: { current: "/volli-test-userdata" },
+  // The `~` the worktree deps resolve — where a worktree's pending setup
+  // marker lives. A real temp dir, so the claim never touches a real home.
+  worktreeHomeRef: { current: "/volli-test-home" },
 }));
 
 vi.mock("electron", () => ({
@@ -92,13 +96,22 @@ vi.mock("../../../../packages/host-core/src/worktree/index", async (importOrigin
   return { ...actual, ensure: ensureWorktree };
 });
 vi.mock("./worktree-host", () => ({
-  worktreeDeps: (db: unknown) => ({ db, git: () => "", onPhase: onWorktreePhase }),
+  worktreeDeps: (db: unknown) => ({
+    db,
+    git: () => "",
+    onPhase: onWorktreePhase,
+    home: worktreeHomeRef.current,
+  }),
 }));
 vi.mock("../../../../packages/host-core/src/worktree-runtime", () => ({
   worktreesHome: () => "/volli-test-worktrees",
 }));
 
 import { confirmDestructiveClose, desktopPtyPorts, registerTerminalIpcHandlers } from "./pty";
+import {
+  isFirstRunPending,
+  markFirstRunPending,
+} from "../../../../packages/host-core/src/worktree/first-run";
 import { PtyManager, type ParkConfig, type ProcessInspector } from "@volli/host-core/pty";
 import { clientEventSink } from "./client-event-sink";
 import { abandonAcceptedUpdateInstall, beginAcceptedUpdateInstall, refuseQuit } from "./quit-gate";
@@ -309,6 +322,7 @@ beforeAll(async () => {
   process.env["VOLLI_PARK_DISABLE"] = "1";
   root = await fs.realpath(await fs.mkdtemp(join(os.tmpdir(), "volli-pty-")));
   outside = await fs.realpath(await fs.mkdtemp(join(os.tmpdir(), "volli-pty-outside-")));
+  worktreeHomeRef.current = root;
   userDataPathRef.current = await fs.realpath(
     await fs.mkdtemp(join(os.tmpdir(), "volli-pty-userdata-")),
   );
@@ -2214,13 +2228,20 @@ describe("worktree ticket sessions", () => {
   const wtCwd = () => join(root, "wt-WP-20");
   const wtBranch = "volli/WP-20-worktree";
 
-  /** Mocks `ensure` to succeed with the given `created` flag and the fixed identity. */
+  /**
+   * Mocks `ensure` to succeed with the fixed identity. `created` stands for a
+   * fresh worktree that still owes its setup run: the durable pending marker is
+   * written the way `ensure` writes it, so the terminal's claim is the real one.
+   */
   function ensureOk(created: boolean) {
+    if (created) markFirstRunPending({ home: root }, wtCwd(), "wt1", ["setup"]);
     ensureWorktree.mockResolvedValue({
       ok: true,
       value: {
         identity: { worktreePath: wtCwd(), branch: wtBranch, baseBranch: "main" },
         created,
+        restamped: created,
+        setupPending: created,
       },
     });
   }
@@ -2490,6 +2511,52 @@ describe("worktree ticket sessions", () => {
     expect(written).toContain("codex");
     expect(written).not.toContain("__VOLLI_SETUP_DONE");
     expect(onWorktreePhase).not.toHaveBeenCalledWith("wt1", "setting-up");
+  });
+
+  it("claims the worktree's pending setup run, so a second terminal there never runs it again", async () => {
+    // Two terminals can both see `setupPending` — two doors racing one new
+    // worktree, or a structured Session that claimed it first. The claim is
+    // what runs it once (VC-835).
+    ensureOk(true);
+    const first = await createWorktreeSession({ harnessId: "codex", prompt: "go" });
+    if (!first.result.ok) throw new Error(`expected session, got ${first.result.error}`);
+    expect(first.pty.write.mock.calls[0]![0] as string).toContain("__VOLLI_SETUP_DONE");
+    expect(isFirstRunPending({ home: root }, wtCwd(), "setup")).toBe(false);
+
+    // Same outcome again, but the marker is gone: straight to the harness.
+    ensureWorktree.mockResolvedValue({
+      ok: true,
+      value: {
+        identity: { worktreePath: wtCwd(), branch: wtBranch, baseBranch: "main" },
+        created: false,
+        restamped: false,
+        setupPending: true,
+      },
+    });
+    const second = await createWorktreeSession({ harnessId: "codex", prompt: "go" });
+    if (!second.result.ok) throw new Error(`expected session, got ${second.result.error}`);
+    expect(second.pty.write).toHaveBeenCalledTimes(1);
+    const written = second.pty.write.mock.calls[0]![0] as string;
+    expect(written).toContain("codex");
+    expect(written).not.toContain("__VOLLI_SETUP_DONE");
+  });
+
+  it("runs a pending setup on a terminal whose ensure did not create the worktree — a Retry after a failed first start", async () => {
+    markFirstRunPending({ home: root }, wtCwd(), "wt1", ["setup"]);
+    ensureWorktree.mockResolvedValue({
+      ok: true,
+      value: {
+        identity: { worktreePath: wtCwd(), branch: wtBranch, baseBranch: "main" },
+        created: false,
+        restamped: false,
+        setupPending: true,
+      },
+    });
+    const { result, pty } = await createWorktreeSession({ harnessId: "codex", prompt: "go" });
+    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+    const setupLine = pty.write.mock.calls[0]![0] as string;
+    expect(setupLine).toContain("pnpm install");
+    expect(setupLine).toContain("__VOLLI_SETUP_DONE");
   });
 
   it("boots a reused worktree ticket with no kickoff as a bare, untouched shell", async () => {

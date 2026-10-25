@@ -12,7 +12,7 @@ import { createCheckpointFailureReporter } from "../session-control";
 import type { HostEventBus } from "../ports";
 import type { Logger } from "../log/logger";
 import { correlatedExecutor } from "./correlated-executor";
-import { createSessionLocationResolver } from "./location";
+import { createSessionLocationResolver, type WorktreeSetupEnvironment } from "./location";
 import { createSqliteSessionFollowUpLedger } from "../db/session-follow-up-repo";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 
@@ -39,6 +39,12 @@ export interface HostSessionRuntimeOptions {
   artifacts?: TranscriptArtifactStore;
   now?: () => number;
   nextId?: () => string;
+  /**
+   * The shell and environment a worktree's setup command runs in when a
+   * structured Session's start owes it (VC-835). Absent uses the host's own
+   * environment as is.
+   */
+  setupEnvironment?: (sessionId: string) => Promise<WorktreeSetupEnvironment>;
   /**
    * The same opt-in VC-119 sink the Pi runtime holds, for the one measurement
    * only the Session runtime can make: time a message queued before its turn
@@ -69,6 +75,9 @@ export function createHostSessionRuntime(options: HostSessionRuntimeOptions): Ho
       {
         dataDir: options.dataDir,
         ...(options.venue === undefined ? {} : { venue: options.venue }),
+        ...(options.setupEnvironment === undefined
+          ? {}
+          : { setupEnvironment: options.setupEnvironment }),
       },
     ),
     clock: { now },

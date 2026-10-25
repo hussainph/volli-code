@@ -6,11 +6,11 @@
  *
  * Order (git first, DB write last — DB writes never straddle long-running git):
  *   resolve identity → reconcile (which may adopt a same-ticket branch already
- *   checked out at the ticket's path) → resolve base → git worktree add → copy step
- *   (freshly-created worktrees ONLY — the Main-checkout walk is a creation
- *   cost, never a per-boot one) → materialize attachments (CONCEPT decision
- *   #19, issue #77 PR 2) → persist identity (emits `worktree_changed`) →
- *   phase `ready`.
+ *   checked out at the ticket's path) → resolve base → record the first-run
+ *   steps pending → git worktree add → copy step (while it is still pending:
+ *   the Main-checkout walk is a creation cost, never a per-boot one) →
+ *   materialize attachments (CONCEPT decision #19, issue #77 PR 2) → persist
+ *   identity (emits `worktree_changed`) → phase `ready`.
  *
  * Every step is ASYNC — git through the non-blocking runner, the copy walk
  * through fs/promises — because this pipeline runs on Electron main and its
@@ -19,8 +19,11 @@
  * On failure at any stage: phase → `failed`, a `worktree_failed` ticket event
  * with the stage + trimmed stderr, and a typed error Result the caller toasts —
  * the session NEVER silently falls back to the main checkout (#38). Setup-command
- * execution is deliberately NOT here: it runs in the PTY after spawn (`setup.ts`
- * builds/parses its sentinel), so `ensure` ends at `ready` with the identity.
+ * execution is deliberately NOT here: `ensure` only reports whether it is still
+ * pending, and the door that starts work claims and runs it — the terminal in
+ * its shell after spawn (`setup.ts` builds/parses its sentinel), a structured
+ * Session before its first turn (`setup-exec.ts`). See `first-run.ts` for why
+ * both creation-only steps are a durable fact rather than this call's `created`.
  */
 import {
   displayTicketId,
@@ -38,6 +41,8 @@ import { refExists, resolveBaseBranch } from "./base";
 import { GitError, stderrOf } from "./git";
 import { homeDir } from "./home";
 import { resolveWorktreeIdentity } from "./identity";
+import { completeFirstRunCopy, isFirstRunPending, markFirstRunPending } from "./first-run";
+import type { FirstRunStep } from "./first-run";
 import { copyIncludedFiles } from "./include";
 import { setPhase } from "./phase";
 import { reconcile } from "./reconcile";
@@ -47,9 +52,15 @@ import { err, ok, type RunGitAsync, type WorktreePorts, type WorktreeResult } fr
 /**
  * The success value of `ensure`: the resolved identity plus whether THIS run
  * actually created the worktree on disk (`git worktree add` ran) versus found
- * it already present. `created` is the setup-command gate — the setup command
- * must run exactly once, for a freshly-materialized worktree only, so a session
- * booting into an existing worktree never re-runs it (worktree-support §6).
+ * it already present.
+ *
+ * `setupPending` is the setup-command gate: the worktree was created with a
+ * setup command configured and no door has claimed that run yet
+ * (`first-run.ts`). It is a durable fact of the worktree, not of this call, so
+ * a Retry after a start that failed past the add still owes it, and a Session
+ * booting into a worktree whose setup already ran never re-runs it
+ * (worktree-support §6). A door that acts on it must claim it first
+ * (`claimFirstRunSetup`) — two doors can both read `true`.
  *
  * `restamped` says whether THIS run changed the identity the ticket records —
  * true on a first creation, and on a reuse that adopted a same-ticket branch
@@ -61,6 +72,7 @@ export interface EnsureOutcome {
   identity: WorktreeIdentity;
   created: boolean;
   restamped: boolean;
+  setupPending: boolean;
 }
 
 /** Concurrent `ensure(ticketId)` calls join the same promise; the entry clears on settle. */
@@ -176,9 +188,22 @@ async function runEnsure(
     return fail(deps, ticketId, "create", message, message);
   }
 
-  // Whether THIS run runs `git worktree add`; drives the setup-command gate.
+  // Whether THIS run runs `git worktree add`.
   const created = reconciled.value.kind === "create";
   if (reconciled.value.kind === "create") {
+    // The creation-only steps are owed from before the add, so a start that
+    // dies anywhere past this point — the add outliving its deadline included —
+    // still owes them to the next start (`first-run.ts`). Setup is owed only
+    // when the project has a command now: one configured later belongs to the
+    // next worktree, not to this one's next boot.
+    const steps: FirstRunStep[] =
+      (project.setupCommand?.trim() ?? "").length > 0 ? ["copy", "setup"] : ["copy"];
+    try {
+      markFirstRunPending(deps, identity.path, ticketId, steps);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      return fail(deps, ticketId, "create", message, message);
+    }
     const addArgs = reuseBranch
       ? [identity.path, branch]
       : ["-b", branch, identity.path, base!.startPoint];
@@ -212,15 +237,18 @@ async function runEnsure(
   // it on every reuse boot was the multisecond stall VC-16's follow-up comment
   // reports — a ready worktree already carries its local files, and a new `.env`
   // in the Main checkout transports on the next worktree CREATION, not on every
-  // Session boot into an old one.
+  // Session boot into an old one. "Creation" is the durable pending record, not
+  // this call: a creation whose copy failed owes it to the Retry, which
+  // reconciles to `already-present`.
   setPhase(ticketId, "copying", deps.onPhase);
-  if (created) {
-    try {
+  try {
+    if (isFirstRunPending(deps, identity.path, "copy")) {
       await copyIncludedFiles(project.path, identity.path);
-    } catch (caught) {
-      const message = caught instanceof Error ? caught.message : String(caught);
-      return fail(deps, ticketId, "copy", message, message);
+      completeFirstRunCopy(deps, identity.path);
     }
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : String(caught);
+    return fail(deps, ticketId, "copy", message, message);
   }
 
   // Materialize the ticket's file attachments into the fresh worktree
@@ -257,30 +285,40 @@ async function runEnsure(
     return fail(deps, ticketId, "create", message, message);
   }
 
+  // Read after every other step: the copy and attachments stages can fail,
+  // and the setup a failed start owes is the Retry's to report. A record that
+  // cannot be read fails the start rather than quietly owing nothing.
+  let setupPending: boolean;
+  try {
+    setupPending = isFirstRunPending(deps, identity.path, "setup");
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : String(caught);
+    return fail(deps, ticketId, "create", message, message);
+  }
   setPhase(ticketId, "ready", deps.onPhase);
   const result: WorktreeIdentity = {
     worktreePath: identity.path,
     branch,
     baseBranch,
   };
-  return ok({ identity: result, created, restamped });
+  return ok({ identity: result, created, restamped, setupPending });
 }
 
 /**
- * Ensures the ticket's worktree exists and is prepared, returning its identity
- * plus whether THIS call created it (the setup-command gate — see {@link
- * EnsureOutcome}). Idempotent and single-flight: a concurrent call for the same
- * ticket joins the in-flight promise instead of running the pipeline twice.
+ * Ensures the ticket's worktree exists and is prepared, returning its identity,
+ * whether THIS call created it, and whether its setup run is still owed (see
+ * {@link EnsureOutcome}). Idempotent and single-flight: a concurrent call for
+ * the same ticket joins the in-flight promise instead of running the pipeline
+ * twice.
  */
 export function ensure(
   deps: WorktreePorts,
   ticketId: string,
 ): Promise<WorktreeResult<EnsureOutcome>> {
   const existing = inflight.get(ticketId);
-  // A joiner shares the leader's work but must NOT re-fire created-only side
-  // effects (the setup command runs exactly once, for the run that actually
-  // materialized the worktree). Only the leader reports `created` as it
-  // happened; every joiner sees `created: false`.
+  // A joiner shares the leader's work. Only the leader reports `created` as it
+  // happened; every joiner sees `created: false`. Both may see `setupPending`
+  // — the claim, not this flag, is what makes the setup run exactly once.
   if (existing) return existing.then(asJoiner);
   const run = runEnsure(deps, ticketId).finally(() => inflight.delete(ticketId));
   inflight.set(ticketId, run);

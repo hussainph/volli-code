@@ -1,8 +1,10 @@
 /**
- * The sentinel-gated setup-command state machine (worktree-support §6). The
- * setup command runs in the session's live terminal AFTER the PTY spawns — never
- * as the pane's primary process — so `ensure` (ensure.ts) ends at
- * `ready` with the identity and deliberately does NOT run setup. Historically
+ * The sentinel-gated setup-command state machine (worktree-support §6). When a
+ * terminal claims a worktree's pending setup run (`first-run.ts`), the command
+ * runs in the session's live terminal AFTER the PTY spawns — never as the
+ * pane's primary process — so `ensure` (ensure.ts) ends at `ready` with the
+ * identity and deliberately does NOT run setup. A structured Session runs it
+ * through `setup-exec.ts` instead. Historically
  * pty.ts owned the whole machine inline: arming the watch, writing the sentinel
  * line, scanning output tails, driving `setting-up → ready | failed`, and
  * emitting the `worktree_failed(setup)` event itself. That is worktree-module
@@ -32,7 +34,7 @@ const log = hostLogger("worktree-setup");
  * also the best failure context to record — so we keep the tail bounded rather
  * than the whole transcript.
  */
-const SETUP_TAIL_MAX_CHARS = 16_000;
+export const SETUP_TAIL_MAX_CHARS = 16_000;
 
 /** The deps a setup run needs: the db (for the failure event) and the phase broadcast. */
 export interface SetupRunPorts {
@@ -85,36 +87,39 @@ export interface SetupRun {
 }
 
 /**
+ * Drives the phase to `failed` and best-effort records a `worktree_failed`
+ * (setup) event with `stderr` as failure context. Best-effort because the
+ * ticket can be deleted while its setup command runs, and a throwing insert
+ * must never escape into the pty hot path. Shared by both setup runners — this
+ * one in the terminal and `setup-exec.ts` for structured Sessions — so a
+ * failed setup reads the same on the ticket whichever door ran it.
+ */
+export function recordSetupFailure(deps: SetupRunPorts, ticketId: string, stderr: string): void {
+  setPhase(ticketId, "failed", deps.onPhase);
+  try {
+    recordTicketEvent(
+      deps.db,
+      ticketId,
+      { kind: "worktree_failed", stage: "setup", stderr: trimWorktreeFailureStderr(stderr) },
+      (deps.now ?? Date.now)(),
+    );
+  } catch (error) {
+    log.error("failed to record setup failure", { ticketId, error });
+  }
+}
+
+/**
  * Arms a setup run: transitions the ticket to `setting-up` and returns the
  * handle. The caller writes {@link SetupRun.commandLine} to the PTY, then drives
  * the handle through {@link SetupRun.feed} / {@link SetupRun.handleExit}.
  */
 export function createSetupRun(deps: SetupRunPorts, params: SetupRunParams): SetupRun {
-  const now = deps.now ?? Date.now;
   let tail = "";
   let settled = false;
 
   setPhase(params.ticketId, "setting-up", deps.onPhase);
 
-  /**
-   * Drives the phase to `failed` and best-effort records a `worktree_failed`
-   * (setup) event with `stderr` as failure context. Best-effort because the
-   * ticket can be deleted while its setup command runs, and a throwing insert
-   * must never escape into the pty hot path.
-   */
-  function recordFailure(stderr: string): void {
-    setPhase(params.ticketId, "failed", deps.onPhase);
-    try {
-      recordTicketEvent(
-        deps.db,
-        params.ticketId,
-        { kind: "worktree_failed", stage: "setup", stderr: trimWorktreeFailureStderr(stderr) },
-        now(),
-      );
-    } catch (error) {
-      log.error("failed to record setup failure", { ticketId: params.ticketId, error });
-    }
-  }
+  const recordFailure = (stderr: string): void => recordSetupFailure(deps, params.ticketId, stderr);
 
   return {
     commandLine: buildSetupSentinelLine(params.setupCommand, params.shellPath),
