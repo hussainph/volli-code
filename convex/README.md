@@ -107,6 +107,8 @@ armed watch settles on its earliest durable outcome. Original/retry answers
 use `{parent}:{toolCall}:answer`; later resumed or joined turns use the frozen
 `{parent}:{toolCall}:resume:{turnId}:answer` id. Host-notice-only turns do not
 re-arm. Local and backend answers race into one first-writer-wins outbox slot.
+A locally delivered original answer also retires its cloud watch when kickoff
+failed before recording a child intent, including parent-first drain ordering.
 A parent's stop cascades only to original watches on other runners, after the
 child projection catches up. `delegations.forParent` is visibility-checked;
 starting a child elsewhere is a separate runner-selection feature.

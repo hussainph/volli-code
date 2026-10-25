@@ -332,17 +332,20 @@ Each was a decision made while turning the design into code.
     clock advances for backend-held edits/cancels as well as mirrors; client
     preconditions use that clock and are translated to the runner revision
     before delivery. Claim-generation changes invalidate old preconditions.
-    Queue changes do not invalidate the Session snapshot. Claim transfer drops the mirror; generation checks also
-    hide obsolete mirrors after runner replacement. Queue-control receipts
+    Queue changes do not invalidate the Session snapshot. Claim transfer drops
+    the mirror; generation checks also hide obsolete mirrors after runner replacement. Queue-control receipts
     travel with job completion because these runtime controls are deliberately
     outside the immutable event command vocabulary. Delegations gain optional
     `stopCommandId`, minted once for a cross-runner stop cascade and reused on
     derivation replay, and a bounded `watch` projection. Watch boundaries—not
     lifetime settlement—choose outcomes: held kickoffs stay unarmed, Retry
     keeps the original answer id, and resumed/joined turns get their frozen
-    per-turn answer ids. Only armed original watches defer a parent's watchers
-    or participate in stop cascades. `sessionEvents.by_session_command` proves
-    the parent recorded an original answer without scanning its history.
+    per-turn answer ids. Armed original and resumed watches defer a parent's
+    watchers; only original watches participate in stop cascades.
+    `sessionEvents.by_session_command` proves the parent recorded an original
+    answer without scanning its history. That evidence also retires a spent
+    original watch after a local pre-intent kickoff failure, before the next
+    child fact is classified.
 
 ## Runner-routed agent Session commands
 
