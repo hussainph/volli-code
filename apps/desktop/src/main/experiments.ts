@@ -33,6 +33,7 @@ export class ExperimentalSettings {
     environment: string | undefined,
     private readonly buildKind: ExperimentBuildKind,
     private readonly now: () => number = Date.now,
+    private readonly previewGranted = false,
   ) {
     const parsed = parseExperimentEnvironment(environment);
     this.#environment = parsed.ids;
@@ -45,7 +46,7 @@ export class ExperimentalSettings {
   }
 
   snapshot(): ExperimentSnapshot {
-    return resolveExperiments(this.#stored, this.#environment, this.buildKind);
+    return resolveExperiments(this.#stored, this.#environment, this.buildKind, this.previewGranted);
   }
 
   isEnabled(id: ExperimentId): boolean {

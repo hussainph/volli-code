@@ -81,8 +81,7 @@ export interface SettingsGroupsOptions {
    */
   readonly hosts?: boolean;
   /**
-   * Shows Services → Account, the Volli Cloud sign-in (VC-884): only with the
-   * `cloud` experiment on.
+   * Shows Services → Account: with cloud on, or as stable preview enrollment.
    */
   readonly account?: boolean;
   /**

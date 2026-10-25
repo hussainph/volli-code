@@ -32,8 +32,9 @@
  *
  * **Restore.** The saved sign-in is read when it is first asked for: the
  * window's first snapshot, or the first {@link AccountService.accessToken}.
- * Nothing reads it at launch, so there is no new unattended keychain access;
- * the caller that asks is the one that decided it may. While the backend is
+ * Stable preview launches with a deliberate sign-in marker restore before
+ * choosing the product store; other launches read it only on demand, so
+ * there is no keychain access before a deliberate sign-in. While the backend is
  * unreachable, each new window subscription tries it again.
  *
  * **Sign-out** forgets the tokens and the sealed record, then opens the
@@ -54,6 +55,7 @@ import {
   type AccountState,
 } from "@volli/shared";
 
+import { previewAccountGranted } from "../preview-gate";
 import { BackendRefusedError, type AccountBackend, type BackendViewer } from "./backend";
 import { CallbackAbortedError, listenForCallback, type LoopbackCallback } from "./loopback";
 import { createPkcePair, newState } from "./pkce";
@@ -82,6 +84,9 @@ const UNAVAILABLE_TOKEN: AccountAccessToken = Object.freeze({
   kind: "unavailable",
   retryAfterMs: ACCOUNT_TOKEN_RETRY_MS,
 });
+
+export const PREVIEW_WAITLIST =
+  "Volli Cloud is invite-only. You're on the waitlist; your local projects are unchanged.";
 
 export const ACCOUNT_CLOUD_OFF = "Volli Cloud is off. Turn it on in Settings → Experimental.";
 
@@ -112,9 +117,11 @@ export interface AccountServiceOptions {
 }
 
 export interface AccountService {
+  /** Fresh backend grant only, never a saved profile or launch marker. */
+  previewUserId(): string | null;
   snapshot(): AccountSnapshot;
   subscribe(listener: (snapshot: AccountSnapshot) => void): () => void;
-  signIn(connection: AccountConnection): Promise<void>;
+  signIn(connection: AccountConnection, inviteCode?: string): Promise<void>;
   cancelSignIn(): void;
   signOut(): Promise<void>;
   requestDeletion(): Promise<void>;
@@ -355,8 +362,18 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     return refreshAccess(provider);
   };
 
+  /** Every backend answer follows the same preview gate, including account restoration. */
+  const acceptViewer = (answered: BackendViewer): void => {
+    viewer = answered;
+    const granted = previewAccountGranted(answered);
+    backendState = granted ? "synced" : "refused";
+    failure = granted || answered.status === "deletion_pending" ? null : PREVIEW_WAITLIST;
+    if (granted) options.marker?.write(answered.userId);
+    else options.marker?.clear();
+  };
+
   /** Asks the backend for the person; on failure keeps the sign-in and says why. */
-  const syncViewer = (): Promise<void> => {
+  const syncViewer = (inviteCode?: string): Promise<void> => {
     if (backend === null) return Promise.resolve();
     if (syncing !== null) return syncing;
     const startedIn = epoch;
@@ -364,14 +381,18 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
       try {
         const token = await freshToken();
         if (token === null || epoch !== startedIn) return;
-        const answered = await backend.ensureViewer(token);
+        const answered = await backend.ensureViewer(token, inviteCode);
         if (epoch !== startedIn) return;
-        viewer = answered;
-        backendState = "synced";
-        failure = null;
-        options.marker?.write(answered.userId);
+        acceptViewer(answered);
       } catch (error) {
         if (epoch !== startedIn) return;
+        if (error instanceof BackendRefusedError && error.code === "preview_waitlisted") {
+          backendState = "refused";
+          failure = error.message;
+          options.marker?.clear();
+          emit();
+          return;
+        }
         if (error instanceof BackendRefusedError && error.code === "account_deleted") {
           await forget("This account has been deleted.", startedIn);
           return;
@@ -456,6 +477,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     callback: LoopbackCallback,
     verifier: string,
     startedIn: number,
+    inviteCode?: string,
   ): Promise<void> => {
     let result: Awaited<LoopbackCallback["result"]>;
     try {
@@ -524,7 +546,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     failure = null;
     log.info("account signed in", { provider: live.kind });
     emit();
-    await syncViewer();
+    await syncViewer(inviteCode);
   };
 
   const signedInBackend = async (): Promise<{ backend: AccountBackend; token: string }> => {
@@ -543,13 +565,16 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     const { backend: live, token } = await signedInBackend();
     const answered = await call(live, token);
     if (epoch !== startedIn) return;
-    viewer = answered;
-    backendState = "synced";
-    failure = null;
+    acceptViewer(answered);
     emit();
   };
 
   return {
+    previewUserId() {
+      return backendState === "synced" && viewer !== null && previewAccountGranted(viewer)
+        ? viewer.userId
+        : null;
+    },
     snapshot() {
       requireCloud();
       void ensureRestored();
@@ -566,7 +591,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
         listeners.delete(listener);
       };
     },
-    async signIn(connection) {
+    async signIn(connection, inviteCode) {
       const live = requireEnabled();
       if (!isAccountConnection(connection)) throw new Error("Unknown sign-in provider.");
       if (state === "signed-in") throw new Error("Already signed in. Sign out first.");
@@ -601,7 +626,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
           callback.close();
           return;
         }
-        void track(runFlow(live, callback, pkce.verifier, startedIn));
+        void track(runFlow(live, callback, pkce.verifier, startedIn, inviteCode));
         await options.openBrowser(url);
       } catch (error) {
         if (epoch === startedIn) {

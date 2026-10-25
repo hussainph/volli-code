@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { beforeAll, describe, expect, test } from "vite-plus/test";
 
-import { api } from "../functions/_generated/api";
+import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
 
 const backend = connectBackend();
@@ -37,6 +37,8 @@ async function column(status: string) {
 
 beforeAll(async () => {
   // Sign-up creates the person's own Workspace; the project goes there.
+  const { userId } = await client().mutation(api.accounts.ensureViewer, {});
+  await backend.admin(internal.previewAccess.set, { kind: "user", value: userId, enabled: true });
   await client().mutation(api.accounts.ensureViewer, {});
   const [workspace] = await client().query(api.workspaces.listMine, {});
   const workspaceId = workspace!.workspaceId;

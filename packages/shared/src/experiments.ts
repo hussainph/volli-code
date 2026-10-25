@@ -109,21 +109,22 @@ export function serializeExperimentUpdate(
   return JSON.stringify({ ...storedExperimentRecord(raw), [id]: enabled });
 }
 
-/** One resolution rule for the host and every projection. Environment always wins. */
+/** One resolution rule: environment wins on dev/canary; stable requires a fresh preview grant. */
 export function resolveExperiments(
   stored: Partial<ExperimentValues>,
   environment: readonly ExperimentId[],
   buildKind: ExperimentBuildKind,
+  previewGranted = false,
 ): ExperimentSnapshot {
   return Object.fromEntries(
     EXPERIMENTS.map((entry) => {
-      const fromEnvironment = environment.includes(entry.id);
+      const fromEnvironment = buildKind !== "stable" && environment.includes(entry.id);
       const available = (entry.availableOn as readonly ExperimentBuildKind[]).includes(buildKind);
       const saved = available ? stored[entry.id] : undefined;
       return [
         entry.id,
         {
-          enabled: fromEnvironment || (available && (saved ?? entry.default)),
+          enabled: fromEnvironment || (available ? (saved ?? entry.default) : previewGranted),
           source: fromEnvironment ? "environment" : saved === undefined ? "default" : "storage",
           ...(!available && !fromEnvironment ? { visible: false } : {}),
         },

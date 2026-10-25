@@ -4,7 +4,7 @@ import { describe, expect, test } from "vite-plus/test";
 
 import { newId, type SessionRole, type SessionVisibility } from "@volli/shared/cloud";
 
-import { api } from "../functions/_generated/api";
+import { api, internal } from "../functions/_generated/api";
 import type { DataModel } from "../functions/_generated/dataModel.js";
 import { requireSessionScope } from "../functions/lib/auth";
 import {
@@ -51,7 +51,14 @@ function code(value: string) {
 }
 
 async function signIn(t: T, name: string) {
-  const client = t.withIdentity(person(name));
+  const identity = person(name);
+  // VC-936: the preview admits only allowlisted accounts, by verified email.
+  await t.mutation(internal.previewAccess.set, {
+    kind: "email",
+    value: identity.email,
+    enabled: true,
+  });
+  const client = t.withIdentity(identity);
   const { userId } = await client.mutation(api.accounts.ensureViewer, {});
   return { client, userId };
 }

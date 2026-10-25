@@ -20,6 +20,7 @@ import type { DataModel, Doc } from "./_generated/dataModel.js";
 import { mutation, query } from "./_generated/server";
 import { authError, ensureViewer as ensureViewerRow, findViewer, type Viewer } from "./lib/auth";
 import { audit } from "./lib/audit";
+import { previewAccess, redeemPreviewCode, type PreviewAccess } from "./lib/previewAccess";
 import { onFirstSignIn } from "./lib/firstSignIn";
 import { literals } from "./lib/validators";
 
@@ -33,6 +34,7 @@ export type ViewerSummary = {
   status: "active" | "deletion_pending";
   /** When a pending deletion is purged; `null` for an active account. */
   purgeAfter: number | null;
+  previewAccess: PreviewAccess;
 };
 
 export type AccountErrorCode = "sole_owner" | "purge_started";
@@ -59,9 +61,13 @@ async function signedInViewer(ctx: Parameters<typeof findViewer>[0]): Promise<Vi
   return found;
 }
 
-function summary(viewer: Viewer): ViewerSummary {
+async function summary(
+  ctx: Parameters<typeof findViewer>[0],
+  viewer: Viewer,
+): Promise<ViewerSummary> {
   const { user } = viewer;
   return {
+    previewAccess: await previewAccess(ctx, viewer),
     userId: viewer.userId,
     displayName: user.displayName,
     primaryEmail: user.primaryEmail,
@@ -78,11 +84,21 @@ function summary(viewer: Viewer): ViewerSummary {
  * as it is, so the client can offer to restore it.
  */
 export const ensureViewer = mutation({
-  args: {},
-  handler: async (ctx): Promise<ViewerSummary & { created: boolean }> => {
+  args: { inviteCode: v.optional(v.string()) },
+  handler: async (ctx, { inviteCode }): Promise<ViewerSummary & { created: boolean }> => {
     const { created, ...viewer } = await ensureViewerRow(ctx);
-    if (created) await onFirstSignIn(ctx, viewer);
-    return { ...summary(viewer), created };
+    if (inviteCode !== undefined) await redeemPreviewCode(ctx, viewer, inviteCode);
+    const result = await summary(ctx, viewer);
+    if (result.previewAccess === "granted" && !viewer.user.previewWorkspaceCreated) {
+      // Older accounts already own a Workspace. A waitlisted account has none yet.
+      const memberships = await ctx.db
+        .query("workspaceMembers")
+        .withIndex("by_user", (q) => q.eq("userId", viewer.userId))
+        .first();
+      if (memberships === null) await onFirstSignIn(ctx, viewer);
+      await ctx.db.patch(viewer.user._id, { previewWorkspaceCreated: true });
+    }
+    return { ...result, created };
   },
 });
 
@@ -91,7 +107,7 @@ export const viewer = query({
   args: {},
   handler: async (ctx): Promise<ViewerSummary | null> => {
     const found = await findViewer(ctx);
-    return found === null ? null : summary(found);
+    return found === null ? null : summary(ctx, found);
   },
 });
 
@@ -173,7 +189,7 @@ export const requestDeletion = mutation({
   args: deletionArgs,
   handler: async (ctx, { via }): Promise<ViewerSummary> => {
     const person = await signedInViewer(ctx);
-    if (person.user.status === "deletion_pending") return summary(person);
+    if (person.user.status === "deletion_pending") return summary(ctx, person);
     const blocked = await soleOwnerships(ctx, person.userId);
     if (blocked.length > 0) {
       throw accountError(
@@ -224,7 +240,7 @@ export const requestDeletion = mutation({
       detail: { purgeAfter },
     });
     const user = (await ctx.db.get(person.user._id))!;
-    return summary({ userId: person.userId, user });
+    return summary(ctx, { userId: person.userId, user });
   },
 });
 
@@ -237,7 +253,7 @@ export const cancelDeletion = mutation({
   args: deletionArgs,
   handler: async (ctx, { via }): Promise<ViewerSummary> => {
     const found = await signedInViewer(ctx);
-    if (found.user.status !== "deletion_pending") return summary(found);
+    if (found.user.status !== "deletion_pending") return summary(ctx, found);
     const now = Date.now();
     const request = await pendingRequest(ctx, found.userId);
     if (request === null || (found.user.purgeAfter !== null && now >= found.user.purgeAfter)) {
@@ -259,6 +275,6 @@ export const cancelDeletion = mutation({
       detail: {},
     });
     const user = (await ctx.db.get(found.user._id))!;
-    return summary({ userId: found.userId, user });
+    return summary(ctx, { userId: found.userId, user });
   },
 });

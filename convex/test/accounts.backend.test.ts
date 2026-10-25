@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { describe, expect, test } from "vite-plus/test";
 
-import { api } from "../functions/_generated/api";
+import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
 
 const backend = connectBackend();
@@ -18,6 +18,12 @@ describe("accounts on the pinned local backend", () => {
   });
 
   test("creates the viewer once from the token's claims, then returns the same one", async () => {
+    // VC-936: the preview admits only allowlisted accounts, by verified email.
+    await backend.admin(internal.previewAccess.set, {
+      kind: "email",
+      value: "dana@example.com",
+      enabled: true,
+    });
     const client = backend.client(subject(), {
       claims: { email: "Dana@Example.com", email_verified: true, name: "Dana" },
     });
@@ -27,6 +33,7 @@ describe("accounts on the pinned local backend", () => {
     expect(first).toMatchObject({
       displayName: "Dana",
       primaryEmail: "dana@example.com",
+      previewAccess: "granted",
       created: true,
     });
     expect(first.userId).toMatch(
@@ -43,6 +50,7 @@ describe("accounts on the pinned local backend", () => {
       primaryEmail: "dana@example.com",
       status: "active",
       purgeAfter: null,
+      previewAccess: "granted",
     });
   });
 
@@ -63,5 +71,8 @@ describe("accounts on the pinned local backend", () => {
     );
     expect(a!.userId).not.toBe(b!.userId);
     expect(a!.displayName).toBe("Volli user");
+    // Neither address is allowlisted: both accounts exist, the preview stays closed.
+    expect(a!.previewAccess).toBe("waitlisted");
+    expect(b!.previewAccess).toBe("waitlisted");
   });
 });

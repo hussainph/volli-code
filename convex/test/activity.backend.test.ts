@@ -4,7 +4,7 @@ import { beforeAll, expect, test } from "vite-plus/test";
 
 import type { ActivityPage } from "@volli/shared/cloud";
 
-import { api } from "../functions/_generated/api";
+import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
 
 const backend = connectBackend();
@@ -21,6 +21,8 @@ const created = (page: ActivityPage) =>
   page.page.flatMap((item) => (item.what.kind === "created" ? [item.what.title] : []));
 
 beforeAll(async () => {
+  const { userId } = await client().mutation(api.accounts.ensureViewer, {});
+  await backend.admin(internal.previewAccess.set, { kind: "user", value: userId, enabled: true });
   await client().mutation(api.accounts.ensureViewer, {});
   const [workspace] = await client().query(api.workspaces.listMine, {});
   workspaceId = workspace!.workspaceId;

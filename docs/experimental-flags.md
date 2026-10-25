@@ -29,16 +29,20 @@ not workspace data**; the future host-level settings database owns this key.
 No schema migration is needed. Device-scoped flags are device-local, never
 portable workspace preferences; the registry carries each flag's scope.
 
-Cloud is available in dev (`app.isPackaged === false`) and packaged prerelease
-(canary) builds. Packaged versions without prerelease components are stable:
-Cloud's switch and the empty Experimental category are hidden, stored `on` is
-ignored, and `settings.setExperiment` is refused. The stored value is not
-rewritten: returning to canary restores it. Build kind uses electron-updater's
-already-parsed running version, not the user-selected update channel.
+Cloud's experimental switch is available in dev and canary builds. Stable
+builds hide it and ignore stored intent. Only a fresh backend preview grant
+for the signed-in account enables cloud for a stable launch; the Account
+pane remains available for enrollment and a waitlist message. Verification
+has a two-second launch deadline: failure or timeout opens the unchanged
+local board, never a cached grant. An account check that finishes later may
+offer a restart, but never changes stores in a running window. See
+`convex/SCHEMA-NOTES.md` for administration and invite codes. The stored flag
+is not rewritten, so returning to canary restores it. Build kind comes from
+the running version, never the user-selected update channel. On stable,
+`source: default` means launch policy, not a persisted opt-in.
 
-`VOLLI_EXPERIMENTAL=cloud` deliberately opts in at boot in **all** builds,
-including stable. It bypasses build availability for testing, showing today's
-environment-locked switch.
+`VOLLI_EXPERIMENTAL=cloud` opts in at boot in dev/canary builds only, showing
+the environment-locked switch. It never bypasses the stable preview gate.
 The value is a comma-separated list of ids, trimmed and matched case-insensitively
 (`Cloud` enables `cloud`); duplicate ids are accepted. Unknown or retired env ids
 are ignored and logged together in one warning at boot, never a launch failure.
@@ -102,4 +106,5 @@ flag-off suite alongside it; do not use concurrent tests with this global fixtur
   before. Code: `packages/host-core/src/worktree/recipe.ts`.
 
 Settings → Experimental exposes the registry-backed flags. With `cloud` off,
-no cloud service or cloud-only UI is enabled.
+no cloud product service or cloud-only UI is enabled. The stable Account
+pane is enrollment only.

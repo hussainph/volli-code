@@ -18,6 +18,7 @@ import {
   type WhoCanInvite,
 } from "@volli/shared/cloud";
 
+import { requirePreviewAccess } from "./lib/previewAccess";
 import { mutation, query } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel.js";
 import { requireManage, requireMember, requireViewer } from "./lib/auth";
@@ -117,6 +118,7 @@ export const create = mutation({
   args: { workspaceId: v.string(), name: v.string() },
   handler: async (ctx, args): Promise<{ workspaceId: string; slug: string; created: boolean }> => {
     const viewer = await requireViewer(ctx);
+    await requirePreviewAccess(ctx, viewer);
     const workspaceId = idArg("workspace", args.workspaceId);
     const name = workspaceName(args.name);
     const existing = await findWorkspace(ctx, workspaceId);

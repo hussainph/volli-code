@@ -183,6 +183,7 @@ import {
   resolveAccountConfig,
 } from "./account";
 import { ACCOUNT_CLOUD_OFF } from "./account/service";
+import { previewAtLaunch } from "./preview-gate";
 import { CLOUD_SNAPSHOT_DIRECTORY, cloudSnapshotFiles } from "./cloud-snapshot";
 import {
   CLOUD_RUNNER_APP_STATE_KEY,
@@ -865,8 +866,11 @@ const appStartup = app.whenReady().then(async () => {
   });
   // The Volli Cloud account on this Mac (VC-884): browser sign-in, the sealed
   // refresh token (the harness keyring in harness mode), the backend's
-  // `ensureViewer`. Every call refuses while `cloud` is off; nothing is read
-  // until the window first asks for the account.
+  // `ensureViewer`. Stable permits enrollment before cloud is enabled; dev
+  // and canary refuse with the flag off. A stable sign-in marker permits a
+  // bounded launch-time check; other account reads are on demand.
+  const buildKind = runningBuildKind(app.isPackaged, autoUpdater.currentVersion);
+  const accountEnrollmentEnabled = () => buildKind === "stable" || isExperimentEnabled("cloud");
   const accountConfig = resolveAccountConfig({ env: process.env, packaged: app.isPackaged });
   // The next launch's product store (VC-889): written when a sign-in
   // completes, cleared when it ends. A row in this Mac's database, reached
@@ -902,7 +906,7 @@ const appStartup = app.whenReady().then(async () => {
         }
       },
     },
-    enabled: () => isExperimentEnabled("cloud"),
+    enabled: accountEnrollmentEnabled,
     inventory: hostPrivateInventory,
     unlockInventory: unlockHostPrivate,
     openBrowser: openAccountBrowser,
@@ -1010,14 +1014,29 @@ const appStartup = app.whenReady().then(async () => {
     quit: () => setTimeout(() => app.quit(), 0),
   });
   const watchedDb = dbHandle.ok === true ? dbHandle.db : null;
-  const buildKind = runningBuildKind(app.isPackaged, autoUpdater.currentVersion);
-  installExperimentalSettings(
-    new ExperimentalSettings(watchedDb, process.env["VOLLI_EXPERIMENTAL"], buildKind),
-  );
   // The launch's product store (VC-889), decided once here, before the window
   // opens, and fixed for this process: Volli Cloud's board with the flag on,
   // a signed-in marker and a configured backend; this Mac's otherwise.
   launchMarkerDb = watchedDb;
+  const previewGranted = await previewAtLaunch({
+    stable: buildKind === "stable",
+    configured: accountConfig.backendUrl !== null && accountConfig.provider !== null,
+    readMarker: () => launchMarker.read(),
+    restoreAccount: async () => {
+      account.snapshot();
+      await account.settled();
+      return account.previewUserId();
+    },
+  });
+  installExperimentalSettings(
+    new ExperimentalSettings(
+      watchedDb,
+      process.env["VOLLI_EXPERIMENTAL"],
+      buildKind,
+      Date.now,
+      previewGranted,
+    ),
+  );
   const launch = chooseProductStore({
     cloudFlag: isExperimentEnabled("cloud"),
     readMarker: () => launchMarker.read(),
@@ -1585,14 +1604,12 @@ const appStartup = app.whenReady().then(async () => {
         {
           launch: () => launch,
           relaunch: () => {
-            // Like every other account entry, nothing with `cloud` off.
-            if (!isExperimentEnabled("cloud"))
-              throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
+            // Stable enrollment may restart before the launch grants cloud access.
+            if (!accountEnrollmentEnabled()) throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
             relaunch.request();
           },
           reportUnsavedWrites: (count) => {
-            if (!isExperimentEnabled("cloud"))
-              throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
+            if (!accountEnrollmentEnabled()) throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
             recordUnsavedBoardWrites(count);
           },
           // Only a cloud launch has a board to keep, and only its own account's.

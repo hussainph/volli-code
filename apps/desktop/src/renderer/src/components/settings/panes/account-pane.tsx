@@ -57,6 +57,7 @@ import {
 import { toast } from "sonner";
 
 import { SignOutRestartDialog } from "@renderer/components/cloud/sign-out-restart";
+import { Input } from "@renderer/components/ui/input";
 import { Button } from "@renderer/components/ui/button";
 import { toastError } from "@renderer/lib/toast";
 import { launchStore } from "@renderer/stores/launch";
@@ -94,6 +95,7 @@ function Failure({ text }: { text: string | null }) {
 }
 
 function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: AccountCommands }) {
+  const [inviteCode, setInviteCode] = React.useState("");
   const waiting = snapshot.state === "signing-in";
   return (
     <PrefSection
@@ -106,12 +108,22 @@ function SignIn({ snapshot, commands }: { snapshot: AccountSnapshot; commands: A
       }
     >
       <div className="flex flex-col gap-2" data-testid="account-sign-in">
+        <Input
+          aria-label="Preview invite code"
+          placeholder="Invite code (optional)"
+          value={inviteCode}
+          onChange={(event) => setInviteCode(event.target.value)}
+          disabled={waiting}
+          maxLength={128}
+        />
         {BUTTONS.map(({ connection, label, icon: Icon }) => (
           <Button
             key={connection}
             variant="outline"
             disabled={waiting || snapshot.state === "restoring"}
-            onClick={() => act(() => commands.signIn(connection), "Sign-in")}
+            onClick={() =>
+              act(() => commands.signIn(connection, inviteCode.trim() || undefined), "Sign-in")
+            }
           >
             <Icon />
             {waiting && snapshot.signingInWith === connection ? "Waiting for the browser…" : label}

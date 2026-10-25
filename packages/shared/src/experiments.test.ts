@@ -28,12 +28,15 @@ describe("experimental registry", () => {
     });
   });
 
-  it("ignores stored intent on stable without hiding deliberate environment opt-ins", () => {
+  it("requires a fresh preview grant on stable, ignoring storage and environment", () => {
     expect(resolveExperiments({ cloud: true }, [], "stable")).toEqual({
       cloud: { enabled: false, source: "default", visible: false },
     });
     expect(resolveExperiments({ cloud: true }, ["cloud"], "stable")).toEqual({
-      cloud: { enabled: true, source: "environment" },
+      cloud: { enabled: false, source: "default", visible: false },
+    });
+    expect(resolveExperiments({}, [], "stable", true)).toEqual({
+      cloud: { enabled: true, source: "default", visible: false },
     });
     for (const kind of ["dev", "canary"] as const) {
       expect(resolveExperiments({ cloud: true }, [], kind)).toEqual({

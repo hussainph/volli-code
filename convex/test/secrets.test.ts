@@ -41,6 +41,11 @@ async function signIn(t: T, name: string) {
     email: `${name.toLowerCase()}@example.com`,
     emailVerified: true,
   });
+  await t.mutation(internal.previewAccess.set, {
+    kind: "email",
+    value: `${name.toLowerCase()}@example.com`,
+    enabled: true,
+  });
   const { userId } = await client.mutation(api.accounts.ensureViewer, {});
   return { client, userId };
 }

@@ -8,6 +8,7 @@
 
 /** What `accounts.ensureViewer` and the deletion mutations answer. */
 export interface BackendViewer {
+  readonly previewAccess: "granted" | "waitlisted";
   readonly userId: string;
   readonly displayName: string;
   readonly primaryEmail: string | null;
@@ -16,7 +17,7 @@ export interface BackendViewer {
 }
 
 export interface AccountBackend {
-  ensureViewer(accessToken: string): Promise<BackendViewer>;
+  ensureViewer(accessToken: string, inviteCode?: string): Promise<BackendViewer>;
   requestDeletion(accessToken: string): Promise<BackendViewer>;
   cancelDeletion(accessToken: string): Promise<BackendViewer>;
 }
@@ -44,7 +45,9 @@ function viewerFrom(value: unknown): BackendViewer {
   ) {
     throw new Error("Volli Cloud answered with an account this build cannot read.");
   }
-  return { userId, displayName, primaryEmail, status, purgeAfter };
+  // Older or unknown backend replies never grant preview access.
+  const previewAccess = record["previewAccess"] === "granted" ? "granted" : "waitlisted";
+  return { userId, displayName, primaryEmail, status, purgeAfter, previewAccess };
 }
 
 /** Which of Convex's HTTP functions endpoints a call goes to. */
@@ -116,7 +119,8 @@ export function convexAccountBackend(options: {
     args: Record<string, string> = {},
   ): Promise<BackendViewer> => viewerFrom(await call("mutation", path, accessToken, args));
   return {
-    ensureViewer: (token) => mutation("accounts:ensureViewer", token),
+    ensureViewer: (token, inviteCode) =>
+      mutation("accounts:ensureViewer", token, inviteCode === undefined ? {} : { inviteCode }),
     // The deletion's Actor names the client it came through.
     requestDeletion: (token) => mutation("accounts:requestDeletion", token, { via: "desktop" }),
     cancelDeletion: (token) => mutation("accounts:cancelDeletion", token, { via: "desktop" }),

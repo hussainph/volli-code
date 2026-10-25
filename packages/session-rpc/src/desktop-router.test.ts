@@ -1293,6 +1293,14 @@ describeContract<Host, DesktopRouter>(
         });
       }
       expect(fixture.calls).toHaveLength(7);
+      await client.account.signIn.mutate({
+        connection: "google",
+        inviteCode: "preview-code-123456",
+      });
+      expect(fixture.calls.at(-1)?.input).toEqual({
+        connection: "google",
+        inviteCode: "preview-code-123456",
+      });
     });
 
     // VC-889: the window's own Volli Cloud client and the launch's store.

@@ -29,11 +29,11 @@ export function SettingsPage({
 }: { initialCategoryKey?: string; initialSignInProviderId?: string } = {}) {
   const logs = useLogViewerEnabled();
   const hosts = useCloudEnabled();
-  // Volli Cloud's Account rides the same flag as Hosts (VC-884).
-  const account = hosts;
   // Runners exist only in a Volli Cloud launch, fixed for the process (VC-895).
   const runners = launchStore() === "cloud";
   const experiments = useExperimentsStore((state) => state.snapshot);
+  // Stable hides the experiment, but retains enrollment into the invite-only preview.
+  const account = hosts || experiments?.cloud.visible === false;
   React.useEffect(() => {
     void useExperimentsStore.getState().ensure();
   }, []);

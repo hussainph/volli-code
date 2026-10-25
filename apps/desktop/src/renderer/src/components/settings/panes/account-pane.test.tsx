@@ -476,3 +476,32 @@ describe("Settings → Account → GitHub", () => {
     expect(error).toHaveBeenCalledWith("GitHub is unavailable. Try again.", expect.anything());
   });
 });
+
+it("sends the optional preview invite code and leaves a waitlisted sign-in without a restart offer", () => {
+  const tier = standIn();
+  act(() => root.render(<AccountPane rpc={tier.rpc} />));
+  tier.push(SIGNED_OUT);
+  const input = container.querySelector<HTMLInputElement>(
+    'input[aria-label="Preview invite code"]',
+  )!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+      input,
+      "preview-code-123456",
+    );
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  act(() => button("Continue with GitHub").click());
+  expect(tier.rpc.account.signIn.mutate).toHaveBeenCalledWith({
+    connection: "github",
+    inviteCode: "preview-code-123456",
+  });
+  tier.push({
+    ...SIGNED_IN,
+    account: { ...SIGNED_IN.account!, backend: "refused" },
+    failure:
+      "Volli Cloud is invite-only. You're on the waitlist; your local projects are unchanged.",
+  });
+  expect(container.textContent).toContain("waitlist");
+  expect(container.textContent).not.toContain("Restart to open");
+});

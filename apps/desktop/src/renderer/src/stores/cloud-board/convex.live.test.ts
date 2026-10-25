@@ -20,6 +20,7 @@
  *   pnpm -C convex with-backend --deploy -- \
  *     sh -c 'cd ../apps/desktop && vp test run src/renderer/src/stores/cloud-board/convex.live.test.ts'
  */
+import { inviteTestEmail } from "../../../../main/test-helpers/preview";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { ConvexHttpClient } from "convex/browser";
@@ -250,6 +251,7 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
       // Setup, as the person: their account, their Workspace, a project and a ticket.
       const http = new ConvexHttpClient(url!);
       http.setAuth(token(subject));
+      await inviteTestEmail(url!, `${subject}@example.com`);
       await http.mutation(api.accounts.ensureViewer, {});
       const [workspace] = await http.query(api.workspaces.listMine, {});
       const projectId = randomUUID();
@@ -473,6 +475,7 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
       const subject = `live-snapshot-${randomUUID()}`;
       const http = new ConvexHttpClient(url!);
       http.setAuth(token(subject));
+      await inviteTestEmail(url!, `${subject}@example.com`);
       await http.mutation(api.accounts.ensureViewer, {});
       const [workspace] = await http.query(api.workspaces.listMine, {});
       const projectId = randomUUID();

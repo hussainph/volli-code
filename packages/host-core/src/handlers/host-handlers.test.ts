@@ -1629,6 +1629,11 @@ describe("the Volli Cloud account", () => {
     expect(snapshots.emit).toHaveBeenCalledWith(SNAPSHOT);
     expect(await map["account.signIn"]({ connection: "google" }, WINDOW)).toBeNull();
     expect(port.signIn).toHaveBeenCalledWith("google");
+    await map["account.signIn"](
+      { connection: "github", inviteCode: "preview-code-123456" },
+      WINDOW,
+    );
+    expect(port.signIn).toHaveBeenCalledWith("github", "preview-code-123456");
     for (const key of [
       "account.cancelSignIn",
       "account.signOut",

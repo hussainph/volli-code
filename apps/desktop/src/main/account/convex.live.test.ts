@@ -10,6 +10,7 @@
  *   pnpm -C convex with-backend --deploy -- \
  *     pnpm -C apps/desktop exec vp test run src/main/account/convex.live.test.ts
  */
+import { inviteTestEmail } from "../test-helpers/preview";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
@@ -42,6 +43,7 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
       const temp = tempInventory();
       cleanups.push(temp.dispose);
       const subject = `live-${randomUUID()}`;
+      await inviteTestEmail(url!, `${subject}@example.com`);
       const service = createAccountService({
         enabled: () => true,
         provider: devIssuerProvider({

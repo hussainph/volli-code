@@ -40,6 +40,7 @@ import {
   type WorkspaceId,
 } from "@volli/shared/cloud";
 
+import { requirePreviewAccess } from "./lib/previewAccess";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel.js";
 import { audit } from "./lib/audit";
@@ -525,6 +526,7 @@ export const accept = mutation({
   args: { inviteId: v.string() },
   handler: async (ctx, args): Promise<AcceptedInvite> => {
     const viewer = await requireViewer(ctx);
+    await requirePreviewAccess(ctx, viewer);
     const invite = await findInvite(ctx, idArg("invite", args.inviteId));
     // A link invite is accepted only with its token: ids are not secrets.
     if (invite === null || invite.email === null) {
@@ -539,6 +541,7 @@ export const acceptLink = mutation({
   args: { token: v.string() },
   handler: async (ctx, args): Promise<AcceptedInvite> => {
     const viewer = await requireViewer(ctx);
+    await requirePreviewAccess(ctx, viewer);
     const invite = await inviteByToken(ctx, args.token);
     if (invite === null) throw workspaceError("invite_invalid", "This invite link is not valid.");
     return await acceptInvite(ctx, viewer, invite);

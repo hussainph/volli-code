@@ -763,7 +763,7 @@ jobs:
           test -z "$(git status --porcelain -- convex/functions/_generated)"
 
       - name: Unit tests (convex-test)
-        run: vp run --filter @volli/convex test --maxWorkers=$(nproc)
+        run: vp run --filter @volli/convex test --coverage --maxWorkers=$(nproc)
 
       - name: Backend tests (pinned local backend)
         run: vp run --filter @volli/convex test:backend

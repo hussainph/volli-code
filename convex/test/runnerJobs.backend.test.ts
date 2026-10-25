@@ -65,6 +65,8 @@ async function linkRunner(person: ConvexHttpClient, name: string): Promise<strin
 async function world(): Promise<World> {
   const person = backend.client(`user:${randomUUID()}`);
   const { userId } = await person.mutation(api.accounts.ensureViewer, {});
+  await backend.admin(internal.previewAccess.set, { kind: "user", value: userId, enabled: true });
+  await person.mutation(api.accounts.ensureViewer, {});
   const [workspace] = await person.query(api.workspaces.listMine, {});
   const projectId = randomUUID();
   await person.mutation(api.projects.create, {

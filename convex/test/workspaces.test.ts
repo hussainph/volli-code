@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
 import { newId } from "@volli/shared/cloud";
 
-import { api } from "../functions/_generated/api";
+import { api, internal } from "../functions/_generated/api";
 import schema from "../functions/schema";
 
 const modules = import.meta.glob("../functions/**/*.ts");
@@ -13,7 +13,19 @@ type Client = ReturnType<T["withIdentity"]>;
 
 const ISSUER = "https://issuer.test";
 
-function person(name: string, options: { email?: string | null; verified?: boolean } = {}) {
+/** The claims a test person signs in with; `email` is absent when they have none. */
+type Identity = {
+  subject: string;
+  issuer: string;
+  name: string;
+  email?: string;
+  emailVerified?: boolean;
+};
+
+function person(
+  name: string,
+  options: { email?: string | null; verified?: boolean } = {},
+): Identity {
   const email = options.email === undefined ? `${name.toLowerCase()}@example.com` : options.email;
   return {
     subject: `user:${name.toLowerCase()}`,
@@ -27,9 +39,26 @@ function code(value: string) {
   return expect.objectContaining({ data: expect.objectContaining({ code: value }) });
 }
 
-async function signIn(t: T, identity: ReturnType<typeof person>) {
+/** VC-936: the preview admits only allowlisted accounts, by verified email or user id. */
+async function allow(t: T, grant: { kind: "email" | "user"; value: string }) {
+  await t.mutation(internal.previewAccess.set, { ...grant, enabled: true });
+}
+
+/**
+ * Signs a person in, allowlisted. A verified address is granted before the
+ * account exists, so the first call already sets the account up (its personal
+ * Workspace); an address the gate cannot see (none, or unverified) is granted
+ * by user id after that first call, and the second call sets the account up.
+ */
+async function signIn(t: T, identity: Identity) {
   const client = t.withIdentity(identity);
+  const email = identity.emailVerified === true ? identity.email : undefined;
+  if (email !== undefined) await allow(t, { kind: "email", value: email });
   const { userId } = await client.mutation(api.accounts.ensureViewer, {});
+  if (email === undefined) {
+    await allow(t, { kind: "user", value: userId });
+    await client.mutation(api.accounts.ensureViewer, {});
+  }
   return { client, userId };
 }
 

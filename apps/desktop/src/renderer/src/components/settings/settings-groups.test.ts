@@ -43,7 +43,7 @@ function categories(experiments: ReturnType<typeof resolveExperiments> | null) {
 }
 
 describe("Settings → Experimental", () => {
-  it("omits the empty Experimental category on stable and shows it on dev/canary or an env opt-in", () => {
+  it("omits Experimental on stable even with an environment opt-in", () => {
     expect(categories(null).some(({ key }) => key === "experimental")).toBe(false);
     expect(
       categories(resolveExperiments({ cloud: true }, [], "stable")).some(
@@ -59,7 +59,7 @@ describe("Settings → Experimental", () => {
       categories(resolveExperiments({}, ["cloud"], "stable")).some(
         ({ key }) => key === "experimental",
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
   it("lists the registry in System and makes its flag discoverable from the rail", () => {
     const system = settingsGroups(undefined, {
