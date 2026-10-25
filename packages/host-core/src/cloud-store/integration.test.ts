@@ -3,6 +3,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  createSessionExecutorSlot,
+  createSessionRuntime,
+  type NativeHarnessAdapter,
+} from "@volli/session-engine";
+import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
 import { decodeSessionEventPayload, LOCAL_RUNNER } from "@volli/shared";
 import { SESSION_COMMAND_FORMAT, type ClaimedJob, type JobOutcome } from "@volli/shared/cloud";
 import type { LiveHostCore } from "../index";
@@ -22,6 +28,8 @@ import type { CloudRunnerContext } from "./context";
 import { createLocalSessionEngine } from "./owner";
 import { createCloudEnvironmentPreparation } from "./environment";
 import { markFirstRunPending } from "../worktree/first-run";
+import type { BusyWorktreeSites } from "../worktree/activity";
+import { agentTurnOpenWithin } from "../worktree/agent-sites";
 
 const PROJECT = "00000000-0000-4000-8000-000000000001";
 const TICKET = "00000000-0000-4000-8000-000000000002";
@@ -58,7 +66,7 @@ function git(cwd: string, args: string[]) {
   }).trim();
 }
 
-function fixture() {
+function fixture(busySites: BusyWorktreeSites = async () => []) {
   opened = openTestDb();
   const { db } = opened;
   root = mkdtempSync(join(tmpdir(), "volli-cloud-store-"));
@@ -86,7 +94,7 @@ function fixture() {
       ownerUserId,
       runnerId: () => runnerId,
       home: root!,
-      busySites: async () => [],
+      busySites,
       ...(sessionJobs === undefined ? {} : { sessionJobs }),
     });
     cleanups.push(() => cloud.dispose());
@@ -623,6 +631,129 @@ it("recreates an already-briefed missing copy while the shared link is disconnec
     args: expect.objectContaining({ state: "ready", ticketId: TICKET }),
   });
 }, 20_000);
+
+it.each([false, true])(
+  "durably closes idle attachments before inbox reclaim, refusing a failed detach (failure: %s)",
+  async (detachFails) => {
+    let runtime: ReturnType<typeof createSessionRuntime> | undefined;
+    const unreadable = vi.fn();
+    const busySites = vi.fn(async (directory: string) =>
+      runtime !== undefined && (await agentTurnOpenWithin(runtime, directory, unreadable))
+        ? [{ directory, surface: "agent" as const }]
+        : [],
+    );
+    const f = fixture(busySites);
+    f.frozen();
+    const a = f.store();
+    // Connect first: the inbox must read the runtime bound later by assembly.
+    const remote = connect(f, a);
+    const session = await birth(a, "idle-reclaim");
+    const release = vi.fn(async () => {
+      if (detachFails) throw new Error("Executor refused to detach");
+    });
+    const adapter: NativeHarnessAdapter = {
+      id: "scripted",
+      durableIdNamespace: "scripted",
+      adapterVersion: "1",
+      runtime: { path: "/scripted", version: "1", fingerprint: "scripted" },
+      attach: async () => ({
+        native: { id: "native", detail: null },
+        dispatch: async (command) => ({
+          commandId: command.commandId,
+          status: "accepted" as const,
+          acceptedAt: Date.now(),
+          native: null,
+        }),
+        reconcile: async () => ({ cursor: null, observations: [], receipts: [] }),
+        release,
+      }),
+    };
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    let nextId = 0;
+    runtime = createSessionRuntime({
+      engine: a.engine,
+      executors: createSessionExecutorSlot(adapter),
+      artifacts,
+      locations: a.locations,
+      clock: { now: Date.now },
+      ids: { next: (kind) => `${kind}-${++nextId}` },
+    });
+    const boundRuntime = runtime;
+    cleanups.push(() => boundRuntime.close());
+    a.bindRuntime(runtime, artifacts);
+    const attached = await runtime.command({
+      commandId: "attach-idle-reclaim",
+      sessionId: session.id,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    expect(attached.receipt?.status).toBe("accepted");
+    expect((await runtime.projection({ sessionId: session.id })).projection.turnActive).toBe(false);
+    const bindings = runtime.openNativeBindings();
+    expect(bindings).toHaveLength(1);
+    const { attachmentId, directory } = bindings[0]!;
+    expect(directory).toBe(a.registry().workingCopies.pathOf(TICKET, REPO));
+    await vi.waitFor(() =>
+      expect(a.registry().workingCopies.get(TICKET, REPO)?.workingCopyId).toBe(COPY),
+    );
+    const closedWhilePresent: boolean[] = [];
+    cleanups.push(
+      f.wake.subscribe(({ event }) => {
+        if (event.sessionId === session.id && event.payload.kind === "attachment.closed")
+          closedWhilePresent.push(existsSync(directory));
+      }),
+    );
+    f.facts.ticket!.status = "done";
+    f.facts.retention = {
+      doneEntryAt: Date.now() - 20 * 86400000,
+      prUrl: null,
+      prState: null,
+    };
+    const job = claimed("workingCopy.reclaim", "00000000-0000-4000-8000-000000000040", RUNNER_A);
+    remote.queued.push(job);
+    remote.sync.start();
+    await vi.waitFor(() => expect(remote.completed.has(job.job.id)).toBe(true), {
+      timeout: 10_000,
+    });
+    expect(remote.completed.get(job.job.id)).toMatchObject({
+      status: "done",
+      result: { kind: detachFails ? "skipped" : "reclaimed" },
+    });
+    expect(busySites).toHaveBeenCalledWith(directory);
+    expect(unreadable).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledExactlyOnceWith("requested");
+    expect(existsSync(directory)).toBe(detachFails);
+    expect(runtime.openNativeBindings()).toHaveLength(detachFails ? 1 : 0);
+    // A cold reader proves the close is in SQLite, not just runtime memory;
+    // the post-commit wake above proves it preceded the directory's removal.
+    const reader = createTestSessionEngine(f.db);
+    const durable = await reader.getSession({ sessionId: session.id });
+    const closed = (await reader.listEvents({ sessionId: session.id })).filter(
+      (event) => event.payload.kind === "attachment.closed",
+    );
+    if (detachFails) {
+      expect(closed).toEqual([]);
+      expect(closedWhilePresent).toEqual([]);
+      expect(durable?.liveExecutor?.id).toBe(attachmentId);
+      expect(remote.calls).not.toContainEqual({
+        name: "workingCopies:report",
+        args: expect.objectContaining({ state: "reclaimed" }),
+      });
+    } else {
+      expect(closed).toHaveLength(1);
+      expect(closed[0]?.payload).toMatchObject({ attachmentId, outcome: "completed" });
+      expect(closedWhilePresent).toEqual([true]);
+      expect(durable?.liveExecutor).toBeNull();
+      await vi.waitFor(() =>
+        expect(remote.calls).toContainEqual({
+          name: "workingCopies:report",
+          args: expect.objectContaining({ state: "reclaimed" }),
+        }),
+      );
+    }
+    expect(JSON.stringify(remote.completed.get(job.job.id))).not.toContain(root);
+  },
+  20_000,
+);
 
 it("wires retention reclaim to fresh backend dates/PR facts and the machine TTL", async () => {
   const f = fixture();

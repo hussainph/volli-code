@@ -1,4 +1,5 @@
 /** The cloud product store: one owner-scoped local ledger, one shared runner link. No Electron. */
+import { randomUUID } from "node:crypto";
 import type {
   HostedSessionRuntime,
   SessionLocationResolver,
@@ -27,6 +28,7 @@ import { registerSessionCommandJob, ownerGuardedInbox } from "./session-jobs";
 import { runGitCapturingAsync } from "../worktree/git";
 import { getTrimSettings } from "../worktree/trim-settings";
 import type { BusyWorktreeSites } from "../worktree/activity";
+import { releaseAgentSites } from "../worktree/agent-sites";
 import { hostLogger } from "../log/root";
 import { computeWorktreeReclaim, isTicketStatus } from "@volli/shared";
 import { retentionTtlMs } from "../worktree/retention";
@@ -250,6 +252,28 @@ export function createCloudProductStore(options: {
           }).reclaim;
         },
         busySites: options.busySites,
+        releaseAgentSites: async (directory) => {
+          // No runtime has attached anything before bindRuntime. Read the live
+          // binding here: connect can precede runtime assembly.
+          if (runtime === null) return { released: [], stillOpen: [] };
+          const report = await releaseAgentSites(runtime, directory, {
+            newCommandId: randomUUID,
+            onError: (sessionId, error) =>
+              log.warn("Working copy attachment release failed", { sessionId, directory, error }),
+          });
+          // Unlike a confirmed manual removal, an inbox reclaim must not delete
+          // the directory underneath a binding that refused to close.
+          if (report.stillOpen.length > 0) {
+            log.warn("Working copy still has structured attachments", {
+              directory,
+              sessionIds: report.stillOpen,
+            });
+            throw new Error(
+              "An agent is still attached to this working copy; refusing to reclaim.",
+            );
+          }
+          return report;
+        },
       });
       let sync: RunnerSync | null = null;
       return {
