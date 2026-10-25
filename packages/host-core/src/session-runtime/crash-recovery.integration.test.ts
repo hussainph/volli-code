@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   sessionRootThreadId,
@@ -124,7 +125,7 @@ function fixture() {
     });
     const host = createSessionRuntime({
       engine,
-      executor: {
+      executors: createSessionExecutorSlot({
         ...adapter,
         attach: async (spec, sink) => {
           attachSpecs.push(spec);
@@ -160,7 +161,7 @@ function fixture() {
           };
           return binding;
         },
-      },
+      }),
       followUps: createSqliteSessionFollowUpLedger(database.db),
       // Explicit recovery wakes exercise retry; no background backoff races.
       followUpRetryDelaysMs: [],

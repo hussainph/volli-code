@@ -2,6 +2,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   sessionRootThreadId,
@@ -100,7 +101,7 @@ export async function silentEndsFixture(
   const terminal = Promise.withResolvers<void>();
   const runtime = createSessionRuntime({
     engine,
-    executor: {
+    executors: createSessionExecutorSlot({
       ...adapter,
       attach: async (spec, sink) =>
         adapter.attach(spec, {
@@ -109,7 +110,7 @@ export async function silentEndsFixture(
             if (observation.kind === "turn" && observation.state !== "started") terminal.resolve();
           },
         }),
-    },
+    }),
     artifacts,
     followUps: createSqliteSessionFollowUpLedger(db.db),
     locations: {

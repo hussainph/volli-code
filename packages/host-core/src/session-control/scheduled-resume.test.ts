@@ -5,6 +5,7 @@
  * a relaunch reads too.
  */
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   type BindingHandle,
@@ -97,7 +98,7 @@ function world(): World {
   const at = async () => ({ directory: "/projects/p", venue });
   const runtime = createSessionRuntime({
     engine,
-    executor,
+    executors: createSessionExecutorSlot(executor),
     artifacts: createInMemoryTranscriptArtifactStore(),
     locations: { resolve: at, prepare: at, reaffirm: async () => undefined },
     clock: { now },

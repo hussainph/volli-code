@@ -27,6 +27,7 @@ import type {
   ObservationSink,
 } from "@volli/session-engine";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   NativeAttachmentError,
@@ -447,7 +448,7 @@ describe("legacy enforce attachment boot recovery", () => {
       });
       const host = createSessionRuntime({
         engine,
-        executor: adapter,
+        executors: createSessionExecutorSlot(adapter),
         artifacts: createFileTranscriptArtifactStore(join(dirname(db.dbPath), "transcripts")),
         locations: {
           resolve: async () => ({ directory: "/work", venue }),
@@ -843,7 +844,7 @@ describe("Pi native adapter context carry", () => {
     });
     const runtime = createSessionRuntime({
       engine,
-      executor: adapter,
+      executors: createSessionExecutorSlot(adapter),
       artifacts: createInMemoryTranscriptArtifactStore(),
       locations: {
         resolve: async () => ({ directory: "/work", venue }),

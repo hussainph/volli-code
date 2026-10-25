@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { DEFAULT_CODE_MODE_LIMITS, type SessionInput, type McpToolDefinition } from "@volli/shared";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   sessionRootThreadId,
@@ -160,7 +161,7 @@ async function fixture(birth: Surface, initial: Surface, supportsMidConvoSystemM
   });
   runtime = createSessionRuntime({
     engine,
-    executor: adapter,
+    executors: createSessionExecutorSlot(adapter),
     artifacts: createFileTranscriptArtifactStore(join(root, "transcripts")),
     locations: {
       resolve: async () => ({ directory: workspace, venue: { id: "local", kind: "local" } }),

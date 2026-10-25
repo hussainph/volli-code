@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { piExecutionEnv } from "@volli/agent-runtime";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   sessionRootThreadId,
@@ -139,7 +140,7 @@ async function startFixture(steps: Parameters<typeof scriptedProvider>[0], killG
   const createRuntime = () =>
     createSessionRuntime({
       engine,
-      executor: adapter,
+      executors: createSessionExecutorSlot(adapter),
       artifacts: createFileTranscriptArtifactStore(join(dirname(db!.dbPath), "transcripts")),
       locations: {
         resolve: async () => ({ directory, venue: { id: "local", kind: "local" } }),

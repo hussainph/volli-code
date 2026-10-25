@@ -1,6 +1,7 @@
 import { copyFileSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   sessionRootThreadId,
@@ -89,7 +90,7 @@ export async function silentEndSession(input: {
   });
   const runtime = createSessionRuntime({
     engine,
-    executor: {
+    executors: createSessionExecutorSlot({
       ...adapter,
       attach: (spec, sink) =>
         adapter.attach(spec, {
@@ -98,7 +99,7 @@ export async function silentEndSession(input: {
             if (observation.kind === "turn" && observation.state !== "started") terminal.resolve();
           },
         }),
-    },
+    }),
     artifacts: createFileTranscriptArtifactStore(sessionTranscriptsRoot(root)),
     locations: {
       resolve: async () => ({ directory, venue: { id: "local", kind: "local" } }),

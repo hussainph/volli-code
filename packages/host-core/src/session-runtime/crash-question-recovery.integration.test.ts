@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  createSessionExecutorSlot,
   createSessionEngine,
   createSessionRuntime,
   sessionRootThreadId,
@@ -84,7 +85,7 @@ function fixture(shape: "flat" | "questions") {
     });
     const host = createSessionRuntime({
       engine,
-      executor: {
+      executors: createSessionExecutorSlot({
         ...adapter,
         attach: (spec, sink) =>
           adapter.attach(spec, {
@@ -106,7 +107,7 @@ function fixture(shape: "flat" | "questions") {
                 asked.resolve();
             },
           }),
-      },
+      }),
       artifacts,
       locations: {
         resolve: async () => ({ directory, venue }),

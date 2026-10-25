@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
+  createSessionExecutorSlot,
   createSessionRuntime,
   type HarnessCommand,
   type NativeHarnessAdapter,
@@ -98,7 +99,7 @@ async function boot(sessionId: string, unknownDelivery = false) {
   };
   runtime = createSessionRuntime({
     engine,
-    executor: adapter,
+    executors: createSessionExecutorSlot(adapter),
     followUps: createSqliteSessionFollowUpLedger(fixture.db),
     artifacts: createInMemoryTranscriptArtifactStore(),
     clock: { now: () => 200 },

@@ -32,6 +32,7 @@ import { PtyManager, type PtyManagerOptions } from "./pty/manager";
 import type { SessionWake } from "./session-control/session-wake";
 import { createHostMaintenance, type HostMaintenanceOptions } from "./maintenance-services";
 import { createHostRuntimeServices } from "./runtime-services";
+import { createSessionExecutorSlot } from "@volli/session-engine";
 
 /**
  * Each mock below passes through to the real module and only RECORDS: the
@@ -242,7 +243,7 @@ describe("createHostCore", () => {
       dataDir: core.dataDir,
       transcriptDirectory: join(core.dataDir, "transcripts"),
       sessionEngine: engine,
-      executor,
+      executors: createSessionExecutorSlot(executor),
     });
     const manager = new PtyManager({
       host: {
@@ -311,7 +312,7 @@ describe("createHostCore", () => {
       dataDir: core.dataDir,
       transcriptDirectory: join(core.dataDir, "transcripts"),
       sessionEngine: core.sessionEngine,
-      executor: {
+      executors: createSessionExecutorSlot({
         id: "test",
         durableIdNamespace: "test",
         adapterVersion: "1",
@@ -319,7 +320,7 @@ describe("createHostCore", () => {
         attach: vi.fn(() => {
           throw new Error("executor offline");
         }),
-      },
+      }),
     });
     try {
       const { sessionId } = await runtime.command({

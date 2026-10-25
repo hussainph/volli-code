@@ -26,6 +26,7 @@ import {
 import { BASELINE_SCAN_CHUNK, recoverTranscriptBaseline } from "./transcript-baseline";
 import type { SessionTranscriptArtifact } from "./transcript-artifacts";
 import { createInMemorySessionLedger, createInMemoryTranscriptArtifactStore } from "./testing";
+import { createSessionExecutorSlot } from "./executor-slot";
 
 /**
  * The plan and reply of a Session whose history predates transcript digests,
@@ -172,7 +173,7 @@ async function record(steps: readonly Step[]): Promise<Recorded> {
   const adapter = new TemplateAdapter();
   const live = createSessionRuntime({
     engine,
-    executor: adapter,
+    executors: createSessionExecutorSlot(adapter),
     artifacts: recording,
     locations: fixedLocation("/projects/fake"),
     clock,
@@ -279,7 +280,7 @@ async function record(steps: readonly Step[]): Promise<Recorded> {
       const failures: unknown[] = [];
       const runtime = createSessionRuntime({
         engine: reader,
-        executor: new TemplateAdapter(),
+        executors: createSessionExecutorSlot(new TemplateAdapter()),
         artifacts: {
           write: (artifact) => memory.write(artifact),
           byteLength: (reference) => memory.byteLength!(reference),

@@ -28,6 +28,7 @@ import {
   createInMemorySessionLedger,
   createInMemoryTranscriptArtifactStore,
 } from "./testing";
+import { createSessionExecutorSlot } from "./executor-slot";
 
 const message = (id: string, text = id): UIMessage => ({
   id,
@@ -172,7 +173,7 @@ function fixture(
       engine,
       artifacts,
       followUps: withStorage ? followUps : undefined,
-      executor: adapter,
+      executors: createSessionExecutorSlot(adapter),
       clock,
       ids: { next: (kind) => `${kind}-${++sequence}` },
       locations: {

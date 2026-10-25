@@ -416,9 +416,10 @@ function resolveModelAccess(options: PiRuntimeHostOptions): PiModelAccessSource 
 }
 
 /**
- * Build the one structured executor port. The models are resolved once rather
- * than per attachment: the credential store behind them serializes this
- * process's writes to Pi's `auth.json`, and a fresh store per attach would not.
+ * Build the Pi executor, the one runtime in the executor slot. The models are
+ * resolved once rather than per attachment: the credential store behind them
+ * serializes this process's writes to Pi's `auth.json`, and a fresh store per
+ * attach would not.
  *
  * Every Session it attaches dispatches a model-issued tool batch sequentially,
  * unless {@link PiRuntimeHostOptions.parallelMcpReads} is on AND that Session's
