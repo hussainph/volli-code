@@ -9,7 +9,7 @@
  * wiring between them.
  *
  * SCOPE FOLLOWS THE SURFACE, and it is resolved at OPEN. Home searches the
- * project's Main checkout; a Ticket workspace searches that ticket's worktree —
+ * project's Main checkout; a Ticket view searches that ticket's worktree —
  * see {@link quickOpenScope}, and `volli-fs.ts` for the main-process half,
  * which resolves the pair through the same seam a file READ resolves through.
  * A pick lands in the surface you invoked from, which is the same statement
@@ -39,7 +39,7 @@ import { MENU_ROW_STATE_CMDK } from "@renderer/components/ui/menu-classes";
 import { toastError } from "@renderer/lib/toast";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
-import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, useProjectUiStore } from "@renderer/stores/project-ui";
 import { remoteHostNow } from "@renderer/stores/remote-project";
 
 /**
@@ -61,17 +61,16 @@ export function QuickOpen({
   onOpenChange(open: boolean): void;
 }) {
   const projectId = useProjectsStore((state) => state.selectedProjectId);
-  const nav = useWorkspaceStore(
+  const nav = useProjectUiStore(
     (state) =>
-      (projectId === null ? undefined : state.byProject[projectId]?.nav) ??
-      DEFAULT_WORKSPACE_UI.nav,
+      (projectId === null ? undefined : state.byProject[projectId]?.nav) ?? DEFAULT_PROJECT_UI.nav,
   );
-  const homeActiveTab = useWorkspaceStore(
+  const homeActiveTab = useProjectUiStore(
     (state) =>
       (projectId === null ? undefined : state.byProject[projectId]?.homeActiveTab) ??
-      DEFAULT_WORKSPACE_UI.homeActiveTab,
+      DEFAULT_PROJECT_UI.homeActiveTab,
   );
-  const openTicketId = useWorkspaceStore((state) =>
+  const openTicketId = useProjectUiStore((state) =>
     projectId === null ? null : (state.byProject[projectId]?.openTicketId ?? null),
   );
 
@@ -143,10 +142,10 @@ export function QuickOpen({
       const pin = pinIntent.current;
       pinIntent.current = false;
       if (scope === null) return;
-      const workspace = useWorkspaceStore.getState();
+      const projectUi = useProjectUiStore.getState();
       const surface = quickOpenSurfaceFiles(
         scope,
-        workspace.byProject[scope.projectId] ?? DEFAULT_WORKSPACE_UI,
+        projectUi.byProject[scope.projectId] ?? DEFAULT_PROJECT_UI,
       );
       const intent = quickOpenIntent({ relPath, pin, ...surface });
       if (scope.kind === "ticket") {
@@ -157,12 +156,12 @@ export function QuickOpen({
         // and is identity for an already-pinned one, so ⌘↵ on a file already
         // in the strip would land nowhere, or do nothing at all. This is the
         // pin-AND-activate pair `pinHomeFile` already is at the other scope.
-        if (intent === "pin") workspace.openTicketFile(scope.projectId, scope.ticketId, relPath);
-        else workspace.previewTicketFile(scope.projectId, scope.ticketId, relPath);
+        if (intent === "pin") projectUi.openTicketFile(scope.projectId, scope.ticketId, relPath);
+        else projectUi.previewTicketFile(scope.projectId, scope.ticketId, relPath);
       } else if (intent === "pin") {
-        workspace.pinHomeFile(scope.projectId, relPath);
+        projectUi.pinHomeFile(scope.projectId, relPath);
       } else {
-        workspace.previewHomeFile(scope.projectId, relPath);
+        projectUi.previewHomeFile(scope.projectId, relPath);
       }
       // Settings is chrome over the workspace the file just landed in — the
       // same step ⌘K takes before it navigates.

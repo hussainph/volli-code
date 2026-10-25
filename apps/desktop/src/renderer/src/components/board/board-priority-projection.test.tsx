@@ -8,7 +8,7 @@ import type { TicketResult } from "../../../../ipc/contract";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
-import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, useProjectUiStore } from "@renderer/stores/project-ui";
 
 import { Board } from "./board";
 
@@ -52,7 +52,7 @@ beforeEach(() => {
     },
   );
   useBoardStore.getState().hydrate({ p1: [ticket] }, { p1: [] });
-  useWorkspaceStore.setState({ byProject: { p1: { ...DEFAULT_WORKSPACE_UI } } });
+  useProjectUiStore.setState({ byProject: { p1: { ...DEFAULT_PROJECT_UI } } });
   useAutomationsStore.setState({
     byProject: { p1: [] },
     armingByProject: { p1: [] },

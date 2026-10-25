@@ -10,7 +10,7 @@
  */
 import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
 import { MONACO_SURFACE_SELECTOR } from "@renderer/lib/monaco-surface";
-import type { NavKey } from "@renderer/stores/workspace";
+import type { NavKey } from "@renderer/stores/project-ui";
 
 /** The two kinds a press can start. Chat is the default act; a terminal is its companion. */
 export type NewSessionKind = "chat" | "terminal";

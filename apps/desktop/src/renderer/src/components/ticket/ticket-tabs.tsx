@@ -225,7 +225,7 @@ interface TicketTabStripProps extends TicketTabListProps {
   onNewSession(): void;
   /** Mints a chat Session and opens its tab. */
   onNewChat(): void;
-  /** Opens a user-owned Browser Tab in this Ticket workspace. */
+  /** Opens a user-owned Browser Tab in this Ticket view. */
   onNewBrowser(): void;
   /** Drives the corner control's label — the details rail's current state. */
   railCollapsed: boolean;

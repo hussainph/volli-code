@@ -37,7 +37,7 @@ export function remoteHostNow(projectId: string | null | undefined): HostRecord 
  */
 export function remoteHostOfTicketNow(ticketId: string | null | undefined): HostRecord | null {
   if (ticketId === null || ticketId === undefined) return null;
-  return remoteHostNow(boardProtocol()?.sync.workspaceOf(ticketId));
+  return remoteHostNow(boardProtocol()?.sync.projectOf(ticketId));
 }
 
 /** {@link refuseRemote} for an action keyed by a ticket. */

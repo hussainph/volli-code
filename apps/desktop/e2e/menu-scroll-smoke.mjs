@@ -46,7 +46,7 @@ import {
 const LABEL_COUNT = 40;
 
 /**
- * Land on Home's Board tab (both nav and tab are remembered per-workspace and
+ * Land on Home's Board tab (both nav and tab are remembered per-project and
  * both default to it, but re-assert after every reload to be robust).
  */
 async function goToBoard(page) {

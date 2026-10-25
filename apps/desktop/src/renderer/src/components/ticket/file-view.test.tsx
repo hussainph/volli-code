@@ -56,7 +56,7 @@ vi.mock("@renderer/editor/monaco-runtime", () => ({
 
 vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
 
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { FileView, overwriteAutosaveConflict } from "./file-view";
 
 describe("overwriteAutosaveConflict", () => {
@@ -125,7 +125,7 @@ beforeEach(() => {
       },
     },
   });
-  useWorkspaceStore.setState({ byProject: {} });
+  useProjectUiStore.setState({ byProject: {} });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -138,7 +138,7 @@ afterEach(async () => {
   root = null;
   container?.remove();
   container = null;
-  useWorkspaceStore.setState({ byProject: {} });
+  useProjectUiStore.setState({ byProject: {} });
   vi.unstubAllGlobals();
 });
 
@@ -208,7 +208,7 @@ describe("FileView — the markdown view band", () => {
   it("drops a remembered Preview choice once the file can be edited as a document", async () => {
     // The same path in both cases: the preference is remembered for the FILE,
     // and the bytes get the last word.
-    useWorkspaceStore.getState().setMarkdownFileView(PROJECT, "docs/NOTES.md", "preview");
+    useProjectUiStore.getState().setMarkdownFileView(PROJECT, "docs/NOTES.md", "preview");
 
     const view = await openFile("docs/NOTES.md");
 

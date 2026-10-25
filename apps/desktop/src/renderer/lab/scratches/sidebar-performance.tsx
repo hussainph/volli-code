@@ -58,12 +58,12 @@ import {
 } from "@renderer/stores/sessions";
 import { createUiStore } from "@renderer/stores/ui";
 import {
-  createWorkspaceStore,
-  DEFAULT_WORKSPACE_UI,
-  useWorkspaceStore,
+  createProjectUiStore,
+  DEFAULT_PROJECT_UI,
+  useProjectUiStore,
   type TicketTabsState,
-  type WorkspaceUiState,
-} from "@renderer/stores/workspace";
+  type ProjectUiState,
+} from "@renderer/stores/project-ui";
 
 import type { ApiOverrides } from "../fake-api";
 import { appApi, seedApp } from "../seed";
@@ -276,9 +276,9 @@ export function seed(): void {
     ...state,
     ticketsByProject: { [PERF_PROJECT.id]: PERF_TICKETS },
   }));
-  useWorkspaceStore.setState({
+  useProjectUiStore.setState({
     byProject: {
-      [PERF_PROJECT.id]: { ...DEFAULT_WORKSPACE_UI, nav: "home" },
+      [PERF_PROJECT.id]: { ...DEFAULT_PROJECT_UI, nav: "home" },
     },
     navHistory: EMPTY_NAV_HISTORY,
   });
@@ -491,7 +491,7 @@ function storageProbe() {
   };
 }
 
-function persistenceWorkspaceUi(): WorkspaceUiState {
+function persistenceProjectUi(): ProjectUiState {
   const ticketTabs = Object.fromEntries(
     PERF_TICKETS.map((ticket, index) => {
       const relPath = `src/perf-${index + 1}.ts`;
@@ -510,7 +510,7 @@ function persistenceWorkspaceUi(): WorkspaceUiState {
     pinned: true,
   }));
   return {
-    ...DEFAULT_WORKSPACE_UI,
+    ...DEFAULT_PROJECT_UI,
     boardView: "list",
     openTicketId: PERF_TICKETS[0]!.id,
     ticketTabs,
@@ -570,14 +570,14 @@ function measurePersistence(samples: number): Record<string, PersistenceScenario
   const uiOptions = ui.persist.getOptions();
   const uiPartialize = uiOptions.partialize ?? ((state) => state);
 
-  const workspaceProbe = storageProbe();
-  const workspace = createWorkspaceStore(workspaceProbe.storage);
-  workspace.setState({
-    byProject: { [PERF_PROJECT.id]: persistenceWorkspaceUi() },
+  const projectUiProbe = storageProbe();
+  const projectUi = createProjectUiStore(projectUiProbe.storage);
+  projectUi.setState({
+    byProject: { [PERF_PROJECT.id]: persistenceProjectUi() },
     navHistory: EMPTY_NAV_HISTORY,
   });
-  const workspaceOptions = workspace.persist.getOptions();
-  const workspacePartialize = workspaceOptions.partialize ?? ((state) => state);
+  const projectUiOptions = projectUi.persist.getOptions();
+  const projectUiPartialize = projectUiOptions.partialize ?? ((state) => state);
 
   const draftsProbe = storageProbe();
   const drafts = createChatDraftsStore(draftsProbe.storage);
@@ -602,15 +602,15 @@ function measurePersistence(samples: number): Record<string, PersistenceScenario
       name: "workspace-transient",
       samples: persistenceSamples,
       action: (sample) =>
-        workspace.getState().recordNav({
+        projectUi.getState().recordNav({
           projectId: PERF_PROJECT.id,
           nav: "home",
           openTicketId: PERF_TICKETS[Math.abs(sample) % 2]!.id,
         }),
-      readState: workspace.getState,
-      partialize: workspacePartialize,
-      version: workspaceOptions.version ?? 0,
-      probe: workspaceProbe,
+      readState: projectUi.getState,
+      partialize: projectUiPartialize,
+      version: projectUiOptions.version ?? 0,
+      probe: projectUiProbe,
     }),
     chatDraftKeystroke: measurePersistenceScenario({
       name: "chat-draft-keystroke",

@@ -17,7 +17,7 @@
  * with the ticket's composed prompt as an argv, and the composer carried a
  * terminal-harness picker to choose which one (VC-15, subsumed by VC-56). The
  * product has one structured executor and terminals are manual companions, so
- * "Create & start" starts the thing the ticket workspace is built around and
+ * "Create & start" starts the thing the Ticket view is built around and
  * never a terminal. Two consequences worth stating, because they look like
  * omissions:
  *

@@ -41,7 +41,7 @@ const reportFor = (
 ) => activeNotificationTarget(visibleNotificationSurface(reading), reading);
 
 describe("activeNotificationTarget", () => {
-  it("names the chat Session in front of a ticket workspace, and the item it shows", () => {
+  it("names the chat Session in front of a Ticket view, and the item it shows", () => {
     expect(
       reportFor({
         ...QUIET,

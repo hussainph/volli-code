@@ -27,7 +27,7 @@ import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useBoardStore } from "@renderer/stores/board";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { PeekConversation } from "./peek-conversation";
@@ -119,7 +119,7 @@ beforeEach(() => {
       ]),
     ),
   });
-  useWorkspaceStore.setState({ byProject: {} });
+  useProjectUiStore.setState({ byProject: {} });
   vi.spyOn(useProjectsStore.getState(), "select").mockImplementation(() => {});
   useTicketSessionRecordsStore.setState({ byTicket: { "ticket-6": [row] } });
   useProjectSessionsStore.setState({ byProject: {} });
@@ -187,7 +187,7 @@ describe("PeekConversation", () => {
 
   it("opens the cached ticket chat as a tab and dismisses the preview", async () => {
     const onClose = vi.fn();
-    useWorkspaceStore.getState().openHome("project-1", "file:notes.md");
+    useProjectUiStore.getState().openHome("project-1", "file:notes.md");
     await render(SESSION, onClose);
 
     const button = [...dialog()!.querySelectorAll("button")].find(
@@ -199,9 +199,9 @@ describe("PeekConversation", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(useProjectsStore.getState().select).toHaveBeenCalledWith("project-1");
     expect(useChatSessionsStore.getState().openTabs["ticket-6"]).toEqual([SESSION]);
-    const workspace = useWorkspaceStore.getState().byProject["project-1"]!;
-    expect(workspace.openTicketId).toBe("ticket-6");
-    expect(workspace.ticketTabs["ticket-6"]?.active).toBe(chatTabId(SESSION));
+    const projectUi = useProjectUiStore.getState().byProject["project-1"]!;
+    expect(projectUi.openTicketId).toBe("ticket-6");
+    expect(projectUi.ticketTabs["ticket-6"]?.active).toBe(chatTabId(SESSION));
     await render(null);
     expect(dialog()).toBeNull();
     expect(useChatSessionsStore.getState().sessions[SESSION]).toBeDefined();
@@ -227,9 +227,9 @@ describe("PeekConversation", () => {
       expect(onClose).toHaveBeenCalledTimes(1);
       expect(useChatSessionsStore.getState().openTabs["project-1"]).toEqual([SESSION]);
       expect(useChatSessionsStore.getState().openTabs["ticket-6"]).toBeUndefined();
-      const workspace = useWorkspaceStore.getState().byProject["project-1"]!;
-      expect(workspace.homeActiveTab).toBe(chatTabId(SESSION));
-      expect(workspace.openTicketId).toBeNull();
+      const projectUi = useProjectUiStore.getState().byProject["project-1"]!;
+      expect(projectUi.homeActiveTab).toBe(chatTabId(SESSION));
+      expect(projectUi.openTicketId).toBeNull();
     },
   );
 
@@ -244,7 +244,7 @@ describe("PeekConversation", () => {
         },
       },
     });
-    useWorkspaceStore.getState().openTicketWorkspace("project-1", "ticket-other");
+    useProjectUiStore.getState().openTicketView("project-1", "ticket-other");
     await render(SESSION);
     await act(async () =>
       [...dialog()!.querySelectorAll("button")]
@@ -253,22 +253,22 @@ describe("PeekConversation", () => {
     );
 
     expect(useChatSessionsStore.getState().openTabs["project-1"]).toEqual([SESSION]);
-    const workspace = useWorkspaceStore.getState().byProject["project-1"]!;
-    expect(workspace.homeActiveTab).toBe(chatTabId(SESSION));
-    expect(workspace.openTicketId).toBe("ticket-other");
+    const projectUi = useProjectUiStore.getState().byProject["project-1"]!;
+    expect(projectUi.homeActiveTab).toBe(chatTabId(SESSION));
+    expect(projectUi.openTicketId).toBe("ticket-other");
   });
 
   it("focuses an existing tab in its split pane without duplicating it", async () => {
-    const workspace = useWorkspaceStore.getState();
+    const projectUi = useProjectUiStore.getState();
     useChatSessionsStore.getState().openChatTab("ticket-6", SESSION);
-    workspace.openTicketWorkspace("project-1", "ticket-6");
-    workspace.splitTicketPane("project-1", "ticket-6", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+    projectUi.openTicketView("project-1", "ticket-6");
+    projectUi.splitTicketPane("project-1", "ticket-6", SPLIT_VIEW_ROOT_PANE_ID, "right", {
       tabId: chatTabId(SESSION),
     });
     const split =
-      useWorkspaceStore.getState().byProject["project-1"]!.ticketTabs["ticket-6"]!.splitView!;
+      useProjectUiStore.getState().byProject["project-1"]!.ticketTabs["ticket-6"]!.splitView!;
     const chatPaneId = split.focusedPaneId;
-    workspace.focusTicketPane("project-1", "ticket-6", SPLIT_VIEW_ROOT_PANE_ID);
+    projectUi.focusTicketPane("project-1", "ticket-6", SPLIT_VIEW_ROOT_PANE_ID);
     await render(SESSION);
     await act(async () =>
       [...dialog()!.querySelectorAll("button")]
@@ -278,7 +278,7 @@ describe("PeekConversation", () => {
 
     expect(useChatSessionsStore.getState().openTabs["ticket-6"]).toEqual([SESSION]);
     expect(
-      useWorkspaceStore.getState().byProject["project-1"]?.ticketTabs["ticket-6"]?.splitView
+      useProjectUiStore.getState().byProject["project-1"]?.ticketTabs["ticket-6"]?.splitView
         ?.focusedPaneId,
     ).toBe(chatPaneId);
   });
@@ -344,7 +344,7 @@ describe("PeekConversation", () => {
     expect(useProjectsStore.getState().select).toHaveBeenCalledWith("project-2");
     expect(useChatSessionsStore.getState().openTabs["ticket-current"]).toEqual(["child-1"]);
     expect(
-      useWorkspaceStore.getState().byProject["project-2"]?.ticketTabs["ticket-current"]?.active,
+      useProjectUiStore.getState().byProject["project-2"]?.ticketTabs["ticket-current"]?.active,
     ).toBe(chatTabId("child-1"));
     expect(useChatSessionsStore.getState().openTabs["ticket-6"]).toBeUndefined();
   });

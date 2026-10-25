@@ -713,7 +713,7 @@ describe("boardApi with the protocol on", () => {
     const { client } = fakeBoard({});
     // An engine whose every command is proved by the feed, its row in hand.
     const proving = {
-      workspaceOf: () => undefined,
+      projectOf: () => undefined,
       command: async (spec: { fromFeed: (row: unknown, commandId: string) => unknown }) => ({
         ok: true,
         answer: spec.fromFeed({ id: "fed" }, "cmd-fed"),
@@ -866,7 +866,7 @@ describe("a facade write's host", () => {
     const clientFor = vi.fn((_projectId: string | undefined) => current);
     const specs: { owner?: string; send(commandId: string): Promise<unknown> }[] = [];
     const sync = {
-      workspaceOf: (ticketId: string) => (ticketId === "rt" ? "r1" : undefined),
+      projectOf: (ticketId: string) => (ticketId === "rt" ? "r1" : undefined),
       command: (spec: { owner?: string; send(commandId: string): Promise<unknown> }) => {
         specs.push(spec);
         return Promise.resolve({ ok: false, error: "held" });

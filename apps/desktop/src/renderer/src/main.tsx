@@ -33,7 +33,7 @@ import { attachThisMacWhileCloud } from "./stores/host-sources";
 import { attachRemoteHostsWhileCloud } from "./stores/remote-host-source";
 import { attachRemoteLogSourcesForPage } from "./components/logs/remote-log-sources";
 import { useUpdateStore } from "./stores/update";
-import { useWorkspaceStore } from "./stores/workspace";
+import { useProjectUiStore } from "./stores/project-ui";
 import { watchSystemAppearance } from "./theme/canvas-paint";
 import { initTerminalAppearance } from "./terminal/appearance";
 
@@ -121,10 +121,10 @@ async function main() {
               label: "View ticket",
               // Route through the nav-intent seam, not bare openTicket: the toast
               // can fire from any nav (Files/Sessions), and detail only renders on
-              // the Board — openTicketWorkspace switches nav so the ticket actually
+              // the Board — openTicketView switches nav so the ticket actually
               // appears (the same fix the composer kickoff needed).
               onClick: () =>
-                useWorkspaceStore.getState().openTicketWorkspace(target.projectId, target.ticketId),
+                useProjectUiStore.getState().openTicketView(target.projectId, target.ticketId),
             },
           }),
     });
@@ -145,7 +145,7 @@ async function main() {
           const chat = useChatSessionsStore.getState();
           chat.adoptChatSession(target.sessionId);
           chat.openChatTab(target.ticketId, target.sessionId);
-          useWorkspaceStore.getState().openTicketWorkspace(target.projectId, target.ticketId, {
+          useProjectUiStore.getState().openTicketView(target.projectId, target.ticketId, {
             tabId: chatTabId(target.sessionId),
           });
         },

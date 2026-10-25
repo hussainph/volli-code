@@ -27,7 +27,7 @@ import {
   hydrateBackgroundShells,
   subscribeBackgroundShells,
 } from "@renderer/stores/background-shells";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { subscribeWorktreePhases } from "@renderer/stores/worktree";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
@@ -39,7 +39,7 @@ import { closeTerminalPane } from "@renderer/terminal/session-lifecycle";
 
 interface SessionsLayerProps {
   /**
-   * Home's own plane box is in front — as against a ticket workspace that has
+   * Home's own plane box is in front — as against a Ticket view that has
    * taken Home over, or another nav page. The layer stays MOUNTED regardless;
    * this only toggles the box's visibility. Ticket terminals it also hosts are
    * shown independently, overlaid on the ticket's own panes, even while this is
@@ -76,7 +76,7 @@ interface SessionsLayerProps {
    * Home's plane: its split grid, with whatever each pane draws inside it —
    * editors, chats, the Board, terminal anchors, a Browser Tab's renderer
    * chrome and native-view anchor (VC-202). Null only while no project is
-   * selected or a ticket workspace has taken Home over.
+   * selected or a Ticket view has taken Home over.
    *
    * It arrives as a node for the reason {@link SessionsLayerProps.rail} does,
    * and it stands in the SAME column as the terminals this layer hosts — which
@@ -105,7 +105,7 @@ interface SessionsLayerProps {
  * project's live terminals positioned over whichever pane anchors each of them
  * (VC-202) — beside Home's own rail when the composition one level up hands one
  * down, and the resident {@link TicketTerminalOverlay}, which does the same for
- * a ticket workspace's panes. Both read the one unified store, and both position
+ * a Ticket view's panes. Both read the one unified store, and both position
  * through the one viewport registry.
  *
  * THE CHAT PLANE used to live here too, `absolute inset-0` over the same box.
@@ -341,7 +341,7 @@ export function SessionsLayer({ visible, visibleTabIds, rail, plane = null }: Se
   return (
     <>
       {/* Home's plane and, beside it, Home's rail. Flow layout, hidden (not
-          unmounted) when a ticket workspace has taken Home over or another page
+          unmounted) when a Ticket view has taken Home over or another page
           is in front. The row is the outer box so the rail narrows what is in
           the column rather than covering it, and it is the ONE place the rail is
           rendered from: see `plane` on the props for what a second position
@@ -375,7 +375,7 @@ export function SessionsLayer({ visible, visibleTabIds, rail, plane = null }: Se
                     onPointerDownCapture={() => {
                       const paneId = paneIdForElement(anchor);
                       if (paneId !== null) {
-                        useWorkspaceStore.getState().focusHomePane(ownerId, paneId);
+                        useProjectUiStore.getState().focusHomePane(ownerId, paneId);
                       }
                     }}
                   >

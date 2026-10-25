@@ -104,7 +104,7 @@ import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab"
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useRetentionTtlStore } from "@renderer/stores/retention-ttl";
 import { useUiStore } from "@renderer/stores/ui";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 /** Below a week, an automatic deletion is close enough to ask about. */
 const CONFIRM_BELOW_DAYS = 7;
@@ -1404,9 +1404,7 @@ function DirtyOrphanItem({
     }
     onFailure(null);
     useProjectsStore.getState().select(projectId);
-    useWorkspaceStore
-      .getState()
-      .openTicketWorkspace(projectId, ticketId, { tabId: TICKET_BODY_TAB_ID });
+    useProjectUiStore.getState().openTicketView(projectId, ticketId, { tabId: TICKET_BODY_TAB_ID });
     useUiStore.getState().setSettingsOpen(false);
   }
 

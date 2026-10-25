@@ -2946,7 +2946,7 @@ export type RevealResult = Result;
 /**
  * The full data snapshot handed to the renderer on boot
  * (`volli:data-bootstrap`): projects/tickets/labels from SQLite, plus the raw
- * `app_state` JSON the ui/workspace persist stores rehydrate from.
+ * `app_state` JSON the ui/project-ui persist stores rehydrate from.
  */
 export interface BootstrapPayload {
   /** Ordered by `sort_order`. An empty list is the sole signal boot uses to

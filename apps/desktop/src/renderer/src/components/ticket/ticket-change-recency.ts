@@ -21,7 +21,7 @@ export interface ChangeRecencyState {
 }
 
 /**
- * Null-prototype accumulator (the `stores/workspace.ts` pattern): these records
+ * Null-prototype accumulator (the `stores/project-ui.ts` pattern): these records
  * are keyed by arbitrary repository paths, and a file literally named
  * `constructor` (or `__proto__`, `toString`, …) must not resolve through
  * `Object.prototype` and read as an inspected path that was never opened.

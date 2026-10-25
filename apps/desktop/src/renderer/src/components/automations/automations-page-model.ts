@@ -331,7 +331,7 @@ export function laneDropRank(input: {
  * history is scoped through the Run's Session rather than through a live
  * Ticket — so a Run outlives its Ticket, keeps its row, and still opens the
  * Session it started. Where that Session opens is `run-automation.ts`'s
- * `openRunSession`: the ticket workspace when there is a Ticket, and Home —
+ * `openRunSession`: the Ticket view when there is a Ticket, and Home —
  * the project's own place for a Session that belongs to no Ticket — when there
  * is not. The same is true of a Run that never named one (VC-130).
  */

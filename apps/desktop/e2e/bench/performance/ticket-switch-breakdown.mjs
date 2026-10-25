@@ -4,7 +4,7 @@
  * The switch's latency has always been one number, and the ticket's own review
  * showed the number contains at least three unrelated things: opening the
  * command palette (which re-reads every project's Session listing), rebuilding
- * the ticket workspace, and creating the Monaco description editor for the
+ * the Ticket view, and creating the Monaco description editor for the
  * first time. A single figure cannot say which of those a change moved, so the
  * renderer stamps a mark at each boundary (`@renderer/lib/perf-marks`) and this
  * reducer turns those stamps into the segments between them.
@@ -29,15 +29,17 @@
 /**
  * What each boundary means, since two of them are easy to misread:
  *
- * - `ticket-workspace.mount` is stamped from a LAYOUT EFFECT, so it lands once
- *   the workspace subtree is on the DOM. `workspaceRebuildMs` is therefore the
- *   cost of actually building the ticket page, its rail and its panels.
+ * - `ticket-view.mount` is stamped from a LAYOUT EFFECT, so it lands once
+ *   the Ticket view subtree is on the DOM. `ticketViewRebuildMs` is therefore
+ *   the cost of actually building the ticket page, its rail and its panels.
  *   Before VC-385's review it was stamped during render instead, where it
- *   landed at the START of the workspace's render and the segment measured
+ *   landed at the START of the Ticket view's render and the segment measured
  *   only the scheduling gap ahead of it — the four VC-385 before/after
  *   reports published then carry that earlier meaning, and their
  *   `rebuild workspace` and `description editor` lines are not comparable to
- *   later runs (their sum, and the total, are).
+ *   later runs (their sum, and the total, are). Reports from before the
+ *   Ticket view rename name this mark `ticket-workspace.mount` and this
+ *   segment `workspaceRebuildMs` / "rebuild workspace".
  * - `ticket-description.ready` is stamped only by the ticket-body editor, not
  *   by any other Monaco surface.
  */
@@ -48,7 +50,7 @@ export const TICKET_SWITCH_MARKS = Object.freeze({
   paletteOpen: "volli.command-palette.open",
   sessionsListed: "volli.command-palette.sessions-listed",
   commit: "volli.ticket-switch.commit",
-  workspaceMount: "volli.ticket-workspace.mount",
+  ticketViewMount: "volli.ticket-view.mount",
   descriptionReady: "volli.ticket-description.ready",
 });
 
@@ -81,7 +83,7 @@ export function ticketSwitchBreakdown({ marks, latencyMs }) {
   const paletteOpen = stampOf(marks, TICKET_SWITCH_MARKS.paletteOpen);
   const sessionsListed = stampOf(marks, TICKET_SWITCH_MARKS.sessionsListed);
   const commit = stampOf(marks, TICKET_SWITCH_MARKS.commit);
-  const workspaceMount = stampOf(marks, TICKET_SWITCH_MARKS.workspaceMount);
+  const ticketViewMount = stampOf(marks, TICKET_SWITCH_MARKS.ticketViewMount);
   const descriptionReady = stampOf(marks, TICKET_SWITCH_MARKS.descriptionReady);
   const end = start === null ? null : start + latencyMs;
   const missingMarks = Object.values(TICKET_SWITCH_MARKS).filter(
@@ -91,8 +93,8 @@ export function ticketSwitchBreakdown({ marks, latencyMs }) {
   return {
     paletteOpenMs: span(start, paletteOpen),
     paletteResolveMs: span(paletteOpen, commit),
-    workspaceRebuildMs: span(commit, workspaceMount),
-    descriptionEditorMs: span(workspaceMount, descriptionReady),
+    ticketViewRebuildMs: span(commit, ticketViewMount),
+    descriptionEditorMs: span(ticketViewMount, descriptionReady),
     settleMs: span(descriptionReady, end),
     sessionsListMs: span(paletteOpen, sessionsListed),
     missingMarks,

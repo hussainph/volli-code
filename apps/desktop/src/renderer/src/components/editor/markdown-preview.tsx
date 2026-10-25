@@ -74,7 +74,7 @@ const PreviewFileContext = React.createContext<PreviewFile | null>(null);
 
 export interface MarkdownPreviewProps {
   projectId: string;
-  /** Present in a ticket workspace, so repository paths resolve to its worktree copy. */
+  /** Present in a Ticket view, so repository paths resolve to its worktree copy. */
   ticketId?: string;
   /** The markdown file's own project-relative path — what relative images resolve against. */
   relPath: string;

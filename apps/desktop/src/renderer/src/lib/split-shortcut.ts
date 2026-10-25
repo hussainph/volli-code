@@ -15,7 +15,7 @@
  * shape of the other.
  */
 import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
-import type { NavKey } from "@renderer/stores/workspace";
+import type { NavKey } from "@renderer/stores/project-ui";
 import type { SplitViewEdge, SplitViewFocusDirection } from "@volli/shared";
 
 /** The subset of `KeyboardEvent` the split chords inspect. */
@@ -106,7 +106,7 @@ export interface SplitShortcutChrome {
   /** The selected project's nav page. Ticket detail is a STATE of `home`. */
   nav: NavKey;
   /** Which Home tab is in front — with `openTicketId`, this says whether a
-   * ticket workspace is actually on screen (`home-tabs.ts`). */
+   * Ticket view is actually on screen (`home-tabs.ts`). */
   homeActiveTab: string;
   /** App-wide Settings is chrome layered OVER the workspace, not a nav page. */
   settingsOpen: boolean;

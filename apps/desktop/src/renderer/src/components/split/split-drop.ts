@@ -13,7 +13,7 @@
  *  2. **Whether a payload may land here at all.** The sidebars drag NATIVELY
  *     (HTML5 `dataTransfer`), and their rows outlive the surface they were
  *     dragged from: a ticket-A Session must not land on ticket B or on Home,
- *     and a Board Session must not land in a ticket workspace. Tabs never
+ *     and a Board Session must not land in a Ticket view. Tabs never
  *     move between surfaces (§ "Deliberate constraints").
  *  3. **Which store write a drop is.** Reorder inside one pane, move to another
  *     pane, or split a pane open — one function, so the two surfaces cannot
@@ -361,7 +361,7 @@ export function parseSplitDragPayload(type: string, raw: string): SplitDragPaylo
  * The rule is the same one that keeps tabs from crossing surfaces, said for the
  * one gesture that can reach across: a payload lands only where its own scope
  * points. Home takes the project's own Sessions and Main-checkout files; a
- * ticket workspace takes ITS ticket's Sessions and ITS worktree's files. Every
+ * Ticket view takes ITS ticket's Sessions and ITS worktree's files. Every
  * other combination shows no zones at all rather than a target that refuses on
  * release.
  */

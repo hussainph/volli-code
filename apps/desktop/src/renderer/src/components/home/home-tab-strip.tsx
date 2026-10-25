@@ -46,7 +46,7 @@ import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
  * The `board` kind carries nothing at all: it is the permanent first tab, and
  * every fact about it is a constant. It is the exact analogue of the ticket
  * strip's always-present Body tab — same position, same permanence, same
- * absence of a close — which is what makes Home read as the ticket workspace
+ * absence of a close — which is what makes Home read as the Ticket view
  * one scope up rather than as a new kind of thing.
  *
  * A terminal tab carries its whole store record — park state, panes and exit
@@ -142,10 +142,10 @@ interface HomeTabStripProps extends HomeTabListProps {
 
 /**
  * Home's tab strip: the FOLDER variant of `ui/tab-strip.tsx`, the same drawing
- * the ticket workspace uses and in the same place — the top edge of the content
+ * the Ticket view uses and in the same place — the top edge of the content
  * card, with the active tab bleeding one pixel past the strip's border so it
  * fuses with the plane below. That is not a coincidence to be tidied away
- * later: Home and a ticket workspace are the same object at two scopes, and
+ * later: Home and a Ticket view are the same object at two scopes, and
  * drawing them alike is how the app says so without prose.
  *
  * (It was the PILL variant while this strip belonged to the Sessions page,

@@ -7,7 +7,7 @@
  * exists (`previewHomeFile` / `previewTicketFile`). The second has no store to
  * live in — a caret position is not durable workspace state, it is a one-shot
  * instruction to whichever editor is about to mount. Threading it as a prop
- * would mean parking a line number in the workspace store, persisting it to
+ * would mean parking a line number in the project UI store, persisting it to
  * disk with the rest of the tab record, and then remembering to clear it so the
  * tab does not jump again the next time it is opened.
  *

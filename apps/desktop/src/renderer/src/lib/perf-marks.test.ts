@@ -10,7 +10,7 @@ describe("markPerfPhase", () => {
   it("stamps nothing while the window has not asked to be instrumented", () => {
     const host = { mark: vi.fn() };
 
-    markPerfPhase("volli.ticket-workspace.mount", host);
+    markPerfPhase("volli.ticket-view.mount", host);
 
     expect(perfPhaseMarksEnabled()).toBe(false);
     expect(host.mark).not.toHaveBeenCalled();
@@ -20,9 +20,9 @@ describe("markPerfPhase", () => {
     const host = { mark: vi.fn() };
     Reflect.set(globalThis, PERF_MARKS_FLAG, true);
 
-    markPerfPhase("volli.ticket-workspace.mount", host);
+    markPerfPhase("volli.ticket-view.mount", host);
 
     expect(perfPhaseMarksEnabled()).toBe(true);
-    expect(host.mark).toHaveBeenCalledWith("volli.ticket-workspace.mount");
+    expect(host.mark).toHaveBeenCalledWith("volli.ticket-view.mount");
   });
 });

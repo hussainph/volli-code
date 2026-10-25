@@ -39,7 +39,7 @@ export const PERF_PHASE = Object.freeze({
   commandPaletteOpen: "volli.command-palette.open",
   commandPaletteSessionsListed: "volli.command-palette.sessions-listed",
   ticketSwitchCommit: "volli.ticket-switch.commit",
-  ticketWorkspaceMount: "volli.ticket-workspace.mount",
+  ticketViewMount: "volli.ticket-view.mount",
   ticketDescriptionReady: "volli.ticket-description.ready",
 });
 

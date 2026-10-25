@@ -1,7 +1,7 @@
 /**
  * Home's rail pages (VC-55).
  *
- * The ticket workspace's rail one scope up, and deliberately its own enum
+ * The Ticket view's rail one scope up, and deliberately its own enum
  * rather than a widening of `TicketRailMode`: the two rails answer about
  * different things (a ticket's changes and files against a project's venue and
  * its own Sessions), and `ticket-rail-model.ts` owns a persisted vocabulary

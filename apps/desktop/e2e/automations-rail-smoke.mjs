@@ -121,7 +121,7 @@ try {
   await page.reload();
   await cardById(page, "PRB-1").first().waitFor({ timeout: 30000 });
 
-  /** Open the ticket workspace the way a person does: double-click its card. */
+  /** Open the Ticket view the way a person does: double-click its card. */
   async function openTicket() {
     await cardById(page, "PRB-1").first().dblclick();
     await page.locator('[data-testid="ticket-rail-automations"]').waitFor({ timeout: 20000 });

@@ -10,9 +10,11 @@ billing, and shared connections (GitHub App, secrets, MCP, skills, plugins,
 agents, instructions, model keys). Every account gets one at signup, named
 after the person; inviting someone just adds a Member. One Workspace is open at
 a time, with a switcher. Projects can move between Workspaces. Not a database
-file, a worktree, or the ticket surface (**Ticket view**). Internal identifiers
-such as `useWorkspaceStore` and `workspaceRailHidden` predate this meaning and
-name the project rail; they are wire format, not copy.
+file, a worktree, or the ticket surface (**Ticket view**). Persisted names
+such as the `volli:workspace` app-state key, the stored `workspaceRailHidden`
+field and the `workspace_id` columns of `board_command_receipts` and
+`workspace_epochs` predate this meaning and hold project state; they are wire
+format, kept for older builds, and code reading them says project.
 _Avoid_: org, personal workspace (the signup Workspace is an ordinary one;
 there are no Workspace types), Ticket workspace
 
@@ -104,8 +106,10 @@ authority never moves, and one Working copy per ticket per machine needs no
 fence. **Checkpoint ref** is retired: Volli never pushes uncommitted work.
 Their contracts live in the superseded `docs/host-*.md` until those are
 deleted.
-**Workspace** no longer means one host's database file; host-protocol code that
-says `workspace` (`workspaceId`, `workspace_epochs`) still means that.
+**Workspace** no longer means one host's database file. Host-protocol code that
+says `workspace` (`workspaceId`, Workspace grants and links, `workspace_epochs`)
+still means the host protocol's Workspace, where a project is its own Workspace
+(`workspace_epochs.workspace_id` references `projects(id)`).
 
 **Ticket**:
 A board card whose Ticket Body can scope a Ticket Session. Opening it shows the Ticket view; moving it to Doing records work state but does not start a Session.
@@ -987,7 +991,7 @@ end.
 _Avoid_: idle (for a failed interruption), error, crashed
 
 **Project**:
-A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk. **The one user-facing word for a rail entry** (VC-57 ruling): every surface says "project" — "project switcher", "Project override", "Set by this project" — and it anchors the session language too (project-level vs ticket-level sessions). Internal identifiers (`useWorkspaceStore`, `workspaceRailHidden`) are wire format, not copy.
+A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk. **The one user-facing word for a rail entry** (VC-57 ruling): every surface says "project" — "project switcher", "Project override", "Set by this project" — and it anchors the session language too (project-level vs ticket-level sessions). Persisted names (`volli:workspace`, `workspaceRailHidden`) are wire format, not copy.
 _Avoid_: Workspace (the team container that owns projects), Ticket view (the ticket surface), space
 
 **Ticket worktree**:

@@ -32,11 +32,7 @@ import {
 import { readOnlyControl, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
-import {
-  DEFAULT_WORKSPACE_UI,
-  useWorkspaceStore,
-  type BoardView,
-} from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, useProjectUiStore, type BoardView } from "@renderer/stores/project-ui";
 
 interface BoardHeaderProps {
   projectId: string;
@@ -53,10 +49,10 @@ interface BoardHeaderProps {
  * drag order is one-directional), so those items disable there.
  */
 function OrderingMenu({ projectId }: { projectId: string }) {
-  const sort = useWorkspaceStore(
-    (state) => state.byProject[projectId]?.boardSort ?? DEFAULT_WORKSPACE_UI.boardSort,
+  const sort = useProjectUiStore(
+    (state) => state.byProject[projectId]?.boardSort ?? DEFAULT_PROJECT_UI.boardSort,
   );
-  const setBoardSort = useWorkspaceStore((state) => state.setBoardSort);
+  const setBoardSort = useProjectUiStore((state) => state.setBoardSort);
   const isManual = sort.key === "manual";
 
   return (
@@ -107,10 +103,10 @@ function OrderingMenu({ projectId }: { projectId: string }) {
 
 /** Two-segment board/list toggle; the active segment mirrors the filter chips' active state. */
 function ViewToggle({ projectId }: { projectId: string }) {
-  const view = useWorkspaceStore(
-    (state) => state.byProject[projectId]?.boardView ?? DEFAULT_WORKSPACE_UI.boardView,
+  const view = useProjectUiStore(
+    (state) => state.byProject[projectId]?.boardView ?? DEFAULT_PROJECT_UI.boardView,
   );
-  const setBoardView = useWorkspaceStore((state) => state.setBoardView);
+  const setBoardView = useProjectUiStore((state) => state.setBoardView);
 
   const segment = (value: BoardView, label: string, Icon: typeof KanbanIcon) => (
     <button

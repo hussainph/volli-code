@@ -1062,7 +1062,7 @@ export async function readProjectTypeScriptOptions(
 
 /**
  * The default reader: the same scoped `{ projectId, ticketId }` file seam every
- * other read in the app goes through, so a ticket workspace reads the
+ * other read in the app goes through, so a Ticket view reads the
  * `tsconfig.json` in ITS worktree.
  *
  * Guarded on `window` for the two surfaces that mount editors without a preload

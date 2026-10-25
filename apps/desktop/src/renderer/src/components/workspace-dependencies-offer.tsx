@@ -14,7 +14,7 @@ import { workspaceDependenciesOffer } from "@renderer/components/workspace-depen
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { toastError } from "@renderer/lib/toast";
 import { useUiStore } from "@renderer/stores/ui";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 /**
  * The offer that replaced the dependency banner (VC-156).
@@ -51,14 +51,14 @@ export function WorkspaceDependenciesOffer() {
   const project = useSelectedProject();
   const projectId = project?.id;
   const projectCwd = project?.path;
-  const dismissed = useWorkspaceStore((state) =>
+  const dismissed = useProjectUiStore((state) =>
     projectId === undefined
       ? true
       : (state.byProject[projectId]?.dependencyOfferDismissed ?? false),
   );
   const terminalFocused = useUiStore((state) => state.terminalFocusTarget !== null);
-  const dismiss = useWorkspaceStore((state) => state.dismissDependencyOffer);
-  const setNav = useWorkspaceStore((state) => state.setNav);
+  const dismiss = useProjectUiStore((state) => state.dismissDependencyOffer);
+  const setNav = useProjectUiStore((state) => state.setNav);
   // The answer that lands is the one asked for last, whether the ask came from
   // selection, from refocus, or from an install this surface itself ran.
   const fetchToken = useRef(0);

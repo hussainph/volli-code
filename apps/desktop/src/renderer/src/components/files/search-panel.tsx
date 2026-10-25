@@ -301,7 +301,7 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
               />
             </div>
             {/* The navigator's own mono sub-line, saying which checkout these
-                results come from — the branch in a Ticket workspace, the
+                results come from — the branch in a Ticket view, the
                 project in Home. */}
             <p
               data-testid="file-search-scope"

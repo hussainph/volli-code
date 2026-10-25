@@ -11,7 +11,7 @@
  *
  * Extracted from `ticket-detail.tsx` as a plain module so the ordering it exists
  * for — read, then append, then write — is assertable without mounting the
- * ticket workspace.
+ * Ticket view.
  */
 import { appendFileRef } from "@renderer/editor/file-refs";
 import { toastError } from "@renderer/lib/toast";

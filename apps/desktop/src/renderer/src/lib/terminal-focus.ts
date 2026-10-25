@@ -23,7 +23,7 @@
  */
 import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
 import type { TerminalFocusTarget } from "@renderer/stores/ui";
-import type { NavKey } from "@renderer/stores/workspace";
+import type { NavKey } from "@renderer/stores/project-ui";
 
 /** The subset of `KeyboardEvent` the terminal-focus chord inspects. */
 export interface TerminalFocusKeyEvent {
@@ -91,7 +91,7 @@ export interface TerminalFocusChrome {
  *  • a Home Session tab → that Session, if it is a terminal.
  *
  * The tab, nav and Settings gates are not belt-and-braces. `openTicketId`
- * survives leaving the ticket (stores/workspace.ts) — across Files and
+ * survives leaving the ticket (stores/project-ui.ts) — across Files and
  * Configure so returning to Home lands you back on it, and across Home's own
  * Session tabs, which keep the ticket remembered behind them (VC-54 decision
  * 1). So `openTicketId != null` is true in three places where the ticket is

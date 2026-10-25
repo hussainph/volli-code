@@ -1,11 +1,11 @@
 /**
- * Per-workspace UI state, keyed by project id. Holds whatever should survive
+ * Per-project UI state, keyed by project id. Holds whatever should survive
  * switching to another project and back — the active nav page, and any future
- * per-workspace UI memory — so ten workspace switches later you land exactly
+ * per-project UI memory — so ten project switches later you land exactly
  * where you left each project.
  *
- * One `WorkspaceUiState` record per project (not parallel per-field maps), so
- * everything a workspace remembers lives and dies together: `forget` stays a
+ * One `ProjectUiState` record per project (not parallel per-field maps), so
+ * everything a project remembers lives and dies together: `forget` stays a
  * single delete no matter how many fields the record grows.
  *
  * Persistence is FIELD-SELECTIVE: `boardView`, `boardSort`, `openTicketId`,
@@ -14,7 +14,7 @@
  * `projectFileViewStates`) survive relaunch (they're deliberate per-project
  * state — a view preference, the ticket-detail-mvp decision that the open
  * ticket persists across restart, decision #3, the Home tab that was in front
- * so Home has the same relaunch parity a Ticket workspace already had, VC-54,
+ * so Home has the same relaunch parity a Ticket view already had, VC-54,
  * and the rest of Home's strip so its Sessions come back with it, VC-105,
  * Diff tabs landing where you left them after lazy content reload, issue #109,
  * or the Project Files workspace that must resume where you left it, decisions
@@ -22,8 +22,8 @@
  * Document view (VC-192), while `nav`, `expandedSessionGroups`, and Home's close-return
  * `homeTabHistory` stay session-only — nav resetting to Home on
  * relaunch is a settled decision (see ui.ts's history) and now applies per
- * workspace. The partialize below prunes each record down to that persisted
- * set; merge rehydrates them back over `DEFAULT_WORKSPACE_UI`, sanitizing stale
+ * project. The partialize below prunes each record down to that persisted
+ * set; merge rehydrates them back over `DEFAULT_PROJECT_UI`, sanitizing stale
  * values so old localStorage can never smuggle in an invalid view/sort/ticket
  * id — or an unusable tab record.
  *
@@ -104,10 +104,15 @@ import {
 import { useBoardStore } from "@renderer/stores/board";
 import { useSessionsStore } from "@renderer/stores/sessions";
 
-export const WORKSPACE_UI_APP_STATE_KEY = "volli:workspace";
+/**
+ * The `app_state` key this store persists under. The name predates Workspace
+ * meaning the team container (CONTEXT.md) and is kept: it is a persisted key
+ * that N-1 builds read and write.
+ */
+export const PROJECT_UI_APP_STATE_KEY = "volli:workspace";
 
 /**
- * The per-workspace nav pages (NAV_ITEMS). `home` is the tabbed environment
+ * The per-project nav pages (NAV_ITEMS). `home` is the tabbed environment
  * that holds the permanent Board tab plus the project's own Sessions (VC-54);
  * `configure` holds the selected project's scoped settings (base branch, setup
  * command, worktrees); app-wide Settings is separate chrome — see stores/ui.ts.
@@ -140,7 +145,7 @@ export interface TicketDiffTabMeta {
   binary?: boolean;
 }
 
-/** Options accepted by {@link WorkspaceState.openTicketDiff}. */
+/** Options accepted by {@link ProjectUiStoreState.openTicketDiff}. */
 export interface OpenTicketDiffOpts {
   previousPath?: string | null;
   status?: string;
@@ -179,7 +184,7 @@ export interface TicketTabsState {
   tabOrder: TabOrder;
   /**
    * How this ticket's main area is SPLIT into panes (VC-202), or nothing at all
-   * — see {@link WorkspaceUiState.homeSplitView} for why absence is the whole
+   * — see {@link ProjectUiState.homeSplitView} for why absence is the whole
    * compatibility story, and `split-view.ts` for the model. Persisted and
    * tolerant-read, inside this record so `forget` and the empty-record prune
    * carry it away with everything else the ticket remembers.
@@ -188,7 +193,7 @@ export interface TicketTabsState {
   active: string;
 }
 
-export interface WorkspaceUiState {
+export interface ProjectUiState {
   nav: NavKey;
   /**
    * Ticket ids whose Previous-band group is open in the sidebar (collapsed =
@@ -256,7 +261,7 @@ export interface WorkspaceUiState {
    * PERSISTED, and that is the whole of VC-54's scope 4. What it points at is
    * resident (`chat-sessions.ts`'s `openTabs`), so this is not a receipt for
    * live state — it is the durable fact needed to put the same tab back in
-   * front on relaunch, exactly as a Ticket workspace's `ticketTabs[].active`
+   * front on relaunch, exactly as a Ticket view's `ticketTabs[].active`
    * already did; {@link homeTabOrder} is the rest of the strip around it. A
    * stale id is never repaired at boot: `home-tabs.ts`'s `resolveHomeTabs` asks
    * the project's durable Session listing first, so "not hydrated yet" can
@@ -279,7 +284,7 @@ export interface WorkspaceUiState {
    * And it is the strip's WHOLE record, not just a memory of the last drag
    * (VC-105): once a project's strip has been restored, Home records the strip
    * as drawn here (`home-tabs.ts`'s `homeTabOrderReceipt`, via
-   * {@link WorkspaceState.recordHomeTabOrder}), so every chat Session tab that
+   * {@link ProjectUiStoreState.recordHomeTabOrder}), so every chat Session tab that
    * is open is named in order, and a relaunch reopens each of them against the
    * project's durable listing. One order model, not two. It is pruned live by
    * that receipt and never here: the read cannot tell a Session that has not
@@ -303,7 +308,7 @@ export interface WorkspaceUiState {
    * one would grow an entry for every markdown file ever opened. Choosing
    * Source again removes the path, which is the same statement.
    *
-   * Keyed by relPath alone, so Home's Main checkout and a Ticket workspace's
+   * Keyed by relPath alone, so Home's Main checkout and a Ticket view's
    * worktree copy of the same file agree: which view a document reads best in
    * is a fact about the document, not about the checkout it was opened from.
    * The bytes still get the last word — `resolveMarkdownFileView` refuses
@@ -332,8 +337,8 @@ export interface WorkspaceUiState {
    * it came back on every relaunch and on every wording change. "I know, leave
    * me alone" is an answer, and an answer that has to be repeated is not one.
    *
-   * Per project because the state is per workspace, and cleared with the
-   * project's whole record by {@link WorkspaceState.forget} — which is why it
+   * Per project because the state is per project, and cleared with the
+   * project's whole record by {@link ProjectUiStoreState.forget} — which is why it
    * lives here rather than in a map of its own.
    */
   dependencyOfferDismissed: boolean;
@@ -357,7 +362,7 @@ export interface WorkspaceUiState {
   homeSplitView?: SplitViewState | null;
 }
 
-export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
+export const DEFAULT_PROJECT_UI: ProjectUiState = {
   nav: "home",
   expandedSessionGroups: [],
   boardView: "board",
@@ -399,7 +404,7 @@ const RETIRED_NAV_KEYS: ReadonlyMap<string, NavKey> = new Map([["files", "home"]
  * survive.
  *
  * So every input lands on Home today: a retired key through {@link
- * RETIRED_NAV_KEYS}, everything else through {@link DEFAULT_WORKSPACE_UI}. The
+ * RETIRED_NAV_KEYS}, everything else through {@link DEFAULT_PROJECT_UI}. The
  * map still earns its place by recording WHERE a retired page went, so a key
  * that ever retires onto something other than the default resolves correctly
  * rather than silently stranding on it.
@@ -409,7 +414,7 @@ export function resolvePersistedNav(stored: { nav?: unknown }): NavKey {
     const landing = RETIRED_NAV_KEYS.get(stored.nav);
     if (landing !== undefined) return landing;
   }
-  return DEFAULT_WORKSPACE_UI.nav;
+  return DEFAULT_PROJECT_UI.nav;
 }
 
 /** The active-tab id of the always-present Ticket Body tab — the fallback when a
@@ -509,7 +514,7 @@ function collapsedTabOrder(pane: SplitViewPane, permanentTabId: string): TabOrde
  * write" — the surface is not split, or the operation changed nothing — which
  * is what keeps every unsplit path byte-for-byte what it was.
  */
-function homeSplitWrite(next: SplitViewState | null): Partial<WorkspaceUiState> {
+function homeSplitWrite(next: SplitViewState | null): Partial<ProjectUiState> {
   if (next === null) return {};
   if (!isSinglePane(next)) return { homeSplitView: next };
   return {
@@ -526,14 +531,14 @@ function ticketSplitWrite(next: SplitViewState | null): Partial<TicketTabsState>
 }
 
 /** Home's split view after activating `tabId`, or null when there is nothing to write. */
-function activatedHomeSplit(current: WorkspaceUiState, tabId: string): SplitViewState | null {
+function activatedHomeSplit(current: ProjectUiState, tabId: string): SplitViewState | null {
   const split = current.homeSplitView ?? null;
   if (split === null) return null;
   const next = activateInSplit(split, tabId, HOME_BOARD_TAB_ID);
   return next === split ? null : next;
 }
 
-/** {@link activatedHomeSplit} for a ticket workspace. */
+/** {@link activatedHomeSplit} for a Ticket view. */
 function activatedTicketSplit(existing: TicketTabsState, tabId: string): SplitViewState | null {
   const split = existing.splitView ?? null;
   if (split === null) return null;
@@ -553,7 +558,7 @@ function activatedTicketSplit(existing: TicketTabsState, tabId: string): SplitVi
  * empty pane the person just opened.
  */
 function homeSplitAfterFileTabs(
-  current: WorkspaceUiState,
+  current: ProjectUiState,
   before: readonly FileWorkspaceTab[],
   after: readonly FileWorkspaceTab[],
   activated: string | null,
@@ -566,7 +571,7 @@ function homeSplitAfterFileTabs(
   return next === split ? null : next;
 }
 
-/** {@link homeSplitAfterFileTabs} for a ticket workspace. */
+/** {@link homeSplitAfterFileTabs} for a Ticket view. */
 function ticketSplitAfterFileTabs(
   existing: TicketTabsState,
   before: readonly FileWorkspaceTab[],
@@ -590,15 +595,15 @@ function ticketSplitAfterFileTabs(
  * the Board tab (which, with a ticket open, would take the whole page over).
  */
 function homeActiveAfterFocus(
-  current: WorkspaceUiState,
+  current: ProjectUiState,
   next: SplitViewState,
-): Partial<WorkspaceUiState> {
+): Partial<ProjectUiState> {
   const active = activeTabInSplitView(next);
   if (active === null || active === current.homeActiveTab) return {};
   return { homeActiveTab: active, homeTabHistory: homeHistoryAfterVisit(current, active) };
 }
 
-/** {@link homeActiveAfterFocus} for a ticket workspace. */
+/** {@link homeActiveAfterFocus} for a Ticket view. */
 function ticketActiveAfterFocus(
   existing: TicketTabsState,
   next: SplitViewState,
@@ -703,10 +708,10 @@ function sanitizeTicketFiles(raw: unknown): FileWorkspaceTab[] {
   return [...sanitizeFileWorkspace({ tabs, activeRelPath: null }).tabs];
 }
 
-interface WorkspaceState {
-  byProject: Record<string, WorkspaceUiState>;
+interface ProjectUiStoreState {
+  byProject: Record<string, ProjectUiState>;
   /**
-   * Slack-style workspace navigation history (the chrome-bar ←/→ buttons and
+   * Slack-style project navigation history (the chrome-bar ←/→ buttons and
    * ⌘[ / ⌘]). In-memory only — deliberately excluded from `partialize`, so it
    * starts empty on every relaunch and never reaches persisted storage.
    */
@@ -728,7 +733,7 @@ interface WorkspaceState {
    * `home-surface.tsx` writes back whatever it derived, and the derivation
    * lands on the Board tab whenever the last Session tab closes. If that write
    * also closed the open ticket, closing a chat would discard the ticket
-   * remembered behind it. {@link WorkspaceState.openHomeBoard} is where
+   * remembered behind it. {@link ProjectUiStoreState.openHomeBoard} is where
    * "the Board tab means the plain board" lives.
    *
    * It is a tab SELECTION, though, so it announces one (VC-483) even when the
@@ -743,7 +748,7 @@ interface WorkspaceState {
   /**
    * Record Home's strip as drawn (VC-105): `order` is its movable tab ids, the
    * Board never among them. A receipt, not an arrangement — it moves no tab and
-   * touches no File list, unlike {@link WorkspaceState.moveHomeTab} — and the
+   * touches no File list, unlike {@link ProjectUiStoreState.moveHomeTab} — and the
    * record a relaunch reads its Sessions back from. Recording the order already
    * held leaves the store by identity.
    */
@@ -817,7 +822,7 @@ interface WorkspaceState {
    */
   openTicket(projectId: string, ticketId: string): void;
   /**
-   * THE navigation-intent seam: makes `ticketId`'s workspace visible right
+   * THE navigation-intent seam: makes `ticketId`'s Ticket view visible right
    * now, no matter where the project's nav currently is. Switches this
    * project onto Home AND onto Home's Board tab (ticket detail renders only
    * there — `home-surface.tsx` — so a caller that skips either step can set
@@ -840,10 +845,10 @@ interface WorkspaceState {
    * through this one seam instead of hand-rolling setNav+openTicket(+tab)
    * themselves.
    */
-  openTicketWorkspace(projectId: string, ticketId: string, opts?: { tabId?: string }): void;
+  openTicketView(projectId: string, ticketId: string, opts?: { tabId?: string }): void;
   /**
    * Opens a ticket's exact live terminal tab, optionally focusing one split
-   * pane. A thin wrapper over {@link openTicketWorkspace}'s ordering, plus the
+   * pane. A thin wrapper over {@link openTicketView}'s ordering, plus the
    * sessions-store sync a session tab (unlike Doc/file tabs) needs.
    */
   openTicketSession(projectId: string, ticketId: string, tabId: string, paneId?: string): void;
@@ -911,7 +916,7 @@ interface WorkspaceState {
   /** Automatic stale-tab receipt: neither selects a pane nor announces intent. */
   recordResolvedTicketTab(projectId: string, ticketId: string, tabId: string): void;
   /**
-   * {@link WorkspaceState.moveHomeTab} at ticket scope (VC-189) — same overlay,
+   * {@link ProjectUiStoreState.moveHomeTab} at ticket scope (VC-189) — same overlay,
    * same pin-what-you-arranged rule, one scope down. The Ticket Body tab is
    * never among `order`.
    */
@@ -942,7 +947,7 @@ interface WorkspaceState {
     edge: SplitViewEdge,
     opts?: { tabId?: string; surfaceTabIds?: readonly string[] },
   ): void;
-  /** {@link WorkspaceState.splitHomePane} for a ticket workspace. */
+  /** {@link ProjectUiStoreState.splitHomePane} for a Ticket view. */
   splitTicketPane(
     projectId: string,
     ticketId: string,
@@ -956,7 +961,7 @@ interface WorkspaceState {
    * tab, or does nothing when false (draft restore owns reachability).
    */
   claimHomeTabInPane(projectId: string, tabId: string, paneId: string, activate: boolean): void;
-  /** {@link WorkspaceState.claimHomeTabInPane} for a ticket workspace. */
+  /** {@link ProjectUiStoreState.claimHomeTabInPane} for a Ticket view. */
   claimTicketTabInPane(
     projectId: string,
     ticketId: string,
@@ -966,18 +971,18 @@ interface WorkspaceState {
   ): void;
   /** Move a Home tab into `paneId` (a centre-zone drop, or another pane's strip). */
   moveHomeTabToPane(projectId: string, tabId: string, paneId: string): void;
-  /** {@link WorkspaceState.moveHomeTabToPane} for a ticket workspace. */
+  /** {@link ProjectUiStoreState.moveHomeTabToPane} for a Ticket view. */
   moveTicketTabToPane(projectId: string, ticketId: string, tabId: string, paneId: string): void;
   /**
    * Focus a Home pane (a click inside it), which also brings that pane's front
    * tab forward as the surface's active tab — the rail reads the focused pane.
    */
   focusHomePane(projectId: string, paneId: string): void;
-  /** {@link WorkspaceState.focusHomePane} for a ticket workspace. */
+  /** {@link ProjectUiStoreState.focusHomePane} for a Ticket view. */
   focusTicketPane(projectId: string, ticketId: string, paneId: string): void;
   /** Move Home's pane focus geometrically (`⌃⌘` + arrows). */
   focusAdjacentHomePane(projectId: string, direction: SplitViewFocusDirection): void;
-  /** {@link WorkspaceState.focusAdjacentHomePane} for a ticket workspace. */
+  /** {@link ProjectUiStoreState.focusAdjacentHomePane} for a Ticket view. */
   focusAdjacentTicketPane(
     projectId: string,
     ticketId: string,
@@ -985,7 +990,7 @@ interface WorkspaceState {
   ): void;
   /** Resize one Home divider; the ratio is clamped by the model. */
   setHomeSplitRatio(projectId: string, splitId: string, ratio: number): void;
-  /** {@link WorkspaceState.setHomeSplitRatio} for a ticket workspace. */
+  /** {@link ProjectUiStoreState.setHomeSplitRatio} for a Ticket view. */
   setTicketSplitRatio(projectId: string, ticketId: string, splitId: string, ratio: number): void;
   /**
    * Close a Home pane. Tabs it still held are relinquished to the primary pane
@@ -993,10 +998,10 @@ interface WorkspaceState {
    * split at all, carrying the surviving pane's order into the strip.
    */
   closeHomePane(projectId: string, paneId: string): void;
-  /** {@link WorkspaceState.closeHomePane} for a ticket workspace. */
+  /** {@link ProjectUiStoreState.closeHomePane} for a Ticket view. */
   closeTicketPane(projectId: string, ticketId: string, paneId: string): void;
   /**
-   * {@link WorkspaceState.moveHomeTab} INSIDE one pane: `order` is that pane's
+   * {@link ProjectUiStoreState.moveHomeTab} INSIDE one pane: `order` is that pane's
    * movable tab ids as the drop left them. The surface-level arrangement is not
    * touched while split — a pane's order is the pane's — but a dragged preview
    * tab is still pinned, because arranging a tab is deliberate wherever it
@@ -1008,7 +1013,7 @@ interface WorkspaceState {
     movedId: string,
     order: readonly string[],
   ): void;
-  /** {@link WorkspaceState.moveHomeTabInPane} for a ticket workspace. */
+  /** {@link ProjectUiStoreState.moveHomeTabInPane} for a Ticket view. */
   moveTicketTabInPane(
     projectId: string,
     ticketId: string,
@@ -1024,7 +1029,7 @@ interface WorkspaceState {
    * no-op while unsplit, where the MRU return is unchanged.
    */
   removeHomeTabFromSplit(projectId: string, tabId: string): void;
-  /** {@link WorkspaceState.removeHomeTabFromSplit} for a ticket workspace. */
+  /** {@link ProjectUiStoreState.removeHomeTabFromSplit} for a Ticket view. */
   removeTicketTabFromSplit(projectId: string, ticketId: string, tabId: string): void;
   /**
    * The first edit of a preview tab promotes it to persistent (decision #56:
@@ -1057,7 +1062,7 @@ interface WorkspaceState {
   /**
    * Remember which view one repository Markdown file opens in (VC-192).
    * `"source"` forgets the path rather than recording the default — see
-   * {@link WorkspaceUiState.markdownDocumentFiles}. A choice that changes
+   * {@link ProjectUiState.markdownDocumentFiles}. A choice that changes
    * nothing returns the state by identity, so re-picking the view already in
    * front notifies nobody.
    */
@@ -1084,9 +1089,9 @@ interface WorkspaceState {
   stepNavForward(): NavSnapshot | null;
 }
 
-/** The slice of a workspace record that survives relaunch. */
-type PersistedWorkspaceUi = Pick<
-  WorkspaceUiState,
+/** The slice of a project's record that survives relaunch. */
+type PersistedProjectUi = Pick<
+  ProjectUiState,
   | "boardView"
   | "boardSort"
   | "openTicketId"
@@ -1102,8 +1107,8 @@ type PersistedWorkspaceUi = Pick<
   | "dependencyOfferDismissed"
 >;
 
-interface PersistedWorkspaceState {
-  byProject: Record<string, PersistedWorkspaceUi>;
+interface PersistedProjectUiState {
+  byProject: Record<string, PersistedProjectUi>;
 }
 
 /**
@@ -1290,11 +1295,11 @@ function sanitizeMarkdownFileList(raw: unknown): readonly string[] {
   return [...new Set(paths)];
 }
 
-function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): PersistedWorkspaceUi {
+function sanitizePersistedUi(persisted: Partial<PersistedProjectUi>): PersistedProjectUi {
   const view: BoardView =
     persisted.boardView === "board" || persisted.boardView === "list"
       ? persisted.boardView
-      : DEFAULT_WORKSPACE_UI.boardView;
+      : DEFAULT_PROJECT_UI.boardView;
   // Runtime JSON can hold anything — `null` in particular passes a bare
   // `!== undefined` check and then throws on `.key`, taking the renderer down
   // during store creation. Require a real object before touching fields.
@@ -1318,11 +1323,11 @@ function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): Persiste
     // Rebuild rather than spread so stray keys in old JSON never enter state.
     boardSort: sortValid
       ? { key: sort.key, direction: sort.direction }
-      : DEFAULT_WORKSPACE_UI.boardSort,
+      : DEFAULT_PROJECT_UI.boardSort,
     openTicketId:
       typeof openTicketId === "string" || openTicketId === null
         ? openTicketId
-        : DEFAULT_WORKSPACE_UI.openTicketId,
+        : DEFAULT_PROJECT_UI.openTicketId,
     ticketTabs,
     ticketDiffViewStates: sanitizeTicketDiffViewStates(persisted.ticketDiffViewStates, ticketTabs),
     projectFiles,
@@ -1345,22 +1350,22 @@ function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): Persiste
 }
 
 /** Whether a record's persisted fields still match the defaults (by value) — such records are dropped. */
-function isDefaultPersistedUi(ui: WorkspaceUiState): boolean {
+function isDefaultPersistedUi(ui: ProjectUiState): boolean {
   return (
-    ui.boardView === DEFAULT_WORKSPACE_UI.boardView &&
+    ui.boardView === DEFAULT_PROJECT_UI.boardView &&
     ui.boardSort.key === DEFAULT_TICKET_SORT.key &&
     ui.boardSort.direction === DEFAULT_TICKET_SORT.direction &&
-    ui.openTicketId === DEFAULT_WORKSPACE_UI.openTicketId &&
+    ui.openTicketId === DEFAULT_PROJECT_UI.openTicketId &&
     Object.keys(ui.ticketTabs).length === 0 &&
     Object.keys(ui.ticketDiffViewStates).length === 0 &&
     ui.projectFiles.tabs.length === 0 &&
     Object.keys(ui.projectFileViewStates).length === 0 &&
-    ui.homeActiveTab === DEFAULT_WORKSPACE_UI.homeActiveTab &&
+    ui.homeActiveTab === DEFAULT_PROJECT_UI.homeActiveTab &&
     ui.homeTabOrder.length === 0 &&
     (ui.homeSplitView ?? null) === null &&
     ui.markdownDocumentFiles.length === 0 &&
     ui.markdownPreviewFiles.length === 0 &&
-    ui.dependencyOfferDismissed === DEFAULT_WORKSPACE_UI.dependencyOfferDismissed
+    ui.dependencyOfferDismissed === DEFAULT_PROJECT_UI.dependencyOfferDismissed
   );
 }
 
@@ -1379,7 +1384,7 @@ function withMarkdownFile(
 }
 
 /** Record the current Home tab and then the one being brought forward. */
-function homeHistoryAfterVisit(current: WorkspaceUiState, nextTabId: string): readonly string[] {
+function homeHistoryAfterVisit(current: ProjectUiState, nextTabId: string): readonly string[] {
   return visitHomeTab(visitHomeTab(current.homeTabHistory, current.homeActiveTab), nextTabId);
 }
 
@@ -1394,13 +1399,13 @@ function homeHistoryAfterVisit(current: WorkspaceUiState, nextTabId: string): re
  * Draft's placement, which writes this store again. Receipts, focus moves,
  * reorders and placement-only claims are not selections and never announce.
  */
-function publishHomeSelection(state: WorkspaceState, projectId: string, tabId: string): void {
+function publishHomeSelection(state: ProjectUiStoreState, projectId: string, tabId: string): void {
   publishWorkspaceTabSelection(projectId, tabId, state.byProject[projectId]?.homeSplitView ?? null);
 }
 
-/** {@link publishHomeSelection} for a ticket workspace, whose owner is the ticket. */
+/** {@link publishHomeSelection} for a Ticket view, whose owner is the ticket. */
 function publishTicketSelection(
-  state: WorkspaceState,
+  state: ProjectUiStoreState,
   projectId: string,
   ticketId: string,
   tabId: string,
@@ -1413,18 +1418,18 @@ function publishTicketSelection(
 }
 
 /** The project's record merged with `changes` — spread into `set()`. */
-function patchWorkspace(
-  state: WorkspaceState,
+function patchProjectUi(
+  state: ProjectUiStoreState,
   projectId: string,
-  changes: Partial<WorkspaceUiState>,
-): Pick<WorkspaceState, "byProject"> {
-  const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+  changes: Partial<ProjectUiState>,
+): Pick<ProjectUiStoreState, "byProject"> {
+  const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
   return { byProject: { ...state.byProject, [projectId]: { ...current, ...changes } } };
 }
 
 /**
  * Run one pure Project Files transition (@volli/shared's `previewFile` &co)
- * over `projectId`'s workspace. `markProjectFileEdited` is its one remaining
+ * over `projectId`'s record. `markProjectFileEdited` is its one remaining
  * caller — the Home-prefixed actions read/write `projectFiles` directly, and
  * the Files-page actions this helper used to also serve retired with the page
  * (VC-122) — but the shape stays: a transition that returns its input by
@@ -1432,14 +1437,14 @@ function patchWorkspace(
  * untouched so subscribers don't re-render for a no-op.
  */
 function applyProjectFiles(
-  state: WorkspaceState,
+  state: ProjectUiStoreState,
   projectId: string,
   transition: (files: FileWorkspaceState) => FileWorkspaceState,
-): WorkspaceState | Pick<WorkspaceState, "byProject"> {
-  const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+): ProjectUiStoreState | Pick<ProjectUiStoreState, "byProject"> {
+  const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
   const projectFiles = transition(current.projectFiles);
   if (projectFiles === current.projectFiles) return state;
-  return patchWorkspace(state, projectId, { projectFiles });
+  return patchProjectUi(state, projectId, { projectFiles });
 }
 
 /**
@@ -1451,35 +1456,35 @@ function applyProjectFiles(
  * the focus the operation left behind (plan §2's invariant).
  */
 function applyHomeSplit(
-  state: WorkspaceState,
+  state: ProjectUiStoreState,
   projectId: string,
   op: (split: SplitViewState) => SplitViewState,
-): WorkspaceState | Pick<WorkspaceState, "byProject"> {
-  const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+): ProjectUiStoreState | Pick<ProjectUiStoreState, "byProject"> {
+  const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
   const split = current.homeSplitView ?? null;
   if (split === null) return state;
   const next = op(split);
   if (next === split) return state;
-  return patchWorkspace(state, projectId, {
+  return patchProjectUi(state, projectId, {
     ...homeSplitWrite(next),
     ...homeActiveAfterFocus(current, next),
   });
 }
 
-/** {@link applyHomeSplit} for a ticket workspace. */
+/** {@link applyHomeSplit} for a Ticket view. */
 function applyTicketSplit(
-  state: WorkspaceState,
+  state: ProjectUiStoreState,
   projectId: string,
   ticketId: string,
   op: (split: SplitViewState) => SplitViewState,
-): WorkspaceState | Pick<WorkspaceState, "byProject"> {
-  const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+): ProjectUiStoreState | Pick<ProjectUiStoreState, "byProject"> {
+  const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
   const existing = current.ticketTabs[ticketId];
   if (existing === undefined || (existing.splitView ?? null) === null) return state;
   const split = existing.splitView!;
   const next = op(split);
   if (next === split) return state;
-  return patchWorkspace(state, projectId, {
+  return patchProjectUi(state, projectId, {
     ticketTabs: {
       ...current.ticketTabs,
       [ticketId]: {
@@ -1500,11 +1505,11 @@ function applyTicketSplit(
  * the one thing here that cannot be derived, and a test that cannot predict it
  * cannot read what it wrote.
  */
-export function createWorkspaceStore(
+export function createProjectUiStore(
   storage?: StateStorage,
   mintPaneId: () => string = () => crypto.randomUUID(),
 ) {
-  return create<WorkspaceState>()(
+  return create<ProjectUiStoreState>()(
     persist(
       (set, get) => ({
         byProject: {},
@@ -1512,7 +1517,7 @@ export function createWorkspaceStore(
 
         setNav(projectId, nav) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             // Ticket detail is a state of Home's BOARD TAB, not a separate
             // top-level nav key — so a deliberate Home selection means the plain
             // board even when `nav` is already "home", which is the only reason
@@ -1525,7 +1530,7 @@ export function createWorkspaceStore(
             // Home → Configure → Home would otherwise discard it for nothing
             // visible.
             const clearsTicket = nav === "home" && isHomeBoardTab(current.homeActiveTab);
-            return patchWorkspace(
+            return patchProjectUi(
               state,
               projectId,
               clearsTicket ? { nav, openTicketId: null } : { nav },
@@ -1535,12 +1540,12 @@ export function createWorkspaceStore(
 
         setSessionGroupExpanded(projectId, ticketId, expanded) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             // No-op guard: this fires from a row in a band that re-renders on
             // every activity refresh, and a `set` that changes nothing still
             // notifies subscribers.
             if (current.expandedSessionGroups.includes(ticketId) === expanded) return state;
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               expandedSessionGroups: expanded
                 ? [...current.expandedSessionGroups, ticketId]
                 : current.expandedSessionGroups.filter((id) => id !== ticketId),
@@ -1549,29 +1554,29 @@ export function createWorkspaceStore(
         },
 
         setBoardView(projectId, view) {
-          set((state) => patchWorkspace(state, projectId, { boardView: view }));
+          set((state) => patchProjectUi(state, projectId, { boardView: view }));
         },
 
         dismissDependencyOffer(projectId) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             if (current.dependencyOfferDismissed) return state;
-            return patchWorkspace(state, projectId, { dependencyOfferDismissed: true });
+            return patchProjectUi(state, projectId, { dependencyOfferDismissed: true });
           });
         },
 
         setBoardSort(projectId, sort) {
-          set((state) => patchWorkspace(state, projectId, { boardSort: sort }));
+          set((state) => patchProjectUi(state, projectId, { boardSort: sort }));
         },
 
         setHomeActiveTab(projectId, tabId) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const split = activatedHomeSplit(current, tabId);
             // The no-op guard grew a second half: while split, selecting the tab
             // that is already in front is how focus comes back to its pane.
             if (current.homeActiveTab === tabId && split === null) return state;
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               homeActiveTab: tabId,
               homeTabHistory: homeHistoryAfterVisit(current, tabId),
               ...homeSplitWrite(split),
@@ -1584,9 +1589,9 @@ export function createWorkspaceStore(
 
         recordResolvedHomeTab(projectId, tabId) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             if (current.homeActiveTab === tabId) return state;
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               homeActiveTab: tabId,
               homeTabHistory: homeHistoryAfterVisit(current, tabId),
             });
@@ -1595,21 +1600,21 @@ export function createWorkspaceStore(
 
         recordHomeTabOrder(projectId, order) {
           set((state) => {
-            const recorded = (state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI).homeTabOrder;
+            const recorded = (state.byProject[projectId] ?? DEFAULT_PROJECT_UI).homeTabOrder;
             const homeTabOrder = sanitizeTabOrder(order);
             const same =
               homeTabOrder.length === recorded.length &&
               homeTabOrder.every((tabId, at) => tabId === recorded[at]);
-            return same ? state : patchWorkspace(state, projectId, { homeTabOrder });
+            return same ? state : patchProjectUi(state, projectId, { homeTabOrder });
           });
         },
 
         previewHomeFile(projectId, relPath) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const projectFiles = previewFile(current.projectFiles, relPath);
             const tabId = fileTabId(relPath);
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               nav: "home",
               projectFiles,
               // A preview tab replaced IN PLACE is the same tab under a new id;
@@ -1638,10 +1643,10 @@ export function createWorkspaceStore(
 
         pinHomeFile(projectId, relPath) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const projectFiles = activateFile(pinFile(current.projectFiles, relPath), relPath);
             const tabId = fileTabId(relPath);
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               nav: "home",
               projectFiles,
               homeActiveTab: tabId,
@@ -1657,12 +1662,12 @@ export function createWorkspaceStore(
           // selected nothing — so it has nothing to announce either.
           let selected = false;
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             if (!current.projectFiles.tabs.some((tab) => tab.relPath === relPath)) return state;
             selected = true;
             const projectFiles = activateFile(current.projectFiles, relPath);
             const tabId = fileTabId(relPath);
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               nav: "home",
               projectFiles,
               homeActiveTab: tabId,
@@ -1675,7 +1680,7 @@ export function createWorkspaceStore(
 
         closeHomeFile(projectId, relPath, openSessionTabIds) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const projectFiles = closeFile(current.projectFiles, relPath);
             if (projectFiles === current.projectFiles) return state;
 
@@ -1693,7 +1698,7 @@ export function createWorkspaceStore(
               const next = removeTab(split, closedTabId);
               const active = activeTabInSplitView(next) ?? HOME_BOARD_TAB_ID;
               const returnedFile = parseFileTabId(active);
-              return patchWorkspace(state, projectId, {
+              return patchProjectUi(state, projectId, {
                 projectFiles:
                   returnedFile === null ? projectFiles : activateFile(projectFiles, returnedFile),
                 projectFileViewStates,
@@ -1707,7 +1712,7 @@ export function createWorkspaceStore(
             }
 
             if (current.homeActiveTab !== closedTabId) {
-              return patchWorkspace(state, projectId, {
+              return patchProjectUi(state, projectId, {
                 projectFiles,
                 projectFileViewStates,
                 homeTabHistory: current.homeTabHistory.filter((tabId) => tabId !== closedTabId),
@@ -1724,7 +1729,7 @@ export function createWorkspaceStore(
               ],
             });
             const activeFile = parseFileTabId(close.active);
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               projectFiles:
                 activeFile === null ? projectFiles : activateFile(projectFiles, activeFile),
               projectFileViewStates,
@@ -1739,7 +1744,7 @@ export function createWorkspaceStore(
             const current = state.byProject[projectId];
             if (current === undefined) return state;
             if (current.homeActiveTab !== tabId) {
-              return patchWorkspace(state, projectId, {
+              return patchProjectUi(state, projectId, {
                 homeTabHistory: current.homeTabHistory.filter((candidate) => candidate !== tabId),
               });
             }
@@ -1748,7 +1753,7 @@ export function createWorkspaceStore(
               closedTabId: tabId,
               openTabIds,
             });
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               homeActiveTab: close.active,
               homeTabHistory: close.history,
             });
@@ -1757,7 +1762,7 @@ export function createWorkspaceStore(
 
         moveHomeTab(projectId, movedId, order) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const homeTabOrder = sanitizeTabOrder(order);
             // The File half: keep the reducer's own list in the arrangement the
             // strip now shows, and pin what was dragged. `moveFile` returns by
@@ -1769,13 +1774,13 @@ export function createWorkspaceStore(
               const slot = fileSlotInOrder(homeTabOrder, relPath);
               if (slot !== -1) projectFiles = moveFile(projectFiles, relPath, slot);
             }
-            return patchWorkspace(state, projectId, { homeTabOrder, projectFiles });
+            return patchProjectUi(state, projectId, { homeTabOrder, projectFiles });
           });
         },
 
         renameHomeFile(projectId, from, to) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const projectFiles = renameFile(current.projectFiles, from, to);
             if (projectFiles === current.projectFiles) return state;
 
@@ -1790,7 +1795,7 @@ export function createWorkspaceStore(
             if (carried === undefined) delete projectFileViewStates[to];
             else projectFileViewStates[to] = carried;
 
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               projectFiles,
               projectFileViewStates,
               // The renamed tab keeps its place in the arrangement too, for the
@@ -1822,8 +1827,8 @@ export function createWorkspaceStore(
 
         openHome(projectId, tabId) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
-            return patchWorkspace(
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
+            return patchProjectUi(
               state,
               projectId,
               tabId === undefined
@@ -1843,8 +1848,8 @@ export function createWorkspaceStore(
 
         openHomeBoard(projectId) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
-            return patchWorkspace(state, projectId, {
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
+            return patchProjectUi(state, projectId, {
               nav: "home",
               homeActiveTab: HOME_BOARD_TAB_ID,
               homeTabHistory: homeHistoryAfterVisit(current, HOME_BOARD_TAB_ID),
@@ -1860,11 +1865,11 @@ export function createWorkspaceStore(
         openTicket(projectId, ticketId) {
           // The Board tab too: `openTicketId` alone renders nothing while a Home
           // Session tab is in front (`home-surface.tsx`). Nav is deliberately
-          // NOT touched here — that is `openTicketWorkspace`'s job, and the
+          // NOT touched here — that is `openTicketView`'s job, and the
           // difference between the two is exactly which promise each makes.
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
-            return patchWorkspace(state, projectId, {
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
+            return patchProjectUi(state, projectId, {
               homeActiveTab: HOME_BOARD_TAB_ID,
               openTicketId: ticketId,
               ...homeSplitWrite(activatedHomeSplit(current, HOME_BOARD_TAB_ID)),
@@ -1881,26 +1886,26 @@ export function createWorkspaceStore(
           publishHomeSelection(get(), projectId, HOME_BOARD_TAB_ID);
         },
 
-        openTicketWorkspace(projectId, ticketId, opts) {
+        openTicketView(projectId, ticketId, opts) {
           // The switch's commit point, wherever it was asked for (VC-385): the
           // palette, a board card, nav history. Stamped in the store rather
           // than at each caller so the measured boundary cannot depend on
           // which door the person came through.
           markPerfPhase(PERF_PHASE.ticketSwitchCommit);
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const tabId = opts?.tabId;
             // Home AND its Board tab: a ticket takes Home over from that tab and
             // from no other, so both halves are the promise this seam makes.
-            const surface: Partial<WorkspaceUiState> = {
+            const surface: Partial<ProjectUiState> = {
               nav: "home",
               homeActiveTab: HOME_BOARD_TAB_ID,
               openTicketId: ticketId,
               ...homeSplitWrite(activatedHomeSplit(current, HOME_BOARD_TAB_ID)),
             };
-            if (tabId === undefined) return patchWorkspace(state, projectId, surface);
+            if (tabId === undefined) return patchProjectUi(state, projectId, surface);
             const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               ...surface,
               ticketTabs: {
                 ...current.ticketTabs,
@@ -1922,27 +1927,27 @@ export function createWorkspaceStore(
         },
 
         openTicketSession(projectId, ticketId, tabId, paneId) {
-          get().openTicketWorkspace(projectId, ticketId, { tabId });
+          get().openTicketView(projectId, ticketId, { tabId });
           const sessions = useSessionsStore.getState();
           sessions.setActiveSession(ticketId, tabId);
           if (paneId !== undefined) sessions.setActivePane(ticketId, tabId, paneId);
         },
 
         closeTicket(projectId) {
-          set((state) => patchWorkspace(state, projectId, { openTicketId: null }));
+          set((state) => patchProjectUi(state, projectId, { openTicketId: null }));
         },
 
         openTicketFile(projectId, ticketId, relPath) {
           // Explicit open (@file chips, create-artifact): pin + activate so
           // the tab is persistent and focused — never a replaceable glance.
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
             const next = applyTicketFileTransition(existing, (files) =>
               activateFile(pinFile(files, relPath), relPath),
             );
             if (next === null) return state;
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               ticketTabs: { ...current.ticketTabs, [ticketId]: next },
             });
           });
@@ -1952,13 +1957,13 @@ export function createWorkspaceStore(
 
         previewTicketFile(projectId, ticketId, relPath) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
             const next = applyTicketFileTransition(existing, (files) =>
               previewFile(files, relPath),
             );
             if (next === null) return state;
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               ticketTabs: { ...current.ticketTabs, [ticketId]: next },
             });
           });
@@ -1970,12 +1975,12 @@ export function createWorkspaceStore(
           // that is already open does not steal focus, so it selects nothing.
           let opened = false;
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
             opened = !existing.files.some((tab) => tab.relPath === relPath);
             const next = applyTicketFileTransition(existing, (files) => pinFile(files, relPath));
             if (next === null) return state;
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               ticketTabs: { ...current.ticketTabs, [ticketId]: next },
             });
           });
@@ -1984,13 +1989,13 @@ export function createWorkspaceStore(
 
         markTicketFileEdited(projectId, ticketId, relPath) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
             const next = applyTicketFileTransition(existing, (files) =>
               markFileEdited(files, relPath),
             );
             if (next === null) return state;
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               ticketTabs: { ...current.ticketTabs, [ticketId]: next },
             });
           });
@@ -1998,7 +2003,7 @@ export function createWorkspaceStore(
 
         openTicketDiff(projectId, ticketId, relPath, opts) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
             const diffs = existing.diffs.includes(relPath)
               ? existing.diffs
@@ -2018,7 +2023,7 @@ export function createWorkspaceStore(
               diffMeta[relPath] = meta;
             }
             const opened = diffTabId(relPath);
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               ticketTabs: {
                 ...current.ticketTabs,
                 [ticketId]: {
@@ -2038,7 +2043,7 @@ export function createWorkspaceStore(
 
         closeTicketFile(projectId, ticketId, relPath) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const existing = current.ticketTabs[ticketId];
             if (existing === undefined) return state;
             // Reuse closeFile for the list mutation; ticket strips fall back to
@@ -2067,20 +2072,20 @@ export function createWorkspaceStore(
             const nextTabs = { ...current.ticketTabs };
             if (isEmptyTicketTabs(next)) delete nextTabs[ticketId];
             else nextTabs[ticketId] = next;
-            return patchWorkspace(state, projectId, { ticketTabs: nextTabs });
+            return patchProjectUi(state, projectId, { ticketTabs: nextTabs });
           });
         },
 
         renameTicketFile(projectId, ticketId, from, to) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const existing = current.ticketTabs[ticketId];
             if (existing === undefined) return state;
             const next = applyTicketFileTransition(existing, (files) =>
               renameFile(files, from, to),
             );
             if (next === null) return state;
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               ticketTabs: { ...current.ticketTabs, [ticketId]: next },
             });
           });
@@ -2088,7 +2093,7 @@ export function createWorkspaceStore(
 
         closeTicketDiff(projectId, ticketId, relPath) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const existing = current.ticketTabs[ticketId];
             if (existing === undefined) return state;
             const diffs = existing.diffs.filter((path) => path !== relPath);
@@ -2120,7 +2125,7 @@ export function createWorkspaceStore(
             if (Object.keys(perTicket).length === 0) delete ticketDiffViewStates[ticketId];
             else ticketDiffViewStates[ticketId] = perTicket;
 
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               ticketTabs: nextTabs,
               ticketDiffViewStates,
             });
@@ -2129,13 +2134,13 @@ export function createWorkspaceStore(
 
         setTicketActiveTab(projectId, ticketId, tabId) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
             const split = activatedTicketSplit(existing, tabId);
             // no-op keeps empty records from forming; while split, re-selecting
             // the tab in front is how focus returns to its pane.
             if (existing.active === tabId && split === null) return state;
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               ticketTabs: {
                 ...current.ticketTabs,
                 [ticketId]: { ...existing, active: tabId, ...ticketSplitWrite(split) },
@@ -2148,10 +2153,10 @@ export function createWorkspaceStore(
 
         recordResolvedTicketTab(projectId, ticketId, tabId) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
             if (existing.active === tabId) return state;
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               ticketTabs: {
                 ...current.ticketTabs,
                 [ticketId]: { ...existing, active: tabId },
@@ -2162,7 +2167,7 @@ export function createWorkspaceStore(
 
         moveTicketTab(projectId, ticketId, movedId, order) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
             const tabOrder = sanitizeTabOrder(order);
             let next: TicketTabsState = { ...existing, tabOrder };
@@ -2178,7 +2183,7 @@ export function createWorkspaceStore(
                   next;
               }
             }
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               ticketTabs: { ...current.ticketTabs, [ticketId]: next },
             });
           });
@@ -2187,7 +2192,7 @@ export function createWorkspaceStore(
         splitHomePane(projectId, paneId, edge, opts) {
           let didSplit = false;
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             // Materialize the surface's one pane before splitting it, claiming
             // the strip as it stands so no open tab is left unassigned — an
             // unclaimed tab activated later would be taken for a tab that was
@@ -2208,7 +2213,7 @@ export function createWorkspaceStore(
             // materialized either: the surface is still unsplit.
             if (next === split) return state;
             didSplit = true;
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               ...homeSplitWrite(next),
               ...homeActiveAfterFocus(current, next),
             });
@@ -2223,7 +2228,7 @@ export function createWorkspaceStore(
         splitTicketPane(projectId, ticketId, paneId, edge, opts) {
           let didSplit = false;
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
             const split =
               existing.splitView ??
@@ -2234,7 +2239,7 @@ export function createWorkspaceStore(
             const next = splitPane(split, paneId, edge, { tabId: opts?.tabId }, mintPaneId);
             if (next === split) return state;
             didSplit = true;
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               ticketTabs: {
                 ...current.ticketTabs,
                 [ticketId]: {
@@ -2353,7 +2358,7 @@ export function createWorkspaceStore(
 
         moveHomeTabInPane(projectId, paneId, movedId, order) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const split = current.homeSplitView ?? null;
             if (split === null) return state;
             const next = reorderPaneTabs(split, paneId, sanitizeTabOrder(order));
@@ -2372,7 +2377,7 @@ export function createWorkspaceStore(
                     current.projectFiles.tabs.findIndex((tab) => tab.relPath === relPath),
                   );
             if (next === split && projectFiles === current.projectFiles) return state;
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               ...homeSplitWrite(next === split ? null : next),
               projectFiles,
             });
@@ -2381,7 +2386,7 @@ export function createWorkspaceStore(
 
         moveTicketTabInPane(projectId, ticketId, paneId, movedId, order) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const existing = current.ticketTabs[ticketId];
             if (existing === undefined || (existing.splitView ?? null) === null) return state;
             const split = existing.splitView!;
@@ -2403,7 +2408,7 @@ export function createWorkspaceStore(
                   );
             if (reordered === split && pinned === null) return state;
             next = pinned ?? next;
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               ticketTabs: { ...current.ticketTabs, [ticketId]: next },
             });
           });
@@ -2411,7 +2416,7 @@ export function createWorkspaceStore(
 
         removeHomeTabFromSplit(projectId, tabId) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const split = current.homeSplitView ?? null;
             if (split === null) return state;
             const next = removeTab(split, tabId);
@@ -2426,7 +2431,7 @@ export function createWorkspaceStore(
             const active =
               front ??
               (current.homeActiveTab === tabId ? HOME_BOARD_TAB_ID : current.homeActiveTab);
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               homeActiveTab: active,
               homeTabHistory: visitHomeTab(
                 current.homeTabHistory.filter((id) => id !== tabId),
@@ -2439,7 +2444,7 @@ export function createWorkspaceStore(
 
         removeTicketTabFromSplit(projectId, ticketId, tabId) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const existing = current.ticketTabs[ticketId];
             if (existing === undefined || (existing.splitView ?? null) === null) return state;
             const split = existing.splitView!;
@@ -2448,7 +2453,7 @@ export function createWorkspaceStore(
             // See the Home twin above: the permanent-tab fallback applies only
             // when this close took the surface's active tab (validation V2).
             const front = activeTabInSplitView(next);
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               ticketTabs: {
                 ...current.ticketTabs,
                 [ticketId]: {
@@ -2469,14 +2474,14 @@ export function createWorkspaceStore(
 
         setProjectFileViewState(projectId, relPath, viewState) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             // Only an OPEN tab may hold view state. A closing tab's editor
             // unmounts AFTER `closeHomeFile` has already dropped its entry
             // and emits one last view state bound to the path it was showing;
             // accepting that write would re-insert exactly what the close just
             // pruned, and the map would grow without bound as tabs churn.
             if (!current.projectFiles.tabs.some((tab) => tab.relPath === relPath)) return state;
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               projectFileViewStates: { ...current.projectFileViewStates, [relPath]: viewState },
             });
           });
@@ -2484,10 +2489,10 @@ export function createWorkspaceStore(
 
         setTicketDiffViewState(projectId, ticketId, relPath, viewState) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const diffs = current.ticketTabs[ticketId]?.diffs;
             if (diffs === undefined || !diffs.includes(relPath)) return state;
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               ticketDiffViewStates: {
                 ...current.ticketDiffViewStates,
                 [ticketId]: {
@@ -2501,7 +2506,7 @@ export function createWorkspaceStore(
 
         setMarkdownFileView(projectId, relPath, view) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const markdownDocumentFiles = withMarkdownFile(
               current.markdownDocumentFiles,
               relPath,
@@ -2520,7 +2525,7 @@ export function createWorkspaceStore(
             ) {
               return state;
             }
-            return patchWorkspace(state, projectId, {
+            return patchProjectUi(state, projectId, {
               markdownDocumentFiles,
               markdownPreviewFiles,
             });
@@ -2560,7 +2565,7 @@ export function createWorkspaceStore(
         },
       }),
       {
-        name: WORKSPACE_UI_APP_STATE_KEY,
+        name: PROJECT_UI_APP_STATE_KEY,
         version: 1,
         storage: createJSONStorage(() => storage ?? appStateStorage),
         skipHydration: storage === undefined,
@@ -2568,7 +2573,7 @@ export function createWorkspaceStore(
         // doc); records that still match the defaults are dropped entirely so
         // the stored map never accretes entries for projects that were merely
         // visited.
-        partialize: (state): PersistedWorkspaceState => ({
+        partialize: (state): PersistedProjectUiState => ({
           byProject: Object.fromEntries(
             Object.entries(state.byProject)
               .filter(([, ui]) => !isDefaultPersistedUi(ui))
@@ -2592,7 +2597,7 @@ export function createWorkspaceStore(
                   // relaunch reopens (VC-105), and how they were arranged.
                   homeTabOrder: ui.homeTabOrder,
                   // A layout is a deliberate act too — but an unsplit surface
-                  // writes no key, so the persisted blob of a workspace that
+                  // writes no key, so the persisted blob of a project that
                   // never split is byte-identical to one from before panes.
                   ...(ui.homeSplitView == null ? {} : { homeSplitView: ui.homeSplitView }),
                   // Which markdown files open as documents, and which in the
@@ -2614,16 +2619,16 @@ export function createWorkspaceStore(
           // ids are persisted JSON keys, and `__proto__` among them must not
           // reach an object literal's prototype (nor may a lookup of an
           // unvisited project ever resolve to an inherited member).
-          const byProject = Object.create(null) as Record<string, WorkspaceUiState>;
-          const persistedByProject = (persisted as PersistedWorkspaceState | undefined)?.byProject;
+          const byProject = Object.create(null) as Record<string, ProjectUiState>;
+          const persistedByProject = (persisted as PersistedProjectUiState | undefined)?.byProject;
           for (const [projectId, ui] of Object.entries(persistedByProject ?? {})) {
             // A non-object record (null from a corrupt write) would throw
             // inside sanitizePersistedUi's property reads — treat it as empty.
             const record = typeof ui === "object" && ui !== null ? ui : {};
             byProject[projectId] = {
-              ...DEFAULT_WORKSPACE_UI,
+              ...DEFAULT_PROJECT_UI,
               ...sanitizePersistedUi(record),
-              // `nav` is not part of `PersistedWorkspaceUi` (it is session-only —
+              // `nav` is not part of `PersistedProjectUi` (it is session-only —
               // see the module doc), so no shipped build wrote one here. Read
               // and mapped anyway, the same tolerant-read every other field in
               // this record gets, in case a foreign or hand-edited blob carries
@@ -2639,4 +2644,4 @@ export function createWorkspaceStore(
 }
 
 /** App-wide singleton; components import this directly. */
-export const useWorkspaceStore = createWorkspaceStore();
+export const useProjectUiStore = createProjectUiStore();

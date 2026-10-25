@@ -11,7 +11,7 @@
  * record the strip as it stands at the moment it opens (`surfaceTabIds`, so no
  * open tab is left unclaimed — see the store's `splitHomePane`), and the only
  * component that knows that list is the surface drawing it. Both instances are
- * mounted while a ticket workspace is open (Home hosts the detail view), so
+ * mounted while a Ticket view is open (Home hosts the detail view), so
  * each asks the SAME pure predicate which surface is in front and the one that
  * is not stands down. Two listeners, one answer.
  *
@@ -31,11 +31,11 @@ import {
 } from "@renderer/lib/split-shortcut";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
-import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { DEFAULT_PROJECT_UI, useProjectUiStore } from "@renderer/stores/project-ui";
 
 export interface SplitShortcutTarget {
   projectId: string | null;
-  /** `null` for Home; the ticket id for a ticket workspace. */
+  /** `null` for Home; the ticket id for a Ticket view. */
   ticketId: string | null;
   /**
    * The surface's live strip, in drawn order — what the FIRST split of a
@@ -60,19 +60,19 @@ export function useSplitShortcuts({ projectId, ticketId, orderedTabIds }: SplitS
       const mine = latest.current;
       if (mine.projectId === null) return;
       const selectedProjectId = useProjectsStore.getState().selectedProjectId;
-      const workspace = useWorkspaceStore.getState();
-      const ui = selectedProjectId === null ? undefined : workspace.byProject[selectedProjectId];
+      const projectUi = useProjectUiStore.getState();
+      const ui = selectedProjectId === null ? undefined : projectUi.byProject[selectedProjectId];
       const { settingsOpen, newTicketOpen, terminalFocusTarget } = useUiStore.getState();
       const surface = splitSurfaceForChrome({
         selectedProjectId,
-        nav: ui?.nav ?? DEFAULT_WORKSPACE_UI.nav,
-        homeActiveTab: ui?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab,
+        nav: ui?.nav ?? DEFAULT_PROJECT_UI.nav,
+        homeActiveTab: ui?.homeActiveTab ?? DEFAULT_PROJECT_UI.homeActiveTab,
         settingsOpen,
         newTicketOpen,
         openTicketId: ui?.openTicketId ?? null,
         terminalFocused: terminalFocusTarget !== null,
       });
-      // Not this surface's press. Both surfaces listen while a ticket workspace
+      // Not this surface's press. Both surfaces listen while a Ticket view
       // is open, and exactly one of them is the one in front.
       if (
         surface === null ||
@@ -91,8 +91,8 @@ export function useSplitShortcuts({ projectId, ticketId, orderedTabIds }: SplitS
         // that does nothing should not also swallow the keypress.
         if (split === null) return;
         event.preventDefault();
-        if (ticket === null) workspace.focusAdjacentHomePane(project, shortcut.direction);
-        else workspace.focusAdjacentTicketPane(project, ticket, shortcut.direction);
+        if (ticket === null) projectUi.focusAdjacentHomePane(project, shortcut.direction);
+        else projectUi.focusAdjacentTicketPane(project, ticket, shortcut.direction);
         return;
       }
 
@@ -101,8 +101,8 @@ export function useSplitShortcuts({ projectId, ticketId, orderedTabIds }: SplitS
       // what lets ⌘\ name its subject before any split exists.
       const paneId = split?.focusedPaneId ?? SPLIT_VIEW_ROOT_PANE_ID;
       const opts = { surfaceTabIds: mine.orderedTabIds };
-      if (ticket === null) workspace.splitHomePane(project, paneId, shortcut.edge, opts);
-      else workspace.splitTicketPane(project, ticket, paneId, shortcut.edge, opts);
+      if (ticket === null) projectUi.splitHomePane(project, paneId, shortcut.edge, opts);
+      else projectUi.splitTicketPane(project, ticket, paneId, shortcut.edge, opts);
       focusNewPaneMenu();
     };
 

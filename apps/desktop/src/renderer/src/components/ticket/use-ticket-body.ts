@@ -6,7 +6,7 @@ import { isTicketBodyLoaded, planningChangeAffects, useBoardStore } from "@rende
 import { boardApi } from "@renderer/lib/board-protocol";
 
 /**
- * What the open Ticket workspace may do with the body in the board store.
+ * What the open Ticket view may do with the body in the board store.
  *
  * `loading` is the one state a body editor must NOT be rendered in: the store
  * holds a `""` placeholder, and an editor seeded from it would let a person type

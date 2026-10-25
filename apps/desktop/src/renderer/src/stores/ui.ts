@@ -1,5 +1,5 @@
 /**
- * App-wide (workspace-independent) UI state.
+ * App-wide (project-independent) UI state.
  *
  * "Persists app-wide" below means one thing throughout: through
  * {@link appStateStorage}, the `app_state` preload bridge onto main's SQLite —
@@ -12,24 +12,25 @@
  * panel) — persists so the grip position survives relaunch.
  * `railWidth` — the ticket-detail right rail's width, resizable via its own
  * left-edge grip (see rail-resize-handle.tsx) — persists app-wide by the same
- * reasoning: it's a global chrome preference, not per-workspace state.
+ * reasoning: it's a global chrome preference, not per-project state.
  * `settingsOpen` is session-only: Settings is app-wide chrome (the sidebar
- * footer entry), not a per-workspace place, so it stays up across project
+ * footer entry), not a per-project place, so it stays up across project
  * switches and closes when a nav page is picked. `newTicketOpen` is
  * session-only for the same reason: the global New-ticket dialog (board
- * header button + the "c" hotkey) is app-wide chrome, not per-workspace
+ * header button + the "c" hotkey) is app-wide chrome, not per-project
  * state, so it never follows a project into persisted storage.
  *
- * `workspaceRailHidden` — whether the Slack-style project switcher is
- * visible — persists app-wide. (The key predates CONTEXT.md's "project"
- * ruling and stays as wire format; the copy on the toggle says project
- * switcher.) Hiding it returns its full width to the active workspace while
+ * `projectRailHidden` — whether the Slack-style project switcher is
+ * visible — persists app-wide, under the stored key `workspaceRailHidden`.
+ * (That key predates "Workspace" naming the team container, CONTEXT.md, and
+ * stays as wire format so N-1 builds keep reading it.) Hiding it returns its
+ * full width to the active project while
  * project keyboard shortcuts remain available.
  *
  * `sidebarPinned` — whether the summoned sidebar panel stands in the layout
  * (⌘B / the chrome-band trigger) rather than being summoned by the pointer at
  * the window's left edge. Persisted app-wide for the same reason as the two
- * above: it is a chrome preference, not a per-workspace place. A panel that
+ * above: it is a chrome preference, not a per-project place. A panel that
  * re-pinned itself on every launch would undo the choice the moment it mattered.
  * Missing or corrupt persisted state pins it — the visible default, and today's
  * behavior.
@@ -44,7 +45,7 @@
  *
  * `railCollapsed` — the ticket-detail right rail's collapsed state (the
  * chrome-bar ⌥⌘B toggle, VS-Code secondary-sidebar style) — persists app-wide
- * like the sidebar width: it's a global chrome preference, not per-workspace,
+ * like the sidebar width: it's a global chrome preference, not per-project,
  * so every ticket you open honors the same choice.
  *
  * `homeRailMode` — which page HOME's rail shows (Now / Sessions / Files /
@@ -105,7 +106,7 @@
  * store-layer twin. Either way app-shell (which hides all chrome while a target
  * is set) can never be stranded around a session that's gone.
  *
- * Per-workspace UI state (the active nav page) lives in stores/workspace.ts.
+ * Per-project UI state (the active nav page) lives in stores/project-ui.ts.
  */
 
 import { create } from "zustand";
@@ -402,7 +403,7 @@ interface UiState {
   /** Session-only — never persisted; see module doc. */
   newTicketOpen: boolean;
   /** Project switcher rail hidden? Persisted app-wide (see module doc). */
-  workspaceRailHidden: boolean;
+  projectRailHidden: boolean;
   /** Sidebar panel docked rather than summoned on hover? Persisted app-wide (see module doc). */
   sidebarPinned: boolean;
   /** Ticket-detail right rail collapsed? Persisted app-wide (see module doc). */
@@ -494,8 +495,8 @@ interface UiState {
   /** Show one closed Session's saved record. Replaces whichever was open. */
   openSessionDetail(projectId: string, sessionId: string): void;
   closeSessionDetail(): void;
-  toggleWorkspaceRailHidden(): void;
-  setWorkspaceRailHidden(hidden: boolean): void;
+  toggleProjectRailHidden(): void;
+  setProjectRailHidden(hidden: boolean): void;
   setSidebarPinned(pinned: boolean): void;
   toggleRailCollapsed(): void;
   setRailCollapsed(collapsed: boolean): void;
@@ -555,7 +556,6 @@ type PersistedUiState = Pick<
   | "sidebarWidth"
   | "railWidth"
   | "uiScale"
-  | "workspaceRailHidden"
   | "sidebarPinned"
   | "railCollapsed"
   | "railMode"
@@ -569,6 +569,8 @@ type PersistedUiState = Pick<
   | "dismissedEnvironmentFaults"
   | "usagePin"
 > & {
+  /** `projectRailHidden`'s stored key, kept for N-1 builds (module doc). */
+  workspaceRailHidden?: boolean;
   /** Legacy pre-icon-rail key; read on merge only, never written again. */
   detailsExpanded?: boolean;
 };
@@ -595,7 +597,7 @@ export function createUiStore(storage?: StateStorage) {
         configureCategory: null,
         newTicketOpen: false,
         sessionDetail: null,
-        workspaceRailHidden: false,
+        projectRailHidden: false,
         sidebarPinned: true,
         railCollapsed: false,
         railMode: DEFAULT_TICKET_RAIL_MODE,
@@ -627,9 +629,9 @@ export function createUiStore(storage?: StateStorage) {
         openSessionDetail: (projectId, sessionId) =>
           set({ sessionDetail: { projectId, sessionId } }),
         closeSessionDetail: () => set({ sessionDetail: null }),
-        toggleWorkspaceRailHidden: () =>
-          set((state) => ({ workspaceRailHidden: !state.workspaceRailHidden })),
-        setWorkspaceRailHidden: (hidden) => set({ workspaceRailHidden: hidden }),
+        toggleProjectRailHidden: () =>
+          set((state) => ({ projectRailHidden: !state.projectRailHidden })),
+        setProjectRailHidden: (hidden) => set({ projectRailHidden: hidden }),
         setSidebarPinned: (pinned) => set({ sidebarPinned: pinned }),
         toggleRailCollapsed: () => set((state) => ({ railCollapsed: !state.railCollapsed })),
         setRailCollapsed: (collapsed) => set({ railCollapsed: collapsed }),
@@ -698,7 +700,7 @@ export function createUiStore(storage?: StateStorage) {
           sidebarWidth: state.sidebarWidth,
           railWidth: state.railWidth,
           uiScale: state.uiScale,
-          workspaceRailHidden: state.workspaceRailHidden,
+          workspaceRailHidden: state.projectRailHidden,
           sidebarPinned: state.sidebarPinned,
           railCollapsed: state.railCollapsed,
           railMode: state.railMode,
@@ -726,7 +728,7 @@ export function createUiStore(storage?: StateStorage) {
             uiScale: sanitizeUiScale(stored.uiScale),
             // Missing/corrupt state from an older build keeps the switcher
             // visible so projects never become unexpectedly undiscoverable.
-            workspaceRailHidden: stored.workspaceRailHidden === true,
+            projectRailHidden: stored.workspaceRailHidden === true,
             // The opposite default to the line above, for the same reason:
             // anything other than an explicit `false` leaves the panel standing,
             // so a missing key or corrupt JSON can never open the app on a
