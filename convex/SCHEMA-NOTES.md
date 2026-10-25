@@ -103,14 +103,24 @@ Each was a decision made while turning the design into code.
 10. Besides `ensureViewer`, `accounts.viewer` is a read-only query for the
     signed-in person's own account (or `null` before the first
     `ensureViewer`), so a client can tell "signed in, not set up" from "set up".
-11. `ensureViewer` creates the person only. Creating their first Workspace
-    belongs to the Workspaces work, which calls it.
-
-## Auth hook
-
-The real sign-in provider is not wired. `auth.config.ts` trusts only the test
-issuer, and only where `VOLLI_TEST_JWKS` is set. `lib/auth.ts` exports
-`ProfileFromIdentity` and `profileFromIdentity`, the one place a provider's
-claims become a `users` profile; the accounts work adds its provider to
-`auth.config.ts` and, if its claims differ from the standard OIDC ones, passes
-its own mapping to `ensureViewer`.
+11. `ensureViewer` creates the person and, in the same transaction, their
+    personal Workspace (named after them, Free plan, default policy row, the
+    person its one owner). Later calls create nothing.
+12. `workspaceInvites.email` is nullable: `null` is a single-use link invite,
+    accepted only with its token. An email invite is accepted only by a
+    person whose verified email matches, by id or by token.
+13. Workspace and Member writes record an Actor in `auditLog` (`workspace.*`,
+    `policy.updated`, `invite.*`, `member.*`) with an `auditEntry` id, through
+    `lib/audit.ts`. `detail` is typed JSON from that helper rather than a
+    shared codec (nothing outside `convex/` reads it yet), and never holds an
+    invite token; only the token's sha256 is stored.
+14. `workspaces.activeMemberCount` stays on the Workspace row, as designed:
+    Member changes are rare next to the reads that want it. It is recounted
+    from the active Member rows in every Member transaction rather than
+    incremented, so it cannot drift.
+15. Workspace, Member and invite mutations carry no `commandId`. Each is
+    idempotent by its target state (a role, a status), a create by the
+    client's id, an invite acceptance by the invite. The exception is a lost
+    reply to `invites.create` for a link: a retry leaves a second pending link
+    nobody holds, which expires after 7 days (the invite lifetime) and can be
+    revoked.

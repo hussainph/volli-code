@@ -160,7 +160,8 @@ export default defineSchema({
   workspaceInvites: defineTable({
     id: uuid,
     workspaceId: uuid,
-    email: v.string(),
+    // Normalized; null for a link invite, which anyone signed in may accept once.
+    email: nullable(v.string()),
     role: memberRole,
     invitedByUserId: uuid,
     tokenHash: v.string(),

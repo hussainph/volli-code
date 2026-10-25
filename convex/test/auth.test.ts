@@ -287,6 +287,15 @@ describe("profileFromIdentity", () => {
       displayName: "Volli user",
     });
   });
+
+  test("reads email_verified as a customJwt provider passes it through", () => {
+    expect(
+      profileFromIdentity({ ...base, email: "a@x.test", email_verified: true }).emailVerified,
+    ).toBe(true);
+    expect(
+      profileFromIdentity({ ...base, email: "a@x.test", email_verified: "true" }).emailVerified,
+    ).toBe(false);
+  });
 });
 
 describe("membership checks", () => {

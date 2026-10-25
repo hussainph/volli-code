@@ -10,8 +10,14 @@
 
 import type * as accounts from "../accounts.js";
 import type * as health from "../health.js";
+import type * as invites from "../invites.js";
+import type * as lib_audit from "../lib/audit.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_firstSignIn from "../lib/firstSignIn.js";
 import type * as lib_validators from "../lib/validators.js";
+import type * as lib_workspaces from "../lib/workspaces.js";
+import type * as members from "../members.js";
+import type * as workspaces from "../workspaces.js";
 
 import type {
   ApiFromModules,
@@ -22,8 +28,14 @@ import type {
 declare const fullApi: ApiFromModules<{
   accounts: typeof accounts;
   health: typeof health;
+  invites: typeof invites;
+  "lib/audit": typeof lib_audit;
   "lib/auth": typeof lib_auth;
+  "lib/firstSignIn": typeof lib_firstSignIn;
   "lib/validators": typeof lib_validators;
+  "lib/workspaces": typeof lib_workspaces;
+  members: typeof members;
+  workspaces: typeof workspaces;
 }>;
 
 /**
