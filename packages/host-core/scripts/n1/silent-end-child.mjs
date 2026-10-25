@@ -2,6 +2,18 @@
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 const n1 = (path) => import(`n1:${path}`);
+
+/**
+ * N-1's executor port, under both names a shipped build reads: `executor` (one
+ * adapter) before VC-916, `executors` (the executor slot) since. Each build
+ * reads only its own name, so passing both fits every N-1.
+ */
+function executorPorts(adapter) {
+  return {
+    executor: adapter,
+    executors: { runtimes: new Map([[adapter.id, adapter]]), defaultRuntime: adapter },
+  };
+}
 const { dbPath, steps } = JSON.parse(process.argv[2]);
 const step = steps[0];
 const { openVolliDb } = await n1("./db/index");
@@ -61,13 +73,13 @@ try {
       prepare: async () => ({ directory: step.workspace, venue: { id: "local", kind: "local" } }),
       reaffirm: async () => undefined,
     },
-    executor: {
+    ...executorPorts({
       ...adapter,
       attach: (spec, sink) => {
         attachSpecs.push(spec);
         return adapter.attach(spec, sink);
       },
-    },
+    }),
   });
   // Replay BEFORE attaching, then again after attach: both are real artifact/codec reads.
   const replay = await runtime.snapshot({ sessionId: step.sessionId });
@@ -111,7 +123,7 @@ try {
   });
   const cold = createSessionRuntime({
     engine: coldEngine,
-    executor: adapter,
+    ...executorPorts(adapter),
     artifacts: createFileTranscriptArtifactStore(step.transcriptsRoot),
     clock: { now },
     ids: { next: (kind) => `silent-cold-${kind}-${++next}` },
