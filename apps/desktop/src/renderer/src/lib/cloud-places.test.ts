@@ -16,14 +16,17 @@ import { adoptLaunch } from "@renderer/stores/launch";
 
 import type { CloudSession } from "./cloud-client";
 import {
+  availabilityDotState,
   bindCloudPlaces,
   forgetProjectPlaces,
   noteProjectPlaces,
+  openSessionPlace,
   placeOf,
   readPending,
   readPlaces,
   sinceLabel,
   useCloudPlacesStore,
+  useOpenSessionPlace,
   useSessionPendingLine,
   witnessBatches,
   type ThisMacStream,
@@ -48,6 +51,8 @@ const reset = () =>
     sessions: {},
     runners: {},
     thisRunnerId: null,
+    opened: {},
+    openedPlaces: {},
   });
 
 afterEach(() => {
@@ -108,7 +113,55 @@ describe("the listing's Places", () => {
         null,
         { sessionId: "s5", place: place({ id: "r2", statusReason: "removed" }) },
       ]),
-    ).toEqual([place(), place({ id: "r2", statusReason: "removed" })]);
+    ).toEqual([
+      { sessionId: "s1", place: place() },
+      { sessionId: "s2", place: null },
+      { sessionId: "s3", place: null },
+      { sessionId: "s4", place: null },
+      { sessionId: "s5", place: place({ id: "r2", statusReason: "removed" }) },
+    ]);
+    expect(readPlaces([{ place: place() }, { sessionId: "s6" }])).toEqual([
+      { sessionId: "s6", place: null },
+    ]);
+  });
+
+  it("adds every drawn Session no listing holds as its own witness", () => {
+    expect(
+      witnessBatches({ a: { placeRunnerId: "r1", turnActive: false } }, ["z", "a", "m"]),
+    ).toEqual([["a", "m", "z"]]);
+  });
+
+  it("counts each surface that opens a Session, and forgets it with the last", () => {
+    const first = openSessionPlace("s1");
+    const second = openSessionPlace("s1");
+    expect(useCloudPlacesStore.getState().opened).toEqual({ s1: 2 });
+    useCloudPlacesStore.setState({
+      openedPlaces: { s1: { placeRunnerId: "r1", turnActive: false } },
+    });
+    first();
+    first();
+    expect(useCloudPlacesStore.getState().opened).toEqual({ s1: 1 });
+    second();
+    expect(useCloudPlacesStore.getState().opened).toEqual({});
+    expect(useCloudPlacesStore.getState().openedPlaces).toEqual({});
+  });
+});
+
+const dot = (kind: string, reason: Parameters<typeof availabilityDotState>[0]["reason"]) =>
+  availabilityDotState({ kind, reason });
+
+describe("availabilityDotState", () => {
+  it("draws serving as ready, removed as an error, and waiting by its reason", () => {
+    expect(dot("serving", null)).toBe("ready");
+    expect(dot("here", null)).toBe("ready");
+    expect(dot("online", null)).toBe("ready");
+    expect(dot("removed", "cut_off")).toBe("error");
+    expect(dot("waiting", "asleep")).toBe("parked");
+    expect(dot("waiting", "closed")).toBe("exited");
+    expect(dot("waiting", "updating")).toBe("starting");
+    expect(dot("waiting", "needs_update")).toBe("error");
+    expect(dot("waiting", "offline")).toBe("idle");
+    expect(dot("waiting", "unknown")).toBe("idle");
   });
 });
 
@@ -304,6 +357,12 @@ function bound(thisMac: ThisMacStream | null = null) {
   };
 }
 
+/** A surface that draws one Session. */
+function OpenProbe({ sessionId }: { sessionId: string | null }) {
+  useOpenSessionPlace(sessionId);
+  return null;
+}
+
 describe("bindCloudPlaces", () => {
   it("watches the witnesses' Places while connected, and forgets everything when unbound", async () => {
     const { fake, follow, stop, stopFollowing, warn } = bound();
@@ -389,6 +448,107 @@ describe("bindCloudPlaces", () => {
     noteProjectPlaces("p", [{ id: "s2", placeRunnerId: "r2", turnActive: false }]);
     expect(useCloudPlacesStore.getState().runners).toEqual({});
     stop();
+  });
+
+  it("paints nothing from a read queued for a batch that is gone", async () => {
+    // The client already holds an answer, so each new watch queues a read of it.
+    const { fake, follow, stop } = bound();
+    noteProjectPlaces("p", [{ id: "s1", placeRunnerId: "r1", turnActive: false }]);
+    fake.answer(PLACES, { sessionIds: ["s1"] }, [{ sessionId: "s1", place: place() }]);
+    // The account's client closes before the queued read runs.
+    follow(fake.session);
+    follow(null);
+    await settle();
+    expect(useCloudPlacesStore.getState().runners).toEqual({});
+    // A rebuilt batch's queued read is the one that paints.
+    follow(fake.session);
+    noteProjectPlaces("p", [{ id: "s2", placeRunnerId: "r2", turnActive: false }]);
+    await settle();
+    expect(useCloudPlacesStore.getState().runners).toEqual({});
+    noteProjectPlaces("p", [{ id: "s1", placeRunnerId: "r1", turnActive: false }]);
+    await settle();
+    expect(useCloudPlacesStore.getState().runners).toEqual({ r1: place() });
+    // Unbound before the read runs: nothing comes back.
+    noteProjectPlaces("p", [{ id: "s3", placeRunnerId: "r1", turnActive: false }]);
+    noteProjectPlaces("p", [{ id: "s1", placeRunnerId: "r1", turnActive: false }]);
+    stop();
+    await settle();
+    expect(useCloudPlacesStore.getState().runners).toEqual({});
+  });
+
+  it("follows a drawn Session no listing holds, by itself, until the last surface lets go", async () => {
+    const { fake, follow, stop } = bound();
+    noteProjectPlaces("p", [{ id: "s1", placeRunnerId: "r1", turnActive: false }]);
+    follow(fake.session);
+    await settle();
+    // A Session opened from a link or a notification, outside every listing.
+    const header = openSessionPlace("s9");
+    const composer = openSessionPlace("s9");
+    const args = { sessionIds: ["s1", "s9"] };
+    expect(fake.watchers(PLACES, args)).toBe(1);
+    expect(placeOf(useCloudPlacesStore.getState(), "s9", 0)).toBeNull();
+    fake.answer(PLACES, args, [
+      { sessionId: "s1", place: place() },
+      { sessionId: "s9", place: place({ id: "r9", name: "box", kind: "linux", owned: false }) },
+    ]);
+    // Its turn is not known here, so it reads as waiting rather than paused.
+    expect(placeOf(useCloudPlacesStore.getState(), "s9", 0)?.label).toBe(
+      "Waiting for box — asleep since " + sinceLabel(0, 0),
+    );
+    // Shared with nobody any more: the backend stops vouching, and the label goes.
+    fake.answer(PLACES, args, [
+      { sessionId: "s1", place: place() },
+      { sessionId: "s9", place: null },
+    ]);
+    expect(placeOf(useCloudPlacesStore.getState(), "s9", 0)).toBeNull();
+    expect(Object.keys(useCloudPlacesStore.getState().runners)).toEqual(["r1"]);
+    fake.answer(PLACES, args, [
+      { sessionId: "s1", place: place() },
+      { sessionId: "s9", place: place({ id: "r9", name: "box" }) },
+    ]);
+    expect(placeOf(useCloudPlacesStore.getState(), "s9", 0)).not.toBeNull();
+
+    // Listed after all: the listing's row answers for it (its live turn too),
+    // and it now witnesses its runner as a listed Session; the read is the same.
+    noteProjectPlaces("p", [
+      { id: "s1", placeRunnerId: "r1", turnActive: false },
+      { id: "s9", placeRunnerId: "r9", turnActive: true },
+    ]);
+    expect(fake.watchers(PLACES, args)).toBe(1);
+    expect(placeOf(useCloudPlacesStore.getState(), "s9", 0)?.label).toBe("Paused — box is asleep");
+    noteProjectPlaces("p", [{ id: "s1", placeRunnerId: "r1", turnActive: false }]);
+    expect(fake.watchers(PLACES, args)).toBe(1);
+    expect(placeOf(useCloudPlacesStore.getState(), "s9", 0)?.label).toContain("Waiting for box");
+
+    // The last surface lets go: forgotten, and its runner with it.
+    header();
+    expect(useCloudPlacesStore.getState().opened).toEqual({ s9: 1 });
+    composer();
+    expect(useCloudPlacesStore.getState().opened).toEqual({});
+    expect(useCloudPlacesStore.getState().openedPlaces).toEqual({});
+    expect(Object.keys(useCloudPlacesStore.getState().runners)).toEqual(["r1"]);
+    expect(fake.watchers(PLACES, { sessionIds: ["s1"] })).toBe(1);
+    stop();
+  });
+
+  it("opens the Session a surface draws while it is mounted, in a cloud launch only", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const root = createRoot(document.createElement("div"));
+    try {
+      await act(async () => root.render(React.createElement(OpenProbe, { sessionId: "s1" })));
+      expect(useCloudPlacesStore.getState().opened).toEqual({});
+      adoptLaunch({ store: "cloud", userId: "u", backendUrl: "https://example.convex.cloud" });
+      await act(async () => root.render(React.createElement(OpenProbe, { sessionId: "s2" })));
+      expect(useCloudPlacesStore.getState().opened).toEqual({ s2: 1 });
+      await act(async () => root.render(React.createElement(OpenProbe, { sessionId: null })));
+      expect(useCloudPlacesStore.getState().opened).toEqual({});
+      await act(async () => root.render(React.createElement(OpenProbe, { sessionId: "s3" })));
+      await act(async () => root.unmount());
+      expect(useCloudPlacesStore.getState().opened).toEqual({});
+    } finally {
+      adoptLaunch(LOCAL_LAUNCH);
+      vi.unstubAllGlobals();
+    }
   });
 
   it("learns this Mac's runner from main's stream", () => {

@@ -3,7 +3,9 @@
  * (`sessions.command`), as their runner and their owner read them back.
  *
  * - `forRunner` (runner): the staged body of one `message.submit` command,
- *   for the runner that holds the Session's claim and leased that command.
+ *   for the runner that holds the Session's active claim and that the
+ *   command's job is routed to (its lease is not checked: the body is the
+ *   same for every attempt).
  *   The runner checks the body against the command's reference and stores it
  *   through its own transcript codec before delivering the message.
  * - `pending` (client): the owner's commands the runner's engine has not
@@ -68,7 +70,8 @@ export type RunnerMessageBody = { status: "staged"; body: string } | { status: "
 
 /**
  * The staged body of `commandId`, a `message.submit` job of `sessionId`, for
- * the runner that holds the Session's active claim and the job. The Session must be
+ * the runner that holds the Session's active claim and that the job is routed to
+ * (not its lease). The Session must be
  * the runner owner's, in a project they are still an active Member of.
  * `missing`: no inline body is staged for the command's reference.
  */

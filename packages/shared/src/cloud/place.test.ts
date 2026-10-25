@@ -1,7 +1,6 @@
 import { describe, expect, test } from "vite-plus/test";
 
 import {
-  defaultSinceLabel,
   pendingCommandLabel,
   RUNNER_PLACES_MAX_SESSIONS,
   runnerPlaceAvailability,
@@ -23,6 +22,12 @@ const mac = (patch: Partial<RunnerPlace> = {}): RunnerPlace => ({
   ...patch,
 });
 
+/** A surface's "since": the clock time, as the renderer's locale formatter would give it. */
+const clock = (at: number) => {
+  const then = new Date(at);
+  return `${String(then.getHours()).padStart(2, "0")}:${String(then.getMinutes()).padStart(2, "0")}`;
+};
+
 const place = (
   runner: RunnerPlace,
   options: { turnActive?: boolean; viewerRunnerId?: string | null } = {},
@@ -32,6 +37,7 @@ const place = (
     runner,
     viewerRunnerId: options.viewerRunnerId ?? null,
     now: NOW,
+    formatSince: clock,
   });
 
 describe("sessionPlaceState", () => {
@@ -163,15 +169,6 @@ describe("runnerPlaceAvailability", () => {
     expect(of("revoked", "removed")).toEqual({ kind: "removed", reason: "removed" });
     expect(of("revoked", "replaced")).toEqual({ kind: "removed", reason: "removed" });
     expect(of("revoked", "credential_reuse")).toEqual({ kind: "removed", reason: "cut_off" });
-  });
-});
-
-describe("defaultSinceLabel", () => {
-  test("a clock time today, a date before", () => {
-    expect(defaultSinceLabel(new Date(2026, 9, 24, 9, 5).getTime(), NOW)).toBe("09:05");
-    expect(defaultSinceLabel(new Date(2026, 9, 23, 23, 59).getTime(), NOW)).toBe("Oct 23");
-    expect(defaultSinceLabel(new Date(2025, 9, 24, 9, 5).getTime(), NOW)).toBe("Oct 24");
-    expect(defaultSinceLabel(new Date(2026, 8, 24, 9, 5).getTime(), NOW)).toBe("Sep 24");
   });
 });
 

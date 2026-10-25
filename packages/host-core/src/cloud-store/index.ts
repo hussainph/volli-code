@@ -1,7 +1,6 @@
 /** The cloud product store: one owner-scoped local ledger, one shared runner link. No Electron. */
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { isAbsolute } from "node:path";
 import type {
   HostedSessionRuntime,
   SessionLocationResolver,
@@ -46,8 +45,6 @@ import { createCloudBoardVerbs, CLOUD_VERB_BUDGET_MS } from "../cloud-agent/boar
 import { createCloudSessionVerbs } from "../cloud-agent/session-verbs";
 import { getProjectById } from "../db/projects-repo";
 import { createCloudRestartRecovery } from "./recovery";
-import { prepared } from "../db/prepared";
-import type { CloudLocationRequest } from "./location";
 
 export interface CloudRunnerSyncConnection {
   start(): void;
@@ -122,18 +119,17 @@ export function createCloudProductStore(options: {
       log.warn("Session cloud drain stopped", { sessionId, code: block.code }),
     onRetry: (sessionId) => log.warn("Session cloud drain will retry", { sessionId }),
   });
-  const readContext = async (input: CloudLocationRequest, over?: BackendLink) => {
-    const live = over ?? link();
-    if (live.query === undefined) throw new Error("Runner context reads are unavailable.");
-    return (await live.query("runnerContext:forSession", { ...input })) as CloudRunnerContext;
-  };
   const context = createCloudContext({
     db,
     ownerUserId,
     engine: host.sessionEngine,
     registry,
     runnerId: () => active?.runnerId ?? options.runnerId(),
-    query: (input) => readContext(input),
+    query: async (input) => {
+      const live = link();
+      if (live.query === undefined) throw new Error("Runner context reads are unavailable.");
+      return (await live.query("runnerContext:forSession", { ...input })) as CloudRunnerContext;
+    },
   });
   const owner = createCloudSessionOwner({
     db,
@@ -304,35 +300,27 @@ export function createCloudProductStore(options: {
        * disk. `null` when this Mac has no runner identity to hold one.
        */
       located(projectId: string): boolean | null {
-        const runnerId = active?.runnerId ?? options.runnerId();
-        if (runnerId === null) return null;
-        const registered = prepared<[string, string], { abs_path: string }>(
-          db,
-          "SELECT abs_path FROM project_checkout_paths WHERE runner_id = ? AND project_id = ? ORDER BY project_repo_id",
-        ).all(runnerId, projectId);
-        if (registered.length > 0) return registered.every((row) => existsSync(row.abs_path));
-        const frozen = prepared<[string], { path: string }>(
-          db,
-          `SELECT path FROM projects WHERE id = ? AND NOT EXISTS
-          (SELECT 1 FROM cloud_shadow_rows WHERE kind = 'project' AND id = projects.id)`,
-        ).get(projectId);
-        return frozen !== undefined && isAbsolute(frozen.path) && existsSync(frozen.path);
+        if ((active?.runnerId ?? options.runnerId()) === null) return null;
+        const checkout = registry().checkouts.ofProject(projectId);
+        return checkout !== null && existsSync(checkout.absPath);
       },
       /**
        * The project and its primary repository as Volli Cloud answers this
-       * runner: owner membership checked by `runnerContext.forSession`. A fresh
-       * id names no Session, so the query takes its new-birth path (membership
-       * alone authorizes it) and reserves nothing.
+       * runner (`runnerContext.forProject`: the owner's current membership).
+       * A read: nothing is reserved or minted, and no path is sent.
        */
       async site(
         projectId: string,
       ): Promise<{ projectId: string; projectRepoId: string; projectName: string }> {
         if (active === null)
           throw new Error("Volli Cloud is unreachable. Choose the folder once this Mac connects.");
-        const facts = await readContext(
-          { sessionId: randomUUID(), projectId, ticketId: null },
-          active.link,
-        );
+        if (active.link.query === undefined)
+          throw new Error("Runner context reads are unavailable.");
+        const facts = (await active.link.query("runnerContext:forProject", { projectId })) as {
+          ownerUserId: string;
+          project: { id: string; name: string };
+          primaryRepo: { id: string; projectId: string };
+        };
         if (
           facts.ownerUserId !== ownerUserId ||
           facts.project.id !== projectId ||

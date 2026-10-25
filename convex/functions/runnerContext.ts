@@ -91,3 +91,23 @@ export const forSession = query({
     };
   },
 });
+
+/**
+ * A project and its primary repository as this runner's owner may see them
+ * (VC-895 N2-3: "Choose the folder for <project> on this Mac"). Membership is
+ * the owner's current one, checked as {@link forSession} checks a new birth.
+ * Reads only: no Session, claim or repository row is created, and no machine
+ * path is read or returned.
+ */
+export const forProject = query({
+  args: { projectId: v.string() },
+  handler: async (ctx, args) => {
+    const caller = await requireRunner(ctx);
+    const project = await runnerProject(ctx, caller, args.projectId);
+    return {
+      ownerUserId: caller.ownerUserId,
+      project: publicRow(project),
+      primaryRepo: await primaryRepo(ctx, project),
+    };
+  },
+});

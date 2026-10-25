@@ -57,29 +57,8 @@ export interface SessionPlaceInput {
   /** This machine's runner id in this launch, or `null` (no runner here). */
   readonly viewerRunnerId: string | null;
   readonly now: number;
-  /** How "since" reads (`14:02` today). Defaults to {@link defaultSinceLabel}. */
-  readonly formatSince?: (at: number, now: number) => string;
-}
-
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-/** Two digits: `9` → `09`. */
-function pad(value: number): string {
-  return String(value).padStart(2, "0");
-}
-
-/** `14:02` on the same local day as `now`, else `Oct 24`. Surfaces pass a locale-aware one. */
-export function defaultSinceLabel(at: number, now: number): string {
-  const then = new Date(at);
-  const today = new Date(now);
-  if (
-    then.getFullYear() === today.getFullYear() &&
-    then.getMonth() === today.getMonth() &&
-    then.getDate() === today.getDate()
-  ) {
-    return `${pad(then.getHours())}:${pad(then.getMinutes())}`;
-  }
-  return `${MONTHS[then.getMonth()]} ${then.getDate()}`;
+  /** How "since" reads (`14:02` today, a date before): the surface's own, locale-aware. */
+  readonly formatSince: (at: number, now: number) => string;
 }
 
 /** Statuses in which the runner is serving its Sessions. */
@@ -145,7 +124,7 @@ function closedWords(runner: RunnerPlace): string {
  */
 export function sessionPlaceState(input: SessionPlaceInput): SessionPlaceState {
   const { runner, now } = input;
-  const formatSince = input.formatSince ?? defaultSinceLabel;
+  const { formatSince } = input;
   const name = runner.name;
   const base = { runnerName: name };
   const availability = runnerPlaceAvailability(runner);

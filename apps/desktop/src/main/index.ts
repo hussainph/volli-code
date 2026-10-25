@@ -38,7 +38,6 @@ import {
   NEW_TICKET_DRAFT_APP_STATE_KEY,
   OperationUnavailableError,
   RUNNER_RESIDENT_APP_STATE_KEY,
-  runnerStaysAvailable,
   VOLLI_USER_ZDOTDIR_ENV,
   workspaceInstallCommand,
 } from "@volli/shared";
@@ -190,6 +189,7 @@ import { CLOUD_SNAPSHOT_DIRECTORY, cloudSnapshotFiles } from "./cloud-snapshot";
 import { createCloudProductStore } from "@volli/host-core/cloud-runner";
 import { decodeRunnerRecords } from "./cloud-runner/record";
 import { runnerTrayStatus } from "./cloud-runner/tray-status";
+import { keepCloudRunnerAvailable } from "./cloud-runner/residency";
 import { runnerSleepSimulation } from "./cloud-runner/smoke-power";
 import { createCloudCheckoutPort, folderPicker } from "./cloud-checkout";
 import {
@@ -1055,16 +1055,21 @@ const appStartup = app.whenReady().then(async () => {
     liveHost === undefined
       ? undefined
       : {
-          turns: () => liveHost.liveWork.current().turns,
+          turns: () => (isExperimentEnabled("cloud") ? liveHost.liveWork.current().turns : 0),
           subscribe: (listener) => liveHost.liveWork.subscribe(listener),
           choose: (turns) => {
-            const answer = dialog.showMessageBoxSync({
-              type: "question",
+            const options = {
+              type: "question" as const,
               message: `Volli will switch when ${turns === 1 ? "the running turn finishes" : `the ${turns} running turns finish`}`,
               buttons: ["Switch When Finished", "Switch Now", "Cancel"],
               defaultId: 0,
               cancelId: 2,
-            });
+            };
+            const owner = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+            const answer =
+              owner === undefined
+                ? dialog.showMessageBoxSync(options)
+                : dialog.showMessageBoxSync(owner, options);
             return answer === 0 ? "wait" : answer === 1 ? "now" : "cancel";
           },
         },
@@ -2482,7 +2487,10 @@ const appStartup = app.whenReady().then(async () => {
     ...(launch.store === "cloud" && liveHost !== undefined && macRunner !== null
       ? {
           residentRunner: () =>
-            runnerStaysAvailable(getAppState(liveHost.database.db, RUNNER_RESIDENT_APP_STATE_KEY)),
+            keepCloudRunnerAvailable(
+              macRunner.snapshot(),
+              getAppState(liveHost.database.db, RUNNER_RESIDENT_APP_STATE_KEY),
+            ),
           runnerLine: () => runnerTrayStatus(macRunner.snapshot()),
         }
       : {}),

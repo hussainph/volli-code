@@ -41,7 +41,14 @@ export async function renameChatSession(
   title: string,
   refineFrom?: string,
 ): Promise<boolean> {
-  if (launchStore() === "cloud" && !guardSessionWrite(null)) return false;
+  if (launchStore() === "cloud") {
+    // Auto-titling is an unrequested refinement. This build cannot run that
+    // refinement on an away runner; keep its existing title, without turning
+    // a successful message into an unrelated "not available" toast.
+    if (refineFrom !== undefined) return false;
+    guardSessionWrite(null);
+    return false;
+  }
   const trimmed = title.trim();
   if (trimmed.length === 0) return false;
   // A Session on a remote host is retitled by its host (VC-713): this Mac's

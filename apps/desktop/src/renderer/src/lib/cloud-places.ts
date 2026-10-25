@@ -9,6 +9,11 @@
  * Session per distinct Place as that runner's witness, in reads of at most
  * {@link RUNNER_PLACES_MAX_SESSIONS}. It never lists anyone's runners.
  *
+ * A Session drawn on screen (its header, its composer) is opened
+ * ({@link useOpenSessionPlace}) and is its own witness when no listing holds
+ * it, so its Place shows even before or outside a listing; it is answered by
+ * the same query, by Session, and loses its Place with the backend's vouching.
+ *
  * This Mac's own runner id comes from main's `runners.subscribeThisMac`
  * stream (the same one Settings → Runners reads), so a Session placed here
  * reads "Running on this Mac" whatever the backend last heard.
@@ -31,9 +36,11 @@ import {
   RUNNER_PLACES_MAX_SESSIONS,
   sessionPlaceState,
   type RunnerPlace,
+  type SessionPlaceReason,
   type SessionPlaceState,
 } from "@volli/shared/cloud";
 
+import type { StatusDotState } from "@renderer/components/ui/status-dot";
 import { launchStore } from "@renderer/stores/launch";
 
 import { followCloudSession, type CloudSession } from "./cloud-client";
@@ -53,6 +60,14 @@ export interface CloudPlacesState {
   readonly runners: Readonly<Record<string, RunnerPlace>>;
   /** This Mac's runner id, when it is one. */
   readonly thisRunnerId: string | null;
+  /** Sessions drawn now (a header, a composer), by how many surfaces draw each. */
+  readonly opened: Readonly<Record<string, number>>;
+  /**
+   * The Places of drawn Sessions no listing holds (not loaded yet, or in no
+   * followed project), as `runners.places` answered them. Their turn is not
+   * known here, so they read as idle.
+   */
+  readonly openedPlaces: Readonly<Record<string, SessionPlaceFacts>>;
 }
 
 const EMPTY: CloudPlacesState = {
@@ -60,6 +75,8 @@ const EMPTY: CloudPlacesState = {
   sessions: {},
   runners: {},
   thisRunnerId: null,
+  opened: {},
+  openedPlaces: {},
 };
 
 export const useCloudPlacesStore = create<CloudPlacesState>(() => EMPTY);
@@ -98,14 +115,53 @@ export function forgetProjectPlaces(projectId: string): void {
   });
 }
 
-/** One witness Session per distinct Place, in reads of at most {@link RUNNER_PLACES_MAX_SESSIONS}. */
-export function witnessBatches(sessions: Readonly<Record<string, SessionPlaceFacts>>): string[][] {
+/**
+ * A drawn Session is opened while the returned function is not yet called
+ * (each surface that draws it opens it once): its Place is followed even when
+ * no listing holds it. The last release forgets it.
+ */
+export function openSessionPlace(sessionId: string): () => void {
+  useCloudPlacesStore.setState((state) => ({
+    opened: { ...state.opened, [sessionId]: (state.opened[sessionId] ?? 0) + 1 },
+  }));
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    useCloudPlacesStore.setState((state) => {
+      const count = (state.opened[sessionId] ?? 1) - 1;
+      if (count > 0) return { opened: { ...state.opened, [sessionId]: count } };
+      const { [sessionId]: _closed, ...opened } = state.opened;
+      const { [sessionId]: _forgotten, ...openedPlaces } = state.openedPlaces;
+      return { opened, openedPlaces };
+    });
+  };
+}
+
+/** A Session's Place facts: its listing row's, else what `runners.places` said of it while drawn. */
+function factsOf(state: CloudPlacesState, sessionId: string): SessionPlaceFacts | undefined {
+  return state.sessions[sessionId] ?? state.openedPlaces[sessionId];
+}
+
+/** Drawn Sessions no listing holds: each is its own witness. */
+function unlistedOpened(state: Pick<CloudPlacesState, "sessions" | "opened">): string[] {
+  return Object.keys(state.opened).filter((sessionId) => !(sessionId in state.sessions));
+}
+
+/**
+ * One witness Session per distinct listed Place, plus every drawn Session no
+ * listing holds, in reads of at most {@link RUNNER_PLACES_MAX_SESSIONS}.
+ */
+export function witnessBatches(
+  sessions: Readonly<Record<string, SessionPlaceFacts>>,
+  unlisted: readonly string[] = [],
+): string[][] {
   const witnesses = new Map<string, string>();
   for (const sessionId of Object.keys(sessions).toSorted()) {
     const runnerId = sessions[sessionId]!.placeRunnerId;
     if (!witnesses.has(runnerId)) witnesses.set(runnerId, sessionId);
   }
-  const ids = [...witnesses.values()].toSorted();
+  const ids = [...new Set([...witnesses.values(), ...unlisted])].toSorted();
   const batches: string[][] = [];
   for (let at = 0; at < ids.length; at += RUNNER_PLACES_MAX_SESSIONS) {
     batches.push(ids.slice(at, at + RUNNER_PLACES_MAX_SESSIONS));
@@ -113,35 +169,48 @@ export function witnessBatches(sessions: Readonly<Record<string, SessionPlaceFac
   return batches;
 }
 
-/** Reads one `runners.places` answer; anything not shaped like one is ignored. */
-export function readPlaces(value: unknown): RunnerPlace[] {
+/** One `runners.places` row: a Session and its Place, `null` when the backend vouches for none. */
+export interface PlaceAnswer {
+  readonly sessionId: string;
+  readonly place: RunnerPlace | null;
+}
+
+function placeOfRow(value: unknown): RunnerPlace | null {
+  const place = value as Record<string, unknown> | null;
+  if (
+    place === null ||
+    typeof place !== "object" ||
+    typeof place.id !== "string" ||
+    typeof place.name !== "string" ||
+    typeof place.kind !== "string" ||
+    typeof place.status !== "string" ||
+    typeof place.statusChangedAt !== "number" ||
+    (place.statusReason !== null && typeof place.statusReason !== "string") ||
+    typeof place.owned !== "boolean"
+  )
+    return null;
+  return {
+    id: place.id,
+    name: place.name,
+    kind: place.kind,
+    status: place.status,
+    statusChangedAt: place.statusChangedAt,
+    statusReason: place.statusReason as string | null,
+    owned: place.owned,
+  };
+}
+
+/**
+ * Reads one `runners.places` answer. A row whose place is malformed reads as
+ * no place; a row with no Session id, or an answer that is not a list, as
+ * nothing at all.
+ */
+export function readPlaces(value: unknown): PlaceAnswer[] {
   if (!Array.isArray(value)) return [];
-  const places: RunnerPlace[] = [];
-  for (const row of value as unknown[]) {
-    const place = (row as { place?: unknown } | null)?.place as Record<string, unknown> | null;
-    if (
-      place === null ||
-      typeof place !== "object" ||
-      typeof place.id !== "string" ||
-      typeof place.name !== "string" ||
-      typeof place.kind !== "string" ||
-      typeof place.status !== "string" ||
-      typeof place.statusChangedAt !== "number" ||
-      (place.statusReason !== null && typeof place.statusReason !== "string") ||
-      typeof place.owned !== "boolean"
-    )
-      continue;
-    places.push({
-      id: place.id,
-      name: place.name,
-      kind: place.kind,
-      status: place.status,
-      statusChangedAt: place.statusChangedAt,
-      statusReason: place.statusReason as string | null,
-      owned: place.owned,
-    });
-  }
-  return places;
+  return (value as unknown[]).flatMap((row) => {
+    const { sessionId, place } = (row ?? {}) as { sessionId?: unknown; place?: unknown };
+    return typeof sessionId === "string" ? [{ sessionId, place: placeOfRow(place ?? null) }] : [];
+  });
 }
 
 /** Main's stream of this Mac's runner, as `runners.subscribeThisMac` types it. */
@@ -172,40 +241,70 @@ export function bindCloudPlaces(deps: CloudPlacesDeps): () => void {
   let session: CloudSession | null = null;
   let key = "";
   let stops: (() => void)[] = [];
+  /** Per live batch, the runners its latest answer vouched for. */
+  let vouched: string[][] = [];
 
   const stopWatches = () => {
     for (const stop of stops) stop();
     stops = [];
+    vouched = [];
   };
   const watch = () => {
-    const batches = session === null ? [] : witnessBatches(useCloudPlacesStore.getState().sessions);
+    const state = useCloudPlacesStore.getState();
+    const batches = session === null ? [] : witnessBatches(state.sessions, unlistedOpened(state));
     const next = JSON.stringify(batches);
     if (next === key) return;
     key = next;
     stopWatches();
     if (session === null) return;
     const current = session;
-    for (const sessionIds of batches) {
+    const answeredBy = batches.map((): string[] => []);
+    vouched = answeredBy;
+    batches.forEach((sessionIds, index) => {
       const watched = current.client.watchQuery(current.api.runners.places, {
         sessionIds,
       }) as Watched;
+      // Live until this batch is replaced or the binding ends: a read queued
+      // for a batch that is gone (a rebind, another account, the end) paints
+      // nothing.
+      let live = true;
       // The runners this batch last answered: its next answer replaces them,
       // so a Place the backend stops answering (its witness went private, was
       // deleted, or the viewer left the Workspace) leaves no label behind.
-      let answeredIds: string[] = [];
-      const replace = (answered: readonly RunnerPlace[]) =>
-        useCloudPlacesStore.setState((state) => {
-          const runners = { ...state.runners };
+      const replace = (answers: readonly PlaceAnswer[]) =>
+        useCloudPlacesStore.setState((known) => {
+          const runners = { ...known.runners };
           const witnessed = sessionIds.flatMap((id) => {
-            const facts = state.sessions[id];
+            const facts = factsOf(known, id);
             return facts === undefined ? [] : [facts.placeRunnerId];
           });
-          for (const id of [...answeredIds, ...witnessed]) delete runners[id];
-          for (const place of answered) runners[place.id] = place;
-          answeredIds = answered.map((place) => place.id);
-          return { runners };
+          for (const id of [...answeredBy[index]!, ...witnessed]) delete runners[id];
+          // A drawn Session no listing holds takes its Place from this answer,
+          // and loses it with the backend's vouching.
+          const unlisted = sessionIds.filter((id) => id in known.opened && !(id in known.sessions));
+          const placed = new Map<string, string>();
+          const answered: string[] = [];
+          for (const { sessionId, place } of answers) {
+            if (place === null) continue;
+            answered.push(place.id);
+            runners[place.id] = place;
+            placed.set(sessionId, place.id);
+          }
+          answeredBy[index] = answered;
+          let openedPlaces = known.openedPlaces;
+          for (const id of unlisted) {
+            const runnerId = placed.get(id);
+            if (openedPlaces[id]?.placeRunnerId === runnerId) continue;
+            const { [id]: _was, ...rest } = openedPlaces;
+            openedPlaces =
+              runnerId === undefined
+                ? rest
+                : { ...rest, [id]: { placeRunnerId: runnerId, turnActive: false } };
+          }
+          return { runners, openedPlaces };
         });
       const read = () => {
+        if (!live) return;
         let value: unknown;
         try {
           value = watched.localQueryResult();
@@ -217,29 +316,44 @@ export function bindCloudPlaces(deps: CloudPlacesDeps): () => void {
         if (value === undefined) return;
         replace(readPlaces(value));
       };
-      stops.push(watched.onUpdate(read));
+      const unsubscribe = watched.onUpdate(read);
+      stops.push(() => {
+        live = false;
+        unsubscribe();
+      });
       queueMicrotask(read);
-    }
+    });
   };
 
-  /** Runners no listed Session lives on any more are forgotten. */
-  const prune = (state: CloudPlacesState) => {
-    const referenced = new Set(Object.values(state.sessions).map((facts) => facts.placeRunnerId));
-    const kept = Object.entries(state.runners).filter(([id]) => referenced.has(id));
-    if (kept.length !== Object.keys(state.runners).length)
-      useCloudPlacesStore.setState({ runners: Object.fromEntries(kept) });
+  /**
+   * Runners neither a listed or drawn Session lives on, nor a live batch's
+   * latest answer vouched for, are forgotten. A listing a step behind the
+   * backend (a witness that just moved runner) does not erase the answer.
+   */
+  const prune = () => {
+    const state = useCloudPlacesStore.getState();
+    const kept = new Set([
+      ...[...Object.values(state.sessions), ...Object.values(state.openedPlaces)].map(
+        (facts) => facts.placeRunnerId,
+      ),
+      ...vouched.flat(),
+    ]);
+    const runners = Object.entries(state.runners).filter(([id]) => kept.has(id));
+    if (runners.length !== Object.keys(state.runners).length)
+      useCloudPlacesStore.setState({ runners: Object.fromEntries(runners) });
   };
 
   const stopSessions = useCloudPlacesStore.subscribe((state, previous) => {
-    if (state.sessions === previous.sessions) return;
-    prune(state);
+    if (state.sessions === previous.sessions && state.opened === previous.opened) return;
+    // Rebuild first, so a batch that is gone no longer vouches for anything.
     watch();
+    prune();
   });
   const stopFollowing = deps.follow((next) => {
     session = next;
     key = "";
     stopWatches();
-    useCloudPlacesStore.setState({ runners: {} });
+    useCloudPlacesStore.setState({ runners: {}, openedPlaces: {} });
     watch();
   });
   const thisMac =
@@ -253,7 +367,8 @@ export function bindCloudPlaces(deps: CloudPlacesDeps): () => void {
     stopFollowing();
     stopWatches();
     thisMac?.unsubscribe();
-    useCloudPlacesStore.setState(EMPTY);
+    // Surfaces still drawn keep their opening; everything learned goes.
+    useCloudPlacesStore.setState((state) => ({ ...EMPTY, opened: state.opened }));
   };
 }
 
@@ -277,7 +392,7 @@ export function placeOf(
   now: number,
 ): SessionPlaceState | null {
   if (sessionId === null) return null;
-  const facts = state.sessions[sessionId];
+  const facts = factsOf(state, sessionId);
   if (facts === undefined) return null;
   const runner = state.runners[facts.placeRunnerId];
   if (runner === undefined) return null;
@@ -298,6 +413,45 @@ export function placeOf(
  */
 export function useSessionPlace(sessionId: string | null): SessionPlaceState | null {
   return useCloudPlacesStore(useShallow((state) => placeOf(state, sessionId, Date.now())));
+}
+
+/**
+ * {@link useSessionPlace} for the surface that draws one Session (its header,
+ * its composer): the Session is opened while mounted, so its Place is
+ * followed even when no listing holds it. Opens nothing in a local launch.
+ */
+export function useOpenSessionPlace(sessionId: string | null): SessionPlaceState | null {
+  const cloud = launchStore() === "cloud";
+  React.useEffect(
+    () => (cloud && sessionId !== null ? openSessionPlace(sessionId) : undefined),
+    [cloud, sessionId],
+  );
+  return useSessionPlace(sessionId);
+}
+
+/**
+ * The dot a runner's availability wears, wherever it is drawn: the Session
+ * header's Place and Settings → Runners. Serving is ready, removed an error,
+ * and waiting by its reason.
+ */
+export function availabilityDotState(availability: {
+  readonly kind: string;
+  readonly reason: SessionPlaceReason | null;
+}): StatusDotState {
+  if (availability.kind === "removed") return "error";
+  if (availability.kind !== "waiting") return "ready";
+  switch (availability.reason) {
+    case "asleep":
+      return "parked";
+    case "closed":
+      return "exited";
+    case "updating":
+      return "starting";
+    case "needs_update":
+      return "error";
+    default:
+      return "idle";
+  }
 }
 
 /** A message the backend holds for a Session's runner, as the composer shows it while it waits. */

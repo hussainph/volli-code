@@ -228,6 +228,53 @@ async function stageCommandBody(
   );
 }
 
+/**
+ * A new interaction answer is persisted only for an open, ordinary question
+ * of the Session's live attachment, as its caught-up fold says: a generic
+ * answer may carry secret bytes in any field, so a credential request (which
+ * person-only credential controls answer), an unknown or settled question, or
+ * a fold still catching up is refused before anything is written. The
+ * refusal never repeats the answer.
+ */
+async function requireAnswerableInteraction(
+  ctx: QueryCtx,
+  sessionId: string,
+  intent: { interactionId: string; attachmentId: string },
+): Promise<void> {
+  const intake = await ctx.db
+    .query("sessionIntake")
+    .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+    .unique();
+  const doc = await ctx.db
+    .query("sessionStates")
+    .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+    .unique();
+  let state: CloudSessionState | null = null;
+  try {
+    state = readStoredState(doc);
+  } catch {
+    state = null;
+  }
+  if (
+    intake === null ||
+    doc === null ||
+    state === null ||
+    (doc.catchUpAt ?? null) !== null ||
+    state.throughSequence !== intake.acceptedThrough
+  ) {
+    throw fail("not_ready", "This session is still catching up. Answer again in a moment.");
+  }
+  const interaction = state.fold.projection.interactions.active.find(
+    ({ id }) => id === intent.interactionId,
+  );
+  if (interaction === undefined || interaction.attachmentId !== intent.attachmentId) {
+    throw fail("interaction_closed", "That question is no longer open.");
+  }
+  if (interaction.credential !== undefined) {
+    throw fail("credential_required", "A credential request is answered with credential controls.");
+  }
+}
+
 /** An intent's JSON text; a message body travels beside it as a transcript artifact, not in it. */
 const MAX_INTENT_BYTES = 64 * 1024;
 
@@ -255,7 +302,8 @@ const MAX_INTENT_BYTES = 64 * 1024;
  * A person's message without either is queued as before: its reference
  * names a body the runner holds itself. An interaction answer carries none:
  * its reference must be the one its intent derives. No other intent takes a
- * body.
+ * body. A new interaction answer must name an open, ordinary question
+ * (`requireAnswerableInteraction`) before anything is persisted.
  */
 export const command = mutation({
   args: {
@@ -334,6 +382,14 @@ export const command = mutation({
           error instanceof Error ? error.message : "Unreadable answer.",
         );
       }
+      // An exact replay of a queued answer is answered from its job (the
+      // card may have settled since); a different intent under its id is
+      // `id_taken` there. Only a new answer is checked against the Session.
+      const queued = await ctx.db
+        .query("runnerJobs")
+        .withIndex("by_uuid", (q) => q.eq("id", args.commandId))
+        .unique();
+      if (queued === null) await requireAnswerableInteraction(ctx, session.id, intent);
     }
     const intake = await ctx.db
       .query("sessionIntake")

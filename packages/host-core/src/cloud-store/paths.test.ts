@@ -152,6 +152,50 @@ describe("runner-local paths", () => {
     ).toThrow("absolute");
   });
 
+  it("names a project's checkout read-only: this runner's registration, else an adoptable frozen folder", () => {
+    const registry = createRunnerPathRegistry(ctx.db, { runnerId: "runner-a" });
+    const other = createRunnerPathRegistry(ctx.db, { runnerId: "runner-b" });
+    expect(registry.checkouts.ofProject("project")).toBeNull();
+    insertProject(ctx.db, testProject({ id: "project", path: join(root, "frozen") }));
+    const before = ctx.db.prepare("SELECT * FROM projects").all();
+    expect(registry.checkouts.ofProject("project")).toEqual({
+      absPath: join(root, "frozen"),
+      adoptable: true,
+    });
+    // Naming is not adopting: nothing is registered, and the frozen row is untouched.
+    expect(registry.checkouts.get("project", "repo-b")).toBeNull();
+    expect(ctx.db.prepare("SELECT * FROM projects").all()).toEqual(before);
+    other.checkouts.register({
+      projectId: "project",
+      projectRepoId: "repo-a",
+      absPath: join(root, "other-runner"),
+    });
+    registry.checkouts.register({
+      projectId: "project",
+      projectRepoId: "repo-b",
+      absPath: join(root, "second"),
+    });
+    registry.checkouts.register({
+      projectId: "project",
+      projectRepoId: "repo-a",
+      absPath: join(root, "first"),
+    });
+    expect(registry.checkouts.ofProject("project")).toEqual({
+      absPath: join(root, "first"),
+      adoptable: false,
+    });
+    expect(other.checkouts.ofProject("project")?.absPath).toBe(join(root, "other-runner"));
+  });
+
+  it("never names a shadow row's or a nonabsolute legacy folder as a project's checkout", () => {
+    insertProject(ctx.db, testProject({ id: "shadow", path: join(root, "shadow") }));
+    ctx.db.prepare("INSERT INTO cloud_shadow_rows VALUES ('project', 'shadow', 'owner')").run();
+    insertProject(ctx.db, testProject({ id: "legacy", path: "relative/legacy" }));
+    const registry = createRunnerPathRegistry(ctx.db, { runnerId: "runner" });
+    expect(registry.checkouts.ofProject("shadow")).toBeNull();
+    expect(registry.checkouts.ofProject("legacy")).toBeNull();
+  });
+
   it("retains a minted copy id and rejects replacing it or sharing another copy's path", () => {
     const registry = createRunnerPathRegistry(ctx.db, { runnerId: "runner" });
     registry.workingCopies.register({

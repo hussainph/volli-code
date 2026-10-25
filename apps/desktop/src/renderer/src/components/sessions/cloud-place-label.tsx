@@ -7,34 +7,16 @@
  * is empty there, and nothing is watched.
  */
 import * as React from "react";
-import type { SessionPlaceState } from "@volli/shared/cloud";
 
-import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
+import { StatusDot } from "@renderer/components/ui/status-dot";
 import {
+  availabilityDotState,
+  useOpenSessionPlace,
   useSessionPendingLine,
-  useSessionPlace,
   type FailedCommand,
 } from "@renderer/lib/cloud-places";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
-
-/** The pill's dot: the runner's state, not the Session's. */
-export function placeDotState(place: SessionPlaceState): StatusDotState {
-  if (place.kind === "removed") return "error";
-  if (place.kind !== "waiting") return "ready";
-  switch (place.reason) {
-    case "asleep":
-      return "parked";
-    case "closed":
-      return "exited";
-    case "updating":
-      return "starting";
-    case "needs_update":
-      return "error";
-    default:
-      return "idle";
-  }
-}
 
 /** The Session header's corner: nothing for a Session running on this Mac. */
 export function CloudPlaceLabel({
@@ -44,7 +26,7 @@ export function CloudPlaceLabel({
   sessionId: string | null;
   className?: string;
 }) {
-  const place = useSessionPlace(sessionId);
+  const place = useOpenSessionPlace(sessionId);
   if (place === null || place.kind === "here") return null;
   return (
     <span
@@ -56,7 +38,8 @@ export function CloudPlaceLabel({
         className,
       )}
     >
-      <StatusDot state={placeDotState(place)} />
+      {/* The runner's state, not the Session's. */}
+      <StatusDot state={availabilityDotState(place)} />
       <span className="truncate">{place.label}</span>
     </span>
   );
@@ -71,7 +54,7 @@ export function CloudPlaceLabel({
  * runner that is away.
  */
 export function CloudComposerStatus({ sessionId }: { sessionId: string | null }) {
-  const place = useSessionPlace(sessionId);
+  const place = useOpenSessionPlace(sessionId);
   const pending = useSessionPendingLine(sessionId);
   const away = place !== null && (place.kind === "waiting" || place.kind === "removed");
   const line = pending.label ?? (away ? place.label : null);

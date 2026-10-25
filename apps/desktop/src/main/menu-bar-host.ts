@@ -387,6 +387,10 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
     }
   }
 
+  function staysAvailable(): boolean {
+    return ports.residentRunner?.() === true && !waitAndQuit && !installArmed;
+  }
+
   function updateState(): TrayUpdateState {
     if (!ports.update.ready()) return "none";
     return installArmed ? "armed" : "ready";
@@ -447,10 +451,7 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
     settle = timers.setTimeout(() => {
       settle = null;
       if (!resident) return;
-      if (
-        hasLiveWork(liveWork()) ||
-        (ports.residentRunner?.() === true && !waitAndQuit && !installArmed)
-      ) {
+      if (hasLiveWork(liveWork()) || staysAvailable()) {
         reevaluate();
         return;
       }
@@ -467,7 +468,7 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
     if (hasLiveWork(work)) {
       exitAttempted = false;
       cancelSettle();
-    } else if (ports.residentRunner?.() === true && !waitAndQuit && !installArmed) {
+    } else if (staysAvailable()) {
       cancelSettle();
     } else {
       scheduleSettle();
@@ -499,7 +500,7 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
         updateInstallInFlight,
         systemShuttingDown,
         quitRequested,
-        residentRunner: ports.residentRunner?.() === true && !waitAndQuit && !installArmed,
+        residentRunner: staysAvailable(),
         liveWork: liveWork(),
       });
       // Nothing live and nothing overriding: the barrier re-reads and takes
@@ -519,7 +520,7 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
           updateInstallInFlight: ports.update.installInFlight(),
           systemShuttingDown,
           quitRequested,
-          residentRunner: ports.residentRunner?.() === true && !waitAndQuit && !installArmed,
+          residentRunner: staysAvailable(),
           liveWork: liveWork(),
         }) === "menu-bar";
       if (!wouldEnter) return true;

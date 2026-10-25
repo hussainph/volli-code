@@ -218,6 +218,27 @@ export function createRunnerPathRegistry(db: Database.Database, options: { runne
       adoptedFromFrozen: true,
     }).absPath;
   }
+  /**
+   * The folder this runner would start a project's Sessions from, named
+   * without touching anything: its registered checkout (lowest repository id
+   * first), else the absolute folder of a frozen local project with the same
+   * id that {@link checkoutPathOf} would adopt. A shadow row is never one.
+   * Read-only: adoption, collision and on-disk checks stay with
+   * {@link checkoutPathOf} and the callers.
+   */
+  function checkoutOfProject(projectId: string): { absPath: string; adoptable: boolean } | null {
+    const registered = prepared<[string, string], { abs_path: string }>(
+      db,
+      "SELECT abs_path FROM project_checkout_paths WHERE runner_id = ? AND project_id = ? ORDER BY project_repo_id LIMIT 1",
+    ).get(runnerId, projectId);
+    if (registered) return { absPath: registered.abs_path, adoptable: false };
+    const frozen = prepared<[string], { path: string }>(
+      db,
+      "SELECT path FROM projects WHERE id = ? AND NOT EXISTS (SELECT 1 FROM cloud_shadow_rows WHERE kind = 'project' AND id = projects.id)",
+    ).get(projectId);
+    if (!frozen?.path || !isAbsolute(frozen.path)) return null;
+    return { absPath: frozen.path, adoptable: true };
+  }
   function getCopy(ticketId: string, projectRepoId: string): WorkingCopyPath | null {
     const row = prepared<[string, string, string], WorkingCopyRow>(
       db,
@@ -319,7 +340,12 @@ export function createRunnerPathRegistry(db: Database.Database, options: { runne
   }
   return {
     runnerId,
-    checkouts: { pathOf: checkoutPathOf, get: getCheckout, register: registerCheckout },
+    checkouts: {
+      pathOf: checkoutPathOf,
+      get: getCheckout,
+      register: registerCheckout,
+      ofProject: checkoutOfProject,
+    },
     workingCopies: {
       pathOf: copyPathOf,
       get: getCopy,

@@ -42,21 +42,100 @@ async function world() {
   );
   const carolRunner = await t.run((ctx) => seedTestRunner(ctx, users.carol!, "carol-runner"));
   const runner = seeded.runnerIds[0]!;
-  const { sessionId, events } = await writeSession({
+  const { sessionId, events, engine } = await writeSession({
     projectId: seeded.projectId,
     ticketId: seeded.ticketId,
   });
-  for (const event of events) {
-    await asRunner(t, runner).mutation(api.sessions.accept, {
+  let accepted = 0;
+  /** Accepts what the runner's ledger holds past what was accepted, one fact at a time. */
+  const drain = async () => {
+    const all = await engine.listEvents({ sessionId });
+    for (const event of all.slice(accepted)) {
+      await asRunner(t, runner).mutation(api.sessions.accept, {
+        sessionId,
+        generation: 1,
+        events: [wire(event)],
+      });
+    }
+    accepted = all.length;
+  };
+  await drain();
+  const opened = events.find(({ payload }) => payload.kind === "attachment.opened")!;
+  if (opened.payload.kind !== "attachment.opened") throw new Error("no attachment");
+  const attachmentId = opened.payload.attachment.id;
+  let clock = events.at(-1)!.occurredAt;
+  const observe = (fields: Record<string, unknown>) =>
+    engine.observe({
+      id: randomUUID(),
       sessionId,
-      generation: 1,
-      events: [wire(event)],
-    });
-  }
+      occurredAt: ++clock,
+      provenance: {
+        source: { kind: "adapter", id: "pi", detail: { channel: "rpc" } },
+        venue: { id: "local", kind: "local" },
+      },
+      attachmentId,
+      ...fields,
+    } as never);
+  const question = (id: string, credential?: Record<string, unknown>) => ({
+    id,
+    attachmentId,
+    kind: "question",
+    title: "Which branch?",
+    detail: null,
+    options: [{ id: "main", label: "main", description: null }],
+    multiple: false,
+    ...(credential === undefined ? {} : { credential }),
+    native: { id: `native-${id}`, detail: null },
+  });
+  // A turn asking an ordinary question and a credential request, both open.
+  await observe({ kind: "turn.started", turnId: randomUUID() });
+  await observe({ kind: "interaction.opened", interaction: question("question-1") });
+  await observe({
+    kind: "interaction.opened",
+    interaction: question("credential-1", {
+      id: "secret-request-1",
+      name: "DEPLOY_TOKEN",
+      sessionId,
+      sessionLabel: "Intake",
+      projectId: seeded.projectId,
+      projectLabel: "Project",
+      agentSays: null,
+    }),
+  });
+  await drain();
   const send = (args: { commandId: string; intent: string; body?: string }, as = "alice") =>
     asUser(t, as).mutation(api.sessions.command, { sessionId, ...args });
   const staged = () => t.run((ctx) => ctx.db.query("transcriptArtifacts").collect());
-  return { t, runner, otherRunner: seeded.runnerIds[1]!, carolRunner, sessionId, send, staged };
+  /** An answer to one of the Session's questions, built as the renderer builds it. */
+  const answer = (
+    commandId: string,
+    interactionId = "question-1",
+    resolution: Parameters<typeof cloudInteractionResolve>[0]["resolution"] = {
+      optionIds: ["main"],
+      response: null,
+    },
+    attachment = attachmentId,
+  ) =>
+    cloudInteractionResolve({
+      sessionId,
+      commandId,
+      attachmentId: attachment,
+      interactionId,
+      resolution,
+    });
+  return {
+    t,
+    runner,
+    otherRunner: seeded.runnerIds[1]!,
+    carolRunner,
+    sessionId,
+    attachmentId,
+    send,
+    staged,
+    answer,
+    observe,
+    drain,
+  };
 }
 
 describe("sessions.command with a message body", () => {
@@ -145,7 +224,7 @@ describe("sessions.command with a message body", () => {
   });
 
   test("refuses a body that is not the command's, and a body or reference out of place", async () => {
-    const { send, staged, sessionId } = await world();
+    const { send, staged, sessionId, answer } = await world();
     const commandId = randomUUID();
     const built = cloudMessageSubmit({ sessionId, commandId, message: message("hello") });
     const foreign = cloudMessageSubmit({
@@ -154,20 +233,14 @@ describe("sessions.command with a message body", () => {
       message: message("hello"),
     });
     const other = cloudMessageSubmit({ sessionId, commandId, message: message("other") });
-    const answer = cloudInteractionResolve({
-      sessionId,
-      commandId,
-      attachmentId: "a-1",
-      interactionId: "i-1",
-      resolution: { optionIds: [], response: "yes" },
-    });
-    const forged = JSON.stringify({ ...JSON.parse(answer.intent), reference: built.reference });
+    const answered = answer(commandId);
+    const forged = JSON.stringify({ ...JSON.parse(answered.intent), reference: built.reference });
     for (const args of [
       { intent: built.intent, body: foreign.body },
       { intent: built.intent, body: other.body },
       { intent: built.intent, body: "x".repeat(INLINE_ARTIFACT_MAX_BYTES + 1) },
       { intent: JSON.stringify({ kind: "session.archive" }), body: built.body },
-      { intent: answer.intent, body: built.body },
+      { intent: answered.intent, body: built.body },
       { intent: forged },
     ]) {
       await expect(send({ commandId, ...args })).rejects.toThrow(code("invalid_request"));
@@ -180,7 +253,7 @@ describe("sessions.command with a message body", () => {
     ).rejects.toThrow(code("not_found"));
     expect(await staged()).toEqual([]);
     // An answer whose reference its intent derives is queued, and stages nothing.
-    await expect(send({ commandId, intent: answer.intent })).resolves.toMatchObject({
+    await expect(send({ commandId, intent: answered.intent })).resolves.toMatchObject({
       status: "queued",
     });
     expect(await staged()).toEqual([]);
@@ -227,18 +300,12 @@ describe("sessionMessages.forRunner", () => {
 
 describe("sessionMessages.pending", () => {
   test("lists the owner's unanswered commands, waiting or ended with their reason, newest first", async () => {
-    const { t, sessionId, send } = await world();
+    const { t, sessionId, send, answer: answerTo } = await world();
     const sent = randomUUID();
     const built = cloudMessageSubmit({ sessionId, commandId: sent, message: message("hello") });
     await send({ commandId: sent, intent: built.intent, body: built.body });
     const answered = randomUUID();
-    const answer = cloudInteractionResolve({
-      sessionId,
-      commandId: answered,
-      attachmentId: "a-1",
-      interactionId: "i-1",
-      resolution: { optionIds: ["ok"], response: null },
-    });
+    const answer = answerTo(answered);
     await send({ commandId: answered, intent: answer.intent });
     const settled = randomUUID();
     await send({ commandId: settled, intent: JSON.stringify({ kind: "session.archive" }) });
@@ -304,5 +371,106 @@ describe("sessionMessages.pending", () => {
     await expect(
       asUser(t, "carol").query(api.sessionMessages.pending, { sessionId }),
     ).rejects.toThrow(code("not_found"));
+  });
+});
+
+const CANARY = "canary-7f3a-not-for-storage";
+const secretAnswer = {
+  optionIds: [CANARY],
+  response: CANARY,
+  answers: [{ promptId: CANARY, optionIds: [CANARY], response: CANARY }],
+};
+
+/** Every row a refused answer could have reached, as text. */
+async function stored(t: T): Promise<string> {
+  return t.run(async (ctx) => {
+    const rows: unknown[] = [
+      ...(await ctx.db.query("runnerJobs").collect()),
+      ...(await ctx.db.query("transcriptArtifacts").collect()),
+      ...(await ctx.db.query("sessionEvents").collect()),
+      ...(await ctx.db.query("sessionStates").collect()),
+    ];
+    return JSON.stringify(rows);
+  });
+}
+
+describe("sessions.command with an interaction answer", () => {
+  test("refuses a credential request, an unknown, settled or misattributed question before writing anything", async () => {
+    const { t, send, answer } = await world();
+    const jobs = () => t.run((ctx) => ctx.db.query("runnerJobs").collect());
+    // Each answer is built for the id it is sent under, so its reference passes
+    // the preflight and only the Session's fold can refuse it (each code below
+    // comes from that check alone).
+    for (const [interactionId, refusal, attachment] of [
+      ["credential-1", "credential_required", undefined],
+      ["no-such-question", "interaction_closed", undefined],
+      // Settled in the written history: no longer open.
+      ["interaction-0", "interaction_closed", undefined],
+      // Open, but on another attachment than the one the answer names.
+      ["question-1", "interaction_closed", randomUUID()],
+    ] as const) {
+      const commandId = randomUUID();
+      const built = answer(commandId, interactionId, secretAnswer, attachment);
+      const failure = send({ commandId, intent: built.intent });
+      await expect(failure).rejects.toThrow(code(refusal));
+      await failure.catch((error: unknown) => {
+        expect(JSON.stringify(error)).not.toContain(CANARY);
+        expect(String(error)).not.toContain(CANARY);
+      });
+    }
+    expect(await jobs()).toEqual([]);
+    expect(await stored(t)).not.toContain(CANARY);
+  });
+
+  test("fails closed while the fold is catching up or missing", async () => {
+    const { t, send, answer } = await world();
+    const state = await t.run((ctx) => ctx.db.query("sessionStates").first());
+    await t.run((ctx) => ctx.db.patch(state!._id, { catchUpAt: Date.now() }));
+    const commandId = randomUUID();
+    await expect(send({ commandId, intent: answer(commandId).intent })).rejects.toThrow(
+      code("not_ready"),
+    );
+    await t.run((ctx) => ctx.db.patch(state!._id, { catchUpAt: null }));
+    const intake = await t.run((ctx) => ctx.db.query("sessionIntake").first());
+    await t.run((ctx) =>
+      ctx.db.patch(intake!._id, { acceptedThrough: intake!.acceptedThrough + 1 }),
+    );
+    await expect(send({ commandId, intent: answer(commandId).intent })).rejects.toThrow(
+      code("not_ready"),
+    );
+    await t.run((ctx) => ctx.db.patch(intake!._id, { acceptedThrough: intake!.acceptedThrough }));
+    await t.run((ctx) => ctx.db.delete(state!._id));
+    await expect(send({ commandId, intent: answer(commandId).intent })).rejects.toThrow(
+      code("not_ready"),
+    );
+    expect(await t.run((ctx) => ctx.db.query("runnerJobs").collect())).toEqual([]);
+  });
+
+  test("queues an open ordinary answer and replays it exactly after the card settles", async () => {
+    const { t, send, answer, observe, drain } = await world();
+    const commandId = randomUUID();
+    const built = answer(commandId);
+    const first = await send({ commandId, intent: built.intent });
+    expect(first).toMatchObject({ commandId, status: "queued" });
+    await observe({
+      kind: "interaction.resolved",
+      interactionId: "question-1",
+      resolution: { optionIds: ["main"], response: null },
+    });
+    await drain();
+    const before = await t.run((ctx) => ctx.db.query("runnerJobs").collect());
+    // The exact replay is answered from its job; nothing new is written.
+    await expect(send({ commandId, intent: built.intent })).resolves.toEqual(first);
+    expect(await t.run((ctx) => ctx.db.query("runnerJobs").collect())).toEqual(before);
+    // Another answer under the same id is the caller's conflict, and carries nothing in.
+    await expect(
+      send({ commandId, intent: answer(commandId, "question-1", secretAnswer).intent }),
+    ).rejects.toThrow(code("id_taken"));
+    // A new answer to the settled card is refused.
+    const late = randomUUID();
+    await expect(send({ commandId: late, intent: answer(late).intent })).rejects.toThrow(
+      code("interaction_closed"),
+    );
+    expect(await stored(t)).not.toContain(CANARY);
   });
 });

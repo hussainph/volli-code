@@ -96,15 +96,11 @@ function connect(
   return { query, mutations };
 }
 
-const facts = (args: Record<string, unknown>, patch: Record<string, unknown> = {}) => ({
-  sessionId: args.sessionId,
+/** `runnerContext.forProject`'s answer: the owner, the project, its primary repository. */
+const facts = (_args: Record<string, unknown>, patch: Record<string, unknown> = {}) => ({
   ownerUserId: "owner-a",
-  project: { id: PROJECT, name: "Cloud project" },
-  ticketPrefix: "VC",
+  project: { id: PROJECT, name: "Cloud project", ticketPrefix: "VC" },
   primaryRepo: { id: REPO, projectId: PROJECT, baseBranch: "main" },
-  ticket: null,
-  body: null,
-  retention: null,
   ...patch,
 });
 
@@ -131,7 +127,7 @@ describe("a cloud project's checkout on this Mac", () => {
     expect(store.checkouts.located(PROJECT)).toBe(false);
   });
 
-  it("reads the project through the runner query with a fresh, unreserved Session id", async () => {
+  it("reads the project through runnerContext.forProject, naming nothing but the project", async () => {
     const { store } = fixture();
     await expect(store.checkouts.site(PROJECT)).rejects.toThrow(/unreachable/);
     const { query } = connect(store, (args) => facts(args));
@@ -140,12 +136,7 @@ describe("a cloud project's checkout on this Mac", () => {
       projectRepoId: REPO,
       projectName: "Cloud project",
     });
-    const [name, args] = query.mock.calls[0]!;
-    expect(name).toBe("runnerContext:forSession");
-    expect(args).toMatchObject({ projectId: PROJECT, ticketId: null });
-    expect(args.sessionId).toMatch(/^[0-9a-f-]{36}$/);
-    await store.checkouts.site(PROJECT);
-    expect(query.mock.calls[1]![1].sessionId).not.toBe(args.sessionId);
+    expect(query.mock.calls).toEqual([["runnerContext:forProject", { projectId: PROJECT }]]);
   });
 
   it("refuses a project answer for another owner or another project", async () => {
@@ -190,6 +181,9 @@ describe("a cloud project's checkout on this Mac", () => {
       headSha: null,
     });
     expect(JSON.stringify(report)).not.toContain(home);
+    // A registered folder that is gone from disk needs choosing again.
+    rmSync(folder, { recursive: true });
+    expect(store.checkouts.located(PROJECT)).toBe(false);
   });
 
   it("refuses a folder another runner already registered", async () => {
