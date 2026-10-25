@@ -2211,6 +2211,8 @@ const appStartup = app.whenReady().then(async () => {
     },
   });
   runnerEdge.bind({ menuBar });
+  // The quit path is whole from here: a dropped binding fails the launch.
+  runnerEdge.assertBound();
   revealWindowForLaunch = () => menuBar.reveal({ focus: true });
   // The menu-bar smokes' seam (`e2e/menu-bar-*-smoke.mjs`): a CI runner has no
   // model to keep a turn live, so the mechanics smoke enters the mode through

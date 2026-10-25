@@ -455,6 +455,20 @@ describe("the accepted-quit hold the runner installs", () => {
   });
 });
 
+describe("boot's last word on the quit path", () => {
+  it("names every binding boot never made, and passes once the path is whole", () => {
+    const h = harness();
+    expect(() => h.edge.assertBound()).toThrow(
+      "never bound: automations, unsavedQuit, terminals, windows, repack, menuBar",
+    );
+    h.boot();
+    // A dropped menu-bar binding would silently skip menu-bar mode at quit.
+    expect(() => h.edge.assertBound()).toThrow("never bound: menuBar.");
+    h.edge.bind({ menuBar: menuBarFake("quit", h.calls) });
+    expect(() => h.edge.assertBound()).not.toThrow();
+  });
+});
+
 describe("the runner's producer stop and Session RPC transport", () => {
   it("stops desktop's producers: the host is closing, and the bound terminals stop sweeping", () => {
     const h = harness();

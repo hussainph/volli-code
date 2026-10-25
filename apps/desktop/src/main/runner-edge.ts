@@ -87,6 +87,16 @@ export interface DesktopQuitBindings<T extends QuitTerminals> {
   menuBar: MenuBarHost;
 }
 
+/** Every binding boot owes the quit path, in the order boot makes them. */
+const QUIT_BINDINGS = [
+  "automations",
+  "unsavedQuit",
+  "terminals",
+  "windows",
+  "repack",
+  "menuBar",
+] as const satisfies readonly (keyof DesktopQuitBindings<QuitTerminals>)[];
+
 /** What the edge needs of the runner `createRunnerComposition` returned. */
 export interface AdoptableRunner<Owner> {
   owner(edge: { bind(ready: RunnerReady): void; closeSocket(): Promise<boolean | void> }): Owner;
@@ -110,6 +120,12 @@ export interface DesktopRunnerEdge<T extends QuitTerminals> {
    */
   ownerFor<Owner>(runner: AdoptableRunner<Owner>): Owner;
   readonly bind: (bindings: Partial<DesktopQuitBindings<T>>) => void;
+  /**
+   * Boot's last word on the quit path: throws naming every binding boot never
+   * made, so a dropped `bind` fails the launch (and every smoke) instead of
+   * silently skipping a confirm or a stop at quit.
+   */
+  readonly assertBound: () => void;
   /** Whether the host has begun stopping (the producer stop ran). */
   readonly hostClosing: () => boolean;
   /** Menu-bar mode once bound, else null: read when a notification click or the updater needs it. */
@@ -198,6 +214,12 @@ export function createDesktopRunnerEdge<T extends QuitTerminals>(
     },
     bind: (bindings) => {
       Object.assign(bound, bindings);
+    },
+    assertBound: () => {
+      const missing = QUIT_BINDINGS.filter((name) => bound[name] === undefined);
+      if (missing.length > 0) {
+        throw new Error(`The desktop quit path was never bound: ${missing.join(", ")}.`);
+      }
     },
     hostClosing: () => hostClosing,
     menuBar: () => bound.menuBar ?? null,
