@@ -28,7 +28,7 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { boardResourceWorkspace } from "@volli/host-core/board";
+import { boardResourceProject } from "@volli/host-core/board";
 import { insertProject } from "@volli/host-core/db";
 import { admittedHandlers, createHostHandlers, ROUTER_POLICY } from "@volli/host-core/handlers";
 import { createTestSessionEngine, openTestDb, testProject } from "@volli/host-core/testing";
@@ -268,7 +268,7 @@ async function box(features: readonly string[] = FEATURES) {
     "session.subscribeQueue": counted("session.subscribeQueue"),
   };
 
-  const boardWorkspace = boardResourceWorkspace(ctx.db);
+  const boardWorkspace = boardResourceProject(ctx.db);
   const diagnostics = new RpcDiagnosticLog();
   const listener = await startHostProtocolListener({
     router: createHostRouter(),

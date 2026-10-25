@@ -76,7 +76,7 @@ async function openHost() {
   insertSession(db, testSession(PROJECT, null, { id: SESSION, cwd: "/repo/volli" }));
   const feed = createBoardChangeFeed({
     projectOfTicket: (ticketId) => getTicketRow(db, ticketId)?.project_id,
-    workspaces: () => [PROJECT],
+    projects: () => [PROJECT],
   });
   // Every `data-changed` the host's bus carries taps the feed, as each host
   // wires it: a writer that stamped no rows is stamped rowless here.

@@ -24,7 +24,7 @@
  */
 import { connect, createServer, type AddressInfo, type Server, type Socket } from "node:net";
 
-import { boardResourceWorkspace, createBoardChangeFeed } from "@volli/host-core/board";
+import { boardResourceProject, createBoardChangeFeed } from "@volli/host-core/board";
 import { getTicketRow, insertProject, insertTicket, listComments } from "@volli/host-core/db";
 import {
   ADMITTED,
@@ -148,7 +148,7 @@ async function box(features: readonly string[] = EVERY_FEATURE): Promise<Box> {
   );
   const feed = createBoardChangeFeed({
     projectOfTicket: (ticketId) => getTicketRow(ctx.db, ticketId)?.project_id,
-    workspaces: () => [PROJECT],
+    projects: () => [PROJECT],
   });
   let clock = 10_000;
   const map = createHostHandlers(
@@ -195,7 +195,7 @@ async function box(features: readonly string[] = EVERY_FEATURE): Promise<Box> {
     "session.subscribe": sessionStream("session.subscribe"),
     "session.subscribeQueue": sessionStream("session.subscribeQueue"),
   };
-  const boardWorkspace = boardResourceWorkspace(ctx.db);
+  const boardWorkspace = boardResourceProject(ctx.db);
   const diagnostics = new RpcDiagnosticLog();
   const listener = await startHostProtocolListener({
     router: createHostRouter(),

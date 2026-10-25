@@ -4,6 +4,11 @@
  * received gets the original answer instead of a second effect. No older
  * reader knows the table, and none needs it: an N−1 build writes the board
  * as it always has and leaves this table alone.
+ *
+ * `workspace_id` holds a project id: the column was named when the host
+ * protocol called a project a "Workspace", a word that now names the team
+ * container (CONTEXT.md). Shipped schema is never renamed in place; code
+ * reading the column calls it `projectId` (board/receipts.ts).
  */
 export const BOARD_COMMAND_RECEIPTS_MIGRATION = `
 CREATE TABLE IF NOT EXISTS board_command_receipts (

@@ -1,17 +1,18 @@
 /**
- * Which Workspace a board resource belongs to (VC-565): the board router's
+ * Which project a board resource belongs to (VC-565): the board router's
  * half of a composition root's `resourceWorkspace` port (HP § Command
- * catalog, "Resources, open per area"). A ticket's Workspace is its project;
- * a comment's, its ticket's; a label's, its own project. Any other kind, or an
- * absent id, answers null, which the router refuses exactly as it refuses a
- * foreign one.
+ * catalog, "Resources, open per area"). A ticket's project is its own; a
+ * comment's, its ticket's; a label's, its own. Any other kind, or an absent
+ * id, answers null, which the router refuses exactly as it refuses a foreign
+ * one. The port keeps the host protocol's name, where a project was a
+ * "Workspace"; that word now names the team container (CONTEXT.md).
  */
 import type Database from "better-sqlite3";
 import { BOARD_RESOURCE_KINDS } from "@volli/shared";
 
 import { prepared } from "../db/prepared";
 
-export function boardResourceWorkspace(
+export function boardResourceProject(
   db: Database.Database,
 ): (resource: { readonly kind: string; readonly id: string }) => string | null {
   return ({ kind, id }) => {

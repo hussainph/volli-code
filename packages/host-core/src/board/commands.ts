@@ -14,7 +14,7 @@
  * - its **materialization**: switching a ticket into worktree scope makes the
  *   checkout (VC-98), refusing the opposite switch while that runs;
  * - its **feed publication**: the committed rows, naming the `commandId`, on
- *   the Workspace's change feed (F1, T5), in the turn of the commit;
+ *   the project's change feed (F1, T5), in the turn of the commit;
  * - its **announcement**: `data-changed` for the flag-off windows, except to
  *   the desktop window that asked, whose reply already carries the row (the
  *   one difference VC-668 documented), unless the change moved a checkout.
@@ -119,7 +119,7 @@ export interface BoardCommandId {
 
 /**
  * What every board write answers besides its row: its receipt, when it
- * carried a `commandId`, and the Workspace feed's cursor through which its
+ * carried a `commandId`, and the project feed's cursor through which its
  * effect is stamped (as `throughSequence` is a Session's, HP § Commands): a
  * Client that has applied the feed through it holds the write (T5).
  */
@@ -330,11 +330,11 @@ const PROJECT_REMOVED = "This project was removed from Volli. Add its folder aga
  */
 const materializingWorktrees = new Set<string>();
 
-function withWorkspace(
+function withProject(
   prior: { readonly reply: unknown } | undefined,
-  workspaceId: string,
-): { readonly reply: unknown; readonly workspaceId: string } | undefined {
-  return prior === undefined ? undefined : { reply: prior.reply, workspaceId };
+  projectId: string,
+): { readonly reply: unknown; readonly projectId: string } | undefined {
+  return prior === undefined ? undefined : { reply: prior.reply, projectId };
 }
 
 function receiptOf(commandId: string | undefined, replayed: boolean): BoardCommandReceipt | null {
@@ -431,59 +431,59 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
    * is gone), or the recorded value for a write whose answer names no row.
    * Otherwise `write` runs in one transaction with the receipt, inside the
    * ticket's wake when it names one, and `committed` publishes after COMMIT.
-   * `workspaceId` null means the resource is gone: only a repeat of the
+   * `projectId` null means the resource is gone: only a repeat of the
    * command that removed it can still answer, from its receipt; anything else
    * runs `write`, which refuses.
    */
   function recorded<Value>(
     spec: {
       readonly operation: string;
-      readonly workspaceId: string | null;
+      readonly projectId: string | null;
       readonly input: BoardCommandId;
       readonly wakeTicketId?: string;
       readonly current?: (db: Database.Database, answered: NoInfer<Value>) => NoInfer<Value>;
     },
     write: (db: Database.Database) => Value,
-    committed: (value: Value, workspaceId: string) => void,
+    committed: (value: Value, projectId: string) => void,
   ): { receipt: BoardCommandReceipt | null; value: Value; throughCursor: string } {
     const db = board();
     const { commandId, ...intent } = spec.input;
     if (commandId !== undefined) {
-      const prior: { readonly reply: unknown; readonly workspaceId: string } | undefined =
-        spec.workspaceId === null
+      const prior: { readonly reply: unknown; readonly projectId: string } | undefined =
+        spec.projectId === null
           ? replayOrphanedBoardCommand(db, { commandId, operation: spec.operation, intent }, now())
-          : withWorkspace(
+          : withProject(
               replayBoardCommand(
                 db,
-                { workspaceId: spec.workspaceId, commandId, operation: spec.operation, intent },
+                { projectId: spec.projectId, commandId, operation: spec.operation, intent },
                 now(),
               ),
-              spec.workspaceId,
+              spec.projectId,
             );
       if (prior !== undefined) {
         const reply = prior.reply as Value;
         return {
           receipt: receiptOf(commandId, true),
           value: spec.current === undefined ? reply : spec.current(db, reply),
-          throughCursor: feed.cursor(prior.workspaceId),
+          throughCursor: feed.cursor(prior.projectId),
         };
       }
     }
     // A removed project takes no write (VC-822): it is detached, not deleted,
     // and nothing in it changes until its folder is added again. A replay above
     // still answers the write it already took.
-    if (spec.workspaceId !== null && isProjectRemoved(db, spec.workspaceId)) {
+    if (spec.projectId !== null && isProjectRemoved(db, spec.projectId)) {
       throw new Error(PROJECT_REMOVED);
     }
     // A resource that is gone refuses inside `write`, with today's message.
-    const workspaceId = spec.workspaceId ?? "";
+    const projectId = spec.projectId ?? "";
     const transact = (): Value =>
       withTransaction(db, () => {
         const value = write(db);
         if (commandId !== undefined) {
           recordBoardCommand(
             db,
-            { workspaceId, commandId, operation: spec.operation, intent },
+            { projectId, commandId, operation: spec.operation, intent },
             value,
             now(),
           );
@@ -495,16 +495,16 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       spec.wakeTicketId === undefined
         ? transact()
         : withTicketWake(db, spec.wakeTicketId, transact);
-    committed(value, workspaceId);
+    committed(value, projectId);
     return {
       receipt: receiptOf(commandId, false),
       value,
-      throughCursor: feed.cursor(workspaceId),
+      throughCursor: feed.cursor(projectId),
     };
   }
 
-  /** The Workspace a ticket belongs to, for its receipt key; null when it is gone. */
-  const workspaceOfTicket = (ticketId: string): string | null =>
+  /** The project a ticket belongs to, for its receipt key; null when it is gone. */
+  const projectOfTicket = (ticketId: string): string | null =>
     getTicketRow(board(), ticketId)?.project_id ?? null;
 
   const ticketChanges = (
@@ -544,7 +544,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     } = recorded(
       {
         operation,
-        workspaceId: input.projectId,
+        projectId: input.projectId,
         input,
         current: (db) => {
           const row = getProjectById(db, input.projectId);
@@ -588,7 +588,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     } = recorded(
       {
         operation,
-        workspaceId: workspaceOfTicket(input.ticketId),
+        projectId: projectOfTicket(input.ticketId),
         input,
         wakeTicketId: input.ticketId,
         current: (db) => currentTicket(db, input.ticketId),
@@ -615,9 +615,9 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     }
   };
 
-  const commentWorkspace = (commentId: string): string | null => {
+  const projectOfComment = (commentId: string): string | null => {
     const comment = getComment(board(), commentId);
-    return comment === undefined ? null : workspaceOfTicket(comment.ticketId);
+    return comment === undefined ? null : projectOfTicket(comment.ticketId);
   };
 
   return {
@@ -659,7 +659,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
           void sink.emit(batch);
         },
         // The feed ended under the subscription (an epoch change, or the
-        // Workspace removed): the Client resnapshots.
+        // project removed): the Client resnapshots.
         (error) => sink.fail(error),
       );
     },
@@ -724,7 +724,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       } = recorded(
         {
           operation: "board.createTicket",
-          workspaceId: input.projectId,
+          projectId: input.projectId,
           input,
           wakeTicketId: ticketId,
           current: (db, answered: Ticket) => currentTicket(db, answered.id),
@@ -761,7 +761,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       const db = board();
       const { commandId, ...move } = input;
       const key = (id: string) => ({
-        workspaceId: input.projectId,
+        projectId: input.projectId,
         commandId: id,
         operation: "board.moveTickets",
         intent: move,
@@ -910,7 +910,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       const { receipt, throughCursor } = recorded(
         {
           operation: "board.archiveTicket",
-          workspaceId: projectId,
+          projectId,
           input,
           wakeTicketId: input.ticketId,
         },
@@ -966,12 +966,12 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       ),
 
     // A repeat of a delete finds its ticket gone: it answers from its receipt
-    // (`recorded`, with no Workspace), and anything else refuses as today.
+    // (`recorded`, with no project), and anything else refuses as today.
     "board.deleteTicket": (input, call) => {
       const db = board();
       const row = getTicketRow(db, input.ticketId);
       const { receipt, throughCursor } = recorded(
-        { operation: "board.deleteTicket", workspaceId: row?.project_id ?? null, input },
+        { operation: "board.deleteTicket", projectId: row?.project_id ?? null, input },
         (database) => {
           if (row === undefined) throw new Error("Unknown ticket");
           // Before the delete, which detaches the Sessions from the ticket, and
@@ -1008,7 +1008,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       } = recorded(
         {
           operation: "board.createComment",
-          workspaceId: workspaceOfTicket(input.ticketId),
+          projectId: projectOfTicket(input.ticketId),
           input,
           wakeTicketId: input.ticketId,
           current: (db, answered: TicketComment) => currentComment(db, answered.id),
@@ -1043,7 +1043,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       } = recorded(
         {
           operation: "board.updateComment",
-          workspaceId: commentWorkspace(input.commentId),
+          projectId: projectOfComment(input.commentId),
           input,
           current: (db) => currentComment(db, input.commentId),
         },
@@ -1065,7 +1065,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     "board.removeComment": (input, call) => {
       const existing = getComment(board(), input.commentId);
       const { receipt, throughCursor } = recorded(
-        { operation: "board.removeComment", workspaceId: commentWorkspace(input.commentId), input },
+        { operation: "board.removeComment", projectId: projectOfComment(input.commentId), input },
         (db) => {
           if (existing === undefined) throw new Error("Unknown comment");
           deleteComment(db, input.commentId);
@@ -1085,7 +1085,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
       } = recorded(
         {
           operation: "board.setLabelColor",
-          workspaceId: existing?.projectId ?? null,
+          projectId: existing?.projectId ?? null,
           input,
           current: (db) => {
             const row = getLabel(db, input.labelId);

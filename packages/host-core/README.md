@@ -832,7 +832,7 @@ and the socket's `ticket.move` all invoke the map.
   (`boardFeed`) and feeds it every `data-changed` its bus carries
   (`noteDataChanged`): desktop through `tapDataChanged` (`broadcast.ts`), hostd
   through `headlessPorts`.
-- `resources.ts`: `boardResourceWorkspace(db)`, the board's half of a root's
+- `resources.ts`: `boardResourceProject(db)`, the board's half of a root's
   `resourceWorkspace` port.
 
 The contract: HP § Command catalog, "The board (VC-565)", and § Workspace
