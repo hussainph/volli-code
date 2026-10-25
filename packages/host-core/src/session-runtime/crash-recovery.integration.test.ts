@@ -21,7 +21,11 @@ import { insertProject } from "../db/projects-repo";
 import { createSqliteSessionFollowUpLedger } from "../db/session-follow-up-repo";
 import { openRawDb, openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
-import { closeStaleAttachments, type BootRecoveredTurns } from "./boot-recovery";
+import {
+  closeStaleAttachments,
+  type BootRecoveredTurns,
+  type BootRecoveryFailure,
+} from "./boot-recovery";
 import { resumeRecoveredTurns } from "./restart-resume";
 import { createPiNativeAdapter } from "./pi-adapter";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
@@ -80,12 +84,18 @@ function fixture() {
       attachDelayMs: number;
       /** Set synchronously on entering a gate, before the runtime arms its timer. */
       stalled: boolean;
+      /**
+       * A command whose acceptance the next reconcile contradicts, after its
+       * replay: the receipt conflict older builds hit (VC-926).
+       */
+      contradictAcceptance: string | null;
     } = {
       attachFailure: null,
       attachGate: null,
       admissionGate: null,
       attachDelayMs: 0,
       stalled: false,
+      contradictAcceptance: null,
     };
     const adapter = createPiNativeAdapter({
       sessionDataDir,
@@ -121,6 +131,19 @@ function fixture() {
             await new Promise((resolve) => setTimeout(resolve, control.attachDelayMs));
           if (control.attachFailure) throw control.attachFailure;
           const binding = await adapter.attach(spec, sink);
+          const reconcile = binding.reconcile.bind(binding);
+          binding.reconcile = async (cursor) => {
+            const reconciliation = await reconcile(cursor);
+            const commandId = control.contradictAcceptance;
+            if (commandId === null) return reconciliation;
+            return {
+              ...reconciliation,
+              receipts: [
+                ...reconciliation.receipts,
+                { commandId, status: "rejected", code: "contradicted", detail: null, native: null },
+              ],
+            };
+          };
           const dispatch = binding.dispatch.bind(binding);
           binding.dispatch = async (command) => {
             if (command.kind === "message.submit" && control.admissionGate) {
@@ -188,11 +211,16 @@ function fixture() {
   async function boot(
     current: ReturnType<typeof launch>,
     onRecovered?: (recovered: BootRecoveredTurns) => void,
+    onFailure?: (failure: BootRecoveryFailure) => void,
   ) {
     const errors: unknown[] = [];
     const closed = await closeStaleAttachments({
       engine: current.engine,
       reconcile: (input) => current.host.reconcile(input),
+      // The lifecycle's own reading of a live binding.
+      holdsBinding: (attachmentId) =>
+        current.host.openNativeBindings().some((binding) => binding.attachmentId === attachmentId),
+      ...(onFailure === undefined ? {} : { onFailure }),
       projectIds: ["project"],
       newId: () => `boot-${clock++}`,
       now: () => clock++,
@@ -944,6 +972,93 @@ describe("restart resume through the durable Pi binding (VC-450)", () => {
     expect(
       projection.commands.filter(({ intent }) => intent.kind === "message.submit"),
     ).toHaveLength(1);
+  });
+
+  // VC-926: the production shape. The lost process accepted the message and
+  // its executor saved the interruption, but the ledger never heard of it. The
+  // boot's rebuilt executor replays that end, and only then does its reconcile
+  // fail. Its turn is recovered on the live attachment, not closed by the host.
+  it("continues a turn whose rebuilt executor replayed its end before the reconcile failed", async () => {
+    const f = fixture();
+    const stalled = Promise.withResolvers<void>();
+    f.replies.splice(
+      0,
+      f.replies.length,
+      {
+        wait: (signal) =>
+          new Promise<void>((resolve) => {
+            stalled.resolve();
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          }),
+      },
+      { text: "Picked up after the failed reconcile." },
+    );
+    const { sessionId } = await f.host.command({
+      commandId: `create-${clock++}`,
+      command: {
+        kind: "session.create",
+        projectId: "project",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Failed reconcile",
+      },
+    });
+    await f.engine.getOrRecordSessionInput({
+      sessionId,
+      input: { kind: "tool-surface", tools: ["read", "edit", "write", "execute", "ask_user"] },
+      provenance,
+    });
+    await f.host.command({
+      sessionId,
+      commandId: `attach-${clock++}`,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    const commandId = `submit-${clock++}`;
+    await f.host.command({
+      sessionId,
+      commandId,
+      command: {
+        kind: "message.submit",
+        settle: "opened",
+        message: { id: "m", role: "user", parts: [{ type: "text", text: "Build the thing" }] },
+      },
+    });
+    await stalled.promise;
+
+    const current = await f.restart(f, true);
+    current.control.contradictAcceptance = commandId;
+    const failures: BootRecoveryFailure[] = [];
+    let recovered: BootRecoveredTurns | undefined;
+    expect(
+      await f.boot(
+        current,
+        (turns) => (recovered = turns),
+        (failure) => failures.push(failure),
+      ),
+    ).toEqual({ closed: 0, errors: [] });
+    const attachmentId = (await current.host.projection({ sessionId })).projection.liveExecutor!.id;
+    expect(failures).toEqual([
+      expect.objectContaining({
+        attachmentId,
+        reason: "reconcile_failed",
+        outcome: "recovered",
+        error: expect.objectContaining({ name: "SessionEngineConflictError" }),
+      }),
+    ]);
+    const interrupted = (await current.host.projection({ sessionId })).projection;
+    expect(interrupted.lastTurnOutcome).toBe("interrupted");
+    expect(interrupted.attention.active.map(({ id }) => id)).not.toContain(
+      `${attachmentId}:boot-recovery`,
+    );
+    expect(recovered?.turns).toEqual([{ sessionId, attachmentId }]);
+
+    current.control.contradictAcceptance = null;
+    await resume(current, recovered!);
+    const projection = (await current.host.projection({ sessionId })).projection;
+    expect(projection.lastTurnOutcome).toBe("completed");
+    expect(projection.liveExecutor?.id).toBe(attachmentId);
+    expect(userTexts(f.script.requests.at(-1)!, "Build the thing")).toHaveLength(1);
   });
 
   it("leaves a turn lost inside a tool for the person, whose Resume then continues it", async () => {

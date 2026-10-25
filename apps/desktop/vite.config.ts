@@ -735,7 +735,7 @@ export default defineConfig(({ mode }) => ({
         "**/packages/host-core/src/project-roots.ts",
         // About's support metadata (VC-293). Enrolled on the same argument as
         // the IPC handlers around it: this module is an ALLOWLIST, and the
-        // guarantee it carries — five fields, one pragma, one app_state key,
+        // guarantee it carries — eight fields, one pragma, one app_state key,
         // nothing that could reach a credential — is only as good as the test
         // that walks every branch of it.
         "**/src/main/support-info.ts",

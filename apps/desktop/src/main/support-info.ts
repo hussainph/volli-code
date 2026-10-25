@@ -3,7 +3,8 @@
  * which build is running, which release line it follows, which OS and
  * architecture it runs on, what schema version its database is at, whether
  * the migrations that file ran are the ones this build ships (VC-633), and
- * what the updater's last check said (VC-294).
+ * what the updater's last check said (VC-294), and what this launch's boot
+ * recovery did (VC-926).
  *
  * Every one of them lives somewhere the renderer cannot reach — the app
  * version is Electron's, the channel is a row in `app_state`, the schema
@@ -13,7 +14,7 @@
  *
  * AN ALLOWLIST, NOT A DUMP. The report is text a person pastes into a public
  * issue, so this module is written so that widening it takes an edit here and
- * a new test: it names seven fields, reads one pragma, one `app_state` key and
+ * a new test: it names eight fields, reads one pragma, one `app_state` key and
  * the version/fingerprint columns of `migration_history`, and imports nothing
  * that could reach the secrets table, the credential store, or the
  * environment. The last update check is handed in from the running updater
@@ -26,11 +27,13 @@
  * The handler remains available when the database did not open, but it returns
  * an unavailable result instead of presenting a partial report as complete.
  * Copy stays gated until all six required facts can be read; the last update
- * check is not one of them ("none recorded" is a complete answer).
+ * check and boot recovery are not among them ("none recorded" and "not
+ * finished" are complete answers).
  */
 import type Database from "better-sqlite3";
 import { checkMigrationHistory, describeMigrationHistory, SCHEMA_HEAD } from "@volli/host-core/db";
 
+import type { BootRecoveryReport } from "@volli/host-core/session-runtime";
 import { summarizeUpdateFailure, type ExperimentBuildKind } from "@volli/shared";
 
 import type { SupportInfo, UpdateLastCheck } from "../ipc/contract";
@@ -54,6 +57,8 @@ export interface SupportInfoDeps {
   arch: string;
   /** The running updater's last answered check — `autoUpdate.state().lastCheck`. */
   lastUpdateCheck(): UpdateLastCheck | null;
+  /** This launch's boot recovery sweep — `runner.bootRecovery()`; `null` until it finished. */
+  bootRecovery(): BootRecoveryReport | null;
 }
 
 /**
@@ -73,6 +78,34 @@ export function describeLastUpdateCheck(check: UpdateLastCheck | null): string {
     case "download-error":
       return `${at}, download${check.version === null ? "" : ` of ${check.version}`} failed: ${summarizeUpdateFailure(check.error ?? "")}`;
   }
+}
+
+/** At most this many distinct failure kinds on the line; the rest are counted. */
+const BOOT_RECOVERY_FAILURE_KINDS = 5;
+
+/**
+ * The report's boot recovery line (VC-926): counts, then each kind of failed
+ * reconcile as `reason→outcome ErrorName[:code]`, repeated kinds counted.
+ * Everything here is a count, a fixed reason word or an error class name, so
+ * nothing on the line can name a Session, a path or what an error said.
+ */
+export function describeBootRecovery(report: BootRecoveryReport | null): string {
+  if (report === null) return "not finished";
+  const at = new Date(report.finishedAt).toISOString();
+  const turns = `${report.recovered} lost ${report.recovered === 1 ? "turn" : "turns"} recovered`;
+  const closed = `${report.closed} ${report.closed === 1 ? "attachment" : "attachments"} closed`;
+  const kinds = new Map<string, number>();
+  for (const { reason, outcome, error } of report.failures) {
+    const key = `${reason}→${outcome} ${error.name}${error.code === undefined ? "" : `:${error.code}`}`;
+    kinds.set(key, (kinds.get(key) ?? 0) + 1);
+  }
+  const listed = [...kinds]
+    .slice(0, BOOT_RECOVERY_FAILURE_KINDS)
+    .map(([key, count]) => (count === 1 ? key : `${key} ×${count}`));
+  if (kinds.size > BOOT_RECOVERY_FAILURE_KINDS) {
+    listed.push(`${kinds.size - BOOT_RECOVERY_FAILURE_KINDS} more`);
+  }
+  return `${at}, ${turns}, ${closed}${listed.length === 0 ? "" : `; failed: ${listed.join(", ")}`}`;
 }
 
 /**
@@ -98,6 +131,7 @@ export function collectSupportInfo(deps: SupportInfoDeps): SupportInfo {
     schemaVersion: schemaVersion(db),
     migrationHistory: describeMigrationHistory(checkMigrationHistory(db, SCHEMA_HEAD)),
     lastUpdateCheck: describeLastUpdateCheck(deps.lastUpdateCheck()),
+    bootRecovery: describeBootRecovery(deps.bootRecovery()),
   };
 }
 

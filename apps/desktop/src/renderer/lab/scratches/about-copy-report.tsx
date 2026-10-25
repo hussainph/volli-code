@@ -22,6 +22,7 @@ OS: darwin arm64
 Database schema: 34
 Migration history: consistent
 Last update check: none recorded
+Boot recovery: 2026-02-01T09:14:02.000Z, 1 lost turn recovered, 0 attachments closed
 
 CLI status
 Volli command: Linked

@@ -37,6 +37,7 @@ export {
 export type { HostNoticeDelivery } from "../session-runtime/host-notice-delivery";
 export { repackLegacyTranscriptArtifacts } from "../session-runtime";
 export {
+  type BootRecoveryReport,
   type RecoveredSessionServices,
   SessionRuntimeClosingError,
 } from "../session-runtime/lifecycle";

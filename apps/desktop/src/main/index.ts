@@ -2571,6 +2571,8 @@ const appStartup = app.whenReady().then(async () => {
     arch: process.arch,
     // Redacted to one sentence inside the collector (VC-294).
     lastUpdateCheck: () => autoUpdate.state().lastCheck,
+    // Counts, reasons and error class names only (VC-926).
+    bootRecovery: () => runner.bootRecovery(),
   });
 
   try {

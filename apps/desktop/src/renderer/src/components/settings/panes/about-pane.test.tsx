@@ -96,6 +96,7 @@ const SUPPORT: SupportInfoResult = {
     schemaVersion: 34,
     migrationHistory: "consistent",
     lastUpdateCheck: "none recorded",
+    bootRecovery: "not finished",
   },
 };
 
