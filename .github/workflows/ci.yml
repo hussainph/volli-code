@@ -63,9 +63,9 @@ name: CI
 #     Every failed smoke retries ONCE in a fresh profile; retry-green is FLAKY
 #     in the job summary, and both attempts' evidence is uploaded for 30 days.
 #   - A COARSE path gate skips the macOS lane for changes that provably cannot
-#     reach the Electron app (website, docs site, prose, convex/) or that the
-#     unit suites own (packages/shared sources). A shared change still runs
-#     the full desktop unit suite here and core e2e after it merges.
+#     reach the Electron app (website, docs site, prose, convex/, apps/gateway/)
+#     or that the unit suites own (packages/shared sources). A shared change
+#     still runs the full desktop unit suite here and core e2e after it merges.
 #   - ONE job, `CI gate`, is the required check. It waits on every lane and
 #     fails unless each one passed or was skipped by its own condition. The
 #     condition is re-derived there, not trusted: a smoke lane that skipped
@@ -166,11 +166,11 @@ jobs:
           # directory is treated as desktop-affecting until someone says
           # otherwise, which is the safe direction to be wrong in.
           inert='^(docs/|reference/|lessons/|assets/|apps/website/|apps/docs/|\.github/ISSUE_TEMPLATE/|[^/]*\.md$|LICENSE$)'
-          # Paths that reach the app but whose PR-time proof is the unit suites,
-          # which always run: convex/ (the desktop imports none of it; its
+          # Paths whose PR-time proof is the unit suites, which always run:
+          # convex/ and apps/gateway/ (the desktop imports neither; convex's
           # sign-in seam is tested in the Convex lane) and packages/shared's
           # sources. Not a manifest — a dependency change is never skipped.
-          unit_owned='^(convex/|packages/shared/)'
+          unit_owned='^(convex/|apps/gateway/|packages/shared/)'
           manifest='(^|/)package\.json$'
 
           # Plain greps into variables, not `grep -q` mid-pipeline: an early
@@ -183,7 +183,7 @@ jobs:
             echo "-> desktop-affecting changes present"
           else
             echo "desktop=false" >> "$GITHUB_OUTPUT"
-            echo "-> prose/website/convex/shared only; skipping core e2e"
+            echo "-> prose/website/convex/gateway/shared only; skipping core e2e"
           fi
 
           # Container inputs and host code. Workflow edits run it too, so the

@@ -155,6 +155,8 @@ test("actual path classifier selects lanes and fails safe", () => {
       // ...but never a manifest: a dependency change always runs core e2e.
       ["packages/shared/package.json", "true", "true", "base"],
       ["convex/package.json", "true", "false", "base"],
+      ["apps/gateway/src/gateway.ts", "false", "false", "base"],
+      ["apps/gateway/package.json", "true", "false", "base"],
       ["docs/DESIGN.md\npackages/session-rpc/src/index.ts", "true", "true", "base"],
       [longDiff, "true", "false", "base"],
       // Migration and N-1 harness inputs run every N-1 lane on the PR.
