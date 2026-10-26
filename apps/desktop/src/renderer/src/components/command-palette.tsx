@@ -617,20 +617,27 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                       const chat = useChatSessionsStore.getState();
                       chat.adoptChatSession(item.sessionId);
                       if (item.scope.kind === "ticket") {
+                        // A tab this had to open OPENS into a shown group's
+                        // focused pane; one already open is selected (VC-614).
+                        const opensTab = !chat.openTabs[item.scope.ticketId]?.includes(
+                          item.sessionId,
+                        );
                         chat.openChatTab(item.scope.ticketId, item.sessionId);
                         useWorkspaceStore
                           .getState()
                           .openTicketWorkspace(item.projectId, item.scope.ticketId, {
                             tabId: chatTabId(item.sessionId),
+                            open: opensTab,
                           });
                       } else {
                         // Home, with this Session's tab named in the same write.
                         // `openHome` leaves `openTicketId` alone — a Home Session
                         // tab keeps the ticket remembered behind it (VC-54).
+                        const opensTab = !chat.openTabs[item.projectId]?.includes(item.sessionId);
                         chat.openChatTab(item.projectId, item.sessionId);
                         useWorkspaceStore
                           .getState()
-                          .openHome(item.projectId, chatTabId(item.sessionId));
+                          .openHome(item.projectId, chatTabId(item.sessionId), { open: opensTab });
                       }
                     } else if (item.scope.kind === "ticket") {
                       useWorkspaceStore

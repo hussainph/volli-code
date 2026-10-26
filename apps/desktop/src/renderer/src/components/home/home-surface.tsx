@@ -24,11 +24,11 @@
  *   Board      | set          | TicketDetail, full-bleed, NO Home strip
  *   a work tab | either       | Home strip + that Session/File/Browser plane
  *
- * "Active tab" reads as the FOCUSED PANE's front tab since VC-202, which is the
- * same sentence while nothing is split — the plane below the strip is a split
- * grid, and an unsplit Home resolves to one pane holding the whole strip. The
- * Board rides inside that grid now (it is the primary pane's permanent tab)
- * rather than beside it; a ticket workspace still takes the whole page over.
+ * "Active tab" reads as the FOCUSED PANE's front tab, which is the same sentence
+ * while no tab group is shown — the plane below the strip is a split grid, and
+ * an ordinary tab resolves to one full-width pane (VC-614). The Board rides
+ * inside that grid like any tab, in a group or full width; a Ticket view still
+ * takes the whole page over.
  *
  * A Home SESSION additionally gets the right rail (VC-55) — the ticket
  * workspace's panel at this scope, on the same ⌥⌘B and the same persisted
@@ -62,8 +62,7 @@ import {
   arrangeTabs,
   EMPTY_TAB_ORDER,
   errorMessage,
-  resolveSplitView,
-  singlePaneSplitView,
+  projectSplitView,
   SPLIT_VIEW_ROOT_PANE_ID,
   type FileWorkspaceTab,
   type ResolvedSplitViewPane,
@@ -71,7 +70,10 @@ import {
 import type { BrowserTabState } from "../../../../ipc/contract";
 
 import { renameChatSession } from "@renderer/chat/rename";
-import { BrowserPane } from "@renderer/components/browser/browser-pane";
+import {
+  BrowserPaneAnchor,
+  ResidentBrowserPanes,
+} from "@renderer/components/browser/resident-browser-panes";
 import { HomePaneTabStrip, HomeTabStrip, type HomeTabDescriptor } from "./home-tab-strip";
 import { useHomeTabDescriptors } from "./home-tab-descriptors";
 import { HomeRail } from "./home-rail";
@@ -102,9 +104,16 @@ import {
   tabDropWrite,
   type SplitSurfaceWrites,
 } from "@renderer/components/split/split-surface-drop";
-import { paneStripLabel, paneTabs } from "@renderer/components/split/split-tab-partition";
+import type { TabGroup } from "@renderer/components/split/grouped-tab-chip";
+import { paneStripLabel } from "@renderer/components/split/split-tab-partition";
 import { SplitViewGrid } from "@renderer/components/split/split-view-grid";
 import { SplitViewTabBar } from "@renderer/components/split/split-view-tab-bar";
+import {
+  groupedTabIds,
+  stripTabGroups,
+  surfaceOrderAfterReorder,
+  topStripTabIds,
+} from "@renderer/components/split/split-tab-groups";
 import { TerminalPaneAnchor } from "@renderer/components/split/terminal-pane-anchor";
 import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
 import { FileView } from "@renderer/components/ticket/file-view";
@@ -147,7 +156,17 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // Browser state is main-owned and pushed for every scope. Home is the app's
   // always-mounted workspace owner, so it owns the one subscription too; a
   // Ticket detail can come and go without losing title/loading updates.
-  React.useEffect(() => subscribeBrowserTabs(browserApi), [browserApi]);
+  React.useEffect(
+    () =>
+      subscribeBrowserTabs(browserApi, (tab) => {
+        const workspace = useProjectUiStore.getState();
+        if (tab.ticketId === null)
+          workspace.removeHomeTabFromSplit(tab.projectId, browserTabId(tab.tabId));
+        else
+          workspace.removeTicketTabFromSplit(tab.projectId, tab.ticketId, browserTabId(tab.tabId));
+      }),
+    [browserApi],
+  );
   // A remote project has no Browser Tabs on this Mac (VC-711): none read.
   const remoteHost = useRemoteProjectHost(selectedId);
   React.useEffect(() => {
@@ -223,6 +242,12 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     readSplitView,
     claimTab: claimProvisionalTab,
     activateTab: activateClaimedDraft,
+    focusPane: (paneId) => {
+      if (selectedId !== null) useProjectUiStore.getState().focusHomePane(selectedId, paneId);
+    },
+    closePane: (paneId) => {
+      if (selectedId !== null) useProjectUiStore.getState().closeHomePane(selectedId, paneId);
+    },
   });
   const {
     activeOverride: provisionalActive,
@@ -232,8 +257,20 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     guardLayoutWrites,
     releaseActive,
     takeActive,
+    groupTabs: groupProvisionalTabs,
+    ungroupTab: ungroupProvisionalTab,
   } = provisionalTabs;
-  const recordedTab = useWorkspaceStore((state) =>
+  /** A tab out of its group, an untouched Draft out of its renderer-local pane. */
+  const ungroupLocalTab = React.useCallback(
+    (id: string) => {
+      if (selectedId === null) return;
+      ungroupProvisionalTab(id, (tabId) =>
+        useProjectUiStore.getState().ungroupHomeTab(selectedId, tabId),
+      );
+    },
+    [selectedId, ungroupProvisionalTab],
+  );
+  const recordedTab = useProjectUiStore((state) =>
     selectedId === null
       ? DEFAULT_WORKSPACE_UI.homeActiveTab
       : (state.byProject[selectedId]?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab),
@@ -397,13 +434,13 @@ export function HomeSurface({ visible }: { visible: boolean }) {
    * — so the grid below draws today's plane, and there is no second rendering
    * path to drift.
    */
-  const split = resolveSplitView(
-    splitView === null
-      ? singlePaneSplitView([], activeTabId, SPLIT_VIEW_ROOT_PANE_ID)
-      : overlaySplitView(splitView),
-    orderedTabIds,
-    HOME_BOARD_TAB_ID,
-  );
+  const overlaid = splitView === null ? null : overlaySplitView(splitView);
+  const split = projectSplitView(overlaid, orderedTabIds, activeTabId, HOME_BOARD_TAB_ID);
+  // The top strip: ordinary tabs, and one chip per group (VC-614).
+  const groups = stripTabGroups(overlaid, split, orderedTabIds);
+  const drawnTabIds = groupedTabIds(orderedTabIds, groups);
+  // What the top strip drags: its ordinary tabs, never the Board.
+  const topTabIds = topStripTabIds(drawnTabIds, groups).filter((id) => !isHomeBoardTab(id));
   // What Home is SHOWING — one tab per pane. The sessions layer reads it to
   // decide whether the terminal zen mode is holding is still on screen.
   const visibleTabIds = split.panes.flatMap((pane) =>
@@ -416,7 +453,11 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   useSplitShortcuts({
     projectId: selectedId,
     ticketId: null,
-    orderedTabIds: orderedTabIds.filter((tabId) => !emptyProvisionalTabIds.has(tabId)),
+    paneId: split.focusedPaneId,
+    targetTabId:
+      split.activeTabId === null || emptyProvisionalTabIds.has(split.activeTabId)
+        ? null
+        : split.activeTabId,
   });
 
   // Terminal focus is an in-app zen mode: one terminal takes the whole canvas
@@ -471,9 +512,10 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     if (selectedId === null) return;
     await openBrowserTab(browserApi, { projectId: selectedId }, (tabId) => {
       releaseActive();
-      setHomeActiveTab(selectedId, tabId);
+      // A new Browser Tab OPENS into the shown group's focused pane.
+      useProjectUiStore.getState().openHomeTab(selectedId, tabId);
     });
-  }, [browserApi, releaseActive, selectedId, setHomeActiveTab]);
+  }, [browserApi, releaseActive, selectedId]);
 
   // The guard for closing a TAB. `SessionsLayer` keeps its own for closing a
   // PANE: the two surfaces own different closes now that the strip lives here,
@@ -599,6 +641,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         // The pane that held it has to be told, though: a chat tab's lifetime
         // lives in the chat store, so nothing else drops its pane assignment
         // (a no-op while unsplit, where the MRU return is unchanged).
+        if (emptyProvisionalTabIds.has(descriptor.id)) ungroupLocalTab(descriptor.id);
         removeHomeTabFromSplit(selectedId, descriptor.id);
         useChatSessionsStore.getState().closeChatTab(selectedId, descriptor.sessionId);
         return;
@@ -620,7 +663,15 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     // The controller's own callback, not the controller: its object identity
     // moves whenever a tab, a dirty flag or a pending close does, and this memo
     // also holds the terminal close guard.
-    [closeBrowser, closeGuard, removeHomeTabFromSplit, requestCloseFile, selectedId],
+    [
+      closeBrowser,
+      closeGuard,
+      removeHomeTabFromSplit,
+      requestCloseFile,
+      selectedId,
+      emptyProvisionalTabIds,
+      ungroupLocalTab,
+    ],
   );
 
   const handleRename = React.useCallback((descriptor: HomeTabDescriptor, title: string) => {
@@ -645,23 +696,39 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   /**
    * This surface's half of the drop-routing seam (`split-surface-drop.ts`):
    * Home's store twins, and Home's own doors for a native payload. The
-   * decisions — pane-or-surface reorder, the unsplit centre's activation door,
-   * the first split's strip claim — live in the seam, one copy shared with the
-   * ticket workspace. `null` while no project is selected: there is no surface
-   * for a drop to write to.
+   * decisions — surface-or-pane reorder, the full-width centre's activation
+   * door, a move to the top strip leaving its group — live in the seam, one
+   * copy shared with the Ticket view. `null` while no project is selected:
+   * there is no surface for a drop to write to.
    */
   const dropWrites = React.useMemo<SplitSurfaceWrites | null>(() => {
     if (selectedId === null) return null;
+    // A drop's target is the tab drawn where it landed; an untouched Draft is
+    // never one, because no layout may name it.
+    const targetOf = (paneId: string) => {
+      const front = split.panes.find((pane) => pane.id === paneId)?.activeTabId ?? null;
+      return front === null || emptyProvisionalTabIds.has(front) ? {} : { targetTabId: front };
+    };
     // Every writer below records durable workspace layout, so each is wrapped
     // by the one rule about an empty Chat Draft — see `useProvisionalChatTabs`.
     const writes: SplitSurfaceWrites = {
-      reorderSurface: (movedId, ids) => moveHomeTab(selectedId, movedId, ids),
+      // The top strip drags its ordinary tabs; every group keeps its slots.
+      reorderSurface: (movedId, ids) => {
+        const movable = topTabIds.filter((id) => !emptyProvisionalTabIds.has(id));
+        const drawn = drawnTabIds.filter((id) => !emptyProvisionalTabIds.has(id));
+        moveHomeTab(
+          selectedId,
+          movedId,
+          surfaceOrderAfterReorder(drawn, movable, ids).filter((id) => !isHomeBoardTab(id)),
+        );
+      },
       reorderPane: (paneId, movedId, ids) => moveHomeTabInPane(selectedId, paneId, movedId, ids),
       moveTabToPane: (tabId, paneId) => moveHomeTabToPane(selectedId, tabId, paneId),
-      splitPane: (paneId, edge, tabId, surfaceTabIds) =>
+      ungroupTab: (tabId) => useProjectUiStore.getState().ungroupHomeTab(selectedId, tabId),
+      splitPane: (paneId, edge, tabId) =>
         splitHomePane(selectedId, paneId, edge, {
           ...(tabId === null ? {} : { tabId }),
-          surfaceTabIds,
+          ...targetOf(paneId),
         }),
       // The door the row's own tab click takes: the tab comes to the front,
       // and a terminal onto the container's own ledger too — the same pair
@@ -694,6 +761,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     };
     return guardLayoutWrites(writes, (paneId) => focusHomePane(selectedId, paneId));
   }, [
+    drawnTabIds,
+    emptyProvisionalTabIds,
     guardLayoutWrites,
     focusHomePane,
     moveHomeTab,
@@ -705,45 +774,32 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     setHomeActiveTab,
     splitHomePane,
     terminalTabs,
+    topTabIds,
+    split,
   ]);
 
-  /** A drop on one pane's strip — surface arrangement unsplit, pane order split. */
+  /** A drop on one strip — the top strip's arrangement, or a group pane's stack. */
   const reorderInPane = React.useCallback(
     (paneId: string, movedId: string, ids: readonly string[]) => {
-      if (dropWrites === null) return;
-      reorderDropWrite(
-        { isSplit: splitView !== null, orderedTabIds },
-        dropWrites,
-        paneId,
-        movedId,
-        ids,
-      );
+      if (dropWrites !== null) reorderDropWrite(dropWrites, paneId, movedId, ids);
     },
-    [dropWrites, orderedTabIds, splitView],
+    [dropWrites],
   );
 
   /** A tab let go somewhere on Home (VC-202 §4) — the seam routes, the twins write. */
   const applySplitDrop = React.useCallback(
     (operation: SplitDropOperation) => {
-      if (dropWrites === null) return;
-      tabDropWrite({ isSplit: splitView !== null, orderedTabIds }, dropWrites, operation);
+      if (dropWrites !== null) tabDropWrite(dropWrites, operation);
     },
-    [dropWrites, orderedTabIds, splitView],
+    [dropWrites],
   );
 
   /** A Session or file row dropped on a pane — opened by Home's doors, placed by the seam. */
   const handleNativeDrop = React.useCallback(
     (payload: SplitDragPayload, paneId: string, zone: SplitDropZone) => {
-      if (dropWrites === null) return;
-      nativeDropWrite(
-        { isSplit: splitView !== null, orderedTabIds },
-        dropWrites,
-        payload,
-        paneId,
-        zone,
-      );
+      if (dropWrites !== null) nativeDropWrite(dropWrites, payload, paneId, zone);
     },
-    [dropWrites, orderedTabIds, splitView],
+    [dropWrites],
   );
 
   /**
@@ -801,9 +857,12 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     (sessionId: string) => {
       if (selectedId === null) return;
       const chat = useChatSessionsStore.getState();
+      const wasOpen = chat.openTabs[selectedId]?.includes(sessionId) === true;
       chat.adoptChatSession(sessionId);
       chat.openChatTab(selectedId, sessionId);
-      setHomeActiveTab(selectedId, chatTabId(sessionId));
+      // A child it had to open OPENS into a shown group's focused pane.
+      if (wasOpen) setHomeActiveTab(selectedId, chatTabId(sessionId));
+      else useProjectUiStore.getState().openHomeTab(selectedId, chatTabId(sessionId));
     },
     [selectedId, setHomeActiveTab],
   );
@@ -887,21 +946,18 @@ export function HomeSurface({ visible }: { visible: boolean }) {
           // one browser per pane composes exactly as files and chats do.
           // `visible` reaches the controller because a native view ignores the
           // CSS `hidden` that stands the rest of this plane down.
-          <BrowserPane
-            key={paneBrowserTab.tabId}
-            tab={paneBrowserTab}
-            visible={visible}
-            api={browserApi}
-            onTabState={useBrowserTabsStore.getState().receive}
+          <BrowserPaneAnchor
+            key={pane.id}
+            tabId={paneBrowserTab.tabId}
+            visible={visible && !ticketTakesOver && visibleTabIds.includes(tabId)}
             onClose={() => closeBrowser(paneBrowserTab.tabId)}
-            onFocusPane={() => focusHomePane(selectedId, pane.id)}
           />
         ) : null}
         {relPath === null &&
         chatSessionId === null &&
         paneBrowserTabId === null &&
         !isHomeBoardTab(tabId) ? (
-          <TerminalPaneAnchor tabId={tabId} ownerId={selected.id} />
+          <TerminalPaneAnchor key={pane.id} tabId={tabId} ownerId={selected.id} />
         ) : null}
       </div>
     );
@@ -930,52 +986,61 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       origin={
         selectedId === null ? null : { scope: "project", projectId: selectedId, ticketId: null }
       }
-      panes={split.panes.map((pane) => ({
-        paneId: pane.id,
-        tabIds: pane.tabIds.filter((id) => !isHomeBoardTab(id)),
-      }))}
+      // The top strip is the full-width pane's strip; a shown group's panes
+      // draw their own. Reading the same ids the strips draw is what lets a
+      // drop compute the order the person saw.
+      panes={[
+        { paneId: SPLIT_VIEW_ROOT_PANE_ID, tabIds: topTabIds },
+        ...(split.groupId === null
+          ? []
+          : split.panes.map((pane) => ({ paneId: pane.id, tabIds: pane.tabIds }))),
+      ]}
+      onGroupDrop={(targetTabId, tabId, edge) => {
+        if (selectedId === null) return;
+        groupProvisionalTabs(targetTabId, tabId, edge, (target, tab, side) =>
+          useProjectUiStore.getState().groupHomeTabs(selectedId, target, tab, side),
+        );
+      }}
       onTabDrop={applySplitDrop}
       onNativeDrop={handleNativeDrop}
     >
       {stripVisible && selectedId !== null ? (
-        <SplitViewTabBar
-          view={split}
-          railWidth={railVisible ? railWidth : 0}
-          onFocusPane={(paneId) => focusHomePane(selectedId, paneId)}
-          onResizeSplit={(splitId, ratio) => setHomeSplitRatio(selectedId, splitId, ratio)}
-          renderStrip={(pane, last) => (
-            <HomeTabs
-              projectId={selectedId}
-              pane={pane}
-              terminalTabs={terminalTabs}
-              chatIds={openChatIds}
-              fileTabs={fileTabs}
-              browserTabs={browserTabs}
-              dirtyFilePaths={fileWorkspace.dirtyPaths}
-              onSelect={handleSelect}
-              onClose={handleClose}
-              onRename={handleRename}
-              onReorder={(movedId, ids) => reorderInPane(pane.id, movedId, ids)}
-              onPinFile={(relPath) => pinHomeFile(selectedId, relPath)}
-              onCloseOtherFiles={(relPath) => void requestCloseOtherFiles(relPath)}
-              actions={
-                last
-                  ? {
-                      creating,
-                      onNewChat: () => void startProjectChat(selectedId),
-                      onNewSession: () => void startProjectTerminal(selectedId),
-                      onNewBrowser: () => void createBrowser(),
-                      railCollapsed,
-                      // A browser tab in front hides the rail: the native view owns
-                      // that edge of the window.
-                      railTogglable: !boardTabActive && activeBrowserTab === undefined,
-                      onToggleRail: toggleRailCollapsed,
-                    }
-                  : undefined
-              }
-            />
-          )}
-        />
+        <SplitViewTabBar>
+          <HomeTabs
+            label="Home tabs"
+            projectId={selectedId}
+            tabIds={drawnTabIds}
+            activeTabId={activeTabId}
+            groups={groups}
+            shownGroupId={split.groupId}
+            onUngroup={(groupId) => {
+              releaseActive();
+              useProjectUiStore.getState().ungroupHome(selectedId, groupId);
+            }}
+            terminalTabs={terminalTabs}
+            chatIds={openChatIds}
+            fileTabs={fileTabs}
+            browserTabs={browserTabs}
+            dirtyFilePaths={fileWorkspace.dirtyPaths}
+            onSelect={handleSelect}
+            onClose={handleClose}
+            onRename={handleRename}
+            onReorder={(movedId, ids) => reorderInPane(SPLIT_VIEW_ROOT_PANE_ID, movedId, ids)}
+            onPinFile={(relPath) => pinHomeFile(selectedId, relPath)}
+            onCloseOtherFiles={(relPath) => void requestCloseOtherFiles(relPath)}
+            actions={{
+              creating,
+              onNewChat: () => void startProjectChat(selectedId),
+              onNewSession: () => void startProjectTerminal(selectedId),
+              onNewBrowser: () => void createBrowser(),
+              railCollapsed,
+              // A browser tab in front hides the rail: the native view owns
+              // that edge of the window.
+              railTogglable: !boardTabActive && activeBrowserTab === undefined,
+              onToggleRail: toggleRailCollapsed,
+            }}
+          />
+        </SplitViewTabBar>
       ) : null}
 
       {/* Always mounted: it owns every live terminal in the app, so it is never
@@ -1005,12 +1070,15 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             <SplitViewGrid
               view={split}
               renderStrip={(pane) =>
-                // The grid asks only for lower panes; top-edge tabs share the
-                // main bar. An empty lower pane needs no extra band of chrome.
+                // Every pane of a shown group draws its own stack — a pane of
+                // one tab too, so that tab can be dragged out or closed. An
+                // empty pane needs no band of chrome over its menu.
                 pane.tabIds.length === 0 || selectedId === null ? null : (
                   <HomeTabs
+                    label={paneStripLabel(pane)}
                     projectId={selectedId}
-                    pane={pane}
+                    tabIds={pane.tabIds}
+                    activeTabId={pane.activeTabId ?? ""}
                     terminalTabs={terminalTabs}
                     chatIds={openChatIds}
                     fileTabs={fileTabs}
@@ -1022,6 +1090,11 @@ export function HomeSurface({ visible }: { visible: boolean }) {
                     onReorder={(movedId, ids) => reorderInPane(pane.id, movedId, ids)}
                     onPinFile={(relPath) => pinHomeFile(selectedId, relPath)}
                     onCloseOtherFiles={(relPath) => void requestCloseOtherFiles(relPath)}
+                    onTakeOut={
+                      pane.activeTabId === null
+                        ? undefined
+                        : () => ungroupLocalTab(pane.activeTabId!)
+                    }
                   />
                 )
               }
@@ -1050,6 +1123,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
           ticket={ticket}
         />
       ) : null}
+
+      <ResidentBrowserPanes api={browserApi} />
 
       <ConfirmCloseDialog
         pending={closeGuard.pending}
@@ -1087,7 +1162,7 @@ function useChatSessionsIdsForProject(projectId: string | null): readonly string
   );
 }
 
-/** The trailing cluster's props — only the main bar's trailing strip carries them. */
+/** The trailing cluster's props — only the top strip carries them. */
 interface HomeStripActions {
   creating: boolean;
   onNewSession(): void;
@@ -1099,11 +1174,19 @@ interface HomeStripActions {
   onToggleRail(): void;
 }
 
-interface HomePaneStripProps {
+interface HomeStripProps {
+  /** The tablist's accessible name: "Home tabs", or "Pane N tabs". */
+  label: string;
   /** Home's file tabs are Main-checkout files of THIS project (Copy Path). */
   projectId: string;
-  /** The pane this strip belongs to — which tabs it draws, and which is in front. */
-  pane: ResolvedSplitViewPane;
+  /** The ids this strip draws, in its order. */
+  tabIds: readonly string[];
+  /** The one in front of it. */
+  activeTabId: string;
+  /** The top strip's groups (absent on a pane strip) — see `HomeTabListProps`. */
+  groups?: readonly TabGroup[];
+  shownGroupId?: string | null;
+  onUngroup?(groupId: string): void;
   terminalTabs: readonly SessionTab[];
   chatIds: readonly string[];
   fileTabs: readonly FileWorkspaceTab[];
@@ -1118,7 +1201,8 @@ interface HomePaneStripProps {
 }
 
 /**
- * One pane's strip, and the only place the per-token chat reads live.
+ * One strip — the top strip or a group pane's — and the only place the
+ * per-token chat reads live.
  *
  * {@link HomeSurface} hosts every live terminal in the app and must not
  * re-render on a streamed word; a chat's title and lifecycle move on exactly
@@ -1126,13 +1210,27 @@ interface HomePaneStripProps {
  * {@link useHomeTabDescriptors}, and this component exists to be the thing that
  * re-renders instead.
  */
-function HomeTabs({ actions, ...strip }: HomePaneStripProps & { actions?: HomeStripActions }) {
-  const tabs = paneTabs(strip.pane, useHomeTabDescriptors(strip));
+function HomeTabs({
+  actions,
+  label,
+  tabIds,
+  onTakeOut,
+  ...strip
+}: HomeStripProps & { actions?: HomeStripActions; onTakeOut?: () => void }) {
+  const descriptors = useHomeTabDescriptors(strip);
+  const byId = new Map(descriptors.map((tab) => [tab.id, tab]));
+  const tabs = tabIds.flatMap((id) => {
+    const tab = byId.get(id);
+    return tab === undefined ? [] : [tab];
+  });
   const list = {
-    label: strip.pane.isPrimary ? "Home tabs" : paneStripLabel(strip.pane),
+    label,
     projectId: strip.projectId,
     tabs,
-    activeTabId: strip.pane.activeTabId ?? "",
+    groups: strip.groups,
+    shownGroupId: strip.shownGroupId,
+    onUngroup: strip.onUngroup,
+    activeTabId: strip.activeTabId,
     onReorder: strip.onReorder,
     onSelect: strip.onSelect,
     onClose: strip.onClose,
@@ -1141,7 +1239,7 @@ function HomeTabs({ actions, ...strip }: HomePaneStripProps & { actions?: HomeSt
     onCloseOtherFiles: strip.onCloseOtherFiles,
   };
   return actions === undefined ? (
-    <HomePaneTabStrip {...list} />
+    <HomePaneTabStrip {...list} onTakeOut={onTakeOut} />
   ) : (
     <HomeTabStrip {...list} {...actions} />
   );

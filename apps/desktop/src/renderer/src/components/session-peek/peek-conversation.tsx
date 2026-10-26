@@ -168,14 +168,18 @@ export function PeekConversation({
             .ticketsByProject[subject.projectId]?.some((ticket) => ticket.id === subject.ticketId)
             ? subject.ticketId
             : null;
+          // A tab this had to open OPENS into a shown group's focused pane;
+          // one already open is selected where it is (VC-614).
+          const open = !chat.openTabs[ticketId ?? subject.projectId]?.includes(id);
           chat.openChatTab(ticketId ?? subject.projectId, id);
           useProjectsStore.getState().select(subject.projectId);
           const workspace = useWorkspaceStore.getState();
           if (ticketId === null) {
-            workspace.openHome(subject.projectId, chatTabId(id));
+            projectUi.openHome(subject.projectId, chatTabId(id), { open });
           } else {
             workspace.openTicketWorkspace(subject.projectId, ticketId, {
               tabId: chatTabId(id),
+              open,
             });
           }
         };

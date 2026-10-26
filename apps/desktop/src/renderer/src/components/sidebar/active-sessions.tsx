@@ -1009,9 +1009,12 @@ export function ActiveSessions({
           // `adoptChatSession` is idempotent, so a chat already in front takes
           // this path too.
           const chat = useChatSessionsStore.getState();
+          // A tab this row had to open OPENS (into a shown group's focused
+          // pane); one already open is selected where it is (VC-614).
+          const open = !chat.openTabs[route.ticketId]?.includes(route.sessionId);
           chat.adoptChatSession(route.sessionId);
           chat.openChatTab(route.ticketId, route.sessionId);
-          openTicketWorkspace(project.id, route.ticketId, { tabId: route.tabId });
+          openTicketView(project.id, route.ticketId, { tabId: route.tabId, open });
           return;
         }
         case "ticket-workspace": {
@@ -1035,9 +1038,10 @@ export function ActiveSessions({
             return;
           }
           const chat = useChatSessionsStore.getState();
+          const open = !chat.openTabs[project.id]?.includes(route.sessionId);
           chat.adoptChatSession(route.sessionId);
           chat.openChatTab(project.id, route.sessionId);
-          openHome(project.id, route.tabId);
+          openHome(project.id, route.tabId, { open });
           return;
         }
         case "home": {

@@ -52,7 +52,7 @@ import {
 import { useSplitDnd } from "@renderer/components/split/split-dnd";
 import { cn } from "@renderer/lib/utils";
 
-const ZONES: readonly SplitDropZone[] = ["center", "right", "bottom"];
+const ZONES: readonly SplitDropZone[] = ["center", "left", "right", "top", "bottom"];
 
 /**
  * The zones of ONE pane. Renders nothing while nothing droppable is in flight
@@ -200,14 +200,16 @@ function DropZoneRegion({
 
 /**
  * Where each hit region sits — the DOM twin of `splitDropZoneAt`, off the same
- * constant (`SPLIT_DROP_EDGE_BAND_CSS`). The three TILE the pane with no
+ * constant (`SPLIT_DROP_EDGE_BAND_CSS`). The five TILE the pane with no
  * overlap, which is what makes dnd-kit's box hit-test and the native path's
- * arithmetic give one answer: a right-hand column, a bottom strip beside it,
- * and the centre that is left.
+ * arithmetic give one answer: full-height left and right columns, top and
+ * bottom strips between them, and the centre that is left.
  */
 const BAND = SPLIT_DROP_EDGE_BAND_CSS;
 const ZONE_REGION: Record<SplitDropZone, React.CSSProperties> = {
-  center: { top: 0, left: 0, right: BAND, bottom: BAND },
+  center: { top: BAND, left: BAND, right: BAND, bottom: BAND },
+  left: { top: 0, left: 0, bottom: 0, width: BAND },
   right: { top: 0, right: 0, bottom: 0, width: BAND },
-  bottom: { left: 0, right: BAND, bottom: 0, height: BAND },
+  top: { top: 0, left: BAND, right: BAND, height: BAND },
+  bottom: { left: BAND, right: BAND, bottom: 0, height: BAND },
 };

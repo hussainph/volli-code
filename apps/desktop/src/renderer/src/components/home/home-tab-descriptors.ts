@@ -2,8 +2,8 @@
  * WHAT HOME'S TABS SAY ABOUT THEMSELVES — composed once, drawn by whichever
  * strip is asking (VC-202).
  *
- * It lived inside Home's one strip until Home could have several: a split
- * surface draws one strip per pane, and each of them needs the same facts about
+ * It lived inside Home's one strip until Home could have several: a shown tab
+ * group draws one strip per pane, and each of them needs the same facts about
  * the same Sessions. Composing them twice would be two chances for a park badge
  * or a preview italic to differ between two strips on the same screen.
  *
@@ -16,9 +16,9 @@
  * on every batch whether or not anything moved.
  *
  * Composition order is the strip's fixed order (Board, terminals, chats,
- * files); which pane draws which of them, and in what order, is
- * `resolveSplitView`'s answer and is applied by the caller
- * (`split/split-tab-partition.ts`).
+ * files); which strip draws which of them, and in what order, is
+ * `projectSplitView`'s answer (and the top strip's groups), applied by the
+ * caller.
  */
 import { useShallow } from "zustand/react/shallow";
 import type { FileWorkspaceTab } from "@volli/shared";

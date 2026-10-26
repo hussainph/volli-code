@@ -5,6 +5,7 @@
  * Which twin a surface binds is the surface's business; that the right one is
  * asked, with the right ids, is this module's.
  */
+import { SPLIT_VIEW_ROOT_PANE_ID } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { SplitDragPayload } from "./split-drop";
@@ -34,6 +35,7 @@ function recordingWrites(opensAs: string | null): {
     reorderSurface: vi.fn(),
     reorderPane: vi.fn(),
     moveTabToPane: vi.fn(),
+    ungroupTab: vi.fn(),
     splitPane: vi.fn(),
     activateTab: vi.fn(),
     openPayload: vi.fn(() => opensAs),
@@ -41,88 +43,85 @@ function recordingWrites(opensAs: string | null): {
   return { writes: calls, calls };
 }
 
-const UNSPLIT = { isSplit: false, orderedTabIds: ["board", "a", "b"] };
-const SPLIT = { isSplit: true, orderedTabIds: ["board", "a", "b"] };
+const ROOT = SPLIT_VIEW_ROOT_PANE_ID;
 
 describe("reorderDropWrite", () => {
-  it("arranges the surface while unsplit", () => {
+  it("arranges the surface from the top strip's full-width pane", () => {
     const { writes, calls } = recordingWrites(null);
-    reorderDropWrite(UNSPLIT, writes, "pane-2", "a", ["a", "b"]);
+    reorderDropWrite(writes, ROOT, "a", ["a", "b"]);
     expect(calls.reorderSurface).toHaveBeenCalledWith("a", ["a", "b"]);
     expect(calls.reorderPane).not.toHaveBeenCalled();
   });
 
-  it("rewrites the pane's own order while split, leaving the surface alone", () => {
+  it("rewrites a group pane's own stack, leaving the surface alone", () => {
     const { writes, calls } = recordingWrites(null);
-    reorderDropWrite(SPLIT, writes, "pane-2", "a", ["a", "b"]);
+    reorderDropWrite(writes, "pane-2", "a", ["a", "b"]);
     expect(calls.reorderPane).toHaveBeenCalledWith("pane-2", "a", ["a", "b"]);
     expect(calls.reorderSurface).not.toHaveBeenCalled();
   });
 });
 
 describe("tabDropWrite", () => {
-  it("routes a reorder through the same unsplit-or-pane branch", () => {
+  it("routes a reorder through the same surface-or-pane branch", () => {
     const { writes, calls } = recordingWrites(null);
-    tabDropWrite(SPLIT, writes, { kind: "reorder", paneId: "pane-2", movedId: "a", ids: ["a"] });
+    tabDropWrite(writes, { kind: "reorder", paneId: "pane-2", movedId: "a", ids: ["a"] });
     expect(calls.reorderPane).toHaveBeenCalledWith("pane-2", "a", ["a"]);
   });
 
-  it("hands a move to the pane twin, which focuses and activates for it", () => {
+  it("hands a move into a group pane to the pane twin", () => {
     const { writes, calls } = recordingWrites(null);
-    tabDropWrite(SPLIT, writes, { kind: "move", tabId: "a", paneId: "pane-2" });
+    tabDropWrite(writes, { kind: "move", tabId: "a", paneId: "pane-2" });
     expect(calls.moveTabToPane).toHaveBeenCalledWith("a", "pane-2");
+    expect(calls.ungroupTab).not.toHaveBeenCalled();
   });
 
-  it("splits with the strip as it stands — the first split's claim", () => {
+  it("takes a tab moved to the top strip out of its group", () => {
     const { writes, calls } = recordingWrites(null);
-    tabDropWrite(UNSPLIT, writes, { kind: "split", paneId: "root", edge: "right", tabId: "a" });
-    expect(calls.splitPane).toHaveBeenCalledWith("root", "right", "a", ["board", "a", "b"]);
+    tabDropWrite(writes, { kind: "move", tabId: "a", paneId: ROOT });
+    expect(calls.ungroupTab).toHaveBeenCalledWith("a");
+    expect(calls.moveTabToPane).not.toHaveBeenCalled();
+  });
+
+  it("splits the pane the zone names", () => {
+    const { writes, calls } = recordingWrites(null);
+    tabDropWrite(writes, { kind: "split", paneId: ROOT, edge: "left", tabId: "a" });
+    expect(calls.splitPane).toHaveBeenCalledWith(ROOT, "left", "a");
   });
 });
 
 describe("nativeDropWrite", () => {
   it("writes nothing when the payload opens no tab", () => {
     const { writes, calls } = recordingWrites(null);
-    nativeDropWrite(SPLIT, writes, TERMINAL, "pane-2", "center");
+    nativeDropWrite(writes, TERMINAL, "pane-2", "center");
     expect(calls.openPayload).toHaveBeenCalledWith(TERMINAL);
     expect(calls.moveTabToPane).not.toHaveBeenCalled();
     expect(calls.activateTab).not.toHaveBeenCalled();
     expect(calls.splitPane).not.toHaveBeenCalled();
   });
 
-  it("moves the opened tab into the pane for a centre drop while split", () => {
+  it("moves the opened tab into a group pane for a centre drop", () => {
     const { writes, calls } = recordingWrites("t1");
-    nativeDropWrite(SPLIT, writes, TERMINAL, "pane-2", "center");
+    nativeDropWrite(writes, TERMINAL, "pane-2", "center");
     expect(calls.moveTabToPane).toHaveBeenCalledWith("t1", "pane-2");
     expect(calls.activateTab).not.toHaveBeenCalled();
   });
 
-  it("answers an unsplit centre drop with the activation door, payload and all", () => {
+  it("answers a full-width centre drop with the activation door, payload and all", () => {
     const { writes, calls } = recordingWrites("t1");
-    nativeDropWrite(UNSPLIT, writes, TERMINAL, "root", "center");
+    nativeDropWrite(writes, TERMINAL, ROOT, "center");
     expect(calls.activateTab).toHaveBeenCalledWith("t1", TERMINAL);
     expect(calls.moveTabToPane).not.toHaveBeenCalled();
   });
 
-  it("splits on an edge, claiming the strip PLUS the tab the drop just opened", () => {
+  it("splits on an edge with the tab the drop just opened", () => {
     const { writes, calls } = recordingWrites("chat:s1");
-    nativeDropWrite(UNSPLIT, writes, CHAT, "root", "right");
-    expect(calls.splitPane).toHaveBeenCalledWith("root", "right", "chat:s1", [
-      "board",
-      "a",
-      "b",
-      "chat:s1",
-    ]);
+    nativeDropWrite(writes, CHAT, ROOT, "right");
+    expect(calls.splitPane).toHaveBeenCalledWith(ROOT, "right", "chat:s1");
   });
 
   it("maps the bottom band to a down split", () => {
     const { writes, calls } = recordingWrites("chat:s1");
-    nativeDropWrite(SPLIT, writes, CHAT, "pane-2", "bottom");
-    expect(calls.splitPane).toHaveBeenCalledWith("pane-2", "down", "chat:s1", [
-      "board",
-      "a",
-      "b",
-      "chat:s1",
-    ]);
+    nativeDropWrite(writes, CHAT, "pane-2", "bottom");
+    expect(calls.splitPane).toHaveBeenCalledWith("pane-2", "down", "chat:s1");
   });
 });

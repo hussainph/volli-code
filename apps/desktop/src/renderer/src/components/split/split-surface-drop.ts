@@ -12,19 +12,20 @@
  * store keeps them as pairs on purpose), and HOW a native payload's tab is
  * opened (`openPayload`, each surface's own doors: preview this checkout's
  * file, adopt this owner's chat, take this container's terminal tab). The
- * decisions themselves are one copy here:
+ * decisions themselves are one copy here, and they key on the PANE a gesture
+ * names (VC-614):
  *
- *  • a strip drop arranges the SURFACE while unsplit and one PANE's own order
- *    while split (§2 — the surface arrangement is untouched while split);
- *  • a centre drop while unsplit is not a pane move — there is no split for
- *    `moveTabToPane` to write to — so it answers with the activation door a
- *    click on the row would have taken, and a zone that lit "Move here" never
- *    lands as nothing;
- *  • a split records the strip as it stands (`orderedTabIds`) as the primary
- *    pane's claim, INCLUDING a tab the drop itself just opened, which this
- *    render's list predates.
+ *  • the full-width pane ({@link SPLIT_VIEW_ROOT_PANE_ID}) is the top strip's
+ *    pane: a drop on its strip arranges the SURFACE, a tab moved to it leaves
+ *    its group (an ordinary tab again), and a centre drop on it is the
+ *    activation door a click on the row would have taken — "here" is the one
+ *    tab on screen, and a zone that lit "Move here" never lands as nothing;
+ *  • a group pane's strip rewrites that pane's own stack, and a tab moved to
+ *    it joins that stack;
+ *  • an edge splits the pane it names — a new group of two on the full-width
+ *    pane, another pane inside a group.
  */
-import type { SplitViewEdge } from "@volli/shared";
+import { SPLIT_VIEW_ROOT_PANE_ID, type SplitViewEdge } from "@volli/shared";
 
 import {
   splitDropEdge,
@@ -43,28 +44,24 @@ import {
  * landed.
  */
 export interface SplitSurfaceWrites {
-  /** Arrange the surface's own strip (VC-189's drop) — the unsplit half. */
+  /** Arrange the surface's own top strip (VC-189's drop). */
   reorderSurface(movedId: string, ids: readonly string[]): void;
-  /** Rewrite one pane's own order — the split half. */
+  /** Rewrite one group pane's own stack order. */
   reorderPane(paneId: string, movedId: string, ids: readonly string[]): void;
-  /** Move a tab into a pane; the model focuses and activates for it. */
+  /** Move a tab into a group pane's stack; the model fronts and focuses it. */
   moveTabToPane(tabId: string, paneId: string): void;
+  /** Take a grouped tab back out to the top strip — ordinary again, and selected. */
+  ungroupTab(tabId: string): void;
   /**
-   * Split a pane open around `tabId`, claiming `surfaceTabIds` on a first split.
+   * Split a pane open around `tabId`.
    *
    * `null` splits the pane open with NOTHING assigned to it. That is what a
    * Chat Draft nobody has typed into needs (VC-358): the pane is durable
    * layout and is recorded, but the Draft riding into it is not yet something
-   * the workspace may name, so it arrives through the renderer-only active
-   * override instead.
+   * the workspace may name, so it arrives through the renderer-only overlay.
    */
-  splitPane(
-    paneId: string,
-    edge: SplitViewEdge,
-    tabId: string | null,
-    surfaceTabIds: readonly string[],
-  ): void;
-  /** Bring a tab to the front of an UNSPLIT surface — the centre drop's door. */
+  splitPane(paneId: string, edge: SplitViewEdge, tabId: string | null): void;
+  /** Bring a tab to the front full width — the full-width centre drop's door. */
   activateTab(tabId: string, payload: SplitDragPayload): void;
   /**
    * Open what a native payload names, answering with the tab id it landed in —
@@ -74,51 +71,38 @@ export interface SplitSurfaceWrites {
   openPayload(payload: SplitDragPayload): string | null;
 }
 
-/** The two live facts every routing decision reads. */
-export interface SplitSurfaceDropState {
-  /** Whether the surface currently has a split (`splitView !== null`). */
-  isSplit: boolean;
-  /** The surface's strip in drawn order — what a first split records. */
-  orderedTabIds: readonly string[];
-}
-
 /**
- * A drop on one pane's strip. While unsplit it arranges the SURFACE, exactly
- * as it always did; while split it rewrites that pane's own order and leaves
- * the surface arrangement alone (§2) — where a pane's tabs sit is the pane's
+ * A drop on one strip: the top strip arranges the SURFACE, exactly as it
+ * always did; a group pane's strip rewrites that pane's own stack and leaves
+ * the surface arrangement alone — where a pane's tabs sit is the pane's
  * business.
  */
 export function reorderDropWrite(
-  state: SplitSurfaceDropState,
   writes: SplitSurfaceWrites,
   paneId: string,
   movedId: string,
   ids: readonly string[],
 ): void {
-  if (state.isSplit) writes.reorderPane(paneId, movedId, ids);
-  else writes.reorderSurface(movedId, ids);
+  if (paneId === SPLIT_VIEW_ROOT_PANE_ID) writes.reorderSurface(movedId, ids);
+  else writes.reorderPane(paneId, movedId, ids);
 }
 
 /**
  * What a dnd-kit tab drop writes — the three operations `split-drop.ts` can
- * answer with, each handed to the store twin that owns it. A `move` needs no
- * unsplit branch: one pane cannot produce one (its centre is the identity
- * no-op, decided upstream).
+ * answer with, each handed to the store twin that owns it. A move to the top
+ * strip's pane is a tab leaving its group.
  */
-export function tabDropWrite(
-  state: SplitSurfaceDropState,
-  writes: SplitSurfaceWrites,
-  operation: SplitDropOperation,
-): void {
+export function tabDropWrite(writes: SplitSurfaceWrites, operation: SplitDropOperation): void {
   if (operation.kind === "reorder") {
-    reorderDropWrite(state, writes, operation.paneId, operation.movedId, operation.ids);
+    reorderDropWrite(writes, operation.paneId, operation.movedId, operation.ids);
     return;
   }
   if (operation.kind === "move") {
-    writes.moveTabToPane(operation.tabId, operation.paneId);
+    if (operation.paneId === SPLIT_VIEW_ROOT_PANE_ID) writes.ungroupTab(operation.tabId);
+    else writes.moveTabToPane(operation.tabId, operation.paneId);
     return;
   }
-  writes.splitPane(operation.paneId, operation.edge, operation.tabId, state.orderedTabIds);
+  writes.splitPane(operation.paneId, operation.edge, operation.tabId);
 }
 
 /**
@@ -126,12 +110,11 @@ export function tabDropWrite(
  *
  * The tab has to EXIST before a pane can hold it, so the payload is opened
  * first through the surface's own door (`openPayload`); the placement is then
- * the same split-or-move a tab drop makes — except the unsplit centre, where
- * "here" is the surface's only pane and the drop answers by bringing the tab
- * forward instead of writing to a split that does not exist.
+ * the same split-or-move a tab drop makes — except the full-width centre,
+ * where "here" is the one tab on screen and the drop answers by bringing the
+ * new tab forward instead.
  */
 export function nativeDropWrite(
-  state: SplitSurfaceDropState,
   writes: SplitSurfaceWrites,
   payload: SplitDragPayload,
   paneId: string,
@@ -140,11 +123,10 @@ export function nativeDropWrite(
   const tabId = writes.openPayload(payload);
   if (tabId === null) return;
   const edge = splitDropEdge(zone);
-  if (edge === null) {
-    if (state.isSplit) writes.moveTabToPane(tabId, paneId);
-    else writes.activateTab(tabId, payload);
+  if (edge !== null) {
+    writes.splitPane(paneId, edge, tabId);
     return;
   }
-  // Including the tab just opened: the caller's list predates it.
-  writes.splitPane(paneId, edge, tabId, [...state.orderedTabIds, tabId]);
+  if (paneId === SPLIT_VIEW_ROOT_PANE_ID) writes.activateTab(tabId, payload);
+  else writes.moveTabToPane(tabId, paneId);
 }

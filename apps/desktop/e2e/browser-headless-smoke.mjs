@@ -1,7 +1,7 @@
 /**
  * Acceptance smoke for headless agent Browser Tabs (VC-238, driven from the
  * Activity Island since VC-268), against the BUILT app:
- * headless → show here → hide → open as tab → show here → hide → close.
+ * headless → open beside chat → close/Undo → show and group → close.
  *
  * A Session-owned tab is born headless — in no strip, attached to no window —
  * and the only place a person sees it is the chat that owns it: the island
@@ -13,14 +13,16 @@
  *
  *   1. the island's tabs cluster counts it, it is in NO strip, and no native
  *      view is attached;
- *   2. the card's row pins it above the composer, attached BESIDE the person's
- *      own tab in the other pane of a split — two native views on screen
- *      together;
- *   3. Hide on the preview returns it to headless; nothing the agent sees changed;
- *   4. Open as tab promotes it into the strip with the Session mark; the island
- *      says so, and its row brings it back here, where Hide takes it out again;
- *   5. Close from the card removes it everywhere and the island with it; a
- *      second Session's tab was never listed.
+ *   2. Open beside chat opens it in the chat's tab group, the chat's pane split
+ *      with the browser on its right (VC-614) — never a miniature preview; the
+ *      person's tab stays where it was in the same group;
+ *   3. Close hides it without changing its page or owner, and Undo restores it;
+ *   4. Show tab SELECTS it — full width while it is ordinary, never pulled into
+ *      a group. A tab-edge drop onto the person's tab groups the two browsers,
+ *      attaching both native views together, and Show tab then shows that
+ *      group. The compatibility hide bridge still preserves agent state;
+ *   5. Close removes the row immediately, destroys the tab after five seconds,
+ *      and leaves the other Session's tab and the person's tab alone.
  *
  * MANUALLY-RUN or CI (needs a display + the built app); not part of `vp test`.
  *
@@ -42,6 +44,7 @@ import {
   makeScratch,
   seedDefaultModel,
   seedProjects,
+  sleep,
   tabStrip,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
@@ -70,22 +73,20 @@ async function startFixtureServer() {
   };
 }
 
-// Page-wide, on purpose: under a split each pane draws its own strip, and the
-// question every check asks is about the surface as a whole.
-const browserStripTabs = (page) => page.getByTestId("home-browser-tab");
-/**
- * The focused pane's chat tab, found by structure rather than by name.
- *
- * A chat tab is born with the fallback label "Chat" and is renamed from its
- * Session's first message moments later, so its name is not a handle to hold
- * across a few checks — it is a tab, and the tab is what the strip draws. The
- * browser tabs in the same pane carry their own test id; everything else in
- * that strip is the chat.
- */
-const chatStripTab = (page) =>
-  page
-    .locator('[data-slot="split-view-pane"][data-focused="true"] [role="tab"]')
-    .filter({ hasNot: page.getByTestId("home-browser-tab") });
+// The TOP strip holds ordinary tabs and one chip per group, whose segments are
+// each pane's front tab; a shown group's panes also draw strips of their own,
+// so every probe here is scoped to the top strip.
+const browserStripTabs = (page) => tabStrip(page, HOME_TAB_STRIP).getByTestId("home-browser-tab");
+/** A chat's top-strip tab. Identity survives auto-title and SessionGlyph names. */
+const chatStripTab = (page, sessionId) =>
+  tabStrip(page, HOME_TAB_STRIP)
+    .locator(`[data-pair-target-id="chat:${sessionId}"]`)
+    .getByRole("tab");
+const activeGroup = (page) =>
+  tabStrip(page, HOME_TAB_STRIP).locator('[data-slot="grouped-tab-chip"][data-active="true"]');
+/** How many shown panes draw a strip of their own. */
+const paneStrips = (page) =>
+  page.locator('[data-slot="split-view-pane"] > [data-slot="tab-strip"]').count();
 const island = (page) => page.locator("[data-activity-island]");
 const tabsCluster = (page) => page.locator('[data-island-cluster="tabs"]');
 const tabsCount = (page) => tabsCluster(page).locator("[data-island-count]");
@@ -128,20 +129,141 @@ async function pinTabsCard(page, tabId) {
   return row;
 }
 
-/** The row IS the verb: activating it pins the tab here. Then the card is released. */
-async function showHere(page, tabId) {
+/** The title-first row and its one reveal control share the same action. */
+async function showBeside(page, tabId, label) {
   const row = await pinTabsCard(page, tabId);
-  await row.click();
+  await waitUntil(
+    "the fixture title in the Island row",
+    async () => (await row.getAttribute("aria-label")) === `${label}: Agent Fixture`,
+  );
+  const titleFirst = await row.textContent();
+  const accessible = await row.getAttribute("aria-label");
+  if (!titleFirst?.includes("Agent Fixture") || accessible !== `${label}: Agent Fixture`) {
+    throw new Error(`unexpected Island row: ${JSON.stringify({ titleFirst, accessible })}`);
+  }
+  const reveal = row.locator("..").getByRole("button", { name: label, exact: true });
+  if ((await reveal.count()) !== 1) throw new Error("Island row must have one reveal action");
+  // Cover both advertised targets: Open beside chat's control and Show tab's
+  // title-first row activation, rather than relying on a decorative label.
+  if (label === "Show tab") await row.click();
+  else await reveal.click();
   await page.keyboard.press("Escape");
 }
 
-/** Close arms on the first press and fires on the second; the card goes with its last row. */
+/** Close hides immediately, offers Undo, and destroys only after that window. */
 async function closeFromCard(page, tabId) {
   const row = await pinTabsCard(page, tabId);
-  const close = row.locator("..").getByRole("button", { name: "Close tab", exact: true });
   await row.hover();
-  await close.click();
-  await tabsCard(page).getByRole("button", { name: "Click again to close", exact: true }).click();
+  await row.locator("..").getByRole("button", { name: "Close tab", exact: true }).click();
+  await page.keyboard.press("Escape");
+}
+
+/** The agent browser's tab in its group pane's own strip. */
+const agentPaneTab = (page) =>
+  page
+    .locator('[data-slot="split-view-pane"] > [data-slot="tab-strip"]')
+    .getByTestId("home-browser-tab")
+    .filter({ has: page.locator('[data-browser-tab-mark="session"]') })
+    .first();
+
+/** Drag a pane strip's tab up onto the top strip, past its tabs: it leaves its group. */
+async function ungroupByDrag(page, paneTab) {
+  await paneTab.scrollIntoViewIfNeeded();
+  const from = await paneTab.boundingBox();
+  const bar = await page.locator('[data-slot="split-view-tab-bar"]').first().boundingBox();
+  if (from === null || bar === null) throw new Error("no bounds to drag a tab out of its group");
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  try {
+    await page.mouse.move(from.x + from.width / 2 + 12, from.y + from.height / 2 + 12, {
+      steps: 4,
+    });
+    await page.mouse.move(bar.x + bar.width * 0.6, bar.y + bar.height / 2, { steps: 12 });
+    await page.mouse.move(bar.x + bar.width * 0.6, bar.y + bar.height / 2, { steps: 2 });
+  } finally {
+    await page.mouse.up();
+  }
+  await waitUntil(
+    "the dragged tab to leave its group",
+    async () => (await page.locator('[data-slot="split-view-pane"][data-pane-id]').count()) === 1,
+    { timeout: 6000 },
+  );
+  await dragSettled(page);
+}
+
+/**
+ * Select the owning chat's top-strip tab, so its pane — and the Island above
+ * its composer, the only place a headless tab is reached from — is on screen.
+ */
+async function showOwningChat(page, sessionId) {
+  await chatStripTab(page, sessionId).click();
+  await waitUntil("the chat's Island", async () =>
+    (await tabsCluster(page).count()) === 1 ? true : null,
+  );
+}
+
+/**
+ * A drag's tail. dnd-kit's pointer sensor stops every `click` for 50ms after a
+ * drag ends (so the release is not also a click), and its ghost flies home
+ * over 150ms: a click the smoke sends sooner is eaten, which a hand never is.
+ */
+async function dragSettled(page) {
+  await waitUntil("the drag ghost to land", async () =>
+    (await page.getByTestId("tab-drag-ghost").count()) === 0 ? true : null,
+  );
+  await sleep(100);
+}
+
+/** Whether the focused pane's front tab is the agent's (Session-marked) browser. */
+function focusedPaneFrontsAgent(page) {
+  return page.evaluate(
+    () =>
+      document.querySelector(
+        '[data-slot="split-view-pane"][data-focused="true"] > [data-slot="tab-strip"] [data-testid="home-browser-tab"][aria-selected="true"] [data-browser-tab-mark="session"]',
+      ) !== null,
+  );
+}
+
+/** Exercise the real top-strip tab-edge grouping gesture; no store or layout injection. */
+async function groupBrowsers(page, agentTab, personTab) {
+  await agentTab.scrollIntoViewIfNeeded();
+  const from = await agentTab.boundingBox();
+  if (from === null) throw new Error("browser source tab has no bounds");
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  try {
+    await page.mouse.move(from.x + from.width / 2 + 12, from.y + from.height / 2 + 12, {
+      steps: 4,
+    });
+    // Activation can scroll an overflowing strip. Aim at its current visible
+    // wrapper, not a pre-drag child rectangle displaced by that scroll.
+    await personTab.scrollIntoViewIfNeeded();
+    const to = await personTab.evaluate((tab) => {
+      const box = tab.closest("[data-pair-target-id]")?.getBoundingClientRect();
+      return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null;
+    });
+    if (to === null) throw new Error("browser group target has no bounds");
+    await page.mouse.move(to.x + to.width * 0.9, to.y + to.height / 2, { steps: 12 });
+    await waitUntil("browser tab's right-edge grouping preview", () =>
+      personTab.evaluate(
+        (tab) =>
+          tab.closest("[data-pair-target-id]")?.getAttribute("data-pair-drop-edge") === "right",
+      ),
+    ).catch(async (error) => {
+      const geometry = await personTab.evaluate((tab) => ({
+        child: tab.getBoundingClientRect().toJSON(),
+        wrapper: tab.closest("[data-pair-target-id]")?.getBoundingClientRect().toJSON(),
+        transform: getComputedStyle(tab).transform,
+        scrollLeft: tab.closest('[data-slot="tab-scroll"]')?.scrollLeft,
+      }));
+      throw new Error(
+        `${error.message}; target=${JSON.stringify(to)} actual=${JSON.stringify(geometry)}`,
+      );
+    });
+  } finally {
+    await page.mouse.up();
+  }
+  await dragSettled(page);
 }
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-browser-headless-");
@@ -178,14 +300,8 @@ async function main() {
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.waitForLoadState("domcontentloaded");
   assertBuiltRendererLoaded(page);
-  // A SHORT window on purpose, near the usability floor. The pinned preview
-  // sits between the transcript and the composer, and the island sits above
-  // the composer with its card opening UPWARD over the preview: on a tall
-  // developer window nothing is crowded, and on a short one everything is.
-  // The chip this smoke used to drive once came down over the preview's
-  // header and swallowed its Hide button, and only CI's smaller screen found
-  // it. Sizing the window here is what keeps this smoke able to find the
-  // next such collision.
+  // Keep the short-window collision regression: Island controls must remain
+  // reachable beside a browser/chat group, not just on a developer display.
   await app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
     window?.setSize(1000, 700);
@@ -214,11 +330,11 @@ async function main() {
     },
   );
 
-  // A second pane with a chat in it. Since VC-358 a New chat is a
+  // A group of the person's tab over a chat. Since VC-358 a New chat is a
   // provisional Draft, not a Session — so Send one message to promote it:
   // promotion mints the durable row (and its id, which is what the agent tab
   // is owned by) before the turn runs, and the turn itself fails on the
-  // placeholder key, which nothing below depends on. The split is what lets
+  // placeholder key, which nothing below depends on. The group is what lets
   // the chat and the person's tab share the screen, which is the
   // multi-attach proof below.
   await page.keyboard.press("Shift+Meta+\\");
@@ -243,7 +359,7 @@ async function main() {
   // moments from now, so a label read here can still be the fallback "Chat"
   // by the time the tab is clicked below.
   await waitUntil("the chat tab", async () =>
-    (await chatStripTab(page).count()) > 0 ? true : null,
+    (await chatStripTab(page, sessionId).count()) === 1 ? true : null,
   );
 
   let agentTabId = null;
@@ -281,6 +397,7 @@ async function main() {
         ok:
           opened.every((tab) => tab.presentation === "headless") &&
           stripCount === 1 &&
+          (await preview(page).count()) === 0 &&
           !attached.includes(agentUrl),
         detail: `opened=${JSON.stringify(opened)} strip=${stripCount} attached=${JSON.stringify(attached)}`,
       };
@@ -289,99 +406,182 @@ async function main() {
 
   await must(
     2,
-    "the card's row pins the tab above the composer, attached beside the person's own tab in the other pane",
+    "Open beside chat splits the owning chat's pane in its group, with no miniature preview",
     async () => {
-      await showHere(page, agentTabId);
-      // Both planes, because the island's card is a popover overlay: while it
-      // was open every native view stood down onto frozen pixels, and the
-      // person's pane comes back only once it has closed.
+      const groupId = await activeGroup(page).getAttribute("data-group-id");
+      await showBeside(page, agentTabId, "Open beside chat");
       const state = await waitUntil(
-        "the preview to be pinned and attached beside the person's pane",
+        "the browser to attach beside its owning chat",
         async () => {
           const mine = (await hostTabs(app)).find((tab) => tab.ownerSessionId === sessionId);
           const attached = await attachedViews(app);
-          return mine?.presentation === "preview" &&
+          return mine?.presentation === "tab" &&
             attached.includes(agentUrl) &&
-            attached.includes(personUrl)
+            attached.includes(personUrl) &&
+            (await activeGroup(page).getByRole("tab").count()) === 3 &&
+            (await activeGroup(page)
+              .locator(`[data-pair-target-id="chat:${sessionId}"]`)
+              .count()) === 1
             ? { mine, attached }
             : null;
         },
         { timeout: 20000 },
       );
+      // The chat and the browser beside it share a row: the browser on its right.
+      const beside = await page.evaluate(() => {
+        const cells = Array.from(
+          document.querySelectorAll('[data-slot="split-view-pane"][data-pane-id]'),
+        );
+        const holding = (mark) =>
+          cells.find((cell) =>
+            cell.querySelector(
+              `:scope > [data-slot="tab-strip"] [data-browser-tab-mark="${mark}"]`,
+            ),
+          );
+        const agent = holding("session");
+        const person = holding("user");
+        const chat = cells.find((cell) => cell !== agent && cell !== person);
+        if (!agent || !chat) return false;
+        const a = agent.getBoundingClientRect();
+        const c = chat.getBoundingClientRect();
+        return a.x > c.x && Math.abs(a.y - c.y) < 2;
+      });
       return {
         ok:
-          (await preview(page).count()) === 1 &&
-          state.attached.includes(agentUrl) &&
-          state.attached.includes(personUrl) &&
-          (await browserStripTabs(page).count()) === 1,
-        detail: `attached=${JSON.stringify(state.attached)} strip=${await browserStripTabs(page).count()}`,
+          (await preview(page).count()) === 0 &&
+          state.mine.ownerSessionId === sessionId &&
+          (await activeGroup(page).getAttribute("data-group-id")) === groupId &&
+          (await browserStripTabs(page).count()) === 2 &&
+          (await paneStrips(page)) === 3 &&
+          beside,
+        detail: `attached=${JSON.stringify(state.attached)} owner=${state.mine.ownerSessionId} strip=${await browserStripTabs(page).count()} paneStrips=${await paneStrips(page)} beside=${beside}`,
       };
     },
   );
 
-  await must(3, "Hide returns it to headless without touching what the agent sees", async () => {
-    const before = (await hostTabs(app)).find((tab) => tab.ownerSessionId === sessionId);
-    await preview(page).getByRole("button", { name: "Hide", exact: true }).click();
-    const after = await waitUntil("the tab to leave the screen", async () => {
-      const mine = (await hostTabs(app)).find((tab) => tab.ownerSessionId === sessionId);
-      const attached = await attachedViews(app);
-      return mine?.presentation === "headless" && !attached.includes(agentUrl) ? mine : null;
-    });
-    const attached = await attachedViews(app);
-    return {
-      ok:
-        after.generation === before.generation &&
-        after.url === before.url &&
-        after.ownerSessionId === before.ownerSessionId &&
-        attached.includes(personUrl) &&
-        (await preview(page).count()) === 0,
-      detail: `before=${JSON.stringify(before)} after=${JSON.stringify(after)} attached=${JSON.stringify(attached)}`,
-    };
-  });
+  await must(
+    3,
+    "Close hides without changing the agent's page; Undo restores the shown owner",
+    async () => {
+      const before = (await hostTabs(app)).find((tab) => tab.ownerSessionId === sessionId);
+      await closeFromCard(page, agentTabId);
+      const after = await waitUntil("the tab to leave the screen", async () => {
+        const mine = (await hostTabs(app)).find((tab) => tab.ownerSessionId === sessionId);
+        const attached = await attachedViews(app);
+        return mine?.presentation === "headless" && !attached.includes(agentUrl) ? mine : null;
+      });
+      await page.getByRole("button", { name: "Undo", exact: true }).click();
+      const restored = await waitUntil("Undo to restore the same shown tab", async () => {
+        const mine = (await hostTabs(app)).find((tab) => tab.tabId === agentTabId);
+        return mine?.presentation === "tab" && (await attachedViews(app)).includes(agentUrl)
+          ? mine
+          : null;
+      });
+      return {
+        ok:
+          after.generation === before.generation &&
+          after.url === before.url &&
+          after.ownerSessionId === before.ownerSessionId &&
+          restored.generation === before.generation &&
+          restored.url === before.url &&
+          restored.ownerSessionId === sessionId &&
+          (await browserStripTabs(page).count()) === 2 &&
+          (await hostTabs(app)).some((tab) => tab.createdBy === "user" && tab.url === personUrl) &&
+          (await preview(page).count()) === 0,
+        detail: `before=${JSON.stringify(before)} hidden=${JSON.stringify(after)} restored=${JSON.stringify(restored)}`,
+      };
+    },
+  );
 
   await must(
     4,
-    "Open as tab puts it in the strip with the Session mark; the island says so, brings it back, and Hide takes it out",
+    "Show tab selects without grouping; a tab-edge drop groups both browsers; Show tab then shows that group; hiding keeps ownership",
     async () => {
-      await showHere(page, agentTabId);
-      await waitUntil("the preview", async () =>
-        (await preview(page).count()) === 1 ? true : null,
-      );
-      await preview(page).getByRole("button", { name: "Open as tab", exact: true }).click();
-      await waitUntil("two strip tabs", async () => (await browserStripTabs(page).count()) === 2);
+      await chatStripTab(page, sessionId).click();
+      const groupId = await activeGroup(page).getAttribute("data-group-id");
+      // Close and Undo kept the tab in its pane beside the chat: Show tab shows
+      // that group, with the browser's pane in focus.
+      await showBeside(page, agentTabId, "Show tab");
+      const grouped = await waitUntil(
+        "Show tab to show the browser's group",
+        async () =>
+          (await activeGroup(page).getAttribute("data-group-id")) === groupId &&
+          (await attachedViews(app)).includes(agentUrl),
+      ).catch(() => false);
+      // Dragged from its pane's strip up to the top strip, it leaves the group;
+      // Show tab now SELECTS it full width and never pulls it back in. The
+      // Island lives above its chat's composer, so the chat's segment is what
+      // brings it back on screen to ask from.
+      await ungroupByDrag(page, agentPaneTab(page));
+      await showOwningChat(page, sessionId);
+      await showBeside(page, agentTabId, "Show tab");
+      const selected = await waitUntil(
+        "Show tab to bring the ordinary browser forward full width",
+        async () =>
+          (await activeGroup(page).count()) === 0 &&
+          (await page.locator('[data-slot="split-view-pane"][data-pane-id]').count()) === 1 &&
+          (await attachedViews(app)).includes(agentUrl),
+      ).catch(() => false);
       const marks = await browserStripTabs(page).evaluateAll((tabs) =>
         tabs.map((tab) =>
           tab.querySelector("[data-browser-tab-mark]")?.getAttribute("data-browser-tab-mark"),
         ),
       );
-      // The promoted tab took the chat's pane; bring the chat back to reach its island.
-      await chatStripTab(page).first().click();
-      await waitUntil("the island again", async () =>
-        (await island(page).count()) === 1 ? true : null,
+      const agentTab = browserStripTabs(page).filter({
+        has: page.locator('[data-browser-tab-mark="session"]'),
+      });
+      const personTab = browserStripTabs(page).filter({
+        has: page.locator('[data-browser-tab-mark="user"]'),
+      });
+      await groupBrowsers(page, agentTab, personTab);
+      const both = await waitUntil("both native browser planes in one group", async () => {
+        const attached = await attachedViews(app);
+        return attached.includes(agentUrl) &&
+          attached.includes(personUrl) &&
+          (await activeGroup(page).getAttribute("data-group-id")) === groupId &&
+          (await activeGroup(page).getByTestId("home-browser-tab").count()) === 2
+          ? attached
+          : null;
+      });
+      // Focus back on the chat, then Show tab: a grouped tab shows its group,
+      // with the browser's pane in focus.
+      await showOwningChat(page, sessionId);
+      await showBeside(page, agentTabId, "Show tab");
+      const reusedGroupId = await waitUntil("Show tab to show the browser's group", async () =>
+        (await focusedPaneFrontsAgent(page))
+          ? activeGroup(page)
+              .getAttribute("data-group-id")
+              .catch(() => null)
+          : null,
       );
-      // The island has no Hide of its own: a strip tab comes back HERE through
-      // the same row, and the preview's Hide returns it to headless. The row
-      // says where the tab is before it is moved.
-      const row = await pinTabsCard(page, agentTabId);
-      const rowText = await row.textContent();
-      await page.keyboard.press("Escape");
-      await showHere(page, agentTabId);
-      await waitUntil("one strip tab", async () => (await browserStripTabs(page).count()) === 1);
-      await waitUntil("the preview", async () =>
-        (await preview(page).count()) === 1 ? true : null,
+      const before = (await hostTabs(app)).find((tab) => tab.tabId === agentTabId);
+      // Hide is no longer a miniature-preview control. Retain its compatibility
+      // bridge assertion separately from the person's reversible Close journey.
+      const hidden = await page.evaluate(
+        (tabId) => window.api.browser.setPresentation({ tabId, presentation: "headless" }),
+        agentTabId,
       );
-      await preview(page).getByRole("button", { name: "Hide", exact: true }).click();
-      const mine = await waitUntil("the tab to go headless", async () => {
-        const found = (await hostTabs(app)).find((tab) => tab.ownerSessionId === sessionId);
-        return found?.presentation === "headless" ? found : null;
+      if (!hidden.ok) throw new Error(hidden.error);
+      const mine = await waitUntil("the tab to leave the strip and return headless", async () => {
+        const found = (await hostTabs(app)).find((tab) => tab.tabId === agentTabId);
+        return found?.presentation === "headless" &&
+          (await browserStripTabs(page).count()) === 1 &&
+          !(await attachedViews(app)).includes(agentUrl)
+          ? found
+          : null;
       });
       return {
         ok:
+          grouped !== false &&
+          selected !== false &&
+          groupId !== null &&
+          groupId === reusedGroupId &&
           marks.toSorted().join(",") === "session,user" &&
-          (rowText ?? "").includes("as a tab") &&
-          mine?.presentation === "headless" &&
-          (await browserStripTabs(page).count()) === 1,
-        detail: `marks=${JSON.stringify(marks)} row=${JSON.stringify(rowText)} presentation=${mine?.presentation}`,
+          mine.ownerSessionId === sessionId &&
+          mine.generation === before.generation &&
+          mine.url === before.url &&
+          (await preview(page).count()) === 0,
+        detail: `grouped=${grouped} selected=${selected} marks=${JSON.stringify(marks)} reusedGroup=${groupId === reusedGroupId} both=${JSON.stringify(both)} presentation=${mine.presentation}`,
       };
     },
   );
@@ -394,9 +594,18 @@ async function main() {
       await waitUntil("the island to disappear", async () =>
         (await island(page).count()) === 0 ? true : null,
       );
-      const tabs = await hostTabs(app);
+      // The row disappears immediately; destruction waits for the five-second
+      // Undo deadline. Poll the host, not an arbitrary sleep or the row alone.
+      const tabs = await waitUntil(
+        "the closed tab to be destroyed after Undo expires",
+        async () => {
+          const current = await hostTabs(app);
+          return current.some((tab) => tab.tabId === agentTabId) ? null : current;
+        },
+        { timeout: 10000 },
+      );
       const errorToasts = await page
-        .getByText(/Could not (show|hide|open|close) Browser Tab/i)
+        .getByText(/Could not (show|hide|open|close|restore) Browser Tab/i)
         .count();
       const cardsLeft = await tabsCard(page).count();
       return {

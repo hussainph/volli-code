@@ -41,8 +41,8 @@ export interface BrowserChromeProps {
   error: string | null;
   /**
    * Who holds the tab (VC-239), or null for a free tab. Present only while
-   * someone does: the pill beside the address bar IS the state, and the
-   * person's Take over / Ask to leave / Hand back live on it.
+   * someone does: the address row carries the hold indicator and the
+   * person's Take over / Ask to leave / Hand back controls.
    */
   holder?: BrowserTabHolder | null;
   onAddressChange(value: string): void;
@@ -75,10 +75,17 @@ export function BrowserChrome({
 }: BrowserChromeProps) {
   const displayTitle = browserTabDisplayTitle(tab);
   return (
-    // A named container so the holder pill can shed its button labels by the
-    // chrome's own width (VC-239) rather than the window's.
-    <div className="@container/chrome shrink-0 border-b border-border bg-rail">
-      <div className="flex h-9 items-center gap-1 px-2">
+    // Keep narrow-pane overflow local to the toolbar, never the native plane.
+    <div
+      data-slot="browser-chrome"
+      data-direction="classic"
+      aria-label={displayTitle}
+      className="min-w-0 shrink-0 border-b border-border bg-background"
+    >
+      <div
+        data-slot="browser-address-row"
+        className="flex min-w-0 items-center gap-1 overflow-x-auto p-2"
+      >
         <Button
           type="button"
           variant="ghost"
@@ -103,7 +110,7 @@ export function BrowserChrome({
           {tab.loading ? <Spinner className="size-3.5" /> : <ArrowClockwiseIcon />}
         </Button>
         <form
-          className="min-w-0 flex-1"
+          className="min-w-12 flex-1"
           onSubmit={(event) => {
             event.preventDefault();
             const target = normalizeBrowserAddress(address);
@@ -116,7 +123,7 @@ export function BrowserChrome({
             placeholder="Enter a URL"
             value={address}
             onChange={(event) => onAddressChange(event.currentTarget.value)}
-            className="bg-background font-mono shadow-none"
+            className="min-w-0 bg-card"
             spellCheck={false}
           />
         </form>
@@ -128,9 +135,6 @@ export function BrowserChrome({
             onHandBack={() => onHandBack?.()}
           />
         ) : null}
-        <span className="max-w-48 truncate px-2 text-ui text-muted-foreground" title={displayTitle}>
-          {displayTitle}
-        </span>
         <Button
           type="button"
           variant="ghost"

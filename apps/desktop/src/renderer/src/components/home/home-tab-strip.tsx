@@ -1,6 +1,8 @@
 import * as React from "react";
 import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
+import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
+import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
 import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
 import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
@@ -8,6 +10,7 @@ import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
+import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { XSquareIcon } from "@phosphor-icons/react/dist/csr/XSquare";
 
@@ -17,6 +20,16 @@ import { BrowserHolderDot } from "@renderer/components/browser/browser-holder-do
 import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-menu-item";
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
+import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
+import { PaneTakeOutButton } from "@renderer/components/split/pane-take-out-button";
+import {
+  GroupedTabList,
+  groupTabItems,
+  type TabGroup,
+  type TabMenuLabel,
+} from "@renderer/components/split/grouped-tab-chip";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import {
@@ -37,8 +50,10 @@ import {
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { Button } from "@renderer/components/ui/button";
-import { Tab, TabStrip, tabStopIndex, type TabProps } from "@renderer/components/ui/tab-strip";
+import { Tab, TabStrip, type TabProps } from "@renderer/components/ui/tab-strip";
 import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
+import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
+import { browserTabAddress } from "@renderer/chat/use-island-tabs";
 
 /**
  * What the Home strip draws, per kind.
@@ -97,7 +112,17 @@ export const HOME_BOARD_TAB: HomeTabDescriptor = { kind: "board", id: HOME_BOARD
  * italics and the rename plumbing is how a strip drifts from the strip beside
  * it on the same screen.
  */
-interface HomeTabListProps {
+export interface HomeTabListProps {
+  /**
+   * The TOP strip's tab groups, one chip each (VC-614). Present only on the
+   * top strip — a group pane's own strip draws its stack as plain tabs, the
+   * Board included, every one of them draggable out of the pane.
+   */
+  groups?: readonly TabGroup[];
+  /** The group on screen, whose chip is drawn active. */
+  shownGroupId?: string | null;
+  /** Dissolve a group from its chip's menu; every tab stays open. */
+  onUngroup?(groupId: string): void;
   /**
    * The project whose Main checkout Home's File tabs come from — what Copy Path
    * resolves against. Home has no ticket, so those paths never resolve into a
@@ -160,9 +185,10 @@ interface HomeTabStripProps extends HomeTabListProps {
  * a hover-revealed close. Session tabs rename on double-click; preview File
  * tabs pin.
  *
- * The Board tab does not drag and nothing drops before it — it is simply left
- * out of the sortable ids and given no `dragId`, which is the same statement
- * made twice for the two halves that could otherwise disagree.
+ * On the top strip the Board tab does not drag and nothing drops before it, and
+ * a group is one chip whose segments are its panes' front tabs — a click
+ * selects that pane, the right-click menu lists the whole group. In a group
+ * pane's own strip the Board drags like any other tab, so it can leave.
  *
  * Only the terminal kind talks about parking: the moon badge, the wake-on-click
  * and the Park/Wake/Keep Awake items are all about a PTY holding memory (issue
@@ -232,26 +258,67 @@ export function HomeTabStrip({
 }
 
 /**
- * A pane's strip without actions. The surface's controls stay on the main
- * bar's trailing strip, even when the primary pane no longer reaches that edge.
+ * A pane's strip. The surface's controls stay on the top strip's trailing
+ * edge, whichever pane is focused; a group pane's own trailing edge carries
+ * only the way out of the group ({@link PaneTakeOutButton}).
  */
-export function HomePaneTabStrip({ label, ...list }: HomeTabListProps & { label: string }) {
+export function HomePaneTabStrip({
+  label,
+  onTakeOut,
+  ...list
+}: HomeTabListProps & { label: string; onTakeOut?: () => void }) {
   return (
-    <TabStrip variant="folder" label={label} reorder={reorderFor(list)}>
+    <TabStrip
+      variant="folder"
+      label={label}
+      reorder={reorderFor(list)}
+      actions={onTakeOut === undefined ? undefined : <PaneTakeOutButton onTakeOut={onTakeOut} />}
+    >
       <HomeTabList {...list} />
     </TabStrip>
   );
 }
 
 /**
- * Every tab but the permanent Board tab may be dragged — which is the same
- * statement made twice for the two halves that could otherwise disagree (the
- * other is the absent `dragId` below). A strip with no `onReorder` mounts no
- * drag machinery at all.
+ * What a strip drags. The top strip drags its ordinary tabs but the Board —
+ * a chip is not a sortable — and a pane strip drags every tab of its stack. A
+ * strip with no `onReorder` mounts no drag machinery at all.
  */
-function reorderFor({ tabs, onReorder }: HomeTabListProps) {
+function reorderFor({ tabs, groups, onReorder }: HomeTabListProps) {
   if (onReorder === undefined) return undefined;
-  return { ids: tabs.filter((tab) => tab.kind !== "board").map((tab) => tab.id), onReorder };
+  return {
+    ids:
+      groups === undefined
+        ? tabs.map((tab) => tab.id)
+        : groupTabItems(tabs, groups).flatMap((item) =>
+            item.group === null && item.tab.kind !== "board" ? [item.tab.id] : [],
+          ),
+    onReorder,
+  };
+}
+
+/** What a group chip's menu says about a Home tab. */
+function homeTabMenuLabel(tab: HomeTabDescriptor): TabMenuLabel {
+  if (tab.kind === "board") return { label: "Board", icon: KanbanIcon };
+  if (tab.kind === "terminal") return { label: tab.tab.title, icon: TerminalWindowIcon };
+  if (tab.kind === "chat") return { label: tab.title, icon: ChatCircleIcon };
+  if (tab.kind === "browser") {
+    // Read when the menu opens: the address is the line that tells fifteen
+    // localhost tabs apart, and the strip's descriptor does not carry it.
+    const url = useBrowserTabsStore.getState().byId[tab.tabId]?.url;
+    return {
+      label: tab.title,
+      icon: BrowserIcon,
+      detail: url === undefined ? null : browserTabAddress(url),
+    };
+  }
+  return { label: tab.title, icon: FileIcon, detail: folderOf(tab.relPath) };
+}
+
+/** A project-relative path's folder, or `null` at the project root. */
+function folderOf(relPath: string): string | null {
+  const slash = relPath.lastIndexOf("/");
+  return slash <= 0 ? null : relPath.slice(0, slash);
 }
 
 /** The tabs themselves, drawn the same wherever the strip around them is. */
@@ -259,6 +326,9 @@ function HomeTabList({
   projectId,
   tabs,
   activeTabId,
+  groups,
+  shownGroupId,
+  onUngroup,
   onSelect,
   onClose,
   onRename,
@@ -266,22 +336,31 @@ function HomeTabList({
   onCloseOtherFiles,
 }: HomeTabListProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
-  const stop = tabStopIndex(
-    tabs.length,
-    tabs.findIndex((tab) => tab.id === activeTabId),
-  );
-
   return (
-    <>
-      {tabs.map((descriptor, index) => {
-        const active = descriptor.id === activeTabId;
-        const tabStop = index === stop;
+    <GroupedTabList
+      tabs={tabs}
+      groups={groups}
+      activeTabId={activeTabId}
+      shownGroupId={shownGroupId}
+      edgeTargets={groups !== undefined}
+      describe={homeTabMenuLabel}
+      onSelect={onSelect}
+      onUngroup={onUngroup}
+    >
+      {(descriptor, { active, tabStop, grouped }) => {
+        // A chip segment is the chip's: no drag of its own, no menu of its own.
+        // On a pane strip (no `groups`) every tab drags, the Board included.
+        const dragId =
+          grouped || (groups !== undefined && descriptor.kind === "board")
+            ? undefined
+            : descriptor.id;
         if (descriptor.kind === "board") {
           return (
             <BoardTab
               key={descriptor.id}
               active={active}
               tabStop={tabStop}
+              dragId={dragId}
               onSelect={() => onSelect(descriptor)}
             />
           );
@@ -295,7 +374,7 @@ function HomeTabList({
               title={descriptor.title}
               active={active}
               tabStop={tabStop}
-              dragId={descriptor.id}
+              dragId={dragId}
               status={descriptor.loading ? "working" : undefined}
               // Two marks, two facts: the glyph says whose tab this IS
               // (VC-238), the dot says who may write to it right now (VC-239).
@@ -314,7 +393,8 @@ function HomeTabList({
               tab={descriptor}
               active={active}
               tabStop={tabStop}
-              dragId={descriptor.id}
+              dragId={dragId}
+              menu={!grouped}
               onSelect={() => onSelect(descriptor)}
               onPin={() => onPinFile(descriptor.relPath)}
               onClose={() => onClose(descriptor)}
@@ -332,7 +412,8 @@ function HomeTabList({
           projectId,
           active,
           tabStop,
-          dragId: descriptor.id,
+          dragId,
+          menu: !grouped,
           editing: editingId === descriptor.id,
           onClose: () => onClose(descriptor),
           onStartRename: () => setEditingId(descriptor.id),
@@ -359,8 +440,8 @@ function HomeTabList({
             onSelect={() => onSelect(descriptor)}
           />
         );
-      })}
-    </>
+      }}
+    </GroupedTabList>
   );
 }
 
@@ -379,15 +460,18 @@ function HomeTabList({
 function BoardTab({
   active,
   tabStop,
+  dragId,
   onSelect,
 }: {
   active: boolean;
   tabStop: boolean;
+  dragId?: string;
   onSelect(): void;
 }) {
   return (
     <Tab
       label="Board"
+      dragId={dragId}
       active={active}
       tabStop={tabStop}
       closable={false}
@@ -417,6 +501,7 @@ function HomeFileTab({
   active,
   tabStop,
   dragId,
+  menu,
   onSelect,
   onPin,
   onClose,
@@ -426,7 +511,9 @@ function HomeFileTab({
   tab: Extract<HomeTabDescriptor, { kind: "file" }>;
   active: boolean;
   tabStop: boolean;
-  dragId: string;
+  dragId: string | undefined;
+  /** False for a group chip's segment, whose right-click is the chip's menu. */
+  menu: boolean;
   onSelect(): void;
   onPin(): void;
   onClose(): void;
@@ -452,6 +539,7 @@ function HomeFileTab({
       onClose={onClose}
     />
   );
+  if (!menu) return inner;
 
   return (
     <ContextMenu>
@@ -480,8 +568,10 @@ interface KindTabProps {
   projectId: string;
   active: boolean;
   tabStop: boolean;
-  /** This tab's id, for the strip's sortable (VC-189). */
-  dragId: string;
+  /** This tab's id, for the strip's sortable (VC-189); none as a chip segment. */
+  dragId: string | undefined;
+  /** False for a group chip's segment, whose right-click is the chip's menu. */
+  menu: boolean;
   editing: boolean;
   onSelect(): void;
   onClose(): void;
@@ -506,7 +596,7 @@ function sharedTabProps(
     onStartRename,
     onCommitRename,
     onCancelRename,
-  }: Omit<KindTabProps, "onSelect" | "projectId">,
+  }: Omit<KindTabProps, "onSelect" | "projectId" | "menu">,
 ): Pick<TabProps, "active" | "tabStop" | "dragId" | "renaming" | "onClose" | "onDoubleClick"> {
   return {
     active,
@@ -519,7 +609,13 @@ function sharedTabProps(
 }
 
 /** One terminal tab: a live PTY tree, with the warm-park tier's vocabulary on it. */
-function TerminalTab({ projectId, tab, onSelect, ...shell }: KindTabProps & { tab: SessionTab }) {
+function TerminalTab({
+  projectId,
+  tab,
+  onSelect,
+  menu,
+  ...shell
+}: KindTabProps & { tab: SessionTab }) {
   const parkState = useSessionsStore((state) => state.parkState);
   const provenance = useSessionProvenance(projectId, tab.sessionId);
   // The derivation moved to `terminal-tab-state.ts` so the ticket strip could
@@ -543,42 +639,41 @@ function TerminalTab({ projectId, tab, onSelect, ...shell }: KindTabProps & { ta
     }
   };
 
+  const inner = (
+    <Tab
+      {...sharedTabProps(tab.title, shell)}
+      label={tab.title}
+      // Exited tabs read as muted; a parked (and live) tab explains itself
+      // on hover.
+      title={tabTitleWithProvenance(
+        exited
+          ? `Exited (${exitCode})`
+          : parked
+            ? "Terminal is parked to save memory. Select to wake it."
+            : tab.title,
+        sessionProvenanceHoverLine(provenance),
+      )}
+      labelClassName={exited ? "line-through" : undefined}
+      status={dot ?? undefined}
+      // Between the liveness dot and the label, exactly where the ticket
+      // strip and the sidebar put it: one Session, one place to look.
+      badge={<SessionProvenanceMark provenance={provenance} />}
+      leading={
+        // size-3, the same as the chat bubble that shares this slot and the
+        // same as the ticket strip's moon — one leading glyph size now that
+        // the two strips are one tab.
+        dot === null ? (
+          <MoonIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />
+        ) : null
+      }
+      onActivate={activate}
+    />
+  );
+  if (!menu) return inner;
+
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <Tab
-          {...sharedTabProps(tab.title, shell)}
-          label={tab.title}
-          // Exited tabs read as muted; a parked (and live) tab explains itself
-          // on hover.
-          title={tabTitleWithProvenance(
-            exited
-              ? `Exited (${exitCode})`
-              : parked
-                ? "Terminal is parked to save memory. Select to wake it."
-                : tab.title,
-            sessionProvenanceHoverLine(provenance),
-          )}
-          labelClassName={exited ? "line-through" : undefined}
-          status={dot ?? undefined}
-          // Between the liveness dot and the label, exactly where the ticket
-          // strip and the sidebar put it: one Session, one place to look.
-          badge={<SessionProvenanceMark provenance={provenance} />}
-          leading={
-            // size-3, the same as the chat bubble that shares this slot and the
-            // same as the ticket strip's moon — one leading glyph size now that
-            // the two strips are one tab.
-            dot === null ? (
-              <MoonIcon
-                aria-hidden
-                weight="bold"
-                className="size-3 shrink-0 text-muted-foreground"
-              />
-            ) : null
-          }
-          onActivate={activate}
-        />
-      </ContextMenuTrigger>
+      <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem icon={PencilSimpleIcon} onSelect={shell.onStartRename}>
           Rename
@@ -630,10 +725,8 @@ function TerminalTab({ projectId, tab, onSelect, ...shell }: KindTabProps & { ta
 }
 
 /**
- * One chat tab. The dot sits in the same leading slot a terminal's does, so the
- * column reads as liveness whatever the kind; the bubble beside it is the only
- * thing that says this row is not a terminal — the exception is marked, the
- * default is not.
+ * One chat tab. SessionGlyph carries the model provider and liveness together,
+ * matching the ticket strip rather than drawing a second standalone state mark.
  *
  * No park, no split: a chat Session's stream, fold and queue live in the
  * resident client, which outlives every view, so there is nothing here to hold
@@ -645,37 +738,51 @@ function ChatTab({
   title,
   status,
   onSelect,
+  menu,
   ...shell
 }: KindTabProps & { sessionId: string; title: string; status: TicketTabStatus }) {
   const provenance = useSessionProvenance(projectId, sessionId);
+  const liveProvider = useChatSessionsStore(
+    (state) => state.sessions[sessionId]?.projection?.modelSelection?.providerId ?? null,
+  );
+  const savedProvider = useProjectSessionsStore(
+    (state) =>
+      state.byProject[projectId]?.chat.find((record) => record.sessionId === sessionId)?.model
+        ?.providerId ?? null,
+  );
+  const providerId = liveProvider ?? savedProvider;
+  const inner = (
+    <Tab
+      {...sharedTabProps(title, shell)}
+      label={title}
+      // The waiting dot's one line of hover, in the sidebar's own words: a
+      // tab is the only place that dot stands with nothing beside it to say
+      // what it means.
+      title={tabTitleWithProvenance(
+        status === "waiting" ? `${title}\nWaiting for you` : title,
+        sessionProvenanceHoverLine(provenance),
+      )}
+      onActivate={onSelect}
+      badge={<SessionProvenanceMark provenance={provenance} />}
+      // A landing auto-title reveals here word by word (VC-81); terminal
+      // and board tabs stay static.
+      revealLabel
+      leading={
+        <SessionGlyph
+          providerId={providerId}
+          providerLabel={providerId ?? "Chat"}
+          state={status}
+          kind="chat"
+          name={`${providerId ?? "Chat"}, ${status}`}
+          size="tab"
+        />
+      }
+    />
+  );
+  if (!menu) return inner;
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <Tab
-          {...sharedTabProps(title, shell)}
-          label={title}
-          // The waiting dot's one line of hover, in the sidebar's own words: a
-          // tab is the only place that dot stands with nothing beside it to say
-          // what it means.
-          title={tabTitleWithProvenance(
-            status === "waiting" ? `${title}\nWaiting for you` : title,
-            sessionProvenanceHoverLine(provenance),
-          )}
-          onActivate={onSelect}
-          status={status}
-          badge={<SessionProvenanceMark provenance={provenance} />}
-          // A landing auto-title reveals here word by word (VC-81); terminal
-          // and board tabs stay static.
-          revealLabel
-          leading={
-            // Bold, not filled: the dot beside it is already a solid object,
-            // and two in a 12px row is one too many. Same treatment as the
-            // sidebar's kind glyph — at this size regular draws lighter than
-            // its own label and bold puts the pen back on the text stem.
-            <ChatCircleIcon weight="bold" className="size-3 shrink-0 text-muted-foreground" />
-          }
-        />
-      </ContextMenuTrigger>
+      <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem icon={PencilSimpleIcon} onSelect={shell.onStartRename}>
           Rename

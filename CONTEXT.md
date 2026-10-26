@@ -84,31 +84,43 @@ fills the surface and Home's tab bar steps aside, so the two surfaces' tabs
 never stack above one another.
 _Avoid_: Board (for the page), Sessions page, dashboard, Files (as a nav item)
 
+**Tab group**:
+Two or more Panes of one surface (Home, or one Ticket view) shown together as a
+split, each Pane a stack of tabs (VC-614). The top tab strip draws a group as
+ONE chip whose segments are its Panes' front tabs; right-clicking it lists
+every tab of the group by Pane and offers Ungroup. Selecting any tab of a group
+shows the whole group with that tab in front of its Pane; selecting an ordinary
+tab shows it full width and never pulls it in, and returning restores the
+group exactly. A tab OPENED while a group is shown — a new chat, terminal or
+Browser Tab, a file from ⌘P or a file tree — joins the focused Pane's stack. A
+surface keeps any number of groups; a tab belongs to at most one, and groups
+never cross surfaces. A group left with one Pane (or no tab) dissolves; nothing
+that changes a group closes a tab. A saved older split reads back as one group.
+_Avoid_: pair (the two-tab predecessor), split screen, editor group, pane tree
+
 **Split view**:
-A tabbed surface's plane divided into Panes, each holding a subset of that
-surface's tabs (VC-202). Both surfaces have one, each keeps its own, and tabs
-never cross between them. Splits open right or down only, which keeps the
-permanent tab's Pane in the top left. Top-edge Panes divide the main tab bar;
-only Panes below a down split add lower tab strips (VC-333). A
-surface with no split is not "a split view of one" — it is the plane it always
-was, and the app stores nothing for it.
-_Avoid_: split screen, editor group, pane tree, multi-pane mode
+The side-by-side or stacked arrangement a shown **Tab group** draws, and the
+docs' name for the feature. A full-width tab is not "a split view of one".
+_Avoid_: multi-pane mode, split screen
 
 **Pane**:
-One cell of a Split view: a set of tab ids, the one it has in front, and its own
-tab strip. The FOCUSED Pane is the surface's context — the right rail reads it,
-and the surface's active tab is its front tab. A Pane holding nothing draws the
-surface menu (New chat, New terminal, Open file…, Close pane) rather than an
-empty plane. Not to be confused with a terminal pane, which is one shell inside
-a Split Tab.
-_Avoid_: split, group, editor group, window, terminal pane
+One cell of a shown Tab group: a stack of tab ids, the one it has in front, and
+a tab strip of its own. The FOCUSED Pane is the surface's context — the right
+rail reads it, and new tabs open into it. A Pane holding nothing draws the
+surface menu (New chat, New terminal, New browser, Open file…, Close pane);
+closing a Pane hands its tabs to its sibling. Not to be confused with a
+terminal pane, which is one shell inside a terminal Split Tab.
+_Avoid_: split, editor group, window, terminal pane
 
 **Drop zone**:
 Where a dragged tab, Session row or file row may land on a Pane: its centre
-(move here) or its right/bottom edge (split there). Zones appear only while a
-compatible drag is live, and what lights up is the RESULT — the half the split
-would open, or the whole Pane a move would fill — never the region being
-hit-tested. A payload from another surface shows no zones at all.
+(join that Pane's stack) or its left/right/top/bottom edge (split there — on a
+full-width tab, a new group of two). A top-strip tab's left or right edge
+groups beside it, and a Pane's tab dropped on the top strip leaves its group.
+Zones appear only while a compatible drag is live, and what lights up is the
+RESULT — the half the split would open, or the whole Pane a move would fill —
+never the region being hit-tested. A payload from another surface shows no
+zones at all.
 _Avoid_: drop target (for the highlight), drag overlay, hot zone
 
 **Project Files**:
@@ -391,7 +403,7 @@ The Session that opened a Browser Tab (`ownerSessionId`), or nobody for a
 person's tab. Ownership is who may drive a tab through the Browser port: a
 Session sees the person's tabs and its own, so two Sessions on one Ticket
 never see each other's. It is separate from the storage partition, which stays
-per Ticket. Six headless tabs per owner; the person's own cap is counted
+per Ticket. Six live tabs per owner; the person's own cap is counted
 apart, so a fleet of agents can never stop a person opening one. Distinct from
 a **tab hold**: ownership says whose tab it is and outlives every turn, while
 a hold says whose turn it is to write to it right now. A Session owns its
@@ -400,12 +412,15 @@ _Avoid_: creator, session tab (ambiguous with the Session's own tabs)
 
 **Presentation**:
 Where a Browser Tab is drawn, decided by the person and held by main:
-`headless` (on no surface a person can look at), `preview` (pinned live above
-the owning chat's composer, one per Session), or `tab` (an item in the Home or
-Ticket strip, marked as driven). A person's tabs are always `tab`. Show, Hide
-and Open as tab change presentation and nothing else — not the owner, the
-generation, the cookies, or anything the agent sees. A tab the person has shown
-is theirs and survives its Session.
+`headless` (on no surface a person can look at), `tab` (an item in the Home or
+Ticket strip), or the compatible legacy `preview` (pinned live above the owning
+chat's composer). A person's tabs are always `tab`. **Open beside chat** promotes
+a Session's tab into the strip and groups it beside its owning chat, splitting
+the chat's Pane when the chat is already in a Tab group; the Island's **Show
+tab** selects it, showing its group if it has one. Neither changes ownership,
+generation, cookies or what the agent sees. A revealed tab survives its Session.
+The preview representation remains readable but is no longer the default reveal
+path.
 _Avoid_: visibility (that is whether the native plane is attached right now),
 shown/hidden as states (they are the actions)
 **Tab hold**:

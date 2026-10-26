@@ -163,6 +163,13 @@ export function SessionCursor({
         onPointerEnter={() => setHovered(true)}
         onPointerLeave={() => setHovered(false)}
       >
+        {/* A bounded pulse announces a live hold without moving the tip or
+            changing the host's glide/ack timing. */}
+        <span
+          aria-hidden
+          className="session-cursor-live"
+          data-live={present && !handoff ? "true" : "false"}
+        />
         {/* Keyed on the press so React remounts the ring and the keyframe
             restarts, which is the one case a restart is right. */}
         <span

@@ -1,48 +1,61 @@
 ---
 title: Use split view
-description: Arrange tabs from Home or a ticket workspace side by side or stacked in panes.
+description: Group tabs from Home or a Ticket view into panes, side by side or stacked.
 sidebar:
   label: Split view
 ---
 
 import { CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-Use **Split view** to show several tabs at once, side by side or stacked. Home
-and each ticket workspace keep their own layout. A tab cannot move from Home to
-a ticket workspace, or between ticket workspaces.
+Use **Split view** to show several tabs at once by grouping them. A **tab
+group** is two or more panes, side by side or stacked, and each pane holds its
+own stack of tabs. Home and each Ticket view keep their own groups, and a tab
+cannot move from Home to a Ticket view, or between Ticket views.
 
-## Split the focused pane
+The top tab strip shows a group as one chip. Each segment of the chip is the
+front tab of one pane. Select a segment to show the group with that pane
+focused. Select any other tab to show it on its own; select the chip again to
+return to the group exactly as you left it.
 
-In Home or a ticket workspace, select the pane you want to divide, then use:
+## Make a group
 
-- `⌘\` to open an empty pane to its right.
-- `⇧⌘\` to open an empty pane below it.
+- Press `⌘\` to open an empty pane to the right of the tab in front, or `⇧⌘\`
+  to open one below it. In a group, this splits the focused pane.
+- Drag a tab onto the left or right edge of another tab in the top strip.
+- Drag a tab, Session, or file onto an edge of the plane.
 
-The new pane takes focus. Choose **New chat**, **New terminal**, **New browser**, or **Open
-file…** in the empty pane to open something there. Choose **Close pane** from
-that menu if you do not need the empty pane.
+An empty pane offers **New chat**, **New terminal**, **New browser**, **Open
+file…**, and **Close pane**.
 
-## Move a tab or Session into a pane
+## Open tabs into a group
 
-Drag a tab, Session, or file toward a pane. Drop in its center to move the item
-into that pane. Drop at the right edge or bottom edge to split there and place
-the item in the new pane. The highlight previews where the item will land.
+While a group is shown, anything new you open joins the focused pane, in
+front: a new chat or terminal, a new Browser Tab, or a file opened with `⌘P`
+or from a file list. Each pane has its own tab strip, so you can switch,
+close, rename, and reorder its tabs there.
 
-You can move an item only within Home or within one ticket workspace. For
-example, a Ticket Session belongs in that ticket workspace; a Board Session
-belongs in Home. A file opened in Project Files is separate from the same path
-opened in Ticket Files.
+## Move tabs between panes
 
-## Focus and resize panes
+Drag a tab from a pane's strip:
+
+- Onto another pane's center or strip to move it into that pane.
+- Onto an edge of a pane to split there and place it in a new pane.
+- Onto the top strip to take it out of the group.
+
+The highlight previews where the item will land. A pane emptied by a move
+closes, and a group left with one pane goes back to ordinary tabs.
+
+## Focus, resize, and ungroup
 
 Select a pane or one of its tabs to focus it. The focused pane decides which
-tab is active and which ticket the rail describes. Drag a divider to change the
-panes' relative sizes. Use `⌃⌘` plus an arrow key to move focus to an adjacent
-pane.
+tab is active and what the rail describes. Drag a divider to resize panes, and
+use `⌃⌘` plus an arrow key to move focus to an adjacent pane.
 
-A Home split keeps the permanent **Board** tab in the top-left pane. A ticket
-workspace keeps its permanent Ticket Body there. Closing panes until only one
-remains returns the layout to a single pane.
+Right-click a group's chip to see every tab in it, pane by pane, with each
+pane's front tab checked. Choose a tab to bring it forward, or choose
+**Ungroup** to split the group back into ordinary tabs. Closing a pane moves
+its tabs into the pane beside it. Ungrouping and closing panes never close a
+tab.
 
 ## Next steps
 
@@ -50,7 +63,7 @@ remains returns the layout to a single pane.
   <LinkCard
     title="Use Browser Tabs"
     href="/guides/browser-tabs/"
-    description="Open a page and choose where to show a Browser Tab."
+    description="Open a page beside the chat that is building it."
   />
   <LinkCard
     title="Use a chat"
