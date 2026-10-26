@@ -10,8 +10,9 @@ warning copy, defaults, build availability, and `host | device` scope. The first
 - Main code gates new work with `isExperimentEnabled("cloud")` from
   `apps/desktop/src/main/experiments.ts`. Check before starting cloud work.
 - The composition root installs one `ExperimentalSettings` after opening the
-  database, before feature consumers run. It has no Electron dependency and can
-  later be hosted by `hostd`.
+  database, before feature consumers run. It has no Electron dependency.
+  Existing host integrations are maintenance-only; new cloud work follows
+  [Workspace authority and offline](BOUNDARIES.md#workspace-authority-and-offline).
 - Clients read `settings.experiments` through session-rpc. Each entry carries
   `{ enabled, source, visible? }`, where source is `default`, `storage`, or `environment`.
   `visible: false` hides the switch; no visible experiments means no Experimental
@@ -25,7 +26,8 @@ warning copy, defaults, build availability, and `host | device` scope. The first
 
 `volli:experimental-flags` is one JSON object (for example `{"cloud":true}`)
 under `app_state` in today's `volli.db`. **Classification: host-level settings,
-not workspace data**; the future host-level settings database owns this key.
+not Workspace data** in the compatibility path. The launch switch remains
+machine-local; this classification is not a plan for a new host authority.
 No schema migration is needed. Device-scoped flags are device-local, never
 portable workspace preferences; the registry carries each flag's scope.
 

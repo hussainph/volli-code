@@ -1,5 +1,10 @@
 # Models on a host (VC-729)
 
+> **Superseded.** This is a maintenance reference for the older host protocol,
+> not the Volli Cloud architecture. The backend owns signed-in Workspace state
+> and Runners execute; see [Workspace authority and offline](BOUNDARIES.md#workspace-authority-and-offline).
+> Keep this reference while the corresponding compatibility code exists; do not extend it.
+
 A paired Mac chooses a box's default models through its dedicated, device-authenticated
 HOST connection. The client is not the source of truth: hostd validates availability
 and stores defaults using the same Model Access service as local Sessions.
