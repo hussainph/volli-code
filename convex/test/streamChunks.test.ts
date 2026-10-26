@@ -23,6 +23,7 @@ import {
   SINCE_MAX_STREAMS,
 } from "../functions/streamChunks";
 import { SESSION_MAX_VIEWERS } from "../functions/sessionViewers";
+import { enrollPreview } from "./preview-fixtures";
 import { wire, writeSession } from "./sessionFixtures";
 
 const modules = import.meta.glob("../functions/**/*.ts");
@@ -47,7 +48,11 @@ function code(value: string) {
 }
 
 async function signIn(t: T, identity: typeof OWNER): Promise<string> {
-  return (await t.withIdentity(identity).mutation(api.accounts.ensureViewer, {})).userId;
+  const userId = (await t.withIdentity(identity).mutation(api.accounts.ensureViewer, {})).userId;
+  // Every product call rechecks the grant and the accepted agreement, for a
+  // person and for a runner token's owner alike.
+  await enrollPreview(t, userId);
+  return userId;
 }
 
 function asRunner(t: T, runnerId: string) {

@@ -130,8 +130,8 @@ async function requireSessionProducer<C extends ReadCtx>(
   fence: { runnerId: string; generation: number },
   resolveRunner: (ctx: C) => Promise<CallingRunner> = requireRunner,
 ): Promise<{ session: Doc<"sessions">; project: Doc<"projects">; intake: Doc<"sessionIntake"> }> {
-  if (!isUuid(sessionId)) throw invalid("sessionId must be a lowercase UUID");
   const identity = await requireIdentity(ctx);
+  if (!isUuid(sessionId)) throw invalid("sessionId must be a lowercase UUID");
   const caller = isRunnerIdentity(identity) ? await resolveRunner(ctx) : null;
   let session: Doc<"sessions">;
   let project: Doc<"projects">;

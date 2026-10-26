@@ -257,6 +257,17 @@ describe("the /runner/* wire", () => {
     expect(readRunnerHttpError({ error: "revoked" })).toBeNull();
     expect(readRunnerHttpError({})).toBeNull();
     expect(readRunnerHttpError(null)).toBeNull();
+    // A rate limit is ours (the caller waits for `Retry-After`), never a reason to link again.
+    expect(readRunnerHttpError({ error: { code: "rate_limited", message: "slow" } })).toEqual({
+      code: "rate_limited",
+      message: "slow",
+    });
+    expect(
+      readRunnerHttpError({ error: { code: "preview_access_required", message: "preview" } }),
+    ).toEqual({
+      code: "preview_access_required",
+      message: "preview",
+    });
     expect(RUNNER_RELINK_CODES).toEqual(["invalid_credential", "revoked"]);
   });
 });

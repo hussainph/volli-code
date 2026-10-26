@@ -5,6 +5,7 @@ import { canonicalJson, RUNNER_TOKEN_ISSUER } from "@volli/shared/cloud";
 import { api, internal } from "../functions/_generated/api";
 import schema from "../functions/schema";
 import { seedTestWorld } from "../functions/lib/testWorld";
+import { enrollPreview } from "./preview-fixtures";
 import { wire, writeSession } from "./sessionFixtures";
 const modules = import.meta.glob("../functions/**/*.ts");
 const code = (value: string) =>
@@ -13,6 +14,9 @@ async function world() {
   const t = convexTest(schema, modules);
   const person = t.withIdentity({ subject: "user:alice", issuer: "https://issuer.test" });
   const { userId } = await person.mutation(api.accounts.ensureViewer, {});
+  // The person and their runner token's owner need the grant and the accepted
+  // agreement; every refusal below is enrolled too, so it proves its own rule.
+  await enrollPreview(t, userId);
   const seeded = await t.run((ctx) => seedTestWorld(ctx, { ownerUserId: userId, runners: 2 }));
   const { sessionId, events } = await writeSession({
     projectId: seeded.projectId,
@@ -357,7 +361,8 @@ describe("follow-up intent routing", () => {
       subject: "user:receipt-outsider",
       issuer: "https://issuer.test",
     });
-    await outsider.mutation(api.accounts.ensureViewer, {});
+    const { userId: outsiderId } = await outsider.mutation(api.accounts.ensureViewer, {});
+    await enrollPreview(w.t, outsiderId);
     await expect(
       outsider.query(api.sessions.receipt, { sessionId: w.sessionId, commandId: queued.commandId }),
     ).rejects.toMatchObject(code("not_found"));
@@ -385,7 +390,8 @@ describe("follow-up intent routing", () => {
       code: "message_exists",
     });
     const other = w.t.withIdentity({ subject: "user:bob", issuer: "https://issuer.test" });
-    await other.mutation(api.accounts.ensureViewer, {});
+    const { userId: otherId } = await other.mutation(api.accounts.ensureViewer, {});
+    await enrollPreview(w.t, otherId);
     await expect(
       other.mutation(api.sessions.command, {
         sessionId: w.sessionId,

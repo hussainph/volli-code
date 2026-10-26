@@ -15,8 +15,26 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
   that can reach it. The `/runner/*` HTTP routes are the deliberate exception:
   a box calls them before it has an identity, and each proves itself with a
   one-time secret (install token, poll secret, refresh credential), takes JSON
-  only, and sends no CORS headers.
+  only, and sends no CORS headers. Device-code starts are limited per network
+  (IPv4 address or IPv6 /64) and deployment-wide. Install-token links and
+  device polls are limited per network, per real token/request and globally;
+  a made-up code creates no code bucket. Throttles return 429 with `Retry-After`.
+  Addresses come from Convex request metadata, never forwarded headers.
+- Preview access is checked on every product call, not just sign-in: people,
+  runners and Agent tokens need a live grant and current Preview Agreement.
+  Revocation or expiry cuts off existing memberships, runner writes/reads and
+  credential refresh. A preview lapse pauses authorization without deleting
+  the linked credential; a re-grant or agreement acceptance restores it.
+  Desktop registration, install-token redemption and device
+  approval/poll recheck it too. Account enrollment/recovery stays reachable.
 - No Electron imports. `scripts/check-host-electron-imports.mjs` enforces this.
+
+The invite-only preview uses conservative limits: starts and install links
+allow a burst of ten per network, then one per minute. Bulk installs behind
+one NAT may need to wait. Global caps deliberately favor bounded anonymous
+allocations over linking availability during a distributed flood; they are
+not a substitute for upstream abuse protection. A self-hosted reverse proxy
+must expose trustworthy request metadata or its users share one quota.
 
 ## Layout
 
@@ -39,7 +57,7 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 | `functions/lib/boardEffects.ts`                                     | A board write's machine side effects (Done/archive trim, interrupts, armed arrivals, worktree materialization) as `runnerJobs` rows for the runner that holds the work.                                                                                                                           |
 | `functions/activity.ts`                                             | The activity feed: `project` and `workspace`, newest first, with our own page cursor (see **The activity feed**).                                                                                                                                                                                 |
 | `functions/lib/activity.ts`                                         | The feed reader: the k-way merge, the cursor, visibility, folding and the tickets and people a page names.                                                                                                                                                                                        |
-| `functions/boardReceipts.ts`, `functions/crons.ts`                  | The scheduled sweeps (receipts hourly, packed transcript staging every 15 min, the runner offline sweep every minute, runner link/audit expiry hourly).                                                                                                                                           |
+| `functions/boardReceipts.ts`, `functions/crons.ts`                  | The scheduled sweeps (receipts hourly, packed transcript staging every 15 min, the runner offline sweep every minute, runner link/audit expiry and refilled rate-limit cleanup hourly).                                                                                                           |
 | `functions/transcripts.ts`                                          | Transcript bodies and Pi logs: `stageArtifacts`, `commitSegment`, `commitPiLogSegment`, `head` (where a runner resumes), the producer fence and `sweepPacked`.                                                                                                                                    |
 | `functions/sessionTranscript.ts`                                    | Viewer-authorized transcript segment manifests, staged artifact bodies and signed GETs for committed packs/spills. The renderer hydrates settled history with these reads.                                                                                                                        |
 | `functions/files.ts`                                                | `presignPut`: a SigV4 URL bound to one key, length and SHA-256 (signed by `presignS3Request` in `@volli/shared/cloud`).                                                                                                                                                                           |
@@ -47,6 +65,7 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 | `functions/lib/visibility.ts`                                       | The visibility writes and filters: `visibilityForNewSession` (every Session-creating write), `shareSession`, `visibleBoardEvents` (every read of board events that may name a Session). The decisions are the predicates in `@volli/shared/cloud`.                                                |
 | `functions/runners.ts`                                              | Runners: linking (desktop, install token, device code), a Mac's successor taking over its work, the rotated credential with reuse detection, heartbeat, sleep and capabilities, the offline sweep, the Settings list, and `places`: the runner a visible Session lives on ("Waiting for <Mac>").  |
 | `functions/runnerHttp.ts`, `functions/http.ts`                      | `/runner/link`, `/runner/link/start`, `/runner/link/poll`, `/runner/token` (HTTP actions; secrets are minted here, mutations see hashes) and the deployment's HTTP router.                                                                                                                        |
+| `functions/{,lib/}runnerLinkRateLimit.ts`                           | Transactional linking limits and the hourly cleanup of refilled buckets.                                                                                                                                                                                                                          |
 | `functions/lib/runnerAuth.ts`                                       | `requireRunner`: the check every runner-called function starts with. A runner token is never a person.                                                                                                                                                                                            |
 | `functions/streamChunks.ts`                                         | Streamed text: the chunk rows a runner appends while someone watches, the cursor read a viewer folds, and their cleanups (settle, turn end, sweep).                                                                                                                                               |
 | `functions/sessionViewers.ts`                                       | Who watches a Session: open, heartbeat and close for clients, `watched` for the runner, and the lapsed-viewer sweep.                                                                                                                                                                              |
@@ -61,7 +80,7 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 | `functions/sessionMessages.ts`                                      | `pending`: an owner's commands with no engine receipt, waiting or ended with a reason, and a message's staged body (runners read staged bodies through `transcripts.commandArtifact`).                                                                                                            |
 | `functions/lib/sessionIntake.ts`, `functions/lib/sessionDerived.ts` | The intake rules and the fold (`sessionIntake`), and what a folded fact derives: turns, attention items, the second job receipt, the listing row (`sessionDerived`).                                                                                                                              |
 | `functions/attention.ts`, `functions/lib/attention.ts`              | Needs-you attention: `markSeen`, `raiseFromRunner` (`volli notify`), the internal `access_lost` sweep. `lib/attention.ts` is the one writer of `attentionItems` (and the push hook); reads filter with `attentionVisibility` (`canSeeAttention`).                                                 |
-| `functions/testSeed.ts`, `functions/lib/testWorld.ts`               | Test-only seeding (a Workspace, a project, a ticket, runners) until those areas have functions of their own. Internal, and refused on any deployment without `VOLLI_TEST_JWKS`.                                                                                                                   |
+| `functions/testSeed.ts`, `functions/lib/testWorld.ts`               | Test-only seeding (a Workspace, project, ticket, runners) and quota resets for the serial backend suite. Internal, and refused on any deployment without `VOLLI_TEST_JWKS`.                                                                                                                       |
 | `functions/secrets.ts`                                              | Team secrets: `listWorkspace`, `listProject` (with what overrides what), `listPersonal`, `set` (an action: it seals), `setExposure`, `remove`. Metadata only on the way out: no query returns a secret's value. Rules: `secrets.ts` in `@volli/shared/cloud`.                                     |
 | `functions/secretsDelivery.ts`                                      | The resolved set for a runner's claimed Session or leased job (`deliver`, internal): claim, ownership, membership and opt-out checks, precedence, exposure, then opened in memory.                                                                                                                |
 | `functions/lib/sealing.ts`, `secretKeys.ts`                         | Envelope encryption: per-Workspace and per-person data keys wrapped by a root key behind `RootKeyProvider`; `secretKeys:rewrap` re-wraps after a root key rotation. See "Secrets root key" below.                                                                                                 |
@@ -406,11 +425,53 @@ typechecks this package along with the rest of the workspace.
 
 There are no cloud deployments yet. Dev, staging and prod deployments, deploy
 CI, the object-storage bucket (R2), backups and export are added once the
-Convex and Cloudflare accounts exist. Deploy CI will push this package with
-`npx convex deploy` and a per-environment deploy key. It will refuse any
-target that has `VOLLI_TEST_JWKS` set. Signing uploads already works against
+Convex and Cloudflare accounts exist. Signing uploads already works against
 any S3-compatible store: a deployment points at its bucket with the
 `VOLLI_S3_*` variables (`functions/lib/objectStore.ts`).
+
+### Deploying with the self-check
+
+Deploy with `scripts/deploy.mjs` (logic in `scripts/deploy.ts`), never a bare
+`npx convex deploy`:
+
+```sh
+CONVEX_DEPLOY_KEY=<prod: or dev: deploy key> pnpm -C convex deploy:checked
+```
+
+It takes no deploy flags: its one target comes from the environment, either a
+`prod:` or `dev:` deploy key (a preview key is refused: `deploy` would create a
+deployment the check never sees) or `CONVEX_SELF_HOSTED_URL` with
+`CONVEX_SELF_HOSTED_ADMIN_KEY`. The other selectors are blanked, so every step
+reaches the same deployment. Then it:
+
+1. refuses to push when the target sets `VOLLI_TEST_JWKS` (`convex env get`,
+   output discarded), or when it cannot tell, since the auth config is
+   evaluated at push time;
+2. pushes `functions/` with codegen off (`_generated/` is committed);
+3. runs the internal self-check on the same target, and exits non-zero when
+   it refuses. The new code is live by then: fix what it names, then re-run
+   `npx convex run health:deploymentChecks '{}'`.
+
+`health:deploymentChecks` (`functions/lib/deploymentChecks.ts`) reads names
+and presence only, never prints a value, and makes no key material. Its cloud
+check, the default, answers `deployment_unsafe` when `VOLLI_TEST_JWKS` is set
+at all (`forbidden`) or any of these is unset (`missing`):
+
+| Variable                                                                                       | For                                       |
+| ---------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `WORKOS_CLIENT_ID`                                                                             | Sign-in ("Sign-in provider")              |
+| `VOLLI_RUNNER_SIGNING_KEY`, `VOLLI_RUNNER_JWKS`                                                | Runner and Agent tokens ("Runner tokens") |
+| `VOLLI_SECRETS_ROOT_KEYS`                                                                      | Sealed secrets ("Secrets root key")       |
+| `VOLLI_S3_ENDPOINT`, `VOLLI_S3_BUCKET`, `VOLLI_S3_ACCESS_KEY_ID`, `VOLLI_S3_SECRET_ACCESS_KEY` | Object storage                            |
+
+`{"mode":"test"}` allows both, for the throwaway local backend only: on a
+deployment whose `CONVEX_CLOUD_URL` is not loopback it answers
+`test_mode_refused` and runs the cloud check anyway. Against the fixture:
+
+```sh
+pnpm -C convex with-backend -- node scripts/deploy.mjs --test   # passes
+pnpm -C convex with-backend --deploy -- node scripts/deploy.mjs # refused: the fixture trusts the test issuer
+```
 
 The desktop reads transcript packs and spilled bodies directly with
 `sessionTranscript.presignGet`, after the backend checks Session visibility.

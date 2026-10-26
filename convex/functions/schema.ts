@@ -640,6 +640,20 @@ export default defineSchema({
     windowStartedAt: time,
     failures: v.number(),
   }).index("by_user", ["userId"]),
+  // Token buckets for the anonymous linking doors (`lib/runnerLinkRateLimit.ts`).
+  // `key` names the bucket: a door and a hash of one network (an IPv4 address
+  // or an IPv6 /64), a door and the id of a real install token or link request,
+  // or the whole deployment. No caller address or secret is stored here. A row
+  // is written only when a request is admitted, and an absent row is a full
+  // bucket, so the sweep deletes rows once `fullAt` has passed.
+  runnerLinkRateLimits: defineTable({
+    key: v.string(),
+    tokens: v.number(),
+    updatedAt: time,
+    fullAt: time,
+  })
+    .index("by_key", ["key"])
+    .index("by_full_at", ["fullAt"]),
   runnerEvents: defineTable({
     runnerId: uuid,
     // Open set: linked, token_reuse, revoked, ip_changed, update_*, rolled_back.

@@ -14,6 +14,7 @@ import {
 
 import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
+import { enrollBackendPreview } from "./preview-fixtures";
 import { wire, writeSession } from "./sessionFixtures";
 
 const backend = connectBackend();
@@ -53,6 +54,8 @@ describe("volli notify on the real backend", () => {
   test("the claimed runner raises an item its owner reads and answers by seeing it; another runner is fenced", async () => {
     const person = backend.client(`user:${randomUUID()}`);
     const { userId } = await person.mutation(api.accounts.ensureViewer, {});
+    // The runner is linked for this account, so its grant is what its calls recheck.
+    await enrollBackendPreview(backend, person, userId);
     const { projectId } = await backend.admin(internal.testSeed.seedWorld, {
       ownerUserId: userId,
       runners: 0,

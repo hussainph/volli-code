@@ -36,6 +36,7 @@ import { createTestSessionEngine, testProject } from "@volli/host-core/testing";
 import { api, internal } from "../functions/_generated/api";
 import { verifyS3Request } from "../fixture/s3-boundary.ts";
 import { connectBackend } from "../fixture/testing";
+import { enrollBackendPreview } from "./preview-fixtures";
 
 export const CANARY = 'packing-canary-"escaped"-é-950';
 export const sha256 = (bytes: Uint8Array | string) =>
@@ -228,6 +229,8 @@ export async function historyWorld() {
   const backend = connectBackend();
   const person = backend.client(`user:${randomUUID()}`);
   const { userId } = await person.mutation(api.accounts.ensureViewer, {});
+  // The linked runner is only as good as its owner's preview grant.
+  await enrollBackendPreview(backend, person, userId);
   const { projectId } = await backend.admin(internal.testSeed.seedWorld, {
     ownerUserId: userId,
     runners: 0,

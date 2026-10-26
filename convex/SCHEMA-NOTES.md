@@ -546,3 +546,13 @@ The runner's `host_notice_outbox` is retained, not replaced: it owns delivery
 timing and first-writer-wins replay after the job reaches the runner. Cloud
 Sessions do not arm process-memory watches. Machine-local notices still use
 the outbox directly, and the signed-out watch path keeps its existing rules.
+
+## Anonymous runner-link limits
+
+`runnerLinkRateLimits` is an additive side table of token buckets, keyed by
+operation plus a hashed network or an existing token/request id. No secret or
+raw IP is stored there. Admission is transactional and all-or-none across the
+network and code/global buckets. Refilled rows are equivalent to absent rows;
+the hourly paged sweep deletes them using `by_full_at`. All three linking doors have
+a deployment-wide cap as well as a network cap, bounding device-code and
+limiter-metadata allocations across distinct networks.

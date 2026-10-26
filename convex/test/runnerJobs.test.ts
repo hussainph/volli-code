@@ -31,6 +31,7 @@ import {
   type JobDraft,
 } from "../functions/lib/jobs";
 import schema from "../functions/schema";
+import { enrollUser } from "./preview-fixtures";
 
 const modules = import.meta.glob("../functions/**/*.ts");
 
@@ -90,7 +91,7 @@ async function seedRunner(ctx: Ctx, ownerUserId: string, name: string): Promise<
   return id;
 }
 
-/** A runner serves only an owner whose account is active. */
+/** A runner serves only an owner whose account is active and enrolled for the preview. */
 async function seedUser(ctx: Ctx, userId: string) {
   await ctx.db.insert("users", {
     id: userId,
@@ -105,6 +106,7 @@ async function seedUser(ctx: Ctx, userId: string) {
     createdAt: 0,
     lastSeenAt: 0,
   });
+  await enrollUser(ctx, userId);
 }
 
 async function seedMember(ctx: Ctx, workspaceId: string, userId: string) {

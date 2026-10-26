@@ -6,6 +6,7 @@ import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared/cloud";
 
 import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
+import { enrollBackendPreview } from "./preview-fixtures";
 
 const backend = connectBackend();
 const uuid = () => randomUUID();
@@ -157,7 +158,9 @@ describe("the board on the pinned local backend", () => {
 
   test("refuses an outsider with a typed error", async () => {
     const outsider = backend.client(`user:${uuid()}`);
-    await outsider.mutation(api.accounts.ensureViewer, {});
+    const { userId } = await outsider.mutation(api.accounts.ensureViewer, {});
+    // Enrolled, so the refusal is membership, not the preview gate.
+    await enrollBackendPreview(backend, outsider, userId);
     await expect(outsider.query(api.board.roster, { projectId })).rejects.toMatchObject({
       data: { code: "not_a_member" },
     });

@@ -4,6 +4,7 @@ import {
   PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
   PREVIEW_AGREEMENT_REQUIRED_MESSAGE,
   type PreviewAccess,
+  type UserId,
 } from "@volli/shared/cloud";
 import type { GenericDatabaseReader, GenericDatabaseWriter } from "convex/server";
 import { ConvexError } from "convex/values";
@@ -56,6 +57,14 @@ export function hasPreviewAgreement(user: Doc<"users">): boolean {
   return (
     user.previewAgreementVersion === PREVIEW_ENROLLMENT_AGREEMENT_VERSION &&
     typeof user.previewAgreementAcceptedAt === "number"
+  );
+}
+
+/** A runner/Agent owner's current product authorization, independent of its credential. */
+export async function hasLivePreviewAccess(ctx: Reader, user: Doc<"users">): Promise<boolean> {
+  return (
+    hasPreviewAgreement(user) &&
+    (await previewAccess(ctx, { userId: user.id as UserId, user })) === "granted"
   );
 }
 

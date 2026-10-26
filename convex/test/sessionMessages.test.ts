@@ -17,6 +17,7 @@ import {
 import { api } from "../functions/_generated/api";
 import { seedTestWorld } from "../functions/lib/testWorld";
 import schema from "../functions/schema";
+import { enrollPreview } from "./preview-fixtures";
 import { wire, writeSession } from "./sessionFixtures";
 
 const modules = import.meta.glob("../functions/**/*.ts");
@@ -45,6 +46,8 @@ async function world() {
   for (const name of ["alice", "bob", "carol"]) {
     users[name] = (await asUser(t, name).mutation(api.accounts.ensureViewer, {})).userId as UserId;
   }
+  // Carol is enrolled too: her refusal must be "not in this Workspace".
+  await enrollPreview(t, Object.values(users));
   const seeded = await t.run((ctx) =>
     seedTestWorld(ctx, { ownerUserId: users.alice!, memberUserIds: [users.bob!], runners: 2 }),
   );

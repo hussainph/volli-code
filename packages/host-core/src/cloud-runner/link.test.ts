@@ -72,6 +72,7 @@ describe("linking", () => {
     const client = deviceClient([
       { status: "pending" },
       new RunnerHttpError("unavailable", null, "down"),
+      new RunnerHttpError("rate_limited", 429, "Try again in 4 s."),
       { status: "linked", grant: GRANT },
     ]);
     const shown: unknown[] = [];
@@ -88,7 +89,7 @@ describe("linking", () => {
     expect(outcome).toEqual({ status: "linked", link: GRANT });
     expect(shown).toEqual([["BCDF-GHJK", 123]]);
     // Never faster than the documented five seconds.
-    expect(sleeps).toEqual([5000, 5000, 5000]);
+    expect(sleeps).toEqual([5000, 5000, 5000, 5000]);
     expect(saved()).toEqual(GRANT);
   });
 

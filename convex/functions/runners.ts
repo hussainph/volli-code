@@ -90,6 +90,7 @@ import {
 } from "./_generated/server";
 import { clearRunnerAlert, raiseRunnerAlert } from "./lib/attention";
 import { authError, requireSessionVisible, requireViewer, type Viewer } from "./lib/auth";
+import { hasLivePreviewAccess } from "./lib/previewAccess";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
 import { mintSecret } from "./lib/runnerSecrets";
 import { nullable } from "./lib/validators";
@@ -152,13 +153,19 @@ async function credentialsOf(ctx: Reader, runnerId: string) {
     .unique();
 }
 
-/** A person who may own a new runner: an active account, not pending deletion. */
-async function activeUser(ctx: Reader, userId: string): Promise<Doc<"users"> | null> {
+/** The account behind a credential, independently of its current preview authorization. */
+async function activeAccount(ctx: Reader, userId: string): Promise<Doc<"users"> | null> {
   const user = await ctx.db
     .query("users")
     .withIndex("by_uuid", (q) => q.eq("id", userId))
     .unique();
   return user !== null && user.status === "active" ? user : null;
+}
+
+/** A person who may link a new runner: active account, live preview grant and agreement. */
+async function activeUser(ctx: Reader, userId: string): Promise<Doc<"users"> | null> {
+  const user = await activeAccount(ctx, userId);
+  return user !== null && (await hasLivePreviewAccess(ctx, user)) ? user : null;
 }
 
 /**
@@ -1063,39 +1070,43 @@ export const rotateCredential = internalMutation({
     args,
   ): Promise<
     | { ok: true; generation: number; ownerUserId: UserId; kind: RunnerKind }
-    | { ok: false; code: "revoked" | "invalid_credential" }
+    | { ok: false; code: "revoked" | "invalid_credential" | "preview_access_required" }
   > => {
     const runner = await runnerById(ctx, args.runnerId);
     const credentials = runner === null ? null : await credentialsOf(ctx, runner.id);
     // An unknown id reads like a wrong credential: an id alone reveals nothing.
     if (runner === null) return { ok: false, code: "invalid_credential" };
-    if (
-      runner.revokedAt !== null ||
-      credentials === null ||
-      (await activeUser(ctx, runner.ownerUserId)) === null
-    ) {
+    const owner = await activeAccount(ctx, runner.ownerUserId);
+    if (runner.revokedAt !== null || credentials === null || owner === null) {
       return { ok: false, code: "revoked" };
+    }
+    const current = args.presentedHash === credentials.currentHash;
+    if (!current) {
+      if (args.presentedHash !== credentials.previousHash) {
+        return { ok: false, code: "invalid_credential" };
+      }
+      if (credentials.currentFirstUsedAt !== null) {
+        await revokeRunner(ctx, runner, RUNNER_STATUS_REASONS.credentialReuse, { ip: args.ip });
+        return { ok: false, code: "revoked" };
+      }
+    }
+    // Validate and detect reuse even while authorization is paused, but spend
+    // no valid credential until the account has preview access again.
+    if (!(await hasLivePreviewAccess(ctx, owner))) {
+      return { ok: false, code: "preview_access_required" };
     }
     const now = Date.now();
     const generation = credentials.generation + 1;
     const used = { generation, rotatedAt: now, lastUsedAt: now, lastUsedIp: args.ip };
-    if (args.presentedHash === credentials.currentHash) {
+    if (current) {
       await ctx.db.patch(credentials._id, {
         ...used,
         previousHash: credentials.currentHash,
         currentHash: args.nextHash,
         currentFirstUsedAt: null,
       });
-    } else if (
-      args.presentedHash === credentials.previousHash &&
-      credentials.currentFirstUsedAt === null
-    ) {
-      await ctx.db.patch(credentials._id, { ...used, currentHash: args.nextHash });
-    } else if (args.presentedHash === credentials.previousHash) {
-      await revokeRunner(ctx, runner, RUNNER_STATUS_REASONS.credentialReuse, { ip: args.ip });
-      return { ok: false, code: "revoked" };
     } else {
-      return { ok: false, code: "invalid_credential" };
+      await ctx.db.patch(credentials._id, { ...used, currentHash: args.nextHash });
     }
     return { ok: true, generation, ownerUserId: runner.ownerUserId as UserId, kind: runner.kind };
   },

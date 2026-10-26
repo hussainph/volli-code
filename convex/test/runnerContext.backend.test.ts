@@ -15,6 +15,7 @@ import {
 
 import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
+import { enrollBackendPreview } from "./preview-fixtures";
 import { wire, writeSession } from "./sessionFixtures";
 
 const backend = connectBackend();
@@ -52,7 +53,10 @@ test("first accept registers a runner-originated Session; nonmember runners cann
   const owner = backend.client(`user:${randomUUID()}`);
   const outsider = backend.client(`user:${randomUUID()}`);
   const { userId } = await owner.mutation(api.accounts.ensureViewer, {});
-  await outsider.mutation(api.accounts.ensureViewer, {});
+  const { userId: outsiderId } = await outsider.mutation(api.accounts.ensureViewer, {});
+  // Both enrolled: the outsider's runner must reach "not a member", not the gate.
+  await enrollBackendPreview(backend, owner, userId);
+  await enrollBackendPreview(backend, outsider, outsiderId);
   const { projectId, ticketId } = await backend.admin(internal.testSeed.seedWorld, {
     ownerUserId: userId,
     runners: 0,

@@ -20,6 +20,7 @@ import { RUNNER_TOKEN_ISSUER, type UserId } from "@volli/shared/cloud";
 import { api, internal } from "../functions/_generated/api";
 import { seedTestWorld } from "../functions/lib/testWorld";
 import schema from "../functions/schema";
+import { enrollPreview } from "./preview-fixtures";
 import { userProvenance, wire, writeSession } from "./sessionFixtures";
 
 const modules = import.meta.glob("../functions/**/*.ts");
@@ -77,6 +78,9 @@ async function world() {
       .withIdentity({ subject: "user:alice", issuer: ISSUER })
       .mutation(api.accounts.ensureViewer, {})
   ).userId as UserId;
+  // The person and their runner token's owner are the same account: both the
+  // accept below and the agent commands later recheck the grant.
+  await enrollPreview(t, alice);
   const seeded = await t.run(async (ctx) => {
     const seededWorld = await seedTestWorld(ctx, { ownerUserId: alice, runners: 1 });
     // A project is created with its counter; the seed predates board writes.

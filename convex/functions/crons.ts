@@ -24,6 +24,13 @@ crons.interval("runners: offline sweep", { minutes: 1 }, internal.runners.sweepO
 });
 // Expired install tokens and device codes, and runner audit events past 90 days.
 crons.interval("runners: expiry cleanup", { hours: 1 }, internal.runners.sweepExpired, {});
+// Linking rate-limit buckets that have refilled (an absent bucket is a full one).
+crons.interval(
+  "runners: link rate-limit cleanup",
+  { hours: 1 },
+  internal.runnerLinkRateLimit.sweep,
+  {},
+);
 // Runner inbox: delete finished jobs once their keep time has passed.
 crons.interval("purge finished runner jobs", { hours: 1 }, internal.runnerJobs.sweep, {});
 crons.interval("watches: expiry and access sweep", { hours: 1 }, internal.watches.sweep, {});

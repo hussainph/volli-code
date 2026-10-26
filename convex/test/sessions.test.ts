@@ -14,6 +14,7 @@ import { parseRendererSessionEvent, type SessionEvent } from "@volli/shared";
 import { api, internal } from "../functions/_generated/api";
 import { seedTestRunner, seedTestWorld } from "../functions/lib/testWorld";
 import schema from "../functions/schema";
+import { enrollPreview } from "./preview-fixtures";
 import { localProjection, userProvenance, wire, writeSession } from "./sessionFixtures";
 
 /** The next fact after `history`, from the executor that history opened. */
@@ -51,6 +52,9 @@ async function signIn(t: T, name: string): Promise<UserId> {
   const result = await t
     .withIdentity({ subject: `user:${name}`, issuer: ISSUER })
     .mutation(api.accounts.ensureViewer, {});
+  // Every product call rechecks the grant and the accepted agreement, for a
+  // person and for a runner token's owner alike.
+  await enrollPreview(t, result.userId);
   return result.userId as UserId;
 }
 

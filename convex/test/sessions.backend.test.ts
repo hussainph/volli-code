@@ -17,6 +17,7 @@ import type { SessionEvent } from "@volli/shared";
 
 import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
+import { enrollBackendPreview } from "./preview-fixtures";
 import { moreTurns, wire, writeSession } from "./sessionFixtures";
 
 const backend = connectBackend();
@@ -59,6 +60,8 @@ async function linkRunner(person: ConvexHttpClient) {
 async function world() {
   const person = backend.client(`user:${randomUUID()}`);
   const { userId } = await person.mutation(api.accounts.ensureViewer, {});
+  // The linked runners serve this account: its grant is what their calls recheck.
+  await enrollBackendPreview(backend, person, userId);
   const seeded = await backend.admin(internal.testSeed.seedWorld, {
     ownerUserId: userId,
     runners: 0,

@@ -13,6 +13,7 @@ import { assertSessionEvent, type SessionEvent } from "@volli/shared";
 import { canonicalJson, parseJobPayload } from "@volli/shared/cloud";
 import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
+import { enrollBackendPreview } from "./preview-fixtures";
 import { wire, writeSession } from "./sessionFixtures";
 
 const backend = connectBackend();
@@ -44,6 +45,8 @@ async function linkRunner(person: ConvexHttpClient) {
 test("a child on runner B settles once into the sleeping parent's runner A inbox", async () => {
   const person = backend.client(`user:${randomUUID()}`);
   const { userId } = await person.mutation(api.accounts.ensureViewer, {});
+  // The linked runners serve this account: its grant is what their calls recheck.
+  await enrollBackendPreview(backend, person, userId);
   const { projectId, ticketId } = await backend.admin(internal.testSeed.seedWorld, {
     ownerUserId: userId,
     runners: 0,
@@ -157,6 +160,7 @@ function request(messageId: string) {
 test("sleeping-runner cancel is final; wake publishes the mirror before intake completes", async () => {
   const person = backend.client(`user:${randomUUID()}`);
   const { userId } = await person.mutation(api.accounts.ensureViewer, {});
+  await enrollBackendPreview(backend, person, userId);
   const { projectId, ticketId } = await backend.admin(internal.testSeed.seedWorld, {
     ownerUserId: userId,
     runners: 0,

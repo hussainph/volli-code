@@ -8,6 +8,8 @@ export default defineConfig({
   test: {
     include: ["test/**/*.backend.test.ts"],
     globalSetup: ["fixture/global-setup.ts"],
+    setupFiles: ["test/backend-setup.ts"],
+    // Quota reset in backend-setup.ts must not race another test's HTTP calls.
     maxWorkers: 1,
   },
 });

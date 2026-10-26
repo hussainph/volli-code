@@ -27,6 +27,7 @@ import { makeFunctionReference } from "convex/server";
 
 import { api } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
+import { enrollBackendPreview } from "./preview-fixtures";
 
 const backend = connectBackend();
 const subject = () => `user:${randomUUID()}`;
@@ -47,7 +48,9 @@ function memoryStore(): RunnerLinkStore & { current(): RunnerLink | null } {
 
 async function person() {
   const client = backend.client(subject());
-  await client.mutation(api.accounts.ensureViewer, {});
+  const { userId } = await client.mutation(api.accounts.ensureViewer, {});
+  // The runners linked below serve this account: its grant is what they recheck.
+  await enrollBackendPreview(backend, client, userId);
   return client;
 }
 

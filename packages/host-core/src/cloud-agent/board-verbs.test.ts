@@ -951,6 +951,19 @@ describe("failing fast", () => {
     expect(backend.calls.filter((call) => call.path === "agentTokens:mint")).toHaveLength(3);
   });
 
+  it("preview cutoff is an authorization refusal rather than a failed mutation", async () => {
+    const { verbs, backend } = await verbsOver();
+    backend.override.set("board:roster", () => ({
+      error: { code: "preview_access_required", message: "Preview access is needed." },
+    }));
+    await expect(
+      verbs.board({ sessionId: SESSION, request: request("board") }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN_ACTOR", message: "Preview access is needed." },
+    });
+  });
+
   it("an unexpected refusal is a failed operation with the backend's sentence", async () => {
     const { verbs, backend } = await verbsOver();
     backend.override.set("board:labels", () => ({

@@ -17,6 +17,7 @@ import { api, internal } from "../functions/_generated/api";
 import type { DataModel } from "../functions/_generated/dataModel.js";
 import { seedTestRunner } from "../functions/lib/testWorld";
 import schema from "../functions/schema";
+import { enrollPreview } from "./preview-fixtures";
 
 const modules = import.meta.glob("../functions/**/*.ts");
 
@@ -56,6 +57,8 @@ async function world(options: { acceptedThrough?: number; intake?: boolean } = {
   const t = convexTest(schema, modules);
   const alice = (await t.withIdentity(ALICE).mutation(api.accounts.ensureViewer, {})).userId;
   const bob = (await t.withIdentity(BOB).mutation(api.accounts.ensureViewer, {})).userId;
+  // Both enrolled: the runners and the reads below recheck each owner's grant.
+  await enrollPreview(t, [alice, bob]);
   const { runnerId, ...ids } = await t.run(async (ctx: Ctx) => {
     const claimantId = await seedTestRunner(ctx, alice, "Alice's Mac");
     const spareRunnerId = await seedTestRunner(ctx, alice, "Alice's spare");

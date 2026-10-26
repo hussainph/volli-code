@@ -14,6 +14,8 @@
  *
  * A runner serves its owner only, so a runner whose owner's account is no
  * longer active (deletion pending or deleted) is refused as `revoked` too.
+ * A preview lapse is `preview_access_required`: all calls are refused, but
+ * the runner retains its credential for when access is restored.
  *
  * Every runner MUTATION starts with {@link requireRunnerForWrite}: the first
  * write with a token of the current credential generation is what ends the
@@ -33,8 +35,13 @@ import {
 } from "@volli/shared/cloud";
 
 import type { DataModel, Doc } from "../_generated/dataModel.js";
+import { hasLivePreviewAccess } from "./previewAccess";
 
-export type RunnerAuthErrorCode = "unauthenticated" | "not_a_runner" | "revoked";
+export type RunnerAuthErrorCode =
+  | "unauthenticated"
+  | "not_a_runner"
+  | "revoked"
+  | "preview_access_required";
 
 export type RunnerAuthErrorData = { code: RunnerAuthErrorCode; message: string };
 
@@ -92,6 +99,11 @@ export async function requireRunner(ctx: RunnerCtx): Promise<CallingRunner> {
     .unique();
   if (owner === null || owner.status !== "active") {
     throw runnerAuthError("revoked", "This runner's account is closing or closed.");
+  }
+  if (!(await hasLivePreviewAccess(ctx, owner))) {
+    // Authorization is paused, not the credential revoked: re-granting access
+    // must not require every machine to link again.
+    throw runnerAuthError("preview_access_required", "This runner's account needs preview access.");
   }
   const gen = identity.gen;
   return {

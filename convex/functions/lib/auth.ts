@@ -41,6 +41,7 @@ import {
 
 import type { DataModel, Doc } from "../_generated/dataModel.js";
 import { isAgentIdentity, isRunnerIdentity } from "./runnerAuth";
+import { requirePreviewAccess } from "./previewAccess";
 
 export type AuthErrorCode =
   | "unauthenticated"
@@ -164,7 +165,8 @@ export async function findViewer(ctx: ReadCtx): Promise<Viewer | null> {
 }
 
 /**
- * The viewer, or `no_viewer` (call `accounts.ensureViewer` first). For queries.
+ * The viewer with live preview access and current agreement, or `no_viewer`
+ * (call `accounts.ensureViewer` first). Enrollment/recovery uses `findViewer`.
  *
  * An account whose deletion is pending is signed out of everything but the
  * `accounts` functions that show it and restore it (`account_deletion_pending`):
@@ -179,6 +181,9 @@ export async function requireViewer(ctx: ReadCtx): Promise<Viewer> {
       "This account is scheduled for deletion. Restore it to continue.",
     );
   }
+  // Account enrollment/recovery uses findViewer instead. Every product call
+  // rechecks the live grant, including calls using an existing membership.
+  await requirePreviewAccess(ctx, viewer);
   return viewer;
 }
 

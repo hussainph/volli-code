@@ -38,7 +38,7 @@ import {
   type ActionCtx,
 } from "./_generated/server.js";
 import { mintGithubToken } from "./githubTokens";
-import { requireMember, requireViewer } from "./lib/auth";
+import { requireIdentity, requireMember, requireViewer } from "./lib/auth";
 import { GithubApiError, githubClient } from "./lib/github/client";
 import { githubError, readGithubConfig, requireGithubConfig } from "./lib/github/config";
 import { randomSecret, sha256Base64Url } from "./lib/github/crypto";
@@ -184,6 +184,7 @@ export const createFlow = internalMutation({
 export const beginConnect = action({
   args: { flowId: v.string() },
   handler: async (ctx, { flowId }): Promise<{ url: string }> => {
+    await requireIdentity(ctx);
     const app = requireGithubConfig();
     const secret = randomSecret();
     const verifier = randomSecret();
@@ -217,6 +218,7 @@ export const beginInstall = action({
     targetId: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ url: string }> => {
+    await requireIdentity(ctx);
     const app = requireGithubConfig();
     if (args.targetId !== undefined && !/^[1-9][0-9]{0,19}$/u.test(args.targetId)) {
       throw githubError("flow_not_found", "That GitHub account id is not valid.");
@@ -332,8 +334,8 @@ function configureUrl(
 export const installations = action({
   args: { workspaceId: v.optional(v.string()) },
   handler: async (ctx, { workspaceId }): Promise<GithubInstallationsResult> => {
-    const app = requireGithubConfig();
     const context = await ctx.runQuery(internal.github.installationsContext, { workspaceId });
+    const app = requireGithubConfig();
     const mint = await mintGithubToken(ctx, context.userId);
     const visible = new Set<string>();
     let status: GithubInstallationsResult["connection"] = "active";
