@@ -1,4 +1,5 @@
-import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
+import { LOCAL_LAUNCH, NO_AUTOMATION_TRIGGER } from "@volli/shared";
+import { adoptLaunch } from "./launch";
 import type {
   Automation,
   AutomationRun,
@@ -155,7 +156,64 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  adoptLaunch(LOCAL_LAUNCH);
   vi.unstubAllGlobals();
+});
+
+describe("cloud launch", () => {
+  beforeEach(() => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    stubApi({});
+  });
+
+  it("warms empty automation offers without reading the frozen local service", async () => {
+    const store = createAutomationsStore();
+    await store.getState().ensureLoaded("p1");
+    expect(await store.getState().refreshRail("p1", 1)).toBe(true);
+    await store.getState().refreshRuns("p1");
+    await store.getState().refreshSkips("p1");
+    await store.getState().refreshAutomationHistory("p1", "a1");
+
+    expect(selectAutomations(store.getState(), "p1")).toEqual([]);
+    expect(selectArmings(store.getState(), "p1")).toEqual([]);
+    expect(selectColumnOrders(store.getState(), "p1")).toEqual([]);
+    expect(store.getState().enabledIds).toEqual([]);
+    for (const door of Object.values(window.api.automations)) {
+      expect(door).not.toHaveBeenCalled();
+    }
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("refuses project-less mutations before reaching local automation rows", async () => {
+    const store = createAutomationsStore();
+    expect(
+      await store.getState().save({
+        projectId: null,
+        name: "Nightly",
+        instructions: "Review",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      }),
+    ).toBe("Not available on Volli Cloud yet");
+    expect(
+      await store.getState().update({
+        automationId: "local-automation",
+        name: "Nightly",
+        instructions: "Review",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      }),
+    ).toBe("Not available on Volli Cloud yet");
+    await store.getState().setEnabled("local-automation", true);
+
+    expect(window.api.automations.create).not.toHaveBeenCalled();
+    expect(window.api.automations.update).not.toHaveBeenCalled();
+    expect(window.api.automations.setEnabled).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith("Not available on Volli Cloud yet", {
+      duration: 8000,
+      closeButton: true,
+    });
+  });
 });
 
 describe("refresh", () => {

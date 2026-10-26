@@ -243,7 +243,13 @@ One convention for what a module asks for and what it is (VC-632):
 `createHostAutomations` owns one engine/service, its runner, armed arrivals
 and scheduler, started at recovered readiness. Execution is an explicit
 idle/unavailable/ready variant. After timer producers stop, `settled()` joins
-recovery, attempts and Run boots before SQLite closes.
+recovery, attempts and Run boots before SQLite closes. A cloud-store launch
+composes the degraded variant instead — no service, runner, scheduler or
+armed timer, whatever the `cloud` flag says — and passes
+`automationsAvailable: false` to the Session assembly and the tool door: a new
+Session is offered no `automation.run` (direct or through Code Mode), while a
+Session already frozen with it is replayed unchanged and refused at dispatch
+with one line (VC-952).
 `createHostAgentCommands` builds the socket verb door over the host's
 [handler map](#the-handler-map); `session-runtime/agents`
 owns the lazy tool door and watches. `createHostAgentSocket` composes the

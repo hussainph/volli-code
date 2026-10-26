@@ -30,6 +30,7 @@ import type {
   AutomationTrigger,
   CommandReceipt,
   ModelSelection,
+  Project,
   RuntimeAskRequest,
   RuntimeSessionIdentity,
   VerbResultDetailsSchema,
@@ -855,7 +856,15 @@ const RUN_MODEL: ModelSelection = {
   reasoningLevel: "high",
 };
 
-function automationHarness(options: { host?: "absent" } = {}) {
+function automationHarness(
+  options: {
+    host?: "absent";
+    /** A cloud launch's door: no Automations at all (VC-952). */
+    automationsAvailable?: boolean;
+    /** Asked per call by the door; a refusal must never reach it. */
+    projects?: () => readonly Project[];
+  } = {},
+) {
   ctx = openTestDb();
   const db = ctx.db;
   insertProject(
@@ -928,7 +937,7 @@ function automationHarness(options: { host?: "absent" } = {}) {
 
   const door = createAgentToolDoor({
     db,
-    projects: () => listProjects(db),
+    projects: options.projects ?? (() => listProjects(db)),
     handlers: testHostHandlers({ db }),
     // Inert for the automation suite: its callers never reach `session.start`,
     // and the defaults here are what an ordinary Board Session's rows say.
@@ -943,6 +952,9 @@ function automationHarness(options: { host?: "absent" } = {}) {
               return runner.run(input);
             },
           },
+    ...(options.automationsAvailable === undefined
+      ? {}
+      : { automationsAvailable: options.automationsAvailable }),
     now: () => 1_000,
     authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
     watches: () => null,
@@ -1013,6 +1025,22 @@ function runShape(run: AutomationRun) {
 }
 
 describe("automation_run through the Agent Tool Surface (VC-134)", () => {
+  it("refuses a frozen tool in a cloud launch before project or Ticket resolution (VC-952)", async () => {
+    const projects = vi.fn((): readonly Project[] => {
+      throw new Error("a cloud launch must not resolve local projects for automation.run");
+    });
+    const h = automationHarness({ automationsAvailable: false, projects });
+
+    const result = await h.call({ automation: "Nightly sweep", ticket: "VC-1" });
+
+    expect(result.text).toBe("Automations are not available in cloud launches yet.");
+    // Refused at dispatch: no project, Ticket or Automation was looked up, so
+    // this launch's shadow rows are never mistaken for a place to start a Run.
+    expect(projects).not.toHaveBeenCalled();
+    expect(h.runInputs).toEqual([]);
+    expect(h.creates).toEqual([]);
+  });
+
   it("runs a saved Automation on the caller's project through the one Run door", async () => {
     const h = automationHarness();
     const automation = await h.save({ name: "Nightly sweep", projectId: "project-one" });

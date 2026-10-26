@@ -11,7 +11,8 @@
  */
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { Ticket } from "@volli/shared";
+import { LOCAL_LAUNCH, type Ticket } from "@volli/shared";
+import { adoptLaunch } from "@renderer/stores/launch";
 
 import { runAutomationOnTicket } from "@renderer/components/automations/run-automation";
 import { TicketContextMenu } from "@renderer/components/board/ticket-context-menu";
@@ -80,6 +81,7 @@ afterEach(async () => {
   toast.mockClear();
   vi.restoreAllMocks();
   document.body.innerHTML = "";
+  adoptLaunch(LOCAL_LAUNCH);
 });
 
 function menuItem(text: string): HTMLElement | undefined {
@@ -117,6 +119,16 @@ function renderCard(on: HostWorld) {
 }
 
 describe("a card's context menu", () => {
+  it("hides Automations in a cloud launch while retaining the board controls", async () => {
+    world = hostWorld({ cloud: false });
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    const container = await renderCard(world);
+    await openCardMenu(container);
+    expect(menuItem("Automations")).toBeUndefined();
+    expect(menuItem("Priority")).toBeDefined();
+    expect(menuItem("Archive")).toBeDefined();
+  });
+
   it("offline: Priority is shown disabled and writes nothing", async () => {
     world = hostWorld({ hetzner: { link: OFFLINE } });
     const priority = vi

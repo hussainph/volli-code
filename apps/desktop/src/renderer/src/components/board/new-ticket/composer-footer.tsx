@@ -16,6 +16,7 @@ import {
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { launchStore } from "@renderer/stores/launch";
 
 /**
  * TWO COMMITS AND A CHOOSER, in that order of prominence.
@@ -135,51 +136,53 @@ export function ComposerFooter({
           aria-label={action.label}
           aria-keyshortcuts="Shift+Meta+Enter Shift+Control+Enter"
           title={`${action.label} (⇧⌘↵)`}
-          className="min-w-0 rounded-none"
+          className={launchStore() === "cloud" ? "min-w-0 rounded-l-none" : "min-w-0 rounded-none"}
         >
           <span className="max-w-64 truncate">{action.label}</span>
         </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              size="icon"
-              aria-label="Choose what starts"
-              title="Start chat, or run an Automation"
-              data-testid="composer-launch-picker"
-              className="shrink-0 rounded-l-none border-l border-primary-foreground/30"
-            >
-              <CaretDownIcon weight="bold" className="size-3" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" side="top" className="w-80">
-            {/* No "Create only" row: that action is the button to the left of
+        {launchStore() === "cloud" ? null : (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="icon"
+                aria-label="Choose what starts"
+                title="Start chat, or run an Automation"
+                data-testid="composer-launch-picker"
+                className="shrink-0 rounded-l-none border-l border-primary-foreground/30"
+              >
+                <CaretDownIcon weight="bold" className="size-3" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" side="top" className="w-80">
+              {/* No "Create only" row: that action is the button to the left of
                 this caret. The menu chooses what the PRIMARY starts. */}
-            <DropdownMenuRadioGroup
-              value={selection}
-              onValueChange={(value) => {
-                if (value === "kickoff") onLaunchChange({ kind: value });
-                else
-                  onLaunchChange({
-                    kind: "automation",
-                    projectId,
-                    automationId: value.slice("automation:".length),
-                  });
-              }}
-            >
-              {/* No chord badge on the row: ⇧⌘↵ fires whatever this menu has
+              <DropdownMenuRadioGroup
+                value={selection}
+                onValueChange={(value) => {
+                  if (value === "kickoff") onLaunchChange({ kind: value });
+                  else
+                    onLaunchChange({
+                      kind: "automation",
+                      projectId,
+                      automationId: value.slice("automation:".length),
+                    });
+                }}
+              >
+                {/* No chord badge on the row: ⇧⌘↵ fires whatever this menu has
                   SELECTED, so printing it against one option would be a lie the
                   moment an Automation is chosen. The primary button carries it,
                   because the primary button is what it presses. */}
-              <DropdownMenuRadioItem value="kickoff">
-                <ChatCircleIcon />
-                Start chat
-              </DropdownMenuRadioItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel>Run automation</DropdownMenuLabel>
-              <CreateRunAutomationItems {...automationOffer} />
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
+                <DropdownMenuRadioItem value="kickoff">
+                  <ChatCircleIcon />
+                  Start chat
+                </DropdownMenuRadioItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Run automation</DropdownMenuLabel>
+                <CreateRunAutomationItems {...automationOffer} />
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
     </div>
   );

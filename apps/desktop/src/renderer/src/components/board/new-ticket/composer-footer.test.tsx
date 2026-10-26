@@ -3,7 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { act, useState, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { Automation } from "@volli/shared";
+import { LOCAL_LAUNCH, type Automation } from "@volli/shared";
+import { adoptLaunch } from "@renderer/stores/launch";
 import { ComposerFooter, CreateRunAutomationItems } from "./composer-footer";
 import type { ComposerLaunch } from "./composer-launch";
 
@@ -55,6 +56,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
+  adoptLaunch(LOCAL_LAUNCH);
 });
 function render(overrides: Partial<typeof props> = {}): string {
   return renderToStaticMarkup(<ComposerFooter {...props} {...overrides} />);
@@ -94,6 +96,15 @@ it("offers both commits as buttons at rest, with no create-more switch", () => {
   expect(html).toContain('aria-label="Choose what starts"');
   expect(html).not.toContain('aria-label="Create more"');
   expect(html).not.toContain('aria-label="Create and run an automation"');
+});
+
+it("offers creation and chat but no Automation chooser in a cloud launch", () => {
+  adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+  const html = render();
+  expect(html).toContain('data-testid="composer-create"');
+  expect(html).toContain('data-testid="composer-kickoff"');
+  expect(html).not.toContain('data-testid="composer-launch-picker"');
+  expect(html).not.toContain("Automation");
 });
 
 it("gives the unmodified chord to Create and the shifted one to the primary", () => {

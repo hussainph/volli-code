@@ -6,7 +6,9 @@
  * activity reads and title refinement — is mapped from the lifecycle's
  * recovered services, and only from an issued recovery proof. A host whose
  * database did not open gets the degraded variant instead: no service, no
- * runner and no timers, chosen once at construction.
+ * runner and no timers, chosen once at construction. So does a cloud launch
+ * (VC-952), whatever the `cloud` flag says: its Automations live in the
+ * backend once VC-569 lands, and until then it must not run a local one.
  */
 import type Database from "better-sqlite3";
 import type { HostedSessionRuntime } from "@volli/session-engine";
@@ -50,6 +52,13 @@ export interface RuntimeAutomationsInput {
   homeDir: string;
   /** Whether the `cloud` flag is on now; read at every prompt supply (prompt templates' precedence). */
   cloudEnabled: () => boolean;
+  /**
+   * Whether this launch has Automations at all (VC-952). Absent means yes;
+   * a cloud launch passes `false`, which composes the degraded form on an
+   * open database too: no local Automation service, runner, scheduler or
+   * armed timer until VC-569.
+   */
+  automationsAvailable?: boolean;
   log: Pick<Logger, "error">;
 }
 
@@ -71,7 +80,8 @@ export type RuntimeAutomations = RuntimeAutomationLifecycle &
 
 export function createRuntimeAutomations(input: RuntimeAutomationsInput): RuntimeAutomations {
   const { host, piRuntimeHost } = input;
-  if (!host.database.ok) return degradedRuntimeAutomations();
+  if (input.automationsAvailable === false || !host.database.ok)
+    return degradedRuntimeAutomations();
   const db = host.database.db;
   const automations: HostAutomations = createHostAutomations({
     db,
@@ -99,7 +109,10 @@ export function createRuntimeAutomations(input: RuntimeAutomationsInput): Runtim
   };
 }
 
-/** A host without a database: the proof is still checked, and nothing arms. */
+/**
+ * A host without a database, or a launch without Automations: the proof is
+ * still checked, and nothing arms.
+ */
 function degradedRuntimeAutomations(): RuntimeAutomations {
   let settled = false;
   return {

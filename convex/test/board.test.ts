@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
 import { ARMED_RUN_DELAY_MS } from "@volli/shared";
-import { SESSION_INTERRUPT_FORMAT, boardReceiptExpiry, newId } from "@volli/shared/cloud";
+import {
+  RUNNER_TOKEN_ISSUER,
+  SESSION_INTERRUPT_FORMAT,
+  boardReceiptExpiry,
+  newId,
+  runnerSubject,
+  type RunnerCapabilityReport,
+  type RunnerId,
+} from "@volli/shared/cloud";
 
 const BOARD_RECEIPT_TTL_MS = boardReceiptExpiry(0);
 
@@ -28,6 +36,48 @@ afterEach(() => {
 });
 
 const command = () => newId("command");
+
+/**
+ * A complete capability report, as `runners.reportCapabilities` parses it.
+ * `tools` is primarily platform tools; `automation.run` is the explicit job
+ * capability this board reads, and the executor a cloud launch waits for
+ * (VC-569).
+ */
+function capabilityReport(tools: string[]): RunnerCapabilityReport {
+  return {
+    version: "0.3.0",
+    platform: { os: "darwin", distro: null, kernel: null, arch: "arm64", glibc: null },
+    installMode: "app",
+    capabilities: {
+      v: 1,
+      nodeVersion: "24.18.0",
+      cpuCount: 8,
+      memTotalMb: 16_384,
+      git: { version: "2.43.0" },
+      docker: false,
+      terminals: "available",
+      browser: { state: "unavailable", reason: "not installed" },
+      maxConcurrentSessions: 4,
+      tools,
+    },
+    localCredentials: [],
+  };
+}
+
+/** Reports capabilities through the runner's own mutation, as a linked runner does. */
+async function reportRunnerCapabilities(t: Tester, runnerId: string, tools: string[]) {
+  await t
+    .withIdentity({
+      issuer: RUNNER_TOKEN_ISSUER,
+      subject: runnerSubject(runnerId as RunnerId),
+    })
+    .mutation(api.runners.reportCapabilities, { report: capabilityReport(tools) });
+}
+
+/** Adds the explicit `automation.run` job capability to a runner's report. */
+async function advertiseAutomationRun(t: Tester, runnerId: string) {
+  await reportRunnerCapabilities(t, runnerId, ["automation.run"]);
+}
 
 async function columnOrder(as: Client, projectId: string, status: string) {
   const { tickets } = await as.query(api.board.roster, { projectId });
@@ -645,6 +695,7 @@ describe("board.moveTickets", () => {
     const t = setup();
     const { as, projectId, userId, ids } = await board(t);
     const armed = await seedAutomation(t, projectId, userId, { status: "needs_review" });
+    await advertiseAutomationRun(t, armed.runnerId);
     const before = Date.now();
     await as.mutation(api.board.moveTickets, {
       commandId: command(),
@@ -693,6 +744,7 @@ describe("board.moveTickets", () => {
     const armed = await seedAutomation(t, projectId, userId, { status: "needs_review" });
     const picked = await seedAutomation(t, projectId, userId, null);
     const gone = await seedAutomation(t, projectId, userId, { status: "todo", deleted: true });
+    await advertiseAutomationRun(t, armed.runnerId);
     const move = (ticketId: string, toStatus: "needs_review" | "todo", automationId: string) =>
       as.mutation(api.board.moveTickets, {
         commandId: command(),
@@ -707,6 +759,7 @@ describe("board.moveTickets", () => {
     expect(await jobs(t, ids["A"]!)).toEqual([]);
 
     const placeRunnerId = await seedRunner(t, userId);
+    await advertiseAutomationRun(t, placeRunnerId);
     const row = await ticketRow(t, ids["B"]!);
     await t.run((ctx) => ctx.db.patch(row!._id, { placeRunnerId }));
     await move(ids["B"]!, "needs_review", picked.automationId);
@@ -800,12 +853,115 @@ describe("board.moveTickets", () => {
     ]);
   });
 
+  test("a runner that has not advertised the Automation executor gets no run", async () => {
+    const t = setup();
+    const { as, projectId, userId, ids } = await board(t);
+    const armed = await seedAutomation(t, projectId, userId, { status: "needs_review" });
+    const picked = await seedAutomation(t, projectId, userId, null);
+    const placeRunnerId = await seedRunner(t, userId);
+    // The armer's runner has never reported capabilities; the Place runner
+    // reports a valid report without the executor. Neither admits a run yet.
+    await t.run(async (ctx) => {
+      const runner = await ctx.db
+        .query("runners")
+        .withIndex("by_uuid", (q) => q.eq("id", armed.runnerId))
+        .unique();
+      await ctx.db.patch(runner!._id, { capabilities: null });
+    });
+    await reportRunnerCapabilities(t, placeRunnerId, ["xcode"]);
+    // The Automation's own runner is not the chosen runner: a pick runs on the
+    // ticket's Place, so its advertisement changes nothing here.
+    await advertiseAutomationRun(t, picked.runnerId);
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("tickets")
+        .withIndex("by_uuid", (q) => q.eq("id", ids["B"]!))
+        .unique();
+      await ctx.db.patch(row!._id, { placeRunnerId });
+    });
+
+    // The board fact lands; no job waits for an executor this launch lacks.
+    const arrival = await as.mutation(api.board.moveTickets, {
+      commandId: command(),
+      projectId,
+      ticketIds: [ids["A"]!],
+      toStatus: "needs_review",
+    });
+    expect(arrival.unstartedRuns).toEqual([]);
+    expect((await ticketRow(t, ids["A"]!))!.status).toBe("needs_review");
+    expect(await jobs(t, ids["A"]!)).toEqual([]);
+
+    // A deliberate pick says why it did not start, and leaves no run behind.
+    const pick = await as.mutation(api.board.moveTickets, {
+      commandId: command(),
+      projectId,
+      ticketIds: [ids["B"]!],
+      toStatus: "needs_review",
+      choice: { kind: "automation", automationId: picked.automationId },
+    });
+    expect(pick.unstartedRuns).toEqual([
+      { ticketId: ids["B"], automationId: picked.automationId, reason: "runner_unsupported" },
+    ]);
+    expect((await ticketRow(t, ids["B"]!))!.status).toBe("needs_review");
+    expect(await jobs(t, ids["B"]!)).toEqual([]);
+  });
+
+  test("a runner that advertises the Automation executor admits armed and picked runs", async () => {
+    const t = setup();
+    const { as, projectId, userId, ids } = await board(t);
+    const armed = await seedAutomation(t, projectId, userId, { status: "needs_review" });
+    const picked = await seedAutomation(t, projectId, userId, null);
+    const placeRunnerId = await seedRunner(t, userId);
+    await advertiseAutomationRun(t, armed.runnerId);
+    await advertiseAutomationRun(t, placeRunnerId);
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("tickets")
+        .withIndex("by_uuid", (q) => q.eq("id", ids["B"]!))
+        .unique();
+      await ctx.db.patch(row!._id, { placeRunnerId });
+    });
+
+    const arrival = await as.mutation(api.board.moveTickets, {
+      commandId: command(),
+      projectId,
+      ticketIds: [ids["A"]!],
+      toStatus: "needs_review",
+    });
+    expect(arrival.unstartedRuns).toEqual([]);
+    expect((await jobs(t, ids["A"]!)).map((job) => [job.kind, job.runnerId, job.payload])).toEqual([
+      [
+        "automation.run",
+        armed.runnerId,
+        expect.objectContaining({ automationId: armed.automationId, origin: "armed" }),
+      ],
+    ]);
+
+    const pick = await as.mutation(api.board.moveTickets, {
+      commandId: command(),
+      projectId,
+      ticketIds: [ids["B"]!],
+      toStatus: "needs_review",
+      choice: { kind: "automation", automationId: picked.automationId },
+    });
+    expect(pick.unstartedRuns).toEqual([]);
+    expect((await jobs(t, ids["B"]!)).map((job) => [job.kind, job.runnerId, job.payload])).toEqual([
+      [
+        "automation.run",
+        placeRunnerId,
+        expect.objectContaining({ automationId: picked.automationId, origin: "chosen" }),
+      ],
+    ]);
+  });
+
   test("work the inbox will not route is skipped, and the move still commits", async () => {
     const t = setup();
     const { as, projectId, userId, ids } = await board(t);
     // A worktree on a runner that was removed since, and the armer's runner removed too.
     const copy = await seedWorkingCopy(t, { ticketId: ids["A"]!, projectId });
     const armed = await seedAutomation(t, projectId, userId, { status: "needs_review" });
+    await advertiseAutomationRun(t, copy.runnerId);
+    await advertiseAutomationRun(t, armed.runnerId);
     await t.run(async (ctx) => {
       for (const runnerId of [copy.runnerId, armed.runnerId]) {
         const runner = await ctx.db

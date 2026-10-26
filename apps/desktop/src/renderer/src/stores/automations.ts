@@ -40,6 +40,8 @@ import type { AutomationCreateInput, AutomationUpdateInput } from "../../../ipc/
 import { duplicateName } from "@renderer/components/automations/automations-page-model";
 import { toastError } from "@renderer/lib/toast";
 import { notAvailableOn, refuseRemote, remoteHostNow } from "@renderer/stores/remote-project";
+import { launchStore } from "@renderer/stores/launch";
+import { CLOUD_HOST } from "@renderer/stores/host-connection";
 
 type AutomationDraftInput = Omit<AutomationCreateInput, "commandId"> & {
   /** Kept by a caller across a transport retry; generated here when omitted. */
@@ -464,6 +466,12 @@ export function createAutomationsStore() {
     },
 
     async refreshEnablement() {
+      // Unlike the project reads, enablement has no project id for the
+      // local-only guard. A cloud launch must never read this Mac's switches.
+      if (launchStore() === "cloud") {
+        set({ enabledIds: [], enablementRead: true });
+        return true;
+      }
       try {
         const result = await window.api.automations.enablement();
         if (!result.ok) {
@@ -517,6 +525,7 @@ export function createAutomationsStore() {
     },
 
     async save(input) {
+      if (launchStore() === "cloud") return notAvailableOn(CLOUD_HOST);
       const host = remoteHostNow(input.projectId ?? get().editor?.projectId);
       if (host !== null) return notAvailableOn(host);
       try {
@@ -547,6 +556,7 @@ export function createAutomationsStore() {
     },
 
     async update(input) {
+      if (launchStore() === "cloud") return notAvailableOn(CLOUD_HOST);
       try {
         const { commandId, ...draft } = input;
         const result = await window.api.automations.update({
@@ -628,6 +638,10 @@ export function createAutomationsStore() {
     },
 
     async setEnabled(automationId, enabled) {
+      if (launchStore() === "cloud") {
+        toastError(notAvailableOn(CLOUD_HOST));
+        return;
+      }
       try {
         const result = await window.api.automations.setEnabled({
           // Durable intent, like every other write here: the projection this
