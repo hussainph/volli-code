@@ -56,11 +56,12 @@ afterEach(() => {
 
 const DANA = { id: 501, login: "dana", name: "Dana Doe" };
 
-/** Runs scheduled functions (reconciles, revokes) to completion. */
+/**
+ * Drains scheduled functions under suite-scoped fake timers, restored by teardown.
+ * Token-refresh concurrency keeps real timers for its refresh-lease wait.
+ */
 async function settle(t: Tester) {
-  vi.useFakeTimers();
   await t.finishAllScheduledFunctions(vi.runAllTimers);
-  vi.useRealTimers();
 }
 
 async function connect(t: Tester, name: string, githubUser: { id: number; login: string }) {
@@ -351,6 +352,8 @@ const ACME = {
 };
 
 describe("install", () => {
+  beforeEach(() => vi.useFakeTimers());
+
   test("needs a connection", async () => {
     const t = setup();
     const { as, userId } = await signIn(t as never, "dana");
@@ -393,6 +396,7 @@ describe("install", () => {
       `/github/setup?installation_id=77&setup_action=install&state=${encodeURIComponent(state)}`,
     );
     expect(await response.text()).toContain("installed on acme");
+    await settle(t);
     expect(await as.query(api.github.flow, { flowId })).toMatchObject({
       status: "done",
       installationId: "77",
@@ -463,6 +467,7 @@ describe("install", () => {
       requester: { id: DANA.id, login: "dana" },
     });
     expect(delivered.status).toBe(202);
+    await settle(t);
     expect(await as.query(api.github.flow, { flowId })).toMatchObject({
       status: "done",
       installationId: "77",
@@ -486,6 +491,9 @@ describe("install", () => {
 });
 
 describe("webhooks", () => {
+  // Control zero-delay reconciles from the moment each delivery schedules them.
+  beforeEach(() => vi.useFakeTimers());
+
   test("a valid signature is accepted under the current and the previous secret", async () => {
     const t = setup();
     const installation = github.addInstallation(ACME);
@@ -495,6 +503,7 @@ describe("webhooks", () => {
     expect((await deliver(t, "ping", { zen: "hi" }, { secret: OLD_WEBHOOK_SECRET })).status).toBe(
       202,
     );
+    await settle(t);
     const rows = await t.run((ctx) => ctx.db.query("githubWebhookDeliveries").collect());
     expect(rows.map((row) => [row.event, row.outcome])).toEqual([
       ["installation", "applied"],
@@ -534,14 +543,18 @@ describe("webhooks", () => {
     const t = setup();
     const installation = github.addInstallation(ACME);
     await deliver(t, "installation", { action: "created", installation }, { id: "same" });
+    // Only the redelivery, not the first delivery's reconcile, may touch the sentinel.
+    await settle(t);
     await t.run(async (ctx) => {
       const row = await ctx.db.query("githubInstallations").first();
+      expect(row!.reconciledAt).toEqual(expect.any(Number));
       await ctx.db.patch(row!._id, { accountLogin: "changed-since" });
     });
     expect(
       (await deliver(t, "installation", { action: "created", installation }, { id: "same" }))
         .status,
     ).toBe(202);
+    await settle(t);
     const rows = await t.run(async (ctx) => ({
       deliveries: await ctx.db.query("githubWebhookDeliveries").collect(),
       installation: await ctx.db.query("githubInstallations").first(),
@@ -561,6 +574,7 @@ describe("webhooks", () => {
     };
     const installation = github.addInstallation({ ...ACME, repositories: [repo] });
     await deliver(t, "installation", { action: "created", installation });
+    await settle(t);
     await seedRepo(t, { githubRepoId: "3001", installationId: "77", owner: "acme", name: "api" });
     await deliver(t, "installation", { action: "deleted", installation });
     expect(await repoRow(t, "3001")).toMatchObject({ githubAccess: "app_removed" });
@@ -583,13 +597,16 @@ describe("webhooks", () => {
       default_branch: "main",
       archived: false,
     };
-    const installation = github.addInstallation({ ...ACME, repositories: [repo] });
-    await seedRepo(t, { githubRepoId: "3001", installationId: "77", owner: "acme", name: "api" });
-    await deliver(t, "installation", {
-      action: "suspend",
-      installation: { ...installation, suspended_at: "x" },
+    const installation = github.addInstallation({
+      ...ACME,
+      repositories: [repo],
+      suspended_at: "2026-10-25T00:00:00Z",
     });
+    await seedRepo(t, { githubRepoId: "3001", installationId: "77", owner: "acme", name: "api" });
+    await deliver(t, "installation", { action: "suspend", installation });
+    await settle(t);
     expect(await repoRow(t, "3001")).toMatchObject({ githubAccess: "app_removed" });
+    installation.suspended_at = null;
     await deliver(t, "installation", { action: "unsuspend", installation });
     await settle(t);
     expect(await repoRow(t, "3001")).toMatchObject({ githubAccess: "ok" });
@@ -804,6 +821,8 @@ describe("tokens", () => {
 });
 
 describe("revocation", () => {
+  beforeEach(() => vi.useFakeTimers());
+
   test("disconnect revokes the grant on GitHub and forgets the connection", async () => {
     const t = setup();
     const { as } = await connect(t, "dana", DANA);
@@ -872,7 +891,7 @@ describe("sweeps", () => {
     await deliver(t, "installation", { action: "created", installation });
     // Finish the webhook's reconcile while GitHub still has the installation.
     // Otherwise it can remove the row before the daily sweep counts it.
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    await settle(t);
     expect(await t.run((ctx) => ctx.db.query("githubInstallations").first())).toMatchObject({
       deletedAt: null,
       reconciledAt: expect.any(Number),
