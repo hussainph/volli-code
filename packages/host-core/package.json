@@ -95,7 +95,7 @@
     "@opentelemetry/otlp-exporter-base": "0.223.0",
     "@opentelemetry/otlp-transformer": "0.223.0",
     "@opentelemetry/resources": "2.12.0",
-    "@opentelemetry/sdk-metrics": "2.12.0",
+    "@opentelemetry/sdk-metrics": "3.0.0",
     "@opentelemetry/sdk-trace": "2.12.0",
     "@volli/agent-runtime": "workspace:*",
     "@volli/session-engine": "workspace:*",
