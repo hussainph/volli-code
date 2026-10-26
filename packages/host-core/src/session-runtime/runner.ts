@@ -256,6 +256,10 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
           dispose: undefined,
         };
   const sessionEngine = product.engine;
+  // Automations are a local-launch feature until VC-569 (VC-952). The chosen
+  // product store decides, never the `cloud` flag: a local launch with the
+  // flag on still runs its own Automations.
+  const automationsAvailable = store.kind === "local";
   // One runtime per host's Session services, claimed before anything is built.
   const bindSessionRuntime = live?.[SESSION_RUNTIME].claim();
   const runtimeServices = live?.runtimeServices;
@@ -369,6 +373,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     ...(input.capabilities.browser === undefined ? {} : { browser: input.capabilities.browser }),
     askUser: input.capabilities.askUser,
     requestSecret: input.capabilities.requestSecret,
+    automationsAvailable,
     beforeExecution: input.beforeExecution,
     concurrencyEnvFor,
     // The facade/tool-door cycle: no verb runs before both exist, and every
@@ -404,6 +409,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     piRuntimeHost: assembly.piRuntimeHost,
     homeDir: input.homeDir,
     cloudEnabled: () => input.cloudEnabled(),
+    automationsAvailable,
     log: hostLogger("automations"),
   });
   const facade = createRuntimeSessionFacade({
@@ -430,6 +436,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     handlers: (ready) => handlersFor(ready),
     ...(product.projects === undefined ? {} : { projects: product.projects }),
     inProcessWatches: product.inProcessWatches,
+    automationsAvailable,
     ...(store.kind === "cloud" ? { cloudSessionVerbs: store.cloud.cloudSessionVerbs } : {}),
   });
   let handlerMap: HostHandlerMap | undefined;

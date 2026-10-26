@@ -118,6 +118,13 @@ export interface RuntimeAssemblyOptions {
   /** This host has a person-answering surface for Session interactions. */
   askUser: boolean;
   requestSecret: boolean;
+  /**
+   * Whether this launch has Automations at all (VC-952). Absent means yes;
+   * a cloud launch passes `false`, so a new Session's surface omits
+   * `automation.run`, direct and through Code Mode. An already-frozen surface
+   * is replayed, never recomputed.
+   */
+  automationsAvailable?: boolean;
   beforeExecution(): Promise<unknown>;
   concurrencyEnvFor(sessionId: string): Promise<Record<string, string>>;
   resolveRuntimeContext: PiAdapterOptions["resolveRuntimeContext"];
@@ -192,6 +199,9 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                 requestSecret: options.requestSecret,
                 browser: browser !== undefined,
                 shells: shells !== undefined,
+                ...(options.automationsAvailable === undefined
+                  ? {}
+                  : { automationsAvailable: options.automationsAvailable }),
               },
             });
           },

@@ -24,6 +24,7 @@ import { createCloudSessionReads, cloudSessionRefusal } from "./session-reads";
 import { failure } from "../agent-dispatch/context";
 import { dryRunResponse } from "../agent-dispatch/preview";
 import { supervisionMarker } from "../session-runtime/supervise-session";
+import { AUTOMATIONS_UNAVAILABLE_IN_CLOUD } from "../automations/availability";
 import { createCloudWatchVerb } from "./watch-verbs";
 
 export interface CloudSessionVerbsOptions {
@@ -145,10 +146,7 @@ export function createCloudSessionVerbs(options: CloudSessionVerbsOptions) {
         request.input["env"] !== undefined
       )
         return refused("Starting on another runner is not available yet. Omit env to start here.");
-      if (request.verb === "automation.run")
-        return refused(
-          "Automations cannot be run through Volli Cloud yet; no local Automation was substituted.",
-        );
+      if (request.verb === "automation.run") return refused(AUTOMATIONS_UNAVAILABLE_IN_CLOUD);
       const watchResult = await watch(session, request, signal);
       if (watchResult !== null) return watchResult;
       if (request.verb !== "session.send" && request.verb !== "session.stop") return null;

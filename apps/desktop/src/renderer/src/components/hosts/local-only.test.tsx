@@ -6,6 +6,8 @@
  * This Mac's projects, and every project with the flag off, render as before.
  */
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { LOCAL_LAUNCH } from "@volli/shared";
+import { adoptLaunch } from "@renderer/stores/launch";
 
 import { hostWorld, type HostWorld } from "./hosts.test-support";
 import { LocalOnly, NotAvailableOnHost } from "./local-only";
@@ -16,6 +18,7 @@ let world: HostWorld | null = null;
 afterEach(async () => {
   await world?.cleanup();
   world = null;
+  adoptLaunch(LOCAL_LAUNCH);
 });
 
 /** A child that would reach this Mac's main process the moment it mounts. */
@@ -33,6 +36,25 @@ function Probe({ projectId }: { projectId: string | null }) {
 }
 
 describe("LocalOnly", () => {
+  it("blocks local-only children with one line or a hidden fallback in a cloud launch", async () => {
+    world = hostWorld({ cloud: false });
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    reached.mockClear();
+    const root = await world.render(
+      <>
+        <LocalOnly projectId="local">
+          <LocalSurface projectId="local" />
+        </LocalOnly>
+        <LocalOnly projectId="local" fallback={null}>
+          <LocalSurface projectId="local" />
+        </LocalOnly>
+      </>,
+    );
+    expect(root.textContent).toBe("Not available on Volli Cloud yet");
+    expect(root.querySelectorAll('[role="status"]')).toHaveLength(1);
+    expect(reached).not.toHaveBeenCalled();
+  });
+
   it("never mounts a remote project's local-only surface, and says where it is not available", async () => {
     world = hostWorld();
     reached.mockClear();

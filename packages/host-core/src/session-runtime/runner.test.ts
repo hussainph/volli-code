@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { ALWAYS_ONLINE, piOwnedModelAccess } from "@volli/agent-runtime";
 import { DEFAULT_AUTHORITY_POLICY, LOCAL_RUNNER, sessionHostNoticeMetadata } from "@volli/shared";
+import type { CodeModeBirth } from "@volli/shared";
 import { SESSION_NOTICE_FORMAT, type ClaimedJob } from "@volli/shared/cloud";
 import {
   createHostCore,
@@ -273,6 +274,8 @@ describe("runner composition", () => {
       lifecycleModule,
       contextModule,
       agentServiceModule,
+      automationServicesModule,
+      schedulerModule,
     ] = await Promise.all([
       import("./assembly"),
       import("./facade"),
@@ -280,6 +283,8 @@ describe("runner composition", () => {
       import("./lifecycle"),
       import("./context"),
       import("../agent-services"),
+      import("../automation-services"),
+      import("../automations/scheduler"),
     ]);
     const buildAssembly = vi.spyOn(assemblyModule, "createRuntimeAssembly");
     const buildFacade = vi.spyOn(facadeModule, "createRuntimeSessionFacade");
@@ -288,8 +293,18 @@ describe("runner composition", () => {
     const buildContext = vi.spyOn(contextModule, "createRuntimeContextResolver");
     const buildHandlers = vi.spyOn(handlerModule, "createHostHandlers");
     const buildToolDoor = vi.spyOn(agentServiceModule, "createHostAgentToolDoor");
+    const buildAutomations = vi.spyOn(automationServicesModule, "createHostAutomations");
+    const buildScheduler = vi.spyOn(schedulerModule, "createAutomationScheduler");
     const f = compose(fixture, { kind: "cloud", host, cloud });
+    // VC-952: a cloud launch composes no local Automation module at all — no
+    // service, no runner, no scheduler — whatever the `cloud` flag says.
+    expect(f.runner.automations.kind).toBe("degraded");
+    expect(f.runner.automations).not.toHaveProperty("service");
+    expect(f.runner.automations).not.toHaveProperty("execution");
+    expect(buildAutomations).not.toHaveBeenCalled();
     const assembly = buildAssembly.mock.lastCall![0];
+    const assembled = buildAssembly.mock.results[0]!.value;
+    expect(assembly.automationsAvailable).toBe(false);
     expect(assembly.sessionEngine).toBe(cloud.engine);
     expect(assembly.locations).toBe(cloud.locations);
     expect(assembly.ownsSession).toBe(cloud.ownsSession);
@@ -313,6 +328,7 @@ describe("runner composition", () => {
     const agents = buildAgents.mock.lastCall![0];
     expect(agents.services.sessionEngine).toBe(cloud.engine);
     expect(agents.inProcessWatches).toBe(false);
+    expect(agents.automationsAvailable).toBe(false);
     expect(agents.projects!()).toMatchObject([cloudProject]);
     expect(bindEnvironment).toHaveBeenCalledExactlyOnceWith(expect.any(Function));
     expect(bindRuntime).toHaveBeenCalledExactlyOnceWith(
@@ -324,7 +340,24 @@ describe("runner composition", () => {
     expect(bindNotices).toHaveBeenCalledExactlyOnceWith({ enqueue: expect.any(Function) });
     const notices = bindNotices.mock.lastCall![0];
     await host.start(f.runner.owner());
+    expect(buildScheduler).not.toHaveBeenCalled();
+    // A new cloud Session's surface omits the verb, direct and through Code
+    // Mode: the route is derived from the surface, so neither can reach it.
+    const birth: CodeModeBirth = {
+      offered: true,
+      mode: "both",
+      nudge: false,
+      largeServers: new Set(),
+    };
+    const surface = assembled.sessionToolSurface;
+    expect(surface).not.toBeNull();
+    const tools = surface!.resolve("project", [], undefined, [], birth, false);
+    expect(tools).not.toContain("automation.run");
+    const routes = assembly.codeMode.surfaceFor(birth, tools, [])?.routes;
+    expect(Object.keys(routes ?? {})).not.toContain("automation.run");
+    expect(routes?.["automation.run"]).toBeUndefined();
     expect(buildToolDoor.mock.lastCall![0].cloudSessionVerbs).toBe(cloud.cloudSessionVerbs);
+    expect(buildToolDoor.mock.lastCall![0].automationsAvailable).toBe(false);
     expect(buildToolDoor.mock.lastCall![0].authorityPolicy(cloudProject.id)).toBe(
       DEFAULT_AUTHORITY_POLICY,
     );
@@ -614,6 +647,8 @@ describe("runner composition", () => {
     if (!isLiveHost(host)) throw new Error(host.database.error);
     const build = vi.spyOn(handlerModule, "createHostHandlers");
     const f = compose(fixture);
+    // A local launch keeps the live module, with the same start and stop.
+    expect(f.runner.automations.kind).toBe("live");
     await host.start(f.runner.owner());
     const proof = await f.runner.ready();
     const map = f.runner.handlers(proof);

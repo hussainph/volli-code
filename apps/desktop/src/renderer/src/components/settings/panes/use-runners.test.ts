@@ -2,7 +2,7 @@
  * Settings → Runners' status words (VC-895): each status the backend writes,
  * this Mac's own states, and the one recovery a blocked Mac offers.
  */
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { THIS_MAC_RUNNER_OFF, type ThisMacRunnerSnapshot } from "@volli/shared";
 
 import { runnerStatus, sinceLabel, thisMacRecovery, thisMacStatus } from "./use-runners";
@@ -56,9 +56,15 @@ describe("a runner's status", () => {
     expect(sinceLabel(YESTERDAY, NOW)).toBe(
       new Date(YESTERDAY).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
     );
-    expect(sinceLabel(NOW)).toBe(
-      new Date(NOW).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }),
-    );
+    // Exercise the default clock without depending on the real calendar day.
+    vi.useFakeTimers({ now: NOW });
+    try {
+      expect(sinceLabel(NOW)).toBe(
+        new Date(NOW).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

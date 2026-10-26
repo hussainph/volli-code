@@ -467,6 +467,19 @@ describe("the delegation paragraph", () => {
       `);
   });
 
+  it("does not recommend automation_run to a cloud Board Session without the frozen tool", () => {
+    const local = execution("project", roleVerbBundle("project"));
+    const withoutAutomation = execution(
+      "project",
+      roleVerbBundle("project").filter((verb) => verb !== "automation.run"),
+    );
+    expect(withoutAutomation).toBe(
+      local.replace("\nWhen a saved Automation already describes the job, use automation_run.", ""),
+    );
+    expect(withoutAutomation).toContain("Use session_delegate");
+    expect(withoutAutomation).not.toContain("automation_run");
+  });
+
   it("teaches a Ticket Session inline and subagent, and session_start only for its own Ticket", () => {
     const text = execution("ticket", roleVerbBundle("ticket"));
     expect(text).toContain("Use session_delegate for bounded work");

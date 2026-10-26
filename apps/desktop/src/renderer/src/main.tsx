@@ -233,24 +233,28 @@ async function main() {
   // before priming so a window opened mid-countdown cannot miss a replacement
   // between its read and listener registration. Every window receives the same
   // whole snapshot; Cancel travels back to main with the exact arrival id.
-  window.api.automations.onPendingArmedRunsChanged(receivePendingArmedRuns);
-  window.api.automations.onPendingArmedRunSettled(announcePendingArmedRunSettlement);
-  window.api.automations
-    .pendingArmedRuns()
-    .then((pending) => {
-      if (pending.ok) {
-        receivePendingArmedRuns(pending.pending);
-        // A failed expiry can outlive every renderer and the app process. Its
-        // retained command id stays in main; a newly opened window restores
-        // the retry action from this renderer-safe projection.
-        for (const failure of pending.failures) {
-          announcePendingArmedRunSettlement({ kind: "failed", ...failure });
-        }
-      } else toastError(`Couldn't load pending automations: ${pending.error}`);
-    })
-    .catch((error: unknown) => {
-      toastError(`Couldn't load pending automations: ${errorMessage(error)}`);
-    });
+  // Cloud Automations have no runner executor yet. Do not read or subscribe
+  // to this Mac's frozen countdowns in a cloud window.
+  if (!cloudLaunch) {
+    window.api.automations.onPendingArmedRunsChanged(receivePendingArmedRuns);
+    window.api.automations.onPendingArmedRunSettled(announcePendingArmedRunSettlement);
+    window.api.automations
+      .pendingArmedRuns()
+      .then((pending) => {
+        if (pending.ok) {
+          receivePendingArmedRuns(pending.pending);
+          // A failed expiry can outlive every renderer and the app process. Its
+          // retained command id stays in main; a newly opened window restores
+          // the retry action from this renderer-safe projection.
+          for (const failure of pending.failures) {
+            announcePendingArmedRunSettlement({ kind: "failed", ...failure });
+          }
+        } else toastError(`Couldn't load pending automations: ${pending.error}`);
+      })
+      .catch((error: unknown) => {
+        toastError(`Couldn't load pending automations: ${errorMessage(error)}`);
+      });
+  }
 
   window.api.data.onChanged((event) => {
     // Forward the payload's scope (affected ticket/project, or untargeted) so

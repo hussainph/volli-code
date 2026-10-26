@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { CodeModeBirth, SessionRole, SessionToolId } from "@volli/shared";
-import { resolveHostToolSurface } from "./host-capabilities";
+import {
+  codeModeSurfaceAtBirth,
+  type CodeModeBirth,
+  type SessionRole,
+  type SessionToolId,
+} from "@volli/shared";
+import { resolveHostToolSurface, type HostToolCapabilities } from "./host-capabilities";
 import { MAIN_SURFACE_BASELINE } from "./fixtures/main-surface-baseline";
 import type { SessionWebPorts } from "../web/ports";
 
@@ -149,5 +154,43 @@ describe("host capabilities at Session birth", () => {
     expect(tools).toContain("shell_start");
     expect(tools).toContain("web_search");
     expect(tools.some((tool) => tool.startsWith("browser_"))).toBe(false);
+  });
+
+  it("offers no automation.run — direct or through Code Mode — in a launch without Automations (VC-952)", () => {
+    const resolve = (capabilities: HostToolCapabilities) =>
+      resolveHostToolSurface({
+        capabilities,
+        web: {},
+        role: "project",
+        grants: [],
+        mcpTools: [],
+        classify: false,
+        codeModeBirth,
+      });
+
+    // A local launch is unchanged: the verb is there, and Code Mode routes it.
+    const local = resolve(desktop);
+    expect(local).toContain("automation.run");
+    const localRoutes = codeModeSurfaceAtBirth({
+      birth: codeModeBirth,
+      tools: local,
+      mcpTools: [],
+    })?.routes;
+    expect(localRoutes?.["automation.run"]).toBeDefined();
+
+    const tools = resolve({ ...desktop, automationsAvailable: false });
+    expect(tools).not.toContain("automation.run");
+    // The rest of the project bundle is untouched.
+    expect(tools).toContain("session.start");
+    expect(tools).toContain("codemode");
+    // Code Mode's routes are derived from the tools this resolver returns, so
+    // the one verb that spends an Automation has no route a program could call.
+    const routes = codeModeSurfaceAtBirth({
+      birth: codeModeBirth,
+      tools,
+      mcpTools: [],
+    })?.routes;
+    expect(Object.keys(routes ?? {})).not.toContain("automation.run");
+    expect(routes?.["automation.run"]).toBeUndefined();
   });
 });

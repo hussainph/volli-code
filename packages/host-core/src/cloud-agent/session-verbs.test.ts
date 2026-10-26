@@ -10,6 +10,7 @@ import {
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { createTestSessionEngine } from "../testing/session-engine";
+import { AUTOMATIONS_UNAVAILABLE_IN_CLOUD } from "../automations/availability";
 import { createAgentBackend } from "./agent-backend";
 import { createCloudFunctionsClient } from "./functions-client";
 import { createCloudSessionVerbs } from "./session-verbs";
@@ -291,9 +292,16 @@ describe("cloud Session target routing", () => {
       "connection",
     );
   });
+  it("refuses automation.run instead of substituting a local Run (VC-952)", async () => {
+    const f = await fixture();
+    expect((await f.tool("automation.run", {}))?.text).toBe(
+      `Volli refused: ${AUTOMATIONS_UNAVAILABLE_IN_CLOUD}`,
+    );
+    expect(f.calls).toEqual([]);
+  });
   it("refuses unavailable cloud workflows instead of substituting local behavior", async () => {
     const f = await fixture();
-    for (const verb of ["watch", "ticket.await", "session.await", "automation.run"] as const)
+    for (const verb of ["watch", "ticket.await", "session.await"] as const)
       expect((await f.tool(verb, {}))?.text).toContain("refused");
     expect((await f.tool("session.start", { ticket: "VC-1", env: "Other Mac" }))?.text).toContain(
       "Omit env",

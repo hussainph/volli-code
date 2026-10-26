@@ -129,16 +129,19 @@ const EXECUTION_CORE = [
  *   review. From a Board Session that is where substantial implementation
  *   goes; a Ticket Session holds it only by grant, and a grant can only aim it
  *   at its own Ticket, so it is told exactly that;
- * - `automation_run` — a saved Automation already describes the job. It lives
- *   in the Board bundle alone, so only the Board paragraph names it.
+ * - `automation_run` — a saved Automation already describes the job. Only a
+ *   Board Session whose frozen bundle holds it is told to use it; new cloud
+ *   Sessions have no Automation executor yet.
  *
  * Keyed by Role and rendered only when the frozen bundle holds
  * `session.delegate`. That condition keeps the Cache Prefix Role-static: the
  * verb is in both working Roles' DEFAULT bundle, so no grant can change whether
  * a Session of either Role holds it, and a subagent's bundle is empty by
- * construction — it composes no paragraph and is never told to delegate. The
- * only Sessions the condition actually separates are ones frozen before the
- * verb existed, which would otherwise be told to call a tool they lack.
+ * construction — it composes no paragraph and is never told to delegate.
+ * Sessions the condition separates are ones frozen before the verb existed,
+ * which would otherwise be told to call a tool they lack. The Automation line
+ * is separately bounded by that frozen tool, preserving local and previously
+ * frozen prompts while withholding it from new cloud Sessions.
  *
  * Budgeted on its own, beside the core's 150–250: the Board paragraph is 681
  * characters / ~171 estimated tokens and the Ticket one 538 / ~135, so the
@@ -168,9 +171,10 @@ const DELEGATION_PARAGRAPH: Record<Exclude<RuntimeSessionRole, "subagent">, stri
     ...DELEGATION_INLINE_AND_SUBAGENT,
     "Substantial implementation belongs on a Ticket with its own Session",
     "(session_start): its own worktree, branch and review, visible on the board.",
-    "When a saved Automation already describes the job, use automation_run.",
   ].join("\n"),
 };
+const AUTOMATION_RUN_GUIDANCE =
+  "When a saved Automation already describes the job, use automation_run.";
 
 /**
  * When to write a program (VC-471, the "nudge").
@@ -207,10 +211,13 @@ function executionLayer(role: RuntimeSessionRole, tools: RuntimeToolBundle): str
       ? CODE_MODE_PARAGRAPH.replace("a loop of bash or read calls", "a loop of read calls")
       : CODE_MODE_PARAGRAPH;
   const codeMode = tools.codeMode?.nudge === true ? `\n\n${paragraph}` : "";
-  if (role === "subagent" || !(tools.verbs ?? []).includes("session.delegate")) {
+  const verbs = tools.verbs ?? [];
+  if (role === "subagent" || !verbs.includes("session.delegate")) {
     return `${EXECUTION_CORE}${codeMode}`;
   }
-  return `${EXECUTION_CORE}\n\n${DELEGATION_PARAGRAPH[role]}${codeMode}`;
+  const automation =
+    role === "project" && verbs.includes("automation.run") ? `\n${AUTOMATION_RUN_GUIDANCE}` : "";
+  return `${EXECUTION_CORE}\n\n${DELEGATION_PARAGRAPH[role]}${automation}${codeMode}`;
 }
 
 const ROLE_LAYER: Record<RuntimeSessionRole, string> = {
