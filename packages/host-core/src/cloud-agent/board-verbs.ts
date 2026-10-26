@@ -234,6 +234,7 @@ function refusalOf(error: CloudFunctionError): AgentResponse {
     case "forbidden":
     case "fenced":
     case "revoked":
+    case "preview_access_required":
     case "not_claimed":
     case "unauthenticated":
       return failure(

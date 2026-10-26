@@ -262,6 +262,12 @@ describe("the /runner/* wire", () => {
       code: "rate_limited",
       message: "slow",
     });
+    expect(
+      readRunnerHttpError({ error: { code: "preview_access_required", message: "preview" } }),
+    ).toEqual({
+      code: "preview_access_required",
+      message: "preview",
+    });
     expect(RUNNER_RELINK_CODES).toEqual(["invalid_credential", "revoked"]);
   });
 });

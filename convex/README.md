@@ -17,15 +17,24 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
   one-time secret (install token, poll secret, refresh credential), takes JSON
   only, and sends no CORS headers. Device-code starts are limited per network
   (IPv4 address or IPv6 /64) and deployment-wide. Install-token links and
-  device polls are limited per network and per real token/request; a made-up
-  code creates no code bucket. Throttles return 429 with `Retry-After`.
+  device polls are limited per network, per real token/request and globally;
+  a made-up code creates no code bucket. Throttles return 429 with `Retry-After`.
   Addresses come from Convex request metadata, never forwarded headers.
 - Preview access is checked on every product call, not just sign-in: people,
   runners and Agent tokens need a live grant and current Preview Agreement.
   Revocation or expiry cuts off existing memberships, runner writes/reads and
-  credential refresh. Desktop registration, install-token redemption and device
+  credential refresh. A preview lapse pauses authorization without deleting
+  the linked credential; a re-grant or agreement acceptance restores it.
+  Desktop registration, install-token redemption and device
   approval/poll recheck it too. Account enrollment/recovery stays reachable.
 - No Electron imports. `scripts/check-host-electron-imports.mjs` enforces this.
+
+The invite-only preview uses conservative limits: starts and install links
+allow a burst of ten per network, then one per minute. Bulk installs behind
+one NAT may need to wait. Global caps deliberately favor bounded anonymous
+allocations over linking availability during a distributed flood; they are
+not a substitute for upstream abuse protection. A self-hosted reverse proxy
+must expose trustworthy request metadata or its users share one quota.
 
 ## Layout
 
@@ -48,7 +57,7 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 | `functions/lib/boardEffects.ts`                                     | A board write's machine side effects (Done/archive trim, interrupts, armed arrivals, worktree materialization) as `runnerJobs` rows for the runner that holds the work.                                                                                                                           |
 | `functions/activity.ts`                                             | The activity feed: `project` and `workspace`, newest first, with our own page cursor (see **The activity feed**).                                                                                                                                                                                 |
 | `functions/lib/activity.ts`                                         | The feed reader: the k-way merge, the cursor, visibility, folding and the tickets and people a page names.                                                                                                                                                                                        |
-| `functions/boardReceipts.ts`, `functions/crons.ts`                  | The scheduled sweeps (receipts hourly, packed transcript staging every 15 min, the runner offline sweep every minute, runner link/audit expiry hourly).                                                                                                                                           |
+| `functions/boardReceipts.ts`, `functions/crons.ts`                  | The scheduled sweeps (receipts hourly, packed transcript staging every 15 min, the runner offline sweep every minute, runner link/audit expiry and refilled rate-limit cleanup hourly).                                                                                                           |
 | `functions/transcripts.ts`                                          | Transcript bodies and Pi logs: `stageArtifacts`, `commitSegment`, `commitPiLogSegment`, `head` (where a runner resumes), the producer fence and `sweepPacked`.                                                                                                                                    |
 | `functions/sessionTranscript.ts`                                    | Viewer-authorized transcript segment manifests, staged artifact bodies and signed GETs for committed packs/spills. The renderer hydrates settled history with these reads.                                                                                                                        |
 | `functions/files.ts`                                                | `presignPut`: a SigV4 URL bound to one key, length and SHA-256 (signed by `presignS3Request` in `@volli/shared/cloud`).                                                                                                                                                                           |
@@ -71,7 +80,7 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 | `functions/sessionMessages.ts`                                      | `pending`: an owner's commands with no engine receipt, waiting or ended with a reason, and a message's staged body (runners read staged bodies through `transcripts.commandArtifact`).                                                                                                            |
 | `functions/lib/sessionIntake.ts`, `functions/lib/sessionDerived.ts` | The intake rules and the fold (`sessionIntake`), and what a folded fact derives: turns, attention items, the second job receipt, the listing row (`sessionDerived`).                                                                                                                              |
 | `functions/attention.ts`, `functions/lib/attention.ts`              | Needs-you attention: `markSeen`, `raiseFromRunner` (`volli notify`), the internal `access_lost` sweep. `lib/attention.ts` is the one writer of `attentionItems` (and the push hook); reads filter with `attentionVisibility` (`canSeeAttention`).                                                 |
-| `functions/testSeed.ts`, `functions/lib/testWorld.ts`               | Test-only seeding (a Workspace, a project, a ticket, runners) until those areas have functions of their own. Internal, and refused on any deployment without `VOLLI_TEST_JWKS`.                                                                                                                   |
+| `functions/testSeed.ts`, `functions/lib/testWorld.ts`               | Test-only seeding (a Workspace, project, ticket, runners) and quota resets for the serial backend suite. Internal, and refused on any deployment without `VOLLI_TEST_JWKS`.                                                                                                                       |
 | `functions/secrets.ts`                                              | Team secrets: `listWorkspace`, `listProject` (with what overrides what), `listPersonal`, `set` (an action: it seals), `setExposure`, `remove`. Metadata only on the way out: no query returns a secret's value. Rules: `secrets.ts` in `@volli/shared/cloud`.                                     |
 | `functions/secretsDelivery.ts`                                      | The resolved set for a runner's claimed Session or leased job (`deliver`, internal): claim, ownership, membership and opt-out checks, precedence, exposure, then opened in memory.                                                                                                                |
 | `functions/lib/sealing.ts`, `secretKeys.ts`                         | Envelope encryption: per-Workspace and per-person data keys wrapped by a root key behind `RootKeyProvider`; `secretKeys:rewrap` re-wraps after a root key rotation. See "Secrets root key" below.                                                                                                 |

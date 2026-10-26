@@ -590,6 +590,8 @@ export const RUNNER_HTTP_ERROR_CODES = [
    * reply is a 429 whose `Retry-After` header says, in seconds, when to try again.
    */
   "rate_limited",
+  /** Authorization is paused; keep the credential for when preview access is restored. */
+  "preview_access_required",
 ] as const;
 export type RunnerHttpErrorCode = (typeof RUNNER_HTTP_ERROR_CODES)[number];
 

@@ -553,5 +553,6 @@ the outbox directly, and the signed-out watch path keeps its existing rules.
 operation plus a hashed network or an existing token/request id. No secret or
 raw IP is stored there. Admission is transactional and all-or-none across the
 network and code/global buckets. Refilled rows are equivalent to absent rows;
-the hourly paged sweep deletes them using `by_full_at`. Device-code starts have
-a deployment-wide cap as well as a network cap, bounding anonymous allocations.
+the hourly paged sweep deletes them using `by_full_at`. All three linking doors have
+a deployment-wide cap as well as a network cap, bounding device-code and
+limiter-metadata allocations across distinct networks.

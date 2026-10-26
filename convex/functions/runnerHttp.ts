@@ -52,6 +52,7 @@ const STATUS_OF: Record<RunnerHttpErrorCode, number> = {
   invalid_credential: 401,
   revoked: 403,
   issuer_unconfigured: 503,
+  preview_access_required: 403,
   rate_limited: 429,
 };
 
@@ -63,6 +64,7 @@ const MESSAGE_OF: Record<RunnerHttpErrorCode, string> = {
   invalid_credential: "This runner's credential is not valid. Link it again.",
   revoked: "This runner was removed from its account. Link it again.",
   issuer_unconfigured: "This deployment cannot issue runner tokens yet.",
+  preview_access_required: "This account needs preview access and the current Preview Agreement.",
   rate_limited: "Too many linking requests.",
 };
 

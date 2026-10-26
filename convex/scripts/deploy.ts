@@ -24,6 +24,8 @@
  * against a loopback self-hosted backend; the deployment refuses it elsewhere too.
  */
 
+import { isLoopbackUrl } from "../functions/lib/deploymentChecks.ts";
+
 /** Runs the pinned `convex` CLI; `capture` collects stdout instead of printing it. */
 export type ConvexCli = (
   args: string[],
@@ -32,14 +34,6 @@ export type ConvexCli = (
 ) => Promise<{ code: number; stdout: string }>;
 
 const filled = (value: string | undefined) => (value ?? "").trim() !== "";
-
-function isLoopback(url: string): boolean {
-  try {
-    return ["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname);
-  } catch {
-    return false;
-  }
-}
 
 /** The exit code: 0 deployed and checked, 2 a usage or target error, else the failing step's. */
 export async function deployChecked(
@@ -64,7 +58,7 @@ export async function deployChecked(
     log("CONVEX_DEPLOY_KEY must be a prod: or dev: deploy key, naming one deployment.");
     return 2;
   }
-  if (mode === "test" && !(selfHosted && isLoopback(env["CONVEX_SELF_HOSTED_URL"] as string))) {
+  if (mode === "test" && !(selfHosted && isLoopbackUrl(env["CONVEX_SELF_HOSTED_URL"]))) {
     log("--test runs only against a loopback self-hosted backend.");
     return 2;
   }

@@ -9,8 +9,8 @@
  *   real row: the install token's row for `/runner/link`, the named link
  *   request for `/runner/link/poll`. Addresses from many networks still cannot
  *   hammer one code, and a junk code makes no bucket;
- * - for the whole deployment, on `/runner/link/start` only, so starts spread
- *   over many networks still cannot write unbounded device-code rows.
+ * - for the whole deployment, so callers spread over many networks cannot
+ *   allocate unbounded device-code requests or limiter metadata.
  *
  * A refused request writes nothing. Bucket keys hold a hash of the network
  * and a row's own id, never an address or a secret. An absent row is a full
@@ -28,7 +28,7 @@ import type { DataModel, Doc } from "../_generated/dataModel.js";
 type Writer = { db: GenericDatabaseWriter<DataModel> };
 
 /** A token bucket: `capacity` requests at once, then one more every `refillMs`. */
-export interface BucketPolicy {
+interface BucketPolicy {
   readonly capacity: number;
   readonly refillMs: number;
 }
@@ -40,10 +40,14 @@ export const RUNNER_LINK_LIMITS = {
   startGlobal: { capacity: 120, refillMs: 2_000 },
   /** Install-token links from one network. */
   linkPerNetwork: { capacity: 10, refillMs: 60_000 },
+  /** Bounds metadata allocation across networks, not just guesses of one code. */
+  linkGlobal: { capacity: 120, refillMs: 2_000 },
   /** Tries of one install token, from anywhere. */
   linkPerToken: { capacity: 5, refillMs: 60_000 },
   /** Polls from one network: a dozen boxes polling every 5 s. */
   pollPerNetwork: { capacity: 60, refillMs: 400 },
+  /** Enough for fifty boxes at the normal interval, with a bounded burst. */
+  pollGlobal: { capacity: 120, refillMs: 100 },
   /** Polls of one link request, from anywhere: faster than the 5 s interval never runs dry. */
   pollPerRequest: { capacity: 5, refillMs: 4_000 },
 } as const satisfies Record<string, BucketPolicy>;
@@ -51,7 +55,7 @@ export const RUNNER_LINK_LIMITS = {
 /** Rows one sweep pass deletes; a full page schedules the next one. */
 export const RATE_LIMIT_SWEEP_PAGE_SIZE = 200;
 
-export interface Bucket {
+interface Bucket {
   key: string;
   policy: BucketPolicy;
 }
@@ -106,7 +110,10 @@ export function linkStartBuckets(ip: string | null): Bucket[] {
 
 /** What one `/runner/link` from `ip` takes from; `tokenId` is the presented token's row, if any. */
 export function linkBuckets(ip: string | null, tokenId: string | null): Bucket[] {
-  const buckets = [networkBucket("link", ip, RUNNER_LINK_LIMITS.linkPerNetwork)];
+  const buckets = [
+    networkBucket("link", ip, RUNNER_LINK_LIMITS.linkPerNetwork),
+    { key: "link:all", policy: RUNNER_LINK_LIMITS.linkGlobal },
+  ];
   if (tokenId !== null) {
     buckets.push({ key: `link:token:${tokenId}`, policy: RUNNER_LINK_LIMITS.linkPerToken });
   }
@@ -115,7 +122,10 @@ export function linkBuckets(ip: string | null, tokenId: string | null): Bucket[]
 
 /** What one `/runner/link/poll` from `ip` takes from; `requestId` names a real request, if any. */
 export function linkPollBuckets(ip: string | null, requestId: string | null): Bucket[] {
-  const buckets = [networkBucket("link_poll", ip, RUNNER_LINK_LIMITS.pollPerNetwork)];
+  const buckets = [
+    networkBucket("link_poll", ip, RUNNER_LINK_LIMITS.pollPerNetwork),
+    { key: "link_poll:all", policy: RUNNER_LINK_LIMITS.pollGlobal },
+  ];
   if (requestId !== null) {
     buckets.push({
       key: `link_poll:request:${requestId}`,

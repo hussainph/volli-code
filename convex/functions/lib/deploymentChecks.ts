@@ -13,7 +13,7 @@
  * cloud check runs anyway.
  */
 
-export type DeploymentCheckMode = "cloud" | "test";
+type DeploymentCheckMode = "cloud" | "test";
 
 /** The variable `auth.config.ts` trusts the test issuer under. */
 const TEST_JWKS_VARIABLE = "VOLLI_TEST_JWKS";
@@ -35,16 +35,16 @@ const REQUIRED_VARIABLES = [
   "VOLLI_S3_SECRET_ACCESS_KEY",
 ] as const;
 
-export type DeploymentProblemCode = "forbidden" | "missing" | "test_mode_refused";
+type DeploymentProblemCode = "forbidden" | "missing" | "test_mode_refused";
 
 // Type aliases, not interfaces: a `ConvexError`'s data must be a Convex `Value`,
 // which an interface (no implicit index signature) is not.
-export type DeploymentProblem = {
+type DeploymentProblem = {
   variable: string;
   code: DeploymentProblemCode;
 };
 
-export type DeploymentReport = {
+type DeploymentReport = {
   ok: boolean;
   mode: DeploymentCheckMode;
   /** Whether the deployment's own URL is loopback; only a loopback one may pass a test check. */
@@ -55,7 +55,7 @@ export type DeploymentReport = {
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 /** Whether `url` is an http(s) URL on this machine's loopback interface. */
-function isLoopbackUrl(url: string | undefined): boolean {
+export function isLoopbackUrl(url: string | undefined): boolean {
   try {
     const parsed = new URL(url ?? "");
     return /^https?:$/.test(parsed.protocol) && LOOPBACK_HOSTS.has(parsed.hostname);

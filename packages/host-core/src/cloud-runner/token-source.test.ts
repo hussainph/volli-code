@@ -123,6 +123,21 @@ describe("the runner token", () => {
     await expect(h.source.token()).resolves.toBe("jwt-2");
   });
 
+  it("retains the credential through preview cutoff and recovers after a re-grant", async () => {
+    const h = harness();
+    h.answers.push(() =>
+      Promise.reject(new RunnerHttpError("preview_access_required", 403, "preview")),
+    );
+    await expect(h.source.token()).rejects.toThrow("preview");
+    expect(h.source.lost).toBeNull();
+    expect(h.lost).toEqual([]);
+    await expect(h.source.token()).resolves.toBe("jwt-2");
+    expect(h.log.filter((line) => line.startsWith("exchange"))).toEqual([
+      "exchange vrc_1",
+      "exchange vrc_1",
+    ]);
+  });
+
   it("a revoked runner or a dead credential ends the link once, and answers null from then on", async () => {
     for (const code of ["revoked", "invalid_credential"] as const) {
       const h = harness();

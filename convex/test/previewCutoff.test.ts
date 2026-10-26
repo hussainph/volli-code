@@ -83,18 +83,18 @@ describe("preview hard cutoff", () => {
         vi.advanceTimersByTime(1_001);
       }
       await expect(read()).rejects.toThrow(code("preview_waitlisted"));
-      await expect(wake()).rejects.toThrow(code("revoked"));
-      await expect(agentRead()).rejects.toThrow(code("revoked"));
+      await expect(wake()).rejects.toThrow(code("preview_access_required"));
+      await expect(agentRead()).rejects.toThrow(code("preview_access_required"));
       await expect(
         w.runner.query(internal.agentTokens.authorizeMint, { sessionId: w.sessionId }),
-      ).rejects.toThrow(code("revoked"));
+      ).rejects.toThrow(code("preview_access_required"));
       await expect(
         w.runner.mutation(api.sessions.accept, {
           sessionId: w.sessionId,
           generation: 1,
           events: [],
         }),
-      ).rejects.toThrow(code("revoked"));
+      ).rejects.toThrow(code("preview_access_required"));
       // Enrollment/recovery remains reachable, but cannot recover product access on its own.
       await expect(w.person.query(api.accounts.viewer, {})).resolves.toMatchObject({
         previewAccess: "waitlisted",
@@ -103,6 +103,16 @@ describe("preview hard cutoff", () => {
         previewAccess: "waitlisted",
       });
       await expect(read()).rejects.toThrow(code("preview_waitlisted"));
+      await w.t.mutation(internal.previewAccess.set, {
+        kind: "user",
+        value: w.userId,
+        enabled: true,
+        expiresAt: Date.now() + 60_000,
+      });
+      // Re-grant restores the same identities; no runner credential was revoked.
+      await expect(read()).resolves.toMatchObject({ id: w.projectId });
+      await expect(wake()).resolves.toMatchObject({ ready: 0 });
+      await expect(agentRead()).resolves.toMatchObject({ id: w.projectId });
     },
   );
 
@@ -124,9 +134,11 @@ describe("preview hard cutoff", () => {
         }),
     ])
       await expect(call()).rejects.toThrow(code("preview_waitlisted"));
-    await expect(w.runner.query(api.runnerJobs.wake, {})).rejects.toThrow(code("revoked"));
+    await expect(w.runner.query(api.runnerJobs.wake, {})).rejects.toThrow(
+      code("preview_access_required"),
+    );
     await expect(w.agent.query(api.projects.get, { projectId: w.projectId })).rejects.toThrow(
-      code("revoked"),
+      code("preview_access_required"),
     );
   });
 
@@ -142,9 +154,11 @@ describe("preview hard cutoff", () => {
     await expect(w.person.query(api.projects.get, { projectId: w.projectId })).rejects.toThrow(
       code("preview_agreement_required"),
     );
-    await expect(w.runner.query(api.runnerJobs.wake, {})).rejects.toThrow(code("revoked"));
+    await expect(w.runner.query(api.runnerJobs.wake, {})).rejects.toThrow(
+      code("preview_access_required"),
+    );
     await expect(w.agent.query(api.projects.get, { projectId: w.projectId })).rejects.toThrow(
-      code("revoked"),
+      code("preview_access_required"),
     );
   });
 
@@ -203,7 +217,7 @@ describe("preview hard cutoff", () => {
         nextHash: secretHash("next"),
         ip: null,
       }),
-    ).resolves.toEqual({ ok: false, code: "revoked" });
+    ).resolves.toEqual({ ok: false, code: "preview_access_required" });
     const stored = await w.t.run(async (ctx) => ({
       token: await ctx.db
         .query("runnerInstallTokens")
@@ -216,5 +230,40 @@ describe("preview hard cutoff", () => {
     }));
     expect(stored.token!.usedAt).toBeNull();
     expect(stored.credential!.currentHash).toBe(secretHash(desktop.credential));
+    await w.t.mutation(internal.previewAccess.set, {
+      kind: "user",
+      value: w.userId,
+      enabled: true,
+    });
+    await expect(
+      w.t.mutation(internal.runners.rotateCredential, {
+        runnerId: desktop.runnerId,
+        presentedHash: secretHash(desktop.credential),
+        nextHash: secretHash("next"),
+        ip: null,
+      }),
+    ).resolves.toMatchObject({ ok: true, generation: 2 });
+    await w.t.run(async (ctx) => {
+      const credential = await ctx.db
+        .query("runnerCredentials")
+        .withIndex("by_runner", (q) => q.eq("runnerId", desktop.runnerId))
+        .unique();
+      await ctx.db.patch(credential!._id, { currentFirstUsedAt: Date.now() });
+    });
+    await w.t.mutation(internal.previewAccess.set, {
+      kind: "user",
+      value: w.userId,
+      enabled: false,
+    });
+    const refresh = (presented: string) =>
+      w.t.mutation(internal.runners.rotateCredential, {
+        runnerId: desktop.runnerId,
+        presentedHash: secretHash(presented),
+        nextHash: secretHash("later"),
+        ip: null,
+      });
+    // A pause neither reveals itself to a bad credential nor disables reuse detection.
+    await expect(refresh("wrong")).resolves.toEqual({ ok: false, code: "invalid_credential" });
+    await expect(refresh(desktop.credential)).resolves.toEqual({ ok: false, code: "revoked" });
   });
 });

@@ -245,8 +245,8 @@ describe("POST /runner/link/poll", () => {
     for (let n = 0; n < capacity; n += 1) {
       expect((await poll(t, "192.0.2.9", newId("runner"), "vrp_junk")).status).toBe(404);
     }
-    // One network bucket, however many ids were made up.
-    expect(await buckets(t)).toHaveLength(before + 1);
+    // One network bucket and one global bucket, however many ids were made up.
+    expect(await buckets(t)).toHaveLength(before + 2);
     // Refused at the network, a real request's own bucket is not touched.
     expectLimited(await poll(t, "192.0.2.9", requestId, pollSecret));
     expect(
@@ -299,11 +299,34 @@ describe("POST /runner/link", () => {
     for (let n = 0; n < capacity; n += 1) {
       expect((await link(t, "192.0.2.9", `vrt_junk${n}`)).status).toBe(401);
     }
-    expect(await buckets(t)).toHaveLength(1);
+    expect(await buckets(t)).toHaveLength(2);
     expectLimited(await link(t, "192.0.2.9", "vrt_junk_more"));
     expect((await link(t, "192.0.2.10", "vrt_junk_more")).status).toBe(401);
   });
 });
+
+test.each(["link", "poll"] as const)(
+  "%s metadata allocation has a global ceiling",
+  async (door) => {
+    vi.useFakeTimers();
+    const t = setup();
+    const policy = door === "link" ? RUNNER_LINK_LIMITS.linkGlobal : RUNNER_LINK_LIMITS.pollGlobal;
+    await t.run((ctx) =>
+      ctx.db.insert("runnerLinkRateLimits", {
+        key: door === "link" ? "link:all" : "link_poll:all",
+        tokens: 0,
+        updatedAt: Date.now(),
+        fullAt: Date.now() + policy.capacity * policy.refillMs,
+      }),
+    );
+    const result =
+      door === "link"
+        ? await link(t, "192.0.2.55", "vrt_junk")
+        : await poll(t, "192.0.2.55", newId("runner"), "vrp_junk");
+    expectLimited(result);
+    expect(await buckets(t)).toHaveLength(1);
+  },
+);
 
 describe("the bucket cleanup", () => {
   test("deletes refilled buckets only, and a deleted bucket answers as it would have", async () => {
