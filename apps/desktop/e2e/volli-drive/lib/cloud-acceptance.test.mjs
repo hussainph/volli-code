@@ -37,6 +37,7 @@ test("the fixture is the loopback backend with a test key, never a deployment", 
   assert.deepEqual(cloudFixtureFromEnv(env), {
     convexUrl: env.VOLLI_CONVEX_URL,
     siteUrl: env.VOLLI_CONVEX_SITE_URL,
+    storageOrigin: null,
     privateKeyPem: pem,
     adminKey: "admin",
   });
@@ -58,9 +59,33 @@ test("the key reaches the supervisor by environment only, and back", () => {
   assert.deepEqual(cloudFixtureFromSupervisorEnv(passed), {
     convexUrl: fixture.convexUrl,
     siteUrl: fixture.siteUrl,
+    storageOrigin: null,
     privateKeyPem: pem,
   });
   assert.equal(cloudFixtureFromSupervisorEnv({}), null);
+});
+
+test("the exact object-store origin survives CLI → supervisor → Electron", () => {
+  const storageOrigin = "http://127.0.0.1:4321";
+  const fixture = cloudFixtureFromEnv({ ...env, VOLLI_CLOUD_STORAGE_ORIGIN: `${storageOrigin}/` });
+  const passed = cloudSupervisorEnv(fixture);
+  assert.equal(passed[CLOUD_SUPERVISOR_ENV.storageOrigin], storageOrigin);
+  const restored = cloudFixtureFromSupervisorEnv(passed);
+  assert.equal(restored.storageOrigin, storageOrigin);
+  assert.equal(cloudElectronEnv(restored, "wake-1").VOLLI_CLOUD_STORAGE_ORIGIN, storageOrigin);
+  for (const invalid of [
+    "https://store.example.com",
+    "http://store.example.com",
+    "http://127.0.0.1:4321/path",
+    "http://user@127.0.0.1:4321",
+    "http://127.0.0.1:4321?key=value",
+    "http://127.0.0.1:4321/#hash",
+  ]) {
+    assert.throws(() => cloudFixtureFromEnv({ ...env, VOLLI_CLOUD_STORAGE_ORIGIN: invalid }));
+    assert.throws(() =>
+      cloudFixtureFromSupervisorEnv({ ...passed, [CLOUD_SUPERVISOR_ENV.storageOrigin]: invalid }),
+    );
+  }
 });
 
 test("Electron gets the flag, the dev sign-in, the backend and the power seam", () => {

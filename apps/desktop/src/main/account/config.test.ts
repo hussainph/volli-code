@@ -113,6 +113,30 @@ describe("the account's configuration", () => {
     ).toBeNull();
   });
 
+  it("accepts an exact HTTP loopback transcript store only in an unpackaged config", () => {
+    for (const origin of ["http://127.0.0.1:4321", "http://localhost:4321"]) {
+      const env = { VOLLI_CLOUD_STORAGE_ORIGIN: `${origin}/` };
+      expect(resolveAccountConfig({ ...dev, env })).toMatchObject({
+        storageOrigin: origin,
+        problem: null,
+      });
+      expect(resolveAccountConfig({ packaged: true, env }).storageOrigin).toBeNull();
+    }
+    for (const origin of [
+      "http://storage.example.com",
+      "http://127.0.0.1:4321/path",
+      "http://user@localhost:4321",
+      "http://localhost:4321?key=value",
+    ]) {
+      expect(
+        resolveAccountConfig({ ...dev, env: { VOLLI_CLOUD_STORAGE_ORIGIN: origin } }),
+      ).toMatchObject({
+        storageOrigin: null,
+        problem: "VOLLI_CLOUD_STORAGE_ORIGIN is not an exact permitted origin",
+      });
+    }
+  });
+
   it("reads the dev issuer, which needs the fixture's key", () => {
     expect(
       resolveAccountConfig({

@@ -188,7 +188,7 @@ export async function startTranscriptStore(fixture, reportDir) {
     await close();
     throw error;
   }
-  return { objects, requests, problems, close };
+  return { endpoint, objects, requests, problems, close };
 }
 
 /** Read committed indexes; validate the real objects against the unchanged local files. */

@@ -204,6 +204,8 @@ HTTPS/WebSocket origins and transcript-store origin, never a wildcard or a
 packaged runtime environment override. Packaged builds pin these public values
 with `VOLLI_BUILD_CONVEX_URL` / `VOLLI_BUILD_STORAGE_ORIGIN`; unpackaged builds
 use validated dev configuration (`VOLLI_CONVEX_URL` / `VOLLI_CLOUD_STORAGE_ORIGIN`).
+An unpackaged fixture may use exact HTTP loopback backend and store origins;
+this never adds a loopback wildcard to the launch policy.
 The dev server separately permits fixture loopback connections. The HTTP-actions
 site URL is explicit in the launch descriptor but is used only by main.
 Session listings, settled

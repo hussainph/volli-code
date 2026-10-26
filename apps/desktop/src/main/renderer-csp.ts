@@ -15,7 +15,8 @@ export function launchConnectSources(
     ...new Set([
       backend,
       websocket.origin,
-      ...(storageOrigin === null ? [] : [exactOrigin(storageOrigin)]),
+      // Account config permits HTTP loopback only unpackaged; release inputs require HTTPS.
+      ...(storageOrigin === null ? [] : [exactOrigin(storageOrigin, true)]),
     ]),
   ];
 }
@@ -53,7 +54,7 @@ export function rendererConnectSources(input: {
   // backend and storage origins from main; legacy env must not leak into them.
   const storage = input.serve ? input.env["VOLLI_CLOUD_STORAGE_ORIGIN"] : undefined;
   if (storage === undefined || storage === "") return sources;
-  return [...sources, exactOrigin(storage)];
+  return [...sources, exactOrigin(storage, true)];
 }
 
 /**

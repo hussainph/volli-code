@@ -29,6 +29,8 @@ import { promises as fs } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import { exactOrigin } from "../../../src/main/deployment-config.ts";
+
 const exec = promisify(execFile);
 
 /** The built renderer page (`vite.config.ts`'s renderer `outDir`). */
@@ -58,6 +60,7 @@ export const DEV_NAME = "Dev User";
 export const CLOUD_SUPERVISOR_ENV = Object.freeze({
   convexUrl: "VOLLI_DRIVE_CLOUD_CONVEX_URL",
   siteUrl: "VOLLI_DRIVE_CLOUD_SITE_URL",
+  storageOrigin: "VOLLI_DRIVE_CLOUD_STORAGE_ORIGIN",
   privateKeyPem: "VOLLI_DRIVE_CLOUD_TEST_KEY",
 });
 
@@ -81,6 +84,11 @@ function loopbackHttpUrl(name, raw) {
   return raw;
 }
 
+function fixtureStorageOrigin(raw) {
+  if (!raw) return null;
+  return exactOrigin(loopbackHttpUrl("VOLLI_CLOUD_STORAGE_ORIGIN", raw), true);
+}
+
 /**
  * The fixture backend, from `with-backend.ts --deploy`'s environment. Refuses
  * anything that is not a loopback backend with a test issuer key: a drive
@@ -93,7 +101,13 @@ export function cloudFixtureFromEnv(env = process.env) {
   if (!privateKeyPem || !privateKeyPem.includes("PRIVATE KEY")) {
     throw new Error("VOLLI_CONVEX_TEST_PRIVATE_KEY is missing: run under `with-backend --deploy`");
   }
-  return { convexUrl, siteUrl, privateKeyPem, adminKey: env.VOLLI_CONVEX_ADMIN_KEY ?? null };
+  return {
+    convexUrl,
+    siteUrl,
+    storageOrigin: fixtureStorageOrigin(env.VOLLI_CLOUD_STORAGE_ORIGIN),
+    privateKeyPem,
+    adminKey: env.VOLLI_CONVEX_ADMIN_KEY ?? null,
+  };
 }
 
 /** What `cli launch --cloud` hands its supervisor, beside the scrubbed environment. */
@@ -101,6 +115,9 @@ export function cloudSupervisorEnv(fixture) {
   return {
     [CLOUD_SUPERVISOR_ENV.convexUrl]: fixture.convexUrl,
     [CLOUD_SUPERVISOR_ENV.siteUrl]: fixture.siteUrl,
+    ...(fixture.storageOrigin
+      ? { [CLOUD_SUPERVISOR_ENV.storageOrigin]: fixture.storageOrigin }
+      : {}),
     [CLOUD_SUPERVISOR_ENV.privateKeyPem]: fixture.privateKeyPem,
   };
 }
@@ -114,6 +131,7 @@ export function cloudFixtureFromSupervisorEnv(env = process.env) {
   return {
     convexUrl: loopbackHttpUrl("cloud fixture URL", convexUrl),
     siteUrl: loopbackHttpUrl("cloud fixture site URL", siteUrl),
+    storageOrigin: fixtureStorageOrigin(env[CLOUD_SUPERVISOR_ENV.storageOrigin]),
     privateKeyPem,
   };
 }
@@ -139,6 +157,7 @@ export function cloudElectronEnv(fixture, subject) {
     VOLLI_ACCOUNT_DEV_SUBJECT: subject,
     VOLLI_CONVEX_URL: fixture.convexUrl,
     VOLLI_CONVEX_SITE_URL: fixture.siteUrl,
+    ...(fixture.storageOrigin ? { VOLLI_CLOUD_STORAGE_ORIGIN: fixture.storageOrigin } : {}),
     VOLLI_CONVEX_TEST_PRIVATE_KEY: fixture.privateKeyPem,
     // Honoured only by an unpackaged build in a Volli Cloud launch (smoke-power.ts).
     VOLLI_SMOKE_CLOUD_RUNNER_POWER: "1",

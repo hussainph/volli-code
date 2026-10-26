@@ -13,7 +13,8 @@
  *   WorkOS environment, normally its staging one.
  * - `VOLLI_CONVEX_URL`: the backend `accounts.ensureViewer` runs on.
  * - `VOLLI_CONVEX_SITE_URL`: the explicit HTTP-actions origin (never inferred).
- * - `VOLLI_CLOUD_STORAGE_ORIGIN`: the exact HTTPS transcript-store origin.
+ * - `VOLLI_CLOUD_STORAGE_ORIGIN`: the exact transcript-store origin (HTTPS,
+ *   or HTTP loopback for a local fixture, as with the backend URLs).
  * Invalid dev origins become `problem` plus null, never a startup exception.
  *
  * A packaged build ignores all of these: its sign-in is never redirected by
@@ -83,7 +84,7 @@ export function resolveAccountConfig(input: {
   };
   const backendUrl = origin("VOLLI_CONVEX_URL", true);
   const siteUrl = origin("VOLLI_CONVEX_SITE_URL", true);
-  const storageOrigin = origin("VOLLI_CLOUD_STORAGE_ORIGIN", false);
+  const storageOrigin = origin("VOLLI_CLOUD_STORAGE_ORIGIN", true);
   let provider: AccountProviderConfig | null = null;
   const requested = value(env, "VOLLI_ACCOUNT_PROVIDER");
   const clientId = value(env, "VOLLI_WORKOS_CLIENT_ID");

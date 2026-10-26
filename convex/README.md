@@ -479,8 +479,9 @@ The desktop reads transcript packs and spilled bodies directly with
 `sessionTranscript.presignGet`, after the backend checks Session visibility.
 Name the bucket's S3 origin at packaging time — `VOLLI_BUILD_STORAGE_ORIGIN` for
 a packaged build — or, for an unpackaged build, in its runtime environment:
-`VOLLI_CLOUD_STORAGE_ORIGIN`, which the dev server also reads. Either way it is
-the exact public HTTPS origin, with no credentials, path or wildcard, and it is
-what allows these GETs in the CSP. The bucket's CORS must also allow the desktop
+`VOLLI_CLOUD_STORAGE_ORIGIN`, which the dev server also reads. This is an exact
+HTTPS origin, with no credentials, path or wildcard. An unpackaged desktop
+also permits an exact HTTP loopback origin for the local object-store fixture.
+The configured origin allows these GETs in the CSP. The bucket's CORS must also allow the desktop
 origin and `GET`; without storage configuration older packed bodies fail visibly,
 while staged inline bodies and live chunks require no object-store access.

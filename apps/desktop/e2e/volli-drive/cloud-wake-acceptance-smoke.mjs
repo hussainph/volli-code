@@ -153,7 +153,7 @@ function driver(label, socket) {
   };
 }
 
-async function launch(label, subject) {
+async function launch(label, subject, storageOrigin) {
   const { stdout } = await exec(
     process.execPath,
     [
@@ -167,7 +167,12 @@ async function launch(label, subject) {
       "--no-build",
       "--json",
     ],
-    { cwd: REPO, timeout: 300_000, maxBuffer: 2 * 1024 * 1024 },
+    {
+      cwd: REPO,
+      timeout: 300_000,
+      maxBuffer: 2 * 1024 * 1024,
+      env: { ...process.env, VOLLI_CLOUD_STORAGE_ORIGIN: storageOrigin },
+    },
   );
   const launched = JSON.parse(stdout);
   const entry = await createRegistry().get(launched.id);
@@ -245,8 +250,10 @@ async function journey(fixture, store) {
   const token = () => devAccessToken({ privateKeyPem: fixture.privateKeyPem, subject });
   // SETUP: preview enrollment for the dev profile, on the throwaway backend.
   await grantPreview({ convexUrl: fixture.convexUrl, adminKey: fixture.adminKey });
-  const macA = await launch("A", subject);
-  const macB = await launch("B", subject);
+  // Both windows need the store's exact origin in their launch-time CSP;
+  // configuring backend presigns alone does not allow the window's GETs.
+  const macA = await launch("A", subject, store.endpoint);
+  const macB = await launch("B", subject, store.endpoint);
 
   await step(1, async () => {
     await signIn(macA);
@@ -442,7 +449,8 @@ if (
   process.env.RUNNER_OS !== "macOS"
 )
   throw new Error("Cloud wake acceptance runs only on disposable macOS GitHub CI runners");
-const fixture = cloudFixtureFromEnv(process.env);
+// This journey starts its own store; never consume an ambient bucket origin.
+const fixture = cloudFixtureFromEnv({ ...process.env, VOLLI_CLOUD_STORAGE_ORIGIN: undefined });
 const reportDir =
   process.env.VOLLI_SMOKE_REPORT_DIR ?? join(REPO, ".scratch", "cloud-wake-acceptance");
 await fs.mkdir(reportDir, { recursive: true });
