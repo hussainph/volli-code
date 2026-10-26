@@ -195,8 +195,11 @@ it uses SQLite and receives bug fixes only. The target **Volli Local** runs the
 same `convex/` functions and schema on an embedded, loopback-only backend on the
 Mac, fully offline; that backend is planned, not bundled today. Board and Session
 features are written once for both deployments, and the runner is the same.
-The first local-backend launch imports existing SQLite data locally. Moving a
-project to the cloud or back is optional, via export/import between deployments;
+The target includes importing existing SQLite data on-device, not uploading it.
+It requires a locally issued identity, local membership bootstrap and local key
+provisioning; no account does not mean unauthenticated backend calls. Those
+deployment pieces are not implemented yet, and shared identity checks are not
+bypassed. Moving a project to the cloud or back is optional, via export/import between deployments;
 local mode is never retired in favor of required cloud migration. Sharing, teams,
 other devices and cloud runners require cloud mode.
 
