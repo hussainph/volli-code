@@ -186,6 +186,24 @@ describe("a Home tab group's chip", () => {
     expect(tab("a.ts").getAttribute("aria-selected")).toBe("true");
   });
 
+  it("summarizes an unshown group's chip and opens it out once shown (VC-614)", () => {
+    home(file.id, [group], null);
+    const chip = container.querySelector('[data-slot="grouped-tab-chip"]')!;
+    expect(chip.getAttribute("data-compact")).toBe("true");
+    // The summary is drawing only: every segment keeps its full name for the
+    // tooltip and assistive tech, and its glyph stays to stand in for it.
+    expect(tab("Chat").getAttribute("aria-label")).toBe("Chat");
+    expect(tab("Page").getAttribute("aria-label")).toBe("Page");
+    expect(tab("Page").querySelector('[data-slot="tab-leading"]')).not.toBeNull();
+    home(chat.id);
+    expect(chip.getAttribute("data-compact")).toBe("false");
+    // A group whose other panes have nothing live has nothing to summarize.
+    home(file.id, [{ id: "solo", panes: [group.panes[0]!] }], null);
+    expect(
+      container.querySelector('[data-slot="grouped-tab-chip"]')?.getAttribute("data-compact"),
+    ).toBe("false");
+  });
+
   it("keeps per-segment selection, closing, rename and keyboard traversal", () => {
     const callbacks = home(chat.id);
     click(tab("Page"));

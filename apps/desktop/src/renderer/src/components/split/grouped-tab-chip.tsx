@@ -87,10 +87,17 @@ export function groupTabItems<T extends { id: string }>(
  * selects that pane), and the right-click menu lists every tab of the group,
  * pane by pane, its front checked — choosing one brings it to the front of its
  * pane — with Ungroup to dissolve the group, every tab staying open.
+ *
+ * A group that is NOT on screen draws SUMMARIZED (`compact`): the first pane's
+ * front keeps a shortened label and every later pane shrinks to its glyph, so
+ * a three- or four-pane group stops costing three or four full tabs of strip.
+ * Names stay whole where they are read — each segment's tooltip and accessible
+ * name, and the chip's menu — and the chip opens out again once selected.
  */
 function GroupedTabChip<T extends { id: string }>({
   item,
   active,
+  compact,
   describe,
   onSelect,
   onUngroup,
@@ -98,6 +105,8 @@ function GroupedTabChip<T extends { id: string }>({
 }: {
   item: Extract<StripItem<T>, { group: TabGroup }>;
   active: boolean;
+  /** Summarized: see `grouped-tab-chip.css`. */
+  compact: boolean;
   describe(tab: T): TabMenuLabel;
   onSelect(tab: T): void;
   onUngroup?(groupId: string): void;
@@ -112,6 +121,7 @@ function GroupedTabChip<T extends { id: string }>({
           data-slot="grouped-tab-chip"
           data-group-id={item.group.id}
           data-active={active}
+          data-compact={compact}
           className={cn(
             "flex shrink-0 items-center rounded-t-lg border border-b-0 border-border",
             // The group owns the folder outline; members retain their tab hit targets.
@@ -228,6 +238,7 @@ export function GroupedTabList<T extends { id: string }>({
         key={item.group.id}
         item={item}
         active={active}
+        compact={!active && item.segments.length > 1}
         describe={describe}
         onSelect={onSelect}
         onUngroup={onUngroup}

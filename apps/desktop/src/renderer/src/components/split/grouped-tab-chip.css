@@ -14,3 +14,46 @@
 [data-pair-drop-edge="right"]::after {
   right: 0;
 }
+
+/*
+ * A SUMMARIZED group chip — a group that is not on screen (VC-614). The first
+ * pane's front keeps a shortened label; every later pane shrinks to the glyph
+ * that stands for it (a Session's mark, a Browser Tab's, a terminal's state),
+ * or to a short label when it has none (a File tab). The close × goes too,
+ * except where it is carrying an unsaved-changes dot. Hover tooltips and
+ * accessible names keep every full name; the chip opens out when selected.
+ * Unlayered, so it outranks the tab's own `max-w-*` utility.
+ */
+[data-slot="grouped-tab-chip"][data-compact="true"] [data-testid="tab-hint"] {
+  display: none;
+}
+[data-slot="grouped-tab-chip"][data-compact="true"]
+  [data-slot="grouped-tab-member"]:first-child
+  [data-slot="tab-label"] {
+  max-width: 7rem;
+}
+[data-slot="grouped-tab-chip"][data-compact="true"]
+  [data-slot="grouped-tab-member"]
+  + [data-slot="grouped-tab-member"]
+  [data-slot="tab-label"] {
+  max-width: 4rem;
+}
+[data-slot="grouped-tab-chip"][data-compact="true"]
+  [data-slot="grouped-tab-member"]
+  + [data-slot="grouped-tab-member"]
+  [data-slot="tab"]:is(:has([data-slot="tab-leading"]), :has([data-slot="tab-state"]))
+  [data-slot="tab-label"] {
+  display: none;
+}
+[data-slot="grouped-tab-chip"][data-compact="true"]
+  [data-slot="grouped-tab-member"]
+  + [data-slot="grouped-tab-member"]
+  [data-slot="tab-close"]:not(:has([data-testid="tab-dirty"])) {
+  display: none;
+}
+[data-slot="grouped-tab-chip"][data-compact="true"]
+  [data-slot="grouped-tab-member"]
+  + [data-slot="grouped-tab-member"]
+  [data-slot="tab"] {
+  padding-inline: 0.375rem;
+}
