@@ -9,6 +9,7 @@ import { newId } from "@volli/shared/cloud";
 import { api } from "../functions/_generated/api";
 import type { DataModel } from "../functions/_generated/dataModel.js";
 import schema from "../functions/schema";
+import { enrollPreview } from "./preview-fixtures";
 
 const modules = import.meta.glob("../functions/**/*.ts");
 
@@ -29,10 +30,15 @@ export function code(value: string) {
   return expect.objectContaining({ data: expect.objectContaining({ code: value }) });
 }
 
-/** Signs `name` in and returns their user id and a client acting as them. */
+/**
+ * Signs `name` in, enrolls them for the preview (every product call rechecks the
+ * live grant and the accepted agreement), and returns their user id and a
+ * client acting as them.
+ */
 export async function signIn(t: Tester, name: string) {
   const as = t.withIdentity(identity(name));
   const { userId } = await as.mutation(api.accounts.ensureViewer, {});
+  await enrollPreview(t, userId);
   return { userId, as };
 }
 

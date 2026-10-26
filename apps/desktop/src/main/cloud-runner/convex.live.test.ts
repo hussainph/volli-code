@@ -18,7 +18,7 @@ import { EventEmitter } from "node:events";
 import { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
 import type { PowerPort } from "@volli/host-core/ports";
-import type { ThisMacRunnerSnapshot } from "@volli/shared";
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION, type ThisMacRunnerSnapshot } from "@volli/shared";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { convexAccountBackend } from "../account/backend";
@@ -26,6 +26,7 @@ import { devIssuerProvider } from "../account/dev-issuer";
 import { createAccountService } from "../account/service";
 import { inventoryAccountSessionStore } from "../account/session-store";
 import { tempInventory } from "../account/test-support";
+import { inviteTestEmail } from "../test-helpers/preview";
 import { createDesktopMacRunner } from "./index";
 import type { MacRunner } from "./mac-runner";
 
@@ -71,6 +72,7 @@ describe.skipIf(!ready)("this Mac as a runner against the pinned local backend",
     const temp = tempInventory();
     cleanups.push(temp.dispose);
     const subject = `live-${randomUUID()}`;
+    await inviteTestEmail(url!, `${subject}@example.com`);
     const account = createAccountService({
       enabled: () => true,
       provider: devIssuerProvider({
@@ -89,7 +91,7 @@ describe.skipIf(!ready)("this Mac as a runner against the pinned local backend",
     cleanups.push(() => account.dispose());
     account.snapshot();
     await account.settled();
-    await account.signIn("github");
+    await account.signIn("github", undefined, PREVIEW_ENROLLMENT_AGREEMENT_VERSION);
     await account.settled();
     const userId = account.snapshot().account!.userId!;
 

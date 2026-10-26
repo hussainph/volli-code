@@ -122,10 +122,10 @@ async function lease(
 export const claim = mutation({
   args: { bootId: v.string(), max: v.optional(v.number()) },
   handler: async (ctx, { bootId, max }): Promise<ClaimedJob[]> => {
+    const { runnerId, ownerUserId } = await requireRunnerForWrite(ctx);
     if (!isUuid(bootId)) {
       throw new ConvexError({ code: "invalid_request", message: "bootId is this boot's UUID." });
     }
-    const { runnerId, ownerUserId } = await requireRunnerForWrite(ctx);
     const limit = bounded(max, JOB_CLAIM_MAX, 1, JOB_CLAIM_MAX);
     const now = Date.now();
     const candidates: Doc<"runnerJobs">[] = [];

@@ -24,6 +24,7 @@ import { enqueueJob } from "../functions/lib/jobs";
 import { COMMAND_ARTIFACT_MEDIA_TYPE } from "../functions/lib/sessionCommands";
 import { seedTestWorld } from "../functions/lib/testWorld";
 import schema from "../functions/schema";
+import { enrollPreview } from "./preview-fixtures";
 import { wire, writeSession } from "./sessionFixtures";
 
 const modules = import.meta.glob("../functions/**/*.ts");
@@ -61,6 +62,8 @@ async function claimed(
 async function world() {
   const t = convexTest(schema, modules);
   const alice = (await asUser(t, "alice").mutation(api.accounts.ensureViewer, {})).userId as UserId;
+  // Alice owns every runner here, so her grant is what every accept rechecks.
+  await enrollPreview(t, alice);
   const seeded = await t.run((ctx) => seedTestWorld(ctx, { ownerUserId: alice, runners: 2 }));
   const other = await t.run((ctx) => seedTestWorld(ctx, { ownerUserId: alice, runners: 1 }));
   const [local, remote] = seeded.runnerIds as [string, string];

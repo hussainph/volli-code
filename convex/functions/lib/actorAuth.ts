@@ -15,7 +15,8 @@
  *   - the claim is still the same runner at the same generation (a transfer to
  *     another runner, or a release, is `fenced`);
  *   - the runner is not removed and still belongs to that owner, and the
- *     owner's account is active (`revoked`).
+ *     owner's account is active with live preview access and a current
+ *     agreement (`revoked`).
  *
  *   Membership is then checked on the owner like any person's, by the same
  *   helpers, so an agent can do exactly what its owner can and no more.
@@ -44,6 +45,7 @@ import {
 import type { DataModel, Doc } from "../_generated/dataModel.js";
 import { authError, requireIdentity, requireViewer, type Viewer } from "./auth";
 import { isAgentIdentity } from "./runnerAuth";
+import { hasPreviewAgreement, previewAccess } from "./previewAccess";
 
 export type CallerKind = "person" | "agent";
 
@@ -137,6 +139,12 @@ async function resolveAgent(ctx: ReadCtx, identity: UserIdentity): Promise<Calle
     .unique();
   if (owner === null || owner.status !== "active") {
     throw agentError("revoked", "This session's owner's account is closing or closed.");
+  }
+  if (
+    !hasPreviewAgreement(owner) ||
+    (await previewAccess(ctx, { userId: owner.id as UserId, user: owner })) !== "granted"
+  ) {
+    throw agentError("revoked", "This session's owner no longer has preview access.");
   }
   const ticketId = (session.ticketId ?? null) as TicketId | null;
   const userId = owner.id as UserId;

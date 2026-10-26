@@ -13,7 +13,9 @@
  * viewer for it.
  *
  * A runner serves its owner only, so a runner whose owner's account is no
- * longer active (deletion pending or deleted) is refused as `revoked` too.
+ * longer active (deletion pending or deleted), whose preview grant expired or
+ * was revoked, or who needs to accept the current agreement is refused as
+ * `revoked` too. Existing tokens never outlive that authorization.
  *
  * Every runner MUTATION starts with {@link requireRunnerForWrite}: the first
  * write with a token of the current credential generation is what ends the
@@ -33,6 +35,7 @@ import {
 } from "@volli/shared/cloud";
 
 import type { DataModel, Doc } from "../_generated/dataModel.js";
+import { hasPreviewAgreement, previewAccess } from "./previewAccess";
 
 export type RunnerAuthErrorCode = "unauthenticated" | "not_a_runner" | "revoked";
 
@@ -92,6 +95,12 @@ export async function requireRunner(ctx: RunnerCtx): Promise<CallingRunner> {
     .unique();
   if (owner === null || owner.status !== "active") {
     throw runnerAuthError("revoked", "This runner's account is closing or closed.");
+  }
+  if (
+    !hasPreviewAgreement(owner) ||
+    (await previewAccess(ctx, { userId: owner.id as UserId, user: owner })) !== "granted"
+  ) {
+    throw runnerAuthError("revoked", "This runner's account no longer has preview access.");
   }
   const gen = identity.gen;
   return {

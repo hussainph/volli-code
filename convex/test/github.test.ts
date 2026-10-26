@@ -26,6 +26,7 @@ import {
   signBody,
   type FakeGithub,
 } from "./github-fake";
+import { enrollPreview } from "./preview-fixtures";
 
 let github: FakeGithub;
 
@@ -307,7 +308,8 @@ describe("connect", () => {
       email: "mallory@evil.test",
       email_verified: true,
     } as never);
-    await as.mutation(api.accounts.ensureViewer, {});
+    const { userId: mallory } = await as.mutation(api.accounts.ensureViewer, {});
+    await enrollPreview(t, mallory);
     const { url } = await as.action(api.github.beginConnect, { flowId: newId("githubFlow") });
     github.addUser(DANA);
     const { code: authCode, state } = github.authorize(url, DANA.id);

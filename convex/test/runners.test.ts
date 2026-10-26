@@ -34,6 +34,7 @@ import {
 } from "../functions/runners";
 import { mintUserCode } from "../functions/lib/runnerSecrets";
 import schema from "../functions/schema";
+import { enrollPreview } from "./preview-fixtures";
 
 const modules = import.meta.glob("../functions/**/*.ts");
 
@@ -88,7 +89,11 @@ function code(value: string) {
 }
 
 async function signIn(t: T, identity = ALICE): Promise<string> {
-  return (await t.withIdentity(identity).mutation(api.accounts.ensureViewer, {})).userId;
+  const userId = (await t.withIdentity(identity).mutation(api.accounts.ensureViewer, {})).userId;
+  // A runner token is only as good as its owner's preview: `requireRunner`
+  // rechecks the owner's live grant and accepted agreement on every call.
+  await enrollPreview(t, userId);
+  return userId;
 }
 
 function asRunner(t: T, runnerId: string, gen: number | null = 1) {

@@ -90,6 +90,7 @@ import {
 } from "./_generated/server";
 import { clearRunnerAlert, raiseRunnerAlert } from "./lib/attention";
 import { authError, requireSessionVisible, requireViewer, type Viewer } from "./lib/auth";
+import { hasPreviewAgreement, previewAccess } from "./lib/previewAccess";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
 import { mintSecret } from "./lib/runnerSecrets";
 import { nullable } from "./lib/validators";
@@ -152,13 +153,16 @@ async function credentialsOf(ctx: Reader, runnerId: string) {
     .unique();
 }
 
-/** A person who may own a new runner: an active account, not pending deletion. */
+/** A person whose runners may operate: active account, live preview grant and agreement. */
 async function activeUser(ctx: Reader, userId: string): Promise<Doc<"users"> | null> {
   const user = await ctx.db
     .query("users")
     .withIndex("by_uuid", (q) => q.eq("id", userId))
     .unique();
-  return user !== null && user.status === "active" ? user : null;
+  if (user === null || user.status !== "active" || !hasPreviewAgreement(user)) return null;
+  return (await previewAccess(ctx, { userId: user.id as UserId, user })) === "granted"
+    ? user
+    : null;
 }
 
 /**

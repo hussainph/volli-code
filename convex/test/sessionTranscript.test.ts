@@ -7,6 +7,7 @@ import { artifactSpillKey, newId, transcriptPackKey } from "@volli/shared/cloud"
 import { api, internal } from "../functions/_generated/api";
 import type { DataModel } from "../functions/_generated/dataModel.js";
 import schema from "../functions/schema";
+import { enrollPreview } from "./preview-fixtures";
 
 const modules = import.meta.glob("../functions/**/*.ts");
 
@@ -44,7 +45,9 @@ async function world() {
   const t = convexTest(schema, modules);
   const alice = (await t.withIdentity(ALICE).mutation(api.accounts.ensureViewer, {})).userId;
   const bob = (await t.withIdentity(BOB).mutation(api.accounts.ensureViewer, {})).userId;
-  await t.withIdentity(CAROL).mutation(api.accounts.ensureViewer, {});
+  const carol = (await t.withIdentity(CAROL).mutation(api.accounts.ensureViewer, {})).userId;
+  // Everyone enrolled: Carol must reach "not in this Workspace", not the gate.
+  await enrollPreview(t, [alice, bob, carol]);
   const runnerId = newId("runner");
   const ids = await t.run(async (ctx: Ctx) => {
     const workspaceId = newId("workspace");

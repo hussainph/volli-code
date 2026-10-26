@@ -12,7 +12,15 @@ export default defineConfig({
     include: ["test/**/*.test.ts"],
     coverage: {
       provider: "v8",
-      include: ["functions/lib/previewAccess.ts", "functions/previewAccess.ts"],
+      include: [
+        "functions/lib/previewAccess.ts",
+        "functions/previewAccess.ts",
+        "functions/lib/deploymentChecks.ts",
+        "functions/lib/runnerLinkRateLimit.ts",
+        "functions/runnerLinkRateLimit.ts",
+        "scripts/deploy.ts",
+        "scripts/deploy.mjs",
+      ],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
     },
     exclude: ["test/**/*.backend.test.ts"],

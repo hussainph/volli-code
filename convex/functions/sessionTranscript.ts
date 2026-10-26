@@ -71,8 +71,8 @@ function cursorArg(value: number | undefined, name: string): number | undefined 
  * the caller's identity, so `presignGet` is gated the same way.
  */
 async function visibleSession(ctx: Parameters<typeof requireSessionVisible>[0], sessionId: string) {
-  const id = sessionIdArg(sessionId);
   const { viewer } = await requireActor(ctx, PERSON_OR_AGENT);
+  const id = sessionIdArg(sessionId);
   return requireSessionVisible(ctx, id, viewer);
 }
 

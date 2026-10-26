@@ -19,6 +19,7 @@ import { attentionVisibility, raiseAttention, raiseRunnerAlert } from "../functi
 import { BoardWrite } from "../functions/lib/board";
 import { seedTestRunner, seedTestWorld } from "../functions/lib/testWorld";
 import schema from "../functions/schema";
+import { enrollPreview } from "./preview-fixtures";
 import { wire, writeSession } from "./sessionFixtures";
 
 const modules = import.meta.glob("../functions/**/*.ts");
@@ -37,6 +38,9 @@ const asRunner = (t: T, runnerId: string) =>
 
 async function signIn(t: T, name: string): Promise<UserId> {
   const result = await asUser(t, name).mutation(api.accounts.ensureViewer, {});
+  // Every product call rechecks the grant and the accepted agreement, for a
+  // person and for a runner token's owner alike.
+  await enrollPreview(t, result.userId);
   return result.userId as UserId;
 }
 

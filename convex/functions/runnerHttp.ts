@@ -10,6 +10,11 @@
  *   token and its own successor (rotation with reuse detection,
  *   `runners.rotateCredential`).
  *
+ * The three linking doors are rate-limited before they do any work
+ * (`runnerLinkRateLimit.ts`): per network, per code, and for device-code
+ * starts deployment-wide. A refusal is a 429 `rate_limited` with
+ * `Retry-After` in seconds.
+ *
  * Every secret is minted here (an action) and only its hash reaches a
  * mutation. Bodies and replies are the shared wire in `@volli/shared/cloud`;
  * failures are `{ error: { code, message } }` with a code from
@@ -47,6 +52,7 @@ const STATUS_OF: Record<RunnerHttpErrorCode, number> = {
   invalid_credential: 401,
   revoked: 403,
   issuer_unconfigured: 503,
+  rate_limited: 429,
 };
 
 const MESSAGE_OF: Record<RunnerHttpErrorCode, string> = {
@@ -57,12 +63,13 @@ const MESSAGE_OF: Record<RunnerHttpErrorCode, string> = {
   invalid_credential: "This runner's credential is not valid. Link it again.",
   revoked: "This runner was removed from its account. Link it again.",
   issuer_unconfigured: "This deployment cannot issue runner tokens yet.",
+  rate_limited: "Too many linking requests.",
 };
 
-function reply(status: number, body: unknown): Response {
+function reply(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", "cache-control": "no-store" },
+    headers: { "content-type": "application/json", "cache-control": "no-store", ...headers },
   });
 }
 
@@ -71,13 +78,25 @@ function failure(code: RunnerHttpErrorCode, message = MESSAGE_OF[code]): Respons
   return reply(STATUS_OF[code], body);
 }
 
+/** The 429 a refused admission answers with; `Retry-After` is whole seconds, at least one. */
+function rateLimited(retryAfterMs: number): Response {
+  const seconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+  const message = `${MESSAGE_OF.rate_limited} Try again in ${seconds} s.`;
+  const body: RunnerHttpErrorBody = { error: { code: "rate_limited", message } };
+  return reply(STATUS_OF.rate_limited, body, { "retry-after": String(seconds) });
+}
+
 /**
  * The caller's address as Convex saw the request, never a header the caller
- * could set. A hint for the approval sheet and the audit trail, never a
- * security decision.
+ * could set. What the rate limits key on, and, cut to 64 characters
+ * ({@link shownIp}), a hint for the approval sheet and the audit trail.
  */
-async function callerIp(ctx: ActionCtx): Promise<string | null> {
+async function requestIp(ctx: ActionCtx): Promise<string | null> {
   const { ip } = await ctx.meta.getRequestMetadata();
+  return ip;
+}
+
+function shownIp(ip: string | null): string | null {
   return ip === null ? null : ip.slice(0, 64);
 }
 
@@ -103,9 +122,15 @@ async function bodyOf<T>(request: Request, parse: (value: unknown) => T): Promis
 export const link = httpAction(async (ctx, request) => {
   const body = await bodyOf(request, parseRunnerLinkRequest);
   if (body instanceof Response) return body;
+  const tokenHash = secretHash(body.installToken);
+  const admitted = await ctx.runMutation(internal.runnerLinkRateLimit.admitLink, {
+    ip: await requestIp(ctx),
+    tokenHash,
+  });
+  if (!admitted.ok) return rateLimited(admitted.retryAfterMs);
   const credential = mintSecret(RUNNER_SECRET_PREFIXES.credential);
   const result = await ctx.runMutation(internal.runners.linkWithInstallToken, {
-    tokenHash: secretHash(body.installToken),
+    tokenHash,
     credentialHash: secretHash(credential),
     host: body.host,
     name: body.name,
@@ -126,6 +151,9 @@ const START_ATTEMPTS = 4;
 export const linkStart = httpAction(async (ctx, request) => {
   const body = await bodyOf(request, parseRunnerDeviceLinkStartRequest);
   if (body instanceof Response) return body;
+  const ip = await requestIp(ctx);
+  const admitted = await ctx.runMutation(internal.runnerLinkRateLimit.admitLinkStart, { ip });
+  if (!admitted.ok) return rateLimited(admitted.retryAfterMs);
   const pollSecret = mintSecret(RUNNER_SECRET_PREFIXES.pollSecret);
   for (let attempt = 0; attempt < START_ATTEMPTS; attempt += 1) {
     const requestId = crypto.randomUUID();
@@ -135,7 +163,7 @@ export const linkStart = httpAction(async (ctx, request) => {
       userCodeHash: secretHash(userCode),
       pollSecretHash: secretHash(pollSecret),
       host: body.host,
-      ip: await callerIp(ctx),
+      ip: shownIp(ip),
     });
     if (result.ok) {
       const started: RunnerDeviceLinkStart = {
@@ -154,6 +182,11 @@ export const linkStart = httpAction(async (ctx, request) => {
 export const linkPoll = httpAction(async (ctx, request) => {
   const body = await bodyOf(request, parseRunnerDeviceLinkPollRequest);
   if (body instanceof Response) return body;
+  const admitted = await ctx.runMutation(internal.runnerLinkRateLimit.admitLinkPoll, {
+    ip: await requestIp(ctx),
+    requestId: body.requestId,
+  });
+  if (!admitted.ok) return rateLimited(admitted.retryAfterMs);
   const credential = mintSecret(RUNNER_SECRET_PREFIXES.credential);
   const result = await ctx.runMutation(internal.runners.pollDeviceLink, {
     requestId: body.requestId,
@@ -187,7 +220,7 @@ export const token = httpAction(async (ctx, request) => {
     runnerId: body.runnerId,
     presentedHash: secretHash(body.credential),
     nextHash: secretHash(credential),
-    ip: await callerIp(ctx),
+    ip: shownIp(await requestIp(ctx)),
   });
   if (!result.ok) return failure(result.code);
   const serverTime = Date.now();

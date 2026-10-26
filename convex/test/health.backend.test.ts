@@ -9,7 +9,9 @@ const backend = connectBackend();
 
 describe("health.whoami on the pinned local backend", () => {
   test("refuses an anonymous caller", async () => {
-    await expect(backend.client().query(api.health.whoami, {})).rejects.toThrow("Unauthenticated");
+    await expect(backend.client().query(api.health.whoami, {})).rejects.toThrow(
+      expect.objectContaining({ data: expect.objectContaining({ code: "unauthenticated" }) }),
+    );
   });
 
   test("accepts a token from the test issuer, for any user", async () => {

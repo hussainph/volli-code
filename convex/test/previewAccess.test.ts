@@ -24,7 +24,7 @@ describe("preview access", () => {
       acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
     });
     expect(first.previewAccess).toBe("waitlisted");
-    expect(await client.query(api.workspaces.listMine, {})).toEqual([]);
+    await expect(client.query(api.workspaces.listMine, {})).rejects.toThrow(refused);
     await expect(
       client.mutation(api.workspaces.create, { workspaceId: newId("workspace"), name: "No" }),
     ).rejects.toThrow(refused);
@@ -299,7 +299,11 @@ describe("explicit preview agreement acceptance", () => {
     const initial = await client.mutation(api.accounts.ensureViewer, {});
     expect(initial).toMatchObject({ previewAccess: "granted", previewAgreementAccepted: false });
     await client.mutation(api.accounts.ensureViewer, {});
-    expect(await client.query(api.workspaces.listMine, {})).toEqual([]);
+    await expect(client.query(api.workspaces.listMine, {})).rejects.toThrow(
+      expect.objectContaining({
+        data: expect.objectContaining({ code: "preview_agreement_required" }),
+      }),
+    );
     await expect(
       client.mutation(api.workspaces.create, {
         workspaceId: newId("workspace"),

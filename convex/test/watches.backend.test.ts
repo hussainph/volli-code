@@ -12,6 +12,7 @@ import {
 import { parseJobPayload } from "@volli/shared/cloud";
 import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
+import { enrollBackendPreview } from "./preview-fixtures";
 import { wire, writeSession, userProvenance } from "./sessionFixtures";
 
 const backend = connectBackend();
@@ -42,6 +43,8 @@ async function linkRunner(person: ConvexHttpClient) {
 test("a sleeping watcher wakes to one coalesced notice, claims once, and mirrors the final receipt", async () => {
   const person = backend.client(`user:${randomUUID()}`);
   const { userId } = await person.mutation(api.accounts.ensureViewer, {});
+  // The linked runners serve this account: its grant is what their calls recheck.
+  await enrollBackendPreview(backend, person, userId);
   const { projectId, ticketId } = await backend.admin(internal.testSeed.seedWorld, {
     ownerUserId: userId,
     runners: 0,

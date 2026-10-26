@@ -15,7 +15,16 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
   that can reach it. The `/runner/*` HTTP routes are the deliberate exception:
   a box calls them before it has an identity, and each proves itself with a
   one-time secret (install token, poll secret, refresh credential), takes JSON
-  only, and sends no CORS headers.
+  only, and sends no CORS headers. Device-code starts are limited per network
+  (IPv4 address or IPv6 /64) and deployment-wide. Install-token links and
+  device polls are limited per network and per real token/request; a made-up
+  code creates no code bucket. Throttles return 429 with `Retry-After`.
+  Addresses come from Convex request metadata, never forwarded headers.
+- Preview access is checked on every product call, not just sign-in: people,
+  runners and Agent tokens need a live grant and current Preview Agreement.
+  Revocation or expiry cuts off existing memberships, runner writes/reads and
+  credential refresh. Desktop registration, install-token redemption and device
+  approval/poll recheck it too. Account enrollment/recovery stays reachable.
 - No Electron imports. `scripts/check-host-electron-imports.mjs` enforces this.
 
 ## Layout
@@ -47,6 +56,7 @@ Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 | `functions/lib/visibility.ts`                                       | The visibility writes and filters: `visibilityForNewSession` (every Session-creating write), `shareSession`, `visibleBoardEvents` (every read of board events that may name a Session). The decisions are the predicates in `@volli/shared/cloud`.                                                |
 | `functions/runners.ts`                                              | Runners: linking (desktop, install token, device code), a Mac's successor taking over its work, the rotated credential with reuse detection, heartbeat, sleep and capabilities, the offline sweep, the Settings list, and `places`: the runner a visible Session lives on ("Waiting for <Mac>").  |
 | `functions/runnerHttp.ts`, `functions/http.ts`                      | `/runner/link`, `/runner/link/start`, `/runner/link/poll`, `/runner/token` (HTTP actions; secrets are minted here, mutations see hashes) and the deployment's HTTP router.                                                                                                                        |
+| `functions/{,lib/}runnerLinkRateLimit.ts`                           | Transactional linking limits and the hourly cleanup of refilled buckets.                                                                                                                                                                                                                          |
 | `functions/lib/runnerAuth.ts`                                       | `requireRunner`: the check every runner-called function starts with. A runner token is never a person.                                                                                                                                                                                            |
 | `functions/streamChunks.ts`                                         | Streamed text: the chunk rows a runner appends while someone watches, the cursor read a viewer folds, and their cleanups (settle, turn end, sweep).                                                                                                                                               |
 | `functions/sessionViewers.ts`                                       | Who watches a Session: open, heartbeat and close for clients, `watched` for the runner, and the lapsed-viewer sweep.                                                                                                                                                                              |
@@ -406,11 +416,53 @@ typechecks this package along with the rest of the workspace.
 
 There are no cloud deployments yet. Dev, staging and prod deployments, deploy
 CI, the object-storage bucket (R2), backups and export are added once the
-Convex and Cloudflare accounts exist. Deploy CI will push this package with
-`npx convex deploy` and a per-environment deploy key. It will refuse any
-target that has `VOLLI_TEST_JWKS` set. Signing uploads already works against
+Convex and Cloudflare accounts exist. Signing uploads already works against
 any S3-compatible store: a deployment points at its bucket with the
 `VOLLI_S3_*` variables (`functions/lib/objectStore.ts`).
+
+### Deploying with the self-check
+
+Deploy with `scripts/deploy.mjs` (logic in `scripts/deploy.ts`), never a bare
+`npx convex deploy`:
+
+```sh
+CONVEX_DEPLOY_KEY=<prod: or dev: deploy key> pnpm -C convex deploy:checked
+```
+
+It takes no deploy flags: its one target comes from the environment, either a
+`prod:` or `dev:` deploy key (a preview key is refused: `deploy` would create a
+deployment the check never sees) or `CONVEX_SELF_HOSTED_URL` with
+`CONVEX_SELF_HOSTED_ADMIN_KEY`. The other selectors are blanked, so every step
+reaches the same deployment. Then it:
+
+1. refuses to push when the target sets `VOLLI_TEST_JWKS` (`convex env get`,
+   output discarded), or when it cannot tell, since the auth config is
+   evaluated at push time;
+2. pushes `functions/` with codegen off (`_generated/` is committed);
+3. runs the internal self-check on the same target, and exits non-zero when
+   it refuses. The new code is live by then: fix what it names, then re-run
+   `npx convex run health:deploymentChecks '{}'`.
+
+`health:deploymentChecks` (`functions/lib/deploymentChecks.ts`) reads names
+and presence only, never prints a value, and makes no key material. Its cloud
+check, the default, answers `deployment_unsafe` when `VOLLI_TEST_JWKS` is set
+at all (`forbidden`) or any of these is unset (`missing`):
+
+| Variable                                                                                       | For                                       |
+| ---------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `WORKOS_CLIENT_ID`                                                                             | Sign-in ("Sign-in provider")              |
+| `VOLLI_RUNNER_SIGNING_KEY`, `VOLLI_RUNNER_JWKS`                                                | Runner and Agent tokens ("Runner tokens") |
+| `VOLLI_SECRETS_ROOT_KEYS`                                                                      | Sealed secrets ("Secrets root key")       |
+| `VOLLI_S3_ENDPOINT`, `VOLLI_S3_BUCKET`, `VOLLI_S3_ACCESS_KEY_ID`, `VOLLI_S3_SECRET_ACCESS_KEY` | Object storage                            |
+
+`{"mode":"test"}` allows both, for the throwaway local backend only: on a
+deployment whose `CONVEX_CLOUD_URL` is not loopback it answers
+`test_mode_refused` and runs the cloud check anyway. Against the fixture:
+
+```sh
+pnpm -C convex with-backend -- node scripts/deploy.mjs --test   # passes
+pnpm -C convex with-backend --deploy -- node scripts/deploy.mjs # refused: the fixture trusts the test issuer
+```
 
 The desktop reads transcript packs and spilled bodies directly with
 `sessionTranscript.presignGet`, after the backend checks Session visibility.

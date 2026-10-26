@@ -585,6 +585,11 @@ export const RUNNER_HTTP_ERROR_CODES = [
   "revoked",
   /** The deployment has no runner-token signing key. */
   "issuer_unconfigured",
+  /**
+   * Too many requests from this network (or the deployment as a whole): the
+   * reply is a 429 whose `Retry-After` header says, in seconds, when to try again.
+   */
+  "rate_limited",
 ] as const;
 export type RunnerHttpErrorCode = (typeof RUNNER_HTTP_ERROR_CODES)[number];
 
