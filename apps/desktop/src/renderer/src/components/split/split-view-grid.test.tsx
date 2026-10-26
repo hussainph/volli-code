@@ -2,17 +2,18 @@
 /**
  * The plane, drawn once for both cases.
  *
- * The assertions that matter are the compatibility ones: an unsplit surface
- * must render as the bare plane it always was — no ring, no pane name, no
- * divider — because "splitting is strictly additive" is a claim about this file
- * and nowhere else. The rest is the vocabulary the terminal split already
- * speaks, asserted as relations (focused vs. not) rather than as hexes.
+ * The assertions that matter are the compatibility ones: a full-width tab must
+ * render as the bare plane it always was — no ring, no pane name, no strip, no
+ * divider — because grouping is strictly additive and that is a claim about
+ * this file and nowhere else. A shown group gives EVERY pane its own strip
+ * (VC-614). The rest is the vocabulary the terminal split already speaks,
+ * asserted as relations (focused vs. not) rather than as hexes.
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import {
-  resolveSplitView,
+  emptySplitView,
+  projectSplitView,
   setSplitRatio,
-  singlePaneSplitView,
   splitPane,
   SPLIT_VIEW_ROOT_PANE_ID,
   type ResolvedSplitView,
@@ -23,24 +24,21 @@ import { paneIdForElement, SplitViewGrid } from "./split-view-grid";
 
 const BODY = "doc";
 
-/** One pane holding the whole strip — an unsplit surface. */
+/** One full-width pane — an ordinary tab on screen. */
 function unsplit(): ResolvedSplitView {
-  return resolveSplitView(
-    singlePaneSplitView([], BODY, SPLIT_VIEW_ROOT_PANE_ID),
-    [BODY, "term"],
-    BODY,
-  );
+  return projectSplitView(null, [BODY, "term"], BODY, BODY);
 }
 
 /**
- * Two panes side by side, the second (focused) holding `term`. `splitPane`
- * mints the new PANE first and the branch that holds it second, so the ids are
- * `p1` and `p2` — which is also how the ratio is set below.
+ * A group of two side by side, the second (focused) holding `term`.
+ * `splitPane` mints the new PANE, then the group's branch, then the pane the
+ * full-width tab moves into — `p1`, `p2`, `p3` — which is also how the ratio
+ * is set below.
  */
 function split(ratio = 0.5): ResolvedSplitView {
   let minted = 0;
   const opened = splitPane(
-    singlePaneSplitView([BODY, "term"], BODY, SPLIT_VIEW_ROOT_PANE_ID),
+    emptySplitView(BODY),
     SPLIT_VIEW_ROOT_PANE_ID,
     "right",
     { tabId: "term" },
@@ -49,7 +47,7 @@ function split(ratio = 0.5): ResolvedSplitView {
       return `p${minted}`;
     },
   );
-  return resolveSplitView(setSplitRatio(opened, "p2", ratio), [BODY, "term"], BODY);
+  return projectSplitView(setSplitRatio(opened, "p2", ratio), [BODY, "term"], "term", BODY);
 }
 
 function markup(view: ResolvedSplitView): string {
@@ -72,16 +70,18 @@ describe("SplitViewGrid", () => {
     expect(html).not.toContain("ring-inset");
     expect(html).not.toContain("aria-label");
     expect(html).not.toContain('role="separator"');
-    // Top-edge panes share the main bar, including the unsplit pane.
+    // The top strip is the full-width tab's strip; the cell draws none.
     expect(html).not.toContain("strip-root");
   });
 
-  it("gives side-by-side panes their own content without nested strips", () => {
+  it("gives every pane of a group its own strip above its own content", () => {
     const html = markup(split());
 
     expect(html).toContain(">doc</div>");
     expect(html).toContain(">term</div>");
-    expect(html).not.toContain('data-testid="strip-');
+    expect(html).toContain('data-testid="strip-p3"');
+    expect(html).toContain('data-testid="strip-p1"');
+    expect(html.indexOf("strip-p1")).toBeLessThan(html.indexOf(">term</div>"));
   });
 
   it("rings the focused pane in the terminal split's own vocabulary", () => {
@@ -93,6 +93,7 @@ describe("SplitViewGrid", () => {
     expect(html).toContain("ring-1 ring-border/50 ring-inset");
     expect(html).toContain("ring-1 ring-primary/50 ring-inset");
     expect(html).toContain('data-pane-id="p1" data-focused="true"');
+    expect(html).not.toContain('data-pane-id="p3" data-focused="true"');
   });
 
   it("names each pane by its position once there is a choice to describe", () => {

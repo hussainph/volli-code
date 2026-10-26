@@ -22,6 +22,11 @@
  */
 import * as React from "react";
 import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
+import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
+import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
+import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
+import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
+import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
 import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 
@@ -29,6 +34,7 @@ import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
+import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { sessionProvenanceHoverLine, type BrowserTabHolder } from "@volli/shared";
 
@@ -36,6 +42,18 @@ import { BrowserHolderDot } from "@renderer/components/browser/browser-holder-do
 import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-menu-item";
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
+import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
+import { PaneTakeOutButton } from "@renderer/components/split/pane-take-out-button";
+import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
+import { browserTabAddress } from "@renderer/chat/use-island-tabs";
+import {
+  GroupedTabList,
+  groupTabItems,
+  type TabGroup,
+  type TabMenuLabel,
+} from "@renderer/components/split/grouped-tab-chip";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import {
@@ -52,7 +70,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import { Tab, TabStrip, tabStopIndex } from "@renderer/components/ui/tab-strip";
+import { Tab, TabStrip } from "@renderer/components/ui/tab-strip";
 import { parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { useSessionProvenance } from "@renderer/hooks/use-session-provenance";
 import { cn } from "@renderer/lib/utils";
@@ -188,7 +206,17 @@ export function tabTitleWithProvenance(title: string, provenanceLine: string | n
  * How a tab is DRAWN is shared, and shared as a component rather than as a
  * convention, so two strips on one screen cannot drift apart.
  */
-interface TicketTabListProps {
+export interface TicketTabListProps {
+  /**
+   * The TOP strip's tab groups, one chip each (VC-614). Present only on the
+   * top strip — a group pane's own strip draws its stack as plain tabs, the
+   * Body included, every one of them draggable out of the pane.
+   */
+  groups?: readonly TabGroup[];
+  /** The group on screen, whose chip is drawn active. */
+  shownGroupId?: string | null;
+  /** Dissolve a group from its chip's menu; every tab stays open. */
+  onUngroup?(groupId: string): void;
   /** The ticket's owning project, used to resolve file tabs in main. */
   projectId: string;
   ticketId: string;
@@ -210,9 +238,9 @@ interface TicketTabListProps {
   onRenameSessionTab(tabId: string, title: string): void;
   /**
    * A tab was dragged to a new place (VC-189): the tab that moved, and the
-   * strip's movable tab ids in the order the drop left them. The Body tab is
-   * never among them — it does not drag and nothing lands before it. Optional:
-   * a strip without it mounts no drag machinery.
+   * strip's movable tab ids in the order the drop left them. The top strip's
+   * Body does not drag; a pane strip's does, so it can leave its group.
+   * Optional: a strip without it mounts no drag machinery.
    */
   onReorderTabs?(movedId: string, ids: readonly string[]): void;
 }
@@ -245,6 +273,7 @@ function TicketTab({
   active,
   tabStop,
   dragId,
+  menu,
   editing,
   onSelect,
   onClose,
@@ -259,8 +288,10 @@ function TicketTab({
   active: boolean;
   /** This tab is the strip's single roving-tabindex entry point. */
   tabStop: boolean;
-  /** This tab's id for the strip's sortable, or undefined for the Body tab. */
+  /** This tab's sortable id; absent for the top strip's Body and a chip segment. */
   dragId?: string;
+  /** False for a group chip's segment, whose right-click is the chip's menu. */
+  menu: boolean;
   editing: boolean;
   onSelect(): void;
   onClose(): void;
@@ -287,6 +318,18 @@ function TicketTab({
   // answer — one frozen shared constant — for every tab that is not a Session
   // and every Session no Automation started.
   const sessionId = tabSessionId(tab);
+  const liveProvider = useChatSessionsStore((state) =>
+    sessionId === null
+      ? null
+      : (state.sessions[sessionId]?.projection?.modelSelection?.providerId ?? null),
+  );
+  const savedProvider = useTicketSessionRecordsStore((state) => {
+    const row = state.byTicket[ticketId]?.find(
+      (entry) => entry.kind === "chat" && entry.record.sessionId === sessionId,
+    );
+    return row?.kind === "chat" ? (row.record.model?.providerId ?? null) : null;
+  });
+  const providerId = liveProvider ?? savedProvider;
   const provenance = useSessionProvenance(projectId, sessionId);
   const provenanceLine = sessionProvenanceHoverLine(provenance);
   const parked = terminal !== null && terminal.parked && !terminal.exited;
@@ -351,11 +394,22 @@ function TicketTab({
       // terminal tabs stay static.
       revealLabel={tab.kind === "chat"}
       status={
-        tab.status ??
-        (tab.kind === "browser" && tab.loading ? "working" : (terminalDot ?? undefined))
+        tab.kind === "chat"
+          ? undefined
+          : (tab.status ??
+            (tab.kind === "browser" && tab.loading ? "working" : (terminalDot ?? undefined)))
       }
       leading={
-        tab.kind === "browser" ? (
+        tab.kind === "chat" ? (
+          <SessionGlyph
+            providerId={providerId}
+            providerLabel={providerId ?? "Chat"}
+            state={tab.status ?? null}
+            kind="chat"
+            name={`${providerId ?? "Chat"}, ${tab.status ?? "idle"}`}
+            size="tab"
+          />
+        ) : tab.kind === "browser" ? (
           <BrowserTabMark driven={tab.driven === true} />
         ) : terminalDot === null && terminal !== null ? (
           <MoonIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />
@@ -398,7 +452,9 @@ function TicketTab({
   // submenu, the two Copy Path items and Word Wrap whether pinned or previewed;
   // preview tabs additionally get Keep Open. Doc and Diff tabs still have
   // nothing to offer.
-  if (!renamable && fileTarget === null && !(preview && onPin !== undefined)) return inner;
+  if (!menu || (!renamable && fileTarget === null && !(preview && onPin !== undefined))) {
+    return inner;
+  }
 
   return (
     <ContextMenu>
@@ -550,28 +606,67 @@ export function TicketTabStrip({
 }
 
 /**
- * A pane's strip without actions. The session-start control and rail toggle
- * stay at the main bar's right edge rather than following the primary pane.
+ * A pane's strip. The session-start control and rail toggle stay at the top
+ * strip's right edge rather than following any pane; a group pane's own
+ * trailing edge carries only the way out of the group
+ * ({@link PaneTakeOutButton}).
  */
-export function TicketPaneTabStrip({ label, ...list }: TicketTabListProps & { label: string }) {
+export function TicketPaneTabStrip({
+  label,
+  onTakeOut,
+  ...list
+}: TicketTabListProps & { label: string; onTakeOut?: () => void }) {
   return (
-    <TabStrip label={label} reorder={reorderFor(list)}>
+    <TabStrip
+      label={label}
+      reorder={reorderFor(list)}
+      actions={onTakeOut === undefined ? undefined : <PaneTakeOutButton onTakeOut={onTakeOut} />}
+    >
       <TicketTabList {...list} />
     </TabStrip>
   );
 }
 
 /**
- * Every tab but the permanent Body tab may be dragged — the same statement the
- * absent `dragId` below makes, spelled for the half that could disagree with
- * it. A strip with no `onReorderTabs` mounts no drag machinery at all.
+ * What a strip drags. The top strip drags its ordinary tabs but the Body — a
+ * chip is not a sortable — and a pane strip drags every tab of its stack. A
+ * strip with no `onReorderTabs` mounts no drag machinery at all.
  */
-function reorderFor({ tabs, onReorderTabs }: TicketTabListProps) {
+function reorderFor({ tabs, groups, onReorderTabs }: TicketTabListProps) {
   if (onReorderTabs === undefined) return undefined;
   return {
-    ids: tabs.filter((tab) => tab.kind !== "body").map((tab) => tab.id),
+    ids:
+      groups === undefined
+        ? tabs.map((tab) => tab.id)
+        : groupTabItems(tabs, groups).flatMap((item) =>
+            item.group === null && item.tab.kind !== "body" ? [item.tab.id] : [],
+          ),
     onReorder: onReorderTabs,
   };
+}
+
+const TICKET_TAB_ICONS = {
+  body: FileTextIcon,
+  session: TerminalWindowIcon,
+  file: FileIcon,
+  diff: GitDiffIcon,
+  chat: ChatCircleIcon,
+  browser: BrowserIcon,
+} as const;
+
+/** What a group chip's menu says about a ticket tab. */
+function ticketTabMenuLabel(tab: TicketTabDescriptor): TabMenuLabel {
+  const icon = TICKET_TAB_ICONS[tab.kind];
+  if (tab.browserTabId !== undefined) {
+    // Read when the menu opens — see the Home strip's twin.
+    const url = useBrowserTabsStore.getState().byId[tab.browserTabId]?.url;
+    return { label: tab.label, icon, detail: url === undefined ? null : browserTabAddress(url) };
+  }
+  if (tab.relPath !== undefined) {
+    const slash = tab.relPath.lastIndexOf("/");
+    return { label: tab.label, icon, detail: slash <= 0 ? null : tab.relPath.slice(0, slash) };
+  }
+  return { label: tab.label, icon };
 }
 
 /** The tabs themselves, drawn the same wherever the strip around them is. */
@@ -580,31 +675,38 @@ function TicketTabList({
   ticketId,
   tabs,
   activeTabId,
+  groups,
+  shownGroupId,
+  onUngroup,
   onSelectTab,
   onCloseTab,
   onPinFileTab,
   onRenameSessionTab,
 }: TicketTabListProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
-  const stop = tabStopIndex(
-    tabs.length,
-    tabs.findIndex((tab) => tab.id === activeTabId),
-  );
-
   return (
-    <>
-      {tabs.map((tab, index) => (
+    <GroupedTabList
+      tabs={tabs}
+      groups={groups}
+      activeTabId={activeTabId}
+      shownGroupId={shownGroupId}
+      edgeTargets={groups !== undefined}
+      describe={ticketTabMenuLabel}
+      onSelect={(tab) => onSelectTab(tab.id)}
+      onUngroup={onUngroup}
+    >
+      {(tab, { active, tabStop, grouped }) => (
         <TicketTab
           key={tab.id}
           projectId={projectId}
           ticketId={ticketId}
           tab={tab}
-          active={tab.id === activeTabId}
-          tabStop={index === stop}
-          // The Body tab is the permanent first tab: no id here means no
-          // sortable registration, which is half of "index 0 is not a drop
-          // target" (the other half is its absence from `movableIds`).
-          dragId={tab.kind === "body" ? undefined : tab.id}
+          active={active}
+          tabStop={tabStop}
+          // The top strip's Body stays permanent, and a chip segment is the
+          // chip's; in a pane strip every tab drags, so it can leave the group.
+          dragId={grouped || (groups !== undefined && tab.kind === "body") ? undefined : tab.id}
+          menu={!grouped}
           editing={editingId === tab.id}
           onSelect={() => onSelectTab(tab.id)}
           onClose={() => onCloseTab(tab)}
@@ -620,7 +722,7 @@ function TicketTabList({
           }}
           onCancelRename={() => setEditingId(null)}
         />
-      ))}
-    </>
+      )}
+    </GroupedTabList>
   );
 }

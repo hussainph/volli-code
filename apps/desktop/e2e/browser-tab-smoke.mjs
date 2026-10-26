@@ -1171,14 +1171,14 @@ async function main() {
       await waitUntil(
         "a focused second pane for the completed Session",
         async () =>
-          (await page.locator('[data-slot="split-view-pane"]').count()) === 2 &&
+          (await page.locator('[data-slot="split-view-pane"][data-pane-id]').count()) === 2 &&
           (await transcriptPane.getAttribute("data-focused")) === "true",
       );
       await page
         .locator(`[data-peek-row="chat:${OVERLAY_SESSION.id}"][data-peek-surface="nav"]`)
         .getByRole("button")
         .click();
-      const transcriptTab = tabStrip(page, "Pane 2 tabs").getByRole("tab", {
+      const transcriptTab = tabStrip(page, "Home tabs").getByRole("tab", {
         name: OVERLAY_SESSION.title,
         exact: true,
       });
@@ -1211,13 +1211,14 @@ async function main() {
       const restored = await restoredNativePlane(secondUrl, before.contentsId);
       // Close only the fixture transcript, leaving the original Browser journey
       // and its two tabs untouched for the teardown assertion below.
-      // A down split keeps "Home tabs" on the primary pane; this Session's
-      // close affordance belongs to the lower pane's "Pane 2 tabs" strip.
+      // The transcript is the lower pane's only tab, and its top-strip chip
+      // segment closes it: the emptied pane collapses and the group of two
+      // dissolves, closing neither original Browser Tab (VC-614).
       await transcriptTab.getByTestId("tab-close").click();
       await waitUntil(
         "the original unsplit Browser surface",
         async () =>
-          (await page.locator('[data-slot="split-view-pane"]').count()) === 1 &&
+          (await page.locator('[data-slot="split-view-pane"][data-pane-id]').count()) === 1 &&
           (await remoteViewAttached(app, secondUrl)),
       );
       return {

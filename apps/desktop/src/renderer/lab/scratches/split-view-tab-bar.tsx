@@ -13,9 +13,9 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { project, tickets } from "../fixtures";
 import { appApi, seedApp } from "../seed";
 
-export const title = "Split view · shared main bar";
+export const title = "Tab groups · top strip and pane strips";
 export const note =
-  "Real Home/Ticket tabs: right, down, mixed, resizing and rail alignment. Native pages are not rendered.";
+  "Real Home/Ticket tabs grouped right, down and mixed: one chip on the top strip, a strip per pane. Native pages are not rendered.";
 export const viewport = "window" as const;
 
 const ticketId = tickets[0]!.id;
@@ -64,7 +64,7 @@ function arrange(ticket: boolean, layout: Layout) {
   if (ticket) store.openTicketWorkspace(project.id, ticketId);
   if (layout === "Unsplit") return;
   const split = (paneId: string, edge: "right" | "down", tabId: string) => {
-    const opts = { tabId, surfaceTabIds: ids };
+    const opts = { tabId };
     if (ticket) store.splitTicketPane(project.id, ticketId, paneId, edge, opts);
     else store.splitHomePane(project.id, paneId, edge, opts);
   };

@@ -61,20 +61,26 @@ import { effortLabel } from "./composer-effort";
  */
 export interface IslandTab {
   id: string;
-  /** What the pill and the card name the tab by. */
+  /** Host identity, retained for compact summaries and older fixtures. */
   host: string;
+  /** Page title leads the row; absent in older display fixtures. */
+  title?: string;
+  /** Host:port/path, or the current driver's activity. */
+  detail?: string;
+  /** A load failure or a waiting driver asks for the person's attention. */
+  needsAttention?: boolean;
   state: "loading" | "ready";
   /**
    * Somewhere a person can see it — the card and that surface are one model.
-   * One boolean, because that is all the pill asks; WHICH surface is
-   * {@link surface}'s answer, and only the card's caption needs it.
+   * One boolean, because that is all the pill asks; {@link surface} keeps
+   * the compatibility presentation for the card's show action.
    */
   promoted: boolean;
   /**
-   * Where a promoted tab is drawn (VC-268): `preview` is pinned above this
-   * chat's composer, `tab` is out in the workspace strip, `null` is headless.
-   * The two visible places are different answers to "where is it", so the
-   * state word says which rather than printing one word for both.
+   * Where a promoted tab is drawn: `tab` is in the workspace strip and `null`
+   * is headless. `preview` remains accepted for older display fixtures; the
+   * renderer treats legacy preview tabs as headless, without a miniature UI.
+   * Every row remains showable regardless of presentation.
    */
   surface: "preview" | "tab" | null;
   /**
@@ -221,19 +227,13 @@ export const EMPTY_ACTIVITY_ISLAND: ActivityIslandModel = {
 
 /**
  * What a card can do. Every row is its obvious promotion (row = verb): a tab
- * is pinned as this chat's preview, a subagent peeks in an overlay, a shell
- * opens its output, a plan step jumps. The destructive three — close, stop,
- * kill — arm on first press in the UI; by the time one of these is called the
- * person has pressed twice. The wiring ticket implements these against the
- * runtime; the island never learns what they do.
+ * opens beside its owning chat, a subagent peeks in an overlay, a shell opens
+ * its output, a plan step jumps. Tab close is immediate with Undo; stop and
+ * kill arm on first press in the UI. The mount owns runtime wiring.
  */
 export interface ActivityIslandActions {
   closeTab(id: string): void;
-  /**
-   * Pin the tab above this chat's composer — VC-238's Show, the cheap reveal.
-   * "Open as tab" stays where VC-238 put it, on the preview chrome and the
-   * transcript card; the island never promotes straight to the strip.
-   */
+  /** Reveal the tab, pairing it beside its owning chat when not already grouped. */
   promoteTab(id: string): void;
   /**
    * Opens the Browser replay (VC-453) of what the tab's Session did in it —
@@ -388,18 +388,10 @@ export function tabsHeading(tabs: readonly IslandTab[]): string {
   return `Browser${FLASH_SEPARATOR}${plural(tabs.length, "tab")}`;
 }
 
-/**
- * The state word riding a tab row's name; `null` when there is nothing to say.
- *
- * Reads {@link IslandTab.surface}, not `promoted`: the pill's boolean says
- * "visible somewhere", and a caption that said only that would print the same
- * word for a preview above this composer and a tab in the strip. In the card's
- * own caption grammar: `pinned here` / `as a tab`.
- */
+/** A tab's activity, never an implementation detail about its presentation. */
 export function tabStateWord(tab: IslandTab): string | null {
+  if (tab.needsAttention) return "needs you";
   if (tab.state === "loading") return "loading";
-  if (tab.surface === "preview") return "pinned here";
-  if (tab.surface === "tab") return "as a tab";
   return null;
 }
 

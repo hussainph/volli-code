@@ -340,15 +340,12 @@ function simReducer(sim: Sim, action: SimAction): Sim {
       const tab = sim.tabs.find((candidate) => candidate.id === action.id);
       if (!tab) return sim;
       return {
-        // The verb pins one tab as the chat's preview (VC-268): the one that
-        // was pinned goes back to headless, the way main keeps it to one.
-        ...flashed(sim, "Pinned here", tab.host),
+        // Simulated wiring: the lab has no workspace in which to form a pair.
+        ...flashed(sim, tab.promoted ? "Focused tab" : "Opened beside chat", tab.host),
         tabs: sim.tabs.map((candidate) =>
           candidate.id === action.id
-            ? { ...candidate, promoted: true, surface: "preview" as const }
-            : candidate.surface === "preview"
-              ? { ...candidate, promoted: false, surface: null }
-              : candidate,
+            ? { ...candidate, promoted: true, surface: "tab" as const }
+            : candidate,
         ),
       };
     }

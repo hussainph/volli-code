@@ -1,0 +1,34 @@
+[data-pair-drop-edge]::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--primary);
+  pointer-events: none;
+  z-index: 20;
+}
+[data-pair-drop-edge="left"]::after {
+  left: 0;
+}
+[data-pair-drop-edge="right"]::after {
+  right: 0;
+}
+
+/*
+ * A SUMMARIZED group chip — a group that is not on screen (VC-614). The first
+ * pane's front keeps a shortened label; the other panes fold into the chip's
+ * `+n` count (`GroupMoreCount`), whose tooltip names them. Unlayered, so it
+ * outranks the tab's own `max-w-*` utility.
+ */
+[data-slot="grouped-tab-chip"][data-compact="true"] [data-testid="tab-hint"] {
+  display: none;
+}
+[data-slot="grouped-tab-chip"][data-compact="true"] [data-slot="tab-label"] {
+  max-width: 7rem;
+}
+[data-slot="grouped-tab-chip"][data-compact="true"]
+  [data-slot="grouped-tab-member"]
+  + [data-slot="grouped-tab-member"] {
+  display: none;
+}

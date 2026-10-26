@@ -180,11 +180,10 @@ describe("tabs", () => {
     expect(tabsLoading([tab()])).toBe(false);
   });
 
-  it("tells the two visible places apart — pinned in this chat, or out in the strip (VC-268)", () => {
-    // `promoted` is one boolean for the pill; the card's caption answers
-    // "where", and a preview above this composer is not a tab in the strip.
-    expect(tabStateWord(tab({ promoted: true, surface: "preview" }))).toBe("pinned here");
-    expect(tabStateWord(tab({ promoted: true, surface: "tab" }))).toBe("as a tab");
+  it("reports attention rather than presentation implementation details", () => {
+    expect(tabStateWord(tab({ promoted: true, surface: "preview" }))).toBeNull();
+    expect(tabStateWord(tab({ promoted: true, surface: "tab" }))).toBeNull();
+    expect(tabStateWord(tab({ needsAttention: true, state: "loading" }))).toBe("needs you");
   });
 });
 

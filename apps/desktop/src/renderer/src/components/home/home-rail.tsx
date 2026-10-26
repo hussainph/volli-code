@@ -611,9 +611,11 @@ function openSession(projectId: string, row: HomeSessionRow): void {
   const workspace = useWorkspaceStore.getState();
   if (row.kind === "chat") {
     const chat = useChatSessionsStore.getState();
+    // A tab this row had to open OPENS into a shown group's focused pane.
+    const open = !chat.openTabs[projectId]?.includes(row.id);
     chat.adoptChatSession(row.id);
     chat.openChatTab(projectId, row.id);
-    workspace.openHome(projectId, chatTabId(row.id));
+    workspace.openHome(projectId, chatTabId(row.id), { open });
     return;
   }
   // The TAB the pane belongs to, then the pane inside it: a durable terminal

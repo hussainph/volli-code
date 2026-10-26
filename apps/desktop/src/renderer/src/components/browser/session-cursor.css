@@ -114,6 +114,35 @@
   pointer-events: none;
 }
 
+/* State indication on hold arrival, not a perpetual beacon. This separate
+ * leaf never moves the actual tip, and stays inside the native arrow view. */
+.session-cursor-live {
+  position: absolute;
+  top: 1px;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--session-cursor-color);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.session-cursor-live[data-live="true"] {
+  animation: session-cursor-live 200ms var(--ease-out) 3;
+}
+
+@keyframes session-cursor-live {
+  from {
+    opacity: 0.3;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+
 .session-cursor-press[data-live="true"] {
   animation: session-cursor-press 240ms var(--ease-out) both;
 }
@@ -281,7 +310,8 @@
   }
   .session-cursor-press[data-live="true"],
   .session-cursor-body[data-gesture="scroll"] .session-cursor-arrow,
-  .session-cursor-caret {
+  .session-cursor-caret,
+  .session-cursor-live[data-live="true"] {
     animation: none;
   }
   .session-cursor-label {
@@ -303,7 +333,8 @@
 .session-cursor[data-reduced-motion="true"]
   .session-cursor-body[data-gesture="scroll"]
   .session-cursor-arrow,
-.session-cursor[data-reduced-motion="true"] .session-cursor-caret {
+.session-cursor[data-reduced-motion="true"] .session-cursor-caret,
+.session-cursor[data-reduced-motion="true"] .session-cursor-live[data-live="true"] {
   animation: none;
 }
 .session-cursor[data-reduced-motion="true"] .session-cursor-label {

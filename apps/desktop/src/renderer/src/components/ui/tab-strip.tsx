@@ -48,8 +48,13 @@
  * its own; a strip with no surface above it is exactly the strip it was.
  */
 import * as React from "react";
+import "./tab-strip.css";
 import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
+import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
+import { CircleNotchIcon } from "@phosphor-icons/react/dist/csr/CircleNotch";
+import { QuestionIcon } from "@phosphor-icons/react/dist/csr/Question";
+import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import {
   closestCenter,
@@ -77,7 +82,7 @@ import type { TabOrder } from "@volli/shared";
 // so a strip states only its width.
 import { Button } from "@renderer/components/ui/button";
 import { InlineRename } from "@renderer/components/ui/inline-rename";
-import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
+import type { StatusDotState } from "@renderer/components/ui/status-dot";
 import { TitleReveal } from "@renderer/components/ui/title-reveal";
 import {
   Tooltip,
@@ -201,7 +206,7 @@ function revealTab(tab: HTMLElement, smooth: boolean): void {
 
 /**
  * Reveal the tab this strip is currently ABOUT — after something moved that is
- * neither a selection nor a focus (VC-288).
+ * neither a selection nor a focus (VC-288 review).
  *
  * The keyboard's tab wins over the selected one: if focus is inside this strip
  * then that is the tab a person is working with, and the two differ for the
@@ -367,7 +372,7 @@ export function TabStrip({
           ? current
           : next;
       });
-    // A VIEWPORT RESIZE IS ALSO A REVEAL (VC-288). The tab that matters
+    // A VIEWPORT RESIZE IS ALSO A REVEAL (VC-288 review). The tab that matters
     // was put in view against the width the strip had at the time; the chevrons
     // mounting, a divider drag, a rail opening and a window resize all hand it a
     // different one, and none of them is a selection or a focus, so nothing else
@@ -398,7 +403,7 @@ export function TabStrip({
     };
   }, []);
 
-  // AND THE AFFORDANCES THEMSELVES ARE A RESIZE (VC-288). Mounting two
+  // AND THE AFFORDANCES THEMSELVES ARE A RESIZE (VC-288 review). Mounting two
   // 24px controls at the ends of the strip takes that width out of the
   // scroller, which can put the tab that was just revealed back under one of
   // them. A browser reports that as a second `ResizeObserver` callback and the
@@ -422,7 +427,7 @@ export function TabStrip({
 
   const strip = (
     // A PROVIDER OF ITS OWN, so a tab's label reveal works wherever a strip is
-    // drawn (VC-288). `SidebarProvider` mounts one around the whole app,
+    // drawn (VC-288 review). `SidebarProvider` mounts one around the whole app,
     // but a strip is also rendered on its own by a good deal of the test suite
     // and by the fixture gallery, and a Radix tooltip with no provider above it
     // throws. Nesting is allowed and costs one context; what it changes is that
@@ -437,10 +442,10 @@ export function TabStrip({
           // width of THIS strip, never the window's. A split puts two of these in
           // one window, and a media query cannot tell them apart.
           "@container/tab-strip flex shrink-0 border-b border-border bg-rail",
-          // A folder strip is only as tall as its tabs plus the 4px above them,
+          // A folder strip is only as tall as its tabs plus the 8px above them,
           // because the tabs ARE its bottom edge. A pill strip centres its tabs
           // in a band of its own.
-          folder ? "items-end pt-1" : "h-9 items-center gap-1 px-2",
+          folder ? "items-end pt-2" : "h-9 items-center gap-1 px-2",
           className,
         )}
         {...props}
@@ -449,12 +454,12 @@ export function TabStrip({
           answer to what is drawn inside it. `flex-1 min-w-0` against the actions
           cluster beside it means this is the strip's width minus that cluster,
           full stop — a chevron mounting cannot change it, which is what lets the
-          chevrons be decided from it without deciding themselves (VC-288,
-          `tabOverflow`). */}
+          chevrons be decided from it without deciding themselves (VC-288
+          review, `tabOverflow`). */}
         <div
           ref={areaRef}
           data-slot="tab-scroll-area"
-          className={cn("flex min-w-0 flex-1", folder ? "items-end" : "items-center gap-1")}
+          className={cn("flex min-w-0 flex-1 self-stretch", folder ? "items-end" : "items-center")}
         >
           {/* THE POINTER'S WAY TO A CLIPPED TAB, and the discoverable one. The
             gesture was Shift+wheel and nothing else: a convention a mouse user
@@ -512,7 +517,7 @@ export function TabStrip({
           // The divider is half the separation; vertical alignment is the rest.
           // Tabs sit on the strip's bottom edge because they fuse with the plane
           // below, so a control spanning the band's full height cannot be
-          // mistaken for one however it is styled. `-mt-1` cancels the strip's
+          // mistaken for one however it is styled. `-mt-2` cancels the strip's
           // own top pad so the column reaches the true top edge.
           <div
             // Named because it is the one part of a strip that does NOT belong
@@ -522,7 +527,7 @@ export function TabStrip({
             data-slot="tab-actions"
             className={cn(
               "flex shrink-0 border-l border-border/70",
-              folder ? "-mt-1 items-stretch self-stretch pr-1 pl-2" : "items-center pl-2",
+              folder ? "-mt-2 items-stretch self-stretch pr-1 pl-2" : "items-center pl-2",
             )}
           >
             {actions}
@@ -573,16 +578,15 @@ function TabScrollAffordance({
       aria-label={towards === "prev" ? "Earlier tabs" : "Later tabs"}
       disabled={disabled}
       onClick={onTravel}
-      // A folder strip's tabs stand on its bottom edge; a control that spanned
-      // the band would read as one of them, so it sits on the same baseline.
-      // Flush against that edge rather than lifted off it: `mb-0.5` was 2px
-      // from nowhere on `docs/DESIGN.md`'s ladder, and the next rung up (4px)
-      // would float the caret above the tabs it belongs to.
-      className={cn("shrink-0", folder ? "self-end" : "self-center")}
+      // Edge-to-edge travel targets, not tabs or round floating buttons. Cancel
+      // the folder strip's top pad so the caret centres on the complete band.
+      className={cn(
+        "h-auto w-control-default shrink-0 self-stretch rounded-none border-border text-foreground disabled:text-muted-foreground disabled:opacity-100",
+        towards === "prev" ? "border-r" : "border-l",
+        folder && "-mt-2",
+      )}
     >
-      {/* `bold` is the ≤12px tier (CLAUDE.md): a caret at this size draws
-          lighter than the tab labels beside it at regular. */}
-      <Icon weight="bold" className="size-3" />
+      <Icon className="size-4" />
     </Button>
   );
 }
@@ -699,7 +703,7 @@ export interface TabProps extends React.ComponentPropsWithRef<"div"> {
    * the first tab when nothing is active" rule lives.
    */
   tabStop: boolean;
-  /** A Session's liveness, leading. The one status map (`ui/status-dot.tsx`). */
+  /** A Session's liveness, drawn as a state glyph beside or over its kind. */
   status?: StatusDotState;
   /** Anything else leading: a kind glyph, a park badge. */
   leading?: React.ReactNode;
@@ -807,7 +811,9 @@ function SortableTab({ dragId, ...props }: TabProps & { dragId: string }) {
       aria-describedby={attributes["aria-describedby"]}
       style={{
         ...props.style,
-        transform: ghosted ? undefined : CSS.Transform.toString(transform),
+        // Surface strips use fixed tab-edge pairing targets. Moving siblings
+        // during a drag would separate the visible edge from its hit box.
+        transform: inSurface ? undefined : CSS.Transform.toString(transform),
         transition: transition ?? undefined,
       }}
       // Above its neighbours while it travels, so the tab being dragged is not
@@ -893,7 +899,7 @@ function TabShell({
   // inline edit are commit and cancel, and an × that blurs (committing) and
   // then closes is a destructive answer to a control reached for to dismiss.
   const showClose = closable && onClose !== undefined && !renamingNow;
-  // THE WHOLE LABEL, ON HOVER AND ON FOCUS (VC-288). The name below is
+  // THE WHOLE LABEL, ON HOVER AND ON FOCUS (VC-288 review). The name below is
   // capped at `max-w-40` and truncates, and until now the rest of it lived in
   // `aria-label` alone — an answer for a screen reader and for nothing else,
   // on tabs that do not all carry a `title` either. The reveal rides the tab
@@ -972,9 +978,6 @@ function TabShell({
             }
           }}
           className={cn(
-            // `scale` is in the transition list and `scale-100!` is the
-            // reduced-motion cancel — see the press note in `ui/button.tsx`.
-            //
             // `transform` LEAVES that list under reduced motion, and it has to be
             // said here rather than left to dnd-kit (VC-189): a sortable tab asks
             // for no transition at all under the flag, but "no transition" means no
@@ -988,28 +991,36 @@ function TabShell({
             // instead of answering the click. Every other clickable row has
             // said this since `menu-classes.ts` (VC-381); this was the one
             // row that never did.
-            "group relative flex h-7 shrink-0 cursor-default select-none items-center gap-1 text-ui font-medium outline-none transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out active:scale-[0.97] motion-reduce:transition-[color,background-color,box-shadow] motion-reduce:scale-100! focus-visible:ring-2 focus-visible:ring-ring",
-            folder ? "rounded-t-lg" : "rounded-md",
+            "group relative flex h-7 shrink-0 cursor-default select-none items-center gap-1 text-ui font-medium outline-none transition-[color,background-color,box-shadow,transform] duration-150 ease-out motion-reduce:transition-[color,background-color,box-shadow] focus-visible:ring-2 focus-visible:ring-ring",
+            folder ? "workspace-folder-tab rounded-t-lg" : "rounded-md",
             // A closable tab pays its right inset in the × instead of in padding.
             folder ? (closable ? "pr-1 pl-3" : "px-3") : closable ? "pr-1 pl-2" : "px-2.5",
             active
               ? folder
                 ? // -mb-px pulls the active tab 1px past the strip's bottom border
-                  // so its content-coloured fill covers that seam. `shadow-raised`
-                  // is the halo that says "active" — carried here rather than by
-                  // the `[role="tab"][aria-selected="true"]` rule globals.css used
-                  // to hold, because a shadow you cannot see in the component is a
-                  // shadow nobody can tell is live.
-                  "-mb-px bg-background text-foreground shadow-raised"
+                  // so its content-coloured fill covers that seam. The reverse
+                  // corners in tab-strip.css complete the joined silhouette;
+                  // no lower shadow redraws the seam it is meant to cover.
+                  "-mb-px bg-background text-foreground"
                 : "bg-accent text-foreground shadow-raised"
               : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
             className,
           )}
         >
-          {/* 8px, not the 6px default: `ui/status-dot.tsx` sizes the dot by where it
-          sits, and a tab is the larger of its two homes. */}
-          {status !== undefined ? <StatusDot state={status} size="md" /> : null}
-          {leading}
+          {leading && status !== undefined ? (
+            <span
+              data-slot="tab-kind-state"
+              className="relative mr-1 flex size-5 shrink-0 items-center justify-center"
+            >
+              {leading}
+              <TabStateIcon state={status} badge />
+            </span>
+          ) : (
+            <>
+              {status !== undefined ? <TabStateIcon state={status} /> : null}
+              {leading}
+            </>
+          )}
           {badge}
           {renamingNow ? (
             <InlineRename
@@ -1058,6 +1069,44 @@ function TabShell({
           answer half the question. */}
       <TooltipContent side="bottom">{name}</TooltipContent>
     </Tooltip>
+  );
+}
+
+/** Same four state glyphs as SessionGlyph, over the strip's existing state contract. */
+function TabStateIcon({ state, badge = false }: { state: StatusDotState; badge?: boolean }) {
+  const busy = state === "working" || state === "setup" || state === "starting";
+  const failed = state === "error" || state === "interrupted";
+  const Icon = busy
+    ? CircleNotchIcon
+    : state === "waiting"
+      ? QuestionIcon
+      : failed
+        ? WarningIcon
+        : CircleIcon;
+  return (
+    <span
+      aria-hidden
+      data-slot="tab-state"
+      data-state={state}
+      className={cn(
+        "flex shrink-0 items-center justify-center",
+        // Tucked inside the 28px tab: hanging a full step below the 20px slot
+        // put the badge's lower edge on the scroller's clip line (VC-614).
+        badge && "absolute -right-0.5 -bottom-0.5 rounded-full bg-background p-px",
+        failed
+          ? "text-destructive"
+          : state === "waiting"
+            ? "text-attention"
+            : busy || state === "ready"
+              ? "text-positive"
+              : "text-muted-foreground",
+      )}
+    >
+      <Icon
+        weight="bold"
+        className={cn(badge ? "size-2.5" : "size-3", busy && "motion-safe:animate-spin")}
+      />
+    </span>
   );
 }
 
@@ -1133,7 +1182,9 @@ function TabClose({ label, dirty, onClose }: { label: string; dirty: boolean; on
         // is the reference): the duration and the reduced-motion escape are
         // part of it, and every tab copy had dropped both.
         "group/close flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none transition-opacity duration-100 hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-        dirty ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+        dirty
+          ? "opacity-100"
+          : "opacity-0 group-aria-selected:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100",
       )}
     >
       {dirty ? (

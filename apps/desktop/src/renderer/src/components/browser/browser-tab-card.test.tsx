@@ -107,47 +107,32 @@ const button = (name: string) =>
   [...(container?.querySelectorAll("button") ?? [])].find((one) => one.textContent === name);
 
 describe("BrowserTabCard", () => {
-  it("shows the live tab — URL, title, owner — and offers Show, Open as tab and Close for a headless agent tab", async () => {
+  it("offers one reveal action for a headless agent tab, rather than a preview", async () => {
     useBrowserTabsStore.getState().receive(tab());
     const card = host();
-
     await draw(card, facet());
-
     expect(text()).toContain("Sign in — Example");
     expect(text()).toContain("example.com/sign-in");
     expect(text()).toContain("this Session");
-    expect(button("Show")).toBeDefined();
-    expect(button("Open as tab")).toBeDefined();
-    expect(button("Close")).toBeDefined();
+    expect(button("Show")).toBeUndefined();
     expect(button("Hide")).toBeUndefined();
-
-    await act(async () => button("Show")?.click());
-    expect(card.api.setPresentation).toHaveBeenCalledWith({
-      tabId: "tab-1",
-      presentation: "preview",
-    });
-    await act(async () => button("Open as tab")?.click());
+    await act(async () => button("Open beside chat")?.click());
     expect(card.api.setPresentation).toHaveBeenCalledWith({ tabId: "tab-1", presentation: "tab" });
     await act(async () => button("Close")?.click());
     expect(card.api.close).toHaveBeenCalledWith({ tabId: "tab-1" });
   });
 
-  it("offers Hide instead of Show once the tab is on screen, and names a child Session as the driver", async () => {
+  it("reveals an already-visible child's tab through its mount's pairing door", async () => {
     useBrowserTabsStore
       .getState()
-      .receive(tab({ presentation: "preview", ownerSessionId: "s1-child" }));
-    const card = host();
-
+      .receive(tab({ presentation: "tab", ownerSessionId: "s1-child" }));
+    const openBeside = vi.fn(async () => {});
+    const card = { ...host(), openBeside };
     await draw(card, facet({ ownerSessionId: "s1-child" }));
-
     expect(text()).toContain("Explore the seam");
-    expect(button("Hide")).toBeDefined();
-    expect(button("Show")).toBeUndefined();
-    await act(async () => button("Hide")?.click());
-    expect(card.api.setPresentation).toHaveBeenCalledWith({
-      tabId: "tab-1",
-      presentation: "headless",
-    });
+    await act(async () => button("Open beside chat")?.click());
+    expect(openBeside).toHaveBeenCalledExactlyOnceWith("tab-1");
+    expect(card.api.setPresentation).not.toHaveBeenCalled();
   });
 
   it("says the tab is gone and keeps the last URL, title and picture from the transcript", async () => {
@@ -189,9 +174,11 @@ describe("BrowserTabCard", () => {
     await draw(host(), facet());
     expect(text()).toContain("Loading");
 
-    useBrowserTabsStore
-      .getState()
-      .receive(tab({ loading: false, error: "Could not load page: ERR_NAME_NOT_RESOLVED" }));
+    act(() =>
+      useBrowserTabsStore
+        .getState()
+        .receive(tab({ loading: false, error: "Could not load page: ERR_NAME_NOT_RESOLVED" })),
+    );
     await draw(host(), facet());
     expect(text()).toContain("Could not load page");
 
@@ -209,7 +196,7 @@ describe("BrowserTabCard", () => {
     expect(card.api.picture).toHaveBeenCalledTimes(1);
   });
 
-  it("toasts a failed Show, Hide or Close rather than swallowing it", async () => {
+  it("toasts a failed reveal or Close rather than swallowing it", async () => {
     useBrowserTabsStore.getState().receive(tab());
     const card = host({
       setPresentation: vi.fn(async () => ({ ok: false, error: "Unknown Browser Tab" }) as const),
@@ -219,8 +206,8 @@ describe("BrowserTabCard", () => {
     });
     await draw(card, facet());
 
-    await act(async () => button("Show")?.click());
-    expect(toastError).toHaveBeenCalledWith("Could not show Browser Tab: Unknown Browser Tab");
+    await act(async () => button("Open beside chat")?.click());
+    expect(toastError).toHaveBeenCalledWith("Could not open Browser Tab: Unknown Browser Tab");
     await act(async () => button("Close")?.click());
     expect(toastError).toHaveBeenCalledWith("Could not close Browser Tab: gone");
   });
@@ -232,7 +219,7 @@ describe("BrowserTabCard", () => {
     expect(container?.querySelectorAll("button")).toHaveLength(0);
   });
 
-  it("does not act on a person's own tab beyond closing it", async () => {
+  it("can focus or close a person's own tab", async () => {
     useBrowserTabsStore
       .getState()
       .receive(tab({ createdBy: "user", ownerSessionId: null, presentation: "tab" }));
@@ -243,7 +230,7 @@ describe("BrowserTabCard", () => {
       container?.querySelector("[data-browser-tab-mark]")?.getAttribute("data-browser-tab-mark"),
     ).toBe("user");
     expect(button("Show")).toBeUndefined();
-    expect(button("Open as tab")).toBeUndefined();
+    expect(button("Open as tab")).toBeDefined();
     expect(button("Close")).toBeDefined();
   });
 
@@ -261,7 +248,7 @@ describe("BrowserTabCard", () => {
       pictureId: "picture-4",
     });
 
-    useBrowserTabsStore.getState().receive(tab());
+    act(() => useBrowserTabsStore.getState().receive(tab()));
     await draw(card, facet({ action: "open" }));
     expect(button("Replay")).toBeDefined();
     expect(button("Close")).toBeDefined();

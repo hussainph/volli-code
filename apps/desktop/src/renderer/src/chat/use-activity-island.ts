@@ -70,6 +70,7 @@ export interface ActivityIslandDeps {
   openSession?: (sessionId: string) => void;
   /** Where `replayTab` opens a Session's Browser replay: the plane's modal (VC-453). */
   openTrace?: (request: BrowserTraceRequest) => void;
+  openBrowserBeside?: (tabId: string, ownerSessionId: string) => Promise<void>;
 }
 
 /**
@@ -97,7 +98,10 @@ export function useActivityIsland(
   deps: ActivityIslandDeps = {},
 ): ActivityIslandBinding {
   const { flash, push } = useIslandFlash();
-  const tabs = useIslandTabs(sessionId, projectId, push, { openTrace: deps.openTrace });
+  const tabs = useIslandTabs(sessionId, projectId, push, {
+    openTrace: deps.openTrace,
+    openBrowserBeside: deps.openBrowserBeside,
+  });
   const plan = useIslandPlan(sessionId, deps.store);
   const shells = useIslandShells(sessionId, { openOutput: deps.openShellOutput });
   // The agents feed's deps are a subset of the mount's, under the same names.
