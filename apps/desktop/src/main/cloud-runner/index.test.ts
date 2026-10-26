@@ -3,32 +3,22 @@ import { describe, expect, it } from "vite-plus/test";
 import { LOCAL_LAUNCH, OperationUnavailableError, THIS_MAC_RUNNER_OFF } from "@volli/shared";
 
 import { chooseProductStore } from "../cloud-launch";
-import { resolveRunnerSiteUrl, runnerAccountPort, thisMacRunnerLaunch } from "./index";
+import {
+  createDesktopMacRunner,
+  runnerAccountPort,
+  thisMacRunnerLaunch,
+  type DesktopMacRunnerInput,
+} from "./index";
 import type { MacRunner } from "./mac-runner";
 
-const resolve = (env: Record<string, string>, backendUrl: string | null, packaged = false) =>
-  resolveRunnerSiteUrl({ env, packaged, backendUrl });
-
-describe("the runner's HTTP actions origin", () => {
-  it("is the deployment's .convex.site twin, or what an unpackaged build names", () => {
-    expect(resolve({}, "https://happy-otter-1.convex.cloud")).toBe(
-      "https://happy-otter-1.convex.site",
-    );
-    expect(
-      resolve({ VOLLI_CONVEX_SITE_URL: "http://127.0.0.1:3211" }, "http://127.0.0.1:3210"),
-    ).toBe("http://127.0.0.1:3211");
-    expect(
-      resolve({ VOLLI_CONVEX_SITE_URL: "http://127.0.0.1:3211" }, "https://a.convex.cloud", true),
-    ).toBe("https://a.convex.site");
-    expect(resolve({ VOLLI_CONVEX_SITE_URL: "nope" }, "http://127.0.0.1:3210")).toBeNull();
-    expect(resolve({ VOLLI_CONVEX_SITE_URL: "ftp://x" }, null)).toBeNull();
-    expect(resolve({}, "not a url")).toBeNull();
-  });
-});
-
 describe("which launch makes this Mac a runner", () => {
+  it("refuses to pair an embedded deployment with a hosted token exchange", () => {
+    expect(() => createDesktopMacRunner({ deployment: "local" } as DesktopMacRunnerInput)).toThrow(
+      "local runner token source",
+    );
+  });
   it("only a Volli Cloud launch with an HTTP actions origin; a local (and every flag-off) launch composes nothing", () => {
-    expect(thisMacRunnerLaunch(LOCAL_LAUNCH, "https://a.convex.site")).toBeNull();
+    expect(thisMacRunnerLaunch(LOCAL_LAUNCH)).toBeNull();
     // Main's own boot decision with the flag off: no marker is read, nothing is composed.
     const flagOff = chooseProductStore({
       cloudFlag: false,
@@ -38,10 +28,11 @@ describe("which launch makes this Mac a runner", () => {
       backendUrl: "https://a.convex.cloud",
       signInConfigured: true,
     });
-    expect(thisMacRunnerLaunch(flagOff, "https://a.convex.site")).toBeNull();
+    expect(thisMacRunnerLaunch(flagOff)).toBeNull();
     const cloud = { store: "cloud", userId: "u", backendUrl: "https://a.convex.cloud" } as const;
-    expect(thisMacRunnerLaunch(cloud, null)).toBeNull();
-    expect(thisMacRunnerLaunch(cloud, "https://a.convex.site")).toEqual({
+    expect(thisMacRunnerLaunch(cloud)).toBeNull();
+    expect(thisMacRunnerLaunch({ ...cloud, siteUrl: "https://a.convex.site" })).toEqual({
+      deployment: "cloud",
       userId: "u",
       backendUrl: "https://a.convex.cloud",
       siteUrl: "https://a.convex.site",

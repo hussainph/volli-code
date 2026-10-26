@@ -26,6 +26,8 @@ describe("the launch's product store (VC-889)", () => {
       }),
     ).toEqual({
       store: "cloud",
+      deployment: "cloud",
+      siteUrl: null,
       userId: USER,
       backendUrl: URL,
     });
@@ -46,6 +48,37 @@ describe("the launch's product store (VC-889)", () => {
         }),
       ).toEqual({ store: "local" });
     }
+  });
+
+  it("carries explicit action URLs and keeps the deployment separate from the store", () => {
+    const input = {
+      cloudFlag: true,
+      readMarker: () => ({ userId: USER }),
+      backendUrl: URL,
+      siteUrl: "http://127.0.0.1:3211",
+      signInConfigured: true,
+    };
+    expect(chooseProductStore(input)).toMatchObject({
+      deployment: "cloud",
+      siteUrl: input.siteUrl,
+    });
+    // Simulated wiring: VC-938 supplies this only after its embedded supervisor is ready.
+    expect(
+      chooseProductStore({
+        ...input,
+        cloudFlag: false,
+        readMarker: () => {
+          throw new Error("no account required");
+        },
+        localDeployment: { userId: "local-owner", backendUrl: URL, siteUrl: input.siteUrl },
+      }),
+    ).toEqual({
+      store: "cloud",
+      deployment: "local",
+      userId: "local-owner",
+      backendUrl: URL,
+      siteUrl: input.siteUrl,
+    });
   });
 
   it("never reads the marker with the flag off, or with no backend or sign-in to launch into", () => {

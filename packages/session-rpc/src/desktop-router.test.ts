@@ -1344,6 +1344,15 @@ describeContract<Host, DesktopRouter>(
       expect(fixture.calls).toHaveLength(6);
     });
 
+    it("carries an explicit deployment and actions URL over the real desktop transport", async () => {
+      for (const deployment of ["cloud", "local"] as const) {
+        const launch = { ...CLOUD_LAUNCH, deployment, siteUrl: "https://actions.example.net" };
+        const fixture = host(LOCAL_DESKTOP_CALLER, { "cloud.launch": () => launch });
+        const client = await connect(fixture);
+        expect(await client.cloud.launch.query()).toEqual(launch);
+      }
+    });
+
     it("refuses a token answer or a launch that is not one of their shapes", async () => {
       for (const answer of [
         { kind: "token", token: "", expiresAt: 1 },

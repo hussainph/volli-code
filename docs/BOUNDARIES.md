@@ -199,10 +199,14 @@ shared `decide…` rules over the client's own rows, never durable) and is
 refused, not queued, while the window cannot reach the backend. That client authenticates with a short-lived access
 token main hands it on demand (`account.accessToken`, a desktop-only entry),
 held in memory only and never logged; the refresh token never leaves main.
-The window's CSP permits its own origin, the loopback a local backend runs
-on in a dev build, and the exact HTTPS transcript-store origin named at build
-time by `VOLLI_CLOUD_STORAGE_ORIGIN` (never a wildcard). A deployment's exact
-backend origin joins that list when one exists. Session listings, settled
+Main serves the built window's CSP from the chosen launch: its exact backend
+HTTPS/WebSocket origins and transcript-store origin, never a wildcard or a
+packaged runtime environment override. Packaged builds pin these public values
+with `VOLLI_BUILD_CONVEX_URL` / `VOLLI_BUILD_STORAGE_ORIGIN`; unpackaged builds
+use validated dev configuration (`VOLLI_CONVEX_URL` / `VOLLI_CLOUD_STORAGE_ORIGIN`).
+The dev server separately permits fixture loopback connections. The HTTP-actions
+site URL is explicit in the launch descriptor but is used only by main.
+Session listings, settled
 history and live chunks use the same client directly; transcript packs and
 spilled bodies use visibility-authorized signed GETs to that store. Viewer
 leases are held only while a Session's chat surface is visible.

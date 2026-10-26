@@ -110,12 +110,14 @@ function windowDeps(
       } as never,
       api,
     }),
-    account: {
+    tokens: {
       accessToken: async (): Promise<AccountAccessToken> => ({
         kind: "token",
         token: token(subject),
         expiresAt: Date.now() + 3_600_000,
       }),
+    },
+    account: {
       subscribe: () => ({ unsubscribe: () => {} }),
     },
     window: {
@@ -298,7 +300,7 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
           } as never,
           api,
         }),
-        account: {
+        tokens: {
           accessToken: async (): Promise<AccountAccessToken> => {
             // While cut, main cannot refresh: unavailable, never signed out.
             if (offlineTokens) {
@@ -308,6 +310,8 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
             // Short-lived, so the client asks for a fresh one while it is cut.
             return { kind: "token", token: token(subject, 12), expiresAt: Date.now() + 12_000 };
           },
+        },
+        account: {
           subscribe: (handlers) => {
             handlers.onData({
               state: "signed-in",

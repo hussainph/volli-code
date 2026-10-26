@@ -17,6 +17,8 @@ import * as os from "node:os";
 
 import {
   convexBackendConnection,
+  createRunnerLinkClient,
+  createRunnerTokenSource,
   probeRunnerCapabilities,
   readRunnerLoad,
   runnerHostFacts,
@@ -26,7 +28,12 @@ import {
 import type { RunnerAccountPort } from "@volli/host-core/handlers";
 import type { PowerPort } from "@volli/host-core/ports";
 import type { HostLiveWork } from "@volli/host-core/sessions";
-import { OperationUnavailableError, THIS_MAC_RUNNER_OFF, type CloudLaunch } from "@volli/shared";
+import {
+  OperationUnavailableError,
+  THIS_MAC_RUNNER_OFF,
+  type CloudLaunch,
+  type CloudLaunchDeployment,
+} from "@volli/shared";
 import type { RunnerBrowserCapability } from "@volli/shared/cloud";
 
 import { convexMacRunnerBackend } from "./backend";
@@ -80,51 +87,27 @@ export async function thisMacName(packaged: boolean): Promise<string> {
 }
 
 /**
- * The deployment's HTTP actions origin, where a runner exchanges its
- * credential (`/runner/token`): a cloud deployment's `.convex.site` twin of
- * its `.convex.cloud` URL. An unpackaged build may name it instead
- * (`VOLLI_CONVEX_SITE_URL`, which the local backend fixture hands what it
- * runs, since a local backend serves it on its own port). `null`: none.
+ * The Convex store's runner identity and explicit HTTP-actions origin.
+ * A SQLite launch composes nothing. Embedded deployments must also provide
+ * their local token source to createDesktopMacRunner (VC-938).
  */
-export function resolveRunnerSiteUrl(input: {
-  readonly env: Readonly<Record<string, string | undefined>>;
-  readonly packaged: boolean;
-  readonly backendUrl: string | null;
-}): string | null {
-  const named = input.packaged ? undefined : input.env["VOLLI_CONVEX_SITE_URL"]?.trim();
-  if (named !== undefined && named !== "") {
-    try {
-      const url = new URL(named);
-      if (url.protocol === "https:" || url.protocol === "http:") return named;
-    } catch {
-      // Not a URL: fall through to the derived one.
-    }
-  }
-  if (input.backendUrl === null) return null;
-  try {
-    const url = new URL(input.backendUrl);
-    if (!url.hostname.endsWith(".convex.cloud")) return null;
-    url.hostname = `${url.hostname.slice(0, -".convex.cloud".length)}.convex.site`;
-    return url.origin;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Whether this launch makes this Mac a runner, and for whom: only a Volli
- * Cloud launch (the flag on, a signed-in marker, a backend) with an HTTP
- * actions origin. Every other launch, flag-off ones first, composes nothing.
- */
-export function thisMacRunnerLaunch(
-  launch: CloudLaunch,
-  siteUrl: string | null,
-): { userId: string; backendUrl: string; siteUrl: string } | null {
-  if (launch.store !== "cloud" || siteUrl === null) return null;
-  return { userId: launch.userId, backendUrl: launch.backendUrl, siteUrl };
+export function thisMacRunnerLaunch(launch: CloudLaunch): {
+  deployment: CloudLaunchDeployment;
+  userId: string;
+  backendUrl: string;
+  siteUrl: string;
+} | null {
+  if (launch.store !== "cloud" || launch.siteUrl == null) return null;
+  return {
+    deployment: launch.deployment ?? "cloud",
+    userId: launch.userId,
+    backendUrl: launch.backendUrl,
+    siteUrl: launch.siteUrl,
+  };
 }
 
 export interface DesktopMacRunnerInput {
+  readonly deployment: CloudLaunchDeployment;
   readonly userId: string;
   /** The deployment (`https://<deployment>.convex.cloud`). */
   readonly backendUrl: string;
@@ -144,6 +127,8 @@ export interface DesktopMacRunnerInput {
   /** The agent browser, as Sessions here can use it now (closed while in the menu bar). */
   readonly browser: () => RunnerBrowserCapability;
   readonly sync?: RunnerConnectionDeps["sync"];
+  /** VC-938 must supply its in-process issuer here before composing an embedded runner. */
+  readonly tokens?: RunnerConnectionDeps["tokens"];
   /** Dual-locked power acceptance seam; absent in ordinary launches. */
   readonly connectionTransform?: (connect: ConnectBackend) => ConnectBackend;
   readonly log: {
@@ -153,6 +138,9 @@ export interface DesktopMacRunnerInput {
 }
 
 export function createDesktopMacRunner(input: DesktopMacRunnerInput): MacRunner {
+  if (input.deployment === "local" && input.tokens === undefined) {
+    throw new Error("Embedded deployment needs a local runner token source");
+  }
   return createMacRunner({
     userId: input.userId,
     account: input.account,
@@ -160,7 +148,13 @@ export function createDesktopMacRunner(input: DesktopMacRunnerInput): MacRunner 
     record: runnerRecordStore(input.recordRow, input.userId, input.log),
     backend: convexMacRunnerBackend({ url: input.backendUrl }),
     connect: runnerConnector({
-      siteUrl: input.siteUrl,
+      tokens:
+        input.tokens ??
+        ((options) =>
+          createRunnerTokenSource({
+            ...options,
+            client: createRunnerLinkClient({ siteUrl: input.siteUrl }),
+          })),
       connect:
         input.connectionTransform === undefined
           ? convexBackendConnection(input.backendUrl, input.convex)

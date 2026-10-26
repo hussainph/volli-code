@@ -197,7 +197,6 @@ import {
   createDesktopMacRunner,
   holdWhileTurnsRun,
   NO_POWER_BLOCKER,
-  resolveRunnerSiteUrl,
   runnerAccountPort,
   thisMacRunnerLaunch,
   type MacRunner,
@@ -208,6 +207,7 @@ import {
   createRelaunchController,
   launchMarkerStore,
 } from "./cloud-launch";
+import { launchConnectSources, withRendererConnections } from "./renderer-csp";
 import { engineSignInLinks, remoteSignInsPort, signInPreflight } from "./host-sign-ins/port";
 import {
   createHostLinkRelay,
@@ -721,12 +721,17 @@ const appStartup = app.whenReady().then(async () => {
   const loginShellPathAttempt = probeLoginShellPath(ADOPTION_PROBE);
   logPowerTransitions(powerMonitor);
   registerRendererLogForwarding(ipcMain);
-  const serveRendererAsset = (request: Request): Promise<Response> | Response => {
+  // Fixed before any window opens; the future embedded supervisor supplies the same descriptor.
+  let rendererSources: readonly string[] = [];
+  const serveRendererAsset = async (request: Request): Promise<Response> => {
     const assetPath = resolvePackagedRendererAsset(request.url, PACKAGED_RENDERER_ROOT);
     if (assetPath === null) {
       return new Response("Not found", { status: 404 });
     }
-    return net.fetch(pathToFileURL(assetPath).toString());
+    const response = await net.fetch(pathToFileURL(assetPath).toString());
+    return assetPath === join(PACKAGED_RENDERER_ROOT, "index.html")
+      ? withRendererConnections(response, rendererSources)
+      : response;
   };
   protocol.handle(PACKAGED_RENDERER_SCHEME, serveRendererAsset);
   // The Session cursor overlay (VC-239) runs under its own partition, and a
@@ -877,7 +882,12 @@ const appStartup = app.whenReady().then(async () => {
   // and canary refuse with the flag off. A stable sign-in marker permits a
   // bounded launch-time check; other account reads are on demand.
   const buildKind = runningBuildKind(app.isPackaged, autoUpdater.currentVersion);
-  const accountConfig = resolveAccountConfig({ env: process.env, packaged: app.isPackaged });
+  const buildCloudConfig = VOLLI_PACKAGED_CLOUD_CONFIG;
+  const accountConfig = resolveAccountConfig({
+    env: process.env,
+    packaged: app.isPackaged,
+    build: buildCloudConfig,
+  });
   const enrollmentAvailable =
     buildKind === "stable" && accountConfig.provider !== null && accountConfig.backendUrl !== null;
   const accountEnrollmentEnabled = () => enrollmentAvailable || isExperimentEnabled("cloud");
@@ -1047,8 +1057,10 @@ const appStartup = app.whenReady().then(async () => {
     cloudFlag: isExperimentEnabled("cloud"),
     readMarker: () => launchMarker.read(),
     backendUrl: accountConfig.backendUrl,
+    siteUrl: accountConfig.siteUrl,
     signInConfigured: accountConfig.provider !== null,
   });
+  rendererSources = launchConnectSources(launch, accountConfig.storageOrigin);
   // Signing in or out restarts into the other store, through every quit gate.
   const relaunch = createRelaunchController(
     { quit: () => app.quit(), relaunch: () => app.relaunch() },
@@ -1078,14 +1090,7 @@ const appStartup = app.whenReady().then(async () => {
   // Volli Cloud launch, which reads the sealed runner link at boot (a runner
   // connects without a window). A local launch, and every flag-off one,
   // composes nothing here.
-  const runnerLaunch = thisMacRunnerLaunch(
-    launch,
-    resolveRunnerSiteUrl({
-      env: process.env,
-      packaged: app.isPackaged,
-      backendUrl: launch.store === "cloud" ? launch.backendUrl : null,
-    }),
-  );
+  const runnerLaunch = thisMacRunnerLaunch(launch);
   // Bound once menu-bar mode exists below: its browser closes while resident.
   let residentMenuBar: { isResident(): boolean } | null = null;
   // The cloud launch's turn-time power assertion, released at teardown.

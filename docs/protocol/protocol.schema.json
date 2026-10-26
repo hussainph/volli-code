@@ -1079,6 +1079,25 @@
                   "minLength": 1,
                   "type": "string"
                 },
+                "deployment": {
+                  "enum": [
+                    "cloud",
+                    "local"
+                  ],
+                  "type": "string"
+                },
+                "siteUrl": {
+                  "anyOf": [
+                    {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "store": {
                   "const": "cloud",
                   "type": "string"
