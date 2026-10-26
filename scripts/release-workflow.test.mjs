@@ -198,6 +198,24 @@ test("failed preparation blocks hostd/release; dry builds have read-only content
   }
 });
 
+test("desktop release and dry run compile only the public pinned account target", () => {
+  for (const job of ["release", "dry-run-desktop"]) {
+    const build = workflow.jobs[job].steps.find((step) => step.env?.VOLLI_HOSTD_MANIFEST);
+    for (const name of [
+      "VOLLI_BUILD_WORKOS_CLIENT_ID",
+      "VOLLI_BUILD_CONVEX_URL",
+      "VOLLI_BUILD_CONVEX_SITE_URL",
+      "VOLLI_BUILD_STORAGE_ORIGIN",
+    ]) {
+      assert.equal(build.env[name], `\u0024{{ vars.${name} }}`);
+    }
+    assert.doesNotMatch(
+      Object.keys(build.env).join(" "),
+      /DEPLOY_KEY|SIGNING_KEY|S3_SECRET|ROOT_KEYS/,
+    );
+  }
+});
+
 test("desktop gets the same generated pin; release cleanup keeps hostd assets and signature", () => {
   for (const job of ["release", "dry-run-desktop"]) {
     const steps = workflow.jobs[job].steps;
