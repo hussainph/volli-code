@@ -11,5 +11,4 @@
  * The `cloud` flag is NOT this answer: a local launch with the flag on still
  * runs its own Automations. The launch's chosen product store decides.
  */
-export const AUTOMATIONS_UNAVAILABLE_IN_CLOUD =
-  "Automations are not available in cloud launches yet.";
+export const AUTOMATIONS_UNAVAILABLE_IN_CLOUD = "Not available on Volli Cloud yet";

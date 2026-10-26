@@ -264,7 +264,12 @@ export interface RunnerCapabilities {
   browser: RunnerBrowserCapability;
   /** How many Sessions this runner admits at once (its memory admission). */
   maxConcurrentSessions: number;
-  /** Platform tools a Session may need (`xcode`, `simulator`, …); Mac-only tools appear only on a Mac. */
+  /**
+   * Open capability names: platform tools a Session may need (`xcode`,
+   * `simulator`, …), plus explicit job executors such as `automation.run`.
+   * Mac-only tools appear only on a Mac. A job capability is advertised only
+   * when this runner can execute that kind; absence never implies support.
+   */
   tools: string[];
 }
 

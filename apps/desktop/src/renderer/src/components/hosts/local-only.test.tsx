@@ -36,7 +36,7 @@ function Probe({ projectId }: { projectId: string | null }) {
 }
 
 describe("LocalOnly", () => {
-  it("keeps the Automations page blocked with one line and hides ticket controls in a cloud launch", async () => {
+  it("blocks local-only children with one line or a hidden fallback in a cloud launch", async () => {
     world = hostWorld({ cloud: false });
     adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
     reached.mockClear();

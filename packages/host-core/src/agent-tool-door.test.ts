@@ -1033,7 +1033,7 @@ describe("automation_run through the Agent Tool Surface (VC-134)", () => {
 
     const result = await h.call({ automation: "Nightly sweep", ticket: "VC-1" });
 
-    expect(result.text).toBe("Automations are not available in cloud launches yet.");
+    expect(result.text).toBe("Not available on Volli Cloud yet");
     // Refused at dispatch: no project, Ticket or Automation was looked up, so
     // this launch's shadow rows are never mistaken for a place to start a Run.
     expect(projects).not.toHaveBeenCalled();
