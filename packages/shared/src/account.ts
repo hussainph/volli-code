@@ -123,14 +123,25 @@ export const ACCOUNT_TOKEN_MAX = 16_384;
 /**
  * Which product store this launch of the app uses (`cloud.launch`, VC-889),
  * chosen once by main before the window opens and fixed for the life of the
- * process: `local` is this Mac's own database, exactly as without Volli
- * Cloud; `cloud` is the signed-in person's Workspaces on the backend at
- * `backendUrl`. Signing in or out relaunches the app into the other one.
- * Never a secret: a user id and a URL.
+ * process: `local` is the frozen SQLite store; the legacy `cloud` store
+ * discriminator selects Convex, while `deployment` says hosted or embedded.
+ * Absent deployment means hosted for older bridges. `siteUrl` is explicit,
+ * never inferred from backendUrl. Signing in or out relaunches, never hot-swaps.
+ * The preview composes only hosted Convex; the embedded supervisor and local
+ * token issuer must be wired before selecting a local deployment.
+ * Never a secret: an identity and public origins.
  */
 export type CloudLaunch =
   | { readonly store: "local" }
-  | { readonly store: "cloud"; readonly userId: string; readonly backendUrl: string };
+  | {
+      /** Legacy wire discriminator for the Convex store, not the deployment's location. */
+      readonly store: "cloud";
+      readonly userId: string;
+      readonly backendUrl: string;
+      /** Additive for older desktop bridges. New launches always name both fields. */
+      readonly deployment?: "cloud" | "local";
+      readonly siteUrl?: string | null;
+    };
 
 /** The largest last-seen board snapshot the window may keep (VC-889, D3), in characters. */
 export const CLOUD_SNAPSHOT_TEXT_MAX = 16 * 1024 * 1024;

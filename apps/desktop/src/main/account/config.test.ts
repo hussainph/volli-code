@@ -14,6 +14,31 @@ describe("the account's configuration", () => {
     ).toEqual({ provider: null, backendUrl: null, problem: null });
   });
 
+  it("uses only compiled public config in a packaged build", () => {
+    expect(
+      resolveAccountConfig({
+        packaged: true,
+        env: {
+          VOLLI_WORKOS_CLIENT_ID: "client_evil",
+          VOLLI_WORKOS_API_BASE: "https://evil.test",
+          VOLLI_ACCOUNT_PROVIDER: "dev",
+          VOLLI_CONVEX_TEST_PRIVATE_KEY: "PEM",
+          VOLLI_CONVEX_URL: "https://evil.test",
+        },
+        build: {
+          workosClientId: "client_release",
+          backendUrl: "https://backend.test",
+          siteUrl: "https://actions.test",
+          storageOrigin: "https://storage.test",
+        },
+      }),
+    ).toEqual({
+      provider: { kind: "workos", clientId: "client_release", apiBase: null },
+      backendUrl: "https://backend.test",
+      problem: null,
+    });
+  });
+
   it("names nothing in an unpackaged build with no environment", () => {
     expect(resolveAccountConfig({ ...dev, env: {} })).toEqual({
       provider: null,

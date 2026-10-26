@@ -13,10 +13,8 @@
 import {
   createBackendLink,
   createMutationGate,
-  createRunnerLinkClient,
   createRunnerPowerCycle,
   createRunnerPresence,
-  createRunnerTokenSource,
   runnerPresenceBackend,
   type ConnectBackend,
   type BackendLink,
@@ -25,6 +23,7 @@ import {
   type LinkStatus,
   type RunnerLinkLoss,
   type RunnerLinkStore,
+  type RunnerTokenSource,
   type RunnerPowerCycle,
 } from "@volli/host-core/cloud-runner";
 import type { RunnerCapabilityReport, RunnerLoad } from "@volli/shared/cloud";
@@ -58,8 +57,11 @@ export interface ConnectRunnerInput {
 export type ConnectRunner = (input: ConnectRunnerInput) => RunnerConnection;
 
 export interface RunnerConnectionDeps {
-  /** The deployment's HTTP actions origin (`/runner/token`). */
-  readonly siteUrl: string;
+  /** One source per linked connection; hosted HTTP exchange or an embedded issuer adapter. */
+  readonly tokens: (input: {
+    store: RunnerLinkStore;
+    onLinkLost(reason: RunnerLinkLoss): void;
+  }) => RunnerTokenSource;
   /** The Convex client connection for the deployment (`convexBackendConnection(url, convex)`). */
   readonly connect: ConnectBackend;
   /** New on every process start. */
@@ -78,7 +80,6 @@ export interface RunnerConnectionDeps {
 }
 
 export function runnerConnector(deps: RunnerConnectionDeps): ConnectRunner {
-  const client = createRunnerLinkClient({ siteUrl: deps.siteUrl });
   return (input) => {
     let lost = false;
     const lose = (reason: RunnerLinkLoss) => {
@@ -86,7 +87,7 @@ export function runnerConnector(deps: RunnerConnectionDeps): ConnectRunner {
       lost = true;
       input.onLost(reason);
     };
-    const tokens = createRunnerTokenSource({ client, store: input.store, onLinkLost: lose });
+    const tokens = deps.tokens({ store: input.store, onLinkLost: lose });
     const link = createBackendLink({
       connect: deps.connect,
       token: (options) => tokens.token(options),

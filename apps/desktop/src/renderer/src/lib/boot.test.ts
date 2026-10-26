@@ -1592,12 +1592,24 @@ describe("a cloud launch's boot (VC-889)", () => {
     vi.restoreAllMocks();
   });
 
-  it("never asks which store with the flag off: a flag-off boot makes no new call", async () => {
-    const readLaunch = vi.fn(async () => CLOUD);
+  it("uses main's SQLite descriptor with the flag off without starting a Convex client", async () => {
+    const readLaunch = vi.fn(async () => LOCAL_LAUNCH);
     await boot(fakeGateway(), fakeStorage(), async () => false, readLaunch);
-    expect(readLaunch).not.toHaveBeenCalled();
+    expect(readLaunch).toHaveBeenCalledOnce();
     expect(launchStore()).toBe("local");
     expect(await startCloudBoard({ start: vi.fn() })).toBe(false);
+  });
+
+  it("can select an embedded Convex store with hosted cloud capabilities off", async () => {
+    // Simulated wiring: the preview's main never supplies an embedded descriptor.
+    await boot(
+      fakeGateway(),
+      fakeStorage(),
+      async () => false,
+      async () => ({ ...CLOUD, deployment: "local", siteUrl: "http://127.0.0.1:2" }),
+    );
+    expect(launchStore()).toBe("cloud");
+    expect(useProjectsStore.getState().projects).toEqual([]);
   });
 
   it("launches local when the store cannot be read in time", async () => {

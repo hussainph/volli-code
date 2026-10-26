@@ -63,8 +63,10 @@ describe("the shared Mac runner connection", () => {
         resume,
       };
     };
+    const token = vi.fn(async () => "local-runner-token");
+    const tokens = vi.fn(() => ({ token, lost: null }));
     connection = runnerConnector({
-      siteUrl: "http://127.0.0.1:1",
+      tokens,
       connect,
       bootId: "boot-id",
       sync,
@@ -106,7 +108,9 @@ describe("the shared Mac runner connection", () => {
     expect(start).toHaveBeenCalledTimes(1);
     expect(startPresence!).toHaveBeenCalledTimes(1);
     expect(shared).toMatchObject({ bootId: "boot-id", runnerId: "runner-id" });
-    expect(await shared!.runnerToken()).toBeNull();
+    expect(await shared!.runnerToken()).toBe("local-runner-token");
+    expect(tokens).toHaveBeenCalledOnce();
+    expect(token).toHaveBeenCalledWith({ forceRefreshToken: false });
     expect(mutation).toHaveBeenCalledWith(
       "runners:heartbeat",
       expect.objectContaining({ bootId: "boot-id" }),

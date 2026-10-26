@@ -10,6 +10,7 @@ import type { PackUserConfig } from "vite-plus/pack";
 import { RENDERER_DEV_PORT } from "./scripts/dev-constants.mjs";
 import { SHARED_MACHINE_TEST_WORKERS } from "../../vitest.workers";
 import { rendererConnectSources, withConnectSources } from "./src/main/renderer-csp";
+import { packagedCloudConfig } from "./src/main/deployment-config";
 
 // Launch Electron after a pack only when BOTH hold:
 //  1. dev.mjs opted in by injecting VOLLI_DESKTOP_DEV=1 into the pack child's
@@ -787,6 +788,7 @@ export default defineConfig(({ mode, command }) => ({
         // The last-seen cloud board on disk, per account (VC-889, D3).
         "**/src/main/cloud-snapshot.ts",
         "**/src/main/renderer-csp.ts",
+        "**/src/main/deployment-config.ts",
         "**/src/main/host-runtime.ts",
         // Menu-bar mode's whole decision and lifecycle (VC-577).
         "**/src/main/menu-bar-host.ts",
@@ -877,6 +879,7 @@ export default defineConfig(({ mode, command }) => ({
   pack: [
     definePackConfig({
       name: "electron-main",
+      define: { VOLLI_PACKAGED_CLOUD_CONFIG: JSON.stringify(packagedCloudConfig(process.env)) },
       entry: { main: "src/main/index.ts" },
       format: "cjs",
       outDir: "dist-electron",

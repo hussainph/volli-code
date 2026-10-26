@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  launchConnectSources,
+  withRendererConnections,
   LOOPBACK_CONNECT_SOURCES,
   rendererConnectSources,
   withConnectSources,
@@ -14,6 +16,48 @@ function cspOf(html: string): string {
 }
 
 describe("the main window's connections (VC-889)", () => {
+  it("uses runtime launch origins and replaces the dev policy rather than duplicating it", async () => {
+    const launch = {
+      store: "cloud",
+      deployment: "cloud",
+      userId: "u",
+      backendUrl: "https://api.example.com",
+      siteUrl: "https://actions.example.net",
+    } as const;
+    const sources = launchConnectSources(launch, "https://storage.example.org");
+    expect(sources).toEqual([
+      "https://api.example.com",
+      "wss://api.example.com",
+      "https://actions.example.net",
+      "https://storage.example.org",
+    ]);
+    const response = await withRendererConnections(
+      new Response(withConnectSources(page, LOOPBACK_CONNECT_SOURCES), {
+        headers: { "content-type": "text/html", "content-length": "999" },
+      }),
+      sources,
+    );
+    expect(response.headers.get("content-type")).toBe("text/html");
+    expect(response.headers.has("content-length")).toBe(false);
+    const csp = cspOf(await response.text());
+    expect(csp.match(/connect-src/gu)).toHaveLength(1);
+    expect(csp).toContain(
+      "connect-src 'self' https://api.example.com wss://api.example.com https://actions.example.net https://storage.example.org;",
+    );
+    expect(csp).not.toContain("127.0.0.1");
+    expect(csp).toContain("form-action 'none'");
+    expect(launchConnectSources({ store: "local" }, "invalid unused config")).toEqual([]);
+    expect(
+      launchConnectSources(
+        { ...launch, deployment: "local", backendUrl: "http://127.0.0.1:4321", siteUrl: null },
+        null,
+      ),
+    ).toEqual(["http://127.0.0.1:4321", "ws://127.0.0.1:4321"]);
+    const unchanged = new Response(page);
+    expect(await withRendererConnections(unchanged, [])).toBe(unchanged);
+    const notFound = new Response("missing", { status: 404 });
+    expect(await withRendererConnections(notFound, sources)).toBe(notFound);
+  });
   it("permits only the configured exact HTTPS transcript-store origin", () => {
     const sources = rendererConnectSources({
       serve: false,

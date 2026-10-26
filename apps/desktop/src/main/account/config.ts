@@ -1,8 +1,8 @@
 /**
  * Which sign-in provider and backend this build talks to.
  *
- * A packaged build names neither (its account is `unconfigured`) until its
- * release names a WorkOS environment and a Convex deployment here. An
+ * A packaged build uses only its compiled public deployment config (or is
+ * `unconfigured` when the build names none). An
  * unpackaged build reads them from its environment:
  *
  * - `VOLLI_ACCOUNT_PROVIDER=dev`: the local dev issuer (`./dev-issuer`),
@@ -16,6 +16,8 @@
  * A packaged build ignores all of these: its sign-in is never redirected by
  * an environment variable.
  */
+import type { PackagedCloudConfig } from "../deployment-config";
+
 export type AccountProviderConfig =
   | { readonly kind: "workos"; readonly clientId: string; readonly apiBase: string | null }
   | { readonly kind: "dev"; readonly privateKeyPem: string; readonly subject: string | null };
@@ -46,8 +48,18 @@ function httpUrl(raw: string | null): string | null {
 export function resolveAccountConfig(input: {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly packaged: boolean;
+  /** Compiled into main by the release build. Packaged runtime environment is never consulted. */
+  readonly build?: PackagedCloudConfig | null;
 }): AccountConfig {
-  if (input.packaged) return { provider: null, backendUrl: null, problem: null };
+  if (input.packaged) {
+    return input.build == null
+      ? { provider: null, backendUrl: null, problem: null }
+      : {
+          provider: { kind: "workos", clientId: input.build.workosClientId, apiBase: null },
+          backendUrl: input.build.backendUrl,
+          problem: null,
+        };
+  }
   const { env } = input;
   const rawBackend = value(env, "VOLLI_CONVEX_URL");
   const backendUrl = httpUrl(rawBackend);

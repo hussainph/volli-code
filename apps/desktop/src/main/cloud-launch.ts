@@ -46,23 +46,41 @@ export function decodeLaunchMarker(raw: string | undefined): LaunchMarker | null
 }
 
 /**
- * The launch's store: `cloud` only with the flag on, a marker present, and a
- * backend and a sign-in configured (with no sign-in there would be no way to
- * sign out of it); `local` otherwise. The marker is read only then, so a
- * flag-off boot touches nothing of Volli Cloud's.
+ * The launch's store: hosted Convex requires the cloud flag, a marker and
+ * configured sign-in. A future supervised embedded deployment needs neither.
+ * Otherwise SQLite. Flag-off preview launches read no hosted account marker.
  */
 export function chooseProductStore(input: {
   readonly cloudFlag: boolean;
   readonly readMarker: () => LaunchMarker | null;
   readonly backendUrl: string | null;
+  readonly siteUrl?: string | null;
   readonly signInConfigured: boolean;
+  /** Future embedded-backend supervisor's ready descriptor, never a runtime environment override.
+   * VC-938 must supply the local identity, token source and exact runtime CSP before using this.
+   * The Convex store is independent of the cloud feature flag; this preview never supplies it.
+   */
+  readonly localDeployment?: {
+    readonly userId: string;
+    readonly backendUrl: string;
+    readonly siteUrl: string;
+  };
 }): CloudLaunch {
+  if (input.localDeployment !== undefined) {
+    return { store: "cloud", deployment: "local", ...input.localDeployment };
+  }
   if (!input.cloudFlag || input.backendUrl === null || !input.signInConfigured) {
     return LOCAL_LAUNCH;
   }
   const marker = input.readMarker();
   if (marker === null) return LOCAL_LAUNCH;
-  return { store: "cloud", userId: marker.userId, backendUrl: input.backendUrl };
+  return {
+    store: "cloud",
+    deployment: "cloud",
+    userId: marker.userId,
+    backendUrl: input.backendUrl,
+    siteUrl: input.siteUrl ?? null,
+  };
 }
 
 /** The one `app_state` row the marker is, as main reaches it. */
