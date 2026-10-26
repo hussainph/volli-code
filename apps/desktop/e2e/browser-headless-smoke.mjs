@@ -83,6 +83,11 @@ const chatStripTab = (page, sessionId) =>
   tabStrip(page, HOME_TAB_STRIP)
     .locator(`[data-pair-target-id="chat:${sessionId}"]`)
     .getByRole("tab");
+/** {@link chatStripTab}, including a segment folded into a summarized chip's +n. */
+const chatStripTabAny = (page, sessionId) =>
+  tabStrip(page, HOME_TAB_STRIP)
+    .locator(`[data-pair-target-id="chat:${sessionId}"]`)
+    .getByRole("tab", { includeHidden: true });
 const activeGroup = (page) =>
   tabStrip(page, HOME_TAB_STRIP).locator('[data-slot="grouped-tab-chip"][data-active="true"]');
 /** How many shown panes draw a strip of their own. */
@@ -197,7 +202,7 @@ async function ungroupByDrag(page, paneTab) {
  * its composer, the only place a headless tab is reached from — is on screen.
  */
 async function showOwningChat(page, sessionId) {
-  await selectStripTab(page, chatStripTab(page, sessionId));
+  await selectStripTab(page, chatStripTabAny(page, sessionId));
   await waitUntil("the chat's Island", async () =>
     (await tabsCluster(page).count()) === 1 ? true : null,
   );
@@ -498,7 +503,7 @@ async function main() {
     4,
     "Show tab selects without grouping; a tab-edge drop groups both browsers; Show tab then shows that group; hiding keeps ownership",
     async () => {
-      await selectStripTab(page, chatStripTab(page, sessionId));
+      await selectStripTab(page, chatStripTabAny(page, sessionId));
       const groupId = await activeGroup(page).getAttribute("data-group-id");
       // Close and Undo kept the tab in its pane beside the chat: Show tab shows
       // that group, with the browser's pane in focus.
