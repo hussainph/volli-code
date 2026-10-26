@@ -7,6 +7,7 @@ import type { Delegations } from "./delegate-session";
 import * as control from "../session-control";
 import { SESSION_RUNTIME } from "../session-services";
 import * as notices from "./durable-host-notice-delivery";
+import { readSqliteHostNotice, scopeSqliteHostNoticeOutbox } from "./sqlite-host-notice-outbox";
 import * as recovery from "./boot-recovery";
 import * as mcp from "../mcp/session-host";
 import * as shell from "../shell/shell-notices";
@@ -34,6 +35,16 @@ vi.mock("../session-control", () => ({
   createSuspendClock: vi.fn(() => ({ suspendedMsWithin: () => 0, close: vi.fn() })),
 }));
 vi.mock("./durable-host-notice-delivery", () => ({ createHostNoticeDelivery: vi.fn() }));
+vi.mock("./sqlite-host-notice-outbox", () => ({
+  readSqliteHostNotice: vi.fn(() => ({ state: "absent" })),
+  scopeSqliteHostNoticeOutbox: vi.fn((_db, outbox, ownsSession) => ({
+    ...outbox,
+    pending: async () =>
+      (await outbox.pending()).filter((notice: { sessionId: string }) =>
+        ownsSession(notice.sessionId),
+      ),
+  })),
+}));
 vi.mock("./boot-recovery", () => ({ closeStaleAttachments: vi.fn() }));
 vi.mock("./restart-resume", () => ({ resumeRecoveredTurns: vi.fn(async () => {}) }));
 vi.mock("../mcp/session-host", () => ({ closeAllMcpSessionHosts: vi.fn() }));
@@ -49,6 +60,7 @@ vi.mock("../shell/shell-notices", () => ({
 }));
 afterEach(() => {
   vi.clearAllMocks();
+  vi.mocked(readSqliteHostNotice).mockReturnValue({ state: "absent" });
   vi.mocked(followUps.consumeFollowUpCleanClose).mockReturnValue([]);
 });
 
@@ -170,6 +182,8 @@ function fixture() {
   };
   return {
     outbox,
+    delegation,
+    delegateHost,
     options,
     calls,
     services,
@@ -183,6 +197,24 @@ function fixture() {
     quit: () => quit(),
   };
 }
+
+/** A backend-queued notice and the intent that would compose it (VC-887). */
+const backendNotice = (commandId: string, sessionId = "mine") => ({
+  sessionId,
+  commandId,
+  messageId: `${commandId}:message`,
+  text: "composed once",
+  metadata: {
+    kind: "session-host-notice" as const,
+    notice: { kind: "watch" as const, events: [] },
+  },
+  label: `notice ${commandId}`,
+});
+const noticeIntent = (value: ReturnType<typeof backendNotice>) => ({
+  sessionId: value.sessionId,
+  commandId: value.commandId,
+  compose: vi.fn(() => value),
+});
 
 describe("Session lifecycle port ordering (replaces desktop source scans)", () => {
   it("holds downgraded queues before boot event writes and explains them with existing Attention", async () => {
@@ -791,6 +823,118 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     await owner.close();
   });
 
+  describe("backend-queued host notices (VC-887)", () => {
+    function owned() {
+      const f = fixture();
+      const put = vi.fn(async (value: unknown) => value);
+      // Before construction: the scoped outbox copies the raw one's methods.
+      Object.assign(f.outbox, { put, pending: async () => [] });
+      const owner = createSessionRuntimeLifecycle({
+        ...f.options,
+        ownsSession: (id) => id === "mine",
+      });
+      return { f, put, owner };
+    }
+
+    it("commits a never-held id, then delivers it behind recovery", async () => {
+      const { f, put, owner } = owned();
+      const gate = deferred();
+      vi.mocked(recovery.closeStaleAttachments).mockImplementationOnce(async () => {
+        await gate.promise;
+        return 0;
+      });
+      const value = backendNotice("watch:mine:1");
+      const first = noticeIntent(value);
+      await expect(owner.enqueueHostNotice(first)).resolves.toEqual(value);
+      expect(first.compose).toHaveBeenCalledOnce();
+      expect(put).toHaveBeenCalledWith(value);
+      // Durable now; delivery waits for boot recovery to finish.
+      expect(f.delivery.deliver).not.toHaveBeenCalled();
+      gate.resolve();
+      await owner.ready();
+      await vi.waitFor(() => expect(f.delivery.deliver).toHaveBeenCalledWith(value));
+      await owner.close();
+    });
+
+    it("composes nothing for a stored or settled id, and nothing for another owner's Session", async () => {
+      const { f, put, owner } = owned();
+      await owner.ready();
+      const value = backendNotice("watch:mine:2");
+      vi.mocked(readSqliteHostNotice).mockReturnValueOnce({ state: "pending", notice: value });
+      const replay = noticeIntent({ ...value, text: "re-minted" });
+      await expect(owner.enqueueHostNotice(replay)).resolves.toEqual(value);
+      expect(replay.compose).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(f.delivery.deliver).toHaveBeenCalledWith(value));
+      vi.mocked(readSqliteHostNotice).mockReturnValueOnce({ state: "settled" });
+      const settled = noticeIntent(value);
+      await expect(owner.enqueueHostNotice(settled)).resolves.toBeNull();
+      expect(settled.compose).not.toHaveBeenCalled();
+      const foreign = noticeIntent(backendNotice("watch:theirs:1", "theirs"));
+      await expect(owner.enqueueHostNotice(foreign)).rejects.toThrow(
+        "outside this launch's Session scope",
+      );
+      expect(foreign.compose).not.toHaveBeenCalled();
+      expect(put).not.toHaveBeenCalled();
+      expect(readSqliteHostNotice).toHaveBeenCalledWith(
+        f.options.host.database.db,
+        value.commandId,
+        "mine",
+      );
+      await owner.close();
+    });
+
+    it("refuses a composition for another id, and delivers nothing the outbox already settled", async () => {
+      const { f, put, owner } = owned();
+      await owner.ready();
+      const wrong = {
+        ...noticeIntent(backendNotice("watch:mine:3")),
+        commandId: "watch:mine:other",
+      };
+      await expect(owner.enqueueHostNotice(wrong)).rejects.toThrow("composed for another id");
+      // A put that lost a race to a settle: nothing to deliver.
+      put.mockResolvedValueOnce(null);
+      await expect(
+        owner.enqueueHostNotice(noticeIntent(backendNotice("watch:mine:4"))),
+      ).resolves.toBeNull();
+      await new Promise((done) => setTimeout(done, 0));
+      expect(f.delivery.deliver).not.toHaveBeenCalled();
+      await owner.close();
+    });
+
+    it("reports a delivery that failed, but stays quiet when a close won", async () => {
+      const { f, owner } = owned();
+      await owner.ready();
+      f.delivery.deliver.mockRejectedValueOnce(new Error("subscribe failed"));
+      await owner.enqueueHostNotice(noticeIntent(backendNotice("watch:mine:5")));
+      await vi.waitFor(() =>
+        expect(f.options.ports.log.error).toHaveBeenCalledWith("host notice delivery failed", {
+          detail: "notice watch:mine:5",
+          error: expect.objectContaining({ message: "subscribe failed" }),
+        }),
+      );
+      vi.mocked(f.options.ports.log.error).mockClear();
+      // Stored, then the close wins before delivery could start.
+      const stored = owner.enqueueHostNotice(noticeIntent(backendNotice("watch:mine:6")));
+      const drain = owner.close();
+      await expect(stored).resolves.toMatchObject({ commandId: "watch:mine:6" });
+      await drain;
+      await new Promise((done) => setTimeout(done, 0));
+      expect(f.options.ports.log.error).not.toHaveBeenCalled();
+      await expect(
+        owner.enqueueHostNotice(noticeIntent(backendNotice("watch:mine:7"))),
+      ).rejects.toBeInstanceOf(SessionRuntimeClosingError);
+    });
+
+    it("refuses when this launch has no delivery", async () => {
+      const f = fixture();
+      const owner = createSessionRuntimeLifecycle({ ...f.options, runtime: null });
+      const value = noticeIntent(backendNotice("watch:mine:8"));
+      await expect(owner.enqueueHostNotice(value)).rejects.toThrow("no host notice delivery");
+      expect(value.compose).not.toHaveBeenCalled();
+      await owner.close();
+    });
+  });
+
   it("closing an unstarted owner prevents any later recovery", async () => {
     const f = fixture();
     const owner = createSessionRuntimeLifecycle(f.options);
@@ -916,6 +1060,10 @@ describe("restart resume after recovery (VC-450)", () => {
     expect(ports.shouldStop()).toBe(false);
     // A local launch names no cloud-launch port: the verdict reads it as local.
     expect(ports.cloudLaunch).toBeUndefined();
+    // Nor a cloud store's reads: the local path is unchanged.
+    expect(ports.cloud).toBeUndefined();
+    expect(ports.ownsSession).toBeUndefined();
+    expect(ports.closing).toBeUndefined();
     // A resumed run outlives readiness; close waits for it.
     let closed = false;
     const closing = owner.close().then(() => {
@@ -943,12 +1091,101 @@ describe("restart resume after recovery (VC-450)", () => {
     await owner.close();
   });
 
+  it("hands a cloud store's reads, its owner scope and the close signal to the resume (N2-3)", async () => {
+    const f = fixture();
+    armed(f);
+    let given: Parameters<typeof restart.resumeRecoveredTurns>[0] | undefined;
+    vi.mocked(restart.resumeRecoveredTurns).mockImplementation(async (ports) => {
+      given = ports;
+    });
+    const cloudRecovery = {
+      firstConnect: vi.fn(async () => true),
+      ticketSiblings: vi.fn(async () => ({ siblings: [], complete: true })),
+    };
+    const owner = createSessionRuntimeLifecycle({
+      ...f.options,
+      cloudLaunch: () => true,
+      ownsSession: (sessionId) => sessionId === "s",
+      cloudRecovery,
+    });
+    await owner.ready();
+    expect(given!.cloud).toBe(cloudRecovery);
+    expect(given!.ownsSession?.("s")).toBe(true);
+    expect(given!.ownsSession?.("other")).toBe(false);
+    expect(given!.closing?.aborted).toBe(false);
+    await owner.close();
+    // Closing ends a wait for the runner's first connect.
+    expect(given!.closing?.aborted).toBe(true);
+  });
+
   it("arms nothing without a runtime", async () => {
     const bare = fixture();
     armed(bare);
     const owner = createSessionRuntimeLifecycle({ ...bare.options, runtime: null });
     await owner.ready();
     expect(restart.resumeRecoveredTurns).not.toHaveBeenCalled();
+    await owner.close();
+  });
+});
+
+describe("launch-selected Session recovery scope", () => {
+  it("uses the injected engine and owner projects, and filters machine-state candidates before recovery", async () => {
+    const f = fixture();
+    const scoped = { ...f.engine, listSessions: vi.fn(async () => []) } as SessionEngine;
+    const ownedSessionIds = new Set(["owned", "owned-parent"]);
+    const ownsSession = (id: string) => ownedSessionIds.has(id);
+    vi.mocked(schedules.listScheduledResumeSessionIds).mockReturnValue(["owned", "foreign"]);
+    const ownedChild = {
+      childSessionId: "owned",
+      parentSessionId: "owned-parent",
+      operationId: "delegation-owned",
+      projectId: "cloud-project",
+      title: "Owned child",
+    };
+    vi.mocked(f.delegation.listUnansweredSubagents).mockReturnValue([
+      ownedChild,
+      { ...ownedChild, childSessionId: "foreign", operationId: "foreign-child" },
+      { ...ownedChild, parentSessionId: "foreign", operationId: "foreign-parent" },
+    ]);
+    Object.assign(f.outbox, {
+      pending: async () => [{ sessionId: "owned" }, { sessionId: "foreign" }],
+    });
+    const owner = createSessionRuntimeLifecycle({
+      ...f.options,
+      sessionEngine: scoped,
+      ownsSession,
+      projectIds: () => ["cloud-project"],
+    });
+    await owner.ready();
+    expect(vi.mocked(recovery.closeStaleAttachments).mock.lastCall![0]).toMatchObject({
+      engine: scoped,
+      projectIds: ["cloud-project"],
+    });
+    const ownedProjection = { session: { id: "owned" } } as SessionProjection;
+    owner.observeScheduledResume(ownedProjection);
+    owner.observeScheduledResume({ session: { id: "foreign" } } as SessionProjection);
+    expect(f.resume.observe).toHaveBeenCalledExactlyOnceWith(ownedProjection);
+    const resumePorts = vi.mocked(control.createScheduledResumeHost).mock.lastCall![0];
+    expect(await resumePorts.candidates()).toEqual(["owned"]);
+    await resumePorts.ticketSessions({ projectId: "p", ticketId: "t" });
+    expect(scoped.listSessions).toHaveBeenCalledWith({
+      projectId: "p",
+      scope: "ticket",
+      ticketId: "t",
+    });
+    expect(f.delegateHost.recover).toHaveBeenCalledWith([ownedChild]);
+    const noticePorts = vi.mocked(notices.createHostNoticeDelivery).mock.lastCall![0];
+    expect(await noticePorts.outbox.pending()).toEqual([{ sessionId: "owned" }]);
+    expect(scopeSqliteHostNoticeOutbox).toHaveBeenCalledWith(
+      f.options.host.database.ok ? f.options.host.database.db : undefined,
+      f.outbox,
+      ownsSession,
+    );
+    expect(followUps.consumeFollowUpCleanClose).toHaveBeenCalledWith(
+      f.options.host.database.ok ? f.options.host.database.db : undefined,
+      expect.any(Function),
+      ownsSession,
+    );
     await owner.close();
   });
 });

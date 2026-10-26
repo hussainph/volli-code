@@ -9,7 +9,9 @@ const modules = import.meta.glob("../functions/**/*.ts");
 describe("health.whoami", () => {
   test("refuses an anonymous caller", async () => {
     const t = convexTest(schema, modules);
-    await expect(t.query(api.health.whoami, {})).rejects.toThrow("Unauthenticated");
+    await expect(t.query(api.health.whoami, {})).rejects.toThrow(
+      expect.objectContaining({ data: expect.objectContaining({ code: "unauthenticated" }) }),
+    );
   });
 
   test("answers with the caller's identity", async () => {

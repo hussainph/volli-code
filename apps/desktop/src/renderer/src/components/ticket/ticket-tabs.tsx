@@ -52,6 +52,7 @@ import {
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
+import { CloudCheckoutControl } from "@renderer/components/cloud-checkout/cloud-checkout-control";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import {
   runOnLivePanes,
@@ -558,6 +559,7 @@ export function TicketTabStrip({
                 ticket they start exactly what this control starts.
                 `align="end"` because the control sits at the strip's right edge
                 — the menu hangs back into the window rather than off it. */}
+            <CloudCheckoutControl projectId={list.projectId} />
             <NewSessionControl
               projectId={list.projectId}
               disabled={creating}

@@ -23,7 +23,6 @@ export {
   type HostSubscriptionHandler,
   type SessionCreateHandlerInput,
   type SessionReadHandlerInput,
-  type SessionReadPort,
 } from "../handlers/host-handlers";
 export type {
   RemoteHostsPort,
@@ -40,6 +39,8 @@ export {
 export type { HostLinkRelayPort, HostScopeRelayPort } from "../handlers/host-link-relay-port";
 export type { BrowserShortcutsPort } from "../handlers/browser-shortcuts-port";
 export type { AccountPort } from "../handlers/account-port";
+export type { RunnerAccountPort } from "../handlers/runner-account-port";
+export type { CloudCheckoutPort } from "../handlers/cloud-checkout-port";
 export {
   ADMITTED,
   admittedHandlers,

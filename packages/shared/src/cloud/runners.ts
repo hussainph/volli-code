@@ -32,6 +32,8 @@ export type RunnerKind = (typeof RUNNER_KINDS)[number];
 export const RUNNER_STATUSES = [
   "online",
   "offline",
+  /** The machine said it is going to sleep (a Mac's lid closed); its first beat after wake makes it `online`. */
+  "asleep",
   "draining",
   "updating",
   "degraded",
@@ -50,9 +52,14 @@ export const LIVE_RUNNER_STATUSES = [
   "upgrade_required",
 ] as const satisfies readonly RunnerStatus[];
 
-/** What a runner may report about itself. `offline` is the sweep's; `revoked` the owner's. */
+/**
+ * What a runner may report about itself. `offline` is the sweep's; `revoked` the owner's.
+ * `asleep` is not a live status: an asleep runner is not expected to beat, so
+ * the offline sweep leaves it (and its `since`) as it said.
+ */
 export const RUNNER_REPORTED_STATES = [
   "online",
+  "asleep",
   "draining",
   "updating",
   "degraded",
@@ -80,6 +87,8 @@ export const RUNNER_STATUS_REASONS = {
   credentialReuse: "credential_reuse",
   /** No heartbeat for {@link RUNNER_OFFLINE_AFTER_MS}. */
   heartbeatLost: "heartbeat_lost",
+  /** The same Mac registered again (its local credential was lost); its successor took its name and Sessions. */
+  replaced: "replaced",
 } as const;
 
 // ── liveness and lifetimes ───────────────────────────────────────────────────
@@ -255,7 +264,12 @@ export interface RunnerCapabilities {
   browser: RunnerBrowserCapability;
   /** How many Sessions this runner admits at once (its memory admission). */
   maxConcurrentSessions: number;
-  /** Platform tools a Session may need (`xcode`, `simulator`, …); Mac-only tools appear only on a Mac. */
+  /**
+   * Open capability names: platform tools a Session may need (`xcode`,
+   * `simulator`, …), plus explicit job executors such as `automation.run`.
+   * Mac-only tools appear only on a Mac. A job capability is advertised only
+   * when this runner can execute that kind; absence never implies support.
+   */
   tools: string[];
 }
 
@@ -571,6 +585,13 @@ export const RUNNER_HTTP_ERROR_CODES = [
   "revoked",
   /** The deployment has no runner-token signing key. */
   "issuer_unconfigured",
+  /**
+   * Too many requests from this network (or the deployment as a whole): the
+   * reply is a 429 whose `Retry-After` header says, in seconds, when to try again.
+   */
+  "rate_limited",
+  /** Authorization is paused; keep the credential for when preview access is restored. */
+  "preview_access_required",
 ] as const;
 export type RunnerHttpErrorCode = (typeof RUNNER_HTTP_ERROR_CODES)[number];
 

@@ -1,12 +1,17 @@
 /**
  * The account's calls into the backend: Convex's HTTP functions API
- * (`POST {url}/api/mutation`), authorized with the person's access token.
- * Three mutations, all in `convex/functions/accounts.ts`; no Convex client
- * library rides in main for them.
+ * (`POST {url}/api/{query|mutation|action}`), authorized with the person's
+ * access token. Three mutations here, all in `convex/functions/accounts.ts`;
+ * the GitHub half's calls (`./github`) ride the same {@link convexCaller}. No
+ * Convex client library rides in main for them.
  */
+
+import type { PreviewAccess } from "@volli/shared/cloud";
 
 /** What `accounts.ensureViewer` and the deletion mutations answer. */
 export interface BackendViewer {
+  readonly previewAccess: PreviewAccess;
+  readonly previewAgreementAccepted: boolean;
   readonly userId: string;
   readonly displayName: string;
   readonly primaryEmail: string | null;
@@ -15,7 +20,11 @@ export interface BackendViewer {
 }
 
 export interface AccountBackend {
-  ensureViewer(accessToken: string): Promise<BackendViewer>;
+  ensureViewer(
+    accessToken: string,
+    inviteCode?: string,
+    acceptedAgreementVersion?: string,
+  ): Promise<BackendViewer>;
   requestDeletion(accessToken: string): Promise<BackendViewer>;
   cancelDeletion(accessToken: string): Promise<BackendViewer>;
 }
@@ -43,21 +52,43 @@ function viewerFrom(value: unknown): BackendViewer {
   ) {
     throw new Error("Volli Cloud answered with an account this build cannot read.");
   }
-  return { userId, displayName, primaryEmail, status, purgeAfter };
+  // Older or unknown backend replies never grant preview access.
+  const previewAccess = record["previewAccess"] === "granted" ? "granted" : "waitlisted";
+  return {
+    userId,
+    displayName,
+    primaryEmail,
+    status,
+    purgeAfter,
+    previewAccess,
+    previewAgreementAccepted: record["previewAgreementAccepted"] === true,
+  };
 }
 
-export function convexAccountBackend(options: {
+/** Which of Convex's HTTP functions endpoints a call goes to. */
+export type ConvexFunctionKind = "query" | "mutation" | "action";
+
+/**
+ * One call into Convex's HTTP functions API (`POST {url}/api/{kind}`) with
+ * the person's bearer token: the function's value, or a
+ * {@link BackendRefusedError} carrying its typed `code`, or a plain error for
+ * anything in transit.
+ */
+export type ConvexCall = (
+  kind: ConvexFunctionKind,
+  path: string,
+  accessToken: string,
+  args?: Record<string, string>,
+) => Promise<unknown>;
+
+export function convexCaller(options: {
   readonly url: string;
   readonly fetch?: typeof fetch;
-}): AccountBackend {
+}): ConvexCall {
   const base = options.url.replace(/\/+$/u, "");
   const fetchImpl = options.fetch ?? fetch;
-  const mutation = async (
-    path: string,
-    accessToken: string,
-    args: Record<string, string> = {},
-  ): Promise<BackendViewer> => {
-    const response = await fetchImpl(`${base}/api/mutation`, {
+  return async (kind, path, accessToken, args = {}) => {
+    const response = await fetchImpl(`${base}/api/${kind}`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
       body: JSON.stringify({ path, args, format: "json" }),
@@ -69,7 +100,7 @@ export function convexAccountBackend(options: {
     } catch {
       body = {};
     }
-    if (body["status"] === "success") return viewerFrom(body["value"]);
+    if (body["status"] === "success") return body["value"];
     if (body["status"] === "error") {
       const data = body["errorData"] as Record<string, unknown> | undefined;
       const message =
@@ -90,8 +121,24 @@ export function convexAccountBackend(options: {
     }
     throw new Error(`Volli Cloud answered ${response.status}.`);
   };
+}
+
+export function convexAccountBackend(options: {
+  readonly url: string;
+  readonly fetch?: typeof fetch;
+}): AccountBackend {
+  const call = convexCaller(options);
+  const mutation = async (
+    path: string,
+    accessToken: string,
+    args: Record<string, string> = {},
+  ): Promise<BackendViewer> => viewerFrom(await call("mutation", path, accessToken, args));
   return {
-    ensureViewer: (token) => mutation("accounts:ensureViewer", token),
+    ensureViewer: (token, inviteCode, acceptedAgreementVersion) =>
+      mutation("accounts:ensureViewer", token, {
+        ...(inviteCode === undefined ? {} : { inviteCode }),
+        ...(acceptedAgreementVersion === undefined ? {} : { acceptedAgreementVersion }),
+      }),
     // The deletion's Actor names the client it came through.
     requestDeletion: (token) => mutation("accounts:requestDeletion", token, { via: "desktop" }),
     cancelDeletion: (token) => mutation("accounts:cancelDeletion", token, { via: "desktop" }),

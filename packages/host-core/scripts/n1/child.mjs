@@ -150,6 +150,84 @@ const steps = {
     }
   },
 
+  /** The previous runtime's real queue replay/steer paths, not a copied guard. */
+  followUpIdentityReplay: async (step) => {
+    const queue = await optional("./db/session-follow-up-repo");
+    if (!queue?.createSqliteSessionFollowUpLedger) return { unsupported: true };
+    const { createSessionEngine, createSessionRuntime } = await n1("@volli/session-engine");
+    const { createSqliteSessionLedger } = await n1("./session-control/sqlite-ledger");
+    const db = openVolliDb(command.dbPath);
+    let runtime;
+    let artifactReads = 0;
+    let artifactWrites = 0;
+    let attaches = 0;
+    let next = 0;
+    try {
+      const adapter = {
+        id: "pi",
+        durableIdNamespace: "pi",
+        adapterVersion: "n1-proof",
+        runtime: { path: "/test/pi", version: "n1-proof", fingerprint: "test" },
+        attach: async () => {
+          attaches++;
+          throw new Error("Unexpected duplicate delivery attach");
+        },
+      };
+      const location = async () => ({
+        directory: step.directory,
+        venue: { id: "local", kind: "local" },
+      });
+      runtime = createSessionRuntime({
+        engine: createSessionEngine({
+          ledger: createSqliteSessionLedger(db),
+          clock: { now: () => NOW },
+          ids: { next: (kind) => `n1-proof-${kind}-${++next}` },
+        }),
+        followUps: queue.createSqliteSessionFollowUpLedger(db),
+        ...executorPorts(adapter),
+        artifacts: {
+          read: async () => {
+            artifactReads++;
+            throw new Error("Unexpected historical artifact read");
+          },
+          write: async () => {
+            artifactWrites++;
+            throw new Error("Unexpected duplicate message intent");
+          },
+        },
+        locations: { resolve: location, prepare: location, reaffirm: async () => {} },
+        clock: { now: () => NOW },
+        ids: { next: (kind) => `n1-runtime-proof-${kind}-${++next}` },
+      });
+      const send = async (commandId, delivery) => {
+        try {
+          await runtime.command({
+            commandId,
+            sessionId: step.sessionId,
+            command: {
+              kind: "message.submit",
+              delivery,
+              message: {
+                id: step.messageId,
+                role: "user",
+                parts: [{ type: "text", text: "A stale client must not resend this" }],
+              },
+            },
+          });
+          return { accepted: true };
+        } catch (error) {
+          return errorReport(error);
+        }
+      };
+      const staleSteer = await send("fresh-stale-steer-command", "steer");
+      const expiredReplay = await send(step.queueCommandId, "queue");
+      return { staleSteer, expiredReplay, artifactReads, artifactWrites, attaches };
+    } finally {
+      await runtime?.close();
+      db.close();
+    }
+  },
+
   /** Leaves a flat Pi-style card pending while a new-birth Session is downgraded. */
   pendingFlatAsk: async (step) => {
     const { createSessionEngine } = await n1("@volli/session-engine");

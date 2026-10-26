@@ -14,6 +14,7 @@
   "scripts": {
     "backend:fetch": "node fixture/fetch-backend.ts",
     "codegen": "node fixture/with-backend.ts -- convex codegen --typecheck disable",
+    "deploy:checked": "node scripts/deploy.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vp test run",
     "test:backend": "vp test run --config vite.backend.config.ts",
@@ -26,6 +27,7 @@
   "devDependencies": {
     "@types/node": "catalog:",
     "@volli/host-core": "workspace:*",
+    "@volli/session-engine": "workspace:*",
     "convex-test": "0.0.65",
     "typescript": "catalog:",
     "vite-plus": "catalog:"

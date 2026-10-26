@@ -2,8 +2,11 @@ import { randomUUID } from "node:crypto";
 
 import { beforeAll, describe, expect, test } from "vite-plus/test";
 
-import { api } from "../functions/_generated/api";
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared/cloud";
+
+import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
+import { enrollBackendPreview } from "./preview-fixtures";
 
 const backend = connectBackend();
 const uuid = () => randomUUID();
@@ -37,7 +40,11 @@ async function column(status: string) {
 
 beforeAll(async () => {
   // Sign-up creates the person's own Workspace; the project goes there.
-  await client().mutation(api.accounts.ensureViewer, {});
+  const { userId } = await client().mutation(api.accounts.ensureViewer, {});
+  await backend.admin(internal.previewAccess.set, { kind: "user", value: userId, enabled: true });
+  await client().mutation(api.accounts.ensureViewer, {
+    acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+  });
   const [workspace] = await client().query(api.workspaces.listMine, {});
   const workspaceId = workspace!.workspaceId;
   projectId = uuid();
@@ -151,7 +158,9 @@ describe("the board on the pinned local backend", () => {
 
   test("refuses an outsider with a typed error", async () => {
     const outsider = backend.client(`user:${uuid()}`);
-    await outsider.mutation(api.accounts.ensureViewer, {});
+    const { userId } = await outsider.mutation(api.accounts.ensureViewer, {});
+    // Enrolled, so the refusal is membership, not the preview gate.
+    await enrollBackendPreview(backend, outsider, userId);
     await expect(outsider.query(api.board.roster, { projectId })).rejects.toMatchObject({
       data: { code: "not_a_member" },
     });

@@ -13,12 +13,31 @@
  * The box exchanges its refresh credential at `POST /runner/token` for a
  * 15-minute runner token and the credential's successor (`rotateCredential`).
  * A credential presented after its successor was used means it was copied:
- * the runner is cut off (`revoked`, reason `credential_reuse`).
+ * the runner is cut off (`revoked`, reason `credential_reuse`), and its owner
+ * gets a Needs-you runner alert, cleared when they remove the runner.
+ *
+ * A Mac that lost its sealed credential (keychain loss, a reset inventory)
+ * registers again naming the runner it was (`replacesRunnerId`, from a
+ * non-secret local record). When that names one of the caller's own Mac
+ * runners that is neither gone nor still heartbeating in a live status, the
+ * new runner succeeds it in the same transaction: it takes the old runner's
+ * name, the old runner is revoked (reason `replaced`) and leaves the list,
+ * and the old runner's work follows
+ * (`moveRunnerWork`): Session claims (next generation), Session Places,
+ * viewers, and open jobs that name no Working copy. Working-copy jobs stay
+ * with the replaced runner until Working copies move (not part of this
+ * handover).
+ * Any other value registers a plain new runner, so the id reveals nothing
+ * about anyone else's runners. A client-minted `registrationId` makes a lost
+ * registration reply retryable while the first credential is unused: the
+ * same runner is returned with a fresh credential, without moving work again.
  *
  * Liveness: `heartbeat` writes only `runnerPresence`, which no client
  * subscribes to; `runners.status` changes only on a transition (the first
- * heartbeat after silence, an explicit `reportState`, or `sweepOffline` after
- * 90 s of silence), so a heartbeat never re-runs anyone's runner list.
+ * heartbeat after silence or sleep, an explicit `reportState`, or
+ * `sweepOffline` after 90 s of silence), so a heartbeat never re-runs anyone's
+ * runner list. `asleep` (a Mac whose lid closed) is reported, not live: the
+ * sweep leaves it alone, and the first beat after wake makes it `online`.
  *
  * Secrets are minted in actions (`lib/runnerSecrets.ts`); mutations here see
  * only their hashes.
@@ -29,9 +48,11 @@ import type { GenericDatabaseReader, GenericDatabaseWriter } from "convex/server
 
 import {
   LIVE_RUNNER_STATUSES,
+  RUNNER_ALERTS,
   RUNNER_INSTALL_TOKEN_TTL_MS,
   RUNNER_LINK_REQUEST_TTL_MS,
   RUNNER_OFFLINE_AFTER_MS,
+  RUNNER_PLACES_MAX_SESSIONS,
   RUNNER_REPORTED_STATES,
   RUNNER_SECRET_PREFIXES,
   RUNNER_STATUS_REASONS,
@@ -52,14 +73,24 @@ import {
   type RunnerKind,
   type RunnerLinkGrant,
   type RunnerLinkMethod,
+  type RunnerPlace,
   type RunnerStatus,
   type UserId,
 } from "@volli/shared/cloud";
 
 import { internal } from "./_generated/api";
 import type { DataModel, Doc } from "./_generated/dataModel.js";
-import { action, internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
-import { authError, requireViewer } from "./lib/auth";
+import {
+  action,
+  internalMutation,
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server";
+import { clearRunnerAlert, raiseRunnerAlert } from "./lib/attention";
+import { authError, requireSessionVisible, requireViewer, type Viewer } from "./lib/auth";
+import { hasLivePreviewAccess } from "./lib/previewAccess";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
 import { mintSecret } from "./lib/runnerSecrets";
 import { nullable } from "./lib/validators";
@@ -122,8 +153,8 @@ async function credentialsOf(ctx: Reader, runnerId: string) {
     .unique();
 }
 
-/** A person who may own a new runner: an active account, not pending deletion. */
-async function activeUser(ctx: Reader, userId: string): Promise<Doc<"users"> | null> {
+/** The account behind a credential, independently of its current preview authorization. */
+async function activeAccount(ctx: Reader, userId: string): Promise<Doc<"users"> | null> {
   const user = await ctx.db
     .query("users")
     .withIndex("by_uuid", (q) => q.eq("id", userId))
@@ -131,9 +162,22 @@ async function activeUser(ctx: Reader, userId: string): Promise<Doc<"users"> | n
   return user !== null && user.status === "active" ? user : null;
 }
 
-/** Whether a runner was removed by its owner: its name is free again and it leaves the list. */
-function isRemoved(runner: Doc<"runners">): boolean {
-  return runner.status === "revoked" && runner.statusReason === RUNNER_STATUS_REASONS.removed;
+/** A person who may link a new runner: active account, live preview grant and agreement. */
+async function activeUser(ctx: Reader, userId: string): Promise<Doc<"users"> | null> {
+  const user = await activeAccount(ctx, userId);
+  return user !== null && (await hasLivePreviewAccess(ctx, user)) ? user : null;
+}
+
+/**
+ * Whether a runner is gone: removed by its owner, or replaced by its
+ * successor on the same Mac. Its name is free again and it leaves the list.
+ */
+function isGone(runner: Doc<"runners">): boolean {
+  return (
+    runner.status === "revoked" &&
+    (runner.statusReason === RUNNER_STATUS_REASONS.removed ||
+      runner.statusReason === RUNNER_STATUS_REASONS.replaced)
+  );
 }
 
 async function namesTaken(ctx: Reader, ownerUserId: string, except: string | null = null) {
@@ -142,9 +186,7 @@ async function namesTaken(ctx: Reader, ownerUserId: string, except: string | nul
     .withIndex("by_owner_name", (q) => q.eq("ownerUserId", ownerUserId))
     .collect();
   return new Set(
-    owned
-      .filter((runner) => !isRemoved(runner) && runner.id !== except)
-      .map((runner) => runner.name),
+    owned.filter((runner) => !isGone(runner) && runner.id !== except).map((runner) => runner.name),
   );
 }
 
@@ -165,13 +207,16 @@ interface NewRunner {
   name: string | null;
   nameHint: string | null;
   credentialHash: string;
+  /** The runner this one succeeds: its name does not count as taken. */
+  replaces?: string;
+  desktopRegistrationId?: string;
 }
 
 /** Inserts the runner, its first credential and its `linked` audit event. */
 async function createRunner(ctx: Writer, input: NewRunner): Promise<IssuedGrant> {
   const now = Date.now();
   const runnerId = newId("runner");
-  const taken = await namesTaken(ctx, input.ownerUserId);
+  const taken = await namesTaken(ctx, input.ownerUserId, input.replaces ?? null);
   const name = dedupeRunnerName(
     chooseRunnerName({ name: input.name, nameHint: input.nameHint, hostname: input.host.hostname }),
     (candidate) => taken.has(candidate),
@@ -191,6 +236,9 @@ async function createRunner(ctx: Writer, input: NewRunner): Promise<IssuedGrant>
     installMode: input.host.installMode,
     linkedVia: input.linkedVia,
     linkedAt: now,
+    ...(input.desktopRegistrationId === undefined
+      ? {}
+      : { desktopRegistrationId: input.desktopRegistrationId }),
     autoUpdate: DEFAULT_AUTO_UPDATE,
     update: null,
     revokedAt: null,
@@ -210,7 +258,11 @@ async function createRunner(ctx: Writer, input: NewRunner): Promise<IssuedGrant>
     runnerId,
     kind: "linked",
     at: now,
-    detail: { via: input.linkedVia, hostname: input.host.hostname },
+    detail: {
+      via: input.linkedVia,
+      hostname: input.host.hostname,
+      ...(input.replaces === undefined ? {} : { replaces: input.replaces }),
+    },
   });
   return { runnerId, name, generation: 1 };
 }
@@ -248,6 +300,12 @@ async function revokeRunner(
     at: now,
     detail: { reason, ...detail },
   });
+  // A runner cut off for reuse tells its owner in Needs you; removing it is the answer.
+  if (reason === RUNNER_STATUS_REASONS.credentialReuse) {
+    await raiseRunnerAlert(ctx, runner, RUNNER_ALERTS.credentialReuse, now);
+  } else if (reason === RUNNER_STATUS_REASONS.removed) {
+    await clearRunnerAlert(ctx, runner.id, RUNNER_ALERTS.credentialReuse, now);
+  }
 }
 
 async function setStatus(
@@ -306,15 +364,90 @@ export const list = query({
       .query("runners")
       .withIndex("by_owner_name", (q) => q.eq("ownerUserId", userId))
       .collect();
-    return owned.filter((runner) => !isRemoved(runner)).map(summary);
+    return owned.filter((runner) => !isGone(runner)).map(summary);
   },
 });
+
+/**
+ * The Places of Sessions the caller can see: for each Session id, the runner
+ * it lives on as "Waiting for <Mac>" reads it (`sessionPlaceState` in
+ * `@volli/shared/cloud`), or `null` when the caller cannot see that Session
+ * (absent, deleted, private to someone else, or no longer a Member: all read
+ * the same). Keyed by Session, never by runner, so a teammate learns of a
+ * runner only through a Session they can already see, and the read is bounded
+ * by {@link RUNNER_PLACES_MAX_SESSIONS}. A removed runner is still answered
+ * (`revoked`), so its Sessions can say so.
+ */
+export const places = query({
+  args: { sessionIds: v.array(v.string()) },
+  handler: async (ctx, { sessionIds }): Promise<SessionPlaceRow[]> => {
+    const viewer = await requireViewer(ctx);
+    const unique = [...new Set(sessionIds)];
+    if (unique.length > RUNNER_PLACES_MAX_SESSIONS) {
+      throw new ConvexError({
+        code: "invalid_request",
+        message: `At most ${RUNNER_PLACES_MAX_SESSIONS} sessions per read.`,
+      });
+    }
+    const runners = new Map<string, Doc<"runners"> | null>();
+    const answer: SessionPlaceRow[] = [];
+    for (const sessionId of unique) {
+      const runnerId = await visiblePlace(ctx, viewer, sessionId);
+      if (runnerId === null) {
+        answer.push({ sessionId, place: null });
+        continue;
+      }
+      if (!runners.has(runnerId)) runners.set(runnerId, await runnerById(ctx, runnerId));
+      const runner = runners.get(runnerId)!;
+      answer.push({
+        sessionId,
+        place:
+          runner === null
+            ? null
+            : {
+                id: runner.id,
+                name: runner.name,
+                kind: runner.kind,
+                status: runner.status,
+                statusChangedAt: runner.statusChangedAt,
+                statusReason: runner.statusReason,
+                owned: runner.ownerUserId === viewer.userId,
+              },
+      });
+    }
+    return answer;
+  },
+});
+
+/** One `runners.places` answer. */
+export interface SessionPlaceRow {
+  sessionId: string;
+  place: RunnerPlace | null;
+}
+
+/** The Place of a Session the viewer can see, else `null` (every refusal reads the same). */
+async function visiblePlace(
+  ctx: QueryCtx,
+  viewer: Viewer,
+  sessionId: string,
+): Promise<string | null> {
+  if (!isUuid(sessionId)) return null;
+  try {
+    const { session } = await requireSessionVisible(ctx, sessionId, viewer);
+    return session.placeRunnerId;
+  } catch (error) {
+    if (error instanceof ConvexError && (error.data as { code?: unknown }).code === "not_found") {
+      return null;
+    }
+    throw error;
+  }
+}
 
 /** One of the caller's own runners, or `not_found` (someone else's reads the same). */
 async function requireOwnRunner(ctx: MutationCtx, runnerId: string) {
   const { userId } = await requireViewer(ctx);
   const runner = await runnerById(ctx, parseId("runner", runnerId));
-  if (runner === null || runner.ownerUserId !== userId || isRemoved(runner)) {
+  if (runner === null || runner.ownerUserId !== userId || isGone(runner)) {
     throw authError("not_found", "That runner does not exist.");
   }
   return { userId, runner };
@@ -344,7 +477,7 @@ export const remove = mutation({
     if (runner === null || runner.ownerUserId !== userId) {
       throw authError("not_found", "That runner does not exist.");
     }
-    if (!isRemoved(runner)) {
+    if (!isGone(runner)) {
       await revokeRunner(ctx, runner, RUNNER_STATUS_REASONS.removed, { by: userId });
     }
     return null;
@@ -455,32 +588,190 @@ export const revokeInstallToken = mutation({
 
 // The desktop's own Mac.
 
+/**
+ * The runner a re-registering Mac may succeed: one of `ownerUserId`'s own Mac
+ * runners that is neither gone nor still heartbeating in a live status,
+ * registering again as a Mac. Anything else (nothing named, a malformed or
+ * unknown id, someone else's runner, another kind, a removed or already
+ * replaced runner) is `null`, read the same way.
+ */
+async function replaceableRunner(
+  ctx: Reader,
+  ownerUserId: string,
+  kind: RunnerKind,
+  runnerId: string | null | undefined,
+): Promise<Doc<"runners"> | null> {
+  if (kind !== "mac" || typeof runnerId !== "string" || !isUuid(runnerId)) return null;
+  const runner = await runnerById(ctx, runnerId);
+  if (runner === null || runner.ownerUserId !== ownerUserId) return null;
+  if (runner.kind !== "mac" || isGone(runner)) return null;
+  if (LIVE_RUNNER_STATUSES.some((status) => status === runner.status)) {
+    const presence = await ctx.db
+      .query("runnerPresence")
+      .withIndex("by_runner", (q) => q.eq("runnerId", runner.id))
+      .unique();
+    if (presence !== null && Date.now() - presence.lastHeartbeatAt <= RUNNER_OFFLINE_AFTER_MS) {
+      return null;
+    }
+  }
+  return runner;
+}
+
+/** A lost registration reply may replace only the caller's never-used first credential. */
+async function retryDesktopRegistration(
+  ctx: Writer,
+  ownerUserId: string,
+  registrationId: string,
+  credentialHash: string,
+): Promise<IssuedGrant | null> {
+  const owned = await ctx.db
+    .query("runners")
+    .withIndex("by_owner_name", (q) => q.eq("ownerUserId", ownerUserId))
+    .collect();
+  for (const runner of owned) {
+    if (runner.desktopRegistrationId !== registrationId || isGone(runner)) continue;
+    const credentials = await credentialsOf(ctx, runner.id);
+    // A token exchange advances generation even before the first runner write.
+    if (credentials?.generation !== 1 || credentials.currentFirstUsedAt !== null) continue;
+    await ctx.db.patch(credentials._id, { currentHash: credentialHash });
+    return {
+      runnerId: parseId("runner", runner.id),
+      name: runner.name,
+      generation: credentials.generation,
+    };
+  }
+  return null;
+}
+
+/**
+ * Moves one page of a replaced runner's work to its successor, and returns
+ * whether more may remain:
+ * - every Session claim it held passes to the successor at the next claim
+ *   generation, so a write fenced by the old claim is refused;
+ * - every Session placed on it is placed on the successor, and its viewers
+ *   (indexed by the claimed runner) follow;
+ * - its open jobs (queued, or leased: the lease keeps its boot and attempt,
+ *   so the successor's next claim takes back one an earlier boot held, and
+ *   the same process may still complete its own) follow, except jobs naming
+ *   a Working copy: Working copies stay on the runner that reported them,
+ *   and a job's Working copy is always on the job's runner.
+ * A moved row leaves the old runner's index, so a continuation simply runs
+ * this again.
+ */
+async function moveRunnerWork(ctx: Writer, from: string, to: string): Promise<boolean> {
+  const intakes = await ctx.db
+    .query("sessionIntake")
+    .withIndex("by_runner", (q) => q.eq("claim.runnerId", from))
+    .take(SWEEP_PAGE_SIZE);
+  for (const intake of intakes) {
+    await ctx.db.patch(intake._id, {
+      claim: { runnerId: to, generation: intake.claim.generation + 1 },
+    });
+  }
+  const sessions = await ctx.db
+    .query("sessions")
+    .withIndex("by_place_runner", (q) => q.eq("placeRunnerId", from))
+    .take(SWEEP_PAGE_SIZE);
+  for (const session of sessions) await ctx.db.patch(session._id, { placeRunnerId: to });
+  const viewers = await ctx.db
+    .query("sessionViewers")
+    .withIndex("by_runner", (q) => q.eq("runnerId", from))
+    .take(SWEEP_PAGE_SIZE);
+  for (const viewer of viewers) await ctx.db.patch(viewer._id, { runnerId: to });
+  let jobsLeft = false;
+  for (const status of ["queued", "leased"] as const) {
+    const jobs = await ctx.db
+      .query("runnerJobs")
+      .withIndex("by_runner_ready", (q) => q.eq("runnerId", from).eq("status", status))
+      .filter((q) => q.eq(q.field("workingCopyId"), null))
+      .take(SWEEP_PAGE_SIZE);
+    for (const job of jobs) await ctx.db.patch(job._id, { runnerId: to });
+    if (jobs.length === SWEEP_PAGE_SIZE) jobsLeft = true;
+  }
+  return jobsLeft || [intakes, sessions, viewers].some((rows) => rows.length === SWEEP_PAGE_SIZE);
+}
+
+/** The rest of a replaced runner's work, a page per run, when it had more than one page. */
+export const moveReplacedWork = internalMutation({
+  args: { from: v.string(), to: v.string() },
+  handler: async (ctx, { from, to }): Promise<null> => {
+    if (await moveRunnerWork(ctx, from, to)) {
+      await ctx.scheduler.runAfter(0, internal.runners.moveReplacedWork, { from, to });
+    }
+    return null;
+  },
+});
+
 export const linkFromDesktop = internalMutation({
-  args: { credentialHash: v.string(), host: v.any(), name: nullable(v.string()) },
+  args: {
+    credentialHash: v.string(),
+    host: v.any(),
+    name: nullable(v.string()),
+    replacesRunnerId: v.optional(nullable(v.string())),
+    registrationId: v.optional(nullable(v.string())),
+  },
   handler: async (ctx, args): Promise<IssuedGrant> => {
     const { userId, user } = await requireViewer(ctx);
     if (user.status !== "active") {
       throw authError("account_deleted", "This account is being deleted.");
     }
     const host = parsed(parseRunnerHostFacts, args.host);
-    return createRunner(ctx, {
+    const kind = runnerKindForOs(host.platform.os);
+    const registrationId = isUuid(args.registrationId) ? args.registrationId : undefined;
+    if (registrationId !== undefined) {
+      const retry = await retryDesktopRegistration(
+        ctx,
+        userId,
+        registrationId,
+        args.credentialHash,
+      );
+      if (retry !== null) return retry;
+    }
+    const replaced = await replaceableRunner(ctx, userId, kind, args.replacesRunnerId);
+    const grant = await createRunner(ctx, {
       ownerUserId: userId,
-      kind: runnerKindForOs(host.platform.os),
+      kind,
       linkedVia: "desktop",
       host,
-      name: args.name,
+      // A successor keeps the name the person knows the Mac by.
+      name: replaced?.name ?? args.name,
       nameHint: null,
       credentialHash: args.credentialHash,
+      ...(registrationId === undefined ? {} : { desktopRegistrationId: registrationId }),
+      ...(replaced === null ? {} : { replaces: replaced.id }),
     });
+    if (replaced !== null) {
+      await revokeRunner(ctx, replaced, RUNNER_STATUS_REASONS.replaced, {
+        by: userId,
+        successor: grant.runnerId,
+      });
+      if (await moveRunnerWork(ctx, replaced.id, grant.runnerId)) {
+        await ctx.scheduler.runAfter(0, internal.runners.moveReplacedWork, {
+          from: replaced.id,
+          to: grant.runnerId,
+        });
+      }
+    }
+    return grant;
   },
 });
 
 /**
  * The signed-in desktop registers the machine it runs on. Returns the same
  * grant a box gets from linking; the desktop seals the credential locally.
+ * `replacesRunnerId` is the runner this Mac was before it lost its
+ * credential: when it is the caller's own Mac runner, the new one succeeds it
+ * (see the module comment); otherwise it is ignored. `registrationId` is a
+ * client-minted lowercase UUID retained across retries until the first
+ * credential is used; null, omitted or malformed ids are ignored.
  */
 export const registerThisMac = action({
-  args: { host: v.any(), name: nullable(v.string()) },
+  args: {
+    host: v.any(),
+    name: nullable(v.string()),
+    replacesRunnerId: v.optional(nullable(v.string())),
+    registrationId: v.optional(nullable(v.string())),
+  },
   handler: async (ctx, args): Promise<RunnerLinkGrant> => {
     const credential = mintSecret(RUNNER_SECRET_PREFIXES.credential);
     const grant = await ctx.runMutation(internal.runners.linkFromDesktop, {
@@ -779,39 +1070,43 @@ export const rotateCredential = internalMutation({
     args,
   ): Promise<
     | { ok: true; generation: number; ownerUserId: UserId; kind: RunnerKind }
-    | { ok: false; code: "revoked" | "invalid_credential" }
+    | { ok: false; code: "revoked" | "invalid_credential" | "preview_access_required" }
   > => {
     const runner = await runnerById(ctx, args.runnerId);
     const credentials = runner === null ? null : await credentialsOf(ctx, runner.id);
     // An unknown id reads like a wrong credential: an id alone reveals nothing.
     if (runner === null) return { ok: false, code: "invalid_credential" };
-    if (
-      runner.revokedAt !== null ||
-      credentials === null ||
-      (await activeUser(ctx, runner.ownerUserId)) === null
-    ) {
+    const owner = await activeAccount(ctx, runner.ownerUserId);
+    if (runner.revokedAt !== null || credentials === null || owner === null) {
       return { ok: false, code: "revoked" };
+    }
+    const current = args.presentedHash === credentials.currentHash;
+    if (!current) {
+      if (args.presentedHash !== credentials.previousHash) {
+        return { ok: false, code: "invalid_credential" };
+      }
+      if (credentials.currentFirstUsedAt !== null) {
+        await revokeRunner(ctx, runner, RUNNER_STATUS_REASONS.credentialReuse, { ip: args.ip });
+        return { ok: false, code: "revoked" };
+      }
+    }
+    // Validate and detect reuse even while authorization is paused, but spend
+    // no valid credential until the account has preview access again.
+    if (!(await hasLivePreviewAccess(ctx, owner))) {
+      return { ok: false, code: "preview_access_required" };
     }
     const now = Date.now();
     const generation = credentials.generation + 1;
     const used = { generation, rotatedAt: now, lastUsedAt: now, lastUsedIp: args.ip };
-    if (args.presentedHash === credentials.currentHash) {
+    if (current) {
       await ctx.db.patch(credentials._id, {
         ...used,
         previousHash: credentials.currentHash,
         currentHash: args.nextHash,
         currentFirstUsedAt: null,
       });
-    } else if (
-      args.presentedHash === credentials.previousHash &&
-      credentials.currentFirstUsedAt === null
-    ) {
-      await ctx.db.patch(credentials._id, { ...used, currentHash: args.nextHash });
-    } else if (args.presentedHash === credentials.previousHash) {
-      await revokeRunner(ctx, runner, RUNNER_STATUS_REASONS.credentialReuse, { ip: args.ip });
-      return { ok: false, code: "revoked" };
     } else {
-      return { ok: false, code: "invalid_credential" };
+      await ctx.db.patch(credentials._id, { ...used, currentHash: args.nextHash });
     }
     return { ok: true, generation, ownerUserId: runner.ownerUserId as UserId, kind: runner.kind };
   },
@@ -828,9 +1123,9 @@ const load = v.object({
 });
 
 /**
- * Every 30 s. Writes presence (never subscribed), flips `offline`/`stopped`
- * to `online` on the first beat after silence, and answers with what the
- * runner should run.
+ * Every 30 s. Writes presence (never subscribed), flips `offline`, `stopped`
+ * or `asleep` to `online` on the first beat after silence or sleep, and
+ * answers with what the runner should run.
  */
 export const heartbeat = mutation({
   args: { bootId: v.string(), load },
@@ -860,7 +1155,7 @@ export const heartbeat = mutation({
       });
     }
     const status =
-      runner.status === "offline" || runner.status === "stopped"
+      runner.status === "offline" || runner.status === "stopped" || runner.status === "asleep"
         ? await setStatus(ctx, runner, "online", null)
         : runner.status;
     const release = await ctx.db
@@ -877,7 +1172,11 @@ export const heartbeat = mutation({
   },
 });
 
-/** A transition the runner reports itself: `draining`, `updating`, `degraded(reason)`, `stopped`, back to `online`. */
+/**
+ * A transition the runner reports itself: `draining`, `updating`,
+ * `degraded(reason)`, `stopped`, `asleep` (a Mac going to sleep), back to
+ * `online`.
+ */
 export const reportState = mutation({
   args: {
     state: v.union(...RUNNER_REPORTED_STATES.map((state) => v.literal(state))),

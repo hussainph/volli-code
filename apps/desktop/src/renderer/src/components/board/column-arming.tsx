@@ -57,6 +57,7 @@ import {
   useAutomationsStore,
 } from "@renderer/stores/automations";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
+import { launchStore } from "@renderer/stores/launch";
 
 /** The `No Automation` row's value. Not an empty string: a radio group needs a real token. */
 const DISARMED = "none";
@@ -99,6 +100,9 @@ export function ColumnArmingButton({
       : armingState === "ready"
         ? `${TICKET_STATUS_LABELS[status]} runs ${armed.name}`
         : `${TICKET_STATUS_LABELS[status]} is armed with ${armed.name} — automatic triggers off`;
+
+  // The launch is fixed at boot; cloud has no Automation executor yet.
+  if (launchStore() === "cloud") return null;
 
   return (
     <DropdownMenu

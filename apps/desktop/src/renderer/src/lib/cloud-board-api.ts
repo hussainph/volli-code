@@ -24,7 +24,8 @@ import {
 import type { BoardApi } from "./board-api";
 import { cloudSession, type CloudSession } from "./cloud-client";
 
-const NOT_CONNECTED = "Volli Cloud isn’t connected yet.";
+/** What a write is told when the window has no Volli Cloud client yet. */
+export const NOT_CONNECTED = "Volli Cloud isn’t connected yet.";
 
 /** How many comments the door remembers (for an edit's ticket): oldest first out. */
 export const KNOWN_COMMENTS_MAX = 10_000;

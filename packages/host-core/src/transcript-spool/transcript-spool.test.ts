@@ -505,6 +505,27 @@ describe("packPiLogs", () => {
     return zstdDecompressSync(await readFile(objects.pathOf(key))).toString("utf8");
   }
 
+  test("batches more than 64 Pi files and reports missing files without starving later attachments", async () => {
+    const files = Array.from({ length: 66 }, (_, index) => ({
+      attachmentId: `att-${index}`,
+      path: join(root, `file-${index}.jsonl`),
+    }));
+    for (const entry of files.slice(1)) await writeFile(entry.path, jsonLine({ text: SECRET }));
+    const heads: number[] = [];
+    const original = backend.head.bind(backend);
+    backend.head = async (input) => {
+      heads.push(input.piFileIds.length);
+      expect(input.piFileIds.length).toBeLessThanOrEqual(64);
+      return original(input);
+    };
+    const report = await spool().packPiLogs(session, files);
+    expect(heads).toEqual([64, 2]);
+    expect(report.missing).toEqual(["file-0"]);
+    expect(report.segments).toHaveLength(65);
+    expect(backend.pi).toHaveLength(65);
+    expect((await spool().packPiLogs(session, files)).segments).toEqual([]);
+  });
+
   test("uploads complete lines since the committed offset, redacted, and waits for a partial one", async () => {
     const first = jsonLine({ type: "session", id: "abc" });
     const secret = jsonLine({ type: "message", content: `use ${SECRET}\nand ${PEM}` });
@@ -522,6 +543,7 @@ describe("packPiLogs", () => {
           status: "committed",
         },
       ],
+      missing: [],
       truncated: [],
       oversized: [],
     });
@@ -537,6 +559,7 @@ describe("packPiLogs", () => {
     // Nothing complete since: nothing uploaded.
     await expect(packer.packPiLogs(session, [file()])).resolves.toEqual({
       segments: [],
+      missing: [],
       truncated: [],
       oversized: [],
     });
@@ -574,11 +597,13 @@ describe("packPiLogs", () => {
     await truncate(file().path, 3);
     await expect(s.packPiLogs(session, [file()])).resolves.toEqual({
       segments: [],
+      missing: [],
       truncated: [piFileId],
       oversized: [],
     });
     await expect(s.packPiLogs(session, [])).resolves.toEqual({
       segments: [],
+      missing: [],
       truncated: [],
       oversized: [],
     });

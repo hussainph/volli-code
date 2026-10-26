@@ -107,9 +107,7 @@ export function describeSessionFollowUpLedgerContract(
         // A queue command's reply and a release's evidence outlive the entry
         // they were about.
         commands: { "queued-0": { signature: "sig-0", result: queuedResult("queued-0") } },
-        releases: {
-          "delivery-0": { command: deliveryCommand("delivery-0"), receipt: deliveryReceipt() },
-        },
+        releases: {},
       } satisfies SessionFollowUpState;
       await expect(
         followUps.transaction("session-write", (state) => {
@@ -120,6 +118,150 @@ export function describeSessionFollowUpLedgerContract(
       await expect(followUps.transaction("session-write", (state) => state)).resolves.toEqual(
         written,
       );
+    });
+
+    it("reads a private snapshot without committing even accidental changes", async () => {
+      const { followUps } = await fresh("session-read");
+      await followUps.transaction("session-read", (state) => {
+        state.entries.push(entry(1));
+        state.revision = 1;
+      });
+      const read = await followUps.transaction(
+        "session-read",
+        (state) => {
+          state.entries = [];
+          state.revision = 99;
+          return state;
+        },
+        { mode: "read" },
+      );
+      expect(read.revision).toBe(99);
+      expect(
+        await followUps.transaction("session-read", (state) => state, { mode: "read" }),
+      ).toEqual({
+        ...emptySessionFollowUpState(),
+        revision: 1,
+        entries: [entry(1)],
+      });
+      expect(await followUps.pendingSessionIds()).toEqual(["session-read"]);
+      await expect(
+        followUps.transaction("session-read", (() => Promise.resolve()) as never, { mode: "read" }),
+      ).rejects.toThrow();
+      await expect(
+        followUps.transaction(
+          "session-read",
+          () => {
+            throw new Error("read failed");
+          },
+          { mode: "read" },
+        ),
+      ).rejects.toThrow("read failed");
+    });
+
+    it("prunes old settled replies, keeping newest 64, pending/unresolved replies and compact queue identities", async () => {
+      const { followUps } = await fresh("session-retention");
+      const old = Date.now() - 8 * 24 * 60 * 60_000;
+      await followUps.transaction("session-retention", (state) => {
+        state.entries.push(entry(0));
+        for (let i = 0; i < 100; i++) {
+          const id = `queued-${i}`;
+          const result = queuedResult(id);
+          result.command = {
+            ...result.command,
+            route: null,
+            createdAt: old + i,
+            intent:
+              i === 3
+                ? {
+                    kind: "message.queue",
+                    message: { id: "old-queue-identity", role: "user", parts: [] },
+                  }
+                : i % 2 === 0
+                  ? {
+                      kind: "message.edit",
+                      messageId: `message-${i}`,
+                      message: { id: `message-${i}`, role: "user", parts: [] },
+                    }
+                  : { kind: "message.cancel", messageId: `message-${i}` },
+          };
+          result.receipt = { ...deliveryReceipt(), commandId: id, recordedAt: old + i };
+          if (i === 1)
+            result.receipt = {
+              id: "unresolved",
+              commandId: id,
+              recordedAt: old,
+              sequence: 0,
+              status: "unreconciled",
+              detail: "No proof",
+            };
+          if (i === 2) result.receipt.recordedAt = Date.now();
+          state.commands[id] = { signature: id, result };
+        }
+        state.releases["legacy"] = {
+          command: deliveryCommand("legacy"),
+          receipt: deliveryReceipt(),
+        };
+        state.revision = 1;
+      });
+      const stored = await followUps.transaction("session-retention", (state) => state, {
+        mode: "read",
+      });
+      expect(Object.keys(stored.commands)).toHaveLength(67);
+      for (const id of ["queued-0", "queued-1", "queued-2", "queued-3", "queued-99"])
+        expect(stored.commands).toHaveProperty(id);
+      expect(stored.commands["queued-3"]?.signature).not.toBe("queued-3");
+      expect(stored.commands["queued-3"]?.result.command.intent).toEqual({
+        kind: "message.queue",
+        message: { id: "old-queue-identity", role: "user", parts: [] },
+      });
+      expect(
+        await followUps.transaction(
+          "session-retention",
+          (_state, _proof, queued) => [queued?.("old-queue-identity"), queued?.("never-queued")],
+          { mode: "read" },
+        ),
+      ).toEqual([true, false]);
+      expect(stored.commands).not.toHaveProperty("queued-4");
+      expect(stored.commands).not.toHaveProperty("queued-5");
+      expect(stored.releases).toEqual({});
+      expect(stored.entries).toEqual([entry(0)]);
+    });
+
+    it("keeps queue identities Session-scoped and never leaks them from failed or read-only work", async () => {
+      const { followUps } = await fresh("session-identity-a", "session-identity-b");
+      const write = (state: SessionFollowUpState) => {
+        state.commands.queued = { signature: "sig", result: queuedResult("queued") };
+        state.revision++;
+      };
+      await expect(
+        followUps.transaction("session-identity-a", (state) => {
+          write(state);
+          throw new Error("rollback");
+        }),
+      ).rejects.toThrow("rollback");
+      await followUps.transaction("session-identity-a", write, { mode: "read" });
+      expect(
+        await followUps.transaction(
+          "session-identity-a",
+          (_state, _proof, queued) => queued?.("message-0"),
+          { mode: "read" },
+        ),
+      ).toBe(false);
+      await followUps.transaction("session-identity-a", write);
+      expect(
+        await followUps.transaction(
+          "session-identity-a",
+          (_state, _proof, queued) => queued?.("message-0"),
+          { mode: "read" },
+        ),
+      ).toBe(true);
+      expect(
+        await followUps.transaction(
+          "session-identity-b",
+          (_state, _proof, queued) => queued?.("message-0"),
+          { mode: "read" },
+        ),
+      ).toBe(false);
     });
 
     it("hands each transaction a private state: a reference kept past commit changes nothing", async () => {

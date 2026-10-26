@@ -16,6 +16,8 @@ import { errorMessage } from "@volli/shared";
 import { notAvailableOn } from "@renderer/components/hosts/use-remote-project";
 import { remoteHostOfSession } from "@renderer/lib/session-project";
 import { toastError } from "@renderer/lib/toast";
+import { guardSessionWrite } from "@renderer/lib/cloud-session-read-only";
+import { launchStore } from "@renderer/stores/launch";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 
@@ -39,6 +41,14 @@ export async function renameChatSession(
   title: string,
   refineFrom?: string,
 ): Promise<boolean> {
+  if (launchStore() === "cloud") {
+    // Auto-titling is an unrequested refinement. This build cannot run that
+    // refinement on an away runner; keep its existing title, without turning
+    // a successful message into an unrelated "not available" toast.
+    if (refineFrom !== undefined) return false;
+    guardSessionWrite(null);
+    return false;
+  }
   const trimmed = title.trim();
   if (trimmed.length === 0) return false;
   // A Session on a remote host is retitled by its host (VC-713): this Mac's

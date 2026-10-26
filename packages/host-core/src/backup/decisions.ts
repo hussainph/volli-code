@@ -138,6 +138,12 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
       "Pending follow-ups, mutation receipts and release evidence cannot be rebuilt; omitting them loses accepted work or duplicates replay.",
   },
   {
+    table: "session_follow_up_identities",
+    decision: "include",
+    reason:
+      "Exact queued-message identities survive reply pruning; dropping them can resend an old message after restore.",
+  },
+  {
     table: "host_notice_outbox",
     decision: "include",
     reason:
@@ -343,6 +349,21 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
       "This runner's accepted cursor per claimed Session, valid only for this runner's claim on the backend. A restore is a new runner whose claims and cursors start from the backend.",
   },
   {
+    table: "project_checkout_paths",
+    decision: "exclude",
+    reason: "Absolute checkout folders belong to this runner, never a restored machine.",
+  },
+  {
+    table: "working_copy_paths",
+    decision: "exclude",
+    reason: "Working-copy paths and observed git metadata belong to this runner's filesystem.",
+  },
+  {
+    table: "cloud_shadow_rows",
+    decision: "exclude",
+    reason: "Runner-local FK identity provenance, not a second copy of the cloud board.",
+  },
+  {
     table: "job_journal",
     decision: "exclude",
     reason:
@@ -484,6 +505,7 @@ export const BACKUP_INCLUDED_TABLES: readonly string[] = [
   "ticket_event_sequence",
   "sessions",
   "session_follow_up_queue",
+  "session_follow_up_identities",
   "host_notice_outbox",
   "session_delegations",
   "session_verb_grants",

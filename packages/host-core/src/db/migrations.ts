@@ -16,6 +16,7 @@
  */
 import { BOARD_COMMAND_RECEIPTS_MIGRATION } from "./board-receipts-migration";
 import { RUNNER_DRAIN_MIGRATION } from "./runner-drain-migration";
+import { applyRunnerPathsMigration, RUNNER_PATHS_MIGRATION } from "./runner-paths-migration";
 import { CLOUD_IDENTITY_MIGRATION } from "./cloud-identity-migration";
 import { HOST_NOTICE_OUTBOX_MIGRATION } from "./host-notice-outbox-migration";
 import {
@@ -23,6 +24,7 @@ import {
   PROJECT_REMOVED_COLUMN_MIGRATION,
 } from "./project-removed-migration";
 import { SESSION_FOLLOW_UP_MIGRATION } from "./session-follow-up-migration";
+import { SESSION_FOLLOW_UP_IDENTITIES_MIGRATION } from "./session-follow-up-identities-migration";
 import {
   applySpawnLedgerParkedColumn,
   SPAWN_LEDGER_PARKED_COLUMN_MIGRATION,
@@ -2824,6 +2826,17 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 65,
     name: "session drain cursors and the job journal — the cloud runner's machine state (VC-892)",
     sql: RUNNER_DRAIN_MIGRATION,
+  },
+  {
+    version: 66,
+    name: "runner-local checkout paths, working copy paths and cloud identity provenance (VC-895)",
+    sql: RUNNER_PATHS_MIGRATION,
+    apply: applyRunnerPathsMigration,
+  },
+  {
+    version: 67,
+    name: "follow-up message identities — runner-local dedupe proof after reply retention (VC-696)",
+    sql: SESSION_FOLLOW_UP_IDENTITIES_MIGRATION,
   },
 ];
 

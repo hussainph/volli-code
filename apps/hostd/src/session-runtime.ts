@@ -13,7 +13,6 @@ import { parseExperimentEnvironment, VOLLI_SOCKET_ENV, type RunnerIdentity } fro
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { RetentionReclaimSeams } from "@volli/host-core/maintenance";
 import type { BoardChangeFeed } from "@volli/host-core/board";
-import type { SessionReadPort } from "@volli/host-core/handlers";
 import type { LogRing } from "@volli/host-core/log";
 import { SecretService } from "@volli/host-core/secrets";
 import {
@@ -182,8 +181,6 @@ export function createHeadlessSessionRuntime(input: {
       });
     },
   };
-  /** The agent command service's Session reads, which the map forwards to once served. */
-  let sessionReads: SessionReadPort | undefined;
   /**
    * What only this host's doors know, for the one handler map the runner
    * builds over the recovered services (once, when the runner binds this
@@ -244,9 +241,6 @@ export function createHeadlessSessionRuntime(input: {
     return {
       experiments: null,
       busyWorktreeSites,
-      // Served before any door opens: hostd hands it over before it
-      // settles the socket or starts the listener.
-      sessionReads: (verb, workspaceId, args) => sessionReads!(verb, workspaceId, args),
       signIns,
       workspaces,
       logs: input.logs ?? null,
@@ -256,14 +250,6 @@ export function createHeadlessSessionRuntime(input: {
   /** What a recovered host serves, from the recovered proof. */
   const serve = (ready: RunnerReady) => ({
     ...recoveredSessionCommandPorts(ready),
-    /**
-     * Hands the map its Session reads (VC-663, D4): the agent command
-     * service's Workspace-scoped `executeInWorkspace`, which is built
-     * after this map, so the map forwards to it once served.
-     */
-    serveSessionReads(read: SessionReadPort): void {
-      sessionReads = read;
-    },
     venue: options.venue,
     verifySessionToken: tokens.verify,
     automationsAvailable: automations.kind === "live" && automations.execution.kind === "ready",

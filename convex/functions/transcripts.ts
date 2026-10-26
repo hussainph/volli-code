@@ -12,15 +12,19 @@
  * session log is committed the same way as byte ranges (`commitPiLogSegment`),
  * contiguous per Pi file from offset 0, and kept forever.
  *
- * Every write is the Session's producer's: its owner's identity (0.3: the
- * owner's runner acts as them) presenting the current claim, so a runner that
- * lost the claim cannot commit. A Session being released (moving to another
- * runner) still accepts its holder's uploads, so the handoff can pack what
- * the old runner holds. Until N1 this fence is advisory against the owner's
- * own clients (the runner id is on the listing row, the generation is a small
- * counter); it orders producers, it does not authenticate them. HOOK(N1):
- * when runner tokens land, the caller is the runner itself and its id must
- * equal `claim.runnerId`.
+ * One body is staged by a client instead: a `message.submit` queued through
+ * `sessions.command` with its body inline (`uploadedBy: "client"`), so the
+ * Session's runner, which never wrote it, can read it back
+ * (`commandArtifact`, runner-only and claim-fenced) before delivery.
+ *
+ * Every write is the Session's producer's, presenting the current claim, so a
+ * runner that lost the claim cannot commit. The producer is either the runner
+ * itself (a runner token: its id must equal `claim.runnerId`, its owner must
+ * own the Session and still see its project), or the Session's owner (a
+ * person token; against the owner's own clients this fence is advisory: the
+ * runner id is on the listing row, the generation a small counter). A Session
+ * being released (moving to another runner) still accepts its holder's
+ * uploads, so the handoff can pack what the old runner holds.
  *
  * Objects are write-once: a key a committed row already names is never signed
  * for upload again (`authorizeSessionUpload` answers `committed`).
@@ -56,7 +60,13 @@ import {
 import { internal } from "./_generated/api";
 import type { DataModel, Doc } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
-import { requireSessionActor } from "./lib/auth";
+import { findVisibleProject, requireIdentity, requireSessionActor } from "./lib/auth";
+import {
+  isRunnerIdentity,
+  requireRunner,
+  requireRunnerForWrite,
+  type CallingRunner,
+} from "./lib/runnerAuth";
 import { nullable } from "./lib/validators";
 
 export type TranscriptErrorCode =
@@ -102,15 +112,46 @@ function positiveInteger(value: number, name: string): number {
 
 /**
  * The Session, its project and its intake head, when the caller is its
- * producer: the Session's owner presenting the current, active claim.
+ * producer presenting the current claim (`active`, or `releasing` during a
+ * handoff):
+ *
+ * - a runner token: the runner and its owner's account are live
+ *   (`requireRunner`), the Session is live, its owner's, in a project the
+ *   owner can still see, and the claim is this very runner's at
+ *   `fence.generation`. Another person's Session reads as unclaimed, as
+ *   `commandArtifact` answers: its existence is not this runner's to learn.
+ * - any other identity: the Session's owner (`requireSessionActor`).
+ *
+ * Mutations pass `requireRunnerForWrite`, as every runner mutation starts.
  */
-async function requireSessionProducer(
-  ctx: ReadCtx,
+async function requireSessionProducer<C extends ReadCtx>(
+  ctx: C,
   sessionId: string,
   fence: { runnerId: string; generation: number },
+  resolveRunner: (ctx: C) => Promise<CallingRunner> = requireRunner,
 ): Promise<{ session: Doc<"sessions">; project: Doc<"projects">; intake: Doc<"sessionIntake"> }> {
+  const identity = await requireIdentity(ctx);
   if (!isUuid(sessionId)) throw invalid("sessionId must be a lowercase UUID");
-  const { session, project } = await requireSessionActor(ctx, sessionId);
+  const caller = isRunnerIdentity(identity) ? await resolveRunner(ctx) : null;
+  let session: Doc<"sessions">;
+  let project: Doc<"projects">;
+  if (caller === null) {
+    ({ session, project } = await requireSessionActor(ctx, sessionId));
+  } else {
+    const row = await ctx.db
+      .query("sessions")
+      .withIndex("by_uuid", (q) => q.eq("id", sessionId))
+      .unique();
+    const visible =
+      row === null || row.deletedAt !== null || row.ownerUserId !== caller.ownerUserId
+        ? null
+        : await findVisibleProject(ctx, caller.ownerUserId, row.projectId);
+    if (row === null || visible === null) {
+      throw transcriptError("not_claimed", "No runner holds this session.");
+    }
+    session = row;
+    project = visible;
+  }
   const intake = await ctx.db
     .query("sessionIntake")
     .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
@@ -118,7 +159,11 @@ async function requireSessionProducer(
   if (intake === null || intake.state === "released") {
     throw transcriptError("not_claimed", "No runner holds this session.");
   }
-  if (intake.claim.runnerId !== fence.runnerId || intake.claim.generation !== fence.generation) {
+  if (
+    intake.claim.runnerId !== fence.runnerId ||
+    intake.claim.generation !== fence.generation ||
+    (caller !== null && caller.runnerId !== fence.runnerId)
+  ) {
     throw transcriptError("stale_claim", "This runner no longer holds this session.");
   }
   return { session, project, intake };
@@ -190,9 +235,10 @@ type StagedArtifactArgs = {
 /**
  * Stage bodies for one Session, idempotently by `(sessionId, digest)`. A body
  * whose referencing event a committed segment already covers is not staged:
- * it is in that pack. The caller has checked the producer fence.
+ * it is in that pack. The caller has checked the producer fence, or (for a
+ * command's inline body, `sessions.command`) that it may command the Session.
  */
-async function stageArtifactRows(
+export async function stageArtifactRows(
   ctx: { db: GenericDatabaseWriter<DataModel> },
   scope: { sessionId: string; projectId: string },
   artifacts: readonly StagedArtifactArgs[],
@@ -269,7 +315,12 @@ async function stageArtifactRows(
 export const stageArtifacts = mutation({
   args: { sessionId: v.string(), claim, artifacts: v.array(stagedArtifact) },
   handler: async (ctx, args) => {
-    const { session } = await requireSessionProducer(ctx, args.sessionId, args.claim);
+    const { session } = await requireSessionProducer(
+      ctx,
+      args.sessionId,
+      args.claim,
+      requireRunnerForWrite,
+    );
     return stageArtifactRows(
       ctx,
       { sessionId: session.id, projectId: session.projectId },
@@ -277,6 +328,58 @@ export const stageArtifacts = mutation({
       "runner",
       Date.now(),
     );
+  },
+});
+
+/** A staged body the claimed runner hydrates before it delivers the command that references it. */
+export type CommandArtifactBody = { digest: string; mediaType: string; body: string };
+
+/**
+ * A staged inline body, for the runner holding the Session's claim: how a
+ * command queued with its body (`sessions.command`'s `artifact`) reaches a
+ * runner that never wrote it. The runner writes it to its own artifact store
+ * (which re-verifies the digest) before delivery. `null` when nothing inline
+ * is staged under `digest` (never staged, spilled, or swept after a pack).
+ *
+ * Runner-only (a runner token), and fenced like an accept: the Session must
+ * be the runner owner's in a project they can still see, and the claim
+ * this runner's at `generation`.
+ */
+export const commandArtifact = query({
+  args: { sessionId: v.string(), generation: v.number(), digest: v.string() },
+  handler: async (ctx, args): Promise<CommandArtifactBody | null> => {
+    const caller = await requireRunner(ctx);
+    if (!isUuid(args.sessionId)) throw invalid("sessionId must be a lowercase UUID");
+    if (!isArtifactDigest(args.digest)) throw invalid("digest must be sha256:<hex>");
+    const session = await ctx.db
+      .query("sessions")
+      .withIndex("by_uuid", (q) => q.eq("id", args.sessionId))
+      .unique();
+    const intake =
+      session === null ||
+      session.deletedAt !== null ||
+      session.ownerUserId !== caller.ownerUserId ||
+      (await findVisibleProject(ctx, caller.ownerUserId, session.projectId)) === null
+        ? null
+        : await ctx.db
+            .query("sessionIntake")
+            .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
+            .unique();
+    // Another person's Session reads as unclaimed: its existence is not this runner's to learn.
+    if (intake === null || intake.state === "released") {
+      throw transcriptError("not_claimed", "No runner holds this session.");
+    }
+    if (intake.claim.runnerId !== caller.runnerId || intake.claim.generation !== args.generation) {
+      throw transcriptError("stale_claim", "This runner no longer holds this session.");
+    }
+    const row = await ctx.db
+      .query("transcriptArtifacts")
+      .withIndex("by_session_digest", (q) =>
+        q.eq("sessionId", args.sessionId).eq("digest", args.digest),
+      )
+      .first();
+    if (row === null || row.body === null) return null;
+    return { digest: row.digest, mediaType: row.mediaType, body: row.body };
   },
 });
 
@@ -298,7 +401,12 @@ export const commitSegment = mutation({
     digests: v.array(v.string()),
   },
   handler: async (ctx, args): Promise<SegmentCommitResult> => {
-    const { session, intake } = await requireSessionProducer(ctx, args.sessionId, args.claim);
+    const { session, intake } = await requireSessionProducer(
+      ctx,
+      args.sessionId,
+      args.claim,
+      requireRunnerForWrite,
+    );
     if (!isUuid(args.segmentId)) throw invalid("segmentId must be a lowercase UUID");
     positiveInteger(args.firstSequence, "firstSequence");
     positiveInteger(args.lastSequence, "lastSequence");
@@ -414,7 +522,12 @@ export const commitPiLogSegment = mutation({
     sha256: v.string(),
   },
   handler: async (ctx, args): Promise<SegmentCommitResult> => {
-    const { session } = await requireSessionProducer(ctx, args.sessionId, args.claim);
+    const { session } = await requireSessionProducer(
+      ctx,
+      args.sessionId,
+      args.claim,
+      requireRunnerForWrite,
+    );
     nonNegativeInteger(args.startOffset, "startOffset");
     nonNegativeInteger(args.endOffset, "endOffset");
     if (args.endOffset <= args.startOffset) throw invalid("The range is empty");

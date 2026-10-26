@@ -10,6 +10,7 @@ import {
   isOperationUnavailable,
   OperationUnavailableError,
   REMOTE_HOST_UPDATE_UNAVAILABLE,
+  SESSION_READ_VERBS,
   type ActiveAddHost,
   type AddHostEvent,
   type AddHostFacts,
@@ -50,6 +51,8 @@ import {
   type HostHandlers,
 } from "./host-handlers";
 import type { AccountPort } from "./account-port";
+import type { RunnerAccountPort } from "./runner-account-port";
+import type { CloudCheckoutPort } from "./cloud-checkout-port";
 import type { BrowserShortcutsPort } from "./browser-shortcuts-port";
 import type { RemoteHostsPort } from "./remote-hosts-port";
 
@@ -183,6 +186,25 @@ describe("the map", () => {
     expect(Object.keys(handlers()).toSorted()).toEqual([...HOST_HANDLER_KEYS].toSorted());
   });
 
+  it("forwards a composition's optional entity id source to the board map", async () => {
+    const newId = vi.fn(() => "composition-ticket");
+    const map = handlers({ newId });
+    const { ticket: createdTicket } = await map["board.createTicket"](
+      {
+        projectId: PROJECT,
+        commandId: "composition-create",
+        status: "todo",
+        title: "Composition id",
+        body: "",
+        labels: [],
+        priority: "medium",
+      },
+      USER,
+    );
+    expect(createdTicket.id).toBe("composition-ticket");
+    expect(newId).toHaveBeenCalledOnce();
+  });
+
   it("refuses to build without the busy-worktree guard, for a JavaScript caller too", () => {
     expect(() => handlers({ busyWorktreeSites: undefined as never })).toThrow(
       "The busy-worktree supplier is required.",
@@ -217,7 +239,8 @@ describe("the map", () => {
     expect(await unavailable(() => empty["worktree.trimSettings"](undefined, WINDOW))).toBe(
       "The board is unavailable: the database did not open",
     );
-    // The desktop serves the socket's Session reads over no network door.
+    // The Session reads answer as before until the agent command service
+    // serves them (VC-894): the map is sealed without them.
     expect(
       await unavailable(() => empty["session.list"]({ workspaceId: PROJECT, args: {} }, USER)),
     ).toBe("Session reads are unavailable on this transport");
@@ -658,26 +681,17 @@ describe("Session commands", () => {
     );
   });
 
-  it("runs the socket's Session reads Workspace-scoped, through the port it was given (VC-663)", async () => {
-    const answer = { v: 1, ok: true, data: { sessions: [], hidden: 0 } } as const;
-    const sessionReads = vi.fn(async () => answer);
-    const map = handlers({ sessionReads });
-    for (const verb of [
-      "session.list",
-      "session.show",
-      "session.peek",
-      "session.answer",
-    ] as const) {
-      await expect(map[verb]({ workspaceId: PROJECT, args: { id: "a1" } }, USER)).resolves.toBe(
-        answer,
+  // The reads' ports are the agent command service's, which serves them
+  // (VC-894, `agent-dispatch/verbs.ts`): the map is sealed without them, and
+  // a router reaching one before the service exists hears the unavailable
+  // words the sealed entry always answered, unchanged on the wire.
+  it("leaves the Session reads for the agent command service to serve (VC-894)", async () => {
+    const map = handlers();
+    for (const verb of SESSION_READ_VERBS) {
+      expect(await unavailable(() => map[verb]({ workspaceId: PROJECT, args: {} }, USER))).toBe(
+        "Session reads are unavailable on this transport",
       );
     }
-    expect(sessionReads.mock.calls).toEqual([
-      ["session.list", PROJECT, { id: "a1" }],
-      ["session.show", PROJECT, { id: "a1" }],
-      ["session.peek", PROJECT, { id: "a1" }],
-      ["session.answer", PROJECT, { id: "a1" }],
-    ]);
   });
 
   // The one start both agent doors reach (VC-923): the facade, the kickoff,
@@ -1578,6 +1592,11 @@ describe("the Volli Cloud account", () => {
     () => map["cloud.reportUnsavedWrites"]({ count: 1 }, WINDOW),
     () => map["cloud.saveSnapshot"]({ text: "{}" }, WINDOW),
     () => map["cloud.readSnapshot"](undefined, WINDOW),
+    () => map["account.githubSubscribe"](undefined, WINDOW, sink()),
+    () => map["account.githubConnect"](undefined, WINDOW),
+    () => map["account.githubInstall"](undefined, WINDOW),
+    () => map["account.githubCancel"](undefined, WINDOW),
+    () => map["account.githubDisconnect"](undefined, WINDOW),
   ];
 
   it("answers unavailable for every key on a host with no account service (hostd)", async () => {
@@ -1607,6 +1626,13 @@ describe("the Volli Cloud account", () => {
       reportUnsavedWrites: vi.fn(),
       saveSnapshot: vi.fn(),
       readSnapshot: vi.fn(() => "{}"),
+      github: {
+        subscribe: vi.fn(() => () => {}),
+        connect: vi.fn(),
+        install: vi.fn(),
+        cancel: vi.fn(),
+        disconnect: vi.fn(),
+      },
     } satisfies AccountPort;
     const map = handlers({ account: port });
     const snapshots = sink();
@@ -1616,6 +1642,16 @@ describe("the Volli Cloud account", () => {
     expect(snapshots.emit).toHaveBeenCalledWith(SNAPSHOT);
     expect(await map["account.signIn"]({ connection: "google" }, WINDOW)).toBeNull();
     expect(port.signIn).toHaveBeenCalledWith("google");
+    await map["account.signIn"](
+      { connection: "github", inviteCode: "preview-code-123456" },
+      WINDOW,
+    );
+    expect(port.signIn).toHaveBeenCalledWith("github", "preview-code-123456");
+    await map["account.signIn"](
+      { connection: "github", acceptedAgreementVersion: "current-version" },
+      WINDOW,
+    );
+    expect(port.signIn).toHaveBeenCalledWith("github", undefined, "current-version");
     for (const key of [
       "account.cancelSignIn",
       "account.signOut",
@@ -1646,5 +1682,149 @@ describe("the Volli Cloud account", () => {
     expect(await map["cloud.saveSnapshot"]({ text: '{"v":1}' }, WINDOW)).toBeNull();
     expect(port.saveSnapshot).toHaveBeenCalledWith('{"v":1}');
     expect(await map["cloud.readSnapshot"](undefined, WINDOW)).toEqual({ text: "{}" });
+  });
+
+  it("forwards the GitHub half to the port's own and feeds the window its snapshots", async () => {
+    const GITHUB = {
+      state: "ready",
+      connection: { status: "active", login: "dana", name: null },
+      installations: [],
+      waiting: null,
+      requested: false,
+      failure: null,
+    } as const;
+    const unsubscribe = vi.fn();
+    const github = {
+      subscribe: vi.fn((listener: (snapshot: typeof GITHUB) => void) => {
+        listener(GITHUB);
+        return unsubscribe;
+      }),
+      connect: vi.fn(async () => {}),
+      install: vi.fn(async () => {}),
+      cancel: vi.fn(),
+      disconnect: vi.fn(async () => {}),
+    };
+    const port = {
+      snapshot: vi.fn(() => SNAPSHOT),
+      subscribe: vi.fn(() => () => {}),
+      signIn: vi.fn(),
+      cancelSignIn: vi.fn(),
+      signOut: vi.fn(),
+      requestDeletion: vi.fn(),
+      cancelDeletion: vi.fn(),
+      accessToken: vi.fn(async () => ({ kind: "signed-out" as const })),
+      launch: vi.fn(() => ({ store: "local" as const })),
+      relaunch: vi.fn(),
+      reportUnsavedWrites: vi.fn(),
+      saveSnapshot: vi.fn(),
+      readSnapshot: vi.fn(() => null),
+      github,
+    } satisfies AccountPort;
+    const map = handlers({ account: port });
+    const snapshots = sink();
+
+    expect(await map["account.githubSubscribe"](undefined, WINDOW, snapshots)).toBe(unsubscribe);
+    expect(snapshots.emit).toHaveBeenCalledWith(GITHUB);
+    for (const key of [
+      "account.githubConnect",
+      "account.githubInstall",
+      "account.githubCancel",
+      "account.githubDisconnect",
+    ] as const) {
+      expect(await map[key](undefined, WINDOW)).toBeNull();
+    }
+    for (const method of ["connect", "install", "cancel", "disconnect"] as const) {
+      expect(github[method]).toHaveBeenCalledOnce();
+    }
+  });
+});
+
+// This Mac as a runner (VC-895): desktop main's Mac runner, through its port;
+// absent everywhere else.
+describe("this Mac as a runner", () => {
+  const SNAPSHOT = {
+    state: "online",
+    runnerId: "runner-1",
+    runnerName: "Dana's MacBook",
+    since: 1_700_000_000_000,
+    waitingFacts: 0,
+    problem: null,
+    message: null,
+  } as const;
+
+  const everyCall = (map: ReturnType<typeof handlers>): (() => unknown)[] => [
+    () => map["runners.thisMac"](undefined, WINDOW),
+    () => map["runners.subscribeThisMac"](undefined, WINDOW, sink()),
+    () => map["runners.addThisMac"](undefined, WINDOW),
+    () => map["runners.removeThisMac"](undefined, WINDOW),
+  ];
+
+  it("answers unavailable for every key on a host with no Mac runner (hostd)", async () => {
+    for (const map of [handlers(), handlers({ runners: null })]) {
+      for (const call of everyCall(map)) {
+        expect(await unavailable(call)).toBe("Runners are unavailable on this host");
+      }
+    }
+  });
+
+  it("forwards each command to the port and feeds the window every snapshot", async () => {
+    const unsubscribe = vi.fn();
+    const port = {
+      thisMac: vi.fn(() => SNAPSHOT),
+      subscribeThisMac: vi.fn((listener: (snapshot: typeof SNAPSHOT) => void) => {
+        listener(SNAPSHOT);
+        return unsubscribe;
+      }),
+      addThisMac: vi.fn(async () => {}),
+      removeThisMac: vi.fn(),
+    } satisfies RunnerAccountPort;
+    const map = handlers({ runners: port });
+    const snapshots = sink();
+
+    expect(await map["runners.thisMac"](undefined, WINDOW)).toEqual(SNAPSHOT);
+    expect(await map["runners.subscribeThisMac"](undefined, WINDOW, snapshots)).toBe(unsubscribe);
+    expect(snapshots.emit).toHaveBeenCalledWith(SNAPSHOT);
+    expect(await map["runners.addThisMac"](undefined, WINDOW)).toBeNull();
+    expect(port.addThisMac).toHaveBeenCalledOnce();
+    expect(await map["runners.removeThisMac"](undefined, WINDOW)).toBeNull();
+    expect(port.removeThisMac).toHaveBeenCalledOnce();
+  });
+});
+
+// A cloud project's folder on this Mac (VC-895 N2-3): desktop main, through
+// its port; absent everywhere else.
+describe("a cloud project's folder on this Mac", () => {
+  const CLOUD_PROJECT = "11111111-1111-4111-8111-111111111111";
+
+  it("answers unavailable for every key on a host with no project folders (hostd)", async () => {
+    for (const map of [handlers(), handlers({ checkouts: null })]) {
+      for (const call of [
+        () => map["checkouts.status"]({ projectId: CLOUD_PROJECT }, WINDOW),
+        () => map["checkouts.chooseFolder"]({ projectId: CLOUD_PROJECT }, WINDOW),
+      ]) {
+        expect(await unavailable(call)).toBe("Project folders are unavailable on this host");
+      }
+    }
+  });
+
+  it("forwards the project to the port and answers its path-free result", async () => {
+    const port = {
+      status: vi.fn(() => ({ state: "missing" as const })),
+      chooseFolder: vi.fn(async () => ({
+        outcome: "chosen" as const,
+        projectRepoId: CLOUD_PROJECT,
+      })),
+    } satisfies CloudCheckoutPort;
+    const map = handlers({ checkouts: port });
+
+    expect(await map["checkouts.status"]({ projectId: CLOUD_PROJECT }, WINDOW)).toEqual({
+      state: "missing",
+    });
+    expect(port.status).toHaveBeenCalledWith(CLOUD_PROJECT);
+    expect(await map["checkouts.chooseFolder"]({ projectId: CLOUD_PROJECT }, WINDOW)).toEqual({
+      outcome: "chosen",
+      projectRepoId: CLOUD_PROJECT,
+    });
+    expect(port.chooseFolder).toHaveBeenCalledWith(CLOUD_PROJECT);
   });
 });

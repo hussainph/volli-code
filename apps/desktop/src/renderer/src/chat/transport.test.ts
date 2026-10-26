@@ -7,7 +7,33 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { ChatSessionTransport } from "@volli/session-presentation";
 
+import { LOCAL_LAUNCH } from "@volli/shared";
+
 import { rememberRemoteProject, resetRemoteOwnersForTest } from "@renderer/lib/remote-owners";
+import { adoptLaunch } from "@renderer/stores/launch";
+
+// Each case owns a fresh window bridge; keep the real IPC codec, not the
+// production singleton bound to the first case's already-destroyed window.
+vi.mock("@renderer/lib/session-rpc-ipc-link", async (original) => {
+  const actual = await original<typeof import("@renderer/lib/session-rpc-ipc-link")>();
+  return {
+    ...actual,
+    sessionRpcClient: () => actual.createSessionRpcClient(window.api.sessionRpc),
+  };
+});
+
+const cloud = vi.hoisted(() => ({
+  session: null as unknown,
+  transport: vi.fn((..._args: unknown[]) => ({ streamRecovery: "host-link" })),
+}));
+vi.mock("@renderer/lib/cloud-client", async (original) => ({
+  ...(await original<object>()),
+  cloudSession: () => cloud.session,
+}));
+vi.mock("@renderer/lib/cloud-session-transport", async (original) => ({
+  ...(await original<object>()),
+  cloudChatTransport: cloud.transport,
+}));
 
 import {
   browserChatTransport,
@@ -209,5 +235,45 @@ describe("chatTransportFor (VC-713)", () => {
         command: { kind: "session.stop" },
       }),
     ).rejects.toThrow("hetzner-1 isn’t connected");
+  });
+});
+
+describe("chatTransportFor in a cloud launch (VC-895)", () => {
+  afterEach(() => {
+    adoptLaunch(LOCAL_LAUNCH);
+    cloud.session = null;
+    cloud.transport.mockClear();
+    vi.unstubAllGlobals();
+  });
+
+  it("answers Volli Cloud's transport, handing it only this Mac's create and attach", async () => {
+    stubWindow();
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "https://example.convex.cloud" });
+    cloud.session = { client: {}, api: {} };
+    // Even a project this window once knew on a remote host is Volli Cloud's here.
+    rememberRemoteProject("remote", { hostId: "box", hostName: "hetzner-1" });
+    expect(chatTransportFor("remote").streamRecovery).toBe("host-link");
+    expect(cloud.transport).toHaveBeenCalledTimes(1);
+    const [session, local] = cloud.transport.mock.calls[0]! as [
+      unknown,
+      Pick<ChatSessionTransport, "createSession" | "attachSession">,
+    ];
+    expect(session).toBe(cloud.session);
+    expect(Object.keys(local).toSorted()).toEqual(["attachSession", "createSession"]);
+    expect(typeof local.createSession).toBe("function");
+    expect(typeof local.attachSession).toBe("function");
+    // The Island's Stop has no cloud outcome to report yet: it stays refused.
+    await expect(
+      sessionCommandFor("p")({ commandId: "c", sessionId: "s", command: { kind: "session.stop" } }),
+    ).rejects.toThrow("Not available yet in cloud");
+    expect(window.api.sessionRpc.request).not.toHaveBeenCalled();
+    // Merely reading a cloud Session never even opens the IPC link. Only
+    // explicit runner-originated create/attach reaches these machine doors.
+    vi.mocked(window.api.sessionRpc.request).mockResolvedValue({ ok: true, data: null });
+    await local.createSession({ operationId: "born", projectId: "p", ticketId: null, title: null });
+    await local.attachSession({ operationId: "attach", sessionId: "s" });
+    expect(
+      vi.mocked(window.api.sessionRpc.request).mock.calls.map(([request]) => request.path),
+    ).toEqual(["sessions.create", "sessions.attach"]);
   });
 });

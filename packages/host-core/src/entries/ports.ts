@@ -16,6 +16,7 @@ export {
   type HostEventBus,
   type HostEventMap,
   NO_POWER_EVENTS,
+  type PowerPort,
   type SecretKeyPort,
   SecretKeyUnavailableError,
 } from "../ports";

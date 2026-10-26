@@ -53,6 +53,7 @@ import {
 } from "../../../session-engine/src/observation-translation";
 import {
   askUserInteractionId,
+  LOCAL_RUNNER,
   readInteractionAnswers,
   type SessionInteractionPrompt,
   codeModeSurfaceFor,
@@ -78,10 +79,13 @@ import { MIGRATIONS, SCHEMA_HEAD } from "./migrations";
 import { insertProject } from "./projects-repo";
 import { MIN_READER_VERSION_KEY, readMinReaderVersion } from "./schema-compatibility";
 import { hasSecret, writeSecret } from "./secrets-repo";
-import { testProject } from "./test-helpers";
+import { testProject, testTicket } from "./test-helpers";
+import { createCloudSessionOwner, createLocalSessionEngine } from "../cloud-store/owner";
+import { createRunnerPathRegistry } from "../cloud-store/paths";
+import { sqliteDrainCursorStore } from "../cloud-runner/sqlite-stores";
 import { movedPiBash, MOVED_BASH_TOOLS } from "./fixtures/moved-pi-bash";
 import { recoveredPiQuestion } from "./fixtures/recovered-pi-question";
-import { listTicketsByProject } from "./tickets-repo";
+import { insertTicket, listTicketsByProject } from "./tickets-repo";
 import {
   silentEndSession,
   FATAL_DIAGNOSTIC,
@@ -120,6 +124,7 @@ const KNOWN_HAZARDS: Readonly<Record<string, { release: string; bundle?: readonl
     bundle: [
       "Data document is missing table workspace_epochs.",
       "Data document is missing table session_follow_up_queue.",
+      "Data document is missing table session_follow_up_identities.",
     ],
   },
   // v0.2.1-canary.7 (schema 57) has v0.2.1's database and backup modules
@@ -129,6 +134,7 @@ const KNOWN_HAZARDS: Readonly<Record<string, { release: string; bundle?: readonl
     bundle: [
       "Data document is missing table workspace_epochs.",
       "Data document is missing table session_follow_up_queue.",
+      "Data document is missing table session_follow_up_identities.",
     ],
   },
 };
@@ -147,6 +153,7 @@ function releasePolicyRemedy(ref: string): string {
 
 const HOOKS = new URL("../../scripts/n1/hooks.mjs", import.meta.url).href;
 const CHILD = new URL("../../scripts/n1/child.mjs", import.meta.url).pathname;
+const CLOUD_SESSION_CHILD = new URL("./fixtures/cloud-session-n1.mjs", import.meta.url).pathname;
 const CODE_MODE_CHILD = new URL("./fixtures/n1-code-mode-child.mjs", import.meta.url).pathname;
 const SILENT_END_CHILD = new URL("../../scripts/n1/silent-end-child.mjs", import.meta.url).pathname;
 const SILENT_END_SCENARIOS: SilentEndScenario[] = ["fatal attachment", "Stop racing finish"];
@@ -440,6 +447,20 @@ async function headProfile(): Promise<void> {
   const db = openVolliDb(dbPath);
   try {
     insertProject(db, testProject({ id: PROJECT_ID, path: join(root, "repo") }));
+    // N−1 does not know runner-local paths/provenance. Its ordinary local
+    // writes must leave these opaque machine rows untouched (migration 066).
+    db.prepare("INSERT INTO project_checkout_paths VALUES (?, ?, ?, ?, 'main', 1)").run(
+      "n1-repo",
+      PROJECT_ID,
+      "n1-runner",
+      join(root, "repo"),
+    );
+    db.prepare(
+      "INSERT INTO working_copy_paths (working_copy_id,ticket_id,project_repo_id,runner_id,abs_path,adopted_from_frozen) VALUES (?, ?, ?, ?, ?, 1)",
+    ).run("n1-copy", "cloud-only-ticket", "n1-repo", "n1-runner", join(root, "cloud-copy"));
+    db.prepare(
+      "INSERT INTO cloud_shadow_rows VALUES ('compatibility-probe', 'cloud-only-id', 'cloud-owner')",
+    ).run();
     const ticket = createTicketCommand(
       db,
       { id: "ticket-head", projectId: PROJECT_ID, title: "Written by head", status: "todo" },
@@ -474,6 +495,105 @@ async function headProfile(): Promise<void> {
     db.close();
   }
 }
+
+const CLOUD_PROJECT_ID = "project-cloud-compat";
+const CLOUD_TICKET_ID = "ticket-cloud-compat";
+const CLOUD_SESSION_ID = "session-cloud-compat";
+const CLOUD_OWNER_ID = "owner-cloud-compat";
+
+/** Real owner birth/cursor over identity-only shadows, beside the frozen fixture. */
+async function headCloudProfile(): Promise<void> {
+  await headProfile();
+  const checkoutPath = join(root, "cloud-repo");
+  mkdirSync(checkoutPath);
+  const db = openVolliDb(dbPath);
+  try {
+    insertProject(
+      db,
+      testProject({ id: CLOUD_PROJECT_ID, path: checkoutPath, name: "Volli Cloud project" }),
+    );
+    insertTicket(
+      db,
+      testTicket(CLOUD_PROJECT_ID, {
+        id: CLOUD_TICKET_ID,
+        ticketNumber: -1,
+        title: "Volli Cloud ticket",
+        body: "",
+        usesWorktree: true,
+      }),
+    );
+    const shadow = db.prepare(
+      "INSERT INTO cloud_shadow_rows(kind,id,owner_user_id) VALUES (?,?,?)",
+    );
+    shadow.run("project", CLOUD_PROJECT_ID, CLOUD_OWNER_ID);
+    shadow.run("ticket", CLOUD_TICKET_ID, CLOUD_OWNER_ID);
+    const registry = createRunnerPathRegistry(db, { runnerId: "cloud-compat-runner" });
+    registry.checkouts.register({
+      projectId: CLOUD_PROJECT_ID,
+      projectRepoId: CLOUD_PROJECT_ID,
+      absPath: checkoutPath,
+    });
+    registry.workingCopies.register({
+      ticketId: CLOUD_TICKET_ID,
+      projectRepoId: CLOUD_PROJECT_ID,
+      absPath: join(root, "owner-copy"),
+      workingCopyId: "cloud-compat-copy",
+      branch: "volli/VC-1-cloud",
+      baseBranch: "main",
+    });
+    const cursors = sqliteDrainCursorStore(db, () => NOW);
+    const owner = createCloudSessionOwner({
+      db,
+      engine: headEngine(db, "cloud-compat"),
+      ownerUserId: CLOUD_OWNER_ID,
+      adopt: (sessionId) =>
+        cursors.save({
+          sessionId,
+          ownerUserId: CLOUD_OWNER_ID,
+          generation: 0,
+          acceptedThrough: 0,
+          blocked: null,
+        }),
+    });
+    await owner.engine.createSession({
+      commandId: "cloud-compat-birth",
+      requestedSessionId: CLOUD_SESSION_ID,
+      projectId: CLOUD_PROJECT_ID,
+      ticketId: CLOUD_TICKET_ID,
+      role: "ticket",
+      parentSessionId: null,
+      title: "Cloud Session",
+      provenance: { ...provenance, venue: LOCAL_RUNNER },
+    });
+  } finally {
+    db.close();
+  }
+}
+
+it("builds the cloud downgrade fixture through owner birth and hides it from frozen local reads", async () => {
+  await headCloudProfile();
+  const db = openVolliDb(dbPath);
+  try {
+    const raw = headEngine(db);
+    expect(await raw.getBaseSession({ sessionId: CLOUD_SESSION_ID })).toMatchObject({
+      ownerUserId: CLOUD_OWNER_ID,
+    });
+    expect(sqliteDrainCursorStore(db).get(CLOUD_SESSION_ID)).toMatchObject({
+      ownerUserId: CLOUD_OWNER_ID,
+      acceptedThrough: 0,
+    });
+    const local = createLocalSessionEngine({ db, engine: raw });
+    expect(await local.getBaseSession({ sessionId: CLOUD_SESSION_ID })).toBeNull();
+    expect(await local.getBaseSession({ sessionId: "session-head" })).not.toBeNull();
+    expect(listTicketsByProject(db, CLOUD_PROJECT_ID)).toEqual([]);
+    expect(
+      db.prepare("SELECT body, worktree_path FROM tickets WHERE id = ?").get(CLOUD_TICKET_ID),
+    ).toEqual({ body: "", worktree_path: null });
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+  } finally {
+    db.close();
+  }
+});
 
 function countUser(messages: unknown, text: string): number {
   return (messages as { role: string; parts?: unknown; content?: unknown }[]).filter(
@@ -630,6 +750,164 @@ describe.skipIf(manifest === null)(
       ).toEqual([]);
     });
 
+    it("lets an older listing read or safely skip an owner-stamped cloud Session over identity-only shadows", async () => {
+      await headCloudProfile();
+      const { head, guarded } = await probe();
+      if (guarded && headFloor() > head) return;
+      const before = new Database(dbPath, { readonly: true });
+      let history: unknown[];
+      try {
+        history = before
+          .prepare("SELECT payload FROM session_events WHERE session_id = ? ORDER BY sequence")
+          .all(CLOUD_SESSION_ID);
+      } finally {
+        before.close();
+      }
+      const run = await n1(
+        dbPath,
+        [
+          {
+            kind: "cloudListing",
+            projectId: CLOUD_PROJECT_ID,
+            ticketId: CLOUD_TICKET_ID,
+            sessionId: CLOUD_SESSION_ID,
+            localProjectId: PROJECT_ID,
+            localSessionId: "session-head",
+          },
+        ],
+        CLOUD_SESSION_CHILD,
+      );
+      const answer = value(run, 0);
+      expect(answer.localVisible).toBe(true);
+      // Old builds may display the identity placeholders; newer frozen readers
+      // may intentionally hide them. Neither may fail the entire listing.
+      for (const key of [
+        "cloudListed",
+        "cloudReadable",
+        "shadowProjectListed",
+        "shadowTicketListed",
+      ])
+        expect(typeof answer[key]).toBe("boolean");
+      if (answer.cloudListed) expect(answer.cloudReadable).toBe(true);
+      const db = openVolliDb(dbPath);
+      try {
+        expect(
+          db
+            .prepare("SELECT payload FROM session_events WHERE session_id = ? ORDER BY sequence")
+            .all(CLOUD_SESSION_ID),
+        ).toEqual(history!);
+        expect(await headEngine(db).getBaseSession({ sessionId: CLOUD_SESSION_ID })).toMatchObject({
+          ownerUserId: CLOUD_OWNER_ID,
+        });
+        expect(sqliteDrainCursorStore(db).get(CLOUD_SESSION_ID)).toMatchObject({
+          ownerUserId: CLOUD_OWNER_ID,
+          generation: 0,
+          acceptedThrough: 0,
+        });
+        expect(
+          db
+            .prepare(
+              "SELECT kind, id, owner_user_id FROM cloud_shadow_rows WHERE id IN (?,?) ORDER BY kind",
+            )
+            .all(CLOUD_PROJECT_ID, CLOUD_TICKET_ID),
+        ).toEqual([
+          { kind: "project", id: CLOUD_PROJECT_ID, owner_user_id: CLOUD_OWNER_ID },
+          { kind: "ticket", id: CLOUD_TICKET_ID, owner_user_id: CLOUD_OWNER_ID },
+        ]);
+        expect(db.pragma("foreign_key_check")).toEqual([]);
+      } finally {
+        db.close();
+      }
+    });
+
+    it("refuses a stale steer and expired command replay through the previous runtime after reply compaction", async () => {
+      await headProfile();
+      const { head, guarded } = await probe();
+      if (guarded && headFloor() > head) return;
+      const db = openVolliDb(dbPath);
+      try {
+        const old = Date.now() - 8 * 24 * 60 * 60_000;
+        await createSqliteSessionFollowUpLedger(db).transaction("session-head", (state) => {
+          for (let i = 0; i < 70; i++) {
+            const id = `expired-queue-${i}`;
+            const message = {
+              id: `expired-message-${i}`,
+              role: "user" as const,
+              parts: [{ type: "text" as const, text: `Discard old body ${i}`.repeat(100) }],
+            };
+            state.commands[id] = {
+              signature: JSON.stringify(message),
+              result: {
+                sessionId: "session-head",
+                command: {
+                  id,
+                  sessionId: "session-head",
+                  createdAt: old + i,
+                  route: null,
+                  intent: { kind: "message.queue", message },
+                },
+                receipt: {
+                  id,
+                  commandId: id,
+                  status: "accepted",
+                  acceptedAt: old + i,
+                  recordedAt: old + i,
+                  sequence: 0,
+                  result: { kind: "message.submitted", sessionId: "session-head" },
+                },
+                throughSequence: 0,
+                refusal: null,
+              },
+            };
+          }
+          state.revision++;
+        });
+        expect(
+          await createSqliteSessionFollowUpLedger(db).transaction(
+            "session-head",
+            (state) => state.commands["expired-queue-0"]?.result.command.intent,
+            { mode: "read" },
+          ),
+        ).toEqual({
+          kind: "message.queue",
+          message: { id: "expired-message-0", role: "user", parts: [] },
+        });
+      } finally {
+        db.close();
+      }
+      const answer = value(
+        await n1(dbPath, [
+          {
+            kind: "followUpIdentityReplay",
+            sessionId: "session-head",
+            messageId: "expired-message-0",
+            queueCommandId: "expired-queue-0",
+            directory: root,
+          },
+        ]),
+        0,
+      );
+      if (head < 61) {
+        // These builds have no queued-message execution surface to replay.
+        expect(answer).toEqual({ unsupported: true });
+        return;
+      }
+      expect(answer).toMatchObject({
+        staleSteer: {
+          name: "SessionRuntimeConflictError",
+          message: expect.stringContaining("already been delivered or removed"),
+        },
+        expiredReplay: {
+          name: "SessionRuntimeCommandConflictError",
+          message: expect.stringContaining("different intent"),
+        },
+        artifactReads: 0,
+        artifactWrites: 0,
+        attaches: 0,
+      });
+      assertHeadReads(dbPath);
+    });
+
     it("keeps the author rule: N-1 writes a compatible head profile, or refuses a breaking one", async () => {
       await headProfile();
       const floor = headFloor();
@@ -674,6 +952,15 @@ describe.skipIf(manifest === null)(
           (state) => state.entries,
         );
         expect(queued).toMatchObject([{ id: "head-follow-up", state: "queued" }]);
+        expect(db.prepare("SELECT * FROM project_checkout_paths").all()).toMatchObject([
+          { project_repo_id: "n1-repo", runner_id: "n1-runner", adopted_from_frozen: 1 },
+        ]);
+        expect(db.prepare("SELECT * FROM working_copy_paths").all()).toMatchObject([
+          { working_copy_id: "n1-copy", ticket_id: "cloud-only-ticket", runner_id: "n1-runner" },
+        ]);
+        expect(db.prepare("SELECT * FROM cloud_shadow_rows").all()).toEqual([
+          { kind: "compatibility-probe", id: "cloud-only-id", owner_user_id: "cloud-owner" },
+        ]);
         expect(hasSecret(db, "n1-probe:saved")).toBe(true);
         expect(hasSecret(db, "n1-probe:kept")).toBe(false);
         const tickets = listTicketsByProject(db, PROJECT_ID);

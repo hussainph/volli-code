@@ -36,7 +36,8 @@
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
+import { LOCAL_LAUNCH, NO_AUTOMATION_TRIGGER } from "@volli/shared";
+import { adoptLaunch } from "@renderer/stores/launch";
 import { toast } from "sonner";
 import type {
   Automation,
@@ -384,6 +385,7 @@ afterEach(async () => {
   container?.remove();
   container = null;
   resetArmedRuns();
+  adoptLaunch(LOCAL_LAUNCH);
   useChatSessionsStore.setState({ sessions: {} });
   vi.unstubAllGlobals();
 });
@@ -487,6 +489,25 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
         modelOverride: null,
       }),
     );
+  });
+
+  it("the cloud command palette offers no Automation Run or authoring shortcut", async () => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    // Even a retained local cache must not advertise a cloud launch's controls.
+    useAutomationsStore.setState({ byProject: { p1: [AUTOMATION] } });
+    useProjectUiStore.getState().openTicket("p1", "t1");
+    await render(<CommandPalette open onOpenChange={() => {}} />);
+
+    expect(
+      [...document.querySelectorAll("[cmdk-group-heading]")].some(
+        (heading) => heading.textContent === "Automations",
+      ),
+    ).toBe(false);
+    const items = [...document.querySelectorAll("[cmdk-item]")];
+    expect(items.some((item) => item.textContent?.includes("New, edit, duplicate"))).toBe(false);
+    expect(items.some((item) => item.textContent?.includes("Run on VC-12"))).toBe(false);
+    expect(doors.list).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("the command palette's run-by-name row toasts in place with main's resolved name", async () => {

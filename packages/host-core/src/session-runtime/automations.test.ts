@@ -64,7 +64,9 @@ afterEach(async () => {
 const db = { name: "live" };
 const moduleInput = () => vi.mocked(createHostAutomations).mock.calls[0]![0];
 
-function fixture(options: { db?: boolean; piRuntime?: boolean; cloud?: boolean } = {}) {
+function fixture(
+  options: { db?: boolean; piRuntime?: boolean; cloud?: boolean; automations?: boolean } = {},
+) {
   const live = options.db ?? true;
   const service = { kind: "service" };
   const runner = { kind: "runner" };
@@ -104,6 +106,7 @@ function fixture(options: { db?: boolean; piRuntime?: boolean; cloud?: boolean }
     piRuntimeHost: (options.piRuntime ?? true) ? (pi as unknown as PiRuntimeHost) : null,
     homeDir: "/home",
     cloudEnabled: () => options.cloud ?? false,
+    automationsAvailable: options.automations ?? true,
     log,
   });
   // Real issued/revocable proof, with a port-only view over the degraded owner.
@@ -246,7 +249,9 @@ describe("live runtime automations", () => {
   });
 
   it("hands the cloud flag to the prompt template read", async () => {
+    // The flag alone never turns Automations off: this is still a local launch.
     const f = fixture({ cloud: true });
+    expect(f.owner.kind).toBe("live");
     f.owner.start(f.ready());
     vi.mocked(getProjectById).mockReturnValue(project);
     vi.mocked(loadPromptTemplates).mockResolvedValue({ ok: true, templates: [] });
@@ -356,6 +361,17 @@ it("joins the live Automation module before the host closes its database", async
 });
 
 describe("degraded runtime automations", () => {
+  it("composes no local module in a cloud launch, whatever the cloud flag says (VC-952)", () => {
+    const f = fixture({ cloud: true, automations: false });
+    expect(createHostAutomations).not.toHaveBeenCalled();
+    expect(f.owner.kind).toBe("degraded");
+    expect(f.owner).not.toHaveProperty("service");
+    expect(f.owner).not.toHaveProperty("execution");
+    // The proof is still checked; nothing arms, schedules or settles a Run.
+    f.owner.start(f.ready({ sessions: null, runtime: null }));
+    expect(f.owner.kind).toBe("degraded");
+  });
+
   it("composes no module and offers no service, runner or pending Runs", () => {
     const f = fixture({ db: false });
     expect(createHostAutomations).not.toHaveBeenCalled();

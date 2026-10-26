@@ -36,6 +36,7 @@ import {
 import { describe, expect, it, vi } from "vite-plus/test";
 import { z } from "zod";
 
+import { accountGithubSnapshotSchema } from "./account-schema";
 import { LOCAL_DESKTOP_CALLER, type RouterCaller } from "./catalog";
 import {
   createDesktopRouter,
@@ -293,6 +294,36 @@ const CLOUD_LAUNCH = {
   backendUrl: "http://127.0.0.1:3210",
 } as const;
 
+/** The account's GitHub half (VC-897): a connection and its installations, never a token. */
+const GITHUB = {
+  state: "ready",
+  connection: { status: "active", login: "dana", name: "Dana" },
+  installations: [
+    {
+      installationId: "42",
+      accountLogin: "acme",
+      accountType: "org",
+      repositorySelection: "selected",
+      suspended: false,
+      configureUrl: "https://github.com/organizations/acme/settings/installations/42",
+    },
+  ],
+  waiting: null,
+  requested: false,
+  failure: null,
+} as const;
+
+/** This Mac's runner snapshot main hands the window (VC-895): never its credential. */
+const THIS_MAC = {
+  state: "online",
+  runnerId: "runner-1",
+  runnerName: "Dana's MacBook",
+  since: 1_900_000_000_000,
+  waitingFacts: 0,
+  problem: null,
+  message: null,
+} as const;
+
 function recordingHandlers(fixture: Host): DesktopRouterHandlers {
   const record =
     <Output>(key: string, output: Output) =>
@@ -368,6 +399,20 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "cloud.reportUnsavedWrites": record("cloud.reportUnsavedWrites", null),
     "cloud.saveSnapshot": record("cloud.saveSnapshot", null),
     "cloud.readSnapshot": record("cloud.readSnapshot", { text: null }),
+    "account.githubSubscribe": stream("account.githubSubscribe", GITHUB),
+    "account.githubConnect": record("account.githubConnect", null),
+    "account.githubInstall": record("account.githubInstall", null),
+    "account.githubCancel": record("account.githubCancel", null),
+    "account.githubDisconnect": record("account.githubDisconnect", null),
+    "runners.thisMac": record("runners.thisMac", THIS_MAC),
+    "runners.subscribeThisMac": stream("runners.subscribeThisMac", THIS_MAC),
+    "runners.addThisMac": record("runners.addThisMac", null),
+    "runners.removeThisMac": record("runners.removeThisMac", null),
+    "checkouts.status": record("checkouts.status", { state: "missing" }),
+    "checkouts.chooseFolder": record("checkouts.chooseFolder", {
+      outcome: "chosen",
+      projectRepoId: "repo-1",
+    }),
     ...fixture.overrides,
   };
 }
@@ -1253,6 +1298,16 @@ describeContract<Host, DesktopRouter>(
         });
       }
       expect(fixture.calls).toHaveLength(7);
+      await client.account.signIn.mutate({
+        connection: "google",
+        inviteCode: "preview-code-123456",
+        acceptedAgreementVersion: "current-version",
+      });
+      expect(fixture.calls.at(-1)?.input).toEqual({
+        connection: "google",
+        inviteCode: "preview-code-123456",
+        acceptedAgreementVersion: "current-version",
+      });
     });
 
     // VC-889: the window's own Volli Cloud client and the launch's store.
@@ -1289,6 +1344,15 @@ describeContract<Host, DesktopRouter>(
       expect(fixture.calls).toHaveLength(6);
     });
 
+    it("carries an explicit deployment and actions URL over the real desktop transport", async () => {
+      for (const deployment of ["cloud", "local"] as const) {
+        const launch = { ...CLOUD_LAUNCH, deployment, siteUrl: "https://actions.example.net" };
+        const fixture = host(LOCAL_DESKTOP_CALLER, { "cloud.launch": () => launch });
+        const client = await connect(fixture);
+        expect(await client.cloud.launch.query()).toEqual(launch);
+      }
+    });
+
     it("refuses a token answer or a launch that is not one of their shapes", async () => {
       for (const answer of [
         { kind: "token", token: "", expiresAt: 1 },
@@ -1316,6 +1380,124 @@ describeContract<Host, DesktopRouter>(
         kind: "signed-out",
       });
       expect(await client.cloud.launch.query()).toEqual({ store: "local" });
+    });
+
+    it("streams the account's GitHub snapshot and sends its four commands", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      const stream = collect((handlers) =>
+        client.account.githubSubscribe.subscribe(undefined, handlers),
+      );
+      await vi.waitFor(() => expect(stream.values).toEqual([GITHUB]));
+      const waiting = { ...GITHUB, waiting: "install", requested: true } as const;
+      await fixture.sinks.get("account.githubSubscribe")!.emit(waiting);
+      await vi.waitFor(() => expect(stream.values).toEqual([GITHUB, waiting]));
+      stream.unsubscribe();
+      await vi.waitFor(() => expect(fixture.unsubscribed).toEqual(["account.githubSubscribe"]));
+
+      expect(await client.account.githubConnect.mutate()).toBeNull();
+      expect(await client.account.githubInstall.mutate()).toBeNull();
+      expect(await client.account.githubCancel.mutate()).toBeNull();
+      expect(await client.account.githubDisconnect.mutate()).toBeNull();
+      expect(fixture.calls.map(({ key, input, call }) => [key, input, call])).toEqual([
+        ["account.githubSubscribe", undefined, WINDOW_CALL],
+        ["account.githubConnect", undefined, WINDOW_CALL],
+        ["account.githubInstall", undefined, WINDOW_CALL],
+        ["account.githubCancel", undefined, WINDOW_CALL],
+        ["account.githubDisconnect", undefined, WINDOW_CALL],
+      ]);
+    });
+
+    it("refuses a GitHub snapshot whose configure link is not a web page", async () => {
+      const installation = GITHUB.installations[0];
+      expect(accountGithubSnapshotSchema.safeParse(GITHUB).success).toBe(true);
+      for (const configureUrl of ["javascript:alert(1)", "file:///etc/passwd", ""]) {
+        expect(
+          accountGithubSnapshotSchema.safeParse({
+            ...GITHUB,
+            installations: [{ ...installation, configureUrl }],
+          }).success,
+        ).toBe(false);
+      }
+    });
+
+    // This Mac as a runner (VC-895): desktop main's Mac runner, the window's alone.
+    it("serves this Mac's runner snapshot and its commands, and streams every change", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      expect(await client.runners.thisMac.query()).toEqual(THIS_MAC);
+      const stream = collect((handlers) =>
+        client.runners.subscribeThisMac.subscribe(undefined, handlers),
+      );
+      await vi.waitFor(() => expect(stream.values).toEqual([THIS_MAC]));
+      const removed = {
+        ...THIS_MAC,
+        state: "removed",
+        problem: "credential_reuse",
+        message: "This Mac's runner was used from two places.",
+      } as const;
+      await fixture.sinks.get("runners.subscribeThisMac")!.emit(removed);
+      await vi.waitFor(() => expect(stream.values).toEqual([THIS_MAC, removed]));
+      stream.unsubscribe();
+      await vi.waitFor(() => expect(fixture.unsubscribed).toEqual(["runners.subscribeThisMac"]));
+
+      expect(await client.runners.addThisMac.mutate()).toBeNull();
+      expect(await client.runners.removeThisMac.mutate()).toBeNull();
+      expect(fixture.calls.map(({ key, input, call }) => [key, input, call])).toEqual([
+        ["runners.thisMac", undefined, WINDOW_CALL],
+        ["runners.subscribeThisMac", undefined, WINDOW_CALL],
+        ["runners.addThisMac", undefined, WINDOW_CALL],
+        ["runners.removeThisMac", undefined, WINDOW_CALL],
+      ]);
+    });
+
+    it("refuses a runner snapshot outside its vocabulary or carrying more than it names", async () => {
+      for (const answer of [
+        { ...THIS_MAC, state: "online-ish" },
+        { ...THIS_MAC, problem: "stolen" },
+        { ...THIS_MAC, runnerId: "" },
+        { ...THIS_MAC, waitingFacts: -1 },
+        { ...THIS_MAC, message: "m".repeat(513) },
+      ]) {
+        const fixture = host(LOCAL_DESKTOP_CALLER, { "runners.thisMac": () => answer as never });
+        const client = await connect(fixture);
+        await expect(client.runners.thisMac.query()).rejects.toBeDefined();
+      }
+      const fixture = host(LOCAL_DESKTOP_CALLER, {
+        "runners.thisMac": () => ({ ...THIS_MAC, credential: "secret" }) as never,
+      });
+      const client = await connect(fixture);
+      expect(await client.runners.thisMac.query()).toEqual(THIS_MAC);
+    });
+
+    // A cloud project's folder on this Mac (VC-895 N2-3): the window's alone, never a path.
+    it("serves a cloud project's folder status and choice without a path", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER, {
+        "checkouts.chooseFolder": () =>
+          ({ outcome: "chosen", projectRepoId: "repo-1", absPath: "/Users/dana/code" }) as never,
+      });
+      const client = await connect(fixture);
+      expect(await client.checkouts.status.query({ projectId: "project-1" })).toEqual({
+        state: "missing",
+      });
+      expect(await client.checkouts.chooseFolder.mutate({ projectId: "project-1" })).toEqual({
+        outcome: "chosen",
+        projectRepoId: "repo-1",
+      });
+      await expect(
+        client.checkouts.status.query({ projectId: "project-1", path: "/tmp" } as never),
+      ).rejects.toBeDefined();
+      for (const answer of [{ state: "somewhere" }, { outcome: "chosen" }]) {
+        const refused = host(LOCAL_DESKTOP_CALLER, {
+          "checkouts.status": () => answer as never,
+          "checkouts.chooseFolder": () => answer as never,
+        });
+        const refusing = await connect(refused);
+        await expect(refusing.checkouts.status.query({ projectId: "p" })).rejects.toBeDefined();
+        await expect(
+          refusing.checkouts.chooseFolder.mutate({ projectId: "p" }),
+        ).rejects.toBeDefined();
+      }
     });
 
     it("refuses an account snapshot that would carry anything but the profile", async () => {
@@ -1652,6 +1834,17 @@ describe("the desktop router's grammar", () => {
         "cloud.reportUnsavedWrites",
         "cloud.saveSnapshot",
         "cloud.readSnapshot",
+        "account.githubSubscribe",
+        "account.githubConnect",
+        "account.githubInstall",
+        "account.githubCancel",
+        "account.githubDisconnect",
+        "runners.thisMac",
+        "runners.subscribeThisMac",
+        "runners.addThisMac",
+        "runners.removeThisMac",
+        "checkouts.status",
+        "checkouts.chooseFolder",
       ].toSorted(),
     );
     expect(schemas["worktree.trimSettings"]).toMatchObject({

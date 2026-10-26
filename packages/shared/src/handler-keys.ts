@@ -13,10 +13,12 @@ import type { TicketEventActor } from "./ticket-events";
 import {
   AGENT_COMMAND_BINDINGS,
   CATALOG_ENTRIES,
+  SESSION_READ_VERBS,
   VERB_TOOL_KEYS,
   type AgentCommandBindingId,
   type CatalogKey,
   type CatalogKeyOf,
+  type SessionReadVerb,
   type VerbEntry,
   type VerbKey,
   type VerbToolKey,
@@ -160,23 +162,23 @@ export type HostHandlerKeyOf<E extends VerbEntry> = Exclude<
 >;
 
 /**
- * Both-door keys whose map entry runs the socket verb's own handler, rather
- * than the other way round: the socket's Session reads, which the WebSocket
- * serves Workspace-scoped (VC-663, D4). Their map entry reaches the socket's
- * pipeline (`AgentCommandService.executeInWorkspace`) under the router's
- * policy, so both doors still reach one function, and the socket binding
- * stays the verb's own (a projection of the map would call itself). The list
- * can only shrink: an area that moves a read's logic into host-core makes its
- * socket verb a projection and strikes it here.
+ * Both-door catalog keys whose entry the agent command service serves into
+ * the map, as the agent doors serve their own verbs (VC-923): the socket's
+ * Session reads, which the WebSocket also reaches Workspace-scoped (VC-663,
+ * D4). Their ports (the Session Engine, the attachments, the transcript
+ * artifacts) are that service's composition rather than the map's, so the map
+ * is sealed without them; the entry itself is host-core's one implementation,
+ * and every door, the socket included, reaches it as a projection of the map
+ * (VC-894 S6-3, which retired the socket-delegated inversion).
  */
-export const SOCKET_DELEGATED_HANDLER_KEYS = Object.freeze([
-  "session.list",
-  "session.show",
-  "session.peek",
-  "session.answer",
+export const SERVED_CATALOG_HANDLER_KEYS = Object.freeze([
+  ...SESSION_READ_VERBS,
 ] as const satisfies readonly CatalogKey[]);
 
-export type SocketDelegatedHandlerKey = (typeof SOCKET_DELEGATED_HANDLER_KEYS)[number];
+export type ServedCatalogHandlerKey = SessionReadVerb;
+
+/** Every key a service serves into the sealed map: the agent doors' own, and the Session reads. */
+export type ServedHandlerKey = ServedAgentHandlerKey | ServedCatalogHandlerKey;
 
 /**
  * The handler keys the agent socket serves under its own verb's name: a
@@ -186,10 +188,7 @@ export type SocketDelegatedHandlerKey = (typeof SOCKET_DELEGATED_HANDLER_KEYS)[n
  * handler of its own. The socket's ticket writes that project a board key under
  * another name are {@link SocketBoardProjections} (VC-794).
  */
-export type SocketHandlerKey = Exclude<
-  Extract<HostHandlerKey, AgentCommandBindingId>,
-  SocketDelegatedHandlerKey
->;
+export type SocketHandlerKey = Extract<HostHandlerKey, AgentCommandBindingId>;
 
 /**
  * What a door tells a handler about the call, besides its input: who it
@@ -275,6 +274,12 @@ const shared: ReadonlySet<string> = new Set(SHARED_AGENT_HANDLER_KEYS);
 export const SERVED_AGENT_HANDLER_KEYS: readonly ServedAgentHandlerKey[] = Object.freeze(
   AGENT_HANDLER_KEYS.filter((key) => !shared.has(key)) as ServedAgentHandlerKey[],
 );
+
+/** {@link ServedHandlerKey}, at runtime: the agent doors' own, then the served catalog keys. */
+export const SERVED_HANDLER_KEYS: readonly ServedHandlerKey[] = Object.freeze([
+  ...SERVED_AGENT_HANDLER_KEYS,
+  ...SERVED_CATALOG_HANDLER_KEYS,
+]);
 
 /** {@link HostHandlerKey}, at runtime: the catalog's keys, then the agent doors'. */
 export const HOST_HANDLER_KEYS: readonly HostHandlerKey[] = Object.freeze([

@@ -310,7 +310,7 @@ describe("a Session's turns, under the real runtime and ledger", () => {
   });
 });
 
-function state(entries: { id: string; state: "queued" | "releasing" }[], released = false) {
+function state(entries: { id: string; state: "queued" | "releasing" }[]) {
   return {
     revision: 1,
     releasedBoundary: null,
@@ -321,13 +321,7 @@ function state(entries: { id: string; state: "queued" | "releasing" }[], release
       deliveryCommandId: `follow-up:s-1:queue-${entry.id}`,
       message: { id: entry.id, role: "user" as const, parts: [] },
     })),
-    releases: released
-      ? {
-          "follow-up:s-1:queue-m1": {
-            receipt: { status: "accepted" },
-          },
-        }
-      : {},
+    releases: {},
   } as unknown as Parameters<typeof logQueueChanges>[2];
 }
 const rows = (s: Parameters<typeof logQueueChanges>[2]) =>
@@ -348,15 +342,22 @@ describe("a queued follow-up keeps its message's trace", () => {
     try {
       const queued = state([{ id: "m1", state: "queued" }]);
       withTrace(C, { operation: "session.command" }, () =>
-        logQueueChanges("s-1", new Map(), queued),
+        logQueueChanges("s-1", new Map(), queued, new Map()),
       );
       expect(commandTrace("follow-up:s-1:queue-m1")).toBe(C.traceId);
       // Released when another message's turn ends, on that message's chain.
       const releasing = state([{ id: "m1", state: "releasing" }]);
-      withTrace(B, {}, () => logQueueChanges("s-1", rows(queued), releasing));
-      withTrace(B, {}, () => logQueueChanges("s-1", rows(releasing), state([], true)));
+      withTrace(B, {}, () => logQueueChanges("s-1", rows(queued), releasing, new Map()));
+      withTrace(B, {}, () =>
+        logQueueChanges(
+          "s-1",
+          rows(releasing),
+          state([]),
+          new Map([["follow-up:s-1:queue-m1", { status: "accepted" } as never]]),
+        ),
+      );
       // Untraced background release too.
-      withRootLogContext({}, () => logQueueChanges("s-1", rows(queued), releasing));
+      withRootLogContext({}, () => logQueueChanges("s-1", rows(queued), releasing, new Map()));
       expect(records.map(({ msg, traceId }) => [msg, traceId])).toEqual([
         ["follow-up queued", C.traceId],
         ["follow-up release claimed", C.traceId],
@@ -436,10 +437,10 @@ describe("a queued follow-up keeps its message's trace", () => {
     const { records, undo } = captureRoot();
     try {
       const queued = state([{ id: "m1", state: "queued" }]);
-      withTrace(C, {}, () => logQueueChanges("s-1", new Map(), queued));
+      withTrace(C, {}, () => logQueueChanges("s-1", new Map(), queued, new Map()));
       const releasing = state([{ id: "m1", state: "releasing" }]);
-      logQueueChanges("s-1", rows(releasing), queued);
-      logQueueChanges("s-1", rows(queued), state([]));
+      logQueueChanges("s-1", rows(releasing), queued, new Map());
+      logQueueChanges("s-1", rows(queued), state([]), new Map());
       expect(records.slice(1).map(({ msg, traceId, reason }) => [msg, traceId, reason])).toEqual([
         ["follow-up claim returned", C.traceId, "not-sent"],
         ["follow-up withdrawn", C.traceId, "cancelled"],

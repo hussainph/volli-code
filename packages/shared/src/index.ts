@@ -26,6 +26,14 @@ export * from "./handler-keys";
 export * from "./desktop-entries";
 export * from "./environment-recipe";
 export * from "./account";
+export * from "./this-mac-runner";
+export * from "./cloud-checkout";
+export * from "./runner-preferences";
+export {
+  PREVIEW_WAITLIST_MESSAGE,
+  PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+  PREVIEW_AGREEMENT_REQUIRED_MESSAGE,
+} from "./cloud/preview-access";
 export type * from "./browser-app-shortcut";
 export * from "./host-link-relay";
 export * from "./agent-surface";
@@ -64,6 +72,8 @@ export * from "./web-target-policy";
 export * from "./session-activity";
 export * from "./browser-trace";
 export * from "./session-host-notice";
+export * from "./session-notice";
+export * from "./watch-rules";
 export * from "./session-todo";
 export * from "./ticket-branch";
 export * from "./ticket-comment";
@@ -113,6 +123,7 @@ export * from "./session-read";
 export * from "./session-order";
 export * from "./session-peek";
 export * from "./session-need";
+export * from "./session-listing-activity";
 export * from "./notification-preferences";
 export * from "./notification-catalog";
 export * from "./host-events";
@@ -130,6 +141,9 @@ export * from "./session-usage-report";
 export * from "./session-streak";
 export * from "./working-copy";
 export * from "./session-event-codec";
+export * from "./cloud-session-intent";
+export * from "./cloud-message-artifact";
+export * from "./transcript-canonical-json";
 export * from "./native-observation-id";
 export * from "./session-rpc-wire";
 export * from "./park";

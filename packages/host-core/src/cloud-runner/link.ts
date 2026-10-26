@@ -110,7 +110,10 @@ export async function linkWithDeviceCode(input: {
         pollSecret: started.pollSecret,
       });
     } catch (error) {
-      if ((error as { code?: unknown }).code === "unavailable") continue;
+      const code = (error as { code?: unknown }).code;
+      // The poll limit refills in four seconds; the normal five-second
+      // interval backs off without losing a code that is awaiting approval.
+      if (code === "unavailable" || code === "rate_limited") continue;
       throw error;
     }
     if (poll.status === "pending") continue;

@@ -412,9 +412,9 @@ export interface SessionRouterHandlers extends SignInRouterHandlers {
     sink: { emit(batch: HostLogsBatch): void | Promise<void>; fail(error: unknown): void },
   ) => Promise<() => void>;
   /**
-   * The socket's Session reads, Workspace-scoped (VC-663, D4): the map runs
-   * the socket verb's own handler with its roster forced to `workspaceId`
-   * (`SOCKET_DELEGATED_HANDLER_KEYS`). The answer is the socket's envelope.
+   * The socket's Session reads, Workspace-scoped (VC-663, D4): the map's one
+   * entry for each read, which the socket projects too (VC-894), runs it with
+   * its roster forced to `workspaceId`. The answer is the socket's envelope.
    */
   readonly "session.list": HostHandler<SessionReadInput, AgentResponse>;
   readonly "session.show": HostHandler<SessionReadInput, AgentResponse>;
@@ -725,6 +725,7 @@ const experimentFlagSchema = z.object({
   enabled: z.boolean(),
   source: z.enum(["default", "storage", "environment"]),
   visible: z.boolean().optional(),
+  enrollment: z.boolean().optional(),
 });
 const experimentSnapshotSchema = z.object(
   Object.fromEntries(EXPERIMENTS.map(({ id }) => [id, experimentFlagSchema])) as Record<

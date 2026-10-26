@@ -59,6 +59,7 @@ import {
   createAgentCommandService as createAgentCommandServiceBase,
   type AgentCommandServiceOptions,
 } from "./agent-commands";
+import type { CloudSessionVerbs } from "./cloud-agent/session-verbs";
 import { createTestSessionEngine } from "./testing/session-engine";
 import { testHostHandlers, type TestHandlerPorts } from "./testing/host-handlers";
 import { writeModelAccessDefault } from "./session-runtime/model-access-preferences";
@@ -2048,6 +2049,34 @@ describe("agent command service", () => {
     expect(missing).toMatchObject({ v: 1, ok: false, error: { code: "PROJECT_NOT_FOUND" } });
   });
 
+  it("reports this machine as a Volli Cloud runner only when it is one", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "p1", name: "Alpha", path: "/repo/alpha", ticketPrefix: "AL" }),
+    );
+    const request: Parameters<ReturnType<typeof createAgentCommandService>["execute"]>[0] = {
+      v: 1,
+      cmd: "identify",
+      args: { project: "AL" },
+      ctx: { cwd: "/repo/alpha", env: {} },
+    };
+    let runner: { name: string | null; state: string } | null = null;
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      cloudRunner: () => runner,
+    });
+    const off = await service.execute(request);
+    expect(off).toMatchObject({ ok: true });
+    expect(off).not.toHaveProperty("data.runner");
+    runner = { name: "danas-mac", state: "online" };
+    expect(await service.execute(request)).toMatchObject({
+      ok: true,
+      data: { runner: { name: "danas-mac", state: "online" } },
+    });
+  });
+
   it("enumerates the priority vocabulary on raw create/update/list rejections", async () => {
     ctx = openTestDb();
     insertProject(
@@ -3679,7 +3708,10 @@ describe("agent command service", () => {
       venue: { id: "local" as const, kind: "local" as const },
     };
 
-    async function ticketSession(messages: readonly UIMessage[]) {
+    async function ticketSession(
+      messages: readonly UIMessage[],
+      extra: Partial<Pick<AgentCommandServiceOptions, "cloudSessionVerbs">> = {},
+    ) {
       ctx = openTestDb();
       insertProject(
         ctx.db,
@@ -3723,6 +3755,7 @@ describe("agent command service", () => {
           sessionEngine,
           appVersion: "1.2.3",
           readTranscriptArtifact: (reference) => artifacts.read(reference),
+          ...extra,
         }),
       };
     }
@@ -3792,6 +3825,29 @@ describe("agent command service", () => {
           "- [ ] Get the credentials (in progress)",
         ].join("\n"),
       );
+    });
+
+    // VC-894 S6-3: in a cloud launch the backend's accept fold derives this
+    // comment from the signal fact, so the host writes none of its own: the
+    // signal still records, through the local ledger, like any local target.
+    it("leaves the comment to the cloud accept fold in a cloud launch", async () => {
+      const socket = vi.fn(async () => null);
+      const { service, sessionId } = await ticketSession(
+        [todoMessage("m1", [{ content: "Read the ticket", status: "completed" }])],
+        { cloudSessionVerbs: { socket } as unknown as CloudSessionVerbs },
+      );
+
+      const done = await service.execute({
+        v: 1,
+        cmd: "session.done",
+        args: { reason: "Tests pass" },
+        ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
+      });
+
+      expect(done).toMatchObject({ ok: true, data: { signal: "done", recorded: true } });
+      expect(socket).toHaveBeenCalledOnce();
+      expect(listComments(ctx.db, "ticket-one")).toHaveLength(0);
+      expect(ctx.db.prepare("SELECT operation FROM board_command_receipts").all()).toEqual([]);
     });
 
     it("leaves no comment for a Session that never kept a list", async () => {

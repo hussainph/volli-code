@@ -2,10 +2,12 @@ import type Database from "better-sqlite3";
 import {
   canonicalJson,
   emptySessionFollowUpState,
+  pruneSessionFollowUpState,
   sessionFollowUpDeliveryEvidence,
   type SessionFollowUpLedger,
   type SessionFollowUpState,
 } from "@volli/session-engine";
+import type { CommandReceipt, Synchronous } from "@volli/shared";
 import { logContext, withRootLogContext } from "../log/context";
 import { commandTrace, rememberCommandTrace } from "../log/correlation";
 import { hostLogger } from "../log/root";
@@ -27,16 +29,69 @@ function pendingWatermarks(db: Database.Database): Array<{ session_id: string; s
   ).all();
 }
 
+/** The launch scope is registered only after boot consumption commits. */
+const cleanCloseScopes = new WeakMap<Database.Database, (sessionId: string) => boolean>();
+
+function cleanCloseStamp(encoded: string | undefined): {
+  sessions: Record<string, unknown>;
+  consumedSessionIds: readonly string[];
+} {
+  let stamp: unknown;
+  try {
+    if (encoded !== undefined) stamp = JSON.parse(encoded);
+  } catch {
+    /* An unreadable marker holds every unconsumed queue, never guesses. */
+  }
+  if (!record(stamp) || stamp.v !== 1 || !record(stamp.sessions)) {
+    return { sessions: {}, consumedSessionIds: [] };
+  }
+  return {
+    sessions: stamp.sessions,
+    consumedSessionIds:
+      Array.isArray(stamp.consumedSessionIds) &&
+      stamp.consumedSessionIds.every((id: unknown) => typeof id === "string")
+        ? stamp.consumedSessionIds
+        : [],
+  };
+}
+
 /** Called only after a clean lifecycle drain, while SQLite is still open. */
 export function stampFollowUpCleanClose(db: Database.Database, now: number): void {
   withTransaction(db, () => {
+    const encoded = getAppState(db, FOLLOW_UP_CLEAN_CLOSE_KEY);
+    const ownsSession = cleanCloseScopes.get(db);
     // A quit before readiness (or failed consumption) must not overwrite the
     // prior process's still-unchecked watermark with this process's history.
-    if (getAppState(db, FOLLOW_UP_CLEAN_CLOSE_KEY) !== undefined) return;
-    const sessions = Object.fromEntries(
-      pendingWatermarks(db).map(({ session_id, sequence }) => [session_id, sequence]),
+    if (ownsSession === undefined && encoded !== undefined) return;
+    const pending = pendingWatermarks(db);
+    if (ownsSession === undefined) {
+      const sessions = Object.fromEntries(
+        pending.map(({ session_id, sequence }) => [session_id, sequence]),
+      );
+      setAppState(db, FOLLOW_UP_CLEAN_CLOSE_KEY, JSON.stringify({ v: 1, sessions }), now);
+      return;
+    }
+    const previous = cleanCloseStamp(encoded);
+    const sessions = new Map(Object.entries(previous.sessions));
+    const consumed = new Set(previous.consumedSessionIds);
+    for (const id of sessions.keys()) if (ownsSession(id)) sessions.delete(id);
+    for (const id of consumed) if (ownsSession(id)) consumed.delete(id);
+    for (const { session_id, sequence } of pending) {
+      if (ownsSession(session_id)) sessions.set(session_id, sequence);
+      // There was no downgrade sentinel at all. Do not invent one for a
+      // different owner's queue just because this launch closes cleanly.
+      else if (encoded === undefined) consumed.add(session_id);
+    }
+    setAppState(
+      db,
+      FOLLOW_UP_CLEAN_CLOSE_KEY,
+      JSON.stringify({
+        v: 1,
+        sessions: Object.fromEntries(sessions),
+        ...(consumed.size === 0 ? {} : { consumedSessionIds: [...consumed] }),
+      }),
+      now,
     );
-    setAppState(db, FOLLOW_UP_CLEAN_CLOSE_KEY, JSON.stringify({ v: 1, sessions }), now);
   });
 }
 
@@ -44,23 +99,21 @@ export function stampFollowUpCleanClose(db: Database.Database, now: number): voi
 export function consumeFollowUpCleanClose(
   db: Database.Database,
   onUnreadable?: (sessionId: string, error: unknown) => void,
+  ownsSession?: (sessionId: string) => boolean,
 ): string[] {
-  return withTransaction(db, () => {
+  const heldSessions = withTransaction(db, () => {
     const encoded = getAppState(db, FOLLOW_UP_CLEAN_CLOSE_KEY);
-    let stamp: unknown;
-    if (encoded !== undefined) {
-      try {
-        stamp = JSON.parse(encoded);
-      } catch {
-        /* Unreadable stamp: hold, never guess. */
-      }
-    }
-    const sessions = record(stamp) && stamp.v === 1 && record(stamp.sessions) ? stamp.sessions : {};
+    const { sessions, consumedSessionIds } = cleanCloseStamp(encoded);
+    const consumed = new Set(consumedSessionIds);
+    const pending = pendingWatermarks(db).filter(
+      ({ session_id }) => ownsSession?.(session_id) ?? true,
+    );
     const held: string[] = [];
-    for (const { session_id, sequence } of pendingWatermarks(db)) {
+    for (const { session_id, sequence } of pending) {
       const previous = Object.hasOwn(sessions, session_id) ? sessions[session_id] : undefined;
       const stale =
         encoded !== undefined &&
+        !consumed.has(session_id) &&
         !(typeof previous === "number" && Number.isSafeInteger(previous) && previous >= sequence);
       const stored = prepared<[string], { state: string }>(
         db,
@@ -95,6 +148,8 @@ export function consumeFollowUpCleanClose(
       }
       if (changed) {
         state.revision += 1;
+        indexQueuedMessageIdentities(db, session_id, state);
+        pruneSessionFollowUpState(state, Date.now());
         prepared<[string, string]>(
           db,
           "UPDATE session_follow_up_queue SET state = ? WHERE session_id = ?",
@@ -107,40 +162,98 @@ export function consumeFollowUpCleanClose(
       )
         held.push(session_id);
     }
-    deleteAppState(db, FOLLOW_UP_CLEAN_CLOSE_KEY);
+    if (ownsSession === undefined) deleteAppState(db, FOLLOW_UP_CLEAN_CLOSE_KEY);
+    else if (encoded !== undefined) {
+      // Additive to the v1 marker. A consumed owner has no active watermark
+      // until clean close; foreign owners keep their original sentinel. This
+      // also preserves the old crash-without-a-watermark behavior per owner.
+      for (const { session_id } of pending) consumed.add(session_id);
+      setAppState(
+        db,
+        FOLLOW_UP_CLEAN_CLOSE_KEY,
+        JSON.stringify({
+          v: 1,
+          sessions,
+          ...(consumed.size === 0 ? {} : { consumedSessionIds: [...consumed] }),
+        }),
+        Date.now(),
+      );
+    }
     return held;
   });
+  if (ownsSession === undefined) cleanCloseScopes.delete(db);
+  else cleanCloseScopes.set(db, ownsSession);
+  return heldSessions;
 }
 
 const log = hostLogger("follow-up");
 
 /** No async work inside the atomic queue command/claim/settlement boundary. */
-export function createSqliteSessionFollowUpLedger(db: Database.Database): SessionFollowUpLedger {
+export function createSqliteSessionFollowUpLedger(
+  db: Database.Database,
+  ownsSession?: (sessionId: string) => boolean,
+): SessionFollowUpLedger {
   return {
-    transaction(sessionId, work) {
+    transaction(sessionId, work, options) {
       let before: ReadonlyMap<string, FollowUpRow> = new Map();
       let after: SessionFollowUpState | null = null;
-      const settled = settleTransaction(db, () => {
+      const delivered = new Map<string, CommandReceipt>();
+      const readOnly = options?.mode === "read";
+      let logChanges = !readOnly && log.enabled("info");
+      const settle = readOnly ? readTransaction : settleTransaction;
+      const settled = settle(db, () => {
+        if (ownsSession !== undefined && !ownsSession(sessionId)) {
+          throw new Error("The follow-up queue is outside this launch's Session scope");
+        }
         const stored = prepared<[string], { state: string }>(
           db,
           "SELECT state FROM session_follow_up_queue WHERE session_id = ?",
         ).get(sessionId);
         const state = stored ? readState(stored.state) : emptySessionFollowUpState();
-        before = rowsOf(state);
-        const result = work(state, (deliveryCommandId) => {
+        // An older build can restore full replies without populating this
+        // index. Backfill in the same write transaction, before any pruning.
+        if (!readOnly) {
+          indexQueuedMessageIdentities(db, sessionId, state);
+          // Old persisted releases are not this transaction's outcomes.
+          state.releases = {};
+        }
+        if (logChanges) before = rowsOf(state);
+        const evidence = (deliveryCommandId: string): CommandReceipt | null => {
           const { command, receipts, events } = readSqliteSessionCommandEvidence(
             db,
             sessionId,
             deliveryCommandId,
           );
-          return (
-            command !== null &&
-            sessionFollowUpDeliveryEvidence(sessionId, command, receipts, events) !== null
-          );
-        });
+          return command === null
+            ? null
+            : sessionFollowUpDeliveryEvidence(sessionId, command, receipts, events);
+        };
+        const result = work(
+          state,
+          (deliveryCommandId) => evidence(deliveryCommandId) !== null,
+          (messageId) =>
+            prepared<[string, string]>(
+              db,
+              "SELECT 1 FROM session_follow_up_identities WHERE session_id = ? AND message_id = ?",
+            ).get(sessionId, messageId) !== undefined,
+        );
         if (result && typeof result === "object" && "then" in result) {
           throw new Error("Follow-up ledger transaction must be synchronous");
         }
+        // Snapshot reads neither serialize/prune state nor acquire a writer lock.
+        // Even accidental callback mutations are discarded, as the port promises.
+        if (readOnly) return result;
+        if (stored || state.revision > 0) indexQueuedMessageIdentities(db, sessionId, state);
+        if (logChanges) {
+          try {
+            for (const [deliveryCommandId, outcome] of Object.entries(state.releases))
+              delivered.set(deliveryCommandId, outcome.receipt);
+          } catch {
+            // Diagnostics never authorize the mutation or make it fail.
+            logChanges = false;
+          }
+        }
+        pruneSessionFollowUpState(state, Date.now());
         const encoded = canonicalJson(state);
         // Ordinary projections do not create rows or rewrite unchanged state.
         if (encoded !== stored?.state && (stored || state.revision > 0)) {
@@ -157,21 +270,53 @@ export function createSqliteSessionFollowUpLedger(db: Database.Database): Sessio
       });
       // Each committed queue transition, with why, inside the operation that made it (VC-699).
       return settled.then((result) => {
-        if (after !== null) logQueueChanges(sessionId, before, after);
+        if (logChanges && after !== null) {
+          try {
+            logQueueChanges(sessionId, before, after, delivered);
+          } catch {
+            // A failing sink must not turn an already-committed mutation into
+            // a rejection (and invite an unnecessary caller retry).
+          }
+        }
         return result;
       });
     },
     pendingSessionIds() {
-      return settleTransaction(db, () =>
+      return readTransaction(db, () =>
         prepared<[], { session_id: string }>(
           db,
           "SELECT session_id FROM session_follow_up_queue WHERE pending_count > 0 ORDER BY session_id",
         )
           .all()
-          .map(({ session_id }) => session_id),
+          .map(({ session_id }) => session_id)
+          .filter((sessionId) => ownsSession?.(sessionId) ?? true),
       );
     },
   };
+}
+
+/** Compact identities survive reply pruning; payloads remain only in the queue/ledger. */
+function indexQueuedMessageIdentities(
+  db: Database.Database,
+  sessionId: string,
+  state: SessionFollowUpState,
+): void {
+  for (const { result } of Object.values(state.commands)) {
+    if (result.command.intent.kind !== "message.queue") continue;
+    prepared<[string, string]>(
+      db,
+      "INSERT OR IGNORE INTO session_follow_up_identities(session_id, message_id) VALUES (?, ?)",
+    ).run(sessionId, result.command.intent.message.id);
+  }
+}
+
+/** Native deferred transactions participate in the existing ownership guard. */
+function readTransaction<T>(db: Database.Database, work: () => Synchronous<T>): Promise<T> {
+  try {
+    return Promise.resolve(db.transaction(work).deferred());
+  } catch (error) {
+    return Promise.reject(error);
+  }
 }
 
 interface FollowUpRow {
@@ -208,6 +353,7 @@ export function logQueueChanges(
   sessionId: string,
   before: ReadonlyMap<string, FollowUpRow>,
   after: SessionFollowUpState,
+  delivered: ReadonlyMap<string, CommandReceipt>,
 ): void {
   const now = rowsOf(after);
   const base = { sessionId, revision: after.revision, pending: after.entries.length };
@@ -243,9 +389,9 @@ export function logQueueChanges(
   }
   for (const [messageId, row] of before) {
     if (now.has(messageId)) continue;
-    const release = after.releases[row.deliveryCommandId];
+    const receipt = delivered.get(row.deliveryCommandId);
     const ids = { ...base, messageId, commandId: row.commandId };
-    if (release === undefined) {
+    if (receipt === undefined) {
       underTrace(row.commandId, () =>
         log.info("follow-up withdrawn", { ...ids, reason: "cancelled" }),
       );
@@ -254,7 +400,7 @@ export function logQueueChanges(
         log.info("follow-up delivered", {
           ...ids,
           deliveryCommandId: row.deliveryCommandId,
-          status: release.receipt.status,
+          status: receipt.status,
         }),
       );
     }

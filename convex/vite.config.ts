@@ -10,6 +10,19 @@ export default defineConfig({
     // One `vp test` invocation's share of a shared machine (VC-339).
     ...SHARED_MACHINE_TEST_WORKERS,
     include: ["test/**/*.test.ts"],
+    coverage: {
+      provider: "v8",
+      include: [
+        "functions/lib/previewAccess.ts",
+        "functions/previewAccess.ts",
+        "functions/lib/deploymentChecks.ts",
+        "functions/lib/runnerLinkRateLimit.ts",
+        "functions/runnerLinkRateLimit.ts",
+        "scripts/deploy.ts",
+        "scripts/deploy.mjs",
+      ],
+      thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
+    },
     exclude: ["test/**/*.backend.test.ts"],
   },
 });

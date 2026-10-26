@@ -2518,3 +2518,42 @@ function intentFor(request: SessionRuntimeCommandRequest): SessionCommand["inten
   }
   throw new Error(`Unexpected fixture command ${request.command.kind}`);
 }
+
+describe("composition Session birth preparation", () => {
+  it("awaits preparation before the ticket check, skills, or durable creation", async () => {
+    const order: string[] = [];
+    const f = sessions({
+      sessionBirth: {
+        beforeCreate: async () => {
+          await Promise.resolve();
+          order.push("identities");
+        },
+      },
+      ticketBelongsToProject: () => {
+        order.push("ticket");
+        return true;
+      },
+      skills: {
+        ...NO_SKILLS,
+        index: async () => {
+          order.push("skills");
+          return null;
+        },
+      },
+    });
+    await f.sessions.create(startInput("prepared"));
+    expect(order).toEqual(["identities", "ticket", "skills"]);
+    expect(f.commands[0]?.command.kind).toBe("session.create");
+  });
+  it("refuses a failed preparation before any durable writes or attachment", async () => {
+    const f = sessions({
+      sessionBirth: {
+        beforeCreate: async () => {
+          throw new Error("offline");
+        },
+      },
+    });
+    await expect(f.sessions.start(startInput("offline"))).rejects.toThrow("offline");
+    expect(f.commands).toEqual([]);
+  });
+});

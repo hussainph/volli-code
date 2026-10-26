@@ -263,10 +263,21 @@ export function labelNamesOf(
   return names;
 }
 
+/** A project's labels by name key: a live label wins its key over an alias that happens to share it. */
+function labelsByKey(labels: ReadonlyArray<BoardLabel>): Map<string, BoardLabel> {
+  const byKey = new Map<string, BoardLabel>();
+  for (const label of labels) {
+    const existing = byKey.get(label.nameKey);
+    if (existing === undefined || (existing.mergedIntoId !== null && label.mergedIntoId === null))
+      byKey.set(label.nameKey, label);
+  }
+  return byKey;
+}
+
 /** Resolves label names against a project's labels, minting the ones that do not exist. */
 class LabelResolver {
   private readonly byId = new Map<LabelId, BoardLabel>();
-  private readonly byKey = new Map<string, BoardLabel>();
+  private readonly byKey: Map<string, BoardLabel>;
   /** Labels minted while resolving, in mint order. */
   readonly created: BoardLabel[] = [];
 
@@ -277,12 +288,7 @@ class LabelResolver {
     this.projectId = projectId;
     this.mintLabelId = mintLabelId;
     for (const label of labels) this.byId.set(label.id, label);
-    // A live label wins its key over an alias that happens to share it.
-    for (const label of labels) {
-      const existing = this.byKey.get(label.nameKey);
-      if (existing === undefined || (existing.mergedIntoId !== null && label.mergedIntoId === null))
-        this.byKey.set(label.nameKey, label);
-    }
+    this.byKey = labelsByKey(labels);
   }
 
   /** The label a stored id names, as it is worn now (a merged label resolves to its target). */
@@ -961,4 +967,76 @@ export function normalizeLabelColor(color: string | null): string | null {
   if (color === null) return null;
   if (color.length === 0 || color.length > 64) throw invalid("A label colour is 1–64 characters.");
   return color;
+}
+
+// ── label merge ──────────────────────────────────────────────────────────────
+
+export interface MergeLabelsCommand {
+  /** The name to retire. Matched ignoring ASCII case; a retired name follows its merge. */
+  from: string;
+  /** The name it folds into. */
+  into: string;
+}
+
+export interface MergeLabelsDecision {
+  from: BoardLabel;
+  into: BoardLabel;
+  /**
+   * Every stored label id that is worn as `from` now: `from` itself and the
+   * aliases already merged into it. A ticket wearing any of them is one the
+   * merge relabels.
+   */
+  fromIds: LabelId[];
+  /** The patch to `from`'s row: it becomes an alias of `into`. */
+  patch: { mergedIntoId: LabelId };
+  events: BoardEventDraft[];
+}
+
+/**
+ * Folds one label into another: `from` becomes an alias of `into`, so every
+ * ticket that wore `from` wears `into` (each label once), and the retired
+ * name keeps resolving to `into`. No ticket row is rewritten: the label ids a
+ * ticket stores are followed to the live label they were merged into
+ * ({@link labelNamesOf}). One project-level `label_merged` event records it.
+ *
+ * Refused: a name the project has no label for (the refusal names the ones
+ * it has), and two names that are already the same label.
+ */
+export function decideMergeLabels(
+  labels: readonly BoardLabel[],
+  command: MergeLabelsCommand,
+): MergeLabelsDecision {
+  const byId = new Map(labels.map((label) => [label.id, label]));
+  const byKey = labelsByKey(labels);
+  const vocabulary = () => {
+    const names = labels
+      .filter((label) => label.mergedIntoId === null)
+      .map((label) => label.name)
+      .toSorted();
+    return names.length > 0 ? `Its labels are: ${names.join(", ")}.` : "It has no labels yet.";
+  };
+  const find = (name: string) => {
+    const found = byKey.get(labelNameKey(normalizeLabelName(name)));
+    if (found === undefined) {
+      throw invalid(`This project has no label named ${name.trim()}. ${vocabulary()}`);
+    }
+    return canonicalLabel(byId, found);
+  };
+  const from = find(command.from);
+  const into = find(command.into);
+  if (from.id === into.id) {
+    throw invalid(`${command.from} and ${command.into} are already the same label.`);
+  }
+  const fromIds = labels
+    .filter((label) => canonicalLabel(byId, label).id === from.id)
+    .map((label) => label.id);
+  return {
+    from,
+    into,
+    fromIds,
+    patch: { mergedIntoId: into.id },
+    events: [
+      { ticketId: null, payload: { kind: "label_merged", labelId: from.id, intoLabelId: into.id } },
+    ],
+  };
 }

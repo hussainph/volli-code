@@ -295,8 +295,8 @@ export function coordinationRefusal(
  * verdict it just reached (`agent-commands.ts`). It admits only the
  * key this request's verb projects (`projected`: a both-door entry's socket
  * binding id is its key, as is each of the socket's own verbs', VC-923, and
- * `ticket.create`/`update`/`comment` name their board key, VC-794; undefined
- * for the four Session reads the map delegates to the socket). It is
+ * `ticket.create`/`update`/`comment` name their board key, VC-794; the four
+ * Session reads project their own, VC-894). It is
  * deliberately not the catalog's router actor: the board's keys are
  * person-only on the WebSocket until VC-565, while a Session the project's
  * policy admits has always written tickets here.

@@ -15,6 +15,10 @@
  * board fact stands, and what did not start is reported in the reply (a
  * picked run that cannot run, a worktree that was not asked for). A malformed
  * job (a defect, not a routing refusal) still fails the write, loudly.
+ *
+ * An Automation run is only queued for a runner that advertises the executor
+ * in its capability report. Until one does (VC-569), a cloud launch leaves no
+ * `automation.run` job that nothing can execute; the board fact still stands.
  */
 
 import {
@@ -23,6 +27,8 @@ import {
   SESSION_INTERRUPT_FORMAT,
   type Actor,
   type BoardSideEffect,
+  type JobKind,
+  type RunnerCapabilities,
   type UserId,
 } from "@volli/shared/cloud";
 
@@ -56,8 +62,18 @@ interface UnstartedRun {
    * another person's runner (a pick never runs on a teammate's machine).
    * `runner_unavailable`: the runner it would run on was removed.
    * `not_a_member`: the person whose work it is left the Workspace.
+   * `runner_unsupported`: the runner does not advertise the Automation
+   * executor, so a cloud launch keeps the run off (VC-569).
+   *
+   * Open-ended: this is an additive output with no schema validator, so a
+   * reader handles the reasons it knows and tolerates any it does not.
    */
-  reason: "no_place" | "place_not_yours" | "runner_unavailable" | "not_a_member";
+  reason:
+    | "no_place"
+    | "place_not_yours"
+    | "runner_unavailable"
+    | "not_a_member"
+    | "runner_unsupported";
 }
 
 export interface SideEffectReport {
@@ -75,6 +91,24 @@ export interface SideEffectReport {
 function unstartedReason(refused: JobRefusalCode): UnstartedRun["reason"] {
   if (refused === "runner_unavailable" || refused === "not_a_member") return refused;
   return "place_not_yours";
+}
+
+/**
+ * The one `runners.capabilities.tools` entry this module reads as a job
+ * capability. That list is primarily platform tools (`xcode`, `simulator`);
+ * `automation.run` is not a platform tool but the explicit capability with
+ * which a runner says it executes this job kind. It is spelled like the job
+ * kind on purpose: one name for one thing, and the runner's versioned
+ * capability report is the channel that already exists (VC-569 flips it on by
+ * naming it). A runner that has never reported, or reports no such entry, is
+ * not assumed to have an executor; the other tools in the list mean nothing
+ * here.
+ */
+const AUTOMATION_RUN_CAPABILITY = "automation.run" satisfies JobKind;
+
+function advertisesAutomationRun(runner: Doc<"runners">): boolean {
+  const tools = (runner.capabilities as Partial<RunnerCapabilities> | null)?.tools;
+  return Array.isArray(tools) && tools.includes(AUTOMATION_RUN_CAPABILITY);
 }
 
 /** Inserts the jobs a write's side effects need; reports what did not start. */
@@ -254,15 +288,20 @@ async function jobsFor(
       // is the picker's own: work never lands on a teammate's machine.
       const picker = actorUserId(actor);
       let runnerId: string;
+      let runner: Doc<"runners"> | null;
       if (armed) {
         runnerId = arming.runnerId;
+        runner = await ctx.db
+          .query("runners")
+          .withIndex("by_uuid", (q) => q.eq("id", runnerId))
+          .unique();
       } else {
         const place = ticket.placeRunnerId;
         if (place === null) {
           unstarted.push({ ticketId: ticket.id, automationId, reason: "no_place" });
           return [];
         }
-        const runner = await ctx.db
+        runner = await ctx.db
           .query("runners")
           .withIndex("by_uuid", (q) => q.eq("id", place))
           .unique();
@@ -271,6 +310,32 @@ async function jobsFor(
           return [];
         }
         runnerId = place;
+      }
+      // A removed runner is the inbox's refusal to report (`runner_unavailable`),
+      // not a capability gap: let `tryEnqueueJob` answer that unchanged. A live
+      // runner that does not advertise the executor gets no job at all, so no
+      // ghost run waits for a kind this launch cannot execute.
+      if (
+        runner !== null &&
+        runner.revokedAt === null &&
+        runner.status !== "revoked" &&
+        !advertisesAutomationRun(runner)
+      ) {
+        console.warn("board side effect not enqueued", {
+          effect: effect.kind,
+          job: "automation.run",
+          ticketId: ticket.id,
+          runnerId,
+          reason: "capability_absent",
+        });
+        if (effect.choice?.kind === "automation") {
+          unstarted.push({
+            ticketId: ticket.id,
+            automationId,
+            reason: "runner_unsupported",
+          });
+        }
+        return [];
       }
       return [
         {

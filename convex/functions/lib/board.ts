@@ -35,6 +35,8 @@ import {
 
 import type { DataModel, Doc } from "../_generated/dataModel.js";
 import type { MutationCtx, QueryCtx } from "../_generated/server.js";
+import { onBoardEvents } from "./attention";
+import { onBoardEvents as onWatchEvents } from "./watches";
 import { authError, requireProject, type Viewer } from "./auth";
 
 export type BoardErrorCode =
@@ -67,15 +69,10 @@ export async function asBoardErrors<T>(run: () => T | Promise<T>): Promise<T> {
 }
 
 // ── the caller ─────────────────────────────────────────────────────────────
-
-/**
- * Who a board write is attributed to. Today every caller is a person through
- * a client; agent verbs (Session-scoped tokens) resolve to an `agent` Actor
- * here once they exist, and nothing else in the board changes.
- */
-export function boardActor(viewer: Viewer): Actor {
-  return { kind: "person", userId: viewer.userId };
-}
+//
+// Who a board write is attributed to is the caller's Actor (`lib/actorAuth.ts`
+// `requireActor`): a person through a client, or an agent acting for its
+// Session's owner. Nothing else in the board tells them apart.
 
 /** A project's board takes writes only while the project is live and not archived. */
 export function requireWritableProject(project: Doc<"projects">): void {
@@ -100,15 +97,17 @@ export async function findTicket(ctx: Reader, ticketId: string): Promise<Doc<"ti
 /**
  * A live ticket the viewer can see (an active Member of its project's
  * current Workspace), with its project. A ticket the viewer cannot see reads
- * as `not_found`, as a project does.
+ * as `not_found`, as a project does. `resolved` is a viewer the caller already
+ * resolved (an agent's Session owner); without it, only a person may read.
  */
 export async function requireTicket(
   ctx: QueryCtx | MutationCtx,
   ticketId: string,
+  resolved?: Viewer,
 ): Promise<{ viewer: Viewer; project: Doc<"projects">; ticket: Doc<"tickets"> }> {
   const ticket = await findTicket(ctx, ticketId);
   if (ticket === null) throw authError("not_found", "That ticket does not exist.");
-  const { viewer, project } = await requireProject(ctx, ticket.projectId);
+  const { viewer, project } = await requireProject(ctx, ticket.projectId, resolved);
   return { viewer, project, ticket };
 }
 
@@ -242,7 +241,12 @@ export class BoardWrite {
     return this.nextTicketNumber++;
   }
 
-  /** Appends board events in order, each with the next `seq`. */
+  /**
+   * Appends board events in order, each with the next `seq`. This is the one
+   * place a board write appends events (the migration import copies history
+   * and derives nothing), so what they derive is called from here: the review
+   * requests in Needs you (`attention.ts`).
+   */
   async append(drafts: readonly BoardEventDraft[]): Promise<void> {
     for (const draft of drafts) {
       this.boardSeq += 1;
@@ -257,6 +261,18 @@ export class BoardWrite {
         payload: draft.payload,
       });
     }
+    await onBoardEvents(this.ctx, {
+      projectId: this.projectId,
+      actor: this.actor,
+      at: this.now,
+      events: drafts,
+    });
+    await onWatchEvents(this.ctx, {
+      projectId: this.projectId,
+      actor: this.actor,
+      at: this.now,
+      events: drafts,
+    });
   }
 
   /**

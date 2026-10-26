@@ -14,11 +14,17 @@
  * follows the host's own stop policy.
  *
  * The one fork is the product store: where projects, the board and Session
- * history live. `local`, the host's own SQLite, is the only store.
+ * history live: frozen local SQLite, or the owner's cloud store over the runner ledger.
  */
 import type { CodeModeSandboxAssets } from "@volli/agent-runtime";
 import type { HostedSessionRuntime } from "@volli/session-engine";
-import { DEFAULT_CODE_MODE_POLICY, displayTicketId, type RunnerIdentity } from "@volli/shared";
+import {
+  DEFAULT_CODE_MODE_POLICY,
+  displayTicketId,
+  harnessAdapters,
+  scrubInheritedSessionEnv,
+  type RunnerIdentity,
+} from "@volli/shared";
 import { isLiveHost, type HostCore, type HostCorePorts, type HostRuntimeOwner } from "../index";
 import { getProjectById } from "../db/projects-repo";
 import { getTicket } from "../db/tickets-repo";
@@ -56,13 +62,20 @@ import {
 } from "./lifecycle";
 import { readCodeModePolicy } from "./model-access-preferences";
 import type { PiRuntimeHost } from "./pi-adapter";
+import type { CloudProductStore } from "../cloud-store";
+import { createLocalSessionEngine } from "../cloud-store/owner";
+import { createCloudEnvironmentPreparation } from "../cloud-store/environment";
+import { prepared } from "../db/prepared";
+import { localSessionRow } from "../db/local-product";
 
 /**
  * Where a runner's product state lives: projects, the board and Session
  * history. `local` is the host's own SQLite. A store is chosen here, once;
  * nothing below it forks on where state lives.
  */
-export type RunnerProductStore = { readonly kind: "local"; readonly host: HostCore };
+export type RunnerProductStore =
+  | { readonly kind: "local"; readonly host: HostCore }
+  | { readonly kind: "cloud"; readonly host: HostCore; readonly cloud: CloudProductStore };
 
 /** The recovered proof every ledger consumer requires (`lifecycle.ts`). */
 export type RunnerReady = RecoveredSessionServices<RuntimeSessionFacade>;
@@ -107,7 +120,9 @@ export interface RunnerCompositionInput {
   cloudEnabled(): boolean;
   /**
    * Whether this launch shows Volli Cloud's board rather than this host's
-   * (VC-889): its interrupted turns are then not resumed on their own.
+   * (VC-889): a local store's interrupted turns are then not resumed on their
+   * own. A cloud store ignores it: its own turns resume once the runner has
+   * connected and the backend's Ticket siblings allow it (`restart-resume.ts`).
    */
   cloudLaunch?(): boolean;
   /** Where Code Mode's worker and WebAssembly are; absent offers no Code Mode. */
@@ -182,7 +197,69 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
   const host = store.host;
   const live = isLiveHost(host) ? host : undefined;
   const db = live?.database.db ?? null;
-  const sessionEngine = live?.sessionEngine ?? null;
+  const localTicketDisplayIdOf = (ticketId: string): string | null => {
+    if (db === null) return null;
+    const ticket = getTicket(db, ticketId);
+    const project = ticket === undefined ? undefined : getProjectById(db, ticket.projectId);
+    return ticket && project ? displayTicketId(project.ticketPrefix, ticket.ticketNumber) : null;
+  };
+  // The one store fork. Every consumer below receives the selected ports,
+  // including the facade, agent door, recovery and listing readers.
+  const product =
+    store.kind === "cloud"
+      ? {
+          engine: store.cloud.engine,
+          brief: store.cloud.brief,
+          locations: store.cloud.locations,
+          sessionBirth: store.cloud.sessionBirth,
+          ticketDisplayIdOf: store.cloud.ticketDisplayIdOf,
+          recordSessionStarted: null,
+          ownsSession: store.cloud.ownsSession,
+          projectIds: store.cloud.projectIds,
+          projects: () =>
+            store.cloud.projectIds().flatMap((id) => {
+              const project = db === null ? undefined : getProjectById(db, id);
+              return project === undefined ? [] : [project];
+            }),
+          inProcessWatches: false,
+          recovery: store.cloud.recovery,
+          bindRuntime: store.cloud.bindRuntime,
+          bindNotices: store.cloud.bindNotices,
+          bindEnvironment: store.cloud.bindEnvironment,
+          dispose: store.cloud.dispose,
+        }
+      : {
+          engine:
+            db === null || live === undefined
+              ? null
+              : createLocalSessionEngine({ db, engine: live.sessionEngine }),
+          brief: undefined,
+          locations: undefined,
+          sessionBirth: undefined,
+          ticketDisplayIdOf: localTicketDisplayIdOf,
+          recordSessionStarted: undefined,
+          ownsSession:
+            db === null
+              ? undefined
+              : (id: string) =>
+                  prepared(
+                    db,
+                    `SELECT 1 FROM sessions WHERE id = ? AND ${localSessionRow("sessions.id")}`,
+                  ).get(id) !== undefined,
+          projectIds: undefined,
+          projects: undefined,
+          inProcessWatches: true,
+          recovery: undefined,
+          bindRuntime: undefined,
+          bindNotices: undefined,
+          bindEnvironment: undefined,
+          dispose: undefined,
+        };
+  const sessionEngine = product.engine;
+  // Automations are a local-launch feature until VC-569 (VC-952). The chosen
+  // product store decides, never the `cloud` flag: a local launch with the
+  // flag on still runs its own Automations.
+  const automationsAvailable = store.kind === "local";
   // One runtime per host's Session services, claimed before anything is built.
   const bindSessionRuntime = live?.[SESSION_RUNTIME].claim();
   const runtimeServices = live?.runtimeServices;
@@ -194,12 +271,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
   const identities = createAttachmentIdentities({
     mint: tokens.mint,
     revoke: tokens.revoke,
-    ticketDisplayIdOf: (ticketId) => {
-      if (db === null) return null;
-      const ticket = getTicket(db, ticketId);
-      const project = ticket === undefined ? undefined : getProjectById(db, ticket.projectId);
-      return ticket && project ? displayTicketId(project.ticketPrefix, ticket.ticketNumber) : null;
-    },
+    ticketDisplayIdOf: product.ticketDisplayIdOf,
   });
   // The opt-in export (VC-119): a profile that never asked builds no exporter.
   const observability =
@@ -251,9 +323,34 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
         : await concurrency({ excludeSessionId: sessionId, environment: input.env });
     return input.sessionEnvironment?.(budget) ?? budget;
   };
+  if (db !== null && product.bindEnvironment !== undefined) {
+    product.bindEnvironment(
+      createCloudEnvironmentPreparation({
+        db,
+        home: input.homeDir,
+        power: ports.power,
+        environment: async (sessionId) => {
+          await input.beforeExecution();
+          const inherited = scrubInheritedSessionEnv(process.env, harnessAdapters);
+          const path = inherited["PATH"];
+          return {
+            shellPath: process.env["SHELL"] || "/bin/sh",
+            env: {
+              ...inherited,
+              ...(await concurrencyEnvFor(sessionId)),
+              PATH:
+                path === undefined || path.length === 0 ? input.binDir : `${input.binDir}:${path}`,
+            },
+          };
+        },
+      }),
+    );
+  }
   const assemblyInputs: Omit<RuntimeAssemblyOptions, "resolveRuntimeContext"> = {
     dbHandle: host.database,
     sessionEngine,
+    ...(product.locations === undefined ? {} : { locations: product.locations }),
+    ...(product.ownsSession === undefined ? {} : { ownsSession: product.ownsSession }),
     sessionWake: live?.sessionWakeBus.subscribe ?? null,
     dataDir: host.dataDir,
     binDir: input.binDir,
@@ -276,6 +373,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     ...(input.capabilities.browser === undefined ? {} : { browser: input.capabilities.browser }),
     askUser: input.capabilities.askUser,
     requestSecret: input.capabilities.requestSecret,
+    automationsAvailable,
     beforeExecution: input.beforeExecution,
     concurrencyEnvFor,
     // The facade/tool-door cycle: no verb runs before both exist, and every
@@ -300,6 +398,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
             // ready here would make recovery wait on its own promise.
             waitForBirth: (sessionId) => facade.waitForBirth(sessionId),
             toolSurface: () => assembly.sessionToolSurface,
+            ...(product.brief === undefined ? {} : { brief: product.brief }),
           }),
         })
       : createRuntimeAssembly({ ...assemblyInputs, resolveRuntimeContext: async () => null });
@@ -310,6 +409,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     piRuntimeHost: assembly.piRuntimeHost,
     homeDir: input.homeDir,
     cloudEnabled: () => input.cloudEnabled(),
+    automationsAvailable,
     log: hostLogger("automations"),
   });
   const facade = createRuntimeSessionFacade({
@@ -319,7 +419,13 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     venue,
     decisions: runtimeServices?.decisions ?? null,
     delegation,
+    ...(sessionEngine === null ? {} : { sessionEngine }),
+    ...(product.sessionBirth === undefined ? {} : { sessionBirth: product.sessionBirth }),
+    ...(product.recordSessionStarted === undefined
+      ? {}
+      : { recordSessionStarted: product.recordSessionStarted }),
   });
+  product.bindRuntime?.(assembly.sessionRuntime, assembly.transcriptArtifacts);
   const agents = facade.agents({
     host,
     delegation,
@@ -328,6 +434,10 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     events: ports.events,
     log: hostLogger("session-agents"),
     handlers: (ready) => handlersFor(ready),
+    ...(product.projects === undefined ? {} : { projects: product.projects }),
+    inProcessWatches: product.inProcessWatches,
+    automationsAvailable,
+    ...(store.kind === "cloud" ? { cloudSessionVerbs: store.cloud.cloudSessionVerbs } : {}),
   });
   let handlerMap: HostHandlerMap | undefined;
   /** Built once, from the first recovered proof a door or the tool door brings. */
@@ -391,8 +501,14 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     venue,
     ...(input.ownsLegacyRunner === undefined ? {} : { ownsLegacyRunner: input.ownsLegacyRunner }),
     ...(input.cloudLaunch === undefined ? {} : { cloudLaunch: input.cloudLaunch }),
+    // The cloud store's own Sessions resume behind its first connect and the
+    // backend's siblings; `cloudLaunch` then suppresses nothing it owns.
+    ...(product.recovery === undefined ? {} : { cloudRecovery: product.recovery }),
     host,
     ports,
+    ...(sessionEngine === null ? {} : { sessionEngine }),
+    ...(product.ownsSession === undefined ? {} : { ownsSession: product.ownsSession }),
+    ...(product.projectIds === undefined ? {} : { projectIds: product.projectIds }),
     runtime: assembly.sessionRuntime,
     rpc: () => {
       const transport = input.transport?.() ?? null;
@@ -415,6 +531,9 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     stopProducers,
     installQuitHold: (close) => input.installQuitHold(close),
   });
+  // Backend-queued notices (`session.notice` jobs) enter the same owner-scoped
+  // outbox and delivery as this machine's own producers (VC-887).
+  product.bindNotices?.({ enqueue: (intent) => lifecycle.enqueueHostNotice(intent) });
   // The host's Session services hear what only the runtime and its lifecycle
   // know: open bindings, pending starts and the start latch (VC-577), and
   // every folded projection, for scheduled resume.
@@ -431,11 +550,11 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
         }),
   });
   const close = async (): Promise<void> => {
-    if (!fullDrain) return lifecycle.close();
     try {
       await lifecycle.close();
+      if (fullDrain) await automations.settled();
     } finally {
-      await automations.settled();
+      product.dispose?.();
     }
   };
   return {

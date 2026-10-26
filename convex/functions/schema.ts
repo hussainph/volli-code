@@ -26,8 +26,20 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 import {
+  ATTENTION_CLEARED_REASONS,
+  ATTENTION_SOURCES,
   BOARD_EVENT_KINDS,
   CHECKOUT_MODES,
+  CHAT_SESSION_ACTIVITIES,
+  CHAT_WAITING_REASONS,
+  GITHUB_ACCOUNT_TYPES,
+  GITHUB_CONNECTION_STATUSES,
+  GITHUB_DELIVERY_OUTCOMES,
+  GITHUB_ERROR_CODES,
+  GITHUB_FLOW_PURPOSES,
+  GITHUB_FLOW_STATUSES,
+  GITHUB_REPO_ACCESS,
+  GITHUB_REPOSITORY_SELECTIONS,
   JOB_KINDS,
   JOB_PRIORITIES,
   JOB_STATUSES,
@@ -70,9 +82,22 @@ const blobRow = {
 
 export default defineSchema({
   // ── identity ───────────────────────────────────────────────────────────────
+  previewAccess: defineTable({
+    kind: literals(["email", "user", "code"]),
+    key: v.string(), // Normalized email, user UUID, or invite-code SHA-256.
+    redeemedByUserId: nullable(uuid),
+    expiresAt: nullable(time),
+    revokedAt: nullable(time),
+    createdAt: time,
+  })
+    .index("by_kind_key", ["kind", "key"])
+    .index("by_redeemed_user", ["redeemedByUserId"]),
   users: defineTable({
     id: uuid,
     // Nullable because a purge nulls PII and keeps the row as a tombstone.
+    previewWorkspaceCreated: v.optional(v.boolean()),
+    previewAgreementVersion: v.optional(v.string()),
+    previewAgreementAcceptedAt: v.optional(time),
     primaryEmail: nullable(v.string()),
     emailVerified: v.boolean(),
     displayName: v.string(),
@@ -115,15 +140,67 @@ export default defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_provider_session", ["providerSessionId"]),
+  // A person's GitHub App user authorization (`githubTokens.ts`). The tokens
+  // are sealed under the person's data key and never returned by a query;
+  // `null` once revoked or disconnected. One Volli account per GitHub account.
   githubConnections: defineTable({
     userId: uuid,
     githubUserId: v.string(),
-    accessToken: sealed,
-    refreshToken: sealed,
+    accessToken: nullable(sealed),
+    refreshToken: nullable(sealed),
     accessExpiresAt: time,
     refreshExpiresAt: time,
     revokedAt: nullable(time),
-  }).index("by_user", ["userId"]),
+    login: v.string(),
+    name: nullable(v.string()),
+    // Verified addresses only, cached at connect and on reconnect.
+    emails: v.array(
+      v.object({
+        email: v.string(),
+        primary: v.boolean(),
+        verified: v.boolean(),
+        visibility: nullable(v.string()),
+      }),
+    ),
+    status: literals(GITHUB_CONNECTION_STATUSES),
+    // Held by the one caller refreshing the tokens (a refresh token is single use).
+    refreshLease: nullable(v.object({ nonce: v.string(), until: time })),
+    updatedAt: time,
+  })
+    .index("by_user", ["userId"])
+    .index("by_github_user", ["githubUserId"]),
+  // A browser round trip to GitHub (connect, or install the App), single use.
+  // The client follows its own row; `codeVerifier` is never returned.
+  githubFlows: defineTable({
+    id: uuid,
+    userId: uuid,
+    purpose: literals(GITHUB_FLOW_PURPOSES),
+    workspaceId: nullable(uuid),
+    stateHash: v.string(),
+    codeVerifier: nullable(v.string()),
+    status: literals(GITHUB_FLOW_STATUSES),
+    error: nullable(literals(GITHUB_ERROR_CODES)),
+    installationId: nullable(v.string()),
+    accountLogin: nullable(v.string()),
+    // Held by the one confirm exchanging the connect code (a double click posts twice).
+    claim: nullable(v.object({ nonce: v.string(), until: time })),
+    createdAt: time,
+    expiresAt: time,
+  })
+    .index("by_uuid", ["id"])
+    .index("by_user_status", ["userId", "status"])
+    .index("by_expiry", ["expiresAt"]),
+  // Webhook deliveries already applied: a redelivery or duplicate is a no-op.
+  githubWebhookDeliveries: defineTable({
+    deliveryId: v.string(),
+    event: v.string(),
+    action: nullable(v.string()),
+    installationId: nullable(v.string()),
+    receivedAt: time,
+    outcome: literals(GITHUB_DELIVERY_OUTCOMES),
+  })
+    .index("by_delivery", ["deliveryId"])
+    .index("by_received", ["receivedAt"]),
   userPrefs: defineTable({
     userId: uuid,
     defaultRunnerId: nullable(uuid),
@@ -193,19 +270,26 @@ export default defineSchema({
     // 1.0 slots: allow-lists, model policy, commit-author policy, retention.
     slots: v.optional(json),
   }).index("by_workspace", ["workspaceId"]),
+  // Global, not owned by a Workspace: a GitHub account installs the App once,
+  // and its repositories serve every Workspace (SCHEMA-NOTES). Unique by
+  // `installationId`, held by the writing mutation.
   githubInstallations: defineTable({
     id: uuid,
-    workspaceId: uuid,
     installationId: v.string(),
+    accountId: v.string(),
     accountLogin: v.string(),
-    accountType: literals(["user", "org"]),
-    repositorySelection: literals(["all", "selected"]),
-    installedByUserId: uuid,
+    accountType: literals(GITHUB_ACCOUNT_TYPES),
+    repositorySelection: literals(GITHUB_REPOSITORY_SELECTIONS),
+    // `null` for an install started on GitHub's own page.
+    installedByUserId: nullable(uuid),
+    permissions: v.record(v.string(), v.string()),
+    events: v.array(v.string()),
     suspendedAt: nullable(time),
+    deletedAt: nullable(time),
+    reconciledAt: nullable(time),
   })
     .index("by_uuid", ["id"])
-    .index("by_installation", ["installationId"])
-    .index("by_workspace", ["workspaceId"]),
+    .index("by_installation", ["installationId"]),
 
   // ── projects ───────────────────────────────────────────────────────────────
   projects: defineTable({
@@ -253,9 +337,14 @@ export default defineSchema({
     baseBranch: nullable(v.string()),
     defaultBranchCache: nullable(v.string()),
     dirName: v.string(),
+    // Whether the App still reaches the repository (`provider: github` rows).
+    githubAccess: v.optional(literals(GITHUB_REPO_ACCESS)),
+    accessCheckedAt: v.optional(time),
   })
     .index("by_uuid", ["id"])
-    .index("by_project", ["projectId", "position"]),
+    .index("by_project", ["projectId", "position"])
+    .index("by_github_repo", ["githubRepoId"])
+    .index("by_installation", ["installationId"]),
   projectMoves: defineTable({
     id: uuid,
     projectId: uuid,
@@ -408,7 +497,9 @@ export default defineSchema({
   })
     .index("by_uuid", ["id"])
     .index("by_project_seq", ["projectId", "seq"])
-    .index("by_ticket_seq", ["ticketId", "seq"]),
+    .index("by_ticket_seq", ["ticketId", "seq"])
+    // A fresh retention read needs only the latest transition, not the ticket's whole history.
+    .index("by_ticket_kind_seq", ["ticketId", "kind", "seq"]),
   boardReceipts: defineTable({
     commandId: uuid,
     projectId: uuid,
@@ -463,6 +554,8 @@ export default defineSchema({
     installMode: literals(RUNNER_INSTALL_MODES),
     linkedVia: literals(RUNNER_LINK_METHODS),
     linkedAt: time,
+    // Desktop registration retry key; absent on older rows and other link methods.
+    desktopRegistrationId: v.optional(uuid),
     autoUpdate: v.object({
       enabled: v.boolean(),
       channel: v.string(),
@@ -547,6 +640,20 @@ export default defineSchema({
     windowStartedAt: time,
     failures: v.number(),
   }).index("by_user", ["userId"]),
+  // Token buckets for the anonymous linking doors (`lib/runnerLinkRateLimit.ts`).
+  // `key` names the bucket: a door and a hash of one network (an IPv4 address
+  // or an IPv6 /64), a door and the id of a real install token or link request,
+  // or the whole deployment. No caller address or secret is stored here. A row
+  // is written only when a request is admitted, and an absent row is a full
+  // bucket, so the sweep deletes rows once `fullAt` has passed.
+  runnerLinkRateLimits: defineTable({
+    key: v.string(),
+    tokens: v.number(),
+    updatedAt: time,
+    fullAt: time,
+  })
+    .index("by_key", ["key"])
+    .index("by_full_at", ["fullAt"]),
   runnerEvents: defineTable({
     runnerId: uuid,
     // Open set: linked, token_reuse, revoked, ip_changed, update_*, rolled_back.
@@ -620,6 +727,8 @@ export default defineSchema({
     projectRepoId: uuid,
     kind: literals(["main", "managed_clone"]),
     headBranch: nullable(v.string()),
+    // Older/migrated reports carry only the branch.
+    headSha: v.optional(nullable(v.string())),
     reportedAt: time,
   })
     .index("by_runner_repo", ["runnerId", "projectRepoId"])
@@ -664,6 +773,17 @@ export default defineSchema({
       }),
     ),
     usageTotals: json,
+    // The listing rule's answer over the fold (`sessionListingActivity` in
+    // `@volli/shared`), so no client restates it. Optional: rows written
+    // before it have none until their next listing sync.
+    listing: v.optional(
+      v.object({
+        activity: literals(CHAT_SESSION_ACTIVITIES),
+        waitingOn: nullable(literals(CHAT_WAITING_REASONS)),
+        live: v.boolean(),
+        bornTicketless: v.boolean(),
+      }),
+    ),
     createdAt: time,
     // Coarse: refreshed at turn boundaries, signals and attention changes.
     lastActivityAt: time,
@@ -673,7 +793,9 @@ export default defineSchema({
     .index("by_project_activity", ["projectId", "lastActivityAt"])
     .index("by_ticket_activity", ["ticketId", "lastActivityAt"])
     .index("by_owner_activity", ["ownerUserId", "lastActivityAt"])
-    .index("by_parent", ["parentSessionId"]),
+    .index("by_parent", ["parentSessionId"])
+    // A replaced runner's Sessions move to its successor (`runners.linkFromDesktop`).
+    .index("by_place_runner", ["placeRunnerId"]),
   // The per-Session head document: the claim and the accepted cursor.
   sessionIntake: defineTable({
     sessionId: uuid,
@@ -685,12 +807,16 @@ export default defineSchema({
   })
     .index("by_session", ["sessionId"])
     .index("by_runner", ["claim.runnerId"]),
-  // The bounded cloud fold (≤ 64 KB by contract).
+  // The bounded cloud fold (≤ 64 KB by contract), stored as its JSON text.
   sessionStates: defineTable({
     sessionId: uuid,
     throughSequence: v.number(),
     foldVersion: v.number(),
     state: json,
+    // When a catch-up (or refold) over the accepted history was last scheduled; null when caught up.
+    catchUpAt: v.optional(nullable(time)),
+    // The last fact whose derived rows (turns, attention, receipts) were written; a refold keeps it.
+    derivedThrough: v.optional(v.number()),
   }).index("by_session", ["sessionId"]),
   // Accepted, immutable Session facts: the shared envelope plus backend metadata.
   sessionEvents: defineTable({
@@ -712,6 +838,7 @@ export default defineSchema({
   })
     .index("by_session_sequence", ["sessionId", "sequence"])
     .index("by_session_event", ["sessionId", "eventId"])
+    .index("by_session_command", ["sessionId", "commandId", "kind"])
     .index("by_session_kind", ["sessionId", "kind", "sequence"]),
   sessionTurns: defineTable({
     sessionId: uuid,
@@ -787,15 +914,22 @@ export default defineSchema({
     createdAt: time,
   }).index("by_session_file_offset", ["sessionId", "piFileId", "startOffset"]),
   // Ephemeral streaming deltas, sent only while someone views the Session.
+  // `delta` is the chunk's transcript-overlay operations as JSON text
+  // (`@volli/shared/cloud` stream-chunks); `baseline` marks a chunk that
+  // starts with a `reset`, where a reader may start or restart the stream.
   streamChunks: defineTable({
     sessionId: uuid,
     messageId: v.string(),
     seq: v.number(),
     turnId: nullable(v.string()),
-    delta: json,
+    baseline: v.boolean(),
+    throughSequence: v.number(),
+    delta: v.string(),
     createdAt: time,
   })
     .index("by_session_message_seq", ["sessionId", "messageId", "seq"])
+    .index("by_session_message_baseline", ["sessionId", "messageId", "baseline", "seq"])
+    .index("by_session_created", ["sessionId", "createdAt"])
     .index("by_created", ["createdAt"]),
   sessionViewers: defineTable({
     id: uuid,
@@ -812,6 +946,32 @@ export default defineSchema({
   sessionViewerHeartbeats: defineTable({ viewerId: uuid, expiresAt: time })
     .index("by_viewer", ["viewerId"])
     .index("by_expiry", ["expiresAt"]),
+  // Public queue preconditions cover backend intent changes AND runner mirrors.
+  sessionFollowUpRevisions: defineTable({
+    sessionId: uuid,
+    generation: v.number(),
+    revision: v.number(),
+  }).index("by_session", ["sessionId"]),
+  // Rebuildable runner-owned queue view. Intent is held separately by runnerJobs.
+  sessionFollowUpQueues: defineTable({
+    sessionId: uuid,
+    runnerId: uuid,
+    generation: v.number(),
+    revision: v.number(),
+    items: v.array(
+      v.object({
+        messageId: v.string(),
+        commandId: v.string(),
+        state: literals(["queued", "releasing"]),
+        afterCurrentStep: v.optional(v.boolean()),
+        refused: v.optional(v.boolean()),
+        refusedDetail: v.optional(v.string()),
+        message: nullable(v.string()),
+        messageDigest: v.string(),
+      }),
+    ),
+    updatedAt: time,
+  }).index("by_session", ["sessionId"]),
   delegations: defineTable({
     childSessionId: uuid,
     parentSessionId: uuid,
@@ -819,13 +979,33 @@ export default defineSchema({
     depth: v.number(),
     toolCallId: v.string(),
     createCommandId: v.string(),
+    stopCommandId: v.optional(uuid),
+    // A slot outlives each watch: failed first attaches wait for Retry, and
+    // resumed turns use their own frozen notice ids without a stop cascade.
+    watch: v.optional(
+      v.object({
+        throughSequence: v.number(),
+        // Parent recorded :answer, or its own stop settled the original watch.
+        originalSettled: v.boolean(),
+        // Original result already chosen, even if its notice is still parked.
+        originalOutcome: v.boolean(),
+        active: nullable(
+          v.object({
+            afterSequence: v.number(),
+            resumed: v.boolean(),
+            commandId: v.string(),
+          }),
+        ),
+      }),
+    ),
     status: literals(["starting", "running", "answered", "failed", "stopped"]),
     answerRef: nullable(json),
     createdAt: time,
     settledAt: nullable(time),
   })
     .index("by_child", ["childSessionId"])
-    .index("by_parent_call", ["parentSessionId", "toolCallId"]),
+    .index("by_parent_call", ["parentSessionId", "toolCallId"])
+    .index("by_parent_status", ["parentSessionId", "status"]),
   delegationExtensions: defineTable({
     parentSessionId: uuid,
     toolCallId: v.string(),
@@ -846,10 +1026,33 @@ export default defineSchema({
     createdBy: actor,
     createdAt: time,
     endedAt: nullable(time),
+    origin: v.optional(literals(["explicit", "started", "steered", "delegation"])),
+    turnArmed: v.optional(v.boolean()),
+    // Never report a fact already accepted before this arm (including catch-up/refold).
+    armedThroughSequence: v.optional(v.number()),
+    kinds: v.optional(v.array(v.string())),
+    lastNoticeAt: v.optional(time),
+    lastArmedAt: v.optional(time),
+    endedReason: v.optional(
+      literals(["unwatched", "watcher_stopped", "target_stopped", "access_lost", "expired"]),
+    ),
   })
     .index("by_uuid", ["id"])
     .index("by_target", ["target.kind", "target.id", "endedAt"])
-    .index("by_watcher", ["watcherSessionId", "endedAt"]),
+    .index("by_watcher", ["watcherSessionId", "endedAt"])
+    .index("by_open", ["endedAt"]),
+  // Arming receipts are independent of watch lifetime: a retried arm must not
+  // re-arm a turn that fired, or resurrect a watch ended since that command.
+  watchReceipts: defineTable({
+    commandId: v.string(),
+    watcherSessionId: uuid,
+    target: v.object({ kind: literals(["session", "ticket"]), id: uuid }),
+    watchId: uuid,
+    kinds: v.optional(v.array(v.string())),
+    expiresAt: time,
+  })
+    .index("by_command", ["commandId"])
+    .index("by_expiry", ["expiresAt"]),
   readMarkers: defineTable({
     userId: uuid,
     sessionId: uuid,
@@ -871,6 +1074,8 @@ export default defineSchema({
     workingCopyId: nullable(uuid),
     commandId: nullable(uuid),
     payload: json,
+    // Frozen caller intent: queued follow-up payloads may be edited in place.
+    commandIntent: v.optional(v.string()),
     priority: literals(JOB_PRIORITIES),
     // 0 urgent, 1 normal (`jobRank`): the ready index sorts on it.
     rank: v.number(),
@@ -909,41 +1114,40 @@ export default defineSchema({
     .index("by_uuid", ["id"])
     .index("by_runner_ready", ["runnerId", "status", "rank", "availableAt"])
     .index("by_session", ["sessionId", "createdAt"])
+    .index("by_session_kind_status", ["sessionId", "kind", "status"])
     .index("by_ticket", ["ticketId", "createdAt"])
     .index("by_expiry", ["expiresAt"])
     // Queued work of one kind by age (the notice expiry sweep).
     .index("by_kind_status", ["kind", "status", "createdAt"]),
 
   // ── attention / Needs-you ──────────────────────────────────────────────────
+  // Written only by `lib/attention.ts`.
   attentionItems: defineTable({
-    // Derived and frozen for Session items (`s:{sessionId}:{sourceId}`), a UUID otherwise.
+    // Frozen, derived by each producer (`attention.ts` in `@volli/shared/cloud`):
+    // `s:{sessionId}:{sourceId}`, `t:{ticketId}:review:{userId}`, `r:{runnerId}:{alert}`.
     id: v.string(),
     userId: uuid,
-    projectId: uuid,
+    // Null for an item that belongs to no project (a runner alert, billing).
+    projectId: nullable(uuid),
+    // A billing item's Workspace; every other item reaches its Workspace through its project.
+    workspaceId: v.optional(nullable(uuid)),
     ticketId: nullable(uuid),
     sessionId: nullable(uuid),
-    source: literals([
-      "session_attention",
-      "interaction",
-      "session_blocked",
-      "review_requested",
-      "mention",
-      "environment_failed",
-      "runner_alert",
-      "billing",
-    ]),
+    source: literals(ATTENTION_SOURCES),
     sourceId: v.string(),
     kind: v.string(),
     title: v.string(),
     detail: nullable(v.string()),
     raisedAt: time,
     clearedAt: nullable(time),
-    clearedReason: nullable(literals(["resolved", "access_lost", "superseded", "deleted"])),
+    clearedReason: nullable(literals(ATTENTION_CLEARED_REASONS)),
     seenAt: nullable(time),
   })
     .index("by_uuid", ["id"])
     .index("by_user_open", ["userId", "clearedAt", "raisedAt"])
-    .index("by_session", ["sessionId", "clearedAt"]),
+    .index("by_session", ["sessionId", "clearedAt"])
+    // A ticket's open items of one source (its review requests, re-targeted on each board write).
+    .index("by_ticket", ["ticketId", "source", "clearedAt"]),
 
   // ── config, secrets, model connections ─────────────────────────────────────
   configEntries: defineTable({

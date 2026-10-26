@@ -64,6 +64,8 @@ export interface Session {
    * before the field existed, all of which were root Sessions.
    */
   readonly parentSessionId: string | null;
+  /** Cloud owner, frozen at birth; absent on signed-out and pre-cloud Sessions. */
+  readonly ownerUserId?: string;
   readonly title: string | null;
   /** Epoch milliseconds. Metadata only; ordering comes from `SessionEvent.sequence`. */
   readonly createdAt: number;

@@ -15,8 +15,7 @@ import type {
  * `AGENT_VERB_TABLE` binds every verb (a both-door key, a ticket write whose
  * command is a board key, VC-794, and each of its own verbs' keys, VC-923)
  * only as a projection of `handlers[key]` under its coordination policy
- * (`agent-dispatch/table.ts`), bar the four Session reads the map delegates
- * the other way;
+ * (`agent-dispatch/table.ts`), the four Session reads included (VC-894);
  * a legacy per-channel IPC handler that still serves a catalog command
  * invokes the same entry under the desktop window's policy until its area
  * moves. So "both doors reach the same function, admitted" is a fact of the
@@ -34,7 +33,9 @@ import type {
  * and neither does a handler with no catalog key. What a host lacks this
  * launch is a handler's answer ({@link OperationUnavailableError}), never a
  * missing entry; an agent door's own verb (VC-923) is sealed empty and served
- * by that door, and answers unavailable until it is (`HandlerNotServedError`).
+ * by that door, and so are the socket's Session reads, which the agent
+ * command service serves (VC-894); each answers unavailable until it is
+ * (`HandlerNotServedError`).
  */
 import type Database from "better-sqlite3";
 import type {
@@ -62,6 +63,7 @@ import {
   type AddHostStepId,
   type AccountAccessToken,
   type AccountConnection,
+  type AccountGithubSnapshot,
   type AccountSnapshot,
   type AgentResponse,
   type CloudLaunch,
@@ -95,6 +97,7 @@ import {
   type HostHandlerKey,
   type RuntimeVerbResult,
   type ServedAgentHandlerKey,
+  type ServedHandlerKey,
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
   type ModelPickerView,
@@ -109,7 +112,9 @@ import {
   type CreateRemoteProjectInput,
   type CreateRemoteProjectResult,
   type SessionListingPage,
-  type SessionReadVerb,
+  type ThisMacRunnerSnapshot,
+  type CloudCheckoutChoice,
+  type CloudCheckoutStatus,
   type Ticket,
   type WorktreeSetupAnswer,
   type WorktreeSetupStatusView,
@@ -121,6 +126,8 @@ import type { ToolVerbInput } from "../agent-tool-door";
 import type { DetachedWorkPort } from "../detached-work";
 import type { AccountPort } from "./account-port";
 import type { BrowserShortcutsPort } from "./browser-shortcuts-port";
+import type { RunnerAccountPort } from "./runner-account-port";
+import type { CloudCheckoutPort } from "./cloud-checkout-port";
 import type { BrowserPictureStore } from "../browser/picture-store";
 import type { HostSignIns } from "../host-sign-ins";
 import { withLogContext } from "../log/context";
@@ -287,10 +294,12 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
   >;
   readonly "session.reconcile": HostHandler<{ sessionId: string; attachmentId: string }, void>;
   /**
-   * The socket's Session reads, for a caller bound to one Workspace (VC-663,
-   * D4): the socket verb's own handler, its roster forced to `workspaceId`
-   * (`AgentCommandService.executeInWorkspace`). Socket-delegated keys
-   * (`SOCKET_DELEGATED_HANDLER_KEYS`): the socket serves these verbs itself.
+   * The socket's Session reads (VC-663, D4; VC-894): one entry per read,
+   * which the agent command service serves into the map
+   * (`SERVED_CATALOG_HANDLER_KEYS`, `agent-dispatch/verbs.ts`), and which
+   * every door reaches as a projection: the socket with the request it
+   * resolved, a router with a Workspace the roster is forced to
+   * ({@link SessionReadHandlerInput}). The answer is the socket's envelope.
    */
   readonly "session.list": HostHandler<SessionReadHandlerInput, AgentResponse>;
   readonly "session.show": HostHandler<SessionReadHandlerInput, AgentResponse>;
@@ -440,7 +449,10 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
   readonly "account.snapshot": HostHandler<void, AccountSnapshot>;
   /** The current snapshot first, then every change. */
   readonly "account.subscribe": HostSubscriptionHandler<void, AccountSnapshot>;
-  readonly "account.signIn": HostHandler<{ connection: AccountConnection }, null>;
+  readonly "account.signIn": HostHandler<
+    { connection: AccountConnection; inviteCode?: string; acceptedAgreementVersion?: string },
+    null
+  >;
   readonly "account.cancelSignIn": HostHandler<void, null>;
   readonly "account.signOut": HostHandler<void, null>;
   readonly "account.requestDeletion": HostHandler<void, null>;
@@ -452,6 +464,27 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
   readonly "cloud.reportUnsavedWrites": HostHandler<{ count: number }, null>;
   readonly "cloud.saveSnapshot": HostHandler<{ text: string }, null>;
   readonly "cloud.readSnapshot": HostHandler<void, { text: string | null }>;
+  /** The account's GitHub connection and the App's installations (VC-897), through {@link AccountPort.github}. */
+  readonly "account.githubSubscribe": HostSubscriptionHandler<void, AccountGithubSnapshot>;
+  readonly "account.githubConnect": HostHandler<void, null>;
+  readonly "account.githubInstall": HostHandler<void, null>;
+  readonly "account.githubCancel": HostHandler<void, null>;
+  readonly "account.githubDisconnect": HostHandler<void, null>;
+  /**
+   * This Mac as one of the person's runners (VC-895): desktop main's Mac
+   * runner, {@link HostHandlerOptions.runners}'s, or unavailable.
+   */
+  readonly "runners.thisMac": HostHandler<void, ThisMacRunnerSnapshot>;
+  /** The current snapshot first, then every change. */
+  readonly "runners.subscribeThisMac": HostSubscriptionHandler<void, ThisMacRunnerSnapshot>;
+  readonly "runners.addThisMac": HostHandler<void, null>;
+  readonly "runners.removeThisMac": HostHandler<void, null>;
+  /**
+   * A Volli Cloud project's folder on this Mac (VC-895 N2-3): desktop main's
+   * {@link HostHandlerOptions.checkouts}, or unavailable. Never a path.
+   */
+  readonly "checkouts.status": HostHandler<{ projectId: string }, CloudCheckoutStatus>;
+  readonly "checkouts.chooseFolder": HostHandler<{ projectId: string }, CloudCheckoutChoice>;
 }
 
 /** The agent keys the socket serves: its own verbs, less the start both agent doors share. */
@@ -500,24 +533,34 @@ export type AgentHandlerSignatures = {
   readonly "session.start": HostHandler<SessionStartCommandInput, StartSessionResult>;
 };
 
-/** What a Session read's handler is asked: its Workspace, and the socket verb's args. */
-export interface SessionReadHandlerInput {
+/**
+ * What a router asks a Session read (VC-663, D4): the Workspace its roster is
+ * forced to, and the socket verb's args. The project is the Workspace's,
+ * never taken from the args, so a handle in any other Workspace resolves
+ * exactly as an absent one does.
+ */
+export interface SessionReadWorkspaceInput {
   readonly workspaceId: string;
   readonly args: Record<string, unknown>;
 }
 
-/** Runs one of the socket's Session reads forced to one Workspace: the agent command service's. */
-export type SessionReadPort = (
-  verb: SessionReadVerb,
-  workspaceId: string,
-  args: Record<string, unknown>,
-) => Promise<AgentResponse>;
+/**
+ * What a Session read's entry is asked: a router's Workspace-scoped call, or
+ * the request the agent socket resolved ({@link AgentVerbInput}), as the
+ * socket's own verbs are asked. Told apart by `request`, which only the
+ * socket's carries.
+ */
+export type SessionReadHandlerInput = SessionReadWorkspaceInput | AgentVerbInput;
 
 /** The one map: every {@link HostHandlerKey}, and nothing else. */
 export type HostHandlers = { readonly [Key in HostHandlerKey]: HostHandlerSignatures[Key] };
 
-/** What {@link createHostHandlers} seals: every entry but the agent doors' own, which are served. */
-export type SealedHostHandlers = Omit<HostHandlers, ServedAgentHandlerKey>;
+/**
+ * What {@link createHostHandlers} seals: every entry but the served ones (the
+ * agent doors' own, and the socket's Session reads), which a door's service
+ * serves.
+ */
+export type SealedHostHandlers = Omit<HostHandlers, ServedHandlerKey>;
 
 type AssertNever<Type extends never> = Type;
 /**
@@ -592,13 +635,6 @@ export interface HostHandlerOptions {
   readonly worktree?: WorktreePorts;
   /** Sees every policy verdict at the map, before the handler it admits. */
   readonly onAdmission?: AdmissionObserver;
-  /**
-   * The socket's Session reads, Workspace-scoped (VC-663, D4), or null where
-   * the host serves them over no network door (the desktop): they answer
-   * unavailable. A root whose agent command service is built after this map
-   * passes a forwarder.
-   */
-  readonly sessionReads?: SessionReadPort | null;
   /** The host's in-memory recent log (VC-699), or null where this host keeps none. */
   readonly logs?: LogRing | null;
   /**
@@ -670,6 +706,18 @@ export interface HostHandlerOptions {
    * hostd: `account.*` answer unavailable.
    */
   readonly account?: AccountPort | null;
+  /**
+   * Desktop main's Mac runner (VC-895): this Mac's registration as one of
+   * the person's runners; absent or null on hostd: `runners.*` answer
+   * unavailable.
+   */
+  readonly runners?: RunnerAccountPort | null;
+  /**
+   * Desktop main's cloud project folders (VC-895 N2-3): the runner-local
+   * registry and the folder picker; absent or null on hostd: `checkouts.*`
+   * answer unavailable.
+   */
+  readonly checkouts?: CloudCheckoutPort | null;
 }
 
 /** Messages a client may show; unchanged from the router's own (VC-564). */
@@ -680,7 +728,6 @@ const EXPERIMENTS_UNAVAILABLE = "Experimental settings are unavailable on this t
 const MODEL_ACCESS_UNAVAILABLE = "Model Access is unavailable on this transport";
 const PREFERENCES_UNAVAILABLE = "Model Access preferences are unavailable on this transport";
 const BOARD_UNAVAILABLE = "The board is unavailable: the database did not open";
-const SESSION_READS_UNAVAILABLE = "Session reads are unavailable on this transport";
 const SIGN_INS_UNAVAILABLE = "Sign-ins are unavailable on this host";
 const REMOTE_HOSTS_UNAVAILABLE = "Remote hosts are unavailable on this host";
 const REMOTE_SIGN_INS_UNAVAILABLE = "Remote host sign-ins are unavailable on this host";
@@ -690,6 +737,8 @@ const HOST_SCOPE_RELAY_UNAVAILABLE = "Remote host operations are unavailable on 
 const HOST_LINK_RELAY_UNAVAILABLE = "Remote projects are unavailable on this host";
 const BROWSER_SHORTCUTS_UNAVAILABLE = "Browser Tab shortcuts are unavailable on this host";
 const ACCOUNT_UNAVAILABLE = "Accounts are unavailable on this host";
+const RUNNERS_UNAVAILABLE = "Runners are unavailable on this host";
+const CHECKOUTS_UNAVAILABLE = "Project folders are unavailable on this host";
 const PROJECT_REMOVAL_UNAVAILABLE = "Removing a project is unavailable on this host";
 
 /**
@@ -792,7 +841,6 @@ function hostHandlerEntries(
   const preferences = () => present(db, PREFERENCES_UNAVAILABLE);
   const board = () => present(db, BOARD_UNAVAILABLE);
   const worktreeReads = () => present(options.worktreeReads, WORKTREE_READS_UNAVAILABLE);
-  const sessionReads = () => present(options.sessionReads ?? null, SESSION_READS_UNAVAILABLE);
   const signIns = () => present(options.signIns ?? null, SIGN_INS_UNAVAILABLE);
   const remoteHosts = () => present(options.remoteHosts ?? null, REMOTE_HOSTS_UNAVAILABLE);
   const remoteSignIns = () => present(options.remoteSignIns ?? null, REMOTE_SIGN_INS_UNAVAILABLE);
@@ -804,6 +852,8 @@ function hostHandlerEntries(
   const browserShortcuts = () =>
     present(options.browserShortcuts ?? null, BROWSER_SHORTCUTS_UNAVAILABLE);
   const account = () => present(options.account ?? null, ACCOUNT_UNAVAILABLE);
+  const runners = () => present(options.runners ?? null, RUNNERS_UNAVAILABLE);
+  const checkouts = () => present(options.checkouts ?? null, CHECKOUTS_UNAVAILABLE);
   const feed = options.boardFeed ?? createBoardChangeFeed();
 
   const worktree = (database: Database.Database) =>
@@ -1014,11 +1064,6 @@ function hostHandlerEntries(
     "session.cancelInteraction": (input) =>
       runtime().cancelInteraction({ ...input, reason: "abandoned", origin: { kind: "user" } }),
     "session.reconcile": (input) => runtime().reconcile(input),
-    "session.list": ({ workspaceId, args }) => sessionReads()("session.list", workspaceId, args),
-    "session.show": ({ workspaceId, args }) => sessionReads()("session.show", workspaceId, args),
-    "session.peek": ({ workspaceId, args }) => sessionReads()("session.peek", workspaceId, args),
-    "session.answer": ({ workspaceId, args }) =>
-      sessionReads()("session.answer", workspaceId, args),
     "session.listing": async ({ projectId }) =>
       boundedSessionListing(await projectSessionListing(listing(), projectId)),
     "session.listingForTicket": async ({ ticketId }) =>
@@ -1205,7 +1250,14 @@ function hostHandlerEntries(
     "account.snapshot": () => account().snapshot(),
     "account.subscribe": async (_input, _call, sink) =>
       account().subscribe((snapshot) => void sink.emit(snapshot)),
-    "account.signIn": ({ connection }) => done(() => account().signIn(connection)),
+    "account.signIn": ({ connection, inviteCode, acceptedAgreementVersion }) =>
+      done(() =>
+        acceptedAgreementVersion !== undefined
+          ? account().signIn(connection, inviteCode, acceptedAgreementVersion)
+          : inviteCode === undefined
+            ? account().signIn(connection)
+            : account().signIn(connection, inviteCode),
+      ),
     "account.cancelSignIn": () => done(() => account().cancelSignIn()),
     "account.signOut": () => done(() => account().signOut()),
     "account.requestDeletion": () => done(() => account().requestDeletion()),
@@ -1216,5 +1268,20 @@ function hostHandlerEntries(
     "cloud.reportUnsavedWrites": ({ count }) => done(() => account().reportUnsavedWrites(count)),
     "cloud.saveSnapshot": ({ text }) => done(() => account().saveSnapshot(text)),
     "cloud.readSnapshot": async () => ({ text: await account().readSnapshot() }),
+    "account.githubSubscribe": async (_input, _call, sink) =>
+      account().github.subscribe((snapshot) => void sink.emit(snapshot)),
+    "account.githubConnect": () => done(() => account().github.connect()),
+    "account.githubInstall": () => done(() => account().github.install()),
+    "account.githubCancel": () => done(() => account().github.cancel()),
+    "account.githubDisconnect": () => done(() => account().github.disconnect()),
+    // This Mac as a runner (VC-895): desktop main's Mac runner, through its port.
+    "runners.thisMac": () => runners().thisMac(),
+    "runners.subscribeThisMac": async (_input, _call, sink) =>
+      runners().subscribeThisMac((snapshot) => void sink.emit(snapshot)),
+    "runners.addThisMac": () => done(() => runners().addThisMac()),
+    "runners.removeThisMac": () => done(() => runners().removeThisMac()),
+    // A cloud project's folder on this Mac (VC-895 N2-3): desktop main, through its port.
+    "checkouts.status": ({ projectId }) => checkouts().status(projectId),
+    "checkouts.chooseFolder": ({ projectId }) => checkouts().chooseFolder(projectId),
   };
 }

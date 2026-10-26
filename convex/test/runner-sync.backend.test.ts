@@ -26,6 +26,7 @@ import {
 
 import { api } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
+import { enrollBackendPreview } from "./preview-fixtures";
 
 const backend = connectBackend();
 
@@ -49,7 +50,9 @@ const until = async (check: () => Promise<boolean>, ms = 10_000) => {
 describe("the runner's backend link on the pinned local backend", () => {
   test("a WebSocket link signs in with the runner token, beats, reconnects, and stops cleanly", async () => {
     const person = backend.client(`user:${randomUUID()}`);
-    await person.mutation(api.accounts.ensureViewer, {});
+    const { userId } = await person.mutation(api.accounts.ensureViewer, {});
+    // The link below is this account's: its grant is what the runner rechecks.
+    await enrollBackendPreview(backend, person, userId);
     const { installToken } = await person.action(api.runners.createInstallToken, {
       nameHint: "ws-box",
       defaultWorkspaceId: null,

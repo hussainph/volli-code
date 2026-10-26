@@ -14,6 +14,14 @@ export interface HostToolCapabilities {
   requestSecret: boolean;
   browser: boolean;
   shells: boolean;
+  /**
+   * Whether this launch runs Automations at all (VC-952). Absent means yes —
+   * every local caller — and only a cloud launch passes `false`, so a surface
+   * resolved now never names `automation.run`. A Session already frozen with
+   * it keeps the record: this resolver is only read at a new birth or as an
+   * additive-refresh candidate, never to rewrite one.
+   */
+  automationsAvailable?: boolean;
 }
 
 /**
@@ -33,7 +41,7 @@ export function resolveHostToolSurface(input: {
   classify: boolean;
 }): readonly SessionToolId[] {
   const { capabilities, web, role, grants, within, mcpTools, codeModeBirth, classify } = input;
-  return resolveAgentToolSurface({
+  const surface = resolveAgentToolSurface({
     role,
     ...(within === undefined ? {} : { within }),
     capabilities: {
@@ -65,4 +73,13 @@ export function resolveHostToolSurface(input: {
     grants,
     mcpTools,
   });
+  // Membership only, and after the canonical order is settled: dropping the
+  // one verb that spends an Automation leaves the relative order of every
+  // remaining tool untouched, and a local launch's surface byte-for-byte as
+  // it was. Code Mode derives its routes from this same surface, so it loses
+  // the route with the name. A frozen record is never resolved again through
+  // here; the additive refresh keeps names it already holds.
+  return capabilities.automationsAvailable === false
+    ? surface.filter((tool) => tool !== "automation.run")
+    : surface;
 }

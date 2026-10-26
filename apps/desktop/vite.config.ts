@@ -10,6 +10,7 @@ import type { PackUserConfig } from "vite-plus/pack";
 import { RENDERER_DEV_PORT } from "./scripts/dev-constants.mjs";
 import { SHARED_MACHINE_TEST_WORKERS } from "../../vitest.workers";
 import { rendererConnectSources, withConnectSources } from "./src/main/renderer-csp";
+import { packagedCloudConfig } from "./src/main/deployment-config";
 
 // Launch Electron after a pack only when BOTH hold:
 //  1. dev.mjs opted in by injecting VOLLI_DESKTOP_DEV=1 into the pack child's
@@ -60,8 +61,14 @@ const shouldLaunchElectronAfterPack = process.env.VOLLI_DESKTOP_DEV === "1" && i
 // is ESM-only, exporting no `require` condition, so the `require()` main.cjs
 // would be left with fails at boot. `verify-packed-requires.mjs` fails the
 // build if a chunk ever requires it.
+//
+// The Convex client (VC-895) is bundled too: main loads `convex/browser` and
+// `convex/server` only in a Volli Cloud launch, for this Mac's runner
+// connection, and inlined they add nothing the packaged app must ship.
 const bundleWorkspacePackages = (id: string): boolean =>
   id.startsWith("@volli/") ||
+  id === "convex" ||
+  id.startsWith("convex/") ||
   id.startsWith("@opentelemetry/") ||
   id.startsWith("@earendil-works/pi-mcp") ||
   id === "@earendil-works/pi-codemode" ||
@@ -620,6 +627,15 @@ export default defineConfig(({ mode, command }) => ({
         // the wrong store, and nothing on screen says so.
         "src/lib/board-api.ts",
         "src/lib/cloud-board-api.ts",
+        "src/lib/cloud-session-listing.ts",
+        "src/lib/cloud-session-source.ts",
+        "src/lib/cloud-session-peek.ts",
+        "src/lib/use-cloud-session-on-screen.ts",
+        "src/lib/cloud-sessions.ts",
+        "src/lib/cloud-session-read-only.ts",
+        "src/lib/cloud-session-view.ts",
+        "src/lib/cloud-transcript-reader.ts",
+        "src/lib/cloud-session-transport.ts",
         // When a remote project's Session listing is read again (VC-713): a
         // missed branch is a question nobody sees on reopen, or a poll that
         // never stops.
@@ -768,9 +784,11 @@ export default defineConfig(({ mode, command }) => ({
         // Which product store a launch uses, its marker, and the restart into
         // the other one through the quit gates (VC-889).
         "**/src/main/cloud-launch.ts",
+        "**/src/main/preview-gate.ts",
         // The last-seen cloud board on disk, per account (VC-889, D3).
         "**/src/main/cloud-snapshot.ts",
         "**/src/main/renderer-csp.ts",
+        "**/src/main/deployment-config.ts",
         "**/src/main/host-runtime.ts",
         // Menu-bar mode's whole decision and lifecycle (VC-577).
         "**/src/main/menu-bar-host.ts",
@@ -861,6 +879,7 @@ export default defineConfig(({ mode, command }) => ({
   pack: [
     definePackConfig({
       name: "electron-main",
+      define: { VOLLI_PACKAGED_CLOUD_CONFIG: JSON.stringify(packagedCloudConfig(process.env)) },
       entry: { main: "src/main/index.ts" },
       format: "cjs",
       outDir: "dist-electron",

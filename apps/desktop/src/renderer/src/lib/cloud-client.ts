@@ -49,6 +49,7 @@ export type CloudClient = Pick<
   | "watchQuery"
   | "query"
   | "mutation"
+  | "action"
   | "connectionState"
   | "subscribeToConnectionState"
   | "setAuth"
@@ -134,9 +135,13 @@ export function createTokenFetcher(deps: {
   };
 }
 
-/** The account doors the client uses, over the desktop bridge. */
-export interface CloudAccountDoor {
+/** The identity's short-lived token, independent of the sign-in provider. */
+export interface CloudTokenSource {
   accessToken(force: boolean): Promise<AccountAccessToken>;
+}
+
+/** Hosted account lifecycle; embedded deployments need no account subscription. */
+export interface CloudAccountDoor {
   subscribe(handlers: { onData(snapshot: AccountSnapshot): void; onError(error: unknown): void }): {
     unsubscribe(): void;
   };
@@ -151,7 +156,8 @@ export interface CloudClientDeps {
     ) => CloudClient;
     api: CloudApi;
   }>;
-  account: CloudAccountDoor;
+  tokens: CloudTokenSource;
+  account?: CloudAccountDoor;
   window: {
     readonly navigator: { readonly onLine: boolean };
     addEventListener(type: "online" | "offline" | "pagehide", listener: () => void): void;
@@ -163,11 +169,14 @@ export interface CloudClientDeps {
   reportUnsavedWrites(count: number): void;
 }
 
-function defaultDeps(): CloudClientDeps {
+function defaultDeps(launch: Extract<CloudLaunch, { store: "cloud" }>): CloudClientDeps {
+  // VC-938 must inject its local issuer. Never fall back to a person's hosted account.
+  if (launch.deployment === "local")
+    throw new Error("Embedded deployment needs a local token source");
   return {
     load: () => import("./cloud-runtime"),
+    tokens: { accessToken: (force) => sessionRpcClient().account.accessToken.query({ force }) },
     account: {
-      accessToken: (force) => sessionRpcClient().account.accessToken.query({ force }),
       subscribe: (handlers) => sessionRpcClient().account.subscribe.subscribe(undefined, handlers),
     },
     window,
@@ -231,7 +240,7 @@ export function closeCloudClient(): void {
  */
 export async function startCloudClient(
   launch: Extract<CloudLaunch, { store: "cloud" }>,
-  deps: CloudClientDeps = defaultDeps(),
+  deps: CloudClientDeps = defaultDeps(launch),
 ): Promise<CloudSession> {
   closeActive?.();
   const { inputs, clock } = deps;
@@ -246,7 +255,7 @@ export async function startCloudClient(
   let closed = false;
   const waiter = createWaiter(clock);
   const fetchToken = createTokenFetcher({
-    ask: (force) => deps.account.accessToken(force),
+    ask: (force) => deps.tokens.accessToken(force),
     wait: (ms) => waiter.wait(ms),
     closed: () => closed,
     retryMs: TOKEN_RETRY_MS,
@@ -293,7 +302,7 @@ export async function startCloudClient(
   let authCleared = false;
   let stopAccount: () => void = NOTHING;
   let lastAccount: { state: string; backend: string | null } | null = null;
-  const account = deps.account.subscribe({
+  const account = deps.account?.subscribe({
     onData(snapshot) {
       if (closed) return;
       const signedIn = snapshot.account;
@@ -330,8 +339,10 @@ export async function startCloudClient(
     },
   });
   // A first snapshot delivered during the call may already have closed the client.
-  if (closed) account.unsubscribe();
-  else stopAccount = () => account.unsubscribe();
+  if (account !== undefined) {
+    if (closed) account.unsubscribe();
+    else stopAccount = () => account.unsubscribe();
+  }
 
   function close(): void {
     if (closed) return;

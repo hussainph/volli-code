@@ -1,7 +1,8 @@
 /**
- * Settings → Account (VC-884): its rail entry, first under Services. Only with
- * the `cloud` experiment on (`settingsGroups`'s `account` option); with it off
- * the category does not exist.
+ * Settings → Account (VC-884; its GitHub section, VC-897): its rail entry,
+ * first under Services. Only with the `cloud` experiment on
+ * (`settingsGroups`'s `account` option); with it off the category does not
+ * exist.
  */
 import { UserCircleIcon } from "@phosphor-icons/react/dist/csr/UserCircle";
 
@@ -35,6 +36,13 @@ export function accountCategory(): PrefCategory {
       "scheduled",
       "connected",
       "offline",
+      "github accounts",
+      "connect github",
+      "reconnect",
+      "disconnect",
+      "install on an account",
+      "configure on github",
+      "repositories",
     ],
     content: <AccountPane />,
   };

@@ -108,6 +108,12 @@ export const MIGRATION_TABLE_DECISIONS: readonly MigrationTableDecision[] = [
     reason: "Release stays a runner decision; preflight requires it settled.",
   },
   {
+    table: "session_follow_up_identities",
+    disposition: "runner",
+    reason:
+      "Exact follow-up replay proofs stay with the runner queue after its reply payloads are pruned.",
+  },
+  {
     table: "session_usage",
     disposition: "runner",
     reason: "A rebuildable index over `usage.recorded` events, which are exported.",
@@ -285,6 +291,21 @@ export const MIGRATION_TABLE_DECISIONS: readonly MigrationTableDecision[] = [
     table: "session_drain_cursors",
     disposition: "runner",
     reason: "The runner's own accepted cursors; the import writes the backend's side.",
+  },
+  {
+    table: "project_checkout_paths",
+    disposition: "runner",
+    reason: "Absolute checkout folders belong to the runner, not the cloud project.",
+  },
+  {
+    table: "working_copy_paths",
+    disposition: "runner",
+    reason: "Absolute Working-copy paths and observed git metadata stay on this runner.",
+  },
+  {
+    table: "cloud_shadow_rows",
+    disposition: "runner",
+    reason: "Runner-local identity provenance, never authoritative cloud board rows.",
   },
   {
     table: "job_journal",

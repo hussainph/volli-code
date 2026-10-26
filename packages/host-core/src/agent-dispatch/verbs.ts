@@ -18,12 +18,32 @@
  * service serves {@link agentVerbEntries} into the map it was handed, once, on
  * construction (`createAgentCommandService`), and until then they answer
  * unavailable.
+ *
+ * The socket's Session reads are served the same way ({@link sessionReadEntries},
+ * VC-894), though they are catalog keys: a router reaches them too, with a
+ * Workspace their roster is forced to (VC-663, D4). Their entry is the one
+ * implementation behind both doors, so the socket's binding is a projection
+ * of it like every other verb's, and a cloud launch's overlay has one entry
+ * to take each read over at.
  */
 
-import type { SessionProjection, SessionRecord } from "@volli/shared";
+import { SESSION_READ_VERBS } from "@volli/shared";
+import type {
+  AgentRequest,
+  AgentResponse,
+  SessionProjection,
+  SessionReadVerb,
+  SessionRecord,
+} from "@volli/shared";
 import type { SessionEngine } from "@volli/session-engine";
 
-import type { HostHandlers, SocketServedKey } from "../handlers/host-handlers";
+import { getProjectById, listProjects } from "../db/projects-repo";
+import type {
+  HostHandlers,
+  SessionReadHandlerInput,
+  SessionReadWorkspaceInput,
+  SocketServedKey,
+} from "../handlers/host-handlers";
 import { terminalSessionRecord } from "../session-control";
 import type { AgentVerbContext, AgentVerbHandler, AgentVerbInput } from "./context";
 import { doctorVerb, modelListVerb, notifyVerb, promptBaselineVerb } from "./app-verbs";
@@ -31,6 +51,7 @@ import { conflictsVerb } from "./conflicts-verb";
 import { costVerb } from "./cost-verb";
 import { hookVerb, sessionHarnessVerb, sessionLinkVerb } from "./harness-verbs";
 import { labelMergeVerb } from "./label-verbs";
+import { agentCommandPreflight } from "./preview";
 import { projectAddVerb } from "./project-verbs";
 import {
   boardVerb,
@@ -42,7 +63,14 @@ import {
   ticketListVerb,
   ticketShowVerb,
 } from "./read-verbs";
-import { sessionBlockedVerb, sessionDoneVerb } from "./session-verbs";
+import {
+  sessionAnswerVerb,
+  sessionBlockedVerb,
+  sessionDoneVerb,
+  sessionListVerb,
+  sessionPeekVerb,
+  sessionShowVerb,
+} from "./session-verbs";
 import { ticketSignalVerb } from "./ticket-verbs";
 import { worktreeDiffVerb, worktreeStatusVerb, worktreeSyncVerb } from "./worktree-verbs";
 
@@ -135,19 +163,104 @@ export function agentVerbEntries(
   const entries: Partial<Record<SocketServedKey, HostHandlers[SocketServedKey]>> = {};
   for (const key of Object.keys(AGENT_VERB_HANDLERS) as SocketServedKey[]) {
     const handle = AGENT_VERB_HANDLERS[key];
-    entries[key] = (input) =>
-      handle(
-        {
-          ...state,
-          ...rosterLoaders(state.sessionEngine, input.projects),
-          projects: input.projects,
-          envSession: input.envSession,
-          envSessionTerminal: input.envSessionTerminal,
-          authenticatedSessionId: input.authenticatedSessionId,
-          actor: input.actor,
-        },
-        input.request,
-      );
+    entries[key] = async (input) => {
+      const cloud = await state.options.cloudSessionVerbs?.socket({
+        sessionId: input.authenticatedSessionId,
+        request: input.request,
+      });
+      return cloud ?? handle(verbContext(state, input), input.request);
+    };
   }
   return entries as Pick<HostHandlers, SocketServedKey>;
+}
+
+/**
+ * The socket's Session reads' handlers (VC-79, VC-9, VC-663): the verbs the
+ * socket used to bind as handlers of its own, unchanged, now behind the map's
+ * one entry for each.
+ */
+const SESSION_READ_HANDLERS: { readonly [Key in SessionReadVerb]: AgentVerbHandler } = {
+  "session.list": sessionListVerb,
+  "session.show": sessionShowVerb,
+  "session.peek": sessionPeekVerb,
+  "session.answer": sessionAnswerVerb,
+};
+
+/**
+ * The map's entries for the socket's Session reads (VC-894), over one
+ * service's state. The socket asks one with the request it resolved, as it
+ * asks its own verbs; a router asks with the Workspace the roster is forced
+ * to ({@link workspaceReadInput}). Either way the same verb runs.
+ */
+export function sessionReadEntries(
+  state: AgentVerbServiceState,
+): Pick<HostHandlers, SessionReadVerb> {
+  const entries: Partial<Record<SessionReadVerb, HostHandlers[SessionReadVerb]>> = {};
+  for (const key of SESSION_READ_VERBS) {
+    const handle = SESSION_READ_HANDLERS[key];
+    entries[key] = async (input: SessionReadHandlerInput): Promise<AgentResponse> => {
+      const resolved = "request" in input ? input : workspaceReadInput(state, key, input);
+      if (!("request" in resolved)) return resolved;
+      // Only a verified agent call can borrow its Session-scoped grant. The
+      // frozen person's router has no Agent identity; cloud clients read Convex directly.
+      const cloud =
+        "request" in input
+          ? await state.options.cloudSessionVerbs?.socket({
+              sessionId: input.authenticatedSessionId,
+              request: input.request,
+            })
+          : null;
+      return cloud ?? handle(verbContext(state, resolved), resolved.request);
+    };
+  }
+  return entries as Pick<HostHandlers, SessionReadVerb>;
+}
+
+/**
+ * A router's read, as the socket would have resolved it (VC-663, D4): no
+ * `VOLLI_SESSION`, no token, no cwd, because the router's actor was
+ * authenticated by its own door and these reads need none of them; the
+ * roster is that one project's, and the project is forced, never taken from
+ * the caller: named by its path, the one selector no other project can
+ * share. A Workspace this host does not have selects no project, so the
+ * verb refuses it as it refuses any unknown project. The socket's preflight
+ * runs first, as it did when this read went through the socket's pipeline.
+ */
+function workspaceReadInput(
+  state: AgentVerbServiceState,
+  verb: SessionReadVerb,
+  { workspaceId, args }: SessionReadWorkspaceInput,
+): AgentVerbInput | AgentResponse {
+  const { db, appVersion } = state.options;
+  const request: AgentRequest = {
+    v: 1,
+    cmd: verb,
+    args: { ...args, project: getProjectById(db, workspaceId)?.path ?? workspaceId },
+    ctx: { cwd: "/", env: {} },
+  };
+  const preflight = agentCommandPreflight(appVersion, request);
+  if (preflight !== null) return preflight;
+  return {
+    request,
+    projects: (state.options.projects?.() ?? listProjects(db)).filter(
+      (project) => project.id === workspaceId,
+    ),
+    envSession: null,
+    envSessionTerminal: null,
+    authenticatedSessionId: null,
+    actor: null,
+  };
+}
+
+/** One verb's context: the service's state, and the request's facts as the door resolved them. */
+function verbContext(state: AgentVerbServiceState, input: AgentVerbInput): AgentVerbContext {
+  return {
+    ...state,
+    ...rosterLoaders(state.sessionEngine, input.projects),
+    projects: input.projects,
+    envSession: input.envSession,
+    envSessionTerminal: input.envSessionTerminal,
+    authenticatedSessionId: input.authenticatedSessionId,
+    actor: input.actor,
+  };
 }

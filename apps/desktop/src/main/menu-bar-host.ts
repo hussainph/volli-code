@@ -12,10 +12,10 @@
  *   simply running with no window, which macOS already allowed before this.
  * - **Not a second source of truth.** Live work is read from the host
  *   (`liveHost.liveWork`), never from a renderer — there is none here.
- * - **Not resident forever.** ⌘Q means "quit when done": once live work has
- *   drained and stayed drained for {@link MENU_BAR_SETTLE_MS}, the app takes
- *   today's quit path on its own. An armed Automation alone does not keep it
- *   resident (the ruling; a later setting can change that).
+ * - In a cloud launch the person's resident-runner setting keeps this Mac
+ *   available even while idle. Otherwise ⌘Q means "quit when done": once
+ *   work stays drained for {@link MENU_BAR_SETTLE_MS}, today's quit runs.
+ *   Tray → Quit Volli always quits for real (or explicitly waits to quit).
  *
  * ── THE DECISION ──────────────────────────────────────────────────────────
  * {@link planQuitBranch} is the whole table. It is asked only with the flag
@@ -136,6 +136,8 @@ export interface QuitBranchInput {
   readonly systemShuttingDown: boolean;
   /** The person chose "Quit Anyway" from the Tray. */
   readonly quitRequested: boolean;
+  /** Cloud launch only: stay available to receive the owner's work while idle. */
+  readonly residentRunner?: boolean;
   readonly liveWork: HostLiveWork;
 }
 
@@ -151,7 +153,7 @@ export function planQuitBranch(input: QuitBranchInput): QuitBranch {
   // the host ends with the session, and boot recovery marks the turn.
   if (input.systemShuttingDown) return "quit";
   if (input.quitRequested) return "quit";
-  return hasLiveWork(input.liveWork) ? "menu-bar" : "quit";
+  return input.residentRunner === true || hasLiveWork(input.liveWork) ? "menu-bar" : "quit";
 }
 
 function counted(count: number, one: string, many: string): string {
@@ -175,7 +177,7 @@ export function quitWithLiveWorkCopy(work: HostLiveWork): { message: string; det
   };
 }
 
-export type TrayItemId = "status" | "open" | "install-when-idle" | "quit";
+export type TrayItemId = "status" | "runner" | "open" | "install-when-idle" | "quit";
 
 export interface TrayItem {
   readonly id: TrayItemId;
@@ -197,11 +199,18 @@ export interface TrayModel {
 export type TrayUpdateState = "none" | "ready" | "armed";
 
 /** The whole Tray, as data: the Electron adapter only renders it. */
-export function trayModel(work: HostLiveWork, update: TrayUpdateState): TrayModel {
+export function trayModel(
+  work: HostLiveWork,
+  update: TrayUpdateState,
+  runnerLine?: string,
+): TrayModel {
   const total = work.turns + work.shells;
   const status = total === 0 ? "Nothing running" : `${liveWorkPhrase(work)} running`;
   const items: TrayItem[] = [
     { id: "status", label: status, enabled: false },
+    ...(runnerLine === undefined
+      ? []
+      : [{ id: "runner" as const, label: runnerLine, enabled: false }]),
     { id: "open", label: "Open Volli", enabled: true },
   ];
   if (update !== "none") {
@@ -264,6 +273,10 @@ export interface MenuBarHostPorts {
   /** Both quiet-policy aware in the adapter: a quiet smoke never shows a Dock icon. */
   dock: { hide(): void; show(): void };
   tray: MenuBarTrayPort;
+  /** Absent outside cloud launches: preserves the original quit-when-done policy. */
+  residentRunner?(): boolean;
+  /** This cloud runner's connection/pending-fact status; no ids or credentials. */
+  runnerLine?(): string;
   /** `powerSaveBlocker("prevent-app-suspension")`; idempotent in the controller. */
   power: { hold(): void; release(): void };
   update: {
@@ -349,6 +362,7 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
 
   let resident = false;
   let quitRequested = false;
+  let waitAndQuit = false;
   let systemShuttingDown = false;
   let shutdownExpiry: unknown = null;
   let installArmed = false;
@@ -371,6 +385,10 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
       log(`[menu-bar] live work unreadable: ${String(error)}`);
       return NO_LIVE_WORK;
     }
+  }
+
+  function staysAvailable(): boolean {
+    return ports.residentRunner?.() === true && !waitAndQuit && !installArmed;
   }
 
   function updateState(): TrayUpdateState {
@@ -433,7 +451,7 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
     settle = timers.setTimeout(() => {
       settle = null;
       if (!resident) return;
-      if (hasLiveWork(liveWork())) {
+      if (hasLiveWork(liveWork()) || staysAvailable()) {
         reevaluate();
         return;
       }
@@ -443,12 +461,14 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
 
   function reevaluate(work: HostLiveWork = liveWork()): void {
     if (!resident) return;
-    ports.tray.update(trayModel(work, updateState()));
+    ports.tray.update(trayModel(work, updateState(), ports.runnerLine?.()));
     // Never while a window is open (that is today), and only for turns: a
     // dev server in a background shell is not a reason to keep a Mac awake.
     holdPower(work.turns > 0);
     if (hasLiveWork(work)) {
       exitAttempted = false;
+      cancelSettle();
+    } else if (staysAvailable()) {
       cancelSettle();
     } else {
       scheduleSettle();
@@ -465,6 +485,7 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
     cancelSettle();
     holdPower(false);
     installArmed = false;
+    waitAndQuit = false;
     exitAttempted = false;
     ports.tray.destroy();
     ports.dock.show();
@@ -479,6 +500,7 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
         updateInstallInFlight,
         systemShuttingDown,
         quitRequested,
+        residentRunner: staysAvailable(),
         liveWork: liveWork(),
       });
       // Nothing live and nothing overriding: the barrier re-reads and takes
@@ -498,6 +520,7 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
           updateInstallInFlight: ports.update.installInFlight(),
           systemShuttingDown,
           quitRequested,
+          residentRunner: staysAvailable(),
           liveWork: liveWork(),
         }) === "menu-bar";
       if (!wouldEnter) return true;
@@ -516,7 +539,7 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
       ports.browserTabs.closeForMenuBar();
       ports.windows.closeAll();
       ports.dock.hide();
-      ports.tray.show(trayModel(work, updateState()));
+      ports.tray.show(trayModel(work, updateState(), ports.runnerLine?.()));
       unsubscribe = ports.liveWork.subscribe((next) => reevaluate(next));
       poll = timers.setInterval(() => reevaluate(), pollMs);
       reevaluate(work);
@@ -531,7 +554,8 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
     quitFromTray() {
       const work = liveWork();
       if (hasLiveWork(work) && ports.confirmQuit(work) === "wait") {
-        // Already the resident default; re-arm the exit a refused one disarmed.
+        // Explicit "Wait and Quit" overrides the always-available preference.
+        waitAndQuit = true;
         exitAttempted = false;
         reevaluate();
         return;

@@ -1,14 +1,39 @@
-/**
- * Where the main window may open a connection (VC-889), templated into its
- * Content-Security-Policy at build time (`vite.config.ts`).
- *
- * The page's own CSP names no `connect-src`, so it falls back to
- * `default-src 'self'`: a packaged build reaches nothing but its own origin.
- * The only Volli Cloud backend a build can reach today is the pinned local
- * fixture an unpackaged build runs against, so the dev server (and a build
- * asked for it with `VOLLI_CLOUD_LOOPBACK=1`) adds the loopback. When a cloud
- * deployment exists, its exact origin joins here, and nothing broader.
- */
+/** Dev-server CSP plus main's launch-time sources for the packaged renderer. */
+import type { CloudLaunch } from "@volli/shared";
+import { exactOrigin } from "./deployment-config";
+
+/** Exact origins from the chosen launch, never from packaged runtime environment. */
+export function launchConnectSources(
+  launch: CloudLaunch,
+  storageOrigin: string | null,
+): readonly string[] {
+  if (launch.store === "local") return [];
+  const backend = exactOrigin(launch.backendUrl, true);
+  const websocket = new URL(backend);
+  websocket.protocol = websocket.protocol === "https:" ? "wss:" : "ws:";
+  return [
+    ...new Set([
+      backend,
+      websocket.origin,
+      // Account config permits HTTP loopback only unpackaged; release inputs require HTTPS.
+      ...(storageOrigin === null ? [] : [exactOrigin(storageOrigin, true)]),
+    ]),
+  ];
+}
+
+/** Only main's index document is transformed; assets and the cursor overlay remain untouched. */
+export async function withRendererConnections(
+  response: Response,
+  sources: readonly string[],
+): Promise<Response> {
+  if (!response.ok || sources.length === 0) return response;
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  return new Response(withConnectSources(await response.text(), sources), {
+    status: response.status,
+    headers,
+  });
+}
 
 /** The loopback a local backend listens on. */
 export const LOOPBACK_CONNECT_SOURCES = Object.freeze([
@@ -23,7 +48,13 @@ export function rendererConnectSources(input: {
   readonly serve: boolean;
   readonly env: Readonly<Record<string, string | undefined>>;
 }): readonly string[] {
-  return input.serve || input.env["VOLLI_CLOUD_LOOPBACK"] === "1" ? LOOPBACK_CONNECT_SOURCES : [];
+  const sources =
+    input.serve || input.env["VOLLI_CLOUD_LOOPBACK"] === "1" ? LOOPBACK_CONNECT_SOURCES : [];
+  // Only the dev server needs static sources. Built pages get their chosen
+  // backend and storage origins from main; legacy env must not leak into them.
+  const storage = input.serve ? input.env["VOLLI_CLOUD_STORAGE_ORIGIN"] : undefined;
+  if (storage === undefined || storage === "") return sources;
+  return [...sources, exactOrigin(storage, true)];
 }
 
 /**
@@ -34,7 +65,8 @@ export function withConnectSources(html: string, sources: readonly string[]): st
   if (sources.length === 0) return html;
   const directive = `connect-src 'self' ${sources.join(" ")}; `;
   return html.replace(
-    /(http-equiv="Content-Security-Policy"\s+content=")([^"]*?)(form-action)/u,
-    (_match, head: string, body: string, tail: string) => `${head}${body}${directive}${tail}`,
+    /(http-equiv="Content-Security-Policy"\s+content=")([^"]*)(")/u,
+    (_match, head: string, body: string, tail: string) =>
+      `${head}${body.replace(/connect-src[^;]*;\s*/gu, "").replace(/form-action/u, `${directive}form-action`)}${tail}`,
   );
 }

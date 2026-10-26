@@ -40,7 +40,7 @@ import {
 } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel.js";
 import { audit, type AuditKind } from "./lib/audit";
-import { authError, requireViewer, type Viewer } from "./lib/auth";
+import { authError, requireIdentity, requireViewer, type Viewer } from "./lib/auth";
 import {
   dataKeyContext,
   newDataKey,
@@ -190,6 +190,7 @@ export const set = action({
     exposure: v.optional(exposureArg),
   },
   handler: async (ctx, args): Promise<SetSecretResult> => {
+    await requireIdentity(ctx);
     const name = nameArg(args.name);
     const problem = secretValueProblem(args.value);
     if (problem !== null) throw secretsError("invalid_argument", problem);

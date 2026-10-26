@@ -20,6 +20,7 @@ import {
 } from "../functions/lib/auth";
 import schema from "../functions/schema";
 import type { GenericMutationCtx } from "convex/server";
+import { enrollPreview } from "./preview-fixtures";
 
 const modules = import.meta.glob("../functions/**/*.ts");
 
@@ -40,9 +41,14 @@ function setup() {
   return convexTest(schema, modules);
 }
 
-/** Signs `identity` in once and returns their user id. */
+/**
+ * Signs `identity` in once, enrolls them for the preview, and returns their user
+ * id. Every check below resolves its viewer with `requireViewer`, which
+ * rechecks the live grant and the accepted agreement on each call.
+ */
 async function signIn(t: ReturnType<typeof setup>, identity: typeof BOB): Promise<UserId> {
   const result = await t.withIdentity(identity).mutation(api.accounts.ensureViewer, {});
+  await enrollPreview(t, result.userId);
   return result.userId as UserId;
 }
 
@@ -183,6 +189,8 @@ describe("accounts.ensureViewer", () => {
       userId: first.userId,
       displayName: "Alice",
       primaryEmail: "alice@example.com",
+      previewAccess: "waitlisted",
+      previewAgreementAccepted: false,
       status: "active",
       purgeAfter: null,
     });

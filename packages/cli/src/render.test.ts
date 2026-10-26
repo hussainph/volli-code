@@ -142,6 +142,10 @@ describe("renderCliSuccess", () => {
     expect(exitCodeForError("APP_UNREACHABLE")).toBe(3);
     expect(exitCodeForError("INVALID_REQUEST")).toBe(2);
     expect(exitCodeForError("BODY_MATCH_FAILED")).toBe(1);
+    // Volli Cloud was unreachable or behind, and nothing was written (EX_TEMPFAIL).
+    expect(exitCodeForError("OFFLINE")).toBe(75);
+    expect(exitCodeForError("NOT_YET_SYNCED")).toBe(75);
+    expect(exitCodeForError("SIGN_IN_REQUIRED")).toBe(1);
   });
 
   it("renders Label merge previews with archived Tickets and applied receipts", () => {
@@ -676,6 +680,12 @@ describe("renderCliSuccess", () => {
       ),
     ).toBe("");
     expect(renderCliSuccess("notify", { notified: true }, options)).toBe("notified\n");
+    expect(renderCliSuccess("notify", { notified: true, queuedFor: "Alice" }, options)).toBe(
+      "queued for Alice\n",
+    );
+    expect(
+      renderCliSuccess("notify", { notified: true, queuedFor: "Alice\u001b[2J" }, options),
+    ).toBe("queued for Alice\\x1b[2J\n");
     expect(renderCliSuccess("app.launch", { alreadyRunning: true }, options)).toBe(
       "Volli is already running\n",
     );
@@ -1264,6 +1274,35 @@ describe("renderCliSuccess", () => {
         "socket  /Users/dev/Library/Application Support/Volli Code/volli.sock\n" +
         "appVersion  1.0.0\n",
     );
+  });
+
+  it("renders identify's runner line when this machine is a Volli Cloud runner", () => {
+    expect(
+      renderCliSuccess(
+        "identify",
+        {
+          project: { name: "Volli Code", prefix: "VC", path: "/repo/volli" },
+          ticket: null,
+          session: null,
+          appVersion: "1.0.0",
+          runner: { name: "danas-mac", state: "online" },
+        },
+        { json: false },
+      ),
+    ).toBe(
+      "project  Volli Code (VC)\n" +
+        "ticket  -\n" +
+        "session  -\n" +
+        "appVersion  1.0.0\n" +
+        "runner  danas-mac (online)\n",
+    );
+    expect(
+      renderCliSuccess(
+        "identify",
+        { project: null, appVersion: "1.0.0", runner: { name: null, state: 7 } },
+        { json: false },
+      ),
+    ).toContain("runner  - (-)\n");
   });
 
   // VC-94's acceptance: an agent discovers its environment from this block,
@@ -1952,6 +1991,44 @@ describe("renderCliSuccess — Session signals (VC-661)", () => {
         `signal reason:\n  | ${reason}\n`,
       );
     }
+  });
+});
+
+describe("cloud Session read limits", () => {
+  it("names bounded history and unreadable bodies in text output", () => {
+    const data = {
+      session: "abcdef12",
+      state: "idle",
+      status: "idle",
+      turns: null,
+      answer: null,
+      unreadable: true,
+      historyComplete: false,
+      unreadableReason: "Object storage is not configured.",
+    };
+    const answer = renderCliSuccess("session.answer", data, { json: false });
+    expect(answer).toContain("Only recent accepted history was read");
+    expect(answer).toContain("Transcript unavailable: Object storage is not configured.");
+    const peek = renderCliSuccess(
+      "session.peek",
+      { ...data, transcript: [], unreadable: 1 },
+      { json: false },
+    );
+    expect(peek).toContain("Only recent accepted history was read");
+    expect(peek).toContain("Transcript unavailable:");
+    expect(
+      renderCliSuccess("session.list", { sessions: [], truncated: true }, { json: false }),
+    ).toContain("listing limit reached");
+    expect(
+      renderCliSuccess(
+        "session.list",
+        {
+          sessions: [{ id: "abcdef12", kind: "chat", status: "idle", title: "Recent" }],
+          truncated: true,
+        },
+        { json: false },
+      ),
+    ).toContain("\nVolli Cloud listing limit reached");
   });
 });
 

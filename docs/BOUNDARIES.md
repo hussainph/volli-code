@@ -199,9 +199,19 @@ shared `decide…` rules over the client's own rows, never durable) and is
 refused, not queued, while the window cannot reach the backend. That client authenticates with a short-lived access
 token main hands it on demand (`account.accessToken`, a desktop-only entry),
 held in memory only and never logged; the refresh token never leaves main.
-The window's CSP lets it connect only to its own origin, plus the loopback a
-local backend runs on in a dev build; a deployment's exact origin joins that
-list when one exists.
+Main serves the built window's CSP from the chosen launch: its exact backend
+HTTPS/WebSocket origins and transcript-store origin, never a wildcard or a
+packaged runtime environment override. Packaged builds pin these public values
+with `VOLLI_BUILD_CONVEX_URL` / `VOLLI_BUILD_STORAGE_ORIGIN`; unpackaged builds
+use validated dev configuration (`VOLLI_CONVEX_URL` / `VOLLI_CLOUD_STORAGE_ORIGIN`).
+An unpackaged fixture may use exact HTTP loopback backend and store origins;
+this never adds a loopback wildcard to the launch policy.
+The dev server separately permits fixture loopback connections. The HTTP-actions
+site URL is explicit in the launch descriptor but is used only by main.
+Session listings, settled
+history and live chunks use the same client directly; transcript packs and
+spilled bodies use visibility-authorized signed GETs to that store. Viewer
+leases are held only while a Session's chat surface is visible.
 A launch's product store (this Mac's SQLite, or the backend) is chosen once
 by main before the window opens, and never changes in a live window.
 The last board a cloud launch saw live (projects, cards and labels; no
@@ -210,6 +220,36 @@ cleared whenever the account ends up signed out. A cloud launch that cannot
 reach the backend shows that cache read-only, says how old it is, and swaps
 to the live board when the backend answers. It is a cache, never a source:
 nothing in it is ever sent back.
+
+**Credentials follow the caller, and are never borrowed.** Each caller class
+has one credential and calls only the functions meant for it:
+
+1. **A person's client** (a desktop window, the web and phone clients, and
+   later a signed-in `volli` CLI) holds the person's sign-in token. On the
+   desktop only main holds it. It never enters a runner's Session environment,
+   a job payload, a transcript or a log. It calls person functions.
+2. **A runner** holds its sealed, rotating refresh credential and short-lived
+   Runner tokens (`runner:<id>`), in memory. Runner tokens call runner functions
+   only: intake, the inbox, presence, uploads and Agent-token minting. They
+   never call board or person functions.
+3. **An agent** holds only its attachment's `VOLLI_SESSION_TOKEN`. That token
+   is good at its own runner's socket and nowhere else. The runner turns a
+   verified call into a backend call under an **Agent token**
+   (`agent:<sessionId>`, `agentTokens.mint`), which the backend mints for one
+   Session that this runner claims and its owner owns. The Agent token is held
+   in runner memory, lives about 15 minutes, and a claim move or a removed
+   runner ends it at once. Backend functions see an `agent` Actor acting for
+   the Session owner, with that owner's membership and no more. **An agent
+   never holds a backend credential.**
+4. **Backend-internal work and webhooks** use no client credential (internal
+   functions; signatures).
+
+A function admits agents only by asking for them (`requireActor` in
+`convex/functions/lib/actorAuth.ts`); everything else is person-only, and a
+runner or Agent token is `not_a_person` there. A caller at a runner's socket
+with no Session evidence is not a person: it gets machine verbs only, and board
+and Session verbs answer `sign_in_required` until the CLI has a sign-in of its
+own.
 
 **Machine-bound resources stay on their machine.** Working copies, terminals and
 browser tabs are supervised by their runner and streamed to clients over a

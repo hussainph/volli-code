@@ -21,6 +21,8 @@ import { ACCOUNT_SESSION_PURPOSE, inventoryAccountSessionStore } from "./session
 import { tempInventory, testKeyPair } from "./test-support";
 
 const VIEWER: BackendViewer = {
+  previewAccess: "granted",
+  previewAgreementAccepted: true,
   userId: "6b4c3a1e-2a9f-4c3e-9d1b-0f8e7d6c5b4a",
   displayName: "Dana from Volli",
   primaryEmail: "dana@example.com",
@@ -887,5 +889,133 @@ describe("the account service's epochs", () => {
       failure: null,
       account: { backend: "synced" },
     });
+  });
+});
+
+describe("preview enrollment", () => {
+  it("keeps waitlisted sign-ins local and reports the waitlist, never a restart grant", async () => {
+    const marker = { write: vi.fn(), clear: vi.fn() };
+    const { service } = harness({
+      marker,
+      backend: backendStandIn({
+        ensureViewer: async () => ({ ...VIEWER, previewAccess: "waitlisted" }),
+      }),
+    });
+    expect(service.previewUserId()).toBeNull();
+    await service.signIn("github");
+    await service.settled();
+    expect(service.snapshot()).toMatchObject({
+      state: "signed-in",
+      account: { backend: "refused" },
+      failure: expect.stringContaining("waitlist"),
+    });
+    expect(service.previewUserId()).toBeNull();
+    expect(marker.write).not.toHaveBeenCalled();
+    expect(marker.clear).toHaveBeenCalled();
+  });
+  it("answers a fresh backend grant only until the sign-in ends", async () => {
+    const { service } = harness();
+    await service.signIn("github");
+    await service.settled();
+    expect(service.previewUserId()).toBe(VIEWER.userId);
+    await service.signOut();
+    expect(service.previewUserId()).toBeNull();
+  });
+});
+
+it("passes an invite code only to this sign-in's backend call and surfaces a refused code", async () => {
+  const backend = backendStandIn();
+  const { service } = harness({ backend });
+  await service.signIn("github", "preview-code-123456");
+  await service.settled();
+  expect(backend.ensureViewer).toHaveBeenCalledWith(
+    expect.any(String),
+    "preview-code-123456",
+    undefined,
+  );
+  await service.signOut();
+  backend.ensureViewer.mockRejectedValueOnce(
+    new BackendRefusedError("This preview invite code is invalid.", "preview_waitlisted"),
+  );
+  await service.signIn("google", "invalid-code-123456");
+  await service.settled();
+  expect(service.snapshot()).toMatchObject({
+    account: { backend: "refused" },
+    failure: "This preview invite code is invalid.",
+  });
+  expect(service.previewUserId()).toBeNull();
+});
+
+it("keeps deletion and restoration answers behind the same preview gate", async () => {
+  const backend = backendStandIn({
+    ensureViewer: async () => ({ ...VIEWER, previewAccess: "waitlisted" }),
+  });
+  backend.requestDeletion.mockResolvedValue({
+    ...VIEWER,
+    previewAccess: "waitlisted",
+    status: "deletion_pending",
+    purgeAfter: 9999,
+  });
+  backend.cancelDeletion.mockResolvedValue({ ...VIEWER, previewAccess: "waitlisted" });
+  const marker = { write: vi.fn(), clear: vi.fn() };
+  const { service } = harness({ backend, marker });
+  await service.signIn("github");
+  await service.settled();
+  await service.requestDeletion();
+  expect(service.snapshot().account?.backend).toBe("synced");
+  expect(service.snapshot().failure).toBeNull();
+  await service.cancelDeletion();
+  expect(service.snapshot()).toMatchObject({
+    account: { backend: "refused" },
+    failure: expect.stringContaining("waitlist"),
+  });
+  expect(service.previewUserId()).toBeNull();
+  expect(marker.write).not.toHaveBeenCalled();
+});
+
+it("retries a transient backend failure with the same in-memory invite code", async () => {
+  const backend = backendStandIn();
+  backend.ensureViewer.mockRejectedValueOnce(new Error("offline"));
+  const { service } = harness({ backend });
+  await service.signIn("github", "preview-code-123456", "current-version");
+  await service.settled();
+  expect(service.snapshot().account?.backend).toBe("unreachable");
+  const unsubscribe = service.subscribe(() => {});
+  await service.settled();
+  unsubscribe();
+  expect(backend.ensureViewer).toHaveBeenNthCalledWith(
+    2,
+    expect.any(String),
+    "preview-code-123456",
+    "current-version",
+  );
+  expect(service.previewUserId()).toBe(VIEWER.userId);
+});
+
+it("sends explicit current-version acceptance only for enrollment, never for restored token refresh", async () => {
+  const temp = tempInventory();
+  cleanups.push(temp.dispose);
+  const backend = backendStandIn();
+  const provider = scriptedProvider();
+  const first = harness({ provider, openBrowser: scriptedBrowser, temp, backend });
+  await first.service.signIn("github", undefined, "current-version");
+  await first.service.settled();
+  expect(backend.ensureViewer).toHaveBeenCalledWith(
+    expect.any(String),
+    undefined,
+    "current-version",
+  );
+  first.service.dispose();
+  const nextBackend = backendStandIn({
+    ensureViewer: async () => ({ ...VIEWER, previewAgreementAccepted: false }),
+  });
+  const next = harness({ provider, temp, backend: nextBackend });
+  next.service.snapshot();
+  await next.service.settled();
+  expect(nextBackend.ensureViewer).toHaveBeenCalledWith(expect.any(String), undefined, undefined);
+  expect(next.service.previewUserId()).toBeNull();
+  expect(next.service.snapshot()).toMatchObject({
+    account: { backend: "refused" },
+    failure: expect.stringContaining("Preview Agreement"),
   });
 });

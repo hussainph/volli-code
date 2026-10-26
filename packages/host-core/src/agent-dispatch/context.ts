@@ -36,7 +36,6 @@ import type {
   SessionActivityState,
   SessionProjection,
   SessionRecord,
-  SessionReadVerb,
   SessionRole,
   SessionEnvRepair,
   SessionEnvReport,
@@ -139,6 +138,12 @@ export interface AgentCommandServiceOptions {
    */
   sessionEnv?: (cwd: string, projectRoot: string) => Promise<SessionEnvReport>;
   /**
+   * This machine as a Volli Cloud runner (VC-895), as `volli identify`
+   * reports it: its name and state, never its id or credential. Absent, or
+   * `null` (not a runner this launch), means identify prints no runner line.
+   */
+  cloudRunner?: () => { readonly name: string | null; readonly state: string } | null;
+  /**
    * The host's handler map (VC-668), which this door projects: every verb is
    * bound in `table.ts` as a projection of `handlers[key]`, never as a
    * handler of its own — a catalog command's under its key, the ticket
@@ -148,9 +153,9 @@ export interface AgentCommandServiceOptions {
    * interrupts and its armed arrival, and every projected board write's
    * receipt, feed rows and `data-changed`, therefore belong to the handler,
    * which the composition root built once for every door. The projection
-   * invokes it only under {@link AgentCommandContext.handlerPolicy}. The four
-   * Session reads are delegated the other way: the map's entry runs this
-   * service (`executeInWorkspace`).
+   * invokes it only under {@link AgentCommandContext.handlerPolicy}. The
+   * four Session reads are entries this service serves too (VC-894), which a
+   * router also reaches, Workspace-scoped.
    */
   handlers: HostHandlerMap;
   /**
@@ -241,6 +246,46 @@ export interface AgentCommandServiceOptions {
    */
   readAuthorityPolicy?: (projectId: string) => AuthorityPolicy;
   /**
+   * The board in Volli Cloud (VC-894): in a cloud launch, every verb whose
+   * route is `cloud-board` (`cloud-agent/routes.ts`) is answered by the
+   * backend through these instead of this host's SQLite board, after the
+   * same identity and admission as today, with the token-verified Session as
+   * the agent the backend acts for. Absent (every local launch), the
+   * dispatch is exactly as before.
+   *
+   * Production: desktop main spreads the cloud product store's `agentCommands`
+   * into `createHostAgentCommands`. The store composes `createCloudBoardVerbs`
+   * over its Agent backend and forgets cached grants on attachment close/failure.
+   */
+  cloudBoardVerbs?: import("../cloud-agent/board-verbs").CloudBoardVerbs;
+  /**
+   * A cloud launch's Session verbs (VC-894 S6-3): after the same identity and
+   * admission as today, a Session read or `notify` whose target is not
+   * claimed here is answered by the backend for the token-verified Session;
+   * `null` from its `socket` continues to this host's local answer, so a
+   * target claimed here stays on this runner's ledger. Its presence also
+   * hands a recorded `session done`/`blocked` todo comment to the backend's
+   * accept fold, which derives it from the signal fact, rather than writing
+   * it to this host's board. Absent (every local launch), the dispatch is
+   * exactly as before.
+   *
+   * Production: desktop main passes the store's `agentCommands` to this socket
+   * service; `createRunnerComposition` also passes its Session overlay to the
+   * runtime's tool door. Session listing is always a backend read.
+   */
+  cloudSessionVerbs?: import("../cloud-agent/session-verbs").CloudSessionVerbs;
+  /**
+   * The projects this door's roster folds and resolves against, as machine
+   * identity only (never board authority). Absent (every local launch): this
+   * host's SQLite projects (`listProjects`). A cloud launch's store passes its
+   * current owner's projects, whose shadow identities `listProjects` leaves
+   * out.
+   *
+   * Production: the cloud product store's `agentCommands.projects` maps the
+   * owner's `projectIds` through `getProjectById`; desktop main passes it here.
+   */
+  projects?: () => readonly Project[];
+  /**
    * The skills index a fresh Session with no explicit skills would carry — the
    * SAME port `session start` composes through (`SessionSkillPorts.index` with
    * nothing injected), threaded in so `prompt baseline` prices the index a real
@@ -264,17 +309,6 @@ export interface OperatorWriteRecord {
 
 export interface AgentCommandService {
   execute(request: AgentRequest): Promise<AgentResponse>;
-  /**
-   * One of the socket's Session reads for a caller bound to ONE Workspace
-   * (the host protocol's WebSocket, VC-663): the same handler `execute`
-   * runs, with its roster forced to that project. Another Workspace's
-   * Session answers `SESSION_NOT_FOUND`, exactly as an absent one does.
-   */
-  executeInWorkspace(
-    verb: SessionReadVerb,
-    workspaceId: string,
-    args: Record<string, unknown>,
-  ): Promise<AgentResponse>;
 }
 
 /**
@@ -493,7 +527,7 @@ export type AgentVerbHandler = (
   request: AgentRequest,
 ) => Promise<AgentResponse>;
 
-/** What the socket's table calls for one request: a projection, or a delegated read. */
+/** What the socket's table calls for one request: a projection of the map. */
 export type SocketVerbHandle = (
   context: AgentCommandContext,
   request: AgentRequest,

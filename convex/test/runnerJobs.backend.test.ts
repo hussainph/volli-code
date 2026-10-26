@@ -10,7 +10,7 @@ import {
   runnerHostFacts,
   type RunnerLink,
 } from "@volli/host-core/cloud-runner";
-import { type ClaimedJob } from "@volli/shared/cloud";
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION, type ClaimedJob } from "@volli/shared/cloud";
 
 import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
@@ -65,6 +65,10 @@ async function linkRunner(person: ConvexHttpClient, name: string): Promise<strin
 async function world(): Promise<World> {
   const person = backend.client(`user:${randomUUID()}`);
   const { userId } = await person.mutation(api.accounts.ensureViewer, {});
+  await backend.admin(internal.previewAccess.set, { kind: "user", value: userId, enabled: true });
+  await person.mutation(api.accounts.ensureViewer, {
+    acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+  });
   const [workspace] = await person.query(api.workspaces.listMine, {});
   const projectId = randomUUID();
   await person.mutation(api.projects.create, {

@@ -625,10 +625,10 @@ export async function boot(
   // `select` afterward) so boot never fires a redundant appState.set — the
   // value already came FROM app_state, there's nothing new to persist.
   const cloud = await readBeforeDeadline(readCloud, false);
-  // Which store this launch shows (VC-889): asked only with the flag on, so
-  // a flag-off boot makes no new call.
-  // A stalled or failed read is a local launch: the one that always works.
-  const launch = cloud ? await readBeforeDeadline(readLaunch, LOCAL_LAUNCH) : LOCAL_LAUNCH;
+  // Main chooses the product store, independently of hosted-cloud capabilities.
+  // An embedded deployment can use Convex without enabling the cloud flag.
+  // This local bridge reads no account; stalled/older bridges fall back to SQLite.
+  const launch = await readBeforeDeadline(readLaunch, LOCAL_LAUNCH);
   adoptLaunch(launch);
   const selectedProjectId = resolveSelectedProjectId(payload.appState, payload.projects);
   if (launch.store === "cloud") {

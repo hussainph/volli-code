@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { BackendRefusedError, convexAccountBackend } from "./backend";
 
 const VIEWER = {
+  previewAccess: "granted",
+  previewAgreementAccepted: true,
   userId: "6b4c3a1e-2a9f-4c3e-9d1b-0f8e7d6c5b4a",
   displayName: "Dana",
   primaryEmail: "dana@example.com",
@@ -44,6 +46,7 @@ describe("the account's backend calls", () => {
     await expect(backend.ensureViewer("tok-1")).resolves.toEqual(VIEWER);
     await backend.requestDeletion("tok-2");
     await backend.cancelDeletion("tok-3");
+    await backend.ensureViewer("tok-4", "preview-code-123456", "current-version");
     expect(seen).toEqual([
       {
         url: "/api/mutation",
@@ -60,8 +63,30 @@ describe("the account's backend calls", () => {
         authorization: "Bearer tok-3",
         body: { path: "accounts:cancelDeletion", args: { via: "desktop" }, format: "json" },
       },
+      {
+        url: "/api/mutation",
+        authorization: "Bearer tok-4",
+        body: {
+          path: "accounts:ensureViewer",
+          args: { inviteCode: "preview-code-123456", acceptedAgreementVersion: "current-version" },
+          format: "json",
+        },
+      },
     ]);
   });
+
+  it.each([undefined, "waitlisted", "future-status"])(
+    "fails closed for a missing or unknown preview status: %s",
+    async (previewAccess) => {
+      const { url } = await convex(() => ({
+        status: 200,
+        body: { status: "success", value: { ...VIEWER, previewAccess } },
+      }));
+      expect((await convexAccountBackend({ url }).ensureViewer("t")).previewAccess).toBe(
+        "waitlisted",
+      );
+    },
+  );
 
   it("carries the backend's typed refusal, and refuses what it cannot read", async () => {
     let reply: { status: number; body: unknown } = {
@@ -96,4 +121,14 @@ describe("the account's backend calls", () => {
     reply = { status: 200, body: { status: "success", value: { userId: 1 } } };
     await expect(backend.ensureViewer("t")).rejects.toThrow("cannot read");
   });
+});
+
+it("never grants cloud for a backend that omits agreement acceptance", async () => {
+  const { url } = await convex(() => ({
+    status: 200,
+    body: { status: "success", value: { ...VIEWER, previewAgreementAccepted: undefined } },
+  }));
+  expect((await convexAccountBackend({ url }).ensureViewer("t")).previewAgreementAccepted).toBe(
+    false,
+  );
 });

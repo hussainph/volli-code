@@ -152,7 +152,7 @@ export async function readSessionTranscriptTail(
         reads.set(reference.id, read);
       }
       const { message } = await read;
-      const entry = tailEntry(event.occurredAt, message, textLimit);
+      const entry = transcriptTailEntry(event.occurredAt, message, textLimit);
       hydrated.push({ event, reference, message, entry });
       if (event.payload.kind === "transcript.referenced" && message.role === "user")
         observedMessages.add(message.id);
@@ -205,7 +205,12 @@ export function transcriptReferenceFor(event: SessionEvent): TranscriptReference
   return null;
 }
 
-function tailEntry(at: number, message: UIMessage, textLimit: number): SessionTranscriptTailEntry {
+/** The same bounded excerpt in a local or cloud Session peek. */
+export function transcriptTailEntry(
+  at: number,
+  message: UIMessage,
+  textLimit: number,
+): SessionTranscriptTailEntry {
   const words: string[] = [];
   const tools: string[] = [];
   for (const part of message.parts) {

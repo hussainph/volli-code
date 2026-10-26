@@ -12,7 +12,9 @@ that writes one.
   `@volli/shared/cloud`. References between tables are these strings, stored
   with the `uuid` validator. A Convex `_id` never leaves `convex/`. Each entity
   table has a `by_uuid` index on `id` (Convex reserves `by_id`); a 1:1 side
-  table is keyed by its owner's id. `test/schema.test.ts` holds this.
+  table is keyed by its owner's id. `test/schema.test.ts` holds this. The
+  exception is a `session.notice` job: its id is its frozen derived notice
+  command id (see deviation 42).
 - **Uniqueness is enforced by the writing mutation**, with an index lookup
   before the insert. Convex has no unique constraint. A field the design calls
   "unique" has an index whose name says what it is unique by.
@@ -198,9 +200,9 @@ Each was a decision made while turning the design into code.
     a runner linked by a device code starts with the right install mode.
 27. A runner cut off for credential reuse is recorded as a `token_reuse`
     runner event and shown in the owner's runner list
-    (`statusReason: credential_reuse`). It raises no Needs-you item yet:
-    `attentionItems.projectId` is required, and a runner belongs to no
-    project. The attention work decides how person-level items are stored.
+    (`statusReason: credential_reuse`). It also raises a Needs-you runner
+    alert for the owner (`r:{runnerId}:credential_reuse`, project-less, see
+    39), cleared when they remove the runner.
 28. `runnerJobs.failure` (optional, added after the first version) holds the
     job's last failure: what the runner reported, or a lease that ran out
     (`by: "backend"`). A retry keeps it, so a waiting job and a dead letter both
@@ -232,6 +234,139 @@ Each was a decision made while turning the design into code.
     can request a secret by name. A scope holds at most 100 secrets and
     64 KiB of names and values (`MAX_SECRETS_PER_SCOPE`, `MAX_SCOPE_BYTES`),
     so a resolved set stays far inside a process's environment limit.
+32. Session facts and folds are stored as JSON text: `sessionEvents.payload`
+    and `.provenance` hold the codec's encoding of the envelope's parts, and
+    `sessionStates.state` the bounded fold's. Event payloads carry object keys
+    a Convex value refuses (`$schema` in an MCP tool schema, non-ASCII keys),
+    so they cross the boundary as text both ways: `sessions.accept` takes each
+    fact's JSON text, `sessions.command` an intent's, and `history` and
+    `snapshot` return renderer-safe JSON text.
+33. `sessionStates.catchUpAt` (optional) marks a scheduled catch-up or refold
+    of the fold over the accepted history; `null` once it reaches the head.
+    `sessionStates.derivedThrough` (optional) is the last fact whose derived
+    rows (turns, attention items, job receipts) were written, so a refold
+    rebuilds the state without replaying old derived rows over newer ones.
+    A stored state is read only by the fold version and event vocabulary that
+    wrote it; any other is refolded from the accepted history on the next
+    accept.
+34. A Session started on a runner is created by its first `accept`, whose
+    sequence 1 is the Engine's `session.create` command (`session.created`
+    follows at 2 and must match the row).
+35. **GitHub installations are global**, not owned by a Workspace (the
+    design gave `githubInstallations` a `workspaceId`). A GitHub account can
+    install an App only once, and its repositories serve a person's personal
+    and team Workspaces alike, so the row is unique by `installationId` and
+    the Workspace a repository serves is its project's. `workspaceId` and
+    `by_workspace` are gone (no deployment held a row); the table gains
+    `accountId` (GitHub's numeric id), the `permissions` and
+    `events` snapshot, `deletedAt` and `reconciledAt`, and
+    `installedByUserId` is nullable (an install started on GitHub's own page
+    has no Volli person).
+36. `githubConnections` gains the GitHub profile (`login`, `name`, verified
+    `emails`), a `status` (`active` / `needs_reconnect` / `revoked`), the
+    refresh lease and `updatedAt`, as required fields: no deployment held a
+    row. The sealed tokens are nullable (forgotten on revoke). `by_github_user`
+    holds one Volli account per GitHub account. The tokens are sealed under
+    the person's data key (`secretKeys` owner `u:{userId}`), bound to the
+    person and to the token's role.
+37. Two new tables: `githubFlows` (a connect or install browser round trip,
+    single use, purged an hour after it expires; a request to an
+    organization's owners waits 14 days) and `githubWebhookDeliveries` (one
+    row per applied delivery id, so a redelivery is a no-op; purged after
+    seven days).
+38. `projectRepos` gains optional `githubAccess` and `accessCheckedAt`
+    (optional: rows the migration importer writes need not carry them; absent
+    reads as not yet checked) and two indexes, `by_github_repo` (webhook
+    routing) and `by_installation` (an installation's removal or reconcile).
+39. `attentionItems` is written only by `lib/attention.ts`. Its ids are each
+    producer's frozen derivation (`attention.ts` in `@volli/shared/cloud`):
+    `s:{sessionId}:{sourceId}` (Session items; the backend's own source ids
+    are `volli:blocked`, `volli:quarantine:{sequence}` and
+    `volli:notify:{notifyId}`), `t:{ticketId}:review:{userId}` (review
+    requests) and `r:{runnerId}:{alert}` (runner alerts), so a refold, a
+    retry or a later board write finds the same row. Widened (expand only):
+    `projectId` is `nullable` (a runner alert belongs to no project, and is
+    visible to its person only); `workspaceId` (optional, nullable) is set
+    only on a billing item, the same exception usage rows make; `source`
+    gains `notify`; `by_ticket` (ticket, source, cleared) finds a ticket's
+    open review requests.
+    Visibility is decided at read time (`canSeeAttention`, membership through
+    the project's current Workspace); an `access_lost` sweep after a Member is
+    suspended, removed or leaves keeps stored rows honest for counts and
+    pushes, and a person active there again by the time it runs keeps theirs.
+40. `sessions.by_place_runner` (added with Mac re-registration) finds the
+    Sessions placed on a runner, so a Mac that lost its credential and
+    registers again as its successor (`registerThisMac` with
+    `replacesRunnerId`) moves them in the same transaction. The predecessor
+    is revoked with reason `replaced` and, like a removed runner, leaves the
+    owner's list and frees its name; its Session claims pass on at the next
+    generation. `runners.status` gains `asleep` (a Mac whose lid closed),
+    which the offline sweep does not watch. Working-copy jobs stay with the
+    replaced runner until Working copies move; that move is not part of this
+    handover.
+41. `runners.desktopRegistrationId` is an optional desktop registration retry
+    key (a client-minted lowercase UUID); older rows and other link methods
+    omit it. `registerThisMac` and `linkFromDesktop` accept optional nullable
+    `registrationId` (invalid values are ignored). A matching caller-owned,
+    non-gone runner with an unused generation-1 credential is returned with
+    its current hash replaced by the freshly minted credential's hash, without
+    creating another runner or moving work again. Used credentials and gone
+    runners take the normal registration path. A Mac still heartbeating in a
+    live status cannot be replaced, even when `replacesRunnerId` names it.
+
+42. Durable watch arms carry optional origin, policy kinds, turn arm, accepted
+    sequence watermark, and last-arm/notice times. Seven-day `watchReceipts`
+    prevent an arm retry from re-arming after delivery or unwatch. Notice jobs
+    use their frozen derived command ids, not UUID job ids, so outbox dedupe and
+    second-stage receipts keep the pre-cloud watch/subagent identity. A watch
+    command's optional `kinds` preserves frozen awaits' selective `for` requests;
+    the receipt stores that subset additively, so changed-kind retries conflict.
+    Older receipts without it mean the full target vocabulary. New arms union
+    their requested kinds with an existing open watch, so a selective await
+    cannot remove interest from an automatic or explicit watch; unwatch resets it.
+
+43. Follow-up intent jobs keep optional immutable `commandIntent` for replay
+    comparison: their mutable payload may have been edited while never leased.
+    `sessionFollowUpQueues` is a claim-fenced, rebuildable side table keyed by
+    Session, capped at 32 items and 64 KiB. A separate `sessionFollowUpRevisions`
+    clock advances for backend-held edits/cancels as well as mirrors; client
+    preconditions use that clock and are translated to the runner revision
+    before delivery. Claim-generation changes invalidate old preconditions.
+    Queue changes do not invalidate the Session snapshot. Claim transfer drops
+    the mirror; generation checks also hide obsolete mirrors after runner replacement. Queue-control receipts
+    travel with job completion because these runtime controls are deliberately
+    outside the immutable event command vocabulary. Delegations gain optional
+    `stopCommandId`, minted once for a cross-runner stop cascade and reused on
+    derivation replay, and a bounded `watch` projection. Watch boundaries—not
+    lifetime settlement—choose outcomes: held kickoffs stay unarmed, Retry
+    keeps the original answer id, and resumed/joined turns get their frozen
+    per-turn answer ids. Armed original and resumed watches defer a parent's
+    watchers; only original watches participate in stop cascades.
+    `sessionEvents.by_session_command` proves the parent recorded an original
+    answer without scanning its history. That evidence also retires a spent
+    original watch after a local pre-intent kickoff failure, before the next
+    child fact is classified.
+
+## Runner-routed agent Session commands
+
+`sessions.command` accepts the existing UUID command ids and, for an authenticated
+agent only, its frozen `<sessionId>:<toolCallId>` operation id (bounded to 512
+characters). A `session.command` job takes that same id; other jobs keep their
+existing UUID or frozen notice-id scheme. Agent supervision is limited to the caller's project: a project
+Session may send/stop there, a ticket Session only its own subagents. An agent
+may signal only itself.
+
+An optional canonical inline message artifact is staged atomically beside a
+message command, never inside its job payload. The claimed runner reads it with
+`transcripts.commandArtifact`, fenced by runner and claim generation, and verifies
+it in its local content-addressed store before delivery. Deploy this additive
+backend argument before a runner that sends it. Unexecuted commands retain their
+bodies; orphan cleanup after terminal command expiry is a follow-up.
+
+Self-signaled done/blocked facts derive the todo-list comment on accept, using the
+shared board rule and the agent Actor. Its comment id is a frozen derivation of
+the Session and signal event, so refolds and drain resends do not duplicate it.
+The local cloud-launch signal path does not also write a board comment.
 
 ## Migrated rows
 
@@ -249,3 +384,175 @@ Each was a decision made while turning the design into code.
   payloads after a storability check only, not through the per-kind codecs
   the intake will apply (it classifies `kindKnown`/`quarantine` with the
   shared Session event codec before sending).
+- Migrated Session event rows hold `payload` and `provenance` as values, where
+  the intake stores JSON text (note 32); the intake reads both. A payload with
+  a key a Convex value refuses (`$schema`, non-ASCII) cannot be imported that
+  way, so the import should send them as text.
+
+## Streamed text
+
+Where `streamChunks` and `sessionViewers` depart from the data-model design:
+
+- `streamChunks` gains `baseline` and `throughSequence`, and the
+  `by_session_message_baseline` and `by_session_created` indexes, before
+  its first writer. `baseline` marks a chunk that starts with a `reset`,
+  where a late joiner starts and a reader that missed rows restarts;
+  `throughSequence` is the overlay's staleness guard. Both are required,
+  not `v.optional`: no row was ever written without them. `delta` is
+  `v.string()`, the operations' JSON text, because their payloads carry
+  object keys a Convex value refuses. An increment is capped at 16 KB as
+  designed; a baseline (one `reset` of the whole message) at 64 KB, the
+  inline cap of a settled body. A larger message stops streaming and shows
+  whole when it settles.
+- The cursor read is per Session, not `chunksSince(messageId, seq)`: one
+  `streamChunks.since` finds the open streams among the Session's newest
+  rows plus the reader's cursors, and starts a stream without a cursor (or
+  with one a newer baseline overtook) at its latest baseline rather than at
+  seq 0, so a late joiner reads at most ~10 s of rows per stream.
+- `streamChunks` rows are deleted by the runner's `settle`, which names the
+  settling fact's sequence and deletes once `acceptedThrough` reaches it
+  — the runner knows which streams a settled fact ends, including a
+  streamed text message that settles under its executor's own id; the
+  accept fold learns message ids only once transcript bodies arrive with
+  `accept`, and then calls the same cleanup through
+  `scheduleStreamCleanup` — by the accept fold at turn end, and by a
+  15-minute sweep.
+
+## Invite-only preview
+
+`previewAccess` is deployment-admin managed, not Workspace-admin managed.
+Its natural key is `(kind, key)`: a normalized email, a Volli user UUID, or
+an invite code's SHA-256. Only a verified email matches an email grant. Codes
+are single-use and bind atomically to one account; retrying on that account
+is harmless. No query returns codes or the allowlist. Revocation and expiry
+are checked from the original grant, including after code redemption.
+
+Deployment operators use the internal function with the Convex CLI (select
+the intended deployment explicitly; these examples omit that selection):
+
+```sh
+pnpm exec convex run previewAccess:set '{"kind":"email","value":"person@example.com","enabled":true}'
+pnpm exec convex run previewAccess:set '{"kind":"user","value":"<volli-user-uuid>","enabled":false}'
+pnpm exec convex run previewAccess:set '{"kind":"code","value":"<random-code-at-least-16-characters>","enabled":true,"expiresAt":1900000000000}'
+```
+
+Run from `convex/`. Only deployment-admin credentials can invoke this
+internal function; ordinary authenticated clients and Workspace owners
+cannot. Supply codes through a trusted operator environment, not tickets or
+chat. Store and share the original code securely; only its hash is retained.
+Setting `enabled: false` revokes that grant; if a person holds several grants,
+revoke all of them to remove access. Re-enabling a code never resets its
+account binding. Expiry is optional, in epoch milliseconds; an omitted expiry
+on an existing grant leaves it unchanged.
+
+`accounts.ensureViewer` returns `previewAccess: granted | waitlisted` and
+accepts an optional `inviteCode` (the desktop's sign-in pane sends it).
+Waitlisted sign-ins create an account but no Workspace. The first granted
+sign-in creates the personal Workspace once; optional
+`users.previewWorkspaceCreated` records that setup, while older accounts
+with memberships keep their existing Workspaces. Every Workspace create and
+both invite-accept paths recheck the allowlist, even on idempotent replays.
+Workspace invites alone do not grant preview access.
+
+On stable desktop launches, stored flags and environment opt-ins cannot
+bypass preview access. A deliberate sign-in marker permits restoring the
+sealed account and checking the backend before choosing the product store;
+only a fresh grant for that marker's user enables `cloud` for this launch.
+The check has a two-second deadline so unreachable account I/O cannot block
+the local app from opening.
+Missing, waitlisted, expired, deleted, mismatched, or unreachable accounts
+leave every cloud product surface off and the local board unchanged. Offline
+stable launches fail closed (canary's cached-board behavior is unchanged).
+The Account sign-in pane is the sole stable pre-enrollment exception on a
+build with a configured provider and backend: it
+shows the waitlist message without enabling cloud. Signing in or out still
+requires a restart to change stores; a running window never hot-swaps.
+Dev/canary flag-off launches do not read the account or launch marker.
+Canary sign-ins also require invitation; already invited canary accounts
+retain their existing offline cached-board launch. Invite codes are retained
+only in memory during transient retries, not across app restarts.
+
+An invitation is not acceptance of the agreement. Enrollment requires an
+explicit checkbox action acknowledging the linked Preview Agreement and
+Privacy notice; only that action sends `acceptedAgreementVersion` through
+the desktop RPC to `accounts.ensureViewer`. For an invited active account,
+a current-version submission records optional `users.previewAgreementVersion`
+and `users.previewAgreementAcceptedAt` using server time, before Workspace
+setup in the same transaction. Retry and token refresh preserve the original
+receipt; missing, stale or incomplete receipts are never auto-backfilled.
+Waitlisted accounts do not record acceptance. Every Workspace create/accept
+requires the current receipt as well as invitation. Account replies include
+`previewAgreementAccepted`; missing/unknown acceptance fails the desktop gate
+closed and offers sign-out/reacceptance. The temporary enrollment version
+constant has a one-line TODO to switch to the legal pages' shared constant
+once that change lands. Waitlisted people must accept again after invitation;
+no receipt is stored before they are invited. Only the current receipt is
+kept on the person row. Legal text still requires owner approval before the
+preview ships.
+
+Deploy the backend before a desktop that sends the new optional agreement
+argument: an older backend rejects unknown arguments. Older canaries cannot
+submit agreement acceptance, so they must update before setting up, creating
+or accepting Workspaces. A stale submitted agreement version explicitly asks
+the person to update Volli; sign-out alone cannot update a compiled version.
+
+CI holds the backend preview gate and the desktop launch gate at 100%
+statements, branches, functions and lines. Backend transport tests also
+prove that clients cannot call the internal admin mutation and concurrent
+code redemption admits only one account.
+
+## Session listing presentation
+
+`sessions.listing` is an additive optional projection of activity, waiting reason,
+liveness and birth scope. It is written with the shared Session listing rules,
+not re-derived by clients. Existing rows without it are read through their stored
+fold until their next accepted fact materializes it. The optional field keeps
+older deployments and stored rows valid.
+
+## Durable watches and notices
+
+`watches` gains optional origin, arming, policy-kind and terminal-reason fields;
+older rows read with the shared default kinds and an armed next turn. Arm
+commands have separate seven-day `watchReceipts`, so retrying a command never
+re-arms a turn already reported or resurrects an ended watch. Ticket watches
+expire after fourteen days without a notice or a deliberate re-arm. A Session
+arm records its accepted-sequence watermark, so a delayed catch-up/refold never
+reports history accepted before that arm; an auto-arm inside an accepted batch
+uses its own command sequence so the batch's later facts still report.
+The hourly paged sweep also ends
+watches whose owner lost access; producers re-check access before each fire.
+
+The accepted-fact hook and `BoardWrite.append` produce structured notice jobs,
+coalescing per watcher with `patchQueuedJob` only while a job was never leased.
+The watcher's claim determines routing, so queued work follows a claim move.
+`session.notice` is the exception to UUID job/command ids: it keeps the frozen
+local `watch:{watcher}:{uuid}` and `{parent}:{toolCall}:answer` command ids as
+its job id, for outbox dedupe and the final accepted-message receipt. Other
+job kinds still require UUID ids. Subagent answer production belongs to the
+delegation fold; the same typed notice executor handles its payload.
+
+A routing refusal leaves the turn arm intact and raises one frozen-id Session
+attention item (`volli:watch-delivery`); successful future delivery clears it.
+A refused automatic arm is logged and is returned as an additive `watch`
+result by `sessions.command`, never rolling back an otherwise valid steer.
+Losing access strips that target's prose from never-leased queued jobs. Claim
+also re-checks every target, including notices whose watch already ended; a
+re-leased job with newly hidden content is cancelled rather than rewritten.
+Anonymous overflow counts are retained because they name no target or prose.
+Late-child deferral uses the child's accepted sequence and the backend quiet
+window, never runner clocks to infer cross-Session causality.
+
+The runner's `host_notice_outbox` is retained, not replaced: it owns delivery
+timing and first-writer-wins replay after the job reaches the runner. Cloud
+Sessions do not arm process-memory watches. Machine-local notices still use
+the outbox directly, and the signed-out watch path keeps its existing rules.
+
+## Anonymous runner-link limits
+
+`runnerLinkRateLimits` is an additive side table of token buckets, keyed by
+operation plus a hashed network or an existing token/request id. No secret or
+raw IP is stored there. Admission is transactional and all-or-none across the
+network and code/global buckets. Refilled rows are equivalent to absent rows;
+the hourly paged sweep deletes them using `by_full_at`. All three linking doors have
+a deployment-wide cap as well as a network cap, bounding device-code and
+limiter-metadata allocations across distinct networks.

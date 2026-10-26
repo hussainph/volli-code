@@ -312,3 +312,112 @@ describe("follow-up clean-close round trips", () => {
     expect(result.projection.queue?.[0].state).toBe("queued");
   });
 });
+
+/** One process can inspect only its launch scope; the marker still protects the next account. */
+describe("owner-scoped clean-close watermarks", () => {
+  async function twoQueues() {
+    const f = await setup();
+    const provenance = {
+      source: { kind: "system" as const, id: "test", detail: null },
+      venue: { id: "local", kind: "local" as const },
+    };
+    const other = await f.engine.createSession({
+      commandId: "other",
+      projectId: "project",
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: null,
+      provenance,
+    });
+    await createSqliteSessionFollowUpLedger(fixture.db).transaction(other.session.id, (state) => {
+      state.revision = 1;
+      state.entries.push({
+        id: "other-message",
+        commandId: "other-queue",
+        deliveryCommandId: "other-delivery",
+        state: "queued",
+        message: { id: "other-message", role: "user", parts: [{ type: "text", text: "other" }] },
+      });
+    });
+    const stateOf = (id: string) =>
+      (
+        fixture.db
+          .prepare("SELECT state FROM session_follow_up_queue WHERE session_id = ?")
+          .get(id) as { state: string }
+      ).state;
+    const advance = (id: string, commandId: string) =>
+      f.engine.submit({
+        commandId,
+        sessionId: id,
+        intent: { kind: "session.retitle", title: commandId },
+        provenance,
+      });
+    return { ...f, otherId: other.session.id, stateOf, advance };
+  }
+
+  it("holds only the current owner's stale queue and preserves the foreign sentinel across clean close", async () => {
+    const f = await twoQueues();
+    stampFollowUpCleanClose(fixture.db, 100);
+    const original = JSON.parse(getAppState(fixture.db, FOLLOW_UP_CLEAN_CLOSE_KEY)!) as {
+      sessions: Record<string, number>;
+    };
+    await f.advance(f.sessionId, "old-a");
+    await f.advance(f.otherId, "old-b");
+    const foreign = f.stateOf(f.otherId);
+    expect(consumeFollowUpCleanClose(fixture.db, undefined, (id) => id === f.sessionId)).toEqual([
+      f.sessionId,
+    ]);
+    expect(f.stateOf(f.otherId)).toBe(foreign);
+    stampFollowUpCleanClose(fixture.db, 101);
+    const stamped = JSON.parse(getAppState(fixture.db, FOLLOW_UP_CLEAN_CLOSE_KEY)!) as {
+      sessions: Record<string, number>;
+    };
+    expect(stamped.sessions[f.otherId]).toBe(original.sessions[f.otherId]);
+    expect(consumeFollowUpCleanClose(fixture.db, undefined, (id) => id === f.otherId)).toEqual([
+      f.otherId,
+    ]);
+  });
+
+  it("does not turn a scoped consume followed by a crash into a false downgrade hold", async () => {
+    const f = await twoQueues();
+    stampFollowUpCleanClose(fixture.db, 100);
+    expect(consumeFollowUpCleanClose(fixture.db, undefined, (id) => id === f.sessionId)).toEqual(
+      [],
+    );
+    await f.advance(f.sessionId, "new-a");
+    // A new connection loses the in-memory launch scope, like a crash/relaunch.
+    fixture.db.close();
+    fixture.db = openRawDb(fixture.dbPath);
+    expect(consumeFollowUpCleanClose(fixture.db, undefined, (id) => id === f.sessionId)).toEqual(
+      [],
+    );
+  });
+
+  it("does not invent a foreign downgrade sentinel when no marker existed", async () => {
+    const f = await twoQueues();
+    expect(consumeFollowUpCleanClose(fixture.db, undefined, (id) => id === f.sessionId)).toEqual(
+      [],
+    );
+    stampFollowUpCleanClose(fixture.db, 100);
+    expect(consumeFollowUpCleanClose(fixture.db, undefined, (id) => id === f.otherId)).toEqual([]);
+  });
+
+  it("never decodes or repairs another owner's malformed queue", async () => {
+    const f = await twoQueues();
+    setAppState(fixture.db, FOLLOW_UP_CLEAN_CLOSE_KEY, '{"v":1,"sessions":{}}', 100);
+    fixture.db
+      .prepare("UPDATE session_follow_up_queue SET state = '{}' WHERE session_id = ?")
+      .run(f.otherId);
+    const errors: string[] = [];
+    expect(
+      consumeFollowUpCleanClose(
+        fixture.db,
+        (id) => errors.push(id),
+        (id) => id === f.sessionId,
+      ),
+    ).toEqual([f.sessionId]);
+    expect(errors).toEqual([]);
+    expect(f.stateOf(f.otherId)).toBe("{}");
+  });
+});

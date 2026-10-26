@@ -13,6 +13,8 @@
  * off, every read is the local one.
  */
 import { useBoardStore } from "@renderer/stores/board";
+import { launchStore } from "@renderer/stores/launch";
+import { cloudSessionReader } from "./cloud-sessions";
 
 import { remoteOwnerOf } from "./remote-owners";
 import { closedListingReader, type SessionListingReader } from "./remote-session-wire";
@@ -68,6 +70,7 @@ function projectOfTicket(ticketId: string): string | null {
  * Workspace is not bound now reads nothing and says why (VC-713, B1).
  */
 export function sessionListingReaderForProject(projectId: string): SessionListingReader {
+  if (launchStore() === "cloud") return cloudSessionReader(projectId);
   const owner = remoteOwnerOf(projectId);
   if (owner === null) return localReader();
   return remote?.forProject(projectId) ?? closedListingReader(owner.hostName);
@@ -76,6 +79,7 @@ export function sessionListingReaderForProject(projectId: string): SessionListin
 /** The reader a ticket's listing comes from, by the project the ticket is on. */
 export function sessionListingReaderForTicket(ticketId: string): SessionListingReader {
   const projectId = projectOfTicket(ticketId);
+  if (launchStore() === "cloud") return cloudSessionReader(projectId);
   const owner = remoteOwnerOf(projectId);
   if (owner === null) return localReader();
   return remote?.forProject(projectId!) ?? closedListingReader(owner.hostName);

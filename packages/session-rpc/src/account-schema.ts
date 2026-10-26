@@ -11,10 +11,19 @@ import {
   ACCOUNT_TOKEN_MAX,
   ACCOUNT_BACKEND_STATES,
   ACCOUNT_CONNECTIONS,
+  ACCOUNT_GITHUB_ACCOUNT_TYPES,
+  ACCOUNT_GITHUB_CONNECTION_STATUSES,
+  ACCOUNT_GITHUB_FLOWS,
+  ACCOUNT_GITHUB_INSTALLATIONS_MAX,
+  ACCOUNT_GITHUB_REPOSITORY_SELECTIONS,
+  ACCOUNT_GITHUB_STATES,
   ACCOUNT_PROVIDERS,
   ACCOUNT_STATES,
   ACCOUNT_TEXT_MAX,
   type AccountAccessToken,
+  type AccountGithubConnection,
+  type AccountGithubInstallation,
+  type AccountGithubSnapshot,
   type AccountSnapshot,
   type AccountSummary,
   type CloudLaunch,
@@ -25,6 +34,8 @@ const text = z.string().max(ACCOUNT_TEXT_MAX);
 
 export const accountSignInInputSchema = z.strictObject({
   connection: z.enum(ACCOUNT_CONNECTIONS),
+  inviteCode: z.string().min(16).max(128).optional(),
+  acceptedAgreementVersion: z.string().min(1).max(128).optional(),
 });
 
 const accountSummarySchema = z.object({
@@ -61,5 +72,32 @@ export const cloudLaunchSchema = z.discriminatedUnion("store", [
     store: z.literal("cloud"),
     userId: text.min(1),
     backendUrl: text.min(1),
+    deployment: z.enum(["cloud", "local"]).optional(),
+    siteUrl: text.min(1).nullable().optional(),
   }),
 ]) satisfies z.ZodType<CloudLaunch>;
+
+const githubConnectionSchema = z.object({
+  status: z.enum(ACCOUNT_GITHUB_CONNECTION_STATUSES),
+  login: text,
+  name: text.nullable(),
+}) satisfies z.ZodType<AccountGithubConnection>;
+
+const githubInstallationSchema = z.object({
+  installationId: text,
+  accountLogin: text,
+  accountType: z.enum(ACCOUNT_GITHUB_ACCOUNT_TYPES),
+  repositorySelection: z.enum(ACCOUNT_GITHUB_REPOSITORY_SELECTIONS),
+  suspended: z.boolean(),
+  configureUrl: text.regex(/^https?:\/\//u),
+}) satisfies z.ZodType<AccountGithubInstallation>;
+
+/** The account's GitHub connection and installations (VC-897): never a token. */
+export const accountGithubSnapshotSchema = z.object({
+  state: z.enum(ACCOUNT_GITHUB_STATES),
+  connection: githubConnectionSchema.nullable(),
+  installations: z.array(githubInstallationSchema).max(ACCOUNT_GITHUB_INSTALLATIONS_MAX).nullable(),
+  waiting: z.enum(ACCOUNT_GITHUB_FLOWS).nullable(),
+  requested: z.boolean(),
+  failure: text.nullable(),
+}) satisfies z.ZodType<AccountGithubSnapshot>;

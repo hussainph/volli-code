@@ -29,6 +29,16 @@ describe("the migration table register", () => {
     expect(decided.toSorted()).toEqual(liveTables());
   });
 
+  it("keeps follow-up identity proofs on the runner, not in cloud records or a legacy archive", () => {
+    expect(
+      MIGRATION_TABLE_DECISIONS.find(({ table }) => table === "session_follow_up_identities")
+        ?.disposition,
+    ).toBe("runner");
+    expect(EXPORT_SOURCES.flatMap((source) => source.tables)).not.toContain(
+      "session_follow_up_identities",
+    );
+  });
+
   it("gives every decision a reason", () => {
     for (const decision of MIGRATION_TABLE_DECISIONS) expect(decision.reason).toMatch(/\S.*\.$/);
   });

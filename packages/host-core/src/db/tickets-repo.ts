@@ -20,6 +20,7 @@ import {
   type TicketSummary,
 } from "@volli/shared";
 import { prepared } from "./prepared";
+import { localProductRow } from "./local-product";
 import { hostLogger } from "../log/root";
 
 const log = hostLogger("db");
@@ -182,7 +183,7 @@ function labelNamesByTicketAll(db: Database.Database): Map<string, string[]> {
 export function listTicketsByProject(db: Database.Database, projectId: string): Ticket[] {
   const rows = prepared<[string], TicketRow>(
     db,
-    "SELECT * FROM tickets WHERE project_id = ? AND archived_at IS NULL ORDER BY status, position",
+    `SELECT * FROM tickets WHERE project_id = ? AND archived_at IS NULL AND ${localProductRow("tickets", "ticket")} ORDER BY status, position`,
   ).all(projectId);
   const labelsByTicket = labelNamesByTicket(db, projectId, "live");
   return rows.filter(hasKnownStatus).map((row) => mapTicket(row, labelsByTicket.get(row.id) ?? []));
@@ -231,7 +232,7 @@ export function listLiveTicketRefsByNumber(
 export function listAllTickets(db: Database.Database): Ticket[] {
   const rows = prepared<[], TicketRow>(
     db,
-    "SELECT * FROM tickets WHERE archived_at IS NULL ORDER BY project_id, status, position",
+    `SELECT * FROM tickets WHERE archived_at IS NULL AND ${localProductRow("tickets", "ticket")} ORDER BY project_id, status, position`,
   ).all();
   const labelsByTicket = labelNamesByTicketAll(db);
   return rows.filter(hasKnownStatus).map((row) => mapTicket(row, labelsByTicket.get(row.id) ?? []));
@@ -257,7 +258,7 @@ export function listTicketRosterByProject(
             preferred_harness_id, position, worktree_path, branch, base_branch, pr_url,
             created_at, updated_at
        FROM tickets
-      WHERE project_id = ? AND archived_at IS NULL
+      WHERE project_id = ? AND archived_at IS NULL AND ${localProductRow("tickets", "ticket")}
       ORDER BY status, position`,
   ).all(projectId);
   const labelsByTicket = labelNamesByTicket(db, projectId, "live");
@@ -292,7 +293,7 @@ export function listArchivedTicketsByProject(
   // below rather than being cast blind.
   const rows = prepared<[string], TicketRow & { archived_at: number }>(
     db,
-    "SELECT * FROM tickets WHERE project_id = ? AND archived_at IS NOT NULL ORDER BY archived_at DESC",
+    `SELECT * FROM tickets WHERE project_id = ? AND archived_at IS NOT NULL AND ${localProductRow("tickets", "ticket")} ORDER BY archived_at DESC`,
   ).all(projectId);
   const labelsByTicket = labelNamesByTicket(db, projectId, "archived");
   return rows.filter(hasKnownStatus).map((row): ArchivedTicket => {
@@ -366,7 +367,8 @@ export function getTicketBrief(
 export function listWorktreePaths(db: Database.Database): string[] {
   const rows = prepared<[], { worktree_path: string }>(
     db,
-    "SELECT worktree_path FROM tickets WHERE worktree_path IS NOT NULL",
+    `SELECT worktree_path FROM tickets WHERE worktree_path IS NOT NULL
+      UNION SELECT abs_path AS worktree_path FROM working_copy_paths`,
   ).all();
   return rows.map((row) => row.worktree_path);
 }
@@ -411,7 +413,13 @@ export function listWorktreeRefs(db: Database.Database): Array<{
             p.ticket_prefix AS ticketPrefix, t.ticket_number AS ticketNumber,
             t.title AS title, t.archived_at AS archivedAt
        FROM tickets t JOIN projects p ON p.id = t.project_id
-      WHERE t.worktree_path IS NOT NULL`,
+      WHERE t.worktree_path IS NOT NULL
+      UNION
+      SELECT w.abs_path AS worktree_path, t.id AS ticketId, t.project_id AS projectId,
+             p.ticket_prefix AS ticketPrefix, t.ticket_number AS ticketNumber,
+             t.title AS title, t.archived_at AS archivedAt
+      FROM working_copy_paths w JOIN tickets t ON t.id = w.ticket_id
+      JOIN projects p ON p.id = t.project_id`,
   ).all();
   return rows.map((row) => ({
     path: row.worktree_path,
@@ -504,7 +512,8 @@ export function listRetentionCandidates(db: Database.Database): TicketRow[] {
     db,
     `SELECT * FROM tickets
        WHERE archived_at IS NULL
-         AND (worktree_path IS NOT NULL OR branch IS NOT NULL)`,
+         AND (worktree_path IS NOT NULL OR branch IS NOT NULL)
+         AND NOT EXISTS (SELECT 1 FROM working_copy_paths WHERE ticket_id = tickets.id)`,
   ).all();
 }
 
@@ -522,7 +531,8 @@ export function listTrimCandidates(db: Database.Database): TicketRow[] {
     db,
     `SELECT * FROM tickets
        WHERE worktree_path IS NOT NULL
-         AND (status = 'done' OR archived_at IS NOT NULL)`,
+         AND (status = 'done' OR archived_at IS NOT NULL)
+         AND NOT EXISTS (SELECT 1 FROM working_copy_paths WHERE ticket_id = tickets.id)`,
   ).all();
 }
 

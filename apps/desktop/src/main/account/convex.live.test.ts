@@ -10,6 +10,8 @@
  *   pnpm -C convex with-backend --deploy -- \
  *     pnpm -C apps/desktop exec vp test run src/main/account/convex.live.test.ts
  */
+import { inviteTestEmail } from "../test-helpers/preview";
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
@@ -42,6 +44,7 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
       const temp = tempInventory();
       cleanups.push(temp.dispose);
       const subject = `live-${randomUUID()}`;
+      await inviteTestEmail(url!, `${subject}@example.com`);
       const service = createAccountService({
         enabled: () => true,
         provider: devIssuerProvider({
@@ -60,7 +63,7 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
       cleanups.push(() => service.dispose());
       service.snapshot();
       await service.settled();
-      await service.signIn("github");
+      await service.signIn("github", undefined, PREVIEW_ENROLLMENT_AGREEMENT_VERSION);
       await service.settled();
 
       const signedIn = service.snapshot();
@@ -84,7 +87,7 @@ describe.skipIf(url === undefined || privateKeyPem === undefined)(
       expect(service.snapshot().account!.deletionPurgeAfter).toBeNull();
       // The same person on the next sign-in: ensureViewer finds, not creates.
       await service.signOut();
-      await service.signIn("google");
+      await service.signIn("google", undefined, PREVIEW_ENROLLMENT_AGREEMENT_VERSION);
       await service.settled();
       expect(service.snapshot().account!.userId).toBe(signedIn.account!.userId);
     });

@@ -36,6 +36,7 @@ import { toastError } from "@renderer/lib/toast";
 import type { SessionActivityNotice } from "../../../ipc/contract";
 import type { ListingRefreshOptions } from "./project-sessions";
 import { markSessionRead } from "./session-read-mark";
+import { launchStore } from "./launch";
 
 /** The Session id a listing row answers to, whichever shape it arrived in. */
 function rowSessionId(row: SessionListingRow): string {
@@ -340,6 +341,7 @@ export const useTicketSessionRecordsStore = createTicketSessionRecordsStore();
  * Returns the unsubscribe function for the caller's effect cleanup.
  */
 export function subscribeTicketSessionActivity(): () => void {
+  if (launchStore() === "cloud") return () => {};
   return window.api.sessions.onActivity((notice) => {
     useTicketSessionRecordsStore.getState().applyActivity(notice);
   });

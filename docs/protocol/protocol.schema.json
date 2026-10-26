@@ -252,6 +252,224 @@
         "outputValidation": "network-and-tests",
         "voidOutput": false
       },
+      "account.githubCancel": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "account.githubConnect": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "account.githubDisconnect": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "account.githubInstall": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "account.githubSubscribe": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "subscription",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "connection": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "login": {
+                      "maxLength": 512,
+                      "type": "string"
+                    },
+                    "name": {
+                      "anyOf": [
+                        {
+                          "maxLength": 512,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "status": {
+                      "enum": [
+                        "active",
+                        "needs_reconnect"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "login",
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "failure": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "installations": {
+              "anyOf": [
+                {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "accountLogin": {
+                        "maxLength": 512,
+                        "type": "string"
+                      },
+                      "accountType": {
+                        "enum": [
+                          "user",
+                          "org"
+                        ],
+                        "type": "string"
+                      },
+                      "configureUrl": {
+                        "maxLength": 512,
+                        "pattern": "^https?:\\/\\/",
+                        "type": "string"
+                      },
+                      "installationId": {
+                        "maxLength": 512,
+                        "type": "string"
+                      },
+                      "repositorySelection": {
+                        "enum": [
+                          "all",
+                          "selected"
+                        ],
+                        "type": "string"
+                      },
+                      "suspended": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "installationId",
+                      "accountLogin",
+                      "accountType",
+                      "repositorySelection",
+                      "suspended",
+                      "configureUrl"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 500,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "requested": {
+              "type": "boolean"
+            },
+            "state": {
+              "enum": [
+                "unavailable",
+                "loading",
+                "ready",
+                "failed"
+              ],
+              "type": "string"
+            },
+            "waiting": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "connect",
+                    "install"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "connection",
+            "installations",
+            "waiting",
+            "requested",
+            "failure"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "documented-yield",
+        "voidOutput": false
+      },
       "account.requestDeletion": {
         "compatibility": "client-local",
         "input": {
@@ -273,11 +491,21 @@
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
           "properties": {
+            "acceptedAgreementVersion": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
             "connection": {
               "enum": [
                 "github",
                 "google"
               ],
+              "type": "string"
+            },
+            "inviteCode": {
+              "maxLength": 128,
+              "minLength": 16,
               "type": "string"
             }
           },
@@ -720,6 +948,105 @@
         "outputValidation": "documented-yield",
         "voidOutput": false
       },
+      "checkouts.chooseFolder": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "projectId": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "projectId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "outcome": {
+                  "const": "chosen",
+                  "type": "string"
+                },
+                "projectRepoId": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "outcome",
+                "projectRepoId"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "outcome": {
+                  "const": "cancelled",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "outcome"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "checkouts.status": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "projectId": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "projectId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "enum": [
+                "located",
+                "missing",
+                "no_runner"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "cloud.launch": {
         "compatibility": "client-local",
         "input": {
@@ -751,6 +1078,25 @@
                   "maxLength": 512,
                   "minLength": 1,
                   "type": "string"
+                },
+                "deployment": {
+                  "enum": [
+                    "cloud",
+                    "local"
+                  ],
+                  "type": "string"
+                },
+                "siteUrl": {
+                  "anyOf": [
+                    {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "store": {
                   "const": "cloud",
@@ -5684,6 +6030,252 @@
         "output": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "runners.addThisMac": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "runners.removeThisMac": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "mutation",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "runners.subscribeThisMac": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "subscription",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "message": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "problem": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "removed",
+                    "credential_reuse",
+                    "replaced",
+                    "credentials_locked",
+                    "unreachable",
+                    "refused"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "runnerId": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "runnerName": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "since": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "enum": [
+                "off",
+                "unregistered",
+                "registering",
+                "connecting",
+                "online",
+                "offline",
+                "asleep",
+                "removed",
+                "failed"
+              ],
+              "type": "string"
+            },
+            "waitingFacts": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "state",
+            "runnerId",
+            "runnerName",
+            "since",
+            "waitingFacts",
+            "problem",
+            "message"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "documented-yield",
+        "voidOutput": false
+      },
+      "runners.thisMac": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "message": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "problem": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "removed",
+                    "credential_reuse",
+                    "replaced",
+                    "credentials_locked",
+                    "unreachable",
+                    "refused"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "runnerId": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "runnerName": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "since": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "enum": [
+                "off",
+                "unregistered",
+                "registering",
+                "connecting",
+                "online",
+                "offline",
+                "asleep",
+                "removed",
+                "failed"
+              ],
+              "type": "string"
+            },
+            "waitingFacts": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "state",
+            "runnerId",
+            "runnerName",
+            "since",
+            "waitingFacts",
+            "problem",
+            "message"
+          ],
+          "type": "object"
         },
         "outputValidation": "network-and-tests",
         "voidOutput": false
@@ -17158,6 +17750,9 @@
                                   "id": {
                                     "type": "string"
                                   },
+                                  "ownerUserId": {
+                                    "type": "string"
+                                  },
                                   "parentSessionId": {
                                     "anyOf": [
                                       {
@@ -23886,6 +24481,9 @@
                     "id": {
                       "type": "string"
                     },
+                    "ownerUserId": {
+                      "type": "string"
+                    },
                     "parentSessionId": {
                       "anyOf": [
                         {
@@ -25160,6 +25758,9 @@
                                     "type": "integer"
                                   },
                                   "id": {
+                                    "type": "string"
+                                  },
+                                  "ownerUserId": {
                                     "type": "string"
                                   },
                                   "parentSessionId": {
@@ -29811,6 +30412,9 @@
                     "id": {
                       "type": "string"
                     },
+                    "ownerUserId": {
+                      "type": "string"
+                    },
                     "parentSessionId": {
                       "anyOf": [
                         {
@@ -31051,6 +31655,9 @@
                                   "type": "integer"
                                 },
                                 "id": {
+                                  "type": "string"
+                                },
+                                "ownerUserId": {
                                   "type": "string"
                                 },
                                 "parentSessionId": {
@@ -35160,6 +35767,9 @@
                                 "id": {
                                   "type": "string"
                                 },
+                                "ownerUserId": {
+                                  "type": "string"
+                                },
                                 "parentSessionId": {
                                   "anyOf": [
                                     {
@@ -38717,6 +39327,9 @@
                 "enabled": {
                   "type": "boolean"
                 },
+                "enrollment": {
+                  "type": "boolean"
+                },
                 "source": {
                   "enum": [
                     "default",
@@ -38774,6 +39387,9 @@
               "additionalProperties": false,
               "properties": {
                 "enabled": {
+                  "type": "boolean"
+                },
+                "enrollment": {
                   "type": "boolean"
                 },
                 "source": {

@@ -38,7 +38,13 @@ import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
 import { updateTicketFieldsCommand } from "../ticket-commands";
 import { refExists, resolveBaseBranch } from "./base";
-import { GitError, stderrOf } from "./git";
+import { GitError, parseWorktreeList, stderrOf } from "./git";
+import { existsSync } from "node:fs";
+import { acquireDeletionLease, UNDER_DELETION_REFUSAL } from "./deletion-lease";
+import { busyRefusal, busySiteWithin, type BusyWorktreeSites } from "./activity";
+import { isWorktreeDirtyAsync } from "./dirty";
+import { canonicalize } from "./paths";
+import type { AgentSiteReleaseReport } from "./agent-sites";
 import { homeDir } from "./home";
 import { resolveWorktreeIdentity } from "./identity";
 import { completeFirstRunCopy, isFirstRunPending, markFirstRunPending } from "./first-run";
@@ -81,24 +87,44 @@ const inflight = new Map<string, Promise<WorktreeResult<EnsureOutcome>>>();
 // System-driven, no session: these mutations are attributed to automation.
 const SYSTEM_ACTOR: TicketEventActor = { kind: "automation" };
 
-type Stage = "create" | "copy" | "attachments";
+export type EnsureStage = "create" | "copy" | "attachments";
 
-/** Records the failure event + phase, returns the typed error Result. */
+/** Board facts supplied by a store. The git pipeline never reads a board. */
+export interface EnsureFacts {
+  ticketId: string;
+  projectId: string;
+  checkoutPath: string;
+  displayId: string;
+  title: string;
+  usesWorktree: boolean;
+  worktreePath: string | null;
+  branch: string | null;
+  baseBranch: string | null;
+  projectBaseBranch: string | null;
+  setupCommand: string | null;
+}
+
+/** Machine operations plus store-specific publication; no SQLite dependency. */
+export interface EnsureExplicitPorts {
+  gitAsync: RunGitAsync;
+  home?: string;
+  environmentRecipes?: () => boolean;
+  onPhase?: WorktreePorts["onPhase"];
+  onFailure?: (ticketId: string, stage: EnsureStage, stderr: string) => void;
+  materializeAttachments?: (ticketId: string, worktreePath: string) => Promise<void>;
+  persistIdentity?: (identity: WorktreeIdentity) => void;
+}
+
+/** Records store-specific failure evidence without giving the core a board writer. */
 function fail(
-  deps: WorktreePorts,
+  deps: EnsureExplicitPorts,
   ticketId: string,
-  stage: Stage,
+  stage: EnsureStage,
   message: string,
   stderr: string,
 ): WorktreeResult<EnsureOutcome> {
-  setPhase(ticketId, "failed", deps.onPhase);
-  recordTicketEvent(
-    deps.db,
-    ticketId,
-    { kind: "worktree_failed", stage, stderr: trimWorktreeFailureStderr(stderr) },
-    Date.now(),
-    SYSTEM_ACTOR,
-  );
+  deps.onPhase?.(ticketId, "failed");
+  deps.onFailure?.(ticketId, stage, trimWorktreeFailureStderr(stderr));
   return err(message);
 }
 
@@ -138,7 +164,64 @@ async function runEnsure(
   if (!ticket) return err("Unknown ticket");
   const project = getProjectById(deps.db, ticket.project_id);
   if (!project) return err("Unknown project");
+  return runEnsureExplicit(
+    {
+      ...deps,
+      onPhase: (id, phase) => setPhase(id, phase, deps.onPhase),
+      onFailure: (id, stage, stderr) => {
+        recordTicketEvent(
+          deps.db,
+          id,
+          { kind: "worktree_failed", stage, stderr },
+          Date.now(),
+          SYSTEM_ACTOR,
+        );
+      },
+      materializeAttachments: async (id, path) => {
+        await materializeBlobs(deps.db, deps.blobsRoot, null, id, path);
+      },
+      persistIdentity: (identity) => {
+        updateTicketFieldsCommand(
+          deps.db,
+          {
+            ticketId,
+            worktreePath: identity.worktreePath,
+            branch: identity.branch,
+            baseBranch: identity.baseBranch,
+          },
+          { now: Date.now(), actor: SYSTEM_ACTOR },
+        );
+      },
+    },
+    {
+      ticketId,
+      projectId: project.id,
+      checkoutPath: project.path,
+      displayId: displayTicketId(project.ticketPrefix, ticket.ticket_number),
+      title: ticket.title,
+      usesWorktree: true,
+      worktreePath: ticket.worktree_path,
+      branch: ticket.branch,
+      baseBranch: ticket.base_branch,
+      projectBaseBranch: project.baseBranch ?? null,
+      setupCommand: project.setupCommand ?? null,
+    },
+  );
+}
 
+async function runEnsureExplicit(
+  deps: EnsureExplicitPorts,
+  facts: EnsureFacts,
+): Promise<WorktreeResult<EnsureOutcome>> {
+  const { ticketId, displayId } = facts;
+  if (!facts.usesWorktree) {
+    return ok({
+      identity: { worktreePath: null, branch: facts.branch, baseBranch: facts.baseBranch },
+      created: false,
+      restamped: false,
+      setupPending: false,
+    });
+  }
   // Every git step below runs through the REQUIRED async runner — this pipeline
   // runs on Electron main, and one `execFileSync` here freezes every window for
   // the duration of a `git worktree add` (VC-16's rainbow wheel). Requiring the
@@ -146,22 +229,21 @@ async function runEnsure(
   // escaping to real git or back onto the main thread.
   const git = deps.gitAsync;
 
-  setPhase(ticketId, "creating", deps.onPhase);
+  deps.onPhase?.(ticketId, "creating");
 
-  const displayId = displayTicketId(project.ticketPrefix, ticket.ticket_number);
   const identity = resolveWorktreeIdentity({
     home: homeDir(deps),
-    projectPath: project.path,
-    projectId: project.id,
+    projectPath: facts.checkoutPath,
+    projectId: facts.projectId,
     displayId,
-    title: ticket.title,
-    persistedPath: ticket.worktree_path,
-    persistedBranch: ticket.branch,
+    title: facts.title,
+    persistedPath: facts.worktreePath,
+    persistedBranch: facts.branch,
   });
 
   // Reconcile the collision matrix on canonicalized paths.
   const reconciled = await reconcile(git, {
-    projectPath: project.path,
+    projectPath: facts.checkoutPath,
     worktreePath: identity.path,
     branch: identity.branch,
     displayId,
@@ -177,11 +259,11 @@ async function runEnsure(
   // Resolve base for stamping + (for a new branch) branching. Reusing an
   // existing ticket branch never resets it, so base is only structurally
   // required when we create the branch.
-  const reuseBranch = await refExists(git, project.path, `refs/heads/${branch}`);
+  const reuseBranch = await refExists(git, facts.checkoutPath, `refs/heads/${branch}`);
   const base = await resolveBaseBranch(git, {
-    projectPath: project.path,
-    ticketBaseBranch: ticket.base_branch,
-    projectBaseBranch: project.baseBranch ?? null,
+    projectPath: facts.checkoutPath,
+    ticketBaseBranch: facts.baseBranch,
+    projectBaseBranch: facts.projectBaseBranch,
   });
   if (!reuseBranch && !base) {
     const message = "Couldn't resolve a base branch to create the worktree from.";
@@ -199,7 +281,7 @@ async function runEnsure(
     // it is always owed: whether the checkout carries `.agents/setup` is known
     // only once it exists, and the door that claims the run resolves it.
     const steps: FirstRunStep[] =
-      deps.environmentRecipes?.() === true || (project.setupCommand?.trim() ?? "").length > 0
+      deps.environmentRecipes?.() === true || (facts.setupCommand?.trim() ?? "").length > 0
         ? ["copy", "setup"]
         : ["copy"];
     try {
@@ -220,8 +302,8 @@ async function runEnsure(
       // because `addWorktree` prunes and retries once when the add fails on a
       // record it did not expect, and a prune nobody needed is a no-op.
       const prune = reconciled.value.prune;
-      await withRepositoryWorktreeTurn(project.path, () =>
-        addWorktree(git, project.path, addArgs, prune),
+      await withRepositoryWorktreeTurn(facts.checkoutPath, () =>
+        addWorktree(git, facts.checkoutPath, addArgs, prune),
       );
     } catch (caught) {
       // A timeout is reported as one: the stderr of a stopped add is git's own
@@ -244,10 +326,10 @@ async function runEnsure(
   // Session boot into an old one. "Creation" is the durable pending record, not
   // this call: a creation whose copy failed owes it to the Retry, which
   // reconciles to `already-present`.
-  setPhase(ticketId, "copying", deps.onPhase);
+  deps.onPhase?.(ticketId, "copying");
   try {
     if (isFirstRunPending(deps, identity.path, "copy")) {
-      await copyIncludedFiles(project.path, identity.path);
+      await copyIncludedFiles(facts.checkoutPath, identity.path);
       completeFirstRunCopy(deps, identity.path);
     }
   } catch (caught) {
@@ -261,29 +343,20 @@ async function runEnsure(
   // missing source file (row exists, bytes don't) throws with the
   // attachment's label, which becomes this stage's failure message.
   try {
-    await materializeBlobs(deps.db, deps.blobsRoot, null, ticketId, identity.path);
+    await deps.materializeAttachments?.(ticketId, identity.path);
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
     return fail(deps, ticketId, "attachments", message, message);
   }
 
   // Persist identity (synchronous, after all git work) — emits `worktree_changed`.
-  const baseBranch = base?.name ?? ticket.base_branch ?? null;
+  const baseBranch = base?.name ?? facts.baseBranch ?? null;
   const restamped =
-    ticket.worktree_path !== identity.path ||
-    ticket.branch !== branch ||
-    ticket.base_branch !== baseBranch;
+    facts.worktreePath !== identity.path ||
+    facts.branch !== branch ||
+    facts.baseBranch !== baseBranch;
   try {
-    updateTicketFieldsCommand(
-      deps.db,
-      {
-        ticketId,
-        worktreePath: identity.path,
-        branch,
-        baseBranch,
-      },
-      { now: Date.now(), actor: SYSTEM_ACTOR },
-    );
+    deps.persistIdentity?.({ worktreePath: identity.path, branch, baseBranch });
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
     return fail(deps, ticketId, "create", message, message);
@@ -299,7 +372,7 @@ async function runEnsure(
     const message = caught instanceof Error ? caught.message : String(caught);
     return fail(deps, ticketId, "create", message, message);
   }
-  setPhase(ticketId, "ready", deps.onPhase);
+  deps.onPhase?.(ticketId, "ready");
   const result: WorktreeIdentity = {
     worktreePath: identity.path,
     branch,
@@ -333,4 +406,82 @@ export function ensure(
 function asJoiner(result: WorktreeResult<EnsureOutcome>): WorktreeResult<EnsureOutcome> {
   if (!result.ok || !result.value.created) return result;
   return ok({ ...result.value, created: false });
+}
+
+/**
+ * The same reconcile/add/copy/attachments pipeline with explicit facts and no
+ * board reads or writes. Cloud callers reserve the path before entering it.
+ * Flights are path-scoped across port objects: the Session and inbox services
+ * share one physical checkout even when they use different query ports.
+ */
+const explicitFlights = new Map<string, Promise<WorktreeResult<EnsureOutcome>>>();
+export function ensureExplicit(
+  deps: EnsureExplicitPorts,
+  facts: EnsureFacts,
+): Promise<WorktreeResult<EnsureOutcome>> {
+  const target =
+    facts.worktreePath ??
+    resolveWorktreeIdentity({
+      home: homeDir(deps),
+      projectPath: facts.checkoutPath,
+      projectId: facts.projectId,
+      displayId: facts.displayId,
+      title: facts.title,
+      persistedPath: null,
+      persistedBranch: facts.branch,
+    }).path;
+  const key = `${canonicalize(facts.checkoutPath)}\0${facts.ticketId}\0${canonicalize(target)}`;
+  const existing = explicitFlights.get(key);
+  if (existing) return existing.then(asJoiner);
+  const run = runEnsureExplicit(deps, facts).finally(() => explicitFlights.delete(key));
+  explicitFlights.set(key, run);
+  return run;
+}
+
+/**
+ * Board-free cache eviction for runner-owned paths. No force and no raw folder
+ * delete fallback: forgotten/unverifiable directories always stay untouched.
+ * The registry keeps the path so another materialization can recreate it.
+ */
+export async function reclaimExplicit(
+  ports: {
+    gitAsync: RunGitAsync;
+    busySites?: BusyWorktreeSites;
+    releaseAgentSites?: (directory: string) => Promise<AgentSiteReleaseReport>;
+  },
+  input: { checkoutPath: string; worktreePath: string; baseBranch: string | null; keep: boolean },
+): Promise<WorktreeResult<void>> {
+  if (input.keep) return err("This working copy is kept.");
+  if (canonicalize(input.checkoutPath) === canonicalize(input.worktreePath))
+    return err("The main checkout cannot be reclaimed.");
+  if (!ports.busySites) return err("Worktree activity is unavailable; refusing to reclaim.");
+  const lease = acquireDeletionLease(input.worktreePath);
+  if (!lease) return err(UNDER_DELETION_REFUSAL);
+  try {
+    if (!existsSync(input.worktreePath)) return ok(undefined);
+    const busy = busySiteWithin(input.worktreePath, await ports.busySites(input.worktreePath));
+    if (busy) return err(busyRefusal(busy));
+    return await withRepositoryWorktreeTurn(input.checkoutPath, async () => {
+      const listing = parseWorktreeList(
+        await ports.gitAsync(["worktree", "list", "--porcelain"], input.checkoutPath),
+      );
+      if (!listing.some((entry) => canonicalize(entry.path) === canonicalize(input.worktreePath)))
+        return err("Git no longer tracks this working copy; refusing to delete the folder.");
+      const dirty = await isWorktreeDirtyAsync(ports.gitAsync, {
+        worktreePath: input.worktreePath,
+        branch: null,
+        baseBranch: input.baseBranch,
+        worktreeEntries: listing,
+      });
+      if (dirty.dirty)
+        return err(`This working copy cannot be reclaimed: ${dirty.reason ?? "dirty"}.`);
+      await ports.releaseAgentSites?.(input.worktreePath);
+      await ports.gitAsync(["worktree", "remove", input.worktreePath], input.checkoutPath);
+      return ok(undefined);
+    });
+  } catch (error) {
+    return err(error instanceof Error ? error.message : String(error));
+  } finally {
+    lease.release();
+  }
 }

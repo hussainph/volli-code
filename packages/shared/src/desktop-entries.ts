@@ -526,6 +526,101 @@ export const DESKTOP_ENTRIES = [
     idempotency: "read",
     summary: "The last-seen Volli Cloud board kept on this Mac, if any.",
   },
+  // The account's GitHub connection and the GitHub App's installations
+  // (VC-897; wire types in `./account`). Host-placed for the reason the
+  // account is: the connection is the person's, and desktop main follows its
+  // browser round trips. Served through `AccountPort.github`, `cloud` only.
+  {
+    key: "account.githubSubscribe",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "The account's GitHub connection and installations now, then on every change.",
+  },
+  {
+    // `natural`: a second start while a flow is in flight replaces it.
+    key: "account.githubConnect",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Connect (or reconnect) GitHub in the browser.",
+  },
+  {
+    key: "account.githubInstall",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Install the Volli GitHub App on a GitHub account in the browser.",
+  },
+  {
+    key: "account.githubCancel",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Stop waiting for the GitHub browser round trip.",
+  },
+  {
+    key: "account.githubDisconnect",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Disconnect GitHub: revoke the App's authorization and forget the connection.",
+  },
+  // This Mac as one of the person's runners (VC-895; wire types in
+  // `./this-mac-runner`). Host-placed: the registration is this device's, and
+  // only its own window drives it. Desktop main serves them through the map's
+  // `RunnerAccountPort` (`@volli/host-core/handlers`), and only with `cloud`
+  // on; hostd has none, so every one answers unavailable there. The person's
+  // other runners the window reads and writes through its own Volli Cloud client.
+  {
+    key: "runners.thisMac",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "Where this Mac stands as one of the person's runners: never a credential.",
+  },
+  {
+    key: "runners.subscribeThisMac",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "This Mac's runner snapshot now, then again on every change.",
+  },
+  {
+    // `natural`: a second request while one registration is in flight is the same request.
+    key: "runners.addThisMac",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Register this Mac as a runner again, or retry a failed registration.",
+  },
+  {
+    key: "runners.removeThisMac",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Remove this Mac from the person's runners until it is added again.",
+  },
+  // A cloud project's folder on this Mac (VC-895 N2-3; wire types in
+  // `./cloud-checkout`). Host-placed: the folder is this device's, held only in
+  // its runner's local path registry, and only its own window picks it.
+  // Desktop main serves them through the map's `CloudCheckoutPort`
+  // (`@volli/host-core/handlers`), only with `cloud` on; hostd has none.
+  {
+    key: "checkouts.status",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "Whether this Mac knows a Volli Cloud project's folder: never the path.",
+  },
+  {
+    // `natural`: choosing the same folder again registers the same checkout.
+    key: "checkouts.chooseFolder",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Pick a Volli Cloud project's folder on this Mac with the system folder picker.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];

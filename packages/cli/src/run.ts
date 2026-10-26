@@ -355,7 +355,7 @@ export async function renderParseRefusal(
   parsed: Extract<ReturnType<typeof parseCliArgs>, { ok: false }>,
   argv: readonly string[],
   dependencies: RunCliDependencies,
-): Promise<0 | 1 | 2 | 3> {
+): Promise<0 | 1 | 2 | 3 | 75> {
   const teachableByRole =
     parsed.code === "WRONG_DOOR" &&
     parsed.verb !== undefined &&
@@ -370,7 +370,7 @@ export async function renderParseRefusal(
 export async function runCli(
   argv: readonly string[],
   dependencies: RunCliDependencies,
-): Promise<0 | 1 | 2 | 3> {
+): Promise<0 | 1 | 2 | 3 | 75> {
   // Bare `volli` prints the complete reference to stderr and exits 2 (usage),
   // so an agent that ran the CLI with no arguments learns the whole surface.
   if (argv.length === 0) {

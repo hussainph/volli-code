@@ -90,6 +90,17 @@ describe("the /runner/* client", () => {
     expect(calls[1]!.body).toEqual({ host: HOST });
   });
 
+  it("decodes preview cutoff without invalidating a linked runner's credential", async () => {
+    const { client } = clientAnswering(() =>
+      json(403, {
+        error: { code: "preview_access_required", message: "preview" },
+      }),
+    );
+    const paused = await failure(client.exchange({ runnerId: RUNNER_ID, credential: "vrc_a" }));
+    expect(paused.code).toBe("preview_access_required");
+    expect(paused.relinkRequired).toBe(false);
+  });
+
   it("names the backend's own error code, and knows which ones need a new link", async () => {
     const { client } = clientAnswering(() =>
       json(403, { error: { code: "revoked", message: "gone" } }),

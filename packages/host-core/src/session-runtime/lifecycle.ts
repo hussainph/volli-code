@@ -6,7 +6,7 @@
  * port, including the browser backend. Recovery uses the same host engine.
  */
 import { randomUUID } from "node:crypto";
-import type { HostedSessionRuntime } from "@volli/session-engine";
+import type { HostNotice, HostedSessionRuntime, SessionEngine } from "@volli/session-engine";
 import {
   logErrorSummary,
   type LogErrorSummary,
@@ -36,8 +36,9 @@ import {
   type BootRecoveryFailure,
   type BootRecoveryReason,
 } from "./boot-recovery";
-import { resumeRecoveredTurns } from "./restart-resume";
+import { resumeRecoveredTurns, type RestartResumeCloud } from "./restart-resume";
 import { createHostNoticeDelivery } from "./durable-host-notice-delivery";
+import { readSqliteHostNotice, scopeSqliteHostNoticeOutbox } from "./sqlite-host-notice-outbox";
 import { catchUpSessionResumptions } from "./session-resumptions";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { Delegations } from "./delegate-session";
@@ -111,6 +112,13 @@ export interface RecoveredSessionServices<Services> {
   readonly services: Services;
 }
 
+/** A notice by its ids, composed only if the outbox has never held them. */
+export interface HostNoticeIntent {
+  sessionId: string;
+  commandId: string;
+  compose(): HostNotice;
+}
+
 export interface SessionRuntimeLifecycle<Services> {
   /** No raw services on this owner: ledger consumers must await recovery. */
   ready(): Promise<RecoveredSessionServices<Services>>;
@@ -118,12 +126,31 @@ export interface SessionRuntimeLifecycle<Services> {
   observeScheduledResume(projection: SessionProjection): void;
   /** Starts/joins recovery if needed; fresh external notices never bypass it. */
   relayShellNotice(notice: BackgroundShellNotice): void;
+  /**
+   * Commits one host notice to this launch's (owner-scoped) durable outbox and
+   * resolves once that put has committed: the stored first payload, or `null`
+   * when the id already has a terminal receipt. `compose` runs only for an id
+   * the outbox has never held, so a replayed producer never rebuilds the text
+   * or mints a second nonce. Delivery then runs behind boot recovery, exactly
+   * as for a recovered notice: live → steer, idle → a turn, detached → parked,
+   * stopped → dropped. Rejects when this launch has no delivery (no runtime),
+   * is closing, or does not own the Session; nothing was stored.
+   *
+   * Production caller: the cloud product store's `session.notice` inbox
+   * executor (`cloud-store/notice-jobs.ts`), bound by the runner composition.
+   */
+  enqueueHostNotice(input: HostNoticeIntent): Promise<HostNotice | null>;
   /** This launch's stale-attachment sweep, once it has finished; `null` before then. */
   bootRecovery(): BootRecoveryReport | null;
 }
 
 export function createSessionRuntimeLifecycle<Services>(options: {
   host: HostCore;
+  /** Launch-selected engine, used by every ledger consumer during recovery. */
+  sessionEngine?: SessionEngine;
+  /** Filters machine-state queues before they can reach runtime recovery. */
+  ownsSession?(sessionId: string): boolean;
+  projectIds?(): readonly string[];
   venue?: RunnerIdentity;
   /** Upgrade-only ownership supplied by the host, not the executor. */
   ownsLegacyRunner?(runner: RunnerIdentity): boolean;
@@ -147,12 +174,24 @@ export function createSessionRuntimeLifecycle<Services>(options: {
    * shows it, and is not resumed on its own. Absent is a local launch.
    */
   cloudLaunch?(): boolean;
+  /**
+   * A cloud store's restart-resume reads: its own interrupted turns resume
+   * once the runner first connects and the backend's Ticket siblings allow
+   * it, and `cloudLaunch` no longer suppresses them (`restart-resume.ts`).
+   */
+  cloudRecovery?: RestartResumeCloud;
 }): SessionRuntimeLifecycle<Services> {
   const { host, ports, runtime, rpc, observability, delegation } = options;
   const { database } = host;
   const liveHost = isLiveHost(host) ? host : undefined;
-  const sessionEngine = liveHost?.sessionEngine ?? null;
-  const hostNoticeOutbox = liveHost?.[SESSION_RUNTIME].hostNoticeOutbox ?? null;
+  const sessionEngine =
+    liveHost === undefined ? null : (options.sessionEngine ?? liveHost.sessionEngine);
+  const ownsSession = options.ownsSession ?? (() => true);
+  const rawNoticeOutbox = liveHost?.[SESSION_RUNTIME].hostNoticeOutbox ?? null;
+  const hostNoticeOutbox =
+    rawNoticeOutbox === null || options.ownsSession === undefined || !database.ok
+      ? rawNoticeOutbox
+      : scopeSqliteHostNoticeOutbox(database.db, rawNoticeOutbox, ownsSession);
   const sessionWakeBus = liveHost?.sessionWakeBus ?? null;
   const notices =
     runtime === null || hostNoticeOutbox === null
@@ -193,7 +232,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   const resume =
     runtime !== null && sessionEngine !== null && database.ok
       ? createScheduledResumeHost({
-          candidates: async () => listScheduledResumeSessionIds(database.db),
+          candidates: async () => listScheduledResumeSessionIds(database.db).filter(ownsSession),
           projection: async (sessionId) => (await runtime.projection({ sessionId })).projection,
           ticketSessions: ({ projectId, ticketId }) =>
             sessionEngine.listSessions({ projectId, scope: "ticket", ticketId }),
@@ -213,11 +252,14 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   // Turns a restart resume continued, which outlive readiness (never rejects).
   let restartResumeRuns: Promise<void> | undefined;
   const closed = Promise.withResolvers<false>();
+  // Ends a restart resume's wait for the runner's first connect.
+  const closingSignal = new AbortController();
 
   function close(): Promise<void> {
     if (drain !== undefined) return drain;
     closing = true;
     closed.resolve(false);
+    closingSignal.abort();
     options.stopProducers();
     suspendClock?.close();
     ports.power.removeListener("resume", wake);
@@ -253,8 +295,10 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     if (database.ok && sessionEngine !== null) {
       // Compare before recovery itself can append events. A present watermark
       // is consumed in the same transaction that refuses any stale queued rows.
-      held = consumeFollowUpCleanClose(database.db, (sessionId, error) =>
-        ports.log.error("unreadable follow-up queue", { sessionId, error }),
+      held = consumeFollowUpCleanClose(
+        database.db,
+        (sessionId, error) => ports.log.error("unreadable follow-up queue", { sessionId, error }),
+        options.ownsSession,
       );
       const failures: BootRecoveryReport["failures"][number][] = [];
       let recoveredTurns = 0;
@@ -272,7 +316,8 @@ export function createSessionRuntimeLifecycle<Services>(options: {
                   new Error("The Session runtime is unavailable during boot recovery."),
                 )
               : runtime.reconcile(input),
-          projectIds: listProjects(database.db).map((project) => project.id),
+          projectIds:
+            options.projectIds?.() ?? listProjects(database.db).map((project) => project.id),
           newId: randomUUID,
           now: Date.now,
           // A binding the runtime holds after a failed reconcile was rebuilt.
@@ -324,7 +369,11 @@ export function createSessionRuntimeLifecycle<Services>(options: {
         try {
           // Construct even with nothing unanswered: this arms resumed-child notices.
           const delegateHost = options.delegationsFor();
-          const unanswered = delegation.listUnansweredSubagents();
+          const unanswered = delegation
+            .listUnansweredSubagents()
+            .filter(
+              (child) => ownsSession(child.childSessionId) && ownsSession(child.parentSessionId),
+            );
           if (unanswered.length > 0) {
             const recovered = await delegateHost?.recover(unanswered);
             if (recovered !== undefined) {
@@ -345,7 +394,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
       throw new SessionRuntimeClosingError("The Session runtime closed during recovery.");
     // Explain durable holds after stale bindings are retired, so the Attention
     // belongs to today's executor. Failure cannot unhold a row; retry next boot.
-    for (const sessionId of held) {
+    for (const sessionId of held.filter(ownsSession)) {
       try {
         await runtime?.reportMessageDeliveryFailure({
           sessionId,
@@ -415,6 +464,9 @@ export function createSessionRuntimeLifecycle<Services>(options: {
         command: (request) => hosted.command(request),
         shouldStop: () => closing,
         ...(options.cloudLaunch === undefined ? {} : { cloudLaunch: options.cloudLaunch }),
+        ...(options.cloudRecovery === undefined
+          ? {}
+          : { cloud: options.cloudRecovery, ownsSession, closing: closingSignal.signal }),
       },
       recovered,
     );
@@ -455,7 +507,12 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     return boot;
   }
   const observeScheduledResume = (projection: SessionProjection): void => {
-    if (!closing) resume?.observe(projection);
+    if (
+      !closing &&
+      resume !== null &&
+      (options.ownsSession === undefined || ownsSession(projection.session.id))
+    )
+      resume.observe(projection);
   };
   return {
     ready,
@@ -463,7 +520,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     observeScheduledResume,
     bootRecovery: () => bootRecovery,
     relayShellNotice: (notice) => {
-      if (closing || relay === null) return;
+      if (closing || relay === null || !ownsSession(notice.sessionId)) return;
       // A fresh external notice cannot read the ledger while boot recovery is
       // still reconciling it. Recovery's durable outbox remains an internal port.
       void ready().then(
@@ -475,6 +532,37 @@ export function createSessionRuntimeLifecycle<Services>(options: {
           ports.log.error("failed to ready a shell notice", { error });
         },
       );
+    },
+    enqueueHostNotice: async ({ sessionId, commandId, compose }) => {
+      if (closing) throw new SessionRuntimeClosingError("The Session runtime is closing.");
+      if (hostNoticeOutbox === null || notices === null || !database.ok)
+        throw new Error("This launch has no host notice delivery.");
+      if (!ownsSession(sessionId))
+        throw new Error("The host notice is outside this launch's Session scope");
+      const known = readSqliteHostNotice(database.db, commandId, sessionId);
+      if (known.state === "settled") return null;
+      let stored: HostNotice | null;
+      if (known.state === "pending") stored = known.notice;
+      else {
+        const notice = compose();
+        if (notice.sessionId !== sessionId || notice.commandId !== commandId)
+          throw new Error(`Host notice ${commandId} was composed for another id`);
+        // Committed before anything else: the caller may report success from here.
+        stored = await hostNoticeOutbox.put(notice);
+      }
+      if (stored === null) return null;
+      const committed = stored;
+      // Delivery reads the ledger, so it waits for boot recovery like every
+      // fresh producer. `deliver` re-puts the same id and gets the same first
+      // payload back, so the stored text and nonce are what is sent.
+      void ready()
+        .then(() => notices.deliver(committed))
+        .catch((error: unknown) => {
+          // A close that won: the payload stays durable for the next launch.
+          if (closing) return;
+          ports.log.error("host notice delivery failed", { detail: committed.label, error });
+        });
+      return committed;
     },
   };
 }

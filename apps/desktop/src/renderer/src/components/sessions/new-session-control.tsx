@@ -41,7 +41,9 @@ import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 
-import { readOnlyMark, useCanWrite } from "@renderer/components/hosts/use-hosts";
+import { readOnlyMark } from "@renderer/components/hosts/use-hosts";
+import { useCanSendSession } from "@renderer/lib/cloud-session-read-only";
+import { launchStore } from "@renderer/stores/launch";
 import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
@@ -91,7 +93,8 @@ export interface NewSessionMenuRowHandlers {
   shortcuts?: boolean;
   onNewChat(): void;
   onNewBrowser?(): void;
-  onNewTerminal(): void;
+  /** Absent drops the row: a cloud launch's terminals run on no runner yet. */
+  onNewTerminal?(): void;
 }
 
 /**
@@ -117,10 +120,12 @@ export function newSessionMenuRows(
           Chat
           {shortcuts ? <ContextMenuShortcut>{CHORD.chat}</ContextMenuShortcut> : null}
         </ContextMenuItem>
-        <ContextMenuItem icon={TerminalWindowIcon} onSelect={onNewTerminal}>
-          Terminal
-          {shortcuts ? <ContextMenuShortcut>{CHORD.terminal}</ContextMenuShortcut> : null}
-        </ContextMenuItem>
+        {onNewTerminal === undefined ? null : (
+          <ContextMenuItem icon={TerminalWindowIcon} onSelect={onNewTerminal}>
+            Terminal
+            {shortcuts ? <ContextMenuShortcut>{CHORD.terminal}</ContextMenuShortcut> : null}
+          </ContextMenuItem>
+        )}
         {onNewBrowser === undefined ? null : (
           <>
             <ContextMenuSeparator />
@@ -139,11 +144,13 @@ export function newSessionMenuRows(
         Chat
         {shortcuts ? <DropdownMenuShortcut>{CHORD.chat}</DropdownMenuShortcut> : null}
       </DropdownMenuItem>
-      <DropdownMenuItem onSelect={onNewTerminal}>
-        <TerminalWindowIcon />
-        Terminal
-        {shortcuts ? <DropdownMenuShortcut>{CHORD.terminal}</DropdownMenuShortcut> : null}
-      </DropdownMenuItem>
+      {onNewTerminal === undefined ? null : (
+        <DropdownMenuItem onSelect={onNewTerminal}>
+          <TerminalWindowIcon />
+          Terminal
+          {shortcuts ? <DropdownMenuShortcut>{CHORD.terminal}</DropdownMenuShortcut> : null}
+        </DropdownMenuItem>
+      )}
       {onNewBrowser === undefined ? null : (
         <>
           <DropdownMenuSeparator />
@@ -205,8 +212,15 @@ export function NewSessionControl({
   onNewTerminal(): void;
 }) {
   const drawing = DRAWING[placement];
-  const canWrite = useCanWrite(projectId);
+  // A new chat is a send (VC-895): in a cloud launch this Mac's runner starts
+  // it, so the cloud link decides. Terminals and Browser Tabs are this Mac's
+  // alone and have no cloud Session to belong to, so a cloud launch offers
+  // neither.
+  const canWrite = useCanSendSession(projectId);
   const disabled = booting || !canWrite;
+  const cloud = launchStore() === "cloud";
+  const newTerminal = cloud ? undefined : onNewTerminal;
+  const newBrowser = cloud ? undefined : onNewBrowser;
 
   // Whether the menu that is closing should keep its hands off the caret.
   //
@@ -228,18 +242,18 @@ export function NewSessionControl({
     event.preventDefault();
   };
   const handleNewBrowser =
-    onNewBrowser === undefined
+    newBrowser === undefined
       ? undefined
       : () => {
           yieldFocus.current = true;
-          onNewBrowser();
+          newBrowser();
         };
 
   const items = newSessionMenuRows("dropdown", {
     shortcuts,
     onNewChat,
     onNewBrowser: handleNewBrowser,
-    onNewTerminal,
+    onNewTerminal: newTerminal,
   });
 
   return (
@@ -327,7 +341,7 @@ export function NewSessionControl({
           shortcuts,
           onNewChat,
           onNewBrowser: handleNewBrowser,
-          onNewTerminal,
+          onNewTerminal: newTerminal,
         })}
       </ContextMenuContent>
     </ContextMenu>

@@ -43,10 +43,10 @@ import {
   AGENT_COMMANDS,
   AGENT_HANDLER_KEYS,
   SERVED_AGENT_HANDLER_KEYS,
+  SESSION_READ_VERBS,
   SOCKET_BOARD_PROJECTIONS,
   DEFAULT_AUTHORITY_POLICY,
   HOST_HANDLER_KEYS,
-  SOCKET_DELEGATED_HANDLER_KEYS,
   OperationUnavailableError,
   VERB_REGISTRY,
 } from "@volli/shared";
@@ -63,7 +63,7 @@ import {
   invokeHandler,
   refused,
 } from "./handlers/handler-map";
-import { agentVerbEntries } from "./agent-dispatch/verbs";
+import { agentVerbEntries, sessionReadEntries } from "./agent-dispatch/verbs";
 import { sealTestHandlers, testHostHandlers } from "./testing/host-handlers";
 import {
   doorCallActor,
@@ -179,12 +179,9 @@ describe("the dispatch table (VC-167)", () => {
 });
 
 describe("every socket verb is a projection of the host's map (VC-668, VC-923)", () => {
-  // The socket's Session reads are delegated the other way round (VC-663, D4):
-  // the map runs the socket verb, so the socket keeps its own binding.
-  const delegated: readonly string[] = SOCKET_DELEGATED_HANDLER_KEYS;
-  const SOCKET_HANDLER_KEYS = HOST_HANDLER_KEYS.filter(
-    (key) => key in AGENT_VERB_TABLE && !delegated.includes(key),
-  );
+  // Every key the map holds that the socket binds, its Session reads included
+  // (VC-894: no verb is delegated the other way any more).
+  const SOCKET_HANDLER_KEYS = HOST_HANDLER_KEYS.filter((key) => key in AGENT_VERB_TABLE);
 
   // The ticket writes whose command is a board handler under the board's key (VC-794).
   const BOARD_PROJECTIONS: Readonly<Record<string, string>> = {
@@ -194,22 +191,24 @@ describe("every socket verb is a projection of the host's map (VC-668, VC-923)",
   };
 
   it("binds the both-door commands, the board's ticket writes and its own verbs as projections", () => {
-    expect(SOCKET_HANDLER_KEYS).toEqual([
-      "ticket.move",
-      ...AGENT_HANDLER_KEYS.filter((key) => key in AGENT_VERB_TABLE),
-    ]);
+    expect(SOCKET_HANDLER_KEYS.toSorted()).toEqual(
+      [
+        "ticket.move",
+        ...SESSION_READ_VERBS,
+        ...AGENT_HANDLER_KEYS.filter((key) => key in AGENT_VERB_TABLE),
+      ].toSorted(),
+    );
     expect(SOCKET_BOARD_PROJECTIONS).toEqual(BOARD_PROJECTIONS);
-    for (const key of delegated) expect(key in AGENT_VERB_TABLE, key).toBe(true);
     for (const [id, binding] of Object.entries(AGENT_VERB_TABLE)) {
       expect(projectedHandlerKey(binding), id).toBe(
         (SOCKET_HANDLER_KEYS as readonly string[]).includes(id) ? id : BOARD_PROJECTIONS[id],
       );
     }
-    // Only the four delegated reads keep a handler of their own.
+    // No verb keeps a handler of its own: the Session reads too are projections.
     const own = Object.entries(AGENT_VERB_TABLE)
       .filter(([, binding]) => projectedHandlerKey(binding) === undefined)
       .map(([id]) => id);
-    expect(own.toSorted()).toEqual([...delegated].toSorted());
+    expect(own).toEqual([]);
   });
 
   it("serves one entry for every socket-served agent key, and no other", () => {
@@ -220,6 +219,8 @@ describe("every socket verb is a projection of the host's map (VC-668, VC-923)",
       SERVED_AGENT_HANDLER_KEYS.filter((key) => key in AGENT_VERB_TABLE),
     );
     expect(projectedHandlerKey(AGENT_VERB_TABLE["session.start"])).toBe("session.start");
+    // The Session reads' entries are the service's too (VC-894), served beside them.
+    expect(Object.keys(sessionReadEntries({} as never))).toEqual([...SESSION_READ_VERBS]);
   });
 
   it("serves the socket's own verbs into the map once, and refuses a second service", () => {
@@ -855,9 +856,8 @@ describe("which verbs pay for the roster fold (VC-403)", () => {
 
   // Verb parity at the map (VC-923): every verb the socket answers reaches
   // the map's entry for its own key (a board write: the board's), once,
-  // admitted by the socket's policy, and no other entry. The four delegated
-  // reads run the socket's own handler and touch no entry, and a verb its
-  // dispatch refused touches none either.
+  // admitted by the socket's policy, and no other entry, the four Session
+  // reads included (VC-894), and a verb its dispatch refused touches none.
   it("reaches exactly its own map entry, under the socket's policy, for every verb", async () => {
     const reached: Record<string, string[]> = {};
     for (const command of AGENT_COMMANDS) {
@@ -880,7 +880,11 @@ describe("which verbs pay for the roster fold (VC-403)", () => {
         ctx: { cwd: "/repo/volli", env },
       });
       // Admitted is not ran: an entry nothing served would answer this.
-      if (!response.ok) expect(response.error.message, command).not.toMatch(/is not served/);
+      if (!response.ok) {
+        expect(response.error.message, command).not.toMatch(
+          /is not served|Session reads are unavailable/,
+        );
+      }
       reached[command] = records;
       ctx.cleanup();
     }

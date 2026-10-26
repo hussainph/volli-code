@@ -5,6 +5,7 @@ import {
   ACCOUNT_TOKEN_MAX,
   ACCOUNT_TOKEN_RETRY_MS,
   LOCAL_LAUNCH,
+  UNAVAILABLE_ACCOUNT_GITHUB,
   UNCONFIGURED_ACCOUNT,
   isAccountConnection,
 } from "./account";
@@ -31,6 +32,18 @@ describe("the account wire vocabulary", () => {
     expect(Object.isFrozen(UNCONFIGURED_ACCOUNT)).toBe(true);
   });
 
+  it("answers no GitHub section while signed out, with nothing read", () => {
+    expect(UNAVAILABLE_ACCOUNT_GITHUB).toEqual({
+      state: "unavailable",
+      connection: null,
+      installations: null,
+      waiting: null,
+      requested: false,
+      failure: null,
+    });
+    expect(Object.isFrozen(UNAVAILABLE_ACCOUNT_GITHUB)).toBe(true);
+  });
+
   it("declares every account entry host-placed and client-local, its reads as reads", () => {
     const account = DESKTOP_ENTRIES.filter(({ key }) => key.startsWith("account."));
     expect(account.map(({ key }) => key)).toEqual([
@@ -42,6 +55,11 @@ describe("the account wire vocabulary", () => {
       "account.requestDeletion",
       "account.cancelDeletion",
       "account.accessToken",
+      "account.githubSubscribe",
+      "account.githubConnect",
+      "account.githubInstall",
+      "account.githubCancel",
+      "account.githubDisconnect",
     ]);
     for (const entry of account) {
       expect(entry.placement, entry.key).toBe("host");
@@ -49,7 +67,12 @@ describe("the account wire vocabulary", () => {
     }
     expect(
       account.filter(({ idempotency }) => idempotency === "read").map(({ key }) => key),
-    ).toEqual(["account.snapshot", "account.subscribe", "account.accessToken"]);
+    ).toEqual([
+      "account.snapshot",
+      "account.subscribe",
+      "account.accessToken",
+      "account.githubSubscribe",
+    ]);
   });
 
   it("declares the launch entries host-placed and client-local", () => {

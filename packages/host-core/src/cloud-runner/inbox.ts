@@ -148,6 +148,10 @@ export interface InboxWorker {
   claimNow(): Promise<void>;
   /** Renews every running job's lease now: the wake sequence calls this before claiming. */
   renewInFlight(): Promise<void>;
+  /** Sync fences subscription/poll claims until reconnect has renewed existing leases. */
+  pauseClaims?(): void;
+  /** Lift that fence; the sync owner then explicitly claims. */
+  resumeClaims?(): void;
   stop(): void;
   readonly running: number;
 }
@@ -185,7 +189,10 @@ export function createInboxWorker(options: InboxWorkerOptions): InboxWorker {
   /** Report retries by `jobId:attempt`: an older lease's answer never touches a newer one's. */
   const reportRetries = new Map<string, { failures: number; timer: unknown }>();
   let stopped = true;
+  let claimsPaused = false;
   let claiming: Promise<void> | null = null;
+  /** A claim was asked for while one was in flight. */
+  let claimAgain = false;
   let poll: unknown = null;
   let due: unknown = null;
   let unsubscribeWake: (() => void) | null = null;
@@ -370,16 +377,31 @@ export function createInboxWorker(options: InboxWorkerOptions): InboxWorker {
   }
 
   function claimNow(): Promise<void> {
-    if (stopped) return Promise.resolve();
-    claiming ??= (async () => {
+    if (stopped || claimsPaused) return Promise.resolve();
+    if (claiming !== null) {
+      // A wake that lands while a claim is in flight may name jobs that claim
+      // never saw, and the subscription will not say so again: claim once more.
+      claimAgain = true;
+      return claiming;
+    }
+    claiming = (async () => {
       try {
-        const room = INBOX_LIMITS.concurrent - running.size;
-        if (room <= 0) return;
-        const claimed = await options.backend.claim({ bootId: options.bootId, max: room });
-        for (const job of claimed) if (!running.has(job.job.id)) execute(job);
+        do {
+          claimAgain = false;
+          // A stop or suspend may have landed while the last claim was in flight.
+          if (stopped || claimsPaused) return;
+          const room = INBOX_LIMITS.concurrent - running.size;
+          if (room <= 0) return;
+          const claimed = await options.backend.claim({ bootId: options.bootId, max: room });
+          // An answer from the connection that just slept must not start work
+          // ahead of the reconnect's lease renewal. These leases expire safely.
+          if (stopped || claimsPaused) return;
+          for (const job of claimed) if (!running.has(job.job.id)) execute(job);
+        } while (claimAgain);
       } catch (error) {
         options.onError?.(error);
       } finally {
+        claimAgain = false;
         claiming = null;
       }
     })();
@@ -409,6 +431,12 @@ export function createInboxWorker(options: InboxWorkerOptions): InboxWorker {
       await claimNow();
     },
     claimNow,
+    pauseClaims: () => {
+      claimsPaused = true;
+    },
+    resumeClaims: () => {
+      claimsPaused = false;
+    },
     async renewInFlight() {
       await Promise.all([...running.keys()].map((jobId) => renewOne(jobId)));
     },

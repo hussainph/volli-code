@@ -567,6 +567,12 @@ jobs:
           run-install: true
       - name: Build desktop with verified hostd pin
         env:
+          # Public release target only. All unset keeps Account unconfigured;
+          # a partial set fails the build. Never put backend credentials here.
+          VOLLI_BUILD_WORKOS_CLIENT_ID: ${{ vars.VOLLI_BUILD_WORKOS_CLIENT_ID }}
+          VOLLI_BUILD_CONVEX_URL: ${{ vars.VOLLI_BUILD_CONVEX_URL }}
+          VOLLI_BUILD_CONVEX_SITE_URL: ${{ vars.VOLLI_BUILD_CONVEX_SITE_URL }}
+          VOLLI_BUILD_STORAGE_ORIGIN: ${{ vars.VOLLI_BUILD_STORAGE_ORIGIN }}
           VOLLI_HOSTD_MANIFEST: ${{ runner.temp }}/hostd-assets/hostd-release-manifest.json
         run: |
           vp run --filter @volli/desktop build
@@ -777,6 +783,12 @@ jobs:
       # Prefetch that package too (as CI does), or packaging silently omits it.
       - name: Build desktop pipeline and fetch Electron
         env:
+          # These four public repository variables pin the published desktop's
+          # target. Hosted deploy keys belong to separate environment secrets.
+          VOLLI_BUILD_WORKOS_CLIENT_ID: ${{ vars.VOLLI_BUILD_WORKOS_CLIENT_ID }}
+          VOLLI_BUILD_CONVEX_URL: ${{ vars.VOLLI_BUILD_CONVEX_URL }}
+          VOLLI_BUILD_CONVEX_SITE_URL: ${{ vars.VOLLI_BUILD_CONVEX_SITE_URL }}
+          VOLLI_BUILD_STORAGE_ORIGIN: ${{ vars.VOLLI_BUILD_STORAGE_ORIGIN }}
           VOLLI_HOSTD_MANIFEST: ${{ runner.temp }}/hostd-assets/hostd-release-manifest.json
         run: |
           vp run --filter @volli/desktop build

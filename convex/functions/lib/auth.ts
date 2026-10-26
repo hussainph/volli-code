@@ -11,6 +11,12 @@
  * client's optimistic UI and the backend agree.
  *
  * Failures are `ConvexError`s with a typed `code` (see {@link AuthErrorCode}).
+ *
+ * A machine is never a viewer: a runner token or an Agent token is
+ * `not_a_person` here. A function an agent may call resolves its caller with
+ * `requireActor` (`lib/actorAuth.ts`) and hands the resolved viewer (the
+ * Session owner) to the helpers below through their optional `viewer`
+ * argument; every helper left to resolve its own viewer stays person-only.
  */
 
 import type { GenericDatabaseReader, GenericDatabaseWriter, UserIdentity } from "convex/server";
@@ -34,7 +40,8 @@ import {
 } from "@volli/shared/cloud";
 
 import type { DataModel, Doc } from "../_generated/dataModel.js";
-import { isRunnerIdentity } from "./runnerAuth";
+import { isAgentIdentity, isRunnerIdentity } from "./runnerAuth";
+import { requirePreviewAccess } from "./previewAccess";
 
 export type AuthErrorCode =
   | "unauthenticated"
@@ -139,14 +146,27 @@ function liveViewer(user: Doc<"users">): Viewer {
   return { userId: user.id as UserId, user };
 }
 
-/** The viewer, or `null` when this identity has never called {@link ensureViewer}. */
+/** A runner or an agent: a machine identity, which never resolves to a person. */
+function isMachineIdentity(identity: UserIdentity): boolean {
+  return isRunnerIdentity(identity) || isAgentIdentity(identity);
+}
+
+/**
+ * The viewer, or `null` when this identity has never called {@link ensureViewer}.
+ * A runner or an agent is `not_a_person`.
+ */
 export async function findViewer(ctx: ReadCtx): Promise<Viewer | null> {
-  const user = await userOf(ctx, await requireIdentity(ctx));
+  const identity = await requireIdentity(ctx);
+  if (isMachineIdentity(identity)) {
+    throw authError("not_a_person", "Only a person can do this.");
+  }
+  const user = await userOf(ctx, identity);
   return user === null ? null : liveViewer(user);
 }
 
 /**
- * The viewer, or `no_viewer` (call `accounts.ensureViewer` first). For queries.
+ * The viewer with live preview access and current agreement, or `no_viewer`
+ * (call `accounts.ensureViewer` first). Enrollment/recovery uses `findViewer`.
  *
  * An account whose deletion is pending is signed out of everything but the
  * `accounts` functions that show it and restore it (`account_deletion_pending`):
@@ -161,6 +181,9 @@ export async function requireViewer(ctx: ReadCtx): Promise<Viewer> {
       "This account is scheduled for deletion. Restore it to continue.",
     );
   }
+  // Account enrollment/recovery uses findViewer instead. Every product call
+  // rechecks the live grant, including calls using an existing membership.
+  await requirePreviewAccess(ctx, viewer);
   return viewer;
 }
 
@@ -174,14 +197,26 @@ export async function ensureViewer(
   profileOf: ProfileFromIdentity = profileFromIdentity,
 ): Promise<Viewer & { created: boolean }> {
   const identity = await requireIdentity(ctx);
-  // A runner token is a machine, never a person: it must not mint a `users` row.
-  if (isRunnerIdentity(identity)) {
-    throw authError("not_a_person", "A runner cannot sign in as a person.");
+  // A runner or Agent token is a machine, never a person: it must not mint a `users` row.
+  if (isMachineIdentity(identity)) {
+    throw authError("not_a_person", "A runner or an agent cannot sign in as a person.");
   }
   const now = Date.now();
   const existing = await userOf(ctx, identity);
   if (existing !== null) {
-    const viewer = liveViewer(existing);
+    let viewer = liveViewer(existing);
+    const profile = profileOf(identity);
+    // Email grants follow today's verified identity, never a stale stored address.
+    if (
+      profile.primaryEmail !== existing.primaryEmail ||
+      profile.emailVerified !== existing.emailVerified
+    ) {
+      await ctx.db.patch(existing._id, {
+        primaryEmail: profile.primaryEmail,
+        emailVerified: profile.emailVerified,
+      });
+      viewer = liveViewer((await ctx.db.get(existing._id))!);
+    }
     if (now - existing.lastSeenAt >= LAST_SEEN_RESOLUTION_MS) {
       await ctx.db.patch(existing._id, { lastSeenAt: now });
     }
@@ -266,8 +301,9 @@ async function liveWorkspace(ctx: ReadCtx, workspaceId: string): Promise<Doc<"wo
 export async function requireMember(
   ctx: ReadCtx,
   workspaceId: string,
+  resolved?: Viewer,
 ): Promise<{ viewer: Viewer; workspace: Doc<"workspaces">; membership: MembershipFacts }> {
-  const viewer = await requireViewer(ctx);
+  const viewer = resolved ?? (await requireViewer(ctx));
   const workspace = await liveWorkspace(ctx, workspaceId);
   const membership = await findMembership(ctx, workspaceId, viewer.userId);
   if (!isActiveMember(viewer, workspaceId as WorkspaceId, membership)) {
@@ -296,8 +332,8 @@ type ProjectAccess =
   | { kind: "not_a_member" };
 
 async function projectAccess(
-  ctx: ReadCtx,
-  viewer: Viewer,
+  ctx: { db: GenericDatabaseReader<DataModel> },
+  viewer: { userId: UserId },
   projectId: string,
 ): Promise<ProjectAccess> {
   const project = await ctx.db
@@ -318,12 +354,27 @@ async function projectAccess(
   return { kind: "ok", project, membership };
 }
 
+/**
+ * The live project (in a live Workspace) `userId` can see, or `null`: for a
+ * caller acting for someone other than the signed-in viewer (a runner for its
+ * owner) and for reads that skip what a person can no longer see.
+ */
+export async function findVisibleProject(
+  ctx: { db: GenericDatabaseReader<DataModel> },
+  userId: UserId,
+  projectId: string,
+): Promise<Doc<"projects"> | null> {
+  const access = await projectAccess(ctx, { userId }, projectId);
+  return access.kind === "ok" ? access.project : null;
+}
+
 /** A live project (in a live Workspace) the viewer can see: an active Member of its CURRENT Workspace. */
 export async function requireProject(
   ctx: ReadCtx,
   projectId: ProjectId | string,
+  resolved?: Viewer,
 ): Promise<{ viewer: Viewer; project: Doc<"projects">; membership: MembershipFacts }> {
-  const viewer = await requireViewer(ctx);
+  const viewer = resolved ?? (await requireViewer(ctx));
   const access = await projectAccess(ctx, viewer, projectId);
   if (access.kind === "not_found") throw authError("not_found", "That project does not exist.");
   if (access.kind === "not_a_member") {
@@ -405,8 +456,9 @@ async function sessionScope(
 export async function requireSessionScope(
   ctx: ReadCtx,
   projectId: ProjectId | string,
+  resolved?: Viewer,
 ): Promise<SessionScope> {
-  const { viewer, project, membership } = await requireProject(ctx, projectId);
+  const { viewer, project, membership } = await requireProject(ctx, projectId, resolved);
   return sessionScope(ctx, viewer, project, membership);
 }
 
@@ -418,9 +470,10 @@ export async function requireSessionScope(
 export async function requireSessionVisible(
   ctx: ReadCtx,
   sessionId: SessionId | string,
+  resolved?: Viewer,
 ): Promise<VisibleSession> {
   const absent = () => authError("not_found", "That session does not exist.");
-  const viewer = await requireViewer(ctx);
+  const viewer = resolved ?? (await requireViewer(ctx));
   const session = await ctx.db
     .query("sessions")
     .withIndex("by_uuid", (q) => q.eq("id", sessionId))
@@ -437,8 +490,9 @@ export async function requireSessionVisible(
 export async function requireSessionActor(
   ctx: ReadCtx,
   sessionId: SessionId | string,
+  resolved?: Viewer,
 ): Promise<VisibleSession> {
-  const access = await requireSessionVisible(ctx, sessionId);
+  const access = await requireSessionVisible(ctx, sessionId, resolved);
   if (!canActOnSession(access.viewer, sessionFacts(access.session))) {
     throw authError("forbidden", "Only the session's owner can do this.");
   }

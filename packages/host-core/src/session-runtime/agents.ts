@@ -3,6 +3,7 @@ import { isLiveHost, type HostCore } from "../index";
 import type { Logger } from "../log/logger";
 import type { HostEventBus } from "../ports/events";
 import { getProjectAuthorityPolicy, listProjects } from "../db/projects-repo";
+import { DEFAULT_AUTHORITY_POLICY, type Project } from "@volli/shared";
 import { listAutomationsForProject } from "../db/automations-repo";
 import { getComment } from "../db/comments-repo";
 import type { AgentToolDoor } from "../agent-tool-door";
@@ -31,6 +32,16 @@ export interface RuntimeSessionAgentOptions {
    * built on first ask, so a tool call never waits on another door to build it.
    */
   handlers: (ready: RecoveredSessionServices<RuntimeSessionFacade>) => HostHandlerMap;
+  projects?(): readonly Project[];
+  /** Cloud watches are backend jobs, never an additional in-process delivery. */
+  inProcessWatches?: boolean;
+  /**
+   * Whether this launch has Automations at all (VC-952). A cloud launch passes
+   * `false`, so the tool door refuses a frozen `automation.run` before any
+   * project or Ticket resolution; absent keeps a local launch's answer.
+   */
+  automationsAvailable?: boolean;
+  cloudSessionVerbs?: import("../cloud-agent/session-verbs").CloudSessionVerbs;
 }
 
 export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) {
@@ -41,7 +52,7 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
     mcpSettings,
   } = options;
   const liveHost = isLiveHost(hostCore) ? hostCore : undefined;
-  const sessionEngine = liveHost?.sessionEngine ?? null;
+  const sessionEngine = options.services.sessionEngine;
   const sessionWakeBus = liveHost?.sessionWakeBus ?? null;
   const sessionDb = liveHost?.database.db ?? null;
   const {
@@ -106,7 +117,7 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
   };
   let watches: Watches | null = null;
   const watchesFor = (): Watches | null => {
-    if (stopped) return null;
+    if (stopped || options.inProcessWatches === false) return null;
     if (watches !== null) return watches;
     if (
       liveHost === undefined ||
@@ -139,8 +150,14 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
     }
     agentToolDoor = createHostAgentToolDoor({
       db: sessionDb,
-      projects: () => listProjects(sessionDb),
+      projects: options.projects ?? (() => listProjects(sessionDb)),
       handlers: options.handlers(ready),
+      ...(options.cloudSessionVerbs === undefined
+        ? {}
+        : { cloudSessionVerbs: options.cloudSessionVerbs }),
+      ...(options.automationsAvailable === undefined
+        ? {}
+        : { automationsAvailable: options.automationsAvailable }),
       delegation: sessionDelegation,
       automations: () => {
         if (runtimeAutomations.kind === "degraded") return null;
@@ -152,7 +169,10 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
               run: (input) => execution.runner.run(input),
             };
       },
-      authorityPolicy: (projectId) => getProjectAuthorityPolicy(sessionDb, projectId),
+      authorityPolicy: (projectId) =>
+        options.cloudSessionVerbs === undefined
+          ? getProjectAuthorityPolicy(sessionDb, projectId)
+          : DEFAULT_AUTHORITY_POLICY,
       watches: watchesFor,
       supervise: () =>
         sessionEngine !== null && sessionRuntime !== null

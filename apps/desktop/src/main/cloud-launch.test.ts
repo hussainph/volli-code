@@ -26,6 +26,8 @@ describe("the launch's product store (VC-889)", () => {
       }),
     ).toEqual({
       store: "cloud",
+      deployment: "cloud",
+      siteUrl: null,
       userId: USER,
       backendUrl: URL,
     });
@@ -46,6 +48,37 @@ describe("the launch's product store (VC-889)", () => {
         }),
       ).toEqual({ store: "local" });
     }
+  });
+
+  it("carries explicit action URLs and keeps the deployment separate from the store", () => {
+    const input = {
+      cloudFlag: true,
+      readMarker: () => ({ userId: USER }),
+      backendUrl: URL,
+      siteUrl: "http://127.0.0.1:3211",
+      signInConfigured: true,
+    };
+    expect(chooseProductStore(input)).toMatchObject({
+      deployment: "cloud",
+      siteUrl: input.siteUrl,
+    });
+    // Simulated wiring: VC-938 supplies this only after its embedded supervisor is ready.
+    expect(
+      chooseProductStore({
+        ...input,
+        cloudFlag: false,
+        readMarker: () => {
+          throw new Error("no account required");
+        },
+        localDeployment: { userId: "local-owner", backendUrl: URL, siteUrl: input.siteUrl },
+      }),
+    ).toEqual({
+      store: "cloud",
+      deployment: "local",
+      userId: "local-owner",
+      backendUrl: URL,
+      siteUrl: input.siteUrl,
+    });
   });
 
   it("never reads the marker with the flag off, or with no backend or sign-in to launch into", () => {
@@ -155,5 +188,121 @@ describe("the relaunch", () => {
     // Asked again: a new attempt through the gates.
     relaunch.request();
     expect(lifecycle.quit).toHaveBeenCalledTimes(2);
+  });
+});
+
+function turnFeed(answer: "wait" | "now" | "cancel") {
+  let turns = 2;
+  let changed: (() => void) | null = null;
+  let tick: (() => void) | null = null;
+  const off = vi.fn(() => {
+    changed = null;
+  });
+  const ports = {
+    turns: () => turns,
+    subscribe: (listener: () => void) => {
+      changed = listener;
+      return off;
+    },
+    choose: vi.fn(() => answer),
+    setInterval: (run: () => void) => {
+      tick = run;
+      return "timer";
+    },
+    clearInterval: vi.fn(() => {
+      tick = null;
+    }),
+  };
+  return {
+    ports,
+    off,
+    set: (count: number) => {
+      turns = count;
+      changed?.();
+    },
+    tick: () => tick?.(),
+  };
+}
+
+describe("switching stores over running turns", () => {
+  it("waits for turns without stopping anything, then uses every normal quit gate once", () => {
+    const lifecycle = app();
+    const work = turnFeed("wait");
+    const control = createRelaunchController(lifecycle, work.ports);
+    control.request();
+    control.request();
+    expect(work.ports.choose).toHaveBeenCalledExactlyOnceWith(2);
+    expect(lifecycle.quit).not.toHaveBeenCalled();
+    work.set(1);
+    expect(lifecycle.quit).not.toHaveBeenCalled();
+    work.set(0);
+    work.tick();
+    expect(lifecycle.quit).toHaveBeenCalledOnce();
+    expect(work.off).toHaveBeenCalledOnce();
+    expect(control.pending()).toBe(true);
+    control.quitAccepted();
+    expect(lifecycle.relaunch).toHaveBeenCalledOnce();
+  });
+  it("releases a primed subscription that already observed the last turn finish", () => {
+    const lifecycle = app();
+    let turns = 1;
+    const off = vi.fn();
+    const timer = vi.fn();
+    const control = createRelaunchController(lifecycle, {
+      turns: () => turns,
+      choose: () => "wait",
+      subscribe: (listener) => {
+        turns = 0;
+        listener();
+        return off;
+      },
+      setInterval: timer,
+    });
+    control.request();
+    expect(lifecycle.quit).toHaveBeenCalledOnce();
+    expect(off).toHaveBeenCalledOnce();
+    expect(timer).not.toHaveBeenCalled();
+    expect(control.pending()).toBe(true);
+  });
+
+  it("clears the default polling timer on refusal and when turns finish without a fold", () => {
+    vi.useFakeTimers();
+    try {
+      const lifecycle = app();
+      let turns = 1;
+      const off = vi.fn();
+      const control = createRelaunchController(lifecycle, {
+        turns: () => turns,
+        choose: () => "wait",
+        subscribe: () => off,
+      });
+      control.request();
+      expect(vi.getTimerCount()).toBe(1);
+      control.quitRefused();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(lifecycle.quit).not.toHaveBeenCalled();
+      control.request();
+      turns = 0;
+      vi.advanceTimersByTime(1_000);
+      expect(lifecycle.quit).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(off).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("can switch now or cancel, without arming an eventual unrelated relaunch", () => {
+    const lifecycle = app();
+    const cancelled = createRelaunchController(lifecycle, turnFeed("cancel").ports);
+    cancelled.request();
+    expect(cancelled.pending()).toBe(false);
+    expect(lifecycle.quit).not.toHaveBeenCalled();
+    const now = createRelaunchController(lifecycle, turnFeed("now").ports);
+    now.request();
+    expect(lifecycle.quit).toHaveBeenCalledOnce();
+    now.quitRefused();
+    now.quitAccepted();
+    expect(lifecycle.relaunch).not.toHaveBeenCalled();
   });
 });

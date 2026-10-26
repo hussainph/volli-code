@@ -3,8 +3,8 @@
  * which build is running, which release line it follows, which OS and
  * architecture it runs on, what schema version its database is at, whether
  * the migrations that file ran are the ones this build ships (VC-633), and
- * what the updater's last check said (VC-294), and what this launch's boot
- * recovery did (VC-926).
+ * what the updater's last check said (VC-294), what this launch's boot
+ * recovery did (VC-926), and where this Mac stands as a runner (VC-895).
  *
  * Every one of them lives somewhere the renderer cannot reach — the app
  * version is Electron's, the channel is a row in `app_state`, the schema
@@ -14,7 +14,7 @@
  *
  * AN ALLOWLIST, NOT A DUMP. The report is text a person pastes into a public
  * issue, so this module is written so that widening it takes an edit here and
- * a new test: it names eight fields, reads one pragma, one `app_state` key and
+ * a new test: it names nine fields, reads one pragma, one `app_state` key and
  * the version/fingerprint columns of `migration_history`, and imports nothing
  * that could reach the secrets table, the credential store, or the
  * environment. The last update check is handed in from the running updater
@@ -34,7 +34,11 @@ import type Database from "better-sqlite3";
 import { checkMigrationHistory, describeMigrationHistory, SCHEMA_HEAD } from "@volli/host-core/db";
 
 import type { BootRecoveryReport } from "@volli/host-core/session-runtime";
-import { summarizeUpdateFailure, type ExperimentBuildKind } from "@volli/shared";
+import {
+  summarizeUpdateFailure,
+  type ExperimentBuildKind,
+  type ThisMacRunnerSnapshot,
+} from "@volli/shared";
 
 import type { SupportInfo, UpdateLastCheck } from "../ipc/contract";
 import { readUpdateChannel } from "./auto-update";
@@ -59,6 +63,8 @@ export interface SupportInfoDeps {
   lastUpdateCheck(): UpdateLastCheck | null;
   /** This launch's boot recovery sweep — `runner.bootRecovery()`; `null` until it finished. */
   bootRecovery(): BootRecoveryReport | null;
+  /** This Mac's runner (VC-895); `null` outside a Volli Cloud launch. */
+  cloudRunner?(): ThisMacRunnerSnapshot | null;
 }
 
 /**
@@ -112,6 +118,16 @@ export function describeBootRecovery(report: BootRecoveryReport | null): string 
   return `${at}, ${turns}, ${closed}${listed.length === 0 ? "" : `; failed: ${listed.join(", ")}`}${sweep}`;
 }
 
+/** This Mac's runner as the report's one line: state, problem and the waiting count; never an id or a name. */
+export function describeCloudRunner(snapshot: ThisMacRunnerSnapshot | null): string | null {
+  if (snapshot === null || snapshot.state === "off") return null;
+  const state =
+    snapshot.problem === null ? snapshot.state : `${snapshot.state} (${snapshot.problem})`;
+  const waiting =
+    snapshot.waitingFacts === 1 ? "1 update waiting" : `${snapshot.waitingFacts} updates waiting`;
+  return `${state} · ${waiting}`;
+}
+
 /**
  * SQLite's own migration counter. `pragma` is typed as returning `unknown`, and
  * a value that is not a number is a gap in what we know — reported as one,
@@ -127,7 +143,9 @@ function schemaVersion(db: Database.Database): number {
 export function collectSupportInfo(deps: SupportInfoDeps): SupportInfo {
   const db = deps.database();
   if (db === null) throw new Error("Profile database is unavailable");
+  const cloudRunner = describeCloudRunner(deps.cloudRunner?.() ?? null);
   return {
+    ...(cloudRunner === null ? {} : { cloudRunner }),
     appVersion: deps.appVersion(),
     channel: readUpdateChannel(db, deps.buildKind),
     platform: deps.platform,

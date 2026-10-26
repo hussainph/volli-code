@@ -32,7 +32,7 @@
  */
 import { readSessionTranscriptTail } from "@volli/session-engine";
 import type { SessionTranscriptArtifact } from "@volli/session-engine";
-import { scrubSessionInteraction, SESSION_PEEK_ENTRIES } from "@volli/shared";
+import { scrubSessionInteraction, SESSION_PEEK_ENTRIES, PEEK_EXCERPT_CHARS } from "@volli/shared";
 import type {
   ListSessionEventsQuery,
   SessionEvent,
@@ -57,7 +57,7 @@ export interface SessionPeekContentPorts {
 }
 
 /** Enough prose to summarize meaningfully; the CLI keeps its own 120-character default. */
-export const PEEK_EXCERPT_CHARS = 2_000;
+export { PEEK_EXCERPT_CHARS };
 /** Local reads only: tools must not immediately evict the prose a summary needs. */
 export const PEEK_SUMMARY_WINDOW_ENTRIES = 32;
 

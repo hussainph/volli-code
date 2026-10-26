@@ -14,8 +14,8 @@
  *      how the app knows what it has already watched, and it is the thing this
  *      smoke can move to make "the app was closed" a real, deterministic
  *      condition rather than a wait.
- *   3. **The launch backlog does not exist.** With three nights' worth of due
- *      times behind it, a relaunch starts ZERO Runs. Asserted against the
+ *   3. **The launch backlog does not exist.** With three daily occurrences
+ *      behind it, a relaunch starts ZERO Runs. Asserted against the
  *      database, because "no Runs fired" is a claim about rows, not pixels.
  *   4. The three that were missed become ONE Skipped occurrence, recorded with
  *      its reason and its count, and it appears in the Run history saying
@@ -41,6 +41,7 @@
  */
 import { DatabaseSync } from "node:sqlite";
 
+import { automationScheduleFixture } from "./lib/automation-schedule-fixture.mjs";
 import {
   assertBuiltRendererLoaded,
   assertProfileIsolated,
@@ -60,7 +61,9 @@ console.log("scratch:", scratch, "\n");
 
 /** The scheduler's own machine-local cursor row (`automations/schedule-cursor.ts`). */
 const CURSOR_KEY = "volli:automation-schedule-cursors";
-const DAY_MS = 24 * 60 * 60 * 1000;
+const { schedule, cursor } = automationScheduleFixture(Date.now());
+// Independent expected copy, rather than comparing the UI's formatter to itself.
+const sentence = `Every day at ${String(schedule.hour).padStart(2, "0")}:30 ${schedule.timeZone}`;
 
 /** Reads the closed app's database directly — only ever between launches. */
 function withDb(work) {
@@ -148,7 +151,7 @@ try {
       await preset.click();
       await page.getByRole("option", { name: "Every day" }).click();
       await form.getByLabel("Time", { exact: true }).click();
-      await page.getByLabel("Hour", { exact: true }).fill("21");
+      await page.getByLabel("Hour", { exact: true }).fill(String(schedule.hour));
       await page.getByLabel("Minute", { exact: true }).fill("30");
       await page.keyboard.press("Escape");
 
@@ -177,7 +180,7 @@ try {
           listed.fail === undefined &&
           listed.trigger?.kind === "schedule" &&
           listed.trigger.schedule.preset === "daily" &&
-          listed.trigger.schedule.hour === 21 &&
+          listed.trigger.schedule.hour === schedule.hour &&
           listed.trigger.schedule.minute === 30 &&
           listed.trigger.schedule.timeZone === "Europe/London",
         detail: `${JSON.stringify(listed)} freeTextFields=${textFields}`,
@@ -186,9 +189,9 @@ try {
   );
 
   await must(3, "the row reads as its sentence, with the stored zone shown", async () => {
-    const row = page.getByText("Every day at 21:30 Europe/London");
+    const row = page.getByText(sentence);
     await row.waitFor({ timeout: 15000 });
-    return { ok: true, detail: "Every day at 21:30 Europe/London" };
+    return { ok: true, detail: sentence };
   });
 
   const automation = await listedSchedule();
@@ -223,9 +226,9 @@ try {
     if (cursors[automation.id] === undefined) {
       return { fail: `cursor names ${Object.keys(cursors).join(",")}, not the schedule` };
     }
-    // Three nights ago. The app really was closed for all of it, which is the
-    // condition VC-112 calls a Skipped occurrence.
-    const before = Date.now() - 3 * DAY_MS - 60_000;
+    // Three missed daily slots, independent of DST. Keep the cursor anchored
+    // to the same instant that chose the safely distant slot above.
+    const before = cursor;
     db.prepare("UPDATE app_state SET value = ? WHERE key = ?").run(
       JSON.stringify({ ...cursors, [automation.id]: before }),
       CURSOR_KEY,
@@ -266,7 +269,7 @@ try {
       }, seeded.projectId);
       const [skip] = found;
       return {
-        // Reschedule, never replay: three missed nights, one row, zero Runs.
+        // Reschedule, never replay: three missed daily slots, one row, zero Runs.
         ok:
           found.length === 1 &&
           runs === 0 &&

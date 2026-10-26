@@ -6,7 +6,13 @@ import {
   type SessionProjection,
 } from "@volli/shared";
 
-import { resumeRecoveredTurns, type RestartResumePorts } from "./restart-resume";
+import {
+  CLOUD_RECOVERY_CONNECT_WAIT_MS,
+  resumeRecoveredTurns,
+  type CloudRecoverySiblings,
+  type RestartResumeCloud,
+  type RestartResumePorts,
+} from "./restart-resume";
 
 const LOST_AT = 1_000;
 
@@ -196,5 +202,172 @@ describe("resumeRecoveredTurns (VC-450)", () => {
     // Lost far in the past by the real clock: too old to continue unasked.
     await resumeRecoveredTurns(port, { turns: [turn("a")], lostAt: LOST_AT });
     expect(commands).toEqual([]);
+  });
+});
+
+function cloud(
+  answer: CloudRecoverySiblings | Error = { siblings: [], complete: true },
+  connected: boolean | Error = true,
+) {
+  const reads: Parameters<RestartResumeCloud["ticketSiblings"]>[0][] = [];
+  const waits: Parameters<RestartResumeCloud["firstConnect"]>[0][] = [];
+  const port: RestartResumeCloud = {
+    firstConnect: async (options) => {
+      waits.push(options);
+      if (connected instanceof Error) throw connected;
+      return connected;
+    },
+    ticketSiblings: async (input) => {
+      reads.push(input);
+      if (answer instanceof Error) throw answer;
+      return answer;
+    },
+  };
+  return { port, reads, waits };
+}
+
+describe("resumeRecoveredTurns in a cloud store (N2-3)", () => {
+  it("resumes its own turns once connected, even in a launch showing Volli Cloud", async () => {
+    const remote = cloud({
+      siblings: [
+        { sessionId: "a", movedOn: true },
+        { sessionId: "other", movedOn: false },
+      ],
+      complete: true,
+    });
+    const { port, sessions, commands } = ports({ cloudLaunch: () => true, cloud: remote.port });
+    sessions.set("a", projection("a"));
+    await resumeRecoveredTurns(port, { turns: [turn("a")], lostAt: LOST_AT });
+    // The recovering Session's own row in the answer never supersedes it.
+    expect(commands).toEqual([expect.objectContaining({ sessionId: "a" })]);
+    expect(remote.reads).toEqual([
+      { sessionId: "a", projectId: "project-1", ticketId: "ticket-1", since: LOST_AT },
+    ]);
+    // Bounded by default; a never-aborted signal stands in for no host close.
+    expect(remote.waits).toEqual([
+      { timeoutMs: CLOUD_RECOVERY_CONNECT_WAIT_MS, signal: expect.any(AbortSignal) },
+    ]);
+    expect(CLOUD_RECOVERY_CONNECT_WAIT_MS).toBe(30_000);
+  });
+
+  it("asks the backend about a ticketless Session too: its claim may have moved", async () => {
+    const remote = cloud(new Error("fenced"));
+    const { port, sessions, commands } = ports({ cloud: remote.port });
+    sessions.set("b", projection("b", null));
+    await resumeRecoveredTurns(port, { turns: [turn("b")], lostAt: LOST_AT });
+    expect(remote.reads).toEqual([
+      { sessionId: "b", projectId: "project-1", ticketId: null, since: LOST_AT },
+    ]);
+    expect(commands).toEqual([]);
+  });
+
+  it("leaves every turn for the person when the runner does not connect in time", async () => {
+    const closing = new AbortController();
+    const remote = cloud(undefined, false);
+    const { port, sessions, commands } = ports({
+      cloud: remote.port,
+      closing: closing.signal,
+      connectWaitMs: 5,
+    });
+    sessions.set("a", projection("a"));
+    await resumeRecoveredTurns(port, { turns: [turn("a"), turn("b")], lostAt: LOST_AT });
+    expect(remote.waits).toEqual([{ timeoutMs: 5, signal: closing.signal }]);
+    expect(remote.reads).toEqual([]);
+    expect(commands).toEqual([]);
+
+    // A wait that fails reads as no connection; one a close ended, as a stop.
+    const failing = cloud(undefined, new Error("link gone"));
+    const second = ports({ cloud: failing.port });
+    second.sessions.set("a", projection("a"));
+    await resumeRecoveredTurns(second.port, { turns: [turn("a")], lostAt: LOST_AT });
+    const stopped = ports({ cloud: cloud(undefined, false).port, shouldStop: () => true });
+    stopped.sessions.set("a", projection("a"));
+    await resumeRecoveredTurns(stopped.port, { turns: [turn("a")], lostAt: LOST_AT });
+    expect([...second.commands, ...stopped.commands]).toEqual([]);
+  });
+
+  it("waits for nothing when nothing was recovered", async () => {
+    const remote = cloud();
+    const { port } = ports({ cloud: remote.port });
+    await resumeRecoveredTurns(port, { turns: [], lostAt: LOST_AT });
+    expect(remote.waits).toEqual([]);
+  });
+
+  it("a remote sibling that moved on supersedes the turn", async () => {
+    const remote = cloud({ siblings: [{ sessionId: "remote", movedOn: true }], complete: true });
+    const { port, sessions, commands } = ports({ cloud: remote.port });
+    sessions.set("a", projection("a"));
+    await resumeRecoveredTurns(port, { turns: [turn("a")], lostAt: LOST_AT });
+    expect(remote.reads).toHaveLength(1);
+    expect(commands).toEqual([]);
+  });
+
+  it("fails closed on an unreadable, unsettled or partial sibling answer", async () => {
+    const answers: (CloudRecoverySiblings | Error)[] = [
+      new Error("offline"),
+      { siblings: [{ sessionId: "remote", movedOn: null }], complete: true },
+      { siblings: [{ sessionId: "remote", movedOn: false }], complete: false },
+    ];
+    for (const answer of answers) {
+      const { port, sessions, commands } = ports({ cloud: cloud(answer).port });
+      sessions.set("a", projection("a"));
+      await resumeRecoveredTurns(port, { turns: [turn("a")], lostAt: LOST_AT });
+      expect(commands).toEqual([]);
+    }
+  });
+
+  it("asks nothing of the backend for a turn the local verdict already leaves", async () => {
+    const remote = cloud();
+    const { port, sessions, commands } = ports({
+      cloud: remote.port,
+      resumeBoundary: () => "tool-in-flight",
+    });
+    sessions.set("a", projection("a"));
+    await resumeRecoveredTurns(port, { turns: [turn("a")], lostAt: LOST_AT });
+    expect(remote.reads).toEqual([]);
+    expect(commands).toEqual([]);
+  });
+
+  it("never judges a Session outside the store's owner scope", async () => {
+    const remote = cloud();
+    const { port, sessions, commands } = ports({
+      cloud: remote.port,
+      ownsSession: (sessionId) => sessionId === "mine",
+    });
+    sessions.set("theirs", projection("theirs"));
+    sessions.set("mine", projection("mine"));
+    await resumeRecoveredTurns(port, { turns: [turn("theirs"), turn("mine")], lostAt: LOST_AT });
+    expect(remote.reads.map(({ sessionId }) => sessionId)).toEqual(["mine"]);
+    expect(commands).toEqual([expect.objectContaining({ sessionId: "mine" })]);
+  });
+
+  it("judges again after the backend read, and stops if the host closed meanwhile", async () => {
+    // The person picked the Session up while the backend was read.
+    const sessionsRef: { current?: Map<string, SessionProjection> } = {};
+    const picked: RestartResumeCloud = {
+      firstConnect: async () => true,
+      ticketSiblings: async () => {
+        sessionsRef.current!.set("a", projection("a", "ticket-1", { turnActive: true }));
+        return { siblings: [], complete: true };
+      },
+    };
+    const first = ports({ cloud: picked });
+    sessionsRef.current = first.sessions;
+    first.sessions.set("a", projection("a"));
+    await resumeRecoveredTurns(first.port, { turns: [turn("a")], lostAt: LOST_AT });
+    expect(first.commands).toEqual([]);
+
+    let closing = false;
+    const closedDuringRead: RestartResumeCloud = {
+      firstConnect: async () => true,
+      ticketSiblings: async () => {
+        closing = true;
+        return { siblings: [], complete: true };
+      },
+    };
+    const second = ports({ cloud: closedDuringRead, shouldStop: () => closing });
+    second.sessions.set("a", projection("a"));
+    await resumeRecoveredTurns(second.port, { turns: [turn("a")], lostAt: LOST_AT });
+    expect(second.commands).toEqual([]);
   });
 });

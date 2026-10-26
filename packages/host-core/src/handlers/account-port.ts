@@ -21,6 +21,7 @@
 import type {
   AccountAccessToken,
   AccountConnection,
+  AccountGithubSnapshot,
   AccountSnapshot,
   CloudLaunch,
 } from "@volli/shared";
@@ -33,7 +34,11 @@ export interface AccountPort {
   /** Calls `listener` with the snapshot now, then on every change, until the answer is called. */
   subscribe(listener: (snapshot: AccountSnapshot) => void): Answer<() => void>;
   /** Opens the browser on the provider's page for `connection`; the snapshot follows the flow. */
-  signIn(connection: AccountConnection): Answer<void>;
+  signIn(
+    connection: AccountConnection,
+    inviteCode?: string,
+    acceptedAgreementVersion?: string,
+  ): Answer<void>;
   /** Stops waiting for the browser; quiet when no sign-in is in flight. */
   cancelSignIn(): Answer<void>;
   /** Forgets the sign-in on this Mac; quiet when signed out. */
@@ -54,4 +59,25 @@ export interface AccountPort {
   saveSnapshot(text: string): Answer<void>;
   /** The last-seen board kept for this launch's account, or `null`. */
   readSnapshot(): Answer<string | null>;
+  /** The account's GitHub connection and the GitHub App's installations (VC-897). */
+  readonly github: AccountGithubPort;
+}
+
+/**
+ * The account's GitHub half (VC-897): the person's GitHub connection and the
+ * App's installations, read from the backend with the account's sign-in.
+ * Each browser round trip is followed by the port (the browser returns to
+ * the backend, not here), so the snapshot carries its outcome.
+ */
+export interface AccountGithubPort {
+  /** Reads the connection afresh, calls `listener` now and on every change, until the answer is called. */
+  subscribe(listener: (snapshot: AccountGithubSnapshot) => void): Answer<() => void>;
+  /** Opens the browser to connect (or reconnect) GitHub; the snapshot follows the flow. */
+  connect(): Answer<void>;
+  /** Opens the browser to install the App on a GitHub account; the snapshot follows the flow. */
+  install(): Answer<void>;
+  /** Stops waiting for the browser; quiet when nothing is in flight. */
+  cancel(): Answer<void>;
+  /** Revokes the App's authorization on GitHub and forgets the connection. */
+  disconnect(): Answer<void>;
 }

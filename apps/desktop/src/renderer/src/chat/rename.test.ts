@@ -1,5 +1,6 @@
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
+  LOCAL_LAUNCH,
   PERSON_STARTED,
   type ChatSessionRecord,
   type SessionListingRow,
@@ -14,8 +15,9 @@ import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-re
 
 import { remoteHostOfSession } from "@renderer/lib/session-project";
 import { renameChatSession } from "./rename";
+import { adoptLaunch } from "@renderer/stores/launch";
 
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 vi.mock("@renderer/lib/session-project", () => ({ remoteHostOfSession: vi.fn(() => null) }));
 
 const SESSION = {
@@ -132,12 +134,26 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  adoptLaunch(LOCAL_LAUNCH);
   vi.unstubAllGlobals();
   useChatSessionsStore.setState({ sessions: {} });
   useTicketSessionRecordsStore.setState({ byTicket: {} });
 });
 
 describe("renameChatSession", () => {
+  it("keeps cloud auto-title refinement quiet while an explicit unsupported rename is explained", async () => {
+    adoptLaunch({ store: "cloud", userId: "owner", backendUrl: "https://example.convex.cloud" });
+    const rename = vi.mocked(window.api.sessions.rename);
+    expect(await renameChatSession("chat-1", "A subject", "First message")).toBe(false);
+    expect(rename).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
+    expect(await renameChatSession("chat-1", "A requested title")).toBe(false);
+    expect(toast).toHaveBeenCalledWith("Not available yet in cloud", {
+      id: "cloud-session-read-only",
+    });
+    expect(rename).not.toHaveBeenCalled();
+  });
+
   it("retitles the resident Session and its cached rail row, then persists the trimmed title", async () => {
     const renamed = renameChatSession("chat-1", "  Migration plan  ");
 
@@ -149,6 +165,17 @@ describe("renameChatSession", () => {
     expect(cachedTitle("chat-1")).toBe("Migration plan");
     expect(await renamed).toBe(true);
     expect(renameMock).toHaveBeenCalledWith({ sessionId: "chat-1", title: "Migration plan" });
+  });
+
+  it("passes a nonblank refinement basis, and omits a blank one", async () => {
+    expect(await renameChatSession("chat-1", "Subject", "First message")).toBe(true);
+    expect(renameMock).toHaveBeenLastCalledWith({
+      sessionId: "chat-1",
+      title: "Subject",
+      refineFrom: "First message",
+    });
+    expect(await renameChatSession("chat-1", "Subject", "   ")).toBe(true);
+    expect(renameMock).toHaveBeenLastCalledWith({ sessionId: "chat-1", title: "Subject" });
   });
 
   it("leaves every other row alone — the terminal row beside it, the other chat Session, the other ticket", async () => {

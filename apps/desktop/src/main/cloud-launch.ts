@@ -46,23 +46,41 @@ export function decodeLaunchMarker(raw: string | undefined): LaunchMarker | null
 }
 
 /**
- * The launch's store: `cloud` only with the flag on, a marker present, and a
- * backend and a sign-in configured (with no sign-in there would be no way to
- * sign out of it); `local` otherwise. The marker is read only then, so a
- * flag-off boot touches nothing of Volli Cloud's.
+ * The launch's store: hosted Convex requires the cloud flag, a marker and
+ * configured sign-in. A future supervised embedded deployment needs neither.
+ * Otherwise SQLite. Flag-off preview launches read no hosted account marker.
  */
 export function chooseProductStore(input: {
   readonly cloudFlag: boolean;
   readonly readMarker: () => LaunchMarker | null;
   readonly backendUrl: string | null;
+  readonly siteUrl?: string | null;
   readonly signInConfigured: boolean;
+  /** Future embedded-backend supervisor's ready descriptor, never a runtime environment override.
+   * VC-938 must supply the local identity, token source and exact runtime CSP before using this.
+   * The Convex store is independent of the cloud feature flag; this preview never supplies it.
+   */
+  readonly localDeployment?: {
+    readonly userId: string;
+    readonly backendUrl: string;
+    readonly siteUrl: string;
+  };
 }): CloudLaunch {
+  if (input.localDeployment !== undefined) {
+    return { store: "cloud", deployment: "local", ...input.localDeployment };
+  }
   if (!input.cloudFlag || input.backendUrl === null || !input.signInConfigured) {
     return LOCAL_LAUNCH;
   }
   const marker = input.readMarker();
   if (marker === null) return LOCAL_LAUNCH;
-  return { store: "cloud", userId: marker.userId, backendUrl: input.backendUrl };
+  return {
+    store: "cloud",
+    deployment: "cloud",
+    userId: marker.userId,
+    backendUrl: input.backendUrl,
+    siteUrl: input.siteUrl ?? null,
+  };
 }
 
 /** The one `app_state` row the marker is, as main reaches it. */
@@ -148,13 +166,63 @@ export interface RelaunchController {
  * Electron would keep that request and honour it on whatever quit came next,
  * long after the person cancelled this one.
  */
-export function createRelaunchController(app: RelaunchLifecycle): RelaunchController {
+export function createRelaunchController(
+  app: RelaunchLifecycle,
+  live?: {
+    turns(): number;
+    subscribe(listener: () => void): () => void;
+    choose(turns: number): "wait" | "now" | "cancel";
+    setInterval?(run: () => void): unknown;
+    clearInterval?(handle: unknown): void;
+  },
+): RelaunchController {
   let requested = false;
+  let waiting = false;
+  let unsubscribe: (() => void) | null = null;
+  let poll: unknown = null;
+  const clear = () => {
+    waiting = false;
+    unsubscribe?.();
+    unsubscribe = null;
+    if (poll !== null) {
+      if (live?.clearInterval !== undefined) live.clearInterval(poll);
+      else clearInterval(poll as ReturnType<typeof setInterval>);
+      poll = null;
+    }
+  };
+  const quit = () => {
+    clear();
+    requested = true;
+    app.quit();
+  };
   return {
     request() {
-      if (requested) return;
-      requested = true;
-      app.quit();
+      if (requested || waiting) return;
+      const turns = live?.turns() ?? 0;
+      if (turns > 0 && live !== undefined) {
+        const answer = live.choose(turns);
+        if (answer === "cancel") return;
+        if (answer === "wait") {
+          waiting = true;
+          const check = () => {
+            if (waiting && live.turns() === 0) quit();
+          };
+          const off = live.subscribe(check);
+          // A primed subscription may already have observed zero.
+          if (!waiting) {
+            off();
+            return;
+          }
+          unsubscribe = off;
+          // Live bindings can close without a fold; keep the same fallback
+          // as menu-bar mode's live-work feed. No work is started by this clock.
+          poll =
+            live.setInterval === undefined ? setInterval(check, 1_000) : live.setInterval(check);
+          check();
+          return;
+        }
+      }
+      quit();
     },
     pending: () => requested,
     quitAccepted() {
@@ -163,6 +231,7 @@ export function createRelaunchController(app: RelaunchLifecycle): RelaunchContro
       app.relaunch();
     },
     quitRefused() {
+      clear();
       requested = false;
     },
   };

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { openTestDb, type TestDb } from "../db/test-helpers";
 import { sqliteDrainCursorStore, sqliteJobJournalStore } from "./sqlite-stores";
+import type { JobJournalEntry } from "./inbox";
 
 let opened: TestDb | null = null;
 afterEach(() => {
@@ -12,6 +13,17 @@ afterEach(() => {
 function db() {
   opened = openTestDb();
   return opened.db;
+}
+
+function completedJob(jobId: string): JobJournalEntry {
+  return {
+    jobId,
+    kind: "session.command",
+    lease: { bootId: "boot", attempt: 1 },
+    state: "done",
+    outcome: { status: "done", result: null },
+    receivedAt: 1,
+  };
 }
 
 describe("the runner-local stores (migration 65)", () => {
@@ -78,6 +90,74 @@ describe("the runner-local stores (migration 65)", () => {
       message: "conflict",
       at: 0,
     });
+  });
+
+  it("isolates journal replay, reads, updates and acknowledgements by account owner", () => {
+    const handle = db();
+    const a = sqliteJobJournalStore(handle, "a");
+    const b = sqliteJobJournalStore(handle, "b");
+    const legacy = sqliteJobJournalStore(handle);
+    a.save(completedJob("a-job"));
+    b.save(completedJob("b-job"));
+    legacy.save(completedJob("old-job"));
+    expect(a.get("b-job")).toBeNull();
+    expect(a.get("old-job")).toBeNull();
+    expect(b.get("a-job")).toBeNull();
+    expect(a.unreported().map((row) => row.jobId)).toEqual(["a-job"]);
+    expect(b.unreported().map((row) => row.jobId)).toEqual(["b-job"]);
+    expect(sqliteJobJournalStore(handle, "a").unreported()).toEqual([completedJob("a-job")]);
+
+    expect(() =>
+      b.save({
+        ...completedJob("a-job"),
+        state: "failed",
+        outcome: { status: "failed", code: "stolen", detail: null, retryable: false },
+      }),
+    ).toThrow("another runner owner");
+    b.remove("a-job", 1);
+    a.remove("b-job", 1);
+    expect(a.get("a-job")).toEqual(completedJob("a-job"));
+    expect(b.get("b-job")).toEqual(completedJob("b-job"));
+    // An older unscoped writer cannot take an account-owned job either.
+    expect(() =>
+      legacy.save({ ...completedJob("a-job"), lease: { bootId: "legacy", attempt: 2 } }),
+    ).toThrow("another runner owner");
+    expect(a.get("a-job")?.lease).toEqual({ bootId: "boot", attempt: 1 });
+    a.save({ ...completedJob("a-job"), lease: { bootId: "restart", attempt: 2 } });
+    a.remove("a-job", 1);
+    expect(a.get("a-job")?.lease.attempt).toBe(2);
+    a.remove("a-job", 2);
+    expect(a.unreported()).toEqual([]);
+    expect(b.unreported()).toEqual([completedJob("b-job")]);
+    expect(legacy.get("old-job")).toEqual(completedJob("old-job"));
+  });
+
+  it("filters foreign and pre-owner journal rows before decoding their outcomes", () => {
+    const handle = db();
+    // Deliberate on-disk corruption: only the fixture bypasses json_valid.
+    handle.pragma("ignore_check_constraints = ON");
+    try {
+      handle
+        .prepare(`INSERT INTO job_journal
+        (job_id,kind,lease_boot_id,lease_attempt,state,outcome_json,received_at,owner_user_id)
+        VALUES (?, 'session.command', 'boot', 1, 'done', '{', 1, ?)`)
+        .run("foreign", "a");
+      handle
+        .prepare(`INSERT INTO job_journal
+        (job_id,kind,lease_boot_id,lease_attempt,state,outcome_json,received_at)
+        VALUES ('legacy', 'session.command', 'boot', 1, 'done', '{', 2)`)
+        .run();
+    } finally {
+      handle.pragma("ignore_check_constraints = OFF");
+    }
+    const b = sqliteJobJournalStore(handle, "b");
+    expect(b.get("foreign")).toBeNull();
+    expect(b.get("legacy")).toBeNull();
+    expect(b.unreported()).toEqual([]);
+    b.remove("foreign", 1);
+    b.remove("legacy", 1);
+    expect(handle.prepare("SELECT COUNT(*) AS n FROM job_journal").get()).toEqual({ n: 2 });
+    expect(() => sqliteJobJournalStore(handle, "a").unreported()).toThrow(SyntaxError);
   });
 
   it("journals job outcomes until they are reported", () => {

@@ -176,6 +176,18 @@ const EXACT = {
     reason:
       "Which product store this device's next launch uses (main/cloud-launch.ts, VC-889): the signed-in person's user id, written when a Volli Cloud sign-in completes and removed when it ends. A non-secret marker, never a token; main reads it before the window opens.",
   },
+  "volli:runner-resident": {
+    placement: "client-local",
+    owner: "stays",
+    reason:
+      "This device's cloud runner availability when its windows close (VC-895). Explicit false selects quit-when-done; absent defaults on only in a cloud launch. Never Workspace configuration.",
+  },
+  "volli:cloud-runner": {
+    placement: "client-local",
+    owner: "stays",
+    reason:
+      "This Mac's own Volli Cloud runner per signed-in person (main/cloud-runner/record.ts, VC-895): the runner's id, the host it was written on, and a tombstone once it was removed. Non-secret; the credential is sealed in the host credential inventory. Lets a Mac that lost its keychain item register as its own replacement, and keeps a removed Mac from adding itself back.",
+  },
   "volli:model-picker-view": {
     placement: "client-local",
     owner: "VC-572",
@@ -339,6 +351,18 @@ const EXACT = {
 } as const satisfies Readonly<Record<string, AppStateKeyEntry>>;
 
 const PREFIXES = {
+  "volli:runner-report:": {
+    placement: "client-local",
+    owner: "stays",
+    reason:
+      "Runner-local durable checkout and Working copy reports, keyed by owner, runner and repository or ticket/repository. Path-free machine metadata awaiting backend acknowledgement; never Session facts, a board cache or credentials.",
+  },
+  "volli:runner-site:": {
+    placement: "client-local",
+    owner: "stays",
+    reason:
+      "Runner-local Session location hints keyed by owner and Session: repository identity, checkout mode and git identity only. Lets an already-briefed Session reattach offline using its path registry. Never a board cache or credential.",
+  },
   "volli:vc354-perf:": {
     placement: "client-local",
     owner: "stays",

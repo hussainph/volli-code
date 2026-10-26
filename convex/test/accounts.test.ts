@@ -2,10 +2,10 @@ import { convexTest } from "convex-test";
 import type { GenericMutationCtx } from "convex/server";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
-import { newId } from "@volli/shared/cloud";
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION, newId } from "@volli/shared/cloud";
 
 import { ACCOUNT_DELETION_GRACE_MS } from "../functions/accounts";
-import { api } from "../functions/_generated/api";
+import { api, internal } from "../functions/_generated/api";
 import type { DataModel } from "../functions/_generated/dataModel.js";
 import { requireViewer } from "../functions/lib/auth";
 import schema from "../functions/schema";
@@ -26,7 +26,17 @@ function code(value: string) {
 }
 
 async function signIn(t: ReturnType<typeof setup>, subject: string): Promise<string> {
-  return (await t.withIdentity(identity(subject)).mutation(api.accounts.ensureViewer, {})).userId;
+  const client = t.withIdentity(identity(subject));
+  const { userId } = await client.mutation(api.accounts.ensureViewer, {});
+  // VC-936: an account is waitlisted (and owns no Workspace) until an operator
+  // allowlists it; the next call accepts the current Preview Agreement and so
+  // sets the account up. These identities carry no verified email, so the
+  // grant names the user id.
+  await t.mutation(internal.previewAccess.set, { kind: "user", value: userId, enabled: true });
+  await client.mutation(api.accounts.ensureViewer, {
+    acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+  });
+  return userId;
 }
 
 async function seedWorkspace(ctx: Ctx): Promise<string> {
@@ -74,11 +84,13 @@ afterEach(() => {
 describe("accounts.ensureViewer", () => {
   test("answers the account's status with the new user", async () => {
     const t = setup();
+    // Nobody allowlisted this address: the account exists, the preview is closed.
     const first = await t.withIdentity(identity("dana")).mutation(api.accounts.ensureViewer, {});
     expect(first).toMatchObject({
       displayName: "dana",
       status: "active",
       purgeAfter: null,
+      previewAccess: "waitlisted",
       created: true,
     });
     await expect(t.withIdentity(identity("dana")).query(api.accounts.viewer, {})).resolves.toEqual({
@@ -87,6 +99,8 @@ describe("accounts.ensureViewer", () => {
       primaryEmail: null,
       status: "active",
       purgeAfter: null,
+      previewAccess: "waitlisted",
+      previewAgreementAccepted: false,
     });
   });
 });
@@ -294,6 +308,9 @@ describe("accounts.cancelDeletion", () => {
       primaryEmail: null,
       status: "active",
       purgeAfter: null,
+      // Restoring the account is not an allowlist decision.
+      previewAccess: "granted",
+      previewAgreementAccepted: true,
     });
     const rows = await t.run(async (ctx) => ({
       requests: await ctx.db.query("deletionRequests").collect(),

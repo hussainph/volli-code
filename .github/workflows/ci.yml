@@ -273,12 +273,13 @@ jobs:
           fi
           node scripts/protocol-schema/generate.mjs --check "${args[@]}"
 
-      # The live kickoff smoke needs credentials; its ledger/selection predicates
-      # and card-opening helper are deterministic and must still run on every PR.
+      # Smoke helpers and date-boundary fixtures are pure checks on every PR,
+      # including helpers whose live journey needs credentials (kickoff).
       - name: Test smoke runner policy, reporting and helpers
         run: >-
           node --test apps/desktop/scripts/run-smokes.test.mjs
           apps/desktop/scripts/smoke-quiet-check.test.mjs
+          apps/desktop/e2e/lib/automation-schedule-fixture.test.mjs
           apps/desktop/e2e/lib/kickoff-support.test.mjs
           apps/desktop/e2e/lib/focus-ring-probe.test.mjs
           apps/desktop/e2e/lib/smoke-kit.test.mjs
@@ -298,6 +299,7 @@ jobs:
           apps/desktop/e2e/volli-drive/lib/remote-acceptance.test.mjs
           apps/desktop/e2e/volli-drive/lib/native-window-lifecycle.test.mjs
           apps/desktop/e2e/volli-drive/lib/sshd-fixture.test.mjs
+          apps/desktop/e2e/volli-drive/lib/cloud-acceptance.test.mjs
 
       # Every workspace manifest must declare the license the root declares
       # (VC-411). Not expressible as a lint rule, so it is its own step.
@@ -763,33 +765,39 @@ jobs:
           test -z "$(git status --porcelain -- convex/functions/_generated)"
 
       - name: Unit tests (convex-test)
-        run: vp run --filter @volli/convex test --maxWorkers=$(nproc)
+        run: vp run --filter @volli/convex test --coverage --maxWorkers=$(nproc)
 
       - name: Backend tests (pinned local backend)
         run: vp run --filter @volli/convex test:backend
 
       # The desktop's Volli Cloud sign-in end to end (VC-884): its dev issuer,
       # loopback callback, sealed store and the accounts functions on the
-      # pinned backend. Required here, so a missing fixture env fails rather
-      # than skips.
+      # pinned backend; and this Mac as a runner over it (VC-895): register,
+      # token exchange, heartbeat, asleep and back, removal. Required here, so
+      # a missing fixture env fails rather than skips.
       - name: Desktop sign-in against the pinned backend
         env:
           VOLLI_ACCOUNT_LIVE_REQUIRED: "1"
         working-directory: convex
         run: >-
           node fixture/with-backend.ts --deploy --
-          sh -c 'cd ../apps/desktop && vp test run src/main/account/convex.live.test.ts --maxWorkers=2'
+          sh -c 'cd ../apps/desktop && vp test run src/main/account/convex.live.test.ts src/main/cloud-runner/convex.live.test.ts --maxWorkers=2'
 
       # The cloud board through the real transport (VC-889): two windows on the
       # same live board, and one cut off goes read-only with its board intact.
+      # And the 0.3-C demo as two windows (VC-895): Mac B sees Mac A's Session,
+      # "Waiting for <Mac A>" through a SIMULATED sleep (the smoke power seam:
+      # real power events, runner transport held down), its command queued,
+      # then caught up on wake.
       # Required here, like the sign-in test above: it fails rather than skips.
-      - name: Desktop cloud board against the pinned backend
+      - name: Desktop cloud board and Sessions against the pinned backend
         env:
           VOLLI_CLOUD_BOARD_LIVE_REQUIRED: "1"
+          VOLLI_CLOUD_SESSION_LIVE_REQUIRED: "1"
         working-directory: convex
         run: >-
           node fixture/with-backend.ts --deploy --
-          sh -c 'cd ../apps/desktop && vp test run src/renderer/src/stores/cloud-board/convex.live.test.ts --maxWorkers=2'
+          sh -c 'cd ../apps/desktop && vp test run src/renderer/src/stores/cloud-board/convex.live.test.ts src/main/cloud-sessions.live.test.ts src/main/cloud-runner/waiting-for-mac.live.test.ts --maxWorkers=2'
 
   # N-1 compatibility (VC-633). A previous build, run from its own shipped
   # sources, against a profile THIS build migrated to its head: it must write

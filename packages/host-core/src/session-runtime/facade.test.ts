@@ -2,6 +2,7 @@
 import { describe, expect, expectTypeOf, it, vi, afterEach } from "vite-plus/test";
 import { EMPTY_MODEL_ACCESS_DEFAULTS } from "@volli/shared";
 import { readModelAccessDefaults } from "./model-access-preferences";
+import { testProject } from "../db/test-helpers";
 import type { DegradedHostCore, LiveHostCore } from "../index";
 import type { createRuntimeAssembly } from "./assembly";
 import { createSessions, type Sessions } from "./sessions";
@@ -93,7 +94,12 @@ async function proofFor(facade: RuntimeSessionFacade) {
   });
   return { ready: await owner.ready(), owner };
 }
-async function fixture() {
+async function fixture(
+  overrides: Pick<
+    Parameters<typeof createRuntimeSessionFacade>[0],
+    "sessionEngine" | "sessionBirth" | "recordSessionStarted"
+  > = {},
+) {
   vi.mocked(createDelegations).mockReturnValue({
     recover: vi.fn(),
     watching: vi.fn(),
@@ -157,6 +163,7 @@ async function fixture() {
     venue: { id: "remote", kind: "remote" },
     decisions: null,
     delegation,
+    ...overrides,
   });
   const { ready, owner } = await proofFor(facade);
   return {
@@ -813,4 +820,77 @@ describe("agent staging ports", () => {
       }
     },
   );
+});
+
+describe("Session facade launch injection", () => {
+  it("omits the frozen ticket-start writer for cloud while preserving the local default and explicit recorder", async () => {
+    const cloud = await fixture({ recordSessionStarted: null });
+    const cloudPorts = vi.mocked(createSessions).mock.lastCall![0];
+    expect(cloudPorts).not.toHaveProperty("recordSessionStarted");
+    expect(recordSessionStartedOnce).not.toHaveBeenCalled();
+    await cloud.owner.close();
+
+    const local = await fixture();
+    const localPorts = vi.mocked(createSessions).mock.lastCall![0];
+    const started = { ticketId: "ticket", sessionId: "session", actor: { kind: "user" as const } };
+    localPorts.recordSessionStarted!(started);
+    expect(recordSessionStartedOnce).toHaveBeenCalledExactlyOnceWith(local.host.database.db, {
+      ...started,
+      origin: undefined,
+      now: expect.any(Number),
+    });
+    await local.owner.close();
+
+    vi.mocked(recordSessionStartedOnce).mockClear();
+    const recordSessionStarted =
+      vi.fn<NonNullable<Parameters<typeof createSessions>[0]["recordSessionStarted"]>>();
+    const custom = await fixture({ recordSessionStarted });
+    const customPorts = vi.mocked(createSessions).mock.lastCall![0];
+    expect(customPorts.recordSessionStarted).toBe(recordSessionStarted);
+    customPorts.recordSessionStarted!(started);
+    expect(recordSessionStarted).toHaveBeenCalledExactlyOnceWith(started);
+    expect(recordSessionStartedOnce).not.toHaveBeenCalled();
+    await custom.owner.close();
+  });
+
+  it("uses cloud project identities and disables only the in-process watch delivery", async () => {
+    const f = await fixture();
+    const project = testProject({ id: "cloud-project", path: "/cloud/project" });
+    const projects = vi.fn(() => [project]);
+    const agents = stage(f, { projects, inProcessWatches: false });
+    agents.toolDoor(f.ready);
+    const tool = f.agentServices.createToolDoor.mock.lastCall![0];
+    expect(tool.projects).toBe(projects);
+    expect(tool.projects()).toEqual([project]);
+    expect(listProjects).not.toHaveBeenCalled();
+    expect(tool.watches!()).toBeNull();
+    expect(tool.watches!()).toBeNull();
+    expect(f.agentServices.createWatches).not.toHaveBeenCalled();
+    expect(tool.supervise!()).toEqual({ sessionEngine: f.engine, runtime: f.runtime });
+    tool.delegate!();
+    expect(createDelegations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionEngine: f.engine,
+        runtime: f.runtime,
+        sessions: f.sessions,
+      }),
+    );
+    agents.stop();
+    expect(f.watch.dispose).not.toHaveBeenCalled();
+    await f.owner.close();
+  });
+
+  it("uses the launch-scoped engine for consumers and forwards birth preparation", async () => {
+    const sessionEngine = {
+      getSession: vi.fn(),
+      listEvents: vi.fn(),
+    } as unknown as LiveHostCore["sessionEngine"];
+    const sessionBirth = { beforeCreate: vi.fn(async () => {}) };
+    const f = await fixture({ sessionEngine, sessionBirth });
+    expect(recoveredSessionClientPorts(f.ready).sessionEngine).toBe(sessionEngine);
+    expect(recoveredSessionCommandPorts(f.ready).sessionEngine).toBe(sessionEngine);
+    expect(createSessions).toHaveBeenCalledWith(expect.objectContaining({ sessionBirth }));
+    expect(f.host.sessionEngine).not.toBe(sessionEngine);
+    await f.owner.close();
+  });
 });

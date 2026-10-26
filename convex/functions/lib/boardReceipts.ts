@@ -21,8 +21,9 @@ import {
 } from "@volli/shared/cloud";
 
 import type { MutationCtx } from "../_generated/server.js";
-import { requireProject, requireViewer, type Viewer } from "./auth";
-import { asBoardErrors, boardActor, boardError } from "./board";
+import { PERSON_ONLY, requireActor, type Caller, type CallerKind } from "./actorAuth";
+import { requireProject } from "./auth";
+import { asBoardErrors, boardError } from "./board";
 
 export interface BoardReceipt {
   commandId: string;
@@ -38,16 +39,24 @@ export type BoardReply = Record<string, unknown>;
  * Runs `write` once per `commandId`. `write` returns the project the command
  * belongs to (the receipt's scope) and the reply to record.
  *
- * The caller is part of the command: the same id sent by another person is a
- * conflict, never their replay. A replay is answered only to a viewer who can
- * still see the project it was for.
+ * The caller is part of the command: the same id sent by another person (or
+ * by an agent, or by its owner directly) is a conflict, never their replay. A
+ * replay is answered only to a caller who can still see the project it was for.
+ *
+ * `allow` says who may run the command (`lib/actorAuth.ts`): people only
+ * unless the function admits agents too.
  */
 export async function withBoardReceipt<R extends BoardReply>(
   ctx: MutationCtx,
-  command: { commandId: string; operation: string; intent: unknown },
-  write: (viewer: Viewer) => Promise<{ projectId: string; reply: R }>,
+  command: {
+    commandId: string;
+    operation: string;
+    intent: unknown;
+    allow?: readonly CallerKind[];
+  },
+  write: (caller: Caller) => Promise<{ projectId: string; reply: R }>,
 ): Promise<R & { receipt: BoardReceipt }> {
-  const viewer = await requireViewer(ctx);
+  const caller = await requireActor(ctx, command.allow ?? PERSON_ONLY);
   const commandId = await asBoardErrors(() => parseId("command", command.commandId));
   const now = Date.now();
   const stored = await ctx.db
@@ -56,7 +65,7 @@ export async function withBoardReceipt<R extends BoardReply>(
     .unique();
   const keyed = {
     operation: command.operation,
-    intent: { intent: command.intent, actor: boardActor(viewer) },
+    intent: { intent: command.intent, actor: caller.actor },
   };
   const verdict = boardReceiptVerdict(stored, { ...keyed, now });
   if (verdict.kind === "conflict") {
@@ -66,12 +75,12 @@ export async function withBoardReceipt<R extends BoardReply>(
     );
   }
   if (verdict.kind === "replay") {
-    await requireProject(ctx, stored!.projectId);
+    await requireProject(ctx, stored!.projectId, caller.viewer);
     return { ...(verdict.reply as R), receipt: { commandId, status: "completed", replayed: true } };
   }
   // An expired receipt still holds the id until the sweep removes it.
   if (stored !== null) await ctx.db.delete(stored._id);
-  const { projectId, reply } = await asBoardErrors(() => write(viewer));
+  const { projectId, reply } = await asBoardErrors(() => write(caller));
   await ctx.db.insert("boardReceipts", {
     commandId,
     projectId,

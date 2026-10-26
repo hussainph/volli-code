@@ -156,7 +156,7 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   // host commands (`project.reorder`, `worktree.trimSettings`) are
   // additive-only across supported skew, while the client-local families
   // (`hosts.*`, `hostAdd.*`, `hostSignIns.*`, `hostLink.*`, `hostScope.*`,
-  // `browserShortcuts.*`, `worktree.setupStatus`/`answerSetup`, `account.*`, `cloud.*`) ship with this
+  // `browserShortcuts.*`, `worktree.setupStatus`/`answerSetup`, `account.*`, `cloud.*`, `runners.*`) ship with this
   // renderer and main in one bundle and are not cross-version promises.
   "shells.moveToBackground": "ipc",
   "project.reorder": "ipc",
@@ -219,6 +219,20 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "cloud.reportUnsavedWrites": "ipc",
   "cloud.saveSnapshot": "ipc",
   "cloud.readSnapshot": "ipc",
+  // The account's GitHub connection and installations (VC-897).
+  "account.githubSubscribe": "ipc",
+  "account.githubConnect": "ipc",
+  "account.githubInstall": "ipc",
+  "account.githubCancel": "ipc",
+  "account.githubDisconnect": "ipc",
+  // This Mac as one of the person's runners (VC-895).
+  "runners.thisMac": "ipc",
+  "runners.subscribeThisMac": "ipc",
+  "runners.addThisMac": "ipc",
+  "runners.removeThisMac": "ipc",
+  // A Volli Cloud project's folder on this Mac (VC-895 N2-3).
+  "checkouts.status": "ipc",
+  "checkouts.chooseFolder": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

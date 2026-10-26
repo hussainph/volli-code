@@ -31,14 +31,17 @@
  */
 
 import { ConvexError, v } from "convex/values";
+import { decodeCloudSessionIntent } from "@volli/shared";
 
 import {
   INVALID_JOB_RESULT,
+  isFollowUpIntent,
   JOB_CLAIM_MAX,
   JOB_LEASE_MAX_MS,
   JOB_LEASE_MS,
   JOB_PRIORITIES,
   NOTICE_MAX_WAIT_MS,
+  isDerivedId,
   isTerminalJobStatus,
   isUuid,
   jobRank,
@@ -65,6 +68,7 @@ import {
   type LeaseRef,
 } from "./lib/jobs";
 import { requireRunner, requireRunnerForWrite } from "./lib/runnerAuth";
+import { noticeForClaim } from "./lib/watches";
 
 /** How many of its own leased jobs a claim looks at to take back. A runner holds far fewer. */
 const LEASED_SCAN = 256;
@@ -89,8 +93,9 @@ function bounded(value: number | undefined, fallback: number, min: number, max: 
   return Math.min(Math.max(Math.floor(chosen), min), max);
 }
 
+/** A job by id: a UUID, or a `session.command`'s frozen derived command id (`lib/jobs.ts`). */
 async function jobOf(ctx: MutationCtx, jobId: string): Promise<Doc<"runnerJobs"> | null> {
-  if (!isUuid(jobId)) return null;
+  if (!isDerivedId(jobId)) return null;
   return ctx.db
     .query("runnerJobs")
     .withIndex("by_uuid", (q) => q.eq("id", jobId))
@@ -117,10 +122,10 @@ async function lease(
 export const claim = mutation({
   args: { bootId: v.string(), max: v.optional(v.number()) },
   handler: async (ctx, { bootId, max }): Promise<ClaimedJob[]> => {
+    const { runnerId, ownerUserId } = await requireRunnerForWrite(ctx);
     if (!isUuid(bootId)) {
       throw new ConvexError({ code: "invalid_request", message: "bootId is this boot's UUID." });
     }
-    const { runnerId, ownerUserId } = await requireRunnerForWrite(ctx);
     const limit = bounded(max, JOB_CLAIM_MAX, 1, JOB_CLAIM_MAX);
     const now = Date.now();
     const candidates: Doc<"runnerJobs">[] = [];
@@ -166,8 +171,10 @@ export const claim = mutation({
         await cancelJob(ctx, job, now, NOT_A_MEMBER);
         continue;
       }
-      const ref = { bootId, attempt: (job.lease?.attempt ?? 0) + 1 };
-      claimed.push(claimedJob(await lease(ctx, job, ref, now + JOB_LEASE_MS)));
+      const deliverable = await noticeForClaim(ctx, job);
+      if (deliverable === null) continue;
+      const ref = { bootId, attempt: (deliverable.lease?.attempt ?? 0) + 1 };
+      claimed.push(claimedJob(await lease(ctx, deliverable, ref, now + JOB_LEASE_MS)));
     }
     return claimed;
   },
@@ -246,8 +253,34 @@ export const complete = mutation({
     if (reported.status === "done") {
       const problem = jobResultProblem(reported.result);
       if (problem === null) {
+        // Queue controls do not append event-ledger commands. Their runner
+        // receipt travels with completion instead of waiting for the fact fold.
+        const result = reported.result as { receipt?: unknown } | null | undefined;
+        const receipt = result?.receipt as Record<string, unknown> | null | undefined;
+        const queueControl = isQueueControl(job);
+        const queueReceipt =
+          queueControl &&
+          receipt != null &&
+          ["accepted", "rejected", "completed", "unreconciled"].includes(String(receipt.status)) &&
+          (receipt.code === null || typeof receipt.code === "string") &&
+          (receipt.detail === null || typeof receipt.detail === "string")
+            ? {
+                status: receipt.status as "accepted" | "rejected" | "completed" | "unreconciled",
+                code: receipt.code as string | null,
+                detail: receipt.detail as string | null,
+                at: now,
+              }
+            : null;
+        // A summarized attempt must not downgrade an outcome already folded
+        // from the immutable Session ledger.
         await ctx.db.patch(job._id, {
           status: "done",
+          ...(queueReceipt !== null &&
+          (job.receipt === null ||
+            job.receipt.status === "unreconciled" ||
+            (job.receipt.status === "accepted" && queueReceipt.status === "completed"))
+            ? { receipt: queueReceipt }
+            : {}),
           result: reported.result as Doc<"runnerJobs">["result"],
           ...terminal(now),
         });
@@ -266,6 +299,19 @@ export const complete = mutation({
     });
   },
 });
+
+function isQueueControl(job: Doc<"runnerJobs">): boolean {
+  if (job.kind === "session.followUp") return true;
+  if (job.kind !== "session.command") return false;
+  try {
+    const intent = job.commandIntent ?? (job.payload as { intent?: string }).intent;
+    return (
+      typeof intent === "string" && isFollowUpIntent(decodeCloudSessionIntent(JSON.parse(intent)))
+    );
+  } catch {
+    return false;
+  }
+}
 
 async function recordFailure(
   ctx: MutationCtx,

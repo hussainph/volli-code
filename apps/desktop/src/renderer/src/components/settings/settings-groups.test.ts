@@ -43,7 +43,7 @@ function categories(experiments: ReturnType<typeof resolveExperiments> | null) {
 }
 
 describe("Settings → Experimental", () => {
-  it("omits the empty Experimental category on stable and shows it on dev/canary or an env opt-in", () => {
+  it("omits Experimental on stable even with an environment opt-in", () => {
     expect(categories(null).some(({ key }) => key === "experimental")).toBe(false);
     expect(
       categories(resolveExperiments({ cloud: true }, [], "stable")).some(
@@ -59,7 +59,7 @@ describe("Settings → Experimental", () => {
       categories(resolveExperiments({}, ["cloud"], "stable")).some(
         ({ key }) => key === "experimental",
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
   it("lists the registry in System and makes its flag discoverable from the rail", () => {
     const system = settingsGroups(undefined, {
@@ -179,6 +179,41 @@ describe("Settings → Account", () => {
       "volli cloud",
       "deletion",
       "scheduled",
+    ]) {
+      expect(terms, label).toContain(label);
+    }
+  });
+});
+
+const servicesWith = (options: { account?: boolean; runners?: boolean }) =>
+  settingsGroups(undefined, options)
+    .find((group) => group.key === "services")!
+    .categories.map((category) => category.key);
+
+describe("Settings → Runners", () => {
+  it("exists only with the runners option on, after Account, findable by what it shows", () => {
+    const services = servicesWith;
+    expect(services({})).not.toContain("runners");
+    expect(services({ runners: false })).not.toContain("runners");
+    expect(services({ account: true, runners: true }).slice(0, 2)).toEqual(["account", "runners"]);
+
+    const runners = settingsGroups(undefined, { runners: true })
+      .flatMap((group) => group.categories)
+      .find((category) => category.key === "runners")!;
+    const terms = [runners.label, ...(runners.keywords ?? [])].map((term) => term.toLowerCase());
+    for (const label of [
+      "runners",
+      "this mac",
+      "rename",
+      "remove",
+      "online",
+      "offline",
+      "asleep",
+      "volli is closed",
+      "updating",
+      "used from two places",
+      "add this mac again",
+      "try again",
     ]) {
       expect(terms, label).toContain(label);
     }

@@ -9,7 +9,8 @@
  */
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { EMPTY_TICKET_FILTER, type TicketStatus } from "@volli/shared";
+import { EMPTY_TICKET_FILTER, LOCAL_LAUNCH, type TicketStatus } from "@volli/shared";
+import { adoptLaunch } from "@renderer/stores/launch";
 
 import { hostWorld, type HostWorld } from "@renderer/components/hosts/hosts.test-support";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
@@ -44,6 +45,7 @@ afterEach(async () => {
   useUiStore.setState({ newTicketOpen: false });
   toast.mockClear();
   vi.restoreAllMocks();
+  adoptLaunch(LOCAL_LAUNCH);
 });
 
 const EMPTY_GROUPS: Record<TicketStatus, never[]> = {
@@ -215,6 +217,19 @@ describe("a column composer", () => {
 });
 
 describe("column arming", () => {
+  it("shows no arming control in a cloud launch", async () => {
+    world = hostWorld({ cloud: false });
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    const { ColumnArmingButton } = await import("./column-arming");
+    const container = await world.render(
+      <TooltipProvider>
+        <ColumnArmingButton projectId="local" status="todo" />
+      </TooltipProvider>,
+    );
+    expect(container.querySelector("[data-column-arming]")).toBeNull();
+    expect(container.textContent).toBe("");
+  });
+
   it("an arming menu open before the host went away cannot arm through it", async () => {
     world = hostWorld();
     const arm = vi.fn(async () => null);

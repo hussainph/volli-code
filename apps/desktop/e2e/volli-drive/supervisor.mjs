@@ -17,7 +17,7 @@
  */
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { promises as fs } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 
 import {
@@ -43,11 +43,26 @@ import {
   findInSnapshot,
   instanceLayout,
   killExactly,
+  makeScratchRepo,
   ownedProcesses,
   processIdentity,
   processTable,
   snapshotRefs,
 } from "./lib/core.mjs";
+import {
+  CLOUD_LAUNCH_KEY,
+  CLOUD_RUNNER_KEY,
+  cleanQuitProblems,
+  cloudElectronEnv,
+  cloudFixtureFromSupervisorEnv,
+  completeDevSignIn,
+  launchMarkerUser,
+  observedChildExit,
+  quitCloudLaunchFromTray,
+  readAppState,
+  recordedDevSignIn,
+  recordedRunnerId,
+} from "./lib/cloud-acceptance.mjs";
 import { seedFixture } from "./lib/fixtures.mjs";
 import { serve } from "./lib/protocol.mjs";
 import { quitNativeWindow, reopenNativeWindow } from "./lib/native-window-lifecycle.mjs";
@@ -98,11 +113,28 @@ let electronPid = null;
 /** { pid, pgid, started }: the Electron child, as ps saw it at launch. */
 let electronIdentity = null;
 let electronExit = null;
+/**
+ * The exact ChildProcess of the Electron pid this supervisor launched,
+ * captured at launch. Playwright disposes its dispatcher once that process
+ * exits, so a cloud instance's quit is proven from this handle afterwards.
+ */
+let electronChild = null;
+/** A cloud instance's last Tray quit and close record, kept for the manifest. */
+let lastTrayQuit = null;
+let lastCloudClose = null;
 let provider = null;
 let remoteFixture = null;
 let server = null;
 let seeded = null;
 let stopping = false;
+/** A supervised restart is closing Electron: that exit is expected, not the end of the run. */
+let restarting = false;
+let restarts = 0;
+/** What Electron was launched with, reused unchanged by a supervised restart. */
+let launchEnv = null;
+/** The Volli Cloud fixture (`launch --cloud`), from the supervisor's environment only. */
+const cloud = spec.cloud ? cloudFixtureFromSupervisorEnv(process.env) : null;
+if (spec.cloud && cloud === null) throw new Error("a cloud instance needs the fixture env");
 let generation = 0;
 let current = { generation: 0, window: null, refs: new Set() };
 let shotCounter = 0;
@@ -483,7 +515,28 @@ async function finalize(reason, { keepScratch = false } = {}) {
   // only this snapshot still ties them to us.
   const before = await owned().catch(() => []);
   let close = null;
-  if (app && electronExit === null) {
+  let trayQuit = null;
+  if (spec.cloud) {
+    // A cloud launch stays resident on an ordinary quit: it quits for real,
+    // the person's way (closeCloudInstance). One that already quit (a
+    // restart's quit, then a failure) keeps that quit's record, proven again
+    // from the exact child handle.
+    if (app && electronExit === null) {
+      const closed = await closeCloudInstance().catch((error) => ({
+        trayQuit: lastTrayQuit,
+        close: { kind: "error", error: error.message },
+      }));
+      trayQuit = closed.trayQuit;
+      close = closed.close;
+    } else if (electronExit !== null) {
+      trayQuit = lastTrayQuit;
+      try {
+        close = observedChildExit(electronChild, electronPid) ?? lastCloudClose;
+      } catch (error) {
+        close = { kind: "error", error: error.message };
+      }
+    }
+  } else if (app && electronExit === null) {
     close = await closeAppBounded(app).catch((error) => ({ kind: "error", error: error.message }));
   }
   let remoteCleanupError = null;
@@ -512,7 +565,7 @@ async function finalize(reason, { keepScratch = false } = {}) {
     spec: { ...spec },
     timings,
     seeded,
-    electron: { pid: electronPid, exit: electronExit, close },
+    electron: { pid: electronPid, exit: electronExit, close, trayQuit },
     keychainViolations: violated,
     remoteCleanupError,
     keychainViolationExit: electronExit?.code === HARNESS_VIOLATION_EXIT_CODE,
@@ -597,8 +650,57 @@ async function boot() {
           VOLLI_HOSTD_DEV_TARBALLS: spec.remoteAcceptance.tarballs,
         }
       : {}),
+    ...(cloud ? cloudElectronEnv(cloud, spec.cloud.subject) : {}),
   };
   mark("launchStart");
+  launchEnv = extraEnv;
+  const { page, live, record } = await startElectron(extraEnv);
+  mark("guardVerified");
+  slog(`guard verified: ${Object.keys(live.trapped).length} methods trapped, pid ${electronPid}`);
+
+  seeded = await seedFixture(
+    page,
+    spec.fixture,
+    L,
+    provider
+      ? {
+          providerId: provider.providerId,
+          modelId: provider.modelId,
+          reasoningLevel: provider.reasoningLevel,
+        }
+      : null,
+  );
+  mark("fixtureSeeded");
+  await waitUntil("the app's agent socket", () => pathExists(L.appSocket), { timeout: 30_000 });
+  mark("ready");
+  const mem = await memory().catch(() => null);
+  server = await serve(L.driveSocket, handle);
+  const ready = {
+    id: spec.id,
+    electronPid,
+    supervisorPid: process.pid,
+    timings,
+    memory: mem,
+    seeded,
+    cloud: spec.cloud ?? null,
+    guard: { trapped: Object.keys(live.trapped), switches: record.chromiumSwitches },
+  };
+  await recordMembers();
+  setInterval(() => void recordMembers(), 10_000).unref();
+  writeFileSync(L.readyFile, `${JSON.stringify(ready, null, 2)}\n`);
+  transcript({ cmd: "launch", timings, memoryMb: mem?.totalMb });
+  armIdle();
+}
+
+/**
+ * Starts Electron on this instance's scratch tree and proves the guard in the
+ * live process; the first launch and every supervised restart come through
+ * here, with the same environment, profile, database and harness directory.
+ */
+async function startElectron(extraEnv) {
+  // Quit evidence belongs to one launch, never the process that replaces it.
+  lastTrayQuit = null;
+  lastCloudClose = null;
   // Re-checked at the call: nothing between the gate above and here may have
   // pointed smoke-kit at a packed app.
   assertLaunchable(spec);
@@ -610,6 +712,7 @@ async function boot() {
     extraArgs: ["--use-mock-keychain", "--password-store=basic"],
   });
   const child = app.process();
+  electronChild = child;
   electronPid = child.pid;
   electronIdentity = await processIdentity(electronPid).catch(() => null);
   await registry.update(spec.id, { electronPid, electron: electronIdentity }).catch(() => {});
@@ -619,6 +722,8 @@ async function boot() {
     electronExit = { code, signal, at: iso() };
     slog(`electron exited code=${code} signal=${signal}`);
     if (code === HARNESS_VIOLATION_EXIT_CODE) slog("KEYCHAIN GUARD FAILED THE RUN (exit 86)");
+    // A violation always ends the run, restart or not.
+    if (restarting && code !== HARNESS_VIOLATION_EXIT_CODE) return;
     if (!stopping) {
       void finalize(
         code === HARNESS_VIOLATION_EXIT_CODE ? "keychain-violation" : "electron-exited",
@@ -651,40 +756,68 @@ async function boot() {
       `harness guard NOT proven active in the live process: ${JSON.stringify({ trapped: live.trapped, recorded: live.recorded, containment: record?.containment ?? null, recordPid: record?.pid, electronPid })}`,
     );
   }
-  mark("guardVerified");
-  slog(`guard verified: ${Object.keys(live.trapped).length} methods trapped, pid ${electronPid}`);
+  return { page, live, record };
+}
 
-  seeded = await seedFixture(
-    page,
-    spec.fixture,
-    L,
-    provider
-      ? {
-          providerId: provider.providerId,
-          modelId: provider.modelId,
-          reasoningLevel: provider.reasoningLevel,
-        }
-      : null,
-  );
-  mark("fixtureSeeded");
-  await waitUntil("the app's agent socket", () => pathExists(L.appSocket), { timeout: 30_000 });
-  mark("ready");
-  const mem = await memory().catch(() => null);
-  server = await serve(L.driveSocket, handle);
-  const ready = {
-    id: spec.id,
-    electronPid,
-    supervisorPid: process.pid,
-    timings,
-    memory: mem,
-    seeded,
-    guard: { trapped: Object.keys(live.trapped), switches: record.chromiumSwitches },
-  };
-  await recordMembers();
-  setInterval(() => void recordMembers(), 10_000).unref();
-  writeFileSync(L.readyFile, `${JSON.stringify(ready, null, 2)}\n`);
-  transcript({ cmd: "launch", timings, memoryMb: mem?.totalMb });
-  armIdle();
+/**
+ * A supervised restart (Volli Cloud journeys): what the app's "Restart to
+ * open Volli Cloud" does, without `app.relaunch()`, which under the harness
+ * would start an Electron nobody drives. Electron closes through its normal
+ * quit path, then this supervisor starts it again on the SAME scratch tree,
+ * profile, database, harness keys and environment, and proves the guard
+ * again. The drive socket, fake provider and evidence carry on.
+ */
+async function restart(reason) {
+  if (!spec.cloud) throw new Error("restart is for Volli Cloud instances (launch --cloud)");
+  if (restarting) throw new Error("a restart is already running");
+  restarting = true;
+  const started = performance.now();
+  try {
+    // Through the Tray's Quit Volli, as a person would (a cloud launch stays
+    // resident on an ordinary quit), proven from the exact child handle.
+    const { trayQuit, close } = await closeCloudInstance();
+    const unclean = cleanQuitProblems(close);
+    if (unclean.length > 0) {
+      throw new Error(
+        `Electron did not quit cleanly before the restart (${unclean.join("; ")}): ${JSON.stringify({ close, trayQuit })}`,
+      );
+    }
+    if (electronExit?.code === HARNESS_VIOLATION_EXIT_CODE) throw new Error("keychain violation");
+    // A clean quit takes its helpers with it. Nothing is signalled here: a
+    // process that outlives the quit fails the restart, and `stop` reaps it
+    // by identity and reports it as a leftover.
+    let outlived = [];
+    try {
+      await waitUntil(
+        "the quit Electron's processes to exit",
+        async () => {
+          outlived = await owned();
+          return outlived.length === 0;
+        },
+        { timeout: 10_000, interval: 200 },
+      );
+    } catch (error) {
+      // An unreadable process table is not proof that every helper exited.
+      throw new Error(
+        `processes outlived the quit before the restart, or could not be inspected: ${JSON.stringify(outlived.map((row) => ({ pid: row.pid, started: row.started })))}`,
+        { cause: error },
+      );
+    }
+    await fs.rm(L.appSocket, { force: true });
+    electronExit = null;
+    mainPage = null;
+    current = { generation: ++generation, window: null, refs: new Set() };
+    const { live } = await startElectron(launchEnv);
+    await waitUntil("the app's agent socket", () => pathExists(L.appSocket), { timeout: 30_000 });
+    restarts += 1;
+    const ms = Math.round(performance.now() - started);
+    slog(`restart ${restarts} (${reason}): pid ${electronPid}, guard re-verified`);
+    transcript({ cmd: "restart", reason, restarts, electronPid, ms, close: close.kind });
+    await recordMembers();
+    return { restarts, electronPid, ms, guard: Object.keys(live.trapped).length };
+  } finally {
+    restarting = false;
+  }
 }
 
 async function handle(cmd, args) {
@@ -738,6 +871,86 @@ async function handle(cmd, args) {
       current = { generation: ++generation, window: "main", refs: new Set() };
       transcript({ cmd: "native-reopen" });
       return snapshot();
+    // ---- Volli Cloud journeys (launch --cloud): setup, doubles and reads ----
+    case "cloud-sign-in-browser": {
+      // The browser's half of the dev sign-in: the app asked shell.openExternal
+      // (recorded, never opened) for the dev issuer's loopback authorize URL.
+      requireCloud();
+      const since = Number(args.since ?? 0);
+      let target = null;
+      await waitUntil(
+        "the app to ask the browser for the dev sign-in",
+        async () => {
+          const jsonl = await fs
+            .readFile(join(L.harnessDir, "external-requests.jsonl"), "utf8")
+            .catch(() => "");
+          target = recordedDevSignIn(jsonl, since);
+          return target !== null;
+        },
+        { timeout: Number(args.timeout ?? 20_000), interval: 200 },
+      );
+      const answer = await completeDevSignIn(target);
+      transcript({
+        cmd: "cloud-sign-in-browser",
+        double: "browser (dev issuer, loopback)",
+        ...answer,
+      });
+      return answer;
+    }
+    case "restart":
+      return restart(String(args.reason ?? "requested"));
+    case "runner-power": {
+      // SIMULATED sleep: main's dual-locked seam (cloud-runner/smoke-power.ts)
+      // emits the real power event; suspend resolves once the asleep report
+      // landed and the runner's transport is held down. No OS sleep happens.
+      requireCloud();
+      const action = args.action;
+      if (action !== "suspend" && action !== "resume")
+        throw new Error("runner-power suspend|resume");
+      const started = performance.now();
+      const result = await app.evaluate(async (_electron, which) => {
+        const seam = globalThis.volliCloudRunnerPower;
+        if (seam === undefined) return { installed: false };
+        await seam[which]();
+        return { installed: true };
+      }, action);
+      if (!result.installed) {
+        throw new Error(
+          "volliCloudRunnerPower is not installed: an unpackaged cloud launch with VOLLI_SMOKE_CLOUD_RUNNER_POWER=1 and a runner",
+        );
+      }
+      const ms = Math.round(performance.now() - started);
+      transcript({ cmd: "runner-power", action, simulated: true, ms });
+      return { action, simulated: true, ms };
+    }
+    case "cloud-checkout-folder": {
+      // SETUP + a double at the OS boundary: a scratch-only Git repo (its one
+      // remote a local bare repo), handed back by the native folder picker,
+      // which no driver can operate. The person still presses the app's own
+      // "Choose the folder…" control.
+      requireCloud();
+      const { dir, origin } = await makeScratchRepo(L.projectsDir, "wake-demo");
+      const real = await fs.realpath(dir);
+      if (!real.startsWith(`${await fs.realpath(L.scratch)}/`)) {
+        throw new Error(`the checkout ${real} is outside this instance's scratch tree`);
+      }
+      await app.evaluate(({ dialog }, folder) => {
+        dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
+      }, resolve(real));
+      transcript({ cmd: "cloud-checkout-folder", double: "native folder picker", path: real });
+      return { path: real, origin };
+    }
+    case "cloud-state": {
+      // Reads only: the launch marker (who signed in, a non-secret row) and
+      // this Mac's runner record for that person.
+      requireCloud();
+      const userId = launchMarkerUser(await readAppState(L.dbPath, CLOUD_LAUNCH_KEY));
+      const runnerId =
+        userId === null
+          ? null
+          : recordedRunnerId(await readAppState(L.dbPath, CLOUD_RUNNER_KEY), userId);
+      return { userId, runnerId, restarts };
+    }
     case "ping":
       return { id: spec.id };
     case "snapshot": {
@@ -772,6 +985,50 @@ async function handle(cmd, args) {
     default:
       throw new Error(`unknown command ${cmd}`);
   }
+}
+
+/**
+ * A Volli Cloud instance's real quit (Tray → Quit Volli), for `stop` and
+ * `restart` only. The helper and the seam it reaches live in
+ * `lib/cloud-acceptance.mjs`; every other instance, the remote journey's
+ * native Quit included, never reaches it.
+ */
+async function cloudTrayQuit() {
+  requireCloud();
+  const result = await quitCloudLaunchFromTray(app, () => electronExit !== null);
+  lastTrayQuit = result;
+  transcript({ cmd: "tray-quit", ...result });
+  return result;
+}
+
+/**
+ * A cloud instance's quit, proven. The child handle and pid are taken BEFORE
+ * the Tray quit, so the proof is about the process this supervisor launched.
+ * An exit is read from that handle (no signal, no Playwright); only a child
+ * still running is closed the bounded way, while Playwright can reach it. A
+ * missing or mismatched handle throws: never read as a clean quit.
+ */
+async function closeCloudInstance() {
+  requireCloud();
+  const child = electronChild;
+  const pid = electronPid;
+  const trayQuit = await cloudTrayQuit();
+  let close = observedChildExit(child, pid);
+  if (close === null) {
+    try {
+      close = await closeAppBounded(app);
+    } catch (error) {
+      // It may have exited while the bounded close looked for it; else the fault stands.
+      close = observedChildExit(child, pid);
+      if (close === null) throw error;
+    }
+  }
+  lastCloudClose = close;
+  return { trayQuit, close };
+}
+
+function requireCloud() {
+  if (!spec.cloud || cloud === null) throw new Error("not a Volli Cloud instance (launch --cloud)");
 }
 
 process.on("SIGTERM", async () => {

@@ -13,6 +13,7 @@ import {
   SESSION_INTERRUPT_FORMAT,
   TERMINAL_JOB_TTL_MS,
   newId,
+  newWatchNotice,
   type Actor,
   type JobKind,
 } from "@volli/shared/cloud";
@@ -30,6 +31,7 @@ import {
   type JobDraft,
 } from "../functions/lib/jobs";
 import schema from "../functions/schema";
+import { enrollUser } from "./preview-fixtures";
 
 const modules = import.meta.glob("../functions/**/*.ts");
 
@@ -89,7 +91,7 @@ async function seedRunner(ctx: Ctx, ownerUserId: string, name: string): Promise<
   return id;
 }
 
-/** A runner serves only an owner whose account is active. */
+/** A runner serves only an owner whose account is active and enrolled for the preview. */
 async function seedUser(ctx: Ctx, userId: string) {
   await ctx.db.insert("users", {
     id: userId,
@@ -104,6 +106,7 @@ async function seedUser(ctx: Ctx, userId: string) {
     createdAt: 0,
     lastSeenAt: 0,
   });
+  await enrollUser(ctx, userId);
 }
 
 async function seedMember(ctx: Ctx, workspaceId: string, userId: string) {
@@ -433,7 +436,7 @@ describe("enqueueJob", () => {
         kind: "session.notice",
         projectId,
         sessionId: newId("session"),
-        payload: {},
+        payload: newWatchNotice(`watch:${newId("session")}:${newId("job")}`),
         createdBy: person(w.ownerUserId),
         onBehalfOf: w.ownerUserId,
       }) as JobDraft;
@@ -537,7 +540,7 @@ describe("enqueueJob", () => {
       kind: "session.notice",
       projectId: w.projectId,
       sessionId,
-      payload: { text: "hi" },
+      payload: newWatchNotice(`watch:${newId("session")}:${newId("job")}`),
       createdBy: person(w.ownerUserId),
       onBehalfOf: w.ownerUserId,
     } as JobDraft;
@@ -598,7 +601,7 @@ describe("enqueueJob", () => {
         kind: "session.notice",
         projectId: w.projectId,
         sessionId,
-        payload: {},
+        payload: newWatchNotice(`watch:${newId("session")}:${newId("job")}`),
         createdBy: person(w.ownerUserId),
         onBehalfOf: w.ownerUserId,
       } as JobDraft),
@@ -1269,7 +1272,7 @@ describe("inbox helpers for in-place edits and settled commands", () => {
         kind: "session.notice",
         projectId: w.projectId,
         sessionId,
-        payload: { text: "the build finished" },
+        payload: newWatchNotice(`watch:${newId("session")}:${newId("job")}`),
         createdBy: person(w.ownerUserId),
         onBehalfOf: w.ownerUserId,
       }) as JobDraft;

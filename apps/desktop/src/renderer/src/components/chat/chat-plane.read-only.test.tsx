@@ -3,6 +3,8 @@
 import { act } from "react";
 import { MotionGlobalConfig } from "motion/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { LOCAL_LAUNCH } from "@volli/shared";
+import { adoptLaunch } from "@renderer/stores/launch";
 import {
   EMPTY_TRANSCRIPT,
   type ChatSessionProjection,
@@ -20,6 +22,7 @@ import {
   EMPTY_PROJECT_SESSION_ROWS,
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
+import { useCloudPlacesStore } from "@renderer/lib/cloud-places";
 import { ChatPlane } from "./chat-plane";
 
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { error: vi.fn() }));
@@ -70,6 +73,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  adoptLaunch(LOCAL_LAUNCH);
   await world?.cleanup();
   world = null;
   MotionGlobalConfig.skipAnimations = false;
@@ -82,7 +86,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-function chatStore() {
+function chatStore(turnActive = false) {
   const projection: ChatSessionProjection = {
     session: {
       id: SESSION,
@@ -97,7 +101,7 @@ function chatStore() {
     signal: null,
     modelSelection: { providerId: "anthropic", modelId: "opus", reasoningLevel: "high" },
     modelTier: null,
-    turnActive: false,
+    turnActive,
     lastActivityAt: 0,
     bornTicketless: true,
     scheduledResume: null,
@@ -125,9 +129,9 @@ function chatStore() {
   return { store, holdMessage };
 }
 
-async function mountPlane(cloud = true) {
+async function mountPlane(cloud = true, turnActive = false) {
   world = hostWorld({ cloud });
-  const { store, holdMessage } = chatStore();
+  const { store, holdMessage } = chatStore(turnActive);
   const container = await world.render(
     <TooltipProvider delayDuration={0}>
       <ChatPlane
@@ -141,6 +145,50 @@ async function mountPlane(cloud = true) {
   );
   return { container, holdMessage };
 }
+
+it("keeps the composer in a cloud launch, with where the Session runs above it", async () => {
+  adoptLaunch({ store: "cloud", userId: "u", backendUrl: "https://example.convex.cloud" });
+  useCloudPlacesStore.setState({
+    sessions: { [SESSION]: { placeRunnerId: "r1", turnActive: true } },
+    runners: {
+      r1: {
+        id: "r1",
+        name: "hp-mac",
+        kind: "mac",
+        status: "stopped",
+        statusChangedAt: 0,
+        statusReason: null,
+        owned: false,
+      },
+    },
+  });
+  try {
+    const { container, holdMessage } = await mountPlane(true, true);
+    // The header's corner names the Place, in place of the host pill.
+    const pill = container.querySelector('[data-slot="cloud-place"]');
+    expect(pill?.textContent).toBe("Paused — Volli is closed on hp-mac");
+    expect(container.querySelector('[data-slot="running-on"]')).toBeNull();
+    // The box stays, so a message can wait for the runner; the line rides above it.
+    expect(container.textContent).not.toContain("Not available yet in cloud");
+    const textarea = message(container);
+    const status = container.querySelector('[data-slot="cloud-composer-status"]');
+    expect(status?.textContent).toBe("Paused — Volli is closed on hp-mac");
+    const dock = container.querySelector('[data-slot="chat-composer-dock"]');
+    expect(
+      status!.compareDocumentPosition(textarea) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(dock?.contains(textarea)).toBe(true);
+    // No window client is connected in this test: a press keeps its words.
+    typeDraft(textarea);
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(holdMessage).not.toHaveBeenCalled();
+    expect(textarea.value).toBe(DRAFT);
+  } finally {
+    act(() => useCloudPlacesStore.setState({ sessions: {}, runners: {} }));
+  }
+});
 
 function message(container: HTMLElement): HTMLTextAreaElement {
   const textarea = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]');

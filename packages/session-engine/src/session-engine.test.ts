@@ -4789,3 +4789,61 @@ describe("listSessions cached projections are frozen (VC-393)", () => {
     expect(reported.length).toBe(beforeRefold + 1);
   });
 });
+
+describe("Session birth owner and atomic machine-state hook", () => {
+  it("stamps the birth owner, inherits it for a child, and rejects changing it on replay without widening command intent", async () => {
+    const { plane } = composition();
+    const request = { ...createRequest(), ownerUserId: "person-a" };
+    const parent = await plane.createSession(request);
+    expect(parent.session.ownerUserId).toBe("person-a");
+    expect(parent.command.intent).not.toHaveProperty("ownerUserId");
+    expect((await plane.createSession(request)).session).toEqual(parent.session);
+    const child = await plane.createSession({
+      ...createRequest("child"),
+      role: "subagent",
+      parentSessionId: parent.session.id,
+    });
+    expect(child.session.ownerUserId).toBe("person-a");
+    expect(child.event.payload).toMatchObject({ session: { ownerUserId: "person-a" } });
+    await expect(
+      plane.createSession({ ...request, ownerUserId: "person-b" }),
+    ).rejects.toBeInstanceOf(SessionEngineCommandConflictError);
+    await expect(
+      plane.createSession({
+        ...createRequest("wrong-child"),
+        role: "subagent",
+        parentSessionId: parent.session.id,
+        ownerUserId: "person-b",
+      }),
+    ).rejects.toBeInstanceOf(SessionEngineConflictError);
+  });
+  it("runs the synchronous birth hook once per create/replay, inside the birth transaction", async () => {
+    const { plane, ledger } = composition();
+    const seen: string[] = [];
+    const request = {
+      ...createRequest(),
+      onCreated: (session: Session) => {
+        seen.push(session.id);
+      },
+    };
+    const created = await plane.createSession(request);
+    await plane.createSession(request);
+    expect(seen).toEqual([created.session.id, created.session.id]);
+    await expect(
+      plane.createSession({
+        ...createRequest("failed"),
+        onCreated: () => {
+          throw new Error("cursor unavailable");
+        },
+      }),
+    ).rejects.toThrow("cursor unavailable");
+    expect(await ledger.transaction((tx) => tx.getCommand("failed"))).toBeNull();
+  });
+  it("refuses a promise-returning machine-state birth hook without committing the birth", async () => {
+    const { plane, ledger } = composition();
+    await expect(
+      plane.createSession({ ...createRequest("async-hook"), onCreated: async () => {} }),
+    ).rejects.toThrow("must be synchronous");
+    expect(await ledger.transaction((tx) => tx.getCommand("async-hook"))).toBeNull();
+  });
+});

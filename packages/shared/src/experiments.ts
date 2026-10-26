@@ -38,6 +38,8 @@ export type ExperimentSnapshot = Record<
     source: "default" | "storage" | "environment";
     /** Absent on older hosts means visible; false hides this setting. */
     visible?: boolean;
+    /** Host-configured stable preview enrollment; absent on older or unconfigured hosts. */
+    enrollment?: boolean;
   }
 >;
 
@@ -109,15 +111,16 @@ export function serializeExperimentUpdate(
   return JSON.stringify({ ...storedExperimentRecord(raw), [id]: enabled });
 }
 
-/** One resolution rule for the host and every projection. Environment always wins. */
+/** One resolution rule: environment wins on dev/canary; stable requires a fresh preview grant. */
 export function resolveExperiments(
   stored: Partial<ExperimentValues>,
   environment: readonly ExperimentId[],
   buildKind: ExperimentBuildKind,
+  previewGranted = false,
 ): ExperimentSnapshot {
-  return Object.fromEntries(
+  const snapshot = Object.fromEntries(
     EXPERIMENTS.map((entry) => {
-      const fromEnvironment = environment.includes(entry.id);
+      const fromEnvironment = buildKind !== "stable" && environment.includes(entry.id);
       const available = (entry.availableOn as readonly ExperimentBuildKind[]).includes(buildKind);
       const saved = available ? stored[entry.id] : undefined;
       return [
@@ -130,4 +133,7 @@ export function resolveExperiments(
       ];
     }),
   ) as ExperimentSnapshot;
+  // A preview invitation grants cloud, never another experimental feature.
+  if (buildKind === "stable") snapshot.cloud.enabled = previewGranted;
+  return snapshot;
 }

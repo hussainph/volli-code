@@ -39,12 +39,11 @@
  * purged. Packing for one Session runs one pass at a time; staging has its
  * own queue, so the drain never waits behind a large upload.
  *
- * Wiring (VC-892 S2, with the cloud product store; recorded on VC-892): the fact drain calls
- * {@link TranscriptSpool.stage} for each batch before its `accept`, and calls
- * {@link TranscriptSpool.packTurn} when a turn's events are accepted, and every
- * {@link TRANSCRIPT_PACK_INTERVAL_MS} inside a long turn. The cloud composition
- * gives Sessions a {@link SpoolTranscriptArtifactStore} in place of the
- * signed-out file store; the backend port is the backend link's.
+ * Production staging: `cloud-store/transcripts.ts` calls `stage` before
+ * accepting a referencing fact, adapting the existing durable file store
+ * without changing its format or flush guarantee. The cloud store's accepted
+ * cursor hook and interval worker call `packTurn`, including on restart and
+ * reconnect. The optional batched-durability spool store is not selected.
  */
 
 import { createHash } from "node:crypto";
@@ -206,6 +205,8 @@ export interface PiLogPacked {
 
 export interface PiLogReport {
   segments: PiLogPacked[];
+  /** Files no longer present on this runner; other files still upload. */
+  missing: string[];
   /** Files now shorter than what was already uploaded: rewritten, not appended. Left alone. */
   truncated: string[];
   /** Files whose next line is longer than one object may be: stopped there, the rest go on. */
@@ -336,17 +337,26 @@ export class TranscriptSpool {
   /** Upload and commit the complete lines each Pi file gained since its committed end. */
   packPiLogs(session: SpoolSession, files: readonly PiLogFile[]): Promise<PiLogReport> {
     return this.#exclusive(`pack:${session.sessionId}`, async () => {
-      const report: PiLogReport = { segments: [], truncated: [], oversized: [] };
-      if (files.length === 0) return report;
-      const ids = files.map((file) => piFileIdOf(file.path));
-      const head = await this.#backend.head({
-        sessionId: session.sessionId,
-        claim: session.claim,
-        piFileIds: ids,
-      });
-      for (const [index, file] of files.entries()) {
-        const piFileId = ids[index]!;
-        await this.#tail(session, file, piFileId, head.piLogs[piFileId] ?? 0, report);
+      const report: PiLogReport = { segments: [], missing: [], truncated: [], oversized: [] };
+      // The backend bounds each head to 64 files. Older closed attachments
+      // remain eligible, so a long-lived Session can exceed that in total.
+      for (let start = 0; start < files.length; start += 64) {
+        const batch = files.slice(start, start + 64);
+        const ids = batch.map((file) => piFileIdOf(file.path));
+        const head = await this.#backend.head({
+          sessionId: session.sessionId,
+          claim: session.claim,
+          piFileIds: ids,
+        });
+        for (const [index, file] of batch.entries()) {
+          const piFileId = ids[index]!;
+          try {
+            await this.#tail(session, file, piFileId, head.piLogs[piFileId] ?? 0, report);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            report.missing.push(piFileId);
+          }
+        }
       }
       return report;
     });

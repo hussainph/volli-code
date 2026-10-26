@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 
 import { describe, expect, test } from "vite-plus/test";
 
-import { api } from "../functions/_generated/api";
+import { PREVIEW_ENROLLMENT_AGREEMENT_VERSION } from "@volli/shared/cloud";
+
+import { api, internal } from "../functions/_generated/api";
 import { connectBackend } from "../fixture/testing";
 
 const backend = connectBackend();
@@ -18,21 +20,32 @@ describe("accounts on the pinned local backend", () => {
   });
 
   test("creates the viewer once from the token's claims, then returns the same one", async () => {
+    // VC-936: the preview admits only allowlisted accounts, by verified email.
+    await backend.admin(internal.previewAccess.set, {
+      kind: "email",
+      value: "dana@example.com",
+      enabled: true,
+    });
     const client = backend.client(subject(), {
       claims: { email: "Dana@Example.com", email_verified: true, name: "Dana" },
     });
     await expect(client.query(api.accounts.viewer, {})).resolves.toBeNull();
 
-    const first = await client.mutation(api.accounts.ensureViewer, {});
+    const first = await client.mutation(api.accounts.ensureViewer, {
+      acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+    });
     expect(first).toMatchObject({
       displayName: "Dana",
       primaryEmail: "dana@example.com",
+      previewAccess: "granted",
+      previewAgreementAccepted: true,
       created: true,
     });
     expect(first.userId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
 
+    // A refresh without the version never infers acceptance: the receipt stands.
     await expect(client.mutation(api.accounts.ensureViewer, {})).resolves.toEqual({
       ...first,
       created: false,
@@ -43,6 +56,8 @@ describe("accounts on the pinned local backend", () => {
       primaryEmail: "dana@example.com",
       status: "active",
       purgeAfter: null,
+      previewAccess: "granted",
+      previewAgreementAccepted: true,
     });
   });
 
@@ -63,5 +78,8 @@ describe("accounts on the pinned local backend", () => {
     );
     expect(a!.userId).not.toBe(b!.userId);
     expect(a!.displayName).toBe("Volli user");
+    // Neither address is allowlisted: both accounts exist, the preview stays closed.
+    expect(a!.previewAccess).toBe("waitlisted");
+    expect(b!.previewAccess).toBe("waitlisted");
   });
 });

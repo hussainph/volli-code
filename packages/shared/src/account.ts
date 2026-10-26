@@ -8,6 +8,14 @@
  * the `cloud` experiment on; with it off every `account.*` entry answers
  * unavailable.
  */
+import {
+  GITHUB_ACCOUNT_TYPES,
+  GITHUB_FLOW_PURPOSES,
+  GITHUB_REPOSITORY_SELECTIONS,
+  type GithubAccountType,
+  type GithubFlowPurpose,
+  type GithubRepositorySelection,
+} from "./cloud/github";
 
 /** The sign-in buttons: one per upstream identity provider. */
 export const ACCOUNT_CONNECTIONS = ["github", "google"] as const;
@@ -42,8 +50,8 @@ export type AccountState = (typeof ACCOUNT_STATES)[number];
  * Whether the backend has the account. `synced`: it answered for this
  * sign-in. `unreachable`: the last call failed in transit (offline); the
  * sign-in is kept. `refused`: the backend did not accept this sign-in (a
- * configuration or sign-in problem: signing out and in again is the
- * recovery). `none`: this build names no backend.
+ * configuration or sign-in problem, or a preview waitlist outcome;
+ * `failure` carries the reason). `none`: this build names no backend.
  */
 export const ACCOUNT_BACKEND_STATES = ["synced", "unreachable", "refused", "none"] as const;
 export type AccountBackendState = (typeof ACCOUNT_BACKEND_STATES)[number];
@@ -112,20 +120,111 @@ export const ACCOUNT_TOKEN_RETRY_MS = 5_000;
 /** Bound on a token the router passes through: a JWT, never anything bigger. */
 export const ACCOUNT_TOKEN_MAX = 16_384;
 
+/** Deployment location, independent of the legacy Convex store discriminator. */
+export type CloudLaunchDeployment = "cloud" | "local";
+
 /**
  * Which product store this launch of the app uses (`cloud.launch`, VC-889),
  * chosen once by main before the window opens and fixed for the life of the
- * process: `local` is this Mac's own database, exactly as without Volli
- * Cloud; `cloud` is the signed-in person's Workspaces on the backend at
- * `backendUrl`. Signing in or out relaunches the app into the other one.
- * Never a secret: a user id and a URL.
+ * process: `local` is the frozen SQLite store; the legacy `cloud` store
+ * discriminator selects Convex, while `deployment` says hosted or embedded.
+ * Absent deployment means hosted for older bridges. `siteUrl` is explicit,
+ * never inferred from backendUrl. Signing in or out relaunches, never hot-swaps.
+ * The preview composes only hosted Convex; the embedded supervisor and local
+ * token issuer must be wired before selecting a local deployment.
+ * Never a secret: an identity and public origins.
  */
 export type CloudLaunch =
   | { readonly store: "local" }
-  | { readonly store: "cloud"; readonly userId: string; readonly backendUrl: string };
+  | {
+      /** Legacy wire discriminator for the Convex store, not the deployment's location. */
+      readonly store: "cloud";
+      readonly userId: string;
+      readonly backendUrl: string;
+      /** Additive for older desktop bridges. New launches always name both fields. */
+      readonly deployment?: CloudLaunchDeployment;
+      readonly siteUrl?: string | null;
+    };
 
 /** The largest last-seen board snapshot the window may keep (VC-889, D3), in characters. */
 export const CLOUD_SNAPSHOT_TEXT_MAX = 16 * 1024 * 1024;
 
 /** The launch every flag-off, signed-out or unconfigured app makes. */
 export const LOCAL_LAUNCH: CloudLaunch = Object.freeze({ store: "local" });
+
+// ── GitHub (VC-897) ────────────────────────────────────────────────────────
+//
+// The person's GitHub connection and the Volli GitHub App's installations, as
+// Settings → Account shows them: the wire types of the `account.github*`
+// entries. Desktop main reads them from the backend (`convex/functions/github.ts`)
+// with the account's access token and follows a browser round trip by polling
+// its flow; the window gets this snapshot, never a token.
+
+/**
+ * - `unavailable`: signed out, or this deployment has no GitHub App: no section.
+ * - `loading`: reading the connection.
+ * - `ready`: the connection is known (`connection` may still be `null`).
+ * - `failed`: the read failed; `failure` says why, and a new subscription retries.
+ */
+export const ACCOUNT_GITHUB_STATES = ["unavailable", "loading", "ready", "failed"] as const;
+export type AccountGithubState = (typeof ACCOUNT_GITHUB_STATES)[number];
+
+/** What a browser round trip is for: connecting GitHub, or installing the App on an account. */
+export const ACCOUNT_GITHUB_FLOWS = GITHUB_FLOW_PURPOSES;
+export type AccountGithubFlow = GithubFlowPurpose;
+
+/** A connection that exists; a revoked one is shown as none. */
+export const ACCOUNT_GITHUB_CONNECTION_STATUSES = ["active", "needs_reconnect"] as const;
+export type AccountGithubConnectionStatus = (typeof ACCOUNT_GITHUB_CONNECTION_STATUSES)[number];
+
+/** The backend's vocabularies (`./cloud/github`), as the window's snapshot names them. */
+export const ACCOUNT_GITHUB_ACCOUNT_TYPES = GITHUB_ACCOUNT_TYPES;
+export const ACCOUNT_GITHUB_REPOSITORY_SELECTIONS = GITHUB_REPOSITORY_SELECTIONS;
+
+/** The most installations one snapshot carries (the router validates against it). */
+export const ACCOUNT_GITHUB_INSTALLATIONS_MAX = 500;
+
+export interface AccountGithubConnection {
+  readonly status: AccountGithubConnectionStatus;
+  readonly login: string;
+  readonly name: string | null;
+}
+
+/** One GitHub account the App is installed on. */
+export interface AccountGithubInstallation {
+  readonly installationId: string;
+  readonly accountLogin: string;
+  readonly accountType: GithubAccountType;
+  readonly repositorySelection: GithubRepositorySelection;
+  readonly suspended: boolean;
+  /** Where its repository selection is changed on GitHub (http(s) only). */
+  readonly configureUrl: string;
+}
+
+export interface AccountGithubSnapshot {
+  readonly state: AccountGithubState;
+  /** `null`: not connected (or not known yet). */
+  readonly connection: AccountGithubConnection | null;
+  /** `null` until read: not connected, still loading, or the read failed. */
+  readonly installations: readonly AccountGithubInstallation[] | null;
+  /** The browser round trip being waited for; `null` when none is. */
+  readonly waiting: AccountGithubFlow | null;
+  /**
+   * The last install ended without an installation: an organization member
+   * asked an owner to approve it, or the person cancelled on GitHub. The
+   * backend cannot tell the two apart, nor which organization was asked.
+   */
+  readonly requested: boolean;
+  /** One sentence about the last thing that failed; `null` when nothing did. */
+  readonly failure: string | null;
+}
+
+/** The snapshot while signed out, or before anything has been read. */
+export const UNAVAILABLE_ACCOUNT_GITHUB: AccountGithubSnapshot = Object.freeze({
+  state: "unavailable",
+  connection: null,
+  installations: null,
+  waiting: null,
+  requested: false,
+  failure: null,
+});

@@ -67,7 +67,7 @@ export interface LegacySessionPorts extends Omit<SessionRouterContext, "handlers
   ) => ExperimentSnapshot | Promise<ExperimentSnapshot>;
   createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
   attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
-  /** The socket's Session reads, Workspace-scoped (VC-663, D4): host-core's `executeInWorkspace`. */
+  /** The socket's Session reads, Workspace-scoped (VC-663, D4): host-core's map entry for each. */
   readSessionVerb?: (
     verb: SessionReadVerb,
     workspaceId: string,
@@ -286,6 +286,17 @@ export function sessionHandlersFrom(
     "cloud.reportUnsavedWrites": remote("cloud.reportUnsavedWrites"),
     "cloud.saveSnapshot": remote("cloud.saveSnapshot"),
     "cloud.readSnapshot": remote("cloud.readSnapshot"),
+    "account.githubSubscribe": remote("account.githubSubscribe"),
+    "account.githubConnect": remote("account.githubConnect"),
+    "account.githubInstall": remote("account.githubInstall"),
+    "account.githubCancel": remote("account.githubCancel"),
+    "account.githubDisconnect": remote("account.githubDisconnect"),
+    "runners.thisMac": remote("runners.thisMac"),
+    "runners.subscribeThisMac": remote("runners.subscribeThisMac"),
+    "runners.addThisMac": remote("runners.addThisMac"),
+    "runners.removeThisMac": remote("runners.removeThisMac"),
+    "checkouts.status": remote("checkouts.status"),
+    "checkouts.chooseFolder": remote("checkouts.chooseFolder"),
   };
   return {
     ...handlers,

@@ -28,6 +28,7 @@ import {
 } from "./lib/boot";
 import { installRendererLogForwarding } from "./lib/renderer-log";
 import { bindRemoteSessionsWhileCloud } from "@renderer/lib/remote-sessions";
+import { bindCloudSessions } from "@renderer/lib/cloud-sessions";
 import { toastError } from "./lib/toast";
 import { useBoardStore } from "./stores/board";
 import { useChatSessionsStore } from "./stores/chat-sessions";
@@ -105,14 +106,18 @@ async function main() {
   // remote host's projects over the board protocol (VC-711); with the flag
   // off this reads the flag and does nothing else.
   const cloudLaunch = launchStore() === "cloud";
-  if (cloudLaunch) void startCloudBoard();
-  else void startBoardProtocolIfEnabled();
+  if (cloudLaunch) {
+    const stopSessions = bindCloudSessions();
+    window.addEventListener("pagehide", stopSessions, { once: true });
+    void startCloudBoard();
+  } else void startBoardProtocolIfEnabled();
 
   // Backward-move interrupt announcements (issue #78, CONCEPT #20): automation
   // only ever de-escalates, and never silently — the move that Esc'd live
   // agent sessions toasts where the mover is looking, with a jump-to-ticket
   // action. Fired for BOTH move choke points (renderer drag and socket/CLI).
   window.api.sessions.onInterrupted((event) => {
+    if (cloudLaunch) return;
     const model = interruptToastModel(
       event,
       useBoardStore.getState().ticketsByProject,
@@ -142,6 +147,7 @@ async function main() {
   // and ticket, and its action is the only door into the new session's tab
   // (the same adopt + open pair the sidebar's chat rows make).
   window.api.sessions.onStarted((notice) => {
+    if (cloudLaunch) return;
     const model = sessionStartToastModel(notice);
     const target = model.target;
     toast(model.message, {
@@ -227,24 +233,28 @@ async function main() {
   // before priming so a window opened mid-countdown cannot miss a replacement
   // between its read and listener registration. Every window receives the same
   // whole snapshot; Cancel travels back to main with the exact arrival id.
-  window.api.automations.onPendingArmedRunsChanged(receivePendingArmedRuns);
-  window.api.automations.onPendingArmedRunSettled(announcePendingArmedRunSettlement);
-  window.api.automations
-    .pendingArmedRuns()
-    .then((pending) => {
-      if (pending.ok) {
-        receivePendingArmedRuns(pending.pending);
-        // A failed expiry can outlive every renderer and the app process. Its
-        // retained command id stays in main; a newly opened window restores
-        // the retry action from this renderer-safe projection.
-        for (const failure of pending.failures) {
-          announcePendingArmedRunSettlement({ kind: "failed", ...failure });
-        }
-      } else toastError(`Couldn't load pending automations: ${pending.error}`);
-    })
-    .catch((error: unknown) => {
-      toastError(`Couldn't load pending automations: ${errorMessage(error)}`);
-    });
+  // Cloud Automations have no runner executor yet. Do not read or subscribe
+  // to this Mac's frozen countdowns in a cloud window.
+  if (!cloudLaunch) {
+    window.api.automations.onPendingArmedRunsChanged(receivePendingArmedRuns);
+    window.api.automations.onPendingArmedRunSettled(announcePendingArmedRunSettlement);
+    window.api.automations
+      .pendingArmedRuns()
+      .then((pending) => {
+        if (pending.ok) {
+          receivePendingArmedRuns(pending.pending);
+          // A failed expiry can outlive every renderer and the app process. Its
+          // retained command id stays in main; a newly opened window restores
+          // the retry action from this renderer-safe projection.
+          for (const failure of pending.failures) {
+            announcePendingArmedRunSettlement({ kind: "failed", ...failure });
+          }
+        } else toastError(`Couldn't load pending automations: ${pending.error}`);
+      })
+      .catch((error: unknown) => {
+        toastError(`Couldn't load pending automations: ${errorMessage(error)}`);
+      });
+  }
 
   window.api.data.onChanged((event) => {
     // Forward the payload's scope (affected ticket/project, or untargeted) so

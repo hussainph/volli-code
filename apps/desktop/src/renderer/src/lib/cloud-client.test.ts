@@ -165,8 +165,8 @@ function harness(options: { firstSnapshot?: AccountSnapshot; online?: boolean } 
       ConvexReactClient: FakeConvexClient as never,
       api: {} as never,
     }),
+    tokens: { accessToken: async () => tokens.shift() ?? { kind: "signed-out" } },
     account: {
-      accessToken: async () => tokens.shift() ?? { kind: "signed-out" },
       subscribe: (handlers) => {
         onData = handlers.onData;
         handlers.onError(new Error("ignored"));
@@ -220,6 +220,19 @@ const signedOut = (failure: string | null): AccountSnapshot => ({
 });
 
 describe("the cloud launch's client", () => {
+  it("uses an injected local token source without observing a hosted account", async () => {
+    const h = harness();
+    delete h.deps.account;
+    h.tokens.push({ kind: "token", token: "local-jwt", expiresAt: 100 });
+    const launch = { ...LAUNCH, deployment: "local" as const, siteUrl: "http://127.0.0.1:3211" };
+    await startCloudClient(launch, h.deps);
+    const client = FakeConvexClient.made[0]!;
+    expect(await client.fetchToken!({ forceRefreshToken: false })).toBe("local-jwt");
+    expect(client.cleared).toBe(0);
+    closeCloudClient();
+    expect(client.closed).toBe(1);
+    await expect(startCloudClient(launch)).rejects.toThrow("local token source");
+  });
   beforeEach(() => {
     FakeConvexClient.made = [];
   });
@@ -304,7 +317,7 @@ describe("the cloud launch's client", () => {
   it("wakes a waiting token fetch for a real account change, not a repeated snapshot", async () => {
     const h = harness();
     let asks = 0;
-    h.deps.account.accessToken = async () => {
+    h.deps.tokens.accessToken = async () => {
       asks += 1;
       return { kind: "unavailable", retryAfterMs: 60_000 };
     };

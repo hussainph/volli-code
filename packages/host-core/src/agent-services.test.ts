@@ -150,8 +150,9 @@ it("owns no shutdown step for the verb door: the socket lifecycle drains request
       handlers: sealTestHandlers({ "ticket.move": vi.fn() }),
     } as unknown as HostAgentCommandOptions,
   );
-  // The WebSocket's Session reads (VC-663, D4) are the same verbs, Workspace-scoped: still no close.
-  expect(Object.keys(commands)).toEqual(["execute", "executeInWorkspace"]);
+  // The WebSocket's Session reads (VC-663, D4) are map entries this service
+  // serves (VC-894), not a method of its own: still no close.
+  expect(Object.keys(commands)).toEqual(["execute"]);
 });
 
 it("publishes harness notices from the verb door on the host bus", () => {
