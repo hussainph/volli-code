@@ -48,6 +48,7 @@ import {
   tabStrip,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
+import { selectStripTab } from "./lib/strip-tabs.mjs";
 
 const PROJECT = { id: "browser-headless-smoke-project", name: "Headless Smoke", prefix: "HB" };
 
@@ -196,7 +197,7 @@ async function ungroupByDrag(page, paneTab) {
  * its composer, the only place a headless tab is reached from — is on screen.
  */
 async function showOwningChat(page, sessionId) {
-  await chatStripTab(page, sessionId).click();
+  await selectStripTab(page, chatStripTab(page, sessionId));
   await waitUntil("the chat's Island", async () =>
     (await tabsCluster(page).count()) === 1 ? true : null,
   );
@@ -321,7 +322,7 @@ async function main() {
     "the person's strip tab",
     async () => (await browserStripTabs(page).count()) === 1,
   );
-  await browserStripTabs(page).first().click();
+  await selectStripTab(page, browserStripTabs(page).first());
   await waitUntil(
     "the person's plane",
     async () => (await attachedViews(app)).includes(personUrl),
@@ -497,7 +498,7 @@ async function main() {
     4,
     "Show tab selects without grouping; a tab-edge drop groups both browsers; Show tab then shows that group; hiding keeps ownership",
     async () => {
-      await chatStripTab(page, sessionId).click();
+      await selectStripTab(page, chatStripTab(page, sessionId));
       const groupId = await activeGroup(page).getAttribute("data-group-id");
       // Close and Undo kept the tab in its pane beside the chat: Show tab shows
       // that group, with the browser's pane in focus.

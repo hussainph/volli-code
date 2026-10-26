@@ -51,6 +51,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { createTicketViaBridge } from "./lib/agent-kit.mjs";
+import { selectStripTab } from "./lib/strip-tabs.mjs";
 import {
   assertProfileIsolated,
   closeAppBounded,
@@ -587,8 +588,10 @@ async function main() {
         ).catch(() => null);
         const fullBox = fullWidth === null ? null : await paneBox(page, fullWidth[0].paneId);
 
-        // The chip's terminal segment brings the group back exactly.
-        await topTab(page, terminal).click();
+        // The chip's terminal segment brings the group back exactly. The chip is
+        // summarized while its group is off screen, so the terminal's pane is
+        // folded into +n and is chosen from the chip's menu, as a person would.
+        await selectStripTab(page, topTab(page, terminal));
         await waitUntil(
           "the group, its panes and its focus to return",
           async () => {
@@ -1111,7 +1114,7 @@ async function main() {
       });
       // The Board is a group tab: selecting it focuses the first pane, and
       // must leave the second pane's live terminal visible in the same group.
-      await topTab(page, "Board").click();
+      await selectStripTab(page, topTab(page, "Board"));
       const primaryTookFocus = await waitUntil(
         "the Board's pane to take focus from its tab",
         async () => {
