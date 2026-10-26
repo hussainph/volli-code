@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { configuredSiteUrl, exactOrigin, packagedCloudConfig } from "./deployment-config";
+import { exactOrigin, packagedCloudConfig } from "./deployment-config";
 
 const env = {
   VOLLI_BUILD_WORKOS_CLIENT_ID: " client_public ",
@@ -41,27 +41,5 @@ describe("public packaged deployment inputs", () => {
     expect(exactOrigin("http://127.0.0.1:3210", true)).toBe("http://127.0.0.1:3210");
     expect(exactOrigin("http://localhost:3210/", true)).toBe("http://localhost:3210");
     expect(() => exactOrigin("http://other.test", true)).toThrow();
-  });
-  it("never infers HTTP actions from the backend hostname or reads packaged runtime redirects", () => {
-    const build = packagedCloudConfig(env);
-    expect(
-      configuredSiteUrl({
-        packaged: true,
-        build,
-        env: { VOLLI_CONVEX_SITE_URL: "https://evil.test" },
-      }),
-    ).toBe("https://actions.example.net");
-    expect(configuredSiteUrl({ packaged: true, build: null, env })).toBeNull();
-    expect(configuredSiteUrl({ packaged: false, build, env: {} })).toBeNull();
-    expect(
-      configuredSiteUrl({
-        packaged: false,
-        build: null,
-        env: { VOLLI_CONVEX_SITE_URL: " http://127.0.0.1:3211/ " },
-      }),
-    ).toBe("http://127.0.0.1:3211");
-    expect(
-      configuredSiteUrl({ packaged: false, build: null, env: { VOLLI_CONVEX_SITE_URL: "bad" } }),
-    ).toBeNull();
   });
 });

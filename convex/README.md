@@ -412,10 +412,17 @@ target that has `VOLLI_TEST_JWKS` set. Signing uploads already works against
 any S3-compatible store: a deployment points at its bucket with the
 `VOLLI_S3_*` variables (`functions/lib/objectStore.ts`).
 
+The order to do that account work in — the Convex team and its three
+deployments, the per-deployment variables, WorkOS, the private bucket with its
+lifecycle rules and CORS, the desktop build inputs, and what is still missing
+— is [`docs/runbooks/cloud-deploy.md`](../docs/runbooks/cloud-deploy.md).
+
 The desktop reads transcript packs and spilled bodies directly with
 `sessionTranscript.presignGet`, after the backend checks Session visibility.
-Build the desktop with `VOLLI_CLOUD_STORAGE_ORIGIN=https://<bucket-origin>`
-(the exact public HTTPS origin, no credentials, path or wildcard) to allow
-these GETs in its CSP. The bucket's CORS must also allow the desktop origin
-and `GET`; without storage configuration older packed bodies fail visibly,
+Name the bucket's S3 origin at packaging time — `VOLLI_BUILD_STORAGE_ORIGIN` for
+a packaged build — or, for an unpackaged build, in its runtime environment:
+`VOLLI_CLOUD_STORAGE_ORIGIN`, which the dev server also reads. Either way it is
+the exact public HTTPS origin, with no credentials, path or wildcard, and it is
+what allows these GETs in the CSP. The bucket's CORS must also allow the desktop
+origin and `GET`; without storage configuration older packed bodies fail visibly,
 while staged inline bodies and live chunks require no object-store access.

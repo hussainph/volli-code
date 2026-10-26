@@ -106,6 +106,7 @@ describe.skipIf(!ready)("this Mac as a runner against the pinned local backend",
     let row: string | undefined;
     const power = new EventEmitter() as EventEmitter & PowerPort;
     const runner = createDesktopMacRunner({
+      deployment: "cloud",
       userId,
       backendUrl: url!,
       siteUrl: siteUrl!,

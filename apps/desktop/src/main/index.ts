@@ -207,7 +207,6 @@ import {
   createRelaunchController,
   launchMarkerStore,
 } from "./cloud-launch";
-import { configuredSiteUrl } from "./deployment-config";
 import { launchConnectSources, withRendererConnections } from "./renderer-csp";
 import { engineSignInLinks, remoteSignInsPort, signInPreflight } from "./host-sign-ins/port";
 import {
@@ -889,11 +888,6 @@ const appStartup = app.whenReady().then(async () => {
     packaged: app.isPackaged,
     build: buildCloudConfig,
   });
-  const siteUrl = configuredSiteUrl({
-    env: process.env,
-    packaged: app.isPackaged,
-    build: buildCloudConfig,
-  });
   const enrollmentAvailable =
     buildKind === "stable" && accountConfig.provider !== null && accountConfig.backendUrl !== null;
   const accountEnrollmentEnabled = () => enrollmentAvailable || isExperimentEnabled("cloud");
@@ -1063,15 +1057,10 @@ const appStartup = app.whenReady().then(async () => {
     cloudFlag: isExperimentEnabled("cloud"),
     readMarker: () => launchMarker.read(),
     backendUrl: accountConfig.backendUrl,
-    siteUrl,
+    siteUrl: accountConfig.siteUrl,
     signInConfigured: accountConfig.provider !== null,
   });
-  rendererSources = launchConnectSources(
-    launch,
-    app.isPackaged
-      ? (buildCloudConfig?.storageOrigin ?? null)
-      : process.env["VOLLI_CLOUD_STORAGE_ORIGIN"] || null,
-  );
+  rendererSources = launchConnectSources(launch, accountConfig.storageOrigin);
   // Signing in or out restarts into the other store, through every quit gate.
   const relaunch = createRelaunchController(
     { quit: () => app.quit(), relaunch: () => app.relaunch() },

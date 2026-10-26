@@ -120,6 +120,9 @@ export const ACCOUNT_TOKEN_RETRY_MS = 5_000;
 /** Bound on a token the router passes through: a JWT, never anything bigger. */
 export const ACCOUNT_TOKEN_MAX = 16_384;
 
+/** Deployment location, independent of the legacy Convex store discriminator. */
+export type CloudLaunchDeployment = "cloud" | "local";
+
 /**
  * Which product store this launch of the app uses (`cloud.launch`, VC-889),
  * chosen once by main before the window opens and fixed for the life of the
@@ -139,7 +142,7 @@ export type CloudLaunch =
       readonly userId: string;
       readonly backendUrl: string;
       /** Additive for older desktop bridges. New launches always name both fields. */
-      readonly deployment?: "cloud" | "local";
+      readonly deployment?: CloudLaunchDeployment;
       readonly siteUrl?: string | null;
     };
 

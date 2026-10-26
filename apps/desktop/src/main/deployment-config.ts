@@ -48,19 +48,3 @@ export function packagedCloudConfig(
     storageOrigin: exactOrigin(storage),
   };
 }
-
-/** The HTTP actions URL is always explicit, including for a local fixture. No hostname inference. */
-export function configuredSiteUrl(input: {
-  packaged: boolean;
-  build: PackagedCloudConfig | null;
-  env: Readonly<Record<string, string | undefined>>;
-}): string | null {
-  if (input.packaged) return input.build?.siteUrl ?? null;
-  const raw = input.env["VOLLI_CONVEX_SITE_URL"]?.trim();
-  if (!raw) return null;
-  try {
-    return exactOrigin(raw, true);
-  } catch {
-    return null;
-  }
-}

@@ -330,6 +330,7 @@ describe.skipIf(!fixture)(
       })!;
       let row: string | undefined;
       const macA = createDesktopMacRunner({
+        deployment: "cloud",
         userId,
         backendUrl: url!,
         siteUrl: siteUrl!,

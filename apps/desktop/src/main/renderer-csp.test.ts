@@ -28,7 +28,6 @@ describe("the main window's connections (VC-889)", () => {
     expect(sources).toEqual([
       "https://api.example.com",
       "wss://api.example.com",
-      "https://actions.example.net",
       "https://storage.example.org",
     ]);
     const response = await withRendererConnections(
@@ -42,7 +41,7 @@ describe("the main window's connections (VC-889)", () => {
     const csp = cspOf(await response.text());
     expect(csp.match(/connect-src/gu)).toHaveLength(1);
     expect(csp).toContain(
-      "connect-src 'self' https://api.example.com wss://api.example.com https://actions.example.net https://storage.example.org;",
+      "connect-src 'self' https://api.example.com wss://api.example.com https://storage.example.org;",
     );
     expect(csp).not.toContain("127.0.0.1");
     expect(csp).toContain("form-action 'none'");
@@ -60,22 +59,20 @@ describe("the main window's connections (VC-889)", () => {
   });
   it("permits only the configured exact HTTPS transcript-store origin", () => {
     const sources = rendererConnectSources({
-      serve: false,
+      serve: true,
       env: { VOLLI_CLOUD_STORAGE_ORIGIN: "https://history.example.com/" },
     });
-    expect(sources).toEqual(["https://history.example.com"]);
-    expect(cspOf(withConnectSources(page, sources))).toContain(
-      "connect-src 'self' https://history.example.com;",
-    );
+    expect(sources).toEqual([...LOOPBACK_CONNECT_SOURCES, "https://history.example.com"]);
+    expect(cspOf(withConnectSources(page, sources))).toContain("https://history.example.com;");
     expect(
       rendererConnectSources({
-        serve: true,
+        serve: false,
         env: { VOLLI_CLOUD_STORAGE_ORIGIN: "https://history.example.com" },
       }),
-    ).toEqual([...LOOPBACK_CONNECT_SOURCES, "https://history.example.com"]);
-    expect(
-      rendererConnectSources({ serve: false, env: { VOLLI_CLOUD_STORAGE_ORIGIN: "" } }),
     ).toEqual([]);
+    expect(
+      rendererConnectSources({ serve: true, env: { VOLLI_CLOUD_STORAGE_ORIGIN: "" } }),
+    ).toEqual(LOOPBACK_CONNECT_SOURCES);
     for (const value of [
       "http://bucket.example.com",
       "https://*.example.com",
@@ -88,7 +85,7 @@ describe("the main window's connections (VC-889)", () => {
       "not a URL",
     ]) {
       expect(() =>
-        rendererConnectSources({ serve: false, env: { VOLLI_CLOUD_STORAGE_ORIGIN: value } }),
+        rendererConnectSources({ serve: true, env: { VOLLI_CLOUD_STORAGE_ORIGIN: value } }),
       ).toThrow();
     }
   });

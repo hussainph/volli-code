@@ -11,7 +11,13 @@ describe("the account's configuration", () => {
         packaged: true,
         env: { VOLLI_WORKOS_CLIENT_ID: "client_x", VOLLI_CONVEX_URL: "https://a.convex.cloud" },
       }),
-    ).toEqual({ provider: null, backendUrl: null, problem: null });
+    ).toEqual({
+      provider: null,
+      backendUrl: null,
+      siteUrl: null,
+      storageOrigin: null,
+      problem: null,
+    });
   });
 
   it("uses only compiled public config in a packaged build", () => {
@@ -24,6 +30,8 @@ describe("the account's configuration", () => {
           VOLLI_ACCOUNT_PROVIDER: "dev",
           VOLLI_CONVEX_TEST_PRIVATE_KEY: "PEM",
           VOLLI_CONVEX_URL: "https://evil.test",
+          VOLLI_CONVEX_SITE_URL: "https://evil.test",
+          VOLLI_CLOUD_STORAGE_ORIGIN: "https://evil.test",
         },
         build: {
           workosClientId: "client_release",
@@ -35,6 +43,8 @@ describe("the account's configuration", () => {
     ).toEqual({
       provider: { kind: "workos", clientId: "client_release", apiBase: null },
       backendUrl: "https://backend.test",
+      siteUrl: "https://actions.test",
+      storageOrigin: "https://storage.test",
       problem: null,
     });
   });
@@ -43,6 +53,8 @@ describe("the account's configuration", () => {
     expect(resolveAccountConfig({ ...dev, env: {} })).toEqual({
       provider: null,
       backendUrl: null,
+      siteUrl: null,
+      storageOrigin: null,
       problem: null,
     });
   });
@@ -60,8 +72,45 @@ describe("the account's configuration", () => {
     ).toEqual({
       provider: { kind: "workos", clientId: "client_x", apiBase: "https://auth.example.test" },
       backendUrl: "http://127.0.0.1:3210",
+      siteUrl: null,
+      storageOrigin: null,
       problem: null,
     });
+  });
+
+  it("keeps all origins together, rejects bad dev settings without throwing, and never infers the site", () => {
+    expect(
+      resolveAccountConfig({
+        ...dev,
+        env: {
+          VOLLI_CONVEX_URL: "https://custom.example/",
+          VOLLI_CONVEX_SITE_URL: " http://127.0.0.1:3211/ ",
+          VOLLI_CLOUD_STORAGE_ORIGIN: "https://store.example/",
+        },
+      }),
+    ).toMatchObject({
+      backendUrl: "https://custom.example",
+      siteUrl: "http://127.0.0.1:3211",
+      storageOrigin: "https://store.example",
+      problem: null,
+    });
+    for (const name of [
+      "VOLLI_CONVEX_URL",
+      "VOLLI_CONVEX_SITE_URL",
+      "VOLLI_CLOUD_STORAGE_ORIGIN",
+    ]) {
+      expect(
+        resolveAccountConfig({ ...dev, env: { [name]: "http://nonloopback.example/path" } }),
+      ).toMatchObject({
+        backendUrl: null,
+        siteUrl: null,
+        storageOrigin: null,
+        problem: `${name} is not an exact permitted origin`,
+      });
+    }
+    expect(
+      resolveAccountConfig({ ...dev, env: { VOLLI_CONVEX_URL: "https://a.convex.cloud" } }).siteUrl,
+    ).toBeNull();
   });
 
   it("reads the dev issuer, which needs the fixture's key", () => {
@@ -79,8 +128,27 @@ describe("the account's configuration", () => {
     expect(resolveAccountConfig({ ...dev, env: { VOLLI_ACCOUNT_PROVIDER: "dev" } })).toEqual({
       provider: null,
       backendUrl: null,
+      siteUrl: null,
+      storageOrigin: null,
       problem: "VOLLI_ACCOUNT_PROVIDER=dev needs VOLLI_CONVEX_TEST_PRIVATE_KEY",
     });
+  });
+
+  it("preserves unpackaged provider API overrides used by transport fixtures", () => {
+    for (const base of [undefined, "http://127.0.0.1:3212", "ftp://invalid"]) {
+      const config = resolveAccountConfig({
+        ...dev,
+        env: { VOLLI_WORKOS_CLIENT_ID: "c", VOLLI_WORKOS_API_BASE: base },
+      });
+      expect(config.provider).toEqual({
+        kind: "workos",
+        clientId: "c",
+        apiBase: base === "http://127.0.0.1:3212" ? base : null,
+      });
+      expect(config.problem).toBe(
+        base === "ftp://invalid" ? "VOLLI_WORKOS_API_BASE is not a URL" : null,
+      );
+    }
   });
 
   it("names every unusable value", () => {
@@ -92,7 +160,10 @@ describe("the account's configuration", () => {
     ).toEqual({
       provider: null,
       backendUrl: null,
-      problem: 'VOLLI_CONVEX_URL is not a URL; VOLLI_ACCOUNT_PROVIDER must be "dev" or "workos"',
+      siteUrl: null,
+      storageOrigin: null,
+      problem:
+        'VOLLI_CONVEX_URL is not an exact permitted origin; VOLLI_ACCOUNT_PROVIDER must be "dev" or "workos"',
     });
     expect(
       resolveAccountConfig({ ...dev, env: { VOLLI_ACCOUNT_PROVIDER: "workos" } }).problem,

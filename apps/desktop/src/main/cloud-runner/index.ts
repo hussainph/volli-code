@@ -28,7 +28,12 @@ import {
 import type { RunnerAccountPort } from "@volli/host-core/handlers";
 import type { PowerPort } from "@volli/host-core/ports";
 import type { HostLiveWork } from "@volli/host-core/sessions";
-import { OperationUnavailableError, THIS_MAC_RUNNER_OFF, type CloudLaunch } from "@volli/shared";
+import {
+  OperationUnavailableError,
+  THIS_MAC_RUNNER_OFF,
+  type CloudLaunch,
+  type CloudLaunchDeployment,
+} from "@volli/shared";
 import type { RunnerBrowserCapability } from "@volli/shared/cloud";
 
 import { convexMacRunnerBackend } from "./backend";
@@ -82,18 +87,27 @@ export async function thisMacName(packaged: boolean): Promise<string> {
 }
 
 /**
- * Whether this launch makes this Mac a runner, and for whom: only a Volli
- * Cloud launch (the flag on, a signed-in marker, a backend) with an HTTP
- * actions origin. Every other launch, flag-off ones first, composes nothing.
+ * The Convex store's runner identity and explicit HTTP-actions origin.
+ * A SQLite launch composes nothing. Embedded deployments must also provide
+ * their local token source to createDesktopMacRunner (VC-938).
  */
-export function thisMacRunnerLaunch(
-  launch: CloudLaunch,
-): { userId: string; backendUrl: string; siteUrl: string } | null {
+export function thisMacRunnerLaunch(launch: CloudLaunch): {
+  deployment: CloudLaunchDeployment;
+  userId: string;
+  backendUrl: string;
+  siteUrl: string;
+} | null {
   if (launch.store !== "cloud" || launch.siteUrl == null) return null;
-  return { userId: launch.userId, backendUrl: launch.backendUrl, siteUrl: launch.siteUrl };
+  return {
+    deployment: launch.deployment ?? "cloud",
+    userId: launch.userId,
+    backendUrl: launch.backendUrl,
+    siteUrl: launch.siteUrl,
+  };
 }
 
 export interface DesktopMacRunnerInput {
+  readonly deployment: CloudLaunchDeployment;
   readonly userId: string;
   /** The deployment (`https://<deployment>.convex.cloud`). */
   readonly backendUrl: string;
@@ -113,7 +127,7 @@ export interface DesktopMacRunnerInput {
   /** The agent browser, as Sessions here can use it now (closed while in the menu bar). */
   readonly browser: () => RunnerBrowserCapability;
   readonly sync?: RunnerConnectionDeps["sync"];
-  /** Embedded deployments supply an in-process issuer instead of the hosted credential exchange. */
+  /** VC-938 must supply its in-process issuer here before composing an embedded runner. */
   readonly tokens?: RunnerConnectionDeps["tokens"];
   /** Dual-locked power acceptance seam; absent in ordinary launches. */
   readonly connectionTransform?: (connect: ConnectBackend) => ConnectBackend;
@@ -124,6 +138,9 @@ export interface DesktopMacRunnerInput {
 }
 
 export function createDesktopMacRunner(input: DesktopMacRunnerInput): MacRunner {
+  if (input.deployment === "local" && input.tokens === undefined) {
+    throw new Error("Embedded deployment needs a local runner token source");
+  }
   return createMacRunner({
     userId: input.userId,
     account: input.account,

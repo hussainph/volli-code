@@ -3,10 +3,20 @@ import { describe, expect, it } from "vite-plus/test";
 import { LOCAL_LAUNCH, OperationUnavailableError, THIS_MAC_RUNNER_OFF } from "@volli/shared";
 
 import { chooseProductStore } from "../cloud-launch";
-import { runnerAccountPort, thisMacRunnerLaunch } from "./index";
+import {
+  createDesktopMacRunner,
+  runnerAccountPort,
+  thisMacRunnerLaunch,
+  type DesktopMacRunnerInput,
+} from "./index";
 import type { MacRunner } from "./mac-runner";
 
 describe("which launch makes this Mac a runner", () => {
+  it("refuses to pair an embedded deployment with a hosted token exchange", () => {
+    expect(() => createDesktopMacRunner({ deployment: "local" } as DesktopMacRunnerInput)).toThrow(
+      "local runner token source",
+    );
+  });
   it("only a Volli Cloud launch with an HTTP actions origin; a local (and every flag-off) launch composes nothing", () => {
     expect(thisMacRunnerLaunch(LOCAL_LAUNCH)).toBeNull();
     // Main's own boot decision with the flag off: no marker is read, nothing is composed.
@@ -22,6 +32,7 @@ describe("which launch makes this Mac a runner", () => {
     const cloud = { store: "cloud", userId: "u", backendUrl: "https://a.convex.cloud" } as const;
     expect(thisMacRunnerLaunch(cloud)).toBeNull();
     expect(thisMacRunnerLaunch({ ...cloud, siteUrl: "https://a.convex.site" })).toEqual({
+      deployment: "cloud",
       userId: "u",
       backendUrl: "https://a.convex.cloud",
       siteUrl: "https://a.convex.site",
