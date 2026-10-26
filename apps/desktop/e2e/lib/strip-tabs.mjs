@@ -50,4 +50,10 @@ export async function selectStripTab(page, tab, { timeout = 8000 } = {}) {
   const index = menuRowIndexFor(name, labels);
   if (index < 0) throw new Error(`no group-menu row for "${name}" in ${JSON.stringify(labels)}`);
   await rows.nth(index).click({ timeout });
+  // Settle before handing back. Closing the menu returns focus to the chip as
+  // its content unmounts (Radix's close auto-focus); a caller that opens a
+  // focus-dismissed surface next — the Island's pinned card — would otherwise
+  // see that focus move as "focus left" and close under its own click.
+  await page.locator('[data-slot="grouped-tab-menu"]').waitFor({ state: "detached", timeout });
+  await chip.and(page.locator('[data-active="true"]')).waitFor({ timeout });
 }

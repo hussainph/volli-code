@@ -192,6 +192,17 @@ function topTab(page, label) {
 }
 
 /**
+ * {@link topTab}, including a segment folded into a summarized chip's +n —
+ * what {@link selectStripTab} needs to find the tab it will choose from the menu.
+ */
+function topTabAny(page, label) {
+  return page
+    .locator('[data-slot="split-view-tab-bar"]')
+    .getByRole("tab", { name: label, exact: true, includeHidden: true })
+    .first();
+}
+
+/**
  * The tab a drag picks up: a grouped tab drags from its pane's strip (a chip
  * segment does not drag), an ordinary one from the top strip.
  */
@@ -218,7 +229,10 @@ async function chipMenu(page, groupId, item) {
   await page.getByRole("menuitem", { name: item, exact: true }).click();
 }
 
-/** The labels a chip's menu lists, pane by pane, with which are checked. */
+/**
+ * The tabs a chip's menu lists, pane by pane, and which is its pane's front.
+ * One row per tab (`data-pane`); its accessible name is `"<label>, pane <n>…"`.
+ */
 async function readChipMenu(page, groupId) {
   await page
     .locator(`[data-slot="grouped-tab-chip"][data-group-id="${groupId}"]`)
@@ -227,10 +241,10 @@ async function readChipMenu(page, groupId) {
     "the chip's menu",
     async () => {
       const seen = await page.evaluate(() =>
-        Array.from(document.querySelectorAll('[data-slot="context-menu-radio-item"]')).map(
+        Array.from(document.querySelectorAll('[data-slot="grouped-tab-menu"] [data-pane]')).map(
           (row) => ({
-            label: (row.textContent ?? "").trim(),
-            checked: row.getAttribute("aria-checked") === "true",
+            label: (row.getAttribute("aria-label") ?? "").replace(/, pane \d+.*$/, ""),
+            checked: row.getAttribute("data-front") === "true",
           }),
         ),
       );
@@ -591,7 +605,7 @@ async function main() {
         // The chip's terminal segment brings the group back exactly. The chip is
         // summarized while its group is off screen, so the terminal's pane is
         // folded into +n and is chosen from the chip's menu, as a person would.
-        await selectStripTab(page, topTab(page, terminal));
+        await selectStripTab(page, topTabAny(page, terminal));
         await waitUntil(
           "the group, its panes and its focus to return",
           async () => {
@@ -1114,7 +1128,7 @@ async function main() {
       });
       // The Board is a group tab: selecting it focuses the first pane, and
       // must leave the second pane's live terminal visible in the same group.
-      await selectStripTab(page, topTab(page, "Board"));
+      await selectStripTab(page, topTabAny(page, "Board"));
       const primaryTookFocus = await waitUntil(
         "the Board's pane to take focus from its tab",
         async () => {
