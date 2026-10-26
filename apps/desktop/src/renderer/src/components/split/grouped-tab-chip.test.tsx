@@ -190,13 +190,18 @@ describe("a Home tab group's chip", () => {
     home(file.id, [group], null);
     const chip = container.querySelector('[data-slot="grouped-tab-chip"]')!;
     expect(chip.getAttribute("data-compact")).toBe("true");
-    // The summary is drawing only: every segment keeps its full name for the
-    // tooltip and assistive tech, and its glyph stays to stand in for it.
-    expect(tab("Chat").getAttribute("aria-label")).toBe("Chat");
-    expect(tab("Page").getAttribute("aria-label")).toBe("Page");
-    expect(tab("Page").querySelector('[data-slot="tab-leading"]')).not.toBeNull();
+    // The other panes fold into a +n that names them and shows the group.
+    const more = chip.querySelector<HTMLButtonElement>('[data-slot="grouped-tab-more"]')!;
+    expect(more.textContent).toBe("+1");
+    expect(more.getAttribute("aria-label")).toBe("1 more in this group: Page");
+    expect(more.title).toBe("Page");
+    expect(more.tabIndex).toBe(-1);
+    const callbacks = home(file.id, [group], null);
+    act(() => chip.querySelector<HTMLButtonElement>('[data-slot="grouped-tab-more"]')!.click());
+    expect(callbacks.select).toHaveBeenCalledWith(chat);
     home(chat.id);
     expect(chip.getAttribute("data-compact")).toBe("false");
+    expect(chip.querySelector('[data-slot="grouped-tab-more"]')).toBeNull();
     // A group whose other panes have nothing live has nothing to summarize.
     home(file.id, [{ id: "solo", panes: [group.panes[0]!] }], null);
     expect(

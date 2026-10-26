@@ -1018,13 +1018,7 @@ function TabShell({
           ) : (
             <>
               {status !== undefined ? <TabStateIcon state={status} /> : null}
-              {/* Named so a summarized group chip can tell a tab that has a
-                  glyph to stand for it from one that only has its label. */}
-              {leading ? (
-                <span data-slot="tab-leading" className="contents">
-                  {leading}
-                </span>
-              ) : null}
+              {leading}
             </>
           )}
           {badge}

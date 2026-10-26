@@ -89,10 +89,10 @@ export function groupTabItems<T extends { id: string }>(
  * pane — with Ungroup to dissolve the group, every tab staying open.
  *
  * A group that is NOT on screen draws SUMMARIZED (`compact`): the first pane's
- * front keeps a shortened label and every later pane shrinks to its glyph, so
+ * front keeps a shortened label and the other panes fold into a `+n` count, so
  * a three- or four-pane group stops costing three or four full tabs of strip.
- * Names stay whole where they are read — each segment's tooltip and accessible
- * name, and the chip's menu — and the chip opens out again once selected.
+ * The count's tooltip names what it folds, the chip's menu lists every tab,
+ * and the chip opens out again once selected.
  */
 function GroupedTabChip<T extends { id: string }>({
   item,
@@ -170,6 +170,28 @@ function GroupedTabChip<T extends { id: string }>({
   );
 }
 
+/**
+ * The `+n` a summarized chip ends with: how many other panes it folds, their
+ * fronts named in the tooltip. A press shows the group, the same as pressing
+ * its first segment. Out of the tab order — the segments carry the strip's
+ * roving focus, and the chip's menu reaches every tab by keyboard.
+ */
+function GroupMoreCount({ hidden, onSelect }: { hidden: readonly string[]; onSelect(): void }) {
+  return (
+    <button
+      type="button"
+      tabIndex={-1}
+      data-slot="grouped-tab-more"
+      aria-label={`${hidden.length} more in this group: ${hidden.join(", ")}`}
+      title={hidden.join("\n")}
+      onClick={onSelect}
+      className="mr-1.5 flex h-5 shrink-0 cursor-default items-center rounded-sm px-1 text-ui text-muted-foreground tabular-nums outline-none hover:bg-accent/50 hover:text-foreground"
+    >
+      +{hidden.length}
+    </button>
+  );
+}
+
 /** What a tab renderer is told about the tab it draws. */
 export interface GroupedTabState {
   active: boolean;
@@ -233,12 +255,13 @@ export function GroupedTabList<T extends { id: string }>({
     }
     if (item.segments.length === 0) return null;
     const active = item.group.id === shownGroupId;
+    const compact = !active && item.segments.length > 1;
     return (
       <GroupedTabChip
         key={item.group.id}
         item={item}
         active={active}
-        compact={!active && item.segments.length > 1}
+        compact={compact}
         describe={describe}
         onSelect={onSelect}
         onUngroup={onUngroup}
@@ -260,6 +283,12 @@ export function GroupedTabList<T extends { id: string }>({
             ) : null}
           </div>
         ))}
+        {compact ? (
+          <GroupMoreCount
+            hidden={item.segments.slice(1).map((tab) => describe(tab).label)}
+            onSelect={() => onSelect(item.segments[0]!)}
+          />
+        ) : null}
       </GroupedTabChip>
     );
   });
