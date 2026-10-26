@@ -20,7 +20,7 @@ import type { BrowserTraceRequest } from "@renderer/components/browser/browser-t
 import { BROWSER_NEW_TAB_TITLE, useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { showBrowserTab } from "@renderer/components/browser/show-browser-tab";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
-import { useProjectUiStore } from "@renderer/stores/project-ui";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 import {
   EMPTY_PROJECT_SESSION_ROWS,
   useProjectSessionsStore,
@@ -346,7 +346,7 @@ describe("verbs", () => {
   it("shows a legacy preview from the Island as a SELECTED tab, without losing its identity", async () => {
     const legacy = tab({ tabId: "legacy", presentation: "preview" });
     registry([legacy]);
-    useProjectUiStore.setState({ byProject: {} });
+    useWorkspaceStore.setState({ byProject: {} });
     // Session attachment is outside this path; the layout and registry are real.
     const adopt = vi
       .spyOn(useChatSessionsStore.getState(), "adoptChatSession")
@@ -376,11 +376,11 @@ describe("verbs", () => {
       ]);
       // Showing is a selection (VC-614): the tab comes forward full width and
       // is never pulled into a group — "Open beside chat" is the grouping door.
-      expect(useProjectUiStore.getState().byProject[PROJECT]?.homeSplitView ?? null).toBeNull();
-      expect(useProjectUiStore.getState().byProject[PROJECT]?.homeActiveTab).toBe("browser:legacy");
+      expect(useWorkspaceStore.getState().byProject[PROJECT]?.homeSplitView ?? null).toBeNull();
+      expect(useWorkspaceStore.getState().byProject[PROJECT]?.homeActiveTab).toBe("browser:legacy");
     } finally {
       adopt.mockRestore();
-      useProjectUiStore.setState({ byProject: {} });
+      useWorkspaceStore.setState({ byProject: {} });
     }
   });
 

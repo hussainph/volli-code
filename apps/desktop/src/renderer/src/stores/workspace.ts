@@ -181,7 +181,7 @@ export interface TicketTabsState {
   tabOrder: TabOrder;
   /**
    * This ticket's tab groups, or none. See `split-view.ts` and
-   * {@link ProjectUiState.homeSplitView} for the tolerant read. Persisted and
+   * {@link WorkspaceUiState.homeSplitView} for the tolerant read. Persisted and
    * tolerant-read, inside this record so `forget` and the empty-record prune
    * carry it away with everything else the ticket remembers.
    */
@@ -498,7 +498,7 @@ function ticketSplitWrite(next: SplitViewState | null): Partial<TicketTabsState>
  * when there is nothing to write.
  */
 function activatedHomeSplit(
-  current: ProjectUiState,
+  current: WorkspaceUiState,
   tabId: string,
   open = false,
 ): SplitViewState | null {
@@ -508,7 +508,7 @@ function activatedHomeSplit(
   return next === split ? null : next;
 }
 
-/** {@link activatedHomeSplit} for a Ticket view. */
+/** {@link activatedHomeSplit} for a ticket workspace. */
 function activatedTicketSplit(
   existing: TicketTabsState,
   tabId: string,
@@ -580,7 +580,7 @@ function opensFile(tabId: string, before: readonly FileWorkspaceTab[]): boolean 
 function homeActiveAfterFocus(
   current: WorkspaceUiState,
   next: SplitViewState,
-): Partial<ProjectUiState> {
+): Partial<WorkspaceUiState> {
   const active = activeTabInSplitView(next) ?? next.selectedTabId;
   if (active === null) return {};
   return {
@@ -730,7 +730,7 @@ interface WorkspaceState {
    */
   setHomeActiveTab(projectId: string, tabId: string): void;
   /**
-   * {@link ProjectUiStoreState.setHomeActiveTab} for a tab that was just
+   * {@link WorkspaceState.setHomeActiveTab} for a tab that was just
    * OPENED (a new chat, terminal or Browser Tab): while a group is shown it
    * joins the focused pane's stack instead of replacing the group.
    */
@@ -841,9 +841,9 @@ interface WorkspaceState {
    * Every surface that promises "the user is now looking at this ticket" —
    * the command palette, Active Sessions, and the new-ticket kickoff — routes
    * through this one seam instead of hand-rolling setNav+openTicket(+tab)
-   * themselves. `opts.open` is {@link ProjectUiStoreState.openHome}'s.
+   * themselves. `opts.open` is {@link WorkspaceState.openHome}'s.
    */
-  openTicketView(
+  openTicketWorkspace(
     projectId: string,
     ticketId: string,
     opts?: { tabId?: string; open?: boolean },
@@ -916,7 +916,7 @@ interface WorkspaceState {
    * `file:<relPath>`, a `diff:<relPath>`, or a session id). */
   setTicketActiveTab(projectId: string, ticketId: string, tabId: string): void;
   /**
-   * {@link ProjectUiStoreState.setTicketActiveTab} for a tab that was just
+   * {@link WorkspaceState.setTicketActiveTab} for a tab that was just
    * OPENED (a new chat, terminal or Browser Tab): while a group is shown it
    * joins the focused pane's stack instead of replacing the group.
    */
@@ -945,7 +945,7 @@ interface WorkspaceState {
     tabId: string | null,
     edge?: SplitViewEdge,
   ): void;
-  /** {@link ProjectUiStoreState.groupHomeTabs} for a Ticket view. */
+  /** {@link WorkspaceState.groupHomeTabs} for a ticket workspace. */
   groupTicketTabs(
     projectId: string,
     ticketId: string,
@@ -955,11 +955,11 @@ interface WorkspaceState {
   ): void;
   /** A tab dragged out of its group onto the top strip: ordinary again, and selected. */
   ungroupHomeTab(projectId: string, tabId: string): void;
-  /** {@link ProjectUiStoreState.ungroupHomeTab} for a Ticket view. */
+  /** {@link WorkspaceState.ungroupHomeTab} for a ticket workspace. */
   ungroupTicketTab(projectId: string, ticketId: string, tabId: string): void;
   /** Dissolve a whole Home group (the chip's Ungroup); every tab stays open. */
   ungroupHome(projectId: string, groupId: string): void;
-  /** {@link ProjectUiStoreState.ungroupHome} for a Ticket view. */
+  /** {@link WorkspaceState.ungroupHome} for a ticket workspace. */
   ungroupTicket(projectId: string, ticketId: string, groupId: string): void;
   /**
    * Split a Home pane on `edge`: a group pane grows its group, the full-width
@@ -1527,34 +1527,34 @@ function applyTicketSplit(
  * front is how focus comes back to its pane, so it writes when the split moved.
  */
 function activateHomeTab(
-  state: ProjectUiStoreState,
+  state: WorkspaceState,
   projectId: string,
   tabId: string,
   open: boolean,
-): ProjectUiStoreState | Pick<ProjectUiStoreState, "byProject"> {
-  const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
+): WorkspaceState | Pick<WorkspaceState, "byProject"> {
+  const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
   const split = activatedHomeSplit(current, tabId, open);
   if (current.homeActiveTab === tabId && split === null) return state;
-  return patchProjectUi(state, projectId, {
+  return patchWorkspace(state, projectId, {
     homeActiveTab: tabId,
     homeTabHistory: homeHistoryAfterVisit(current, tabId),
     ...homeSplitWrite(split),
   });
 }
 
-/** {@link activateHomeTab} for a Ticket view; the no-op keeps empty records from forming. */
+/** {@link activateHomeTab} for a ticket workspace; the no-op keeps empty records from forming. */
 function activateTicketTab(
-  state: ProjectUiStoreState,
+  state: WorkspaceState,
   projectId: string,
   ticketId: string,
   tabId: string,
   open: boolean,
-): ProjectUiStoreState | Pick<ProjectUiStoreState, "byProject"> {
-  const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
+): WorkspaceState | Pick<WorkspaceState, "byProject"> {
+  const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
   const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
   const split = activatedTicketSplit(existing, tabId, open);
   if (existing.active === tabId && split === null) return state;
-  return patchProjectUi(state, projectId, {
+  return patchWorkspace(state, projectId, {
     ticketTabs: {
       ...current.ticketTabs,
       [ticketId]: { ...existing, active: tabId, ...ticketSplitWrite(split) },
@@ -1563,7 +1563,7 @@ function activateTicketTab(
 }
 
 /**
- * Where a Ticket view lands after closing one of its own File or Diff tabs. A
+ * Where a ticket workspace lands after closing one of its own File or Diff tabs. A
  * tab of the group on screen hands over to its group — the focused pane's
  * front, or the group tab still selected beside an empty pane. Any other tab
  * returns to the Ticket Body only when it was the one in front, which the split
@@ -1834,7 +1834,7 @@ export function createWorkspaceStore(
             });
             const activeFile = parseFileTabId(close.active);
             const base = left ?? split;
-            return patchProjectUi(state, projectId, {
+            return patchWorkspace(state, projectId, {
               projectFiles:
                 activeFile === null ? projectFiles : activateFile(projectFiles, activeFile),
               projectFileViewStates,
@@ -2275,11 +2275,11 @@ export function createWorkspaceStore(
 
         groupHomeTabs(projectId, targetTabId, tabId, edge = "right") {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
             const split = current.homeSplitView ?? emptySplitView(current.homeActiveTab);
             const next = groupTabs(split, targetTabId, tabId, edge, mintPaneId);
             if (next === split) return state;
-            return patchProjectUi(state, projectId, {
+            return patchWorkspace(state, projectId, {
               ...homeSplitWrite(next),
               ...homeActiveAfterFocus(current, next),
             });
@@ -2289,12 +2289,12 @@ export function createWorkspaceStore(
 
         groupTicketTabs(projectId, ticketId, targetTabId, tabId, edge = "right") {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
             const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
             const split = existing.splitView ?? emptySplitView(existing.active);
             const next = groupTabs(split, targetTabId, tabId, edge, mintPaneId);
             if (next === split) return state;
-            return patchProjectUi(state, projectId, {
+            return patchWorkspace(state, projectId, {
               ticketTabs: {
                 ...current.ticketTabs,
                 [ticketId]: {
@@ -2337,7 +2337,7 @@ export function createWorkspaceStore(
         splitHomePane(projectId, paneId, edge, opts) {
           let didSplit = false;
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
             // Only the shown tab (or group) is split; every other tab stays in
             // the surface's own strip, the Board and future Sessions included.
             const split = current.homeSplitView ?? emptySplitView(current.homeActiveTab);
@@ -2541,7 +2541,7 @@ export function createWorkspaceStore(
                     ),
                   );
             if (reordered === split && pinned === null) return state;
-            return patchProjectUi(state, projectId, {
+            return patchWorkspace(state, projectId, {
               ticketTabs: { ...current.ticketTabs, [ticketId]: pinned ?? withOrder },
             });
           });
@@ -2584,7 +2584,7 @@ export function createWorkspaceStore(
             // See the Home twin above: the permanent-tab fallback applies only
             // when this close took the surface's active tab (validation V2).
             const { next, front } = grouped;
-            return patchProjectUi(state, projectId, {
+            return patchWorkspace(state, projectId, {
               ticketTabs: {
                 ...current.ticketTabs,
                 [ticketId]: {

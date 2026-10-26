@@ -5,7 +5,7 @@ import { browserTabId } from "@renderer/components/home/home-tabs";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
-import { useProjectUiStore } from "@renderer/stores/project-ui";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 /**
  * Reveal an existing Browser Tab, promoting an agent's preview to a strip tab
@@ -30,7 +30,7 @@ export async function showBrowserTab(
   if (!result.ok) throw new Error(result.error);
   const tab = result.tab;
   useBrowserTabsStore.getState().receive(tab);
-  const workspace = useProjectUiStore.getState();
+  const workspace = useWorkspaceStore.getState();
   const id = browserTabId(tabId);
   const owner = tab.ownerSessionId;
   if (mode === "beside-owner" && owner !== null) {
@@ -53,7 +53,7 @@ export async function showBrowserTab(
     workspace.setNav(tab.projectId, "home");
     workspace.setHomeActiveTab(tab.projectId, id);
   } else {
-    workspace.openTicketView(tab.projectId, tab.ticketId, { tabId: id });
+    workspace.openTicketWorkspace(tab.projectId, tab.ticketId, { tabId: id });
   }
 }
 

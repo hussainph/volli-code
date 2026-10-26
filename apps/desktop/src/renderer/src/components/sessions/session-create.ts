@@ -390,7 +390,7 @@ function abandonChat(sessionId: string): void {
 export async function startProjectTerminal(projectId: string): Promise<string | null> {
   const sessionId = await createTerminalSession(projectScope(projectId));
   if (sessionId === null) return null;
-  useProjectUiStore.getState().openHomeTab(projectId, sessionId);
+  useWorkspaceStore.getState().openHomeTab(projectId, sessionId);
   // Returned for the one caller that has something to say to the shell it just
   // opened — the dependency offer types its install into it (VC-156). Every
   // other caller ignores it, exactly as it did when this returned nothing.
@@ -413,7 +413,7 @@ export async function startProjectChat(
       useChatSessionsStore.getState().openChatTab(projectId, sessionId);
       // A Draft is renderer-only until its first content (the surface places
       // it in the focused pane); a Session born with content OPENS there.
-      if (isSession) useProjectUiStore.getState().openHomeTab(projectId, chatTabId(sessionId));
+      if (isSession) useWorkspaceStore.getState().openHomeTab(projectId, chatTabId(sessionId));
       return true;
     },
   });
@@ -441,7 +441,7 @@ export async function startProjectChat(
 export async function startTicketTerminal(projectId: string, ticketId: string): Promise<void> {
   const sessionId = await createTerminalSession(ticketScope(projectId, ticketId));
   if (sessionId === null) return;
-  useProjectUiStore.getState().openTicketTab(projectId, ticketId, sessionId);
+  useWorkspaceStore.getState().openTicketTab(projectId, ticketId, sessionId);
 }
 
 /**
@@ -509,7 +509,7 @@ export async function startTicketChat(
       if (!tickets.some((candidate) => candidate.id === ticketId)) return false;
       useChatSessionsStore.getState().openChatTab(ticketId, booted);
       if (isSession) {
-        useProjectUiStore.getState().openTicketTab(projectId, ticketId, chatTabId(booted));
+        useWorkspaceStore.getState().openTicketTab(projectId, ticketId, chatTabId(booted));
         // The rail's row for this Session needs no read here (VC-373): the
         // chat was minted through the Session Engine, so `volli:session-activity`
         // announces its listing row and the rail's cache folds it in — without

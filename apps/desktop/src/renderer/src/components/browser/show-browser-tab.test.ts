@@ -18,12 +18,12 @@ const stores = vi.hoisted(() => ({
     groupTicketTabs: vi.fn(),
     setNav: vi.fn(),
     setHomeActiveTab: vi.fn(),
-    openTicketView: vi.fn(),
+    openTicketWorkspace: vi.fn(),
   },
   chats: { adoptChatSession: vi.fn(), openChatTab: vi.fn() },
 }));
-vi.mock("@renderer/stores/project-ui", () => ({
-  useProjectUiStore: { getState: () => stores.workspace },
+vi.mock("@renderer/stores/workspace", () => ({
+  useWorkspaceStore: { getState: () => stores.workspace },
 }));
 vi.mock("@renderer/stores/chat-sessions", () => ({
   useChatSessionsStore: { getState: () => stores.chats },
@@ -97,7 +97,7 @@ describe("showBrowserTab", () => {
       "browser:b",
       "right",
     );
-    expect(stores.workspace.openTicketView).toHaveBeenCalledWith("p", "t", {
+    expect(stores.workspace.openTicketWorkspace).toHaveBeenCalledWith("p", "t", {
       tabId: "browser:b",
     });
     expect(stores.workspace.groupHomeTabs).not.toHaveBeenCalled();

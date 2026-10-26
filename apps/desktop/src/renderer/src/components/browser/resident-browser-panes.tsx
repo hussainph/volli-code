@@ -11,7 +11,7 @@ import {
 import { TerminalViewportBox } from "@renderer/components/sessions/terminal-viewport-box";
 import { paneIdForElement } from "@renderer/components/split/split-view-grid";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
-import { useProjectUiStore } from "@renderer/stores/project-ui";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 /**
  * The surface owns only a placeholder, never BrowserPane's lifetime. `visible`
@@ -73,7 +73,7 @@ export function ResidentBrowserPanes({ api }: { api: BrowserApi }) {
           const focusPane = () => {
             const paneId = paneIdForElement(anchor);
             if (paneId === null) return;
-            const workspace = useProjectUiStore.getState();
+            const workspace = useWorkspaceStore.getState();
             if (tab.ticketId === null) workspace.focusHomePane(tab.projectId, paneId);
             else workspace.focusTicketPane(tab.projectId, tab.ticketId, paneId);
           };

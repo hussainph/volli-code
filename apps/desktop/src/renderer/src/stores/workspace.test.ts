@@ -2744,7 +2744,7 @@ describe("split view persistence (VC-202)", () => {
     });
     store.getState().splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "down");
 
-    const rehydrated = createProjectUiStore(storage);
+    const rehydrated = createWorkspaceStore(storage);
     // The full-width tab moves into a minted pane, never one named `root`.
     expect(panesOf(homeSplit(rehydrated))).toEqual([
       ["n3", [HOME_BOARD_TAB_ID], HOME_BOARD_TAB_ID],
@@ -3432,7 +3432,7 @@ describe("tab selection intent — the activation doors (VC-483)", () => {
 
     // Naming a tab SELECTS it: a grouped one shows its group, focused on its
     // pane; an ordinary one is drawn full width, never pulled into the group.
-    ws.openTicketView("project-a", "ticket-1", { tabId: TICKET_BODY_TAB_ID });
+    ws.openTicketWorkspace("project-a", "ticket-1", { tabId: TICKET_BODY_TAB_ID });
     ws.focusTicketPane("project-a", "ticket-1", "n1");
     ws.openTicketWorkspace("project-a", "ticket-1", { tabId: "chat:c2" });
     expect(home).toEqual(Array(3).fill(SPLIT_VIEW_ROOT_PANE_ID));
@@ -3650,12 +3650,12 @@ describe.each(["Home", "Ticket"] as const)("tab groups — %s (VC-614)", (surfac
 
   it("round-trips groups, stacks and an ordinary selection through the workspace codec", () => {
     const storage = createMemoryStorage();
-    const store = createProjectUiStore(storage, paneMinter());
+    const store = createWorkspaceStore(storage, paneMinter());
     group(store, "chat:c1", "browser:b1");
     open(store, "terminal-1");
     group(store, "chat:c2", null);
     select(store, permanent);
-    const restored = createProjectUiStore(storage);
+    const restored = createWorkspaceStore(storage);
     expect(read(restored)).toEqual(read(store));
     select(restored, "browser:b1");
     expect(read(restored)!.root.kind).toBe("split");
@@ -3705,7 +3705,7 @@ describe("legacy workspace split migration", () => {
         state: {
           byProject: {
             "project-a": {
-              ...DEFAULT_PROJECT_UI,
+              ...DEFAULT_WORKSPACE_UI,
               homeActiveTab: "chat:c2",
               homeTabOrder: [
                 "chat:c1",
@@ -3729,7 +3729,7 @@ describe("legacy workspace split migration", () => {
         },
       }),
     );
-    const store = createProjectUiStore(storage);
+    const store = createWorkspaceStore(storage);
     const ui = store.getState().byProject["project-a"]!;
     expect(panesOf(homeSplit(store))).toEqual([
       ["s:root", ["chat:c1", "file:other.ts"], "chat:c1"],
@@ -3774,7 +3774,7 @@ describe("legacy workspace split migration", () => {
     expect(collapsed.ticketTabs["ticket-1"]!.tabOrder).toEqual(ui.ticketTabs["ticket-1"]!.tabOrder);
     expect(collapsed.ticketTabs["ticket-1"]!.files).toEqual(ui.ticketTabs["ticket-1"]!.files);
     expect(collapsed.ticketTabs["ticket-1"]!.diffs).toEqual(ui.ticketTabs["ticket-1"]!.diffs);
-    const restored = createProjectUiStore(storage);
+    const restored = createWorkspaceStore(storage);
     expect(homeSplit(restored)).toBeNull();
     expect(ticketSplit(restored)).toBeNull();
     expect(restored.getState().byProject["project-a"]?.homeTabOrder).toEqual(ui.homeTabOrder);
@@ -3814,7 +3814,7 @@ describe("drop anchors and Board focus", () => {
 
   it("focusing the Board in a Home group cannot reopen a parked ticket", () => {
     const store = splitStore();
-    store.getState().openTicketView("project-a", "ticket-1");
+    store.getState().openTicketWorkspace("project-a", "ticket-1");
     store.getState().setHomeActiveTab("project-a", "browser:b");
     store.getState().groupHomeTabs("project-a", "browser:b", HOME_BOARD_TAB_ID, "left");
     const pane = splitViewPanes(homeSplit(store)!)[0]!.id;
@@ -4060,7 +4060,7 @@ describe("doors that reopen a chat's tab OPEN it (VC-614)", () => {
     store.getState().groupTicketTabs("project-a", "ticket-1", "chat:one", "browser:one");
     store
       .getState()
-      .openTicketView("project-a", "ticket-1", { tabId: "chat:reopened", open: true });
+      .openTicketWorkspace("project-a", "ticket-1", { tabId: "chat:reopened", open: true });
     expect(panesOf(ticketSplit(store))[1]).toEqual([
       "n1",
       ["browser:one", "chat:reopened"],

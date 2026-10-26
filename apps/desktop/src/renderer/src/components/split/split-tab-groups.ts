@@ -2,7 +2,7 @@
  * The top strip's view of a surface's TAB GROUPS (VC-614): which chips it
  * draws, in what order, and what a drag across them writes.
  *
- * Pure and generic over ids, because Home and a Ticket view draw different
+ * Pure and generic over ids, because Home and a ticket workspace draw different
  * descriptors and the arithmetic is the same for both.
  */
 import type {

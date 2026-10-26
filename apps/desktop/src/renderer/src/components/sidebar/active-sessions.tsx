@@ -1014,7 +1014,7 @@ export function ActiveSessions({
           const open = !chat.openTabs[route.ticketId]?.includes(route.sessionId);
           chat.adoptChatSession(route.sessionId);
           chat.openChatTab(route.ticketId, route.sessionId);
-          openTicketView(project.id, route.ticketId, { tabId: route.tabId, open });
+          openTicketWorkspace(project.id, route.ticketId, { tabId: route.tabId, open });
           return;
         }
         case "ticket-workspace": {

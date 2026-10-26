@@ -338,14 +338,14 @@ export function TicketDetail({
     claimTab: claimProvisionalTab,
     activateTab: activateClaimedDraft,
     focusPane: (paneId) =>
-      useProjectUiStore.getState().focusTicketPane(projectId, ticket.id, paneId),
+      useWorkspaceStore.getState().focusTicketPane(projectId, ticket.id, paneId),
     closePane: (paneId) =>
-      useProjectUiStore.getState().closeTicketPane(projectId, ticket.id, paneId),
+      useWorkspaceStore.getState().closeTicketPane(projectId, ticket.id, paneId),
   });
   /** A tab out of its group, an untouched Draft out of its renderer-local pane. */
   function ungroupLocalTab(id: string): void {
     ungroupProvisionalTab(id, (tabId) =>
-      useProjectUiStore.getState().ungroupTicketTab(projectId, ticket.id, tabId),
+      useWorkspaceStore.getState().ungroupTicketTab(projectId, ticket.id, tabId),
     );
   }
   const chatStatuses = useChatSessionsStore(
@@ -808,7 +808,7 @@ export function TicketDetail({
   const openTab = React.useCallback(
     (tabId: string) => {
       releaseActive();
-      useProjectUiStore.getState().openTicketTab(projectId, ticket.id, tabId);
+      useWorkspaceStore.getState().openTicketTab(projectId, ticket.id, tabId);
     },
     [releaseActive, projectId, ticket.id],
   );
@@ -1350,7 +1350,7 @@ export function TicketDetail({
       // the eye out of the group.
       removeTicketTabFromSplit(projectId, ticket.id, tab.id);
       const recorded =
-        useProjectUiStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.active;
+        useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.active;
       if (recorded === tab.id) setActiveTab(BODY_TAB_ID);
       if (emptyProvisionalTabIds.has(tab.id)) ungroupLocalTab(tab.id);
       useChatSessionsStore.getState().closeChatTab(ticket.id, chatId);
@@ -1403,7 +1403,7 @@ export function TicketDetail({
       moveTicketTabInPane(projectId, ticket.id, paneId, movedId, ids),
     moveTabToPane: (tabId, paneId) => moveTicketTabToPane(projectId, ticket.id, tabId, paneId),
     ungroupTab: (tabId) =>
-      useProjectUiStore.getState().ungroupTicketTab(projectId, ticket.id, tabId),
+      useWorkspaceStore.getState().ungroupTicketTab(projectId, ticket.id, tabId),
     splitPane: (paneId, edge, tabId) =>
       splitTicketPane(projectId, ticket.id, paneId, edge, {
         ...(tabId === null ? {} : { tabId }),
@@ -1603,7 +1603,7 @@ export function TicketDetail({
       ]}
       onGroupDrop={(targetTabId, tabId, edge) =>
         groupProvisionalTabs(targetTabId, tabId, edge, (target, tab, side) =>
-          useProjectUiStore.getState().groupTicketTabs(projectId, ticket.id, target, tab, side),
+          useWorkspaceStore.getState().groupTicketTabs(projectId, ticket.id, target, tab, side),
         )
       }
       onTabDrop={applySplitDrop}
@@ -1621,7 +1621,7 @@ export function TicketDetail({
               shownGroupId={split.groupId}
               onUngroup={(groupId) => {
                 releaseActive();
-                useProjectUiStore.getState().ungroupTicket(projectId, ticket.id, groupId);
+                useWorkspaceStore.getState().ungroupTicket(projectId, ticket.id, groupId);
               }}
               activeTabId={activeTab.id}
               onSelectTab={setActiveTab}

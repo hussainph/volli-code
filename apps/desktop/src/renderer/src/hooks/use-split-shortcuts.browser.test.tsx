@@ -34,7 +34,7 @@ let unregister: (() => void) | null = null;
 
 function Probe(): null {
   // What the surface hands the hook: the pane it DRAWS in focus, and its front.
-  const ui = useProjectUiStore((state) => state.byProject[PROJECT]);
+  const ui = useWorkspaceStore((state) => state.byProject[PROJECT]);
   const view = projectSplitView(
     ui?.homeSplitView ?? null,
     ["board", ...STRIP],
@@ -89,7 +89,7 @@ beforeEach(() => {
     byProject: { [PROJECT]: { ...DEFAULT_WORKSPACE_UI, nav: "home", homeActiveTab: LEFT } },
   } as never);
   // One group of two Browser Tabs, side by side.
-  const workspace = useProjectUiStore.getState();
+  const workspace = useWorkspaceStore.getState();
   workspace.splitHomePane(PROJECT, SPLIT_VIEW_ROOT_PANE_ID, "right", { tabId: RIGHT });
   // The last pane clicked IN THE APP was the left one; the person then clicked
   // into the right member's native page, which the split view never heard.
@@ -117,11 +117,11 @@ describe("⌃⌘ + an arrow from inside a Browser page", () => {
     unregister = registerBrowserPaneCommands("tab-right", {
       close: () => true,
       focusAddress: () => undefined,
-      focusPane: () => useProjectUiStore.getState().focusHomePane(PROJECT, paneOf(RIGHT)),
+      focusPane: () => useWorkspaceStore.getState().focusHomePane(PROJECT, paneOf(RIGHT)),
     });
 
     const focused: string[] = [];
-    const unsubscribe = useProjectUiStore.subscribe(() => focused.push(split().focusedPaneId));
+    const unsubscribe = useWorkspaceStore.subscribe(() => focused.push(split().focusedPaneId));
     const right = paneOf(RIGHT);
     const left = paneOf(LEFT);
     try {
@@ -144,8 +144,8 @@ describe("⌃⌘ + an arrow from inside a Browser page", () => {
   });
 
   it("reports the chord as unclaimed while no group is shown, so focus goes back to the page", () => {
-    useProjectUiStore.setState({
-      byProject: { [PROJECT]: { ...DEFAULT_PROJECT_UI, nav: "home", homeActiveTab: RIGHT } },
+    useWorkspaceStore.setState({
+      byProject: { [PROJECT]: { ...DEFAULT_WORKSPACE_UI, nav: "home", homeActiveTab: RIGHT } },
     } as never);
 
     expect(pressLeftInRightPage()).toBe(false);
@@ -169,7 +169,7 @@ describe("⌘\\ splits the pane the surface draws in focus (VC-614)", () => {
   });
 
   it("makes a new group of two from a full-width tab, its new pane an empty menu", () => {
-    act(() => useProjectUiStore.getState().setHomeActiveTab(PROJECT, "board"));
+    act(() => useWorkspaceStore.getState().setHomeActiveTab(PROJECT, "board"));
     pressSplit();
     expect(split().pairs).toHaveLength(2);
     expect(splitViewPanes(split()).map((pane) => pane.tabIds)).toEqual([["board"], []]);

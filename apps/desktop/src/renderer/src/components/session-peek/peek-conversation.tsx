@@ -175,7 +175,7 @@ export function PeekConversation({
           useProjectsStore.getState().select(subject.projectId);
           const workspace = useWorkspaceStore.getState();
           if (ticketId === null) {
-            projectUi.openHome(subject.projectId, chatTabId(id), { open });
+            workspace.openHome(subject.projectId, chatTabId(id), { open });
           } else {
             workspace.openTicketWorkspace(subject.projectId, ticketId, {
               tabId: chatTabId(id),

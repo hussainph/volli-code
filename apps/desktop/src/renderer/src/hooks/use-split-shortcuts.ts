@@ -11,7 +11,7 @@
  * as it is DRAWN — the shown group's focused pane, or the full-width tab, which
  * becomes a new group of two (VC-614) — and the only component that knows what
  * is drawn is the surface drawing it. Both instances are mounted while a
- * Ticket view is open (Home hosts the detail view), so each asks the SAME pure
+ * ticket workspace is open (Home hosts the detail view), so each asks the SAME pure
  * predicate which surface is in front and the one that is not stands down. Two
  * listeners, one answer.
  *
@@ -115,8 +115,8 @@ export function useSplitShortcuts({
       // drawn front is selected first, since the surface may be showing a tab
       // its record has not caught up with.
       const opts = mine.targetTabId === null ? {} : { targetTabId: mine.targetTabId };
-      if (ticket === null) projectUi.splitHomePane(project, mine.paneId, shortcut.edge, opts);
-      else projectUi.splitTicketPane(project, ticket, mine.paneId, shortcut.edge, opts);
+      if (ticket === null) workspace.splitHomePane(project, mine.paneId, shortcut.edge, opts);
+      else workspace.splitTicketPane(project, ticket, mine.paneId, shortcut.edge, opts);
       focusNewPaneMenu();
     };
 

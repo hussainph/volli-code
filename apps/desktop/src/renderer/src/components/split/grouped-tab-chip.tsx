@@ -235,7 +235,7 @@ export interface GroupedTabState {
 
 /**
  * The tabs of one strip, ordinary ones and group chips alike, shared by Home's
- * and a Ticket view's strips. Pass `groups` only for the TOP strip; a group
+ * and a ticket workspace's strips. Pass `groups` only for the TOP strip; a group
  * pane's own strip draws its stack as plain tabs.
  *
  * `edgeTargets` marks each top-level item as a drop target for grouping by

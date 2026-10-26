@@ -1,5 +1,5 @@
 /**
- * TAB GROUPS (VC-614): a surface — Home, or one Ticket view — owns one
+ * TAB GROUPS (VC-614): a surface — Home, or one ticket workspace — owns one
  * ordinary tab strip and any number of groups.
  *
  * A GROUP is a split tree of two or more panes, each pane holding a STACK of

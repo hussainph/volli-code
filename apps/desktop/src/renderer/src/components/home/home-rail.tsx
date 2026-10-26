@@ -615,7 +615,7 @@ function openSession(projectId: string, row: HomeSessionRow): void {
     const open = !chat.openTabs[projectId]?.includes(row.id);
     chat.adoptChatSession(row.id);
     chat.openChatTab(projectId, row.id);
-    projectUi.openHome(projectId, chatTabId(row.id), { open });
+    workspace.openHome(projectId, chatTabId(row.id), { open });
     return;
   }
   // The TAB the pane belongs to, then the pane inside it: a durable terminal

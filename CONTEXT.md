@@ -85,7 +85,7 @@ never stack above one another.
 _Avoid_: Board (for the page), Sessions page, dashboard, Files (as a nav item)
 
 **Tab group**:
-Two or more Panes of one surface (Home, or one Ticket view) shown together as a
+Two or more Panes of one surface (Home, or one ticket workspace) shown together as a
 split, each Pane a stack of tabs (VC-614). The top tab strip draws a group as
 ONE chip whose segments are its Panes' front tabs; right-clicking it lists
 every tab of the group by Pane and offers Ungroup. Selecting any tab of a group

@@ -27,7 +27,7 @@
  * "Active tab" reads as the FOCUSED PANE's front tab, which is the same sentence
  * while no tab group is shown — the plane below the strip is a split grid, and
  * an ordinary tab resolves to one full-width pane (VC-614). The Board rides
- * inside that grid like any tab, in a group or full width; a Ticket view still
+ * inside that grid like any tab, in a group or full width; a ticket workspace still
  * takes the whole page over.
  *
  * A Home SESSION additionally gets the right rail (VC-55) — the ticket
@@ -159,7 +159,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   React.useEffect(
     () =>
       subscribeBrowserTabs(browserApi, (tab) => {
-        const workspace = useProjectUiStore.getState();
+        const workspace = useWorkspaceStore.getState();
         if (tab.ticketId === null)
           workspace.removeHomeTabFromSplit(tab.projectId, browserTabId(tab.tabId));
         else
@@ -243,10 +243,10 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     claimTab: claimProvisionalTab,
     activateTab: activateClaimedDraft,
     focusPane: (paneId) => {
-      if (selectedId !== null) useProjectUiStore.getState().focusHomePane(selectedId, paneId);
+      if (selectedId !== null) useWorkspaceStore.getState().focusHomePane(selectedId, paneId);
     },
     closePane: (paneId) => {
-      if (selectedId !== null) useProjectUiStore.getState().closeHomePane(selectedId, paneId);
+      if (selectedId !== null) useWorkspaceStore.getState().closeHomePane(selectedId, paneId);
     },
   });
   const {
@@ -265,12 +265,12 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     (id: string) => {
       if (selectedId === null) return;
       ungroupProvisionalTab(id, (tabId) =>
-        useProjectUiStore.getState().ungroupHomeTab(selectedId, tabId),
+        useWorkspaceStore.getState().ungroupHomeTab(selectedId, tabId),
       );
     },
     [selectedId, ungroupProvisionalTab],
   );
-  const recordedTab = useProjectUiStore((state) =>
+  const recordedTab = useWorkspaceStore((state) =>
     selectedId === null
       ? DEFAULT_WORKSPACE_UI.homeActiveTab
       : (state.byProject[selectedId]?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab),
@@ -513,7 +513,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     await openBrowserTab(browserApi, { projectId: selectedId }, (tabId) => {
       releaseActive();
       // A new Browser Tab OPENS into the shown group's focused pane.
-      useProjectUiStore.getState().openHomeTab(selectedId, tabId);
+      useWorkspaceStore.getState().openHomeTab(selectedId, tabId);
     });
   }, [browserApi, releaseActive, selectedId]);
 
@@ -698,7 +698,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
    * Home's store twins, and Home's own doors for a native payload. The
    * decisions — surface-or-pane reorder, the full-width centre's activation
    * door, a move to the top strip leaving its group — live in the seam, one
-   * copy shared with the Ticket view. `null` while no project is selected:
+   * copy shared with the ticket workspace. `null` while no project is selected:
    * there is no surface for a drop to write to.
    */
   const dropWrites = React.useMemo<SplitSurfaceWrites | null>(() => {
@@ -724,7 +724,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       },
       reorderPane: (paneId, movedId, ids) => moveHomeTabInPane(selectedId, paneId, movedId, ids),
       moveTabToPane: (tabId, paneId) => moveHomeTabToPane(selectedId, tabId, paneId),
-      ungroupTab: (tabId) => useProjectUiStore.getState().ungroupHomeTab(selectedId, tabId),
+      ungroupTab: (tabId) => useWorkspaceStore.getState().ungroupHomeTab(selectedId, tabId),
       splitPane: (paneId, edge, tabId) =>
         splitHomePane(selectedId, paneId, edge, {
           ...(tabId === null ? {} : { tabId }),
@@ -862,7 +862,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       chat.openChatTab(selectedId, sessionId);
       // A child it had to open OPENS into a shown group's focused pane.
       if (wasOpen) setHomeActiveTab(selectedId, chatTabId(sessionId));
-      else useProjectUiStore.getState().openHomeTab(selectedId, chatTabId(sessionId));
+      else useWorkspaceStore.getState().openHomeTab(selectedId, chatTabId(sessionId));
     },
     [selectedId, setHomeActiveTab],
   );
@@ -998,7 +998,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       onGroupDrop={(targetTabId, tabId, edge) => {
         if (selectedId === null) return;
         groupProvisionalTabs(targetTabId, tabId, edge, (target, tab, side) =>
-          useProjectUiStore.getState().groupHomeTabs(selectedId, target, tab, side),
+          useWorkspaceStore.getState().groupHomeTabs(selectedId, target, tab, side),
         );
       }}
       onTabDrop={applySplitDrop}
@@ -1015,7 +1015,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             shownGroupId={split.groupId}
             onUngroup={(groupId) => {
               releaseActive();
-              useProjectUiStore.getState().ungroupHome(selectedId, groupId);
+              useWorkspaceStore.getState().ungroupHome(selectedId, groupId);
             }}
             terminalTabs={terminalTabs}
             chatIds={openChatIds}
