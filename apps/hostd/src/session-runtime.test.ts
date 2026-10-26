@@ -335,6 +335,7 @@ describe("headless runtime ownership", () => {
       piRuntimeHost: f.assembly.piRuntimeHost,
       homeDir: "/home/service",
       cloudEnabled: expect.any(Function),
+      automationsAvailable: true,
       log: expect.objectContaining({ error: expect.any(Function) }),
     });
     // Prompt templates' precedence follows the environment's `cloud` opt-in.
