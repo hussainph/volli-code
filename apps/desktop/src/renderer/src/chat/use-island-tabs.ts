@@ -132,8 +132,11 @@ export function islandTabHost(tab: Pick<BrowserTabState, "url" | "title">): stri
   return title.length > 0 ? title : BROWSER_NEW_TAB_TITLE;
 }
 
-/** Keep ports and paths: localhost alone cannot identify a working page. */
-function addressOf(url: string): string {
+/**
+ * Keep ports and paths: localhost alone cannot identify a working page. Shared
+ * with the tab-group chip's menu, which names a Browser Tab the same way.
+ */
+export function browserTabAddress(url: string): string {
   if (isBrowserStartUrl(url)) return BROWSER_NEW_TAB_TITLE;
   try {
     const parsed = new URL(url);
@@ -168,7 +171,7 @@ export function islandTabOf(
     id: tab.tabId,
     host: islandTabHost(tab),
     title: browserTabDisplayTitle(tab),
-    detail: addressOf(tab.url),
+    detail: browserTabAddress(tab.url),
     needsAttention: tab.error !== null,
     state: tab.loading ? "loading" : "ready",
     // The wire still accepts legacy previews, but there is no miniature UI.

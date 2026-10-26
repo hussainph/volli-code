@@ -1666,6 +1666,11 @@ export function TicketDetail({
                     onPinFileTab={(relPath) => pinTicketFile(projectId, ticket.id, relPath)}
                     onCloseTab={closeTab}
                     onRenameSessionTab={renameSessionTab}
+                    onTakeOut={
+                      pane.activeTabId === null
+                        ? undefined
+                        : () => ungroupLocalTab(pane.activeTabId!)
+                    }
                   />
                 )
               }

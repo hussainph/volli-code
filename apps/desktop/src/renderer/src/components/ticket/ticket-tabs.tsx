@@ -43,6 +43,9 @@ import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-m
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
+import { PaneTakeOutButton } from "@renderer/components/split/pane-take-out-button";
+import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
+import { browserTabAddress } from "@renderer/chat/use-island-tabs";
 import {
   GroupedTabList,
   groupTabItems,
@@ -605,12 +608,22 @@ export function TicketTabStrip({
 }
 
 /**
- * A pane's strip without actions. The session-start control and rail toggle
- * stay at the top strip's right edge rather than following any pane.
+ * A pane's strip. The session-start control and rail toggle stay at the top
+ * strip's right edge rather than following any pane; a group pane's own
+ * trailing edge carries only the way out of the group
+ * ({@link PaneTakeOutButton}).
  */
-export function TicketPaneTabStrip({ label, ...list }: TicketTabListProps & { label: string }) {
+export function TicketPaneTabStrip({
+  label,
+  onTakeOut,
+  ...list
+}: TicketTabListProps & { label: string; onTakeOut?: () => void }) {
   return (
-    <TabStrip label={label} reorder={reorderFor(list)}>
+    <TabStrip
+      label={label}
+      reorder={reorderFor(list)}
+      actions={onTakeOut === undefined ? undefined : <PaneTakeOutButton onTakeOut={onTakeOut} />}
+    >
       <TicketTabList {...list} />
     </TabStrip>
   );
@@ -645,7 +658,17 @@ const TICKET_TAB_ICONS = {
 
 /** What a group chip's menu says about a ticket tab. */
 function ticketTabMenuLabel(tab: TicketTabDescriptor): TabMenuLabel {
-  return { label: tab.label, icon: TICKET_TAB_ICONS[tab.kind] };
+  const icon = TICKET_TAB_ICONS[tab.kind];
+  if (tab.browserTabId !== undefined) {
+    // Read when the menu opens — see the Home strip's twin.
+    const url = useBrowserTabsStore.getState().byId[tab.browserTabId]?.url;
+    return { label: tab.label, icon, detail: url === undefined ? null : browserTabAddress(url) };
+  }
+  if (tab.relPath !== undefined) {
+    const slash = tab.relPath.lastIndexOf("/");
+    return { label: tab.label, icon, detail: slash <= 0 ? null : tab.relPath.slice(0, slash) };
+  }
+  return { label: tab.label, icon };
 }
 
 /** The tabs themselves, drawn the same wherever the strip around them is. */

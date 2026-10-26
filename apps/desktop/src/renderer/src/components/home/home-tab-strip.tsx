@@ -22,6 +22,7 @@ import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-m
 import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
 import { CloudCheckoutControl } from "@renderer/components/cloud-checkout/cloud-checkout-control";
 import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
+import { PaneTakeOutButton } from "@renderer/components/split/pane-take-out-button";
 import {
   GroupedTabList,
   groupTabItems,
@@ -52,6 +53,8 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { Tab, TabStrip, type TabProps } from "@renderer/components/ui/tab-strip";
 import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
+import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
+import { browserTabAddress } from "@renderer/chat/use-island-tabs";
 
 /**
  * What the Home strip draws, per kind.
@@ -259,12 +262,22 @@ export function HomeTabStrip({
 }
 
 /**
- * A pane's strip without actions. The surface's controls stay on the
- * top strip's trailing edge, whichever pane is focused.
+ * A pane's strip. The surface's controls stay on the top strip's trailing
+ * edge, whichever pane is focused; a group pane's own trailing edge carries
+ * only the way out of the group ({@link PaneTakeOutButton}).
  */
-export function HomePaneTabStrip({ label, ...list }: HomeTabListProps & { label: string }) {
+export function HomePaneTabStrip({
+  label,
+  onTakeOut,
+  ...list
+}: HomeTabListProps & { label: string; onTakeOut?: () => void }) {
   return (
-    <TabStrip variant="folder" label={label} reorder={reorderFor(list)}>
+    <TabStrip
+      variant="folder"
+      label={label}
+      reorder={reorderFor(list)}
+      actions={onTakeOut === undefined ? undefined : <PaneTakeOutButton onTakeOut={onTakeOut} />}
+    >
       <HomeTabList {...list} />
     </TabStrip>
   );
@@ -293,8 +306,23 @@ function homeTabMenuLabel(tab: HomeTabDescriptor): TabMenuLabel {
   if (tab.kind === "board") return { label: "Board", icon: KanbanIcon };
   if (tab.kind === "terminal") return { label: tab.tab.title, icon: TerminalWindowIcon };
   if (tab.kind === "chat") return { label: tab.title, icon: ChatCircleIcon };
-  if (tab.kind === "browser") return { label: tab.title, icon: BrowserIcon };
-  return { label: tab.title, icon: FileIcon };
+  if (tab.kind === "browser") {
+    // Read when the menu opens: the address is the line that tells fifteen
+    // localhost tabs apart, and the strip's descriptor does not carry it.
+    const url = useBrowserTabsStore.getState().byId[tab.tabId]?.url;
+    return {
+      label: tab.title,
+      icon: BrowserIcon,
+      detail: url === undefined ? null : browserTabAddress(url),
+    };
+  }
+  return { label: tab.title, icon: FileIcon, detail: folderOf(tab.relPath) };
+}
+
+/** A project-relative path's folder, or `null` at the project root. */
+function folderOf(relPath: string): string | null {
+  const slash = relPath.lastIndexOf("/");
+  return slash <= 0 ? null : relPath.slice(0, slash);
 }
 
 /** The tabs themselves, drawn the same wherever the strip around them is. */

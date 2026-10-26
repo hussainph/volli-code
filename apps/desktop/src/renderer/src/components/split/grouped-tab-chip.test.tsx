@@ -14,6 +14,7 @@ import {
   type TicketTabDescriptor,
 } from "@renderer/components/ticket/ticket-tabs";
 import { Tab, TabStrip } from "@renderer/components/ui/tab-strip";
+import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { GroupedTabList, groupTabItems, type TabGroup } from "./grouped-tab-chip";
 
 const noop = () => {};
@@ -224,32 +225,45 @@ describe("a Home tab group's chip", () => {
     expect(container.querySelector('input[aria-label="Rename Chat"]')).not.toBeNull();
   });
 
-  it("lists the whole group by pane on right-click, front checked, and ungroups from there", async () => {
+  it("lists the whole group by pane on right-click: one row per tab, its pane and place, then Ungroup", async () => {
+    useBrowserTabsStore.setState({
+      byId: { one: { url: "http://127.0.0.1:5173/login?next=1" } as never },
+    } as never);
     const callbacks = home(chat.id);
     await openChipMenu();
-    const labels = [...document.querySelectorAll('[data-slot="context-menu-label"]')].map(
-      (label) => label.textContent,
-    );
-    expect(labels).toEqual(["Pane 1", "Pane 2"]);
-    const items = [...document.querySelectorAll('[data-slot="context-menu-radio-item"]')];
-    expect(items.map((item) => [item.textContent, item.getAttribute("aria-checked")])).toEqual([
-      ["Chat", "true"],
-      ["Notes", "false"],
-      ["Page", "true"],
+    const menu = document.querySelector('[data-slot="grouped-tab-menu"]')!;
+    expect(menu.textContent).toContain("Tab group");
+    expect(menu.textContent).toContain("2 panes");
+    const rows = [...menu.querySelectorAll('[data-slot="context-menu-item"][data-pane]')];
+    expect(
+      rows.map((row) => [
+        row.getAttribute("aria-label"),
+        row.getAttribute("data-pane"),
+        row.getAttribute("data-front"),
+        row.getAttribute("data-showing"),
+      ]),
+    ).toEqual([
+      ["Chat, pane 1, showing", "1", "true", "true"],
+      ["Notes, pane 1, behind", "1", "false", "false"],
+      ["Page, pane 2", "2", "true", "false"],
     ]);
-    // A segment's own tab menu gives way to the chip's.
-    expect(document.querySelector('[data-slot="context-menu-item"]')?.textContent).toBe("Ungroup");
+    // The line that tells like tabs apart: a page's host:port/path.
+    expect(rows[2]!.textContent).toContain("127.0.0.1:5173/login?next=1");
+    // No checkmarks: nothing in the menu is a radio any more.
+    expect(menu.querySelector('[data-slot="context-menu-radio-item"]')).toBeNull();
     await act(async () => {
-      items[1]!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      rows[1]!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(callbacks.select).toHaveBeenCalledWith(term);
     await openChipMenu();
+    const ungroup = [...document.querySelectorAll('[data-slot="context-menu-item"]')].find(
+      (row) => row.textContent === "Ungroup",
+    )!;
     await act(async () => {
-      document
-        .querySelector('[data-slot="context-menu-item"]')!
-        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      ungroup.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(callbacks.ungroup).toHaveBeenCalledWith("group-1");
+    useBrowserTabsStore.setState({ byId: {} } as never);
   });
 
   it("can hold the permanent Board without making it closable or draggable", () => {
@@ -385,4 +399,31 @@ it("marks no edge targets on a pane's own strip", () => {
   );
   expect(container.querySelector("[data-pair-target-id]")).toBeNull();
   expect(container.querySelector('[data-slot="grouped-tab-chip"]')).toBeNull();
+});
+
+it("puts the way out of the group on a pane strip's trailing edge (VC-614)", () => {
+  const takeOut = vi.fn();
+  act(() =>
+    root.render(
+      <HomePaneTabStrip
+        label="Pane 2 of 3"
+        projectId="project"
+        tabs={[browser]}
+        activeTabId={browser.id}
+        onTakeOut={takeOut}
+        onSelect={noop}
+        onClose={noop}
+        onRename={noop}
+        onPinFile={noop}
+        onCloseOtherFiles={noop}
+      />,
+    ),
+  );
+  const button = container.querySelector<HTMLButtonElement>('[data-slot="pane-take-out"]')!;
+  expect(button.getAttribute("aria-label")).toBe("Take out of group");
+  act(() => button.click());
+  expect(takeOut).toHaveBeenCalledTimes(1);
+  // The top strip, and a pane strip given no way out, draw none.
+  home(chat.id);
+  expect(container.querySelector('[data-slot="pane-take-out"]')).toBeNull();
 });

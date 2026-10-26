@@ -7,9 +7,6 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
-  ContextMenuLabel,
-  ContextMenuRadioGroup,
-  ContextMenuRadioItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
@@ -34,6 +31,11 @@ export interface TabGroup {
 export interface TabMenuLabel {
   label: string;
   icon: Icon;
+  /**
+   * The second line that tells two like tabs apart — a Browser Tab's
+   * host:port/path, a File tab's folder. `null` when the title is enough.
+   */
+  detail?: string | null;
 }
 
 type StripItem<T> =
@@ -85,8 +87,15 @@ export function groupTabItems<T extends { id: string }>(
 /**
  * One chip for a whole group: each pane's front tab is a segment (a click
  * selects that pane), and the right-click menu lists every tab of the group,
- * pane by pane, its front checked — choosing one brings it to the front of its
+ * pane by pane — choosing one brings it to the front of its
  * pane — with Ungroup to dissolve the group, every tab staying open.
+ *
+ * The menu (VC-614, owner feedback) is one row per tab, in pane order: its
+ * glyph, its title over the line that tells like tabs apart (a page's
+ * host:port/path, a file's folder), and its pane's number at the trailing edge.
+ * The tab on screen is emphasised and a tab stacked behind its pane's front is
+ * muted; no checkmarks, which on a group of single-tab panes would mark every
+ * row and say nothing.
  *
  * A group that is NOT on screen draws SUMMARIZED (`compact`): the first pane's
  * front keeps a shortened label and the other panes fold into a `+n` count, so
@@ -97,6 +106,7 @@ export function groupTabItems<T extends { id: string }>(
 function GroupedTabChip<T extends { id: string }>({
   item,
   active,
+  activeTabId,
   compact,
   describe,
   onSelect,
@@ -105,6 +115,8 @@ function GroupedTabChip<T extends { id: string }>({
 }: {
   item: Extract<StripItem<T>, { group: TabGroup }>;
   active: boolean;
+  /** The surface's active tab: the one on screen, if this group is shown. */
+  activeTabId: string;
   /** Summarized: see `grouped-tab-chip.css`. */
   compact: boolean;
   describe(tab: T): TabMenuLabel;
@@ -132,30 +144,51 @@ function GroupedTabChip<T extends { id: string }>({
           {children}
         </div>
       </ContextMenuTrigger>
-      <ContextMenuContent>
+      <ContextMenuContent data-slot="grouped-tab-menu" className="w-72">
+        <div
+          aria-hidden
+          className="flex items-center justify-between px-2 pt-1 pb-1.5 text-label text-muted-foreground"
+        >
+          <span>Tab group</span>
+          <span className="tabular-nums">{`${item.stacks.filter((stack) => stack.tabs.length > 0).length} panes`}</span>
+        </div>
         {item.stacks.map(({ pane, tabs }, index) =>
-          tabs.length === 0 ? null : (
-            <ContextMenuRadioGroup
-              key={pane.paneId}
-              value={pane.activeTabId ?? ""}
-              onValueChange={(id) => {
-                const tab = tabs.find((candidate) => candidate.id === id);
-                if (tab !== undefined) onSelect(tab);
-              }}
-            >
-              {index === 0 ? null : <ContextMenuSeparator />}
-              <ContextMenuLabel>{`Pane ${index + 1}`}</ContextMenuLabel>
-              {tabs.map((tab) => {
-                const { label, icon: Glyph } = describe(tab);
-                return (
-                  <ContextMenuRadioItem key={tab.id} value={tab.id}>
-                    <Glyph aria-hidden />
-                    <span className="truncate">{label}</span>
-                  </ContextMenuRadioItem>
-                );
-              })}
-            </ContextMenuRadioGroup>
-          ),
+          tabs.map((tab) => {
+            const { label, icon, detail } = describe(tab);
+            const front = tab.id === (pane.activeTabId ?? tabs[0]?.id);
+            const showing = active && tab.id === activeTabId;
+            return (
+              <ContextMenuItem
+                key={tab.id}
+                icon={icon}
+                data-pane={index + 1}
+                data-front={front}
+                data-showing={showing}
+                aria-label={`${label}, pane ${index + 1}${showing ? ", showing" : front ? "" : ", behind"}`}
+                onSelect={() => onSelect(tab)}
+                className={cn(
+                  "py-1.5",
+                  showing && "font-medium [&>svg]:text-foreground",
+                  !front && "text-muted-foreground",
+                )}
+              >
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate">{label}</span>
+                  {detail ? (
+                    <span className="truncate text-label font-normal text-muted-foreground">
+                      {detail}
+                    </span>
+                  ) : null}
+                </span>
+                <span
+                  aria-hidden
+                  className="flex size-4 shrink-0 items-center justify-center rounded-sm border border-border text-label font-normal text-muted-foreground tabular-nums"
+                >
+                  {index + 1}
+                </span>
+              </ContextMenuItem>
+            );
+          }),
         )}
         {onUngroup === undefined ? null : (
           <>
@@ -261,6 +294,7 @@ export function GroupedTabList<T extends { id: string }>({
         key={item.group.id}
         item={item}
         active={active}
+        activeTabId={activeTabId}
         compact={compact}
         describe={describe}
         onSelect={onSelect}

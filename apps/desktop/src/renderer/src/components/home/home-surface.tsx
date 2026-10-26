@@ -1090,6 +1090,11 @@ export function HomeSurface({ visible }: { visible: boolean }) {
                     onReorder={(movedId, ids) => reorderInPane(pane.id, movedId, ids)}
                     onPinFile={(relPath) => pinHomeFile(selectedId, relPath)}
                     onCloseOtherFiles={(relPath) => void requestCloseOtherFiles(relPath)}
+                    onTakeOut={
+                      pane.activeTabId === null
+                        ? undefined
+                        : () => ungroupLocalTab(pane.activeTabId!)
+                    }
                   />
                 )
               }
@@ -1209,8 +1214,9 @@ function HomeTabs({
   actions,
   label,
   tabIds,
+  onTakeOut,
   ...strip
-}: HomeStripProps & { actions?: HomeStripActions }) {
+}: HomeStripProps & { actions?: HomeStripActions; onTakeOut?: () => void }) {
   const descriptors = useHomeTabDescriptors(strip);
   const byId = new Map(descriptors.map((tab) => [tab.id, tab]));
   const tabs = tabIds.flatMap((id) => {
@@ -1233,7 +1239,7 @@ function HomeTabs({
     onCloseOtherFiles: strip.onCloseOtherFiles,
   };
   return actions === undefined ? (
-    <HomePaneTabStrip {...list} />
+    <HomePaneTabStrip {...list} onTakeOut={onTakeOut} />
   ) : (
     <HomeTabStrip {...list} {...actions} />
   );
