@@ -10,18 +10,21 @@ import { paneCellLabel } from "@renderer/components/split/split-tab-partition";
 import { cn } from "@renderer/lib/utils";
 
 /**
- * THE PLANE OF A TABBED SURFACE, split into panes (VC-202 §3).
+ * THE PLANE OF A TABBED SURFACE, split into panes (VC-202 §3, VC-614).
  *
  * One grid draws both cases, and that is the whole compatibility argument: an
- * UNSPLIT surface resolves to a single pane, which this renders as one cell
- * with no ring, no inner strip and no divider — the plane it always was. There
- * is no "split rendering path" to fall out of sync with the ordinary one.
+ * ordinary tab shown full width resolves to a single pane, which this renders
+ * as one cell with no ring, no inner strip and no divider — the plane it always
+ * was. A shown tab GROUP is a tree of cells, and EVERY one of them draws its
+ * own strip of its stack ({@link SplitViewGridProps.renderStrip}) above what
+ * its front tab renders ({@link SplitViewGridProps.renderContent}): the top
+ * strip names the group as one chip, the panes name their own tabs. This file
+ * owns the geometry, the focus boundary and the ring — nothing else.
  *
- * The caller keeps everything that is about tabs: each pane's strip
- * ({@link SplitViewGridProps.renderStrip}, drawn here only below a down split;
- * the top-edge panes share `SplitViewTabBar`) and what a pane's front tab
- * renders as ({@link SplitViewGridProps.renderContent}). This file owns the
- * geometry, the focus boundary and the ring — nothing else.
+ * Nothing live is owned by a cell. Terminals and Browser Tabs are resident in
+ * their own layers and a cell only lends them an anchor, so a layout change
+ * here — grouping, ungrouping, switching groups, a tab moving between panes —
+ * re-anchors them and never remounts one.
  *
  * FOCUS IS A POINTER-DOWN IN THE CELL, captured. Capture because the thing
  * clicked is usually a terminal canvas, a Monaco editor or a chat composer,
@@ -38,7 +41,7 @@ import { cn } from "@renderer/lib/utils";
  */
 export interface SplitViewGridProps {
   view: ResolvedSplitView;
-  /** A lower pane's tab strip, or null when it holds no tabs. */
+  /** A shown group pane's own tab strip (never asked for the full-width pane). */
   renderStrip(pane: ResolvedSplitViewPane): React.ReactNode;
   /** What the pane's front tab draws — or its empty-pane menu. */
   renderContent(pane: ResolvedSplitViewPane): React.ReactNode;
@@ -70,25 +73,13 @@ export function paneIdForElement(element: Element | null): string | null {
   return element?.closest("[data-pane-id]")?.getAttribute("data-pane-id") ?? null;
 }
 
-export function SplitViewGrid({
-  view,
-  renderStrip,
-  renderContent,
-  renderOverlay,
-  onFocusPane,
-  onResizeSplit,
-}: SplitViewGridProps) {
+export function SplitViewGrid({ view, ...props }: SplitViewGridProps) {
   return (
     <SplitViewNodeView
+      {...props}
       node={view.root}
       focusedPaneId={view.focusedPaneId}
       paneCount={view.panes.length}
-      topEdge
-      renderStrip={renderStrip}
-      renderContent={renderContent}
-      renderOverlay={renderOverlay}
-      onFocusPane={onFocusPane}
-      onResizeSplit={onResizeSplit}
     />
   );
 }
@@ -97,7 +88,6 @@ interface SplitViewNodeProps extends Omit<SplitViewGridProps, "view"> {
   node: ResolvedSplitViewNode;
   focusedPaneId: string;
   paneCount: number;
-  topEdge: boolean;
 }
 
 /** Shared by the main tab bar and the plane: split the 6px grip cost evenly. */
@@ -126,7 +116,7 @@ function SplitViewNodeView(props: SplitViewNodeProps) {
         onChange={(ratio) => props.onResizeSplit(node.id, ratio)}
       />
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-        <SplitViewNodeView {...props} node={node.second} topEdge={props.topEdge && row} />
+        <SplitViewNodeView {...props} node={node.second} />
       </div>
     </div>
   );
@@ -136,7 +126,6 @@ function SplitViewCell({
   pane,
   focusedPaneId,
   paneCount,
-  topEdge,
   renderStrip,
   renderContent,
   renderOverlay,
@@ -160,7 +149,7 @@ function SplitViewCell({
             : "ring-1 ring-border/50 ring-inset"),
       )}
     >
-      {topEdge ? null : renderStrip(pane)}
+      {split ? renderStrip(pane) : null}
       {/* The content box, and the one thing allowed to cover it. A box of its
           own rather than the cell, so an overlay's `inset-0` means "the pane's
           content" and not "the content and the strip above it". */}

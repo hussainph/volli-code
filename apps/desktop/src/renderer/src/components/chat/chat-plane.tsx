@@ -188,7 +188,10 @@ import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { delayUntil } from "@renderer/lib/boundary-timer";
 
-import { BrowserPreview } from "@renderer/components/browser/browser-preview";
+import {
+  revealIslandBrowserTab,
+  showBrowserTab,
+} from "@renderer/components/browser/show-browser-tab";
 import { BrowserCardHostContext } from "@renderer/components/browser/browser-tab-card";
 import { BrowserTraceDialog } from "@renderer/components/browser/browser-trace-dialog";
 import type { BrowserTraceRequest } from "@renderer/components/browser/browser-trace-model";
@@ -267,9 +270,8 @@ export interface ChatPlaneProps {
   /** Project scope for Model Access and file navigation. */
   projectId: string;
   /**
-   * Whether the surface around this chat is on screen. Only the pinned
-   * Browser preview reads it (VC-238): a native view ignores the CSS that
-   * stands the rest of the plane down, so it has to be told. Default true.
+   * Whether the surface around this chat is on screen. Remote stream and
+   * running-shell subscriptions stand down while hidden. Default true.
    */
   visible?: boolean;
   /** Modal previews cannot let a tall question/composer grow past their header.
@@ -350,16 +352,35 @@ export function ChatPlane({
     [projectId, sessionId],
   );
   const cardHost = browser?.cardHost ?? null;
-  const tracedCardHost = React.useMemo(
-    () => (cardHost === null ? null : { ...cardHost, openTrace: setTraceRequest }),
+  // The Island's row says "Show tab" or "Open beside chat" by where the tab is
+  // now, and this does what it says — never a bare show for both.
+  const revealBrowserTab = React.useCallback(
+    async (tabId: string) => {
+      if (cardHost !== null) await revealIslandBrowserTab(cardHost.api, tabId);
+    },
     [cardHost],
+  );
+  const openBrowserBeside = React.useCallback(
+    async (tabId: string) => {
+      if (cardHost !== null) await showBrowserTab(cardHost.api, tabId, "beside-owner");
+    },
+    [cardHost],
+  );
+  const tracedCardHost = React.useMemo(
+    () =>
+      cardHost === null
+        ? null
+        : { ...cardHost, openTrace: setTraceRequest, openBeside: openBrowserBeside },
+    [cardHost, openBrowserBeside],
   );
   const island = useActivityIsland(sessionId, projectId, {
     ...(store === undefined ? {} : { store }),
     ...(shellsApi === undefined ? {} : { openShellOutput: setOpenShellId }),
     peekSession: setPeekedAgentId,
     ...(onOpenSession === undefined ? {} : { openSession: onOpenSession }),
-    ...(browser === null ? {} : { openTrace: setTraceRequest }),
+    ...(browser === null
+      ? {}
+      : { openTrace: setTraceRequest, openBrowserBeside: revealBrowserTab }),
   });
   // The peeked child as the island models it; a child that left the listing
   // while peeked closes the overlay with it.
@@ -1904,30 +1925,6 @@ export function ChatPlane({
           </FileMentionProvider>
         </BrowserCardHostContext.Provider>
       </CodeModePictureHostContext.Provider>
-
-      {/* The tab a person asked to see (VC-238), IN FLOW between the transcript
-          and the composer rather than inside the composer's absolute block: a
-          native view cannot be clipped, so a pane too short for the block would
-          push the pinned page up behind whatever sits above this plane — in a
-          split, another pane's own native view — and its header with it. Here
-          the transcript shrinks to make room, the frame is bounded by the
-          plane's own height, and the composer's measured block still clears
-          the bottom. */}
-      {browser !== null && browser.preview !== null ? (
-        <div
-          className="flex min-h-0 shrink-0 flex-col"
-          style={{ marginBottom: "var(--composer-height)", maxHeight: "45%" }}
-        >
-          <ContentColumn className="flex min-h-0 flex-col">
-            <BrowserPreview
-              tab={browser.preview}
-              api={browser.api}
-              ownerLabel={browser.ownerLabel(browser.preview)}
-              visible={surfaceVisible}
-            />
-          </ContentColumn>
-        </div>
-      ) : null}
 
       {/* Opaque, because the transcript scrolls the full height of the plane
           behind it. The fade above hands off to this; between them the

@@ -53,6 +53,7 @@ const execFileAsync = promisify(execFile);
 const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
 
   launch [--fixture basic|empty] [--model fake|env] [--idle-min 20]
+         [--fake-script file.json] deterministic fake-provider reply sequence
          [--no-build] [--json]     start an instance (dev build only; packed
                                    apps are refused until VC-705); prints its
                                    id + evidence dir
@@ -179,6 +180,14 @@ async function launch(flags) {
     remoteAcceptance = { tarballs: acceptanceTarballs(process.env.VOLLI_HOSTD_DEV_TARBALLS) };
   }
   if (!["fake", "env"].includes(model)) fail("--model is fake or env");
+  let fakeScript;
+  if (flags.fakeScript) {
+    if (model !== "fake" || flags.remoteAcceptance)
+      fail("--fake-script requires --model fake without remote acceptance");
+    fakeScript = JSON.parse(await fs.readFile(flags.fakeScript, "utf8"));
+    if (!Array.isArray(fakeScript))
+      fail("--fake-script must contain a JSON array of fake-provider replies");
+  }
   let cloud = null;
   let cloudEnv = {};
   if (flags.cloud) {
@@ -228,6 +237,7 @@ async function launch(flags) {
     build,
     appBinary: null,
     remoteAcceptance,
+    ...(fakeScript === undefined ? {} : { fakeScript }),
     cloud,
     bundle: BUILT_MAIN,
     idleMs,

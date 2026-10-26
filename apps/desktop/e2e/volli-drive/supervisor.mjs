@@ -622,8 +622,19 @@ async function boot() {
   if (spec.remoteAcceptance) assertAcceptanceRunner();
   if (spec.model === "fake") {
     const { startFakeProvider } = await import("./lib/fake-provider.mjs");
+    const replies = spec.fakeScript?.slice();
     provider = await startFakeProvider({
-      ...(spec.remoteAcceptance ? { script: acceptanceScript } : {}),
+      ...(spec.remoteAcceptance
+        ? { script: acceptanceScript }
+        : replies === undefined
+          ? {}
+          : {
+              // Tool-free refinements such as auto-title must not consume a scripted agent turn.
+              script: (turn) =>
+                Array.isArray(turn.body.tools) && turn.body.tools.length > 0
+                  ? replies.shift()
+                  : undefined,
+            }),
       log: (record) => slog(`[fake-provider] ${JSON.stringify(record)}`),
     });
     slog(`fake provider at ${provider.url} (${provider.providerId}/${provider.modelId})`);

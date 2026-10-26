@@ -299,7 +299,11 @@ Heights come from the primitive's size variants — don't restate them per-use:
 | `lg` / `icon-lg` | 32px | `text-sm` | rare hero actions (empty states) |
 
 `default` is the chip height on purpose: a default Button next to a filter chip reads as one family.
-Nothing in the app should render a taller control than `lg`.
+Nothing in the app should render a taller standalone control than `lg`.
+The tab strip's **Earlier/Later tabs** travel targets are the one chrome-bound
+exception: rectangular edges spanning the complete folder band, including its
+8px top inset. They close the scroller's boundary rather than float as pills;
+matching that band avoids a dead strip above the overflow arrow.
 
 **A checkbox is the one control that is not a pill, and not a rung.** `ui/checkbox.tsx` is a
 16px box whose corner is half the smallest rung (`calc(var(--radius-sm) / 2)`, 4px). Every rung
@@ -344,63 +348,54 @@ Click-and-drag tiles — board cards, tabs before the drag engages — keep the 
 click is the primary answer, and the closed hand appears only once a drag is actually carrying
 something. The UI lab (`renderer/lab/`) is a scratch space and is not held to this.
 
-## Split view — panes, zones, and the empty pane (VC-202)
+## Split view — tab groups
 
-Both tabbed surfaces divide their plane into **panes** (`components/split/`). One grid draws the
-split and unsplit cases, so the unsplit plane is not a special path: it is one pane, with none of
-the chrome below.
+A split belongs to a **tab group**, not to the whole work area (VC-614). Home
+and each Ticket keep ONE top strip for ordinary tabs and every group: a group
+is one chip with a seam between its segments, and each segment is one pane's
+front tab. Selecting a segment shows the group with that pane focused;
+selecting an ordinary tab restores a full-width plane, and the chip brings the
+group back with its ratios, stacks and fronts. The focused pane's front has a
+fine primary underline inside the chip.
+
+A group has two or more panes, each a stack of tabs with **its own folder
+strip** above it — a pane of one tab too, so its tab can always be closed,
+renamed or dragged. A tab opened while a group is shown joins the focused
+pane's stack, in front. Right-click the chip for the whole group, pane by pane
+(each front checked) and **Ungroup**. A tab dropped on a top-strip tab's left
+or right edge groups beside it; a pane's centre stacks, its edges split; a
+pane's tab dropped on the top strip leaves its group. Nothing here closes a
+tab: a pane emptied by a move collapses, and a group left with one pane
+dissolves into ordinary tabs.
 
 | Mark | Treatment | Says |
 |---|---|---|
-| Focused pane | `ring-1 ring-primary/50 ring-inset` | the rail is reading THIS pane's front tab |
-| Unfocused pane | `ring-1 ring-border/50 ring-inset` | a pane, and not the one in context |
-| Divider | 6px grip, `bg-border` hairline → `bg-primary/70` on hover, 150ms | draggable, and where |
-| Drop preview | `bg-primary/10` + `ring-1 ring-primary/40 ring-inset`, `rounded-md` | where the drop would land |
+| Focused plane | `ring-1 ring-primary/50 ring-inset` | the rail reads this pane, and new tabs open here |
+| Other plane | `ring-1 ring-border/50 ring-inset` | another pane of the shown group |
+| Divider | 6px grip, `bg-border` hairline → `bg-primary/70` on hover, 150ms | resize two panes |
+| Tab-edge drop mark | a primary edge at the insertion side | group beside this tab |
+| Content drop preview | `bg-primary/10`, `ring-1 ring-primary/40 ring-inset` | the resulting half-plane, or the whole pane |
 
-Neither ring is drawn while a surface has one pane: a ring around the only pane is chrome about a
-choice nobody has made. Both are the terminal split's own vocabulary
-(`sessions/session-split-layout.tsx`) because a split is the same act at two scopes — and splits
-open **right or down only** in both, which is what keeps the permanent tab's pane in the top left
-at the start of the main bar.
+An ordinary full-width tab has no plane ring, divider or pane strip. Live
+terminals and Browser Tabs are resident behind anchors, so grouping, switching
+and moving re-anchor them without remounting.
 
-**The main bar splits with the plane (VC-333).** Panes along the top edge share
-one bar height, divided at the same ratios and grip widths as their content.
-Only a pane below a down split adds a lower tab strip, and only when it holds
-tabs. Mixed trees follow that rule recursively. The surface-wide new-session
-control and rail toggle stay once at the main bar's far right; the last segment
-extends over an open rail without moving the pane dividers.
+**Open beside chat** shows an agent Browser Tab to the right of its owning chat,
+splitting the chat's pane when the chat is already grouped. The Activity Island
+lists page titles over host:port and path; it does not embed a thumbnail or a
+pinned preview, and **Show tab** only selects. A close removes the row
+immediately and offers Undo before native destruction.
 
-A pane is then one region drawn in two boxes, and the two boxes behave as one:
-a press anywhere in a pane's segment of the bar focuses that pane exactly as a
-press in its content does. The trailing actions cluster is the one exclusion —
-it acts on the surface and opens into whichever pane is focused, so pressing it
-never moves focus to the pane it happens to sit in. An empty top-edge segment
-keeps its share of the bar so the seams stay aligned, but draws a plain band
-rather than an empty named tablist.
+`⌘\` / `⇧⌘\` split the focused pane (a full-width tab becomes a group of two)
+and open an empty pane whose menu offers New chat, New terminal, New browser,
+Open file… and Close pane. Keyboard splits have no entry animation. Drag
+previews alone transition, with reduced motion disabling them. Untouched Chat
+Draft identities stay renderer-local until their first content, which claims
+them into the pane they were opened in.
 
-**One seam, one announced grip.** A row split is draggable along its whole
-height, bar and plane alike, but only the plane's grip is a `separator` in the
-accessibility tree and the tab order. Two would announce two dividers and cost
-two identical tab stops where the user sees one boundary.
-
-**Drop zones draw the result, never the target.** A pane's content box is tiled by three regions —
-a full-height column down the right edge, a strip along the bottom of what is left, and the centre
-(each edge band the outer 25%, floor 48px). The regions themselves are invisible; what lights up is
-the rectangle the drop would leave behind: the right half, the bottom half, or the whole pane for a
-move. One preview element, so crossing from the centre into a band morphs the rectangle rather than
-swapping two of them. Zones cover the content only — never the pane's own strip, where the same
-drag means a reorder.
-
-**Motion is the drag's, and only the drag's.** One always-mounted preview element carries the
-whole budget: opacity and its four box properties, named exactly, 150ms `ease-out` — it fades in
-where the pointer entered, morphs between zones, and never blinks; `motion-reduce` cancels it. A pane opened from the keyboard (`⌘\`, `⇧⌘\`) appears with **no animation at all** —
-it is a chord pressed tens of times a day — and hands focus to its menu's first row.
-
-**The empty pane is a menu, not a message.** Five rows at the `lg` rung (32px, the size this
-document reserves for empty states) in a `w-72` column: New chat `⌘T`, New terminal `⌥⌘T`, New
-browser, Open file… `⌘P`, Close pane. Icon, label, right-aligned chord hint in the menus' own `MENU_SHORTCUT`.
-No heading, no explanation, and above all no "drag a tab here": each row is a verb, with a chord
-beside it where one exists. Browser and Close pane have no chord.
+Saved legacy splits read back as one group, stacks kept. Group metadata is
+additive; `root` stays the shown group (or one pane) as a legacy tree, so older
+builds open the same workspace safely even when they cannot keep the groups.
 
 ## The ticket rail (VC-406)
 

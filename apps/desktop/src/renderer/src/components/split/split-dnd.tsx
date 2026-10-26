@@ -33,6 +33,7 @@
 import * as React from "react";
 import {
   closestCenter,
+  defaultDropAnimationSideEffects,
   DndContext,
   DragOverlay,
   KeyboardSensor,
@@ -43,8 +44,11 @@ import {
   type CollisionDetection,
   type DragEndEvent,
   type DragStartEvent,
+  type DragMoveEvent,
+  type DropAnimation,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
+import { SPLIT_VIEW_ROOT_PANE_ID } from "@volli/shared";
 
 import {
   isSplitZoneId,
@@ -52,6 +56,7 @@ import {
   splitTabDropOperation,
   subscribeSplitDrag,
   splitDragSnapshot,
+  TOP_STRIP_DROP_ID,
   type SplitDragOrigin,
   type SplitDragPayload,
   type SplitDropOperation,
@@ -95,6 +100,11 @@ export interface SplitDndProps {
   /** A Session or file row dropped on a zone. */
   onNativeDrop(payload: SplitDragPayload, paneId: string, zone: SplitDropZone): void;
   children: React.ReactNode;
+  /**
+   * A tab released on the left or right quarter of a top-strip tab — an
+   * ordinary one, or a group chip's segment — groups beside it on that edge.
+   */
+  onGroupDrop?(targetTabId: string, tabId: string, edge: "left" | "right"): void;
 }
 
 /**
@@ -111,14 +121,18 @@ function useSurfaceSensors() {
 }
 
 /**
- * Zones first, then the strip the pointer is in, then nothing.
+ * Zones first, then the strip the pointer is in, then the top strip itself,
+ * then nothing.
  *
  * A KEYBOARD drag has no pointer, and zones are pointer-only in v1 (`⌘\` is the
  * keyboard's route to a split) — so with no coordinates this is the plain
  * `closestCenter` over tabs the strip has always used.
  */
 const splitCollision: CollisionDetection = (args) => {
-  const tabs = args.droppableContainers.filter((container) => !isSplitZoneId(String(container.id)));
+  const tabs = args.droppableContainers.filter((container) => {
+    const id = String(container.id);
+    return !isSplitZoneId(id) && id !== TOP_STRIP_DROP_ID;
+  });
   const pointer = args.pointerCoordinates;
   if (pointer === null) return closestCenter({ ...args, droppableContainers: tabs });
 
@@ -133,21 +147,102 @@ const splitCollision: CollisionDetection = (args) => {
     const rect = container.rect.current;
     return rect !== null && pointer.y >= rect.top - 6 && pointer.y <= rect.bottom + 6;
   });
-  return inBand.length === 0 ? [] : closestCenter({ ...args, droppableContainers: inBand });
+  if (inBand.length > 0) return closestCenter({ ...args, droppableContainers: inBand });
+  // On the top strip but over none of its tabs: still a drop ON the strip.
+  const strip = args.droppableContainers.filter(
+    (container) => String(container.id) === TOP_STRIP_DROP_ID,
+  );
+  return pointerWithin({ ...args, droppableContainers: strip });
 };
 
-export function SplitDnd({ origin, panes, onTabDrop, onNativeDrop, children }: SplitDndProps) {
-  const sensors = useSurfaceSensors();
-  const reducedMotion = useReducedMotion();
-  const [activeTabId, setActiveTabId] = React.useState<string | null>(null);
-  const [ghostLabel, setGhostLabel] = React.useState<string | null>(null);
-  const nativePayload = useAcceptedNativeDrag(origin);
+/**
+ * The ghost's flight home once it is let go. INERT from the release: until the
+ * flight ends it still sits over the strip — usually over the very tab it is
+ * returning to — and a press there is meant for that tab, not for a picture of
+ * it. dnd-kit's own side effect (the source hidden while its ghost lands) is
+ * kept, composed rather than replaced.
+ */
+const GHOST_DROP_ANIMATION: DropAnimation = {
+  duration: 150,
+  easing: "cubic-bezier(0.23, 1, 0.32, 1)",
+  sideEffects: (parameters) => {
+    parameters.dragOverlay.node.style.pointerEvents = "none";
+    return defaultDropAnimationSideEffects({ styles: { active: { opacity: "0" } } })(parameters);
+  },
+};
 
+/**
+ * Whether two tabs sit in the shown group together. `panes` are the shown
+ * group's panes beside the top strip's own (`SPLIT_VIEW_ROOT_PANE_ID`), so two
+ * tabs both outside the root pane share that one group.
+ */
+function sharesShownGroup(panes: readonly SplitPaneTabs[], first: string, second: string) {
+  const grouped = (id: string) =>
+    panes.some((pane) => pane.paneId !== SPLIT_VIEW_ROOT_PANE_ID && pane.tabIds.includes(id));
+  return grouped(first) && grouped(second);
+}
+
+export function SplitDnd({
+  origin,
+  panes,
+  onTabDrop,
+  onNativeDrop,
+  onGroupDrop,
+  children,
+}: SplitDndProps) {
+  const areaRef = React.useRef<HTMLDivElement>(null);
+  // Collision coordinates are viewport coordinates. Drag-event delta also
+  // includes scroll compensation and cannot be added to the activation point.
+  const pointerRef = React.useRef<{ x: number; y: number } | null>(null);
+  const collisionDetection = React.useCallback<CollisionDetection>((args) => {
+    pointerRef.current = args.pointerCoordinates;
+    return splitCollision(args);
+  }, []);
   // Read at drop time rather than closed over: a drag can outlive several
   // renders (a chat streams a title, a pane resizes), and the panes as they
   // stand when the pointer is released are the ones the drop is about.
   const panesRef = React.useRef(panes);
   panesRef.current = panes;
+  const previewRef = React.useRef<HTMLElement | null>(null);
+  const clearPairPreview = React.useCallback(() => {
+    previewRef.current?.removeAttribute("data-pair-drop-edge");
+    previewRef.current = null;
+  }, []);
+  const pairDrop = React.useCallback(
+    (event: DragMoveEvent | DragEndEvent) => {
+      if (onGroupDrop === undefined || !(event.activatorEvent instanceof MouseEvent)) return null;
+      const pointer = pointerRef.current;
+      if (pointer === null) return null;
+      const { x, y } = pointer;
+      const area = areaRef.current;
+      for (const target of area?.querySelectorAll<HTMLElement>("[data-pair-target-id]") ?? []) {
+        if (target.closest("[data-split-area]") !== area) continue;
+        const id = target.dataset.pairTargetId;
+        if (id === undefined || id === String(event.active.id)) continue;
+        // A segment of the dragged tab's OWN group is no target: grouping
+        // beside a tab it is already grouped with changes nothing, and an edge
+        // lit for a no-op would swallow the drop that leaves the group.
+        if (sharesShownGroup(panesRef.current, String(event.active.id), id)) continue;
+        const scroller = target.closest('[data-slot="tab-scroll"]');
+        if (scroller !== null) {
+          const clip = scroller.getBoundingClientRect();
+          if (x < clip.left || x > clip.right || y < clip.top || y > clip.bottom) continue;
+        }
+        const rect = target.getBoundingClientRect();
+        if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) continue;
+        const fraction = (x - rect.left) / rect.width;
+        if (fraction > 0.25 && fraction < 0.75) return null;
+        return { target, id, edge: fraction <= 0.25 ? "left" : "right" } as const;
+      }
+      return null;
+    },
+    [onGroupDrop],
+  );
+  const sensors = useSurfaceSensors();
+  const reducedMotion = useReducedMotion();
+  const [activeTabId, setActiveTabId] = React.useState<string | null>(null);
+  const [ghostLabel, setGhostLabel] = React.useState<string | null>(null);
+  const nativePayload = useAcceptedNativeDrag(origin);
 
   const handleDragStart = React.useCallback((event: DragStartEvent) => {
     setActiveTabId(String(event.active.id));
@@ -156,9 +251,16 @@ export function SplitDnd({ origin, panes, onTabDrop, onNativeDrop, children }: S
   }, []);
 
   const handleDragEnd = React.useCallback(
-    ({ active, over }: DragEndEvent) => {
+    (event: DragEndEvent) => {
+      const { active, over } = event;
       setActiveTabId(null);
       setGhostLabel(null);
+      clearPairPreview();
+      const edgeDrop = pairDrop(event);
+      if (edgeDrop !== null && onGroupDrop !== undefined) {
+        onGroupDrop(edgeDrop.id, String(active.id), edgeDrop.edge);
+        return;
+      }
       const operation = splitTabDropOperation({
         activeId: String(active.id),
         overId: over === null ? null : String(over.id),
@@ -166,13 +268,14 @@ export function SplitDnd({ origin, panes, onTabDrop, onNativeDrop, children }: S
       });
       if (operation !== null) onTabDrop(operation);
     },
-    [onTabDrop],
+    [onTabDrop, onGroupDrop, pairDrop, clearPairPreview],
   );
 
   const handleDragCancel = React.useCallback(() => {
     setActiveTabId(null);
     setGhostLabel(null);
-  }, []);
+    clearPairPreview();
+  }, [clearPairPreview]);
 
   const state = React.useMemo<SplitDndState>(
     () => ({ activeTabId, nativePayload, onNativeDrop }),
@@ -182,21 +285,31 @@ export function SplitDnd({ origin, panes, onTabDrop, onNativeDrop, children }: S
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={splitCollision}
+      collisionDetection={collisionDetection}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
+      onDragMove={(event) => {
+        clearPairPreview();
+        const pair = pairDrop(event);
+        if (pair !== null) {
+          pair.target.setAttribute("data-pair-drop-edge", pair.edge);
+          previewRef.current = pair.target;
+        }
+      }}
       onDragCancel={handleDragCancel}
     >
       <SplitDndStateContext.Provider value={state}>
-        <TabStripSurface>{children}</TabStripSurface>
+        <TabStripSurface>
+          <div ref={areaRef} data-split-area className="contents">
+            {children}
+          </div>
+        </TabStripSurface>
       </SplitDndStateContext.Provider>
       <DragOverlay
         // The tab returns to its slot in the time a dropdown opens. `null`
         // under reduced motion: a drop that lands is a state change, and the
         // flight back is the decoration the flag turns off.
-        dropAnimation={
-          reducedMotion ? null : { duration: 150, easing: "cubic-bezier(0.23, 1, 0.32, 1)" }
-        }
+        dropAnimation={reducedMotion ? null : GHOST_DROP_ANIMATION}
       >
         {ghostLabel === null ? null : <TabDragGhost label={ghostLabel} />}
       </DragOverlay>

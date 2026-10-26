@@ -33,7 +33,6 @@
  */
 import {
   activateFile,
-  activateTab,
   activeTabInSplitView,
   claimTabInPane,
   closeFile,
@@ -43,14 +42,16 @@ import {
   EMPTY_TAB_ORDER,
   focusAdjacentPane,
   focusPane,
-  isSinglePane,
   markFileEdited,
   moveFile,
   moveTabToPane,
   paneForTab,
+  emptySplitView,
+  groupForTab,
+  groupTabs,
+  openTab,
   pinFile,
   previewFile,
-  primaryPaneId,
   removeTab,
   renamedTabInSplitView,
   renamedTabOrder,
@@ -59,16 +60,17 @@ import {
   sanitizeFileWorkspace,
   sanitizeSplitView,
   sanitizeTabOrder,
+  selectTab,
   setSplitRatio,
-  singlePaneSplitView,
   splitPane,
   substitutedPath,
   TICKET_SORT_KEYS,
+  ungroup,
+  ungroupTab,
   type FileWorkspaceState,
   type FileWorkspaceTab,
   type SplitViewEdge,
   type SplitViewFocusDirection,
-  type SplitViewPane,
   type SplitViewState,
   type TabOrder,
   type TicketSort,
@@ -183,9 +185,8 @@ export interface TicketTabsState {
    */
   tabOrder: TabOrder;
   /**
-   * How this ticket's main area is SPLIT into panes (VC-202), or nothing at all
-   * — see {@link ProjectUiState.homeSplitView} for why absence is the whole
-   * compatibility story, and `split-view.ts` for the model. Persisted and
+   * This ticket's tab groups, or none. See `split-view.ts` and
+   * {@link ProjectUiState.homeSplitView} for the tolerant read. Persisted and
    * tolerant-read, inside this record so `forget` and the empty-record prune
    * carry it away with everything else the ticket remembers.
    */
@@ -343,21 +344,12 @@ export interface ProjectUiState {
    */
   dependencyOfferDismissed: boolean;
   /**
-   * How Home's main area is SPLIT into panes (VC-202): a tree of panes over the
-   * same strip `homeTabOrder` arranges, or NOTHING while Home is one plane.
-   *
-   * OPTIONAL, AND THAT IS THE POINT. A surface that never split carries no key
-   * at all — not `null`, not a default — so a record written before this
-   * existed and a record that has never been split are the same bytes, and
-   * every code path that predates panes goes on reading a workspace it
-   * recognises. `null` means the same thing (a surface that split and then
-   * collapsed back, plan §1's collapse-to-null convention), which is why every
-   * read here is `?? null` and no write-through happens at all while it holds.
-   *
-   * Persisted, for the same reason an arrangement is: a layout is a deliberate
-   * act. Tolerant-read through `sanitizeSplitView`, which may name tabs that are
-   * not on screen yet and degrades an unreadable tree to no split rather than
-   * to something it cannot draw.
+   * Home's tab groups (`split-view.ts`): split trees of tab stacks, any
+   * number of them beside the ordinary strip. Selecting an ordinary tab leaves
+   * every group saved and draws that tab full width. `root` stays readable by
+   * older builds as a legacy split; `sanitizeSplitView` reads an old split as
+   * one group. Missing/hydrating ids are never pruned from membership.
+   * Absent/null means no groups, preserving untouched older workspace records.
    */
   homeSplitView?: SplitViewState | null;
 }
@@ -465,8 +457,8 @@ function orderAfterFileTabs(
  *
  * Both fields are keyed by tab id, so both have to be told when a preview slot
  * is replaced or a file renamed. Left alone the pane would simply stop naming
- * that tab, and it would be drawn in the primary pane the next time — the
- * teleport the substitution exists to avoid.
+ * that tab, and it would fall out of its group the next time it was drawn —
+ * the teleport the substitution exists to avoid.
  */
 function splitAfterFileTabs(
   split: SplitViewState,
@@ -480,33 +472,13 @@ function splitAfterFileTabs(
 }
 
 /**
- * The split-view half of "make `tabId` this surface's active tab" — the
- * write-through every existing activate action runs beside its own writes
- * (plan §2).
- *
- * The permanent tab (Board / Body) is the one that carries a focus move with
- * it: it lives in the primary pane and nowhere else, so activating it means
- * looking at that pane.
+ * The split-view half of bringing `tabId` forward. SELECT shows a group tab's
+ * group, or an ordinary tab full width; OPEN — a tab that did not exist a
+ * moment ago — joins the shown group's focused pane instead (`openTab`).
+ * Board and Body are ordinary tabs here like any other.
  */
-function activateInSplit(
-  split: SplitViewState,
-  tabId: string,
-  permanentTabId: string,
-): SplitViewState {
-  if (tabId !== permanentTabId) return activateTab(split, tabId);
-  return activateTab(focusPane(split, primaryPaneId(split)), tabId);
-}
-
-/**
- * The strip's arrangement after a split collapsed onto one pane: the surviving
- * pane's order, so the merged strip keeps the order the panes had.
- *
- * The permanent tab is dropped from it because it is not part of an
- * arrangement at all — both strips slice their fixed leading tab off before
- * sorting (`tab-order.ts`).
- */
-function collapsedTabOrder(pane: SplitViewPane, permanentTabId: string): TabOrder {
-  return sanitizeTabOrder(pane.tabIds.filter((id) => id !== permanentTabId));
+function activateInSplit(split: SplitViewState, tabId: string, open: boolean): SplitViewState {
+  return open ? openTab(split, tabId) : selectTab(split, tabId);
 }
 
 /**
@@ -516,33 +488,40 @@ function collapsedTabOrder(pane: SplitViewPane, permanentTabId: string): TabOrde
  */
 function homeSplitWrite(next: SplitViewState | null): Partial<ProjectUiState> {
   if (next === null) return {};
-  if (!isSinglePane(next)) return { homeSplitView: next };
-  return {
-    homeSplitView: null,
-    homeTabOrder: collapsedTabOrder(next.root, HOME_BOARD_TAB_ID),
-  };
+  // Dissolving the last group never rewrites the surface's arrangement.
+  return { homeSplitView: next.pairs.length === 0 ? null : next };
 }
 
 /** {@link homeSplitWrite} one scope down, onto a ticket's own record. */
 function ticketSplitWrite(next: SplitViewState | null): Partial<TicketTabsState> {
   if (next === null) return {};
-  if (!isSinglePane(next)) return { splitView: next };
-  return { splitView: null, tabOrder: collapsedTabOrder(next.root, BODY_TAB_ID) };
+  return { splitView: next.pairs.length === 0 ? null : next };
 }
 
-/** Home's split view after activating `tabId`, or null when there is nothing to write. */
-function activatedHomeSplit(current: ProjectUiState, tabId: string): SplitViewState | null {
+/**
+ * Home's split view after selecting (or, with `open`, opening) `tabId`, or null
+ * when there is nothing to write.
+ */
+function activatedHomeSplit(
+  current: ProjectUiState,
+  tabId: string,
+  open = false,
+): SplitViewState | null {
   const split = current.homeSplitView ?? null;
   if (split === null) return null;
-  const next = activateInSplit(split, tabId, HOME_BOARD_TAB_ID);
+  const next = activateInSplit(split, tabId, open);
   return next === split ? null : next;
 }
 
 /** {@link activatedHomeSplit} for a Ticket view. */
-function activatedTicketSplit(existing: TicketTabsState, tabId: string): SplitViewState | null {
+function activatedTicketSplit(
+  existing: TicketTabsState,
+  tabId: string,
+  open = false,
+): SplitViewState | null {
   const split = existing.splitView ?? null;
   if (split === null) return null;
-  const next = activateInSplit(split, tabId, BODY_TAB_ID);
+  const next = activateInSplit(split, tabId, open);
   return next === split ? null : next;
 }
 
@@ -555,19 +534,20 @@ function activatedTicketSplit(existing: TicketTabsState, tabId: string): SplitVi
  * `activated` is the tab the transition brought forward, or `null` when it
  * brought none: a transition that did not change what is in front must not
  * move the focus, or pinning a file in one pane would yank the eye out of the
- * empty pane the person just opened.
+ * empty pane the person just opened. `open` says that tab is a file the
+ * transition just OPENED, which joins the shown group's focused pane.
  */
 function homeSplitAfterFileTabs(
   current: ProjectUiState,
   before: readonly FileWorkspaceTab[],
   after: readonly FileWorkspaceTab[],
   activated: string | null,
+  open = false,
 ): SplitViewState | null {
   const split = current.homeSplitView ?? null;
   if (split === null) return null;
   const renamed = splitAfterFileTabs(split, before, after);
-  const next =
-    activated === null ? renamed : activateInSplit(renamed, activated, HOME_BOARD_TAB_ID);
+  const next = activated === null ? renamed : activateInSplit(renamed, activated, open);
   return next === split ? null : next;
 }
 
@@ -577,12 +557,19 @@ function ticketSplitAfterFileTabs(
   before: readonly FileWorkspaceTab[],
   after: readonly FileWorkspaceTab[],
   activated: string | null,
+  open: boolean,
 ): SplitViewState | null {
   const split = existing.splitView ?? null;
   if (split === null) return null;
   const renamed = splitAfterFileTabs(split, before, after);
-  const next = activated === null ? renamed : activateInSplit(renamed, activated, BODY_TAB_ID);
+  const next = activated === null ? renamed : activateInSplit(renamed, activated, open);
   return next === split ? null : next;
+}
+
+/** Whether `tabId` names a file `before` did not have open — a tab just OPENED. */
+function opensFile(tabId: string, before: readonly FileWorkspaceTab[]): boolean {
+  const relPath = parseFileTabId(tabId);
+  return relPath !== null && !before.some((tab) => tab.relPath === relPath);
 }
 
 /**
@@ -591,16 +578,22 @@ function ticketSplitAfterFileTabs(
  *
  * Nothing is written while that pane is EMPTY, and that is deliberate: an empty
  * pane draws the surface menu and has no context of its own, so the rail keeps
- * the one it had — and `⌘\` on Home cannot silently hand the surface back to
+ * the one it had: the group tab selected before (`selectedTabId`).
+ * `⌘\` on Home cannot silently hand the surface back to
  * the Board tab (which, with a ticket open, would take the whole page over).
  */
 function homeActiveAfterFocus(
   current: ProjectUiState,
   next: SplitViewState,
 ): Partial<ProjectUiState> {
-  const active = activeTabInSplitView(next);
-  if (active === null || active === current.homeActiveTab) return {};
-  return { homeActiveTab: active, homeTabHistory: homeHistoryAfterVisit(current, active) };
+  const active = activeTabInSplitView(next) ?? next.selectedTabId;
+  if (active === null) return {};
+  return {
+    ...(active === current.homeActiveTab
+      ? {}
+      : { homeActiveTab: active, homeTabHistory: homeHistoryAfterVisit(current, active) }),
+    ...(active === HOME_BOARD_TAB_ID ? { openTicketId: null } : {}),
+  };
 }
 
 /** {@link homeActiveAfterFocus} for a Ticket view. */
@@ -608,7 +601,7 @@ function ticketActiveAfterFocus(
   existing: TicketTabsState,
   next: SplitViewState,
 ): Partial<TicketTabsState> {
-  const active = activeTabInSplitView(next);
+  const active = activeTabInSplitView(next) ?? next.selectedTabId;
   return active === null || active === existing.active ? {} : { active };
 }
 
@@ -681,6 +674,7 @@ export function applyTicketFileTransition(
     before.tabs,
     after.tabs,
     active === existing.active ? null : active,
+    opensFile(active, before.tabs),
   );
   return { ...existing, files: [...after.tabs], tabOrder, active, ...ticketSplitWrite(split) };
 }
@@ -740,6 +734,12 @@ interface ProjectUiStoreState {
    * tab is already the one recorded — see `publishHomeSelection`.
    */
   setHomeActiveTab(projectId: string, tabId: string): void;
+  /**
+   * {@link ProjectUiStoreState.setHomeActiveTab} for a tab that was just
+   * OPENED (a new chat, terminal or Browser Tab): while a group is shown it
+   * joins the focused pane's stack instead of replacing the group.
+   */
+  openHomeTab(projectId: string, tabId: string): void;
   /**
    * Renderer fallback receipt, not a tab selection: never moves pane focus and
    * never announces a selection.
@@ -803,8 +803,11 @@ interface ProjectUiStoreState {
    * this Board Session" routes through here rather than pairing `setNav` with
    * `setHomeActiveTab` itself — which would also flash one frame of Home with
    * the OLD tab in front.
+   *
+   * `opts.open` says the door had to OPEN that tab (a chat it reopened): while
+   * a group is shown the tab joins its focused pane instead of replacing it.
    */
-  openHome(projectId: string, tabId?: string): void;
+  openHome(projectId: string, tabId?: string, opts?: { open?: boolean }): void;
   /**
    * The permanent Board tab's own act: Home, the Board tab, no open ticket.
    *
@@ -843,9 +846,13 @@ interface ProjectUiStoreState {
    * Every surface that promises "the user is now looking at this ticket" —
    * the command palette, Active Sessions, and the new-ticket kickoff — routes
    * through this one seam instead of hand-rolling setNav+openTicket(+tab)
-   * themselves.
+   * themselves. `opts.open` is {@link ProjectUiStoreState.openHome}'s.
    */
-  openTicketView(projectId: string, ticketId: string, opts?: { tabId?: string }): void;
+  openTicketView(
+    projectId: string,
+    ticketId: string,
+    opts?: { tabId?: string; open?: boolean },
+  ): void;
   /**
    * Opens a ticket's exact live terminal tab, optionally focusing one split
    * pane. A thin wrapper over {@link openTicketView}'s ordering, plus the
@@ -910,9 +917,15 @@ interface ProjectUiStoreState {
    * for that path. Prunes the ticket record once nothing but Doc remains.
    */
   closeTicketDiff(projectId: string, ticketId: string, relPath: string): void;
-  /** Sets the active tab for `ticketId` (Ticket Body / `"doc"`, a
+  /** SELECTS the active tab for `ticketId` (Ticket Body / `"doc"`, a
    * `file:<relPath>`, a `diff:<relPath>`, or a session id). */
   setTicketActiveTab(projectId: string, ticketId: string, tabId: string): void;
+  /**
+   * {@link ProjectUiStoreState.setTicketActiveTab} for a tab that was just
+   * OPENED (a new chat, terminal or Browser Tab): while a group is shown it
+   * joins the focused pane's stack instead of replacing the group.
+   */
+  openTicketTab(projectId: string, ticketId: string, tabId: string): void;
   /** Automatic stale-tab receipt: neither selects a pane nor announces intent. */
   recordResolvedTicketTab(projectId: string, ticketId: string, tabId: string): void;
   /**
@@ -927,25 +940,44 @@ interface ProjectUiStoreState {
     order: readonly string[],
   ): void;
   /**
-   * Split Home's `paneId`, opening a new pane to its right (`⌘\`, a tab dropped
-   * on the right edge) or below it (`⇧⌘\`, the bottom edge) — VC-202.
-   *
-   * `opts.tabId` is the tab that was dragged into the new pane; without one the
-   * pane opens empty and draws the surface menu. `opts.surfaceTabIds` is the
-   * strip as it stands at that moment, and it matters only for the FIRST split
-   * of a surface: the primary pane records it as its claim, so every tab that
-   * is open has a pane from the outset and a later activation cannot mistake
-   * one of them for a tab that was just opened. Without it the claim falls back
-   * to the arrangement, which names only the tabs somebody dragged.
-   *
-   * An unsplit surface's one pane is {@link SPLIT_VIEW_ROOT_PANE_ID} — what the
-   * grid draws it under — so `⌘\` can name its subject before any split exists.
+   * Group `tabId` beside `targetTabId` on `edge` — a tab dropped on a top-strip
+   * tab's edge, and "Open beside chat". The target's pane splits (a new group
+   * of two for an ordinary target); a null `tabId` opens an empty pane there.
+   */
+  groupHomeTabs(
+    projectId: string,
+    targetTabId: string,
+    tabId: string | null,
+    edge?: SplitViewEdge,
+  ): void;
+  /** {@link ProjectUiStoreState.groupHomeTabs} for a Ticket view. */
+  groupTicketTabs(
+    projectId: string,
+    ticketId: string,
+    targetTabId: string,
+    tabId: string | null,
+    edge?: SplitViewEdge,
+  ): void;
+  /** A tab dragged out of its group onto the top strip: ordinary again, and selected. */
+  ungroupHomeTab(projectId: string, tabId: string): void;
+  /** {@link ProjectUiStoreState.ungroupHomeTab} for a Ticket view. */
+  ungroupTicketTab(projectId: string, ticketId: string, tabId: string): void;
+  /** Dissolve a whole Home group (the chip's Ungroup); every tab stays open. */
+  ungroupHome(projectId: string, groupId: string): void;
+  /** {@link ProjectUiStoreState.ungroupHome} for a Ticket view. */
+  ungroupTicket(projectId: string, ticketId: string, groupId: string): void;
+  /**
+   * Split a Home pane on `edge`: a group pane grows its group, the full-width
+   * pane (`SPLIT_VIEW_ROOT_PANE_ID`) makes a new group of two. `opts.tabId` is
+   * the tab dragged into the new pane; without one the pane opens empty (⌘\).
+   * `opts.targetTabId` is the tab drawn where the gesture landed, selected
+   * first — a native drop may have opened (and selected) its passenger.
    */
   splitHomePane(
     projectId: string,
     paneId: string,
     edge: SplitViewEdge,
-    opts?: { tabId?: string; surfaceTabIds?: readonly string[] },
+    opts?: { tabId?: string; targetTabId?: string },
   ): void;
   /** {@link ProjectUiStoreState.splitHomePane} for a Ticket view. */
   splitTicketPane(
@@ -953,7 +985,7 @@ interface ProjectUiStoreState {
     ticketId: string,
     paneId: string,
     edge: SplitViewEdge,
-    opts?: { tabId?: string; surfaceTabIds?: readonly string[] },
+    opts?: { tabId?: string; targetTabId?: string },
   ): void;
   /**
    * Claim a newly contentful draft in its pane without moving focus. `activate`
@@ -993,19 +1025,17 @@ interface ProjectUiStoreState {
   /** {@link ProjectUiStoreState.setHomeSplitRatio} for a Ticket view. */
   setTicketSplitRatio(projectId: string, ticketId: string, splitId: string, ratio: number): void;
   /**
-   * Close a Home pane. Tabs it still held are relinquished to the primary pane
-   * rather than closed, and the last close collapses the surface back to no
-   * split at all, carrying the surviving pane's order into the strip.
+   * Close a group pane, relinquishing its tabs to its sibling's stack; a group
+   * left with one pane dissolves. No tab is closed, and the surface's ordinary
+   * tab arrangement stays untouched.
    */
   closeHomePane(projectId: string, paneId: string): void;
   /** {@link ProjectUiStoreState.closeHomePane} for a Ticket view. */
   closeTicketPane(projectId: string, ticketId: string, paneId: string): void;
   /**
-   * {@link ProjectUiStoreState.moveHomeTab} INSIDE one pane: `order` is that pane's
-   * movable tab ids as the drop left them. The surface-level arrangement is not
-   * touched while split — a pane's order is the pane's — but a dragged preview
-   * tab is still pinned, because arranging a tab is deliberate wherever it
-   * landed (VC-189).
+   * A drag inside one group pane's strip: `order` is that pane's tabs as the
+   * drop left them. The surface's own arrangement is not touched — a pane's
+   * order is the pane's — but a dragged preview is still pinned (VC-189).
    */
   moveHomeTabInPane(
     projectId: string,
@@ -1022,11 +1052,11 @@ interface ProjectUiStoreState {
     order: readonly string[],
   ): void;
   /**
-   * The split-view half of closing a Home tab this store does not own — chat
-   * and terminal tabs, whose lifetime lives in the sessions stores and whose
-   * closes route through the surface. Drops the tab from its pane (collapsing
-   * an emptied one) and lands the surface on the focused pane's front tab. A
-   * no-op while unsplit, where the MRU return is unchanged.
+   * The split-view half of closing a Home tab this store does not own — chat,
+   * terminal and Browser tabs, whose lifetime lives elsewhere and whose closes
+   * route through the surface. Takes a GROUPED tab out of its pane (collapsing
+   * an emptied one) and lands the surface on what the group then shows. A
+   * no-op for an ordinary tab, whose MRU return is the surface's as before.
    */
   removeHomeTabFromSplit(projectId: string, tabId: string): void;
   /** {@link ProjectUiStoreState.removeHomeTabFromSplit} for a Ticket view. */
@@ -1497,6 +1527,85 @@ function applyTicketSplit(
 }
 
 /**
+ * Bring `tabId` forward on Home — SELECT (`open` false) or OPEN — with its
+ * split-view half. The no-op guard has a second half: re-selecting the tab in
+ * front is how focus comes back to its pane, so it writes when the split moved.
+ */
+function activateHomeTab(
+  state: ProjectUiStoreState,
+  projectId: string,
+  tabId: string,
+  open: boolean,
+): ProjectUiStoreState | Pick<ProjectUiStoreState, "byProject"> {
+  const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
+  const split = activatedHomeSplit(current, tabId, open);
+  if (current.homeActiveTab === tabId && split === null) return state;
+  return patchProjectUi(state, projectId, {
+    homeActiveTab: tabId,
+    homeTabHistory: homeHistoryAfterVisit(current, tabId),
+    ...homeSplitWrite(split),
+  });
+}
+
+/** {@link activateHomeTab} for a Ticket view; the no-op keeps empty records from forming. */
+function activateTicketTab(
+  state: ProjectUiStoreState,
+  projectId: string,
+  ticketId: string,
+  tabId: string,
+  open: boolean,
+): ProjectUiStoreState | Pick<ProjectUiStoreState, "byProject"> {
+  const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
+  const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
+  const split = activatedTicketSplit(existing, tabId, open);
+  if (existing.active === tabId && split === null) return state;
+  return patchProjectUi(state, projectId, {
+    ticketTabs: {
+      ...current.ticketTabs,
+      [ticketId]: { ...existing, active: tabId, ...ticketSplitWrite(split) },
+    },
+  });
+}
+
+/**
+ * Where a Ticket view lands after closing one of its own File or Diff tabs. A
+ * tab of the group on screen hands over to its group — the focused pane's
+ * front, or the group tab still selected beside an empty pane. Any other tab
+ * returns to the Ticket Body only when it was the one in front, which the split
+ * view then shows (a Body that sits in a group brings its group).
+ */
+function ticketAfterClose(
+  existing: TicketTabsState,
+  closedTabId: string,
+): { active: string; split: SplitViewState | null } {
+  const split = existing.splitView ?? null;
+  const grouped = split === null ? null : groupedClose(split, closedTabId, existing.active);
+  if (grouped?.front != null) return { active: grouped.front, split: grouped.next };
+  const base = grouped?.next ?? split;
+  if (existing.active !== closedTabId)
+    return { active: existing.active, split: grouped?.next ?? null };
+  return { active: BODY_TAB_ID, split: base === null ? null : selectTab(base, BODY_TAB_ID) };
+}
+
+/**
+ * The split view after closing `tabId` — when a group holds it, else null —
+ * and, when that group was the one on screen in step with the surface's
+ * `active` tab, what the surface shows next (`front`; null otherwise, and null
+ * when the close left nothing to show). A hidden group's close moves nothing.
+ */
+function groupedClose(
+  split: SplitViewState,
+  tabId: string,
+  active: string,
+): { next: SplitViewState; front: string | null } | null {
+  const group = groupForTab(split, tabId);
+  if (group === null) return null;
+  const shown = split.root.id === group.id && split.selectedTabId === active;
+  const next = removeTab(split, tabId);
+  return { next, front: shown ? (activeTabInSplitView(next) ?? next.selectedTabId) : null };
+}
+
+/**
  * Factory so tests can supply an in-memory storage instead of the real
  * app_state bridge. `skipHydration` only applies to the real singleton (no
  * `storage` injected) — see ui.ts's factory doc for why.
@@ -1570,20 +1679,14 @@ export function createProjectUiStore(
         },
 
         setHomeActiveTab(projectId, tabId) {
-          set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
-            const split = activatedHomeSplit(current, tabId);
-            // The no-op guard grew a second half: while split, selecting the tab
-            // that is already in front is how focus comes back to its pane.
-            if (current.homeActiveTab === tabId && split === null) return state;
-            return patchProjectUi(state, projectId, {
-              homeActiveTab: tabId,
-              homeTabHistory: homeHistoryAfterVisit(current, tabId),
-              ...homeSplitWrite(split),
-            });
-          });
+          set((state) => activateHomeTab(state, projectId, tabId, false));
           // Even when nothing above changed: the saved front tab can still be
           // covered by an empty Draft, and selecting it is what uncovers it.
+          publishHomeSelection(get(), projectId, tabId);
+        },
+
+        openHomeTab(projectId, tabId) {
+          set((state) => activateHomeTab(state, projectId, tabId, true));
           publishHomeSelection(get(), projectId, tabId);
         },
 
@@ -1634,6 +1737,7 @@ export function createProjectUiStore(
                   current.projectFiles.tabs,
                   projectFiles.tabs,
                   tabId,
+                  opensFile(tabId, current.projectFiles.tabs),
                 ),
               ),
             });
@@ -1651,7 +1755,9 @@ export function createProjectUiStore(
               projectFiles,
               homeActiveTab: tabId,
               homeTabHistory: homeHistoryAfterVisit(current, tabId),
-              ...homeSplitWrite(activatedHomeSplit(current, tabId)),
+              ...homeSplitWrite(
+                activatedHomeSplit(current, tabId, opensFile(tabId, current.projectFiles.tabs)),
+              ),
             });
           });
           publishHomeSelection(get(), projectId, fileTabId(relPath));
@@ -1689,14 +1795,14 @@ export function createProjectUiStore(
             delete projectFileViewStates[relPath];
 
             const split = current.homeSplitView ?? null;
-            if (split !== null) {
-              // While split the return is the focused PANE's business rather
-              // than the MRU history's (plan §2): the successor inside the pane,
-              // or — when closing the last tab collapsed the pane — whatever the
-              // pane that took its place is showing. The history is still
-              // pruned, so it is truthful again the moment the split collapses.
-              const next = removeTab(split, closedTabId);
-              const active = activeTabInSplitView(next) ?? HOME_BOARD_TAB_ID;
+            const grouped =
+              split === null ? null : groupedClose(split, closedTabId, current.homeActiveTab);
+            if (grouped?.front != null) {
+              // A tab of the group on screen returns to its group rather than
+              // to the MRU history: the successor in its pane, or — when closing
+              // the last tab collapsed the pane — what the group then shows. The
+              // history is still pruned, so it stays truthful.
+              const { next, front: active } = grouped;
               const returnedFile = parseFileTabId(active);
               return patchProjectUi(state, projectId, {
                 projectFiles:
@@ -1711,11 +1817,14 @@ export function createProjectUiStore(
               });
             }
 
+            // A hidden group still lets go of the closed tab's membership.
+            const left = grouped?.next ?? null;
             if (current.homeActiveTab !== closedTabId) {
               return patchProjectUi(state, projectId, {
                 projectFiles,
                 projectFileViewStates,
                 homeTabHistory: current.homeTabHistory.filter((tabId) => tabId !== closedTabId),
+                ...homeSplitWrite(left),
               });
             }
 
@@ -1729,12 +1838,15 @@ export function createProjectUiStore(
               ],
             });
             const activeFile = parseFileTabId(close.active);
+            const base = left ?? split;
             return patchProjectUi(state, projectId, {
               projectFiles:
                 activeFile === null ? projectFiles : activateFile(projectFiles, activeFile),
               projectFileViewStates,
               homeActiveTab: close.active,
               homeTabHistory: close.history,
+              // The MRU return may land on a group tab, which shows its group.
+              ...homeSplitWrite(base === null ? null : selectTab(base, close.active)),
             });
           });
         },
@@ -1756,6 +1868,7 @@ export function createProjectUiStore(
             return patchProjectUi(state, projectId, {
               homeActiveTab: close.active,
               homeTabHistory: close.history,
+              ...homeSplitWrite(activatedHomeSplit(current, close.active)),
             });
           });
         },
@@ -1825,7 +1938,7 @@ export function createProjectUiStore(
           });
         },
 
-        openHome(projectId, tabId) {
+        openHome(projectId, tabId, opts) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             return patchProjectUi(
@@ -1837,7 +1950,7 @@ export function createProjectUiStore(
                     nav: "home",
                     homeActiveTab: tabId,
                     homeTabHistory: homeHistoryAfterVisit(current, tabId),
-                    ...homeSplitWrite(activatedHomeSplit(current, tabId)),
+                    ...homeSplitWrite(activatedHomeSplit(current, tabId, opts?.open === true)),
                   },
             );
           });
@@ -1854,8 +1967,8 @@ export function createProjectUiStore(
               homeActiveTab: HOME_BOARD_TAB_ID,
               homeTabHistory: homeHistoryAfterVisit(current, HOME_BOARD_TAB_ID),
               openTicketId: null,
-              // The Board lives in the primary pane, so this is a focus move
-              // too: the split view follows the tab, not the other way round.
+              // Selecting the Board shows its group when it has one: the split
+              // view follows the tab, not the other way round.
               ...homeSplitWrite(activatedHomeSplit(current, HOME_BOARD_TAB_ID)),
             });
           });
@@ -1912,7 +2025,7 @@ export function createProjectUiStore(
                 [ticketId]: {
                   ...existing,
                   active: tabId,
-                  ...ticketSplitWrite(activatedTicketSplit(existing, tabId)),
+                  ...ticketSplitWrite(activatedTicketSplit(existing, tabId, opts?.open === true)),
                 },
               },
             });
@@ -2031,9 +2144,11 @@ export function createProjectUiStore(
                   diffs,
                   diffMeta,
                   active: opened,
-                  // A diff tab opened while split lands in the focused pane,
-                  // which is where the person is looking.
-                  ...ticketSplitWrite(activatedTicketSplit(existing, opened)),
+                  // A diff tab just OPENED while a group is shown lands in the
+                  // focused pane, which is where the person is looking.
+                  ...ticketSplitWrite(
+                    activatedTicketSplit(existing, opened, !existing.diffs.includes(relPath)),
+                  ),
                 },
               },
             });
@@ -2052,22 +2167,12 @@ export function createProjectUiStore(
             const before = ticketFilesWorkspace(existing);
             const after = closeFile(before, relPath);
             if (after === before) return state;
-            const closedTabId = fileTabId(relPath);
-            const split = existing.splitView ?? null;
-            const removed = split === null ? null : removeTab(split, closedTabId);
-            // While split, where the strip lands is the focused pane's answer
-            // (plan §2) — the Ticket Body only when that pane has nothing left.
-            const active =
-              removed === null
-                ? existing.active === closedTabId
-                  ? BODY_TAB_ID
-                  : existing.active
-                : (activeTabInSplitView(removed) ?? BODY_TAB_ID);
+            const { active, split } = ticketAfterClose(existing, fileTabId(relPath));
             const next: TicketTabsState = {
               ...existing,
               files: [...after.tabs],
               active,
-              ...ticketSplitWrite(removed),
+              ...ticketSplitWrite(split),
             };
             const nextTabs = { ...current.ticketTabs };
             if (isEmptyTicketTabs(next)) delete nextTabs[ticketId];
@@ -2099,21 +2204,13 @@ export function createProjectUiStore(
             const diffs = existing.diffs.filter((path) => path !== relPath);
             const diffMeta = cloneDiffMeta(existing.diffMeta);
             delete diffMeta[relPath];
-            const closedTabId = diffTabId(relPath);
-            const split = existing.splitView ?? null;
-            const removed = split === null ? null : removeTab(split, closedTabId);
-            const active =
-              removed === null
-                ? existing.active === closedTabId
-                  ? BODY_TAB_ID
-                  : existing.active
-                : (activeTabInSplitView(removed) ?? BODY_TAB_ID);
+            const { active, split } = ticketAfterClose(existing, diffTabId(relPath));
             const next: TicketTabsState = {
               ...existing,
               diffs,
               diffMeta,
               active,
-              ...ticketSplitWrite(removed),
+              ...ticketSplitWrite(split),
             };
             const nextTabs = { ...current.ticketTabs };
             if (isEmptyTicketTabs(next)) delete nextTabs[ticketId];
@@ -2133,21 +2230,13 @@ export function createProjectUiStore(
         },
 
         setTicketActiveTab(projectId, ticketId, tabId) {
-          set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
-            const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
-            const split = activatedTicketSplit(existing, tabId);
-            // no-op keeps empty records from forming; while split, re-selecting
-            // the tab in front is how focus returns to its pane.
-            if (existing.active === tabId && split === null) return state;
-            return patchProjectUi(state, projectId, {
-              ticketTabs: {
-                ...current.ticketTabs,
-                [ticketId]: { ...existing, active: tabId, ...ticketSplitWrite(split) },
-              },
-            });
-          });
+          set((state) => activateTicketTab(state, projectId, ticketId, tabId, false));
           // See setHomeActiveTab: a no-op write is still a selection.
+          publishTicketSelection(get(), projectId, ticketId, tabId);
+        },
+
+        openTicketTab(projectId, ticketId, tabId) {
+          set((state) => activateTicketTab(state, projectId, ticketId, tabId, true));
           publishTicketSelection(get(), projectId, ticketId, tabId);
         },
 
@@ -2189,29 +2278,82 @@ export function createProjectUiStore(
           });
         },
 
+        groupHomeTabs(projectId, targetTabId, tabId, edge = "right") {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
+            const split = current.homeSplitView ?? emptySplitView(current.homeActiveTab);
+            const next = groupTabs(split, targetTabId, tabId, edge, mintPaneId);
+            if (next === split) return state;
+            return patchProjectUi(state, projectId, {
+              ...homeSplitWrite(next),
+              ...homeActiveAfterFocus(current, next),
+            });
+          });
+          publishHomeSelection(get(), projectId, tabId ?? targetTabId);
+        },
+
+        groupTicketTabs(projectId, ticketId, targetTabId, tabId, edge = "right") {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
+            const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
+            const split = existing.splitView ?? emptySplitView(existing.active);
+            const next = groupTabs(split, targetTabId, tabId, edge, mintPaneId);
+            if (next === split) return state;
+            return patchProjectUi(state, projectId, {
+              ticketTabs: {
+                ...current.ticketTabs,
+                [ticketId]: {
+                  ...existing,
+                  ...ticketSplitWrite(next),
+                  ...ticketActiveAfterFocus(existing, next),
+                },
+              },
+            });
+          });
+          publishTicketSelection(get(), projectId, ticketId, tabId ?? targetTabId);
+        },
+
+        ungroupHomeTab(projectId, tabId) {
+          set((state) =>
+            applyHomeSplit(state, projectId, (split) => selectTab(ungroupTab(split, tabId), tabId)),
+          );
+          publishHomeSelection(get(), projectId, tabId);
+        },
+
+        ungroupTicketTab(projectId, ticketId, tabId) {
+          set((state) =>
+            applyTicketSplit(state, projectId, ticketId, (split) =>
+              selectTab(ungroupTab(split, tabId), tabId),
+            ),
+          );
+          publishTicketSelection(get(), projectId, ticketId, tabId);
+        },
+
+        ungroupHome(projectId, groupId) {
+          set((state) => applyHomeSplit(state, projectId, (split) => ungroup(split, groupId)));
+        },
+
+        ungroupTicket(projectId, ticketId, groupId) {
+          set((state) =>
+            applyTicketSplit(state, projectId, ticketId, (split) => ungroup(split, groupId)),
+          );
+        },
+
         splitHomePane(projectId, paneId, edge, opts) {
           let didSplit = false;
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
-            // Materialize the surface's one pane before splitting it, claiming
-            // the strip as it stands so no open tab is left unassigned — an
-            // unclaimed tab activated later would be taken for a tab that was
-            // just opened, and land in whichever pane happened to have focus.
-            // The permanent tab leads that claim because it belongs to the
-            // primary pane and to no other.
-            const split =
-              current.homeSplitView ??
-              singlePaneSplitView(
-                sanitizeTabOrder([
-                  HOME_BOARD_TAB_ID,
-                  ...(opts?.surfaceTabIds ?? current.homeTabOrder),
-                ]),
-                current.homeActiveTab,
-              );
-            const next = splitPane(split, paneId, edge, { tabId: opts?.tabId }, mintPaneId);
+            // Only the shown tab (or group) is split; every other tab stays in
+            // the surface's own strip, the Board and future Sessions included.
+            const split = current.homeSplitView ?? emptySplitView(current.homeActiveTab);
+            // A native file/chat drop may have selected its passenger while
+            // opening it. The target is the tab drawn when the gesture landed.
+            const anchored =
+              opts?.targetTabId === undefined ? split : selectTab(split, opts.targetTabId);
+            const next = splitPane(anchored, paneId, edge, { tabId: opts?.tabId }, mintPaneId);
             // Identity means the split did not happen, so nothing was
             // materialized either: the surface is still unsplit.
-            if (next === split) return state;
+            if (next === anchored) return state;
             didSplit = true;
             return patchProjectUi(state, projectId, {
               ...homeSplitWrite(next),
@@ -2230,14 +2372,13 @@ export function createProjectUiStore(
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const existing = current.ticketTabs[ticketId] ?? emptyTicketTabs();
-            const split =
-              existing.splitView ??
-              singlePaneSplitView(
-                sanitizeTabOrder([BODY_TAB_ID, ...(opts?.surfaceTabIds ?? existing.tabOrder)]),
-                existing.active,
-              );
-            const next = splitPane(split, paneId, edge, { tabId: opts?.tabId }, mintPaneId);
-            if (next === split) return state;
+            const split = existing.splitView ?? emptySplitView(existing.active);
+            // A native file/chat drop may have selected its passenger while
+            // opening it. The target is the tab drawn when the gesture landed.
+            const anchored =
+              opts?.targetTabId === undefined ? split : selectTab(split, opts.targetTabId);
+            const next = splitPane(anchored, paneId, edge, { tabId: opts?.tabId }, mintPaneId);
+            if (next === anchored) return state;
             didSplit = true;
             return patchProjectUi(state, projectId, {
               ticketTabs: {
@@ -2361,7 +2502,7 @@ export function createProjectUiStore(
             const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const split = current.homeSplitView ?? null;
             if (split === null) return state;
-            const next = reorderPaneTabs(split, paneId, sanitizeTabOrder(order));
+            const next = reorderPaneTabs(split, paneId, order);
             // The File half of `moveHomeTab`, minus its list reorder: where a
             // file sits in the SURFACE's file list is not what a drag inside one
             // pane decided, so the file is moved onto its own index — which is
@@ -2390,16 +2531,14 @@ export function createProjectUiStore(
             const existing = current.ticketTabs[ticketId];
             if (existing === undefined || (existing.splitView ?? null) === null) return state;
             const split = existing.splitView!;
-            const reordered = reorderPaneTabs(split, paneId, sanitizeTabOrder(order));
-            let next: TicketTabsState = {
-              ...existing,
-              ...ticketSplitWrite(reordered === split ? null : reordered),
-            };
+            const reordered = reorderPaneTabs(split, paneId, order);
+            const withOrder: TicketTabsState =
+              reordered === split ? existing : { ...existing, ...ticketSplitWrite(reordered) };
             const relPath = parseFileTabId(movedId);
             const pinned =
               relPath === null
                 ? null
-                : applyTicketFileTransition(next, (files) =>
+                : applyTicketFileTransition(withOrder, (files) =>
                     moveFile(
                       files,
                       relPath,
@@ -2407,9 +2546,8 @@ export function createProjectUiStore(
                     ),
                   );
             if (reordered === split && pinned === null) return state;
-            next = pinned ?? next;
             return patchProjectUi(state, projectId, {
-              ticketTabs: { ...current.ticketTabs, [ticketId]: next },
+              ticketTabs: { ...current.ticketTabs, [ticketId]: pinned ?? withOrder },
             });
           });
         },
@@ -2418,16 +2556,15 @@ export function createProjectUiStore(
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const split = current.homeSplitView ?? null;
-            if (split === null) return state;
-            const next = removeTab(split, tabId);
-            if (next === split) return state;
-            // The focused pane's front tab wins when it has one. When it does
-            // not (an EMPTY focused pane — the ⌘\ state), the permanent-tab
-            // fallback applies only if this close took the surface's active
-            // tab: a BACKGROUND close must not steal the surface out from
-            // under a still-valid active (validation V2, and deviation #6's
-            // rule — an empty focused pane leaves the surface active alone).
-            const front = activeTabInSplitView(next);
+            // An ordinary tab's close is the surface's MRU return, unchanged.
+            const grouped =
+              split === null ? null : groupedClose(split, tabId, current.homeActiveTab);
+            if (grouped === null) return state;
+            // What the group on screen shows next wins. A hidden group's close
+            // changes nothing in front, and the permanent-tab fallback applies
+            // only if this close took the surface's active tab, so a BACKGROUND
+            // close never steals the surface from a still-valid active.
+            const { next, front } = grouped;
             const active =
               front ??
               (current.homeActiveTab === tabId ? HOME_BOARD_TAB_ID : current.homeActiveTab);
@@ -2446,13 +2583,12 @@ export function createProjectUiStore(
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_PROJECT_UI;
             const existing = current.ticketTabs[ticketId];
-            if (existing === undefined || (existing.splitView ?? null) === null) return state;
-            const split = existing.splitView!;
-            const next = removeTab(split, tabId);
-            if (next === split) return state;
+            const split = existing?.splitView ?? null;
+            const grouped = split === null ? null : groupedClose(split, tabId, existing!.active);
+            if (grouped === null) return state;
             // See the Home twin above: the permanent-tab fallback applies only
             // when this close took the surface's active tab (validation V2).
-            const front = activeTabInSplitView(next);
+            const { next, front } = grouped;
             return patchProjectUi(state, projectId, {
               ticketTabs: {
                 ...current.ticketTabs,

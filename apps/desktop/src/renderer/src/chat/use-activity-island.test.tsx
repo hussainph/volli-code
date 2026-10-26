@@ -26,6 +26,7 @@ import {
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
 import { useActivityIsland, type ActivityIslandBinding } from "./use-activity-island";
+import { useClosingBrowserTabIds } from "./use-island-tabs-close";
 
 vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
 
@@ -137,6 +138,7 @@ beforeEach(() => {
   } as unknown as BrowserApi;
   vi.stubGlobal("api", { browser });
   registry([]);
+  useClosingBrowserTabIds.setState(new Set(), true);
   shells([]);
   useProjectSessionsStore.setState({ byProject: { [PROJECT]: EMPTY_PROJECT_SESSION_ROWS } });
   container = document.createElement("div");
@@ -151,13 +153,18 @@ afterEach(async () => {
   root = null;
   container?.remove();
   container = null;
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 async function mount(
   store = chatStore(),
   openShellOutput?: (shellId: string) => void,
-  doors: { peekSession?: (id: string) => void; openSession?: (id: string) => void } = {},
+  doors: {
+    peekSession?: (id: string) => void;
+    openSession?: (id: string) => void;
+    openBrowserBeside?: (tabId: string, ownerSessionId: string) => Promise<void>;
+  } = {},
 ) {
   const seen: ActivityIslandBinding[] = [];
   function Probe() {
@@ -189,10 +196,24 @@ describe("useActivityIsland", () => {
     expect(model.agents).toEqual([]);
     expect(model.shells).toEqual([]);
 
-    actions.closeTab("one");
+    vi.useFakeTimers();
+    await act(async () => actions.closeTab("one"));
+    expect(browser.close).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
     expect(browser.close).toHaveBeenCalledWith({ tabId: "one" });
-    actions.promoteTab("one");
-    expect(browser.setPresentation).toHaveBeenCalledWith({ tabId: "one", presentation: "preview" });
+    await act(async () => actions.promoteTab("one"));
+    expect(browser.setPresentation).toHaveBeenCalledWith({ tabId: "one", presentation: "tab" });
+  });
+
+  it("routes browser reveal through the mount's owning-chat door", async () => {
+    registry([tab({ tabId: "one" })]);
+    const openBrowserBeside = vi.fn(async () => {});
+    const probe = await mount(chatStore(), undefined, { openBrowserBeside });
+    await act(async () => probe.latest().actions.promoteTab("one"));
+    expect(openBrowserBeside).toHaveBeenCalledExactlyOnceWith("one", SESSION);
+    expect(browser.setPresentation).not.toHaveBeenCalled();
   });
 
   it("lights the plan cluster from the Session's transcript", async () => {
@@ -336,7 +357,7 @@ describe("useActivityIsland", () => {
     await act(async () => actions.promoteTab("one"));
     expect(browser.setPresentation).toHaveBeenCalledWith({
       tabId: "one",
-      presentation: "preview",
+      presentation: "tab",
     });
   });
 

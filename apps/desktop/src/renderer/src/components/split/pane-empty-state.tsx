@@ -22,9 +22,9 @@ import { cn } from "@renderer/lib/utils";
  *
  * The rows do not carry pane plumbing either. `⌘T` and `⌥⌘T` start a Session on
  * the surface and `⌘P` previews a file on it; each lands HERE because an empty
- * pane is by definition the focused pane and every "make this tab active" write
- * runs through the split view's own write-through (`split-view.ts`'s
- * `activateTab`). Close pane is the one row that is about the pane itself.
+ * pane is by definition the focused pane, and a tab OPENED while a group is
+ * shown joins the focused pane (`split-view.ts`'s `openTab`). Close pane is the
+ * one row that is about the pane itself.
  *
  * 32px rows: `docs/DESIGN.md`'s `lg` rung, the one it reserves for "rare hero
  * actions (empty states)", which is exactly what these are. The shortcut hint

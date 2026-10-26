@@ -7,13 +7,13 @@
  * pure predicate, and `menu.ts` carries only roles and zoom.
  *
  * MOUNTED BY THE SURFACE, one instance each, which is the one place this
- * departs from ⌘T's placement discipline and it is forced: a split has to
- * record the strip as it stands at the moment it opens (`surfaceTabIds`, so no
- * open tab is left unclaimed — see the store's `splitHomePane`), and the only
- * component that knows that list is the surface drawing it. Both instances are
- * mounted while a Ticket view is open (Home hosts the detail view), so
- * each asks the SAME pure predicate which surface is in front and the one that
- * is not stands down. Two listeners, one answer.
+ * departs from ⌘T's placement discipline and it is forced: ⌘\ splits the pane
+ * as it is DRAWN — the shown group's focused pane, or the full-width tab, which
+ * becomes a new group of two (VC-614) — and the only component that knows what
+ * is drawn is the surface drawing it. Both instances are mounted while a
+ * Ticket view is open (Home hosts the detail view), so each asks the SAME pure
+ * predicate which surface is in front and the one that is not stands down. Two
+ * listeners, one answer.
  *
  * NOTHING HERE ANIMATES. A keyboard-initiated split appears instantly: this is
  * a chord that will be pressed tens of times a day, and animation on those is
@@ -38,17 +38,27 @@ export interface SplitShortcutTarget {
   /** `null` for Home; the ticket id for a Ticket view. */
   ticketId: string | null;
   /**
-   * The surface's live strip, in drawn order — what the FIRST split of a
-   * surface records as the primary pane's claim. Read at press time through a
-   * ref, so a chord resolves against the strip as it is rather than as it was
-   * when the listener was installed.
+   * The pane the surface draws in focus: a shown group's pane, or the
+   * full-width pane. Read at press time through a ref, so a chord resolves
+   * against the surface as it is rather than as it was when the listener was
+   * installed.
    */
-  orderedTabIds: readonly string[];
+  paneId: string;
+  /**
+   * The tab drawn in front of that pane, or null — an empty pane's menu, or an
+   * untouched Chat Draft no layout may name.
+   */
+  targetTabId: string | null;
 }
 
-export function useSplitShortcuts({ projectId, ticketId, orderedTabIds }: SplitShortcutTarget) {
-  const latest = React.useRef({ projectId, ticketId, orderedTabIds });
-  latest.current = { projectId, ticketId, orderedTabIds };
+export function useSplitShortcuts({
+  projectId,
+  ticketId,
+  paneId,
+  targetTabId,
+}: SplitShortcutTarget) {
+  const latest = React.useRef({ projectId, ticketId, paneId, targetTabId });
+  latest.current = { projectId, ticketId, paneId, targetTabId };
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -83,26 +93,30 @@ export function useSplitShortcuts({ projectId, ticketId, orderedTabIds }: SplitS
       }
 
       const { ticketId: ticket, projectId: project } = surface;
-      const split =
-        ticket === null ? (ui?.homeSplitView ?? null) : (ui?.ticketTabs[ticket]?.splitView ?? null);
 
       if (shortcut.kind === "focus") {
-        // Nothing to move between while the surface is one pane — and a chord
-        // that does nothing should not also swallow the keypress.
-        if (split === null) return;
+        // Nothing to move between while one tab is shown full width — and a
+        // chord that does nothing should not also swallow the keypress. Read
+        // off the store, as the move itself is: a Browser page's replayed
+        // chord focuses its pane a moment before this runs.
+        const split = ticket === null ? ui?.homeSplitView : ui?.ticketTabs[ticket]?.splitView;
+        if (split?.root.kind !== "split") return;
         event.preventDefault();
         if (ticket === null) projectUi.focusAdjacentHomePane(project, shortcut.direction);
         else projectUi.focusAdjacentTicketPane(project, ticket, shortcut.direction);
         return;
       }
 
+      // A full-width untouched Draft has nothing durable a group could hold.
+      if (mine.paneId === SPLIT_VIEW_ROOT_PANE_ID && mine.targetTabId === null) return;
       event.preventDefault();
-      // An unsplit surface is drawn as ONE pane under the root id, which is
-      // what lets ⌘\ name its subject before any split exists.
-      const paneId = split?.focusedPaneId ?? SPLIT_VIEW_ROOT_PANE_ID;
-      const opts = { surfaceTabIds: mine.orderedTabIds };
-      if (ticket === null) projectUi.splitHomePane(project, paneId, shortcut.edge, opts);
-      else projectUi.splitTicketPane(project, ticket, paneId, shortcut.edge, opts);
+      // A full-width tab is drawn as ONE pane under the root id, which is what
+      // lets ⌘\ name its subject: that tab, which becomes a group of two. The
+      // drawn front is selected first, since the surface may be showing a tab
+      // its record has not caught up with.
+      const opts = mine.targetTabId === null ? {} : { targetTabId: mine.targetTabId };
+      if (ticket === null) projectUi.splitHomePane(project, mine.paneId, shortcut.edge, opts);
+      else projectUi.splitTicketPane(project, ticket, mine.paneId, shortcut.edge, opts);
       focusNewPaneMenu();
     };
 

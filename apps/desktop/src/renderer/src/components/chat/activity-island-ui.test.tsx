@@ -486,51 +486,69 @@ describe("row verbs", () => {
 
     click(rowIn("tabs", "t2"));
     expect(actions.promoteTab).toHaveBeenCalledWith("t2");
-    click(actionIn("tabs", "Show here"));
+    click(actionIn("tabs", "Open beside chat"));
     expect(actions.promoteTab).toHaveBeenCalledTimes(2);
     expect(actions.closeTab).not.toHaveBeenCalled();
   });
 
-  it("opens a tab's Browser replay from its row, without promoting it (VC-453)", async () => {
-    const actions = actionsSpy();
-    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] }, actions);
-    click(cluster("tabs"));
-
-    click(actionIn("tabs", "Replay"));
-    expect(actions.replayTab).toHaveBeenCalledWith("t1");
-    expect(actions.promoteTab).not.toHaveBeenCalled();
-  });
-
-  it("draws a tab already pinned here inert, and a strip tab as one that can be shown here (VC-268)", async () => {
-    // The verb pins a tab as this chat's preview. A tab that IS the preview has
-    // nowhere to go, so its row is inert rather than activatable-and-idle;
-    // a strip tab can come back here, so its row keeps the verb.
+  it("shows every tab, including legacy previews, with title and full address", async () => {
     const actions = actionsSpy();
     await render(
       {
         ...EMPTY_ACTIVITY_ISLAND,
         tabs: [
-          tab({ id: "t1", host: "github.com", promoted: true, surface: "preview" }),
-          tab({ id: "t2", host: "motion.dev", promoted: true, surface: "tab" }),
+          tab({
+            id: "t1",
+            title: "Settings",
+            detail: "localhost:5173/settings",
+            surface: "preview",
+          }),
+          tab({ id: "t2", title: "Board", detail: "localhost:5174/board", surface: "tab" }),
         ],
       },
       actions,
     );
     click(cluster("tabs"));
+    expect(rowIn("tabs", "t1").tagName).toBe("BUTTON");
+    expect(rowIn("tabs", "t1").textContent).toContain("Settings");
+    expect(rowIn("tabs", "t1").textContent).toContain("localhost:5173/settings");
+    expect(card("tabs")?.textContent).not.toContain("pinned here");
+    click(rowIn("tabs", "t1"));
+    click(actionIn("tabs", "Show tab"));
+    expect(actions.promoteTab).toHaveBeenNthCalledWith(1, "t1");
+    expect(actions.promoteTab).toHaveBeenNthCalledWith(2, "t2");
+    expect(card("tabs")?.querySelector('[aria-label="Replay"]')).toBeNull();
+  });
 
-    const pinned = rowIn("tabs", "t1");
-    expect(pinned.tagName).toBe("DIV");
-    expect(pinned.textContent).toContain("pinned here");
-    click(pinned);
-    expect(actions.promoteTab).not.toHaveBeenCalled();
-    expect(pinned.parentElement?.querySelector('[aria-label="Show here"]')).toBeNull();
-    expect(pinned.parentElement?.querySelector('[aria-label="Close tab"]')).not.toBeNull();
+  it("keeps fifteen localhost pages distinguishable without thumbnail previews", async () => {
+    const tabs = Array.from({ length: 15 }, (_, index) =>
+      tab({
+        id: `local-${index}`,
+        host: "localhost",
+        title: `Page ${index + 1}`,
+        detail: `localhost:${5173 + index}/work/page-${index + 1}`,
+      }),
+    );
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs });
+    click(cluster("tabs"));
+    expect(card("tabs")?.querySelectorAll("[data-island-row]")).toHaveLength(15);
+    for (const page of tabs) {
+      const row = rowIn("tabs", page.id);
+      expect(row.textContent).toContain(page.title);
+      expect(row.textContent).toContain(page.detail);
+    }
+    expect(card("tabs")?.querySelector("img")).toBeNull();
+  });
 
-    const strip = rowIn("tabs", "t2");
-    expect(strip.tagName).toBe("BUTTON");
-    expect(strip.textContent).toContain("as a tab");
-    click(strip);
-    expect(actions.promoteTab).toHaveBeenCalledWith("t2");
+  it("raises attention-needing tabs above ready tabs", async () => {
+    await render({
+      ...EMPTY_ACTIVITY_ISLAND,
+      tabs: [tab(), tab({ id: "need", needsAttention: true })],
+    });
+    click(cluster("tabs"));
+    const rows = card("tabs")?.querySelectorAll("[data-island-row]");
+    expect(rows?.[0]?.getAttribute("data-island-row")).toBe("need");
+    expect(rows?.[0]?.textContent).toContain("needs you");
   });
 
   it("names a child Session's tab by its owner, and says nothing for this Session's own", async () => {
@@ -690,17 +708,11 @@ describe("row verbs", () => {
 });
 
 describe("destructive actions", () => {
-  it("arm on the first press and fire on the second", async () => {
+  it("closes browser tabs on the first press; the feed provides Undo", async () => {
     const actions = actionsSpy();
     await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] }, actions);
     click(cluster("tabs"));
-
     const close = actionIn("tabs", "Close tab");
-    click(close);
-    expect(actions.closeTab).not.toHaveBeenCalled();
-    expect(close.getAttribute("aria-label")).toBe("Click again to close");
-    expect(close.hasAttribute("data-armed")).toBe(true);
-
     click(close);
     expect(actions.closeTab).toHaveBeenCalledWith("t1");
     expect(close.hasAttribute("data-armed")).toBe(false);

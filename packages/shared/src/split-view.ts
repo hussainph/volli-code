@@ -1,59 +1,60 @@
 /**
- * SPLIT VIEW — how one tabbed surface's tabs are spread over several panes
- * (VC-202).
+ * TAB GROUPS (VC-614): a surface — Home, or one Ticket view — owns one
+ * ordinary tab strip and any number of groups.
  *
- * Both tabbed surfaces (Home, and a Ticket view) already own one ordered
- * strip of tabs and one active tab. A split view sits BESIDE that, exactly as
- * an arrangement does (`tab-order.ts`): a binary tree whose leaves are panes,
- * each pane naming a subset of the surface's tab ids and its own front tab. The
- * surface keeps composing and arranging its tabs the way it always did; this
- * model only says which pane each of them is drawn in.
+ * A GROUP is a split tree of two or more panes, each pane holding a STACK of
+ * tabs (`tabIds`, with `activeTabId` in front) — the split view this app had
+ * before, one per group. The surface's top strip draws a group as ONE chip.
+ * Selecting any tab of a group shows the whole group with that tab in front of
+ * its pane and that pane focused; selecting an ordinary tab shows that tab full
+ * width and never pulls it into a group; coming back to a group restores its
+ * exact layout, ratios, stacks and fronts.
  *
- * THE MODEL NAMES IDS, AND IDS ONLY, and — like an arrangement — it never has
- * to be true. A pane may name a tab that does not exist yet (a Session that has
- * not hydrated), and a tab may exist that no pane names (it was opened by a
- * path that predates this feature, or restored at boot). Neither is repaired at
- * rest. {@link sanitizeSplitView} checks SHAPE and nothing else, and
- * {@link resolveSplitView} does the reconciling at RENDER time, against the
- * live strip, without writing anything back. That is the same discipline
- * `tab-order.ts` states and for the same reason: a Session that has not
- * hydrated yet looks exactly like a Session that is gone, and only one of those
- * may lose its place.
+ * OPEN is not SELECT. A tab that is newly OPENED (a new chat or terminal, a new
+ * Browser Tab, a file opened from ⌘P or a tree) while a group is shown joins
+ * the focused pane's stack, in front — {@link openTab}. With no group shown it
+ * is exactly a selection.
  *
- * TWO RULES CARRY THE WHOLE COMPATIBILITY STORY:
+ * INVARIANTS, held by every operation here and re-established on read:
  *
- *  1. **A single pane is not a split.** The store holds `SplitViewState | null`
- *     per surface and collapses back to `null` the moment only one pane is
- *     left, so "no split" has exactly one representation and every pre-existing
- *     code path keeps running untouched. {@link isSinglePane} is what the store
- *     asks after each operation; {@link sanitizeSplitView} refuses a persisted
- *     single-pane tree for the same reason.
- *  2. **The primary pane is the first leaf, and it is where everything
- *     unclaimed lives.** Splits only ever open a pane to the RIGHT or BELOW
- *     (the vocabulary the in-app terminal split already uses), so the top-left
- *     leaf is stable — which keeps the primary pane at the start of the main
- *     tab bar, and makes "the permanent tab (Board / Body) never leaves the
- *     primary pane" a property of the model
- *     rather than a rule every caller has to remember.
+ *  • a tab belongs to at most one pane of at most one group;
+ *  • pane ids are unique across all groups and are never
+ *    {@link SPLIT_VIEW_ROOT_PANE_ID}, which names the full-width pane;
+ *  • every group has at least two panes and at least one tab — an operation
+ *    that leaves fewer DISSOLVES the group, and its tabs become ordinary strip
+ *    tabs. No operation here ever closes a tab;
+ *  • a pane that holds tabs has one of them in front; an EMPTY pane (what ⌘\
+ *    opens) is allowed and draws the surface's menu;
+ *  • `root` is the shown group itself (the same object as its `pairs` entry) or
+ *    one full-width pane holding the selected ordinary tab;
+ *  • a no-op returns its input by identity.
  *
- * Every operation is IDENTITY-STABLE: it returns its input when nothing
- * changed, so a store `set` for a no-op never notifies a subscriber, and
- * unchanged subtrees keep their references across a change so a memoized pane
- * does not re-render because its neighbour resized.
- *
- * No DOM, no React, no clock, no randomness: `splitPane` takes an injected
- * `mintId` (the renderer passes `() => crypto.randomUUID()`), which is also
- * what makes the tests here deterministic.
+ * PERSISTED SHAPE, additive and N−1-safe: the groups live in `pairs` (the field
+ * kept the name it had while every group was a pair), and `root` is always a
+ * valid legacy split tree — the shown group, or a single pane, which an older
+ * build reads as "not split". Losing the grouping on downgrade is the accepted
+ * degradation; every tab still comes back through the surface's own strip.
+ * Missing live ids are reconciled at render time, never pruned at rest.
  */
 
 /** `row` = side-by-side (a vertical divider); `column` = stacked. */
 export type SplitViewDirection = "row" | "column";
 
 /**
- * Where a split opens the new pane. Right/down only — the constraint the
- * terminal split already lives under, and what keeps the primary pane top-left.
+ * Where a split opens the new pane. `right`/`down` are what ⌘\ and ⇧⌘\ open;
+ * a drop may also open `left`/`up` (VC-614), which puts the new pane FIRST.
  */
-export type SplitViewEdge = "right" | "down";
+export type SplitViewEdge = "left" | "right" | "up" | "down";
+
+/** The branch direction an edge opens. */
+export function splitEdgeDirection(edge: SplitViewEdge): SplitViewDirection {
+  return edge === "left" || edge === "right" ? "row" : "column";
+}
+
+/** Whether the pane an edge opens comes before the pane it was opened beside. */
+export function splitEdgeLeads(edge: SplitViewEdge): edge is "left" | "up" {
+  return edge === "left" || edge === "up";
+}
 
 /** Pane-to-pane focus movement, resolved geometrically. */
 export type SplitViewFocusDirection = "left" | "right" | "up" | "down";
@@ -61,9 +62,9 @@ export type SplitViewFocusDirection = "left" | "right" | "up" | "down";
 export interface SplitViewPane {
   kind: "pane";
   id: string;
-  /** Tab ids assigned to this pane, in strip order. Ids may name nothing. */
+  /** This pane's tab stack, in its strip's order. Ids may name nothing live. */
   tabIds: readonly string[];
-  /** The pane's front tab, or null (an empty pane draws the surface menu). */
+  /** The pane's front tab, or null — only an empty pane, which draws the menu. */
   activeTabId: string | null;
 }
 
@@ -79,19 +80,28 @@ export interface SplitViewBranch {
 
 export type SplitViewNode = SplitViewPane | SplitViewBranch;
 
+/** A tab group: a split tree of two or more panes. Its id is its root branch's. */
+export type SplitViewGroup = SplitViewBranch;
+
 export interface SplitViewState {
+  /** Every group on the surface (persisted under its first name, `pairs`). */
+  pairs: readonly SplitViewGroup[];
+  /**
+   * The surface's selected tab: the full-width ordinary tab, or the shown
+   * group's focused front — or, while that pane is empty, the group tab that
+   * was selected before. `null` selects nothing.
+   */
+  selectedTabId: string | null;
+  /** The shown group, or the one full-width pane. Always a legacy-valid tree. */
   root: SplitViewNode;
-  /** A pane id; the pane whose active tab is the surface's active tab. */
+  /** A pane of `root`; {@link SPLIT_VIEW_ROOT_PANE_ID} while nothing is grouped. */
   focusedPaneId: string;
 }
 
 /**
- * The pane id a surface's one-and-only pane carries before it has ever split.
- *
- * A constant rather than a minted id because it is also the id a renderer draws
- * an UNSPLIT surface under (`resolveSplitView` over
- * {@link singlePaneSplitView}), so `⌘\` can name the pane it is splitting
- * before any split state exists.
+ * The id of the full-width pane an ordinary tab is drawn in — and, for that
+ * reason, never the id of a pane inside a group: a member wearing it would
+ * answer "focus root", which is every click in a full-width tab (VC-614).
  */
 export const SPLIT_VIEW_ROOT_PANE_ID = "root";
 
@@ -103,40 +113,21 @@ export const SPLIT_VIEW_MIN_RATIO = 0.15;
 export const SPLIT_VIEW_MAX_RATIO = 0.85;
 
 /**
- * Beyond these a rehydrated tree is refused outright (see
- * {@link sanitizeSplitView}): a surface of nine panes or seven levels is not a
- * layout anybody arranged, and drawing it is worse than opening unsplit.
+ * Beyond these a group is not drawn: a split refuses to make one, and a
+ * rehydrated one is dropped. Nine panes or seven levels is not a layout anybody
+ * arranged, and drawing it is worse than showing its tabs ungrouped.
  */
 export const SPLIT_VIEW_MAX_PANES = 8;
 export const SPLIT_VIEW_MAX_DEPTH = 6;
 
-/**
- * One pane holding `tabIds` — what a surface looks like before it splits, and
- * what the store materializes the moment it does.
- *
- * Also the shape a renderer hands {@link resolveSplitView} for an UNSPLIT
- * surface, so one grid draws both cases and the split path is never a second
- * rendering path.
- */
-export function singlePaneSplitView(
-  tabIds: readonly string[],
-  activeTabId: string | null,
-  paneId: string = SPLIT_VIEW_ROOT_PANE_ID,
-): SplitViewState {
-  return {
-    root: { kind: "pane", id: paneId, tabIds: [...tabIds], activeTabId },
-    focusedPaneId: paneId,
-  };
-}
+// ---------------------------------------------------------------------------
+// Trees
 
 /**
  * Rewrite a tree bottom-up, keeping every subtree that did not change BY
- * IDENTITY.
- *
- * The single walker behind every operation below, which is where their identity
- * stability comes from: a change deep in one branch rebuilds the spine down to
- * it and leaves the other side alone, so a resize of one divider cannot
- * invalidate a memoized pane on the far side of the tree.
+ * IDENTITY — so a change deep in one branch rebuilds the spine down to it and
+ * leaves the other side alone, and a resize cannot invalidate a memoized pane
+ * on the far side of the tree.
  */
 function rewrite(node: SplitViewNode, map: (node: SplitViewNode) => SplitViewNode): SplitViewNode {
   if (node.kind === "pane") return map(node);
@@ -145,16 +136,15 @@ function rewrite(node: SplitViewNode, map: (node: SplitViewNode) => SplitViewNod
   return map(first === node.first && second === node.second ? node : { ...node, first, second });
 }
 
-/** Replace one pane's node — with a pane, or with the branch that splits it. */
+/** Replace one pane of a tree — with a pane, or with the branch that splits it. */
 function replacePane(
-  state: SplitViewState,
+  node: SplitViewNode,
   paneId: string,
   replace: (pane: SplitViewPane) => SplitViewNode,
-): SplitViewState {
-  const root = rewrite(state.root, (node) =>
-    node.kind === "pane" && node.id === paneId ? replace(node) : node,
+): SplitViewNode {
+  return rewrite(node, (child) =>
+    child.kind === "pane" && child.id === paneId ? replace(child) : child,
   );
-  return root === state.root ? state : { ...state, root };
 }
 
 function collectPanes(node: SplitViewNode, out: SplitViewPane[]): void {
@@ -166,112 +156,15 @@ function collectPanes(node: SplitViewNode, out: SplitViewPane[]): void {
   collectPanes(node.second, out);
 }
 
-/** Every pane, in tree order — which is reading order: top-left first. */
-export function splitViewPanes(state: SplitViewState): readonly SplitViewPane[] {
+/** A tree's panes in reading order: top-left first. */
+function panesOf(node: SplitViewNode): SplitViewPane[] {
   const panes: SplitViewPane[] = [];
-  collectPanes(state.root, panes);
+  collectPanes(node, panes);
   return panes;
 }
 
-/**
- * The pane that holds the surface's permanent tab and everything no pane
- * claims. Always the first leaf, because splits only open right/down.
- */
-export function primaryPaneId(state: SplitViewState): string {
-  // A tree always has at least one leaf: the only way to build one is from a
-  // pane, and no operation here removes the primary.
-  return splitViewPanes(state)[0]!.id;
-}
-
-function findPane(state: SplitViewState, paneId: string): SplitViewPane | null {
-  return splitViewPanes(state).find((pane) => pane.id === paneId) ?? null;
-}
-
-function findPaneWithTab(state: SplitViewState, tabId: string): SplitViewPane | null {
-  return splitViewPanes(state).find((pane) => pane.tabIds.includes(tabId)) ?? null;
-}
-
-/** Which pane claims `tabId`, or null when none does (see the module doc). */
-export function paneForTab(state: SplitViewState, tabId: string): string | null {
-  return findPaneWithTab(state, tabId)?.id ?? null;
-}
-
-/**
- * The focused pane's front tab — THE surface's active tab while split, and so
- * the context the right rail reads. `null` while the focused pane is empty.
- */
-export function activeTabInSplitView(state: SplitViewState): string | null {
-  return findPane(state, state.focusedPaneId)?.activeTabId ?? null;
-}
-
-/** Whether this is one pane, i.e. no longer a split — see the module doc. */
-export function isSinglePane(
-  state: SplitViewState,
-): state is SplitViewState & { root: SplitViewPane } {
-  return state.root.kind === "pane";
-}
-
-/** Focus a pane. Ignores an id that names none — focus is never left dangling. */
-export function focusPane(state: SplitViewState, paneId: string): SplitViewState {
-  if (state.focusedPaneId === paneId) return state;
-  if (findPane(state, paneId) === null) return state;
-  return { ...state, focusedPaneId: paneId };
-}
-
-/**
- * Make `tabId` the front tab of the pane that holds it, and focus that pane —
- * THE write-through primitive behind every existing "make this tab active"
- * store action.
- *
- * A tab no pane claims is one that was just OPENED, and it belongs to the pane
- * the person is working in: it joins the focused pane's strip. That is what
- * makes an empty pane's menu work without any pane plumbing — `⌘P` opens a
- * file, the surface activates it, and it lands here because here is where the
- * focus is.
- */
-export function activateTab(state: SplitViewState, tabId: string): SplitViewState {
-  const holder = findPaneWithTab(state, tabId);
-  if (holder === null) {
-    return replacePane(state, state.focusedPaneId, (pane) => ({
-      ...pane,
-      tabIds: [...pane.tabIds, tabId],
-      activeTabId: tabId,
-    }));
-  }
-  return replacePane(focusPane(state, holder.id), holder.id, (pane) =>
-    pane.activeTabId === tabId ? pane : { ...pane, activeTabId: tabId },
-  );
-}
-
-/**
- * Assign an unclaimed tab to a pane without moving focus. A draft's first
- * content may arrive after focus has moved elsewhere; its placement still
- * belongs to the pane where it was composed. Only `activate` changes that
- * pane's front tab. Already-claimed tabs and missing panes are left alone.
- */
-export function claimTabInPane(
-  state: SplitViewState,
-  tabId: string,
-  paneId: string,
-  activate: boolean,
-): SplitViewState {
-  if (findPaneWithTab(state, tabId) !== null) return state;
-  return replacePane(state, paneId, (pane) => ({
-    ...pane,
-    tabIds: [...pane.tabIds, tabId],
-    activeTabId: activate ? tabId : pane.activeTabId,
-  }));
-}
-
-/**
- * Drop `tabId` from a pane, handing the front tab to its successor — the next
- * tab in the pane, else the previous one.
- */
-function paneWithoutTab(pane: SplitViewPane, tabId: string): SplitViewPane {
-  const index = pane.tabIds.indexOf(tabId);
-  const tabIds = pane.tabIds.filter((id) => id !== tabId);
-  if (pane.activeTabId !== tabId) return { ...pane, tabIds };
-  return { ...pane, tabIds, activeTabId: tabIds[index] ?? tabIds.at(-1) ?? null };
+function depthOf(node: SplitViewNode): number {
+  return node.kind === "pane" ? 1 : 1 + Math.max(depthOf(node.first), depthOf(node.second));
 }
 
 /** The other child of the branch that holds `paneId`, or null at the root. */
@@ -287,136 +180,457 @@ function dropPane(node: SplitViewNode, paneId: string): SplitViewNode {
   if (node.kind === "pane") return node;
   if (node.first.kind === "pane" && node.first.id === paneId) return node.second;
   if (node.second.kind === "pane" && node.second.id === paneId) return node.first;
+  // Only ever asked about a pane the tree holds: if not under `first`, under `second`.
   const first = dropPane(node.first, paneId);
   if (first !== node.first) return { ...node, first };
-  const second = dropPane(node.second, paneId);
-  return second === node.second ? node : { ...node, second };
+  return { ...node, second: dropPane(node.second, paneId) };
 }
 
 /**
- * Close a pane outright — the empty pane's own menu row, and the collapse a
- * pane emptied by {@link removeTab} performs on itself.
- *
- * THE PRIMARY PANE NEVER CLOSES: it holds the permanent tab, and a surface with
- * no primary pane has nowhere to draw the Board.
- *
- * Tabs the pane still held are RELINQUISHED to the primary pane rather than
- * closed — closing a pane is a layout act, and nothing here may close a tab.
- * The primary pane is where they go because it is already where
- * {@link resolveSplitView} sends any id no pane claims, so the model has one
- * rule about orphaned tabs and not two.
- *
- * Focus follows the space: the sibling that expands into the closed pane's
- * area takes it, which is where the eye already went.
+ * Drop `tabId` from a pane's stack, handing the front to its successor — the
+ * next tab in the stack, else the previous one.
  */
-export function closePane(state: SplitViewState, paneId: string): SplitViewState {
-  const closing = findPane(state, paneId);
-  if (closing === null) return state;
-  if (paneId === primaryPaneId(state)) return state;
-  // A non-primary pane is by definition below a branch, so it has a sibling.
-  const sibling = siblingOf(state.root, paneId)!;
-  const survivor: SplitViewState = {
-    root: dropPane(state.root, paneId),
-    focusedPaneId: state.focusedPaneId === paneId ? firstPaneOf(sibling).id : state.focusedPaneId,
-  };
-  if (closing.tabIds.length === 0) return survivor;
-  const primary = primaryPaneId(survivor);
-  return replacePane(survivor, primary, (pane) => ({
+function paneWithoutTab(pane: SplitViewPane, tabId: string): SplitViewPane {
+  const index = pane.tabIds.indexOf(tabId);
+  const tabIds = pane.tabIds.filter((id) => id !== tabId);
+  if (pane.activeTabId !== tabId) return { ...pane, tabIds };
+  return { ...pane, tabIds, activeTabId: tabIds[index] ?? tabIds.at(-1) ?? null };
+}
+
+/** `tabId` pushed onto a pane's stack. A pane holding tabs always has a front. */
+function paneWithTab(pane: SplitViewPane, tabId: string, front: boolean): SplitViewPane {
+  return {
     ...pane,
-    tabIds: [...pane.tabIds, ...closing.tabIds.filter((id) => !pane.tabIds.includes(id))],
-  }));
-}
-
-function firstPaneOf(node: SplitViewNode): SplitViewPane {
-  const panes: SplitViewPane[] = [];
-  collectPanes(node, panes);
-  return panes[0]!;
+    tabIds: [...pane.tabIds, tabId],
+    activeTabId: front || pane.activeTabId === null ? tabId : pane.activeTabId,
+  };
 }
 
 /**
- * Drop `tabId` from whichever pane holds it — the write-through behind every
- * tab CLOSE. A non-primary pane emptied by it collapses, because an empty pane
- * nobody asked for is just a hole in the layout.
+ * `tabId` taken out of the group tree that holds it. The pane it leaves
+ * COLLAPSES if that emptied it — an empty pane nobody asked for is a hole —
+ * while an untouched empty pane (a ⌘\ menu) stays. Focus that was on the
+ * collapsed pane moves into the sibling that takes its space.
  */
-export function removeTab(state: SplitViewState, tabId: string): SplitViewState {
-  const holder = findPaneWithTab(state, tabId);
-  if (holder === null) return state;
-  const stripped = paneWithoutTab(holder, tabId);
-  const next = replacePane(state, holder.id, () => stripped);
-  // Collapse the STRIPPED pane, so the close relinquishes nothing: the tab is
-  // gone, not moved.
-  if (stripped.tabIds.length === 0 && holder.id !== primaryPaneId(state)) {
-    return closePane(next, holder.id);
-  }
-  return next;
-}
-
-/**
- * Move `tabId` into `paneId` — a tab dropped on a pane's centre zone, or on
- * another pane's strip.
- *
- * The moved tab is activated and its new pane focused, because a dropped tab is
- * the one you meant to look at. Its old pane collapses if the move emptied it.
- */
-export function moveTabToPane(
-  state: SplitViewState,
+function treeWithoutTab(
+  tree: SplitViewGroup,
   tabId: string,
-  paneId: string,
-): SplitViewState {
-  const target = findPane(state, paneId);
-  if (target === null) return state;
-  const source = findPaneWithTab(state, tabId);
-  // Already this pane's last tab: the assignment cannot change, and only focus
-  // and the front tab are left to say.
-  const assigned =
-    source?.id === paneId && target.tabIds.at(-1) === tabId
-      ? state
-      : replacePane(source === null ? state : removeTab(state, tabId), paneId, (pane) => ({
-          ...pane,
-          tabIds: [...pane.tabIds, tabId],
-        }));
-  return activateTab(focusPane(assigned, paneId), tabId);
+  focusId: string,
+): { tree: SplitViewNode; focusId: string } {
+  const holder = panesOf(tree).find((pane) => pane.tabIds.includes(tabId))!;
+  const stripped = paneWithoutTab(holder, tabId);
+  if (stripped.tabIds.length > 0) {
+    return { tree: replacePane(tree, holder.id, () => stripped), focusId };
+  }
+  // A pane of a branch always has a sibling.
+  const sibling = siblingOf(tree, holder.id)!;
+  return {
+    tree: dropPane(tree, holder.id),
+    focusId: focusId === holder.id ? panesOf(sibling)[0]!.id : focusId,
+  };
+}
+
+function holds(node: SplitViewNode, tabId: string): boolean {
+  return panesOf(node).some((pane) => pane.tabIds.includes(tabId));
+}
+
+/** Whether a tree is still a group: two or more panes, and a tab to show. */
+function viable(tree: SplitViewNode): tree is SplitViewGroup {
+  return tree.kind === "split" && panesOf(tree).some((pane) => pane.tabIds.length > 0);
+}
+
+/** Only the trees that are still groups. */
+function viableGroups(trees: readonly SplitViewNode[]): readonly SplitViewGroup[] {
+  return trees.filter((tree) => viable(tree));
 }
 
 /**
- * Rewrite one pane's strip order after a drag inside it — {@link
- * movedTabOrder}'s job one scope down, and rewritten wholesale for the same
- * reason: `ids` is the pane's strip as the drop left it, so the claim it
- * records names every tab that pane is currently drawing and nothing else,
- * which is also what keeps a pane's claim from growing without bound as tabs
- * come and go.
- *
- * The permanent tab is never among `ids` (it does not drag), and a pane's front
- * tab that the drop did not draw gives way rather than being kept as a claim
- * the strip disagrees with.
+ * Every group with `tabId` taken out (see {@link treeWithoutTab}), positions
+ * kept, NOT yet checked for viability — a caller about to put the tab back into
+ * the same group must see that group before a collapse dissolves it.
  */
-export function reorderPaneTabs(
-  state: SplitViewState,
-  paneId: string,
-  ids: readonly string[],
-): SplitViewState {
-  const pane = findPane(state, paneId);
-  if (pane === null) return state;
-  const tabIds = [...new Set(ids.filter((id) => id.length > 0))];
-  const activeTabId =
-    pane.activeTabId !== null && tabIds.includes(pane.activeTabId) ? pane.activeTabId : null;
-  if (sameIds(pane.tabIds, tabIds) && pane.activeTabId === activeTabId) return state;
-  return replacePane(state, paneId, () => ({ ...pane, tabIds, activeTabId }));
+function withoutTabEverywhere(
+  pairs: readonly SplitViewGroup[],
+  tabId: string,
+): readonly SplitViewNode[] {
+  return pairs.map((group) =>
+    holds(group, tabId) ? treeWithoutTab(group, tabId, "").tree : group,
+  );
 }
 
 function sameIds(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((id, index) => id === right[index]);
 }
 
+function clampRatio(ratio: number): number {
+  return Math.min(SPLIT_VIEW_MAX_RATIO, Math.max(SPLIT_VIEW_MIN_RATIO, ratio));
+}
+
+// ---------------------------------------------------------------------------
+// Readers
+
+/** The shown panes, in reading order — one full-width pane while ungrouped. */
+export function splitViewPanes(state: SplitViewState): readonly SplitViewPane[] {
+  return panesOf(state.root);
+}
+
+/** Every pane of every group, shown or not, in group then reading order. */
+export function groupedPanes(state: SplitViewState): readonly SplitViewPane[] {
+  return state.pairs.flatMap((group) => panesOf(group));
+}
+
+/** Every tab a group holds, pane by pane in reading order. */
+export function groupTabIds(group: SplitViewNode): readonly string[] {
+  return panesOf(group).flatMap((pane) => pane.tabIds);
+}
+
+/** The group `tabId` belongs to, or null for an ordinary tab. Never depends on selection. */
+export function groupForTab(state: SplitViewState | null, tabId: string): SplitViewGroup | null {
+  return state?.pairs.find((group) => holds(group, tabId)) ?? null;
+}
+
+/** Which group pane holds `tabId`, or null for an ordinary tab. */
+export function paneForTab(state: SplitViewState, tabId: string): string | null {
+  return groupedPanes(state).find((pane) => pane.tabIds.includes(tabId))?.id ?? null;
+}
+
 /**
- * Split `paneId`, opening a new pane to its right or below it.
+ * The focused pane's front tab — THE surface's active tab, and so the context
+ * the right rail reads. `null` while the focused pane is empty.
+ */
+export function activeTabInSplitView(state: SplitViewState): string | null {
+  return panesOf(state.root).find((pane) => pane.id === state.focusedPaneId)?.activeTabId ?? null;
+}
+
+/** The group on screen, or null while an ordinary tab is shown full width. */
+function shownGroup(state: SplitViewState): SplitViewGroup | null {
+  const { root } = state;
+  return root.kind === "split" ? (state.pairs.find((group) => group.id === root.id) ?? null) : null;
+}
+
+function locatePane(
+  state: SplitViewState,
+  paneId: string,
+): { index: number; group: SplitViewGroup; pane: SplitViewPane } | null {
+  for (const [index, group] of state.pairs.entries()) {
+    const pane = panesOf(group).find((candidate) => candidate.id === paneId);
+    if (pane !== undefined) return { index, group, pane };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Projection: which group (or tab) is on screen
+
+function fullWidthPane(tabId: string | null): SplitViewPane {
+  return {
+    kind: "pane",
+    id: SPLIT_VIEW_ROOT_PANE_ID,
+    tabIds: tabId === null ? [] : [tabId],
+    activeTabId: tabId,
+  };
+}
+
+function settle(
+  state: SplitViewState,
+  pairs: readonly SplitViewGroup[],
+  root: SplitViewNode,
+  focusedPaneId: string,
+  selectedTabId: string | null,
+): SplitViewState {
+  if (
+    state.pairs === pairs &&
+    state.root === root &&
+    state.focusedPaneId === focusedPaneId &&
+    state.selectedTabId === selectedTabId
+  ) {
+    return state;
+  }
+  return { pairs, selectedTabId, root, focusedPaneId };
+}
+
+/** Show `tabId` full width (or nothing, for null) beside `pairs`. */
+function showFull(
+  state: SplitViewState,
+  pairs: readonly SplitViewGroup[],
+  tabId: string | null,
+): SplitViewState {
+  // A pane root is only ever the full-width pane, so its front says what it holds.
+  const { root } = state;
+  const reuse = root.kind === "pane" && root.activeTabId === tabId;
+  return settle(state, pairs, reuse ? root : fullWidthPane(tabId), SPLIT_VIEW_ROOT_PANE_ID, tabId);
+}
+
+/**
+ * Show `group` (already in `pairs`) with `paneId` focused. The selection is the
+ * focused front; an empty focused pane keeps `preferred` when that is one of
+ * the group's tabs, else the group's first front.
+ */
+function showGroup(
+  state: SplitViewState,
+  pairs: readonly SplitViewGroup[],
+  group: SplitViewGroup,
+  paneId: string,
+  preferred: string | null,
+): SplitViewState {
+  const panes = panesOf(group);
+  const pane = panes.find((candidate) => candidate.id === paneId) ?? panes[0]!;
+  const selected =
+    pane.activeTabId ??
+    (preferred !== null && holds(group, preferred) ? preferred : null) ??
+    // A group always holds a tab, and a pane holding tabs has one in front.
+    panes.find((candidate) => candidate.activeTabId !== null)!.activeTabId;
+  return settle(state, pairs, group, pane.id, selected);
+}
+
+/** Replace (or, for a tree that is no longer a group, drop) `pairs[index]`. */
+function withGroup(
+  pairs: readonly SplitViewGroup[],
+  index: number,
+  tree: SplitViewNode,
+): readonly SplitViewGroup[] {
+  return viable(tree)
+    ? pairs.map((group, at) => (at === index ? tree : group))
+    : pairs.filter((_, at) => at !== index);
+}
+
+/**
+ * The surface after group `index` became `tree` — the shared tail of every
+ * removal. A hidden group changes nothing on screen. The shown group stays
+ * shown while it is still a group; a dissolved one hands the screen to the
+ * front of the pane that was left, full width.
+ */
+function afterRemoval(
+  state: SplitViewState,
+  index: number,
+  tree: SplitViewNode,
+  focusId: string,
+  preferred: string | null,
+): SplitViewState {
+  const pairs = withGroup(state.pairs, index, tree);
+  if (shownGroup(state)?.id !== state.pairs[index]!.id) {
+    return settle(state, pairs, state.root, state.focusedPaneId, state.selectedTabId);
+  }
+  if (viable(tree)) return showGroup(state, pairs, tree, focusId, preferred);
+  return showFull(state, pairs, tree.kind === "pane" ? tree.activeTabId : null);
+}
+
+/** A surface with no groups, selecting `selectedTabId` full width. */
+export function emptySplitView(selectedTabId: string | null): SplitViewState {
+  return {
+    pairs: [],
+    selectedTabId,
+    root: fullWidthPane(selectedTabId),
+    focusedPaneId: SPLIT_VIEW_ROOT_PANE_ID,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Select and open
+
+/**
+ * SELECT `tabId` — THE write-through behind every "make this tab active" door
+ * (a strip click, the Island's show, a notification). A group tab shows its
+ * group, in front of its pane, that pane focused; an ordinary tab shows full
+ * width and is never pulled into a group.
+ */
+export function selectTab(state: SplitViewState, tabId: string): SplitViewState {
+  const index = state.pairs.findIndex((group) => holds(group, tabId));
+  if (index === -1) return showFull(state, state.pairs, tabId);
+  const group = state.pairs[index]!;
+  const pane = panesOf(group).find((candidate) => candidate.tabIds.includes(tabId))!;
+  if (pane.activeTabId === tabId) return showGroup(state, state.pairs, group, pane.id, tabId);
+  const fronted = replacePane(group, pane.id, () => ({ ...pane, activeTabId: tabId }));
+  return showGroup(
+    state,
+    withGroup(state.pairs, index, fronted),
+    fronted as SplitViewGroup,
+    pane.id,
+    tabId,
+  );
+}
+
+/**
+ * OPEN `tabId` — a tab that did not exist a moment ago. While a group is shown
+ * it joins the focused pane's stack, in front: the pane the person is working
+ * in. Otherwise (and for a tab some group already holds) it is a selection.
+ */
+export function openTab(state: SplitViewState, tabId: string): SplitViewState {
+  const shown = shownGroup(state);
+  if (shown === null || groupForTab(state, tabId) !== null) return selectTab(state, tabId);
+  const panes = panesOf(shown);
+  // A shown group's focus is always one of its panes.
+  const pane = panes.find((candidate) => candidate.id === state.focusedPaneId)!;
+  const next = replacePane(shown, pane.id, () => paneWithTab(pane, tabId, true)) as SplitViewGroup;
+  const index = state.pairs.indexOf(shown);
+  return showGroup(state, withGroup(state.pairs, index, next), next, pane.id, tabId);
+}
+
+/**
+ * Claim an ungrouped tab into a group pane without moving focus — a Draft's
+ * first content, which may arrive after focus has moved on; its placement still
+ * belongs to the pane it was composed in. Only `activate` puts it in front.
+ * A tab some group already holds, and a pane no group has, are left alone.
+ */
+export function claimTabInPane(
+  state: SplitViewState,
+  tabId: string,
+  paneId: string,
+  activate: boolean,
+): SplitViewState {
+  if (groupForTab(state, tabId) !== null) return state;
+  const found = locatePane(state, paneId);
+  if (found === null) return state;
+  const next = replacePane(found.group, paneId, (pane) =>
+    paneWithTab(pane, tabId, activate),
+  ) as SplitViewGroup;
+  const pairs = withGroup(state.pairs, found.index, next);
+  if (shownGroup(state) !== found.group) {
+    return settle(state, pairs, state.root, state.focusedPaneId, state.selectedTabId);
+  }
+  return showGroup(state, pairs, next, state.focusedPaneId, state.selectedTabId);
+}
+
+// ---------------------------------------------------------------------------
+// Membership
+
+/**
+ * Take `tabId` out of its group — the drag from a pane strip to the top strip,
+ * and the membership half of every close. Its pane collapses if that emptied
+ * it, and a group left with one pane (or no tab) dissolves. The tab itself
+ * stays open; the caller owns its lifetime and whether to select it.
+ */
+export function ungroupTab(state: SplitViewState, tabId: string): SplitViewState {
+  const index = state.pairs.findIndex((group) => holds(group, tabId));
+  if (index === -1) return state;
+  const group = state.pairs[index]!;
+  const removed = treeWithoutTab(group, tabId, state.focusedPaneId);
+  return afterRemoval(
+    state,
+    index,
+    removed.tree,
+    removed.focusId,
+    state.selectedTabId === tabId ? null : state.selectedTabId,
+  );
+}
+
+/**
+ * The split-view half of closing `tabId`: out of its group (see
+ * {@link ungroupTab}), or — for the ordinary tab shown full width — nothing
+ * selected, so the surface's own return rule decides what comes forward.
+ */
+export function removeTab(state: SplitViewState, tabId: string): SplitViewState {
+  if (groupForTab(state, tabId) !== null) return ungroupTab(state, tabId);
+  return state.selectedTabId === tabId ? showFull(state, state.pairs, null) : state;
+}
+
+/**
+ * Dissolve a whole group (the chip's Ungroup). Every tab stays open as an
+ * ordinary tab; a shown group hands the screen to its selected tab, full width.
+ */
+export function ungroup(state: SplitViewState, groupId: string): SplitViewState {
+  const index = state.pairs.findIndex((group) => group.id === groupId);
+  if (index === -1) return state;
+  const pairs = state.pairs.filter((_, at) => at !== index);
+  if (shownGroup(state)?.id !== groupId) {
+    return settle(state, pairs, state.root, state.focusedPaneId, state.selectedTabId);
+  }
+  return showFull(state, pairs, state.selectedTabId);
+}
+
+/**
+ * Close a group pane — the empty pane's own menu row. Its tabs are
+ * RELINQUISHED to the sibling that takes its space (that subtree's first pane),
+ * never closed; focus follows the space. A group left with one pane dissolves.
+ */
+export function closePane(state: SplitViewState, paneId: string): SplitViewState {
+  const found = locatePane(state, paneId);
+  if (found === null) return state;
+  const { group, pane, index } = found;
+  // Every pane of a group is under a branch, so it has a sibling.
+  const heir = panesOf(siblingOf(group, paneId)!)[0]!;
+  const dropped = dropPane(group, paneId);
+  const tree =
+    pane.tabIds.length === 0
+      ? dropped
+      : replacePane(dropped, heir.id, (target) => ({
+          ...target,
+          tabIds: [...target.tabIds, ...pane.tabIds],
+          activeTabId: target.activeTabId ?? pane.activeTabId,
+        }));
+  const focusId = state.focusedPaneId === paneId ? heir.id : state.focusedPaneId;
+  return afterRemoval(state, index, tree, focusId, state.selectedTabId);
+}
+
+/**
+ * Move `tabId` into a group pane's stack — a drop on a pane's centre, or on its
+ * strip. It leaves wherever it was (that pane collapsing if emptied), lands in
+ * front, and its pane takes focus. A group that ends with one pane — the tab
+ * dropped into its only partner — dissolves, and the moved tab is shown.
+ */
+export function moveTabToPane(
+  state: SplitViewState,
+  tabId: string,
+  paneId: string,
+): SplitViewState {
+  const target = locatePane(state, paneId);
+  if (target === null) return state;
+  if (target.pane.tabIds.includes(tabId)) return selectTab(state, tabId);
+  const trees = withoutTabEverywhere(state.pairs, tabId);
+  const tree = replacePane(trees[target.index]!, paneId, (pane) => paneWithTab(pane, tabId, true));
+  const pairs = viableGroups(trees.map((node, at) => (at === target.index ? tree : node)));
+  return viable(tree)
+    ? showGroup(state, pairs, tree, paneId, tabId)
+    : showFull(state, pairs, tabId);
+}
+
+/**
+ * Rewrite one pane's stack order after a drag inside its strip. `ids` is that
+ * strip as the drop left it; tabs the strip did not draw (not hydrated yet)
+ * keep their membership at the end rather than being pruned.
+ */
+export function reorderPaneTabs(
+  state: SplitViewState,
+  paneId: string,
+  ids: readonly string[],
+): SplitViewState {
+  const found = locatePane(state, paneId);
+  if (found === null) return state;
+  const { pane } = found;
+  const drawn = [...new Set(ids)].filter((id) => pane.tabIds.includes(id));
+  const tabIds = [...drawn, ...pane.tabIds.filter((id) => !drawn.includes(id))];
+  if (sameIds(tabIds, pane.tabIds)) return state;
+  const tree = replacePane(found.group, paneId, () => ({ ...pane, tabIds })) as SplitViewGroup;
+  const pairs = withGroup(state.pairs, found.index, tree);
+  return settle(
+    state,
+    pairs,
+    shownGroup(state) === found.group ? tree : state.root,
+    state.focusedPaneId,
+    state.selectedTabId,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Splitting
+
+/**
+ * Split `paneId` on `edge`, opening a new pane there.
  *
- * `opts.tabId` is the tab being dragged into the new pane; without one the new
- * pane opens EMPTY, which is what `⌘\` does and what the surface menu fills.
- * Either way the new pane takes focus — it is the pane the person just made.
+ * Inside a group the new pane joins that group; on the full-width pane
+ * ({@link SPLIT_VIEW_ROOT_PANE_ID}) it makes a NEW group of two, the ordinary
+ * tab shown beside it. `opts.tabId` is the tab dragged into the new pane, taken
+ * out of wherever it was; without one the new pane opens EMPTY — ⌘\, and the
+ * menu the surface draws there. A leading edge (`left`/`up`) puts the new pane
+ * first. Either way the new pane takes focus: it is the pane just made.
  *
- * `mintId` is called twice, for the new pane and then for the branch that holds
- * it.
+ * Refused by identity: a pane's only tab dropped on its own edge (it would
+ * trade one pane for an empty one beside it), a split past
+ * {@link SPLIT_VIEW_MAX_PANES} or {@link SPLIT_VIEW_MAX_DEPTH}, and a pane that
+ * is not there.
+ *
+ * `mintId` names the new pane, then the branch that holds it, then — for a new
+ * group — the pane the full-width tab moves into.
  */
 export function splitPane(
   state: SplitViewState,
@@ -425,39 +639,108 @@ export function splitPane(
   opts: { tabId?: string },
   mintId: () => string,
 ): SplitViewState {
-  const target = findPane(state, paneId);
-  if (target === null) return state;
   const { tabId } = opts;
-  // A pane's only tab dropped on that pane's own edge: the split would trade
-  // one pane of one tab for an empty pane beside a pane of one tab. The drop
-  // zone draws this as the centre preview, and the model answers by identity.
-  if (tabId !== undefined && sameIds(target.tabIds, [tabId])) return state;
-  const detached = tabId === undefined ? state : removeTab(state, tabId);
-  const opened: SplitViewPane = {
-    kind: "pane",
-    id: mintId(),
-    tabIds: tabId === undefined ? [] : [tabId],
-    activeTabId: tabId ?? null,
+  const split = (beside: SplitViewNode): SplitViewGroup => {
+    const opened: SplitViewPane = {
+      kind: "pane",
+      id: mintId(),
+      tabIds: tabId === undefined ? [] : [tabId],
+      activeTabId: tabId ?? null,
+    };
+    const leads = splitEdgeLeads(edge);
+    return {
+      kind: "split",
+      id: mintId(),
+      direction: splitEdgeDirection(edge),
+      ratio: SPLIT_VIEW_DEFAULT_RATIO,
+      first: leads ? opened : beside,
+      second: leads ? beside : opened,
+    };
   };
-  const split = replacePane(detached, paneId, (pane) => ({
-    kind: "split",
-    id: mintId(),
-    direction: edge === "right" ? "row" : "column",
-    ratio: SPLIT_VIEW_DEFAULT_RATIO,
-    first: pane,
-    second: opened,
-  }));
-  return { root: split.root, focusedPaneId: opened.id };
-}
+  const openedOf = (group: SplitViewGroup): string =>
+    (splitEdgeLeads(edge) ? group.first : group.second).id;
+  const trees = tabId === undefined ? state.pairs : withoutTabEverywhere(state.pairs, tabId);
 
-function clampRatio(ratio: number): number {
-  return Math.min(SPLIT_VIEW_MAX_RATIO, Math.max(SPLIT_VIEW_MIN_RATIO, ratio));
+  if (paneId === SPLIT_VIEW_ROOT_PANE_ID) {
+    const anchor = state.root.kind === "pane" ? state.root.activeTabId : null;
+    if (anchor === null || anchor === tabId) return state;
+    const made = split(fullWidthPane(anchor));
+    const kept: SplitViewPane = { ...fullWidthPane(anchor), id: mintId() };
+    const group: SplitViewGroup = splitEdgeLeads(edge)
+      ? { ...made, second: kept }
+      : { ...made, first: kept };
+    return showGroup(
+      state,
+      [...viableGroups(trees), group],
+      group,
+      openedOf(group),
+      tabId ?? anchor,
+    );
+  }
+
+  const target = locatePane(state, paneId);
+  if (target === null) return state;
+  if (tabId !== undefined && sameIds(target.pane.tabIds, [tabId])) return state;
+  let opened = "";
+  const tree = replacePane(trees[target.index]!, paneId, (pane) => {
+    const made = split(pane);
+    opened = openedOf(made);
+    return made;
+  }) as SplitViewGroup;
+  if (panesOf(tree).length > SPLIT_VIEW_MAX_PANES || depthOf(tree) > SPLIT_VIEW_MAX_DEPTH) {
+    return state;
+  }
+  const pairs = viableGroups(trees.map((node, at) => (at === target.index ? tree : node)));
+  return showGroup(state, pairs, tree, opened, tabId ?? state.selectedTabId);
 }
 
 /**
- * Resize a branch. A non-finite ratio is refused rather than clamped: a divider
- * dragged inside a box that has not been measured yet computes `NaN`, and a
- * `NaN` share renders a pane with no size at all.
+ * Group `tabId` beside `targetTabId` on `edge` — a tab dropped on a top-strip
+ * tab's edge, and "Open beside chat". The target's pane is split (a new group
+ * of two when the target is ordinary); a null `tabId` opens an empty pane
+ * there. A tab already in the target's group is simply selected.
+ */
+export function groupTabs(
+  state: SplitViewState,
+  targetTabId: string,
+  tabId: string | null,
+  edge: SplitViewEdge,
+  mintId: () => string,
+): SplitViewState {
+  if (tabId === targetTabId) return state;
+  const group = groupForTab(state, targetTabId);
+  if (tabId !== null && group !== null && groupForTab(state, tabId) === group) {
+    return selectTab(state, tabId);
+  }
+  const anchored = selectTab(state, targetTabId);
+  const next = splitPane(
+    anchored,
+    anchored.focusedPaneId,
+    edge,
+    tabId === null ? {} : { tabId },
+    mintId,
+  );
+  return next === anchored ? state : next;
+}
+
+// ---------------------------------------------------------------------------
+// Focus and geometry
+
+/**
+ * Focus a group pane (a click inside it), which shows its group. Ignores an id
+ * no group has — the full-width pane included — so focus is never dangling.
+ */
+export function focusPane(state: SplitViewState, paneId: string): SplitViewState {
+  if (state.focusedPaneId === paneId) return state;
+  const found = locatePane(state, paneId);
+  if (found === null) return state;
+  return showGroup(state, state.pairs, found.group, paneId, state.selectedTabId);
+}
+
+/**
+ * Resize a branch of any group. A non-finite ratio is refused rather than
+ * clamped: a divider dragged inside a box that has not been measured yet
+ * computes `NaN`, and a `NaN` share renders a pane with no size at all.
  */
 export function setSplitRatio(
   state: SplitViewState,
@@ -466,26 +749,29 @@ export function setSplitRatio(
 ): SplitViewState {
   if (!Number.isFinite(ratio)) return state;
   const clamped = clampRatio(ratio);
-  const root = rewrite(state.root, (node) =>
-    node.kind === "split" && node.id === splitId && node.ratio !== clamped
-      ? { ...node, ratio: clamped }
-      : node,
-  );
-  return root === state.root ? state : { ...state, root };
+  for (const [index, group] of state.pairs.entries()) {
+    const tree = rewrite(group, (node) =>
+      node.kind === "split" && node.id === splitId && node.ratio !== clamped
+        ? { ...node, ratio: clamped }
+        : node,
+    ) as SplitViewGroup;
+    if (tree === group) continue;
+    return settle(
+      state,
+      withGroup(state.pairs, index, tree),
+      shownGroup(state) === group ? tree : state.root,
+      state.focusedPaneId,
+      state.selectedTabId,
+    );
+  }
+  return state;
 }
 
 /**
- * Follow a tab whose IDENTITY changed while the tab itself stayed put — the
- * split view's twin of {@link renamedTabOrder}, and needed for the same reason:
- * a File tab's id carries its path, so a preview slot replaced in place and a
- * renamed file both hand the surface the same tab under a new name. Left alone,
- * no pane would claim the new id and the tab would teleport to the primary pane
- * the next time it was drawn.
- *
- * An existing mention of `toId` is ABSORBED, mirroring `renameFile`'s own
- * absorption of a stale tab already sitting on the destination path — and if
- * that stale tab was somebody's front tab, the tab that took its name is now
- * the tab in front, wherever it lives.
+ * Follow a tab whose IDENTITY changed while the tab stayed put — a preview slot
+ * replaced in place, a renamed file. A stale tab already holding `toId` is
+ * ABSORBED (taken out of its group), and a selection of either id follows the
+ * tab that now carries it.
  */
 export function renamedTabInSplitView(
   state: SplitViewState,
@@ -493,16 +779,38 @@ export function renamedTabInSplitView(
   toId: string,
 ): SplitViewState {
   if (fromId === toId) return state;
-  const holder = findPaneWithTab(state, fromId);
-  if (holder === null) return state;
-  const stale = findPaneWithTab(state, toId);
-  const absorbed = stale === null ? state : removeTab(state, toId);
-  const renamed = replacePane(absorbed, holder.id, (pane) => ({
-    ...pane,
-    tabIds: pane.tabIds.map((id) => (id === fromId ? toId : id)),
-    activeTabId: pane.activeTabId === fromId ? toId : pane.activeTabId,
-  }));
-  return stale?.activeTabId === toId ? activateTab(renamed, toId) : renamed;
+  const absorbed = ungroupTab(state, toId);
+  const follows = state.selectedTabId === fromId || state.selectedTabId === toId;
+  const index = absorbed.pairs.findIndex((group) => holds(group, fromId));
+  if (index === -1) return follows ? showFull(absorbed, absorbed.pairs, toId) : absorbed;
+  const group = absorbed.pairs[index]!;
+  const tree = rewrite(group, (node) =>
+    node.kind === "pane" && node.tabIds.includes(fromId)
+      ? {
+          ...node,
+          tabIds: node.tabIds.map((id) => (id === fromId ? toId : id)),
+          activeTabId: node.activeTabId === fromId ? toId : node.activeTabId,
+        }
+      : node,
+  ) as SplitViewGroup;
+  const pairs = withGroup(absorbed.pairs, index, tree);
+  if (shownGroup(absorbed) === group) {
+    return showGroup(
+      absorbed,
+      pairs,
+      tree,
+      absorbed.focusedPaneId,
+      follows ? toId : absorbed.selectedTabId,
+    );
+  }
+  const moved = settle(
+    absorbed,
+    pairs,
+    absorbed.root,
+    absorbed.focusedPaneId,
+    absorbed.selectedTabId,
+  );
+  return follows ? selectTab(moved, toId) : moved;
 }
 
 interface PaneBox {
@@ -516,8 +824,8 @@ interface PaneBox {
 type DirectionMetrics = readonly [primaryGap: number, crossGap: number, centreDistance: number];
 
 /**
- * Move focus to the visually adjacent pane, or stay put at an outer edge
- * (focus never wraps).
+ * Move focus to the visually adjacent pane of the shown group, or stay put at
+ * an outer edge (focus never wraps).
  *
  * Geometric rather than tree-order, so an uneven or nested layout navigates the
  * way it looks: ratios are respected, ties break by overlap and then by centre
@@ -615,34 +923,8 @@ function compareMetrics(a: DirectionMetrics, b: DirectionMetrics): number {
   return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
 }
 
-/**
- * Validate a rehydrated split view from a possibly-older build: a tree it can
- * draw, or `null` — which is not a failure but the ordinary unsplit surface,
- * the one degradation that is always safe.
- *
- * SHAPE ONLY, so a pane may keep naming tabs nothing on screen answers to (the
- * module doc's rule). What it does check is internal consistency, which is
- * shape: ids are unique across the tree, a tab id is claimed by one pane (first
- * mention wins, as `sanitizeTabOrder` collapses a duplicate), a front tab is
- * one of its own pane's tabs, `focusedPaneId` names a pane, and ratios are
- * numbers inside the clamp. A tree too deep or too wide, or one whose shape
- * cannot be read at all, degrades to `null` rather than being drawn.
- *
- * A single pane is refused too: it is not a split (module doc), and the only
- * way one reaches storage is a build that stopped between a collapse and its
- * write.
- */
-export function sanitizeSplitView(raw: unknown): SplitViewState | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const { root, focusedPaneId } = raw as { root?: unknown; focusedPaneId?: unknown };
-  const node = sanitizeNode(root, new Set<string>(), new Set<string>(), 1);
-  if (node === null || node.kind === "pane") return null;
-  const panes: SplitViewPane[] = [];
-  collectPanes(node, panes);
-  if (panes.length > SPLIT_VIEW_MAX_PANES) return null;
-  const focused = panes.find((pane) => pane.id === focusedPaneId);
-  return { root: node, focusedPaneId: focused?.id ?? panes[0]!.id };
-}
+// ---------------------------------------------------------------------------
+// The tolerant read
 
 function sanitizeNode(
   raw: unknown,
@@ -663,7 +945,7 @@ function sanitizeNode(
     second?: unknown;
   };
   // A repeated id is unaddressable — focus, resize and every drop name nodes by
-  // id, so two nodes answering to one name is a tree we cannot operate on.
+  // id, so two nodes answering to one name is a tree nothing can operate on.
   if (typeof record.id !== "string" || record.id.length === 0 || nodeIds.has(record.id)) {
     return null;
   }
@@ -680,7 +962,8 @@ function sanitizeNode(
       kind: "pane",
       id: record.id,
       tabIds: claimed,
-      activeTabId: typeof active === "string" && claimed.includes(active) ? active : null,
+      activeTabId:
+        typeof active === "string" && claimed.includes(active) ? active : (claimed[0] ?? null),
     };
   }
   if (record.kind !== "split") return null;
@@ -702,17 +985,101 @@ function sanitizeNode(
   };
 }
 
+/**
+ * One stored group, or null. Ids (nodes and tabs) must be unique across every
+ * group already accepted: a later group's repeated node id refuses that group,
+ * and a tab another group claimed is dropped from it (first mention wins). A
+ * pane named {@link SPLIT_VIEW_ROOT_PANE_ID} — a legacy primary pane, or a pair
+ * an earlier build persisted — is renamed under its group, recorded in `renamed`.
+ */
+function sanitizeGroup(
+  raw: unknown,
+  nodeIds: Set<string>,
+  tabIds: Set<string>,
+  renamed: Map<string, string>,
+): SplitViewGroup | null {
+  const nodes = new Set(nodeIds);
+  const tabs = new Set(tabIds);
+  const node = sanitizeNode(raw, nodes, tabs, 1);
+  if (node === null || node.kind === "pane") return null;
+  const panes = panesOf(node);
+  if (panes.length > SPLIT_VIEW_MAX_PANES || !viable(node)) return null;
+  let group: SplitViewGroup = node;
+  if (panes.some((pane) => pane.id === SPLIT_VIEW_ROOT_PANE_ID)) {
+    let id = `${node.id}:${SPLIT_VIEW_ROOT_PANE_ID}`;
+    while (nodes.has(id)) id = `${id}'`;
+    nodes.delete(SPLIT_VIEW_ROOT_PANE_ID);
+    nodes.add(id);
+    renamed.set(SPLIT_VIEW_ROOT_PANE_ID, id);
+    group = replacePane(node, SPLIT_VIEW_ROOT_PANE_ID, (pane) => ({
+      ...pane,
+      id,
+    })) as SplitViewGroup;
+  }
+  for (const id of nodes) nodeIds.add(id);
+  for (const id of tabs) tabIds.add(id);
+  return group;
+}
+
+/**
+ * Validate a rehydrated split view from any build: a surface this one can
+ * draw, or `null` — not a failure but the ungrouped surface, the one
+ * degradation that is always safe.
+ *
+ * SHAPE ONLY: a pane may keep naming tabs nothing on screen answers to (the
+ * module doc's rule). A stored `pairs` array is read group by group, each
+ * malformed group dropped on its own. A LEGACY split (no `pairs` — the pane
+ * tree an older build split the whole surface into) becomes ONE group, stacks
+ * and all, focus kept. Pairs an earlier build of grouping wrote (two one-tab
+ * panes) are groups as they stand.
+ */
+export function sanitizeSplitView(raw: unknown): SplitViewState | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const record = raw as {
+    pairs?: unknown;
+    root?: unknown;
+    selectedTabId?: unknown;
+    focusedPaneId?: unknown;
+  };
+  const legacy = record.pairs === undefined;
+  if (!legacy && !Array.isArray(record.pairs)) return null;
+  const candidates: readonly unknown[] = legacy ? [record.root] : (record.pairs as unknown[]);
+  const nodeIds = new Set<string>();
+  const tabIds = new Set<string>();
+  const renamed = new Map<string, string>();
+  const pairs: SplitViewGroup[] = [];
+  for (const candidate of candidates) {
+    const group = sanitizeGroup(candidate, nodeIds, tabIds, renamed);
+    if (group !== null) pairs.push(group);
+  }
+  if (pairs.length === 0) return null;
+  const base: SplitViewState = { ...emptySplitView(null), pairs };
+  const storedFocus = typeof record.focusedPaneId === "string" ? record.focusedPaneId : null;
+  // A legacy tree covered the whole surface, so it is the group on screen.
+  if (legacy) {
+    const focus = renamed.get(storedFocus ?? "") ?? storedFocus ?? "";
+    return showGroup(base, pairs, pairs[0]!, focus, null);
+  }
+  const selected = typeof record.selectedTabId === "string" ? record.selectedTabId : null;
+  const focused = storedFocus === null ? null : locatePane(base, storedFocus);
+  if (focused !== null && (selected === null || holds(focused.group, selected))) {
+    return showGroup(base, pairs, focused.group, storedFocus!, selected);
+  }
+  return selected === null ? base : selectTab(base, selected);
+}
+
+// ---------------------------------------------------------------------------
+// The render projection
+
 export interface ResolvedSplitViewPane {
   kind: "pane";
   id: string;
-  /** This pane's live tabs, in the order it draws them. */
+  /** This pane's live tabs, in the order its strip draws them. */
   tabIds: readonly string[];
   /** The tab this pane shows, or null — an empty pane draws the surface menu. */
   activeTabId: string | null;
   /** Reading-order position, for "Pane 2 of 3" labels. */
   index: number;
-  /** The primary pane holds the permanent tab, at the start of the main tab bar. */
-  isPrimary: boolean;
 }
 
 export interface ResolvedSplitViewBranch {
@@ -728,72 +1095,13 @@ export type ResolvedSplitViewNode = ResolvedSplitViewPane | ResolvedSplitViewBra
 
 export interface ResolvedSplitView {
   root: ResolvedSplitViewNode;
-  /** Every pane in reading order — `panes[0]` is the primary. */
+  /** Every shown pane in reading order — one, full width, while ungrouped. */
   panes: readonly ResolvedSplitViewPane[];
   focusedPaneId: string;
-  primaryPaneId: string;
   /** The focused pane's tab: the surface's active tab, and the rail's context. */
   activeTabId: string | null;
-}
-
-/**
- * Project a split view onto the strip that actually exists — the render-time
- * half of the tolerant read, and the only place the model meets live tabs.
- *
- * `orderedTabIds` is the surface's composed AND arranged tab list (permanent tab
- * first): exactly what the strip would draw unsplit. Panes keep the ids they
- * claim, in their own order; ids that exist but no pane claims join the PRIMARY
- * pane, in strip order, so a tab opened by a path that never heard of panes is
- * never invisible. The permanent tab is the primary pane's first tab
- * unconditionally — "permanent" means the surface draws it whether or not the
- * live list bothered to name it, and it is what keeps the primary pane from
- * ever resolving empty.
- *
- * Nothing is written back and no pane is collapsed. An empty resolved pane
- * draws the surface menu, which is also what a pane full of dead terminal ids
- * renders after a relaunch — and if those ids come back (a Session hydrating a
- * beat later), the pane simply fills.
- */
-export function resolveSplitView(
-  state: SplitViewState,
-  orderedTabIds: readonly string[],
-  permanentTabId: string,
-): ResolvedSplitView {
-  const live = new Set(orderedTabIds);
-  const claimed = new Set<string>([permanentTabId]);
-  const panes = splitViewPanes(state);
-  const kept = panes.map((pane) => {
-    const ids = pane.tabIds.filter((id) => live.has(id) && !claimed.has(id));
-    for (const id of ids) claimed.add(id);
-    return ids;
-  });
-  const primary = panes[0]!;
-  const resolved = new Map<string, ResolvedSplitViewPane>();
-  panes.forEach((pane, index) => {
-    const isPrimary = pane.id === primary.id;
-    const tabIds = isPrimary
-      ? [permanentTabId, ...kept[index]!, ...orderedTabIds.filter((id) => !claimed.has(id))]
-      : kept[index]!;
-    resolved.set(pane.id, {
-      kind: "pane",
-      id: pane.id,
-      tabIds,
-      activeTabId:
-        pane.activeTabId !== null && tabIds.includes(pane.activeTabId)
-          ? pane.activeTabId
-          : (tabIds[0] ?? null),
-      index,
-      isPrimary,
-    });
-  });
-  const focused = resolved.get(state.focusedPaneId) ?? resolved.get(primary.id)!;
-  return {
-    root: resolveNode(state.root, resolved),
-    panes: [...resolved.values()],
-    focusedPaneId: focused.id,
-    primaryPaneId: primary.id,
-    activeTabId: focused.activeTabId,
-  };
+  /** The shown group's id, or null while an ordinary tab is shown full width. */
+  groupId: string | null;
 }
 
 function resolveNode(
@@ -809,5 +1117,76 @@ function resolveNode(
     ratio: node.ratio,
     first: resolveNode(node.first, resolved),
     second: resolveNode(node.second, resolved),
+  };
+}
+
+/**
+ * Project a surface's split view onto the tabs that actually exist — the
+ * render-time half of the tolerant read, and the only place the model meets
+ * live tabs.
+ *
+ * `selectedTabId` is the surface's active tab as it decided it (a restore, an
+ * empty Draft overlay); when the stored selection differs, the view shows what
+ * selecting it would. `orderedTabIds` is the surface's live strip; a pane keeps
+ * its live tabs in its own order, its front falling back to its first live tab
+ * and, with none, to the empty pane's menu — which is also what a pane of dead
+ * terminal ids renders after a relaunch until they come back. A group with no
+ * live tab at all, and a selected tab that is not live, degrade to the
+ * permanent tab full width. Nothing is written back.
+ */
+export function projectSplitView(
+  state: SplitViewState | null,
+  orderedTabIds: readonly string[],
+  selectedTabId: string,
+  permanentTabId: string,
+): ResolvedSplitView {
+  const base = state ?? emptySplitView(selectedTabId);
+  const next = base.selectedTabId === selectedTabId ? base : selectTab(base, selectedTabId);
+  const live = new Set([permanentTabId, ...orderedTabIds]);
+  if (next.root.kind === "split") {
+    const resolved = new Map<string, ResolvedSplitViewPane>();
+    panesOf(next.root).forEach((pane, index) => {
+      const tabIds = pane.tabIds.filter((id) => live.has(id));
+      resolved.set(pane.id, {
+        kind: "pane",
+        id: pane.id,
+        tabIds,
+        activeTabId:
+          pane.activeTabId !== null && live.has(pane.activeTabId)
+            ? pane.activeTabId
+            : (tabIds[0] ?? null),
+        index,
+      });
+    });
+    const panes = [...resolved.values()];
+    if (panes.some((pane) => pane.tabIds.length > 0)) {
+      // A shown group's focus is always one of its panes.
+      const focused = resolved.get(next.focusedPaneId)!;
+      return {
+        root: resolveNode(next.root, resolved),
+        panes,
+        focusedPaneId: focused.id,
+        activeTabId: focused.activeTabId,
+        groupId: next.root.id,
+      };
+    }
+  }
+  const shown =
+    next.selectedTabId !== null && live.has(next.selectedTabId)
+      ? next.selectedTabId
+      : permanentTabId;
+  const pane: ResolvedSplitViewPane = {
+    kind: "pane",
+    id: SPLIT_VIEW_ROOT_PANE_ID,
+    tabIds: [shown],
+    activeTabId: shown,
+    index: 0,
+  };
+  return {
+    root: pane,
+    panes: [pane],
+    focusedPaneId: SPLIT_VIEW_ROOT_PANE_ID,
+    activeTabId: shown,
+    groupId: null,
   };
 }

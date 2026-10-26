@@ -1,0 +1,24 @@
+/* Classic folder silhouette, shared by every pane strip. No content lifetime
+   or split geometry lives here. Reverse corners join the selected place to
+   its plane; the scroller still owns clipping and overflow travel. */
+.workspace-folder-tab[aria-selected="true"]::before,
+.workspace-folder-tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  width: var(--radius-control);
+  height: var(--radius-control);
+  pointer-events: none;
+  background: radial-gradient(
+    circle at 0 0,
+    transparent var(--radius-control),
+    var(--background) var(--radius-control)
+  );
+}
+.workspace-folder-tab[aria-selected="true"]::before {
+  left: calc(-1 * var(--radius-control));
+}
+.workspace-folder-tab[aria-selected="true"]::after {
+  right: calc(-1 * var(--radius-control));
+  transform: scaleX(-1);
+}

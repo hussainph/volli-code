@@ -43,7 +43,13 @@ export type SessionGlyphSize =
   /** A one-line row: a 20px slot holding a 14px mark. */
   | "row"
   /** A two-line row and the peek card's header: a 24px tile holding a 16px mark. */
-  | "card";
+  | "card"
+  /**
+   * A strip tab: the row's 14px mark, with the badge tucked inside the 28px tab
+   * and a step of room before the label. The row's corner badge hangs 4px below
+   * its slot, which a tab's scroller clips and which crowds the label.
+   */
+  | "tab";
 
 /** The badge's disc is cut out of whatever is behind the mark. */
 export type SessionGlyphSurface = "sidebar" | "popover";
@@ -125,6 +131,7 @@ export function SessionGlyph({
 }: SessionGlyphProps): React.ReactElement {
   const badge = state === null ? null : badgeFor(state);
   const tile = size === "card";
+  const tab = size === "tab";
   const Stand = fallback ?? (kind === "chat" ? ChatCircleIcon : TerminalWindowIcon);
   return (
     <span
@@ -134,6 +141,7 @@ export function SessionGlyph({
       className={cn(
         "relative inline-flex shrink-0 items-center justify-center",
         tile ? "size-6 rounded-md bg-muted/50" : "size-5",
+        tab && "mr-0.5",
       )}
     >
       {providerId === null ? (
@@ -153,7 +161,11 @@ export function SessionGlyph({
       {badge === null ? null : (
         <span
           aria-hidden
-          className={cn("absolute -right-1 -bottom-1 rounded-full p-px", DISC[surface], badge.ink)}
+          className={cn(
+            "absolute rounded-full p-px",
+            tab ? "-right-0.5 -bottom-0.5 bg-background" : ["-right-1 -bottom-1", DISC[surface]],
+            badge.ink,
+          )}
         >
           <badge.icon
             weight="bold"

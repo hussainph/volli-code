@@ -1,8 +1,7 @@
 import {
-  paneForTab,
-  primaryPaneId,
+  groupedPanes,
+  groupForTab,
   SPLIT_VIEW_ROOT_PANE_ID,
-  splitViewPanes,
   type SplitViewState,
 } from "@volli/shared";
 
@@ -17,13 +16,20 @@ import { subscribeWorkspaceTabSelection } from "./workspace-tab-selection";
 
 export interface ProvisionalPaneLayoutHost {
   readSplitView(): SplitViewState | null;
-  /** Save a first-content claim without moving pane focus. */
+  /** Save a first-content claim into a group pane without moving pane focus. */
   claimTab(tabId: string, paneId: string, front: boolean): void;
+  /** Select a Draft that earned content as an ordinary, full-width tab. */
+  activateTab?(tabId: string): void;
 }
 
+/**
+ * Where a Draft placed in `paneId` lives now: that group pane while some group
+ * still has it, else the full-width pane — a Draft whose group dissolved is an
+ * ordinary tab, never a pending claim into a pane that is gone.
+ */
 export function placementPaneId(split: SplitViewState | null, paneId: string): string {
   if (split === null) return SPLIT_VIEW_ROOT_PANE_ID;
-  return splitViewPanes(split).some((pane) => pane.id === paneId) ? paneId : primaryPaneId(split);
+  return groupedPanes(split).some((pane) => pane.id === paneId) ? paneId : SPLIT_VIEW_ROOT_PANE_ID;
 }
 
 interface HostEntry {
@@ -78,9 +84,19 @@ function commitReadyPlacements(): void {
           continue;
         const latest = entry.host.readSplitView();
         const tabId = chatTabId(sessionId);
-        entry.host.claimTab(tabId, placementPaneId(latest, placement.paneId), placement.front);
+        const paneId = placementPaneId(latest, placement.paneId);
+        // Into its pane's stack, in front only if it still was there.
+        entry.host.claimTab(tabId, paneId, placement.front);
         const saved = entry.host.readSplitView();
-        if (saved !== null && paneForTab(saved, tabId) === null) continue;
+        if (saved !== null && groupForTab(saved, tabId) === null) {
+          // A group pane that did not take the claim is retried on the next
+          // change. A full-width Draft is an ordinary tab now, and it becomes
+          // the selection only while it is still the tab in front.
+          if (paneId !== SPLIT_VIEW_ROOT_PANE_ID) continue;
+          if (placement.front && saved.focusedPaneId === SPLIT_VIEW_ROOT_PANE_ID) {
+            entry.host.activateTab?.(tabId);
+          }
+        }
         useProvisionalPaneLayoutStore.getState().remove(ownerId, sessionId);
         const chat = useChatSessionsStore.getState();
         if (chat.provisionalActive[ownerId] === sessionId) chat.setProvisionalActive(ownerId, null);

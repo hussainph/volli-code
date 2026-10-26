@@ -1,12 +1,12 @@
 /**
  * Acceptance smoke for Browser Traces (VC-453), against the BUILT app, across
- * a relaunch:
+ * relaunches:
  *
  *   1. a Session that navigates, reads, finds and acts in its own tab produces a trace whose
  *      steps match its calls in order — a refused act included;
  *   2. each step's frame is on disk under userData/browser-traces, and a tab
  *      the PERSON created, driven by the same Session, left nothing there;
- *   3. the replay opens from the Activity Island's tabs card and steps
+ *   3. the replay opens from the durable transcript's BrowserTabCard and steps
  *      through the frames with the keyboard;
  *   4. after a relaunch the trace and its frames are still there — the live
  *      picture set is empty, so every frame answers from the trace — and a
@@ -17,7 +17,9 @@
  * It takes no model turn. The Session's calls go through the SAME port a
  * Session gets (`browserAgentPort`, behind the `VOLLI_BROWSER_PROBE` door),
  * in the name of a real chat Session minted by one Send — whose turn fails on
- * the placeholder key below, which nothing here depends on.
+ * the placeholder key below, which nothing here depends on. Replay entry cards
+ * are persisted through the production ledger/artifact writer while stopped;
+ * two additional hydration boots avoid mutating a live Session projection.
  *
  * Run (needs a display and the built app):
  *   pnpm run build
@@ -26,6 +28,8 @@
 import http from "node:http";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
+
+import { createServer } from "vite";
 
 import {
   assertBuiltRendererLoaded,
@@ -38,6 +42,7 @@ import {
   makeGitRepo,
   makeScratch,
   openNewChatTab,
+  REPO,
   seedDefaultModel,
   seedProjects,
   tabStrip,
@@ -167,7 +172,7 @@ async function driveSession(app, input) {
   }, input);
 }
 
-/** One more Session step after the relaunch, so the island has a tab to open the replay from. */
+/** One more Session step after the relaunch, producing a second tab's trace. */
 async function openAfterRelaunch(app, input) {
   return app.evaluate(async (_electron, { origin, projectId, sessionId }) => {
     const port = globalThis.volliBrowserProbe.port({ projectId, ticketId: null }, sessionId);
@@ -178,6 +183,134 @@ async function openAfterRelaunch(app, input) {
     port.turnEnded();
     return opened.tabId;
   }, input);
+}
+
+/**
+ * Persist the browser call's real trace facts through the production transcript
+ * writer and Session ledger. The browser probe drives the actual port but is
+ * intentionally not a model turn, so it cannot write a transcript by itself.
+ * Only write with Electron stopped: no live projection cache or competing
+ * writer is bypassed. The next boot hydrates this normal transcript entry.
+ */
+async function persistReplayEntry(sessionId, trace, entry) {
+  if (app !== null) throw new Error("transcript fixture requires a stopped app");
+  const vite = await createServer({
+    root: REPO,
+    appType: "custom",
+    server: { middlewareMode: true },
+    optimizeDeps: { noDiscovery: true },
+    logLevel: "error",
+  });
+  let db;
+  try {
+    const { openVolliDb } = await vite.ssrLoadModule("/packages/host-core/src/db/index.ts");
+    const { createSqliteSessionLedger } = await vite.ssrLoadModule(
+      "/packages/host-core/src/session-control/sqlite-ledger.ts",
+    );
+    const { createFileTranscriptArtifactStore, sessionTranscriptsRoot } = await vite.ssrLoadModule(
+      "/packages/host-core/src/session-runtime/transcript-artifacts.ts",
+    );
+    db = openVolliDb(dbPath);
+    const step = trace.steps.at(-1);
+    if (step === undefined || trace.sessionId !== sessionId)
+      throw new Error("missing replay trace");
+    const id = `${sessionId}-browser-replay-${entry}`;
+    const attachmentId = `${id}-attachment`;
+    const turnId = `${id}-turn`;
+    const toolName = step.action === "find" ? "browser_find" : "browser_navigate";
+    const reference = await createFileTranscriptArtifactStore(
+      sessionTranscriptsRoot(userDataDir),
+    ).write({
+      version: 1,
+      threadId: `${id}-thread`,
+      branchId: `${id}-branch`,
+      attemptId: `${id}-attempt`,
+      turnId,
+      message: {
+        id: `${id}-reply`,
+        role: "assistant",
+        parts: [
+          {
+            type: "dynamic-tool",
+            toolName,
+            toolCallId: `${id}-call`,
+            state: "output-available",
+            input:
+              step.action === "find"
+                ? { tabId: trace.tabId, query: step.target }
+                : { url: step.url },
+            output: "Local browser probe completed",
+            toolMetadata: {
+              "volli.activity": {
+                kind: "browse",
+                nativeToolName: toolName,
+                subject: { label: step.url, path: null, lineRange: null },
+                outcome: null,
+                startedAt: step.at,
+                endedAt: step.at,
+                browse: {
+                  action: step.action,
+                  tabId: trace.tabId,
+                  url: step.url,
+                  title: step.title,
+                  target: step.target,
+                  // Search has no new picture and opens at this tab's latest
+                  // step; navigation opens at the frame that call captured.
+                  picture: step.pictureId,
+                  errorCount: null,
+                  ownerSessionId: sessionId,
+                  error: step.error,
+                  refusal: step.rule,
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+    const payloads = [
+      {
+        kind: "attachment.opened",
+        attachment: {
+          id: attachmentId,
+          sessionId,
+          adapterId: "pi",
+          venue: { id: "local", kind: "local" },
+          continuity: "fresh",
+          native: { id, detail: { fixture: "browser-trace" } },
+          authority: null,
+        },
+      },
+      { kind: "turn.started", attachmentId, turnId },
+      { kind: "transcript.referenced", attachmentId, turnId, reference },
+      { kind: "turn.completed", attachmentId, turnId },
+      { kind: "attachment.closed", attachmentId, outcome: "completed" },
+    ];
+    await createSqliteSessionLedger(db).transaction((transaction) => {
+      if (transaction.getSession(sessionId) === null) throw new Error("owning Session is missing");
+      const events = transaction.listEvents({ sessionId });
+      const last = events.at(-1);
+      const now = Math.max(Date.now(), (last?.occurredAt ?? 0) + 1);
+      for (const [index, payload] of payloads.entries()) {
+        transaction.appendEvent({
+          id: `${id}-event-${index + 1}`,
+          sessionId,
+          sequence: (last?.sequence ?? 0) + index + 1,
+          occurredAt: now + index,
+          recordedAt: now + index,
+          provenance: {
+            source: { kind: "adapter", id: "pi", detail: { fixture: "browser-trace" } },
+            venue: { id: "local", kind: "local" },
+          },
+          attachmentId,
+          payload,
+        });
+      }
+    });
+  } finally {
+    db?.close();
+    await vite.close();
+  }
 }
 
 /** A record as JSON with sorted keys, so two reads compare by content, not key order. */
@@ -192,23 +325,36 @@ function canonical(value) {
 const tracesOf = (page, sessionId) =>
   page.evaluate((id) => window.api.browser.traces({ sessionId: id }), sessionId);
 
-const tabsCluster = (page) => page.locator('[data-island-cluster="tabs"]');
-const tabsCard = (page) => page.locator('[data-island-card="tabs"]');
+const chatTab = (page, sessionId) =>
+  tabStrip(page, HOME_TAB_STRIP)
+    .locator(`[data-pair-target-id="chat:${sessionId}"]`)
+    .getByRole("tab");
 const replay = (page) => page.locator("[data-browser-trace-dialog]");
 const replayPosition = (page) => replay(page).locator("[data-trace-position]");
 const replayCaption = (page) => replay(page).locator("[data-trace-caption]");
 
-async function openReplayFromIsland(page, tabId) {
-  await waitUntil("the island's tabs cluster", async () =>
-    (await tabsCluster(page).count()) === 1 ? true : null,
-  );
-  await tabsCluster(page).click();
-  const row = tabsCard(page).locator(`[data-island-row="${tabId}"]`);
-  await waitUntil("the tab's row in the pinned card", async () =>
-    (await row.count()) === 1 ? true : null,
-  );
-  await row.hover();
-  await row.locator("..").getByRole("button", { name: "Replay", exact: true }).click();
+/** Drive the actual transcript disclosures; Replay no longer lives in the Island. */
+async function openReplayFromTranscript(page, sessionId, tabId, expectedTabIds) {
+  await chatTab(page, sessionId).click();
+  const bundles = page.locator('[data-slot="activity-bundle-header"]');
+  await waitUntil("the persisted browse entries in the transcript", async () => {
+    // Adjacent assistant tool entries share a bundle, even across ledger turns.
+    // Open the real bundle and row disclosures, then count cards, not headers.
+    for (const header of await bundles.all()) {
+      if ((await header.getAttribute("aria-expanded")) !== "true") await header.click();
+      const details = header
+        .locator("..")
+        .getByRole("button", { name: "Show details", exact: true });
+      while ((await details.count()) > 0) await details.first().click();
+    }
+    const actualTabIds = await page
+      .locator("[data-browser-tab-card]")
+      .evaluateAll((cards) => cards.map((card) => card.getAttribute("data-browser-tab-card")));
+    return canonical(actualTabIds.toSorted()) === canonical(expectedTabIds.toSorted());
+  });
+  const card = page.locator(`[data-browser-tab-card="${tabId}"]`);
+  await waitUntil("the transcript's BrowserTabCard", async () => (await card.count()) === 1);
+  await card.getByRole("button", { name: "Replay", exact: true }).click();
   await waitUntil("the replay dialog", async () =>
     (await replay(page).count()) === 1 ? true : null,
   );
@@ -402,11 +548,19 @@ async function main() {
     },
   );
 
+  // The probe has no model-owned transcript writer. Persist its replay entry
+  // offline, then hydrate the real chat UI; no DOM/component injection or
+  // renderer-store mutation stands in for the transcript entry path.
+  await closeAppBounded(app);
+  app = null;
+  await persistReplayEntry(sessionId, recorded[0], 1);
+  page = await boot();
+
   await must(
     3,
-    "the replay opens from the island and steps through the frames with the keyboard",
+    "the replay opens from the transcript BrowserTabCard and steps through the frames with the keyboard",
     async () => {
-      await openReplayFromIsland(page, driven.tabId);
+      await openReplayFromTranscript(page, sessionId, driven.tabId, [driven.tabId]);
       const opened = await replayPosition(page).textContent();
       const expectedFrames = shownFrames(recorded[0].steps);
       const walked = await walkReplay(page, expectedFrames);
@@ -528,20 +682,40 @@ async function main() {
     5,
     "the replay after the relaunch steps back into the frames recorded before it",
     async () => {
-      // The chat comes back with the Home strip; its island needs a live tab to
-      // list, so the Session takes one more step — a new tab, a new trace.
-      const chatTab = tabStrip(page, HOME_TAB_STRIP).getByRole("tab").last();
-      await chatTab.click();
+      // Extend the trace through the same real port, then persist this new
+      // tab's transcript entry offline too. The replay still starts at step 9,
+      // and its first eight frames must be those recorded before the relaunch.
+      await chatTab(page, sessionId).click();
       const tabId = await openAfterRelaunch(app, {
         origin: fixture.origin,
         projectId: PROJECT.id,
         sessionId,
       });
-      await openReplayFromIsland(page, tabId);
+      const after = await tracesOf(page, sessionId);
+      const latestTrace = after.ok
+        ? after.traces.find((trace) => trace.tabId === tabId)
+        : undefined;
+      if (latestTrace === undefined) throw new Error("the post-relaunch trace is missing");
+      const latest = latestTrace.steps[0]?.pictureId ?? null;
+      // Retain replay coverage while a recorded tab is still live, as well as
+      // the disk-only path below. The durable older card opens at its own tab;
+      // End reaches the new tab's live step in this Session-wide timeline.
+      await openReplayFromTranscript(page, sessionId, driven.tabId, [driven.tabId]);
+      await page.keyboard.press("End");
+      await waitUntil(
+        "the new live replay step",
+        async () => (await replayPosition(page).textContent()) === "Step 9 of 9",
+      );
+      const liveFrame = latest === null ? null : await frameLoaded(page, latest);
+      await page.keyboard.press("Escape");
+      await waitUntil("the live replay to close", async () => (await replay(page).count()) === 0);
+      await closeAppBounded(app);
+      app = null;
+      await persistReplayEntry(sessionId, latestTrace, 2);
+      page = await boot();
+      await openReplayFromTranscript(page, sessionId, tabId, [driven.tabId, tabId]);
       const opened = await replayPosition(page).textContent();
       const before = shownFrames(recorded[0].steps);
-      const after = await tracesOf(page, sessionId);
-      const latest = after.ok ? (after.traces.at(-1)?.steps[0]?.pictureId ?? null) : null;
       const walked = await walkReplay(page, [...before, latest]);
       await page.keyboard.press("Home");
       await page.keyboard.press("ArrowRight");
@@ -550,6 +724,7 @@ async function main() {
       return {
         ok:
           opened === "Step 9 of 9" &&
+          (latest === null || liveFrame?.width > 0) &&
           walked[0].caption === "Opened" &&
           JSON.stringify(replayed) === JSON.stringify(before) &&
           replayed.some((id) => id !== null),
