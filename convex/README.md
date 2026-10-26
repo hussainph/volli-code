@@ -5,6 +5,8 @@ local backend that tests and codegen run against. The schema holds the whole
 cloud data model (validators and indexes); product functions arrive area by
 area, each in its own module. No cloud deployment exists yet.
 
+Owner setup and deployment gates: [`docs/runbooks/cloud-deploy.md`](../docs/runbooks/cloud-deploy.md).
+
 Rules that apply here (see `AGENTS.md`, **Volli Cloud**):
 
 - The agent loop never runs in a Convex function or action.
@@ -406,16 +408,9 @@ typechecks this package along with the rest of the workspace.
 
 There are no cloud deployments yet. Dev, staging and prod deployments, deploy
 CI, the object-storage bucket (R2), backups and export are added once the
-Convex and Cloudflare accounts exist. Deploy CI will push this package with
-`npx convex deploy` and a per-environment deploy key. It will refuse any
-target that has `VOLLI_TEST_JWKS` set. Signing uploads already works against
+Convex and Cloudflare accounts exist. Signing uploads already works against
 any S3-compatible store: a deployment points at its bucket with the
 `VOLLI_S3_*` variables (`functions/lib/objectStore.ts`).
-
-The order to do that account work in — the Convex team and its three
-deployments, the per-deployment variables, WorkOS, the private bucket with its
-lifecycle rules and CORS, the desktop build inputs, and what is still missing
-— is [`docs/runbooks/cloud-deploy.md`](../docs/runbooks/cloud-deploy.md).
 
 The desktop reads transcript packs and spilled bodies directly with
 `sessionTranscript.presignGet`, after the backend checks Session visibility.

@@ -45,10 +45,11 @@ only that config; without a site URL a build cannot link a runner.
    pnpm -C convex exec convex deployment create staging --type prod
    ```
 
-3. Deploy keys: deployment → Settings → Deploy keys. `convex deploy` is the one
-   command that cannot take `--deployment`, so it needs an **operator** key per
-   environment with `deployment:deploy` (later a CI key with only that
-   permission). Every other step uses your login with `--deployment <ref>`.
+3. Deploy keys: deployment → Settings → Deploy keys. `convex deploy` cannot
+   take `--deployment`, so use an **operator** key scoped to one deployment
+   (later a separate CI key). Verify it can deploy, read the forbidden-variable
+   probe and invoke the internal self-check; do not broaden it to other
+   environments. Other operator steps use your login with `--deployment <ref>`.
 4. Keep keys in the password manager, never `convex/.env.local`: it is gitignored,
    and the fixture stops it pointing the CLI at a cloud deployment.
 
@@ -247,33 +248,46 @@ and `acceptedAgreementVersion`; Convex rejects unknown arguments, so a newer des
 against an older backend fails, while an old canary cannot accept the current preview
 agreement at all.
 
+This step requires VC-951's checked-deploy entry point. If the selected commit
+has no `deploy:checked` script or `health:deploymentChecks`, stop; a bare deploy
+is not a substitute. Tests and codegen drift must pass before this command.
+
 ```sh
 # Bash, from the repository root. Keep this shell out of tracing/debug mode.
 read -rsp 'operator deploy key: ' CONVEX_DEPLOY_KEY; export CONVEX_DEPLOY_KEY
-pnpm -C convex exec convex deploy --message 'vc: <what this push is>'
+pnpm -C convex deploy:checked
 unset CONVEX_DEPLOY_KEY
 ```
 
-Reading it into the environment keeps the key out of shell history. The key decides
-the target — check the deployment the CLI names. The push typechecks,
-regenerates code, bundles, pushes functions, indexes and schema, and applies
-`auth.config.ts` with the variables it finds (hence step 2's ordering).
+Reading it into the environment keeps the key out of shell history. The `prod:`
+or `dev:` deploy key decides the single target; preview keys and caller deploy
+flags are refused. The wrapper blanks other target selectors, refuses a target
+that trusts `VOLLI_TEST_JWKS` **before** pushing, pushes functions/indexes/schema
+with codegen disabled (committed output must already be current), then runs the
+cloud self-check on the same target. A failed post-push check does not roll back
+the deployed code: fix the reported configuration before serving users.
 
 ## 8. Self-check the deployment
 
-The deployment's own self-check refuses `VOLLI_TEST_JWKS` and a missing required key on
-any non-test deployment. Its function name is **still pending VC-951**, so this step is
-blocking until that contract lands — do not treat an environment as checked before it:
+VC-951's internal `health:deploymentChecks` takes optional `mode` (default
+`cloud`). Only a deployment-admin caller can run it. After that change lands,
+the exact independent recheck is:
 
 ```sh
-# BLOCKING PLACEHOLDER: VC-951 supplies the self-check's function name and arguments.
-# Replace the quoted placeholder with that exact contract; keep this step mandatory.
-pnpm -C convex exec convex run '<vc951:self-check>' '{}' --deployment <ref>
+pnpm -C convex exec convex run health:deploymentChecks '{"mode":"cloud"}' --deployment <ref>
 ```
 
-Until then, by hand: step 2's required names present, and neither `VOLLI_TEST_JWKS` nor
-`VOLLI_CONVEX_TEST_PRIVATE_KEY` anywhere. If `VOLLI_TEST_JWKS` is present, stop and push
-again without it.
+Require `{ok:true, mode:"cloud", deployment:"remote", problems:[]}`. An unsafe
+deployment throws `deployment_unsafe` and the CLI exits non-zero; its report
+contains variable names and problem codes, never values. It refuses a test issuer
+or a missing required variable from step 2. Test mode is only for loopback and is
+refused on a hosted deployment; it cannot replace the cloud check. These are
+presence checks, not proof that the keys, providers or storage actually work.
+If the function is not available yet, this gate remains **blocking**.
+
+The names-only inventory and HTTP-route probe below are diagnostics, not a passing
+self-check. If `VOLLI_TEST_JWKS` is present, stop, unset it and push the auth config
+again through the checked command before serving users.
 
 ```sh
 pnpm -C convex exec convex env list --names-only --deployment <ref>
@@ -362,8 +376,9 @@ skipping `v1/x/` and `v1/m/` — does not exist, and is **not** the local `volli
 bundle ([`docs/backup-bundle.md`](../backup-bundle.md)).
 
 **Logs, inventory, self-check.** `--type prod` for `staging` is the current answer to log
-and error exposure; production log redaction, an automated variable inventory, and the
-self-check itself (VC-951) remain.
+and error exposure; production log redaction and an automated variable inventory remain.
+VC-951 supplies the checked-deploy/self-check commands above; their availability and
+actual hosted results must be verified before this preparation becomes a deployment.
 
 ## Troubleshooting
 
