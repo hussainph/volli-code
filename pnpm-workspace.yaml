@@ -104,6 +104,10 @@ overrides:
   # VC-963: Ajv's ^3.0.1 range permits this patch, but the lock otherwise retains
   # the vulnerable URI normalization. Remove after Ajv requires >=3.1.9.
   "fast-uri@<3.1.9": "3.1.9"
+  # VC-963 / GHSA-rj75-hqrm-r3gf: postcss-nested's ^6.1.1 range allows
+  # the linear selector parser fix, but the lock retains 6.1.4. This path is
+  # docs build tooling only. Remove once its parent requires >=6.1.5.
+  "postcss-selector-parser@<6.1.5": "6.1.5"
   # VC-963: Mermaid's ^0.16.47 range cannot reach the trust-bypass fix
   # GHSA-238p-pmpm-9mq7. Keep its public render API, and remove when Mermaid
   # declares KaTeX >=0.18.2 itself.
