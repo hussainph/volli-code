@@ -228,11 +228,11 @@ describe("connection Island, per project and on chat pages", () => {
       [card, rect(0, 0, 1000, 800)],
       [dock, rect(200, 600, 600, 200)],
     ]);
-    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
-      function (this: Element) {
-        return boxes.get(this) ?? rect(0, 0, 0, 0);
-      },
-    );
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: Element,
+    ) {
+      return boxes.get(this) ?? rect(0, 0, 0, 0);
+    });
     const { createRoot } = await import("react-dom/client");
     const root = createRoot(card);
     await act(async () => root.render(<HostIsland />));

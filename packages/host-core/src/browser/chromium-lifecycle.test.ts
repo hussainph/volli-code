@@ -248,12 +248,13 @@ describe("sweepStaleChromiumProfiles (N10)", () => {
 function backendOver(fake: FakeChromium, profileRoot = root()) {
   const connections: CdpPipeConnection[] = [];
   const original = CdpPipeConnection.prototype.onEvent;
-  const spy = vi
-    .spyOn(CdpPipeConnection.prototype, "onEvent")
-    .mockImplementation(function (this: CdpPipeConnection, listener) {
-      connections.push(this);
-      return original.call(this, listener);
-    });
+  const spy = vi.spyOn(CdpPipeConnection.prototype, "onEvent").mockImplementation(function (
+    this: CdpPipeConnection,
+    listener,
+  ) {
+    connections.push(this);
+    return original.call(this, listener);
+  });
   const backend = new ChromiumBrowserBackend(suitePorts(), {
     executablePath: "/fake",
     profileRoot,
