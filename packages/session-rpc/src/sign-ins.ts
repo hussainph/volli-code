@@ -256,7 +256,8 @@ export function signInProcedures() {
               flowId: identifier,
               // A request target, never a URL: the host replays it to the one
               // origin the flow registered, so no input names where it goes.
-              pathAndQuery: z.string().min(1).max(8192).startsWith("/"),
+              // Regex publishes a standard pattern, not a starts_with format.
+              pathAndQuery: z.string().min(1).max(8192).regex(/^\/.*/),
             }),
           )
           .output(hostAuthCallbackDeliverResultSchema)

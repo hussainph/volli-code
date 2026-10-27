@@ -27,6 +27,7 @@ import {
   type TicketSummary,
 } from "@volli/shared";
 import { z } from "zod";
+import { jsonWireSchema } from "./json-wire-schema";
 
 const text = z.string();
 const integer = z.number().int();
@@ -51,13 +52,13 @@ export const projectSchema = z.object({
   ticketPrefix: text,
   baseBranch: text.nullable().optional(),
   setupCommand: text.nullable().optional(),
-  themeOverride: z.json().optional(),
-  themeCanvas: z.json().optional(),
+  themeOverride: jsonWireSchema.optional(),
+  themeCanvas: jsonWireSchema.optional(),
   themeAppearance: z.enum(["light", "dark", "auto"]).nullable().optional(),
   skillModes: z.record(text, z.enum(["auto", "manual", "off"])).optional(),
   sessionModel: modelSelectionSchema.nullable().optional(),
-  decisionModel: z.json().optional(),
-  authorityPolicy: z.json().optional(),
+  decisionModel: jsonWireSchema.optional(),
+  authorityPolicy: jsonWireSchema.optional(),
   colorIndex: integer,
   sortOrder: integer,
   createdAt: integer,
@@ -110,7 +111,7 @@ export const ticketEventSchema = z.object({
   actor: z.enum(["user", "session", "automation", "unauthenticated"]),
   actorContext: z.object({ sessionId: text, ticketId: text.nullable() }).nullable().optional(),
   createdAt: integer,
-  payload: z.object({ kind: text }).catchall(z.json()),
+  payload: z.object({ kind: text }).catchall(jsonWireSchema),
 });
 
 export const latestSignalSchema = z.object({

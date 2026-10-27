@@ -6,6 +6,7 @@
  * Writers still validate exhaustively, and unmarked vocabularies stay closed.
  */
 import { z } from "zod";
+import { jsonWireSchema } from "./json-wire-schema";
 import {
   CODE_MODE_MODES,
   COMPACTION_REASONS,
@@ -35,7 +36,7 @@ const text = z.string();
 const nullableText = text.nullable();
 const integer = z.number().int();
 const sequence = integer.nonnegative();
-const jsonObject = z.record(text, z.json());
+const jsonObject = z.record(text, jsonWireSchema);
 const native = z.object({ id: z.null(), detail: z.null() });
 const venue = z.object({ id: text, kind: z.enum(["local", "cloud", "remote", "unknown"]) });
 export const sessionSchema = z.object({
@@ -464,17 +465,17 @@ export const eventSchema = z.object({
   commandId: nullableText.optional(),
   commandOrigin: origin.nullable().optional(),
   provenance: z.object({
-    source: z.object({ kind: z.enum(["user", "system"]), id: text, detail: z.json() }),
+    source: z.object({ kind: z.enum(["user", "system"]), id: text, detail: jsonWireSchema }),
     venue: venue.nullable(),
   }),
   payload,
 });
 /** AI SDK parts are open, but their discriminator and JSON-safe payload are not. */
-export const uiPartWireSchema = z.object({ type: text }).catchall(z.json());
+export const uiPartWireSchema = z.object({ type: text }).catchall(jsonWireSchema);
 export const uiMessageWireSchema = z.object({
   id: text,
   role: z.enum(["system", "user", "assistant"]),
-  metadata: z.json().optional(),
+  metadata: jsonWireSchema.optional(),
   parts: z.array(uiPartWireSchema),
 });
 /**
@@ -627,7 +628,7 @@ export const streamEmissionWireSchema = z.union([
           message: z.object({
             id: text,
             role: z.enum(["system", "user", "assistant"]),
-            metadata: z.json().optional(),
+            metadata: jsonWireSchema.optional(),
             parts: z.array(z.object({ key: text, part: uiPartWireSchema })),
           }),
         }),
@@ -639,7 +640,7 @@ export const streamEmissionWireSchema = z.union([
         }),
         z.object({ op: z.literal("part.append"), key: text, text }),
         z.object({ op: z.literal("part.remove"), key: text }),
-        z.object({ op: z.literal("metadata"), metadata: z.json() }),
+        z.object({ op: z.literal("metadata"), metadata: jsonWireSchema }),
         z.object({ op: z.literal("message.remove") }),
       ])
       .meta({ "x-volli-open-union": "op" }),

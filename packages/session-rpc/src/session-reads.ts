@@ -14,6 +14,7 @@
 import { TRPCError } from "@trpc/server";
 import { SESSION_LIST_STATES, type AgentResponse } from "@volli/shared";
 import { z } from "zod";
+import { jsonWireSchema } from "./json-wire-schema";
 
 import {
   HostProcedureError,
@@ -49,7 +50,7 @@ export const sessionPeekInput = sessionHandleInput.extend({
   lines: z.number().int().min(1).max(MAX_PEEK_LINES).optional(),
 });
 
-const row = z.record(z.string(), z.json());
+const row = z.record(z.string(), jsonWireSchema);
 export const sessionListOutput = z.object({
   sessions: z.array(row),
   hidden: z.number().int().nonnegative(),

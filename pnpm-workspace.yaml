@@ -89,13 +89,25 @@ overrides:
   "@earendil-works/pi-ai@^1.0.0": "1.0.0"
   "@earendil-works/pi-telemetry@^1.0.0": "1.0.0"
   "@earendil-works/chord@^1.0.0": "1.0.0"
-  # VC-598 / GHSA-p98j-92pf-mc4p: Monaco 0.57.0 pins vulnerable 3.4.15
-  # exactly, so re-resolution cannot select patched 3.4.16. Latest stable
-  # Monaco is still 0.57.0; scope this version override to that parent only.
-  # Remove when a stable Monaco update declares a patched DOMPurify.
-  # This fixes its npm dependency, NOT Monaco's embedded DOMPurify source;
-  # that separate upstream blocker is tracked on VC-600.
-  "monaco-editor@0.57.0>dompurify": "3.4.16"
+  # Monaco pins DOMPurify exactly; 3.4.17 fixes GHSA-cg2g-xh64-v4q7,
+  # GHSA-mrv2-3pqr-j5jr and GHSA-c6gr-qvv4-5v3f. Remove when Monaco's
+  # dependency is patched. Its embedded sanitizer is separate (VC-600).
+  "monaco-editor@0.57.0>dompurify": "3.4.17"
+  # sandbox-runtime imports zod/v3, an API also shipped by Zod 4. Upgrade
+  # its 3.x package without changing that API; GHSA-mrhx-c7xc-m3w5.
+  # Remove once the parent declares a patched Zod package itself.
+  "@anthropic-ai/sandbox-runtime@0.0.79>zod": "4.6.7"
+  # Miniflare's exact pin cannot float to the content-encoding/EventSource/
+  # SRI fixes (GHSA-xjj6-f33q-929c, GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472).
+  # Remove once the pinned Miniflare declares undici >=7.30.1.
+  "miniflare@5.20261012.1-beta>undici": "7.30.1"
+  # Ajv's ^3.1.0 range permits this patch, but the lock otherwise retains
+  # the vulnerable URI normalization. Remove after Ajv requires >=3.1.9.
+  "fast-uri@<3.1.9": "3.1.9"
+  # Mermaid's ^0.16.22 range cannot reach the trust-bypass fix
+  # GHSA-238p-pmpm-9mq7. Keep its public render API, and remove when Mermaid
+  # declares KaTeX >=0.18.2 itself.
+  "mermaid@11.17.2>katex": "0.18.2"
   # VC-793 / GHSA-85c8-ppgw-ccpr, GHSA-5gmw-xhrv-c9v3: oxfmt 0.64.0 (the
   # formatter vite-plus 0.3.0 pins exactly) pins vulnerable tinypool 2.1.0
   # exactly, so re-resolution cannot select patched 2.1.2 without moving the

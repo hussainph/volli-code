@@ -39,6 +39,7 @@ import {
   type RenameRemoteHostInput,
 } from "@volli/shared";
 import { z } from "zod";
+import { jsonWireSchema } from "./json-wire-schema";
 
 /** A host's id: hostd's `hostId`, a UUID. */
 const hostId = z.uuid();
@@ -269,7 +270,7 @@ export const remoteHostDevicesSchema = z.strictObject({
 /** A question's `kind` and `step`, and its own fields as open JSON. */
 const addHostQuestion = z
   .object({ id: z.string(), kind: z.string(), step: stepId })
-  .catchall(z.json());
+  .catchall(jsonWireSchema);
 const addHostFailure = z.object({
   code: z.string(),
   step: stepId,

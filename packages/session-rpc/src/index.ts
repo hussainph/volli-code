@@ -64,6 +64,7 @@ import {
   type SessionPresentationProjection,
 } from "@volli/shared";
 import { z } from "zod";
+import { jsonWireSchema } from "./json-wire-schema";
 
 import {
   hostAnswer,
@@ -1009,7 +1010,7 @@ const logRecordSchema = z
     component: z.string(),
     msg: z.string(),
   })
-  .catchall(z.json());
+  .catchall(jsonWireSchema);
 const logsBatchSchema = z.object({
   entries: z.array(z.object({ cursor: z.string(), record: logRecordSchema })),
   gap: z.boolean(),
