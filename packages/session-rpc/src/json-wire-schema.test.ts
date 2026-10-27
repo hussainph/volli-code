@@ -30,7 +30,7 @@ describe("JSON wire values", () => {
     expect(jsonWireSchema.parse(null)).toBeNull();
   });
 
-  it("publishes a JSON schema without a custom parser or transform", () => {
+  it("supports JSON Schema generation", () => {
     expect(() => z.toJSONSchema(jsonWireSchema)).not.toThrow();
   });
 });

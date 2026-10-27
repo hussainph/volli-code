@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "vite-plus";
 
 import { protocolChanges, protocolReportLines, unapprovedChanges } from "./compatibility.mjs";
-import { stable } from "./canonical.mjs";
+import { canonicalizeProtocol } from "./canonical.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const schemaPath = "docs/protocol/protocol.schema.json";
@@ -28,7 +28,7 @@ try {
   const { generateProtocolSchema } = await server.ssrLoadModule(
     "/packages/session-rpc/src/protocol-schema.ts",
   );
-  const generated = stable(generateProtocolSchema());
+  const generated = canonicalizeProtocol(generateProtocolSchema());
   const content = `${JSON.stringify(generated, null, 2)}\n`;
   if (checking) {
     if ((await readFile(new URL(`../../${schemaPath}`, import.meta.url), "utf8")) !== content)

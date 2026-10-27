@@ -13420,7 +13420,7 @@ Source:
 Monaco Editor 0.57.0 embeds DOMPurify 3.4.15 in
 esm/vs/base/browser/dompurify/dompurify.js, imported by domSanitize.js.
 This source is part of Volli Code's bundled Monaco renderer. It is separate
-from Monaco's npm DOMPurify dependency, which resolves to 3.4.16.
+from Monaco's npm DOMPurify dependency, which resolves to 3.4.17.
 
 The embedded source carries this notice:
 
@@ -13428,8 +13428,8 @@ The embedded source carries this notice:
 
 Volli elects Apache-2.0 for this dual-licensed source, as for the npm
 DOMPurify dependency. The full Apache-2.0 and MPL-2.0 license texts are
-reproduced in the DOMPurify license group of THIRD-PARTY-NOTICES; those
-texts are identical in DOMPurify 3.4.15 and 3.4.16.
+reproduced in the DOMPurify license group of THIRD-PARTY-NOTICES and cover
+both the npm dependency and this embedded source.
 
 Upstream: https://github.com/cure53/DOMPurify/tree/3.4.15
 Security follow-up: VC-600. The npm version override does not patch this
