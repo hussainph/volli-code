@@ -20,7 +20,7 @@ import {
   type RunnerId,
   type UserId,
 } from "@volli/shared/cloud";
-import type { Doc } from "../_generated/dataModel";
+import type { Doc } from "../_generated/dataModel.js";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { clearAttention, raiseAttention } from "./attention";
 import { authError, requireProject, type Viewer } from "./auth";

@@ -18,7 +18,7 @@ import {
   parseId,
 } from "@volli/shared/cloud";
 import { mutation, query } from "./_generated/server";
-import type { DataModel, Doc } from "./_generated/dataModel";
+import type { DataModel, Doc } from "./_generated/dataModel.js";
 import { PERSON_OR_AGENT, requireActor } from "./lib/actorAuth";
 import { requireProject } from "./lib/auth";
 import { publicRow, recordBoardEvents, requireTicket, requireWritableProject } from "./lib/board";
