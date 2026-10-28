@@ -309,8 +309,11 @@ describe("sessionHandlersFrom", () => {
     // Volli Cloud account's seven (VC-884), the window's Cloud client's token,
     // the launch's store and restart, its unanswered board writes, and its
     // last-seen board (VC-889), the account's GitHub half's five (VC-897),
-    // this Mac's runner's four (VC-895), and a cloud project's folder's two
-    // (VC-895 N2-3).
-    expect(Object.keys(context.handlers)).toHaveLength(113);
+    // this Mac's runner's four (VC-895), a cloud project's folder's two
+    // (VC-895 N2-3), and the local-profile backup read/run/reveal commands.
+    expect(Object.keys(context.handlers)).toHaveLength(116);
+    expect(Object.keys(context.handlers)).toEqual(
+      expect.arrayContaining(["backups.status", "backups.run", "backups.reveal"]),
+    );
   });
 });
