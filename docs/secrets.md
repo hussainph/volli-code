@@ -17,6 +17,17 @@ Every structured Session receives the launch's output redaction filter, includin
 subagents and older Sessions without `request_secret`; filtering grants neither
 the tool nor environment injection.
 
+Each missing credential call opens its own pending interaction. Parallel calls
+(including retries for the same name) do not return early because another call
+is waiting. The composer shows one secure field at a time in interaction order;
+submission, decline or cancellation advances the queue. A retryable write failure
+keeps the current request visible. If a submit or decline confirms its live
+correlation has expired, the card reports that and advances rather than hiding
+later requests behind an orphan. Reloading the renderer reconstructs pending fields from
+the Session projection. An app restart discards memory-only Session values and
+live request correlations; a new call creates a fresh prompt, not a cached
+"still missing" outcome.
+
 ## Storage and revocation
 
 The person chooses:
@@ -548,13 +559,19 @@ to open files as you. Do not treat this read-tool guard as a general process san
 - Terminal companions (Claude Code/Codex). Launch-time injection is technically
   possible, but their own model/transcript/output paths cannot be scrubbed by
   this structured-runtime boundary, so secrets are not injected there.
-- Secret re-entry after a cancelled/restarted request. Waiting and settlement
-  metadata now use the Engine's durable interactions and existing Attention and
-  presentation paths, alongside ordinary question and permission cards. The dedicated person-only write
-  channel is the only answer door; generic interaction answers are refused before
-  persistence. Secret values never become ledger facts.
+- Restoring an in-flight call or memory-only value across an app restart. Boot
+  recovery cancels the lost process's parked interactions without inventing an
+  answer. A fresh `request_secret` call can ask again. The dedicated person-only
+  write channel remains the only answer door; generic interaction answers are
+  refused before persistence. Secret values never become ledger facts.
 
 ## Verification
+
+`packages/host-core/src/secrets/service-queue.test.ts` covers independent parallel
+calls, retries and teardown; `session-runtime/boot-recovery.test.ts` covers queued
+credential retirement before rehydration. The desktop's `secret-card.test.tsx`
+covers the one-field queue, failed writes, expired heads and renderer remounts;
+`main/secrets/ipc.test.ts` distinguishes expiry from retryable settlement failures.
 
 `apps/desktop/src/main/secrets/integration.test.ts` runs the real Pi adapter,
 Session Runtime and SQLite ledger with a scripted provider. A dedicated IPC

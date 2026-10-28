@@ -26,4 +26,4 @@ export {
   SecretStore,
 } from "../secrets";
 export { retiresSessionSecrets } from "../secrets/lifetime";
-export { SecretService } from "../secrets/service";
+export { SecretRequestExpiredError, SecretService } from "../secrets/service";

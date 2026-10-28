@@ -107,6 +107,7 @@ describe("dedicated credential IPC", () => {
     const input = { requestId: before.requests[0]!.id, value, scope: "session" };
     const failed = await invoke("volli:secret-submit", input);
     expect(failed).toMatchObject({ ok: false });
+    expect(failed).not.toHaveProperty("expired");
     expect(JSON.stringify(failed)).not.toContain(value);
     expect(await service.list()).toMatchObject({ requests: before.requests });
     expect(await invoke("volli:secret-submit", input)).toEqual({ ok: true });
@@ -114,6 +115,53 @@ describe("dedicated credential IPC", () => {
     expect(settled).toHaveBeenCalledTimes(2);
     await port.dispose();
   });
+  it("distinguishes expired correlations after a failed cancellation commit from retryable writes", async () => {
+    const { service, invoke } = setup();
+    const port = service.port(
+      { sessionId: "s", projectId: "p", sessionLabel: "Session", projectLabel: "Project" },
+      {
+        opened: async () => {},
+        settled: vi.fn().mockRejectedValueOnce(new Error(value)).mockResolvedValue(undefined),
+      },
+    );
+    const controller = new AbortController();
+    const abandoned = port.request({ name: "OLD_TOKEN", toolCallId: "old" }, controller.signal);
+    const before = await service.list();
+    if (!before.ok) throw new Error("missing metadata");
+    const staleId = before.requests[0]!.id;
+    controller.abort();
+    expect(await abandoned).toBe("still missing");
+    const waiting = port.request(
+      { name: "NEXT_TOKEN", toolCallId: "next" },
+      new AbortController().signal,
+    );
+    for (const result of [
+      await invoke("volli:secret-submit", { requestId: staleId, value, scope: "session" }),
+      await invoke("volli:secret-decline", staleId),
+    ]) {
+      expect(result).toEqual({
+        ok: false,
+        error: "This credential request is no longer waiting.",
+        expired: true,
+      });
+      expect(JSON.stringify(result)).not.toContain(value);
+    }
+    expect(service.environment("s")).toEqual({});
+    const current = await service.list();
+    if (!current.ok) throw new Error("missing metadata");
+    expect(current.requests).toHaveLength(1);
+    expect(current.requests[0]!.name).toBe("NEXT_TOKEN");
+    expect(
+      await invoke("volli:secret-submit", {
+        requestId: current.requests[0]!.id,
+        value,
+        scope: "session",
+      }),
+    ).toEqual({ ok: true });
+    expect(await waiting).toBe("signed in");
+    await port.dispose();
+  });
+
   it("accepts one person submission, metadata-only lists, replacement, revocation and decline", async () => {
     const { invoke, service, store, port } = setup();
     const waiting = port.request(

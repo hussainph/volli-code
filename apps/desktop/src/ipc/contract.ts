@@ -86,6 +86,7 @@ import type { ExternalAppId } from "../external-app-ids";
 import type {
   CredentialsResult,
   SecretReplaceInput,
+  SecretRequestResult,
   SecretSubmitInput,
   SecretsResult,
 } from "./secrets";
@@ -2714,8 +2715,8 @@ export interface VolliDatabaseRecoveryIpcContract {
 /** Person-only credentials: a dedicated handler group, never generic data or Session IPC. */
 export interface VolliSecretIpcContract {
   "volli:secrets-list": { args: [projectId?: string]; result: SecretsResult };
-  "volli:secret-submit": { args: [input: SecretSubmitInput]; result: Result };
-  "volli:secret-decline": { args: [id: string]; result: Result };
+  "volli:secret-submit": { args: [input: SecretSubmitInput]; result: SecretRequestResult };
+  "volli:secret-decline": { args: [id: string]; result: SecretRequestResult };
   "volli:secret-revoke": { args: [id: string]; result: Result };
   "volli:secret-replace": { args: [input: SecretReplaceInput]; result: Result };
   /** Tries locked stored secrets again (VC-641). */

@@ -28,6 +28,14 @@ interface SecretOwner {
   projectId: string;
   projectLabel: string;
 }
+/** A dedicated write cannot settle a correlation the host no longer owns. */
+export class SecretRequestExpiredError extends Error {
+  constructor() {
+    super("This credential request is no longer waiting.");
+    this.name = "SecretRequestExpiredError";
+  }
+}
+
 type Outcome = "signed in" | "declined" | "still missing";
 interface Pending {
   metadata: SecretRequestMetadata;
@@ -132,10 +140,9 @@ export class SecretService {
         }
         if (closed || signal.aborted) return "still missing";
         if (available) return "signed in";
-        // One live correlation per Session; durable waiting state lives in the Engine.
-        if ([...this.#pending.values()].some((p) => p.metadata.sessionId === owner.sessionId)) {
-          return "still missing";
-        }
+        // Every call owns its correlation, including parallel calls and retries.
+        // The Engine keeps all waits durable; the renderer presents them in order.
+        // An existing wait must never turn another request into a false missing result.
         const id = randomUUID();
         const metadata: SecretRequestMetadata = {
           id,
@@ -251,7 +258,7 @@ export class SecretService {
 
   submit(requestId: string, value: string, scope: SecretScope): Promise<void> {
     const pending = this.#pending.get(requestId);
-    if (pending === undefined) throw new Error("This credential request is no longer waiting.");
+    if (pending === undefined) throw new SecretRequestExpiredError();
     if (!["session", "project", "always"].includes(scope)) throw new Error("Invalid secret scope.");
     const { metadata } = pending;
     const save = () =>
@@ -274,7 +281,7 @@ export class SecretService {
 
   decline(id: string): Promise<void> {
     const pending = this.#pending.get(id);
-    if (pending === undefined) throw new Error("This credential request is no longer waiting.");
+    if (pending === undefined) throw new SecretRequestExpiredError();
     return pending.settle("declined");
   }
 
