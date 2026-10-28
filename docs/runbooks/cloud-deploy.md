@@ -1,8 +1,9 @@
 # Runbook: Volli Cloud deployments
 
-> **Preparation only.** There is no Convex team, R2 bucket or WorkOS environment
-> for Volli Cloud, no deployment of this backend, and no hosted deploy CI. This is
-> the order to do the account work in; nothing here is evidence of a deployment.
+> **Status.** The production deployment, its R2 bucket and the WorkOS production
+> environment exist and were first deployed and self-checked for 0.3.0-canary.1
+> (VC-953). `dev` and `staging`, hosted deploy CI, backups and export do not exist
+> yet; their sections are still the plan, not evidence.
 
 You need a Convex team, a Cloudflare account with R2, a WorkOS account, a Google
 Cloud project for people's sign-in, Node at [`.nvmrc`](../../.nvmrc), pnpm, this
@@ -50,13 +51,22 @@ only that config; without a site URL a build cannot link a runner.
    (later a separate CI key). Verify it can deploy, read the forbidden-variable
    probe and invoke the internal self-check; do not broaden it to other
    environments. Other operator steps use your login with `--deployment <ref>`.
+   With the key exported instead (`CONVEX_DEPLOY_KEY`), omit `--deployment`: the
+   key names the target, and every command below prints it (`on prod deployment
+   <name>`) — check it. Blank `CONVEX_DEPLOYMENT` and `CONVEX_URL` in that shell.
+   A key with only `deployment:deploy`, `env:view`, `env:write`,
+   `functions:runInternalQueries`, `functions:runInternalMutations` and `logs:view`
+   covers steps 2–4, 7, 8 and 10; rotating the root key (`secretKeys:rewrap`, an
+   internal action) also needs `functions:runInternalActions`.
 4. Keep keys in the password manager, never `convex/.env.local`: it is gitignored,
    and the fixture stops it pointing the CLI at a cloud deployment.
 
 ## 2. Deployment variables
 
 Set values with the value **omitted** — the CLI prompts or reads stdin, so a
-secret never becomes a shell argument; `--names-only` prints no values:
+secret never becomes a shell argument; `--names-only` prints no values. A value
+can also be pasted in the dashboard (deployment → Settings → Environment
+Variables); check afterwards with `--names-only`:
 
 ```sh
 pnpm -C convex exec convex env set WORKOS_CLIENT_ID --deployment <ref>
@@ -102,11 +112,11 @@ const kid = "volli-runner-1";
 const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
 const pub = { ...publicKey.export({ format: "jwk" }), kid, alg: "ES256", use: "sig" };
 fs.writeFileSync(require("node:path").join(process.env.KEY_DIR, "runner-signing.jwk"), JSON.stringify({ ...privateKey.export({ format: "jwk" }), kid }));
-console.log("data:text/plain;charset=utf-8;base64," + Buffer.from(JSON.stringify({ keys: [pub] })).toString("base64"));
+fs.writeFileSync(require("node:path").join(process.env.KEY_DIR, "runner-jwks.datauri"), "data:text/plain;charset=utf-8;base64," + Buffer.from(JSON.stringify({ keys: [pub] })).toString("base64"));
 '
 printf 'Escrow, then remove this private file: %s\n' "$KEY_DIR/runner-signing.jwk"
 cat "$KEY_DIR/runner-signing.jwk" | pnpm -C convex exec convex env set VOLLI_RUNNER_SIGNING_KEY --deployment <ref>
-pnpm -C convex exec convex env set VOLLI_RUNNER_JWKS --deployment <ref>
+cat "$KEY_DIR/runner-jwks.datauri" | pnpm -C convex exec convex env set VOLLI_RUNNER_JWKS --deployment <ref>
 )
 ```
 
@@ -182,11 +192,25 @@ JSON:
 
 `GET` is `sessionTranscript.presignGet` (a committed pack or a spilled body); a
 cross-origin GET needs `Access-Control-Allow-Origin` even with no request headers.
-An unpackaged build pointed at a real bucket also needs its dev-server origin
-(`http://localhost:<port>`). Acceptance of the custom-scheme origin must be
-verified against the real bucket. If rejected, stop and resolve a supported,
-reviewed desktop-origin policy; do not widen to `"*"` or make the bucket public
-to chase the symptom. A policy can take 30 seconds to apply, and an expired presign answers `403
+A built unpackaged app loads the same `volli-app://bundle` origin; only one run on
+the Vite dev server (`ELECTRON_RENDERER_URL`) would need its `http://localhost:<port>`
+origin as well. Acceptance of the custom-scheme origin must be verified against the
+real bucket; R2 answers a preflight from the bucket policy without credentials:
+
+```sh
+# Expect 204 with Access-Control-Allow-Origin: volli-app://bundle; another
+# origin, or PUT, must answer 403.
+curl -sS -o /dev/null -D - -X OPTIONS -H 'Origin: volli-app://bundle' \
+  -H 'Access-Control-Request-Method: GET' \
+  'https://<ACCOUNT_ID>.r2.cloudflarestorage.com/volli-<env>/v1/p/probe'
+```
+
+A window reads R2 only for a spilled body (over 64 KiB) or a pack whose staging rows
+have expired, an hour after packing; a Session's recent history is served from
+Convex. Prove a real window GET on history older than that hour.
+
+If the origin is rejected, stop and resolve a supported, reviewed desktop-origin
+policy; do not widen to `"*"` or make the bucket public to chase the symptom. A policy can take 30 seconds to apply, and an expired presign answers `403
 ExpiredRequest` with no CORS headers — presigns live five minutes.
 
 A renderer upload would need `PUT` and `content-type` added here; uploads are the
@@ -295,7 +319,8 @@ curl -sS -o /dev/null -w '%{http_code}\n' -X POST '<explicit-site-url>/runner/li
 ```
 
 `404` from the probe means the site URL is wrong or the push did not land; a `4xx` from
-the route itself (`/runner/link` takes JSON only) is the good answer.
+the route itself (`/runner/link` takes JSON only) is the good answer: `400` with
+`{"error":{"code":"invalid_request","message":"Send the body as application/json."}}`.
 
 ## 9. The desktop build: inputs, launch, tokens
 
@@ -350,8 +375,10 @@ switch. Grants are deployment-admin data:
 pnpm -C convex exec convex run previewAccess:set '{"kind":"email","value":"person@example.com","enabled":true}' --deployment <ref>
 ```
 
-Codes are single-use and stored only as a hash; send them through a trusted channel,
-never a ticket or chat. Revoke with `"enabled":false`. Rules:
+An email grant matches only the verified email of the account that actually signs
+in: Google's account chooser may pick another signed-in account, so test a granted
+address in a private window. Codes are single-use and stored only as a hash; send
+them through a trusted channel, never a ticket or chat. Revoke with `"enabled":false`. Rules:
 `convex/SCHEMA-NOTES.md`, "Invite-only preview". Order: deploy the backend, grant the
 first people, then publish the build that names it.
 
@@ -374,6 +401,12 @@ deployment → check a Session's history against its packs) has not been run. Fu
 export — one versioned archive of a Convex snapshot plus `v1/p/`, `v1/w/`, `v1/u/`,
 skipping `v1/x/` and `v1/m/` — does not exist, and is **not** the local `volli-backup`
 bundle ([`docs/backup-bundle.md`](../backup-bundle.md)).
+
+**A dev check against a real deployment.** `volli-drive` (the keychain-free harness)
+refuses any backend but its loopback fixture, so there is no sanctioned way to sign an
+unpackaged build into a real environment before cutting a desktop build. VC-953 used an
+uncommitted local patch passing the step 9 runtime variables; a reviewed
+`--deployment` mode is follow-up work.
 
 **Logs, inventory, self-check.** `--type prod` for `staging` is the current answer to log
 and error exposure; production log redaction and an automated variable inventory remain.
