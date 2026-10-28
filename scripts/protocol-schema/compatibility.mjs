@@ -236,11 +236,26 @@ export function schemaChanges(before, after, path = "", direction = "input", con
   ]);
   for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
     if (handled.has(key) || annotations.has(key) || same(before[key], after[key])) continue;
+    // Inputs must keep accepting old callers; outputs must stay within what
+    // old readers accept. Tightening an output bound is safe, relaxing or
+    // removing one is not (the opposite variance of an input bound).
     if (lowerBounds.has(key)) {
-      if (after[key] !== undefined && (before[key] === undefined || after[key] > before[key]))
+      if (direction === "output") {
+        if (before[key] !== undefined && (after[key] === undefined || after[key] < before[key]))
+          fail(`${path}/${key}`, "output lower bound relaxed");
+      } else if (
+        after[key] !== undefined &&
+        (before[key] === undefined || after[key] > before[key])
+      )
         fail(`${path}/${key}`, "lower bound tightened");
     } else if (upperBounds.has(key)) {
-      if (after[key] !== undefined && (before[key] === undefined || after[key] < before[key]))
+      if (direction === "output") {
+        if (before[key] !== undefined && (after[key] === undefined || after[key] > before[key]))
+          fail(`${path}/${key}`, "output upper bound relaxed");
+      } else if (
+        after[key] !== undefined &&
+        (before[key] === undefined || after[key] < before[key])
+      )
         fail(`${path}/${key}`, "upper bound tightened");
     } else {
       fail(`${path}/${escape(key)}`, "assertion changed (requires explicit review)");

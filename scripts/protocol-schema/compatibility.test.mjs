@@ -472,12 +472,45 @@ test("refuses field/entry removals, narrowing and newly required input", () => {
   assert.equal(protocolChanges(protocol(), next).length, 2);
 });
 
-test("bounds, objects, arrays, literal alternatives and unknown assertions fail closed", () => {
+test("bounds follow caller/input and reader/output variance without exceptions", () => {
+  for (const [keywords, beforeValue, afterValue] of [
+    [["minimum", "exclusiveMinimum", "minLength", "minItems", "minProperties"], 0, 1],
+    [["maximum", "exclusiveMaximum", "maxLength", "maxItems", "maxProperties"], 2, 1],
+  ]) {
+    for (const keyword of keywords) {
+      const before = { [keyword]: beforeValue };
+      const after = { [keyword]: afterValue };
+      // A narrower writer is compatible with the old reader, but a narrower
+      // input would reject an old caller. Reversing either reverses safety.
+      assert.deepEqual(schemaChanges(before, after, "", "output"), []);
+      assert.ok(schemaChanges(before, after, "", "input").length, keyword);
+      assert.ok(schemaChanges(after, before, "", "output").length, keyword);
+      assert.deepEqual(schemaChanges(after, before, "", "input"), []);
+      assert.ok(schemaChanges(before, {}, "", "output").length, keyword);
+      assert.deepEqual(schemaChanges(before, {}, "", "input"), []);
+      assert.deepEqual(schemaChanges({}, after, "", "output"), []);
+      assert.ok(schemaChanges({}, after, "", "input").length, keyword);
+    }
+  }
+});
+
+test("the generated nonnegative omitted output correction is compatible, reversing it is not", () => {
+  const current = JSON.parse(
+    readFileSync(new URL("../../docs/protocol/protocol.schema.json", import.meta.url), "utf8"),
+  ).tiers.public["workspaces.list"].output;
+  assert.equal(current.properties.omitted.minimum, 0);
+  const previous = structuredClone(current);
+  previous.properties.omitted.minimum = -Number.MAX_SAFE_INTEGER;
+  assert.deepEqual(unapprovedChanges(protocol(shape, previous), protocol(shape, current)), []);
+  assert.ok(protocolChanges(protocol(shape, current), protocol(shape, previous)).length);
+  assert.ok(schemaChanges(previous, current, "", "input").length);
+  const withoutBound = structuredClone(current);
+  delete withoutBound.properties.omitted.minimum;
+  assert.ok(protocolChanges(protocol(shape, current), protocol(shape, withoutBound)).length);
+});
+
+test("objects, arrays, literal alternatives and unknown assertions fail closed", () => {
   for (const [before, after] of [
-    [{ minimum: 0 }, { minimum: 1 }],
-    [{ maximum: 10 }, { maximum: 9 }],
-    [{}, { minLength: 1 }],
-    [{}, { maxItems: 1 }],
     [{ const: "a" }, { const: "b" }],
     [{ additionalProperties: true }, { additionalProperties: false }],
     [{}, { additionalProperties: false }],
@@ -745,9 +778,6 @@ test("open unions preserve every old member and recursively check its fields", (
       s.oneOf[0].properties.status.const = "changed";
     },
     (s) => {
-      s.oneOf[0].properties.value.maxLength = 5;
-    },
-    (s) => {
       delete s.oneOf[0].properties.value;
     },
     (s) => {
@@ -761,6 +791,10 @@ test("open unions preserve every old member and recursively check its fields", (
     mutate(next);
     assert.ok(schemaChanges(old, next, "", "output").length, mutate.toString());
   }
+  const tighterOutput = structuredClone(old);
+  tighterOutput.oneOf[0].properties.value.maxLength = 5;
+  assert.deepEqual(schemaChanges(old, tighterOutput, "", "output"), []);
+  assert.ok(schemaChanges(tighterOutput, old, "", "output").length);
   const groupedAddition = structuredClone(old);
   groupedAddition.oneOf[1].properties.status.enum.push("d");
   assert.deepEqual(schemaChanges(old, groupedAddition, "", "output"), []);
@@ -795,7 +829,8 @@ test("open unions recursively compare identical branch refs and discriminator re
   };
   const narrowed = structuredClone(old);
   narrowed.$defs.branch.properties.value = { type: "string", maxLength: 5 };
-  assert.ok(schemaChanges(old, narrowed, "", "output").length);
+  assert.deepEqual(schemaChanges(old, narrowed, "", "output"), []);
+  assert.ok(schemaChanges(narrowed, old, "", "output").length);
   const changedTag = structuredClone(old);
   changedTag.$defs.tag.const = "b";
   assert.ok(schemaChanges(old, changedTag, "", "output").length);

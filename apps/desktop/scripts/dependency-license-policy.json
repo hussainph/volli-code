@@ -311,7 +311,7 @@
 
     "dompurify": {
       "license": "(MPL-2.0 OR Apache-2.0)",
-      "versions": ["3.4.16", "3.4.17"],
+      "versions": ["3.4.17"],
       "reviewedAt": "2026-10-19",
       "disposition": "shipped",
       "summary": [
@@ -319,7 +319,7 @@
         "license in this tree and carries no reciprocity. Recorded because the elected half must appear",
         "in the notices — an entry reading only \"MPL-2.0 OR Apache-2.0\" leaves the reader guessing.",
         "3.4.17's installed LICENSE contains Apache-2.0 in full; its manifest retains the same",
-        "dual-license expression. The existing Apache-2.0 election still applies to both versions."
+        "dual-license expression. The existing Apache-2.0 election still applies."
       ],
       "obligations": ["Notices must state Apache-2.0 as the elected license."],
       "electedLicense": "Apache-2.0",
