@@ -190,5 +190,3 @@ a scanner does not look, so a notice generator must be told where to read it fro
 | Package | License | Read from |
 | --- | --- | --- |
 | `khroma` | MIT | the package's own `license` file |
-| `@yuku-codegen/binding-*` | MIT | its parent package's manifest |
-| `@yuku-parser/binding-*` | MIT | its parent package's manifest |
