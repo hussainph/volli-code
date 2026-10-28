@@ -29,10 +29,9 @@ edit `apps/desktop/THIRD-PARTY-NOTICES` or the website's static notices, which o
 
 **Per-platform families.** pnpm installs only the native sibling matching the current os/cpu, so
 the LGPL library is `@img/sharp-libvips-darwin-arm64` on a developer Mac and
-`@img/sharp-libvips-linux-x64` on CI. Three families in this tree are non-permissive and are
-therefore keyed with a trailing `*` in the policy — the libvips binaries (LGPL), the lightningcss
-binaries (MPL-2.0), and the yuku bindings (no license field). Every other platform-specific package
-in the tree is MIT or Apache-2.0.
+`@img/sharp-libvips-linux-x64` on CI. Three reviewed families use a trailing `*` in the policy:
+the libvips binaries (LGPL), lightningcss binaries (MPL-2.0), and yuku bindings (MIT; older releases
+omitted the manifest license). Every other platform-specific package in the tree is MIT or Apache-2.0.
 
 **What only runs on macOS.** Four assertions need a Mac: the Mach-O dynamic-linking check, the
 notice-inputs generator and the LGPL source offer (both read the shipped libvips package), and
@@ -61,7 +60,8 @@ library unpacked and shipped, and a gate that cannot read the packaging config h
 | `@paper-design/shaders` | Apache-2.0 (with a NOTICE) | Marketing website bundle | Its NOTICE is reproduced in the site's `/licenses.txt` (Apache-2.0 §4(d)) |
 | `lightningcss*` | MPL-2.0 | Build-time only | No action; recorded |
 | `dompurify`, `node-forge`, `json-schema` | Dual-licensed | Various | No action; elected half recorded |
-| `khroma`, `@yuku-*/binding-*` | MIT, but not in the manifest | Various | No action; source of the license recorded |
+| `khroma` | MIT, but not in the manifest | Various | No action; source of the license recorded |
+| `@yuku-*/binding-*` | MIT | Build-time only | Versioned review retained; 0.9.5 declares MIT in the manifest |
 
 What changed in this ticket, in one line each:
 
@@ -551,9 +551,10 @@ the license, and the III.3 problem that did conflict is fixed.
   a false statement about the terms Volli uses a dependency under.
 - **`khroma` (MIT).** No `license` field in its manifest, so scanners report it unlicensed. Its
   `license` file is the plain MIT text.
-- **`@yuku-codegen/binding-*`, `@yuku-parser/binding-*` (MIT).** Generated napi platform packages
-  with neither a `license` field nor a license file. Their parents `yuku-codegen@0.5.48` and
-  `yuku-parser@0.5.48` declare MIT and publish from the same repository and release.
+- **`@yuku-codegen/binding-*`, `@yuku-parser/binding-*` (MIT).** Generated napi platform packages.
+  Version 0.9.5 now declares MIT in each binding manifest, as do the parent packages.
+  The [upstream v0.9.5 license](https://github.com/yuku-toolchain/yuku/blob/v0.9.5/LICENSE)
+  retains the MIT grant and 2026 Yuku copyright from v0.5.48. These remain unmodified build-only tools.
 
 ## 5. What a reviewer should check next
 
