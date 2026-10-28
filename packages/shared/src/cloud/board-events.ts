@@ -88,6 +88,7 @@ export const BOARD_EVENT_WRITE_KINDS = [
   "label_merged",
   "automation_changed",
   "automation_armed",
+  "automation_schedule_armed",
   "automation_run_started",
   "automation_run_skipped",
   "automation_run_failed",
@@ -222,6 +223,12 @@ export type BoardEventPayload =
       status: TicketStatus;
       /** `null` disarms the column. */
       automationId: AutomationId | null;
+      runnerId: RunnerId | null;
+    }
+  | {
+      kind: "automation_schedule_armed";
+      automationId: AutomationId;
+      /** null disarms the project-level schedule (ticketId is null). */
       runnerId: RunnerId | null;
     }
   | {

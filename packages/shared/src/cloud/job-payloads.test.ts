@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vite-plus/test";
 
 import { encodeSessionJson } from "../session-event-codec";
+import { AUTOMATION_INSTRUCTIONS_MAX_CHARS } from "./automations";
 import {
   INVALID_JOB_PAYLOAD,
   InvalidJobPayloadError,
@@ -221,8 +222,84 @@ describe("parseJobPayload", () => {
     expect(refusal("automation.run", { ...armed, armedByUserId: "me" })).toMatch(
       /armedByUserId is not a UUID/,
     );
-    expect(refusal("automation.run", { ...armed, trigger: "schedule" })).toMatch(
-      /trigger is not one of arrival/,
+    expect(refusal("automation.run", { ...armed, trigger: "future" })).toMatch(
+      /trigger is not one of arrival, schedule, manual/,
+    );
+  });
+});
+
+const runMeta = {
+  runId: COPY,
+  sessionId: SESSION,
+  dueAt: 123,
+  missedCount: 0,
+  attendance: "unattended",
+  modelOverride: null,
+  requestedBySessionId: null,
+};
+const scheduled = {
+  ...runMeta,
+  trigger: "schedule",
+  automationId: AUTOMATION,
+  ticketId: null,
+  armedByUserId: USER,
+};
+const manual = {
+  ...runMeta,
+  trigger: "manual",
+  automationId: AUTOMATION,
+  ticketId: TICKET,
+  armedByUserId: null,
+};
+const unbound = { ...manual, automationId: null, instructions: "Review this" };
+
+describe("executable Automation job contract", () => {
+  test.each([
+    { ...VALID["automation.run"], ...runMeta },
+    scheduled,
+    manual,
+    { ...manual, ticketId: null, attendance: "attended" },
+    {
+      ...manual,
+      requestedBySessionId: SESSION,
+      modelOverride: { providerId: "p", modelId: "m", reasoningLevel: "high" },
+    },
+    unbound,
+    { ...unbound, instructions: "x".repeat(AUTOMATION_INSTRUCTIONS_MAX_CHARS) },
+  ])("round-trips complete identities and each trigger through JSON", (payload) => {
+    expect(parseJobPayload("automation.run", JSON.parse(JSON.stringify(payload)))).toEqual(payload);
+  });
+
+  test.each([
+    [scheduled, { runId: "bad" }],
+    [scheduled, { sessionId: "bad" }],
+    [scheduled, { dueAt: -1 }],
+    [scheduled, { missedCount: 0.5 }],
+    [scheduled, { attendance: "future" }],
+    [scheduled, { requestedBySessionId: "bad" }],
+    [scheduled, { ticketId: TICKET }],
+    [scheduled, { armedByUserId: null }],
+    [scheduled, { attendance: "attended" }],
+    [scheduled, { requestedBySessionId: SESSION }],
+    [scheduled, { modelOverride: { providerId: "p", modelId: "m", reasoningLevel: "high" } }],
+    [manual, { armedByUserId: USER }],
+    [manual, { modelOverride: { providerId: "", modelId: "m", reasoningLevel: "high" } }],
+    [manual, { modelOverride: { providerId: "p", modelId: "m", reasoningLevel: "unknown" } }],
+    [
+      manual,
+      { modelOverride: { providerId: "p", modelId: "m", reasoningLevel: "high", secret: "never" } },
+    ],
+    [manual, { instructions: "not allowed on a bound Run" }],
+    [unbound, { instructions: " " }],
+    [unbound, { instructions: "x".repeat(AUTOMATION_INSTRUCTIONS_MAX_CHARS + 1) }],
+    [unbound, { ticketId: null }],
+    [unbound, { status: "doing" }],
+    [unbound, { extra: "closed" }],
+    [VALID["automation.run"]!, { sessionId: SESSION }],
+    [VALID["automation.run"]!, { runId: COPY }],
+  ])("refuses malformed or cross-trigger fields", (payload, patch) => {
+    expect(() => parseJobPayload("automation.run", { ...payload, ...patch })).toThrow(
+      InvalidJobPayloadError,
     );
   });
 });

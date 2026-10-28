@@ -23,6 +23,11 @@ describe("board event kinds", () => {
     expect(isBoardEventWriteKind("checkout_mode_changed")).toBe(true);
   });
 
+  test("schedule arming is a project-level kind, distinct from column arming", () => {
+    expect(isBoardEventWriteKind("automation_schedule_armed")).toBe(true);
+    expect(isBoardEventKind("automation_schedule_armed")).toBe(true);
+  });
+
   test("migrated worktree_changed rows stay readable but are never written", () => {
     expect(BOARD_EVENT_MIGRATED_KINDS).toEqual(["worktree_changed"]);
     expect(isBoardEventKind("worktree_changed")).toBe(true);

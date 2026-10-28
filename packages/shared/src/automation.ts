@@ -717,6 +717,9 @@ export type AutomationMissedReason = { kind: "app-closed" } | { kind: "not-obser
 export type AutomationSkipReason =
   | AutomationMissedReason
   | { kind: "run-refused"; code: string; error: string }
+  | { kind: "runner-asleep"; runnerId: string }
+  | { kind: "runner-unavailable"; code: string }
+  | { kind: "superseded" }
   | { kind: "unknown" };
 
 /**
@@ -761,6 +764,19 @@ export function parseAutomationSkipReason(raw: unknown): AutomationSkipReason {
   const record = raw as Record<string, unknown>;
   if (record["kind"] === "app-closed") return { kind: "app-closed" };
   if (record["kind"] === "not-observed") return { kind: "not-observed" };
+  if (record["kind"] === "superseded") return { kind: "superseded" };
+  if (
+    record["kind"] === "runner-asleep" &&
+    typeof record["runnerId"] === "string" &&
+    record["runnerId"].length > 0
+  )
+    return { kind: "runner-asleep", runnerId: record["runnerId"] };
+  if (
+    record["kind"] === "runner-unavailable" &&
+    typeof record["code"] === "string" &&
+    record["code"].length > 0
+  )
+    return { kind: "runner-unavailable", code: record["code"] };
   if (record["kind"] !== "run-refused") return { kind: "unknown" };
   const code = record["code"];
   const error = record["error"];
