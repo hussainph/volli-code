@@ -64,6 +64,7 @@ import {
   type SessionPresentationProjection,
 } from "@volli/shared";
 import { z } from "zod";
+import { jsonWireSchema } from "./json-wire-schema";
 
 import {
   hostAnswer,
@@ -963,6 +964,14 @@ const hostWelcomeSchema = z.object({
   proof: z.object({ scheme: z.string(), value: z.string() }).nullable(),
 });
 
+// Zod 4.6's max counts Unicode code points. This host bootstrap's existing
+// limit is UTF-16 code units, so retain that boundary as a refinement too.
+const utf16BoundedString = (max: number) =>
+  z
+    .string()
+    .max(max)
+    .refine((value) => value.length <= max, "UTF-16 length exceeds limit");
+
 // A separate bootstrap preserves the frozen Workspace protocol.welcome output.
 // Scope and actor kind/scope are CLOSED output vocabularies: no tolerant reader
 // marker. Proof scheme is an OPEN reserved string, bounded in UTF-16 code units.
@@ -974,8 +983,8 @@ const hostScopeWelcomeSchema = z.object({
   features: z.array(z.string().max(128)).max(256).readonly(),
   proof: z
     .object({
-      scheme: z.string().max(HOST_SCOPE_PROOF_LIMITS.scheme),
-      value: z.string().max(HOST_SCOPE_PROOF_LIMITS.value),
+      scheme: utf16BoundedString(HOST_SCOPE_PROOF_LIMITS.scheme),
+      value: utf16BoundedString(HOST_SCOPE_PROOF_LIMITS.value),
     })
     .nullable(),
 });
@@ -1009,7 +1018,7 @@ const logRecordSchema = z
     component: z.string(),
     msg: z.string(),
   })
-  .catchall(z.json());
+  .catchall(jsonWireSchema);
 const logsBatchSchema = z.object({
   entries: z.array(z.object({ cursor: z.string(), record: logRecordSchema })),
   gap: z.boolean(),

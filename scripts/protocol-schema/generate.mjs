@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "vite-plus";
 
 import { protocolChanges, protocolReportLines, unapprovedChanges } from "./compatibility.mjs";
+import { canonicalizeProtocol } from "./canonical.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const schemaPath = "docs/protocol/protocol.schema.json";
@@ -15,17 +16,6 @@ const baseIndex = args.indexOf("--base");
 const base = baseIndex < 0 ? undefined : args[baseIndex + 1];
 if (baseIndex >= 0 && (!base || base.startsWith("-")))
   throw new Error("--base requires a git revision");
-
-/** Object keys are canonical; array order (including enums) is declaration order. */
-export function stable(value) {
-  if (Array.isArray(value)) return value.map(stable);
-  if (typeof value !== "object" || value === null) return value;
-  return Object.fromEntries(
-    Object.keys(value)
-      .toSorted()
-      .map((key) => [key, stable(value[key])]),
-  );
-}
 
 const server = await createServer({
   root,
@@ -38,7 +28,7 @@ try {
   const { generateProtocolSchema } = await server.ssrLoadModule(
     "/packages/session-rpc/src/protocol-schema.ts",
   );
-  const generated = stable(generateProtocolSchema());
+  const generated = canonicalizeProtocol(generateProtocolSchema());
   const content = `${JSON.stringify(generated, null, 2)}\n`;
   if (checking) {
     if ((await readFile(new URL(`../../${schemaPath}`, import.meta.url), "utf8")) !== content)

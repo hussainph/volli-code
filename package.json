@@ -30,7 +30,7 @@
     "check:notices": "node scripts/generate-third-party-notices.mjs --self-test && node scripts/generate-third-party-notices.mjs --check",
     "generate:notices": "node scripts/generate-third-party-notices.mjs",
     "generate:protocol-schema": "node scripts/protocol-schema/generate.mjs",
-    "check:protocol-schema": "node --test scripts/protocol-schema/compatibility.test.mjs && node scripts/protocol-schema/generate.mjs --check"
+    "check:protocol-schema": "node --test scripts/protocol-schema/*.test.mjs && node scripts/protocol-schema/generate.mjs --check"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "catalog:",
