@@ -2,7 +2,7 @@ name: CI extended
 
 # The lanes that left the PR gate (VC-934), kept rather than deleted: the rest
 # smoke tier (every non-core, non-quarantined journey) and flag-on cloud
-# acceptance. They are macOS-only and long, and gating every PR on them held
+# acceptance. The move engine's kill/resume matrix runs here too, on Linux. They are macOS-only and long, and gating every PR on them held
 # all five of the account's concurrent macOS slots per PR run, so PRs queued
 # behind each other. Here they run:
 #   - on every push to main — the merged tree, after the PR gate;
@@ -248,6 +248,32 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  # The move engine's kill/resume matrix (Move to Volli Cloud, move-plan §5.1):
+  # the engine stopped dead at every step boundary, mid-step and before and
+  # after each backend call lands, then resumed by a fresh engine, against
+  # the real person-authorized import under convex-test. Linux, no backend
+  # process: it holds no macOS slot.
+  move-matrix:
+    name: Move to Volli Cloud
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        with:
+          node-version-file: .nvmrc
+          cache: true
+          run-install: true
+
+      - name: Kill/resume matrix
+        run: vp run --filter @volli/convex test:matrix -- --maxWorkers=$(nproc)
+
   # One place to read the outcome, on the run page and in its summary. It
   # waits on every lane (`always()`, so a cancelled or failed lane is still
   # reported) and fails unless every lane succeeded — nothing here may skip.
@@ -255,7 +281,7 @@ jobs:
   summary:
     name: Extended result
     if: always()
-    needs: [smoke-rest, smoke-cloud, smoke-cloud-wake]
+    needs: [smoke-rest, smoke-cloud, smoke-cloud-wake, move-matrix]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -266,6 +292,7 @@ jobs:
           SMOKE_REST: ${{ needs.smoke-rest.result }}
           SMOKE_CLOUD: ${{ needs.smoke-cloud.result }}
           SMOKE_CLOUD_WAKE: ${{ needs.smoke-cloud-wake.result }}
+          MOVE_MATRIX: ${{ needs.move-matrix.result }}
         run: |
           set -euo pipefail
           status=0
@@ -287,4 +314,5 @@ jobs:
           report "Smoke (rest tier)" "$SMOKE_REST"
           report "Smoke (cloud acceptance)" "$SMOKE_CLOUD"
           report "Smoke (cloud wake acceptance)" "$SMOKE_CLOUD_WAKE"
+          report "Move to Volli Cloud" "$MOVE_MATRIX"
           exit "$status"

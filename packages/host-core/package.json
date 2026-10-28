@@ -21,6 +21,10 @@
       "types": "./src/entries/cloud-runner.ts",
       "import": "./src/entries/cloud-runner.ts"
     },
+    "./cloud-move": {
+      "types": "./src/entries/cloud-move.ts",
+      "import": "./src/entries/cloud-move.ts"
+    },
     "./board": {
       "types": "./src/entries/board.ts",
       "import": "./src/entries/board.ts"

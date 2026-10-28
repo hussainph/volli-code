@@ -23,6 +23,7 @@ export default defineConfig({
       ],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
     },
-    exclude: ["test/**/*.backend.test.ts"],
+    // The move engine's kill/resume matrix runs in ci-extended (`test:matrix`).
+    exclude: ["test/**/*.backend.test.ts", "test/**/*.matrix.test.ts"],
   },
 });

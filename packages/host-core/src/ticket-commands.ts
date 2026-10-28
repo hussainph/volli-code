@@ -17,6 +17,7 @@ import {
   type WorktreeIdentity,
 } from "@volli/shared";
 
+import { assertProjectWritable } from "./cloud-move/freeze";
 import { withTransaction } from "./db/transaction-gate";
 import { createComment } from "./db/comments-repo";
 import { recordTicketEvent } from "./db/events-repo";
@@ -58,6 +59,8 @@ function requireLiveTicket(db: Database.Database, ticketId: string, action: stri
   const row = getTicketRow(db, ticketId);
   if (!row) throw new Error("Unknown ticket");
   if (row.archived_at !== null) throw new Error(`Cannot ${action} an archived ticket`);
+  // A project moving to (or moved to) Volli Cloud is read-only here (VC-993).
+  assertProjectWritable(db, row.project_id);
   return row;
 }
 
@@ -65,6 +68,7 @@ function requireLiveTicket(db: Database.Database, ticketId: string, action: stri
 function requireTicket(db: Database.Database, ticketId: string): TicketRow {
   const row = getTicketRow(db, ticketId);
   if (!row) throw new Error("Unknown ticket");
+  assertProjectWritable(db, row.project_id);
   return row;
 }
 
@@ -115,6 +119,7 @@ export function createTicketCommand(
   if (typeof input.baseBranch === "string" && !isValidBranchName(input.baseBranch)) {
     throw new Error("Invalid base branch name");
   }
+  assertProjectWritable(db, input.projectId);
   return withTransaction(db, (): Ticket => {
     const ticket = createTicket({
       id: input.id,

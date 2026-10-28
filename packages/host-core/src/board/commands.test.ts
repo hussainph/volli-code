@@ -328,6 +328,42 @@ describe("reads", () => {
     expect(batches).toEqual([]);
   });
 
+  // VC-993: a project moving to Volli Cloud is read-only on this Mac: every
+  // board write refuses, its board still reads, and a write it took replays.
+  it("reads a frozen project's board but writes nothing in it", async () => {
+    const map = handlers();
+    seed("t-1");
+    const input = {
+      projectId: PROJECT,
+      commandId: "c-before",
+      status: "todo" as const,
+      title: "A",
+    };
+    const before = await map["board.createTicket"](input, USER);
+    ctx.db.exec(`
+      INSERT INTO cloud_move_queues VALUES ('q', 'u', 'w', 'r', 1, 0, 'pending', NULL, 'running', 1, 1);
+      INSERT INTO cloud_moves (move_id, queue_id, project_id, position, user_id, workspace_id,
+        runner_id, state, app_version, mapper_version, created_at, updated_at)
+      VALUES ('m', 'q', '${PROJECT}', 0, 'u', 'w', 'r', 'frozen', 'test', 3, 1, 1);
+    `);
+    const frozen = "This project is moving to Volli Cloud";
+    await expect(async () =>
+      map["board.createTicket"]({ ...input, commandId: "c-after" }, USER),
+    ).rejects.toThrow(frozen);
+    await expect(async () =>
+      map["board.updateTicket"]({ ticketId: "t-1", title: "Renamed" }, USER),
+    ).rejects.toThrow(frozen);
+    await expect(async () =>
+      map["board.updateProject"]({ projectId: PROJECT, baseBranch: "main" }, USER),
+    ).rejects.toThrow(frozen);
+    await expect(async () =>
+      map["board.moveTickets"]({ projectId: PROJECT, ticketId: "t-1", toStatus: "doing" }, USER),
+    ).rejects.toThrow(frozen);
+    await expectReplay(before, () => map["board.createTicket"](input, USER));
+    expect(map["board.snapshot"]({ projectId: PROJECT }, USER).tickets).toHaveLength(2);
+    expect(getTicket(ctx.db, "t-1")?.title).not.toBe("Renamed");
+  });
+
   it("refuses an unknown project or ticket rather than answering empty", async () => {
     const map = handlers();
     await expect(async () => map["board.snapshot"]({ projectId: "nope" }, USER)).rejects.toThrow(

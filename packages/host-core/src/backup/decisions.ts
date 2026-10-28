@@ -364,6 +364,18 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     reason: "Runner-local FK identity provenance, not a second copy of the cloud board.",
   },
   {
+    table: "cloud_move_queues",
+    decision: "exclude",
+    reason:
+      "This machine's Move to Volli Cloud runs against the backend. A backup taken before a move restores the profile as it was before it, unfrozen.",
+  },
+  {
+    table: "cloud_moves",
+    decision: "exclude",
+    reason:
+      "Each project move's journal and freeze marker, valid only for this machine's moves on the backend. A restore is the profile before the move, every project writable again.",
+  },
+  {
     table: "job_journal",
     decision: "exclude",
     reason:

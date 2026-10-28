@@ -55,6 +55,7 @@ import {
   type TicketSummary,
 } from "@volli/shared";
 
+import { assertProjectWritable } from "../cloud-move/freeze";
 import type { DetachedWorkPort } from "../detached-work";
 import { hostLogger } from "../log/root";
 import { deleteComment, getComment, listComments, updateComment } from "../db/comments-repo";
@@ -475,6 +476,8 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     if (spec.projectId !== null && isProjectRemoved(db, spec.projectId)) {
       throw new Error(PROJECT_REMOVED);
     }
+    // A project moving to (or moved to) Volli Cloud is read-only here (VC-993).
+    if (spec.projectId !== null) assertProjectWritable(db, spec.projectId);
     // A resource that is gone refuses inside `write`, with today's message.
     const projectId = spec.projectId ?? "";
     const transact = (): Value =>
@@ -1158,6 +1161,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     commandId: string | undefined,
     record?: () => void,
   ): Ticket[] | Promise<Ticket[]> {
+    assertProjectWritable(db, input.projectId);
     const before = new Map(
       listTicketRosterByProject(db, input.projectId).map((ticket) => [ticket.id, ticket]),
     );
