@@ -1,10 +1,6 @@
 import { ConvexError } from "convex/values";
 import { afterEach, expect, test, vi } from "vite-plus/test";
-import {
-  intakeError,
-  withIntakeDiagnostics,
-  type IntakeErrorCode,
-} from "../functions/lib/sessionIntakeDiagnostics";
+import { intakeError, withIntakeDiagnostics } from "../functions/lib/sessionIntakeDiagnostics";
 
 const SESSION = "c0000000-0000-4000-8000-000000000001";
 const PRIVATE = "private-message-and-credential";
@@ -12,7 +8,7 @@ const args = { sessionId: SESSION, generation: 1, events: [PRIVATE, "é"] };
 
 afterEach(() => vi.restoreAllMocks());
 
-const codes: IntakeErrorCode[] = [
+const codes: Parameters<typeof intakeError>[0][] = [
   "invalid_request",
   "event_too_large",
   "batch_too_large",
@@ -173,6 +169,29 @@ test("catch-up failures name the missing sequence, not an uncommitted head", asy
     totalBytes: 0,
     maxEventBytes: 0,
   });
+});
+
+test("an exception measuring request sizes is also caught without inventing byte counts", async () => {
+  const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(TextEncoder.prototype, "encode").mockImplementationOnce(() => {
+    throw new RangeError(PRIVATE);
+  });
+  const run = vi.fn(async () => 17);
+  await expect(withIntakeDiagnostics(args, "accept", run)).rejects.toMatchObject({
+    data: { code: "accept_failed", acceptedThrough: null },
+  });
+  expect(run).not.toHaveBeenCalled();
+  expect(log).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({
+    code: "accept_failed",
+    phase: "measure",
+    eventCount: 2,
+    totalBytes: null,
+    maxEventBytes: null,
+    errorKind: "range",
+    unexpected: true,
+  });
+  expect(log.mock.calls[0]![0]).not.toContain(PRIVATE);
 });
 
 test("a successful invocation logs no rejection", async () => {

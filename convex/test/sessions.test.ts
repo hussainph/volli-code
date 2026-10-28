@@ -10,6 +10,7 @@ import {
   type UserId,
 } from "@volli/shared/cloud";
 import { parseRendererSessionEvent, type SessionEvent } from "@volli/shared";
+import * as cloudState from "@volli/shared/cloud";
 
 import { api, internal } from "../functions/_generated/api";
 import { seedTestRunner, seedTestWorld } from "../functions/lib/testWorld";
@@ -670,6 +671,26 @@ describe("intake rejection diagnostics", () => {
     });
   });
 
+  test("a rejected non-UUID Session id has an unknown head, never a fabricated zero", async () => {
+    const { t, runner } = await world();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      asRunner(t, runner).mutation(api.sessions.accept, {
+        sessionId: "private-invalid-session",
+        generation: 1,
+        events: ["{}"],
+      }),
+    ).rejects.toThrow(code("invalid_request", { acceptedThrough: null }));
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({
+      code: "invalid_request",
+      sessionId: null,
+      acceptedThrough: null,
+      expectedSequence: null,
+    });
+    expect(log.mock.calls[0]![0]).not.toContain("private-invalid-session");
+  });
+
   test.each(["payload", "provenance"] as const)(
     "unreadable stored %s is typed corrupt_history, not a bare JSON exception",
     async (field) => {
@@ -698,7 +719,7 @@ describe("intake rejection diagnostics", () => {
     },
   );
 
-  test.each(["json", "checkpoint", "shape"] as const)(
+  test.each(["json", "checkpoint", "ahead", "shape"] as const)(
     "a corrupt %s fold fails typed and rolls back speculative events and cursor",
     async (corruption) => {
       const { t, runner, projectId } = await world();
@@ -711,13 +732,14 @@ describe("intake rejection diagnostics", () => {
           .unique();
         const state = JSON.parse(row!.state!);
         if (corruption === "checkpoint") state.fold.throughSequence = -1;
+        if (corruption === "ahead") state.fold.throughSequence = 999;
         if (corruption === "shape") state.fold = {};
         await ctx.db.patch(row!._id, {
           state: corruption === "json" ? "{private-content" : JSON.stringify(state),
         });
       });
       const log = vi.spyOn(console, "error").mockImplementation(() => {});
-      const reason = corruption === "json" ? "corrupt_state" : "fold_failed";
+      const reason = "corrupt_state";
       await expect(accept(t, runner, sessionId, [events[3]!])).rejects.toThrow(
         code(reason, { acceptedThrough: 3 }),
       );
@@ -739,6 +761,36 @@ describe("intake rejection diagnostics", () => {
       expect(rows.events).toHaveLength(3);
     },
   );
+
+  test("a fresh-fact fold exception is typed without changing its transient retry semantics", async () => {
+    const { t, runner, projectId } = await world();
+    const { sessionId, events } = await writeSession({ projectId });
+    await accept(t, runner, sessionId, events.slice(0, 3));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fold = vi.spyOn(cloudState, "foldCloudSessionState").mockImplementationOnce(() => {
+      throw new TypeError("private-exception-message");
+    });
+    await expect(accept(t, runner, sessionId, [events[3]!])).rejects.toThrow(
+      code("fold_failed", { acceptedThrough: 3 }),
+    );
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({
+      code: "fold_failed",
+      phase: "fold",
+      sequence: 4,
+      kind: "command.recorded",
+      acceptedThrough: 3,
+      errorKind: "type",
+    });
+    expect(log.mock.calls[0]![0]).not.toContain("private-exception-message");
+    expect((await t.run((ctx) => ctx.db.query("sessionIntake").first()))?.acceptedThrough).toBe(3);
+    expect(await t.run((ctx) => ctx.db.query("sessionEvents").collect())).toHaveLength(3);
+    fold.mockRestore();
+    await expect(accept(t, runner, sessionId, [events[3]!])).resolves.toMatchObject({
+      acceptedThrough: 4,
+    });
+    expect(log).toHaveBeenCalledTimes(1);
+  });
 
   test("an unexpected database exception at the head read stays transient and typed", async () => {
     const { t, runner, projectId } = await world();

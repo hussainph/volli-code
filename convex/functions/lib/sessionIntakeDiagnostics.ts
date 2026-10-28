@@ -1,22 +1,24 @@
-/** Content-free diagnostics at the intake transaction boundary, never in each helper. */
+/** Typed intake failures and one content-free log at the transaction boundary. */
 import { ConvexError, type Value } from "convex/values";
 import { SESSION_PROJECTION_EVENT_KINDS } from "@volli/shared";
 import { isUuid } from "@volli/shared/cloud";
 
-export type IntakeErrorCode =
-  | "invalid_request"
-  | "event_too_large"
-  | "batch_too_large"
-  | "unknown_session"
-  | "not_found"
-  | "fenced"
-  | "not_your_runner"
-  | "out_of_order"
-  | "conflict"
-  | "corrupt_history"
-  | "corrupt_state"
-  | "fold_failed"
-  | "accept_failed";
+const INTAKE_ERROR_CODES = [
+  "invalid_request",
+  "event_too_large",
+  "batch_too_large",
+  "unknown_session",
+  "not_found",
+  "fenced",
+  "not_your_runner",
+  "out_of_order",
+  "conflict",
+  "corrupt_history",
+  "corrupt_state",
+  "fold_failed",
+  "accept_failed",
+] as const;
+type IntakeErrorCode = (typeof INTAKE_ERROR_CODES)[number];
 
 // Keep original exceptions only in memory for sanitized diagnostics. They never
 // become ConvexError data or a serialized `cause` that could disclose content.
@@ -36,6 +38,7 @@ export function intakeError(
 /** Static phases, not event kinds, ids, messages, or other caller-supplied text. */
 export interface IntakeDiagnostics {
   phase:
+    | "measure"
     | "authenticate"
     | "head"
     | "validate"
@@ -64,21 +67,9 @@ export interface IntakeDiagnostics {
 
 // Only product-owned codes go into the log. An arbitrary thrown object's data
 // (including its code, message, name and stack) may contain private content.
-const LOG_CODES = new Set([
-  "invalid_request",
-  "event_too_large",
-  "batch_too_large",
-  "unknown_session",
-  "not_found",
-  "fenced",
-  "not_your_runner",
-  "out_of_order",
-  "conflict",
-  "corrupt_history",
-  "corrupt_state",
+const LOG_CODES = new Set<string>([
+  ...INTAKE_ERROR_CODES,
   "corrupt_board",
-  "fold_failed",
-  "accept_failed",
   "unauthenticated",
   "not_a_runner",
   "revoked",
@@ -143,9 +134,9 @@ export async function withIntakeDiagnostics<T>(
   operation: "accept" | "catch_up",
   run: (diagnostics: IntakeDiagnostics) => Promise<T>,
 ): Promise<T> {
-  const eventBytes = (args.events ?? []).map((text) => new TextEncoder().encode(text).length);
+  let measured = false;
   const diagnostics: IntakeDiagnostics = {
-    phase: operation === "accept" ? "authenticate" : "catch_up",
+    phase: "measure",
     acceptedThrough: null,
     expectedSequence: null,
     firstSequence: null,
@@ -154,9 +145,14 @@ export async function withIntakeDiagnostics<T>(
     kind: null,
     hasStateDoc: null,
     stateBytes: null,
-    eventBytes,
+    eventBytes: [],
   };
   try {
+    diagnostics.eventBytes = (args.events ?? []).map(
+      (text) => new TextEncoder().encode(text).length,
+    );
+    measured = true;
+    diagnostics.phase = operation === "accept" ? "authenticate" : "catch_up";
     return await run(diagnostics);
   } catch (error) {
     const data: Value = error instanceof ConvexError ? error.data : null;
@@ -196,9 +192,11 @@ export async function withIntakeDiagnostics<T>(
               : "other",
         hasStateDoc: diagnostics.hasStateDoc,
         stateBytes: diagnostics.stateBytes,
-        eventCount: eventBytes.length,
-        totalBytes: eventBytes.reduce((sum, size) => sum + size, 0),
-        maxEventBytes: eventBytes.reduce((max, size) => Math.max(max, size), 0),
+        eventCount: args.events?.length ?? 0,
+        totalBytes: measured ? diagnostics.eventBytes.reduce((sum, size) => sum + size, 0) : null,
+        maxEventBytes: measured
+          ? diagnostics.eventBytes.reduce((max, size) => Math.max(max, size), 0)
+          : null,
         unexpected: typed === null,
         errorKind:
           original instanceof SyntaxError

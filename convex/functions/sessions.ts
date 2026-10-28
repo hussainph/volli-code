@@ -103,7 +103,7 @@ function fail(code: string, message: string) {
  * Accepts the next facts of a Session from its claimed runner. `events` are
  * the facts' JSON text, ascending and contiguous; a resend of accepted facts
  * is answered as duplicates. Errors carry a typed `code` and the current
- * `acceptedThrough`.
+ * `acceptedThrough` (null when no head could be read, including auth failure).
  */
 export const accept = mutation({
   args: { sessionId: v.string(), generation: v.number(), events: v.array(v.string()) },

@@ -108,11 +108,8 @@ const DRAIN_STOP_CODES = [
   "corrupt_history",
   "corrupt_state",
   "corrupt_board",
-  "fold_failed",
   "invalid_job",
   "id_taken",
-  "wrong_runner",
-  "not_a_member",
 ] as const;
 
 /** A refusal from the backend, read off a ConvexError-shaped error, or `null` for a transient failure. */
@@ -401,7 +398,7 @@ export function createFactDrain(options: FactDrainOptions): FactDrain {
       stream.next = stream.cursor.acceptedThrough + 1;
       return;
     }
-    // `accept_failed` is the server's sanitized unexpected exception. Like a
+    // `accept_failed` and `fold_failed` sanitize unexpected exceptions. Like a
     // transient bare Server Error (and an unknown future code), it backs off
     // without acknowledging or discarding any local fact.
     return retryLater(stream, error);
