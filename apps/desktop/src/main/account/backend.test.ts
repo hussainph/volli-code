@@ -12,6 +12,7 @@ const VIEWER = {
   primaryEmail: "dana@example.com",
   status: "active",
   purgeAfter: null,
+  joinedWorkspaceId: null,
 };
 
 const servers: (() => void)[] = [];
@@ -121,6 +122,19 @@ describe("the account's backend calls", () => {
     reply = { status: 200, body: { status: "success", value: { userId: 1 } } };
     await expect(backend.ensureViewer("t")).rejects.toThrow("cannot read");
   });
+});
+
+it("reads a Workspace joined at sign-in, and none from an older or malformed reply", async () => {
+  let joined: unknown = "6b4c3a1e-2a9f-4c3e-9d1b-0f8e7d6c5b4b";
+  const { url } = await convex(() => ({
+    status: 200,
+    body: { status: "success", value: { ...VIEWER, joinedWorkspaceId: joined } },
+  }));
+  const backend = convexAccountBackend({ url });
+  expect((await backend.ensureViewer("t")).joinedWorkspaceId).toBe(joined);
+  for (joined of [undefined, "", 7]) {
+    expect((await backend.ensureViewer("t")).joinedWorkspaceId).toBeNull();
+  }
 });
 
 it("never grants cloud for a backend that omits agreement acceptance", async () => {

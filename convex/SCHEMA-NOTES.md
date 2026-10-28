@@ -538,7 +538,9 @@ Where `streamChunks` and `sessionViewers` depart from the data-model design:
 
 ## Invite-only preview
 
-`previewAccess` is deployment-admin managed, not Workspace-admin managed.
+`previewAccess` is deployment-admin managed, plus the grants Workspace
+invites carry on their sender's behalf (below); Workspace admins manage
+neither.
 Its natural key is `(kind, key)`: a normalized email, a Volli user UUID, or
 an invite code's SHA-256. Only a verified email matches an email grant. Codes
 are single-use and bind atomically to one account; retrying on that account
@@ -552,14 +554,19 @@ the intended deployment explicitly; these examples omit that selection):
 pnpm exec convex run previewAccess:set '{"kind":"email","value":"person@example.com","enabled":true}'
 pnpm exec convex run previewAccess:set '{"kind":"user","value":"<volli-user-uuid>","enabled":false}'
 pnpm exec convex run previewAccess:set '{"kind":"code","value":"<random-code-at-least-16-characters>","enabled":true,"expiresAt":1900000000000}'
+pnpm exec convex run previewAccess:setSponsorSeats '{"email":"person@example.com","seats":10}'
+pnpm exec convex run previewAccess:revokeSponsoredBy '{"userId":"<volli-user-uuid>"}'
 ```
 
 Run from `convex/`. Only deployment-admin credentials can invoke this
 internal function; ordinary authenticated clients and Workspace owners
 cannot. Supply codes through a trusted operator environment, not tickets or
 chat. Store and share the original code securely; only its hash is retained.
-Setting `enabled: false` revokes that grant; if a person holds several grants,
-revoke all of them to remove access. Re-enabling a code never resets its
+Setting `enabled: false` revokes that grant. Revoking a person's user-id
+grant withdraws them outright: it overrides every other grant they hold or
+used (an address, a code, an invite's), so `set {kind:"user", enabled:false}`
+is how to take one person out; re-enabling it restores them. An address or
+code grant revoked alone ends only that grant. Re-enabling a code never resets its
 account binding. Expiry is optional, in epoch milliseconds; an omitted expiry
 on an existing grant leaves it unchanged.
 
@@ -570,7 +577,68 @@ sign-in creates the personal Workspace once; optional
 `users.previewWorkspaceCreated` records that setup, while older accounts
 with memberships keep their existing Workspaces. Every Workspace create and
 both invite-accept paths recheck the allowlist, even on idempotent replays.
-Workspace invites alone do not grant preview access.
+
+### Sponsored preview access
+
+A Workspace invite also grants its invitee preview access, sponsored by its
+sender (`lib/sponsoredPreview.ts`). The grant is an ordinary `previewAccess`
+row with optional `sponsorUserId` and `inviteId` (absent on an operator's
+grant), so the per-call check makes no extra reads. An email invite's grant
+is keyed by that address and, like every email grant, matches only a
+verified email. A link invite's grant is keyed by its token's SHA-256 and is
+redeemed only by joining with that token: the operator-code path refuses it.
+
+- **Allowance.** A sender sponsors at most `users.previewSponsorSeats`
+  people (default 5; `0` turns sponsoring off; operators set it with
+  `setSponsorSeats`). A seat is taken while its grant is live (`by_sponsor`):
+  unused until the invite expires, or bound for good to the person who used
+  it. Revoked or expired grants free their seat. With no seat left, the
+  invite is still made and says `preview: "needs_access"`.
+- **No grant over an earlier decision.** None is written when the invitee
+  already has access (`already_granted`: an email grant, or a verified
+  account at that address with access by any grant). An existing row is
+  taken over only when it is a sponsored grant that lapsed unused: an
+  operator's grant, or any revoked one, stays as it is, so an invite never
+  revives an address an operator withdrew. Only operators revoke grants (an
+  invite's withdrawal deletes its unused grant), and a person any of whose
+  grants was revoked (by user id, verified address or redeemed code) is never
+  sponsored back in, by address or by code.
+- **Lifetime.** A grant expires with its invite. Revoking the invite deletes
+  its grant while it is unused; a reissue does the same and sponsors again
+  under the new sender. Joining binds it to that person (`redeemedByUserId`,
+  no expiry): accepting an email invite (their verified address's grant), or
+  joining with a link's code. Until then a signed-in invitee holds access
+  only while the invite is live: revoking it before they join takes the
+  access back. An invite whose sender later loses the right to send it can
+  no longer be joined, but its unused grant still admits the invitee to the
+  preview until it expires (at most the 7-day invite lifetime). A bound email
+  grant serves only that person. A link's grant that its joiner did not need
+  (they had access) is deleted on joining.
+- **Joining by code at sign-in.** `accounts.ensureViewer {inviteCode}` first
+  looks the code up as a Workspace invite token. A team code is refused
+  (`invite_invalid`, `invite_expired`, `invite_email_mismatch`, `suspended`)
+  before anything is granted; a link's grant is redeemed, the agreement
+  recorded (required: `preview_agreement_required` otherwise), first sign-in
+  setup run and the invite accepted in the same transaction. The reply's
+  `joinedWorkspaceId` names the Workspace (`null` otherwise). A link that
+  carries no grant refuses a person without access (`preview_waitlisted`),
+  and a Member already in never redeems a code meant for someone else.
+  Any refusal rolls the whole sign-in back. Email invites still match the
+  verified email, and otherwise wait for the person's explicit Join.
+- **Not cascaded.** Revoking a sponsor's own access, or removing the invitee
+  from the Workspace, leaves the invitee's access. Sponsored people get the
+  default allowance too, so sponsorship can chain. `revokeSponsoredBy`
+  revokes every grant someone joined with, deletes the ones nobody used yet
+  (their addresses stay free) and sets the sponsor's allowance to `0`; with
+  `cascade: true` it does the same down the whole chain. `set` with
+  `enabled: true` turns a sponsored grant into an operator grant (no seat, no
+  invite expiry).
+- **What clients see.** `invites.create` and `invites.list` return
+  `preview: sponsored | already_granted | needs_access`; clients show
+  nothing for a value they do not know. Any preview person can invite an
+  address into their own Workspace, so these answers tell them whether that
+  address can already use the preview (or was withdrawn, when they still have
+  seats). This is accepted for the invite-only preview.
 
 On stable desktop launches, stored flags and environment opt-ins cannot
 bypass preview access. A deliberate sign-in marker permits restoring the
@@ -614,10 +682,11 @@ submit agreement acceptance, so they must update before setting up, creating
 or accepting Workspaces. A stale submitted agreement version explicitly asks
 the person to update Volli; sign-out alone cannot update a compiled version.
 
-CI holds the backend preview gate and the desktop launch gate at 100%
-statements, branches, functions and lines. Backend transport tests also
-prove that clients cannot call the internal admin mutation and concurrent
-code redemption admits only one account.
+CI holds the backend preview gate (including `lib/sponsoredPreview.ts`)
+and the desktop launch gate at 100% statements, branches, functions and
+lines. Backend transport tests also prove that clients cannot call the
+internal admin mutation, and that concurrent redemption of one operator code
+or one team code admits only one account.
 
 ## Session listing presentation
 

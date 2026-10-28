@@ -17,6 +17,10 @@
  *   invite is never accepted by id.
  * - Sending the email is not here yet (no mail provider): the client shares
  *   the link.
+ * - An invite also carries its sender's sponsored preview access for the
+ *   invitee, within the sender's allowance (`lib/sponsoredPreview.ts`):
+ *   `create` and `list` say what it does (`preview`). Pasting a link's code
+ *   at sign-in (`accounts.ensureViewer`) joins with it in one step.
  *
  * Listing queries read the clock: an invite that expires while a list is
  * subscribed stays listed until the list next re-runs. Acceptance always
@@ -34,6 +38,7 @@ import {
   newId,
   type InviteAcceptance,
   type InviteFacts,
+  type InvitePreviewAccess,
   type InviteState,
   type MemberRole,
   type UserId,
@@ -41,6 +46,12 @@ import {
 } from "@volli/shared/cloud";
 
 import { requirePreviewAccess } from "./lib/previewAccess";
+import {
+  invitePreview,
+  releaseInviteGrant,
+  settleJoinedInvite,
+  sponsorInvite,
+} from "./lib/sponsoredPreview";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel.js";
 import { audit } from "./lib/audit";
@@ -76,6 +87,8 @@ export type CreatedInvite = {
   expiresAt: number;
   /** An earlier pending invite to the same address was reissued with a fresh token. */
   reissued: boolean;
+  /** What the invite does for the invitee's preview access. */
+  preview: InvitePreviewAccess;
 };
 
 export type PendingInvite = {
@@ -87,6 +100,8 @@ export type PendingInvite = {
   invitedByName: string;
   createdAt: number;
   expiresAt: number;
+  /** What the invite does for the invitee's preview access, now. */
+  preview: InvitePreviewAccess;
 };
 
 export type MyInvite = {
@@ -207,12 +222,13 @@ export const create = mutation({
             "Someone else has already invited this address. Ask them or an admin to change it.",
           );
         }
-        await ctx.db.patch(pending._id, {
+        const reissued = {
           tokenHash,
           expiresAt,
           role: args.role,
           invitedByUserId: viewer.userId,
-        });
+        };
+        await ctx.db.patch(pending._id, reissued);
         await audit(ctx, {
           workspaceId: workspace.id,
           actor,
@@ -222,12 +238,14 @@ export const create = mutation({
           at: now,
           detail: { email, role: args.role, expiresAt },
         });
-        return { inviteId: pending.id, token, expiresAt, reissued: true };
+        // Sponsored again, by whoever sent it now and until it expires now.
+        const preview = await sponsorInvite(ctx, viewer, { ...pending, ...reissued });
+        return { inviteId: pending.id, token, expiresAt, reissued: true, preview };
       }
     }
 
     const inviteId = newId("invite");
-    await ctx.db.insert("workspaceInvites", {
+    const inserted = await ctx.db.insert("workspaceInvites", {
       id: inviteId,
       workspaceId: workspace.id,
       email,
@@ -249,7 +267,8 @@ export const create = mutation({
       at: now,
       detail: { email, role: args.role, expiresAt, link: email === null },
     });
-    return { inviteId, token, expiresAt, reissued: false };
+    const preview = await sponsorInvite(ctx, viewer, (await ctx.db.get(inserted))!);
+    return { inviteId, token, expiresAt, reissued: false, preview };
   },
 });
 
@@ -301,6 +320,7 @@ export const revoke = mutation({
     }
     const now = Date.now();
     await ctx.db.patch(invite._id, { revokedAt: now });
+    await releaseInviteGrant(ctx, invite);
     await audit(ctx, {
       workspaceId: invite.workspaceId,
       actor: personActor(viewer),
@@ -332,8 +352,9 @@ export const list = query({
       ctx,
       invites.map((invite) => invite.invitedByUserId),
     );
-    return invites
-      .map((invite) => ({
+    const rows: PendingInvite[] = [];
+    for (const invite of invites) {
+      rows.push({
         inviteId: invite.id,
         email: invite.email,
         role: invite.role,
@@ -341,8 +362,10 @@ export const list = query({
         invitedByName: users.get(invite.invitedByUserId)?.displayName ?? "Unknown",
         createdAt: invite.createdAt,
         expiresAt: invite.expiresAt,
-      }))
-      .toSorted((a, b) => a.createdAt - b.createdAt);
+        preview: await invitePreview(ctx, invite),
+      });
+    }
+    return rows.toSorted((a, b) => a.createdAt - b.createdAt);
   },
 });
 
@@ -386,7 +409,8 @@ export const listMine = query({
   },
 });
 
-async function inviteByToken(
+/** The invite a link's token names, or `null`. Also how `accounts.ensureViewer` tells a team code. */
+export async function inviteByToken(
   ctx: { db: QueryCtx["db"] },
   token: string,
 ): Promise<Doc<"workspaceInvites"> | null> {
@@ -453,25 +477,9 @@ export const preview = query({
   },
 });
 
-/**
- * Joins the invite's Workspace, or says why not. Already an active Member: a
- * no-op that leaves the invite for whoever it was meant for. A suspended
- * Member is restored by unsuspend, not by an invite. A departed one comes
- * back with the invite's role. Joining also settles any other pending email
- * invites to the viewer's address there.
- */
-async function acceptInvite(
-  ctx: MutationCtx,
-  viewer: Viewer,
-  invite: Doc<"workspaceInvites">,
-): Promise<AcceptedInvite> {
-  const acceptance = await acceptanceOf(ctx, viewer, invite);
-  if (acceptance === null)
-    throw workspaceError("invite_invalid", "This invite is no longer valid.");
-  const { decision, workspace, member } = acceptance;
+/** Why an invite cannot be accepted, as the sentence the person sees. */
+function refuse(decision: Exclude<InviteAcceptance, "join" | "already_member">): never {
   switch (decision) {
-    case "already_member":
-      return { workspaceId: workspace.id, role: member!.role, alreadyMember: true };
     case "accepted":
     case "revoked":
     case "sender_cannot_invite":
@@ -488,9 +496,29 @@ async function acceptInvite(
         "suspended",
         "You are suspended in this workspace. Ask an admin to restore you.",
       );
-    case "join":
-      break;
   }
+}
+
+/**
+ * Joins the invite's Workspace, or says why not. Already an active Member: a
+ * no-op that leaves the invite for whoever it was meant for. A suspended
+ * Member is restored by unsuspend, not by an invite. A departed one comes
+ * back with the invite's role. Joining also settles any other pending email
+ * invites to the viewer's address there. Also how `accounts.ensureViewer`
+ * joins with a pasted code, once the viewer is enrolled.
+ */
+export async function acceptInvite(
+  ctx: MutationCtx,
+  viewer: Viewer,
+  invite: Doc<"workspaceInvites">,
+): Promise<AcceptedInvite> {
+  const acceptance = await acceptanceOf(ctx, viewer, invite);
+  if (acceptance === null) refuse("revoked");
+  const { decision, workspace, member } = acceptance;
+  if (decision === "already_member") {
+    return { workspaceId: workspace.id, role: member!.role, alreadyMember: true };
+  }
+  if (decision !== "join") refuse(decision);
   const now = Date.now();
   const actor = personActor(viewer);
   const email = verifiedEmail(viewer);
@@ -518,7 +546,26 @@ async function acceptInvite(
     via: "invite",
     inviteId: invite.id,
   });
+  await settleJoinedInvite(ctx, viewer, invite);
   return { workspaceId: workspace.id, role: invite.role, alreadyMember: false };
+}
+
+/**
+ * Refuses, before anything is granted, a code pasted at sign-in that the
+ * viewer could not join with now: the same sentence `accept` would say.
+ * Answers `join` when accepting will consume this invite, `already_member`
+ * when the viewer is in already (the invite is left for its invitee).
+ */
+export async function requireJoinable(
+  ctx: MutationCtx,
+  viewer: Viewer,
+  invite: Doc<"workspaceInvites">,
+): Promise<"join" | "already_member"> {
+  const acceptance = await acceptanceOf(ctx, viewer, invite);
+  if (acceptance === null) refuse("revoked");
+  const { decision } = acceptance;
+  if (decision !== "join" && decision !== "already_member") refuse(decision);
+  return decision;
 }
 
 /** Accepts an email invite addressed to the viewer's verified email, by id (from `listMine`). */

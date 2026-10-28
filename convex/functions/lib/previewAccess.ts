@@ -1,4 +1,8 @@
-/** Deployment-admin preview grants. Workspace invites never confer preview access. */
+/**
+ * Preview grants: a deployment admin's (`previewAccess:set`), or one a
+ * Workspace invite carries, sponsored by its sender (`./sponsoredPreview`).
+ * Both are rows of the same table, read here on every product call.
+ */
 import {
   PREVIEW_WAITLIST_MESSAGE,
   PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
@@ -24,7 +28,7 @@ export async function codeHash(code: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function liveGrant(grant: Doc<"previewAccess"> | null): grant is Doc<"previewAccess"> {
+export function liveGrant(grant: Doc<"previewAccess"> | null): grant is Doc<"previewAccess"> {
   return (
     grant !== null &&
     grant.revokedAt === null &&
@@ -39,9 +43,17 @@ export async function previewAccess(ctx: Reader, viewer: Viewer): Promise<Previe
       .query("previewAccess")
       .withIndex("by_kind_key", (q) => q.eq("kind", kind).eq("key", key))
       .unique();
-  const grants = [await byKey("user", viewer.userId)];
+  const own = await byKey("user", viewer.userId);
+  // An operator's revoked user-id grant withdraws the person: it overrides
+  // every other grant they hold or used (an address, a code, an invite's).
+  if (own !== null && own.revokedAt !== null) return "waitlisted";
+  const grants = [own];
   if (viewer.user.emailVerified && viewer.user.primaryEmail !== null) {
-    grants.push(await byKey("email", viewer.user.primaryEmail));
+    const email = await byKey("email", viewer.user.primaryEmail);
+    // A sponsored grant, once bound to the person who used it, serves only them.
+    if (email !== null && (email.redeemedByUserId ?? viewer.userId) === viewer.userId) {
+      grants.push(email);
+    }
   }
   grants.push(
     ...(await ctx.db
@@ -108,7 +120,8 @@ export async function redeemPreviewCode(
     .query("previewAccess")
     .withIndex("by_kind_key", (q) => q.eq("kind", "code").eq("key", key))
     .unique();
-  if (!liveGrant(grant) || grant.redeemedByUserId !== null) {
+  // A Workspace invite's code is redeemed only by joining (`./sponsoredPreview`).
+  if (!liveGrant(grant) || grant.redeemedByUserId !== null || grant.inviteId !== undefined) {
     throw previewError("This preview invite code is invalid or has already been used.");
   }
   await ctx.db.patch(grant._id, { redeemedByUserId: viewer.userId });

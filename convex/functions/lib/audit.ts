@@ -23,6 +23,7 @@ export type AuditKind =
   | "invite.reissued"
   | "invite.revoked"
   | "invite.accepted"
+  | "preview.sponsored"
   | "member.joined"
   | "member.rejoined"
   | "member.role_changed"

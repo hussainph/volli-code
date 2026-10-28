@@ -15,6 +15,7 @@ export default defineConfig({
       include: [
         "functions/lib/previewAccess.ts",
         "functions/previewAccess.ts",
+        "functions/lib/sponsoredPreview.ts",
         "functions/lib/deploymentChecks.ts",
         "functions/lib/runnerLinkRateLimit.ts",
         "functions/runnerLinkRateLimit.ts",

@@ -44,7 +44,7 @@ export function createDesktopAccount(input: {
   readonly openBrowser: (url: string) => void | Promise<void>;
   readonly log: AccountLogger;
   /** The next launch's product store marker (`../cloud-launch.ts`). */
-  readonly marker?: { write(userId: string): void; clear(): void };
+  readonly marker?: { write(userId: string, joinedWorkspaceId?: string): void; clear(): void };
 }): AccountService {
   if (input.config.problem !== null) {
     input.log.warn("account configuration ignored", { problem: input.config.problem });

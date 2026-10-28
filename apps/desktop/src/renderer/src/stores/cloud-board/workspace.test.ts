@@ -481,6 +481,17 @@ describe("the current Volli Cloud Workspace (VC-889)", () => {
     expect(vi.mocked(h.deps.board.seedProject).mock.calls).toEqual([["a"], ["b"]]);
   });
 
+  it("with nothing to restore, opens the Workspace joined most recently", () => {
+    const h = harness();
+    h.connect();
+    h.cloud.answer("workspaces:listMine", {}, [
+      { ...W1, joinedAt: 1 },
+      { ...W2, joinedAt: 3 },
+      { workspaceId: "w3", name: "Same time", joinedAt: 3 },
+    ]);
+    expect(useCloudWorkspaceStore.getState().workspace?.id).toBe("w2");
+  });
+
   it("restores the last cloud selection on the first answer, and keeps the current one after", () => {
     const h = harness({ workspaceId: "w2", projectId: "c" });
     h.connect();

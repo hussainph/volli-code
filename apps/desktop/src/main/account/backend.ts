@@ -17,6 +17,8 @@ export interface BackendViewer {
   readonly primaryEmail: string | null;
   readonly status: "active" | "deletion_pending";
   readonly purgeAfter: number | null;
+  /** The Workspace a team code joined in this `ensureViewer` call; `null` otherwise, or from an older backend. */
+  readonly joinedWorkspaceId: string | null;
 }
 
 export interface AccountBackend {
@@ -54,6 +56,7 @@ function viewerFrom(value: unknown): BackendViewer {
   }
   // Older or unknown backend replies never grant preview access.
   const previewAccess = record["previewAccess"] === "granted" ? "granted" : "waitlisted";
+  const joined = record["joinedWorkspaceId"];
   return {
     userId,
     displayName,
@@ -62,6 +65,7 @@ function viewerFrom(value: unknown): BackendViewer {
     purgeAfter,
     previewAccess,
     previewAgreementAccepted: record["previewAgreementAccepted"] === true,
+    joinedWorkspaceId: typeof joined === "string" && joined.length > 0 ? joined : null,
   };
 }
 

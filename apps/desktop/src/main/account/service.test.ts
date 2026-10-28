@@ -28,6 +28,7 @@ const VIEWER: BackendViewer = {
   primaryEmail: "dana@example.com",
   status: "active",
   purgeAfter: null,
+  joinedWorkspaceId: null,
 };
 
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -944,6 +945,41 @@ it("passes an invite code only to this sign-in's backend call and surfaces a ref
     failure: "This preview invite code is invalid.",
   });
   expect(service.previewUserId()).toBeNull();
+});
+
+it("records a Workspace a team code joined for the next launch, and keeps it across later checks", async () => {
+  const backend = backendStandIn();
+  backend.ensureViewer.mockResolvedValueOnce({ ...VIEWER, joinedWorkspaceId: "team" });
+  const marker = { write: vi.fn(), clear: vi.fn() };
+  const { service } = harness({ backend, marker });
+  await service.signIn("github", "team-code-1234567890", "current-version");
+  await service.settled();
+  expect(marker.write).toHaveBeenLastCalledWith(VIEWER.userId, "team");
+  // A later answer names no join: the marker store keeps the recorded one.
+  await service.cancelDeletion();
+  expect(marker.write).toHaveBeenLastCalledWith(VIEWER.userId);
+});
+
+it("surfaces a team code that cannot be joined with, and never resends it", async () => {
+  for (const code of ["invite_invalid", "invite_expired", "invite_email_mismatch", "suspended"]) {
+    const backend = backendStandIn();
+    backend.ensureViewer.mockRejectedValueOnce(new BackendRefusedError(`Refused: ${code}.`, code));
+    const marker = { write: vi.fn(), clear: vi.fn() };
+    const { service } = harness({ backend, marker });
+    await service.signIn("github", "team-code-1234567890", "current-version");
+    await service.settled();
+    expect(service.snapshot()).toMatchObject({
+      account: { backend: "refused" },
+      failure: `Refused: ${code}.`,
+    });
+    expect(service.previewUserId()).toBeNull();
+    expect(marker.write).not.toHaveBeenCalled();
+    service.subscribe(() => {});
+    await service.settled();
+    // A refused sign-in is not retried: the backend said why, and the person acts on it.
+    expect(backend.ensureViewer).toHaveBeenCalledOnce();
+    await service.signOut();
+  }
 });
 
 it("keeps deletion and restoration answers behind the same preview gate", async () => {

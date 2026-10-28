@@ -12,7 +12,9 @@
  * **The marker.** One non-secret `app_state` row, {@link CLOUD_LAUNCH_APP_STATE_KEY}
  * = `{userId}`: written when a sign-in completes (the backend answered for the
  * person), removed when the sign-in ends. It is the store decision and nothing
- * else: never a token. A flag-off boot never reads it.
+ * else: never a token. A flag-off boot never reads it. A sign-in that joined a
+ * Workspace with a team code adds `joinedWorkspaceId`, which the next cloud
+ * launch opens once and then drops from the marker.
  *
  * **The relaunch.** Nothing hot-swaps a live window: signing in or out
  * restarts the app, through the normal quit path, so every quit gate asks
@@ -24,22 +26,31 @@ import { LOCAL_LAUNCH, type CloudLaunch } from "@volli/shared";
 /** The `app_state` key the marker lives under (registered in `@volli/shared`'s app-state keys). */
 export const CLOUD_LAUNCH_APP_STATE_KEY = "volli:cloud-launch";
 
-/** What the marker says: who signed in. */
+/** What the marker says: who signed in, and the Workspace they just joined, if any. */
 export interface LaunchMarker {
   readonly userId: string;
+  readonly joinedWorkspaceId?: string;
 }
 
 /** The marker's stored form. */
-export function encodeLaunchMarker(userId: string): string {
-  return JSON.stringify({ userId });
+export function encodeLaunchMarker(userId: string, joinedWorkspaceId?: string): string {
+  return JSON.stringify(
+    joinedWorkspaceId === undefined ? { userId } : { userId, joinedWorkspaceId },
+  );
 }
 
 /** The marker in a stored value; anything that is not one reads as no marker (a local launch). */
 export function decodeLaunchMarker(raw: string | undefined): LaunchMarker | null {
   if (raw === undefined) return null;
   try {
-    const userId = (JSON.parse(raw) as { userId?: unknown } | null)?.userId;
-    return typeof userId === "string" && userId.length > 0 ? { userId } : null;
+    const value = JSON.parse(raw) as { userId?: unknown; joinedWorkspaceId?: unknown } | null;
+    const userId = value?.userId;
+    if (typeof userId !== "string" || userId.length === 0) return null;
+    const joined = value?.joinedWorkspaceId;
+    // An unreadable joined Workspace is dropped, never the sign-in.
+    return typeof joined === "string" && joined.length > 0
+      ? { userId, joinedWorkspaceId: joined }
+      : { userId };
   } catch {
     return null;
   }
@@ -80,6 +91,9 @@ export function chooseProductStore(input: {
     userId: marker.userId,
     backendUrl: input.backendUrl,
     siteUrl: input.siteUrl ?? null,
+    ...(marker.joinedWorkspaceId === undefined
+      ? {}
+      : { joinedWorkspaceId: marker.joinedWorkspaceId }),
   };
 }
 
@@ -92,8 +106,13 @@ export interface LaunchMarkerRow {
 
 export interface LaunchMarkerStore {
   read(): LaunchMarker | null;
-  /** A sign-in completed for `userId`: the next launch is a cloud one. */
-  write(userId: string): void;
+  /**
+   * A sign-in completed for `userId`: the next launch is a cloud one.
+   * `joinedWorkspaceId`: a string records the Workspace a team code joined;
+   * `null` drops it (the launch opened it); absent keeps the one recorded for
+   * the same person, so a later account check never loses it first.
+   */
+  write(userId: string, joinedWorkspaceId?: string | null): void;
   /** The sign-in ended: the next launch is a local one. */
   clear(): void;
 }
@@ -119,11 +138,18 @@ export function launchMarkerStore(
   };
   return {
     read: () => attempt("read", (live) => decodeLaunchMarker(live.read()), null),
-    write(userId) {
+    write(userId, joinedWorkspaceId) {
       attempt(
         "write",
         (live) => {
-          const value = encodeLaunchMarker(userId);
+          const before = decodeLaunchMarker(live.read());
+          const joined =
+            joinedWorkspaceId === undefined
+              ? before?.userId === userId
+                ? before.joinedWorkspaceId
+                : undefined
+              : (joinedWorkspaceId ?? undefined);
+          const value = encodeLaunchMarker(userId, joined);
           if (live.read() !== value) live.write(value);
         },
         undefined,

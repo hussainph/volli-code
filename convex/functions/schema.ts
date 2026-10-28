@@ -90,15 +90,21 @@ export default defineSchema({
     expiresAt: nullable(time),
     revokedAt: nullable(time),
     createdAt: time,
+    // Set only on a grant a Workspace invite carries (absent: an operator's grant).
+    sponsorUserId: v.optional(uuid),
+    inviteId: v.optional(uuid),
   })
     .index("by_kind_key", ["kind", "key"])
-    .index("by_redeemed_user", ["redeemedByUserId"]),
+    .index("by_redeemed_user", ["redeemedByUserId"])
+    .index("by_sponsor", ["sponsorUserId"]),
   users: defineTable({
     id: uuid,
     // Nullable because a purge nulls PII and keeps the row as a tombstone.
     previewWorkspaceCreated: v.optional(v.boolean()),
     previewAgreementVersion: v.optional(v.string()),
     previewAgreementAcceptedAt: v.optional(time),
+    // How many people this person may sponsor into the preview; absent: the default.
+    previewSponsorSeats: v.optional(v.number()),
     primaryEmail: nullable(v.string()),
     emailVerified: v.boolean(),
     displayName: v.string(),

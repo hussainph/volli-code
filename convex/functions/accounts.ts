@@ -31,8 +31,11 @@ import {
   redeemPreviewCode,
   hasPreviewAgreement,
   recordPreviewAgreement,
+  requirePreviewAccess,
 } from "./lib/previewAccess";
 import { onFirstSignIn } from "./lib/firstSignIn";
+import { redeemInviteGrant } from "./lib/sponsoredPreview";
+import { acceptInvite, inviteByToken, requireJoinable } from "./invites";
 import { literals } from "./lib/validators";
 
 /** How long a deletion waits before the purge, during which the person may restore the account. */
@@ -95,25 +98,40 @@ async function summary(
  * sign-in runs Workspace setup in the same transaction; waitlisted accounts
  * retain only their account until invited. Idempotent. An account whose deletion is pending is returned
  * as it is, so the client can offer to restore it.
+ *
+ * `inviteCode` is an operator's preview code, or a Workspace invite's code
+ * (a team code). Pasting a team code is the explicit act of joining: its
+ * sponsored grant is redeemed, the agreement recorded, first sign-in setup
+ * run and the invite accepted, all in this transaction, and the reply names
+ * the Workspace (`joinedWorkspaceId`). A team code that cannot be joined with
+ * (invalid, expired, someone else's address, no access to give) refuses the
+ * whole sign-in and grants nothing.
  */
 export const ensureViewer = mutation({
   args: { inviteCode: v.optional(v.string()), acceptedAgreementVersion: v.optional(v.string()) },
   handler: async (
     ctx,
     { inviteCode, acceptedAgreementVersion },
-  ): Promise<ViewerSummary & { created: boolean }> => {
+  ): Promise<ViewerSummary & { created: boolean; joinedWorkspaceId: string | null }> => {
     const { created, ...found } = await ensureViewerRow(ctx);
     let viewer = found;
-    if (inviteCode !== undefined && (await previewAccess(ctx, viewer)) !== "granted") {
+    const invite = inviteCode === undefined ? null : await inviteByToken(ctx, inviteCode);
+    if (invite !== null) {
+      // Refused before anything is granted; the acceptance below rechecks it.
+      // Only a join that consumes the invite may redeem its grant: a Member
+      // already in leaves both for the person the code was meant for.
+      if ((await requireJoinable(ctx, viewer, invite)) === "join") {
+        await redeemInviteGrant(ctx, viewer, invite);
+      }
+    } else if (inviteCode !== undefined && (await previewAccess(ctx, viewer)) !== "granted") {
       await redeemPreviewCode(ctx, viewer, inviteCode);
     }
     viewer = await recordPreviewAgreement(ctx, viewer, acceptedAgreementVersion);
     const result = await summary(ctx, viewer);
-    if (
-      result.previewAccess === "granted" &&
-      result.previewAgreementAccepted &&
-      !viewer.user.previewWorkspaceCreated
-    ) {
+    const enrolled = result.previewAccess === "granted" && result.previewAgreementAccepted;
+    // Joining waits for the agreement: a team code never grants without it.
+    if (invite !== null) await requirePreviewAccess(ctx, viewer);
+    if (enrolled && !viewer.user.previewWorkspaceCreated) {
       // Older accounts already own a Workspace. A waitlisted account has none yet.
       const memberships = await ctx.db
         .query("workspaceMembers")
@@ -122,7 +140,9 @@ export const ensureViewer = mutation({
       if (memberships === null) await onFirstSignIn(ctx, viewer);
       await ctx.db.patch(viewer.user._id, { previewWorkspaceCreated: true });
     }
-    return { ...result, created };
+    const joinedWorkspaceId =
+      invite === null ? null : (await acceptInvite(ctx, viewer, invite)).workspaceId;
+    return { ...result, created, joinedWorkspaceId };
   },
 });
 
