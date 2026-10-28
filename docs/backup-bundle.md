@@ -132,7 +132,11 @@ A restored profile reuses none of those strings; it also does not hide them.
 
 ## Restore
 
-`restoreBackupBundle` never merges and never overwrites.
+A restore never merges and never overwrites. There are two entry points with
+one sequence: `restoreBackupBundleFile` takes a bundle **file** of any size with
+bounded memory (VC-988); `restoreBackupBundle` takes the bundle's bytes and
+remains for small callers (fixtures, tests). Both stage, check and activate
+exactly as below and return the same report or the same problems.
 
 1. Read the archive, then the manifest; check bundle-format compatibility.
 2. Verify every entry's path, size and SHA-256.
@@ -153,6 +157,33 @@ A restored profile reuses none of those strings; it also does not hide them.
 
 Any failure before step 7 removes the staging directory and leaves the original
 profile byte-for-byte unchanged, with a list of named problems to show.
+
+**The file restore** reads the archive twice and holds neither read in memory.
+The first read is the bounded v1 verifier the automatic backup uses (steps 1–3,
+with its inventory, link index and coverage on disk); it also records the
+project ids for step 4, so a missing directory is refused before anything is
+staged. The second read stages the rows and artifacts (step 5) as they stream:
+rows committed every few thousand into the staged database, blobs streamed to
+disk, one transcript at a time through the transcript store. Every entry of the
+second read is hashed and must match the size and SHA-256 the first read
+recorded, and every table's row count must match too, so a file that changes
+between the two reads is refused (`The backup file changed after it was
+verified`) rather than half-restored. Its scratch files live inside the staging
+directory. Two limits are its own: a refusal list is cut at 100 mapping problems,
+and a data document that lists `ticket_event_sequence` or
+`session_event_sequence` before its event table is refused by name (both Volli
+writers list the event table first; the in-memory restore loads in its own
+order). A `checkpoint` callback is awaited at bounded intervals in both reads;
+rejecting it cancels the restore before activation.
+
+At large-profile scale the round trip is rehearsed by
+`packages/host-core/scripts/rehearse-backup-restore.mjs`, which CI extended runs
+on every main push and nightly: a synthetic profile of 2,150,000 Session events
+whose `data.json` is past 1.6 GB (and past V8's maximum string length) is backed
+up by the production worker, restored with `restoreBackupBundleFile` in its own
+process, and compared with its source table by table (row counts and digests of
+every carried row), artifact by artifact, with the rebuilt usage index checked
+against its events. It fails if the restore's peak RSS grows more than 512 MiB.
 
 Activation is the fenced swap of `db/database-file.ts` (VC-628), the one module
 that may put a file at the database path. It holds the open lock, writes the
@@ -192,13 +223,14 @@ profile. A bundle whose schema is newer than the build is refused; the answer is
 to update Volli.
 
 Format compatibility: **a bundle restores into the app version that wrote it or any later
-one; never into an earlier one**, subject to the reader's resource limits. The
-current in-memory restore can exceed V8's string/memory limits on large profiles.
-A file-based staged restore and large-profile round-trip rehearsal are tracked in
-VC-988 and are required before stable large-profile backup/restore readiness.
-A successful file verification is not a claim that this old restore path has
-been rehearsed at that size. `restore.test.ts` exercises the newest schema
-and the two below it end to end, including the two rebuilt usage views.
+one; never into an earlier one**. A profile-sized bundle restores through
+`restoreBackupBundleFile`; the in-memory `restoreBackupBundle` holds the whole
+data document as one string and cannot restore a profile whose `data.json`
+exceeds V8's maximum string length (about 512 MiB). `restore.test.ts` exercises the newest schema
+and the two below it end to end, including the two rebuilt usage views, and
+`restore-file.test.ts` holds the file restore to the in-memory one on the same
+bundles (identical restored databases and artifacts, identical refusals),
+including the two older schemas.
 
 ## Host API boundary
 
