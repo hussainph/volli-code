@@ -5,10 +5,14 @@ import * as React from "react";
 import type { RendererSessionInteraction, SecretRequestMetadata, SecretScope } from "@volli/shared";
 import { COMPOSER_STACK_SHELL } from "@volli/session-presentation";
 import { cn } from "@renderer/lib/utils";
+import { useOpenSessionPlace } from "@renderer/lib/cloud-places";
+import { launchStore } from "@renderer/stores/launch";
 
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { toastError } from "@renderer/lib/toast";
+
+type SecretEntry = { kind: "local" } | { kind: "unavailable"; message: string };
 
 export function SecretCards({
   sessionId,
@@ -18,6 +22,20 @@ export function SecretCards({
   interactions: readonly RendererSessionInteraction[];
 }) {
   const [settled, setSettled] = React.useState<ReadonlySet<string>>(() => new Set());
+  const cloud = launchStore() === "cloud";
+  const place = useOpenSessionPlace(sessionId);
+  // Launch storage does not identify the runner. Unknown placement fails closed.
+  // Main independently requires a live request in this Mac's SecretService.
+  const entry: SecretEntry =
+    !cloud || place?.kind === "here"
+      ? { kind: "local" }
+      : {
+          kind: "unavailable",
+          message:
+            place?.kind === "removed"
+              ? place.label
+              : `Enter this on ${place?.runnerName ?? "the Session's runner"}.`,
+        };
 
   // Waiting comes from the durable Session projection, not the Settings list.
   // Show one secure field at a time, keeping parallel calls queued in fact order.
@@ -30,8 +48,11 @@ export function SecretCards({
   if (head?.credential === undefined) return null;
   return (
     <SecretCard
-      key={head.id}
+      // Remount on entry eligibility changes: discard the password DOM
+      // node (and its typed value) rather than retain it for another runner.
+      key={`${head.id}:${entry.kind}`}
       request={head.credential}
+      entry={entry}
       onSettled={() => setSettled((previous) => new Set([...previous, head.id]))}
     />
   );
@@ -39,9 +60,11 @@ export function SecretCards({
 
 function SecretCard({
   request,
+  entry,
   onSettled,
 }: {
   request: SecretRequestMetadata;
+  entry: SecretEntry;
   onSettled: () => void;
 }) {
   const input = React.useRef<HTMLInputElement>(null);
@@ -53,7 +76,7 @@ function SecretCard({
   const scopeId = React.useId();
 
   async function act(kind: "submit" | "decline"): Promise<void> {
-    if (latch.current) return;
+    if (entry.kind !== "local" || latch.current) return;
     // Clear before IPC or any render. Never copy this into React/store state.
     const value = kind === "submit" ? (input.current?.value ?? "") : "";
     if (input.current !== null) input.current.value = "";
@@ -122,51 +145,57 @@ function SecretCard({
           </p>
         </div>
       )}
-      <form
-        className="flex flex-col gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void act("submit");
-        }}
-      >
-        <label htmlFor={fieldId}>{request.name}</label>
-        <Input
-          ref={input}
-          id={fieldId}
-          type="password"
-          autoComplete="off"
-          spellCheck={false}
-          disabled={busy}
-        />
-        <div className="flex flex-wrap items-center gap-2">
-          <label htmlFor={scopeId}>Scope</label>
-          <select
-            id={scopeId}
-            value={scope}
+      {entry.kind === "unavailable" ? (
+        <p role="status">
+          {request.name}: {entry.message}
+        </p>
+      ) : (
+        <form
+          className="flex flex-col gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void act("submit");
+          }}
+        >
+          <label htmlFor={fieldId}>{request.name}</label>
+          <Input
+            ref={input}
+            id={fieldId}
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
             disabled={busy}
-            className="h-7 rounded-control border border-border bg-background px-2 text-ui outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            onChange={(event) => {
-              const next = event.target.value;
-              if (next === "session" || next === "project" || next === "always") setScope(next);
-            }}
-          >
-            <option value="session">Session</option>
-            <option value="project">Project</option>
-            <option value="always">Always</option>
-          </select>
-          <Button type="submit" disabled={busy}>
-            Submit credential
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={busy}
-            onClick={() => void act("decline")}
-          >
-            Decline
-          </Button>
-        </div>
-      </form>
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <label htmlFor={scopeId}>Scope</label>
+            <select
+              id={scopeId}
+              value={scope}
+              disabled={busy}
+              className="h-7 rounded-control border border-border bg-background px-2 text-ui outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onChange={(event) => {
+                const next = event.target.value;
+                if (next === "session" || next === "project" || next === "always") setScope(next);
+              }}
+            >
+              <option value="session">Session</option>
+              <option value="project">Project</option>
+              <option value="always">Always</option>
+            </select>
+            <Button type="submit" disabled={busy}>
+              Submit credential
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => void act("decline")}
+            >
+              Decline
+            </Button>
+          </div>
+        </form>
+      )}
       <p className="text-label text-muted-foreground">
         Exact-output redaction is best effort; encoded output can leak.
       </p>

@@ -1994,11 +1994,10 @@ function ChatPlaneContent({
                 stands ABOVE the box, which stays, so a message can be queued
                 for a runner that is away. A secret is entered on the machine
                 that asked for it, never here for another runner. */}
-              {cloudLaunch ? (
+              {cloudLaunch && (
                 <CloudComposerStatus sessionId={sessionId} turnActive={projection?.turnActive} />
-              ) : (
-                <SecretCards sessionId={sessionId} interactions={interactions} />
               )}
+              <SecretCards sessionId={sessionId} interactions={interactions} />
               <ComposerInteractionStack
                 interaction={pending}
                 resolving={pending ? resolving.has(pending.id) : false}

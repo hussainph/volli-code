@@ -74,6 +74,48 @@ describe("dedicated credential IPC", () => {
     expect(result).toMatchObject({ ok: false });
     expect(JSON.stringify(result)).not.toContain(value);
   });
+  it("refuses another runner's request id without settling or injecting into local pending requests", async () => {
+    const { service, invoke, port } = setup();
+    const signal = new AbortController().signal;
+    const waiting = port.request({ name: "API_TOKEN", toolCallId: "local" }, signal);
+    const otherPort = service.port({
+      sessionId: "second-local-session",
+      projectId: "p",
+      sessionLabel: "Second local Session",
+      projectLabel: "Project p",
+    });
+    const nextWaiting = otherPort.request({ name: "SECOND_TOKEN", toolCallId: "next" }, signal);
+    const before = await service.list();
+    if (!before.ok) throw new Error("missing metadata");
+    expect(before.requests).toHaveLength(2);
+    expect(
+      await invoke("volli:secret-submit", {
+        requestId: "request-from-another-mac",
+        value,
+        scope: "session",
+      }),
+    ).toMatchObject({ ok: false });
+    expect(await invoke("volli:secret-decline", "request-from-another-mac")).toMatchObject({
+      ok: false,
+    });
+    expect(await service.list()).toMatchObject({ requests: before.requests });
+    expect(service.environment("s")).toEqual({});
+    const local = before.requests.find((request) => request.sessionId === "s")!;
+    expect(
+      await invoke("volli:secret-submit", { requestId: local.id, value, scope: "session" }),
+    ).toEqual({ ok: true });
+    expect(await waiting).toBe("signed in");
+    expect(service.environment("s")).toEqual({ API_TOKEN: value });
+    expect(service.environment("second-local-session")).toEqual({});
+    const remaining = await service.list();
+    if (!remaining.ok) throw new Error("missing metadata");
+    expect(remaining.requests).toHaveLength(1);
+    expect(JSON.stringify(remaining)).not.toContain(value);
+    await invoke("volli:secret-decline", remaining.requests[0]!.id);
+    expect(await nextWaiting).toBe("declined");
+    await port.dispose();
+    await otherPort.dispose();
+  });
   it.each([
     null,
     [],
