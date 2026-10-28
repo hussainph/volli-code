@@ -19,6 +19,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createFixtureProfile, type FixtureProfile } from "../backup/test-fixture";
+import { withProfileMaintenance, profileMaintenanceActive } from "../backup/profile-maintenance";
 import { MigrationExportError } from "./errors";
 import {
   discardPartialMigrationExport,
@@ -36,6 +37,14 @@ import { streamRecords as records, streamTexts as contentOf } from "./test-suppo
 // Each test exports a whole profile through real files; a cold shared CI box is slow.
 vi.setConfig({ testTimeout: 30_000 });
 
+const threadContext = vi.hoisted(() => ({ isMainThread: true }));
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  get isMainThread() {
+    return threadContext.isMainThread;
+  },
+}));
+
 let profile: FixtureProfile;
 let work: string;
 
@@ -45,6 +54,7 @@ beforeEach(() => {
   work = mkdtempSync(join(tmpdir(), "volli-migration-export-"));
 });
 afterEach(() => {
+  threadContext.isMainThread = true;
   profile.cleanup();
   rmSync(work, { recursive: true, force: true });
 });
@@ -86,6 +96,20 @@ function rewriteChunk(dir: string, file: string, text: string) {
 }
 
 describe("a full export", () => {
+  it("uses the parent-owned pause lease in worker context without creating a stranded inner lease", async () => {
+    threadContext.isMainThread = false;
+    await withProfileMaintenance(profile.root, async () => {
+      await exportMigrationSnapshot(
+        options({
+          onProgress: () => {
+            expect(readdirSync(join(profile.root, "backups", ".maintenance"))).toHaveLength(1);
+          },
+        }),
+      );
+    });
+    expect(await profileMaintenanceActive(profile.root)).toBe(false);
+    await verifyMigrationExport(options().outDir);
+  });
   it("publishes a verified directory with a manifest naming every chunk", async () => {
     const progress: MigrationExportProgress[] = [];
     const result = await exportMigrationSnapshot(

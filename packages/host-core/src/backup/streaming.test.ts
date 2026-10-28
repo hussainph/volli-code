@@ -132,8 +132,9 @@ describe("writeBackupBundleFile", () => {
 
     const written = await writeBackupBundleFile(writeOptions(context));
 
-    expect(written.sizeBytes).toBe(statSync(context.outputPath).size);
-    const read = readBackupBundle(readFileSync(context.outputPath));
+    const bytes = readFileSync(context.outputPath);
+    expect(written.sizeBytes).toBe(bytes.length);
+    const read = readBackupBundle(bytes);
     expect(read.ok).toBe(true);
     const verified = await verifyBackupBundleFile(context.outputPath, context.workDir);
     expect(verified.ok).toBe(true);
