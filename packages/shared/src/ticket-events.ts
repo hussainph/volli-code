@@ -353,6 +353,8 @@ export interface TicketEvent {
   id: string;
   ticketId: string;
   actor: TicketEventActorKind;
+  /** Cloud person attribution; absent on local/legacy events. */
+  actorUserId?: string;
   /** Present for session/automation actors; omitted by legacy callers constructing fixtures. */
   actorContext?: TicketEventActorContext | null;
   /** Epoch milliseconds. */

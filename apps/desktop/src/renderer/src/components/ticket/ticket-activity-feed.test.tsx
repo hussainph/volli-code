@@ -18,6 +18,7 @@ import { USER_ACTOR, type Ticket } from "@volli/shared";
 import { TicketActivityFeed } from "./ticket-activity-feed";
 import { useBoardStore } from "@renderer/stores/board";
 import { useTicketActivityStore } from "@renderer/stores/ticket-activity";
+import { useCloudTeamStore } from "@renderer/lib/cloud-team";
 
 import { useAgeNow } from "@renderer/lib/use-age-now";
 
@@ -111,8 +112,71 @@ beforeEach(() => {
 
 afterEach(async () => {
   if (root !== null) await unmount();
+  useCloudTeamStore.setState({ viewerUserId: null, people: [] });
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+it("attributes current and departed people, keeps You personal, and hides edits on others' comments", async () => {
+  useCloudTeamStore.setState({
+    viewerUserId: "me",
+    people: [
+      { userId: "me", displayName: "Ana", status: "active" },
+      { userId: "other", displayName: "Ben Jones", status: "left" },
+    ],
+  });
+  useTicketActivityStore.getState().apply("t1", {
+    events: [
+      {
+        id: "e1",
+        ticketId: "t1",
+        actor: "user",
+        actorUserId: "other",
+        createdAt: 1,
+        payload: { kind: "created", status: "todo", title: "A ticket" },
+      },
+      {
+        id: "e2",
+        ticketId: "t1",
+        actor: "user",
+        actorUserId: "me",
+        createdAt: 2,
+        payload: { kind: "body_edited" },
+      },
+    ],
+    comments: [
+      {
+        id: "c1",
+        ticketId: "t1",
+        actor: USER_ACTOR,
+        authorUserId: "other",
+        sessionId: null,
+        body: "Team comment",
+        createdAt: 3,
+        updatedAt: 3,
+      },
+      {
+        id: "c2",
+        ticketId: "t1",
+        actor: USER_ACTOR,
+        authorUserId: "me",
+        sessionId: null,
+        body: "My comment",
+        createdAt: 4,
+        updatedAt: 4,
+      },
+    ],
+    version: 1,
+  });
+  await mount();
+  expect(container?.textContent).toContain("Ben Jones created the ticket");
+  expect(container?.textContent).toContain("You edited the description");
+  const otherComment = [...container!.querySelectorAll("li")].find((row) =>
+    row.textContent?.includes("Team comment"),
+  )!;
+  expect(otherComment.textContent).toContain("Ben Jones");
+  expect(otherComment.querySelector('[aria-label="Edit comment"]')).toBeNull();
+  expect(container?.querySelectorAll('[aria-label="Edit comment"]')).toHaveLength(1);
 });
 
 describe("the feed's age clock", () => {

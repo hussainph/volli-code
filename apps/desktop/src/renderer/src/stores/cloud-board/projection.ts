@@ -158,6 +158,7 @@ export function projectRows(rows: readonly CloudProjectRow[]): Project[] {
 /** A stored actor, as far as the board reads one: its kind, and an agent's Session. */
 export interface CloudActorRow {
   readonly kind: string;
+  readonly userId?: string;
   readonly sessionId?: string | null;
   readonly ticketId?: string | null;
 }
@@ -221,6 +222,7 @@ export function projectEvents(rows: readonly CloudEventRow[]): TicketEvent[] {
       id: row.id,
       ticketId: row.ticketId,
       actor,
+      ...(row.actor.userId === undefined ? {} : { actorUserId: row.actor.userId }),
       actorContext:
         actor !== "user" && typeof sessionId === "string"
           ? { sessionId, ticketId: row.actor.ticketId ?? row.ticketId }
@@ -239,6 +241,7 @@ export function projectComments(rows: readonly CloudCommentRow[]): TicketComment
     ticketId: row.ticketId,
     sessionId: row.sessionId,
     actor: row.author.kind === "person" ? USER_ACTOR : `${AGENT_ACTOR_PREFIX}pi`,
+    ...(row.author.userId === undefined ? {} : { authorUserId: row.author.userId }),
     body: row.body,
     createdAt: row.createdAt,
     updatedAt: row.editedAt ?? row.createdAt,

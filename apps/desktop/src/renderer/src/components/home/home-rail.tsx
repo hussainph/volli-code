@@ -53,6 +53,13 @@
  * rail's does.
  */
 import * as React from "react";
+import { SessionShare, SessionTeamMark } from "@renderer/components/sessions/session-team";
+import { useSessionTeam } from "@renderer/lib/cloud-team";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+} from "@renderer/components/ui/context-menu";
 import { useShallow } from "zustand/react/shallow";
 import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDots";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
@@ -534,34 +541,53 @@ function BoardSessionRow({
   const provenance = useSessionProvenance(projectId, row.id);
   const provenanceLine = sessionProvenanceHoverLine(provenance);
   const Glyph = row.kind === "chat" ? ChatCircleIcon : TerminalWindowIcon;
+  const sessionId = row.kind === "chat" ? row.id : null;
+  const team = useSessionTeam(sessionId);
+  const content = (
+    <ListRow
+      density="two-line"
+      data-testid="home-session-row"
+      leading={
+        <Glyph
+          weight="bold"
+          aria-label={row.kind === "chat" ? "Chat" : "Terminal"}
+          className="size-4 shrink-0 text-muted-foreground"
+        />
+      }
+      primary={row.title}
+      primaryTrailing={
+        <>
+          <SessionTeamMark sessionId={sessionId} />
+          <SessionProvenanceMark provenance={provenance} />
+        </>
+      }
+      title={provenanceLine === null ? undefined : `${row.title}\n${provenanceLine}`}
+      secondary={
+        <span className="flex min-w-0 items-center gap-1 text-label text-muted-foreground">
+          <StatusDot state={team?.ended ? "idle" : row.state} />
+          <span className="truncate">{team?.ended ?? row.stateLabel}</span>
+          <span className="shrink-0">· {compactAge(row.at, now)}</span>
+        </span>
+      }
+      className={row.live ? undefined : "text-muted-foreground"}
+      onActivate={row.reopenable ? () => openSession(projectId, row) : null}
+      // Draggable onto a pane (VC-202 §4): the same door, opened somewhere
+      // specific.
+      {...splitDragSourceProps(homeSessionDragPayload(projectId, row))}
+    />
+  );
   return (
     <li>
-      <ListRow
-        density="two-line"
-        data-testid="home-session-row"
-        leading={
-          <Glyph
-            weight="bold"
-            aria-label={row.kind === "chat" ? "Chat" : "Terminal"}
-            className="size-4 shrink-0 text-muted-foreground"
-          />
-        }
-        primary={row.title}
-        primaryTrailing={<SessionProvenanceMark provenance={provenance} />}
-        title={provenanceLine === null ? undefined : `${row.title}\n${provenanceLine}`}
-        secondary={
-          <span className="flex min-w-0 items-center gap-1 text-label text-muted-foreground">
-            <StatusDot state={row.state} />
-            <span className="truncate">{row.stateLabel}</span>
-            <span className="shrink-0">· {compactAge(row.at, now)}</span>
-          </span>
-        }
-        className={row.live ? undefined : "text-muted-foreground"}
-        onActivate={row.reopenable ? () => openSession(projectId, row) : null}
-        // Draggable onto a pane (VC-202 §4): the same door, opened somewhere
-        // specific.
-        {...splitDragSourceProps(homeSessionDragPayload(projectId, row))}
-      />
+      {team?.canShare ? (
+        <ContextMenu>
+          <ContextMenuTrigger asChild>{content}</ContextMenuTrigger>
+          <ContextMenuContent>
+            <SessionShare sessionId={sessionId} projectId={projectId} />
+          </ContextMenuContent>
+        </ContextMenu>
+      ) : (
+        content
+      )}
     </li>
   );
 }

@@ -49,6 +49,8 @@ import { ListRow, ListRowSkeleton } from "@renderer/components/ui/list-row";
 import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
+import { SessionTeamMark, SessionShare } from "@renderer/components/sessions/session-team";
+import { useSessionTeam } from "@renderer/lib/cloud-team";
 import {
   RAIL_PANEL_INSET,
   RailFold,
@@ -322,6 +324,8 @@ function SessionRow({
    */
   onToggleRead: (() => void) | null;
 }) {
+  const sessionId = drag?.type === "session" && drag.kind === "chat" ? drag.sessionId : null;
+  const team = useSessionTeam(sessionId);
   const row = (
     <ListRow
       // Two lines, 52px: the title owns one and the state owns the other. While
@@ -356,6 +360,7 @@ function SessionRow({
                 the status column, and a mark that drifted between the title and
                 that column depending on title length would stop being scannable
                 down the list. */}
+            <SessionTeamMark sessionId={sessionId} />
             <SessionProvenanceMark provenance={provenance} />
             <span
               // Unread outranks read by WEIGHT alone; the colour stays the
@@ -371,7 +376,7 @@ function SessionRow({
           </span>
         )
       }
-      secondary={editing ? undefined : secondary}
+      secondary={editing ? undefined : (team?.ended ?? secondary)}
       trailing={unread && !editing ? <UnreadDot /> : undefined}
     />
   );
@@ -384,6 +389,7 @@ function SessionRow({
       <ContextMenu>
         <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
         <ContextMenuContent>
+          <SessionShare sessionId={sessionId} projectId={drag?.projectId ?? null} />
           {onResume !== undefined ? (
             <ContextMenuItem icon={ArrowClockwiseIcon} onSelect={onResume}>
               Resume
