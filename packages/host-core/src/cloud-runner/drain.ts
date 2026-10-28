@@ -103,13 +103,6 @@ const DRAIN_STOP_CODES = [
   "not_found",
   "revoked",
   "not_a_runner",
-  "preview_access_required",
-  "parent_not_found",
-  "corrupt_history",
-  "corrupt_state",
-  "corrupt_board",
-  "invalid_job",
-  "id_taken",
 ] as const;
 
 /** A refusal from the backend, read off a ConvexError-shaped error, or `null` for a transient failure. */
@@ -398,9 +391,11 @@ export function createFactDrain(options: FactDrainOptions): FactDrain {
       stream.next = stream.cursor.acceptedThrough + 1;
       return;
     }
-    // `accept_failed` and `fold_failed` sanitize unexpected exceptions. Like a
-    // transient bare Server Error (and an unknown future code), it backs off
-    // without acknowledging or discarding any local fact.
+    // Newly typed internal faults (corrupt_*, fold_failed, accept_failed)
+    // retain the old bare-error backoff. Do not turn them into permanent
+    // blocked cursors: the production composition has no explicit retry door
+    // for those faults. Repair/refold can then let the retained facts settle.
+    // Unknown future codes likewise never acknowledge or discard local facts.
     return retryLater(stream, error);
   }
 

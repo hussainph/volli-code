@@ -157,16 +157,19 @@ is never the speculative head of the rejected batch.
 Existing typed refusals retain their codes and additive data. Unreadable
 stored event JSON is `corrupt_history`, unreadable same-version fold JSON or
 checkpoint/view shape `corrupt_state`, and a missing board counter
-`corrupt_board` (including regular board mutations). These stop the current
-runner's drain visibly without dropping facts; repair/refold and explicit Retry
-are required. Auth/preview/producer-conflict refusals likewise require recovery.
+`corrupt_board` (including regular board mutations). Corruption requires server
+repair/refold, but the runner retains and retries the facts with its existing
+backoff so they can settle afterwards. No new permanent client stop is added:
+the production composition has no explicit retry door for those blocked
+cursors. Existing terminal refusals and their recorded faults are unchanged.
 Oversized batches still fall back to single facts; oversized single facts
-stop visibly. A fact too large for the bounded fold is still quarantined and
-accepted, not turned into a rejection. `out_of_order` still resends from the
+still stop the drain. A fact too large for the bounded fold is still quarantined
+and accepted, not turned into a rejection. `out_of_order` still resends from the
 backend's head. An unexpected exception in the pure fold is `fold_failed`;
-other unclassified exceptions are sanitized as `accept_failed`. Both retain the
-existing transient backoff, just as bare server errors did, rather than making
-a newly deployed fold defect a permanent client stop. Older clients treat unknown codes as transient and retain their facts.
+other unclassified exceptions are sanitized as `accept_failed`. These likewise
+retain existing backoff rather than making a newly deployed fold defect a
+permanent client stop. Older clients treat unknown codes as transient and
+retain their facts.
 
 Platform argument validation and commit-time failures (including exhausted
 OCC retries) occur outside the JS handler and cannot be caught by this

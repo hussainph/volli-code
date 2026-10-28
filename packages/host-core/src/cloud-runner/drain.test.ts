@@ -329,13 +329,6 @@ describe("the fact drain", () => {
       "not_found",
       "revoked",
       "not_a_runner",
-      "preview_access_required",
-      "parent_not_found",
-      "corrupt_history",
-      "corrupt_state",
-      "corrupt_board",
-      "invalid_job",
-      "id_taken",
     ]) {
       const backend = fakeBackend();
       const { ledger, append } = memoryLedger();
@@ -408,8 +401,15 @@ describe("the fact drain", () => {
     "accept_failed",
     "fold_failed",
     "runner_unavailable",
+    "preview_access_required",
+    "parent_not_found",
+    "corrupt_history",
+    "corrupt_state",
+    "corrupt_board",
+    "invalid_job",
+    "id_taken",
     "future_refusal",
-  ])("retries transient %s without advancing the cursor or discarding facts", async (code) => {
+  ])("keeps %s queued for retry without advancing the cursor or discarding facts", async (code) => {
     const backend = fakeBackend();
     const { ledger, append } = memoryLedger();
     const { store, rows } = memoryCursors();

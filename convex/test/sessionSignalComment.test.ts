@@ -276,7 +276,7 @@ describe("a signal's todo list on its ticket", () => {
     }));
     expect(rows.intake?.acceptedThrough).toBe(before.length);
     expect(rows.events).toHaveLength(before.length);
-    // Repair plus the runner's explicit Retry replays the retained signal once.
+    // Repair plus the runner's resend replays the retained signal once.
     await t.run((ctx) => ctx.db.insert("projectCounters", counter));
     await accept(t, runner, sessionId, signal);
     expect(await comments(t)).toHaveLength(1);
