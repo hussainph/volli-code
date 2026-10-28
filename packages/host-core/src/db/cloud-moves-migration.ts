@@ -14,7 +14,7 @@
  *
  * At most one live move per project (the partial unique index). No foreign
  * keys: a journal row outlives whatever it names. No older reader knows
- * these tables and none needs to: an N−1 build ignores the freeze (D11).
+ * these tables and none needs to: an N−1 build ignores the freeze.
  */
 export const CLOUD_MOVES_MIGRATION = `
 CREATE TABLE IF NOT EXISTS cloud_move_queues (

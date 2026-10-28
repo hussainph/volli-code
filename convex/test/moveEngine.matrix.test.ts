@@ -1,5 +1,5 @@
 /**
- * The kill/resume matrix (§5.1): the engine stopped dead at every step
+ * The kill/resume matrix: the engine stopped dead at every step
  * boundary and mid-step, before and after a backend call lands, then a fresh
  * engine (what a relaunch builds) resumes the same queue. Every case must end
  * where an uninterrupted move ends: committed, verified, with the backend
@@ -126,8 +126,10 @@ describe("kill while rolling back, resume, same end", () => {
       .rollBack(moves[0]!.moveId);
     await stopped;
     expect(world.engine().journal.move(moves[0]!.moveId)!.state).toBe("rolling_back");
-    // A relaunch finishes the roll back where it stopped.
-    expect(await world.engine().run(queue.queueId)).toEqual({ kind: "done" });
+    // A relaunch finishes the roll back where it stopped, even in a queue that
+    // stopped at a problem.
+    world.engine().journal.setQueue(queue.queueId, { state: "stopped" });
+    await world.engine().resume();
     expect(world.engine().journal.move(moves[0]!.moveId)!.state).toBe("rolled_back");
     expect((await finalDigests(world, moves[0]!.moveId)).status).toBe("aborting");
   });

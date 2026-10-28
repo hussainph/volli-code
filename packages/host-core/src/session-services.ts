@@ -1,6 +1,11 @@
 /** The one host composition of the Session writer and its post-commit observers. */
 import type Database from "better-sqlite3";
-import type { HostNoticeOutbox, OpenNativeBinding, SessionEngine } from "@volli/session-engine";
+import type {
+  HostNoticeOutbox,
+  OpenNativeBinding,
+  SessionEngine,
+  SubmitSessionCommandRequest,
+} from "@volli/session-engine";
 import type { SessionLedger, SessionProjection } from "@volli/shared";
 import type { Logger } from "./log/logger";
 import { readAutomationRunAttendance } from "./db/automations-repo";
@@ -89,11 +94,11 @@ export interface HostSessionServices {
 }
 
 /** Commands that only ever stop work: a frozen project still takes them. */
-const STOPPING_INTENTS: ReadonlySet<string> = new Set([
+const STOPPING_INTENTS: ReadonlySet<SubmitSessionCommandRequest["intent"]["kind"]> = new Set([
   "session.stop",
   "executor.stop",
   "executor.interrupt",
-]);
+] as const);
 
 /**
  * The engine with the move freeze in front of its two person-intent writes

@@ -1,7 +1,7 @@
 /**
  * The move engine: "Move to Volli Cloud" for one project or every project of
  * the profile, as a durable queue of per-project moves run one after another
- * (D2). Each move is the unit of safety: its own freeze, export, upload,
+ * Each move is the unit of safety: its own freeze, export, upload,
  * import, verification, commit and roll back, so a project that fails rolls
  * back alone and the local copy is exactly as it was (it was never edited).
  *
@@ -56,9 +56,11 @@ import {
   MoveNetworkError,
   importCalls,
   refusalOf,
+  withRetry,
   type ImportCalls,
 } from "./backend";
 import {
+  MoveStateConflictError,
   sqliteMoveJournal,
   type MoveFailure,
   type MoveJournalStore,
@@ -75,7 +77,7 @@ import {
   type MovePlan,
   type RecordContext,
 } from "./plan";
-import type { MoveEnginePorts, MoveObject } from "./ports";
+import type { MoveEnginePorts, MoveObject, MoveObjectStore } from "./ports";
 import { COMMITTED_STATES, SETTLED_STATES, reached, type MoveState } from "./states";
 import { pool, verifyHiddenImport, type VerifyReport } from "./verify";
 
@@ -100,6 +102,30 @@ const RESTING_STATES: ReadonlySet<MoveState> = new Set<MoveState>([
   "confirmed",
   "returning",
 ]);
+
+/**
+ * Waits that are this project's alone: the queue goes on with the next
+ * project and comes back once at its end (a live turn, a purge of the
+ * project's previous move), so one project never holds up the others.
+ */
+const WAITS_FOR_OTHERS: ReadonlySet<MovePause | null> = new Set<MovePause | null>([
+  "not_idle",
+  "waiting_for_purge",
+]);
+
+/** A file of this Mac's own the move reads is gone or unreadable: a problem, never the network. */
+const LOCAL_FILE_CODES: ReadonlySet<string> = new Set([
+  "ENOENT",
+  "EACCES",
+  "EPERM",
+  "EISDIR",
+  "ENOTDIR",
+  "EIO",
+]);
+function isLocalFileError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && LOCAL_FILE_CODES.has(code);
+}
 
 /** A step that must wait, not fail. */
 class MovePausedError extends Error {
@@ -135,7 +161,7 @@ class MoveAgainError extends Error {
 export interface EnqueueInput {
   projectIds: readonly string[];
   target: MigrationTarget;
-  /** Default: on for this profile's first queue, off afterwards (D9). */
+  /** Default: on for a single project and for the profile's first "Move all", off afterwards. */
   stopAtFirstProblem?: boolean;
   includeRemoved?: boolean;
   /** Projects that go last (the one the person works in). */
@@ -180,7 +206,7 @@ function projectWeight(db: MoveEnginePorts["db"], projectId: string): number {
 }
 
 /**
- * The queue's order (§4): smallest first, a delegation's parent project
+ * The queue's order: smallest first, a delegation's parent project
  * before its child's when both move, the named projects last.
  */
 export function queueOrder(
@@ -234,15 +260,15 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     ports.sleep ??
     ((ms: number, signal: AbortSignal) =>
       new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, ms);
-        signal.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            reject(signal.reason);
-          },
-          { once: true },
-        );
+        const aborted = () => {
+          clearTimeout(timer);
+          reject(signal.reason);
+        };
+        const timer = setTimeout(() => {
+          signal.removeEventListener("abort", aborted);
+          resolve();
+        }, ms);
+        signal.addEventListener("abort", aborted, { once: true });
       }));
   const fault = async (point: string) => {
     await ports.faults?.(point);
@@ -274,6 +300,7 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       workDir: workDir(move),
       exportDir: exportDir(move),
       manifest: await manifestOf(move),
+      exportManifestSha256: move.journal.exportManifestSha256!,
       target: targetOf(move),
       eventRecord: (record) => ports.history.eventRecord(record),
       signal,
@@ -340,24 +367,23 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     }
   };
 
-  /** The network-retry rule for the object store, which shares the backend's. */
-  const withNetworkRetry = async <T>(call: () => Promise<T>, signal: AbortSignal): Promise<T> => {
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= RETRY.attempts; attempt += 1) {
-      signal.throwIfAborted();
-      try {
-        return await call();
-      } catch (error) {
-        const refusal = refusalOf(error);
-        if (refusal !== null || error instanceof MoveProblemError) throw refusal ?? error;
-        if (isDiskFullError(error)) throw error;
-        lastError = error;
-        if (attempt < RETRY.attempts) {
-          await sleep(Math.min(RETRY.baseMs * 2 ** (attempt - 1), RETRY.maxMs), signal);
-        }
-      }
-    }
-    throw new MoveNetworkError(lastError);
+  /** The network-retry rule for the object store and the history upload: the backend's. */
+  const withNetworkRetry = <T>(call: () => Promise<T>, signal: AbortSignal): Promise<T> =>
+    withRetry(call, {
+      ...RETRY,
+      sleep,
+      signal,
+      passThrough: (error) =>
+        error instanceof MoveProblemError || isDiskFullError(error) || isLocalFileError(error),
+    });
+
+  /** The object store as the verification reads it: HEADs and GETs retried like every call. */
+  const retriedObjects: MoveObjectStore = {
+    put: (moveId, object, body) => ports.objects.put(moveId, object, body),
+    head: (moveId, key) =>
+      withNetworkRetry(() => ports.objects.head(moveId, key), new AbortController().signal),
+    get: (moveId, key) =>
+      withNetworkRetry(() => ports.objects.get(moveId, key), new AbortController().signal),
   };
 
   /** The staged copy of what the move sends: its convex streams' chunks, compressed, by hash. */
@@ -453,7 +479,8 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     });
   };
 
-  const reserve: Step = async (move, _queue, signal) => {
+  /** The plan, the staged chunks and the move manifest they make: the same on every run. */
+  const manifestFor = async (move: MoveRow, signal: AbortSignal) => {
     const plan = await planOf(move, signal);
     const staged = await stagedChunks(move);
     const manifest = moveManifest({
@@ -465,6 +492,11 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       plan,
       staged,
     });
+    return { plan, staged, manifest };
+  };
+
+  const reserve: Step = async (move, _queue, signal) => {
+    const { plan, manifest } = await manifestFor(move, signal);
     await fault("reserve");
     try {
       await calls.begin(signal, {
@@ -491,17 +523,7 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
   };
 
   const stage: Step = async (move, _queue, signal) => {
-    const plan = await planOf(move, signal);
-    const staged = await stagedChunks(move);
-    const manifest = moveManifest({
-      moveId: move.moveId,
-      target: targetOf(move),
-      exportManifestSha256: move.journal.exportManifestSha256!,
-      appVersion: move.appVersion,
-      mapperVersion: move.mapperVersion,
-      plan,
-      staged,
-    });
+    const { staged, manifest } = await manifestFor(move, signal);
     if (manifest.sha256 !== move.manifestSha256) {
       throw new MoveAgainError("export_changed", "The export changed since the move began.");
     }
@@ -555,7 +577,11 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       const flush = async () => {
         if (rows.length === 0) return;
         const answer = await calls.importRows(signal, { moveId: move.moveId, stream, rows });
-        if (answer.conflicts.length > 0 || answer.rejected.length > 0) {
+        if (
+          answer.conflicts.length > 0 ||
+          answer.rejected.length > 0 ||
+          answer.inserted + answer.unchanged !== rows.length
+        ) {
           const codes: Record<string, number> = {};
           for (const failure of [...answer.conflicts, ...answer.rejected]) {
             codes[failure.code] = (codes[failure.code] ?? 0) + 1;
@@ -618,7 +644,7 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     const plan = await planOf(move, signal);
     const report: VerifyReport = await verifyHiddenImport({
       calls,
-      objects: ports.objects,
+      objects: retriedObjects,
       moveId: move.moveId,
       runnerId: move.runnerId,
       plan,
@@ -688,8 +714,19 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     options: { confirmChanged: boolean },
   ): Promise<MoveRow> => {
     const from = move.journal.rollbackFrom ?? "queued";
-    if (COMMITTED_STATES.has(from) && move.journal.uncommitted !== true) {
-      await calls.uncommit(signal, { moveId: move.moveId, confirmChanged: options.confirmChanged });
+    const confirmChanged = options.confirmChanged || move.journal.rollbackConfirmed === true;
+    // The backend may have shown the project though this Mac never heard so
+    // (a commit that landed before a crash): ask it before deciding.
+    let shown = COMMITTED_STATES.has(from);
+    if (!shown && reached(from, "verified") && move.journal.uncommitted !== true) {
+      try {
+        shown = (await calls.status(signal, move.moveId)).status === "committed";
+      } catch (error) {
+        if (!(error instanceof MoveBackendError && error.code === "not_found")) throw error;
+      }
+    }
+    if (shown && move.journal.uncommitted !== true) {
+      await calls.uncommit(signal, { moveId: move.moveId, confirmChanged });
       move = journal.patch(move.moveId, { journal: { uncommitted: true } });
       await fault("rollback.uncommitted");
     }
@@ -708,18 +745,24 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     if (again === undefined) {
       return journal.advance(move.moveId, "rolling_back", "rolled_back", { paused: null });
     }
-    // Moved again: the old move gives the project up, a fresh one takes its place.
-    const superseded = journal.advance(move.moveId, "rolling_back", "superseded", { paused: null });
-    if (journal.queue(move.queueId)!.runnerId !== again) {
-      journal.setQueue(move.queueId, { runnerId: again });
-    }
-    journal.addMove(move.queueId, {
-      moveId: newId(),
-      projectId: move.projectId,
-      position: move.position,
-      supersedes: move.moveId,
-    });
-    return superseded;
+    // Moved again: the old move gives the project up and a fresh one takes
+    // its place, in one transaction, so a crash never leaves the project
+    // without its next move.
+    return ports.db.transaction(() => {
+      const superseded = journal.advance(move.moveId, "rolling_back", "superseded", {
+        paused: null,
+      });
+      if (journal.queue(move.queueId)!.runnerId !== again) {
+        journal.setQueue(move.queueId, { runnerId: again });
+      }
+      journal.addMove(move.queueId, {
+        moveId: newId(),
+        projectId: move.projectId,
+        position: move.position,
+        supersedes: move.moveId,
+      });
+      return superseded;
+    })();
   };
 
   const startRollBack = (move: MoveRow, failure: MoveFailure | null): MoveRow =>
@@ -762,7 +805,8 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
         journal.patch(moveId, { paused: "signed_out" });
         return { paused: "signed_out" };
       }
-      const step = STEPS[move.state]!;
+      const step = STEPS[move.state];
+      if (step === undefined) return "moved";
       try {
         if (identity.runnerId !== move.runnerId) {
           throw new MoveAgainError("runner_replaced", "This Mac's runner was replaced.");
@@ -816,7 +860,13 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
         ? { code: error.code, message: error.message, detail: error.detail }
         : refusal !== null
           ? { code: refusal.code, message: refusal.message, detail: {} }
-          : null;
+          : isLocalFileError(error)
+            ? {
+                code: "local_file_unreadable",
+                message: "A file this move reads on this Mac is gone or unreadable.",
+                detail: { errno: (error as { code: string }).code },
+              }
+            : null;
     if (problem === null) return pauseFor(move, error);
     const failure = failureOf(move, problem.code, problem.message, problem.detail);
     if (COMMITTED_STATES.has(move.state)) {
@@ -847,7 +897,10 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       journal.patch(move.moveId, { paused: "disk_full" });
       return { paused: "disk_full" };
     }
-    const aborted = (error as { name?: string } | null)?.name === "AbortError";
+    // Cancelled, or another run of the engine took the step first: nothing failed.
+    const aborted =
+      (error as { name?: string } | null)?.name === "AbortError" ||
+      error instanceof MoveStateConflictError;
     if (!aborted) log.warn("a move stopped on an unexpected error", { moveId: move.moveId, error });
     journal.patch(move.moveId, {
       paused: "paused",
@@ -877,9 +930,9 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
         const open = moves.filter(
           (move) => !SETTLED_STATES.has(move.state) && !RESTING_STATES.has(move.state),
         );
-        // A project that was not idle waits for the rest of the queue, then gets one more try.
+        // A project that waits on itself goes after the rest of the queue, then gets one more try.
         const next =
-          open.find((move) => move.paused !== "not_idle") ??
+          open.find((move) => !WAITS_FOR_OTHERS.has(move.paused)) ??
           open.find((move) => !retried.has(move.moveId));
         if (next === undefined) {
           const waiting = open[0];
@@ -893,11 +946,17 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
           journal.setQueue(queueId, { state: "done" });
           return { kind: "done" };
         }
-        if (next.paused === "not_idle") retried.add(next.moveId);
-        if (queue.state === "stopped") return { kind: "stopped", moveId: next.moveId };
+        if (WAITS_FOR_OTHERS.has(next.paused)) retried.add(next.moveId);
+        // A stopped queue still finishes a roll back a crash interrupted.
+        if (queue.state === "stopped" && next.state !== "rolling_back") {
+          const rolling = open.find((move) => move.state === "rolling_back");
+          if (rolling === undefined) return { kind: "stopped", moveId: next.moveId };
+          await advanceMove(rolling.moveId, signal);
+          continue;
+        }
         const outcome = await advanceMove(next.moveId, signal);
         if (typeof outcome === "object") {
-          if (outcome.paused === "not_idle") continue;
+          if (WAITS_FOR_OTHERS.has(outcome.paused)) continue;
           return { kind: "waiting", moveId: next.moveId, reason: outcome.paused };
         }
         const settled = journal.move(next.moveId)!;
@@ -921,9 +980,15 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
           throw new Error(`Project ${projectId} is already moving (${live.state}).`);
       }
       const order = queueOrder(ports.db, input.projectIds, new Set(input.lastProjectIds ?? []));
+      // Stop at the first problem: on for the profile's first "Move all" (a
+      // queue of several projects), however many single moves came before it.
       const firstQueue =
-        prepared<[], { n: number }>(ports.db, "SELECT COUNT(*) AS n FROM cloud_move_queues").get()!
-          .n === 0;
+        input.projectIds.length === 1 ||
+        prepared<[], { n: number }>(
+          ports.db,
+          `SELECT COUNT(*) AS n FROM (SELECT queue_id FROM cloud_moves
+             GROUP BY queue_id HAVING COUNT(DISTINCT project_id) > 1)`,
+        ).get()!.n === 0;
       const queueId = newId();
       journal.createQueue(
         {
@@ -967,6 +1032,10 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       }
       if (move.state !== "rolling_back") {
         move = startRollBack(move, failureOf(move, "cancelled", "Rolled back by the person."));
+      }
+      // Kept, so a roll back a crash interrupts finishes as the person confirmed it.
+      if (options.confirmChanged === true && move.journal.rollbackConfirmed !== true) {
+        move = journal.patch(moveId, { journal: { rollbackConfirmed: true } });
       }
       try {
         return await finishRollBack(move, signal, {

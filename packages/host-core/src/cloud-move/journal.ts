@@ -47,6 +47,8 @@ export interface MoveJournal {
   history?: number;
   /** The state a roll back started from. */
   rollbackFrom?: MoveState;
+  /** The person confirmed losing the cloud copy's changes since the commit. */
+  rollbackConfirmed?: boolean;
   /** The runner a move that starts over moves again onto. */
   againOnRunner?: string;
   /** The engine run that rolled it back called `uncommit` / `abort` already. */

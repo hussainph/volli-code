@@ -95,7 +95,7 @@ export const COMMITTED_STATES: ReadonlySet<MoveState> = new Set<MoveState>([
   "confirmed",
 ]);
 
-/** What the person sees a move doing: the plan's coarse phases (§2.1). */
+/** What the person sees a move doing: the plan's coarse phases. */
 export type MovePhase =
   | "queued"
   | "frozen"

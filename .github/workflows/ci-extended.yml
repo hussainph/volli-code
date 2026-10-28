@@ -2,7 +2,8 @@ name: CI extended
 
 # The lanes that left the PR gate (VC-934), kept rather than deleted: the rest
 # smoke tier (every non-core, non-quarantined journey) and flag-on cloud
-# acceptance. The move engine's kill/resume matrix runs here too, on Linux. They are macOS-only and long, and gating every PR on them held
+# acceptance, plus the move engine's kill/resume matrix (Linux). The smoke
+# lanes are macOS-only and long, and gating every PR on them held
 # all five of the account's concurrent macOS slots per PR run, so PRs queued
 # behind each other. Here they run:
 #   - on every push to main — the merged tree, after the PR gate;
@@ -248,7 +249,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  # The move engine's kill/resume matrix (Move to Volli Cloud, move-plan §5.1):
+  # The move engine's kill/resume matrix (Move to Volli Cloud):
   # the engine stopped dead at every step boundary, mid-step and before and
   # after each backend call lands, then resumed by a fresh engine, against
   # the real person-authorized import under convex-test. Linux, no backend

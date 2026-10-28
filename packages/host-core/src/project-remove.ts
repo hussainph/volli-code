@@ -29,6 +29,7 @@
  */
 import type Database from "better-sqlite3";
 
+import { assertProjectWritable } from "./cloud-move/freeze";
 import { detachProject, isProjectAttached, listProjectSessionIds } from "./db/projects-repo";
 import { releaseAgentSessions, type AgentSiteRuntime } from "./worktree/agent-sites";
 
@@ -95,6 +96,8 @@ export class ProjectRemovalRefused extends Error {
  */
 export async function removeProject(ports: ProjectRemovalPorts, projectId: string): Promise<void> {
   if (!isProjectAttached(ports.db, projectId)) return;
+  // A project moving to Volli Cloud stays on the rail until its move settles (VC-993).
+  assertProjectWritable(ports.db, projectId);
   const sessionIds = new Set(listProjectSessionIds(ports.db, projectId));
 
   const { stillOpen } = await ports.live.releaseBindings(sessionIds);

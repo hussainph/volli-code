@@ -7,11 +7,11 @@
  *
  * The write paths that ask: the board's commands (`board/commands.ts`), the
  * ticket commands every other door shares (`ticket-commands.ts`), the Session
- * engine's create and submit (`session-services.ts`) and a Session's start
- * and every turn's reaffirm (`session-runtime/location.ts`). Reads are never
- * refused: the frozen project stays fully readable.
+ * engine's create and submit (`session-services.ts`; stopping work is always
+ * allowed), the Automation and MCP settings services, and the worktree
+ * reclaim. Reads are never refused: the frozen project stays fully readable.
  *
- * An N−1 build does not know the table and ignores the freeze (D11).
+ * An N−1 build does not know the table and ignores the freeze.
  */
 import type Database from "better-sqlite3";
 

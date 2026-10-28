@@ -1,5 +1,5 @@
 /**
- * The verification before the commit (§2.2 step 8), while the project is
+ * The verification before the commit, while the project is
  * still hidden and only the import has written there:
  *
  * (a) the backend's accumulators equal the plan's promise, stream by stream;
@@ -111,6 +111,28 @@ function tallyInto(
   let tally = byStream.get(stream);
   if (tally === undefined) byStream.set(stream, (tally = new MigrationDigest()));
   tally.add(digest);
+}
+
+/** The sum of tallies: a {@link MigrationDigest} is a count and a sum mod 2^128, so they add. */
+function sumOf(tallies: readonly Tally[]): Tally {
+  let sum = 0n;
+  let count = 0;
+  for (const tally of tallies) {
+    sum = (sum + BigInt(`0x${tally.digest}`)) % (1n << 128n);
+    count += tally.count;
+  }
+  return { count, digest: sum.toString(16).padStart(32, "0") };
+}
+
+/** A session-level stream's planned tallies under the moved Sessions (the ones read back). */
+function movedSessionTallies(
+  plan: MovePlan,
+  stream: MigrationImportStream,
+  moved: ReadonlySet<string>,
+): Tally[] {
+  return Object.entries(plan.sessions)
+    .filter(([id, streams]) => streams[stream] !== undefined && moved.has(id))
+    .map(([, streams]) => streams[stream]!);
 }
 
 export async function verifyHiddenImport(input: {
@@ -267,9 +289,14 @@ export async function verifyHiddenImport(input: {
     const entry = report.streams[promise.stream]!;
     entry.read = read.count;
     const readBackOf = report.notReadBack[promise.stream] ?? 0;
+    // Rows hanging off a parent outside the move are the backend's to count;
+    // the rest must equal, row for row, what the plan holds for the parents read.
+    const expected =
+      readBackOf === 0 ? promise : sumOf(movedSessionTallies(plan, promise.stream, movedSessions));
     const match =
       read.count + readBackOf === promise.count &&
-      (readBackOf > 0 || read.value === promise.digest);
+      read.count === expected.count &&
+      read.value === expected.digest;
     if (!match) {
       entry.match = false;
       failures.push(`${promise.stream}: the read-back is not the plan's`);

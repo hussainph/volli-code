@@ -36,6 +36,7 @@ import type Database from "better-sqlite3";
 import type { TicketEventActor, TicketStatus } from "@volli/shared";
 import type { PrCheck, TicketRetentionState } from "@volli/shared";
 
+import { projectFreeze } from "../cloud-move/freeze";
 import { recordTicketEvent } from "../db/events-repo";
 import { getProjectById } from "../db/projects-repo";
 import { prepared } from "../db/prepared";
@@ -522,6 +523,9 @@ export async function pollRetention(
 
   for (const ticket of listRetentionCandidates(deps.db)) {
     seen.add(ticket.id);
+    // A project moving to Volli Cloud takes no write, a pull request's
+    // included (VC-993): its tickets are polled again once it is unfrozen.
+    if (projectFreeze(deps.db, ticket.project_id) !== null) continue;
     // Per-ticket isolation: a throw here (SQLITE_BUSY, an FK failure on a
     // ticket deleted mid-cycle, ...) must not abort the whole candidate loop —
     // log it and move on so every OTHER ticket's discovery/status/merge still

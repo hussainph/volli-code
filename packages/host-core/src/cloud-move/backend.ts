@@ -65,6 +65,8 @@ export interface RetryPolicy {
   sleep: (ms: number, signal: AbortSignal) => Promise<void>;
   signal: AbortSignal;
   onRetry?: (attempt: number, error: unknown) => void;
+  /** Errors that are neither a refusal nor the network (a full disk): thrown as they are. */
+  passThrough?: (error: unknown) => boolean;
 }
 
 /** Runs `call`, retrying what the network lost. */
@@ -75,6 +77,7 @@ export async function withRetry<T>(call: () => Promise<T>, policy: RetryPolicy):
     try {
       return await call();
     } catch (error) {
+      if (policy.passThrough?.(error) === true) throw error;
       const refusal = refusalOf(error);
       if (refusal !== null) throw refusal;
       lastError = error;

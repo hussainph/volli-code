@@ -4,7 +4,7 @@
  * move is interrupted, refused, rolled back or taken back. The kill/resume
  * matrix itself is `moveEngine.matrix.test.ts` (ci-extended).
  */
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "vite-plus/test";
@@ -126,6 +126,31 @@ describe("interruptions resume", () => {
     expect(await world.engine().run(queueId)).toEqual({ kind: "done" });
   });
 
+  test("a project that waits goes after the rest of the queue", async () => {
+    world = await moveWorld();
+    const removed = "7a1f0c2e-0000-4000-8000-000000000002";
+    const engine = world.engine({
+      ports: {
+        liveWork: { busySessionIds: () => new Set(["7a1f0c2e-0000-4000-8000-000000000031"]) },
+      },
+    });
+    const { queue, moves } = engine.enqueue({
+      projectIds: [world.projectId, removed],
+      target: { userId: world.userId, workspaceId: world.workspaceId, runnerId: world.runnerId },
+      includeRemoved: true,
+    });
+    expect(queue.stopAtFirstProblem).toBe(true);
+    const busy = moves.find((m) => m.projectId === world!.projectId)!;
+    expect(await engine.run(queue.queueId)).toEqual({
+      kind: "waiting",
+      moveId: busy.moveId,
+      reason: "not_idle",
+    });
+    const other = engine.journal.moves(queue.queueId).find((m) => m.projectId === removed)!;
+    expect(other.state).toBe("committed");
+    expect(engine.journal.move(busy.moveId)!.state).toBe("queued");
+  });
+
   test("signed out, the move waits for the same person", async () => {
     world = await moveWorld();
     const { queueId } = enqueue(world);
@@ -161,6 +186,26 @@ describe("problems roll back", () => {
   });
 });
 
+describe("problems with this Mac's own files", () => {
+  test("an attachment gone from disk mid-move rolls the project back, never waits on the network", async () => {
+    world = await moveWorld();
+    const { queueId, moveId } = enqueue(world);
+    const engine = world.engine({
+      ports: {
+        faults: async (point) => {
+          if (point === "reserved")
+            rmSync(join(world!.root, "profile", "blobs"), { recursive: true });
+        },
+      },
+    });
+    await engine.run(queueId);
+    expect(engine.journal.move(moveId)).toMatchObject({
+      state: "rolled_back",
+      failure: { code: "local_file_unreadable" },
+    });
+  });
+});
+
 describe("the person's decisions", () => {
   test("Roll back after the commit uncommits, aborts and unfreezes", async () => {
     world = await moveWorld();
@@ -169,6 +214,28 @@ describe("the person's decisions", () => {
     const rolled = await engine.rollBack(moveId);
     expect(rolled.state).toBe("rolled_back");
     expect(projectFreeze(world.db, world.projectId)).toBeNull();
+    expect((await finalDigests(world, moveId)).status).toBe("aborting");
+  });
+
+  test("a commit that landed unheard is rolled back from the backend's own answer", async () => {
+    world = await moveWorld();
+    const { queueId, moveId } = enqueue(world);
+    let killed!: () => void;
+    const stopped = new Promise<void>((resolve) => (killed = resolve));
+    void world
+      .engine({
+        kill: {
+          point: "call:projectImports:commit",
+          hit: 1,
+          after: true,
+          onKilled: () => killed(),
+        },
+      })
+      .run(queueId);
+    await stopped;
+    const engine = world.engine();
+    expect(engine.journal.move(moveId)!.state).toBe("verified");
+    expect((await engine.rollBack(moveId)).state).toBe("rolled_back");
     expect((await finalDigests(world, moveId)).status).toBe("aborting");
   });
 

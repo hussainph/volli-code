@@ -52,7 +52,12 @@ const ACCESS: ModelAccessSnapshot = {
   ],
 };
 
-function setup(overrides: { inspectModelAccess?: () => Promise<ModelAccessSnapshot> } = {}) {
+function setup(
+  overrides: {
+    inspectModelAccess?: () => Promise<ModelAccessSnapshot>;
+    projectFrozen?: (projectId: string) => string | null;
+  } = {},
+) {
   ctx = openTestDb();
   const project = testProject();
   insertProject(ctx.db, project);
@@ -74,9 +79,72 @@ function setup(overrides: { inspectModelAccess?: () => Promise<ModelAccessSnapsh
     ...(overrides.inspectModelAccess === undefined
       ? {}
       : { inspectModelAccess: overrides.inspectModelAccess }),
+    ...(overrides.projectFrozen === undefined ? {} : { projectFrozen: overrides.projectFrozen }),
   });
   return { project, service };
 }
+
+describe("a project moving to Volli Cloud (VC-993)", () => {
+  it("takes no new Automation edit, but replays one it took", async () => {
+    let frozen: string | null = null;
+    const { project, service } = setup({ projectFrozen: () => frozen });
+    const createId = randomUUID();
+    const runtime = { kind: "tier" as const, tier: "fast" as const };
+    const created = await service.create({
+      commandId: createId,
+      projectId: project.id,
+      ...DRAFT,
+      runtime,
+    });
+    if (!created.ok) throw new Error(created.error);
+    frozen = "This project is moving to Volli Cloud.";
+    const refused = { ok: false, error: frozen };
+    expect(
+      await service.create({ commandId: randomUUID(), projectId: project.id, ...DRAFT, runtime }),
+    ).toEqual(refused);
+    expect(
+      await service.update({
+        commandId: randomUUID(),
+        automationId: created.automation.id,
+        ...DRAFT,
+        runtime,
+      }),
+    ).toEqual(refused);
+    expect(
+      await service.setEnabled({
+        commandId: randomUUID(),
+        automationId: created.automation.id,
+        enabled: false,
+      }),
+    ).toEqual(refused);
+    expect(
+      await service.delete({ commandId: randomUUID(), automationId: created.automation.id }),
+    ).toEqual(refused);
+    expect(
+      await service.arm({
+        commandId: randomUUID(),
+        projectId: project.id,
+        status: "todo",
+        automationId: null,
+      }),
+    ).toEqual(refused);
+    expect(
+      await service.setColumnOrder({
+        commandId: randomUUID(),
+        projectId: project.id,
+        status: "todo",
+        rankedAutomationIds: [],
+      }),
+    ).toEqual(refused);
+    // A global Automation belongs to no project, and a replay is an answer already given.
+    expect(
+      (await service.create({ commandId: randomUUID(), projectId: null, ...DRAFT, runtime })).ok,
+    ).toBe(true);
+    expect(
+      (await service.create({ commandId: createId, projectId: project.id, ...DRAFT, runtime })).ok,
+    ).toBe(true);
+  });
+});
 
 const DRAFT = { name: "Tiered", instructions: "/sweep", trigger: NO_AUTOMATION_TRIGGER };
 

@@ -102,7 +102,7 @@ export class ObjectStandIn implements MoveObjectStore {
 
 /**
  * A Session event as main's importer stores it (classified, payload as the
- * value). Until MOVE-4's `sessionEventImportRecord` lands, the fixture keeps
+ * value). Until the importer stores payloads as JSON text (VC-990), the fixture keeps
  * its payloads storable inline (see {@link writeMoveFixture}).
  */
 function eventRecord(record: Record<string, unknown>): Record<string, unknown> {

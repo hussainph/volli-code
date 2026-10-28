@@ -6,7 +6,7 @@
  * - **Records.** Each export stream's records pass as they are, except:
  *   Session events go through the backend's event encoding
  *   (`MoveSessionHistory.eventRecord`); `eventArchives` is empty (every moved
- *   event goes hot, D3); `sessionIntake` is one row per Session at its last
+ *   event goes hot); `sessionIntake` is one row per Session at its last
  *   sequence, claimed by the move's runner. Reading them is deterministic, so
  *   a resumed step reads the same records in the same order and skips the
  *   ones the journal says landed.
@@ -76,6 +76,8 @@ export interface Tally {
 
 export interface MovePlan {
   projectId: string;
+  /** The export it was computed from. */
+  exportManifestSha256: string;
   expected: StreamPromise[];
   /** Per ticket and per Session, per stream: what the read-back must find. */
   tickets: Record<string, Partial<Record<MigrationImportStream, Tally>>>;
@@ -211,13 +213,16 @@ export async function movePlan(input: {
   workDir: string;
   exportDir: string;
   manifest: MigrationExportManifest;
+  /** The sha256 of the export's `manifest.json`: a plan of another export is computed again. */
+  exportManifestSha256: string;
   target: MigrationTarget;
   eventRecord: (record: Row) => Row;
   signal: AbortSignal;
 }): Promise<MovePlan> {
   const planPath = join(input.workDir, PLAN_FILE);
   try {
-    return JSON.parse(await readFile(planPath, "utf8")) as MovePlan;
+    const saved = JSON.parse(await readFile(planPath, "utf8")) as MovePlan;
+    if (saved.exportManifestSha256 === input.exportManifestSha256) return saved;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
@@ -362,6 +367,7 @@ export async function movePlan(input: {
 
   const plan: MovePlan = {
     projectId,
+    exportManifestSha256: input.exportManifestSha256,
     expected,
     tickets,
     sessions,

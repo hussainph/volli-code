@@ -66,7 +66,7 @@ export interface MovedSessionUploadReport {
 
 /**
  * A moved Session's history beyond its rows: the backend's event encoding,
- * its transcript packs and Pi logs (MOVE-4, `cloud-move/session-history.ts`).
+ * its transcript packs and Pi logs (VC-990).
  */
 export interface MoveSessionHistory {
   /** One exported Session event as the import sends it. Pure. */
@@ -79,7 +79,7 @@ export interface MoveSessionHistory {
   ): Promise<MovedSessionUploadReport>;
 }
 
-/** The profile's verified backup (MOVE-6): written once per queue, re-read before any freeze. */
+/** The profile's verified backup: written once per queue, re-read before any freeze. */
 export interface MoveBackupPort {
   write(signal: AbortSignal): Promise<{ path: string; bytes: number }>;
 }
