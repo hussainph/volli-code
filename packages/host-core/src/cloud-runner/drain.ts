@@ -391,6 +391,11 @@ export function createFactDrain(options: FactDrainOptions): FactDrain {
       stream.next = stream.cursor.acceptedThrough + 1;
       return;
     }
+    // Newly typed internal faults (corrupt_*, fold_failed, accept_failed)
+    // retain the old bare-error backoff. Do not turn them into permanent
+    // blocked cursors: the production composition has no explicit retry door
+    // for those faults. Repair/refold can then let the retained facts settle.
+    // Unknown future codes likewise never acknowledge or discard local facts.
     return retryLater(stream, error);
   }
 

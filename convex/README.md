@@ -83,6 +83,7 @@ must expose trustworthy request metadata or its users share one quota.
 | `functions/sessions.ts`                                             | Sessions on the cloud ledger: `accept` (the claimed runner's facts, fenced, contiguous, idempotent), `command` (a person's or an agent's intent, queued as a `session.command` job), the reads `snapshot`, `history`, `list`, `attention`, and the internal `catchUp`, `refold`, `transferClaim`. |
 | `functions/sessionMessages.ts`                                      | `pending`: an owner's commands with no engine receipt, waiting or ended with a reason, and a message's staged body (runners read staged bodies through `transcripts.commandArtifact`).                                                                                                            |
 | `functions/lib/sessionIntake.ts`, `functions/lib/sessionDerived.ts` | The intake rules and the fold (`sessionIntake`), and what a folded fact derives: turns, attention items, the second job receipt, the listing row (`sessionDerived`).                                                                                                                              |
+| `functions/lib/sessionIntakeDiagnostics.ts`                         | The intake transaction boundary's typed errors and content-free rejection log (see **Session intake rejection diagnostics**).                                                                                                                                                                     |
 | `functions/attention.ts`, `functions/lib/attention.ts`              | Needs-you attention: `markSeen`, `raiseFromRunner` (`volli notify`), the internal `access_lost` sweep. `lib/attention.ts` is the one writer of `attentionItems` (and the push hook); reads filter with `attentionVisibility` (`canSeeAttention`).                                                 |
 | `functions/testSeed.ts`, `functions/lib/testWorld.ts`               | Test-only seeding (a Workspace, project, ticket, runners) and quota resets for the serial backend suite. Internal, and refused on any deployment without `VOLLI_TEST_JWKS`.                                                                                                                       |
 | `functions/secrets.ts`                                              | Team secrets: `listWorkspace`, `listProject` (with what overrides what), `listPersonal`, `set` (an action: it seals), `setExposure`, `remove`. Metadata only on the way out: no query returns a secret's value. Rules: `secrets.ts` in `@volli/shared/cloud`.                                     |
@@ -135,6 +136,46 @@ failed before recording a child intent, including parent-first drain ordering.
 A parent's stop cascades only to original watches on other runners, after the
 child projection catches up. `delegations.forParent` is visibility-checked;
 starting a child elsewhere is a separate runner-selection feature.
+
+## Session intake rejection diagnostics
+
+`sessions.accept` and the scheduled `sessions.catchUp` emit one JSON console
+line per catchable rejected execution attempt, with `event: "session_intake_rejected"`. Search
+that marker in function logs, then use the platform Request ID to correlate it
+with the mutation outcome. Capture a recurrence promptly: the CLI/dashboard's
+recent log history is not an archive.
+
+The line contains only the operation, validated Session UUID (otherwise null),
+a product-owned reason code and phase, committed `acceptedThrough`, expected
+and attempted sequences, the current allowlisted fact kind, state presence/size,
+fact count and UTF-8 sizes. Unknown cursors and unmeasured byte sizes are null,
+not zero. Unexpected exceptions add a fixed error category and allowlisted
+source basenames/line numbers, never their message, raw stack, paths, payloads,
+provenance, tokens, or other credentials. Authentication failures do not look
+up a Session's head. Failed mutations roll back all writes; the logged head
+is never the speculative head of the rejected batch.
+
+Existing typed refusals retain their codes and additive data. Unreadable
+stored event JSON is `corrupt_history`, unreadable same-version fold JSON or
+checkpoint/view shape `corrupt_state`, and a missing board counter
+`corrupt_board` (including regular board mutations). Corruption requires server
+repair/refold, but the runner retains and retries the facts with its existing
+backoff so they can settle afterwards. No new permanent client stop is added:
+the production composition has no explicit retry door for those blocked
+cursors. Existing terminal refusals and their recorded faults are unchanged.
+Oversized batches still fall back to single facts; oversized single facts
+still stop the drain. A fact too large for the bounded fold is still quarantined
+and accepted, not turned into a rejection. `out_of_order` still resends from the
+backend's head. An unexpected exception in the pure fold is `fold_failed`;
+other unclassified exceptions are sanitized as `accept_failed`. These likewise
+retain existing backoff rather than making a newly deployed fold defect a
+permanent client stop. Older clients treat unknown codes as transient and
+retain their facts.
+
+Platform argument validation and commit-time failures (including exhausted
+OCC retries) occur outside the JS handler and cannot be caught by this
+boundary. Their platform request/error logs remain necessary; no error code
+here claims to identify a platform limit or contention without evidence.
 
 ## The migration import
 

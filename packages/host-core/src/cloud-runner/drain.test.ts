@@ -321,7 +321,15 @@ describe("the fact drain", () => {
   });
 
   it("stops a Session's drain, visibly, on a refusal retrying cannot fix", async () => {
-    for (const code of ["fenced", "conflict", "not_your_runner", "unknown_session"]) {
+    for (const code of [
+      "fenced",
+      "conflict",
+      "not_your_runner",
+      "unknown_session",
+      "not_found",
+      "revoked",
+      "not_a_runner",
+    ]) {
       const backend = fakeBackend();
       const { ledger, append } = memoryLedger();
       const { store, rows } = memoryCursors();
@@ -388,17 +396,35 @@ describe("the fact drain", () => {
     expect(calls).toBeLessThanOrEqual(16);
   });
 
-  it("retries a refusal it does not know as transient", async () => {
+  it.each([
+    "unauthenticated",
+    "accept_failed",
+    "fold_failed",
+    "runner_unavailable",
+    "preview_access_required",
+    "parent_not_found",
+    "corrupt_history",
+    "corrupt_state",
+    "corrupt_board",
+    "invalid_job",
+    "id_taken",
+    "future_refusal",
+  ])("keeps %s queued for retry without advancing the cursor or discarding facts", async (code) => {
     const backend = fakeBackend();
     const { ledger, append } = memoryLedger();
     const { store, rows } = memoryCursors();
-    const drain = drainOver(backend, ledger, store);
-    backend.faults.push(() => refusal("unauthenticated", 0));
+    const retryHeads: number[] = [];
+    const drain = drainOver(backend, ledger, store, {
+      onRetry: (sessionId) => retryHeads.push(rows.get(sessionId)!.acceptedThrough),
+    });
+    backend.faults.push(() => refusal(code, 99)); // A rejection is never an acknowledgement.
     append("s1");
     drain.adopt("s1");
     drain.start();
     await drain.idle();
+    expect(retryHeads).toEqual([0]);
     expect(backend.heads.get("s1")).toBe(1);
+    expect(rows.get("s1")?.acceptedThrough).toBe(1);
     expect(rows.get("s1")?.blocked).toBeNull();
   });
 

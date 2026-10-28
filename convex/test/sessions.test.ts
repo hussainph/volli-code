@@ -10,6 +10,7 @@ import {
   type UserId,
 } from "@volli/shared/cloud";
 import { parseRendererSessionEvent, type SessionEvent } from "@volli/shared";
+import * as cloudState from "@volli/shared/cloud";
 
 import { api, internal } from "../functions/_generated/api";
 import { seedTestRunner, seedTestWorld } from "../functions/lib/testWorld";
@@ -111,6 +112,7 @@ async function snapshot(t: T, user: string, sessionId: string) {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("sessions.accept", () => {
@@ -643,6 +645,205 @@ describe("sessions.accept", () => {
     await expect(
       asRunner(t, runner).mutation(api.sessions.accept, { sessionId, generation: 1, events: [] }),
     ).rejects.toThrow(code("invalid_request"));
+  });
+});
+
+describe("intake rejection diagnostics", () => {
+  test("auth refusals are logged once without looking up a Session's private head", async () => {
+    const { t, projectId } = await world();
+    const { sessionId, events } = await writeSession({ projectId });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      t.mutation(api.sessions.accept, {
+        sessionId,
+        generation: 1,
+        events: [wire(events[0]!)],
+      }),
+    ).rejects.toThrow(code("unauthenticated", { acceptedThrough: null }));
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({
+      event: "session_intake_rejected",
+      phase: "authenticate",
+      code: "unauthenticated",
+      sessionId,
+      acceptedThrough: null,
+      expectedSequence: null,
+    });
+  });
+
+  test("a rejected non-UUID Session id has an unknown head, never a fabricated zero", async () => {
+    const { t, runner } = await world();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      asRunner(t, runner).mutation(api.sessions.accept, {
+        sessionId: "private-invalid-session",
+        generation: 1,
+        events: ["{}"],
+      }),
+    ).rejects.toThrow(code("invalid_request", { acceptedThrough: null }));
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({
+      code: "invalid_request",
+      sessionId: null,
+      acceptedThrough: null,
+      expectedSequence: null,
+    });
+    expect(log.mock.calls[0]![0]).not.toContain("private-invalid-session");
+  });
+
+  test.each(["payload", "provenance"] as const)(
+    "unreadable stored %s is typed corrupt_history, not a bare JSON exception",
+    async (field) => {
+      const { t, runner, projectId } = await world();
+      const { sessionId, events } = await writeSession({ projectId });
+      await accept(t, runner, sessionId, events.slice(0, 3));
+      await t.run(async (ctx) => {
+        const row = await ctx.db
+          .query("sessionEvents")
+          .withIndex("by_session_sequence", (q) => q.eq("sessionId", sessionId).eq("sequence", 1))
+          .unique();
+        await ctx.db.patch(row!._id, { [field]: "{private-content" });
+      });
+      const log = vi.spyOn(console, "error").mockImplementation(() => {});
+      await expect(accept(t, runner, sessionId, [events[0]!])).rejects.toThrow(
+        code("corrupt_history", { acceptedThrough: 3 }),
+      );
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({
+        code: "corrupt_history",
+        phase: "duplicates",
+        acceptedThrough: 3,
+        expectedSequence: 4,
+      });
+      expect(log.mock.calls[0]![0]).not.toContain("private-content");
+    },
+  );
+
+  test.each(["json", "checkpoint", "ahead", "shape"] as const)(
+    "a corrupt %s fold fails typed and rolls back speculative events and cursor",
+    async (corruption) => {
+      const { t, runner, projectId } = await world();
+      const { sessionId, events } = await writeSession({ projectId });
+      await accept(t, runner, sessionId, events.slice(0, 3));
+      await t.run(async (ctx) => {
+        const row = await ctx.db
+          .query("sessionStates")
+          .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+          .unique();
+        const state = JSON.parse(row!.state!);
+        if (corruption === "checkpoint") state.fold.throughSequence = -1;
+        if (corruption === "ahead") state.fold.throughSequence = 999;
+        if (corruption === "shape") state.fold = {};
+        await ctx.db.patch(row!._id, {
+          state: corruption === "json" ? "{private-content" : JSON.stringify(state),
+        });
+      });
+      const log = vi.spyOn(console, "error").mockImplementation(() => {});
+      const reason = "corrupt_state";
+      await expect(accept(t, runner, sessionId, [events[3]!])).rejects.toThrow(
+        code(reason, { acceptedThrough: 3 }),
+      );
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({
+        code: reason,
+        acceptedThrough: 3,
+        expectedSequence: 4,
+        firstSequence: 4,
+        lastSequence: 4,
+        eventCount: 1,
+      });
+      expect(log.mock.calls[0]![0]).not.toContain("private-content");
+      const rows = await t.run(async (ctx) => ({
+        intake: await ctx.db.query("sessionIntake").first(),
+        events: await ctx.db.query("sessionEvents").collect(),
+      }));
+      expect(rows.intake?.acceptedThrough).toBe(3);
+      expect(rows.events).toHaveLength(3);
+    },
+  );
+
+  test("a fresh-fact fold exception is typed without changing its transient retry semantics", async () => {
+    const { t, runner, projectId } = await world();
+    const { sessionId, events } = await writeSession({ projectId });
+    await accept(t, runner, sessionId, events.slice(0, 3));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fold = vi.spyOn(cloudState, "foldCloudSessionState").mockImplementationOnce(() => {
+      throw new TypeError("private-exception-message");
+    });
+    await expect(accept(t, runner, sessionId, [events[3]!])).rejects.toThrow(
+      code("fold_failed", { acceptedThrough: 3 }),
+    );
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({
+      code: "fold_failed",
+      phase: "fold",
+      sequence: 4,
+      kind: "command.recorded",
+      acceptedThrough: 3,
+      errorKind: "type",
+    });
+    expect(log.mock.calls[0]![0]).not.toContain("private-exception-message");
+    expect((await t.run((ctx) => ctx.db.query("sessionIntake").first()))?.acceptedThrough).toBe(3);
+    expect(await t.run((ctx) => ctx.db.query("sessionEvents").collect())).toHaveLength(3);
+    fold.mockRestore();
+    await expect(accept(t, runner, sessionId, [events[3]!])).resolves.toMatchObject({
+      acceptedThrough: 4,
+    });
+    expect(log).toHaveBeenCalledTimes(1);
+  });
+
+  test("an unexpected database exception at the head read stays transient and typed", async () => {
+    const { t, runner, projectId } = await world();
+    const { sessionId, events } = await writeSession({ projectId });
+    await accept(t, runner, sessionId, events.slice(0, 3));
+    // Simulate an invariant failure in a database helper, not a caller refusal.
+    await t.run(async (ctx) => {
+      const row = await ctx.db.query("sessionIntake").first();
+      const { _id: _ignoredId, _creationTime: _ignoredTime, ...copy } = row!;
+      await ctx.db.insert("sessionIntake", copy);
+    });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(accept(t, runner, sessionId, [events[3]!])).rejects.toThrow(
+      code("accept_failed", { acceptedThrough: null }),
+    );
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({
+      code: "accept_failed",
+      phase: "head",
+      unexpected: true,
+      acceptedThrough: null,
+    });
+    expect(await t.run((ctx) => ctx.db.query("sessionEvents").collect())).toHaveLength(3);
+  });
+
+  test.each([2, 3])("catch-up missing fact %s is typed and logged once", async (missing) => {
+    vi.useFakeTimers();
+    const { t, runner, projectId } = await world();
+    const { sessionId, events } = await writeSession({ projectId });
+    await accept(t, runner, sessionId, events.slice(0, 3));
+    await t.mutation(internal.sessions.refold, { sessionId });
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("sessionEvents")
+        .withIndex("by_session_sequence", (q) =>
+          q.eq("sessionId", sessionId).eq("sequence", missing),
+        )
+        .unique();
+      await ctx.db.delete(row!._id);
+    });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(t.mutation(internal.sessions.catchUp, { sessionId })).rejects.toThrow(
+      code("corrupt_history"),
+    );
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({
+      operation: "catch_up",
+      phase: "catch_up",
+      code: "corrupt_history",
+      expectedSequence: missing,
+      eventCount: 0,
+    });
+    expect((await t.run((ctx) => ctx.db.query("sessionStates").first()))?.throughSequence).toBe(0);
   });
 });
 
