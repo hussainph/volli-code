@@ -2,11 +2,14 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 import { writeSyntheticProfile } from "../migration-dry-run/test-support/synthetic-profile";
 import { exportMigrationSnapshot, type MigrationExportManifest } from "./exporter";
 import type { StreamName } from "./sources";
 import { verifyMigrationExport } from "./verify";
+
+// This matrix first migrates and exports a real profile, not an in-memory manifest.
+vi.setConfig({ testTimeout: 30_000 });
 
 const sha = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 const digest = `sha256:${sha("{}")}`;

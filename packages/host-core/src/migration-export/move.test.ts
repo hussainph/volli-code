@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { afterEach, expect, it } from "vite-plus/test";
+import { afterEach, expect, it, vi } from "vite-plus/test";
 import { migrationDocument, MigrationRowError } from "@volli/shared/cloud";
 import {
   writeMoveProfile,
@@ -16,6 +16,10 @@ import { streamRecords } from "./test-support/export-files";
 import { verifyMigrationExport } from "./verify";
 import { createOrphanCleanupEngine } from "../worktree/cleanup-engine";
 import { SqliteOrphanCleanupLedger } from "../worktree/cleanup-ledger";
+
+// Full migrated profiles, VACUUM snapshots and fsynced chunks, like exporter.test.ts.
+// A cold CI disk under the packages lane needs the same I/O timeout budget.
+vi.setConfig({ testTimeout: 30_000 });
 
 const roots: string[] = [];
 afterEach(() => {
