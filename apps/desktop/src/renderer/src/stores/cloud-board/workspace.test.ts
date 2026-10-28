@@ -10,6 +10,7 @@ import { CLOUD_READ_ONLY } from "./source";
 import type { BoardSnapshot } from "./snapshot";
 import {
   createCloudProject,
+  selectCloudWorkspace,
   followCloudWorkspace,
   useCloudWorkspaceStore,
   type CloudWorkspaceDeps,
@@ -143,6 +144,49 @@ const SNAPSHOT: BoardSnapshot = {
 
 afterEach(() => {
   useCloudWorkspaceStore.setState({ workspace: null, localProjects: 0 });
+});
+
+describe("joining and leaving a Workspace", () => {
+  it("opens the accepted Workspace before listMine catches up and persists through hydration", async () => {
+    const h = harness();
+    h.connect();
+    h.cloud.answer("workspaces:listMine", {}, [W1]);
+    h.cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("a")]);
+    h.cloud.queries.set("workspaces:get", () => W2);
+    await selectCloudWorkspace("w2", h.cloud.session);
+    expect(useCloudWorkspaceStore.getState().workspace).toEqual({ id: "w2", name: "Team" });
+    expect(h.cloud.watchers("projects:list", { workspaceId: "w1" })).toBe(0);
+    h.cloud.answer("projects:list", { workspaceId: "w2" }, [projectRow("b")]);
+    expect(h.state.hydrateCloud).toHaveBeenLastCalledWith("w2", expect.any(Array), "b");
+    h.cloud.answer("workspaces:listMine", {}, [W1, W2]);
+    expect(useCloudWorkspaceStore.getState().workspace?.id).toBe("w2");
+    h.stop();
+  });
+  it("refuses selection offline and surfaces failed membership reads", async () => {
+    const h = harness();
+    h.connect();
+    h.cloud.connected = false;
+    await expect(selectCloudWorkspace("w2", h.cloud.session)).rejects.toThrow(CLOUD_READ_ONLY);
+    h.cloud.connected = true;
+    h.cloud.queries.set("workspaces:get", () => {
+      throw refusal("not_a_member", "You are no longer a member.");
+    });
+    await expect(selectCloudWorkspace("w2", h.cloud.session)).rejects.toThrow(
+      "You are no longer a member.",
+    );
+    h.stop();
+  });
+  it("clears a formerly live board when the last Workspace is left", () => {
+    const h = harness();
+    h.connect();
+    h.cloud.answer("workspaces:listMine", {}, [W1]);
+    h.cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("a")]);
+    h.cloud.answer("workspaces:listMine", {}, []);
+    expect(useCloudWorkspaceStore.getState().workspace).toBeNull();
+    expect(h.state.projects).toEqual([]);
+    expect(h.cloud.watchers("projects:list", { workspaceId: "w1" })).toBe(0);
+    h.stop();
+  });
 });
 
 describe("the current Volli Cloud Workspace (VC-889)", () => {

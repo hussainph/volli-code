@@ -190,6 +190,42 @@ const servicesWith = (options: { account?: boolean; runners?: boolean }) =>
     .find((group) => group.key === "services")!
     .categories.map((category) => category.key);
 
+describe("Settings → Workspace", () => {
+  it("exists only in a cloud launch next to Runners and indexes all section and row labels", () => {
+    expect(servicesWith({})).not.toContain("workspace");
+    expect(servicesWith({ account: true, runners: false })).not.toContain("workspace");
+    expect(servicesWith({ account: true, runners: true }).slice(0, 3)).toEqual([
+      "account",
+      "runners",
+      "workspace",
+    ]);
+    const workspace = settingsGroups(undefined, { runners: true })
+      .flatMap((g) => g.categories)
+      .find((c) => c.key === "workspace")!;
+    const terms = [workspace.label.toLowerCase(), ...(workspace.keywords ?? [])];
+    for (const label of [
+      "name",
+      "your role",
+      "membership",
+      "members",
+      "invites",
+      "invitations to you",
+      "sharing",
+      "make everything shared",
+      "who can invite",
+      "join",
+      "leave",
+      "revoke",
+      "new code",
+    ]) {
+      expect(
+        terms.some((term) => term.includes(label)),
+        label,
+      ).toBe(true);
+    }
+  });
+});
+
 describe("Settings → Runners", () => {
   it("exists only with the runners option on, after Account, findable by what it shows", () => {
     const services = servicesWith;

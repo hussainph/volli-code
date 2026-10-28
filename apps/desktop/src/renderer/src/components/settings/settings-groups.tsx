@@ -35,6 +35,7 @@ import { hasVisibleExperiments } from "@renderer/stores/experiments";
 import { accountCategory } from "./account-category";
 import { hostsCategory } from "./hosts-category";
 import { runnersCategory } from "./runners-category";
+import { workspaceCategory } from "./workspace-category";
 import { AboutPane } from "./panes/about-pane";
 import { DisplaySection } from "./panes/display-section";
 import { GeneralPane } from "./panes/general-pane";
@@ -191,7 +192,7 @@ export function settingsGroups(
       label: "Services",
       categories: [
         ...(options.account === true ? [accountCategory()] : []),
-        ...(options.runners === true ? [runnersCategory()] : []),
+        ...(options.runners === true ? [runnersCategory(), workspaceCategory()] : []),
         ...(options.hosts === true ? [hostsCategory()] : []),
         {
           key: MODELS_CATEGORY_KEY,
