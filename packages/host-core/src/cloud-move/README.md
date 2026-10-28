@@ -89,7 +89,7 @@ moving the project again needs that copy removed first.
 ## Ports
 
 `MoveEnginePorts` (`ports.ts`): the backend under the person's sign-in, the
-object store, the exporter (normally its worker), the backup writer, the
+object store (`presignedMoveObjects`), the exporter (normally its worker), the backup writer, the
 Session-history upload and cursor seeding, this Mac's live work, the
 signed-in identity, and the real-path check (`windowReadCheck`).
 `faults` is the kill/resume matrix's injection point.
@@ -100,8 +100,9 @@ Receiving wiring:
   composes `sessionEventImportRecord`, `createMoveHistoryUploader` and
   `seedMovedSessionCursors`/`releaseMovedSessionCursors` into
   `MoveSessionHistory`; the real-path check then also waits on its fold.
-- **The object store**: presigned through `projectImports.presignPut` (VC-982)
-  and a read door for the move's own keys, with the object store's own change.
+- **The object store**: `presignedMoveObjects` over the account's Convex client:
+  write-once PUTs through `projectImports.presignPut`, HEADs (with the stored
+  checksum) and GETs through `projectImports.presignRead`, bodies streamed.
 - **The backup step**: `createMoveBackupPort` over the existing automatic-backup
   worker entry (desktop's `automatic-backup-worker` bundle). Pass the profile and
   store paths, the engine's `workRoot`, and a conservative `estimatedExportBytes`

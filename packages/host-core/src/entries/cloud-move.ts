@@ -17,6 +17,7 @@ export {
 export { createMoveBackupPort, type MoveBackupOptions } from "../cloud-move/backup";
 export { ProjectFrozenError, projectFreeze } from "../cloud-move/freeze";
 export type { MoveFailure, MovePause, MoveRow, QueueRow } from "../cloud-move/journal";
+export { presignedMoveObjects } from "../cloud-move/objects";
 export type {
   MoveBackend,
   MoveBackupPort,

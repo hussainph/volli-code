@@ -1083,6 +1083,62 @@ export const presignPut = publicAction({
   },
 });
 
+/**
+ * Checks one object read of an open move: its importer, and a key the move
+ * itself writes (`moveObjectKeyProblem`; a blob's key names its own SHA-256).
+ */
+export const authorizeObjectRead = internalQuery({
+  args: { moveId: v.string(), key: v.string() },
+  handler: async (ctx, args): Promise<{ key: string }> => {
+    const { row } = await requireImporter(ctx, args.moveId);
+    if (!OPEN.has(row.status)) {
+      throw importError("import_closed", "This move no longer reads its objects.", {
+        status: row.status,
+      });
+    }
+    const named = /\/b\/([0-9a-f]{64})$/.exec(args.key)?.[1] ?? "0".repeat(64);
+    const problem = moveObjectKeyProblem(args.key, {
+      moveId: row.id,
+      projectId: row.projectId,
+      sha256: named,
+    });
+    if (problem !== null) throw importError("invalid_key", problem);
+    return { key: args.key };
+  },
+});
+
+/**
+ * A URL for one HEAD or GET of an object the move wrote, valid for five
+ * minutes, while the move is open: how the client's verification reads back
+ * what it uploaded (a HEAD asks for the stored SHA-256 checksum). Once the
+ * project is shown, its objects are read through the window's own paths.
+ */
+export const presignRead = publicAction({
+  args: { moveId: v.string(), key: v.string(), method: literals(["HEAD", "GET"] as const) },
+  handler: async (ctx, args): Promise<{ request: PresignedS3Request }> => {
+    const { key } = await ctx.runQuery(internal.projectImports.authorizeObjectRead, {
+      moveId: args.moveId,
+      key: args.key,
+    });
+    const config = objectStoreConfig(process.env);
+    if (config === null) {
+      throw importError(
+        "storage_unconfigured",
+        "Object storage is not configured on this deployment.",
+      );
+    }
+    const request = presignS3Request({
+      ...config,
+      method: args.method,
+      key,
+      now: Date.now(),
+      expiresSeconds: PRESIGN_EXPIRES_SECONDS,
+      headers: args.method === "HEAD" ? { "x-amz-checksum-mode": "ENABLED" } : {},
+    });
+    return { request };
+  },
+});
+
 // ── reads ────────────────────────────────────────────────────────────────────
 
 /** The move and every stream's promise and accumulator, for its importer. */

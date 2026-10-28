@@ -6,8 +6,9 @@
  * the engine runs every step through `projectImports.*` and the window's own
  * public reads, signed in as her.
  *
- * Stand-ins, each at a port the engine names: object storage (a write-once
- * map, as the store's `If-None-Match: *` makes R2), the Session-history
+ * Objects go through the production store (`presignedMoveObjects`): every
+ * PUT, HEAD and GET presigned by the real `projectImports` actions and
+ * checked by the S3 stand-in. Stand-ins at the other ports: the Session-history
  * upload (nothing to pack in this fixture), the backup writer, this Mac's
  * live work and the identity. `kill` points let the kill/resume matrix stop
  * the engine dead at any step boundary or mid-step, as a crash would.
@@ -20,13 +21,15 @@ import { join } from "node:path";
 import { makeFunctionReference } from "convex/server";
 import { MIGRATION_IMPORT_STREAMS, MigrationDigest, migrationRowDigest } from "@volli/shared/cloud";
 
+import { vi } from "vite-plus/test";
+
 import { createMoveEngine, type MoveEngine } from "../../packages/host-core/src/cloud-move/engine";
 import { sessionEventImportRecord } from "../../packages/host-core/src/migration-export/session-event-record";
+import { presignedMoveObjects } from "../../packages/host-core/src/cloud-move/objects";
 import { openRawDb } from "../../packages/host-core/src/db/test-helpers";
 import type {
   MoveBackend,
   MoveEnginePorts,
-  MoveObjectStore,
   MoveSessionHistory,
 } from "../../packages/host-core/src/cloud-move/ports";
 import { windowReadCheck } from "../../packages/host-core/src/cloud-move/real-paths";
@@ -37,6 +40,7 @@ import {
 import { exportMigrationSnapshot } from "../../packages/host-core/src/migration-export/exporter";
 import { seedTestWorld } from "../functions/lib/testWorld";
 import { setup, signIn, type Tester } from "./board-helpers";
+import { S3StandIn } from "./s3-standin";
 
 /** A signed-in tester called by function path, as the engine's backend port calls it. */
 type Untyped = Record<
@@ -61,39 +65,6 @@ export interface Kill {
 export interface Flaps {
   /** Every `every`-th backend call fails as the network would, before it reaches the backend. */
   every: number;
-}
-
-/** A write-once object store: what R2 does with the move's `If-None-Match: *` PUTs. */
-export class ObjectStandIn implements MoveObjectStore {
-  readonly objects = new Map<string, Uint8Array>();
-  async put(
-    _moveId: string,
-    object: { key: string; bytes: number; sha256: string },
-    body: () => Promise<Uint8Array | NodeJS.ReadableStream>,
-  ): Promise<"stored" | "exists"> {
-    if (this.objects.has(object.key)) return "exists";
-    const source = await body();
-    const chunks: Uint8Array[] = [];
-    if (source instanceof Uint8Array) chunks.push(source);
-    else for await (const chunk of source as AsyncIterable<Uint8Array>) chunks.push(chunk);
-    const bytes = Buffer.concat(chunks);
-    const sha256 = (await import("node:crypto")).createHash("sha256").update(bytes).digest("hex");
-    // The store checks the length and checksum the URL was signed for.
-    if (bytes.length !== object.bytes || sha256 !== object.sha256) {
-      throw Object.assign(new Error("400"), { data: { code: "object_refused" } });
-    }
-    this.objects.set(object.key, bytes);
-    return "stored";
-  }
-  async head(_moveId: string, key: string) {
-    const bytes = this.objects.get(key);
-    if (bytes === undefined) return null;
-    const sha256 = (await import("node:crypto")).createHash("sha256").update(bytes).digest("hex");
-    return { bytes: bytes.length, sha256 };
-  }
-  async get(_moveId: string, key: string) {
-    return this.objects.get(key) ?? null;
-  }
 }
 
 type Db = ReturnType<typeof openRawDb>;
@@ -149,7 +120,8 @@ export interface MoveWorld {
   t: Tester;
   root: string;
   db: Db;
-  objects: ObjectStandIn;
+  /** The object store the move uploads to (write-once, signature-checked). */
+  objects: S3StandIn;
   userId: string;
   runnerId: string;
   /** Another runner of Alice's: what this Mac is registered as after a replacement. */
@@ -172,7 +144,7 @@ export async function moveWorld(): Promise<MoveWorld> {
   const profile = writeMoveFixture(join(root, "profile"));
   const db = openRawDb(profile.dbPath);
   db.pragma("foreign_keys = ON");
-  const objects = new ObjectStandIn();
+  const objects = new S3StandIn().install();
   const calls = new Map<string, number>();
   const history = testHistory(db);
 
@@ -234,7 +206,10 @@ export async function moveWorld(): Promise<MoveWorld> {
         homeDir: join(root, "profile"),
         appVersion: "0.3.0-test",
         backend,
-        objects,
+        objects: presignedMoveObjects({
+          backend,
+          fetch: objects.fetch as unknown as typeof globalThis.fetch,
+        }),
         history,
         backup: {
           async write() {
@@ -262,6 +237,8 @@ export async function moveWorld(): Promise<MoveWorld> {
       return createMoveEngine(ports);
     },
     cleanup() {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
       db.close();
       rmSync(root, { recursive: true, force: true });
     },
