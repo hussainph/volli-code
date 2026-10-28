@@ -147,6 +147,16 @@ afterEach(() => {
 });
 
 describe("joining and leaving a Workspace", () => {
+  it("does not warn about the previous Workspace’s projects on Leave", () => {
+    const h = harness();
+    h.connect();
+    h.cloud.answer("workspaces:listMine", {}, [W1, W2]);
+    h.cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("a")]);
+    h.cloud.answer("workspaces:listMine", {}, [W2]);
+    h.cloud.answer("projects:list", { workspaceId: "w2" }, [projectRow("b")]);
+    expect(h.deps.notice).not.toHaveBeenCalled();
+    h.stop();
+  });
   it("opens the accepted Workspace before listMine catches up and persists through hydration", async () => {
     const h = harness();
     h.connect();
@@ -158,6 +168,9 @@ describe("joining and leaving a Workspace", () => {
     expect(h.cloud.watchers("projects:list", { workspaceId: "w1" })).toBe(0);
     h.cloud.answer("projects:list", { workspaceId: "w2" }, [projectRow("b")]);
     expect(h.state.hydrateCloud).toHaveBeenLastCalledWith("w2", expect.any(Array), "b");
+    expect(h.deps.notice).not.toHaveBeenCalled();
+    h.cloud.answer("projects:list", { workspaceId: "w2" }, []);
+    expect(h.deps.notice).toHaveBeenCalledExactlyOnceWith("B isn’t available any more");
     h.cloud.answer("workspaces:listMine", {}, [W1, W2]);
     expect(useCloudWorkspaceStore.getState().workspace?.id).toBe("w2");
     h.stop();

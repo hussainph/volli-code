@@ -27,6 +27,7 @@ function providerFor(config: AccountConfig): AccountProvider | null {
     return devIssuerProvider({
       privateKeyPem: chosen.privateKeyPem,
       ...(chosen.subject === null ? {} : { subject: chosen.subject }),
+      ...(chosen.email === undefined ? {} : { email: chosen.email }),
     });
   }
   return workosProvider({

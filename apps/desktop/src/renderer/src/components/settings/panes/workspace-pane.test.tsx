@@ -289,6 +289,29 @@ describe("Workspace sections", () => {
 });
 
 describe("Invitations", () => {
+  it("shows only preview verdicts actually returned by the API", () => {
+    const h = mount();
+    h.ready();
+    h.answer("invites:list", [invite]);
+    expect(text()).not.toContain("They need preview access");
+    h.answer("invites:list", [{ ...invite, preview: "needs_access" }]);
+    expect(text()).toContain("They need preview access from Volli first");
+    h.answer("invites:list", [{ ...invite, preview: "future_verdict" }]);
+    expect(text()).not.toContain("They need preview access");
+  });
+  it("distinguishes a completed Join from a failed Workspace navigation", async () => {
+    const h = mount();
+    h.ready();
+    h.answer("invites:listMine", [
+      { inviteId: "mine", workspaceName: "Team", invitedByName: "Robin", role: "member" },
+    ]);
+    h.props.select.mockRejectedValueOnce(new Error("Connection lost"));
+    await click("Join");
+    await resolve(h, { workspaceId: "w2" });
+    expect(toastError).toHaveBeenCalledWith(
+      "Joined the Workspace, but couldn’t open it: Connection lost",
+    );
+  });
   it("creates email invites, reports preview accurately and copies only on an explicit press", async () => {
     const h = mount();
     h.ready();
@@ -329,7 +352,10 @@ describe("Invitations", () => {
     await click("Create invite");
     expect(h.cloud.mutations[0]).toMatchObject({ args: { ...args, email: null, role: "member" } });
     await resolve(h, { inviteId: "i1", token: "code-only-once" });
-    expect(text()).toContain("They need preview access from Volli first");
+    expect(text()).not.toContain("They need preview access from Volli first");
+    expect(text()).not.toContain("They can join now");
+    expect(text()).toContain("Single-use code: code-only-once");
+    expect(text()).not.toContain("and sign in");
     expect(document.querySelector<HTMLInputElement>('[aria-label="Invite code"]')?.value).toBe(
       "code-only-once",
     );

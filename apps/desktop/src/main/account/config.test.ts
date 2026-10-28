@@ -158,6 +158,22 @@ describe("the account's configuration", () => {
     });
   });
 
+  it("allows distinct dev-issuer emails for two-account sharing proofs, never in packaged builds", () => {
+    const env = {
+      VOLLI_ACCOUNT_PROVIDER: "dev",
+      VOLLI_CONVEX_TEST_PRIVATE_KEY: "PEM",
+      VOLLI_ACCOUNT_DEV_SUBJECT: "robin",
+      VOLLI_ACCOUNT_DEV_EMAIL: "robin@volli.invalid",
+    };
+    expect(resolveAccountConfig({ ...dev, env }).provider).toEqual({
+      kind: "dev",
+      privateKeyPem: "PEM",
+      subject: "robin",
+      email: "robin@volli.invalid",
+    });
+    expect(resolveAccountConfig({ packaged: true, env }).provider).toBeNull();
+  });
+
   it("preserves unpackaged provider API overrides used by transport fixtures", () => {
     for (const base of [undefined, "http://127.0.0.1:3212", "ftp://invalid"]) {
       const config = resolveAccountConfig({

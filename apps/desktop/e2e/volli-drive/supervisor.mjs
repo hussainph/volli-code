@@ -650,7 +650,7 @@ async function boot() {
           VOLLI_HOSTD_DEV_TARBALLS: spec.remoteAcceptance.tarballs,
         }
       : {}),
-    ...(cloud ? cloudElectronEnv(cloud, spec.cloud.subject) : {}),
+    ...(cloud ? cloudElectronEnv(cloud, spec.cloud.subject, spec.cloud.email) : {}),
   };
   mark("launchStart");
   launchEnv = extraEnv;

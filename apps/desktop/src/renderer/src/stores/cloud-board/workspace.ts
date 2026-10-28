@@ -23,6 +23,7 @@ import { newId } from "@volli/shared/cloud";
 import { create } from "zustand";
 
 import { cloudSession, type CloudSession } from "@renderer/lib/cloud-client";
+import { NOT_CONNECTED } from "@renderer/lib/cloud-board-api";
 
 import type { CloudSelection } from "../projects";
 import { useCloudLinkInputs } from "../cloud-link";
@@ -53,8 +54,8 @@ const selections = new Set<(session: CloudSession, row: WorkspaceRow) => void>()
 
 /** Opens an accepted Workspace; hydration persists the selection with its projects. */
 export async function selectCloudWorkspace(id: string, session = cloudSession()): Promise<void> {
+  if (session === null) throw new Error(NOT_CONNECTED);
   if (
-    session === null ||
     !session.client.connectionState().isWebSocketConnected ||
     useCloudLinkInputs.getState().input.snapshotAt !== null ||
     !useCloudLinkInputs.getState().input.online
@@ -219,7 +220,9 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
     for (const project of state.projects) {
       if (nextIds.has(project.id)) continue;
       deps.board.forget(project.id);
-      if (!fromSnapshot) deps.notice(`${project.name} isn’t available any more`);
+      // The first answer in a different Workspace replaces the old project list;
+      // those projects are not lost. Only a later answer in this Workspace can lose one.
+      if (answered && !fromSnapshot) deps.notice(`${project.name} isn’t available any more`);
     }
     for (const project of next) deps.board.seedProject(project.id);
     const wanted =

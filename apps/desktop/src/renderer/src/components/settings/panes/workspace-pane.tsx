@@ -55,6 +55,7 @@ import { ListRow } from "@renderer/components/ui/list-row";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { Switch } from "@renderer/components/ui/switch";
 import { toastError } from "@renderer/lib/toast";
+import { CLOUD_READ_ONLY } from "@renderer/stores/cloud-board/source";
 import type { Loaded } from "./use-runners";
 import { useWorkspace, type CreatedInvite, type Member, type PendingInvite } from "./use-workspace";
 
@@ -195,7 +196,7 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
         {viewer.kind === "failed" ? <Empty>{viewer.message}</Empty> : null}
         {readOnly && workspace.kind === "ready" ? (
           <p role="status" className="text-ui text-muted-foreground">
-            Volli Cloud is offline · Read-only
+            {CLOUD_READ_ONLY}
           </p>
         ) : null}
       </PrefSection>
@@ -306,7 +307,9 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
                       key={invite.inviteId}
                       density="two-line"
                       primary={invite.email ?? "Single-use code"}
-                      secondary={`${roleLabel(invite.role)} · ${previewLabel(invite.preview)}`}
+                      secondary={[roleLabel(invite.role), previewLabel(invite.preview)]
+                        .filter(Boolean)
+                        .join(" · ")}
                       onActivate={null}
                       actions={
                         <div className="flex gap-2">
@@ -476,10 +479,12 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
   );
 }
 
-function previewLabel(preview: string | undefined): string {
-  return preview === "granted" || preview === "sponsored" || preview === "already_granted"
-    ? "They can join now"
-    : "They need preview access from Volli first";
+function previewLabel(preview: string | undefined): string | null {
+  if (preview === "granted" || preview === "sponsored" || preview === "already_granted")
+    return "They can join now";
+  if (preview === "needs_access") return "They need preview access from Volli first";
+  // An older API, or a future verdict we cannot interpret: never invent a claim about access.
+  return null;
 }
 
 function InviteDialog({
@@ -505,7 +510,11 @@ function InviteDialog({
   const [email, setEmail] = React.useState(draft.email ?? "");
   const [role, setRole] = React.useState(draft.role);
   const created = draft.created;
-  const message = `Join ${name} on Volli: install Volli from volli.app, open Settings → Account, and sign in${draft.email === null ? `. Invite code: ${created?.token ?? ""}` : ` with ${draft.email}. Open Settings → Workspace → Invitations to you and choose Join.`}`;
+  // TODO(VC-971 PR 1 / PR 3): add code-redemption instructions when sign-in / switcher can receive it.
+  const message =
+    draft.email === null
+      ? `Volli Workspace invite: ${name}. Single-use code: ${created?.token ?? ""}`
+      : `Join ${name} on Volli: install Volli from volli.app, open Settings → Account, and sign in with ${draft.email}. Open Settings → Workspace → Invitations to you and choose Join.`;
   return (
     <Dialog
       open
@@ -571,9 +580,11 @@ function InviteDialog({
           </div>
         ) : (
           <div className="flex flex-col gap-4">
-            <p role="status" className="text-ui">
-              {previewLabel(created.preview)}
-            </p>
+            {previewLabel(created.preview) !== null ? (
+              <p role="status" className="text-ui">
+                {previewLabel(created.preview)}
+              </p>
+            ) : null}
             {draft.email === null ? (
               <Input aria-label="Invite code" value={created.token} readOnly />
             ) : null}

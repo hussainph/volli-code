@@ -18,10 +18,7 @@ import {
 } from "@renderer/stores/cloud-board/workspace";
 import type { FollowSession, Loaded } from "./use-runners";
 
-export type Workspace = FunctionReturnType<CloudApi["workspaces"]["get"]>;
-export type Policy = FunctionReturnType<CloudApi["workspaces"]["policy"]>;
 export type Member = FunctionReturnType<CloudApi["members"]["list"]>[number];
-export type Invitation = FunctionReturnType<CloudApi["invites"]["listMine"]>[number];
 // TODO(VC-971 PR 1): use the generated sponsored-preview fields once the API ships them.
 type Preview = { readonly preview?: string };
 export type PendingInvite = FunctionReturnType<CloudApi["invites"]["list"]>[number] & Preview;
@@ -57,6 +54,7 @@ function useRead<Value>(
     setState({ scope, view: { kind: "loading" } });
     const stopFollow = follow((session) => {
       stop?.();
+      stop = undefined;
       if (!active) return;
       setState({ scope, view: { kind: "loading" } });
       if (session === null || scope === null) return;
@@ -119,6 +117,7 @@ export function useWorkspace({
     let stop: (() => void) | undefined;
     const unfollow = follow((s) => {
       stop?.();
+      stop = undefined;
       const update = () => setConnected(s?.client.connectionState().isWebSocketConnected === true);
       update();
       stop = s?.client.subscribeToConnectionState(update);
@@ -185,7 +184,14 @@ export function useWorkspace({
         const joined = await write(current, ({ client, api }) =>
           client.mutation(api.invites.accept, { inviteId }),
         );
-        await select(joined.workspaceId);
+        try {
+          await select(joined.workspaceId);
+        } catch (error) {
+          throw new Error(
+            `Joined the Workspace, but couldn’t open it: ${error instanceof Error ? error.message : "Try again."}`,
+            { cause: error },
+          );
+        }
       },
     };
   }, [current, select, workspaceId]);
@@ -202,5 +208,3 @@ export function useWorkspace({
     retry: () => setAttempt((n) => n + 1),
   };
 }
-
-export type WorkspaceCommands = ReturnType<typeof useWorkspace>["commands"];

@@ -86,8 +86,8 @@ export interface SettingsGroupsOptions {
    */
   readonly account?: boolean;
   /**
-   * Shows Services → Runners, the person's runners with this Mac among them
-   * (VC-895): only in a Volli Cloud launch.
+   * Shows Services → Runners and Workspace: the cloud launch's runner and team settings.
+   * Neither category exists in a local launch.
    */
   readonly runners?: boolean;
 }

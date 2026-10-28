@@ -101,7 +101,7 @@ volli-drive list                    # nothing of yours should remain live
 
 - Terminal Sessions: the instance's `$SHELL` is a fake login shell (PATH probe), so terminal/harness CLIs are not meaningfully drivable yet; use `apps/desktop/e2e/lib/fake-harness.mjs` smokes for those.
 - Remote hosts: use `apps/desktop/e2e/volli-drive/remote-acceptance-smoke.mjs` and its loopback fixture. Do not connect the harness to a real remote host.
-- Volli Cloud: `launch --cloud --cloud-subject <s>` runs an instance against the loopback fixture backend in its environment (`node convex/fixture/with-backend.ts --deploy -- …`). It needs a build made with `VOLLI_CLOUD_LOOPBACK=1`, and it refuses any other backend. Instances with the same subject are one person on two Macs. Over the drive socket such an instance also answers:
+- Volli Cloud: `launch --cloud --cloud-subject <s>` runs an instance against the loopback fixture backend in its environment (`node convex/fixture/with-backend.ts --deploy -- …`). It needs a build made with `VOLLI_CLOUD_LOOPBACK=1`, and it refuses any other backend. Instances with the same subject are one person on two Macs. For two-account sharing, pass distinct `--cloud-subject` and `--cloud-email` values to each instance (and grant preview to each fixture email); the default dev email otherwise belongs to both accounts. Over the drive socket such an instance also answers:
   - `cloud-sign-in-browser`: follows the dev sign-in URL that the app's recorded `openExternal` asked for;
   - `restart`: a supervised restart on the same scratch tree, in place of `app.relaunch()`;
   - `runner-power suspend|resume`: SIMULATED sleep through main's dual-locked seam;

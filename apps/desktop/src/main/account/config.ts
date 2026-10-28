@@ -24,7 +24,12 @@ import { exactOrigin, type PackagedCloudConfig } from "../deployment-config";
 
 export type AccountProviderConfig =
   | { readonly kind: "workos"; readonly clientId: string; readonly apiBase: string | null }
-  | { readonly kind: "dev"; readonly privateKeyPem: string; readonly subject: string | null };
+  | {
+      readonly kind: "dev";
+      readonly privateKeyPem: string;
+      readonly subject: string | null;
+      readonly email?: string;
+    };
 
 export interface AccountConfig {
   readonly provider: AccountProviderConfig | null;
@@ -93,7 +98,13 @@ export function resolveAccountConfig(input: {
     if (privateKeyPem === null) {
       problems.push("VOLLI_ACCOUNT_PROVIDER=dev needs VOLLI_CONVEX_TEST_PRIVATE_KEY");
     } else {
-      provider = { kind: "dev", privateKeyPem, subject: value(env, "VOLLI_ACCOUNT_DEV_SUBJECT") };
+      const email = value(env, "VOLLI_ACCOUNT_DEV_EMAIL");
+      provider = {
+        kind: "dev",
+        privateKeyPem,
+        subject: value(env, "VOLLI_ACCOUNT_DEV_SUBJECT"),
+        ...(email === null ? {} : { email }),
+      };
     }
   } else if (requested !== null && requested !== "workos") {
     problems.push(`VOLLI_ACCOUNT_PROVIDER must be "dev" or "workos"`);
