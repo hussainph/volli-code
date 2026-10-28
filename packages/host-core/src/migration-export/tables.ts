@@ -54,7 +54,7 @@ export const MIGRATION_TABLE_DECISIONS: readonly MigrationTableDecision[] = [
     table: "app_state",
     disposition: "export",
     reason:
-      "Personal settings keys become config entries and schedule cursors are carried; client, runner and retired keys stay local.",
+      "Personal settings become config entries; schedule cursors are archived paused; client, runner and retired keys stay local.",
   },
   // ---- blobs ------------------------------------------------------
   {
@@ -175,7 +175,7 @@ export const MIGRATION_TABLE_DECISIONS: readonly MigrationTableDecision[] = [
   {
     table: "automation_column_arming",
     disposition: "export",
-    reason: "Board state, armed by the migrating person on this Mac.",
+    reason: "Archived paused with a re-arm reason; never executable after the move.",
   },
   { table: "automation_column_order", disposition: "export", reason: "Verbatim." },
   {
@@ -186,7 +186,7 @@ export const MIGRATION_TABLE_DECISIONS: readonly MigrationTableDecision[] = [
   {
     table: "automation_pending_armed_runs",
     disposition: "export",
-    reason: "An arrival counting down becomes the `automation.run` job that fires it.",
+    reason: "Archived paused with a re-arm reason; never becomes pending runner work.",
   },
   {
     table: "automation_pending_armed_run_attempts",

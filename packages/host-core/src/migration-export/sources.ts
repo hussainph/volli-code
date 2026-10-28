@@ -80,7 +80,7 @@ const RUNNER = MIGRATION_PLACEHOLDERS.runnerId;
 const WORKSPACE = MIGRATION_PLACEHOLDERS.workspaceId;
 
 /** Where a stream's records go. */
-export type StreamDestination = "convex" | "runner" | "legacy";
+export type StreamDestination = "convex" | "runner" | "legacy" | "object";
 
 /** Every stream, the record type it carries, and where it goes. */
 export interface StreamRecords {
@@ -117,6 +117,8 @@ export interface StreamRecords {
   workingCopyPaths: WorkingCopyPathRecord;
   mcpCatalogCache: McpCatalogCacheRecord;
   legacyRows: LegacyRowRecord;
+  transcriptArtifacts: import("./file-streams").TranscriptArtifactRecord;
+  piLogs: import("./file-streams").PiLogRecord;
 }
 export type StreamName = keyof StreamRecords;
 
@@ -154,6 +156,8 @@ export const STREAM_DESTINATIONS: Readonly<Record<StreamName, StreamDestination>
   workingCopyPaths: "runner",
   mcpCatalogCache: "runner",
   legacyRows: "legacy",
+  transcriptArtifacts: "object",
+  piLogs: "object",
 };
 
 /** Writes one record into a stream. */
@@ -168,6 +172,8 @@ export class SourceCorruptError extends Error {
 export interface ExportLookups extends ActorContext {
   /** When the snapshot was taken; stamped as `reportedAt` on runner reports. */
   readonly snapshotAt: number;
+  readonly profileStep: boolean;
+  readonly allProjectIds: ReadonlySet<string>;
   readonly projects: ReadonlyMap<
     string,
     { baseBranch: string | null; ticketPrefix: string; path: string }
@@ -221,7 +227,12 @@ function source<Row, Prepared = undefined>(definition: {
 /** Builds the lookups every source shares. Reads only. */
 export function buildLookups(
   db: Database.Database,
-  options: { snapshotAt: number; pathExists?: (path: string) => boolean; homeDir?: string },
+  options: {
+    snapshotAt: number;
+    pathExists?: (path: string) => boolean;
+    homeDir?: string;
+    profileStep?: boolean;
+  },
 ): ExportLookups {
   const projects = new Map(
     (
@@ -265,6 +276,10 @@ export function buildLookups(
   );
   return {
     snapshotAt: options.snapshotAt,
+    profileStep: options.profileStep ?? true,
+    allProjectIds: new Set(
+      (db.prepare("SELECT id FROM main.projects").all() as Array<{ id: string }>).map((r) => r.id),
+    ),
     projects,
     worktrees,
     sessions,
@@ -1432,32 +1447,18 @@ const failedAttemptsSource = source<FailedAttemptRow>({
   },
 });
 
-/** An arrival still counting down at cutover becomes the job that fires it. */
+/** Pending arrivals are history, never runner work that could fire after a move. */
 const pendingRunsSource = source<PendingRunRow>({
   id: "automationPendingArmedRuns",
   tables: ["automation_pending_armed_runs"],
-  streams: ["runnerJobs"],
+  streams: ["legacyRows"],
   sql: "SELECT * FROM automation_pending_armed_runs ORDER BY ticket_id",
   map(row, _prepared, _lookups, emit) {
-    emit("runnerJobs", {
-      id: row.id,
-      runnerId: RUNNER,
-      kind: "automation.run",
+    emit("legacyRows", {
+      table: "automation_pending_armed_runs",
       projectId: row.project_id,
-      sessionId: null,
-      ticketId: row.ticket_id,
-      workingCopyId: null,
-      payload: {
-        automationId: row.automation_id,
-        automationName: row.automation_name,
-        ticketDisplayId: row.ticket_display_id,
-        status: row.status,
-        origin: row.origin,
-      },
-      priority: "normal",
-      createdBy: PERSON,
-      createdAt: row.opened_at,
-      availableAt: row.start_at,
+      reason: "pending arrival paused; re-arm explicitly after the move",
+      row: { ...row },
     });
   },
 });
@@ -1470,16 +1471,14 @@ const armingsSource = source<{
 }>({
   id: "automationColumnArming",
   tables: ["automation_column_arming"],
-  streams: ["automationArmings"],
+  streams: ["legacyRows"],
   sql: "SELECT * FROM automation_column_arming ORDER BY project_id, status",
   map(row, _prepared, _lookups, emit) {
-    emit("automationArmings", {
+    emit("legacyRows", {
+      table: "automation_column_arming",
       projectId: row.project_id,
-      status: row.status,
-      automationId: row.automation_id,
-      armedByUserId: USER,
-      runnerId: RUNNER,
-      armedAt: row.armed_at,
+      reason: "arming paused; re-arm explicitly after the move",
+      row: { ...row },
     });
   },
 });
@@ -1550,7 +1549,17 @@ const automationLedgerSource = source<LedgerRow>({
                            'result', r.result, 'recorded_at', r.recorded_at)
           FROM automation_command_receipts r LEFT JOIN command_projects p ON p.id = r.command_id
         ORDER BY 1, 2`,
-  map(row, _prepared, _lookups, emit) {
+  map(row, _prepared, lookups, emit) {
+    if (typeof row.project_id === "string" && !lookups.allProjectIds.has(row.project_id))
+      throw new SourceCorruptError(
+        `Automation ledger ${row.id} names missing project ${row.project_id}`,
+      );
+    if (
+      typeof row.project_id === "string"
+        ? !lookups.projects.has(row.project_id)
+        : !lookups.profileStep
+    )
+      return;
     emit("legacyRows", {
       table: row.table_name,
       projectId: typeof row.project_id === "string" ? row.project_id : null,
@@ -1721,7 +1730,8 @@ const settingsSource = source<{ key: string; value: string; updated_at: number }
            .map((key) => `'${key}'`)
            .join(", ")})
          ORDER BY key`,
-  map(row, _prepared, _lookups, emit) {
+  map(row, _prepared, lookups, emit) {
+    if (!lookups.profileStep) return;
     const [kind, name] = PERSONAL_SETTING_KEYS[row.key]!;
     emit("configEntries", {
       id: configEntryId("personal", kind, name),
@@ -1742,25 +1752,39 @@ const settingsSource = source<{ key: string; value: string; updated_at: number }
 
 /**
  * The scheduler's per-Automation cursors (one `app_state` row, keyed by
- * Automation id). An entry this build cannot read is dropped, as
- * `schedule-cursor.ts` drops it: a missing cursor only restarts that one
- * schedule's clock.
+ * Automation id). Kept as paused legacy history, including malformed entries;
+ * never restart a schedule merely because it was moved.
  */
-const scheduleCursorsSource = source<{ value: string }>({
+const scheduleCursorsSource = source<{ value: string }, Map<string, string | null>>({
   id: "automationScheduleCursors",
-  tables: ["app_state"],
-  streams: ["automationScheduleCursors"],
+  tables: ["app_state", "automations"],
+  streams: ["legacyRows"],
   sql: "SELECT value FROM app_state WHERE key = 'volli:automation-schedule-cursors' ORDER BY key",
-  map(row, _prepared, _lookups, emit) {
+  prepare(db) {
+    return new Map(
+      (
+        db.prepare("SELECT id, project_id FROM main.automations").all() as Array<{
+          id: string;
+          project_id: string | null;
+        }>
+      ).map((r) => [r.id, r.project_id]),
+    );
+  },
+  map(row, prepared, lookups, emit) {
+    const projects = prepared;
     const parsed = parseJsonColumn(row.value);
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return;
-    for (const [automationId, at] of Object.entries(parsed)) {
-      if (typeof at !== "number" || !Number.isFinite(at)) continue;
-      emit("automationScheduleCursors", {
-        automationId,
-        evaluatedThrough: at,
-        armedByUserId: USER,
-        runnerId: RUNNER,
+    const entries =
+      parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+        ? Object.entries(parsed)
+        : ([[null, row.value]] as const);
+    for (const [automationId, at] of entries) {
+      const projectId = automationId === null ? null : (projects.get(automationId) ?? null);
+      if (projectId !== null ? !lookups.projects.has(projectId) : !lookups.profileStep) continue;
+      emit("legacyRows", {
+        table: "automation_schedule_cursors",
+        projectId,
+        reason: "schedule cursor paused; re-arm explicitly after the move",
+        row: { automationId, evaluatedThrough: at },
       });
     }
   },

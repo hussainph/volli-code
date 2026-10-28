@@ -7,9 +7,12 @@
 await import("../src/secrets/test-support/ts-hooks.mjs");
 const { writeSyntheticProfile } =
   await import("../src/migration-dry-run/test-support/synthetic-profile.ts");
-const dir = process.argv[2];
+const args = process.argv.slice(2);
+const move = args.includes("--move");
+const dir = args.find((arg) => !arg.startsWith("--"));
 if (!dir) {
   console.error("usage: migration-dry-run-fixture.mjs <empty dir>");
   process.exit(2);
 }
-console.log(writeSyntheticProfile(dir).dbPath);
+const { writeMoveProfile } = await import("../src/migration-dry-run/test-support/move-profile.ts");
+console.log((move ? writeMoveProfile(dir) : writeSyntheticProfile(dir)).dbPath);

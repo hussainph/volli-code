@@ -124,7 +124,7 @@ interface Artifacts {
 }
 
 function reference(id: string): unknown {
-  return { id, mediaType: "application/vnd.volli.transcript+json", digest: id };
+  return { id, mediaType: "application/vnd.volli.ui-message+json", digest: id };
 }
 
 /**

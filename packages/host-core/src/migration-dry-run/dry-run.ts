@@ -65,6 +65,7 @@ import type { StreamName } from "../migration-export/sources";
 import { derivedId } from "../migration-export/transform";
 import { verifyMigrationExport } from "../migration-export/verify";
 import type { ConvexAdmin } from "./convex-admin";
+import { selectLocalProduct } from "../migration-export/scope";
 
 /** A Session active within this many days is imported live; older ones are archived. */
 export const DEFAULT_HOT_DAYS = 30;
@@ -103,6 +104,7 @@ const CONTENT_FIELDS: Readonly<Partial<Record<MigrationImportStream, readonly st
 export interface MigrationDryRunOptions {
   /** The profile database to rehearse. Opened read-only. */
   profilePath: string;
+  projectIds?: readonly string[];
   /** Where the profile's attachment bytes live. Default: `blobs/` beside the database. */
   blobsDir?: string;
   backend: ConvexAdmin;
@@ -162,6 +164,8 @@ export interface MigrationDryRunReport {
   };
   timingsMs: Record<string, number>;
   exported: { records: number; bytes: number; streams: Record<string, number> };
+  /** Verified bulk source streams staged/read back locally; tx/pi commit is MOVE-4. */
+  history: { transcriptArtifacts: number; piLogSlices: number; bytes: number };
   streams: Record<string, StreamReport>;
   deferred: Record<string, { records: number; reason: string }>;
   sessions: {
@@ -314,6 +318,7 @@ export async function runMigrationDryRun(
       try {
         const check = db.pragma("quick_check", { simple: true }) as string;
         const violations = (db.pragma("foreign_key_check") as unknown[]).length;
+        selectLocalProduct(db, { projectIds: options.projectIds, includeRemovedProjects: true });
         const rows = db
           .prepare(
             "SELECT id, project_id, status FROM tickets ORDER BY project_id, status, position, created_at, id",
@@ -344,11 +349,32 @@ export async function runMigrationDryRun(
         outDir: exportDir,
         appVersion: options.appVersion,
         homeDir,
+        includeRemovedProjects: true,
+        projectIds: options.projectIds,
+        transcriptsDir: join(dirname(options.profilePath), "session-transcripts"),
+        piLogsDir: join(dirname(options.profilePath), "pi-sessions"),
+        blobsDir: options.blobsDir ?? join(dirname(options.profilePath), "blobs"),
       }),
     );
     const verification = await time("exportVerify", () => verifyMigrationExport(exportDir));
     // The copy has done its job; nothing reads it again.
     await rm(dirname(copyPath), { recursive: true, force: true });
+
+    const history = { transcriptArtifacts: 0, piLogSlices: 0, bytes: 0 };
+    // Rehearse the bulk export's bytes through the object stand-in as well as
+    // the chunk verifier. These are source streams, not committed tx/pi packs.
+    for (const name of ["transcriptArtifacts", "piLogs"] as const) {
+      const stream = manifest.streams.find((s) => s.name === name)!;
+      history[name === "piLogs" ? "piLogSlices" : "transcriptArtifacts"] = stream.records;
+      for (const [index, chunk] of stream.chunks.entries()) {
+        const bytes = await readFile(join(exportDir, chunk.file));
+        const key = migrationKey(manifest.exportId, `${name}-${index}.ndjson`);
+        await writeObject(r2Root, key, bytes);
+        const copied = await readFile(join(r2Root, key));
+        if (sha256Hex(copied) !== chunk.sha256) failures.push(`${name} staged digest mismatch`);
+        history.bytes += copied.length;
+      }
+    }
 
     // ---- 3. import ----------------------------------------------------------
     const target: MigrationTarget = {
@@ -1037,6 +1063,7 @@ export async function runMigrationDryRun(
       deferred,
       sessions: sessionsReport,
       objects: objectsReport,
+      history,
       invariants,
       cleanedUp: false,
     };

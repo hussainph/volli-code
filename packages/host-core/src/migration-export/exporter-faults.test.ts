@@ -52,6 +52,7 @@ function options(overrides: Partial<MigrationExportOptions> = {}): MigrationExpo
     sourcePath: profile.dbPath,
     outDir: join(work, "export"),
     appVersion: "test",
+    includeRemovedProjects: true,
     ...overrides,
   };
 }

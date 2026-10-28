@@ -59,7 +59,16 @@ describe("the migration table register", () => {
   });
 
   it("has a writer for every stream and unique source ids", () => {
-    const written = new Set(EXPORT_SOURCES.flatMap((source) => source.streams));
+    // Bulk streams have their streaming filesystem writer; executable streams
+    // stay declared for importer compatibility but deliberately have no writer.
+    const written = new Set([
+      ...EXPORT_SOURCES.flatMap((source) => source.streams),
+      "transcriptArtifacts",
+      "piLogs",
+      "runnerJobs",
+      "automationArmings",
+      "automationScheduleCursors",
+    ]);
     expect([...written].toSorted()).toEqual(
       (Object.keys(STREAM_DESTINATIONS) as StreamName[]).toSorted(),
     );

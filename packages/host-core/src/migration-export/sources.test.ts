@@ -10,6 +10,7 @@ import { createFixtureProfile, type FixtureProfile } from "../backup/test-fixtur
 import { exportMigrationSnapshot } from "./exporter";
 import { streamRecords as records } from "./test-support/export-files";
 import { mcpOperationId, mcpServerEntryId, workingCopyId } from "./transform";
+import { EXPORT_SOURCES, buildLookups } from "./sources";
 
 // Each test exports a whole profile through real files; a cold shared CI box is slow.
 vi.setConfig({ testTimeout: 30_000 });
@@ -35,6 +36,7 @@ async function exportProfile(name = "export") {
     sourcePath: profile.dbPath,
     outDir: join(work, name),
     appVersion: "test",
+    includeRemovedProjects: true,
     now: () => 5,
     homeDir: "/Users/source",
   });
@@ -308,7 +310,6 @@ describe("mapping rules", () => {
     profile.db.pragma("foreign_keys = OFF");
     session("session-loop-a", "subagent", "session-loop-b", null);
     session("session-loop-b", "subagent", "session-loop-a", null);
-    session("session-orphan", "subagent", "session-deleted", "ticket-live");
     session("session-sub-of-ticket", "subagent", "session-root", null);
     session("session-parentless", "subagent", null, null);
     profile.db.pragma("foreign_keys = ON");
@@ -338,23 +339,26 @@ describe("mapping rules", () => {
       visibility: "private",
       visibilityReason: "inherited",
     });
-    expect(sessions.get("session-orphan")).toMatchObject({
-      visibility: "shared",
-      visibilityReason: "inherited",
-    });
     expect(sessions.get("session-parentless")!.visibility).toBe("private");
     expect(sessions.get("session-sub-of-ticket")).toMatchObject({
       visibility: "shared",
       visibilityReason: "inherited",
     });
-    expect(records(outDir, manifest, "automationScheduleCursors")).toEqual([
-      {
-        automationId: "automation-1",
-        evaluatedThrough: 1234,
-        armedByUserId: "$local-user",
-        runnerId: "$local-runner",
-      },
-    ]);
+    expect(records(outDir, manifest, "automationScheduleCursors")).toEqual([]);
+    expect(records(outDir, manifest, "legacyRows")).toContainEqual(
+      expect.objectContaining({
+        table: "automation_schedule_cursors",
+        projectId: "proj-alpha",
+        row: { automationId: "automation-1", evaluatedThrough: 1234 },
+      }),
+    );
+    expect(records(outDir, manifest, "legacyRows")).toContainEqual(
+      expect.objectContaining({
+        table: "automation_schedule_cursors",
+        projectId: null,
+        row: { automationId: "broken", evaluatedThrough: "soon" },
+      }),
+    );
     expect(
       records(outDir, manifest, "automationRuns").find((entry) => entry.id === "attempt-1")!
         .retryCommandId,
@@ -432,6 +436,16 @@ describe("mapping rules", () => {
 });
 
 describe("corrupt sources stop the export", () => {
+  // Also drive each mapper's own guard without the ownership projection.
+  // Preflight refuses these FKs earlier in a complete export, but individual
+  // source consumers must never map an orphan into an apparently valid row.
+  function mapRaw(id: string) {
+    const source = EXPORT_SOURCES.find((s) => s.id === id)!;
+    const lookups = buildLookups(profile.db, { snapshotAt: 1 });
+    const prepared = source.prepare(profile.db, lookups);
+    for (const row of profile.db.prepare(source.sql).all())
+      source.map(row, prepared, lookups, () => {});
+  }
   async function expectCorrupt(message: RegExp) {
     await expect(exportProfile()).rejects.toMatchObject({
       code: "source_corrupt",
@@ -442,7 +456,8 @@ describe("corrupt sources stop the export", () => {
   it("a ticket whose project is gone", async () => {
     profile.db.pragma("foreign_keys = OFF");
     ticket("ticket-ghost", 99, { project_id: "proj-ghost" });
-    await expectCorrupt(/ticket ticket-ghost names missing project/);
+    expect(() => mapRaw("tickets")).toThrow(/names missing project/);
+    await expectCorrupt(/orphan tickets ticket-ghost: missing projects/);
   });
 
   it("a comment whose ticket is gone", async () => {
@@ -451,7 +466,8 @@ describe("corrupt sources stop the export", () => {
       `INSERT INTO ticket_comments (id, ticket_id, session_id, actor, body, created_at, updated_at)
        VALUES ('comment-ghost', 'ticket-ghost', NULL, 'user', 'x', 1, 1)`,
     );
-    await expectCorrupt(/comment comment-ghost names a missing ticket/);
+    expect(() => mapRaw("ticketComments")).toThrow(/names a missing ticket/);
+    await expectCorrupt(/orphan ticket_comments comment-ghost: missing tickets/);
   });
 
   it("a blob link with no owner", async () => {
@@ -461,7 +477,8 @@ describe("corrupt sources stop the export", () => {
        VALUES ('link-ghost', ?, 'ticket-ghost', NULL, 'x', 1)`,
       profile.blobHashes.ticket,
     );
-    await expectCorrupt(/blob link link-ghost has no owning/);
+    expect(() => mapRaw("blobLinks")).toThrow(/no owning ticket or Session/);
+    await expectCorrupt(/orphan blob_links link-ghost: missing tickets/);
   });
 
   it("a Run whose Session is gone", async () => {
@@ -471,7 +488,23 @@ describe("corrupt sources stop the export", () => {
                                     provider_id, model_id, reasoning_level, created_at)
        VALUES ('run-ghost', NULL, NULL, NULL, 'session-ghost', 'p', 'm', 'low', 1)`,
     );
-    await expectCorrupt(/Automation Run run-ghost names a missing Session/);
+    expect(() => mapRaw("automationRuns")).toThrow(/names a missing Session/);
+    await expectCorrupt(/orphan automation_runs run-ghost: missing sessions/);
+  });
+
+  it("a Session event whose provenance is missing", async () => {
+    profile.db.pragma("foreign_keys = OFF");
+    run("UPDATE session_events SET provenance_id=999 WHERE id='event-2'");
+    expect(() => mapRaw("sessionEvents")).toThrow(/names missing provenance/);
+    await expectCorrupt(/orphan session_events event-2/);
+  });
+
+  it("an Automation ledger row with an unattributable project", async () => {
+    run(
+      "INSERT INTO automation_commands (id,intent,created_at) VALUES ('orphan-ledger',?,1)",
+      JSON.stringify({ plan: { projectId: "missing-project" } }),
+    );
+    await expectCorrupt(/Automation ledger orphan-ledger names missing project/);
   });
 
   it("a worktree scope change whose sides are not booleans", async () => {
