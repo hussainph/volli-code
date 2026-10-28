@@ -12,16 +12,21 @@ import {
   runAutomaticBackupWorker,
 } from "./automatic-worker";
 
-const diskMock = vi.hoisted(() => ({ statfs: vi.fn<typeof import("node:fs/promises").statfs>() }));
+const diskMock = vi.hoisted(() => ({
+  statfs: vi.fn<typeof import("node:fs/promises").statfs>(),
+  stat: vi.fn<typeof import("node:fs/promises").stat>(),
+}));
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs/promises")>()),
   statfs: diskMock.statfs,
+  stat: diskMock.stat,
 }));
 const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
 
 let profile: FixtureProfile;
 beforeEach(() => {
   diskMock.statfs.mockReset().mockImplementation(actualFs.statfs);
+  diskMock.stat.mockReset().mockImplementation(actualFs.stat);
   profile = createFixtureProfile();
   profile.db.pragma("journal_mode = WAL");
 });
@@ -56,6 +61,94 @@ describe("the automatic backup worker", () => {
     expect(await fs.readdir(join(profile.root, "backups"))).toEqual([]);
     expect(automaticBackupDiskRequirement(100_000_000, 1000)).toBeGreaterThanOrEqual(200_000_000);
   });
+  it("reserves twice the queue export plus headroom on a shared volume before staging", async () => {
+    const target = {
+      ...request(),
+      move: {
+        exportRoot: join(profile.root, "cloud-moves"),
+        estimatedExportBytes: 500_000_000,
+        headroomBytes: 100_000_000,
+      },
+    };
+    diskMock.statfs.mockResolvedValue({ bavail: 1_100_000_000, bsize: 1 } as Awaited<
+      ReturnType<typeof fs.statfs>
+    >);
+    await expect(createAutomaticBackup(target, async () => {})).rejects.toMatchObject({
+      code: "disk-space",
+      message: expect.stringContaining("bytes available"),
+    });
+    expect(await fs.readdir(join(profile.root, "backups"))).toEqual([]);
+  });
+  it("checks export and backup volumes separately for a chosen backup folder", async () => {
+    const exportRoot = join(profile.root, "cloud-moves");
+    const target = {
+      ...request(),
+      move: { exportRoot, estimatedExportBytes: 100_000_000, headroomBytes: 1000 },
+    };
+    diskMock.stat.mockImplementation(async (...args) => {
+      const value = await actualFs.stat(args[0]);
+      return args[0] === exportRoot ? Object.assign(value, { dev: value.dev + 1 }) : value;
+    });
+    diskMock.statfs.mockImplementation(async (...args) => {
+      if (args[0] === exportRoot)
+        return { bavail: 200_000_999, bsize: 1 } as Awaited<ReturnType<typeof fs.statfs>>;
+      return actualFs.statfs(...args);
+    });
+    await expect(createAutomaticBackup(target, async () => {})).rejects.toMatchObject({
+      code: "disk-space",
+      message: expect.stringContaining("200001000 bytes free; 200000999 bytes available"),
+    });
+    expect(existsSync(target.outputPath)).toBe(false);
+    // Enough space on both volumes succeeds without summing their allowances.
+    diskMock.statfs.mockImplementation(actualFs.statfs);
+    expect((await createAutomaticBackup(target, async () => {})).sha256).toMatch(/^[a-f0-9]{64}$/);
+  }, 30_000);
+  it("does not reclaim a daily worker's paused staging or partial archive", async () => {
+    const target = {
+      ...request(),
+      move: {
+        exportRoot: join(profile.root, "cloud-moves"),
+        estimatedExportBytes: 0,
+        headroomBytes: 0,
+      },
+    };
+    const directory = join(profile.root, "backups");
+    const dailyScratch = join(directory, `.automatic-${process.pid}-abcdef`);
+    const dailyPartial = join(
+      directory,
+      `auto-${Date.now()}-00000000-0000-4000-8000-000000000000.tar.gz.partial`,
+    );
+    await fs.mkdir(dailyScratch, { recursive: true });
+    await fs.writeFile(join(dailyScratch, "snapshot.db"), "paused snapshot");
+    await fs.writeFile(dailyPartial, "paused archive");
+    await createAutomaticBackup(target, async () => {});
+    expect(await fs.readFile(join(dailyScratch, "snapshot.db"), "utf8")).toBe("paused snapshot");
+    expect(await fs.readFile(dailyPartial, "utf8")).toBe("paused archive");
+  }, 30_000);
+  it("refuses a move publication if its reserved export space disappears", async () => {
+    const target = {
+      ...request(),
+      move: {
+        exportRoot: join(profile.root, "cloud-moves"),
+        estimatedExportBytes: 1024,
+        headroomBytes: 1024,
+      },
+    };
+    let published = false;
+    diskMock.statfs.mockImplementation(async (...args) => {
+      if (existsSync(`${target.outputPath}.partial`)) {
+        published = true;
+        return { bavail: 2048, bsize: 1 } as Awaited<ReturnType<typeof fs.statfs>>;
+      }
+      return actualFs.statfs(...args);
+    });
+    await expect(createAutomaticBackup(target, async () => {})).rejects.toMatchObject({
+      code: "disk-space",
+    });
+    expect(published).toBe(true);
+    expect(existsSync(target.outputPath)).toBe(false);
+    expect(existsSync(`${target.outputPath}.failed`)).toBe(true);
+  }, 30_000);
   it("takes a consistent WAL snapshot, verifies it, and answers through a real worker codec", async () => {
     const target = request();
     profile.db

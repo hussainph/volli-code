@@ -35,8 +35,29 @@ function enqueue(w: MoveWorld, engine = w.engine(), stopAtFirstProblem = false) 
 describe("a move, start to finish", () => {
   test("moves the project, verified three ways, and waits for the person", async () => {
     world = await moveWorld();
-    const { engine, queueId, moveId } = enqueue(world);
+    const backup = {
+      path: join(world.root, "pre-cloud-move.tar.gz"),
+      bytes: 123,
+      sha256: "a".repeat(64),
+    };
+    let backupWrites = 0;
+    const { engine, queueId, moveId } = enqueue(
+      world,
+      world.engine({
+        ports: {
+          backup: {
+            async write() {
+              backupWrites++;
+              return backup;
+            },
+          },
+        },
+      }),
+    );
     expect(await engine.run(queueId)).toEqual({ kind: "done" });
+    expect(engine.journal.queue(queueId)!.backup).toMatchObject(backup);
+    expect(await world.engine().run(queueId)).toEqual({ kind: "done" });
+    expect(backupWrites).toBe(1);
 
     const move = engine.journal.move(moveId)!;
     expect(move.state).toBe("committed");
@@ -187,6 +208,36 @@ describe("problems roll back", () => {
 });
 
 describe("problems with this Mac's own files", () => {
+  test.each(["ENOSPC", "verification"])(
+    "a failed backup (%s) never freezes or exports a project",
+    async (code) => {
+      world = await moveWorld();
+      const { engine, queueId, moveId } = enqueue(
+        world,
+        world.engine({
+          ports: {
+            backup: {
+              async write() {
+                throw Object.assign(new Error("Backup refused"), { code });
+              },
+            },
+            exportProject: async () => {
+              throw new Error("must never export");
+            },
+          },
+        }),
+      );
+      expect(await engine.run(queueId)).toEqual({
+        kind: "waiting",
+        moveId,
+        reason: code === "ENOSPC" ? "disk_full" : "paused",
+      });
+      expect(engine.journal.queue(queueId)!.backup).toBeNull();
+      expect(engine.journal.move(moveId)!.state).toBe("queued");
+      expect(projectFreeze(world.db, world.projectId)).toBeNull();
+      expect(world.calls.size).toBe(0);
+    },
+  );
   test("an attachment gone from disk mid-move rolls the project back, never waits on the network", async () => {
     world = await moveWorld();
     const { queueId, moveId } = enqueue(world);

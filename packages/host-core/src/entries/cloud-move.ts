@@ -14,6 +14,7 @@ export {
   type MoveEngine,
   type QueueOutcome,
 } from "../cloud-move/engine";
+export { createMoveBackupPort, type MoveBackupOptions } from "../cloud-move/backup";
 export { ProjectFrozenError, projectFreeze } from "../cloud-move/freeze";
 export type { MoveFailure, MovePause, MoveRow, QueueRow } from "../cloud-move/journal";
 export type {

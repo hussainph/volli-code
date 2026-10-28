@@ -429,7 +429,7 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     if (queue.backup === null) {
       const written = await ports.backup.write(signal);
       journal.setQueue(queue.queueId, {
-        backup: { path: written.path, bytes: written.bytes, verifiedAt: now() },
+        backup: { ...written, verifiedAt: now() },
       });
     }
     await fault("freeze");

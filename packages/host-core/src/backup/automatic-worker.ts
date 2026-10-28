@@ -1,5 +1,7 @@
 /** A separately bundled worker entry keeps SQLite iteration and gzip off the UI thread. */
 import { Worker, parentPort, workerData } from "node:worker_threads";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -23,6 +25,7 @@ import { BackupBundleError } from "./bundle";
 import { ProfileBackupError, type ProfileBackupFailureCode } from "./errors";
 import { hostLogger } from "../log/root";
 import { rotateAutomaticBackups } from "./automatic";
+import { isDiskFullError } from "../migration-export/errors";
 
 export interface AutomaticBackupRequest {
   dataDir: string;
@@ -32,11 +35,23 @@ export interface AutomaticBackupRequest {
   appVersion: string;
   outputPath: string;
   now: number;
+  /** Only the move's own backup bypasses its whole-flow maintenance pause. */
+  move?: {
+    exportRoot: string;
+    estimatedExportBytes: number;
+    headroomBytes: number;
+  };
+}
+
+interface BackupWorkerResult {
+  sizeBytes: number;
+  /** SHA-256 of the compressed bundle, supplied for a move's result screen. */
+  sha256?: string;
 }
 
 type WorkerMessage =
   | { type: "notice"; notice: string | null }
-  | { type: "done"; sizeBytes: number }
+  | ({ type: "done" } & BackupWorkerResult)
   | { type: "failed"; code: ProfileBackupFailureCode; message: string; detail: string };
 
 export function runAutomaticBackupWorker(
@@ -45,7 +60,7 @@ export function runAutomaticBackupWorker(
   signal: AbortSignal,
   onNotice: (notice: string | null) => void,
   execArgv?: string[],
-): Promise<{ sizeBytes: number }> {
+): Promise<BackupWorkerResult> {
   if (signal.aborted)
     return Promise.reject(
       new ProfileBackupError("cancelled", "Backup interrupted because Volli is closing."),
@@ -56,7 +71,7 @@ export function runAutomaticBackupWorker(
       ...(execArgv ? { execArgv } : {}),
       resourceLimits: { maxOldGenerationSizeMb: 192 },
     });
-    let result: { sizeBytes: number } | undefined;
+    let result: BackupWorkerResult | undefined;
     let failure: Error | undefined;
     let terminateTimer: ReturnType<typeof setTimeout> | undefined;
     const cancel = () => {
@@ -68,7 +83,11 @@ export function runAutomaticBackupWorker(
     signal.addEventListener("abort", cancel, { once: true });
     worker.on("message", (message: WorkerMessage) => {
       if (message.type === "notice") onNotice(message.notice);
-      else if (message.type === "done") result = { sizeBytes: message.sizeBytes };
+      else if (message.type === "done")
+        result = {
+          sizeBytes: message.sizeBytes,
+          ...(message.sha256 ? { sha256: message.sha256 } : {}),
+        };
       else {
         hostLogger("profile-backups").warn("backup worker failed", { detail: message.detail });
         failure = new ProfileBackupError(message.code, message.message);
@@ -115,27 +134,31 @@ async function treeBytes(path: string): Promise<number> {
 export async function createAutomaticBackup(
   request: AutomaticBackupRequest,
   checkpoint: () => Promise<void>,
-): Promise<{ sizeBytes: number }> {
+): Promise<BackupWorkerResult> {
   await checkpoint();
   const directory = dirname(request.outputPath);
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  // A killed worker cannot run finally. Reclaim only our scratch namespace,
-  // never its archive (which remains available for diagnosis/recovery).
-  for (const name of await readdir(directory)) {
-    const match = /^\.automatic-(\d+)-[A-Za-z0-9]{6}$/.exec(name);
-    if (!match) continue;
-    const abandoned = Number(match[1]) === process.pid || !profileOwnerAlive(Number(match[1]));
-    if (abandoned) await rm(join(directory, name), { recursive: true, force: true });
+  // The daily worker may be paused mid-write under the move's lease. Its
+  // staging and partial archive are still live, never the move's to reclaim.
+  if (!request.move) {
+    // A killed worker cannot run finally. Reclaim only our scratch namespace,
+    // never its archive (which remains available for diagnosis/recovery).
+    for (const name of await readdir(directory)) {
+      const match = /^\.automatic-(\d+)-[A-Za-z0-9]{6}$/.exec(name);
+      if (!match) continue;
+      const abandoned = Number(match[1]) === process.pid || !profileOwnerAlive(Number(match[1]));
+      if (abandoned) await rm(join(directory, name), { recursive: true, force: true });
+    }
+    for (const name of await readdir(directory)) {
+      const match = /^auto-(\d{13})-[a-f0-9-]{36}\.tar\.gz\.partial$/.exec(name);
+      if (!match) continue;
+      const failed = join(directory, `${name.slice(0, -8)}.failed`);
+      await rename(join(directory, name), failed);
+      await moveKeepMarker(join(directory, name), failed);
+      await recordFailedBackup(failed, Number(match[1]));
+    }
+    await rotateAutomaticBackups(directory, request.now, "failed");
   }
-  for (const name of await readdir(directory)) {
-    const match = /^auto-(\d{13})-[a-f0-9-]{36}\.tar\.gz\.partial$/.exec(name);
-    if (!match) continue;
-    const failed = join(directory, `${name.slice(0, -8)}.failed`);
-    await rename(join(directory, name), failed);
-    await moveKeepMarker(join(directory, name), failed);
-    await recordFailedBackup(failed, Number(match[1]));
-  }
-  await rotateAutomaticBackups(directory, request.now, "failed");
   let databaseBytes = (await stat(request.dbPath)).size;
   try {
     databaseBytes += (await stat(`${request.dbPath}-wal`)).size;
@@ -144,14 +167,28 @@ export async function createAutomaticBackup(
   }
   const artifacts =
     (await treeBytes(request.blobsRoot)) + (await treeBytes(request.transcriptsRoot));
+  const moveReserve = request.move
+    ? request.move.estimatedExportBytes * 2 + request.move.headroomBytes
+    : 0;
+  let sharedVolume = false;
+  if (request.move) {
+    await mkdir(request.move.exportRoot, { recursive: true, mode: 0o700 });
+    sharedVolume = (await stat(directory)).dev === (await stat(request.move.exportRoot)).dev;
+    if (!sharedVolume) await requireMoveDisk(request.move.exportRoot, moveReserve);
+  }
+  const backupRequirement = automaticBackupDiskRequirement(databaseBytes, artifacts);
+  if (request.move)
+    await requireMoveDisk(directory, backupRequirement + (sharedVolume ? moveReserve : 0));
   const disk = await statfs(directory);
-  if (disk.bavail * disk.bsize < automaticBackupDiskRequirement(databaseBytes, artifacts)) {
+  if (!request.move && disk.bavail * disk.bsize < backupRequirement) {
     throw new ProfileBackupError(
       "disk-space",
       "Backup skipped: not enough free disk space for two copies of the bundle and verification. Free disk space, then Back up now.",
     );
   }
-  const workDir = await mkdtemp(join(directory, `.automatic-${process.pid}-`));
+  const workDir = await mkdtemp(
+    join(directory, `${request.move ? ".move-backup" : ".automatic"}-${process.pid}-`),
+  );
   const partial = `${request.outputPath}.partial`;
   try {
     await checkpoint();
@@ -179,14 +216,28 @@ export async function createAutomaticBackup(
       });
       await checkpoint();
       const remaining = await statfs(directory);
-      if (remaining.bavail * remaining.bsize < result.sizeBytes * 2) {
+      if (request.move) {
+        await requireMoveDisk(directory, result.sizeBytes * 2 + (sharedVolume ? moveReserve : 0));
+        if (!sharedVolume) await requireMoveDisk(request.move.exportRoot, moveReserve);
+      }
+      if (!request.move && remaining.bavail * remaining.bsize < result.sizeBytes * 2) {
         throw new ProfileBackupError(
           "disk-space",
           "Backup could not be published: free disk space is below twice the bundle size. The failed bundle was kept.",
         );
       }
+      let sha256: string | undefined;
+      if (request.move) {
+        const hash = createHash("sha256");
+        for await (const chunk of createReadStream(partial)) {
+          hash.update(chunk);
+          await checkpoint();
+        }
+        sha256 = hash.digest("hex");
+      }
+      await checkpoint();
       await rename(partial, request.outputPath);
-      return result;
+      return { ...result, ...(sha256 ? { sha256 } : {}) };
     } finally {
       db.close();
     }
@@ -237,9 +288,10 @@ export function serveAutomaticBackupWorker(): void {
         nextPressureCheck = Date.now() + 30_000;
       }
       const maintenance =
-        (await profileMaintenanceActive(request.dataDir)) ||
-        (dirname(request.dbPath) !== request.dataDir &&
-          (await profileMaintenanceActive(dirname(request.dbPath))));
+        !request.move &&
+        ((await profileMaintenanceActive(request.dataDir)) ||
+          (dirname(request.dbPath) !== request.dataDir &&
+            (await profileMaintenanceActive(dirname(request.dbPath)))));
       if (!underPressure && !maintenance) {
         notice(null);
         return;
@@ -259,12 +311,17 @@ export function serveAutomaticBackupWorker(): void {
         const failure =
           error instanceof ProfileBackupError
             ? error
-            : error instanceof BackupBundleError
+            : isDiskFullError(error)
               ? new ProfileBackupError(
-                  "verification",
-                  "Backup verification failed. Any written bundle was kept as failed. Try Back up now.",
+                  "disk-space",
+                  "Backup ran out of disk space. Free space, then retry the move or backup.",
                 )
-              : new ProfileBackupError("io", "Backup could not be completed. Try Back up now.");
+              : error instanceof BackupBundleError
+                ? new ProfileBackupError(
+                    "verification",
+                    "Backup verification failed. Any written bundle was kept as failed. Try Back up now.",
+                  )
+                : new ProfileBackupError("io", "Backup could not be completed. Try Back up now.");
         port.postMessage({
           type: "failed",
           code: failure.code,
@@ -277,6 +334,17 @@ export function serveAutomaticBackupWorker(): void {
       port.removeAllListeners();
       port.close();
     });
+}
+
+async function requireMoveDisk(directory: string, requiredBytes: number): Promise<void> {
+  const disk = await statfs(directory);
+  const availableBytes = disk.bavail * disk.bsize;
+  if (availableBytes < requiredBytes) {
+    throw new ProfileBackupError(
+      "disk-space",
+      `Move backup needs ${requiredBytes} bytes free; ${availableBytes} bytes available. Free disk space, then retry.`,
+    );
+  }
 }
 
 async function recordFailedBackup(path: string, createdAt: number): Promise<void> {

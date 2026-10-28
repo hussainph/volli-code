@@ -81,7 +81,7 @@ export interface MoveSessionHistory {
 
 /** The profile's verified backup: written once per queue, re-read before any freeze. */
 export interface MoveBackupPort {
-  write(signal: AbortSignal): Promise<{ path: string; bytes: number }>;
+  write(signal: AbortSignal): Promise<{ path: string; bytes: number; sha256?: string }>;
 }
 
 /** This Mac's live work: a project with any of these Sessions is not idle. */

@@ -249,6 +249,25 @@ longer lease. With an overridden database path, the backup worker checks both
 the profile data directory and the database's parent directory for pauses. Dead-process leases do not prevent future backups. Backup/restore
 connections remain separate from the app's live database handle.
 
+## Pre-move safety copies
+
+The move engine uses `createMoveBackupPort` from `@volli/host-core/cloud-move`.
+It runs the same snapshot, streaming v1 writer and read-back verifier as the
+daily service, once per move queue, before any project freezes. The result holds
+the local path, compressed byte count and SHA-256 of the compressed archive.
+Bundles are named `pre-cloud-move-<date>-<uuid>.tar.gz` in the same backups folder
+(or a chosen directory) and have a `.kept` sidecar with no expiry. Daily and failed
+rotation never remove them; the preview's escape hatch has no automatic expiry.
+
+Pre-flight reserves the backup writer's staging allowance, twice the whole
+queue's estimated export bytes, and 256 MiB headroom. If backup and export roots
+are on different volumes, each must have its own allowance. Before publication,
+the check uses the actual bundle size and still reserves the export space.
+Shortage refuses the step with required/available byte counts; a failed read-back
+never returns a usable backup or permits the freeze. The move's own backup runs
+inside its maintenance lease without waiting on itself; daily backups still wait.
+The large-profile restore limitation above remains a stable-release gate.
+
 The opt-in synthetic scale probe is
 `packages/host-core/scripts/benchmark-automatic-backup.mjs`. It reports time,
 whole-process peak RSS and parent-thread event-loop delay through the real worker
