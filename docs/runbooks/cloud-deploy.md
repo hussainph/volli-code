@@ -351,6 +351,76 @@ environment (`VOLLI_ACCOUNT_PROVIDER=workos`, `VOLLI_WORKOS_CLIENT_ID`,
 `VOLLI_CONVEX_URL`, `VOLLI_CONVEX_SITE_URL`, `VOLLI_CLOUD_STORAGE_ORIGIN`); a packaged
 build ignores every one.
 
+### A dev check against a real deployment
+
+Use the reviewed `volli-drive --deployment` launch path for an **unpackaged** build.
+It supplies those runtime inputs without changing the release build or any of the four
+GitHub variables. The default launch stays local; `--cloud` stays a loopback-only fixture.
+There is no automatic target selection from shell variables, release channel or a missing
+profile. Packaged apps are refused before any build or spawn, and packaged runtime config
+still ignores the environment.
+
+Create a **gitignored**, checkout-local `.scratch/deployments/staging.json`:
+
+```json
+{
+  "name": "staging",
+  "convexUrl": "https://<staging-deployment>.convex.cloud",
+  "siteUrl": "https://<staging-deployment>.convex.site",
+  "workosClientId": "client_<staging-public-id>",
+  "storageOrigin": "https://<staging-account-id>.r2.cloudflarestorage.com"
+}
+```
+
+Only `dev`, `staging` and `prod` are supported names. The profile's `name` must match;
+a profile labelled `prod` cannot be used as a staging alias. All four values are required,
+origins must be exact HTTPS origins, and unknown fields are rejected. Never put deploy
+keys, WorkOS API keys, signing keys, S3 credentials or tokens in a profile. Do not commit
+profiles or evidence. Verify the deployment name/URLs against the operator inventory:
+public URLs alone cannot tell the driver whether an arbitrary backend is production.
+
+```sh
+alias volli-drive='node apps/desktop/e2e/volli-drive/cli.mjs'
+volli-drive launch --deployment staging --fixture empty
+# Or supply ALL four flags instead of a file (no partial merge/fallback):
+volli-drive launch --deployment staging --fixture empty \
+  --convex-url 'https://<staging-deployment>.convex.cloud' \
+  --site-url 'https://<staging-deployment>.convex.site' \
+  --workos-client-id 'client_<staging-public-id>' \
+  --storage-origin 'https://<staging-account-id>.r2.cloudflarestorage.com'
+```
+
+Production requires **both** `--deployment prod --confirm-prod` on every new launch,
+including flag-only launches; the confirmation is never read from a file or environment.
+The matching file is `.scratch/deployments/prod.json` with `"name": "prod"`. Do not
+label production inputs as staging. The mode can write real data after sign-in; use a
+non-prod deployment for rehearsals and a dedicated test account/Workspace.
+
+The instance keeps the normal keychain traps, mock Chromium keychain, isolated HOME,
+userData, database, socket and per-instance sealing keys. Sign-in is **real WorkOS PKCE**,
+not the fixture issuer. No deploy/admin key is needed or inherited. The model remains
+fake by default; use `--model env` only when intentionally testing real provider calls.
+
+Drive the sign-in button in Settings → Account, then:
+
+```sh
+volli-drive doctor vd-xxxxxx
+volli-drive sign-in-url vd-xxxxxx  # recorded URL only; nothing opens or follows it
+# Open that URL yourself in a browser (private window recommended) and sign in.
+# Once the app offers Restart to open Volli Cloud:
+volli-drive restart vd-xxxxxx     # same isolated profile, guard proved again
+volli-drive doctor vd-xxxxxx
+# Drive the actual check, then always clean up:
+volli-drive stop vd-xxxxxx
+```
+
+The browser request is recorded rather than opened by the harness. Authentication and
+preview access are the normal deployment's gates; this mode bypasses neither. Fixture
+sign-in, simulated power and backend setup commands remain unavailable to a real target.
+`stop` removes scratch, including the instance's sealed sign-in; evidence survives under
+`.scratch/volli-drive/<id>/`. Inspect/redact it before sharing: it can contain account or
+Workspace data and authorization URLs.
+
 **Launch, CSP and tokens.** `CloudLaunch` keeps `store: "cloud"` as the legacy wire
 discriminator for the Convex store and adds `deployment?: "cloud" | "local"` and
 `siteUrl?: string | null`; new launches name both, older bridges omit them. The window's
@@ -401,12 +471,6 @@ deployment → check a Session's history against its packs) has not been run. Fu
 export — one versioned archive of a Convex snapshot plus `v1/p/`, `v1/w/`, `v1/u/`,
 skipping `v1/x/` and `v1/m/` — does not exist, and is **not** the local `volli-backup`
 bundle ([`docs/backup-bundle.md`](../backup-bundle.md)).
-
-**A dev check against a real deployment.** `volli-drive` (the keychain-free harness)
-refuses any backend but its loopback fixture, so there is no sanctioned way to sign an
-unpackaged build into a real environment before cutting a desktop build. VC-953 used an
-uncommitted local patch passing the step 9 runtime variables; a reviewed
-`--deployment` mode is follow-up work.
 
 **Logs, inventory, self-check.** `--type prod` for `staging` is the current answer to log
 and error exposure; production log redaction and an automated variable inventory remain.

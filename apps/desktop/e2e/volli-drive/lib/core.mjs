@@ -23,6 +23,8 @@ import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import { assertDeploymentLaunch } from "./deployment.mjs";
+
 const execFileAsync = promisify(execFile);
 
 /** Repo root: this file lives at apps/desktop/e2e/volli-drive/lib/. */
@@ -268,6 +270,8 @@ const ALWAYS_SCRUBBED = [
   /^PI_CODING_AGENT_DIR$/,
   /^GIT_/, // a GIT_DIR or GIT_CONFIG_* from the outer shell must not reach the fixture
   /^NODE_OPTIONS$/,
+  /^CONVEX_/, // deploy/admin keys are never needed by Electron
+  /^WORKOS_/, // sign-in uses only the explicitly selected public client id
 ];
 /** Kept even though they match a scrub rule: they configure volli-drive itself. */
 const DRIVE_OWN = new Set(["VOLLI_DRIVE_HOME", "VOLLI_DRIVE_EVIDENCE", "VOLLI_DRIVE_IDLE_MS"]);
@@ -440,6 +444,11 @@ export function launchProblems(
   { env = process.env, bundle = BUILT_MAIN, appDir = APP_DIR, sources = HARNESS_SOURCES } = {},
 ) {
   const problems = [];
+  try {
+    assertDeploymentLaunch(spec);
+  } catch (error) {
+    problems.push(error.message);
+  }
   if (spec.build !== "dev") problems.push(`--build ${spec.build}: not yet safe; dev builds only`);
   if (spec.appBinary) problems.push("--app: packed apps are not yet safe; dev builds only");
   if (env.VOLLI_SMOKE_APP_BINARY)

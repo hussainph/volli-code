@@ -73,6 +73,8 @@ import {
   prepareRemoteAcceptance,
 } from "./lib/remote-acceptance.mjs";
 
+import { deploymentElectronEnv, recordedWorkosSignIn } from "./lib/deployment.mjs";
+
 const spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
 const L = instanceLayout(spec.scratch, spec.evidence);
 for (const dir of [
@@ -516,7 +518,7 @@ async function finalize(reason, { keepScratch = false } = {}) {
   const before = await owned().catch(() => []);
   let close = null;
   let trayQuit = null;
-  if (spec.cloud) {
+  if (spec.cloud || spec.deployment) {
     // A cloud launch stays resident on an ordinary quit: it quits for real,
     // the person's way (closeCloudInstance). One that already quit (a
     // restart's quit, then a failure) keeps that quit's record, proven again
@@ -651,6 +653,7 @@ async function boot() {
         }
       : {}),
     ...(cloud ? cloudElectronEnv(cloud, spec.cloud.subject, spec.cloud.email) : {}),
+    ...(spec.deployment ? deploymentElectronEnv(spec.deployment) : {}),
   };
   mark("launchStart");
   launchEnv = extraEnv;
@@ -683,6 +686,7 @@ async function boot() {
     memory: mem,
     seeded,
     cloud: spec.cloud ?? null,
+    deployment: spec.deployment ?? null,
     guard: { trapped: Object.keys(live.trapped), switches: record.chromiumSwitches },
   };
   await recordMembers();
@@ -768,7 +772,7 @@ async function startElectron(extraEnv) {
  * again. The drive socket, fake provider and evidence carry on.
  */
 async function restart(reason) {
-  if (!spec.cloud) throw new Error("restart is for Volli Cloud instances (launch --cloud)");
+  requireCloudLaunch();
   if (restarting) throw new Error("a restart is already running");
   restarting = true;
   const started = performance.now();
@@ -897,6 +901,13 @@ async function handle(cmd, args) {
       });
       return answer;
     }
+    case "sign-in-url": {
+      if (!spec.deployment) throw new Error("sign-in-url requires launch --deployment");
+      const jsonl = await fs
+        .readFile(join(L.harnessDir, "external-requests.jsonl"), "utf8")
+        .catch(() => "");
+      return recordedWorkosSignIn(jsonl, spec.deployment.workosClientId);
+    }
     case "restart":
       return restart(String(args.reason ?? "requested"));
     case "runner-power": {
@@ -990,11 +1001,11 @@ async function handle(cmd, args) {
 /**
  * A Volli Cloud instance's real quit (Tray → Quit Volli), for `stop` and
  * `restart` only. The helper and the seam it reaches live in
- * `lib/cloud-acceptance.mjs`; every other instance, the remote journey's
- * native Quit included, never reaches it.
+ * `lib/cloud-acceptance.mjs`. Both cloud fixtures and explicit real targets
+ * use it; local instances and the remote journey's native Quit never do.
  */
 async function cloudTrayQuit() {
-  requireCloud();
+  requireCloudLaunch();
   const result = await quitCloudLaunchFromTray(app, () => electronExit !== null);
   lastTrayQuit = result;
   transcript({ cmd: "tray-quit", ...result });
@@ -1009,7 +1020,7 @@ async function cloudTrayQuit() {
  * missing or mismatched handle throws: never read as a clean quit.
  */
 async function closeCloudInstance() {
-  requireCloud();
+  requireCloudLaunch();
   const child = electronChild;
   const pid = electronPid;
   const trayQuit = await cloudTrayQuit();
@@ -1027,6 +1038,11 @@ async function closeCloudInstance() {
   return { trayQuit, close };
 }
 
+function requireCloudLaunch() {
+  if (!spec.deployment) requireCloud();
+}
+
+// Fixture-only commands must never borrow the real-deployment sign-in.
 function requireCloud() {
   if (!spec.cloud || cloud === null) throw new Error("not a Volli Cloud instance (launch --cloud)");
 }

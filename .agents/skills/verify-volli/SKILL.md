@@ -30,6 +30,38 @@ volli-drive launch --fake-script replies.json  # scripted tool-enabled fake turn
 
 After changing desktop code, `pnpm run build` (≈15 s) and launch a fresh instance; a running instance never picks up new code.
 
+### Real deployments (unpackaged only)
+
+For a real WorkOS/backend check, use a named, gitignored public-value profile as
+specified in [cloud-deploy §9](../../../docs/runbooks/cloud-deploy.md#a-dev-check-against-a-real-deployment):
+`.scratch/deployments/<name>.json`, with `name`, `convexUrl`, `siteUrl`,
+`workosClientId` and `storageOrigin`. Names are `dev`, `staging`, `prod`; the
+profile name must match. Unknown fields/secrets and partial inputs are refused.
+Alternatively pass **all four** `--convex-url`, `--site-url`, `--workos-client-id`,
+`--storage-origin` flags; they replace the file, never merge with it or ambient env.
+
+```sh
+volli-drive launch --deployment staging --fixture empty
+# Production only with intentional approval: --deployment prod --confirm-prod
+```
+
+Verify the operator's target inventory first: URLs cannot self-identify as prod.
+Never relabel prod as staging. There is no fallback to prod, no GitHub-variable
+write, no packaged-build support, and no combination with `--cloud`/remote acceptance.
+This is the checkout's built **unpackaged app**, with the same scratch profile,
+keychain traps and containment as every drive. After sign-in it can write **real data**;
+prefer non-prod, a dedicated test account and Workspace. The model is still fake by default.
+
+Drive Settings → Account → sign-in, then `volli-drive sign-in-url <id>` prints
+only the recorded WorkOS authorization URL. Open it yourself in a browser (private
+window recommended); the driver neither follows it nor supplies credentials.
+When the app offers a cloud restart, `volli-drive restart <id>` restarts on the
+same isolated profile and re-proves the guard. Run `doctor` again. Preview access
+and backend authorization remain enforced. Fixture sign-in/power/setup commands
+are not available to this mode. Always `stop` afterwards; scratch sign-in keys are
+removed. Evidence can include real account/Workspace data and authorization URLs:
+keep it local and redact before sharing.
+
 ## 2. Doctor
 
 ```sh
@@ -101,13 +133,13 @@ volli-drive list                    # nothing of yours should remain live
 
 - Terminal Sessions: the instance's `$SHELL` is a fake login shell (PATH probe), so terminal/harness CLIs are not meaningfully drivable yet; use `apps/desktop/e2e/lib/fake-harness.mjs` smokes for those.
 - Remote hosts: use `apps/desktop/e2e/volli-drive/remote-acceptance-smoke.mjs` and its loopback fixture. Do not connect the harness to a real remote host.
-- Volli Cloud: `launch --cloud --cloud-subject <s>` runs an instance against the loopback fixture backend in its environment (`node convex/fixture/with-backend.ts --deploy -- …`). It needs a build made with `VOLLI_CLOUD_LOOPBACK=1`, and it refuses any other backend. Instances with the same subject are one person on two Macs. For two-account sharing, pass distinct `--cloud-subject` and `--cloud-email` values to each instance (and grant preview to each fixture email); the default dev email otherwise belongs to both accounts. Over the drive socket such an instance also answers:
+- Volli Cloud loopback fixture: `launch --cloud --cloud-subject <s>` runs an instance against the loopback fixture backend in its environment (`node convex/fixture/with-backend.ts --deploy -- …`). It needs a build made with `VOLLI_CLOUD_LOOPBACK=1`, and it refuses any other backend. Instances with the same subject are one person on two Macs. For two-account sharing, pass distinct `--cloud-subject` and `--cloud-email` values to each instance (and grant preview to each fixture email); the default dev email otherwise belongs to both accounts. Over the drive socket such an instance also answers:
   - `cloud-sign-in-browser`: follows the dev sign-in URL that the app's recorded `openExternal` asked for;
   - `restart`: a supervised restart on the same scratch tree, in place of `app.relaunch()`;
   - `runner-power suspend|resume`: SIMULATED sleep through main's dual-locked seam;
   - `cloud-checkout-folder`: the native folder picker answers with a scratch repo;
   - `cloud-state`: reads the launch marker and the runner record.
-  A cloud launch stays resident on an ordinary quit, so `stop` and `restart` quit through the Tray's Quit Volli. The two-Mac journey is `apps/desktop/e2e/volli-drive/cloud-wake-acceptance-smoke.mjs` (CI: `ci-extended.yml`, `Smoke (cloud wake acceptance)`). Never point it at a real deployment.
+  A cloud launch stays resident on an ordinary quit, so `stop` and `restart` quit through the Tray's Quit Volli. The two-Mac journey is `apps/desktop/e2e/volli-drive/cloud-wake-acceptance-smoke.mjs` (CI: `ci-extended.yml`, `Smoke (cloud wake acceptance)`). Never point this fixture journey at a real deployment; use the separate `--deployment` mode above for real WorkOS sign-in.
 - Packed apps are refused (`--build packed`/`--app` → "not yet safe; dev builds only"; the app itself also refuses harness mode when packaged) until VC-705 gives them a validated gate. Launch is the built `dist-electron/` on the dev Electron binary, rebuilt when the harness sources are newer. No HMR renderer yet.
 - Fixture repos are scratch-created with a local bare `origin`; never point an instance at a real repo or remote.
 - `logs --trace` is a literal match until VC-699's structured logs land (it already reads `logs/structured/*.jsonl` when present).

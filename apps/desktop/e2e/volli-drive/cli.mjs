@@ -40,6 +40,7 @@ import {
   supervisorEnv,
 } from "./lib/core.mjs";
 import { request } from "./lib/protocol.mjs";
+import { readDeployment } from "./lib/deployment.mjs";
 import { assertAcceptanceRunner, acceptanceTarballs } from "./lib/remote-acceptance.mjs";
 import {
   cloudFixtureFromEnv,
@@ -67,6 +68,14 @@ const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
                                    restart, cloud-sign-in-browser, runner-power,
                                    cloud-checkout-folder and cloud-state (the
                                    journey drives them over the drive socket)
+         [--deployment dev|staging|prod] [--confirm-prod]
+                                   real WorkOS sign-in, public values from
+                                   .scratch/deployments/<name>.json, or ALL of
+                                   --convex-url --site-url --workos-client-id
+                                   --storage-origin (exact HTTPS origins).
+                                   Prod requires BOTH prod and --confirm-prod.
+  sign-in-url <id>                 recorded WorkOS URL; open it yourself in a browser
+  restart <id>                     supervised cloud restart on the same isolated profile
   list [--json]                    instances on this machine (max 3 live)
   doctor [<id>] [--json]           no id: is the build about to launch guarded? (static)
                                    with id: up? right build? guard active? isolated?
@@ -170,6 +179,7 @@ async function ensureBuilt(flags) {
 }
 
 async function launch(flags) {
+  const deployment = await readDeployment(flags, REPO);
   const fixture = flags.fixture ?? "basic";
   const model = flags.model ?? "fake";
   const build = flags.build ?? "dev";
@@ -219,6 +229,10 @@ async function launch(flags) {
   // before it runs, so it could start without the guard (VC-705).
   if (build !== "dev" || flags.app)
     fail(`--build ${build}${flags.app ? " --app" : ""}: not yet safe; dev builds only`);
+  if (deployment)
+    process.stderr.write(
+      `volli-drive: real deployment ${deployment.name}: ${deployment.convexUrl} (sign-in can write real data)\n`,
+    );
   await ensureBuilt(flags);
   if (cloud !== null && !(await rendererAllowsLoopback()))
     fail(
@@ -250,6 +264,7 @@ async function launch(flags) {
     remoteAcceptance,
     ...(fakeScript === undefined ? {} : { fakeScript }),
     cloud,
+    deployment,
     bundle: BUILT_MAIN,
     idleMs,
     ...(await gitFacts()),
@@ -322,6 +337,7 @@ async function launch(flags) {
   const t = ready.timings;
   out(`instance: ${id}`);
   out(`evidence: ${evidence}`);
+  if (deployment) out(`deployment: ${deployment.name} · ${deployment.convexUrl}`);
   out(
     `timings: electron→first window ${t.firstWindow - t.launchStart}ms · guard verified ${t.guardVerified}ms · ` +
       `fixture ${t.fixtureSeeded - t.guardVerified}ms · ready ${t.ready}ms (CLI wall ${cliMs}ms)`,
@@ -641,6 +657,12 @@ async function main() {
       out(result.path);
       break;
     }
+    case "sign-in-url":
+      out(await call(id, "sign-in-url"));
+      break;
+    case "restart":
+      out(JSON.stringify(await call(id, "restart", {}, 120_000)));
+      break;
     case "windows":
       for (const w of await call(id, "windows")) out(`${w.name}  "${w.title}"  ${w.url}`);
       break;
