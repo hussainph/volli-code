@@ -13,6 +13,7 @@
 import { BellIcon } from "@phosphor-icons/react/dist/csr/Bell";
 import { ChartLineIcon } from "@phosphor-icons/react/dist/csr/ChartLine";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
+import { CloudArrowUpIcon } from "@phosphor-icons/react/dist/csr/CloudArrowUp";
 import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
 import { FlaskIcon } from "@phosphor-icons/react/dist/csr/Flask";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
@@ -25,6 +26,7 @@ import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure"
 import { EXPERIMENTS, MODEL_TIER_ROWS, type ExperimentSnapshot } from "@volli/shared";
 
 import { LogViewer } from "@renderer/components/logs/log-viewer";
+import { CloudMovesSettings } from "@renderer/components/cloud-moves/cloud-moves";
 import { AgentObservabilitySettings } from "@renderer/components/pages/agent-observability-settings";
 import { AppearanceSettings } from "@renderer/components/pages/appearance-settings";
 import { ExperimentalSettings } from "@renderer/components/pages/experimental-settings";
@@ -193,7 +195,25 @@ export function settingsGroups(
       categories: [
         ...(options.account === true ? [accountCategory()] : []),
         ...(options.runners === true ? [runnersCategory(), workspaceCategory()] : []),
-        ...(options.hosts === true ? [hostsCategory()] : []),
+        ...(options.hosts === true
+          ? [
+              {
+                key: "volli-cloud",
+                label: "Volli Cloud",
+                icon: CloudArrowUpIcon,
+                keywords: [
+                  "move projects to volli cloud",
+                  "move all projects",
+                  "local projects",
+                  "moves",
+                  "progress and local copies",
+                  "go back to local",
+                ],
+                content: <CloudMovesSettings />,
+              },
+              hostsCategory(),
+            ]
+          : []),
         {
           key: MODELS_CATEGORY_KEY,
           label: "Models",

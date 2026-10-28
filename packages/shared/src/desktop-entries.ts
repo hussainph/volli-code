@@ -61,6 +61,48 @@ export interface DesktopEntryDeclaration {
  */
 export const DESKTOP_ENTRIES = [
   {
+    key: "moves.snapshot",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "This Mac's durable moves to Volli Cloud, without row contents or credentials.",
+  },
+  {
+    key: "moves.subscribe",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "Invalidate the move projection when the journal changes.",
+  },
+  {
+    key: "moves.preflight",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "Check selected local projects without moving them.",
+  },
+  {
+    key: "moves.start",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Start the checked project moves, with a verified backup first.",
+  },
+  {
+    key: "moves.command",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Control a move under the person's sign-in and its current safety checks.",
+  },
+  {
+    key: "moves.report",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "Read a content-free move report.",
+  },
+  {
     key: "backups.status",
     compatibility: "host-command",
     placement: "host",

@@ -62,7 +62,7 @@ describe("the desktop-only tier", () => {
     ]);
     for (const entry of DESKTOP_ENTRIES) {
       const clientLocal =
-        /^(hosts|hostAdd|hostSignIns|hostLink|hostScope|shells|browserShortcuts|account|cloud|runners|checkouts)\./u.test(
+        /^(hosts|hostAdd|hostSignIns|hostLink|hostScope|shells|browserShortcuts|account|cloud|runners|checkouts|moves)\./u.test(
           entry.key,
         ) ||
         // The environment recipe's setup gate (VC-584), behind the `cloud` flag.

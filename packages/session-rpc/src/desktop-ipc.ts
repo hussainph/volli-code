@@ -237,6 +237,12 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "account.githubCancel": "ipc",
   "account.githubDisconnect": "ipc",
   // This Mac as one of the person's runners (VC-895).
+  "moves.snapshot": "ipc",
+  "moves.subscribe": "ipc",
+  "moves.preflight": "ipc",
+  "moves.start": "ipc",
+  "moves.command": "ipc",
+  "moves.report": "ipc",
   "runners.thisMac": "ipc",
   "runners.subscribeThisMac": "ipc",
   "runners.addThisMac": "ipc",

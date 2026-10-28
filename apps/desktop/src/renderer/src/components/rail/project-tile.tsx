@@ -5,6 +5,7 @@ import { ArrowsLeftRightIcon } from "@phosphor-icons/react/dist/csr/ArrowsLeftRi
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { HardDrivesIcon } from "@phosphor-icons/react/dist/csr/HardDrives";
 import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
+import { CloudArrowUpIcon } from "@phosphor-icons/react/dist/csr/CloudArrowUp";
 import { errorMessage, monogram, projectColor, type Project } from "@volli/shared";
 
 import { RelinkProjectDialog } from "@renderer/components/rail/relink-project-dialog";
@@ -15,7 +16,13 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import { notAvailableOn, useRemoteProjectHost } from "@renderer/components/hosts/use-hosts";
+import {
+  notAvailableOn,
+  useCloudEnabled,
+  useRemoteProjectHost,
+} from "@renderer/components/hosts/use-hosts";
+import { prepareCloudMove, showCloudMoves, useCloudMovesStore } from "@renderer/stores/cloud-moves";
+import { launchStore } from "@renderer/stores/launch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
@@ -35,6 +42,10 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
   // A remote project's host (VC-711): its tile says where it runs, and this
   // Mac's folder actions stand down for it. Null for This Mac's, flag off too.
   const remoteHost = useRemoteProjectHost(project.id);
+  const cloudEnabled = useCloudEnabled();
+  const move = useCloudMovesStore((state) =>
+    state.snapshot?.moves.findLast((item) => item.projectId === project.id && item.localReadOnly),
+  );
   const [removeOpen, setRemoveOpen] = React.useState(false);
   const [relinkOpen, setRelinkOpen] = React.useState(false);
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
@@ -121,6 +132,14 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                 onReveal={() => void revealInFinder()}
                 onRelink={() => setRelinkOpen(true)}
                 onRemove={() => setRemoveOpen(true)}
+                onMove={
+                  cloudEnabled && launchStore() === "local"
+                    ? () =>
+                        move === undefined
+                          ? prepareCloudMove(project.id)
+                          : showCloudMoves(move.queueId)
+                    : undefined
+                }
               />
             ) : (
               <ContextMenuItem icon={HardDrivesIcon} disabled>
@@ -147,10 +166,12 @@ function LocalProjectActions({
   onReveal,
   onRelink,
   onRemove,
+  onMove,
 }: {
   onReveal: () => void;
   onRelink: () => void;
   onRemove: () => void;
+  onMove?: () => void;
 }) {
   return (
     <>
@@ -160,6 +181,11 @@ function LocalProjectActions({
       <ContextMenuItem icon={ArrowsLeftRightIcon} onSelect={onRelink}>
         Relink folder…
       </ContextMenuItem>
+      {onMove === undefined ? null : (
+        <ContextMenuItem icon={CloudArrowUpIcon} onSelect={onMove}>
+          Move to Volli Cloud…
+        </ContextMenuItem>
+      )}
       <ContextMenuItem icon={MinusCircleIcon} variant="destructive" onSelect={onRemove}>
         Remove from Volli…
       </ContextMenuItem>

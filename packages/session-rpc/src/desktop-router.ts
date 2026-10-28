@@ -92,6 +92,22 @@ import {
 } from "./account-schema";
 import { AsyncQueue } from "./async-queue";
 import { thisMacRunnerSnapshotSchema } from "./runners-schema";
+import type {
+  CloudMoveSnapshot,
+  CloudMovePreflight,
+  CloudMovePreflightInput,
+  CloudMoveStartInput,
+  CloudMoveCommand,
+} from "@volli/shared";
+import {
+  moveSnapshotSchema,
+  movePreflightInputSchema,
+  movePreflightSchema,
+  moveStartInputSchema,
+  moveCommandSchema,
+  moveIdInputSchema,
+  moveReportSchema,
+} from "./moves-schema";
 import {
   cloudCheckoutChoiceSchema,
   cloudCheckoutInputSchema,
@@ -286,6 +302,12 @@ export interface DesktopRouterHandlers {
   readonly "account.githubCancel": HostHandler<void, null>;
   readonly "account.githubDisconnect": HostHandler<void, null>;
   /** This Mac as one of the person's runners (VC-895): desktop main's Mac runner. */
+  readonly "moves.snapshot": HostHandler<void, CloudMoveSnapshot>;
+  readonly "moves.subscribe": DesktopSubscriptionHandler<void, null>;
+  readonly "moves.preflight": HostHandler<CloudMovePreflightInput, CloudMovePreflight>;
+  readonly "moves.start": HostHandler<CloudMoveStartInput, null>;
+  readonly "moves.command": HostHandler<CloudMoveCommand, null>;
+  readonly "moves.report": HostHandler<{ moveId: string }, string>;
   readonly "runners.thisMac": HostHandler<void, ThisMacRunnerSnapshot>;
   readonly "runners.subscribeThisMac": DesktopSubscriptionHandler<void, ThisMacRunnerSnapshot>;
   readonly "runners.addThisMac": HostHandler<void, null>;
@@ -1065,6 +1087,32 @@ export function createDesktopRouter() {
      * answers through the map (only with `cloud` on), and every other host
      * answers unavailable. No procedure carries the runner's credential.
      */
+    moves: {
+      snapshot: hostProcedure("moves.snapshot")
+        .output(moveSnapshotSchema)
+        .query(({ ctx }) => ctx.handlers["moves.snapshot"](undefined, ctx.call)),
+      subscribe: hostProcedure("moves.subscribe").subscription(async function* ({ ctx, signal }) {
+        yield* desktopStream<null>(ctx, "moves.subscribe", signal, (sink) =>
+          ctx.handlers["moves.subscribe"](undefined, ctx.call, sink),
+        );
+      }),
+      preflight: hostProcedure("moves.preflight")
+        .input(movePreflightInputSchema)
+        .output(movePreflightSchema)
+        .query(({ ctx, input }) => ctx.handlers["moves.preflight"](input, ctx.call)),
+      start: hostProcedure("moves.start")
+        .input(moveStartInputSchema)
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["moves.start"](input, ctx.call)),
+      command: hostProcedure("moves.command")
+        .input(moveCommandSchema)
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["moves.command"](input, ctx.call)),
+      report: hostProcedure("moves.report")
+        .input(moveIdInputSchema)
+        .output(moveReportSchema)
+        .query(({ ctx, input }) => ctx.handlers["moves.report"](input, ctx.call)),
+    },
     runners: {
       thisMac: hostProcedure("runners.thisMac")
         .output(thisMacRunnerSnapshotSchema)
@@ -1130,5 +1178,6 @@ export function desktopProcedureSchemas(router: DesktopRouter = createDesktopRou
     "account.subscribe": accountSnapshotSchema,
     "account.githubSubscribe": accountGithubSnapshotSchema,
     "runners.subscribeThisMac": thisMacRunnerSnapshotSchema,
+    "moves.subscribe": z.null(),
   });
 }

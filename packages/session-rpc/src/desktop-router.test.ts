@@ -37,6 +37,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { z } from "zod";
 
 import { accountGithubSnapshotSchema } from "./account-schema";
+import { MOVE_SNAPSHOT, MOVE_PREFLIGHT } from "./moves.test-support";
 import { LOCAL_DESKTOP_CALLER, type RouterCaller } from "./catalog";
 import {
   createDesktopRouter,
@@ -469,6 +470,12 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "account.githubInstall": record("account.githubInstall", null),
     "account.githubCancel": record("account.githubCancel", null),
     "account.githubDisconnect": record("account.githubDisconnect", null),
+    "moves.snapshot": record("moves.snapshot", MOVE_SNAPSHOT),
+    "moves.subscribe": stream("moves.subscribe", null),
+    "moves.preflight": record("moves.preflight", MOVE_PREFLIGHT),
+    "moves.start": record("moves.start", null),
+    "moves.command": record("moves.command", null),
+    "moves.report": record("moves.report", '{"ok":true}'),
     "runners.thisMac": record("runners.thisMac", THIS_MAC),
     "runners.subscribeThisMac": stream("runners.subscribeThisMac", THIS_MAC),
     "runners.addThisMac": record("runners.addThisMac", null),
@@ -1514,6 +1521,54 @@ describeContract<Host, DesktopRouter>(
       }
     });
 
+    it("carries move reads, controls and invalidations through the real codec, validating both directions", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      expect(await client.moves.snapshot.query()).toEqual(MOVE_SNAPSHOT);
+      expect(
+        await client.moves.preflight.query({ workspaceId: null, includeRemoved: false }),
+      ).toEqual(MOVE_PREFLIGHT);
+      const stream = collect((handlers) => client.moves.subscribe.subscribe(undefined, handlers));
+      await vi.waitFor(() => expect(stream.values).toEqual([null]));
+      await fixture.sinks.get("moves.subscribe")!.emit(null);
+      await vi.waitFor(() => expect(stream.values).toEqual([null, null]));
+      stream.unsubscribe();
+      expect(
+        await client.moves.start.mutate({
+          preflightId: "dry-run",
+          projectIds: ["project"],
+          workspaceId: "workspace",
+          stopAtFirstProblem: true,
+        }),
+      ).toBeNull();
+      expect(await client.moves.command.mutate({ moveId: "move", action: "go-back" })).toBeNull();
+      expect(await client.moves.report.query({ moveId: "move" })).toBe('{"ok":true}');
+      await expect(
+        client.moves.command.mutate({ moveId: "move", action: "erase" } as never),
+      ).rejects.toBeDefined();
+      await expect(
+        client.moves.start.mutate({
+          preflightId: "dry-run",
+          projectIds: [],
+          workspaceId: "workspace",
+          stopAtFirstProblem: true,
+        }),
+      ).rejects.toBeDefined();
+      await expect(
+        client.moves.preflight.query({
+          workspaceId: null,
+          includeRemoved: false,
+          token: "not-admitted",
+        } as never),
+      ).rejects.toBeDefined();
+      const invalid = await connect(
+        host(LOCAL_DESKTOP_CALLER, {
+          "moves.snapshot": () => ({ ...MOVE_SNAPSHOT, revision: -1 }),
+        }),
+      );
+      await expect(invalid.moves.snapshot.query()).rejects.toBeDefined();
+    });
+
     // This Mac as a runner (VC-895): desktop main's Mac runner, the window's alone.
     it("serves this Mac's runner snapshot and its commands, and streams every change", async () => {
       const fixture = host(LOCAL_DESKTOP_CALLER);
@@ -1943,6 +1998,12 @@ describe("the desktop router's grammar", () => {
         "account.githubInstall",
         "account.githubCancel",
         "account.githubDisconnect",
+        "moves.snapshot",
+        "moves.subscribe",
+        "moves.preflight",
+        "moves.start",
+        "moves.command",
+        "moves.report",
         "runners.thisMac",
         "runners.subscribeThisMac",
         "runners.addThisMac",
