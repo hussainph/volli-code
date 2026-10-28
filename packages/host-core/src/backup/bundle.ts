@@ -101,9 +101,6 @@ function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-/** The SHA-256 of some bytes, lowercase hex — a bundle entry's identity. */
-export const sha256Hex = sha256;
-
 /** `sha256:<hex>` → the transcript artifact's archive path. */
 export function transcriptArtifactPath(referenceId: string): string {
   return `${TRANSCRIPT_PREFIX}${referenceId.slice("sha256:".length)}.json`;
@@ -258,7 +255,7 @@ export function* backupManifestChunks(
 }
 
 /** Serializes a manifest the way the bundle stores it. */
-export function serializeBackupManifest(manifest: BackupManifest): Buffer {
+function serializeBackupManifest(manifest: BackupManifest): Buffer {
   const header: Omit<BackupManifest, "entries"> = manifest;
   return Buffer.from([...backupManifestChunks(header, manifest.entries)].join(""), "utf8");
 }

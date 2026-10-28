@@ -1,3 +1,4 @@
+import type { ProfileBackupsPort } from "../backup/automatic";
 import type { ProfileBackupStatus } from "@volli/shared";
 import type {
   HostWorkspaceCreateInput,
@@ -341,7 +342,7 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
   /** Stops a project's live work, then detaches it (VC-796, VC-822): `../project-remove`. */
   readonly "project.remove": HostHandler<{ projectId: string }, null>;
   readonly "backups.status": HostHandler<void, ProfileBackupStatus>;
-  readonly "backups.run": HostHandler<void, ProfileBackupStatus>;
+  readonly "backups.run": HostHandler<{ expectedRevision: string }, ProfileBackupStatus>;
   readonly "backups.reveal": HostHandler<void, null>;
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
   /** Where the ticket's working copy's environment setup stands (VC-584). */
@@ -595,11 +596,7 @@ export interface HostHandlerOptions {
   readonly db: Database.Database | null;
   /** The host's data directory: where a worktree's attachment bytes live. */
   readonly dataDir: string;
-  readonly backups?: {
-    status(): Promise<ProfileBackupStatus>;
-    run(): Promise<ProfileBackupStatus>;
-    reveal(): Promise<void>;
-  } | null;
+  readonly backups?: ProfileBackupsPort | null;
   /** The same screenshot store Code Mode writes; absent means an explicit unavailable picture. */
   readonly pictures?: BrowserPictureStore;
   /** The recovered Session runtime, or null when this launch has none. */
@@ -1132,7 +1129,8 @@ function hostHandlerEntries(
       }),
     "backups.status": () =>
       present(options.backups ?? null, "Local backups are unavailable.").status(),
-    "backups.run": () => present(options.backups ?? null, "Local backups are unavailable.").run(),
+    "backups.run": ({ expectedRevision }) =>
+      present(options.backups ?? null, "Local backups are unavailable.").run(expectedRevision),
     "backups.reveal": () =>
       done(() => present(options.backups ?? null, "Local backups are unavailable.").reveal()),
     "worktree.trimSettings": () => getTrimSettings(board()),

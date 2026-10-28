@@ -8,6 +8,7 @@ import {
   rotateAutomaticBackups,
   type AutomaticBackupRecord,
 } from "./automatic";
+import { ProfileBackupError } from "./errors";
 import { profileMaintenanceActive, withProfileMaintenance } from "./profile-maintenance";
 
 const roots: string[] = [];
@@ -69,13 +70,17 @@ describe("automatic profile backups", () => {
 
   it("reports failed verification, keeps the failed file, and throttles automatic retries", async () => {
     const dataDir = await directory();
+    let now = START;
     const run = vi.fn(async (path: string) => {
       await writeFile(`${path}.failed`, "bad bundle");
-      throw new Error("Backup verification failed; failed bundle kept.");
+      throw new ProfileBackupError(
+        "verification",
+        "Backup verification failed; failed bundle kept.",
+      );
     });
     const service = new AutomaticProfileBackups({
       dataDir,
-      now: () => START,
+      now: () => now,
       run,
       reveal: async () => {},
     });
@@ -93,7 +98,52 @@ describe("automatic profile backups", () => {
     expect(
       JSON.parse(await readFile(join(dataDir, "backups", "automatic-state.json"), "utf8")).notice,
     ).toContain("verification failed");
+    now += 60 * 60_000;
+    await service.tick();
+    expect(run).toHaveBeenCalledTimes(1);
+    now += DAY;
+    await service.tick();
+    expect(run).toHaveBeenCalledTimes(2);
     service.stop();
+  });
+
+  it("makes a revision-conditional manual intent idempotent across completion and restart", async () => {
+    const dataDir = await directory();
+    const run = vi.fn(async (path: string) => {
+      await writeFile(path, "bundle");
+      return { sizeBytes: 6 };
+    });
+    const options = { dataDir, now: () => START, run, reveal: async () => {} };
+    const service = new AutomaticProfileBackups(options);
+    const revision = (await service.status()).revision;
+    const first = await service.run(revision);
+    expect(first.revision).not.toBe(revision);
+    await service.run(revision);
+    const reopened = new AutomaticProfileBackups(options);
+    await reopened.run(revision);
+    expect(run).toHaveBeenCalledTimes(1);
+    await reopened.run(first.revision);
+    expect(run).toHaveBeenCalledTimes(2);
+    service.stop();
+    reopened.stop();
+  });
+
+  it("bounds the failed tier while preserving kept failed bundles", async () => {
+    const root = await directory();
+    const records = Array.from({ length: 20 }, (_, index) => ({
+      ...record(index),
+      fileName: `${record(index).fileName}.failed`,
+      verified: false,
+    }));
+    for (const item of records) {
+      await writeFile(join(root, item.fileName), "bundle");
+      await writeFile(join(root, `${item.fileName}.json`), JSON.stringify(item));
+    }
+    await writeFile(join(root, `${records[15]!.fileName}.kept`), "");
+    await rotateAutomaticBackups(root, START, "failed");
+    const files = (await readdir(root)).filter((name) => name.endsWith(".failed"));
+    expect(files).toHaveLength(9); // Seven dailies, one weekly, one explicit keep.
+    expect(files).toContain(records[15]!.fileName);
   });
 
   it("backs up an empty history on start, with no duplicate timer", async () => {
@@ -121,7 +171,9 @@ describe("automatic profile backups", () => {
   it("keeps seven distinct daily snapshots and the most recent completed week's backup", () => {
     const records = Array.from({ length: 20 }, (_, index) => record(index));
     const keep = retainedAutomaticBackups(records, START);
-    expect(keep).toEqual(new Set(records.slice(0, 7).map((item) => item.fileName)));
+    expect(keep).toEqual(
+      new Set([...records.slice(0, 7), records[8]!].map((item) => item.fileName)),
+    );
     // Late in the week, last Sunday is the eighth daily and remains as weekly.
     const sunday = START + DAY * 6;
     const later = records.map((item) =>
@@ -152,7 +204,7 @@ describe("automatic profile backups", () => {
     await writeFile(join(root, "old.tar.gz.failed"), "failed");
     await rotateAutomaticBackups(root, START);
     const names = await readdir(root);
-    expect(names).not.toContain(records[8]!.fileName);
+    expect(names).not.toContain(records[9]!.fileName);
     for (const index of [0, 6, 10, 11, 12]) expect(names).toContain(records[index]!.fileName);
     expect(names).toContain("move-backup.tar.gz");
     expect(names).toContain("old.tar.gz.failed");

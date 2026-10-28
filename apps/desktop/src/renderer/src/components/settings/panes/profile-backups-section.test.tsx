@@ -24,7 +24,12 @@ vi.mock("@renderer/lib/session-rpc-ipc-link", () => ({
 vi.mock("@renderer/lib/toast", () => ({ toastError: mocks.toast }));
 let root: Root;
 let container: HTMLElement;
-const idle: ProfileBackupStatus = { running: false, lastBackup: null, notice: null };
+const idle: ProfileBackupStatus = {
+  revision: "history-revision",
+  running: false,
+  lastBackup: null,
+  notice: null,
+};
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   mocks.status.mockResolvedValue(idle);

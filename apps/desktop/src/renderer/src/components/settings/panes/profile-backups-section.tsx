@@ -36,9 +36,10 @@ export function ProfileBackupsSection() {
   }, []);
 
   async function run() {
+    if (!status || requested) return;
     setRequested(true);
     try {
-      setStatus(await sessionRpcClient().backups.run.mutate());
+      setStatus(await sessionRpcClient().backups.run.mutate({ expectedRevision: status.revision }));
     } catch (error) {
       toastError(`Couldn't back up: ${errorMessage(error)}`);
     } finally {

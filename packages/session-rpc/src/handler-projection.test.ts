@@ -70,7 +70,7 @@ const SAMPLE_INPUTS: {
   "project.reorder": { orderedIds: [PROJECT] },
   "project.remove": { projectId: PROJECT },
   "backups.status": undefined,
-  "backups.run": undefined,
+  "backups.run": { expectedRevision: "history-revision" },
   "backups.reveal": undefined,
   "worktree.trimSettings": undefined,
   "worktree.setupStatus": { ticketId: "ticket-1" },

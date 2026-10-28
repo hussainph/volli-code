@@ -30,6 +30,7 @@ import * as sessionControl from "./session-control";
 import { createHostSessionRuntime, type HostSessionRuntimeOptions } from "./session-runtime";
 import { PtyManager, type PtyManagerOptions } from "./pty/manager";
 import type { SessionWake } from "./session-control/session-wake";
+import { runAutomaticBackupWorker, type AutomaticBackupRequest } from "./backup/automatic-worker";
 import { createHostMaintenance, type HostMaintenanceOptions } from "./maintenance-services";
 import { createHostRuntimeServices } from "./runtime-services";
 import { createSessionExecutorSlot } from "@volli/session-engine";
@@ -40,6 +41,14 @@ import { createSessionExecutorSlot } from "@volli/session-engine";
  * `calls`, which is the contract `createHostCore` wires and nothing else shows.
  */
 const { calls } = vi.hoisted(() => ({ calls: [] as string[] }));
+vi.mock("./backup/automatic-worker", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./backup/automatic-worker")>()),
+  runAutomaticBackupWorker: vi.fn(async (_entry: string | URL, request: AutomaticBackupRequest) => {
+    writeFileSync(request.outputPath, "bundle");
+    return { sizeBytes: 6 };
+  }),
+}));
+
 vi.mock("./maintenance-services", async (importOriginal) => {
   const original = await importOriginal<typeof import("./maintenance-services")>();
   return {
@@ -584,6 +593,35 @@ describe("createHostCore", () => {
 });
 
 describe("createHostCore composition", () => {
+  it("derives backup profile paths in the host and supplies platform facts only", async () => {
+    const root = dataDir();
+    const reveal = vi.fn(async () => {});
+    const workerEntry = new URL("file:///automatic-worker.cjs");
+    const core = live(
+      compose(
+        { log: { error: vi.fn() } },
+        { ...headlessOptions(root), backups: { workerEntry, appVersion: "test", reveal } },
+      ),
+    );
+    const backups = core.maintenance.backups!;
+    await backups.run((await backups.status()).revision);
+    expect(runAutomaticBackupWorker).toHaveBeenCalledWith(
+      workerEntry,
+      expect.objectContaining({
+        dataDir: root,
+        dbPath: core.dbPath,
+        blobsRoot: join(root, "blobs"),
+        transcriptsRoot: join(root, "session-transcripts"),
+        appVersion: "test",
+      }),
+      expect.any(AbortSignal),
+      expect.any(Function),
+    );
+    await backups.reveal();
+    expect(reveal).toHaveBeenCalledWith(join(root, "backups"));
+    await core.stop("test");
+    await expect(backups.run()).rejects.toThrow("closing");
+  });
   it("hands maintenance the host's process readers, and reclaim seams only when supplied", () => {
     const core = live(compose({ log: { error: vi.fn() } }, headlessOptions(dataDir())));
     expect(createHostMaintenance).toHaveBeenCalledTimes(1);

@@ -89,7 +89,6 @@ import {
   missingBundleFileProblem,
   missingManifestProblem,
   missingTranscriptArtifactProblem,
-  sha256Hex,
   strayBlobArtifactProblem,
   strayTranscriptArtifactProblem,
   transcriptArtifactPath,
@@ -219,7 +218,7 @@ export async function writeBackupBundleFile(
     await rename(archivePath, options.outputPath);
     movedToOutput = true;
     await options.checkpoint?.();
-    const verified = await verifyBundleFile(options.outputPath, staging, options.checkpoint);
+    const verified = await verifyBackupBundleFile(options.outputPath, staging, options.checkpoint);
     if (!verified.ok) throw verificationError(verified.problems);
     return { sizeBytes: (await stat(options.outputPath)).size };
   } finally {
@@ -488,25 +487,21 @@ async function measureTranscriptArtifacts(context: WriterContext): Promise<void>
       const id = row[0];
       if (typeof id !== "string") continue;
       after = id;
-      let bytes: Buffer;
+      let sizeBytes = 0;
       try {
-        bytes = store.readCanonicalBytesSync(transcriptReferenceForId(id));
-      } catch (error) {
-        if (isMissing(error)) {
-          throw new BackupBundleError(`Transcript ${id} is missing from the transcript store.`);
+        let chunks = 0;
+        for await (const bytes of store.readCanonicalChunks(transcriptReferenceForId(id))) {
+          sizeBytes += bytes.length;
+          if (++chunks % CHECKPOINT_CHUNKS === 0) await context.checkpoint?.();
         }
-        throw new BackupBundleError(`Transcript ${id} no longer matches its own digest.`, {
-          cause: error,
-        });
+      } catch (error) {
+        throw transcriptReadError(id, error);
       }
-      const digest = sha256Hex(bytes);
-      if (digest !== id.slice(TRANSCRIPT_PREFIX_LENGTH)) {
-        throw new BackupBundleError(`Transcript ${id} no longer matches its own digest.`);
-      }
+      const digest = id.slice(TRANSCRIPT_PREFIX_LENGTH);
       context.scratch.insertManifestEntry({
         path: transcriptArtifactPath(id),
         kind: "transcript",
-        sizeBytes: bytes.length,
+        sizeBytes,
         sha256: digest,
       });
       sinceCheckpoint += 1;
@@ -652,20 +647,17 @@ async function* archiveChunks(
         TRANSCRIPT_PREFIX.length,
         entry.path.length - ".json".length,
       )}`;
-      let bytes: Buffer;
       try {
-        bytes = store.readCanonicalBytesSync(transcriptReferenceForId(id));
-      } catch (error) {
-        if (isMissing(error)) {
-          throw new BackupBundleError(`Transcript ${id} is missing from the transcript store.`);
+        let chunks = 0;
+        for await (const bytes of store.readCanonicalChunks(transcriptReferenceForId(id))) {
+          sizeBytes += bytes.length;
+          digest.update(bytes);
+          yield bytes;
+          if (++chunks % CHECKPOINT_CHUNKS === 0) await checkpoint?.();
         }
-        throw new BackupBundleError(`Transcript ${id} no longer matches its own digest.`, {
-          cause: error,
-        });
+      } catch (error) {
+        throw transcriptReadError(id, error);
       }
-      sizeBytes = bytes.length;
-      digest.update(bytes);
-      yield bytes;
       if (sizeBytes !== entry.sizeBytes || digest.digest("hex") !== entry.sha256) {
         throw new BackupBundleError(`Transcript ${id} no longer matches its own digest.`);
       }
@@ -675,6 +667,15 @@ async function* archiveChunks(
     if (artifactsWritten % CHECKPOINT_ARTIFACTS === 0) await checkpoint?.();
   }
   yield tarEndBlocks();
+}
+
+function transcriptReadError(id: string, error: unknown): BackupBundleError {
+  return new BackupBundleError(
+    isMissing(error)
+      ? `Transcript ${id} is missing from the transcript store.`
+      : `Transcript ${id} no longer matches its own digest.`,
+    { cause: error },
+  );
 }
 
 function verificationError(problems: readonly BackupProblem[]): BackupBundleError {

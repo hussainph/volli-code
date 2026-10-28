@@ -1,14 +1,28 @@
 /** A separately bundled worker entry keeps SQLite iteration and gzip off the UI thread. */
 import { Worker, parentPort, workerData } from "node:worker_threads";
-import { mkdir, mkdtemp, rename, rm, stat, statfs, opendir, readdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import {
+  mkdir,
+  mkdtemp,
+  rename,
+  rm,
+  stat,
+  statfs,
+  opendir,
+  readdir,
+  writeFile,
+} from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { setTimeout as delay, setImmediate as yieldNow } from "node:timers/promises";
 import Database from "better-sqlite3";
 import { platform, totalmem } from "node:os";
 import { parseFreePercentage } from "../process/memory-pressure";
 import { runInventoryTool } from "../process/inventory";
-import { profileMaintenanceActive } from "./profile-maintenance";
+import { profileMaintenanceActive, profileOwnerAlive } from "./profile-maintenance";
 import { writeBackupBundleFile } from "./streaming";
+import { BackupBundleError } from "./bundle";
+import { ProfileBackupError, type ProfileBackupFailureCode } from "./errors";
+import { hostLogger } from "../log/root";
+import { rotateAutomaticBackups } from "./automatic";
 
 export interface AutomaticBackupRequest {
   dataDir: string;
@@ -23,7 +37,7 @@ export interface AutomaticBackupRequest {
 type WorkerMessage =
   | { type: "notice"; notice: string | null }
   | { type: "done"; sizeBytes: number }
-  | { type: "failed"; message: string };
+  | { type: "failed"; code: ProfileBackupFailureCode; message: string; detail: string };
 
 export function runAutomaticBackupWorker(
   entry: string | URL,
@@ -33,7 +47,9 @@ export function runAutomaticBackupWorker(
   execArgv?: string[],
 ): Promise<{ sizeBytes: number }> {
   if (signal.aborted)
-    return Promise.reject(new Error("Backup interrupted because Volli is closing."));
+    return Promise.reject(
+      new ProfileBackupError("cancelled", "Backup interrupted because Volli is closing."),
+    );
   return new Promise((resolve, reject) => {
     const worker = new Worker(entry, {
       workerData: request,
@@ -42,18 +58,28 @@ export function runAutomaticBackupWorker(
     });
     let result: { sizeBytes: number } | undefined;
     let failure: Error | undefined;
-    const cancel = () => worker.postMessage({ type: "cancel" }, []);
+    let terminateTimer: ReturnType<typeof setTimeout> | undefined;
+    const cancel = () => {
+      worker.postMessage({ type: "cancel" }, []);
+      terminateTimer = setTimeout(() => {
+        void worker.terminate();
+      }, 5000);
+    };
     signal.addEventListener("abort", cancel, { once: true });
     worker.on("message", (message: WorkerMessage) => {
       if (message.type === "notice") onNotice(message.notice);
       else if (message.type === "done") result = { sizeBytes: message.sizeBytes };
-      else failure = new Error(message.message);
+      else {
+        hostLogger("profile-backups").warn("backup worker failed", { detail: message.detail });
+        failure = new ProfileBackupError(message.code, message.message);
+      }
     });
     worker.on("error", (error: unknown) => {
       failure = error instanceof Error ? error : new Error(String(error));
     });
     // Settle only when no worker can still be writing (including native backup()).
     worker.once("exit", (code) => {
+      clearTimeout(terminateTimer);
       signal.removeEventListener("abort", cancel);
       if (!failure && code === 0 && result) resolve(result);
       else reject(failure ?? new Error(`Backup worker stopped (${code}). Try Back up now.`));
@@ -66,7 +92,7 @@ export function automaticBackupDiskRequirement(
   databaseBytes: number,
   artifactBytes: number,
 ): number {
-  return Math.max(64 * 1024 * 1024, databaseBytes * 12 + artifactBytes * 4);
+  return 64 * 1024 * 1024 + databaseBytes * 2 + artifactBytes * 2;
 }
 
 async function treeBytes(path: string): Promise<number> {
@@ -98,16 +124,18 @@ export async function createAutomaticBackup(
   for (const name of await readdir(directory)) {
     const match = /^\.automatic-(\d+)-[A-Za-z0-9]{6}$/.exec(name);
     if (!match) continue;
-    let abandoned = Number(match[1]) === process.pid;
-    if (!abandoned) {
-      try {
-        process.kill(Number(match[1]), 0);
-      } catch (error) {
-        abandoned = (error as NodeJS.ErrnoException).code === "ESRCH";
-      }
-    }
+    const abandoned = Number(match[1]) === process.pid || !profileOwnerAlive(Number(match[1]));
     if (abandoned) await rm(join(directory, name), { recursive: true, force: true });
   }
+  for (const name of await readdir(directory)) {
+    const match = /^auto-(\d{13})-[a-f0-9-]{36}\.tar\.gz\.partial$/.exec(name);
+    if (!match) continue;
+    const failed = join(directory, `${name.slice(0, -8)}.failed`);
+    await rename(join(directory, name), failed);
+    await moveKeepMarker(join(directory, name), failed);
+    await recordFailedBackup(failed, Number(match[1]));
+  }
+  await rotateAutomaticBackups(directory, request.now, "failed");
   let databaseBytes = (await stat(request.dbPath)).size;
   try {
     databaseBytes += (await stat(`${request.dbPath}-wal`)).size;
@@ -118,7 +146,8 @@ export async function createAutomaticBackup(
     (await treeBytes(request.blobsRoot)) + (await treeBytes(request.transcriptsRoot));
   const disk = await statfs(directory);
   if (disk.bavail * disk.bsize < automaticBackupDiskRequirement(databaseBytes, artifacts)) {
-    throw new Error(
+    throw new ProfileBackupError(
+      "disk-space",
       "Backup skipped: not enough free disk space for two copies of the bundle and verification. Free disk space, then Back up now.",
     );
   }
@@ -130,7 +159,9 @@ export async function createAutomaticBackup(
     const snapshotPath = join(workDir, "snapshot.db");
     try {
       source.pragma("cache_size = -2048");
-      await source.backup(snapshotPath);
+      // One native copy step cannot be restarted indefinitely by concurrent
+      // Session writes. SQLite WAL writers still proceed on their own connection.
+      await source.backup(snapshotPath, { progress: () => 0x7fff_ffff });
     } finally {
       source.close();
     }
@@ -149,7 +180,8 @@ export async function createAutomaticBackup(
       await checkpoint();
       const remaining = await statfs(directory);
       if (remaining.bavail * remaining.bsize < result.sizeBytes * 2) {
-        throw new Error(
+        throw new ProfileBackupError(
+          "disk-space",
           "Backup could not be published: free disk space is below twice the bundle size. The failed bundle was kept.",
         );
       }
@@ -160,7 +192,10 @@ export async function createAutomaticBackup(
     }
   } catch (error) {
     try {
-      await rename(partial, `${request.outputPath}.failed`);
+      const failed = `${request.outputPath}.failed`;
+      await rename(partial, failed);
+      await moveKeepMarker(partial, failed);
+      await recordFailedBackup(failed, request.now);
     } catch (renameError) {
       if ((renameError as NodeJS.ErrnoException).code !== "ENOENT") throw renameError;
     }
@@ -191,9 +226,7 @@ export function serveAutomaticBackupWorker(): void {
     await yieldNow();
     for (;;) {
       if (cancelled)
-        throw new Error(
-          "Backup interrupted because Volli is closing; partial bundle kept as failed.",
-        );
+        throw new ProfileBackupError("cancelled", "Backup interrupted because Volli is closing.");
       if (Date.now() >= nextPressureCheck) {
         // Swap may remain allocated long after pressure has ended. Backups yield
         // on the current OS reading, not on historical swap allocation.
@@ -203,7 +236,10 @@ export function serveAutomaticBackupWorker(): void {
         underPressure = free === null ? process.availableMemory() < totalmem() * 0.2 : free < 20;
         nextPressureCheck = Date.now() + 30_000;
       }
-      const maintenance = await profileMaintenanceActive(request.dataDir);
+      const maintenance =
+        (await profileMaintenanceActive(request.dataDir)) ||
+        (dirname(request.dbPath) !== request.dataDir &&
+          (await profileMaintenanceActive(dirname(request.dbPath))));
       if (!underPressure && !maintenance) {
         notice(null);
         return;
@@ -219,14 +255,43 @@ export function serveAutomaticBackupWorker(): void {
   void createAutomaticBackup(request, checkpoint)
     .then(
       (result) => port.postMessage({ type: "done", ...result } satisfies WorkerMessage),
-      (error: unknown) =>
+      (error: unknown) => {
+        const failure =
+          error instanceof ProfileBackupError
+            ? error
+            : error instanceof BackupBundleError
+              ? new ProfileBackupError(
+                  "verification",
+                  "Backup verification failed. Any written bundle was kept as failed. Try Back up now.",
+                )
+              : new ProfileBackupError("io", "Backup could not be completed. Try Back up now.");
         port.postMessage({
           type: "failed",
-          message: error instanceof Error ? error.message : "Backup failed. Try Back up now.",
-        } satisfies WorkerMessage),
+          code: failure.code,
+          message: failure.message,
+          detail: error instanceof Error ? error.message : String(error),
+        } satisfies WorkerMessage);
+      },
     )
     .finally(() => {
       port.removeAllListeners();
       port.close();
     });
+}
+
+async function recordFailedBackup(path: string, createdAt: number): Promise<void> {
+  const sizeBytes = (await stat(path)).size;
+  await writeFile(
+    `${path}.json`,
+    JSON.stringify({ fileName: basename(path), createdAt, sizeBytes, verified: false }),
+    { flag: "wx", mode: 0o600 },
+  );
+}
+
+async function moveKeepMarker(from: string, to: string): Promise<void> {
+  try {
+    await rename(`${from}.kept`, `${to}.kept`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
 }

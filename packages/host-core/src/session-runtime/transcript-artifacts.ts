@@ -2,8 +2,9 @@ import { createHash, randomBytes } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readFileSync, type Stats } from "node:fs";
 import { link, lstat, mkdir, open, readdir, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
-import { gunzip, gunzipSync, gzip } from "node:zlib";
+import { createGunzip, gunzip, gunzipSync, gzip } from "node:zlib";
 
 import {
   canonicalJson,
@@ -172,6 +173,54 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
       if (!isMissing(error)) throw error;
     }
     return (await this.readAndVerify(legacy, digest, "plain")).bytes;
+  }
+
+  /** Bounded canonical bytes for backups. Consume to completion to verify the digest. */
+  async *readCanonicalChunks(reference: TranscriptReference): AsyncGenerator<Buffer> {
+    const digest = validateReference(reference);
+    const { compressed, legacy } = this.pathsFor(reference.id);
+    let opened: Awaited<ReturnType<typeof openStoredFile>>;
+    let compressedName = true;
+    try {
+      opened = await openStoredFile(compressed);
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+      compressedName = false;
+      opened = await openStoredFile(legacy);
+    }
+    const { handle } = opened;
+    let source: ReturnType<typeof handle.createReadStream> | undefined;
+    let inflater: ReturnType<typeof createGunzip> | undefined;
+    let finished: Promise<unknown> | undefined;
+    try {
+      const magic = Buffer.alloc(2);
+      await handle.read(magic, 0, 2, 0);
+      const gzipped = hasGzipMagic(magic);
+      if (compressedName && !gzipped)
+        throw new Error("Transcript artifact compressed path is not gzip data");
+      source = handle.createReadStream({ autoClose: false, start: 0 });
+      const chunks = gzipped ? (inflater = createGunzip()) : source;
+      if (inflater)
+        finished = pipeline(source, inflater).then(
+          () => null,
+          (error: unknown) => error,
+        );
+      const hash = createHash("sha256");
+      for await (const chunk of chunks) {
+        const bytes = chunk as Buffer;
+        hash.update(bytes);
+        yield bytes;
+      }
+      const failure = await finished;
+      if (failure) throw failure;
+      if (`sha256:${hash.digest("hex")}` !== digest)
+        throw new Error("Transcript artifact path contains bytes for another digest");
+    } finally {
+      source?.destroy();
+      inflater?.destroy();
+      await finished;
+      await handle.close();
+    }
   }
 
   /** Synchronous verified byte seam for the currently-synchronous bundle writer. */
@@ -583,7 +632,7 @@ function digestBytes(bytes: Uint8Array): string {
  * descriptor. A missing path still throws `ENOENT` untouched, because callers
  * read "missing" as "try the other form".
  */
-async function readStoredFile(path: string): Promise<StoredFile> {
+async function openStoredFile(path: string) {
   let handle: Awaited<ReturnType<typeof open>>;
   try {
     handle = await open(path, STORED_READ_FLAGS);
@@ -593,6 +642,16 @@ async function readStoredFile(path: string): Promise<StoredFile> {
   try {
     const info = await handle.stat();
     if (!info.isFile()) throw notRegularFile();
+    return { handle, info };
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
+async function readStoredFile(path: string): Promise<StoredFile> {
+  const { handle, info } = await openStoredFile(path);
+  try {
     return { stored: await handle.readFile(), info };
   } finally {
     await handle.close();

@@ -93,8 +93,6 @@ import {
   revealWindow,
   sealQuietAppActivation,
   createDatabaseRecovery,
-  AutomaticProfileBackups,
-  runAutomaticBackupWorker,
   startOrphanScan,
   createLoginPathBootstrap,
   ADOPTION_PROBE,
@@ -983,6 +981,14 @@ const appStartup = app.whenReady().then(async () => {
     // A working copy's `.agents/setup` and its setup gate (VC-584).
     environmentRecipes: () => isExperimentEnabled("cloud"),
     databasePath: dbPath,
+    backups: {
+      workerEntry: join(__dirname, "automatic-backup-worker.cjs"),
+      appVersion: app.getVersion(),
+      reveal: async (directory) => {
+        const error = await shell.openPath(directory);
+        if (error) throw new Error(error);
+      },
+    },
     onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
     devDiagnostics: isDev,
     secretKey: harnessPorts?.secretKey ?? keychainSecretCodec(keychainUse.keychain),
@@ -1016,31 +1022,6 @@ const appStartup = app.whenReady().then(async () => {
   });
   const liveHost = isLiveHost(hostCore) ? hostCore : undefined;
   const dbHandle: DbHandle = hostCore.database;
-  const profileBackups = dbHandle.ok
-    ? new AutomaticProfileBackups({
-        dataDir: app.getPath("userData"),
-        run: (outputPath, signal, onNotice) =>
-          runAutomaticBackupWorker(
-            join(__dirname, "automatic-backup-worker.cjs"),
-            {
-              dataDir: app.getPath("userData"),
-              dbPath,
-              outputPath,
-              blobsRoot: blobsRoot(app.getPath("userData")),
-              transcriptsRoot: join(app.getPath("userData"), "session-transcripts"),
-              appVersion: app.getVersion(),
-              now: Date.now(),
-            },
-            signal,
-            onNotice,
-          ),
-        reveal: async (directory) => {
-          const error = await shell.openPath(directory);
-          if (error) throw new Error(error);
-        },
-      })
-    : null;
-  app.once("will-quit", () => profileBackups?.stop());
 
   registerDatabaseRecoveryIpcHandlers({
     recovery: createDatabaseRecovery({ dbPath, dataDir: app.getPath("userData") }),
@@ -1668,7 +1649,7 @@ const appStartup = app.whenReady().then(async () => {
     });
     return {
       backgroundShells,
-      backups: profileBackups,
+      backups: liveHost?.maintenance.backups ?? null,
       experiments: { snapshot: readExperiments, set: setExperiment },
       busyWorktreeSites,
       interruptTicketSessions: interruptTicketSessionsAnnounced,
@@ -2443,7 +2424,6 @@ const appStartup = app.whenReady().then(async () => {
     void liveHost.maintenance.retention;
     mainWindow.webContents.once("did-finish-load", () => {
       liveHost.maintenance.start();
-      profileBackups?.start();
     });
     app.on("browser-window-focus", () => liveHost.maintenance.triggerRetention());
   }

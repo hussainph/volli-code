@@ -17,6 +17,7 @@
  * database never opened, is exactly the host that needs it.
  */
 import type Database from "better-sqlite3";
+import { AutomaticProfileBackups, type AutomaticBackupOptions } from "./backup/automatic";
 import type { HostCorePorts } from "./index";
 import type { WorktreeRuntime } from "./worktree-runtime";
 import type { RetentionWatcher } from "./worktree";
@@ -62,6 +63,7 @@ export interface MaintenanceProcessReaders {
 }
 
 export interface HostMaintenanceOptions {
+  readonly backups?: AutomaticBackupOptions;
   readonly db: Database.Database;
   readonly ports: Pick<HostCorePorts, "events" | "attention">;
   readonly worktrees: Pick<WorktreeRuntime, "deps">;
@@ -78,6 +80,7 @@ export interface HostMaintenanceOptions {
 }
 
 export interface HostMaintenance {
+  readonly backups: AutomaticProfileBackups | null;
   /** One ledger, shared by every spawn door. */
   readonly spawnLedger: SpawnLedger;
   readonly orphanProcesses: OrphanProcessService;
@@ -117,6 +120,7 @@ export function createHostMaintenance(options: HostMaintenanceOptions): HostMain
     openTerminalCwds: () => processReaders.openTerminalCwds(),
   });
   const autoReap: AutoReapWatch = createAutoReapWatch(orphanProcesses, options.autoReap);
+  const backups = options.backups ? new AutomaticProfileBackups(options.backups) : null;
   let retention: RetentionWatcher | undefined;
   const retentionWatch = (): RetentionWatcher =>
     (retention ??= getRetentionWatcher(db, ports, () => worktrees.deps(db), options.reclaim));
@@ -126,6 +130,7 @@ export function createHostMaintenance(options: HostMaintenanceOptions): HostMain
   return {
     spawnLedger,
     orphanProcesses,
+    backups,
     get retention() {
       return retentionWatch();
     },
@@ -134,6 +139,7 @@ export function createHostMaintenance(options: HostMaintenanceOptions): HostMain
       started = true;
       retentionWatch().start();
       autoReap.start();
+      backups?.start();
       parkedRelease = resumeParkedTerminals({
         ledger: spawnLedger,
         launchedAt,
@@ -149,9 +155,15 @@ export function createHostMaintenance(options: HostMaintenanceOptions): HostMain
       // Never built means never started: stopping must not construct the singleton.
       retention?.stop();
       autoReap.stop();
+      backups?.stop();
     },
     async settled() {
-      await Promise.all([retention?.settled(), autoReap.settled(), parkedRelease]);
+      await Promise.all([
+        retention?.settled(),
+        autoReap.settled(),
+        parkedRelease,
+        backups?.settled(),
+      ]);
     },
   };
 }

@@ -72,7 +72,7 @@ export const DESKTOP_ENTRIES = [
     compatibility: "host-command",
     placement: "host",
     idempotency: "natural",
-    summary: "Write and verify a local profile backup in the background.",
+    summary: "Attempt a verified local profile backup if the Storage revision still matches.",
   },
   {
     key: "backups.reveal",

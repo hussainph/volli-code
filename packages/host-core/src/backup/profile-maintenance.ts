@@ -35,11 +35,16 @@ export async function profileMaintenanceActive(dataDir: string): Promise<boolean
   return names.some((name) => {
     const match = /^(\d+)-[a-f0-9-]{36}$/.exec(name);
     if (!match) return true; // Unknown maintenance markers fail closed.
-    try {
-      process.kill(Number(match[1]), 0);
-      return true;
-    } catch (error) {
-      return (error as NodeJS.ErrnoException).code !== "ESRCH";
-    }
+    return profileOwnerAlive(Number(match[1]));
   });
+}
+
+/** Permission errors cannot prove a maintenance owner is gone. */
+export function profileOwnerAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
 }

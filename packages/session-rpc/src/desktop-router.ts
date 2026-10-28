@@ -159,7 +159,7 @@ export interface DesktopRouterHandlers {
   readonly "project.reorder": HostHandler<{ orderedIds: readonly string[] }, null>;
   readonly "project.remove": HostHandler<{ projectId: string }, null>;
   readonly "backups.status": HostHandler<void, ProfileBackupStatus>;
-  readonly "backups.run": HostHandler<void, ProfileBackupStatus>;
+  readonly "backups.run": HostHandler<{ expectedRevision: string }, ProfileBackupStatus>;
   readonly "backups.reveal": HostHandler<void, null>;
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
   /** A ticket's working copy's environment setup (VC-584): where it stands, and a person's answer. */
@@ -434,6 +434,7 @@ const browserAppShortcutEventSchema = z.object({
 });
 
 const backupStatusSchema = z.object({
+  revision: z.string(),
   running: z.boolean(),
   lastBackup: z.object({ createdAt: z.number(), sizeBytes: z.number() }).nullable(),
   notice: z.string().nullable(),
@@ -585,8 +586,9 @@ export function createDesktopRouter() {
         .output(backupStatusSchema)
         .query(({ ctx }) => ctx.handlers["backups.status"](undefined, ctx.call)),
       run: hostProcedure("backups.run")
+        .input(z.strictObject({ expectedRevision: z.string().min(1) }))
         .output(backupStatusSchema)
-        .mutation(({ ctx }) => ctx.handlers["backups.run"](undefined, ctx.call)),
+        .mutation(({ ctx, input }) => ctx.handlers["backups.run"](input, ctx.call)),
       reveal: hostProcedure("backups.reveal")
         .output(z.null())
         .mutation(({ ctx }) => ctx.handlers["backups.reveal"](undefined, ctx.call)),

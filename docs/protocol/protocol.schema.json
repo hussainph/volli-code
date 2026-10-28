@@ -835,10 +835,20 @@
         "compatibility": "host-command",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "null"
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "expectedRevision"
+          ],
+          "type": "object"
         },
         "kind": "mutation",
-        "noInput": true,
+        "noInput": false,
         "output": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -876,11 +886,15 @@
                 }
               ]
             },
+            "revision": {
+              "type": "string"
+            },
             "running": {
               "type": "boolean"
             }
           },
           "required": [
+            "revision",
             "running",
             "lastBackup",
             "notice"
@@ -935,11 +949,15 @@
                 }
               ]
             },
+            "revision": {
+              "type": "string"
+            },
             "running": {
               "type": "boolean"
             }
           },
           "required": [
+            "revision",
             "running",
             "lastBackup",
             "notice"

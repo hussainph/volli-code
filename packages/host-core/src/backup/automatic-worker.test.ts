@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createFixtureProfile, type FixtureProfile } from "./test-fixture";
+import { AutomaticProfileBackups } from "./automatic";
 import { readBackupBundle } from "./bundle";
 import { withProfileMaintenance } from "./profile-maintenance";
 import {
@@ -82,6 +83,76 @@ describe("the automatic backup worker", () => {
       ),
     ).toEqual([]);
   }, 30_000);
+  it("reports a real verification failure and keeps its failed archive with a receipt", async () => {
+    profile.db.pragma("foreign_keys = OFF");
+    profile.db
+      .prepare("UPDATE tickets SET project_id = ? WHERE id = ?")
+      .run("proj-missing", "ticket-live");
+    const service = new AutomaticProfileBackups({
+      dataDir: profile.root,
+      run: (outputPath, signal, notice) =>
+        runAutomaticBackupWorker(ENTRY, { ...request(), outputPath }, signal, notice, ARGS),
+      reveal: async () => {},
+    });
+    try {
+      const status = await service.run((await service.status()).revision);
+      expect(status.lastBackup).toBeNull();
+      expect(status.notice).toContain("verification failed");
+      expect(status.notice).not.toContain("Check disk space");
+      const files = (await fs.readdir(join(profile.root, "backups"))).filter((name) =>
+        name.endsWith(".failed"),
+      );
+      expect(files).toHaveLength(1);
+      expect(
+        JSON.parse(await fs.readFile(join(profile.root, "backups", `${files[0]}.json`), "utf8"))
+          .verified,
+      ).toBe(false);
+    } finally {
+      service.stop();
+      await service.settled();
+    }
+  }, 30_000);
+
+  it("finishes a snapshot while Sessions continuously write through WAL", async () => {
+    const insert = profile.db.prepare(
+      "INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?)",
+    );
+    profile.db.transaction(() => {
+      for (let index = 0; index < 20_000; index++)
+        insert.run(`active-${index}`, "x".repeat(512), 1);
+    })();
+    let writes = 0;
+    const update = profile.db.prepare(
+      "INSERT OR REPLACE INTO app_state (key, value, updated_at) VALUES ('active-writer', ?, ?)",
+    );
+    const timer = setInterval(() => {
+      writes++;
+      update.run(String(writes), writes);
+    }, 2);
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const target = request();
+      await runAutomaticBackupWorker(ENTRY, target, controller.signal, () => {}, ARGS);
+      expect(writes).toBeGreaterThan(2);
+      const read = readBackupBundle(readFileSync(target.outputPath));
+      expect(read.ok).toBe(true);
+      if (read.ok) {
+        const table = read.bundle.document.tables.app_state!;
+        const row = table.rows.find(
+          (item) => item[table.columns.indexOf("key")] === "active-writer",
+        )!;
+        expect(row[table.columns.indexOf("value")]).toBe(
+          String(row[table.columns.indexOf("updated_at")]),
+        );
+      }
+    } finally {
+      clearInterval(timer);
+      clearTimeout(deadline);
+      controller.abort();
+    }
+  }, 30_000);
+
   it("retains a failed archive when verification or publication fails", async () => {
     let checks = 0;
     const target = request();
@@ -97,7 +168,12 @@ describe("the automatic backup worker", () => {
     expect(existsSync(target.outputPath)).toBe(false);
     expect(existsSync(`${target.outputPath}.failed`)).toBe(true);
   }, 30_000);
-  it("pauses a real worker during a move and resumes once its lease ends", async () => {
+  it("pauses a real worker across a database-path override and resumes after the move", async () => {
+    const target = {
+      ...request(),
+      dataDir: join(profile.root, "alternate-profile"),
+      outputPath: join(profile.root, "alternate-profile", "backups", "bundle.tar.gz"),
+    };
     const notices: Array<string | null> = [];
     let observed!: () => void;
     const paused = new Promise<void>((resolve) => {
@@ -107,7 +183,7 @@ describe("the automatic backup worker", () => {
     await withProfileMaintenance(profile.root, async () => {
       flight = runAutomaticBackupWorker(
         ENTRY,
-        request(),
+        target,
         new AbortController().signal,
         (notice) => {
           notices.push(notice);
@@ -116,7 +192,7 @@ describe("the automatic backup worker", () => {
         ARGS,
       );
       await paused;
-      expect(existsSync(request().outputPath)).toBe(false);
+      expect(existsSync(target.outputPath)).toBe(false);
     });
     expect((await flight).sizeBytes).toBeGreaterThan(0);
     expect(notices).toContain("Backup paused during a profile migration or move.");
