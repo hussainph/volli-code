@@ -58,6 +58,9 @@ export function refusalOf(error: unknown): MoveBackendError | null {
   return null;
 }
 
+/** How a call the network lost is retried before the move pauses: every move call's rule. */
+export const MOVE_RETRY = { attempts: 6, baseMs: 1_000, maxMs: 30_000 } as const;
+
 export interface RetryPolicy {
   attempts: number;
   baseMs: number;

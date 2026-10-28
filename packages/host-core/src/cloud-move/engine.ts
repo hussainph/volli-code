@@ -51,11 +51,13 @@ import { prepared } from "../db/prepared";
 import { MigrationExportError, isDiskFullError } from "../migration-export/errors";
 import type { MigrationExportManifest } from "../migration-export/exporter";
 import { MAPPER_VERSION, MANIFEST_FILE } from "../migration-export/staging";
+import { derivedId } from "../migration-export/transform";
 import { verifyMigrationExport } from "../migration-export/verify";
 import { saveCloudChanges } from "./cloud-changes";
-import { handOver, releaseHandover } from "./handover";
+import { handOver, plannedHandover, releaseHandover } from "./handover";
 import {
   MoveBackendError,
+  MOVE_RETRY,
   MoveNetworkError,
   importCalls,
   type ImportRowsAnswer,
@@ -93,8 +95,7 @@ const BATCH_MAX_ROWS = 200;
 const BATCH_MAX_BYTES = 3 * 1024 * 1024;
 const OBJECT_CONCURRENCY = 4;
 const ZSTD_LEVEL = { params: { [zlibConstants.ZSTD_c_compressionLevel]: 3 } };
-/** Retries of one call the network lost before the move pauses. */
-const RETRY = { attempts: 6, baseMs: 1_000, maxMs: 30_000 };
+const RETRY = MOVE_RETRY;
 
 /**
  * Where a move waits for the person, not for the engine: the checks ran
@@ -707,15 +708,22 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
   };
 
   const handover: Step = async (move, _queue, signal) => {
-    const plan = await planOf(move, signal);
-    const record = await handOver({
+    // Journaled before anything is written: a roll back that interrupts the
+    // handover takes back exactly what it may have written.
+    const planned = await plannedHandover({
+      exportDir: exportDir(move),
+      manifest: await manifestOf(move),
+      plan: await planOf(move, signal),
+    });
+    move = journal.patch(move.moveId, { journal: { handover: planned } });
+    await fault("handing_over");
+    const record = handOver({
       db: ports.db,
       history: ports.history,
       userId: move.userId,
       runnerId: move.runnerId,
-      exportDir: exportDir(move),
-      manifest: await manifestOf(move),
-      plan,
+      projectId: move.projectId,
+      planned,
     });
     await fault("handed_over");
     return journal.advance(move.moveId, "committed", "handed_over", {
@@ -801,13 +809,19 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       await fault("rollback.aborted");
     }
     if (move.journal.handover !== undefined) {
-      releaseHandover({
+      const kept = releaseHandover({
         db: ports.db,
         history: ports.history,
         userId: move.userId,
         runnerId: move.runnerId,
         record: move.journal.handover,
       });
+      // Sessions that took new facts in Volli Cloud keep their cursors: say so.
+      if (kept.length > 0 && move.failure !== null) {
+        move = journal.patch(move.moveId, {
+          failure: { ...move.failure, detail: { ...move.failure.detail, keptCursors: kept } },
+        });
+      }
     }
     await rm(workDir(move), { recursive: true, force: true, maxRetries: 3 });
     const again = move.journal.againOnRunner;
@@ -899,6 +913,11 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     error: unknown,
     signal: AbortSignal,
   ): Promise<MoveOutcome | null> => {
+    // Another run (the person's roll back, a go back to local) took the move
+    // on while this step ran: its outcome is theirs to write, not this step's.
+    if (journal.move(move.moveId)!.state !== move.state && !(error instanceof MovePausedError)) {
+      return { paused: "paused" };
+    }
     if (error instanceof MovePausedError) {
       journal.patch(move.moveId, { paused: error.reason });
       return { paused: error.reason };
@@ -1009,20 +1028,20 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     const out = join(dir, "export");
     const report = { inserted: 0, unchanged: 0, kept: 0, refused: {} as Record<string, number> };
     try {
-      if (!existsSync(join(out, MANIFEST_FILE))) {
-        await ports.exportProject({
-          sourcePath: ports.profilePath,
-          outDir: out,
-          appVersion: ports.appVersion,
-          projectIds: [],
-          profileStep: true,
-          blobsDir: ports.stores.blobsDir,
-          transcriptsDir: ports.stores.transcriptsDir,
-          piLogsDir: ports.stores.piLogsDir,
-          homeDir: ports.homeDir,
-          signal,
-        });
-      }
+      // Small and cheap: exported afresh every time, never a stale build's.
+      await rm(out, { recursive: true, force: true, maxRetries: 3 });
+      await ports.exportProject({
+        sourcePath: ports.profilePath,
+        outDir: out,
+        appVersion: ports.appVersion,
+        projectIds: [],
+        profileStep: true,
+        blobsDir: ports.stores.blobsDir,
+        transcriptsDir: ports.stores.transcriptsDir,
+        piLogsDir: ports.stores.piLogsDir,
+        homeDir: ports.homeDir,
+        signal,
+      });
       const { manifest } = await verifyMigrationExport(out);
       let rows: Row[] = [];
       const flush = async () => {
@@ -1045,7 +1064,13 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
         rows = [];
       };
       for await (const record of exportRecords(out, manifest, "configEntries")) {
-        rows.push(record);
+        // A setting's exported id names its kind and name only; in Volli Cloud
+        // it is the person's own, so it is derived for them (a stable name:
+        // the same person moving again lands on the same row).
+        rows.push({
+          ...record,
+          id: derivedId("personal-setting", queue.userId, record.id as string),
+        });
         if (rows.length >= BATCH_MAX_ROWS) await flush();
       }
       await flush();
@@ -1060,8 +1085,13 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       if ((error as { name?: string } | null)?.name === "AbortError") {
         return { kind: "waiting", reason: "paused" };
       }
-      log.warn("the profile step failed", { queueId: queue.queueId, error });
-      report.refused[refusalOf(error)?.code ?? "profile_step_failed"] = 1;
+      const refusal = refusalOf(error);
+      if (refusal === null) {
+        // Not a refusal of the settings: the step waits and runs again.
+        log.warn("the profile step will run again", { queueId: queue.queueId, error });
+        return { kind: "waiting", reason: "paused" };
+      }
+      report.refused[refusal.code] = 1;
     }
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "report.json"), JSON.stringify(report));
@@ -1240,8 +1270,11 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       if (move === null || move.state !== "checked") {
         throw new Error("Only a moved project whose checks ran can be checked again.");
       }
-      journal.advance(moveId, "checked", "handed_over", { paused: null });
-      journal.setQueue(move.queueId, { state: "running" });
+      // The handover runs again too (each write is an upsert): a folder freed since is taken.
+      journal.advance(moveId, "checked", "committed", { paused: null });
+      if (journal.queue(move.queueId)!.state === "done") {
+        journal.setQueue(move.queueId, { state: "running" });
+      }
     },
 
     async goBackToLocal(moveId, signal = new AbortController().signal) {

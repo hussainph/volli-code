@@ -5,6 +5,16 @@ import { prepared } from "../db/prepared";
 import { withTransaction } from "../db/transaction-gate";
 import { canonicalize, isInside } from "../worktree/paths";
 
+/**
+ * A local project the person went back to after moving it (VC-993) is theirs
+ * again: Volli Cloud's copy of it never adopts its folder or worktrees here,
+ * unless the project moved again since.
+ */
+const NOT_RETURNED = (projectId: string) =>
+  ` AND NOT EXISTS (SELECT 1 FROM cloud_moves m WHERE m.project_id = ${projectId}
+      AND m.state = 'returned' AND NOT EXISTS (SELECT 1 FROM cloud_moves n
+        WHERE n.project_id = m.project_id AND n.created_at > m.created_at))`;
+
 export interface CheckoutPath {
   projectRepoId: string;
   projectId: string;
@@ -208,7 +218,7 @@ export function createRunnerPathRegistry(db: Database.Database, options: { runne
     }
     const frozen = prepared<[string], { path: string }>(
       db,
-      "SELECT path FROM projects WHERE id = ? AND NOT EXISTS (SELECT 1 FROM cloud_shadow_rows WHERE kind = 'project' AND id = projects.id)",
+      `SELECT path FROM projects WHERE id = ? AND NOT EXISTS (SELECT 1 FROM cloud_shadow_rows WHERE kind = 'project' AND id = projects.id)${NOT_RETURNED("projects.id")}`,
     ).get(projectId);
     if (!frozen?.path || !isAbsolute(frozen.path)) return null;
     return registerCheckout({
@@ -234,7 +244,7 @@ export function createRunnerPathRegistry(db: Database.Database, options: { runne
     if (registered) return { absPath: registered.abs_path, adoptable: false };
     const frozen = prepared<[string], { path: string }>(
       db,
-      "SELECT path FROM projects WHERE id = ? AND NOT EXISTS (SELECT 1 FROM cloud_shadow_rows WHERE kind = 'project' AND id = projects.id)",
+      `SELECT path FROM projects WHERE id = ? AND NOT EXISTS (SELECT 1 FROM cloud_shadow_rows WHERE kind = 'project' AND id = projects.id)${NOT_RETURNED("projects.id")}`,
     ).get(projectId);
     if (!frozen?.path || !isAbsolute(frozen.path)) return null;
     return { absPath: frozen.path, adoptable: true };
@@ -313,7 +323,7 @@ export function createRunnerPathRegistry(db: Database.Database, options: { runne
       }
     >(
       db,
-      "SELECT project_id, uses_worktree, worktree_path, branch, base_branch FROM tickets WHERE id = ? AND NOT EXISTS (SELECT 1 FROM cloud_shadow_rows WHERE kind = 'ticket' AND id = tickets.id)",
+      `SELECT project_id, uses_worktree, worktree_path, branch, base_branch FROM tickets WHERE id = ? AND NOT EXISTS (SELECT 1 FROM cloud_shadow_rows WHERE kind = 'ticket' AND id = tickets.id)${NOT_RETURNED("tickets.project_id")}`,
     ).get(ticketId);
     if (!frozen) return null;
     if (frozen.uses_worktree === 0) {

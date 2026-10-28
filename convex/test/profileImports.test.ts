@@ -92,6 +92,18 @@ describe("profileImports.importPersonalSettings", () => {
     ).rejects.toMatchObject({ data: { code: "runner_unavailable" } });
   });
 
+  test("refuses a setting that names someone else as its author", async () => {
+    const { alice, workspaceId, runnerId } = await world();
+    const forged = { ...setting("forged", {}), updatedBy: { kind: "person", userId: U(99) } };
+    expect(
+      await alice.as.mutation(api.profileImports.importPersonalSettings, {
+        workspaceId,
+        runnerId,
+        rows: [forged],
+      }),
+    ).toMatchObject({ inserted: 0, rejected: [{ code: "foreign_identity" }] });
+  });
+
   test("needs a Workspace the person belongs to", async () => {
     const { t, runnerId } = await world();
     const carol = await signIn(t, "carol");

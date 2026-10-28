@@ -15,7 +15,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { withRetry } from "./backend";
+import { MOVE_RETRY, withRetry } from "./backend";
 import type { MovePlan } from "./plan";
 import type { MoveBackend } from "./ports";
 
@@ -47,9 +47,7 @@ export async function saveCloudChanges(input: {
   const { signal } = input;
   const query = <T>(path: string, args: Row) =>
     withRetry(() => input.backend.query(path, args), {
-      attempts: 6,
-      baseMs: 1_000,
-      maxMs: 30_000,
+      ...MOVE_RETRY,
       sleep: input.sleep,
       signal,
     }) as Promise<T>;

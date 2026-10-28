@@ -4,8 +4,8 @@
  * compared with the export. The storage check before the commit proves the
  * rows are there; this proves the app can show them.
  *
- * - The project (`projects.get`) and its board (`board.roster`): every live
- *   ticket, with its number, title and column.
+ * - The project in its Workspace's list (`projects.list`) and its board
+ *   (`board.roster`): every live ticket, with its number, title and column.
  * - A sample of tickets (the largest open ones and a spread of the rest):
  *   body (`board.getTicket`), comments (`board.comments`) and activity
  *   (`board.ticketEvents`).
@@ -14,14 +14,16 @@
  *   commit starts the first fold), then every event through
  *   `sessions.history`, in order, by id, each one readable.
  *
- * Counts and ids in the report, never content.
+ * Transcript bodies and attachments are read back once their read paths
+ * carry moved Sessions and blobs (VC-990, VC-985). Counts and ids in the
+ * report, never content.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { MigrationExportManifest } from "../migration-export/exporter";
 import { MANIFEST_FILE } from "../migration-export/staging";
-import { withRetry } from "./backend";
+import { MOVE_RETRY, withRetry } from "./backend";
 import { exportRecords } from "./plan";
 import type { MoveBackend, MoveRealPathCheck, RealPathInput, RealPathReport } from "./ports";
 
@@ -54,9 +56,7 @@ export function windowReadCheck(options: WindowReadCheckOptions): MoveRealPathCh
     async check(input: RealPathInput, signal: AbortSignal): Promise<RealPathReport> {
       const call = <T>(kind: "query", path: string, args: Row) =>
         withRetry(() => options.backend[kind](path, args), {
-          attempts: 6,
-          baseMs: 1_000,
-          maxMs: 30_000,
+          ...MOVE_RETRY,
           sleep: options.sleep,
           signal,
         }) as Promise<T>;
@@ -76,8 +76,12 @@ export function windowReadCheck(options: WindowReadCheckOptions): MoveRealPathCh
       // ---- the project and its board ------------------------------------------
       let projectName: unknown = null;
       for await (const project of records("projects")) projectName = project.name;
-      const shown = await call<Row>("query", "projects:get", { projectId: input.projectId });
-      tally("project", shown.name === projectName);
+      // Listed for the Workspace, as the rail lists it.
+      const listed = await call<Row[]>("query", "projects:list", {
+        workspaceId: input.workspaceId,
+      });
+      const shown = listed.find((project) => project.id === input.projectId);
+      tally("project", shown !== undefined && shown.name === projectName);
 
       const tickets = new Map<string, Row>();
       for await (const ticket of records("tickets")) tickets.set(ticket.id as string, ticket);

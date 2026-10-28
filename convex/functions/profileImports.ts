@@ -57,7 +57,12 @@ export const importPersonalSettings = mutation({
           .withIndex("by_uuid", (q) => q.eq("id", runnerId))
           .unique()
       : null;
-    if (runner === null || runner.ownerUserId !== viewer.userId || runner.revokedAt !== null) {
+    if (
+      runner === null ||
+      runner.ownerUserId !== viewer.userId ||
+      runner.revokedAt !== null ||
+      runner.status === "revoked"
+    ) {
       throw new ConvexError({
         code: "runner_unavailable",
         message: "That runner is not one of yours.",
@@ -68,6 +73,13 @@ export const importPersonalSettings = mutation({
       owns: async (_stream, doc) => personal(doc, viewer.userId),
       foreign: async () => ({ code: "conflict", detail: "another person's setting has this id" }),
       outside: { code: "not_personal", detail: "it is not one of the person's own settings" },
+      // Written by the person themself: a setting names no one else as its author.
+      async check(_stream, doc) {
+        const by = doc.updatedBy as { kind?: unknown; userId?: unknown } | null;
+        return by?.kind === "person" && by.userId === viewer.userId
+          ? null
+          : { code: "foreign_identity", detail: "updatedBy names someone other than the person" };
+      },
     };
     return importBatch(ctx, { target, stream: "configEntries", rows }, policy);
   },

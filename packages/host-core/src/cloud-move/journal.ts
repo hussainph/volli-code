@@ -37,7 +37,12 @@ export interface MoveFailure {
 /** The runner-local rows a handover wrote, so a roll back takes back exactly those. */
 export interface HandoverRecord {
   checkouts: Array<{ projectRepoId: string; absPath: string }>;
-  workingCopies: Array<{ ticketId: string; projectRepoId: string; absPath: string }>;
+  workingCopies: Array<{
+    ticketId: string;
+    projectRepoId: string;
+    absPath: string;
+    workingCopyId?: string | null;
+  }>;
   /** Sessions whose drain cursors were seeded, at the imported head. */
   cursors: Array<{ sessionId: string; acceptedThrough: number }>;
   /** Registrations another one already held: the folder needs the person. */

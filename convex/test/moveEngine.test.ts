@@ -63,8 +63,8 @@ describe("a move, start to finish", () => {
     expect(move.state).toBe("checked");
     expect(move.failure).toBeNull();
     expect(move.report).toMatchObject({ verify: { ok: true } });
-    // Every window read matches the export. Until moved Sessions are folded after the commit (VC-990), the the first
-    // fold of a moved Session, the fold wait is the one check that cannot pass.
+    // Every window read matches the export. Until moved Sessions are folded
+    // after the commit (VC-990), the fold wait is the one check that cannot pass.
     const realPath = move.report!.realPath as { checks: Record<string, { failed: number }> };
     for (const [name, { failed }] of Object.entries(realPath.checks)) {
       expect({ name, failed }).toEqual({ name, failed: name === "sessionFolded" ? failed : 0 });
@@ -403,6 +403,27 @@ describe("the person's decisions", () => {
     expect(engine.journal.move(moveId)!.state).toBe("verified");
     expect((await engine.rollBack(moveId)).state).toBe("rolled_back");
     expect((await finalDigests(world, moveId)).status).toBe("aborting");
+  });
+
+  test("a roll back of an interrupted handover takes back everything it may have written", async () => {
+    world = await moveWorld();
+    const { queueId, moveId } = enqueue(world);
+    let killed!: () => void;
+    const stopped = new Promise<void>((resolve) => (killed = resolve));
+    void world
+      .engine({ kill: { point: "handed_over", hit: 1, onKilled: () => killed() } })
+      .run(queueId);
+    await stopped;
+    expect(world.db.prepare("SELECT COUNT(*) AS n FROM session_drain_cursors").get()).not.toEqual({
+      n: 0,
+    });
+    expect((await world.engine().rollBack(moveId)).state).toBe("rolled_back");
+    expect(world.db.prepare("SELECT COUNT(*) AS n FROM session_drain_cursors").get()).toEqual({
+      n: 0,
+    });
+    expect(world.db.prepare("SELECT COUNT(*) AS n FROM project_checkout_paths").get()).toEqual({
+      n: 0,
+    });
   });
 
   test("a cloud change since the commit needs the person's confirmation to roll back", async () => {

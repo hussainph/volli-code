@@ -34,6 +34,7 @@ const MID_STEP = [
   "rows.sessionIntake",
   "rows.readMarkers",
   "history.session",
+  "handing_over",
 ];
 const CALLS: Array<Omit<Kill, "onKilled">> = [
   { point: "call:projectImports:begin", hit: 1 },

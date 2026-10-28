@@ -16,75 +16,101 @@
  */
 import type Database from "better-sqlite3";
 
-import { createRunnerPathRegistry, RunnerPathCollision } from "../cloud-store/paths";
+import { createRunnerPathRegistry } from "../cloud-store/paths";
 import { prepared } from "../db/prepared";
 import type { MigrationExportManifest } from "../migration-export/exporter";
 import type { HandoverRecord } from "./journal";
 import { exportRecords, type MovePlan } from "./plan";
 import type { MoveSessionHistory } from "./ports";
 
-export async function handOver(input: {
-  db: Database.Database;
-  history: MoveSessionHistory;
-  userId: string;
-  runnerId: string;
+/**
+ * What a handover will write, read from the export before anything is
+ * written: journaled first, so a roll back that interrupts it (a crash, the
+ * person's own call) takes back exactly these rows.
+ */
+export async function plannedHandover(input: {
   exportDir: string;
   manifest: MigrationExportManifest;
   plan: MovePlan;
 }): Promise<HandoverRecord> {
-  const { db } = input;
-  const registry = createRunnerPathRegistry(db, { runnerId: input.runnerId });
   const record: HandoverRecord = { checkouts: [], workingCopies: [], cursors: [], collisions: 0 };
-
   for await (const row of exportRecords(input.exportDir, input.manifest, "projectCheckoutPaths")) {
-    try {
-      registry.checkouts.register({
-        projectId: row.projectId as string,
-        projectRepoId: row.projectRepoId as string,
-        absPath: row.absPath as string,
-        adoptedFromFrozen: true,
-      });
-      record.checkouts.push({
-        projectRepoId: row.projectRepoId as string,
-        absPath: row.absPath as string,
-      });
-    } catch (error) {
-      if (!(error instanceof RunnerPathCollision)) throw error;
-      record.collisions += 1;
-    }
+    record.checkouts.push({
+      projectRepoId: row.projectRepoId as string,
+      absPath: row.absPath as string,
+    });
   }
   for await (const row of exportRecords(input.exportDir, input.manifest, "workingCopyPaths")) {
-    const ticket = prepared<[string], { branch: string | null; base_branch: string | null }>(
-      db,
-      "SELECT branch, base_branch FROM tickets WHERE id = ?",
-    ).get(row.ticketId as string);
-    try {
-      registry.workingCopies.register({
-        ticketId: row.ticketId as string,
-        projectRepoId: row.projectRepoId as string,
-        absPath: row.absPath as string,
-        workingCopyId: row.workingCopyId as string,
-        branch: ticket?.branch ?? null,
-        baseBranch: ticket?.base_branch ?? null,
-        adoptedFromFrozen: true,
-      });
-      record.workingCopies.push({
-        ticketId: row.ticketId as string,
-        projectRepoId: row.projectRepoId as string,
-        absPath: row.absPath as string,
-      });
-    } catch (error) {
-      if (!(error instanceof RunnerPathCollision)) throw error;
-      record.collisions += 1;
-    }
+    record.workingCopies.push({
+      ticketId: row.ticketId as string,
+      projectRepoId: row.projectRepoId as string,
+      absPath: row.absPath as string,
+      workingCopyId: (row.workingCopyId as string | undefined) ?? null,
+    });
   }
-
   record.cursors = input.plan.sessionList.map((session) => ({
     sessionId: session.sessionId,
     acceptedThrough: session.lastSequence,
   }));
-  input.history.seedCursors(input.userId, record.cursors);
   return record;
+}
+
+/**
+ * Writes a planned handover. A registration the registry refuses (another
+ * working copy or runner holds the folder, or the id) is counted in
+ * `collisions`, never an error: the folder needs the person, and the rest of
+ * the handover goes on. Answers the record with what was written.
+ */
+export function handOver(input: {
+  db: Database.Database;
+  history: MoveSessionHistory;
+  userId: string;
+  runnerId: string;
+  projectId: string;
+  planned: HandoverRecord;
+}): HandoverRecord {
+  const { db, planned } = input;
+  const registry = createRunnerPathRegistry(db, { runnerId: input.runnerId });
+  const written: HandoverRecord = {
+    checkouts: [],
+    workingCopies: [],
+    cursors: planned.cursors,
+    collisions: 0,
+  };
+  for (const checkout of planned.checkouts) {
+    try {
+      registry.checkouts.register({
+        projectId: input.projectId,
+        projectRepoId: checkout.projectRepoId,
+        absPath: checkout.absPath,
+        adoptedFromFrozen: true,
+      });
+      written.checkouts.push(checkout);
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      written.collisions += 1;
+    }
+  }
+  for (const copy of planned.workingCopies) {
+    const ticket = prepared<[string], { branch: string | null; base_branch: string | null }>(
+      db,
+      "SELECT branch, base_branch FROM tickets WHERE id = ?",
+    ).get(copy.ticketId);
+    try {
+      registry.workingCopies.register({
+        ...copy,
+        branch: ticket?.branch ?? null,
+        baseBranch: ticket?.base_branch ?? null,
+        adoptedFromFrozen: true,
+      });
+      written.workingCopies.push(copy);
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      written.collisions += 1;
+    }
+  }
+  input.history.seedCursors(input.userId, planned.cursors);
+  return written;
 }
 
 /**
