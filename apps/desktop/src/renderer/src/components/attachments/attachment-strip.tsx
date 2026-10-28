@@ -15,7 +15,8 @@
 import * as React from "react";
 import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
-import { blobUrl, type BlobLinkView } from "@volli/shared";
+import type { BlobLinkView } from "@volli/shared";
+import { AttachmentImage } from "./blob-read";
 
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
@@ -46,8 +47,8 @@ export function AttachmentThumb({
       title={`${attachment.label} · ${detail}`}
     >
       {kind === "image" ? (
-        <img
-          src={blobUrl(attachment.blobHash)}
+        <AttachmentImage
+          hash={attachment.blobHash}
           alt={attachment.label}
           className="size-full rounded-md border border-border/70 object-cover"
           draggable={false}
@@ -118,9 +119,9 @@ export function AttachmentThumbRow({
     >
       {shown.map((attachment) =>
         thumbKind(attachment.mime) === "image" ? (
-          <img
+          <AttachmentImage
             key={attachment.linkId ?? attachment.blobHash}
-            src={blobUrl(attachment.blobHash)}
+            hash={attachment.blobHash}
             alt={attachment.label}
             title={attachment.label}
             className="size-4 rounded-sm border border-border/70 object-cover"

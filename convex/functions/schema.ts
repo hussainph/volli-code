@@ -564,6 +564,8 @@ export default defineSchema({
     sha256: v.string(),
     owner: v.object({ kind: literals(["ticket", "session", "comment"]), id: uuid }),
     label: v.string(),
+    // Local row order breaks equal-timestamp filename collisions after a move.
+    sourceOrder: v.optional(v.number()),
     createdAt: time,
   })
     .index("by_uuid", ["id"])

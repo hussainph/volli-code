@@ -64,7 +64,7 @@ must expose trustworthy request metadata or its users share one quota.
 | `functions/transcripts.ts`                                          | Transcript bodies and Pi logs: `stageArtifacts`, `commitSegment`, `commitPiLogSegment`, `head` (where a runner resumes), the producer fence and `sweepPacked`.                                                                                                                                    |
 | `functions/sessionTranscript.ts`                                    | Viewer-authorized transcript segment manifests, staged artifact bodies and signed GETs for committed packs/spills. The renderer hydrates settled history with these reads.                                                                                                                        |
 | `functions/projectImports.ts`, `functions/lib/migrationImport.ts`   | The person-authorized project import ("Move to Volli Cloud"), hidden until commit, and the batch writer it shares with `migration.ts` (see **The person-authorized project import**).                                                                                                             |
-| `functions/files.ts`                                                | `presignPut`: a SigV4 URL bound to one key, length and SHA-256 (signed by `presignS3Request` in `@volli/shared/cloud`).                                                                                                                                                                           |
+| `functions/files.ts`                                                | `presignPut`: a SigV4 URL bound to one key, length and SHA-256; `attachments`: visible ticket/Session links; `presignGet`: a project blob reachable through a visible owner (signed by `presignS3Request` in `@volli/shared/cloud`).                                                              |
 | `functions/lib/objectStore.ts`                                      | The S3-compatible store the backend signs for (`VOLLI_S3_*` variables; unset refuses with `storage_unconfigured`).                                                                                                                                                                                |
 | `functions/lib/visibility.ts`                                       | The visibility writes and filters: `visibilityForNewSession` (every Session-creating write), `shareSession`, `visibleBoardEvents` (every read of board events that may name a Session). The decisions are the predicates in `@volli/shared/cloud`.                                                |
 | `functions/runners.ts`                                              | Runners: linking (desktop, install token, device code), a Mac's successor taking over its work, the rotated credential with reuse detection, heartbeat, sleep and capabilities, the offline sweep, the Settings list, and `places`: the runner a visible Session lives on ("Waiting for <Mac>").  |
@@ -540,3 +540,10 @@ also permits an exact HTTP loopback origin for the local object-store fixture.
 The configured origin allows these GETs in the CSP. The bucket's CORS must also allow the desktop
 origin and `GET`; without storage configuration older packed bodies fail visibly,
 while staged inline bodies and live chunks require no object-store access.
+
+Moved attachments use `files.attachments` for their names and `files.presignGet`
+for bytes. Reads check the project's current membership and Session visibility;
+a hash without a visible link grants nothing. Importing/deleted projects are
+not found. The renderer verifies length and SHA-256 and converts image bytes to
+inert data URLs, so the same exact storage `connect-src` origin and GET-only
+bucket CORS suffice; `img-src` is unchanged. Blob upload is not offered yet.

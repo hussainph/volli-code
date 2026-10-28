@@ -16,6 +16,7 @@
 import * as React from "react";
 import type { BlobLinkView } from "@volli/shared";
 import type { BlobAttachInput } from "../../../ipc/contract";
+import { launchStore } from "@renderer/stores/launch";
 import {
   notAvailableOn,
   remoteHostNow,
@@ -95,6 +96,10 @@ export function useAttachments(options: UseAttachmentsOptions): AttachmentsHandl
         onRefInsert: insert,
         onError: fail,
       } = latest.current;
+      if (launchStore() === "cloud") {
+        fail?.("Attachments are read-only in Volli Cloud for now.");
+        return;
+      }
       const current = typeof suppliedOwner === "function" ? suppliedOwner() : suppliedOwner;
       // A remote project's ticket keeps its attachments on its host (VC-711).
       const host =
@@ -138,6 +143,10 @@ export function useAttachments(options: UseAttachmentsOptions): AttachmentsHandl
 
   const remove = React.useCallback(
     async (attachment: BlobLinkView): Promise<void> => {
+      if (launchStore() === "cloud") {
+        latest.current.onError?.("Attachments are read-only in Volli Cloud for now.");
+        return;
+      }
       // Dropped from the strip first, whatever the database says. The link may
       // not exist yet (an unowned composer draft), and either way the person has
       // already decided this file is not part of the message.

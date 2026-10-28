@@ -5,7 +5,8 @@ import DOMPurify, {
   type UponSanitizeElementHookEvent,
 } from "dompurify";
 import { Marked } from "marked";
-import { markdownImageNotice, resolveMarkdownImageSrc } from "@volli/shared";
+import { markdownImageNotice, parseBlobUrl, resolveMarkdownImageSrc } from "@volli/shared";
+import { useBlobReader } from "@renderer/components/attachments/blob-read";
 
 import { useMarkdownAttachments } from "@renderer/components/attachments/markdown-image";
 import { chatSanitizerKeepsClass } from "@renderer/components/ui/ai-elements/chat-markdown";
@@ -130,7 +131,8 @@ function hastPropertyName(attribute: string): string {
 function keepAllowedAttribute(node: Element, event: UponSanitizeAttributeHookEvent): void {
   const tag = node.localName;
   const name = event.attrName;
-  if (tag === OWN_ATTRIBUTE.tag && name === OWN_ATTRIBUTE.name) return;
+  if (tag === OWN_ATTRIBUTE.tag && (name === OWN_ATTRIBUTE.name || name === "data-volli-blob"))
+    return;
   if (name === "id" || !allowsPreviewAttribute(tag, hastPropertyName(name))) {
     event.keepAttr = false;
     return;
@@ -188,6 +190,8 @@ export function Markdown({ source, className }: { source: string; className?: st
   // row. The provider memoizes the map on its content, so an unchanged set of
   // attachments keeps this memo's cached HTML.
   const byName = useMarkdownAttachments();
+  const reader = useBlobReader();
+  const container = React.useRef<HTMLDivElement>(null);
 
   const html = React.useMemo(() => {
     // A per-render instance rather than the module-level `marked`: the image
@@ -200,7 +204,12 @@ export function Markdown({ source, className }: { source: string; className?: st
           const resolution = resolveMarkdownImageSrc(href, byName);
           const alt = escapeHtml(text);
           if (resolution.kind === "render") {
-            return `<img src="${escapeHtml(resolution.src)}" alt="${alt}" ${OWN_ATTRIBUTE.name}="lazy" />`;
+            const hash = parseBlobUrl(resolution.src);
+            const imageSource =
+              reader !== null && hash !== null
+                ? `data-volli-blob="${hash}"`
+                : `src="${escapeHtml(resolution.src)}"`;
+            return `<img ${imageSource} alt="${alt}" ${OWN_ATTRIBUTE.name}="lazy" />`;
           }
           // Drawn, not dropped: an image that silently vanishes is
           // indistinguishable from one nobody wrote. The alt text rides along
@@ -212,8 +221,65 @@ export function Markdown({ source, className }: { source: string; className?: st
       },
     });
     const raw = renderer.parse(source, { async: false, gfm: true });
-    return purifier.sanitize(raw, SANITIZE_CONFIG);
-  }, [source, byName]);
+    const sanitized = purifier.sanitize(raw, SANITIZE_CONFIG);
+    if (reader === null) return sanitized;
+    // Raw HTML images bypass marked's image renderer. Rewrite them while
+    // still inert, before they could reach this Mac's local blob protocol.
+    const fragment = document.createElement("template");
+    fragment.innerHTML = sanitized;
+    for (const image of fragment.content.querySelectorAll("img[src]")) {
+      const hash = parseBlobUrl(image.getAttribute("src") ?? "");
+      if (hash === null) continue;
+      image.removeAttribute("src");
+      image.setAttribute("data-volli-blob", hash);
+    }
+    return fragment.innerHTML;
+  }, [source, byName, reader]);
 
-  return <div className={cn("typeset", className)} dangerouslySetInnerHTML={{ __html: html }} />;
+  React.useEffect(() => {
+    if (reader === null) return;
+    let cancelled = false;
+    const notices: HTMLElement[] = [];
+    const cleanups: Array<() => void> = [];
+    for (const image of container.current?.querySelectorAll<HTMLImageElement>(
+      "img[data-volli-blob]",
+    ) ?? []) {
+      const hash = image.dataset.volliBlob;
+      if (hash === undefined || !/^[a-f0-9]{64}$/.test(hash)) continue;
+      image.removeAttribute("src");
+      image.hidden = true;
+      let failed = false;
+      const fail = () => {
+        if (cancelled || failed) return;
+        failed = true;
+        image.hidden = true;
+        const notice = document.createElement("span");
+        notice.className = OWN_CLASS.token;
+        notice.textContent = `Image could not be loaded${image.alt ? ` — ${image.alt}` : ""}`;
+        image.after(notice);
+        notices.push(notice);
+      };
+      image.addEventListener("error", fail);
+      cleanups.push(() => image.removeEventListener("error", fail));
+      void reader(`volli-blob:${hash}`).then((src) => {
+        if (!cancelled) {
+          image.src = src;
+          image.hidden = false;
+        }
+      }, fail);
+    }
+    return () => {
+      cancelled = true;
+      for (const notice of notices) notice.remove();
+      for (const cleanup of cleanups) cleanup();
+    };
+  }, [html, reader]);
+
+  return (
+    <div
+      ref={container}
+      className={cn("typeset", className)}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
 }

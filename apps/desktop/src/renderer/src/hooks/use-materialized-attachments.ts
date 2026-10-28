@@ -15,8 +15,11 @@
 import * as React from "react";
 import type { NamedBlobLink } from "@volli/shared";
 import { remoteHostOfTicketNow } from "@renderer/stores/remote-project";
+import { cloudSession, followCloudSession } from "@renderer/lib/cloud-client";
+import { launchStore } from "@renderer/stores/launch";
 
 export interface MaterializedAttachmentsOwner {
+  projectId?: string | undefined;
   ticketId?: string | undefined;
   sessionId?: string | undefined;
 }
@@ -48,7 +51,8 @@ export function useMaterializedAttachments(
   revision: string | number | null = 0,
 ): readonly NamedBlobLink[] {
   const [links, setLinks] = React.useState<readonly NamedBlobLink[]>(NONE);
-  const { ticketId, sessionId } = owner;
+  const { projectId, ticketId, sessionId } = owner;
+  const cloud = React.useSyncExternalStore(followCloudSession, cloudSession, () => null);
 
   React.useEffect(() => {
     if (ticketId === undefined && sessionId === undefined) {
@@ -65,8 +69,19 @@ export function useMaterializedAttachments(
       return;
     }
     let cancelled = false;
-    void window.api.attachments
-      .materialized({ ticketId, sessionId })
+    const read =
+      launchStore() === "cloud"
+        ? cloud === null || projectId === undefined
+          ? Promise.resolve({ ok: true as const, links: NONE })
+          : cloud.client
+              .query(cloud.api.files.attachments, {
+                projectId,
+                ...(ticketId === undefined ? {} : { ticketId }),
+                ...(sessionId === undefined ? {} : { sessionId }),
+              })
+              .then((rows) => ({ ok: true as const, links: rows }))
+        : window.api.attachments.materialized({ ticketId, sessionId });
+    void read
       .then((result) => {
         if (cancelled) return;
         // A failure here costs a picture, not a mutation the user is waiting
@@ -80,7 +95,7 @@ export function useMaterializedAttachments(
     return () => {
       cancelled = true;
     };
-  }, [ticketId, sessionId, revision]);
+  }, [projectId, ticketId, sessionId, revision, cloud]);
 
   return links;
 }

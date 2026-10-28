@@ -236,6 +236,8 @@ export interface DocumentModeOptions {
    * still renders already-canonical `volli-blob:` and `data:image/*` sources.
    */
   getAttachments?(): readonly NamedBlobLink[] | undefined;
+  /** Cloud reads are signed and async; null keeps the local protocol path. */
+  getImageReader?(): ((src: string) => Promise<string>) | null;
 }
 
 /** What the host keeps hold of: a way to force a rebuild, and teardown. */
@@ -309,7 +311,16 @@ export function attachDocumentMode(
     });
   }
 
+  let lastImageReader: ReturnType<NonNullable<DocumentModeOptions["getImageReader"]>> | undefined;
   function syncImageZones(images: readonly ResolvedDocumentImage[]): void {
+    const reader = options.getImageReader?.();
+    if (reader !== lastImageReader) {
+      editor.changeViewZones((accessor) => {
+        for (const { id } of zones.values()) accessor.removeZone(id);
+      });
+      zones.clear();
+      lastImageReader = reader;
+    }
     const wanted = new Set(images.map(zoneKey));
     const missing = images.filter((image) => !zones.has(zoneKey(image)));
     const stale = [...zones.keys()].filter((key) => !wanted.has(key));
@@ -342,7 +353,6 @@ export function attachDocumentMode(
         }
 
         const element = new Image();
-        element.src = image.src;
         element.alt = image.alt;
         dom.appendChild(element);
         const id = accessor.addZone(zone);
@@ -354,12 +364,18 @@ export function attachDocumentMode(
         // A `volli-blob:` URL whose bytes have been collected, or a file that
         // has gone: the zone would otherwise sit at its 24px placeholder
         // forever, which reads as a rendering glitch rather than a missing file.
-        element.addEventListener("error", () => {
+        const failed = () => {
           if (disposed || zones.get(key)?.id !== id) return;
           element.remove();
           dom.appendChild(missingImageNode(image, "Image could not be loaded"));
           relayout(id, key, dom, zone);
-        });
+        };
+        element.addEventListener("error", failed);
+        if (reader == null) element.src = image.src;
+        else
+          void reader(image.src).then((src) => {
+            if (!disposed && zones.get(key)?.id === id) element.src = src;
+          }, failed);
       }
     });
   }
