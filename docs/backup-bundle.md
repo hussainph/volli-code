@@ -174,38 +174,24 @@ and a data document that lists `ticket_event_sequence` or
 `session_event_sequence` before its event table is refused by name (both Volli
 writers list the event table first; the in-memory restore loads in its own
 order). A `checkpoint` callback is awaited at bounded intervals in both reads;
-rejecting it cancels the restore before activation.
+rejecting it cancels the restore before activation, reported as the restore
+not happening rather than as a damaged bundle. The staged database keeps
+SQLite's temporary structures on disk (`temp_store = FILE`), so a VACUUM run by
+an upgrade migration does not hold a copy of the database in RAM.
 
 At large-profile scale the round trip is rehearsed by
 `packages/host-core/scripts/rehearse-backup-restore.mjs`, which CI extended runs
-on every main push and nightly: a synthetic profile of 2,150,000 Session events
-whose `data.json` is past 1.6 GB (and past V8's maximum string length) is backed
-up by the production worker, restored with `restoreBackupBundleFile` in its own
-process, and compared with its source table by table (row counts and digests of
-every carried row), artifact by artifact, with the rebuilt usage index checked
-against its events. It fails if the restore's peak RSS grows more than 512 MiB.
-
-Activation is the fenced swap of `db/database-file.ts` (VC-628), the one module
-that may put a file at the database path. It holds the open lock, writes the
-`volli.db.recovery-pending` marker durably before moving anything, and takes
-SQLite's exclusive ownership of the live database. A restore under a running
-app is refused rather than renaming the file out from under its writer. The
-live database stays at its path until the staged one replaces it with one
-atomic rename, so the path is never empty. A crash mid-swap leaves the marker,
-and the next launch refuses to open instead of creating an empty profile. A
-failure puts the previous profile back and clears the marker. If the previous
-profile cannot be put back, the marker stays and its files stay in
-`.volli-replaced-<n>/`.
-
-**Credentials (VC-559).** No bundle carries a credential, whichever
-secret-key adapter sealed it: the macOS keychain or a headless host's key
-file. A bundle from a Mac therefore restores onto a headless host, or the
-other way around, like any other. The swap moves only `volli.db*`, `blobs` and
-`session-transcripts`, so the target's `session-secrets.enc`,
-`session-secrets.key` and `mcp-credentials.json` stay exactly as they were. The
-report's `credentials` field says nothing was carried, lists what to enter
-again, and gives one sentence to show. See
-[docs/secrets.md](secrets.md#across-machines-and-adapters).
+on every main push and nightly. It builds a synthetic profile of 2,150,000
+Session events whose `data.json` is past 1.6 GB (and past V8's maximum string
+length). A twentieth of the events are usage events, so the usage rebuild runs
+at scale. The profile also carries a few thousand transcripts and attachments,
+including a 64 MiB attachment and a 16 MiB transcript. The production worker
+backs it up, and `restoreBackupBundleFile` restores it in its own process. The
+result is compared with its source table by table (row counts and digests of
+every carried row) and artifact by artifact, and the rebuilt usage index is
+checked against its events. The restore runs under the automatic backup
+worker's 192 MiB old-generation cap, so completing at all shows a bounded heap.
+The rehearsal also fails if the restore's peak RSS grows more than 512 MiB.
 
 ## Supported versions
 

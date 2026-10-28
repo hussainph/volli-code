@@ -44,7 +44,7 @@ import {
   sessionTranscriptsRoot,
   transcriptReferenceForId,
 } from "../session-runtime/transcript-artifacts";
-import { ArchiveError, ArchiveStreamReader } from "./archive";
+import { ArchiveStreamReader } from "./archive";
 import { BLOB_PREFIX, DATA_PATH, MANIFEST_PATH, TRANSCRIPT_PREFIX } from "./bundle";
 import { decodeValue, isBackupValue, isSchemaMarkerRow } from "./data-document";
 import type { BackupValue } from "./data-document";
@@ -53,6 +53,7 @@ import {
   JsonSyntaxError,
   JsonTokenizer,
   hashedChunks,
+  isArchiveFormatError,
   readArrayItems,
   readGunzipped,
   readJsonValueFrom,
@@ -106,10 +107,11 @@ export interface StagedBundleFile {
 export async function stageBundleFile(options: StageBundleFileOptions): Promise<StagedBundleFile> {
   const { inventory } = options;
   const gate = new CheckpointCounter(options.checkpoint);
-  const reader = new ArchiveStreamReader(
-    readGunzipped(options.filePath),
-    inventory.secondPassPathRegistry(),
-  );
+  // As the in-memory restore does: the staged store exists even with no blobs.
+  const blobs = blobsRoot(options.staging);
+  await mkdir(blobs, { recursive: true });
+  const source = readGunzipped(options.filePath);
+  const reader = new ArchiveStreamReader(source, inventory.secondPassPathRegistry());
   let loaded: TableLoad | undefined;
   let entries = 0;
   try {
@@ -150,11 +152,18 @@ export async function stageBundleFile(options: StageBundleFileOptions): Promise<
     if (error instanceof BundleChangedError) throw error;
     // An archive or gzip failure on the second read of a file that verified
     // is a file that changed (or a disk that failed) under the restore.
-    if (isArchiveFailure(error)) {
+    if (isArchiveFormatError(error)) {
       throw changed(error instanceof Error ? error.message : String(error));
     }
     throw error;
+  } finally {
+    // Stopping early (a change, a cancel, a full disk) must not leave the
+    // bundle open: ending the generator ends its pipeline and closes the file.
+    await source.return(undefined);
   }
+  // `writeBlobArtifact` syncs each shard it fills; the shard entries and the
+  // store itself are names in their parents, made durable once here.
+  for (const directory of [blobs, options.staging]) await syncDirectory(directory);
   if (entries !== inventory.verifiedEntryCount()) {
     throw changed("it holds a different number of entries than when it was verified");
   }
@@ -174,12 +183,6 @@ export async function stageBundleFile(options: StageBundleFileOptions): Promise<
 
 function changed(detail: string): BundleChangedError {
   return new BundleChangedError(`The backup file changed after it was verified: ${detail}.`);
-}
-
-function isArchiveFailure(error: unknown): boolean {
-  if (error instanceof ArchiveError) return true;
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  return typeof code === "string" && code.startsWith("Z_");
 }
 
 /* ------------------------------------------------------------------------- */

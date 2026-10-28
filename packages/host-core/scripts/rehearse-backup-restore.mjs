@@ -7,15 +7,20 @@
 //
 // It builds a synthetic profile (the backup fixture plus BACKUP_REHEARSAL_ROWS
 // Session events, default 2,150,000, sized so data.json is past 1.6 GB and
-// past V8's maximum string length), backs it up through the production
+// past V8's maximum string length; a twentieth of them usage events, a
+// thousandth transcript references; 2,000 attachments plus a 64 MiB one and a
+// 16 MiB transcript), backs it up through the production
 // automatic-backup worker, restores the bundle FILE with
 // restoreBackupBundleFile into a fresh profile, and proves the round trip:
 // every carried table's row count and digest, every blob and transcript, the
 // rebuilt usage projection against its events. The backup and the restore
 // each run in their own process so each reports its own time and peak RSS.
 // No real profile or credential is read; the fixture is removed even on
-// failure. Exits non-zero on any mismatch or on a restore whose RSS growth
-// exceeds BACKUP_REHEARSAL_MAX_EXTRA_RSS_MIB (default 512).
+// failure. The restore runs under the automatic backup worker's 192 MiB
+// old-generation cap (BACKUP_REHEARSAL_RESTORE_HEAP_MIB), so finishing at all
+// proves a bounded heap. Exits non-zero on any mismatch, on a restore that
+// runs out of that heap, or on one whose RSS growth exceeds
+// BACKUP_REHEARSAL_MAX_EXTRA_RSS_MIB (default 512).
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as bufferConstants } from "node:buffer";
@@ -30,10 +35,10 @@ const NODE_FLAGS = ["--experimental-transform-types", "--disable-warning=Experim
 const NOW = Date.UTC(2026, 9, 29);
 
 /** Runs one phase of this script in a fresh process and returns its JSON line. */
-function child(phase, input) {
+function child(phase, input, flags = []) {
   const inputPath = join(input.workDir, `${phase}-input.json`);
   writeFileSync(inputPath, JSON.stringify(input));
-  const run = spawnSync(process.execPath, [...NODE_FLAGS, SCRIPT, phase, inputPath], {
+  const run = spawnSync(process.execPath, [...NODE_FLAGS, ...flags, SCRIPT, phase, inputPath], {
     stdio: ["ignore", "pipe", "inherit"],
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
@@ -137,72 +142,159 @@ const phases = {
   },
 };
 
+/** A BACKUP_REHEARSAL_<name> setting as a number. */
+function env(name, fallback) {
+  return Number(process.env[`BACKUP_REHEARSAL_${name}`] ?? fallback);
+}
+
 function mib(bytes) {
   return Number((bytes / 1048576).toFixed(1));
 }
 
-async function seedSource(rows, textBytes) {
-  const { createFixtureProfile } = await import("../src/backup/test-fixture.ts");
-  const fixture = createFixtureProfile();
+/** Canonical transcript bytes, the shape the fixture and the store use. */
+function transcriptBytes(messageId, text) {
+  return Buffer.from(
+    JSON.stringify({
+      version: 1,
+      threadId: "thread-1",
+      branchId: "branch-1",
+      attemptId: "attempt-1",
+      turnId: "turn-1",
+      message: { id: messageId, role: "user", parts: [{ type: "text", text }] },
+    }),
+    "utf8",
+  );
+}
+
+/**
+ * The backup fixture grown to profile scale: `rows` Session events (every
+ * 20th a usage event, so the usage rebuild runs at scale; every 1000th a
+ * transcript reference to its own artifact), `blobs` attachments, plus one
+ * large attachment and one large transcript to exercise the streamed and the
+ * one-at-a-time artifact paths.
+ */
+async function seedSource(fixture, sizes) {
+  const { writeBlob } = await import("../src/blob-store.ts");
+  const { db } = fixture;
   const started = performance.now();
-  try {
-    fixture.db.pragma("journal_mode = OFF");
-    fixture.db.pragma("cache_size = -2048");
-    const template = fixture.db
-      .prepare("SELECT * FROM session_events WHERE session_id = 'session-root' LIMIT 1")
-      .get();
-    const columns = Object.keys(template);
-    const insert = fixture.db.prepare(
-      `INSERT INTO session_events (${columns.map((column) => `"${column}"`).join(",")}) VALUES (${columns.map(() => "?").join(",")})`,
-    );
-    const repeats = Math.max(1, Math.ceil(textBytes / 64));
-    for (let offset = 0; offset < rows; offset += 5000) {
-      fixture.db.transaction(() => {
-        for (let index = offset; index < Math.min(rows, offset + 5000); index++) {
-          const digest = createHash("sha256").update(`synthetic-${index}`).digest("hex");
-          const row = {
-            ...template,
-            id: `synthetic-event-${index}`,
-            sequence: index + 100,
-            command_id: null,
-            payload: JSON.stringify({
-              kind: "synthetic.fixture",
-              index,
-              text: digest.repeat(repeats).slice(0, textBytes),
-            }),
-          };
-          insert.run(...columns.map((column) => row[column]));
-        }
-      })();
-    }
-  } finally {
-    fixture.db.close();
-  }
-  return {
-    root: fixture.root,
-    cleanup: () => rmSync(fixture.root, { recursive: true, force: true }),
-    seedSeconds: (performance.now() - started) / 1000,
+  db.pragma("journal_mode = OFF");
+  db.pragma("cache_size = -2048");
+  const template = db.prepare("SELECT * FROM session_events WHERE id = 'event-4'").get();
+  const usagePayload = JSON.parse(template.payload);
+  const referencePayload = JSON.parse(
+    db.prepare("SELECT payload FROM session_events WHERE id = 'event-2'").get().payload,
+  );
+  const columns = Object.keys(template);
+  const insert = db.prepare(
+    `INSERT INTO session_events (${columns.map((column) => `"${column}"`).join(",")}) VALUES (${columns.map(() => "?").join(",")})`,
+  );
+  const writeTranscript = (bytes) => {
+    const hex = createHash("sha256").update(bytes).digest("hex");
+    writeFileSync(join(fixture.transcriptsRoot, `${hex}.json`), bytes);
+    return `sha256:${hex}`;
   };
+  const repeats = Math.max(1, Math.ceil(sizes.textBytes / 64));
+  for (let offset = 0; offset < sizes.rows; offset += 5000) {
+    db.transaction(() => {
+      for (let index = offset; index < Math.min(sizes.rows, offset + 5000); index++) {
+        const digest = createHash("sha256").update(`synthetic-${index}`).digest("hex");
+        let payload;
+        if (index % 1000 === 999) {
+          const text = index === 999 ? digest.repeat(sizes.largeTranscriptBytes / 64) : digest;
+          const id = writeTranscript(transcriptBytes(`synthetic-message-${index}`, text));
+          payload = {
+            ...referencePayload,
+            turnId: `synthetic-turn-${index}`,
+            reference: { ...referencePayload.reference, id, digest: id },
+          };
+        } else if (index % 20 === 19) {
+          payload = {
+            ...usagePayload,
+            turnId: `synthetic-turn-${index}`,
+            usage: { ...usagePayload.usage, inputTokens: index, outputTokens: index % 97 },
+          };
+        } else {
+          payload = {
+            kind: "synthetic.fixture",
+            index,
+            text: digest.repeat(repeats).slice(0, sizes.textBytes),
+          };
+        }
+        const row = {
+          ...template,
+          id: `synthetic-event-${index}`,
+          sequence: index + 100,
+          command_id: null,
+          payload: JSON.stringify(payload),
+        };
+        insert.run(...columns.map((column) => row[column]));
+      }
+    })();
+  }
+  const blobRow = db.prepare("SELECT * FROM blobs LIMIT 1").get();
+  const blobColumns = Object.keys(blobRow);
+  const insertBlob = db.prepare(
+    `INSERT INTO blobs (${blobColumns.map((column) => `"${column}"`).join(",")}) VALUES (${blobColumns.map(() => "?").join(",")})`,
+  );
+  const addBlob = (bytes, index) => {
+    const hash = writeBlob(fixture.blobsRoot, bytes);
+    const row = {
+      ...blobRow,
+      hash,
+      mime: "application/octet-stream",
+      size_bytes: bytes.length,
+      original_name: `synthetic-${index}.bin`,
+    };
+    insertBlob.run(...blobColumns.map((column) => row[column]));
+  };
+  db.transaction(() => {
+    for (let index = 0; index < sizes.blobs; index++) {
+      const seed = createHash("sha256").update(`blob-${index}`).digest();
+      const bytes = Buffer.alloc(sizes.blobBytes);
+      for (let at = 0; at < bytes.length; at += seed.length) seed.copy(bytes, at);
+      bytes.writeUInt32BE(index, 0);
+      addBlob(bytes, index);
+    }
+    addBlob(Buffer.alloc(sizes.largeBlobBytes, 0x5a), "large");
+  })();
+  db.close();
+  return (performance.now() - started) / 1000;
 }
 
 async function main() {
-  const rows = Number(process.env.BACKUP_REHEARSAL_ROWS ?? 2_150_000);
-  const textBytes = Number(process.env.BACKUP_REHEARSAL_TEXT_BYTES ?? 448);
+  const sizes = {
+    rows: env("ROWS", 2_150_000),
+    textBytes: env("TEXT_BYTES", 448),
+    blobs: env("BLOBS", 2_000),
+    blobBytes: env("BLOB_BYTES", 64 * 1024),
+    largeBlobBytes: env("LARGE_BLOB_BYTES", 64 * 1024 * 1024),
+    largeTranscriptBytes: env("LARGE_TRANSCRIPT_BYTES", 16 * 1024 * 1024),
+  };
+  const rows = sizes.rows;
   const fullSize = rows >= 2_150_000;
-  const minDataBytes = Number(
-    process.env.BACKUP_REHEARSAL_MIN_DATA_BYTES ?? (fullSize ? 1_600_000_000 : 0),
-  );
-  const maxExtraRssMiB = Number(process.env.BACKUP_REHEARSAL_MAX_EXTRA_RSS_MIB ?? 512);
-  for (const [name, value] of Object.entries({ rows, textBytes, minDataBytes, maxExtraRssMiB })) {
+  const minDataBytes = env("MIN_DATA_BYTES", fullSize ? 1_600_000_000 : 0);
+  const maxExtraRssMiB = env("MAX_EXTRA_RSS_MIB", 512);
+  const restoreHeapMiB = env("RESTORE_HEAP_MIB", 192);
+  for (const [name, value] of Object.entries({
+    ...sizes,
+    minDataBytes,
+    maxExtraRssMiB,
+    restoreHeapMiB,
+  })) {
     if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${name} must be an integer`);
   }
+  if (sizes.largeTranscriptBytes % 64 !== 0)
+    throw new Error("LARGE_TRANSCRIPT_BYTES must be a multiple of 64");
   if (!process.env.TMPDIR || !resolve(process.env.TMPDIR).startsWith(`${process.cwd()}/`))
     throw new Error("Set TMPDIR to a directory inside this worktree.");
   mkdirSync(process.env.TMPDIR, { recursive: true });
 
+  const { createFixtureProfile } = await import("../src/backup/test-fixture.ts");
   const workDir = mkdtempSync(join(process.env.TMPDIR, "volli-rehearsal-"));
-  const source = await seedSource(rows, textBytes);
+  let fixture;
   try {
+    fixture = createFixtureProfile();
+    const source = { root: fixture.root, seedSeconds: await seedSource(fixture, sizes) };
     const bundlePath = join(workDir, "backups", "rehearsal.tar.gz");
     mkdirSync(join(workDir, "backups"));
     const sourceBytes = statSync(join(source.root, "volli.db")).size;
@@ -225,7 +317,12 @@ async function main() {
       mkdirSync(projectPaths[id], { recursive: true });
     }
 
-    const restore = child("restore", { workDir, bundlePath, targetRoot, projectPaths });
+    // The same old-generation cap as the automatic backup worker: a restore
+    // that completes under it holds a bounded heap, whatever V8's lazier
+    // collection does to RSS without one.
+    const restore = child("restore", { workDir, bundlePath, targetRoot, projectPaths }, [
+      `--max-old-space-size=${restoreHeapMiB}`,
+    ]);
     const restoredDigest = restore.result.ok
       ? child("digest", { workDir, root: targetRoot })
       : undefined;
@@ -299,6 +396,7 @@ async function main() {
         peakRssMiB: mib(restore.peakRss),
         extraPeakRssMiB: mib(restore.extraPeakRss),
         budgetMiB: maxExtraRssMiB,
+        maxOldSpaceMiB: restoreHeapMiB,
       },
       digestSeconds: {
         source: Number(sourceDigest.seconds.toFixed(1)),
@@ -308,7 +406,10 @@ async function main() {
       artifacts: {
         blobs: sourceDigest.result.digest.blobs.rows,
         transcripts: sourceDigest.result.digest.transcripts.rows,
+        largeBlobBytes: sizes.largeBlobBytes,
+        largeTranscriptBytes: sizes.largeTranscriptBytes,
       },
+      usageRows: restoredDigest?.result.digest.usage.rows,
       sessionEventsSha256: restoredDigest?.result.digest.tables.session_events?.sha256,
       ok: failures.length === 0,
       failures,
@@ -316,7 +417,7 @@ async function main() {
     console.log(JSON.stringify(summary, null, 2));
     if (failures.length > 0) process.exitCode = 1;
   } finally {
-    source.cleanup();
+    if (fixture !== undefined) rmSync(fixture.root, { recursive: true, force: true });
     rmSync(workDir, { recursive: true, force: true });
   }
 }

@@ -1152,7 +1152,7 @@ async function verifyBundleFile(
   staging: string,
   checkpoint?: () => Promise<void>,
 ): Promise<VerifyBackupBundleFileResult> {
-  const scanned = await scanBundleFile(filePath, staging, checkpoint);
+  const scanned = await scanBundleFile(filePath, staging, checkpoint, "report-all");
   scanned.scratch.close();
   return scanned.result;
 }
@@ -1164,7 +1164,8 @@ async function verifyBundleFile(
 async function scanBundleFile(
   filePath: string,
   staging: string,
-  checkpoint?: () => Promise<void>,
+  checkpoint: (() => Promise<void>) | undefined,
+  errors: "report-all" | "report-archive",
 ): Promise<{
   result: VerifyBackupBundleFileResult;
   scratch: ScratchDatabase;
@@ -1178,6 +1179,10 @@ async function scanBundleFile(
     try {
       await scanArchive(filePath, scratch, outcome, new CheckpointCounter(checkpoint));
     } catch (error) {
+      // The verifier has always named every failure of its read as an archive
+      // problem. A restore must not: a rejected checkpoint is the person
+      // cancelling, and a full scratch disk is not a damaged bundle.
+      if (errors === "report-archive" && !isArchiveReadError(error)) throw error;
       return { result: { ok: false, problems: [archiveProblem(error)] }, scratch, outcome };
     }
     return { result: await concludeVerification(outcome, scratch), scratch, outcome };
@@ -1240,7 +1245,7 @@ export async function openVerifiedBackupBundleFile(
   const staging = await mkdtemp(join(workDir, "backup-verify-"));
   let scanned: Awaited<ReturnType<typeof scanBundleFile>>;
   try {
-    scanned = await scanBundleFile(filePath, staging, checkpoint);
+    scanned = await scanBundleFile(filePath, staging, checkpoint, "report-archive");
   } catch (error) {
     await rm(staging, { recursive: true, force: true });
     throw error;
@@ -1252,7 +1257,9 @@ export async function openVerifiedBackupBundleFile(
     return result;
   }
   // The scan's write transaction is still open; reads below share it, and a
-  // second-pass registry writes into it like any other scratch insert.
+  // second-pass registry writes into it like any other scratch insert. The
+  // mapping looks projects up by id, once per mapped directory.
+  scratch.exec("CREATE INDEX IF NOT EXISTS project_ids_id ON project_ids (id)");
   let closed = false;
   const projectColumns = outcome.data.tableColumns.get("projects");
   return {
@@ -1277,7 +1284,21 @@ export async function openVerifiedBackupBundleFile(
   };
 }
 
-export function archiveProblem(error: unknown): BackupProblem {
+/** An error of the archive's bytes: a damaged tar stream or gzip stream. */
+export function isArchiveFormatError(error: unknown): boolean {
+  if (error instanceof ArchiveError) return true;
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return typeof code === "string" && code.startsWith("Z_");
+}
+
+/** An error {@link archiveProblem} names precisely: the archive's bytes or reading the file. */
+function isArchiveReadError(error: unknown): boolean {
+  if (isArchiveFormatError(error)) return true;
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return typeof code === "string" && /^E[A-Z]+$/.test(code);
+}
+
+function archiveProblem(error: unknown): BackupProblem {
   if (error instanceof ArchiveError) return { kind: "archive", message: error.message };
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   if (typeof code === "string" && code.startsWith("Z_")) {
@@ -1307,7 +1328,27 @@ async function scanArchive(
   outcome: ScanOutcome,
   gate: CheckpointCounter,
 ): Promise<void> {
-  const reader = new ArchiveStreamReader(readGunzipped(filePath), scratch.archivePathRegistry());
+  const source = readGunzipped(filePath);
+  try {
+    await scanEntries(
+      new ArchiveStreamReader(source, scratch.archivePathRegistry()),
+      scratch,
+      outcome,
+      gate,
+    );
+  } finally {
+    // An early stop (a cancel, a refused entry) must not leave the file open:
+    // ending the generator ends its pipeline, which closes the descriptor.
+    await source.return(undefined);
+  }
+}
+
+async function scanEntries(
+  reader: ArchiveStreamReader,
+  scratch: ScratchDatabase,
+  outcome: ScanOutcome,
+  gate: CheckpointCounter,
+): Promise<void> {
   for (;;) {
     const entry = await reader.nextEntry();
     if (entry === null) return;

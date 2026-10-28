@@ -193,8 +193,11 @@ function projectMappingProblems(
     if (problems.length >= limit) truncated = true;
     else problems.push(entry);
   };
+  // Own keys only: a project id like `constructor` is not mapped by Object's prototype.
+  const mapped = (id: string): string | undefined =>
+    Object.hasOwn(projectPaths, id) ? projectPaths[id] : undefined;
   for (const id of ids()) {
-    const path = projectPaths[id];
+    const path = mapped(id);
     if (path === undefined || path.trim() === "") {
       report(
         problem("mapping", `Project ${id} needs a local directory before it can be restored.`),
@@ -216,7 +219,7 @@ function projectMappingProblems(
   }
   const used = new Map<string, string>();
   for (const id of ids()) {
-    const path = projectPaths[id];
+    const path = mapped(id);
     if (path === undefined) continue;
     const owner = used.get(path);
     if (owner !== undefined) {
@@ -556,7 +559,7 @@ interface StagePlan {
    * they always were.
    */
   bounded: boolean;
-  /** Releases the reader's resources before the swap. */
+  /** Releases the reader's resources before the swap. Must not throw. */
   release(): void;
 }
 
@@ -580,8 +583,10 @@ async function stageAndActivate(
     // and the migration free-space budget assumes VACUUM builds its compacted
     // copy in memory, not as a third copy on this disk (`disk-preflight.ts`).
     // A file restore is the exception: its staged database can be gigabytes,
-    // so the copy goes to disk. A compaction that then runs out of room is
-    // reported and skipped by the migration, never a failed restore.
+    // so that copy (and any large sort) goes to SQLite's temporary directory
+    // (`SQLITE_TMPDIR`, else `TMPDIR`, else `/var/tmp`) instead of RAM. The
+    // free-space preflight does not count it; a compaction that runs out of
+    // room is reported and skipped by the migration, never a failed restore.
     db.pragma(plan.bounded ? "temp_store = FILE" : "temp_store = MEMORY");
     // To the bundle's schema first: its rows are shaped for the columns that
     // existed when it was written.
@@ -792,7 +797,7 @@ export async function restoreBackupBundleFile(request: RestoreFileRequest): Prom
     refusal = [notRestoredProblem(error)];
   }
   if (refusal.length > 0) {
-    held.close();
+    closeQuietly(held);
     rmSync(staging, { recursive: true, force: true });
     return { ok: false, problems: refusal };
   }
@@ -816,8 +821,21 @@ export async function restoreBackupBundleFile(request: RestoreFileRequest): Prom
     writeArtifacts: async () => {},
     manifestEntries: () => held.manifestEntries(),
     bounded: true,
-    release: () => held.close(),
+    release: () => closeQuietly(held),
   });
+}
+
+/**
+ * Closes the verifier's scratch inventory. Its directory sits inside staging,
+ * which every path removes (or keeps as evidence) anyway, so a failure here
+ * must not turn a report into a thrown error.
+ */
+function closeQuietly(inventory: VerifiedBundleInventory): void {
+  try {
+    inventory.close();
+  } catch {
+    // Removed with the staging directory.
+  }
 }
 
 /**

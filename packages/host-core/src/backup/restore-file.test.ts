@@ -41,7 +41,8 @@ import { createBackupBundle, DATA_PATH, MANIFEST_PATH } from "./bundle";
 import type { BackupManifest } from "./bundle";
 import { RESTORE_CREDENTIALS, restoreBackupBundle, restoreBackupBundleFile } from "./restore";
 import type { RestoreResult } from "./restore";
-import { BundleChangedError, stageBundleFile } from "./restore-stream";
+import { BundleChangedError, stageBundleFile, TRIGGER_FILLED_TABLES } from "./restore-stream";
+import { BACKUP_INCLUDED_TABLES } from "./decisions";
 import { openVerifiedBackupBundleFile, verifyBackupBundleFile } from "./streaming";
 import { createFixtureProfile } from "./test-fixture";
 import type { FixtureProfile } from "./test-fixture";
@@ -340,6 +341,49 @@ describe("restoreBackupBundleFile — the same restore as restoreBackupBundle", 
     expect(result.report.credentials).toEqual(RESTORE_CREDENTIALS);
     expect(readFileSync(join(target.root, MCP_CREDENTIAL_FILE_NAME), "utf8")).toBe("target-mcp");
     expect(readFileSync(join(target.root, SECRET_STORE_FILE_NAME), "utf8")).toBe("target-secrets");
+  });
+
+  it("restores a bundle with no attachments to an empty attachment store, as in memory", async () => {
+    const source = fixture();
+    source.db.exec("DELETE FROM blob_links; DELETE FROM blobs;");
+    const { memory, file, roots } = await restoreBothWays(bundleOf(source));
+
+    expect(memory.ok).toBe(true);
+    expect(file.ok, JSON.stringify(file)).toBe(true);
+    for (const root of roots) {
+      expect(readdirSync(blobsRoot(root))).toEqual([]);
+    }
+    expectSameDatabase(roots);
+  });
+
+  it("knows every insert trigger a streamed load order can trip", () => {
+    // The file restore loads tables in document order and guards exactly the
+    // event -> sequence pairs in TRIGGER_FILLED_TABLES. An insert trigger on
+    // an included table that writes ANOTHER table would make the two
+    // restores diverge; adding one must update the guard and this list.
+    const source = fixture();
+    const triggers = source.db
+      .prepare(
+        "SELECT tbl_name, name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY tbl_name, name",
+      )
+      .all() as { tbl_name: string; name: string; sql: string }[];
+    const insertTriggers = triggers
+      .filter(
+        (trigger) =>
+          BACKUP_INCLUDED_TABLES.includes(trigger.tbl_name) &&
+          /\b(?:BEFORE|AFTER)\s+INSERT\b/i.test(trigger.sql),
+      )
+      .map((trigger) => `${trigger.tbl_name}:${trigger.name}`);
+    expect(insertTriggers).toEqual([
+      "session_events:session_event_sequence_insert",
+      "ticket_events:ticket_event_sequence_insert",
+      // Same-table, row order only: the document carries rows in key order.
+      "workspace_epochs:workspace_epochs_monotonic",
+    ]);
+    expect(Object.values(TRIGGER_FILLED_TABLES).toSorted()).toEqual([
+      "session_events",
+      "ticket_events",
+    ]);
   });
 
   it("keeps the previous profile set aside, exactly as it was", async () => {
@@ -643,6 +687,34 @@ describe("restoreBackupBundleFile — two reads of one file", () => {
     expect(result.problems[0]?.message).toMatch(
       /^The restore did not happen and the current profile is unchanged: The backup file changed after it was verified/,
     );
+    expectUntouched(target.root, before);
+  });
+
+  it("reports a cancel during verification as a cancel, not a damaged bundle", async () => {
+    const source = fixture();
+    addEvents(source, 5_000);
+    const target = targetProfile();
+    const before = readFileSync(join(target.root, "volli.db"));
+
+    const result = await restoreBackupBundleFile({
+      bundlePath: bundleFile(bundleOf(source)),
+      profileRoot: target.root,
+      projectPaths: mapping(target.checkoutPath),
+      now: NOW,
+      checkpoint: async () => {
+        throw new Error("cancelled by the person");
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.problems).toEqual([
+      {
+        kind: "verify",
+        message:
+          "The restore did not happen and the current profile is unchanged: cancelled by the person",
+      },
+    ]);
     expectUntouched(target.root, before);
   });
 
