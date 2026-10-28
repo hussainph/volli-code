@@ -30,7 +30,6 @@ import {
 import { api, internal } from "../functions/_generated/api";
 import type { TableNames } from "../functions/_generated/dataModel.js";
 import { PROJECT_PURGE, PURGE_TABLES, type PurgeNode } from "../functions/lib/projectPurge";
-import { OBJECTS_AFTER_ABORT_MS } from "../functions/projectImportPurge";
 import schema from "../functions/schema";
 import { code } from "./board-helpers";
 import { createTicket } from "./board-helpers";
@@ -48,6 +47,8 @@ import { wire, writeSession } from "./sessionFixtures";
 
 const TABLES = Object.keys(schema.tables) as TableNames[];
 const SHA = "ab".repeat(32);
+/** When a purge's objects phase starts: 30 minutes after the abort (`projectImportPurge.ts`). */
+const OBJECTS_AFTER_ABORT_MS = 30 * 60 * 1000;
 
 beforeEach(() => {
   vi.useFakeTimers({ now: Date.UTC(2026, 9, 28, 12) });
@@ -264,6 +265,25 @@ describe("a purge", () => {
       generation: 1,
       events: written.events.map(wire),
     });
+    // A project secret set while shown: it must not outlive the project's id.
+    await world.t.run(async (ctx) => {
+      await ctx.db.insert("secrets", {
+        id: newId("project"),
+        scope: "project",
+        scopeKey: `p:${MOVED.projectId}`,
+        name: "TOKEN",
+        kind: "env",
+        plain: "zz-hidden-secret",
+        sealed: null,
+        exposure: "session",
+        requestedBySessionId: null,
+        last4: null,
+        createdBy: { kind: "person", userId: world.bob.userId },
+        updatedAt: 1,
+        lastUsedAt: null,
+        valueVersion: 1,
+      } as never);
+    });
     await runScheduled(world);
     const shown = await snapshot(world);
     expect(shown.sessionStates.length).toBeGreaterThan(before.sessionStates.length);
@@ -429,6 +449,89 @@ describe("a purge", () => {
   });
 });
 
+describe("a purge, at the edges", () => {
+  test("a delegation whose parent is a neighbour's Session, and a Working copy of a ticket the profile lost", async () => {
+    new S3StandIn().install();
+    const world = await importWorld({ parentSessionId: (visible) => visible });
+    const before = await snapshot(world);
+    await importEverything(world);
+    await world.t.run(async (ctx) => {
+      const copy = await ctx.db
+        .query("workingCopies")
+        .withIndex("by_project", (q) => q.eq("projectId", MOVED.projectId))
+        .first();
+      const { _id, _creationTime, ...doc } = copy!;
+      await ctx.db.insert("workingCopies", {
+        ...doc,
+        id: newId("workingCopy"),
+        ticketId: newId("ticket"),
+      });
+    });
+    await abort(world);
+    await runScheduled(world);
+    expect(await status(world)).toMatchObject({ status: "purged" });
+    expectRestored(before, await snapshot(world));
+  });
+
+  test("a move aborted before purges existed is picked up by the cron", async () => {
+    new S3StandIn().install();
+    const world = await importWorld();
+    const before = await snapshot(world);
+    await importEverything(world);
+    await world.t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("projectImports")
+        .withIndex("by_uuid", (q) => q.eq("id", world.moveId))
+        .unique();
+      await ctx.db.patch(row!._id, { status: "aborting", abortedAt: Date.now() });
+    });
+    expect(await world.t.mutation(internal.projectImportPurge.resume, {})).toEqual({
+      restarted: 1,
+    });
+    await runScheduled(world);
+    expect(await status(world)).toMatchObject({ status: "purged" });
+    const after = await snapshot(world);
+    expect(after.tickets).toEqual(before.tickets);
+    expect(after.sessions).toEqual(before.sessions);
+  });
+
+  test("a purge that keeps making no progress stops; only a person starts it again", async () => {
+    new S3StandIn().install();
+    const world = await importWorld();
+    await importEverything(world);
+    await abort(world);
+    // Its run is lost, as if every link had died without a trace.
+    const stall = (restarts: number) =>
+      world.t.run(async (ctx) => {
+        const row = await ctx.db
+          .query("projectImports")
+          .withIndex("by_uuid", (q) => q.eq("id", world.moveId))
+          .unique();
+        await ctx.db.patch(row!._id, {
+          purge: { ...row!.purge!, run: "lost", restarts, updatedAt: 0 },
+        });
+      });
+    await stall(5);
+    await world.t.mutation(internal.projectImportPurge.step, {
+      moveId: world.moveId,
+      run: "stale",
+    });
+    expect(await world.t.mutation(internal.projectImportPurge.resume, {})).toEqual({
+      restarted: 0,
+    });
+    expect(await status(world)).toMatchObject({
+      status: "aborting",
+      purge: { error: "stopped:stalled", rows: 0 },
+    });
+    expect(await world.t.mutation(internal.projectImportPurge.resume, {})).toEqual({
+      restarted: 0,
+    });
+    await abort(world);
+    await runScheduled(world);
+    expect(await status(world)).toMatchObject({ status: "purged", purge: { restarts: 0 } });
+  });
+});
+
 describe("what a purge never touches", () => {
   test("a committed move: no link deletes a row or an object", async () => {
     const store = new S3StandIn().install();
@@ -442,12 +545,24 @@ describe("what a purge never touches", () => {
     const before = await snapshot(world);
     const keys = store.keys();
 
-    await world.t.mutation(internal.projectImportPurge.step, { moveId: world.moveId });
-    await world.t.action(internal.projectImportPurge.objects, { moveId: world.moveId });
-    await world.t.mutation(internal.projectImportPurge.finish, {
-      moveId: world.moveId,
-      skipped: null,
-    });
+    // Whatever run a link claims to be.
+    for (const run of ["", "any-run"]) {
+      const moveId = world.moveId;
+      await world.t.mutation(internal.projectImportPurge.step, { moveId, run });
+      await world.t.action(internal.projectImportPurge.objects, { moveId, run });
+      await world.t.mutation(internal.projectImportPurge.claimObjectBatch, {
+        moveId,
+        run,
+        prefix: `v1/p/${MOVED.projectId}/`,
+        deleted: 1,
+      });
+      await world.t.mutation(internal.projectImportPurge.finish, {
+        moveId,
+        run,
+        deleted: 1,
+        skipped: null,
+      });
+    }
     await world.t.mutation(internal.projectImportPurge.resume, {});
     await runScheduled(world);
 
@@ -590,7 +705,6 @@ describe("presignPut", () => {
     for (const key of [
       projectBlobKey(MOVED.projectId, bodySha),
       legacyArchiveKey(MOVED.projectId, "automation-ledger"),
-      userLegacyArchiveKey(world.alice.userId, "app-state"),
       migrationKey(world.moveId, "manifest.json"),
       `${session}/tx/000000000001-000000000009.pack.zst`,
       `${session}/ev/000000000001-000000000009.ndjson.zst`,
@@ -622,9 +736,10 @@ describe("presignPut", () => {
       });
     const session = `v1/p/${MOVED.projectId}/s/${MOVED.sessionId}`;
     for (const key of [
-      // Another project's, another move's, another person's, the Workspace's.
+      // Another project's, another move's, a person's (even the importer's), the Workspace's.
       projectBlobKey(world.visible.projectId, bodySha),
       migrationKey(newId("project"), "manifest.json"),
+      userLegacyArchiveKey(world.alice.userId, "app-state"),
       userLegacyArchiveKey(world.bob.userId, "app-state"),
       `v1/w/${world.workspaceId}/b/${bodySha}`,
       // A blob not at its own digest; layouts a move does not write; malformed parts.
@@ -657,6 +772,9 @@ describe("presignPut", () => {
     ).rejects.toThrow(code("invalid_argument"));
     await expect(put(blob, { sha256: "AB".repeat(32) })).rejects.toThrow(code("invalid_argument"));
     await expect(put(blob, { bytes: 64 * 1024 * 1024 + 1 })).resolves.toEqual({ key: blob });
+    await expect(put(blob, { bytes: 1024 * 1024 * 1024 + 1 })).rejects.toThrow(
+      code("invalid_argument"),
+    );
   });
 
   test("only for the importer, only while the move is open, only with a store", async () => {

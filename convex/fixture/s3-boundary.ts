@@ -47,21 +47,21 @@ export function verifyS3Request(
   now = Date.now(),
 ): string {
   assert.ok(request.method === "PUT" || request.method === "GET", "Unexpected S3 method");
-  return verifyObjectRequest(request, url, config, now);
+  return verifyObjectRequest(request, url, config, now, false);
 }
 
 /**
- * Verify a purge's signed DELETE of one object, or a write-once PUT (one that
- * also signs `if-none-match: *`); return its decoded key.
+ * Verify a move's write-once PUT (it also signs `if-none-match: *`) or a
+ * purge's DELETE of one object; return its decoded key.
  */
-export function verifyS3PurgeOrWriteOnceRequest(
+export function verifyS3MoveRequest(
   request: S3Request,
   url: URL,
   config: S3BoundaryConfig,
   now = Date.now(),
 ): string {
   assert.ok(request.method === "PUT" || request.method === "DELETE", "Unexpected S3 method");
-  return verifyObjectRequest(request, url, config, now);
+  return verifyObjectRequest(request, url, config, now, request.method === "PUT");
 }
 
 /** Verify a signed ListObjectsV2 of the bucket; return what it asks for. */
@@ -103,6 +103,7 @@ function verifyObjectRequest(
   url: URL,
   config: S3BoundaryConfig,
   now: number,
+  writeOnce: boolean,
 ): string {
   const signing = checkParameters(url, config, now, []);
   const prefix = `/${encode(config.bucket)}/`;
@@ -113,7 +114,6 @@ function verifyObjectRequest(
     key.length > 0 && key.split("/").map(encode).join("/") === encodedKey,
     "Invalid S3 object path",
   );
-  const writeOnce = request.method === "PUT" && "if-none-match" in request.headers;
   const signedNames =
     request.method === "PUT"
       ? writeOnce

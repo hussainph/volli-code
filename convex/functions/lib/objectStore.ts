@@ -37,12 +37,6 @@ export function objectStoreConfig(
   return { endpoint, bucket, accessKeyId, secretAccessKey, region: env.VOLLI_S3_REGION || "auto" };
 }
 
-/** What one listed page holds: its keys, and the token for the next page (`null` at the end). */
-export interface ObjectListPage {
-  keys: string[];
-  nextContinuationToken: string | null;
-}
-
 /** A refused or failed request to the store. Its message names the status, never a URL. */
 export class ObjectStoreError extends Error {
   readonly code = "object_store_failed";
@@ -54,6 +48,9 @@ export class ObjectStoreError extends Error {
     this.name = "ObjectStoreError";
   }
 }
+
+/** How long one request to the store may take before it is given up. */
+const REQUEST_TIMEOUT_MS = 30_000;
 
 const XML_ENTITIES: Readonly<Record<string, string>> = {
   amp: "&",
@@ -72,41 +69,39 @@ function xmlText(text: string): string {
 }
 
 /**
- * The keys and continuation token of a ListObjectsV2 answer listed with
- * `encoding-type=url`: each `<Contents><Key>` is percent-encoded inside the
- * XML. Only what the purge needs is read; anything else is ignored.
+ * The keys of a ListObjectsV2 answer listed with `encoding-type=url`: each
+ * `<Contents><Key>` is form-encoded inside the XML (S3 writes a space as
+ * `+`). Only the keys are read; a purge lists from the start every time.
  */
-export function parseListObjectsV2(xml: string): ObjectListPage {
+export function parseListObjectsV2(xml: string): string[] {
   const keys: string[] = [];
   for (const match of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
     const key = /<Key>([\s\S]*?)<\/Key>/.exec(match[1]!)?.[1];
     if (key === undefined) throw new Error("A listed object has no key");
-    keys.push(decodeURIComponent(xmlText(key)));
+    keys.push(decodeURIComponent(xmlText(key).replaceAll("+", " ")));
   }
-  const truncated = /<IsTruncated>\s*true\s*<\/IsTruncated>/.test(xml);
-  const token = /<NextContinuationToken>([\s\S]*?)<\/NextContinuationToken>/.exec(xml)?.[1];
-  if (truncated && token === undefined) {
-    throw new Error("A truncated list carries no continuation token");
-  }
-  return { keys, nextContinuationToken: truncated ? xmlText(token!) : null };
+  return keys;
 }
 
-/** One page of the keys under `prefix`, signed and sent from the backend itself. */
+/** The first `maxKeys` keys under `prefix`, signed and sent from the backend itself. */
 export async function listObjectKeys(
   config: ObjectStoreConfig,
   prefix: string,
-  continuationToken: string | null,
   maxKeys: number,
-): Promise<ObjectListPage> {
+): Promise<string[]> {
   const request = presignS3ListObjects({
     ...config,
     prefix,
-    continuationToken,
+    continuationToken: null,
     maxKeys,
     now: Date.now(),
     expiresSeconds: PRESIGN_EXPIRES_SECONDS,
   });
-  const response = await fetch(request.url, { method: "GET", headers: request.headers });
+  const response = await fetch(request.url, {
+    method: "GET",
+    headers: request.headers,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
   if (!response.ok) throw new ObjectStoreError("list", response.status);
   return parseListObjectsV2(await response.text());
 }
@@ -120,7 +115,11 @@ export async function deleteObject(config: ObjectStoreConfig, key: string): Prom
     now: Date.now(),
     expiresSeconds: PRESIGN_EXPIRES_SECONDS,
   });
-  const response = await fetch(request.url, { method: "DELETE", headers: request.headers });
+  const response = await fetch(request.url, {
+    method: "DELETE",
+    headers: request.headers,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
   if (!response.ok && response.status !== 404)
     throw new ObjectStoreError("delete", response.status);
 }

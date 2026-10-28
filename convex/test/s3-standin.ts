@@ -14,7 +14,7 @@ import { createHash } from "node:crypto";
 
 import { vi } from "vite-plus/test";
 
-import { verifyS3ListRequest, verifyS3PurgeOrWriteOnceRequest } from "../fixture/s3-boundary.ts";
+import { verifyS3ListRequest, verifyS3MoveRequest } from "../fixture/s3-boundary.ts";
 
 export const S3_CONFIG = {
   endpoint: "http://s3.standin.test",
@@ -102,7 +102,7 @@ export class S3StandIn {
         `</ListBucketResult>`;
       return answer(200, { method: "LIST", prefix }, xml);
     }
-    const key = verifyS3PurgeOrWriteOnceRequest(request, url, config);
+    const key = verifyS3MoveRequest(request, url, config);
     if (request.method === "DELETE") {
       if (this.failDeletesWith !== null)
         return answer(this.failDeletesWith, { method: "DELETE", key });

@@ -358,11 +358,24 @@ Each was a decision made while turning the design into code.
     digested, so a project's digest is the same hidden or shown. An
     `importing` project is not found for everyone (`isShownProject` in
     `lib/auth.ts`). The read-back adds no index: rows without a project
-    index (`runnerJobs`, `workingCopies`, `auditLog`) are read through the
-    importer's runner or the Workspace and filtered. `project.imported` and
-    `project.import_uncommitted` are new audit kinds, target kind `project`.
+    index then (`runnerJobs`, `workingCopies`, `auditLog`) are read through
+    the importer's runner or the Workspace and filtered. `project.imported`,
+    `project.import_uncommitted`, `project.import_aborted` and
+    `project.import_purged` are new audit kinds, target kind `project`.
     `projectMoves` is not written: it records a move between Workspaces and
     names the Workspace a project came from, which a local project has not.
+45. The purge of a cancelled move (`projectImportPurge.ts`) adds an optional
+    `projectImports.purge` (expand only: absent until a move is aborted; the
+    current run, phase, audit cursor, counts of rows and objects deleted, why
+    objects were left, the last error and restarts without progress), an
+    optional `projectImports.purgedAt`, and `projectImports.by_status` (the
+    cron that restarts stalled purges). It reads every row by an index led by
+    the project's id or an id it reached that way, so three tables gain one:
+    `runnerJobs.by_project`, `workingCopies.by_project` and
+    `readMarkers.by_session` (every reader's marker on a Session, where
+    `by_user_session` needs the reader). `PURGE_TABLES` in
+    `lib/projectPurge.ts` names every table; a new table states whether a
+    purge deletes it.
 
 ## Operator rescue of project imports
 

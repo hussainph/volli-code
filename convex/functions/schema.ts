@@ -387,6 +387,8 @@ export default defineSchema({
     // what it deleted (counts only) and its last failure.
     purge: v.optional(
       v.object({
+        // The current run: a link of an older one does nothing.
+        run: v.string(),
         phase: literals(["rows", "audit", "objects"]),
         auditCursor: nullable(v.string()),
         rows: v.number(),
@@ -395,6 +397,8 @@ export default defineSchema({
         // or another project holds the id.
         objectsSkipped: nullable(literals(["storage_unconfigured", "project_id_taken"])),
         error: nullable(v.object({ code: v.string(), at: time })),
+        // Restarts by the cron in a row without progress.
+        restarts: v.number(),
         updatedAt: time,
       }),
     ),
@@ -780,7 +784,9 @@ export default defineSchema({
   })
     .index("by_uuid", ["id"])
     .index("by_ticket_runner_repo", ["ticketId", "runnerId", "projectRepoId"])
-    .index("by_runner", ["runnerId"]),
+    .index("by_runner", ["runnerId"])
+    // Every Working copy of one project (a moved project's purge).
+    .index("by_project", ["projectId"]),
   projectCheckouts: defineTable({
     runnerId: uuid,
     projectId: uuid,

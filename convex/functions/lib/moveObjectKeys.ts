@@ -1,11 +1,10 @@
 /**
  * Which object keys a move may write (`projectImports.presignPut`): the
- * moved project's own (`v1/p/<projectId>/…`), the move's staging
- * (`v1/m/<moveId>/<part>`), and the importer's kept legacy archive
- * (`v1/u/<userId>/legacy/…`). Each key is parsed into its layout's parts and
- * derived again with `r2-keys.ts`; only a key equal to its own derivation
- * passes, so nothing outside those layouts (and nothing of another project,
- * move or person) can be signed.
+ * moved project's own (`v1/p/<projectId>/…`) and the move's staging
+ * (`v1/m/<moveId>/<part>`), the two prefixes its purge deletes. Each key is
+ * parsed into its layout's parts and derived again with `r2-keys.ts`; only a
+ * key equal to its own derivation passes, so nothing outside those layouts
+ * (and nothing of another project or move) can be signed.
  */
 
 import {
@@ -20,22 +19,23 @@ import {
   projectBlobKey,
   projectPrefix,
   transcriptPackKey,
-  userLegacyArchiveKey,
-  userPrefix,
 } from "@volli/shared/cloud";
 
-/** The largest object one S3 PUT may carry (5 GiB). */
-const S3_PUT_MAX_BYTES = 5 * 1024 * 1024 * 1024;
+/**
+ * The largest object one move PUT may carry. A purge waits for an upload
+ * begun just before its URL expired to land (`OBJECTS_AFTER_ABORT_MS`), so
+ * this stays bounded; a bigger object is a follow-up (multipart).
+ */
+const MOVE_PUT_MAX_BYTES = 1024 * 1024 * 1024;
 
 /** The most bytes one PUT to `key` may carry: a Session's history objects are bounded tighter. */
 export function moveObjectMaxBytes(key: string): number {
-  return /^v1\/p\/[^/]+\/s\//.test(key) ? SESSION_OBJECT_MAX_BYTES : S3_PUT_MAX_BYTES;
+  return /^v1\/p\/[^/]+\/s\//.test(key) ? SESSION_OBJECT_MAX_BYTES : MOVE_PUT_MAX_BYTES;
 }
 
 export interface MoveObjectScope {
   moveId: string;
   projectId: string;
-  userId: string;
   /** The object's SHA-256: a blob's key must be its own. */
   sha256: string;
 }
@@ -92,12 +92,6 @@ function derive(key: string, scope: MoveObjectScope): string | null {
   const staging = migrationPrefix(scope.moveId);
   if (key.startsWith(staging)) return migrationKey(scope.moveId, key.slice(staging.length));
 
-  const person = userPrefix(scope.userId);
-  if (key.startsWith(person)) {
-    const match = /^legacy\/(.+)\.ndjson\.zst$/.exec(key.slice(person.length));
-    return match === null ? null : userLegacyArchiveKey(scope.userId, match[1]!);
-  }
-
   const project = projectPrefix(scope.projectId);
   if (!key.startsWith(project)) return null;
   const rest = key.slice(project.length);
@@ -120,5 +114,5 @@ export function moveObjectKeyProblem(key: string, scope: MoveObjectScope): strin
   }
   return derived === key
     ? null
-    : "The key is not one this move writes: the moved project's, the move's staging or your legacy archive.";
+    : "The key is not one this move writes: the moved project's own, or the move's staging.";
 }

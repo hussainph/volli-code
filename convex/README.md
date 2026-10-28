@@ -229,12 +229,15 @@ project move** section.
   the project stays hidden, and cannot be moved again, until it is `purged`.
 - `presignPut` (an action) signs one PUT of an object the move carries, bound
   to its exact length and SHA-256 and write-once (`If-None-Match: *`, so the
-  store answers 412 for a key that holds an object). The key must parse as one
-  of a move's layouts and equal its own derivation (`lib/moveObjectKeys.ts`):
-  under the project (`v1/p/<projectId>/`: a blob at its own SHA-256, a
-  Session's packs, archives, spills and Pi segments, a legacy archive), the
-  move's staging (`v1/m/<moveId>/<part>`), or the importer's kept legacy
-  archive for host-wide rows (`v1/u/<userId>/legacy/`, `userLegacyArchiveKey`).
+  store answers 412 for a key that holds an object), at most 1 GiB (64 MiB
+  for a Session's objects). The key must parse as one of a move's layouts and
+  equal its own derivation (`lib/moveObjectKeys.ts`): under the project
+  (`v1/p/<projectId>/`: a blob at its own SHA-256, a Session's packs,
+  archives, spills and Pi segments, a legacy archive) or the move's staging
+  (`v1/m/<moveId>/<part>`), the two prefixes the purge deletes. Host-wide
+  legacy rows belong under the person (`userLegacyArchiveKey`,
+  `v1/u/<userId>/legacy/`, kept forever); the profile step that uploads them
+  is not part of a project's move and has no door yet.
 - `status` answers the accumulators; `readRows` reads one stream back by the
   project's own indexes (or one ticket's or the importer's Session's), for the
   client's verification, and only while the project has never been shown
@@ -261,11 +264,17 @@ delegations, grants, watches, read markers and attention; each ticket's body,
 comments, signals, links, Working copies and attention; then the rows that name
 the project), then the MCP audit rows the import wrote, then the project row;
 then an action lists and deletes `v1/p/<projectId>/` and `v1/m/<moveId>/`
-(signed ListObjectsV2 and DELETE) and marks the move `purged`. A move rolled
+(signed ListObjectsV2, then one DELETE per key, eight at a time) and marks the
+move `purged`. The objects phase starts 30 minutes after the abort, once every
+upload URL the move was given has expired and its upload has had time to land.
+Each start of a purge mints a run id every link carries, and every batch of
+deletes is claimed under the current run, so a run a restart left behind
+deletes nothing. A move rolled
 back after its commit loses what was written there while it was shown, which is
 why `uncommit` asks first. `PURGE_TABLES` names every table in the schema with
-what a purge does with it (credentials, billing, receipts and the move's own
-record are kept), so a new table cannot be forgotten
+what a purge does with it (project-scoped secrets and model connections go
+with the project; a person's own credentials, billing, receipts and the move's
+own record are kept; rows of other projects that point into it are left), so a new table cannot be forgotten
 (`test/projectImportPurge.test.ts`, against an S3 stand-in, `test/s3-standin.ts`).
 
 What a purge never touches: a project that is not the move's hidden one (the rows
@@ -275,7 +284,10 @@ those two prefixes, or `v1/u/`. A row reached through the project that names
 another project, or a listed key outside its prefix, stops the purge with
 `stopped:…` on the move (`status` shows it) for a person to look at. Any other
 failure (the store unreachable), or ten minutes without progress, is restarted
-by a cron every 15 minutes, or at once by `abort` called again. A deployment with no object store
+by a cron every 15 minutes, five times in a row at most without progress
+(then `stopped:stalled`); `abort` called again restarts any of them at once.
+The move id is the client's: `begin` takes only an unused one, so the
+staging a purge empties is that move's own. A deployment with no object store
 deletes the rows and records that it left the objects (`storage_unconfigured`).
 
 Replacing the move's runner (`registerThisMac` naming it) moves its hidden

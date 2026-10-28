@@ -225,6 +225,7 @@ async function describe(db: Reader, row: ImportRow) {
             objects: row.purge.objects,
             objectsSkipped: row.purge.objectsSkipped,
             error: row.purge.error?.code ?? null,
+            restarts: row.purge.restarts,
           },
     streams: (await streamRows(db, row.id)).map((stream) => ({
       stream: stream.stream,
@@ -858,8 +859,8 @@ export const uncommit = mutation({
  * derived there while it was shown), then its objects, ending `purged`. The
  * project stays hidden until it is gone.
  *
- * Idempotent. Called again while `aborting`, it restarts a purge that failed
- * or stalled; `status` shows how far it got.
+ * Idempotent. Called again while `aborting`, it restarts a purge that failed,
+ * stopped or stalled; `status` shows how far it got.
  */
 export const abort = mutation({
   args: { moveId: v.string() },
@@ -867,8 +868,10 @@ export const abort = mutation({
     const { viewer, row } = await requireImporter(ctx, moveId);
     if (row.status === "purged") return { status: row.status };
     if (row.status === "aborting") {
-      const now = Date.now();
-      if (row.purge?.error != null || purgeStalled(row, now)) await schedulePurge(ctx, row);
+      // A purge that failed, stopped or stalled starts again under a new run.
+      if (row.purge?.error != null || purgeStalled(row, Date.now())) {
+        await schedulePurge(ctx, row, "person");
+      }
       return { status: row.status };
     }
     if (row.status === "committed") {
@@ -885,7 +888,7 @@ export const abort = mutation({
       at: now,
       detail: { moveId: row.id },
     });
-    await schedulePurge(ctx, { ...row, status: "aborting" });
+    await schedulePurge(ctx, row, "person");
     return { status: "aborting" as ImportStatus };
   },
 });
@@ -1009,7 +1012,6 @@ export const authorizeObjectPut = internalQuery({
     const problem = moveObjectKeyProblem(args.key, {
       moveId: row.id,
       projectId: row.projectId,
-      userId: row.userId,
       sha256: args.sha256,
     });
     if (problem !== null) throw importError("invalid_key", problem);
@@ -1025,9 +1027,8 @@ export const authorizeObjectPut = internalQuery({
  * A URL for one PUT of exactly `bytes` bytes hashing to `sha256`, to `key`,
  * valid for five minutes. The key must be one the move carries: under the
  * project's prefix (`v1/p/<projectId>/`: a blob at its own SHA-256, a
- * Session's history objects, a legacy archive), the move's staging
- * (`v1/m/<moveId>/<part>`), or the importer's kept legacy archive
- * (`v1/u/<userId>/legacy/…`, host-wide rows).
+ * Session's history objects, a legacy archive) or the move's staging
+ * (`v1/m/<moveId>/<part>`), the two prefixes a cancelled move's purge deletes.
  *
  * Write-once: the request carries `If-None-Match: *`, so the store refuses
  * (412) a key that already holds an object. A client resuming a move HEADs a

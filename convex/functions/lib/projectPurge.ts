@@ -9,6 +9,12 @@
  * a row reached this way that names another project stops the purge instead
  * ({@link PurgeStop}).
  *
+ * Rows of other projects that point INTO the moved one (a watch on one of
+ * its Sessions, a delegation whose parent was one of them, a link to one of
+ * its tickets) belong to those projects and are left as they are: they name
+ * something that no longer exists, as after any move, and a purge never
+ * writes outside the moved project.
+ *
  * That covers more than the import's own streams. A move rolled back after
  * its commit (`uncommit`, then `abort`) was shown, so the backend may have
  * derived rows there (a fold, attention, streamed text, runner work); they
@@ -100,6 +106,8 @@ export const PROJECT_PURGE: readonly PurgeNode[] = [
     field: "projectId",
     children: [{ table: "recipeStatus", index: "by_repo_ref", field: "projectRepoId" }],
   },
+  // Also by project: an imported one may name a ticket the profile no longer had.
+  { table: "workingCopies", index: "by_project", field: "projectId" },
   { table: "runnerJobs", index: "by_project_kind_status", field: "projectId" },
   { table: "boardEvents", index: "by_project_seq", field: "projectId" },
   { table: "labels", index: "by_project_name_key", field: "projectId" },
@@ -117,6 +125,21 @@ export const PROJECT_PURGE: readonly PurgeNode[] = [
     field: "scopeKey",
     value: (project) => `p:${project.id as string}`,
   },
+  // Project-scoped credentials go with the project: the id may next be moved into
+  // another Workspace, which must not inherit values sealed for this one. A
+  // person's own entries for the project (`u:<userId>/p:<projectId>`) stay theirs.
+  {
+    table: "secrets",
+    index: "by_scope_name",
+    field: "scopeKey",
+    value: (project) => `p:${project.id as string}`,
+  },
+  {
+    table: "modelConnections",
+    index: "by_scope",
+    field: "scopeKey",
+    value: (project) => `p:${project.id as string}`,
+  },
   { table: "memberProjectPrefs", index: "by_project", field: "projectId" },
   { table: "projectCheckouts", index: "by_project", field: "projectId" },
   { table: "projectEnvironment", index: "by_project", field: "projectId" },
@@ -126,8 +149,9 @@ export const PROJECT_PURGE: readonly PurgeNode[] = [
 
 /**
  * An audit row the import wrote (an MCP operation of the moved project, the
- * only audit rows a person's move carries). The backend's own audit rows
- * about the move (`project.imported`, `project.import_*`) stay.
+ * only audit rows a person's move carries). Told apart by shape: nothing in
+ * the backend writes `mcp_*` audit rows, only an import does. The backend's
+ * own audit rows about the move (`project.imported`, `project.import_*`) stay.
  */
 export function isImportedAuditRow(
   doc: Row,
@@ -234,12 +258,10 @@ export const PURGE_TABLES: Readonly<Record<TableNames, PurgeDisposition>> = {
   runnerJobs: "deleted",
   attentionItems: "deleted",
   configEntries: "deleted",
-  secrets: {
-    kept: "credentials a person entered; a move never writes them, and deleting them is the project purge's (retention), not a roll back's",
-  },
+  secrets: "deleted",
   secretKeys: { kept: "per-Workspace and per-person data keys" },
-  modelConnections: { kept: "credentials a person entered, as `secrets`" },
-  mcpCredentials: { kept: "a person's own MCP credentials, as `secrets`" },
+  modelConnections: "deleted",
+  mcpCredentials: { kept: "a person's own MCP credentials, keyed by person and entry" },
   environmentRuns: "deleted",
   environmentSnapshots: "deleted",
   usageDaily: { kept: BILLING },

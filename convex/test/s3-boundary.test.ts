@@ -7,7 +7,7 @@ import { presignS3ListObjects, presignS3Request, type S3PresignInput } from "@vo
 
 import {
   verifyS3ListRequest,
-  verifyS3PurgeOrWriteOnceRequest,
+  verifyS3MoveRequest,
   verifyS3Request,
 } from "../fixture/s3-boundary.ts";
 
@@ -302,22 +302,27 @@ describe("the purge's list and delete, and write-once PUTs", () => {
 
   test("accepts a signed DELETE and a write-once PUT; refuses GET and a changed If-None-Match", () => {
     const remove = signedRequest("GET", { method: "DELETE" });
-    expect(verifyS3PurgeOrWriteOnceRequest(remove.request, remove.url, CONFIG, NOW)).toBe(KEY);
+    expect(verifyS3MoveRequest(remove.request, remove.url, CONFIG, NOW)).toBe(KEY);
     const put = signedRequest("PUT", { headers: { ...HEADERS, "if-none-match": "*" } });
-    expect(verifyS3PurgeOrWriteOnceRequest(put.request, put.url, CONFIG, NOW)).toBe(KEY);
+    expect(verifyS3MoveRequest(put.request, put.url, CONFIG, NOW)).toBe(KEY);
     const get = signedRequest("GET");
-    expect(() => verifyS3PurgeOrWriteOnceRequest(get.request, get.url, CONFIG, NOW)).toThrow(
-      /method/u,
-    );
+    expect(() => verifyS3MoveRequest(get.request, get.url, CONFIG, NOW)).toThrow(/method/u);
     const changed = signedRequest("PUT", { headers: { ...HEADERS, "if-none-match": "*" } });
     changed.request.headers["if-none-match"] = "etag";
-    expect(() =>
-      verifyS3PurgeOrWriteOnceRequest(changed.request, changed.url, CONFIG, NOW),
-    ).toThrow(/If-None-Match/u);
+    expect(() => verifyS3MoveRequest(changed.request, changed.url, CONFIG, NOW)).toThrow(
+      /If-None-Match/u,
+    );
     const dropped = signedRequest("PUT", { headers: { ...HEADERS, "if-none-match": "*" } });
     delete dropped.request.headers["if-none-match"];
-    expect(() =>
-      verifyS3PurgeOrWriteOnceRequest(dropped.request, dropped.url, CONFIG, NOW),
-    ).toThrow(/signed headers/u);
+    expect(() => verifyS3MoveRequest(dropped.request, dropped.url, CONFIG, NOW)).toThrow(
+      /signed header/u,
+    );
+    // A move's PUT is write-once; a plain PUT is not one, and the old verifier takes neither the other way.
+    const plain = signedRequest("PUT");
+    expect(() => verifyS3MoveRequest(plain.request, plain.url, CONFIG, NOW)).toThrow(
+      /signed headers/u,
+    );
+    const writeOnce = signedRequest("PUT", { headers: { ...HEADERS, "if-none-match": "*" } });
+    expect(() => verify(writeOnce)).toThrow(/signed headers/u);
   });
 });

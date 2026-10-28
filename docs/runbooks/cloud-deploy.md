@@ -174,8 +174,8 @@ readers never re-derive them. Lifecycle rules delete only the two staging prefix
 The backend deletes objects itself in one case only: the purge of a cancelled move
 to Volli Cloud (`convex/functions/projectImportPurge.ts`) lists and deletes that
 move's `v1/m/<moveId>/` and, once no project row holds the id, the moved project's
-`v1/p/<projectId>/`. The token's Object Read & Write covers those List and Delete
-calls; they run from the backend, so they need no CORS rule. A move's uploads are
+`v1/p/<projectId>/` (one DELETE per key). The token's Object Read & Write covers those
+List and Delete calls; they run from the backend, so they need no CORS rule. A move's uploads are
 write-once (`If-None-Match: *`): a key that holds an object answers 412.
 
 An expired pack is not a cache miss: its index row still names the key and the
