@@ -738,6 +738,7 @@ describe("sessionViewers", () => {
       clientSessionId: "desktop-1",
     });
     expect(lease).toEqual({ viewerId, expiresAt: expect.any(Number), heartbeatMs: 20_000 });
+    if (!("expiresAt" in lease)) throw new Error("Expected a viewer lease");
     // Expiry is a TTL from now (convex-test's clock may tick a millisecond).
     expect(lease.expiresAt - SESSION_VIEWER_TTL_MS).toBeGreaterThanOrEqual(10_000);
     expect(lease.expiresAt - SESSION_VIEWER_TTL_MS).toBeLessThan(10_100);
@@ -786,6 +787,35 @@ describe("sessionViewers", () => {
     });
     const beats = await t.run((ctx) => ctx.db.query("sessionViewerHeartbeats").collect());
     expect(beats).toHaveLength(1);
+  });
+
+  test("arrival probes mask missing/hidden Sessions without allocating a viewer, but still require sign-in", async () => {
+    const t = setup();
+    const w = await world(t);
+    const args = {
+      viewerId: newId("session"),
+      sessionId: newId("session"),
+      clientSessionId: "desktop-1",
+      allowMissing: true,
+    };
+    const teammate = t.withIdentity(TEAMMATE);
+    for (const sessionId of [args.sessionId, w.privateSessionId]) {
+      expect(await teammate.mutation(api.sessionViewers.open, { ...args, sessionId })).toEqual({
+        open: false,
+      });
+    }
+    await expect(t.mutation(api.sessionViewers.open, args)).rejects.toThrow();
+    await expect(
+      teammate.mutation(api.sessionViewers.open, { ...args, allowMissing: false }),
+    ).rejects.toEqual(code("not_found"));
+    expect(await t.run((ctx) => ctx.db.query("sessionViewers").collect())).toEqual([]);
+    expect(await t.run((ctx) => ctx.db.query("sessionViewerHeartbeats").collect())).toEqual([]);
+    expect(
+      await teammate.mutation(api.sessionViewers.open, { ...args, sessionId: w.sessionId }),
+    ).toMatchObject({ viewerId: args.viewerId, heartbeatMs: 20_000 });
+    expect(await w.runner.query(api.sessionViewers.watched, {})).toEqual({
+      sessionIds: [w.sessionId],
+    });
   });
 
   test("open checks the caller can see the Session, and the ids", async () => {

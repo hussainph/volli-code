@@ -435,6 +435,8 @@ export interface ChatSessionTransport {
   streamRecovery?: ChatStreamRecovery;
   scheduler: FlushScheduler;
   newCommandId(): string;
+  /** Refuse an unsendable first message before Draft promotion creates or attaches anything. */
+  validateMessage?(sessionId: string, message: QueuedMessage): void;
   /**
    * Mint the durable Session — create + model policy, NO attach. The fast half
    * of a chat start: the store lands the tab on the id this resolves, and the

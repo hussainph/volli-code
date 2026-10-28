@@ -33,6 +33,8 @@ import {
   type CloudWatchResult,
 } from "./cloud-session-transport";
 import { CLOUD_SESSION_UNAVAILABLE } from "./cloud-session-view";
+import { toastError } from "./toast";
+vi.mock("./toast", () => ({ toastError: vi.fn() }));
 import type { CloudTranscriptReader, CloudTranscriptRequest } from "./cloud-transcript-reader";
 import {
   SESSION_ID,
@@ -556,6 +558,17 @@ describe("the cloud Session reads", () => {
     expect(transport.streamRecovery).toBe("host-link");
     expect(transport.newCommandId()).toBe("command-1");
     expect(session.subscribeQueue).toBeUndefined();
+  });
+
+  it("preflights a Draft with the same canonical UTF-8 limit as a follow-up", () => {
+    const { port, transport } = harness();
+    expect(() => transport.validateMessage!(SESSION_ID, { id: "m", text: "hello" })).not.toThrow();
+    for (const text of ["x".repeat(72_000), "🙂".repeat(17_000), "x".repeat(65_536)]) {
+      expect(() => transport.validateMessage!(SESSION_ID, { id: "m", text })).toThrow(
+        "A message is limited to 65536 bytes.",
+      );
+    }
+    expect(port.commands).toEqual([]);
   });
 
   it("queues a message with its canonical body, and an answer by its derived reference", async () => {
@@ -1207,6 +1220,7 @@ function viewerOf(port: FakePort) {
   const clock = new FakeClock();
   const warnings: string[] = [];
   let viewers = 0;
+  const unavailable = vi.fn();
   const show = () =>
     createCloudViewer(
       {
@@ -1215,47 +1229,78 @@ function viewerOf(port: FakePort) {
         clientSessionId: "window-1",
         clock,
         warn: (message) => warnings.push(message),
+        unavailable,
       },
       SESSION_ID,
     );
-  return { clock, warnings, show };
+  return { clock, warnings, unavailable, show };
 }
 
 describe("createCloudViewer", () => {
-  it("retries a runner-originated birth promptly, bounds that wait, then uses the lease cadence", async () => {
+  it.each(["response", "not_found"])(
+    "bounds a missing birth (%s), then stops until reopened",
+    async (answer) => {
+      const port = new FakePort();
+      const { clock, warnings, unavailable, show } = viewerOf(port);
+      port.open = async () => {
+        if (answer === "not_found") throw unknown();
+        return { open: false };
+      };
+      const hide = show();
+      await settle();
+      for (const delay of [500, 1_000, 2_000, 4_000, 7_500]) {
+        expect(clock.pending()).toEqual([delay]);
+        clock.fire();
+        await settle();
+      }
+      expect(clock.pending()).toEqual([]);
+      expect(port.viewer.filter((entry) => entry.startsWith("open"))).toHaveLength(6);
+      expect(unavailable).toHaveBeenCalledOnce();
+      expect(warnings).toEqual([]);
+      hide();
+      await settle();
+      port.open = async () => ({ heartbeatMs: 5_000 });
+      const hideAgain = show();
+      await settle();
+      expect(clock.pending()).toEqual([5_000]);
+      hideAgain();
+      await settle();
+    },
+  );
+
+  it("opens a delayed birth, then treats lost access as terminal", async () => {
     const port = new FakePort();
-    const { clock, warnings, show } = viewerOf(port);
-    const absent = Object.assign(new Error("not yet accepted"), { data: { code: "not_found" } });
-    port.open = async () => {
-      throw absent;
-    };
-    port.beat = async () => ({ open: false });
+    const { clock, unavailable, show } = viewerOf(port);
+    port.open = async () => ({ open: false });
     const hide = show();
     await settle();
-    expect(clock.pending()).toEqual([500]);
-    expect(warnings).toEqual([]);
-    // An absent/private Session does not get an unbounded fast retry loop.
-    for (let retry = 0; retry < 30; retry += 1) {
-      clock.fire();
-      await settle();
-    }
-    expect(clock.pending()).toEqual([20_000]);
-    expect(warnings).toHaveLength(1);
     port.open = async () => ({ heartbeatMs: 5_000 });
     clock.fire();
     await settle();
     expect(clock.pending()).toEqual([5_000]);
-    // Once opened, losing access never re-enters the fast arrival window.
-    port.beat = async () => {
-      throw absent;
+    port.beat = async () => ({ open: false });
+    port.open = async () => {
+      throw unknown();
     };
     clock.fire();
     await settle();
-    expect(clock.pending()).toEqual([20_000]);
-    expect(warnings).toHaveLength(2);
+    expect(clock.pending()).toEqual([]);
+    expect(unavailable).toHaveBeenCalledOnce();
+    hide();
+    await settle();
+  });
+
+  it("cancels an arrival retry when hidden", async () => {
+    const port = new FakePort();
+    const { clock, unavailable, show } = viewerOf(port);
+    port.open = async () => ({ open: false });
+    const hide = show();
+    await settle();
+    expect(clock.pending()).toEqual([500]);
     hide();
     await settle();
     expect(clock.pending()).toEqual([]);
+    expect(unavailable).not.toHaveBeenCalled();
   });
 
   it("opens, renews on the lease's heartbeat, and closes once", async () => {
@@ -1290,6 +1335,21 @@ describe("createCloudViewer", () => {
     expect(clock.pending()).toEqual([]);
     await settle();
     expect(port.viewer.filter((entry) => entry.startsWith("close"))).toEqual(["close viewer-1"]);
+  });
+
+  it("does not retry or notify for a missing open answered after hide", async () => {
+    const port = new FakePort();
+    const { clock, unavailable, show } = viewerOf(port);
+    const opening = deferred<unknown>();
+    port.open = () => opening.promise;
+    const hide = show();
+    await settle();
+    hide();
+    opening.resolve({ open: false });
+    await settle();
+    expect(clock.pending()).toEqual([]);
+    expect(unavailable).not.toHaveBeenCalled();
+    expect(port.viewer.at(-1)).toBe("close viewer-1");
   });
 
   it("closes a viewer whose open was still in flight, after the open lands", async () => {
@@ -1698,6 +1758,24 @@ describe("cloudChatTransport", () => {
 });
 
 describe("showCloudSession", () => {
+  it("shows one unavailable notice after bounded arrival probes, with no server-error loop", async () => {
+    vi.useFakeTimers();
+    vi.mocked(toastError).mockClear();
+    const { session, calls, answers } = fakeClient();
+    answers.set("sessionViewers.open", { open: false });
+    const hide = showCloudSession(session, SESSION_ID);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(calls.filter((call) => call.ref === "sessionViewers.open")).toHaveLength(6);
+    expect(calls.filter((call) => call.ref === "sessionViewers.heartbeat")).toHaveLength(0);
+    expect(calls[0]?.args).toMatchObject({ allowMissing: true });
+    expect(toastError).toHaveBeenCalledExactlyOnceWith(
+      "This Session is unavailable. Close and reopen it to try again.",
+    );
+    expect(vi.getTimerCount()).toBe(0);
+    hide();
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
   it("watches a Session in this window until hidden, with one window id", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);

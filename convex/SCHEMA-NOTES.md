@@ -409,6 +409,11 @@ Where `streamChunks` and `sessionViewers` depart from the data-model design:
   rows plus the reader's cursors, and starts a stream without a cursor (or
   with one a newer baseline overtook) at its latest baseline rather than at
   seq 0, so a late joiner reads at most ~10 s of rows per stream.
+- `sessionViewers.open` accepts optional `allowMissing`: a missing or hidden
+  Session answers `{open: false}` without allocating a viewer. Without it,
+  `not_found` is unchanged. This lets windows probe runner-originated births
+  quietly with bounded backoff, then surface an unavailable state rather than
+  retry forever. Deploy this additive argument before the desktop that sends it.
 - `streamChunks` rows are deleted by the runner's `settle`, which names the
   settling fact's sequence and deletes once `acceptedThrough` reaches it
   — the runner knows which streams a settled fact ends, including a

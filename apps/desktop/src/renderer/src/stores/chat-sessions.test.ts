@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   EMPTY_TRANSCRIPT,
+  queuedWireMessage,
   getChatClient,
   type ChatCommandRequest,
   type ChatSessionRpc,
@@ -16,6 +17,10 @@ import {
   type ChatStreamCursor,
 } from "@volli/session-presentation";
 import type { ChatSessionRecord, SessionListingRow } from "@volli/shared";
+import {
+  createCloudSessionTransport,
+  type CloudSessionPort,
+} from "@renderer/lib/cloud-session-transport";
 import { useChatDraftsStore } from "./chat-drafts";
 import { useExperimentsStore } from "./experiments";
 import { useHostConnectionStore } from "./host-connection";
@@ -533,6 +538,80 @@ describe("promoteChatSession", () => {
       ]);
     }
   }
+
+  it("refuses an oversized cloud wire message before create/attach, then promotes a shorter send in the same Draft", async () => {
+    const { store, transport, attaches, ticketStarts, subscriptions } = fixture();
+    // Exercise the real cloud transport's preflight, not a copy of its builder.
+    // No cloud port call is needed before validation accepts the message.
+    transport.validateMessage = createCloudSessionTransport({
+      port: {} as CloudSessionPort,
+      readTranscripts: vi.fn(),
+      scheduler: transport.scheduler,
+      newCommandId: transport.newCommandId,
+      clock: { setTimeout: vi.fn(), clearTimeout: vi.fn() },
+      warn: vi.fn(),
+    }).validateMessage;
+    openDraft();
+    useChatDraftsStore
+      .getState()
+      .setProvisionalModel(
+        DRAFT_ID,
+        { providerId: "acme", modelId: "sonnet", reasoningLevel: "high" },
+        { fromDefault: true },
+      );
+    // UTF-8 plus artifact overhead, not JS string length or raw text alone.
+    const oversized = { id: "first-message", text: "🙂".repeat(17_000) };
+    useChatDraftsStore.getState().holdMessage(DRAFT_ID, oversized);
+    await expect(store.getState().promoteChatSession(DRAFT_ID, oversized)).resolves.toBe(false);
+    expect(toast.error).toHaveBeenCalledWith(
+      "A message is limited to 65536 bytes.",
+      expect.any(Object),
+    );
+    expect(ticketStarts).toEqual([]);
+    expect(attaches).toEqual([]);
+    expect(subscriptions).toEqual([]);
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.provisional?.phase).toBe("draft");
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.held[0]?.text).toBe(oversized.text);
+    // The refused copy can stay held for editing. It must not poison a new Send.
+    const shorter = { id: "second-message", text: "short enough" };
+    useChatDraftsStore.getState().holdMessage(DRAFT_ID, shorter);
+    await expect(store.getState().promoteChatSession(DRAFT_ID, shorter)).resolves.toBe(true);
+    expect(ticketStarts).toHaveLength(1);
+    expect(ticketStarts[0]).toMatchObject({ autoSelect: { request: shorter.text } });
+    expect(attaches).toHaveLength(1);
+    await vi.waitFor(() => expect(store.getState().sessions[DRAFT_ID]?.projection).not.toBeNull());
+    useChatDraftsStore
+      .getState()
+      .amendHeldMessage(DRAFT_ID, shorter.id, (held) => ({ ...held, deliveryAccepted: true }));
+    store.setState((state) => {
+      const slice = state.sessions[DRAFT_ID]!;
+      return {
+        sessions: {
+          ...state.sessions,
+          [DRAFT_ID]: {
+            ...slice,
+            transcript: { ...slice.transcript, durableMessages: [queuedWireMessage(shorter)] },
+          },
+        },
+      };
+    });
+    store.getState().applyStream(DRAFT_ID, [], []);
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.held.map(({ id }) => id)).toEqual([
+      oversized.id,
+    ]);
+  });
+
+  it("preflights the supplied first message even when it has no held row", async () => {
+    const { store, transport, ticketStarts } = fixture();
+    openDraft();
+    const message = { id: "unstaged", text: "first words" };
+    transport.validateMessage = vi.fn(() => {
+      throw new Error("Cannot send this message");
+    });
+    await expect(store.getState().promoteChatSession(DRAFT_ID, message)).resolves.toBe(false);
+    expect(transport.validateMessage).toHaveBeenCalledExactlyOnceWith(DRAFT_ID, message);
+    expect(ticketStarts).toEqual([]);
+  });
 
   it("creates under the Draft id and connects only after ownerless Blobs are linked", async () => {
     const { attaches, store, subscriptions, ticketStarts } = fixture();

@@ -681,7 +681,8 @@ export function ChatPlane({
         // therefore create, transfer Draft-owned Blob links, and start attach
         // without any crash window in which these words exist only in memory.
         // Concurrent sends share the Draft store's one promotion Promise.
-        if (!(await sessionsStore.getState().promoteChatSession(sessionId))) return "refused";
+        if (!(await sessionsStore.getState().promoteChatSession(sessionId, message)))
+          return "refused";
         // A close or explicit queue edit can withdraw renderer-owned intent
         // while promotion is awaiting main. Never resurrect a message whose
         // held copy no longer exists merely because the Session mint finished.

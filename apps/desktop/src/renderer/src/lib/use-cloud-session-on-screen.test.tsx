@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { LOCAL_LAUNCH } from "@volli/shared";
 import { adoptLaunch } from "@renderer/stores/launch";
+import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import type { CloudSession } from "./cloud-client";
 const mocks = vi.hoisted(() => ({
   follow: vi.fn(),
@@ -44,6 +45,7 @@ beforeEach(() => {
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
   adoptLaunch(LOCAL_LAUNCH);
+  useChatDraftsStore.setState({ drafts: {} });
   vi.clearAllMocks();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -57,6 +59,31 @@ describe("cloud Session visibility", () => {
     render(null);
     expect(mocks.follow).not.toHaveBeenCalled();
   });
+  it("does not watch an untouched/refused Draft, and starts only after create", () => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "https://example.convex.cloud" });
+    const drafts = useChatDraftsStore.getState();
+    drafts.openProvisional("draft", {
+      projectId: "p",
+      ticketId: null,
+      operationId: "create",
+      title: null,
+    });
+    const render = mount();
+    render("draft");
+    expect(mocks.follow).not.toHaveBeenCalled();
+    act(() => drafts.holdMessage("draft", { id: "huge", text: "x".repeat(72_000) }));
+    act(() => drafts.markHeld("draft", "huge", "unsent"));
+    expect(mocks.follow).not.toHaveBeenCalled();
+    act(() => drafts.markProvisionalSessionCreated("draft"));
+    expect(mocks.follow).toHaveBeenCalledOnce();
+    const session = {} as CloudSession;
+    mocks.listener!(session);
+    expect(mocks.show).toHaveBeenCalledExactlyOnceWith(session, "draft");
+    act(() => drafts.completePromotion("draft"));
+    expect(mocks.show).toHaveBeenCalledOnce();
+    expect(mocks.close).not.toHaveBeenCalled();
+  });
+
   it("opens only while on screen, follows client replacement, and closes on hide/unmount", () => {
     adoptLaunch({ store: "cloud", userId: "u", backendUrl: "https://example.convex.cloud" });
     const render = mount();
