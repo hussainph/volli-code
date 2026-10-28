@@ -370,9 +370,9 @@ Each was a decision made while turning the design into code.
     objects were left, the last error and restarts without progress), an
     optional `projectImports.purgedAt`, and `projectImports.by_status` (the
     cron that restarts stalled purges). It reads every row by an index led by
-    the project's id or an id it reached that way, so three tables gain one:
-    `runnerJobs.by_project`, `workingCopies.by_project` and
-    `readMarkers.by_session` (every reader's marker on a Session, where
+    the project's id or an id it reached that way, so two tables gain one:
+    `workingCopies.by_project` and `readMarkers.by_session` (every reader's
+    marker on a Session, where
     `by_user_session` needs the reader). `PURGE_TABLES` in
     `lib/projectPurge.ts` names every table; a new table states whether a
     purge deletes it.
