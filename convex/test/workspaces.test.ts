@@ -580,6 +580,8 @@ describe("members", () => {
       "member.joined",
       ...Array.from({ length: 4 }, () => [
         "invite.created",
+        // A link names nobody, so it carries its sender's sponsored preview grant.
+        "preview.sponsored",
         "invite.accepted",
         "member.joined",
       ]).flat(),

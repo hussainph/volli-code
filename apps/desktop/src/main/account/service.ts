@@ -92,6 +92,20 @@ export const ACCOUNT_CLOUD_OFF = "Volli Cloud is off. Turn it on in Settings →
 const OFFLINE = "Couldn't reach Volli Cloud. Your sign-in is kept.";
 const NOT_ACCEPTED = "Volli Cloud didn't accept this sign-in. Sign out and sign in again.";
 
+/**
+ * Refusals the person acts on (the backend's sentence says how): the preview
+ * gate, and a team code pasted at sign-in that cannot be joined with. Never
+ * retried with the same code.
+ */
+const SIGN_IN_REFUSALS: ReadonlySet<string | null> = new Set([
+  "preview_waitlisted",
+  "preview_agreement_required",
+  "invite_invalid",
+  "invite_expired",
+  "invite_email_mismatch",
+  "suspended",
+]);
+
 export interface AccountLogger {
   info(message: string, fields?: Record<string, unknown>): void;
   warn(message: string, fields?: Record<string, unknown>): void;
@@ -111,8 +125,11 @@ export interface AccountServiceOptions {
   readonly signInTimeoutMs?: number;
   readonly now?: () => number;
   readonly log?: AccountLogger;
-  /** The next launch's product store (`../cloud-launch.ts`): who is signed in, or nobody. */
-  readonly marker?: { write(userId: string): void; clear(): void };
+  /**
+   * The next launch's product store (`../cloud-launch.ts`): who is signed in,
+   * or nobody, and the Workspace a team code just joined.
+   */
+  readonly marker?: { write(userId: string, joinedWorkspaceId?: string): void; clear(): void };
 }
 
 export interface AccountService {
@@ -382,8 +399,11 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
         : answered.previewAccess === "granted"
           ? PREVIEW_AGREEMENT_REQUIRED_MESSAGE
           : PREVIEW_WAITLIST_MESSAGE;
-    if (granted) options.marker?.write(answered.userId);
-    else options.marker?.clear();
+    if (granted) {
+      // Only a join is news; an answer naming none keeps a join not yet opened.
+      if (answered.joinedWorkspaceId === null) options.marker?.write(answered.userId);
+      else options.marker?.write(answered.userId, answered.joinedWorkspaceId);
+    } else options.marker?.clear();
   };
 
   /** Asks the backend for the person; on failure keeps the sign-in and says why. */
@@ -406,10 +426,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
         acceptViewer(answered);
       } catch (error) {
         if (epoch !== startedIn) return;
-        if (
-          error instanceof BackendRefusedError &&
-          (error.code === "preview_waitlisted" || error.code === "preview_agreement_required")
-        ) {
+        if (error instanceof BackendRefusedError && SIGN_IN_REFUSALS.has(error.code)) {
           pendingInviteCode = undefined;
           pendingAgreementVersion = undefined;
           backendState = "refused";

@@ -19,10 +19,13 @@ import {
 import type { FollowSession, Loaded } from "./use-runners";
 
 export type Member = FunctionReturnType<CloudApi["members"]["list"]>[number];
-// TODO(VC-971 PR 1): use the generated sponsored-preview fields once the API ships them.
-type Preview = { readonly preview?: string };
-export type PendingInvite = FunctionReturnType<CloudApi["invites"]["list"]>[number] & Preview;
-export type CreatedInvite = FunctionReturnType<CloudApi["invites"]["create"]> & Preview;
+// `preview` (an `InvitePreviewAccess`) is open on read: an older backend omits
+// it, and a newer one may answer a verdict this build does not know.
+type OpenPreview<Row extends { preview: string }> = Omit<Row, "preview"> & {
+  readonly preview?: string;
+};
+export type PendingInvite = OpenPreview<FunctionReturnType<CloudApi["invites"]["list"]>[number]>;
+export type CreatedInvite = OpenPreview<FunctionReturnType<CloudApi["invites"]["create"]>>;
 
 const reads = {
   workspace: (s: CloudSession, id: string) =>

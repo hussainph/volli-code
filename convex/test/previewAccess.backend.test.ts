@@ -75,3 +75,48 @@ test("the real backend requires explicit current agreement acceptance, never tok
     client.mutation(api.accounts.ensureViewer, { acceptedAgreementVersion: "old-version" }),
   ).rejects.toMatchObject({ data: { code: "preview_agreement_required" } });
 });
+
+test("a team code joins one new person at sign-in over the real transport; a second is refused", async () => {
+  const inviterEmail = `${randomUUID()}@example.com`;
+  const inviter = backend.client(`user:${randomUUID()}`, {
+    claims: { email: inviterEmail, email_verified: true },
+  });
+  await backend.admin(internal.previewAccess.set, {
+    kind: "email",
+    value: inviterEmail,
+    enabled: true,
+  });
+  await inviter.mutation(api.accounts.ensureViewer, {
+    acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+  });
+  const workspaceId = randomUUID();
+  await inviter.mutation(api.workspaces.create, { workspaceId, name: "Team" });
+  const link = await inviter.mutation(api.invites.create, {
+    workspaceId,
+    email: null,
+    role: "member",
+  });
+  expect(link.preview).toBe("sponsored");
+  const clients = [backend.client(`user:${randomUUID()}`), backend.client(`user:${randomUUID()}`)];
+  const results = await Promise.allSettled(
+    clients.map((client) =>
+      client.mutation(api.accounts.ensureViewer, {
+        inviteCode: link.token,
+        acceptedAgreementVersion: PREVIEW_ENROLLMENT_AGREEMENT_VERSION,
+      }),
+    ),
+  );
+  const joined = results.filter((result) => result.status === "fulfilled");
+  expect(joined).toHaveLength(1);
+  expect(joined[0]!.value).toMatchObject({
+    previewAccess: "granted",
+    joinedWorkspaceId: workspaceId,
+  });
+  const loser = clients[results.findIndex((result) => result.status === "rejected")]!;
+  expect((await loser.query(api.accounts.viewer, {})) ?? null).toBeNull();
+  const winner = clients[results.findIndex((result) => result.status === "fulfilled")]!;
+  expect((await winner.query(api.workspaces.listMine, {})).map((row) => row.workspaceId)).toContain(
+    workspaceId,
+  );
+  await expect(inviter.query(api.invites.list, { workspaceId })).resolves.toEqual([]);
+});

@@ -21,7 +21,10 @@ import { useWorkingCopyStore, workingCopyKey } from "@renderer/stores/working-co
 import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { adoptLaunch, launchStore } from "@renderer/stores/launch";
 import { cloudBoardSource } from "@renderer/stores/board-source";
-import { useCloudWorkspaceStore } from "@renderer/stores/cloud-board/workspace";
+import {
+  followCloudWorkspace,
+  useCloudWorkspaceStore,
+} from "@renderer/stores/cloud-board/workspace";
 import { decodeBoardSnapshot } from "@renderer/stores/cloud-board/snapshot";
 import {
   INITIAL_CLOUD_LINK_INPUT,
@@ -54,6 +57,12 @@ vi.mock("./session-rpc-ipc-link", async (importOriginal) => {
     ...actual,
     sessionRpcClient: vi.fn(() => actual.createSessionRpcClient(window.api.sessionRpc)),
   };
+});
+
+// The real follower, watched: which selection a cloud launch hands it.
+vi.mock("@renderer/stores/cloud-board/workspace", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@renderer/stores/cloud-board/workspace")>();
+  return { ...actual, followCloudWorkspace: vi.fn(actual.followCloudWorkspace) };
 });
 
 /** A full BootstrapPayload, defaulting to the "nothing here yet" shape. */
@@ -1654,6 +1663,28 @@ describe("a cloud launch's boot (VC-889)", () => {
     expect(useProjectsStore.getState().projects).toEqual([]);
     expect(useBoardStore.getState().ticketsByProject).toEqual({});
     expect(useCloudWorkspaceStore.getState().localProjects).toBe(2);
+  });
+
+  it("opens a Workspace joined at sign-in instead of the last selection", async () => {
+    const withSaved = fakeGateway({
+      bootstrap: vi.fn(async () => ({ ok: true as const, data: payload({ appState: saved }) })),
+    });
+    const persisted = async (launch: typeof CLOUD & { joinedWorkspaceId?: string }) => {
+      vi.mocked(followCloudWorkspace).mockClear();
+      await boot(
+        withSaved,
+        fakeStorage(),
+        async () => true,
+        async () => launch,
+      );
+      await startCloudBoard({ start: vi.fn() as never });
+      return vi.mocked(followCloudWorkspace).mock.calls[0]![0].persisted;
+    };
+    expect(await persisted({ ...CLOUD, joinedWorkspaceId: "joined" })).toEqual({
+      workspaceId: "joined",
+      projectId: null,
+    });
+    expect(await persisted(CLOUD)).toEqual({ workspaceId: "w1", projectId: "c2" });
   });
 
   it("starts the board source, Volli Cloud's link and the client, saying when it cannot", async () => {

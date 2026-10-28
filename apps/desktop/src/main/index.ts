@@ -915,7 +915,7 @@ const appStartup = app.whenReady().then(async () => {
   const account = createDesktopAccount({
     config: accountConfig,
     marker: {
-      write: (userId) => launchMarker.write(userId),
+      write: (userId, joinedWorkspaceId) => launchMarker.write(userId, joinedWorkspaceId),
       clear: () => {
         launchMarker.clear();
         try {
@@ -1069,6 +1069,10 @@ const appStartup = app.whenReady().then(async () => {
     siteUrl: accountConfig.siteUrl,
     signInConfigured: accountConfig.provider !== null,
   });
+  // A Workspace joined at sign-in opens on this launch only; later ones return to the selection.
+  if (launch.store === "cloud" && launch.joinedWorkspaceId !== undefined) {
+    launchMarker.write(launch.userId, null);
+  }
   rendererSources = launchConnectSources(launch, accountConfig.storageOrigin);
   // Signing in or out restarts into the other store, through every quit gate.
   const relaunch = createRelaunchController(

@@ -61,6 +61,7 @@ import type * as lib_sessionCommands from "../lib/sessionCommands.js";
 import type * as lib_sessionDerived from "../lib/sessionDerived.js";
 import type * as lib_sessionIntake from "../lib/sessionIntake.js";
 import type * as lib_sessionIntakeDiagnostics from "../lib/sessionIntakeDiagnostics.js";
+import type * as lib_sponsoredPreview from "../lib/sponsoredPreview.js";
 import type * as lib_streamChunks from "../lib/streamChunks.js";
 import type * as lib_testWorld from "../lib/testWorld.js";
 import type * as lib_validators from "../lib/validators.js";
@@ -156,6 +157,7 @@ declare const fullApi: ApiFromModules<{
   "lib/sessionDerived": typeof lib_sessionDerived;
   "lib/sessionIntake": typeof lib_sessionIntake;
   "lib/sessionIntakeDiagnostics": typeof lib_sessionIntakeDiagnostics;
+  "lib/sponsoredPreview": typeof lib_sponsoredPreview;
   "lib/streamChunks": typeof lib_streamChunks;
   "lib/testWorld": typeof lib_testWorld;
   "lib/validators": typeof lib_validators;

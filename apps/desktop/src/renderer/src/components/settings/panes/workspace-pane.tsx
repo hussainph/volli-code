@@ -479,9 +479,8 @@ export function WorkspacePane(props: Parameters<typeof useWorkspace>[0] = {}) {
   );
 }
 
-function previewLabel(preview: string | undefined): string | null {
-  if (preview === "granted" || preview === "sponsored" || preview === "already_granted")
-    return "They can join now";
+function previewLabel(preview: PendingInvite["preview"]): string | null {
+  if (preview === "sponsored" || preview === "already_granted") return "They can join now";
   if (preview === "needs_access") return "They need preview access from Volli first";
   // An older API, or a future verdict we cannot interpret: never invent a claim about access.
   return null;
@@ -512,7 +511,7 @@ function InviteDialog({
   const created = draft.created;
   const message =
     draft.email === null
-      ? `Join ${name} on Volli: open the Workspace menu → Join a workspace… and enter this single-use code: ${created?.token ?? ""}`
+      ? `Join ${name} on Volli: install Volli from volli.app, open Settings → Account, paste this code into Invite code, and sign in. Already signed in? Open the Workspace menu → Join a workspace… and enter it there. Single-use code: ${created?.token ?? ""}`
       : `Join ${name} on Volli: install Volli from volli.app, open Settings → Account, and sign in with ${draft.email}. Open Settings → Workspace → Invitations to you and choose Join.`;
   return (
     <Dialog

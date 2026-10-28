@@ -144,6 +144,11 @@ export type CloudLaunch =
       /** Additive for older desktop bridges. New launches always name both fields. */
       readonly deployment?: CloudLaunchDeployment;
       readonly siteUrl?: string | null;
+      /**
+       * The Workspace the person joined with a team code at sign-in, opened
+       * instead of the last selection on the first cloud launch after it.
+       */
+      readonly joinedWorkspaceId?: string;
     };
 
 /** The largest last-seen board snapshot the window may keep (VC-889, D3), in characters. */

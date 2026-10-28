@@ -2,9 +2,10 @@
  * The current Volli Cloud Workspace and its projects (VC-889): in a cloud
  * launch, the only source of the projects the rail lists.
  *
- * - **Which Workspace.** The one the person last looked at in a cloud launch,
- *   if they are still a Member of it; otherwise the first of
- *   `workspaces.listMine` (their personal Workspace leads).
+ * - **Which Workspace.** The one the person last looked at in a cloud launch
+ *   (or just joined with a team code at sign-in), if they are still a Member
+ *   of it; otherwise the one they joined most recently in
+ *   `workspaces.listMine`, whose oldest row is their personal Workspace.
  * - **Its projects.** A live `projects.list` watch hydrates the projects
  *   store, seeds a board for each project that arrives (which opens its
  *   roster) and forgets the board of each that leaves, saying so once.
@@ -51,6 +52,17 @@ export const useCloudWorkspaceStore = create<CloudWorkspaceState>()(() => ({
 interface WorkspaceRow {
   readonly workspaceId: string;
   readonly name: string;
+  /** Absent from `workspaces.get` rows, which the follower never chooses among. */
+  readonly joinedAt?: number;
+}
+
+/** The most recently joined row; of equal times, the first as `listMine` orders them. */
+function mostRecentlyJoined(rows: readonly WorkspaceRow[]): WorkspaceRow | undefined {
+  let latest: WorkspaceRow | undefined;
+  for (const row of rows) {
+    if (latest === undefined || (row.joinedAt ?? 0) > (latest.joinedAt ?? 0)) latest = row;
+  }
+  return latest;
 }
 
 const selections = new Set<(session: CloudSession, row: WorkspaceRow) => void>();
@@ -355,7 +367,8 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
       settle();
     }
     const wanted = workspaceId ?? deps.persisted?.workspaceId ?? null;
-    const row = rows.find((candidate) => candidate.workspaceId === wanted) ?? rows[0];
+    const row =
+      rows.find((candidate) => candidate.workspaceId === wanted) ?? mostRecentlyJoined(rows);
     if (row !== undefined) {
       openWorkspace(session, row);
       return;

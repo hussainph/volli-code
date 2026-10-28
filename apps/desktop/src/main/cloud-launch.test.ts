@@ -97,6 +97,32 @@ describe("the launch's product store (VC-889)", () => {
     // A registered, device-local row: never a host's or a Workspace's.
     expect(classifyAppStateKey(CLOUD_LAUNCH_APP_STATE_KEY)?.placement).toBe("client-local");
   });
+
+  it("carries a Workspace joined at sign-in into the launch, dropping one it cannot read", () => {
+    const joined = { userId: USER, joinedWorkspaceId: "workspace-1" };
+    expect(decodeLaunchMarker(encodeLaunchMarker(USER, "workspace-1"))).toEqual(joined);
+    for (const bad of ['""', "7", "null"]) {
+      expect(decodeLaunchMarker(`{"userId":"${USER}","joinedWorkspaceId":${bad}}`)).toEqual({
+        userId: USER,
+      });
+    }
+    expect(
+      chooseProductStore({
+        cloudFlag: true,
+        readMarker: () => joined,
+        backendUrl: URL,
+        signInConfigured: true,
+      }),
+    ).toMatchObject({ store: "cloud", userId: USER, joinedWorkspaceId: "workspace-1" });
+    expect(
+      chooseProductStore({
+        cloudFlag: true,
+        readMarker: () => ({ userId: USER }),
+        backendUrl: URL,
+        signInConfigured: true,
+      }),
+    ).not.toHaveProperty("joinedWorkspaceId");
+  });
 });
 
 function row(initial?: string) {
@@ -128,6 +154,21 @@ describe("the launch marker's row", () => {
     store.clear();
     expect(live.remove).toHaveBeenCalledOnce();
     expect(store.read()).toBeNull();
+  });
+
+  it("keeps a joined Workspace for the same person until the launch drops it", () => {
+    const live = row();
+    const store = launchMarkerStore(() => live, log());
+    store.write(USER, "workspace-1");
+    // A later account check names no join: the recorded one stays.
+    store.write(USER);
+    expect(store.read()).toEqual({ userId: USER, joinedWorkspaceId: "workspace-1" });
+    store.write(USER, null);
+    expect(store.read()).toEqual({ userId: USER });
+    store.write(USER, "workspace-2");
+    // Someone else signing in never inherits it.
+    store.write("someone-else");
+    expect(store.read()).toEqual({ userId: "someone-else" });
   });
 
   it("reads as no marker, and writes nothing, without a database", () => {
