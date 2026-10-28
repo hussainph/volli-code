@@ -23,6 +23,7 @@ import {
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
 import { useCloudPlacesStore } from "@renderer/lib/cloud-places";
+import { noteProjectTeam, useCloudTeamStore } from "@renderer/lib/cloud-team";
 import { ChatPlane } from "./chat-plane";
 
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { error: vi.fn() }));
@@ -75,6 +76,14 @@ beforeEach(() => {
 afterEach(async () => {
   adoptLaunch(LOCAL_LAUNCH);
   await world?.cleanup();
+  useCloudTeamStore.setState({
+    viewerUserId: null,
+    people: [],
+    sessions: {},
+    byProject: {},
+    shareAll: null,
+    readError: null,
+  });
   world = null;
   MotionGlobalConfig.skipAnimations = false;
   useChatDraftsStore.setState(originalDrafts, true);
@@ -129,9 +138,13 @@ function chatStore(turnActive = false) {
   return { store, holdMessage };
 }
 
-async function mountPlane(cloud = true, turnActive = false) {
+async function mountPlane(cloud = true, turnActive = false, drafting = false) {
   world = hostWorld({ cloud });
   const { store, holdMessage } = chatStore(turnActive);
+  if (drafting)
+    store.setState((state) => ({
+      sessions: { ...state.sessions, [SESSION]: { ...state.sessions[SESSION]!, projection: null } },
+    }));
   const container = await world.render(
     <TooltipProvider delayDuration={0}>
       <ChatPlane
@@ -147,6 +160,13 @@ async function mountPlane(cloud = true, turnActive = false) {
 }
 
 it("keeps the composer in a cloud launch, with where the Session runs above it", async () => {
+  useCloudTeamStore.setState({
+    viewerUserId: "u",
+    people: [{ userId: "u", displayName: "Ana", status: "active" }],
+  });
+  noteProjectTeam(PROJECT, [
+    { id: SESSION, ownerUserId: "u", visibility: "private", role: "project", turnActive: true },
+  ]);
   adoptLaunch({ store: "cloud", userId: "u", backendUrl: "https://example.convex.cloud" });
   useCloudPlacesStore.setState({
     sessions: { [SESSION]: { placeRunnerId: "r1", turnActive: true } },
@@ -188,6 +208,71 @@ it("keeps the composer in a cloud launch, with where the Session runs above it",
   } finally {
     act(() => useCloudPlacesStore.setState({ sessions: {}, runners: {} }));
   }
+});
+
+it("replaces a teammate's composer, answers and stop controls with the owner boundary", async () => {
+  adoptLaunch({ store: "cloud", userId: "viewer", backendUrl: "https://example.convex.cloud" });
+  useCloudTeamStore.setState({
+    viewerUserId: "viewer",
+    people: [{ userId: "owner", displayName: "Ana Li", status: "active" }],
+  });
+  noteProjectTeam(PROJECT, [
+    { id: SESSION, ownerUserId: "owner", visibility: "shared", role: "ticket", turnActive: true },
+  ]);
+  const { container, holdMessage } = await mountPlane(true, true);
+  expect(container.textContent).toContain("Only Ana Li can send to this Session.");
+  expect(container.querySelector('textarea[aria-label="Message"]')).toBeNull();
+  expect(container.querySelector('[aria-label="Stop"]')).toBeNull();
+  expect(container.querySelector('[aria-label="Session sharing"]')).toBeNull();
+  expect(holdMessage).not.toHaveBeenCalled();
+  act(() =>
+    useCloudTeamStore.setState({
+      people: [{ userId: "owner", displayName: "Ana Li", status: "left" }],
+    }),
+  );
+  expect(container.textContent).toContain("Ended · Ana Li left");
+});
+
+it("keeps a new cloud chat's composer before any Session exists", async () => {
+  adoptLaunch({ store: "cloud", userId: "owner", backendUrl: "https://example.convex.cloud" });
+  useChatDraftsStore.getState().openProvisional(SESSION, {
+    projectId: PROJECT,
+    ticketId: null,
+    title: null,
+    operationId: "new-chat",
+  });
+  const { container } = await mountPlane(true, false, true);
+  expect(container.querySelector('textarea[aria-label="Message"]')).not.toBeNull();
+  expect(container.textContent).not.toContain("Loading Session owner…");
+});
+
+it("keeps the known owner's composer while names load or fail", async () => {
+  adoptLaunch({ store: "cloud", userId: "owner", backendUrl: "https://example.convex.cloud" });
+  noteProjectTeam(PROJECT, [
+    {
+      id: SESSION,
+      ownerUserId: "owner",
+      visibility: "private",
+      role: "project",
+      turnActive: false,
+    },
+  ]);
+  const { container } = await mountPlane();
+  expect(container.querySelector('textarea[aria-label="Message"]')).not.toBeNull();
+  expect(container.textContent).not.toContain("Only Unknown");
+  act(() => useCloudTeamStore.setState({ readError: "Couldn’t load members." }));
+  expect(container.querySelector('textarea[aria-label="Message"]')).not.toBeNull();
+  expect(container.textContent).toContain("Couldn’t load members.");
+  expect(
+    [...container.querySelectorAll("button")].some((button) => button.textContent === "Retry"),
+  ).toBe(true);
+});
+
+it("fails closed while cloud ownership has not answered", async () => {
+  adoptLaunch({ store: "cloud", userId: "viewer", backendUrl: "https://example.convex.cloud" });
+  const { container } = await mountPlane();
+  expect(container.textContent).toContain("Loading Session owner…");
+  expect(container.querySelector('textarea[aria-label="Message"]')).toBeNull();
 });
 
 function message(container: HTMLElement): HTMLTextAreaElement {

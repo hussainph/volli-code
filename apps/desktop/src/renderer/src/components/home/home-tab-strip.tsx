@@ -1,4 +1,6 @@
 import * as React from "react";
+import { launchStore } from "@renderer/stores/launch";
+import { SessionShare, SessionTeamMark } from "@renderer/components/sessions/session-team";
 import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
 import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
@@ -745,6 +747,7 @@ function ChatTab({
   menu,
   ...shell
 }: KindTabProps & { sessionId: string; title: string; status: TicketTabStatus }) {
+  const canRename = launchStore() !== "cloud";
   const provenance = useSessionProvenance(projectId, sessionId);
   const liveProvider = useChatSessionsStore(
     (state) => state.sessions[sessionId]?.projection?.modelSelection?.providerId ?? null,
@@ -758,6 +761,7 @@ function ChatTab({
   const inner = (
     <Tab
       {...sharedTabProps(title, shell)}
+      onDoubleClick={canRename ? shell.onStartRename : undefined}
       label={title}
       // The waiting dot's one line of hover, in the sidebar's own words: a
       // tab is the only place that dot stands with nothing beside it to say
@@ -767,7 +771,12 @@ function ChatTab({
         sessionProvenanceHoverLine(provenance),
       )}
       onActivate={onSelect}
-      badge={<SessionProvenanceMark provenance={provenance} />}
+      badge={
+        <>
+          <SessionTeamMark sessionId={sessionId} />
+          <SessionProvenanceMark provenance={provenance} />
+        </>
+      }
       // A landing auto-title reveals here word by word (VC-81); terminal
       // and board tabs stay static.
       revealLabel
@@ -788,10 +797,15 @@ function ChatTab({
     <ContextMenu>
       <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuItem icon={PencilSimpleIcon} onSelect={shell.onStartRename}>
-          Rename
-        </ContextMenuItem>
-        <ContextMenuSeparator />
+        <SessionShare sessionId={sessionId} projectId={projectId} />
+        {canRename ? (
+          <>
+            <ContextMenuItem icon={PencilSimpleIcon} onSelect={shell.onStartRename}>
+              Rename
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        ) : null}
         <ContextMenuItem icon={XIcon} variant="destructive" onSelect={shell.onClose}>
           Close
         </ContextMenuItem>

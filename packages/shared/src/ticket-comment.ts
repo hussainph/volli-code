@@ -19,6 +19,8 @@ export interface TicketComment {
   sessionId: string | null;
   /** {@link USER_ACTOR} or an {@link agentActor} string. */
   actor: string;
+  /** Cloud attribution; absent on local/legacy comments. */
+  authorUserId?: string;
   /** Markdown. */
   body: string;
   /** Epoch milliseconds. */

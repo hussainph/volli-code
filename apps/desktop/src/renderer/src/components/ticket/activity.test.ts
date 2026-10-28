@@ -505,3 +505,12 @@ describe("Session origin history", () => {
     ).toBe("session resumed by an unknown origin");
   });
 });
+
+it("keeps different cloud people in separate activity bunches", () => {
+  const first = { ...event({ kind: "body_edited" }, 1), actorUserId: "ana" };
+  const second = { ...event({ kind: "body_edited" }, 2), actorUserId: "ben" };
+  const third = { ...event({ kind: "body_edited" }, 3), actorUserId: "ben" };
+  const feed = buildActivityFeed([first, second, third], [], 3);
+  expect(feed).toHaveLength(2);
+  expect(feed[1]).toMatchObject({ kind: "bunch", events: [second, third] });
+});

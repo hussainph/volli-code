@@ -1,6 +1,7 @@
 /** The Session-side twin of the cloud board binding. Installed only in a cloud launch. */
 import type { CloudListingRow, CloudSessionRow } from "./cloud-session-listing";
 import { followCloudSession } from "./cloud-client";
+import { bindCloudTeam, noteProjectTeam } from "./cloud-team";
 import { bindCloudPlaces, forgetProjectPlaces, noteProjectPlaces } from "./cloud-places";
 import { sessionRpcClient } from "./session-rpc-ipc-link";
 import { CloudSessionSource } from "./cloud-session-source";
@@ -17,6 +18,7 @@ function paint(
   rows: CloudListingRow[],
   sent: readonly CloudSessionRow[] | null = null,
 ): void {
+  noteProjectTeam(projectId, sent ?? []);
   if (sent === null) forgetProjectPlaces(projectId);
   else noteProjectPlaces(projectId, sent);
   const chat = rows.map((row) => row.record);
@@ -89,6 +91,7 @@ export function cloudSessionReader(projectId: string | null): SessionListingRead
 
 /** Boot owns this follower; teardown removes every query and clears cloud rows. */
 export function bindCloudSessions(): () => void {
+  const stopTeam = bindCloudTeam();
   let followed = new Set<string>();
   const sync = () => {
     const projects = new Set(useProjectsStore.getState().projects.map((project) => project.id));
@@ -122,6 +125,7 @@ export function bindCloudSessions(): () => void {
   sync();
   return () => {
     stopProjects();
+    stopTeam();
     stopPlaces();
     stopSession();
     source?.closeAll();

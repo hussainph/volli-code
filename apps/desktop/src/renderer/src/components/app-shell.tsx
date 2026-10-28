@@ -10,6 +10,7 @@ import { MainContent } from "@renderer/components/pages/main-content";
 import { FolderClaimDialog } from "@renderer/components/rail/folder-claim-dialog";
 import { ProjectRail } from "@renderer/components/rail/project-rail";
 import { SessionDetailDialog } from "@renderer/components/sessions/session-detail-dialog";
+import { SessionShareDialog } from "@renderer/components/sessions/session-team";
 import {
   armRevealClock,
   CLOSE_MS,
@@ -917,6 +918,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
           surface and takes nothing over, which is the whole point — reading
           what a terminal did must not cost you the tab you were in. */}
       <SessionDetailDialog />
+      <SessionShareDialog />
       <HarnessTrustDialog />
       {/* Window-level for the same reason, and NOT inside the rail (VC-430):
           both doors into adding a project raise the same "is this one you

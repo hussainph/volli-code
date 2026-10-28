@@ -363,7 +363,12 @@ export function buildActivityFeed(
       continue;
     }
     const last = bunch[bunch.length - 1];
-    if (last !== undefined && !belongsToSameBunch(last.createdAt, entry.at, now)) flushBunch();
+    if (
+      last !== undefined &&
+      (last.actorUserId !== entry.event.actorUserId ||
+        !belongsToSameBunch(last.createdAt, entry.at, now))
+    )
+      flushBunch();
     bunch.push(entry.event);
   }
   flushBunch();

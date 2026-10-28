@@ -42,7 +42,10 @@
  * and the row hands its own row back to it.
  */
 import * as React from "react";
+import { launchStore } from "@renderer/stores/launch";
 import { useSessionPlace } from "@renderer/lib/cloud-places";
+import { useSessionTeam } from "@renderer/lib/cloud-team";
+import { SessionShare, SessionTeamMark } from "@renderer/components/sessions/session-team";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { AsteriskIcon } from "@phosphor-icons/react/dist/csr/Asterisk";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
@@ -266,26 +269,35 @@ function RowMark({
  * Chat Draft (no Session to mark) and for a terminal companion (amendment A4's
  * Q2: a companion has no turns, so nothing about it is unread).
  */
-function ReadMenu({
+function SessionRowMenu({
   unread,
   onToggle,
   children,
+  sessionId = null,
+  projectId = null,
 }: {
   unread: boolean;
   onToggle: (() => void) | null;
   children: React.ReactElement;
+  sessionId?: string | null;
+  projectId?: string | null;
 }) {
-  if (onToggle === null) return children;
+  const team = useSessionTeam(sessionId);
+  const toggle = launchStore() === "cloud" ? null : onToggle;
+  if (toggle === null && !team?.canShare) return children;
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuItem
-          icon={unread ? EnvelopeSimpleOpenIcon : EnvelopeSimpleIcon}
-          onSelect={onToggle}
-        >
-          {unread ? "Mark as read" : "Mark as unread"}
-        </ContextMenuItem>
+        <SessionShare sessionId={sessionId} projectId={projectId} />
+        {toggle === null ? null : (
+          <ContextMenuItem
+            icon={unread ? EnvelopeSimpleOpenIcon : EnvelopeSimpleIcon}
+            onSelect={toggle}
+          >
+            {unread ? "Mark as read" : "Mark as unread"}
+          </ContextMenuItem>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -416,8 +428,10 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
    */
   onToggleRead?: ((row: ActiveSessionRow) => void) | null;
 }) {
-  const needsYou = row.attention !== null;
-  const working = !needsYou && row.activity === "working";
+  const sessionId = row.target?.kind === "chat" ? row.target.sessionId : null;
+  const team = useSessionTeam(sessionId);
+  const needsYou = row.attention !== null && team?.ended == null;
+  const working = !needsYou && row.activity === "working" && team?.ended == null;
   const kind = row.target?.kind === "chat" ? "chat" : "terminal";
   const mark = vendor ?? sessionRowVendor({ kind, harnessId: row.harnessId, source: row.source });
   // A Draft stands for no Session, so it has no peek and nothing to read.
@@ -436,7 +450,9 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
       data-peek-surface={peekable ? "nav" : undefined}
       data-unread={unread ? "" : undefined}
     >
-      <ReadMenu
+      <SessionRowMenu
+        sessionId={sessionId}
+        projectId={projectId}
         unread={unread}
         onToggle={
           onToggleRead === null || onToggleRead === undefined || !peekable
@@ -475,7 +491,9 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
           leading={
             <RowMark
               vendor={mark}
-              state={sessionActivityDotState(row.activity, { attention: needsYou })}
+              state={sessionActivityDotState(team?.ended ? "stopped" : row.activity, {
+                attention: needsYou,
+              })}
               kind={kind}
               size="card"
             />
@@ -508,7 +526,12 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
           // The provenance mark qualifies WHOSE Session this is, so it rides
           // the title's own line — and draws nothing at all on a row no
           // Automation started (VC-131).
-          primaryTrailing={<SessionProvenanceMark provenance={row.provenance} />}
+          primaryTrailing={
+            <>
+              <SessionTeamMark sessionId={sessionId} />
+              <SessionProvenanceMark provenance={row.provenance} />
+            </>
+          }
           // The same line `ListRow` typesets for a string secondary, in the
           // row's own span so it can carry the promotion hook — and at the
           // SOLVED mute rather than at an alpha of it: a percentage of ink
@@ -517,12 +540,12 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
           // them is the measured one (`globals.css`, the section-heading note).
           secondary={
             <span className="session-row-meta block truncate text-ui text-muted-foreground transition-colors">
-              {activeSubtitle(row, ticketPrefix, now, away)}
+              {team?.ended ?? activeSubtitle(row, ticketPrefix, now, away)}
             </span>
           }
           trailing={unread ? <UnreadDot /> : undefined}
         />
-      </ReadMenu>
+      </SessionRowMenu>
     </SidebarMenuItem>
   );
 });
@@ -602,13 +625,16 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
   showIdentity?: boolean;
 }) {
   const peekable = canPeekRow(row.id);
+  const sessionId = row.target?.kind === "chat" ? row.target.sessionId : null;
   return (
     <SidebarMenuItem
       data-peek-row={peekable ? row.id : undefined}
       data-peek-surface={peekable ? "nav" : undefined}
       data-unread={unread ? "" : undefined}
     >
-      <ReadMenu
+      <SessionRowMenu
+        sessionId={sessionId}
+        projectId={projectId}
         unread={unread}
         onToggle={
           onToggleRead === null || onToggleRead === undefined || !peekable
@@ -648,6 +674,7 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
           {/* Same slot as the Active row's — beside the title — so a Session
               keeps its mark in the same place as it ages out of one band and
               into the other. */}
+          <SessionTeamMark sessionId={sessionId} />
           <SessionProvenanceMark provenance={row.provenance} />
           {/* Unread outranks by WEIGHT alone, as it does on the Active row.
               There is no trailing slot to put the dot in here: this row's right
@@ -664,7 +691,7 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
             </span>
           ) : null}
         </SidebarMenuButton>
-      </ReadMenu>
+      </SessionRowMenu>
     </SidebarMenuItem>
   );
 });

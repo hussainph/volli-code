@@ -21,6 +21,8 @@
  * renamable.
  */
 import * as React from "react";
+import { launchStore } from "@renderer/stores/launch";
+import { SessionShare, SessionTeamMark } from "@renderer/components/sessions/session-team";
 import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
 import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
@@ -305,7 +307,8 @@ function TicketTab({
   // Both Session kinds rename: the label is the Session's durable title either
   // way, and one `session.retitle` moves it — the consumer routes by tab id
   // (chat ids are `chat:`-prefixed) to the store that holds that title.
-  const renamable = tab.kind === "session" || tab.kind === "chat";
+  const sessionTab = tab.kind === "session" || tab.kind === "chat";
+  const renamable = sessionTab && launchStore() !== "cloud";
   const closable = isClosableTicketTab(tab.kind);
   const preview = tab.preview === true;
   const fileTarget =
@@ -424,7 +427,10 @@ function TicketTab({
         // slot at a time: a File tab has no Session and a Session tab has no
         // worktree badge.
         sessionId !== null ? (
-          <SessionProvenanceMark provenance={provenance} />
+          <>
+            <SessionTeamMark sessionId={sessionId} />
+            <SessionProvenanceMark provenance={provenance} />
+          </>
         ) : tab.kind === "browser" ? (
           // A held Browser tab wears its holder's colour here (VC-239), on
           // screen or not: the strip is where a person learns a Session is
@@ -453,7 +459,7 @@ function TicketTab({
   // submenu, the two Copy Path items and Word Wrap whether pinned or previewed;
   // preview tabs additionally get Keep Open. Doc and Diff tabs still have
   // nothing to offer.
-  if (!menu || (!renamable && fileTarget === null && !(preview && onPin !== undefined))) {
+  if (!menu || (!sessionTab && fileTarget === null && !(preview && onPin !== undefined))) {
     return inner;
   }
 
@@ -461,6 +467,7 @@ function TicketTab({
     <ContextMenu>
       <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
+        <SessionShare sessionId={sessionId} projectId={projectId} />
         {fileTarget !== null ? (
           <>
             <ExternalAppContextMenu target={fileTarget} />
@@ -526,7 +533,7 @@ function TicketTab({
         {/* Closing from the menu, not only from a × you have to hover to see —
             Home's strip has offered this since it shipped, and a Session
             is the one tab kind whose close the keyboard can otherwise not reach. */}
-        {renamable ? (
+        {sessionTab ? (
           <>
             <ContextMenuSeparator />
             <ContextMenuItem icon={XIcon} variant="destructive" onSelect={onClose}>

@@ -328,3 +328,30 @@ describe("a ticket's history and comments from Volli Cloud", () => {
     ]);
   });
 });
+
+it("preserves cloud person ids rather than collapsing everyone to the local user", () => {
+  expect(
+    projectComments([
+      {
+        id: "c",
+        ticketId: "t",
+        sessionId: null,
+        author: { kind: "person", userId: "ben" },
+        body: "Hi",
+        createdAt: 1,
+        editedAt: null,
+      },
+    ])[0],
+  ).toMatchObject({ authorUserId: "ben" });
+  expect(
+    projectEvents([
+      {
+        id: "e",
+        ticketId: "t",
+        actor: { kind: "person", userId: "ana" },
+        occurredAt: 1,
+        payload: { kind: "body_edited" },
+      },
+    ])[0],
+  ).toMatchObject({ actorUserId: "ana" });
+});

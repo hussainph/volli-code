@@ -13,6 +13,8 @@ import { sessionPictureFor } from "@renderer/chat/transport";
 import { CodeModePictureHostContext } from "./activity-ui";
 import { readCodeModePicture } from "./code-mode-output-model";
 import * as React from "react";
+import { useSessionTeam } from "@renderer/lib/cloud-team";
+import { SessionTeamHeader } from "@renderer/components/sessions/session-team";
 import { toast } from "sonner";
 import { useStore } from "zustand";
 
@@ -556,7 +558,9 @@ function ChatPlaneContent({
   const cloudLaunch = launchStore() === "cloud";
   const canWriteLocal = useCanWriteSession(projectId);
   const canSendCloud = useCanSendSession(projectId);
-  const canWrite = cloudLaunch ? canSendCloud : canWriteLocal;
+  const team = useSessionTeam(sessionId);
+  const teamReadOnly = cloudLaunch && provisional === undefined && team?.canAct !== true;
+  const canWrite = cloudLaunch ? canSendCloud && !teamReadOnly : canWriteLocal;
   // What this picker may offer (VC-53), decided in one place because the
   // New-ticket composer asks the same question — see `offerableModels`.
   const composerModels = React.useMemo(
@@ -1685,6 +1689,7 @@ function ChatPlaneContent({
     (text: string, intent: ComposerIntent) => {
       // Read-only (VC-576): the box is already inert; a press that raced the
       // host going away keeps its draft and says why.
+      if (teamReadOnly) return;
       if (!(cloudLaunch ? guardSessionSend(projectId) : guardSessionWrite(projectId))) return;
       const press = composerPress(text);
       if (press.kind === "verb") {
@@ -1694,7 +1699,7 @@ function ChatPlaneContent({
         else verbPress(press);
       } else send(text, intent);
     },
-    [cloudLaunch, projectId, send, verbPress],
+    [cloudLaunch, projectId, send, teamReadOnly, verbPress],
   );
 
   /**
@@ -1835,6 +1840,7 @@ function ChatPlaneContent({
           className="absolute top-3 right-4 z-10 bg-background"
         />
       )}
+      {cloudLaunch ? <SessionTeamHeader sessionId={sessionId} projectId={projectId} /> : null}
       <CodeModePictureHostContext.Provider value={pictureApi}>
         <BrowserCardHostContext.Provider value={tracedCardHost}>
           <FileMentionProvider onOpenFile={onOpenFile}>
@@ -1972,82 +1978,94 @@ function ChatPlaneContent({
           {/* Overlay on the composer, never in its place. Ask-user cards
               stack above the input so a follow-up can still be typed while
               the card waits. */}
-          <>
-            {/* A cloud Session: what it waits for ("Sent — waiting for hp-mac")
+          {teamReadOnly ? (
+            <p
+              role="status"
+              className="pointer-events-auto px-4 py-4 text-ui text-muted-foreground"
+            >
+              {team?.ended ??
+                (team === null
+                  ? "Loading Session owner…"
+                  : `Only ${team.ownerName === "Unknown" ? "the owner" : team.ownerName} can send to this Session.`)}
+            </p>
+          ) : (
+            <>
+              {/* A cloud Session: what it waits for ("Sent — waiting for hp-mac")
                 stands ABOVE the box, which stays, so a message can be queued
                 for a runner that is away. A secret is entered on the machine
                 that asked for it, never here for another runner. */}
-            {cloudLaunch ? (
-              <CloudComposerStatus sessionId={sessionId} turnActive={projection?.turnActive} />
-            ) : (
-              <SecretCards sessionId={sessionId} interactions={interactions} />
-            )}
-            <ComposerInteractionStack
-              interaction={pending}
-              resolving={pending ? resolving.has(pending.id) : false}
-              onResolve={answer}
-              // Request withdrawal cancels the durable interaction. The
-              // composer separately owns turn-only interrupt.
-              onWithdraw={withdraw}
-            >
-              <SessionComposer
-                value={input}
-                onValueChange={onInputChange}
-                textareaRef={textareaRef}
-                onComposerFocusRequest={focusComposer}
-                // The two caret-driven pickers' supply. All project-scoped
-                // reads, handed in as plain arrays so the composer stays a
-                // controlled view the Lab can mount without a bridge.
-                promptTemplates={promptTemplates}
-                // Skills, verbs and `@` files are this Mac's; a cloud
-                // Session's runner reads none of them (VC-895).
-                skills={cloudLaunch ? undefined : skills}
-                verbs={cloudLaunch ? undefined : verbSupply}
-                modelPickerOpen={modelPickerOpen}
-                onModelPickerOpenChange={setModelPickerOpen}
-                files={cloudLaunch ? undefined : files}
-                onFilePickerOpen={fileIndex.refresh}
-                // One thing parks above the composer at a time; a pending
-                // question outranks a list you can reopen by typing.
-                interactionOpen={pending !== null}
-                // Nothing else about a pending question reaches this box. It is a
-                // message box while one waits, exactly as it is when none does
-                // (VC-289): the card above owns the answer, its field and its
-                // send, and this draft is the reader's own to keep.
-                models={composerModels}
-                tiers={composerTiers}
-                selection={selection}
-                selectionProviderLabel={sessionModel?.providerLabel}
-                selectionTier={selectionTier}
-                selectionAuto={selectionAuto}
-                onSelectionChange={changeModel}
-                modelChoiceDisabled={working || (provisional !== undefined && held.length > 0)}
-                working={working}
-                ready={composable && canWrite}
-                hostReadOnly={!canWrite}
-                contextUsage={contextUsage}
-                queued={strip}
-                steeringMessages={pendingSteerIds}
-                onQueuedChange={onQueuedChange}
-                onSteerQueued={onSteerQueued}
-                onSubmit={submitComposer}
-                onStop={stopTurn}
-                attachments={attachments}
-                onAttachFiles={attachDraftFiles}
-                onRemoveAttachment={(attachment) => void removeAttachment(attachment)}
-                onRestoreAttachments={restoreAttachments}
-                imagesUnsupported={imagesUnsupported}
-                hostModelOnly={remoteHost}
-                attachUnavailable={
-                  cloudLaunch
-                    ? CLOUD_ATTACHMENTS_UNAVAILABLE
-                    : remoteHost === null
-                      ? null
-                      : notAvailableOn(remoteHost)
-                }
-              />
-            </ComposerInteractionStack>
-          </>
+              {cloudLaunch ? (
+                <CloudComposerStatus sessionId={sessionId} turnActive={projection?.turnActive} />
+              ) : (
+                <SecretCards sessionId={sessionId} interactions={interactions} />
+              )}
+              <ComposerInteractionStack
+                interaction={pending}
+                resolving={pending ? resolving.has(pending.id) : false}
+                onResolve={answer}
+                // Request withdrawal cancels the durable interaction. The
+                // composer separately owns turn-only interrupt.
+                onWithdraw={withdraw}
+              >
+                <SessionComposer
+                  value={input}
+                  onValueChange={onInputChange}
+                  textareaRef={textareaRef}
+                  onComposerFocusRequest={focusComposer}
+                  // The two caret-driven pickers' supply. All project-scoped
+                  // reads, handed in as plain arrays so the composer stays a
+                  // controlled view the Lab can mount without a bridge.
+                  promptTemplates={promptTemplates}
+                  // Skills, verbs and `@` files are this Mac's; a cloud
+                  // Session's runner reads none of them (VC-895).
+                  skills={cloudLaunch ? undefined : skills}
+                  verbs={cloudLaunch ? undefined : verbSupply}
+                  modelPickerOpen={modelPickerOpen}
+                  onModelPickerOpenChange={setModelPickerOpen}
+                  files={cloudLaunch ? undefined : files}
+                  onFilePickerOpen={fileIndex.refresh}
+                  // One thing parks above the composer at a time; a pending
+                  // question outranks a list you can reopen by typing.
+                  interactionOpen={pending !== null}
+                  // Nothing else about a pending question reaches this box. It is a
+                  // message box while one waits, exactly as it is when none does
+                  // (VC-289): the card above owns the answer, its field and its
+                  // send, and this draft is the reader's own to keep.
+                  models={composerModels}
+                  tiers={composerTiers}
+                  selection={selection}
+                  selectionProviderLabel={sessionModel?.providerLabel}
+                  selectionTier={selectionTier}
+                  selectionAuto={selectionAuto}
+                  onSelectionChange={changeModel}
+                  modelChoiceDisabled={working || (provisional !== undefined && held.length > 0)}
+                  working={working}
+                  ready={composable && canWrite}
+                  hostReadOnly={!canWrite}
+                  contextUsage={contextUsage}
+                  queued={strip}
+                  steeringMessages={pendingSteerIds}
+                  onQueuedChange={onQueuedChange}
+                  onSteerQueued={onSteerQueued}
+                  onSubmit={submitComposer}
+                  onStop={stopTurn}
+                  attachments={attachments}
+                  onAttachFiles={attachDraftFiles}
+                  onRemoveAttachment={(attachment) => void removeAttachment(attachment)}
+                  onRestoreAttachments={restoreAttachments}
+                  imagesUnsupported={imagesUnsupported}
+                  hostModelOnly={remoteHost}
+                  attachUnavailable={
+                    cloudLaunch
+                      ? CLOUD_ATTACHMENTS_UNAVAILABLE
+                      : remoteHost === null
+                        ? null
+                        : notAvailableOn(remoteHost)
+                  }
+                />
+              </ComposerInteractionStack>
+            </>
+          )}
         </ContentColumn>
       </div>
       {shellsApi === undefined ? null : (

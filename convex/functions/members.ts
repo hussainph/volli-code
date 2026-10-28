@@ -1,5 +1,6 @@
 /**
- * Members: the roster, role changes, suspend and unsuspend, remove, leave.
+ * Members: the roster, the attribution read, role changes, suspend and
+ * unsuspend, remove, leave.
  *
  * The rules are `decideMemberChange` in `@volli/shared/cloud`: owners and
  * admins manage Members, only an owner touches an owner, a Workspace always
@@ -10,12 +11,17 @@
  * (they can do nothing in the Workspace); an owner or admin removes them.
  * Losing access (suspend, remove, leave) clears the person's Needs-you items
  * in the Workspace as `access_lost` (`attention.sweepAccess`).
+ *
+ * `list` is the roster (current Members, with role and email); `people` is
+ * what every row of the Workspace is attributed to (current and departed, a
+ * name and a status each).
  */
 
 import { v } from "convex/values";
 
 import {
   MEMBER_ROLES,
+  MEMBER_STATUSES,
   decideMemberChange,
   type MemberChange,
   type MemberRole,
@@ -93,6 +99,66 @@ export const list = query({
         };
       })
       .toSorted((a, b) => a.joinedAt - b.joinedAt);
+  },
+});
+
+/**
+ * One person a Workspace's rows are attributed to. Attribution only: who they
+ * are, and whether they are still here. A departed Member's rows keep their
+ * name, so old work still reads as theirs.
+ */
+export type MemberPerson = {
+  userId: string;
+  displayName: string;
+  /** `left` for someone removed or departed; `suspended` for someone without access now. */
+  status: MemberStatus;
+};
+
+export type MemberPeople = {
+  /** The caller: the UI marks their own rows, and needs no second read to name itself. */
+  viewerUserId: string;
+  people: MemberPerson[];
+};
+
+/**
+ * Everyone this Workspace's rows are attributed to, for naming a Session's
+ * owner, a board event's actor or a ticket's assignee: every current Member
+ * (active and suspended) and every departed one, once each, sorted by user id.
+ *
+ * Any active Member may read it. It carries attribution and nothing more: no
+ * email, avatar or role, which the roster (`list`) has, and no `leftAt`. A
+ * Session's own visibility is what keeps its title and content from a
+ * teammate, never this: a name here says who owns a row, not what is in it.
+ */
+export const people = query({
+  args: { workspaceId: v.string() },
+  handler: async (ctx, args): Promise<MemberPeople> => {
+    const { viewer, workspace } = await requireMember(ctx, args.workspaceId);
+    const rows: Doc<"workspaceMembers">[] = [];
+    for (const status of MEMBER_STATUSES) {
+      rows.push(
+        ...(await ctx.db
+          .query("workspaceMembers")
+          .withIndex("by_workspace_status", (q) =>
+            q.eq("workspaceId", workspace.id).eq("status", status),
+          )
+          .collect()),
+      );
+    }
+    const users = await usersById(
+      ctx,
+      rows.map((row) => row.userId),
+    );
+    return {
+      viewerUserId: viewer.userId,
+      people: rows
+        .map((row) => ({
+          userId: row.userId,
+          displayName: users.get(row.userId)?.displayName ?? "Unknown",
+          status: row.status,
+        }))
+        .toSorted((left, right) => left.userId.localeCompare(right.userId)),
+    };
   },
 });
 

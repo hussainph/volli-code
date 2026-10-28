@@ -40,6 +40,8 @@
  * conversation, `U`, or the row's own menu.
  */
 import * as React from "react";
+import { useSessionTeam } from "@renderer/lib/cloud-team";
+import { launchStore } from "@renderer/stores/launch";
 import { createPortal } from "react-dom";
 import {
   displayTicketId,
@@ -350,6 +352,8 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
   const subjectRowId = subject?.kind === "session" ? subject.rowId : null;
   const subjectRow = subjectRowId === null ? undefined : rowOf(subjectRowId);
   const sessionId = subjectRow?.sessionId ?? null;
+  const team = useSessionTeam(sessionId);
+  const canAct = launchStore() !== "cloud" || team?.canAct === true;
   const contentCache = React.useMemo(
     () => new PeekContentCache(ports.readContent),
     [ports.readContent],
@@ -776,7 +780,7 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
           }
           // A folder's card is read-only, and a terminal companion has nobody to
           // answer: one rule, in `canPinRow`.
-          canReply={via.kind === "row" && canPinRow(rowId, kindOf)}
+          canReply={canAct && via.kind === "row" && canPinRow(rowId, kindOf)}
           onPin={() => dispatch({ type: "pin", target: { rowId, surface: shown.surface } })}
           onClose={() => dispatch({ type: "escape", now: Date.now() })}
           onOpen={() => {

@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useCloudTeamStore, usePersonLabel } from "@renderer/lib/cloud-team";
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
 import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
@@ -97,6 +98,12 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
   session_resumed: PlayCircleIcon,
 };
 
+function attributedEvent(event: TicketEvent, person: string | null): string | null {
+  const description = describeEvent(event.payload, event.actor);
+  if (description === null || person === null) return description;
+  return `${person}${event.actor === "session" ? " · via agent" : ""} ${description}`;
+}
+
 /** The single muted line for one property-change event: icon + sentence + time. */
 function EventLine({
   event,
@@ -108,7 +115,8 @@ function EventLine({
   muted?: boolean;
 }) {
   const Icon = EVENT_ICON[event.payload.kind];
-  const sentence = describeEvent(event.payload, event.actor);
+  const person = usePersonLabel(event.actorUserId);
+  const sentence = attributedEvent(event, person);
   if (sentence === null) return null; // defensive: `commented` is filtered upstream
   return (
     <div
@@ -160,7 +168,8 @@ function BunchRow({
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const sentence = describeEvent(label.payload, label.actor);
+  const person = usePersonLabel(label.actorUserId);
+  const sentence = attributedEvent(label, person);
   if (sentence === null) return null; // defensive: `commented` is filtered upstream
   const Icon = EVENT_ICON[label.payload.kind];
   const hidden = events.length - 1;
@@ -190,8 +199,7 @@ function BunchRow({
 }
 
 /** A small round author badge — first-letter monogram of the author label. */
-function AuthorChip({ actor }: { actor: string }) {
-  const label = commentAuthorLabel(actor);
+function AuthorChip({ actor, label }: { actor: string; label: string }) {
   return (
     <span
       className={cn(
@@ -226,7 +234,15 @@ function CommentBlock({
 }) {
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState(comment.body);
-  const isUser = comment.actor === USER_ACTOR;
+  const viewerUserId = useCloudTeamStore((state) => state.viewerUserId);
+  const person = usePersonLabel(comment.authorUserId);
+  const author =
+    person === null
+      ? commentAuthorLabel(comment.actor)
+      : `${person}${isAgentActor(comment.actor) ? " · via agent" : ""}`;
+  const isUser =
+    comment.actor === USER_ACTOR &&
+    (comment.authorUserId === undefined || comment.authorUserId === viewerUserId);
   const optimistic = comment.id.startsWith("temp-");
 
   async function saveEdit() {
@@ -262,10 +278,8 @@ function CommentBlock({
       )}
     >
       <div className="flex items-center gap-2">
-        <AuthorChip actor={comment.actor} />
-        <span className="text-ui font-medium text-foreground">
-          {commentAuthorLabel(comment.actor)}
-        </span>
+        <AuthorChip actor={comment.actor} label={author} />
+        <span className="text-ui font-medium text-foreground">{author}</span>
         <span className="text-ui text-muted-foreground">
           {relativeTime(comment.createdAt, now)}
           {comment.updatedAt > comment.createdAt ? " · edited" : ""}
