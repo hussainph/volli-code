@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vite-plus/test";
 
-import { automationRunVerdict } from "./automation-run";
+import { automationRunStart, automationRunVerdict } from "./automation-run";
 import type { AutomationRunContext, CloudAutomationDefinition } from "./automations";
 import { parseId } from "./ids";
 import type { AutomationRunJobPayload } from "./job-payloads";
@@ -230,5 +230,40 @@ describe("automationRunVerdict", () => {
     });
     // A context naming an Automation cannot rename an Unbound Run.
     expect(verdict(unbound)).toMatchObject({ automationName: null });
+  });
+});
+
+describe("automationRunStart", () => {
+  test("reads a resumed Run's Instructions whatever its target's state", () => {
+    const moved = context(arrival, {
+      ticket: { ...ticket, status: "done" },
+      columnArming: null,
+      previousRunActive: true,
+    });
+    expect(automationRunStart({ payload: arrival, context: moved })).toMatchObject({
+      kind: "start",
+      instructions: "Review the work",
+    });
+    expect(
+      automationRunStart({ payload: unbound, context: context(unbound, { automation: null }) }),
+    ).toMatchObject({ kind: "start", instructions: "Tidy the README", automationName: null });
+  });
+
+  test("refuses a Run with no Instructions left, a broken Runtime or another Run's context", () => {
+    expect(
+      automationRunStart({ payload: arrival, context: context(arrival, { automation: null }) }),
+    ).toMatchObject({ kind: "refuse", code: "gone" });
+    expect(
+      automationRunStart({
+        payload: arrival,
+        context: context(arrival, {
+          automation: { ...definition, runtime: { kind: "invalid", raw: "x" } },
+        }),
+      }),
+    ).toMatchObject({ kind: "refuse", code: "invalid_runtime" });
+    expect(automationRunStart({ payload: arrival, context: context(schedule) })).toMatchObject({
+      kind: "refuse",
+      code: "context_mismatch",
+    });
   });
 });

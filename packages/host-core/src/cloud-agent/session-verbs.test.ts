@@ -79,8 +79,8 @@ async function fixture() {
   };
   let commandStatus = "queued";
   let dropCommand = false;
-  let automations: { id: string; name: string }[] = [
-    { id: "a1000000-0000-4000-8000-000000000001", name: "Nightly sweep" },
+  let automations: { id: string; name: string; projectId: string }[] = [
+    { id: "a1000000-0000-4000-8000-000000000001", name: "Nightly sweep", projectId: PROJECT },
   ];
   let ticketProject = PROJECT;
   let runner = { id: "r1000000-0000-4000-8000-000000000001", name: "Dana's Mac", status: "online" };
@@ -364,8 +364,8 @@ describe("cloud Session target routing", () => {
       (await f.tool("automation.run", { automation: "Weekly", ticket: "VC-1" }))?.text,
     ).toContain('This project lists: "Nightly sweep".');
     f.automations([
-      { id: "a1", name: "Sweep" },
-      { id: "a2", name: "sweep " },
+      { id: "a1", name: "Sweep", projectId: PROJECT },
+      { id: "a2", name: "sweep ", projectId: PROJECT },
     ]);
     expect(
       (await f.tool("automation.run", { automation: "sweep", ticket: "VC-1" }))?.text,
@@ -374,7 +374,7 @@ describe("cloud Session target routing", () => {
     expect(
       (await f.tool("automation.run", { automation: "Sweep", ticket: "VC-1" }))?.text,
     ).toContain("lists none at all");
-    f.automations([{ id: "a1", name: "Sweep" }]);
+    f.automations([{ id: "a1", name: "Sweep", projectId: PROJECT }]);
     f.ticketProject("b0000000-0000-4000-8000-000000000001");
     expect((await f.tool("automation.run", { automation: "Sweep", ticket: "VC-1" }))?.text).toBe(
       "Volli refused: No Ticket VC-1 in this project, so nothing was started.",

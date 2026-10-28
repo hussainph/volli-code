@@ -18,7 +18,9 @@
  *  3. Mint the Session (`Sessions.create`) under the backend-minted Session id
  *     and a derived operation id, with the model resolved from THIS runner's
  *     settings: the armer's own model connections, never a teammate's. An
- *     unavailable model completes `refused` and nothing exists.
+ *     unavailable pin or tier completes `refused` and nothing exists. An
+ *     inherited default is not inspected at mint (as locally): one gone stale
+ *     fails the attach, and the Session's `error` reaches run-attention.
  *  4. Attach and deliver the first message under derived ids, answered when
  *     its turn opens (a held message when the attach is not ready).
  *  5. Complete `started` with the Session and its resolved model.
@@ -26,9 +28,12 @@
  * **Crash safety.** Every durable step is keyed by an id derived from the
  * producer-minted `runId` (`automationRunIds`), so a re-leased job lands on
  * the same Session and the same first message. A Session that already exists
- * is the commitment: the re-check is not asked again (the Run's own agent may
- * well have moved the ticket since), only the steps still owed are done. The
- * inbox's job journal replays a recorded outcome without running again.
+ * is the commitment: the target is not re-checked (the Run's own agent may
+ * well have moved the ticket since); the birth is replayed under its
+ * operation id, which finishes one a crash cut short, and the first message
+ * is sent if it is still owed. A Session whose Automation was deleted before
+ * its message went completes `refused`, so the armer hears of it. The inbox's
+ * job journal replays a recorded outcome without running again.
  *
  * No local Automation ledger is written: the job journal and the derived ids
  * are this Run's plan, and the backend's Run row is its record.
@@ -44,10 +49,12 @@ import {
   UNBOUND_RUN_LABEL,
   type AutomationRunAttendance,
   type PromptResource,
+  type ResolvedAutomationModel,
   type SessionOrigin,
   type ValidAutomationRuntime,
 } from "@volli/shared";
 import {
+  automationRunStart,
   automationRunVerdict,
   InvalidJobPayloadError,
   isExecutableAutomationRun,
@@ -57,6 +64,7 @@ import {
   type AutomationRunContextRequest,
   type AutomationRunJobPayload,
   type ClaimedJob,
+  type JobKind,
   type JobOutcome,
   type RunnerId,
 } from "@volli/shared/cloud";
@@ -89,7 +97,7 @@ export interface AutomationRunSessions {
 }
 
 export interface AutomationRunJobOptions {
-  runnerId: string;
+  runnerId: RunnerId;
   /** The owner-scoped engine: another account's Session reads as absent. */
   engine: Pick<SessionEngine, "getSession">;
   /**
@@ -104,7 +112,7 @@ export interface AutomationRunJobOptions {
   onSessionBorn?(input: {
     sessionId: string;
     attendance: AutomationRunAttendance;
-    /** Minted by this attempt, rather than found from an earlier one. */
+    /** No first message yet, so the Session has needed nobody: a known baseline. */
     fresh: boolean;
   }): void;
   newOperationId?(): string;
@@ -275,10 +283,11 @@ export function createAutomationRunExecutor(options: AutomationRunJobOptions): J
       !existing.commands.some((command) => command.id === sessionCreateCommandId(ids.operationId))
     )
       return failed("session_conflict", "This Run's Session id belongs to another Session.");
-    const started = (model: { providerId: string; modelId: string; reasoningLevel: string }) =>
+    const started = (model: ResolvedAutomationModel) =>
       done({ kind: "started", sessionId, model, attendance: payload.attendance });
     if (existing !== null && existing.commands.some((c) => c.id === ids.messageCommandId)) {
-      // Started and delivered before a crash: only the completion is owed.
+      // Born and delivered before a crash (a birth records its model before
+      // `create` returns): only the completion is owed.
       if (existing.modelSelection === null)
         return failed("model_unrecorded", "This Run's Session recorded no model.");
       options.onSessionBorn?.({ sessionId, attendance: payload.attendance, fresh: false });
@@ -293,78 +302,56 @@ export function createAutomationRunExecutor(options: AutomationRunJobOptions): J
     if (facts.kind !== "ready") return LEASE_LOST();
     if (facts.projectId !== job.projectId)
       return failed("context_mismatch", "Volli Cloud answered this Run for another project.");
-    if (existing !== null) {
-      // Born before a crash, its first message still owed. The Session is the
-      // commitment: the ticket may have moved since (its own agent may have
-      // moved it), so only the Instructions are read again.
-      if (facts.payload.runId !== payload.runId)
-        return failed(
-          "context_mismatch",
-          "Volli Cloud answered this Run's context for another Run.",
-        );
-      const automation = facts.automation;
-      if (
-        payload.automationId !== null &&
-        (automation === null ||
-          automation.deletedAt !== null ||
-          automation.id !== payload.automationId)
-      )
-        return done({ kind: "abandoned", reason: "gone" });
-      if (existing.modelSelection === null)
-        return failed("model_unrecorded", "This Run's Session recorded no model.");
-      const message = await firstMessage(
-        ports,
-        facts.projectId,
-        payload.automationId === null
-          ? (payload as Extract<AutomationRunJobPayload, { instructions: string }>).instructions
-          : automation!.instructions,
-        payload.automationId === null ? null : automation!.name,
-      );
-      options.onSessionBorn?.({ sessionId, attendance: payload.attendance, fresh: false });
-      await deliver(ports, sessionId, payload, message, context.signal);
-      return started(existing.modelSelection);
-    }
-
-    const verdict = automationRunVerdict({
-      payload,
-      context: facts,
-      runnerId: options.runnerId as RunnerId,
-    });
-    if (verdict.kind === "abandon") return done({ kind: "abandoned", reason: verdict.reason });
-    if (verdict.kind === "refuse")
-      return verdict.code === "context_mismatch"
-        ? failed(verdict.code, verdict.detail)
-        : done({ kind: "refused", code: verdict.code, detail: verdict.detail });
+    // A Session that exists is the commitment: the target's state (its own
+    // agent may already have moved the ticket) no longer decides, so only
+    // what the Run starts with is read again.
+    const start =
+      existing === null
+        ? automationRunVerdict({ payload, context: facts, runnerId: options.runnerId })
+        : automationRunStart({ payload, context: facts });
+    if (start.kind === "abandon") return done({ kind: "abandoned", reason: start.reason });
+    if (start.kind === "refuse")
+      return start.code === "context_mismatch"
+        ? failed(start.code, start.detail)
+        : done({ kind: "refused", code: start.code, detail: start.detail });
     const message = await firstMessage(
       ports,
-      verdict.projectId,
-      verdict.instructions,
-      verdict.automationName,
+      start.projectId,
+      start.instructions,
+      start.automationName,
     );
-    // The fence before the durable start: a lease taken away while the
-    // context was read must not mint a Session another attempt also will.
+    // Not a fence (a renewal that cannot reach the backend still answers
+    // true): a lease already taken away stops here rather than minting a
+    // Session for nothing. Exactly-once is the derived ids' job.
     if (!(await context.renew())) return LEASE_LOST();
     if (context.signal.aborted) return LEASE_LOST();
-    let model: { providerId: string; modelId: string; reasoningLevel: string };
+    // Noted before the Session can exist, so an unattended Run whose attach
+    // fails is announced even across a crash. A Session with no first message
+    // has needed nobody yet: its first fold is an edge from a known baseline.
+    options.onSessionBorn?.({ sessionId, attendance: payload.attendance, fresh: true });
+    let model: ResolvedAutomationModel;
     try {
+      // A resumed Run replays the same create: the facade finishes a birth a
+      // crash cut short (model, skills, grants, tool surface) under the same
+      // operation id, and answers the model the Session recorded.
       const created = await ports.sessions.create({
         operationId: ids.operationId,
         requestedSessionId: sessionId,
-        projectId: verdict.projectId,
-        ticketId: verdict.ticketId,
+        projectId: start.projectId,
+        ticketId: start.ticketId,
         // A ticket Run opens a Ticket Session; a schedule's opens a Board Session.
-        role: roleImpliedByTicket(verdict.ticketId),
-        title: verdict.automationName ?? UNBOUND_RUN_LABEL,
+        role: roleImpliedByTicket(start.ticketId),
+        title: start.automationName ?? UNBOUND_RUN_LABEL,
         actor: { kind: "automation" },
         origin: {
           kind: "automation",
           automationRunId: payload.runId,
-          automationName: verdict.automationName,
+          automationName: start.automationName,
         },
         // Inherit lets a decision model choose from the Instructions (VC-432).
-        ...(verdict.runtime === null
+        ...(start.runtime === null
           ? { autoSelect: { request: message.text } }
-          : { modelOverride: runtimeOverride(verdict.runtime) }),
+          : { modelOverride: runtimeOverride(start.runtime) }),
       });
       if (created.sessionId !== sessionId)
         return failed("session_conflict", "The Run's Session was born under another id.");
@@ -374,7 +361,6 @@ export function createAutomationRunExecutor(options: AutomationRunJobOptions): J
         return done({ kind: "refused", code: error.code, detail: error.message });
       throw error;
     }
-    options.onSessionBorn?.({ sessionId, attendance: payload.attendance, fresh: true });
     await deliver(ports, sessionId, payload, message, context.signal);
     return started(model);
   };
@@ -403,5 +389,5 @@ export function registerAutomationRunJob(
   });
 }
 
-/** The job kinds this module executes: what the runner's capability report advertises. */
-export const AUTOMATION_RUN_CAPABILITY = "automation.run";
+/** The job kind this module executes: what the runner's capability report advertises. */
+export const AUTOMATION_RUN_CAPABILITY = "automation.run" satisfies JobKind;

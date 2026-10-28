@@ -15,6 +15,7 @@ import type {
   ClaimedJob,
   CloudAutomationDefinition,
   JobOutcome,
+  RunnerId,
 } from "@volli/shared/cloud";
 
 import { createInboxWorker, type InboxBackend } from "../cloud-runner/inbox";
@@ -30,8 +31,8 @@ import {
   type AutomationRunSessions,
 } from "./automation-jobs";
 
-const RUNNER = "33333333-2222-4333-8444-555555555555";
-const OTHER_RUNNER = "44444444-2222-4333-8444-555555555555";
+const RUNNER = "33333333-2222-4333-8444-555555555555" as RunnerId;
+const OTHER_RUNNER = "44444444-2222-4333-8444-555555555555" as RunnerId;
 const PROJECT = "11111111-2222-4333-8444-555555555555";
 const TICKET = "66666666-2222-4333-8444-555555555555";
 const AUTOMATION = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
@@ -131,6 +132,7 @@ function sessionWorld() {
   const failures: unknown[] = [];
   const titles: unknown[] = [];
   let hangDelivery = false;
+  let hangBirth = false;
   let hangAfterDelivery = false;
   let attachReady = true;
   let receipt: Record<string, unknown> = { status: "accepted" };
@@ -141,8 +143,11 @@ function sessionWorld() {
         creates.push(input);
         if (createError !== null) throw createError;
         const id = input.requestedSessionId!;
+        // The facade's birth: the create command first, then the model.
         if (!sessions.has(id))
-          sessions.set(id, { commands: [`${input.operationId}:create`], model: MODEL });
+          sessions.set(id, { commands: [`${input.operationId}:create`], model: null });
+        if (hangBirth) return new Promise<never>(() => {});
+        sessions.get(id)!.model = MODEL;
         return { sessionId: id, model: MODEL };
       }),
       attach: vi.fn(async (input) => {
@@ -195,6 +200,9 @@ function sessionWorld() {
     },
     hangDelivery: (value: boolean) => {
       hangDelivery = value;
+    },
+    hangBirth: (value: boolean) => {
+      hangBirth = value;
     },
     hangAfterDelivery: (value: boolean) => {
       hangAfterDelivery = value;
@@ -368,9 +376,37 @@ describe("the automation.run executor", () => {
       result: { kind: "started", sessionId: SESSION },
     });
     expect(h.inbox.completes).toEqual([{ attempt: 2, outcome }]);
-    expect(h.world.creates).toHaveLength(1);
+    // The birth is replayed under the same operation id: one Session.
+    expect(h.world.creates.map((create) => create.operationId)).toEqual([
+      IDS.operationId,
+      IDS.operationId,
+    ]);
     expect(h.world.messages.map((message) => message.commandId)).toEqual([IDS.messageCommandId]);
-    expect(h.born.at(-1)).toEqual({ sessionId: SESSION, attendance: "unattended", fresh: false });
+    // Still no first message, so still a known "needs nobody" baseline.
+    expect(h.born.at(-1)).toEqual({ sessionId: SESSION, attendance: "unattended", fresh: true });
+  });
+
+  it("a kill mid-birth (after session.create, before its model) finishes that birth on resume", async () => {
+    const h = harness();
+    h.world.hangBirth(true);
+    const first = h.boot("boot-1");
+    await first.start();
+    await vi.waitFor(() => expect(h.world.creates).toHaveLength(1));
+    first.stop();
+    // The Session exists, half-born, with no model and no first message.
+    expect(await h.world.engine.getSession({ sessionId: SESSION })).toMatchObject({
+      modelSelection: null,
+    });
+    h.world.hangBirth(false);
+    h.inbox.expire();
+    const outcome = await h.run("boot-2");
+    expect(outcome).toMatchObject({
+      result: { kind: "started", sessionId: SESSION, model: MODEL },
+    });
+    expect(new Set(h.world.creates.map((create) => create.operationId))).toEqual(
+      new Set([IDS.operationId]),
+    );
+    expect(h.world.messages).toHaveLength(1);
   });
 
   it("a kill after the first message resumes to completion without touching the Session", async () => {
@@ -489,7 +525,8 @@ describe("the automation.run executor", () => {
       whenUnavailable: "refuse",
     });
     expect(h.world.messages).toEqual([]);
-    expect(h.born).toEqual([]);
+    // Attendance is noted before the birth, so a crash cannot lose it.
+    expect(h.born).toEqual([{ sessionId: SESSION, attendance: "attended", fresh: true }]);
   });
 
   it("refuses an invalid saved Runtime and resolves a tier on this runner", async () => {
@@ -574,7 +611,7 @@ describe("the automation.run executor", () => {
     ]);
   });
 
-  it("abandons a resumed Run whose Automation was deleted before its message was sent", async () => {
+  it("refuses a resumed Run whose Automation was deleted before its message was sent", async () => {
     const h = harness();
     h.world.hangDelivery(true);
     const first = h.boot("boot-1");
@@ -584,9 +621,10 @@ describe("the automation.run executor", () => {
     h.world.hangDelivery(false);
     h.context(() => readyContext(arrival, { automation: null }));
     h.inbox.expire();
+    // The Session exists, so the Run failed (and its armer hears), not skipped.
     expect(await h.run("boot-2")).toEqual({
       status: "done",
-      result: { kind: "abandoned", reason: "gone" },
+      result: { kind: "refused", code: "gone", detail: "The Automation no longer exists." },
     });
   });
 

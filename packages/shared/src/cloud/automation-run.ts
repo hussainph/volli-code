@@ -16,7 +16,7 @@
  */
 import { automationTriggersColumn, isValidAutomationRuntime } from "../automation-policy";
 import type { ValidAutomationRuntime } from "../automation";
-import type { ProjectId, RunnerId, SessionId, TicketId } from "./ids";
+import type { AutomationId, ProjectId, RunnerId, SessionId, TicketId } from "./ids";
 import type { AutomationRunJobPayload } from "./job-payloads";
 import type {
   AutomationRunAbandonReason,
@@ -48,23 +48,22 @@ export type AutomationRunVerdict =
       detail: string;
     };
 
+type AutomationRunStart = Extract<AutomationRunVerdict, { kind: "start" }>;
+
 /**
- * What is true of the target now decides; the order only picks which true
- * reason is named. A gone Automation or ticket outranks a moved ticket, which
- * outranks a disarmed column, which outranks a Run still busy before it.
- *
- * A pick (`origin: "chosen"`) needs only the ticket still in its column, as
- * locally: a person chose it on a deliberate move, not the column's arming.
- * An invalid saved Runtime refuses even under an invocation override: the
- * record needs repair, not a quieter way around it (the local Run door's rule).
+ * What a Run starts with, whatever its target's state: the Session's identity,
+ * its Instructions and its Runtime. The executor asks only this of a Run whose
+ * Session already exists (a crash resumes it; the target's column no longer
+ * decides), and {@link automationRunVerdict} asks it after its target checks.
+ * `gone`: a bound Run whose Automation no longer exists has no Instructions.
  */
-export function automationRunVerdict(input: {
+export function automationRunStart(input: {
   payload: AutomationRunJobPayload;
   context: ReadyContext;
-  /** The executing runner: an arming moved to another runner is not this Run's. */
-  runnerId: RunnerId;
-}): AutomationRunVerdict {
-  const { payload, context, runnerId } = input;
+}):
+  | AutomationRunStart
+  | { kind: "refuse"; code: "context_mismatch" | "gone" | "invalid_runtime"; detail: string } {
+  const { payload, context } = input;
   if (
     context.payload.runId !== payload.runId ||
     context.payload.sessionId !== payload.sessionId ||
@@ -84,7 +83,50 @@ export function automationRunVerdict(input: {
       automation.id !== payload.automationId ||
       automation.projectId !== context.projectId)
   )
-    return { kind: "abandon", reason: "gone" };
+    return { kind: "refuse", code: "gone", detail: "The Automation no longer exists." };
+  if (automation !== null && !isValidAutomationRuntime(automation.runtime))
+    return {
+      kind: "refuse",
+      code: "invalid_runtime",
+      detail:
+        "This Automation's saved Runtime is invalid. Edit it and choose a valid model-and-reasoning pair.",
+    };
+  const recordRuntime = automation === null ? null : (automation.runtime as ValidAutomationRuntime);
+  return {
+    kind: "start",
+    projectId: context.projectId,
+    ticketId: payload.ticketId,
+    automationName: automation?.name ?? null,
+    // The parser admits a null Automation only on an Unbound Run, which carries its own text.
+    instructions:
+      automation?.instructions ??
+      (payload as Extract<AutomationRunJobPayload, { instructions: string }>).instructions,
+    runtime: payload.modelOverride ?? recordRuntime,
+  };
+}
+
+/**
+ * What is true of the target now decides; the order only picks which true
+ * reason is named. A gone Automation or ticket outranks a moved ticket, which
+ * outranks a disarmed column, which outranks a Run still busy before it.
+ *
+ * A pick (`origin: "chosen"`) needs only the ticket still in its column, as
+ * locally: a person chose it on a deliberate move, not the column's arming.
+ * An invalid saved Runtime refuses even under an invocation override: the
+ * record needs repair, not a quieter way around it (the local Run door's rule).
+ */
+export function automationRunVerdict(input: {
+  payload: AutomationRunJobPayload;
+  context: ReadyContext;
+  /** The executing runner: an arming moved to another runner is not this Run's. */
+  runnerId: RunnerId;
+}): AutomationRunVerdict {
+  const { payload, context, runnerId } = input;
+  const start = automationRunStart(input);
+  if (start.kind === "refuse" && start.code === "context_mismatch")
+    return { ...start, code: start.code };
+  if (start.kind === "refuse" && start.code === "gone") return { kind: "abandon", reason: "gone" };
+  const automation = payload.automationId === null ? null : context.automation!;
   const ticket = context.ticket;
   if (
     payload.ticketId !== null &&
@@ -119,25 +161,19 @@ export function automationRunVerdict(input: {
       return { kind: "abandon", reason: "schedule-disarmed" };
   }
   if (context.previousRunActive) return { kind: "abandon", reason: "previous_run_active" };
-  if (automation !== null && !isValidAutomationRuntime(automation.runtime))
-    return {
-      kind: "refuse",
-      code: "invalid_runtime",
-      detail:
-        "This Automation's saved Runtime is invalid. Edit it and choose a valid model-and-reasoning pair.",
-    };
-  const recordRuntime = automation === null ? null : (automation.runtime as ValidAutomationRuntime);
-  return {
-    kind: "start",
-    projectId: context.projectId,
-    ticketId: payload.ticketId,
-    automationName: automation?.name ?? null,
-    // The parser admits a null Automation only on an Unbound Run, which carries its own text.
-    instructions:
-      automation?.instructions ??
-      (payload as Extract<AutomationRunJobPayload, { instructions: string }>).instructions,
-    runtime: payload.modelOverride ?? recordRuntime,
-  };
+  return start.kind === "refuse" ? { ...start, code: "invalid_runtime" } : start;
+}
+
+/**
+ * What the agent's `automation_run` asks `automations.run` (under its Agent
+ * token, which names the caller: an agent's Run is unattended and its caller
+ * watches the Run's Session). `commandId` is a UUID the runner derives from
+ * the tool call, so a replayed call is the same Run.
+ */
+export interface AutomationRunRequest {
+  commandId: string;
+  automationId: AutomationId;
+  ticketId: TicketId;
 }
 
 /**

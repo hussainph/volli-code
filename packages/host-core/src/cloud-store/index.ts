@@ -46,7 +46,7 @@ import {
   DEFAULT_AUTHORITY_POLICY,
   type NotificationRequest,
 } from "@volli/shared";
-import type { AutomationRunContext } from "@volli/shared/cloud";
+import type { AutomationRunContext, JobKind, RunnerId } from "@volli/shared/cloud";
 import { retentionTtlMs } from "../worktree/retention";
 import { createCloudReportPublisher } from "./reports";
 import { createAgentBackend, runnerTokenBefore } from "../cloud-agent/agent-backend";
@@ -467,7 +467,7 @@ export function createCloudProductStore(options: {
      * for the runner's capability report (`runners.capabilities.tools`): the
      * backend queues `automation.run` only for a runner that names it.
      */
-    jobCapabilities: [AUTOMATION_RUN_CAPABILITY] as readonly string[],
+    jobCapabilities: [AUTOMATION_RUN_CAPABILITY] as readonly JobKind[],
     /**
      * The recovered Session services a cloud Automation Run starts through,
      * and this Mac's notification delivery for an unattended Run's alert.
@@ -600,8 +600,9 @@ export function createCloudProductStore(options: {
       // A watcher's notice: composed here, then handed to the durable outbox.
       registerSessionNoticeJob(guarded, { outbox: () => notices });
       // A cloud Automation Run, on the runner its armer (or caller) chose.
-      registerAutomationRunJob(inbox, {
-        runnerId: parts.runnerId,
+      registerAutomationRunJob(guarded, {
+        // The id this runner's registration was issued.
+        runnerId: parts.runnerId as RunnerId,
         engine: owner.engine,
         sessions: boundAutomationSessions,
         runContext: async (request) => {

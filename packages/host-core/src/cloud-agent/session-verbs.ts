@@ -18,6 +18,8 @@ import {
   INLINE_ARTIFACT_MAX_BYTES,
   isUuid,
   type AutomationRunQueued,
+  type AutomationRunRequest,
+  type TicketId,
   type CloudAutomationDefinition,
 } from "@volli/shared/cloud";
 import type { AgentBackend } from "./agent-backend";
@@ -30,6 +32,7 @@ import { failure } from "../agent-dispatch/context";
 import { dryRunResponse } from "../agent-dispatch/preview";
 import { supervisionMarker } from "../session-runtime/supervise-session";
 import { agentToolCommandId } from "../cloud-runner/derived-id";
+import { resolveAutomationByName } from "../automations/by-name";
 import { createCloudWatchVerb } from "./watch-verbs";
 
 export interface CloudSessionVerbsOptions {
@@ -121,43 +124,34 @@ export function createCloudSessionVerbs(options: CloudSessionVerbsOptions) {
         "automations:list",
         { projectId: session.projectId },
         { deadline },
-      )) as readonly Pick<CloudAutomationDefinition, "id" | "name">[];
-      const wanted = named.trim();
-      const matches = listed.filter(
-        (row) => row.id === wanted || row.name.trim().toLowerCase() === wanted.toLowerCase(),
-      );
-      if (matches.length === 0)
-        return refused(
-          listed.length === 0
-            ? `No Automation called ${JSON.stringify(wanted)} here, and this project lists none at all, so nothing was started. A person creates one in the app first.`
-            : `No Automation called ${JSON.stringify(wanted)} in this project, so nothing was started. This project lists: ${listed.map((row) => JSON.stringify(row.name)).join(", ")}.`,
-        );
-      if (matches.length > 1)
-        return refused(
-          `This project lists more than one Automation called ${JSON.stringify(wanted)}, so nothing was started rather than the wrong one. Ask a person which to run, or have the duplicate renamed.`,
-        );
-      const automation = matches[0]!;
+      )) as readonly Pick<CloudAutomationDefinition, "id" | "name" | "projectId">[];
+      const found = resolveAutomationByName(listed, named.trim());
+      if (!found.ok) return refused(found.text);
+      const automation = found.automation;
       const key = ticketKey.trim();
       const ticket = isUuid(key)
-        ? { ticketId: key, projectId: session.projectId, key }
+        ? { ticketId: key as TicketId, projectId: session.projectId, key }
         : ((await backend.query(
             session.sessionId,
             "board:resolveTicketKey",
             { key },
             { deadline },
-          )) as { ticketId: string; projectId: string; key: string });
+          )) as { ticketId: TicketId; projectId: string; key: string });
       if (ticket.projectId !== session.projectId)
         return refused(`No Ticket ${key} in this project, so nothing was started.`);
+      const run: AutomationRunRequest = {
+        commandId: agentToolCommandId(session.sessionId, request.toolCallId),
+        automationId: automation.id,
+        ticketId: ticket.ticketId,
+      };
       submitted = true;
       const queued = (await backend.mutation(
         session.sessionId,
         "automations:run",
+        { ...run },
         {
-          commandId: agentToolCommandId(session.sessionId, request.toolCallId),
-          automationId: automation.id,
-          ticketId: ticket.ticketId,
+          deadline,
         },
-        { deadline },
       )) as AutomationRunQueued;
       return {
         text: [

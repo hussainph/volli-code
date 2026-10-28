@@ -31,6 +31,7 @@
  * the model's move) and a host that could not answer at all (a failed call).
  */
 
+import { resolveAutomationByName } from "./automations/by-name";
 import type Database from "better-sqlite3";
 import {
   AGENT_MODEL_TIERS,
@@ -727,46 +728,6 @@ function sendWithdrawal(signal: AbortSignal): {
 }
 
 /**
- * One saved Automation, found the way a person finds one: by what it is called.
- *
- * Matched case-insensitively, and by id as well, so an id read out of a Run
- * record still works. Where a project's own Automation and a global one share a
- * name the project's own wins — which is the app's listing rule
- * (`listAutomationsForProject` orders the project's first), not a rule invented
- * here. A name that still matches two records is refused rather than guessed:
- * two Automations with one name do different work, and starting the wrong one
- * spends a model and writes a Session.
- */
-function resolveAutomation(
-  listed: readonly Automation[],
-  named: string,
-): { ok: true; automation: Automation } | { ok: false; text: string } {
-  const wanted = named.toLowerCase();
-  const matches = listed.filter(
-    (automation) => automation.id === named || automation.name.trim().toLowerCase() === wanted,
-  );
-  if (matches.length === 0) {
-    const names = listed.map((automation) => JSON.stringify(automation.name)).join(", ");
-    return {
-      ok: false,
-      text:
-        listed.length === 0
-          ? `No Automation called ${JSON.stringify(named)} here, and this project lists none at all, so nothing was started. A person creates one in the app first.`
-          : `No Automation called ${JSON.stringify(named)} in this project, so nothing was started. This project lists: ${names}.`,
-    };
-  }
-  const own = matches.filter((automation) => automation.projectId !== null);
-  const preferred = own.length > 0 ? own : matches;
-  if (preferred.length > 1) {
-    return {
-      ok: false,
-      text: `This project lists more than one Automation called ${JSON.stringify(named)}, so nothing was started rather than the wrong one. Ask a person which to run, or have the duplicate renamed.`,
-    };
-  }
-  return { ok: true, automation: preferred[0]! };
-}
-
-/**
  * Start one Automation Run on one Ticket in the caller's project (VC-134).
  *
  * The door's whole job is resolution: a name and a display id become an
@@ -822,7 +783,7 @@ async function runAutomationTool(
       `No Ticket ${ticketArg.value} in this project, so nothing was started.${reason}`,
     );
   }
-  const found = resolveAutomation(automations.list(project.id), named.value);
+  const found = resolveAutomationByName(automations.list(project.id), named.value);
   if (!found.ok) return refusal(found.text);
 
   const outcome = await automations.run({
