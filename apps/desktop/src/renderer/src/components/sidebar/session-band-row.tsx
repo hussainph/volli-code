@@ -42,6 +42,7 @@
  * and the row hands its own row back to it.
  */
 import * as React from "react";
+import { launchStore } from "@renderer/stores/launch";
 import { useSessionPlace } from "@renderer/lib/cloud-places";
 import { useSessionTeam } from "@renderer/lib/cloud-team";
 import { SessionShare, SessionTeamMark } from "@renderer/components/sessions/session-team";
@@ -268,7 +269,7 @@ function RowMark({
  * Chat Draft (no Session to mark) and for a terminal companion (amendment A4's
  * Q2: a companion has no turns, so nothing about it is unread).
  */
-function ReadMenu({
+function SessionRowMenu({
   unread,
   onToggle,
   children,
@@ -282,6 +283,7 @@ function ReadMenu({
   projectId?: string | null;
 }) {
   const team = useSessionTeam(sessionId);
+  if (launchStore() === "cloud") onToggle = null;
   if (onToggle === null && !team?.canShare) return children;
   return (
     <ContextMenu>
@@ -448,7 +450,7 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
       data-peek-surface={peekable ? "nav" : undefined}
       data-unread={unread ? "" : undefined}
     >
-      <ReadMenu
+      <SessionRowMenu
         sessionId={sessionId}
         projectId={projectId}
         unread={unread}
@@ -543,7 +545,7 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
           }
           trailing={unread ? <UnreadDot /> : undefined}
         />
-      </ReadMenu>
+      </SessionRowMenu>
     </SidebarMenuItem>
   );
 });
@@ -630,7 +632,7 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
       data-peek-surface={peekable ? "nav" : undefined}
       data-unread={unread ? "" : undefined}
     >
-      <ReadMenu
+      <SessionRowMenu
         sessionId={sessionId}
         projectId={projectId}
         unread={unread}
@@ -689,7 +691,7 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
             </span>
           ) : null}
         </SidebarMenuButton>
-      </ReadMenu>
+      </SessionRowMenu>
     </SidebarMenuItem>
   );
 });

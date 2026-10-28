@@ -38,14 +38,15 @@ export function personLabel(directory: Directory, userId: string): string {
 export function teamSessionModel(
   directory: Directory,
   session: TeamSession | null,
-  shareAll: boolean,
+  shareAll: boolean | null,
 ) {
   if (session === null) return null;
   const ownerName = personName(directory, session.ownerUserId);
   const viewer = { userId: directory.viewerUserId as UserId };
   const facts = { ...session, ownerUserId: session.ownerUserId as UserId };
   const canAct = directory.viewerUserId !== null && canActOnSession(viewer, facts);
-  const audience = sessionAudience(session, { shareAll });
+  const audience = sessionAudience(session, { shareAll: shareAll === true });
+  const audienceUnknown = session.visibility === "private" && shareAll === null;
   const departed = directory.people.some(
     (person) => person.userId === session.ownerUserId && person.status === "left",
   );
@@ -61,13 +62,14 @@ export function teamSessionModel(
     canAct,
     canShare:
       directory.viewerUserId !== null && decideSessionShare(viewer, facts, 0).kind === "share",
-    visibilityLabel:
-      audience.kind === "owner"
+    visibilityLabel: audienceUnknown
+      ? "Loading audience…"
+      : audience.kind === "owner"
         ? "Private"
         : audience.via === "policy"
           ? "Visible to the workspace (admin setting)"
           : "Shared with workspace",
-    private: audience.kind === "owner",
+    private: !audienceUnknown && audience.kind === "owner",
     ended: departed && session.turnActive ? `Ended · ${ownerName} left` : null,
   };
 }

@@ -51,6 +51,7 @@ import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-d
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import { SessionTeamMark, SessionShare } from "@renderer/components/sessions/session-team";
 import { useSessionTeam } from "@renderer/lib/cloud-team";
+import { launchStore } from "@renderer/stores/launch";
 import {
   RAIL_PANEL_INSET,
   RailFold,
@@ -326,6 +327,8 @@ function SessionRow({
 }) {
   const sessionId = drag?.type === "session" && drag.kind === "chat" ? drag.sessionId : null;
   const team = useSessionTeam(sessionId);
+  // Cloud rename/read marks still have no write door; never offer a refusing action.
+  const canManage = launchStore() !== "cloud";
   const row = (
     <ListRow
       // Two lines, 52px: the title owns one and the state owns the other. While
@@ -369,7 +372,7 @@ function SessionRow({
                 "min-w-0 flex-1 truncate text-ui",
                 unread ? "font-semibold" : "font-medium",
               )}
-              onDoubleClick={onStartRename}
+              onDoubleClick={canManage ? onStartRename : undefined}
             >
               {title}
             </span>
@@ -386,28 +389,34 @@ function SessionRow({
     // (`session-peek/use-session-peek.tsx`): the `<li>` is the Session, and the
     // row inside it stays the shipped row — drag source, rename field, menu.
     <li data-peek-row={rowId} data-peek-surface="rail" data-unread={unread ? "" : undefined}>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
-        <ContextMenuContent>
-          <SessionShare sessionId={sessionId} projectId={drag?.projectId ?? null} />
-          {onResume !== undefined ? (
-            <ContextMenuItem icon={ArrowClockwiseIcon} onSelect={onResume}>
-              Resume
-            </ContextMenuItem>
-          ) : null}
-          <ContextMenuItem icon={PencilSimpleIcon} onSelect={onStartRename}>
-            Rename
-          </ContextMenuItem>
-          {onToggleRead === null ? null : (
-            <ContextMenuItem
-              icon={unread ? EnvelopeSimpleOpenIcon : EnvelopeSimpleIcon}
-              onSelect={onToggleRead}
-            >
-              {unread ? "Mark as read" : "Mark as unread"}
-            </ContextMenuItem>
-          )}
-        </ContextMenuContent>
-      </ContextMenu>
+      {canManage || team?.canShare ? (
+        <ContextMenu>
+          <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+          <ContextMenuContent>
+            <SessionShare sessionId={sessionId} projectId={drag?.projectId ?? null} />
+            {canManage && onResume !== undefined ? (
+              <ContextMenuItem icon={ArrowClockwiseIcon} onSelect={onResume}>
+                Resume
+              </ContextMenuItem>
+            ) : null}
+            {canManage ? (
+              <ContextMenuItem icon={PencilSimpleIcon} onSelect={onStartRename}>
+                Rename
+              </ContextMenuItem>
+            ) : null}
+            {onToggleRead === null || !canManage ? null : (
+              <ContextMenuItem
+                icon={unread ? EnvelopeSimpleOpenIcon : EnvelopeSimpleIcon}
+                onSelect={onToggleRead}
+              >
+                {unread ? "Mark as read" : "Mark as unread"}
+              </ContextMenuItem>
+            )}
+          </ContextMenuContent>
+        </ContextMenu>
+      ) : (
+        row
+      )}
     </li>
   );
 }

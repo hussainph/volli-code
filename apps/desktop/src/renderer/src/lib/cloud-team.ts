@@ -2,6 +2,8 @@
  * Last live answers survive a socket outage, never a Workspace/client change.
  */
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
+import { cloudLaunchNow } from "@renderer/stores/launch";
 import { cloudSession, followCloudSession, type CloudSession } from "./cloud-client";
 import { useCloudWorkspaceStore } from "@renderer/stores/cloud-board/workspace";
 import { useCloudLinkInputs } from "@renderer/stores/cloud-link";
@@ -15,14 +17,16 @@ import {
 } from "./cloud-team-model";
 
 interface TeamState extends Directory {
-  readonly shareAll: boolean;
+  readonly shareAll: boolean | null;
+  readonly readError: string | null;
   readonly byProject: Readonly<Record<string, Readonly<Record<string, TeamSession>>>>;
   readonly sessions: Readonly<Record<string, TeamSession>>;
 }
 const EMPTY: TeamState = {
   viewerUserId: null,
   people: [],
-  shareAll: false,
+  shareAll: null,
+  readError: null,
   byProject: {},
   sessions: {},
 };
@@ -54,18 +58,34 @@ export function noteProjectTeam(
   });
 }
 
+function directoryOf(state: TeamState): Directory {
+  return {
+    people: state.people,
+    viewerUserId: state.viewerUserId ?? cloudLaunchNow()?.userId ?? null,
+  };
+}
+
 export function useSessionTeam(sessionId: string | null) {
-  const state = useCloudTeamStore();
-  return teamSessionModel(
-    state,
-    sessionId === null ? null : (state.sessions[sessionId] ?? null),
-    state.shareAll,
+  return useCloudTeamStore(
+    useShallow((state) =>
+      teamSessionModel(
+        directoryOf(state),
+        sessionId === null ? null : (state.sessions[sessionId] ?? null),
+        state.shareAll,
+      ),
+    ),
   );
 }
 
 export function usePersonLabel(userId: string | undefined): string | null {
-  const state = useCloudTeamStore();
-  return userId === undefined ? null : personLabel(state, userId);
+  return useCloudTeamStore((state) =>
+    userId === undefined ? null : personLabel(directoryOf(state), userId),
+  );
+}
+
+const retries = new Set<() => void>();
+export function retryCloudTeam(): void {
+  for (const retry of retries) retry();
 }
 
 /** Workspace and client changes synchronously drop old attribution and permissions. */
@@ -73,17 +93,27 @@ export function bindCloudTeam(follow = followCloudSession): () => void {
   let current: CloudSession | null = null;
   let scope: string | null = null;
   let stops: (() => void)[] = [];
-  const clear = () => {
+  const stopReads = () => {
     for (const stop of stops.splice(0)) stop();
+  };
+  const clear = () => {
+    stopReads();
     useCloudTeamStore.setState(EMPTY);
   };
-  const sync = () => {
+  const sync = (retry = false) => {
     const id = useCloudWorkspaceStore.getState().workspace?.id ?? null;
-    if (scope === id) return;
+    if (scope === id && !retry) return;
+    if (scope === id) {
+      stopReads();
+      useCloudTeamStore.setState({ readError: null });
+    } else clear();
     scope = id;
-    clear();
     if (current === null || id === null) return;
-    const read = <T>(watch: Watched<T>, paint: (value: T) => void) => {
+    const read = <T>(
+      watch: Watched<T>,
+      paint: (value: T) => void,
+      kind: "members" | "sharing policy",
+    ) => {
       let active = true;
       const update = () => {
         if (!active) return;
@@ -91,8 +121,12 @@ export function bindCloudTeam(follow = followCloudSession): () => void {
           const value = watch.localQueryResult();
           if (value !== undefined) paint(value);
         } catch (error) {
-          // An authorization failure must not retain stale ownership/name facts.
-          useCloudTeamStore.setState({ viewerUserId: null, people: [], shareAll: false });
+          // Names never survive a failed authorization. A policy failure cannot
+          // revoke the known owner's controls or claim a private audience.
+          useCloudTeamStore.setState({
+            ...(kind === "members" ? { viewerUserId: null, people: [] } : {}),
+            readError: `Couldn’t load ${kind}.`,
+          });
           console.warn("[volli] member directory:", cloudFailure(error).message);
         }
       };
@@ -103,14 +137,20 @@ export function bindCloudTeam(follow = followCloudSession): () => void {
       });
       update();
     };
-    read(current.client.watchQuery(current.api.members.people, { workspaceId: id }), (value) =>
-      useCloudTeamStore.setState(value),
+    read(
+      current.client.watchQuery(current.api.members.people, { workspaceId: id }),
+      (value) => useCloudTeamStore.setState(value),
+      "members",
     );
-    read(current.client.watchQuery(current.api.workspaces.policy, { workspaceId: id }), (value) =>
-      useCloudTeamStore.setState({ shareAll: value.shareAll }),
+    read(
+      current.client.watchQuery(current.api.workspaces.policy, { workspaceId: id }),
+      (value) => useCloudTeamStore.setState({ shareAll: value.shareAll }),
+      "sharing policy",
     );
   };
-  const stopWorkspace = useCloudWorkspaceStore.subscribe(sync);
+  const retry = () => sync(true);
+  retries.add(retry);
+  const stopWorkspace = useCloudWorkspaceStore.subscribe(() => sync());
   const stopFollow = follow((session) => {
     current = session;
     scope = null;
@@ -118,6 +158,7 @@ export function bindCloudTeam(follow = followCloudSession): () => void {
     sync();
   });
   return () => {
+    retries.delete(retry);
     stopWorkspace();
     stopFollow();
     clear();

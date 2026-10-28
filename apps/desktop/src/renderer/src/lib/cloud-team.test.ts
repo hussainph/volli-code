@@ -6,6 +6,7 @@ import {
   bindCloudTeam,
   noteProjectTeam,
   shareWithWorkspace,
+  retryCloudTeam,
   useCloudTeamStore,
 } from "./cloud-team";
 import type { CloudSession } from "./cloud-client";
@@ -63,6 +64,17 @@ it("follows names and policy, keeps last live answers offline, clears on scope/c
   });
   fake.fail("members:people", { workspaceId: "w2" }, new Error("not_a_member"));
   expect(useCloudTeamStore.getState().viewerUserId).toBeNull();
+  expect(useCloudTeamStore.getState().readError).toBe("Couldn’t load members.");
+  fake.answer("members:people", { workspaceId: "w2" }, directory);
+  noteProjectTeam("p", [
+    { id: "s", ownerUserId: "ana", visibility: "private", role: "project", turnActive: false },
+  ]);
+  retryCloudTeam();
+  expect(useCloudTeamStore.getState().readError).toBeNull();
+  expect(useCloudTeamStore.getState().sessions.s?.ownerUserId).toBe("ana");
+  fake.fail("workspaces:policy", { workspaceId: "w2" }, new Error("bad policy read"));
+  expect(useCloudTeamStore.getState().people).toEqual(directory.people);
+  expect(useCloudTeamStore.getState().viewerUserId).toBe("ana");
   follow(null);
   expect(fake.watchers("members:people", { workspaceId: "w2" })).toBe(0);
   stop();

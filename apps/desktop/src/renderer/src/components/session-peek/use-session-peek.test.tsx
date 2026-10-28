@@ -20,6 +20,9 @@ import {
 } from "@volli/shared";
 
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { noteProjectTeam, useCloudTeamStore } from "@renderer/lib/cloud-team";
+import { adoptLaunch } from "@renderer/stores/launch";
+import { LOCAL_LAUNCH } from "@volli/shared";
 
 import {
   useSessionPeek,
@@ -230,6 +233,15 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root?.unmount());
+  adoptLaunch(LOCAL_LAUNCH);
+  useCloudTeamStore.setState({
+    sessions: {},
+    byProject: {},
+    people: [],
+    viewerUserId: null,
+    shareAll: null,
+    readError: null,
+  });
   root = null;
   container.remove();
   useChatSessionsStore.setState({ sessions: {} });
@@ -268,6 +280,30 @@ async function pressKey(element: HTMLElement, key: string): Promise<void> {
 function rectOf(top: number, bottom: number): () => DOMRect {
   return () => ({ top, bottom, left: 0, right: 240, width: 240, height: bottom - top }) as DOMRect;
 }
+
+it("keeps a teammate's cloud peek read-only, including keyboard pinning", async () => {
+  adoptLaunch({ store: "cloud", userId: "viewer", backendUrl: "https://example.convex.cloud" });
+  noteProjectTeam("p1", [
+    {
+      id: "chat-a1",
+      ownerUserId: "owner",
+      role: "ticket",
+      visibility: "shared",
+      turnActive: false,
+    },
+  ]);
+  await render({ rowIds: [SESSION_ROW] });
+  await pressSpace(rowButton(SESSION_ROW));
+  expect(card()).not.toBeNull();
+  expect(
+    [...card()!.querySelectorAll("button")].some((button) =>
+      /^(Send|Answer)$/u.test(button.textContent ?? ""),
+    ),
+  ).toBe(false);
+  await pressSpace(rowButton(SESSION_ROW));
+  expect(card()?.querySelector("textarea")).toBeNull();
+  expect(PORTS.sendMessage).not.toHaveBeenCalled();
+});
 
 describe("the scroller the hook finds for itself", () => {
   it("dismisses on a scroll of the element that really scrolls", async () => {

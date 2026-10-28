@@ -2,7 +2,12 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
-import { SessionShare, SessionTeamHeader, SessionTeamMark } from "./session-team";
+import {
+  SessionShare,
+  SessionShareDialog,
+  SessionTeamHeader,
+  SessionTeamMark,
+} from "./session-team";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -56,7 +61,14 @@ const button = (name: string) =>
     (node) => node.textContent === name || node.getAttribute("aria-label") === name,
   )!;
 async function menu() {
-  await act(async () => root.render(<SessionTeamHeader sessionId="s" projectId="p" />));
+  await act(async () =>
+    root.render(
+      <>
+        <SessionTeamHeader sessionId="s" projectId="p" />
+        <SessionShareDialog />
+      </>,
+    ),
+  );
   const trigger = button("Session sharing");
   await act(async () => {
     trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
@@ -104,14 +116,17 @@ it("confirms the irreversible boundary before Share, cancels without a write, an
 it("keeps the row-context Share confirm mounted after selection", async () => {
   await act(async () =>
     root.render(
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <button>Session row</button>
-        </ContextMenuTrigger>
-        <ContextMenuContent>
-          <SessionShare sessionId="s" projectId="p" />
-        </ContextMenuContent>
-      </ContextMenu>,
+      <>
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <button>Session row</button>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <SessionShare sessionId="s" projectId="p" />
+          </ContextMenuContent>
+        </ContextMenu>
+        <SessionShareDialog />
+      </>,
     ),
   );
   await act(async () =>

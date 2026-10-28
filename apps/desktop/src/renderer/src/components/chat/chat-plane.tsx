@@ -550,7 +550,7 @@ export function ChatPlane({
   const canWriteLocal = useCanWriteSession(projectId);
   const canSendCloud = useCanSendSession(projectId);
   const team = useSessionTeam(sessionId);
-  const teamReadOnly = cloudLaunch && sessionId !== null && team?.canAct !== true;
+  const teamReadOnly = cloudLaunch && provisional === undefined && team?.canAct !== true;
   const canWrite = cloudLaunch ? canSendCloud && !teamReadOnly : canWriteLocal;
   // What this picker may offer (VC-53), decided in one place because the
   // New-ticket composer asks the same question — see `offerableModels`.
@@ -1975,7 +1975,7 @@ export function ChatPlane({
               {team?.ended ??
                 (team === null
                   ? "Loading Session owner…"
-                  : `Only ${team.ownerName} can send to this Session.`)}
+                  : `Only ${team.ownerName === "Unknown" ? "the owner" : team.ownerName} can send to this Session.`)}
             </p>
           ) : (
             <>

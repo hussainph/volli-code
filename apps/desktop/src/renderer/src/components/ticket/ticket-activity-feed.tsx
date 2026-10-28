@@ -98,6 +98,12 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
   session_resumed: PlayCircleIcon,
 };
 
+function attributedEvent(event: TicketEvent, person: string | null): string | null {
+  const description = describeEvent(event.payload, event.actor);
+  if (description === null || person === null) return description;
+  return `${person}${event.actor === "session" ? " · via agent" : ""} ${description}`;
+}
+
 /** The single muted line for one property-change event: icon + sentence + time. */
 function EventLine({
   event,
@@ -110,11 +116,7 @@ function EventLine({
 }) {
   const Icon = EVENT_ICON[event.payload.kind];
   const person = usePersonLabel(event.actorUserId);
-  const description = describeEvent(event.payload, event.actor);
-  const sentence =
-    description === null
-      ? null
-      : `${person === null ? "" : `${person}${event.actor === "session" ? " · via agent" : ""} `}${description}`;
+  const sentence = attributedEvent(event, person);
   if (sentence === null) return null; // defensive: `commented` is filtered upstream
   return (
     <div
@@ -167,11 +169,7 @@ function BunchRow({
   onToggle: () => void;
 }) {
   const person = usePersonLabel(label.actorUserId);
-  const description = describeEvent(label.payload, label.actor);
-  const sentence =
-    description === null
-      ? null
-      : `${person === null ? "" : `${person}${label.actor === "session" ? " · via agent" : ""} `}${description}`;
+  const sentence = attributedEvent(label, person);
   if (sentence === null) return null; // defensive: `commented` is filtered upstream
   const Icon = EVENT_ICON[label.payload.kind];
   const hidden = events.length - 1;
