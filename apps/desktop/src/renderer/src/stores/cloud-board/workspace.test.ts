@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { Project } from "@volli/shared";
+import { getFunctionName } from "convex/server";
 
 import type { CloudSession } from "@renderer/lib/cloud-client";
 import { NOT_CONNECTED } from "@renderer/lib/cloud-board-api";
@@ -40,6 +41,21 @@ function harness(
   const cloud = fakeCloud();
   cloud.queries.set("workspaces:get", (args) =>
     (args as { workspaceId: string }).workspaceId === "w1" ? W1 : W2,
+  );
+  const callbacks: { name: string; args: unknown; run(): void }[] = [];
+  const watchQuery = cloud.session.client.watchQuery.bind(cloud.session.client);
+  vi.spyOn(cloud.session.client, "watchQuery").mockImplementation(
+    (...args: Parameters<typeof watchQuery>) => {
+      const [reference, queryArgs, options] = args;
+      const watch = watchQuery(reference, queryArgs, options);
+      return {
+        ...watch,
+        onUpdate: (run: () => void) => {
+          callbacks.push({ name: getFunctionName(reference as never), args: queryArgs, run });
+          return watch.onUpdate(run);
+        },
+      };
+    },
   );
   let listener: ((session: CloudSession | null) => void) | null = null;
   const state = {
@@ -101,6 +117,7 @@ function harness(
     connect: () => listener!(cloud.session),
     close: () => listener!(null),
     listening: () => listener !== null,
+    callbacks,
     shown,
     snapshot,
     /** The offline timer runs out, and the snapshot (if any) is read. */
@@ -152,6 +169,119 @@ afterEach(() => {
 });
 
 describe("joining and leaving a Workspace", () => {
+  it("ignores queued callbacks from the previous scope and client, even after reopening the scope", async () => {
+    const h = harness();
+    h.connect();
+    const oldList = h.callbacks.find((c) => c.name === "workspaces:listMine")!;
+    h.cloud.answer("workspaces:listMine", {}, [W1, W2]);
+    h.cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("a")]);
+    const oldProjects = h.callbacks.find((c) => c.name === "projects:list")!;
+    h.cloud.queries.set("workspaces:get", () => W2);
+    await selectCloudWorkspace("w2", h.cloud.session);
+    oldProjects.run();
+    expect(h.state.projects).toEqual([]);
+    h.cloud.queries.set("workspaces:get", () => W1);
+    await selectCloudWorkspace("w1", h.cloud.session);
+    h.state.hydrateCloud.mockClear();
+    oldProjects.run();
+    expect(h.state.hydrateCloud).not.toHaveBeenCalled();
+    h.close();
+    oldList.run();
+    oldProjects.run();
+    expect(useCloudWorkspaceStore.getState().workspace).toBeNull();
+    h.stop();
+  });
+  it("dedupes membership confirmations and ignores a refusal after the client closes", async () => {
+    const h = harness();
+    h.connect();
+    h.cloud.answer("workspaces:listMine", {}, [W1]);
+    let reject!: (error: unknown) => void;
+    const query = vi.fn(
+      () =>
+        new Promise<never>((_resolve, no) => {
+          reject = no;
+        }),
+    );
+    h.cloud.queries.set("workspaces:get", query);
+    h.cloud.fail("projects:list", { workspaceId: "w1" }, refusal("not_a_member", "Gone."));
+    h.cloud.fail("projects:list", { workspaceId: "w1" }, refusal("not_a_member", "Gone."));
+    expect(query).toHaveBeenCalledTimes(1);
+    h.close();
+    reject(refusal("not_a_member", "Gone."));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.deps.notice).not.toHaveBeenCalled();
+    h.stop();
+  });
+  it("ignores a previous Workspace’s confirmation while a new confirmation is pending", async () => {
+    const h = harness();
+    h.connect();
+    h.cloud.answer("workspaces:listMine", {}, [W1, W2]);
+    let rejectOld!: (error: unknown) => void;
+    h.cloud.queries.set(
+      "workspaces:get",
+      () =>
+        new Promise<never>((_yes, no) => {
+          rejectOld = no;
+        }),
+    );
+    h.cloud.fail("projects:list", { workspaceId: "w1" }, refusal("not_a_member", "Gone."));
+    h.cloud.queries.set("workspaces:get", () => W2);
+    await selectCloudWorkspace("w2", h.cloud.session);
+    let resolveNew!: (row: typeof W2) => void;
+    h.cloud.queries.set(
+      "workspaces:get",
+      () =>
+        new Promise<typeof W2>((yes) => {
+          resolveNew = yes;
+        }),
+    );
+    h.cloud.fail("projects:list", { workspaceId: "w2" }, refusal("not_a_member", "Gone."));
+    rejectOld(refusal("not_a_member", "Gone."));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    resolveNew(W2);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useCloudWorkspaceStore.getState().workspace?.id).toBe("w2");
+    expect(h.deps.notice).not.toHaveBeenCalled();
+    h.stop();
+  });
+  it("reports unexpected membership-read failures without treating them as revocation", async () => {
+    const h = harness();
+    h.connect();
+    h.cloud.answer("workspaces:listMine", {}, [W1]);
+    h.cloud.queries.set("workspaces:get", () => {
+      throw new Error("transport failed");
+    });
+    h.cloud.fail("projects:list", { workspaceId: "w1" }, refusal("not_a_member", "Gone."));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.deps.failed).toHaveBeenCalledExactlyOnceWith(
+      "Couldn’t read the Workspace: transport failed",
+    );
+    expect(h.deps.notice).not.toHaveBeenCalled();
+    h.stop();
+  });
+  it("clears a confirmed missing Workspace even before listMine first answers", async () => {
+    const h = harness();
+    h.connect();
+    h.cloud.queries.set("workspaces:get", () => W2);
+    await selectCloudWorkspace("w2", h.cloud.session);
+    h.cloud.queries.set("workspaces:get", () => {
+      throw refusal("not_found", "Missing.");
+    });
+    h.cloud.fail("projects:list", { workspaceId: "w2" }, refusal("not_a_member", "Gone."));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useCloudWorkspaceStore.getState().workspace).toBeNull();
+    expect(h.deps.notice).toHaveBeenCalledExactlyOnceWith("You're no longer a member of Team");
+    h.stop();
+  });
   it("confirms an ordinary membership refusal even before listMine updates", async () => {
     const h = harness();
     h.connect();
@@ -480,6 +610,38 @@ describe("a new project in the Workspace (VC-889)", () => {
 });
 
 describe("the offline snapshot at launch (VC-889, D3)", () => {
+  it("detaches a still-authorized snapshot when the live selection is another Workspace", async () => {
+    const h = harness({ workspaceId: "w2", projectId: "b" }, { snapshot: SNAPSHOT });
+    h.connect();
+    await h.timeout();
+    h.cloud.answer("workspaces:listMine", {}, [W1, W2]);
+    expect(h.state.projects).toEqual([]);
+    expect(useCloudWorkspaceStore.getState().workspace?.id).toBe("w2");
+    expect(h.shown).toHaveBeenLastCalledWith(null);
+    expect(h.deps.notice).not.toHaveBeenCalled();
+    h.cloud.answer("projects:list", { workspaceId: "w2" }, [projectRow("b")]);
+    expect(h.state.selectedProjectId).toBe("b");
+    h.stop();
+  });
+  it("will not show a disk snapshot not present in the current membership list", async () => {
+    let answer!: (kept: BoardSnapshot) => void;
+    const h = harness(null, {
+      snapshot: () =>
+        new Promise<BoardSnapshot>((yes) => {
+          answer = yes;
+        }),
+    });
+    h.connect();
+    await h.timeout();
+    h.cloud.answer("workspaces:listMine", {}, [W1]);
+    h.cloud.queries.set("workspaces:get", () => W2);
+    await selectCloudWorkspace("w2", h.cloud.session);
+    answer({ ...SNAPSHOT, workspace: { id: "w2", name: W2.name } });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.shown).not.toHaveBeenCalled();
+    h.stop();
+  });
   it("does not paint another Workspace’s delayed disk snapshot over an explicit choice", async () => {
     let answer!: (kept: BoardSnapshot) => void;
     const h = harness(null, {

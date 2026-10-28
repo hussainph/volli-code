@@ -225,10 +225,10 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
     } catch (error) {
       // listMine owns membership loss, including its single Workspace notice.
       if (cloudFailure(error).code !== "not_a_member") fail("the Workspace’s projects", error);
-      else if (current !== null) confirmMembership(current, id);
+      else confirmMembership(current!, id);
       return;
     }
-    if (rows === undefined || id !== workspaceId) return;
+    if (rows === undefined) return;
     failing = false;
     settle();
     const next = projectRows(rows);
@@ -261,7 +261,6 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
   }
 
   function openWorkspace(session: CloudSession, row: WorkspaceRow, explicit = false): void {
-    if (session !== current) return;
     const switching = workspaceId !== null && row.workspaceId !== workspaceId;
     liveWorkspace = { id: row.workspaceId, name: row.name };
     if (row.workspaceId === workspaceId) {
@@ -309,7 +308,7 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
     memberships = rows;
     if (pendingMembership !== null) {
       if (rows.some((row) => row.workspaceId === pendingMembership)) pendingMembership = null;
-      else if (workspaceId === pendingMembership) {
+      else {
         // An explicit selection was verified by get after invite acceptance;
         // an older listMine answer cannot undo it. Confirm an actual revocation.
         confirmMembership(session, pendingMembership);
@@ -341,8 +340,9 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
   function applyWorkspaces(session: CloudSession, rows: readonly WorkspaceRow[]): void {
     const previous = snapshotWorkspace ?? workspaceId;
     if (previous !== null && !rows.some((row) => row.workspaceId === previous)) {
-      const name = snapshotWorkspace === null ? liveWorkspace?.name : snapshotName;
-      deps.notice(`You're no longer a member of ${name ?? "this Workspace"}`);
+      // Each non-null id is paired with its name when it opens or paints.
+      const name = snapshotWorkspace === null ? liveWorkspace!.name : snapshotName!;
+      deps.notice(`You're no longer a member of ${name}`);
       // Never keep a removed Workspace's cached data while the fallback loads.
       forgetAll();
       deps.projects.getState().clearCloud();
@@ -360,16 +360,8 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
       openWorkspace(session, row);
       return;
     }
-    // No Workspace at all: clear even a previously live Workspace after Leave.
+    // No Workspace at all; any previous scope was cleared above.
     settle();
-    if (workspaceId !== null || snapshotWorkspace !== null) {
-      forgetAll();
-      deps.projects.getState().clearCloud();
-      deps.workspace.setState({ workspace: null });
-      workspaceId = null;
-      for (const stop of stops.splice(1)) stop();
-      dropSnapshot();
-    }
   }
 
   /** Puts the last-seen board on screen, read-only, if no live list has answered meanwhile. */

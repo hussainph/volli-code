@@ -165,6 +165,10 @@ describe("the cloud board source (VC-889)", () => {
     expect(source.follows(P)).toBe(false);
     expect(source.projectOf("t1")).toBeUndefined();
     expect(cloud.watchers("board:roster", { projectId: P })).toBe(0);
+    cloud.answer("board:roster", { projectId: P }, { tickets: [], labels: [] });
+    await source.open(P);
+    cloud.fail("board:roster", { projectId: P }, refusal("not_found", "Project removed."));
+    expect(screen.dropped).toHaveBeenLastCalledWith(P, "Project removed.");
   });
 
   it("stops every watch when the client closes, and closes boards one by one or all", async () => {
