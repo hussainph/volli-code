@@ -191,8 +191,13 @@ then rebuilds `session_usage` and `session_usage_coverage` in the restored
 profile. A bundle whose schema is newer than the build is refused; the answer is
 to update Volli.
 
-In practice: **a bundle restores into the app version that wrote it or any later
-one; never into an earlier one.** `restore.test.ts` exercises the newest schema
+Format compatibility: **a bundle restores into the app version that wrote it or any later
+one; never into an earlier one**, subject to the reader's resource limits. The
+current in-memory restore can exceed V8's string/memory limits on large profiles.
+A file-based staged restore and large-profile round-trip rehearsal are tracked in
+VC-988 and are required before stable large-profile backup/restore readiness.
+A successful file verification is not a claim that this old restore path has
+been rehearsed at that size. `restore.test.ts` exercises the newest schema
 and the two below it end to end, including the two rebuilt usage views.
 
 ## Host API boundary
@@ -200,3 +205,53 @@ and the two below it end to end, including the two rebuilt usage views.
 Bundle readers and writers are host capabilities. Presentation, progress and
 cancellation belong to their callers; the versioned bundle format remains
 independent of any menu or Settings surface.
+
+## Automatic local backups
+
+After the first window loads, a background worker makes a verified bundle every
+24 hours while Volli runs. Settings → Storage shows the latest verified time
+and size, a **Back up now** action, **Show in Finder**, and any skipped/failed
+attempt. Verification failures retry automatically at most daily; disk/I/O
+failures at most hourly. A manual retry can run immediately. Its durable
+revision guard makes a replay of the same intent a no-op after completion or
+restart. No account or cloud flag is needed, and no data leaves the machine.
+
+Bundles live in `<userData>/backups/`. Automatic bundles have an
+`auto-<timestamp>-<uuid>.tar.gz` name and a separate verified receipt. Retention
+keeps the newest backup on each of the last seven backed-up UTC dates, plus the
+latest snapshot from a completed UTC week (Monday–Sunday) older than the daily
+tier. Failed bundles have their own identical bounded retention tier and a
+failed receipt; a new failure is retained before older failures rotate.
+Unrecognised files and move-created bundles never rotate. Neither tier removes
+a bundle with `<bundle>.kept` beside it or `kept: true` in its receipt.
+
+The worker first checks free disk for twice the source database/artifact bytes
+plus 64 MiB headroom for the SQLite snapshot and disk-backed verification.
+This staging allowance can exceed twice the compressed bundle size; a small
+compressed archive still needs space to snapshot its source. The final
+publication check requires at least twice the actual bundle size free.
+If the check cannot be made, the attempt fails closed with a Storage notice.
+It also checks the actual bundle size before publication. Profile rows and
+artifacts are streamed rather than collected in memory; the file verifier uses
+the same v1 format, redaction, inventory and link rules as the in-memory API.
+An archive that fails verification stays as `<bundle>.failed`, with a named
+Storage notice. An interrupted `<bundle>.partial` is registered as failed on
+the next attempt; temporary scratch databases are reclaimed separately.
+The file verifier consumes the canonical v1 field order emitted by both Volli
+writers. The existing in-memory reader remains available for small callers.
+
+The worker yields while current free memory is below 20% and while profile
+maintenance is active. Migration exports acquire a maintenance pause themselves.
+A whole-project move must wrap its **entire flow**, including import verification
+and commit/rollback, in `withProfileMaintenance(dataDir, work)` from
+`@volli/host-core/maintenance`; VC-969's move composition must wire that
+longer lease. With an overridden database path, the backup worker checks both
+the profile data directory and the database's parent directory for pauses. Dead-process leases do not prevent future backups. Backup/restore
+connections remain separate from the app's live database handle.
+
+The opt-in synthetic scale probe is
+`packages/host-core/scripts/benchmark-automatic-backup.mjs`. It reports time,
+whole-process peak RSS and parent-thread event-loop delay through the real worker
+protocol without opening a real profile. Set `TMPDIR` inside the worktree and run
+with Node's `--experimental-transform-types`; `BACKUP_BENCH_ROWS` defaults to
+2,150,000. This is not part of the test suite.

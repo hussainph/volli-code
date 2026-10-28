@@ -981,6 +981,14 @@ const appStartup = app.whenReady().then(async () => {
     // A working copy's `.agents/setup` and its setup gate (VC-584).
     environmentRecipes: () => isExperimentEnabled("cloud"),
     databasePath: dbPath,
+    backups: {
+      workerEntry: join(__dirname, "automatic-backup-worker.cjs"),
+      appVersion: app.getVersion(),
+      reveal: async (directory) => {
+        const error = await shell.openPath(directory);
+        if (error) throw new Error(error);
+      },
+    },
     onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
     devDiagnostics: isDev,
     secretKey: harnessPorts?.secretKey ?? keychainSecretCodec(keychainUse.keychain),
@@ -1014,6 +1022,7 @@ const appStartup = app.whenReady().then(async () => {
   });
   const liveHost = isLiveHost(hostCore) ? hostCore : undefined;
   const dbHandle: DbHandle = hostCore.database;
+
   registerDatabaseRecoveryIpcHandlers({
     recovery: createDatabaseRecovery({ dbPath, dataDir: app.getPath("userData") }),
     degraded: !dbHandle.ok,
@@ -1642,6 +1651,7 @@ const appStartup = app.whenReady().then(async () => {
     });
     return {
       backgroundShells,
+      backups: liveHost?.maintenance.backups ?? null,
       experiments: { snapshot: readExperiments, set: setExperiment },
       busyWorktreeSites,
       interruptTicketSessions: interruptTicketSessionsAnnounced,
@@ -2414,7 +2424,9 @@ const appStartup = app.whenReady().then(async () => {
     // Construct the shared retention watch at its former boot point; both
     // maintenance loops still start only after the first window paints.
     void liveHost.maintenance.retention;
-    mainWindow.webContents.once("did-finish-load", () => liveHost.maintenance.start());
+    mainWindow.webContents.once("did-finish-load", () => {
+      liveHost.maintenance.start();
+    });
     app.on("browser-window-focus", () => liveHost.maintenance.triggerRetention());
   }
 

@@ -198,3 +198,5 @@ export * from "./host-workspaces";
 export * from "./remote-host-health";
 export * from "./git-url";
 export * from "./config-resolution";
+
+export type { ProfileBackupStatus } from "./profile-backups";

@@ -61,6 +61,27 @@ export interface DesktopEntryDeclaration {
  */
 export const DESKTOP_ENTRIES = [
   {
+    key: "backups.status",
+    compatibility: "host-command",
+    placement: "host",
+    idempotency: "read",
+    summary: "Last verified local profile backup and any skipped or failed attempt.",
+  },
+  {
+    key: "backups.run",
+    compatibility: "host-command",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Attempt a verified local profile backup if the Storage revision still matches.",
+  },
+  {
+    key: "backups.reveal",
+    compatibility: "host-command",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Show the local profile backups folder in Finder.",
+  },
+  {
     key: "project.reorder",
     compatibility: "host-command",
     placement: "host",

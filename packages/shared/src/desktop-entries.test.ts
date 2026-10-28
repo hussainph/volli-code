@@ -45,6 +45,9 @@ describe("the desktop-only tier", () => {
       ({ compatibility }) => compatibility === "host-command",
     );
     expect(hostCommands.map(({ key }) => key)).toEqual([
+      "backups.status",
+      "backups.run",
+      "backups.reveal",
       "project.reorder",
       "worktree.trimSettings",
       "project.remove",

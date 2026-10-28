@@ -1828,3 +1828,32 @@ describe("a cloud project's folder on this Mac", () => {
     expect(port.chooseFolder).toHaveBeenCalledWith(CLOUD_PROJECT);
   });
 });
+
+describe("local profile backup commands", () => {
+  it("reports unavailable without a composed service", async () => {
+    const map = handlers();
+    for (const call of [
+      () => map["backups.status"](undefined, WINDOW),
+      () => map["backups.run"]({ expectedRevision: "history-revision" }, WINDOW),
+      () => map["backups.reveal"](undefined, WINDOW),
+    ])
+      expect(await unavailable(call)).toBe("Local backups are unavailable.");
+  });
+  it("delegates reads, coalesced backup intent and Finder to the machine service", async () => {
+    const status = { revision: "history-revision", running: false, lastBackup: null, notice: null };
+    const backups = {
+      status: vi.fn(async () => status),
+      run: vi.fn(async () => status),
+      reveal: vi.fn(async () => {}),
+    };
+    const map = handlers({ backups });
+    expect(await map["backups.status"](undefined, WINDOW)).toEqual(status);
+    expect(await map["backups.run"]({ expectedRevision: "history-revision" }, WINDOW)).toEqual(
+      status,
+    );
+    expect(await map["backups.reveal"](undefined, WINDOW)).toBeNull();
+    expect(backups.status).toHaveBeenCalledOnce();
+    expect(backups.run).toHaveBeenCalledWith("history-revision");
+    expect(backups.reveal).toHaveBeenCalledOnce();
+  });
+});

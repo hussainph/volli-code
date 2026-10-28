@@ -95,6 +95,7 @@ import { Switch } from "@renderer/components/ui/switch";
 import { toast } from "sonner";
 
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
+import { ProfileBackupsSection } from "./profile-backups-section";
 import { RunningProcessesSection } from "./processes-section";
 import { parseRetentionDays } from "./retention-days";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
@@ -131,6 +132,7 @@ export function StoragePane() {
       <BuildArtifactsSection />
       <PiSessionLogsSection />
       <OrphansSection retentionDays={retentionDays} />
+      <ProfileBackupsSection />
       <DatabaseSection />
     </>
   );

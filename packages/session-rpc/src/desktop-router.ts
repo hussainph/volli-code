@@ -1,3 +1,4 @@
+import type { ProfileBackupStatus } from "@volli/shared";
 /**
  * The desktop-only tier's router (VC-608; HP § Command catalog, D-A1 = (c)):
  * host commands only the desktop's own window calls, moved off per-channel
@@ -157,6 +158,9 @@ export interface DesktopRouterHandlers {
   >;
   readonly "project.reorder": HostHandler<{ orderedIds: readonly string[] }, null>;
   readonly "project.remove": HostHandler<{ projectId: string }, null>;
+  readonly "backups.status": HostHandler<void, ProfileBackupStatus>;
+  readonly "backups.run": HostHandler<{ expectedRevision: string }, ProfileBackupStatus>;
+  readonly "backups.reveal": HostHandler<void, null>;
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
   /** A ticket's working copy's environment setup (VC-584): where it stands, and a person's answer. */
   readonly "worktree.setupStatus": HostHandler<{ ticketId: string }, WorktreeSetupStatusView>;
@@ -429,6 +433,13 @@ const browserAppShortcutEventSchema = z.object({
   ]),
 });
 
+const backupStatusSchema = z.object({
+  revision: z.string(),
+  running: z.boolean(),
+  lastBackup: z.object({ createdAt: z.number(), sizeBytes: z.number() }).nullable(),
+  notice: z.string().nullable(),
+});
+
 const trimSettingsSchema = z.object({
   keepPatterns: z.array(z.string()),
   trimOnFinish: z.boolean(),
@@ -569,6 +580,18 @@ export function createDesktopRouter() {
       )
         .output(z.null())
         .mutation(({ ctx, input }) => ctx.handlers["project.remove"](input, ctx.call)),
+    },
+    backups: {
+      status: hostProcedure("backups.status")
+        .output(backupStatusSchema)
+        .query(({ ctx }) => ctx.handlers["backups.status"](undefined, ctx.call)),
+      run: hostProcedure("backups.run")
+        .input(z.strictObject({ expectedRevision: z.string().min(1) }))
+        .output(backupStatusSchema)
+        .mutation(({ ctx, input }) => ctx.handlers["backups.run"](input, ctx.call)),
+      reveal: hostProcedure("backups.reveal")
+        .output(z.null())
+        .mutation(({ ctx }) => ctx.handlers["backups.reveal"](undefined, ctx.call)),
     },
     worktree: {
       /** Was `volli:worktree-trim-settings-get`: the host-level trim settings. */

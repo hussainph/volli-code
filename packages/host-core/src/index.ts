@@ -43,6 +43,8 @@ import { SecretStore } from "./secrets/store";
 import { SecretKeyUnavailableError, type SecretKeyPort } from "./ports/secret-key";
 import { PtyManager, type PtyManagerOptions } from "./pty/manager";
 import { blobsRoot } from "./blob-store";
+import { runAutomaticBackupWorker } from "./backup/automatic-worker";
+import { sessionTranscriptsRoot } from "./session-runtime/transcript-artifacts";
 export type { HostSessionPorts, HostSessionServices } from "./session-services";
 export type { DbOpenFailure } from "./db-open-failure";
 export {
@@ -71,11 +73,18 @@ export interface HostRuntimeOwner {
   drainRequests?(): Promise<boolean | void>;
 }
 
+interface BackupPlatform {
+  workerEntry: string | URL;
+  appVersion: string;
+  reveal(directory: string): Promise<void>;
+}
+
 export interface HostCoreOptions {
   readonly dataDir: string;
   /** Defaults to a full drain/close. Desktop preserves its process-exit quit behavior. */
   readonly stopPolicy?: HostStopPolicy;
   readonly databasePath?: string;
+  readonly backups?: BackupPlatform;
   readonly onTransactionViolation: TransactionViolationHandler;
   readonly devDiagnostics: boolean;
   readonly processReaders: MaintenanceProcessReaders;
@@ -187,11 +196,39 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
   const detachedWork = createDetachedWorkTracker({
     reportFailure: (error) => ports.log.error("detached work failed", { error }),
   });
+  const backupPlatform = options.backups;
   const maintenance = createHostMaintenance({
     db,
     ports,
     worktrees,
     processReaders: options.processReaders,
+    ...(backupPlatform === undefined
+      ? {}
+      : {
+          backups: {
+            dataDir: options.dataDir,
+            run: (
+              outputPath: string,
+              signal: AbortSignal,
+              onNotice: (notice: string | null) => void,
+            ) =>
+              runAutomaticBackupWorker(
+                backupPlatform.workerEntry,
+                {
+                  dataDir: options.dataDir,
+                  dbPath,
+                  outputPath,
+                  blobsRoot: blobsRoot(options.dataDir),
+                  transcriptsRoot: sessionTranscriptsRoot(options.dataDir),
+                  appVersion: backupPlatform.appVersion,
+                  now: Date.now(),
+                },
+                signal,
+                onNotice,
+              ),
+            reveal: backupPlatform.reveal,
+          },
+        }),
     ...(options.reclaim === undefined ? {} : { reclaim: options.reclaim }),
   });
   let runtimeServices: HostRuntimeServices | undefined;

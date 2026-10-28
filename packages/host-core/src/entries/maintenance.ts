@@ -39,3 +39,6 @@ export {
 } from "../quiet-windows";
 export { getRetentionWatcher, type RetentionReclaimSeams } from "../retention-runtime";
 export { settleShutdownBeforeDeadline } from "../shutdown-deadline";
+
+export { serveAutomaticBackupWorker } from "../backup/automatic-worker";
+export { withProfileMaintenance } from "../backup/profile-maintenance";

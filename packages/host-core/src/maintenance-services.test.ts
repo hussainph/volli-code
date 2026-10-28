@@ -1,3 +1,4 @@
+import { dirname } from "node:path";
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { AttentionDeliveryPort, HostEventBus } from "./ports";
@@ -158,6 +159,41 @@ describe("checkpointAndCloseDatabase", () => {
 });
 
 describe("createHostMaintenance", () => {
+  it("owns the configured backup scheduler and joins it before database close", async () => {
+    recordingLoops();
+    const maintenance = createHostMaintenance({
+      db: testDb.db,
+      ports: { events, attention },
+      worktrees,
+      processReaders: readers(),
+      backups: {
+        dataDir: dirname(testDb.dbPath),
+        run: async () => ({ sizeBytes: 1 }),
+        reveal: async () => {},
+      },
+    });
+    const backups = maintenance.backups!;
+    const start = vi.spyOn(backups, "start").mockImplementation(() => {});
+    const stop = vi.spyOn(backups, "stop");
+    const drain = deferred();
+    const settled = vi.spyOn(backups, "settled").mockImplementation(() => drain.promise);
+    maintenance.start();
+    maintenance.start();
+    expect(start).toHaveBeenCalledOnce();
+    maintenance.stop();
+    maintenance.stop();
+    expect(stop).toHaveBeenCalledOnce();
+    let joined = false;
+    const flight = maintenance.settled().then(() => {
+      joined = true;
+    });
+    await Promise.resolve();
+    expect(settled).toHaveBeenCalledOnce();
+    expect(joined).toBe(false);
+    drain.resolve();
+    await flight;
+    expect(joined).toBe(true);
+  });
   it("builds one spawn ledger and an orphan sweep over it, starting nothing", () => {
     const { calls } = recordingLoops();
     const maintenance = createHostMaintenance({

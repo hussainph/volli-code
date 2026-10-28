@@ -737,6 +737,49 @@ export async function waitUntil(label, fn, { timeout = 12000, interval = 150 } =
   throw new Error(`timed out waiting for ${label} (${tail})`);
 }
 
+/**
+ * Detached CLI-launched apps have no ChildProcess handle. A closed socket is
+ * not process exit: host shutdown may still be draining profile writers.
+ * Never let scratch cleanup race those writers, even after escalation.
+ */
+export async function stopDetachedProcesses(
+  pids,
+  {
+    kill = (pid, signal) => process.kill(pid, signal),
+    termGraceMs = 5_000,
+    killGraceMs = 2_000,
+  } = {},
+) {
+  const signalAll = (signal) => {
+    for (const pid of pids) {
+      try {
+        kill(pid, signal);
+      } catch (error) {
+        if (error?.code !== "ESRCH") throw error;
+      }
+    }
+  };
+  const allExited = () =>
+    pids.every((pid) => {
+      try {
+        kill(pid, 0);
+        return false;
+      } catch (error) {
+        if (error?.code === "ESRCH") return true;
+        throw error;
+      }
+    });
+  signalAll("SIGTERM");
+  try {
+    await waitUntil("detached app processes to exit", allExited, { timeout: termGraceMs });
+  } catch (error) {
+    signalAll("SIGKILL");
+    await waitUntil("killed detached app processes to exit", allExited, { timeout: killGraceMs });
+    // Forced cleanup is still a failed shutdown, not a passing smoke.
+    throw error;
+  }
+}
+
 /** @param {import("node:child_process").ChildProcess} child */
 export function childHasExited(child) {
   return child.exitCode !== null || child.signalCode !== null;

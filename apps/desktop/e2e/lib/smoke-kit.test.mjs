@@ -16,6 +16,7 @@ import {
   quietAppExecutablePlan,
   smokeExecutableFor,
   sleep,
+  stopDetachedProcesses,
   summarizeTurnFrames,
 } from "./smoke-kit.mjs";
 
@@ -468,6 +469,93 @@ test("closeAppBounded escalates an ignored SIGTERM to SIGKILL", async () => {
 
   assert.equal(outcome.kind, "sigkill");
   assert.deepEqual(child.signals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("detached shutdown waits for every process, not just its socket to close", async () => {
+  const live = new Set([41, 42]);
+  let socketPresent = true;
+  let settled = false;
+  const signals = [];
+  const closing = stopDetachedProcesses([41, 42], {
+    kill(pid, signal) {
+      if (!live.has(pid)) throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      if (signal !== 0) {
+        signals.push([pid, signal]);
+        socketPresent = false;
+      }
+    },
+  }).then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  assert.equal(socketPresent, false);
+  assert.equal(settled, false);
+  live.delete(41);
+  await sleep(160);
+  assert.equal(settled, false);
+  live.delete(42);
+  await closing;
+  assert.equal(settled, true);
+  assert.deepEqual(signals, [
+    [41, "SIGTERM"],
+    [42, "SIGTERM"],
+  ]);
+});
+
+test("detached shutdown tolerates an owner exiting before the signal", async () => {
+  await stopDetachedProcesses([41], {
+    kill() {
+      throw Object.assign(new Error("gone"), { code: "ESRCH" });
+    },
+  });
+});
+
+test("detached shutdown waits for forced exit but still fails a stuck shutdown", async () => {
+  let live = true;
+  const signals = [];
+  await assert.rejects(
+    stopDetachedProcesses([41], {
+      termGraceMs: 10,
+      killGraceMs: 1_000,
+      kill(pid, signal) {
+        if (!live) throw Object.assign(new Error("gone"), { code: "ESRCH" });
+        if (signal !== 0) signals.push(signal);
+        if (signal === "SIGKILL")
+          setTimeout(() => {
+            live = false;
+          }, 10);
+      },
+    }),
+    /detached app processes to exit/,
+  );
+  assert.equal(live, false);
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("detached shutdown refuses to confirm cleanup if a process survives SIGKILL", async () => {
+  const signals = [];
+  await assert.rejects(
+    stopDetachedProcesses([41], {
+      termGraceMs: 10,
+      killGraceMs: 10,
+      kill(pid, signal) {
+        if (signal !== 0) signals.push(signal);
+      },
+    }),
+    /killed detached app processes to exit/,
+  );
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("detached shutdown reports signal failures rather than claiming an exit", async () => {
+  await assert.rejects(
+    stopDetachedProcesses([41], {
+      kill() {
+        throw Object.assign(new Error("permission denied"), { code: "EPERM" });
+      },
+    }),
+    /permission denied/,
+  );
 });
 
 test("closeAppBounded rejects when the child survives every shutdown attempt", async () => {

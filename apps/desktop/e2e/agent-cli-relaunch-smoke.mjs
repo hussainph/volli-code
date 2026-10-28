@@ -30,6 +30,7 @@ import {
   makeGitRepo,
   pathExists,
   seedProjects,
+  stopDetachedProcesses,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
@@ -40,6 +41,7 @@ const socketPath = socketPathFor(userDataDir);
 const shimPath = shimPathFor(userDataDir);
 const installedBundlePath = join(userDataDir, "bin", "volli.cjs");
 const profileDbPath = join(userDataDir, "volli.db");
+let shutdownConfirmed = false;
 
 async function stopDetachedSocketOwner() {
   let stdout = "";
@@ -53,25 +55,10 @@ async function stopDetachedSocketOwner() {
     .split(/\s+/)
     .map((value) => Number.parseInt(value, 10))
     .filter(Number.isInteger);
-  for (const pid of pids) process.kill(pid, "SIGTERM");
-  try {
-    await waitUntil(
-      "detached app socket to disappear",
-      async () => !(await pathExists(socketPath)),
-      {
-        timeout: 5_000,
-      },
-    );
-  } catch (error) {
-    for (const pid of pids) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        // The owner may have exited between the timeout and escalation.
-      }
-    }
-    throw error;
-  }
+  await stopDetachedProcesses(pids);
+  await waitUntil("detached app socket to disappear", async () => !(await pathExists(socketPath)), {
+    timeout: 5_000,
+  });
 }
 
 async function main() {
@@ -148,6 +135,7 @@ async function main() {
   } finally {
     await app?.close();
     await stopDetachedSocketOwner();
+    shutdownConfirmed = true;
   }
   return summarize();
 }
@@ -159,6 +147,7 @@ try {
   console.error("\nSMOKE ABORTED:", error?.stack ?? error);
   code = 1;
 } finally {
-  await cleanup();
+  if (shutdownConfirmed) await cleanup();
+  else console.error(`Preserving scratch profile after incomplete shutdown: ${scratch}`);
 }
 process.exit(code);

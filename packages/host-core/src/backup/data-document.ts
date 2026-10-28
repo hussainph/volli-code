@@ -23,7 +23,7 @@ import Database from "better-sqlite3";
 import { migrate, SCHEMA_HEAD } from "../db/migrations";
 import { MIN_READER_VERSION_KEY } from "../db/schema-compatibility";
 import { BACKUP_INCLUDED_TABLES, redactionsForTable } from "./decisions";
-import type { RedactionRule } from "./decisions";
+import type { ColumnRedaction, RedactionRule } from "./decisions";
 
 /** The data document's own format marker — never `volli-export`. */
 export const BACKUP_DATA_FORMAT = "volli-backup-data";
@@ -199,9 +199,54 @@ export function buildBackupDataDocument(
   db: Database.Database,
   options: BuildBackupDataOptions,
 ): BackupDataDocument {
+  const tables: Record<string, BackupTableData> = {};
+  for (const plan of planBackupTables(db)) {
+    tables[plan.table] = {
+      columns: plan.columns,
+      rows: [...iterateBackupRows(db, plan)],
+    };
+  }
+  return { ...backupDocumentHeader(db, options), tables };
+}
+
+/**
+ * The document's envelope — everything except its tables.
+ *
+ * Split out so the streaming writer can describe the SAME document without
+ * building it: `schemaVersion` is still this build's head for a newer source,
+ * `createdAt` is still the caller's clock, and the metering boundary is still
+ * read from the source's coverage row rather than invented at restore.
+ */
+export interface BackupDocumentHeader {
+  format: typeof BACKUP_DATA_FORMAT;
+  dataVersion: number;
+  schemaVersion: number;
+  appVersion: string;
+  createdAt: string;
+  usageCoverage: { meteredFrom: number };
+}
+
+/** One included table as the writer reads it: columns, order and redactions. */
+export interface BackupTablePlan {
+  readonly table: string;
+  readonly columns: readonly string[];
+  readonly redactions: readonly ColumnRedaction[];
+  /** The `ORDER BY` expression that makes a bundle deterministic. */
+  readonly orderBy: string;
+}
+
+/**
+ * The tables, columns, row order and redactions one backup of `db` carries.
+ *
+ * The streaming writer and {@link buildBackupDataDocument} both decide what a
+ * bundle holds HERE, so a bounded-memory backup cannot quietly carry a
+ * different set of rows, a different column subset, or a different row order
+ * than the in-memory one.
+ */
+export function planBackupTables(db: Database.Database): BackupTablePlan[] {
   const sourceVersion = db.pragma("user_version", { simple: true }) as number;
   const ownColumns = sourceVersion > SCHEMA_HEAD ? referenceSchema(SCHEMA_HEAD).columns : null;
-  const tables: Record<string, BackupTableData> = {};
+  const plans: BackupTablePlan[] = [];
   for (const table of BACKUP_INCLUDED_TABLES) {
     const columns = columnsOf(db, table).filter(
       (column) => ownColumns === null || (ownColumns.get(table) ?? []).includes(column.name),
@@ -211,27 +256,22 @@ export function buildBackupDataDocument(
     // profile rather than one with empty tables invented for it; the reader
     // decides whether the absence is legitimate from the schema version.
     if (columns.length === 0) continue;
-    const names = columns.map((column) => column.name);
-    const redactions = redactionsForTable(table);
-    const rows = db
-      .prepare(
-        `SELECT ${names.map((name) => `"${name}"`).join(", ")} FROM "${table}" ORDER BY ${orderClause(columns)}`,
-      )
-      .raw()
-      .all() as unknown[][];
-    tables[table] = {
-      columns: names,
-      rows: rows
-        .filter((row) => !isSchemaMarkerRow(table, names, row))
-        .map((row) =>
-          row.map((value, index) => {
-            const encoded = encodeValue(value);
-            const redaction = redactions.find((entry) => entry.column === names[index]);
-            return redaction === undefined ? encoded : redact(encoded, redaction.rule);
-          }),
-        ),
-    };
+    plans.push({
+      table,
+      columns: columns.map((column) => column.name),
+      redactions: redactionsForTable(table),
+      orderBy: orderClause(columns),
+    });
   }
+  return plans;
+}
+
+/** The document envelope for one backup of `db`. */
+export function backupDocumentHeader(
+  db: Database.Database,
+  options: BuildBackupDataOptions,
+): BackupDocumentHeader {
+  const sourceVersion = db.pragma("user_version", { simple: true }) as number;
   // Migration 027 introduced the coverage row; a profile older than that has
   // no boundary to carry, and `0` is what it means — every window complete.
   const coverage = hasTable(db, "session_usage_coverage")
@@ -246,8 +286,53 @@ export function buildBackupDataDocument(
     appVersion: options.appVersion,
     createdAt: new Date(options.now).toISOString(),
     usageCoverage: { meteredFrom: coverage?.metered_from ?? 0 },
-    tables,
   };
+}
+
+/**
+ * Encodes one raw SQLite row for the document, or `null` for the schema marker
+ * row that is a property of one FILE rather than of the data (VC-602).
+ *
+ * The single place the encoder and the redactions meet; the streaming writer
+ * calls exactly this, row for row.
+ */
+export function encodeBackupRow(
+  plan: BackupTablePlan,
+  row: readonly unknown[],
+): BackupValue[] | null {
+  if (isSchemaMarkerRow(plan.table, plan.columns, row)) return null;
+  return plan.columns.map((name, index) => {
+    const encoded = encodeValue(row[index]);
+    const redaction = plan.redactions.find((entry) => entry.column === name);
+    return redaction === undefined ? encoded : redact(encoded, redaction.rule);
+  });
+}
+
+/**
+ * Streams one table's encoded rows in the order the document records them.
+ *
+ * `iterate()` rather than `all()` is the whole point: a profile's
+ticket/session ledger is millions of rows, and this is the seam that keeps the
+write and the verify in bounded memory.
+ */
+export function* iterateBackupRows(
+  db: Database.Database,
+  plan: BackupTablePlan,
+): IterableIterator<BackupValue[]> {
+  const statement = db
+    .prepare(
+      `SELECT ${plan.columns.map((name) => `"${name}"`).join(", ")} FROM "${plan.table}" ORDER BY ${plan.orderBy}`,
+    )
+    .raw();
+  const rows = statement.iterate() as IterableIterator<unknown[]>;
+  try {
+    for (const row of rows) {
+      const encoded = encodeBackupRow(plan, row);
+      if (encoded !== null) yield encoded;
+    }
+  } finally {
+    rows.return?.();
+  }
 }
 
 /** Serializes the data document the way the bundle stores it. */
@@ -255,11 +340,210 @@ export function serializeBackupDataDocument(document: BackupDataDocument): Buffe
   return Buffer.from(`${JSON.stringify(document, null, 2)}\n`, "utf8");
 }
 
+/** One table handed to the streaming serializer: a name, columns, and a row iterator. */
+export interface BackupDataTableSource {
+  readonly name: string;
+  readonly columns: readonly string[];
+  readonly rows: Iterable<readonly BackupValue[]>;
+}
+
+/** Where and how often the streaming writer may be interrupted. */
+export interface BackupDataStreamOptions {
+  /** Awaited at bounded row/byte intervals — the caller's cancellation and pause point. */
+  checkpoint?: () => Promise<void>;
+}
+
+/** Rows between checkpoints. */
+const CHECKPOINT_ROWS = 2_048;
+/** Emitted characters between checkpoints, so one wide table still pauses promptly. */
+const CHECKPOINT_CHARACTERS = 8 * 1024 * 1024;
+/** Emitted characters held before a chunk is handed to the gzip sink. */
+const STREAM_CHUNK_CHARACTERS = 64 * 1024;
+
+/**
+ * Buffers emitted fragments and hands the caller whole chunks, so the archive
+ * writer sees kilobytes rather than one call per JSON token.
+ */
+class StreamChunks {
+  #pending = "";
+  #pushed = 0;
+
+  push = (chunk: string): void => {
+    this.#pending += chunk;
+    this.#pushed += chunk.length;
+  };
+
+  /** The pending text when it reached `threshold`, otherwise `undefined`. */
+  takeIfFull(threshold: number): string | undefined {
+    if (this.#pending.length < threshold) return undefined;
+    const out = this.#pending;
+    this.#pending = "";
+    return out;
+  }
+
+  takeAll(): string | undefined {
+    if (this.#pending.length === 0) return undefined;
+    const out = this.#pending;
+    this.#pending = "";
+    return out;
+  }
+
+  /** Characters pushed since the sink was created; used only for checkpoint pacing. */
+  get pushed(): number {
+    return this.#pushed;
+  }
+}
+
+function jsonIndent(level: number): string {
+  return "  ".repeat(level);
+}
+
+/**
+ * Writes one small JSON value exactly as `JSON.stringify(value, null, 2)`
+ * would at this depth.
+ *
+ * Exported for the bundle's manifest writer, which prints one entry at a time
+ * for the same reason the data document is streamed: a manifest over a large
+ * profile has one entry per transcript.
+ */
+export function writeJsonValue(
+  value: unknown,
+  level: number,
+  write: (chunk: string) => void,
+): void {
+  if (value === null) {
+    write("null");
+    return;
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    write(JSON.stringify(value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      write("[]");
+      return;
+    }
+    write("[\n");
+    value.forEach((item, index) => {
+      write(jsonIndent(level + 1));
+      writeJsonValue(item, level + 1, write);
+      write(index === value.length - 1 ? "\n" : ",\n");
+    });
+    write(`${jsonIndent(level)}]`);
+    return;
+  }
+  if (typeof value !== "object") {
+    throw new Error(`Cannot serialize a ${typeof value} as JSON`);
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0) {
+    write("{}");
+    return;
+  }
+  write("{\n");
+  entries.forEach(([key, nested], index) => {
+    write(`${jsonIndent(level + 1)}${JSON.stringify(key)}: `);
+    writeJsonValue(nested, level + 1, write);
+    write(index === entries.length - 1 ? "\n" : ",\n");
+  });
+  write(`${jsonIndent(level)}}`);
+}
+
+/**
+ * Streams the data document as the EXACT bytes
+ * {@link serializeBackupDataDocument} produces, one bounded chunk at a time.
+ *
+ * Same envelope order, same two-space indentation, same per-row arrays: a
+ * bundle written by the streaming path is byte-for-byte the bundle the
+ * in-memory path writes for the same snapshot, which is what lets the existing
+ * reader keep accepting it and what makes the deterministic claim testable.
+ * No table is held in memory; each row is encoded, printed and released before
+ * the next one is read. `checkpoint` is awaited every few thousand rows, at a
+ * point where no SQLite iterator is invalidated by the pause.
+ */
+export async function* backupDataDocumentChunks(
+  header: BackupDocumentHeader,
+  tables: Iterable<BackupDataTableSource>,
+  options: BackupDataStreamOptions = {},
+): AsyncGenerator<string> {
+  const chunks = new StreamChunks();
+  let rowsSinceCheckpoint = 0;
+  let charactersSinceCheckpoint = 0;
+  let tablesWritten = 0;
+
+  const checkpointIfDue = async (): Promise<void> => {
+    if (options.checkpoint === undefined) return;
+    if (
+      rowsSinceCheckpoint < CHECKPOINT_ROWS &&
+      charactersSinceCheckpoint < CHECKPOINT_CHARACTERS
+    ) {
+      return;
+    }
+    rowsSinceCheckpoint = 0;
+    charactersSinceCheckpoint = 0;
+    await options.checkpoint();
+  };
+
+  chunks.push("{\n");
+  chunks.push(`  "format": ${JSON.stringify(BACKUP_DATA_FORMAT)},\n`);
+  chunks.push(`  "dataVersion": ${BACKUP_DATA_VERSION},\n`);
+  chunks.push(`  "schemaVersion": ${header.schemaVersion},\n`);
+  chunks.push(`  "appVersion": ${JSON.stringify(header.appVersion)},\n`);
+  chunks.push(`  "createdAt": ${JSON.stringify(header.createdAt)},\n`);
+  chunks.push('  "usageCoverage": {\n');
+  chunks.push(`    "meteredFrom": ${header.usageCoverage.meteredFrom}\n`);
+  chunks.push("  },\n");
+  chunks.push('  "tables": {');
+
+  for (const table of tables) {
+    chunks.push(tablesWritten === 0 ? "\n" : ",\n");
+    tablesWritten += 1;
+    chunks.push(`    ${JSON.stringify(table.name)}: {\n`);
+    if (table.columns.length === 0) {
+      chunks.push('      "columns": [],\n');
+    } else {
+      chunks.push('      "columns": [');
+      table.columns.forEach((column, index) => {
+        chunks.push(index === 0 ? "\n" : ",\n");
+        chunks.push(`        ${JSON.stringify(column)}`);
+      });
+      chunks.push("\n      ],\n");
+    }
+    chunks.push('      "rows": [');
+    let rowsWritten = 0;
+    for (const row of table.rows) {
+      const charactersBeforeRow = chunks.pushed;
+      chunks.push(rowsWritten === 0 ? "\n" : ",\n");
+      rowsWritten += 1;
+      chunks.push("        [");
+      row.forEach((value, index) => {
+        chunks.push(index === 0 ? "\n" : ",\n");
+        chunks.push("          ");
+        writeJsonValue(value, 5, chunks.push);
+      });
+      chunks.push("\n        ]");
+      rowsSinceCheckpoint += 1;
+      charactersSinceCheckpoint += chunks.pushed - charactersBeforeRow;
+      const ready = chunks.takeIfFull(STREAM_CHUNK_CHARACTERS);
+      if (ready !== undefined) yield ready;
+      await checkpointIfDue();
+    }
+    // `JSON.stringify(…, null, 2)` prints an empty array as `[]`, not as an
+    // opening bracket with a newline inside it.
+    chunks.push(rowsWritten === 0 ? "]\n    }" : "\n      ]\n    }");
+  }
+  chunks.push("\n  }\n}\n");
+  const tail = chunks.takeAll();
+  if (tail !== undefined) yield tail;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isBackupValue(value: unknown): value is BackupValue {
+/** Whether a JSON value is one the document's value encoding allows. */
+export function isBackupValue(value: unknown): value is BackupValue {
   if (value === null || typeof value === "number" || typeof value === "string") return true;
   if (!isRecord(value)) return false;
   const keys = Object.keys(value);
@@ -361,7 +645,7 @@ export function validateBackupDataDocument(
   return { ok: true, document: value as unknown as BackupDataDocument };
 }
 
-interface ForeignKey {
+export interface ForeignKey {
   from: readonly string[];
   table: string;
   to: readonly string[];
@@ -396,7 +680,7 @@ export function tablesAtVersion(schemaVersion: number): Set<string> {
   }
 }
 
-interface ReferenceSchema {
+export interface ReferenceSchema {
   foreignKeys: Map<string, ForeignKey[]>;
   columns: Map<string, string[]>;
 }
@@ -412,8 +696,11 @@ const cachedSchemas = new Map<number, ReferenceSchema>();
  * remembered to add here. Versioning matters when a migration replaces a
  * column: an older bundle must be validated against the schema that wrote it,
  * before restore migrates those rows forward.
+ *
+ * Exported for the streaming verifier, which checks the same links against a
+ * disk-backed index rather than building every target set in memory.
  */
-function referenceSchema(schemaVersion: number): ReferenceSchema {
+export function referenceSchema(schemaVersion: number): ReferenceSchema {
   const cached = cachedSchemas.get(schemaVersion);
   if (cached !== undefined) return cached;
   const db = new Database(":memory:");
@@ -472,7 +759,7 @@ function referenceSchema(schemaVersion: number): ReferenceSchema {
   }
 }
 
-function keyOf(values: readonly BackupValue[]): string {
+export function recordKeyOf(values: readonly BackupValue[]): string {
   return JSON.stringify(values);
 }
 
@@ -508,12 +795,12 @@ export function validateRecordLinks(document: BackupDataDocument): BackupProblem
       const sourceIndexes = key.from.map((column) => indexOf(table, column));
       if (targetIndexes.includes(-1) || sourceIndexes.includes(-1)) continue;
       const known = new Set(
-        target.rows.map((row) => keyOf(targetIndexes.map((index) => row[index] ?? null))),
+        target.rows.map((row) => recordKeyOf(targetIndexes.map((index) => row[index] ?? null))),
       );
       for (const [rowIndex, row] of data.rows.entries()) {
         const values = sourceIndexes.map((index) => row[index] ?? null);
         if (values.some((value) => value === null)) continue;
-        if (!known.has(keyOf(values))) {
+        if (!known.has(recordKeyOf(values))) {
           problems.push({
             kind: "link",
             message: `${table} row ${rowIndex} references ${key.table}(${key.to.join(", ")}) = ${values
@@ -542,9 +829,9 @@ export function collectBlobHashes(document: BackupDataDocument): string[] {
 
 const TRANSCRIPT_ID = /^sha256:[a-f0-9]{64}$/;
 
-function walkForReferences(value: unknown, found: Set<string>): void {
+export function walkTranscriptReferences(value: unknown, found: Set<string>): void {
   if (Array.isArray(value)) {
-    for (const item of value) walkForReferences(item, found);
+    for (const item of value) walkTranscriptReferences(item, found);
     return;
   }
   if (!isRecord(value)) return;
@@ -559,7 +846,7 @@ function walkForReferences(value: unknown, found: Set<string>): void {
   ) {
     found.add(id);
   }
-  for (const nested of Object.values(value)) walkForReferences(nested, found);
+  for (const nested of Object.values(value)) walkTranscriptReferences(nested, found);
 }
 
 /**
@@ -584,7 +871,7 @@ export function collectTranscriptReferences(document: BackupDataDocument): strin
       const value = row[index];
       if (typeof value !== "string") continue;
       try {
-        walkForReferences(JSON.parse(value), found);
+        walkTranscriptReferences(JSON.parse(value), found);
       } catch {
         // A row whose JSON no longer parses cannot name a transcript; the
         // shape check above has already reported the document's real problem.

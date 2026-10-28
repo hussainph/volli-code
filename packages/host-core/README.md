@@ -183,8 +183,11 @@ One convention for what a module asks for and what it is (VC-632):
   hourly `retention load` summary at info.
 - **Backup.** Formats, redactions, credential exclusions and the
   minimum-reader marker guard are as shipped. Migration rollback backups and
-  backup retention run through the shared open/migration path; there is no
-  periodic bundle scheduler.
+  backup retention run through the shared open/migration path. A configured
+  `maintenance.backups` writes verified bundles daily in a background worker,
+  owns its timer and cancellation, and joins it during a full host drain.
+  Desktop supplies the worker entry/version and Finder reveal, starts
+  maintenance after first paint, and projects its status in Settings → Storage.
 - **Desktop keeps** the recovery screens, dialogs, restart and `app.quit`
   (recovery's IPC door is `main/database-recovery-ipc.ts`), and
   `main/quit-gate.ts`: synchronous refusals, the accepted-update latch, the

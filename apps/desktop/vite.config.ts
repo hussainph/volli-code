@@ -880,7 +880,10 @@ export default defineConfig(({ mode, command }) => ({
     definePackConfig({
       name: "electron-main",
       define: { VOLLI_PACKAGED_CLOUD_CONFIG: JSON.stringify(packagedCloudConfig(process.env)) },
-      entry: { main: "src/main/index.ts" },
+      entry: {
+        main: "src/main/index.ts",
+        "automatic-backup-worker": "src/main/automatic-backup-worker.ts",
+      },
       format: "cjs",
       outDir: "dist-electron",
       sourcemap: true,

@@ -653,6 +653,39 @@ describe("FileTranscriptArtifactStore", () => {
     await expect(artifacts.read(reference)).rejects.toThrow();
   });
 
+  it("streams compressed and legacy canonical bytes with bounded chunks", async () => {
+    const artifacts = await store();
+    const value = artifact("streamed content ".repeat(200_000));
+    const reference = await artifacts.write(value);
+    let total = 0;
+    const hash = createHash("sha256");
+    for await (const bytes of artifacts.readCanonicalChunks(reference)) {
+      expect(bytes.length).toBeLessThanOrEqual(64 * 1024);
+      total += bytes.length;
+      hash.update(bytes);
+    }
+    expect(total).toBe(canonicalBytes(value).length);
+    expect(`sha256:${hash.digest("hex")}`).toBe(reference.id);
+    await rm(compressedName(reference));
+    await writeFile(join(directory!, `${reference.id.slice(7)}.json`), canonicalBytes(value));
+    const parts: Buffer[] = [];
+    for await (const bytes of artifacts.readCanonicalChunks(reference)) parts.push(bytes);
+    expect(Buffer.concat(parts).equals(canonicalBytes(value))).toBe(true);
+  });
+
+  it("keeps a corrupt compressed sibling authoritative on streaming reads", async () => {
+    const artifacts = await store();
+    const value = artifact();
+    const reference = await artifacts.write(value);
+    await writeFile(join(directory!, `${reference.id.slice(7)}.json`), canonicalBytes(value));
+    await writeFile(compressedName(reference), "not gzip");
+    await expect(async () => {
+      for await (const _ of artifacts.readCanonicalChunks(reference)) {
+        /* consume */
+      }
+    }).rejects.toThrow("not gzip");
+  });
+
   it("rejects a digest filename replaced with a symlink", async () => {
     const artifacts = await store();
     const reference = await artifacts.write(artifact());
@@ -675,6 +708,11 @@ describe("FileTranscriptArtifactStore", () => {
     await symlink(externalPath, artifactPath);
 
     expect(() => artifacts.readCanonicalBytesSync(reference)).toThrow("not a regular file");
+    await expect(async () => {
+      for await (const _ of artifacts.readCanonicalChunks(reference)) {
+        /* consume */
+      }
+    }).rejects.toThrow("not a regular file");
   });
 
   it("refuses a FIFO at the digest path instead of blocking on it", async () => {
@@ -688,6 +726,11 @@ describe("FileTranscriptArtifactStore", () => {
 
     await expect(artifacts.read(reference)).rejects.toThrow("not a regular file");
     expect(() => artifacts.readCanonicalBytesSync(reference)).toThrow("not a regular file");
+    await expect(async () => {
+      for await (const _ of artifacts.readCanonicalChunks(reference)) {
+        /* consume */
+      }
+    }).rejects.toThrow("not a regular file");
   });
 
   describe("a digest path swapped for a symlink after the store first touches it", () => {

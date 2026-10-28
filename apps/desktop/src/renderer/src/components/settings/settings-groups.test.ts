@@ -117,6 +117,22 @@ describe("the Models category's search index", () => {
 });
 
 describe("the Storage category's search index", () => {
+  it("finds local backup labels and actions, including the conditional notice", () => {
+    const terms = keywordsFor("storage").map((term) => term.toLowerCase());
+    for (const label of [
+      "Local profile backups",
+      "Last backup",
+      "Backup notice",
+      "Back up now",
+      "Show in Finder",
+    ]) {
+      expect(
+        terms.some((term) => term.includes(label.toLowerCase())),
+        `${label} is drawn in Settings → Storage but nothing in the rail finds it`,
+      ).toBe(true);
+    }
+  });
+
   it("finds the orphaned Pi log row by the label on screen", () => {
     const terms = keywordsFor("storage").map((term) => term.toLowerCase());
 

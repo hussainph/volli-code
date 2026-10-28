@@ -35,10 +35,12 @@
  * at `outDir`.
  */
 import { createHash, randomUUID } from "node:crypto";
+import { isMainThread } from "node:worker_threads";
 import { existsSync } from "node:fs";
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import Database from "better-sqlite3";
+import { withProfileMaintenance } from "../backup/profile-maintenance";
 import { MIGRATION_DISK_HEADROOM_BYTES, nodeDiskProbe, type DiskProbe } from "../db/disk-preflight";
 import { SCHEMA_HEAD } from "../db/migrations";
 import { MigrationExportError, isDiskFullError } from "./errors";
@@ -247,7 +249,11 @@ export async function exportMigrationSnapshot(
   options: MigrationExportOptions,
 ): Promise<MigrationExportResult> {
   try {
-    return await runExport(options);
+    // A worker pause is held by runMigrationExportInWorker in its parent,
+    // which can release it even after Worker.terminate(). Direct callers own theirs.
+    return await (isMainThread
+      ? withProfileMaintenance(dirname(options.sourcePath), () => runExport(options))
+      : runExport(options));
   } catch (error) {
     throwIfAborted(options.signal);
     throw classify(error);
