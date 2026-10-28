@@ -559,6 +559,8 @@ describe("what a purge never touches", () => {
       moveId: world.moveId,
       manifestSha256: MANIFEST_SHA,
     });
+    // The commit's own work (the moved Sessions' first fold) settles first.
+    await runScheduled(world);
     const before = await snapshot(world);
     const keys = store.keys();
 

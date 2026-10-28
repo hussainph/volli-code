@@ -52,9 +52,6 @@ export interface MigrationTarget {
 /** The format marker of a Session event archive object (`ev/…ndjson.zst`). */
 export const SESSION_EVENT_ARCHIVE_FORMAT = "volli.session-events/1";
 
-/** An event payload larger than this is spilled to `…/e/{sequence}.json.zst`; the stored payload names it. */
-export const SESSION_EVENT_INLINE_MAX_BYTES = 256 * 1024;
-
 /** The largest document the importer writes; the backend's hard limit is 1 MiB. */
 export const MIGRATION_DOCUMENT_MAX_BYTES = 1024 * 1024 - 4 * 1024;
 
@@ -318,6 +315,33 @@ function pick(record: Doc, fields: readonly string[]): Doc {
 }
 
 const DELETION = { deletedAt: null, purgeAfter: null } as const;
+
+/**
+ * A Session event's payload or provenance as the backend stores a drained
+ * fact's: JSON text (SCHEMA-NOTES note 32). It arrives as that text, which
+ * is how a value with a key a Convex argument refuses (`$schema`, a
+ * non-ASCII key) crosses the wire, and is stored as sent; the client encodes
+ * it with the Session codec first (`storedSessionJson`), as the intake does.
+ * A value sent as itself (an older client) is stored as its canonical JSON
+ * text.
+ */
+function sessionJson(record: Doc, field: "payload" | "provenance"): { value: Doc; text: string } {
+  const raw = record[field];
+  let value: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      value = JSON.parse(raw) as unknown;
+    } catch {
+      fail("invalid_field", field, "is not JSON text");
+    }
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    fail("invalid_field", field, "is not an object");
+  }
+  // A value is written in canonical key order: a Convex argument does not
+  // keep an object's key order, so sender and backend would disagree.
+  return { value: value as Doc, text: typeof raw === "string" ? raw : canonicalJson(raw) };
+}
 
 type Mapper = (record: Doc, target: MigrationTarget, importedAt: number) => Doc;
 
@@ -703,8 +727,11 @@ const MAPPERS: Readonly<Record<MigrationImportStream, Mapper>> = {
     if (typeof record.id !== "string" || record.id === "") {
       fail("invalid_field", "id", "is not an event id");
     }
-    const payload = asRecord(record.payload);
-    if (typeof payload.kind !== "string") fail("invalid_field", "payload.kind", "is not a string");
+    const payload = sessionJson(record, "payload");
+    if (typeof payload.value.kind !== "string") {
+      fail("invalid_field", "payload.kind", "is not a string");
+    }
+    const provenance = sessionJson(record, "provenance");
     if (typeof record.kindKnown !== "boolean")
       fail("invalid_field", "kindKnown", "is not a boolean");
     return {
@@ -715,14 +742,17 @@ const MAPPERS: Readonly<Record<MigrationImportStream, Mapper>> = {
         "recordedAt",
         "attachmentId",
         "commandId",
-        "provenance",
-        "payload",
         "kindKnown",
         "quarantine",
-        "bytes",
       ]),
+      // Stored as the intake stores a drained fact (SCHEMA-NOTES note 32).
+      provenance: provenance.text,
+      payload: payload.text,
+      // What reads page by (history windows, catch-up steps): the stored
+      // text's size, never a figure the sender supplies.
+      bytes: utf8ToBytes(payload.text).length + utf8ToBytes(provenance.text).length,
       eventId: record.id,
-      kind: payload.kind,
+      kind: payload.value.kind,
       acceptedAt: importedAt,
     };
   },

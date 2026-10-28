@@ -64,6 +64,7 @@ must expose trustworthy request metadata or its users share one quota.
 | `functions/transcripts.ts`                                          | Transcript bodies and Pi logs: `stageArtifacts`, `commitSegment`, `commitPiLogSegment`, `head` (where a runner resumes), the producer fence and `sweepPacked`.                                                                                                                                    |
 | `functions/sessionTranscript.ts`                                    | Viewer-authorized transcript segment manifests, staged artifact bodies and signed GETs for committed packs/spills. The renderer hydrates settled history with these reads.                                                                                                                        |
 | `functions/projectImports.ts`, `functions/lib/migrationImport.ts`   | The person-authorized project import ("Move to Volli Cloud"), hidden until commit, and the batch writer it shares with `migration.ts` (see **The person-authorized project import**).                                                                                                             |
+| `functions/projectImportHistory.ts`                                 | A moved Session readable, not only stored: the import's own doors for its transcript packs and Pi log ranges, and its first fold after the commit (`foldMoved`, `foldProgress`).                                                                                                                  |
 | `functions/files.ts`                                                | `presignPut`: a SigV4 URL bound to one key, length and SHA-256; `attachments`: visible ticket/Session links; `presignGet`: a project blob reachable through a visible owner (signed by `presignS3Request` in `@volli/shared/cloud`).                                                              |
 | `functions/projectImportPurge.ts`, `functions/lib/projectPurge.ts`  | The purge of a cancelled move: its rows by index in bounded batches, then its objects, ending `purged` (see **The person-authorized project import**).                                                                                                                                            |
 | `functions/lib/objectStore.ts`                                      | The S3-compatible store the backend signs for (`VOLLI_S3_*` variables; unset refuses with `storage_unconfigured`), and the list and delete a purge sends itself.                                                                                                                                  |
@@ -242,6 +243,8 @@ project move** section.
   project's own indexes (or one ticket's or the importer's Session's), for the
   client's verification, and only while the project has never been shown
   (once shown, others may have written there).
+- A moved Session's events, transcript packs, Pi logs and first fold: see
+  **A moved Session's history** below.
 
 While a project is `importing`, `projectAccess` (and every read that lists a
 Workspace's projects, through `isShownProject`) treats it as not found for
@@ -289,6 +292,47 @@ by a cron every 15 minutes, five times in a row at most without progress
 The move id is the client's: `begin` takes only an unused one, so the
 staging a purge empties is that move's own. A deployment with no object store
 deletes the rows and records that it left the objects (`storage_unconfigured`).
+
+### A moved Session's history
+
+A moved Session must be readable in the window, not only stored
+(`functions/projectImportHistory.ts`):
+
+- **Events go hot, stored the intake's way.** The client sends each event's
+  payload and provenance as the Session codec's JSON text
+  (`sessionEventImportRecord` in host-core, `storedSessionJson`), which
+  `migrationDocument` stores as sent (SCHEMA-NOTES note 32), so a `$schema`
+  or non-ASCII key needs no spill and a fact larger than one accept takes
+  (256 KB) is stored inline. A document the backend cannot hold (over about
+  1 MiB) is a named refusal of that row. A moved Session's events are all
+  hot: nothing reads an `ev/` archive back yet, so the client sends no
+  archives (the fold stops at the first gap).
+- **Transcript packs and Pi logs.** The runner's doors (`transcripts.*`)
+  refuse a hidden project's Sessions, so a move commits its own through
+  `uploadHead`, `commitSegment` and `commitPiLogSegment`: the importer of an
+  open move, onto their own runner, for a Session of the moved project,
+  presenting the claim the import gave it, until the project is first shown.
+  The checks are the runner's own (`commitTranscriptSegment`,
+  `commitPiLogRange` in `transcripts.ts`), and so is the door's own
+  `presignPut`: a key is replaceable until a row commits it (a resumed upload
+  writes its new bytes, and the commit records exactly those), never after;
+  the move's other objects stay write-once. The client is the runner's spool
+  (`createMoveHistoryUploader` in host-core), which packs every body the
+  history names, a submitted message's and an answer's included, since a
+  moved Session has no client-staged bodies.
+- **The fold.** `commit` schedules `foldMoved`, a chain over the project's
+  Sessions (64 a step) that starts each moved Session's first fold
+  (`startMovedFold`). Its history is folded, not replayed: `derivedThrough`
+  starts at the imported head, so the state and listing row are rebuilt and
+  nothing the old facts derived (turns, attention, watches and notices,
+  delegation answers, todo comments) is written again; facts accepted after
+  the move derive as usual, even when the runner's first accept beats the
+  chain; `importedThrough` keeps an imported fact this build learns to read
+  later from deriving too. `foldProgress` pages the importer's moved
+  Sessions with how far each is folded and when it was last scheduled, for
+  the client to wait on before it checks them through the window's reads;
+  `commit` sent again runs the chain again, restarting any fold that stopped
+  short of its head.
 
 Replacing the move's runner (`registerThisMac` naming it) moves its hidden
 Sessions and claims to the successor like any others, and the move then stops

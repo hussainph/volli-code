@@ -27,6 +27,9 @@
  * - {@link presignPut} signs one write-once PUT of an object the move
  *   carries, to its final key under the project's prefix (or the move's own
  *   staging prefix), bound to its exact length and SHA-256.
+ * - A moved Session's transcript packs and Pi log ranges are committed
+ *   through the import's own doors, and every moved Session is folded after
+ *   the commit (`projectImportHistory.ts`).
  * - {@link status} and {@link readRows} are the importer's own reads: the
  *   accumulators, and a project-scoped read-back (by project, ticket or
  *   Session index) for the client's verification. They read through the
@@ -106,9 +109,10 @@ export type ProjectImportErrorCode =
   | "changed_since_commit"
   | "invalid_rescue_target"
   | "invalid_key"
-  | "storage_unconfigured";
+  | "storage_unconfigured"
+  | "stale_claim";
 
-function importError(
+export function importError(
   code: ProjectImportErrorCode,
   message: string,
   extra: Record<string, unknown> = {},
@@ -123,7 +127,7 @@ type ImportRow = Doc<"projectImports">;
 type ImportStatus = ImportRow["status"];
 
 /** Statuses that still take rows. */
-const OPEN: ReadonlySet<ImportStatus> = new Set(["reserved", "importing"]);
+export const OPEN: ReadonlySet<ImportStatus> = new Set(["reserved", "importing"]);
 /** Statuses that hold the project id: another move of it waits (or is refused). */
 const HOLDING: ReadonlySet<ImportStatus> = new Set(["reserved", "importing", "aborting"]);
 
@@ -140,7 +144,7 @@ const streamValidator = literals(MIGRATION_IMPORT_STREAMS);
 // ── who ──────────────────────────────────────────────────────────────────────
 
 /** The authorized driver; old moves default to the person and runner they began with. */
-function driverOf(row: ImportRow) {
+export function driverOf(row: ImportRow) {
   return row.driver ?? { userId: row.userId, runnerId: row.runnerId };
 }
 
@@ -149,7 +153,7 @@ function driverOf(row: ImportRow) {
  * driver (anyone else reads `not_found`, so a move id says nothing), still
  * an owner or admin of its Workspace, with live preview access.
  */
-async function requireImporter(
+export async function requireImporter(
   ctx: QueryCtx,
   moveId: string,
 ): Promise<{ viewer: Viewer; row: ImportRow }> {
@@ -168,7 +172,7 @@ async function requireImporter(
 }
 
 /** The importer's runner, still theirs and not revoked. */
-async function requireOwnRunner(ctx: QueryCtx, userId: string, runnerId: string) {
+export async function requireOwnRunner(ctx: QueryCtx, userId: string, runnerId: string) {
   const runner = isUuid(runnerId)
     ? await ctx.db
         .query("runners")
@@ -715,13 +719,21 @@ export const importRows = mutation({
  * accumulator equals the manifest's promise (count and digest) and the
  * manifest is the one the move began with. Anything else refuses with
  * `verification_failed`, naming the streams (counts, never content), and
- * changes nothing. Idempotent: a committed move answers `committed`.
+ * changes nothing. Idempotent: a committed move answers `committed` (and
+ * restarts the first fold of any moved Session that stopped short).
  */
 export const commit = mutation({
   args: { moveId: v.string(), manifestSha256: v.string() },
   handler: async (ctx, { moveId, manifestSha256 }) => {
     const { viewer, row } = await requireImporter(ctx, moveId);
-    if (row.status === "committed") return { status: row.status };
+    if (row.status === "committed") {
+      // Sent again: any moved Session whose first fold stopped is folded again.
+      await ctx.scheduler.runAfter(0, internal.projectImportHistory.foldMoved, {
+        moveId: row.id,
+        cursor: null,
+      });
+      return { status: row.status };
+    }
     if (!OPEN.has(row.status)) {
       throw importError("import_closed", "This move was cancelled.", { status: row.status });
     }
@@ -772,6 +784,11 @@ export const commit = mutation({
       updatedAt: now,
       committedAt: now,
       committedBoardSeq: counter?.boardSeq ?? 0,
+    });
+    // Every moved Session folds now that its project is shown (`projectImportHistory.ts`).
+    await ctx.scheduler.runAfter(0, internal.projectImportHistory.foldMoved, {
+      moveId: row.id,
+      cursor: null,
     });
     await audit(ctx, {
       workspaceId: row.workspaceId,

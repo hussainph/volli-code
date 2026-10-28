@@ -17,6 +17,7 @@ import {
   decodeRendererSessionEventPayload,
   decodeSessionEventProvenance,
   encodeSessionJson,
+  storedSessionJson,
   UnknownSessionEventKindError,
 } from "./session-event-codec";
 import type { RendererSessionEventPayload } from "./session-event-codec";
@@ -613,6 +614,17 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       ...opened.interaction,
       native: { id: null, detail: null },
     });
+  });
+
+  it("stores what the codec encodes, and a value it refuses without any credential", () => {
+    expect(storedSessionJson({ kind: "diagnostic", $schema: "s", ü: 1 })).toBe(
+      encodeSessionJson({ kind: "diagnostic", $schema: "s", ü: 1 }),
+    );
+    // Not JSON-safe for the codec (a non-finite number): stored as sent, minus credentials.
+    const refused = { kind: "x", n: Number.NaN, nested: { credential: { value: "secret" } } };
+    expect(() => encodeSessionJson(refused)).toThrow();
+    expect(storedSessionJson(refused)).toBe('{"kind":"x","n":null,"nested":{}}');
+    expect(storedSessionJson(undefined)).toBe("null");
   });
 
   for (const payload of payloads) {

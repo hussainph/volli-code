@@ -22,6 +22,13 @@
  * `startStreamChunks({ link, runtime })` for streamed text;
  * `volli-runner link` calls `linkWithInstallToken` / `linkWithDeviceCode`.
  *
+ * A project move's handover (MOVE-5 composes these; no production caller
+ * yet): `createMoveHistoryUploader` packs and commits a moved Session's
+ * transcript bodies and Pi logs through the import's own doors before the
+ * commit (`piLogFilesOf` finds its Pi files, as the runner's packing does),
+ * and `seedMovedSessionCursors` / `releaseMovedSessionCursors` hand the moved
+ * Sessions to this runner after the commit, and take them back on a roll back.
+ *
  * Agent verbs in a cloud launch: `createCloudProductStore` composes the
  * HTTP functions client and per-Session Agent-token cache over this same
  * runner token source, link status and drain. Desktop passes its
@@ -78,7 +85,24 @@ export {
   type JobJournalEntry,
   type JobJournalStore,
 } from "../cloud-runner/inbox";
-export { sqliteDrainCursorStore, sqliteJobJournalStore } from "../cloud-runner/sqlite-stores";
+export {
+  MovedSessionCursorConflictError,
+  releaseMovedSessionCursors,
+  seedMovedSessionCursors,
+  sqliteDrainCursorStore,
+  sqliteJobJournalStore,
+  type MovedSessionHead,
+} from "../cloud-runner/sqlite-stores";
+export {
+  createMoveHistoryUploader,
+  type MoveBackend,
+  type MovedSessionHistory,
+  type MovedSessionUpload,
+  type MoveHistoryUploader,
+  type MoveHistoryUploaderOptions,
+} from "../cloud-store/move-history";
+export { piLogFilesOf } from "../cloud-store/pi-log-files";
+export { sessionEventImportRecord } from "../migration-export/session-event-record";
 export {
   startStreamChunks,
   type StreamChunks,

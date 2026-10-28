@@ -26,6 +26,11 @@
  * being released (moving to another runner) still accepts its holder's
  * uploads, so the handoff can pack what the old runner holds.
  *
+ * A moved Session's packs and Pi ranges are committed by the project
+ * import's own door while its project is still hidden
+ * (`projectImportHistory.ts`), under the same rules
+ * ({@link commitTranscriptSegment}, {@link commitPiLogRange}).
+ *
  * Objects are write-once: a key a committed row already names is never signed
  * for upload again (`authorizeSessionUpload` answers `committed`).
  *
@@ -201,16 +206,28 @@ export const head = query({
   args: { sessionId: v.string(), claim, piFileIds: v.array(v.string()) },
   handler: async (ctx, args): Promise<SessionUploadHead> => {
     await requireSessionProducer(ctx, args.sessionId, args.claim);
-    if (args.piFileIds.length > HEAD_MAX_PI_FILES) throw invalid("Too many Pi files in one call");
-    const segment = await latestSegment(ctx, args.sessionId);
-    const piLogs: Record<string, number> = {};
-    for (const piFileId of new Set(args.piFileIds)) {
-      if (!isDerivedId(piFileId)) throw invalid("piFileId is not a valid id");
-      piLogs[piFileId] = (await piLogEnd(ctx, args.sessionId, piFileId))?.endOffset ?? 0;
-    }
-    return { transcriptThrough: segment?.lastSequence ?? 0, piLogs };
+    return uploadHeadOf(ctx, args.sessionId, args.piFileIds);
   },
 });
+
+/**
+ * Where a Session's uploads stand, for a caller that has passed its fence
+ * (`head` here; the project import's own door for a moved Session).
+ */
+export async function uploadHeadOf(
+  ctx: { db: GenericDatabaseReader<DataModel> },
+  sessionId: string,
+  piFileIds: readonly string[],
+): Promise<SessionUploadHead> {
+  if (piFileIds.length > HEAD_MAX_PI_FILES) throw invalid("Too many Pi files in one call");
+  const segment = await latestSegment(ctx, sessionId);
+  const piLogs: Record<string, number> = {};
+  for (const piFileId of new Set(piFileIds)) {
+    if (!isDerivedId(piFileId)) throw invalid("piFileId is not a valid id");
+    piLogs[piFileId] = (await piLogEnd(ctx, sessionId, piFileId))?.endOffset ?? 0;
+  }
+  return { transcriptThrough: segment?.lastSequence ?? 0, piLogs };
+}
 
 // ── staging ──────────────────────────────────────────────────────────────────
 
@@ -407,104 +424,131 @@ export const commitSegment = mutation({
       args.claim,
       requireRunnerForWrite,
     );
-    if (!isUuid(args.segmentId)) throw invalid("segmentId must be a lowercase UUID");
-    positiveInteger(args.firstSequence, "firstSequence");
-    positiveInteger(args.lastSequence, "lastSequence");
-    if (args.lastSequence < args.firstSequence) throw invalid("The range is empty");
-    positiveInteger(args.bytes, "bytes");
-    if (args.bytes > SESSION_OBJECT_MAX_BYTES) throw invalid("The object is too large");
-    if (!isSha256Hex(args.sha256)) throw invalid("sha256 must be 64 lowercase hex digits");
-    nonNegativeInteger(args.artifactCount, "artifactCount");
-    if (args.artifactCount > TRANSCRIPT_PACK_MAX_ARTIFACTS) throw invalid("Too many artifacts");
-    if (
-      args.digests.length !== args.artifactCount ||
-      new Set(args.digests).size !== args.digests.length
-    ) {
-      throw invalid("digests must be the pack's artifacts, each once");
-    }
-    if (!args.digests.every(isArtifactDigest)) throw invalid("digest must be sha256:<hex>");
-    if (args.turnIds.length > TRANSCRIPT_PACK_MAX_TURNS || !args.turnIds.every(isDerivedId)) {
-      throw invalid("turnIds are not valid");
-    }
-    const key = transcriptPackKey({
-      projectId: session.projectId,
-      sessionId: session.id,
-      firstSequence: args.firstSequence,
-      lastSequence: args.lastSequence,
-    });
-    if (args.key !== key) throw invalid("key is not this range's key");
-    const taken = await ctx.db
-      .query("transcriptSegments")
-      .withIndex("by_uuid", (q) => q.eq("id", args.segmentId))
-      .unique();
-    if (
-      taken !== null &&
-      (taken.sessionId !== session.id || taken.firstSequence !== args.firstSequence)
-    ) {
-      throw transcriptError("conflict", "That segment id is taken.");
-    }
-
-    const same = await ctx.db
-      .query("transcriptSegments")
-      .withIndex("by_session_first", (q) =>
-        q.eq("sessionId", session.id).eq("firstSequence", args.firstSequence),
-      )
-      .unique();
-    if (same !== null) {
-      if (same.lastSequence === args.lastSequence && same.sha256 === args.sha256) {
-        return { status: "duplicate" };
-      }
-      throw transcriptError("conflict", "A different segment already starts here.");
-    }
-    const previous = await latestSegment(ctx, session.id);
-    const expected = (previous?.lastSequence ?? 0) + 1;
-    if (args.firstSequence !== expected) {
-      throw transcriptError("gap", `The next segment starts at ${expected}.`);
-    }
-    if (args.lastSequence > intake.acceptedThrough) {
-      throw transcriptError("beyond_accepted", "A segment covers accepted events only.");
-    }
-
-    const now = Date.now();
-    await ctx.db.insert("transcriptSegments", {
-      id: args.segmentId,
-      sessionId: session.id,
-      projectId: session.projectId,
-      firstSequence: args.firstSequence,
-      lastSequence: args.lastSequence,
-      turnIds: args.turnIds,
-      key,
-      bytes: args.bytes,
-      sha256: args.sha256,
-      artifactCount: args.artifactCount,
-      format: "volli.transcript-pack/1",
-      createdAt: now,
-    });
-    for (const digest of args.digests) {
-      const row = await ctx.db
-        .query("transcriptArtifacts")
-        .withIndex("by_session_digest", (q) => q.eq("sessionId", session.id).eq("digest", digest))
-        .first();
-      // A row staged for a later reference of the same body is not this pack's.
-      if (row === null || row.packedSegmentId !== null) continue;
-      if (row.firstSequence !== null && row.firstSequence > args.lastSequence) continue;
-      await ctx.db.patch(row._id, {
-        packedSegmentId: args.segmentId,
-        expiresAt: now + PACKED_STAGING_TTL_MS,
-      });
-    }
-    for (const turnId of new Set(args.turnIds)) {
-      const turn = await ctx.db
-        .query("sessionTurns")
-        .withIndex("by_session_turn", (q) => q.eq("sessionId", session.id).eq("turnId", turnId))
-        .first();
-      if (turn !== null && turn.segmentId === null) {
-        await ctx.db.patch(turn._id, { segmentId: args.segmentId });
-      }
-    }
-    return { status: "committed" };
+    return commitTranscriptSegment(ctx, { session, intake }, args);
   },
 });
+
+/** What a pack's commit names, after the Session and claim. */
+export type TranscriptSegmentArgs = {
+  segmentId: string;
+  firstSequence: number;
+  lastSequence: number;
+  turnIds: string[];
+  key: string;
+  bytes: number;
+  sha256: string;
+  artifactCount: number;
+  digests: string[];
+};
+
+/**
+ * Records one uploaded pack of `session`, for a caller that has passed its
+ * fence: `commitSegment` here, or the project import's own door for a moved
+ * Session (whose project is still hidden). See the module comment for what
+ * is checked.
+ */
+export async function commitTranscriptSegment(
+  ctx: { db: GenericDatabaseWriter<DataModel> },
+  { session, intake }: { session: Doc<"sessions">; intake: Doc<"sessionIntake"> },
+  args: TranscriptSegmentArgs,
+): Promise<SegmentCommitResult> {
+  if (!isUuid(args.segmentId)) throw invalid("segmentId must be a lowercase UUID");
+  positiveInteger(args.firstSequence, "firstSequence");
+  positiveInteger(args.lastSequence, "lastSequence");
+  if (args.lastSequence < args.firstSequence) throw invalid("The range is empty");
+  positiveInteger(args.bytes, "bytes");
+  if (args.bytes > SESSION_OBJECT_MAX_BYTES) throw invalid("The object is too large");
+  if (!isSha256Hex(args.sha256)) throw invalid("sha256 must be 64 lowercase hex digits");
+  nonNegativeInteger(args.artifactCount, "artifactCount");
+  if (args.artifactCount > TRANSCRIPT_PACK_MAX_ARTIFACTS) throw invalid("Too many artifacts");
+  if (
+    args.digests.length !== args.artifactCount ||
+    new Set(args.digests).size !== args.digests.length
+  ) {
+    throw invalid("digests must be the pack's artifacts, each once");
+  }
+  if (!args.digests.every(isArtifactDigest)) throw invalid("digest must be sha256:<hex>");
+  if (args.turnIds.length > TRANSCRIPT_PACK_MAX_TURNS || !args.turnIds.every(isDerivedId)) {
+    throw invalid("turnIds are not valid");
+  }
+  const key = transcriptPackKey({
+    projectId: session.projectId,
+    sessionId: session.id,
+    firstSequence: args.firstSequence,
+    lastSequence: args.lastSequence,
+  });
+  if (args.key !== key) throw invalid("key is not this range's key");
+  const taken = await ctx.db
+    .query("transcriptSegments")
+    .withIndex("by_uuid", (q) => q.eq("id", args.segmentId))
+    .unique();
+  if (
+    taken !== null &&
+    (taken.sessionId !== session.id || taken.firstSequence !== args.firstSequence)
+  ) {
+    throw transcriptError("conflict", "That segment id is taken.");
+  }
+
+  const same = await ctx.db
+    .query("transcriptSegments")
+    .withIndex("by_session_first", (q) =>
+      q.eq("sessionId", session.id).eq("firstSequence", args.firstSequence),
+    )
+    .unique();
+  if (same !== null) {
+    if (same.lastSequence === args.lastSequence && same.sha256 === args.sha256) {
+      return { status: "duplicate" };
+    }
+    throw transcriptError("conflict", "A different segment already starts here.");
+  }
+  const previous = await latestSegment(ctx, session.id);
+  const expected = (previous?.lastSequence ?? 0) + 1;
+  if (args.firstSequence !== expected) {
+    throw transcriptError("gap", `The next segment starts at ${expected}.`);
+  }
+  if (args.lastSequence > intake.acceptedThrough) {
+    throw transcriptError("beyond_accepted", "A segment covers accepted events only.");
+  }
+
+  const now = Date.now();
+  await ctx.db.insert("transcriptSegments", {
+    id: args.segmentId,
+    sessionId: session.id,
+    projectId: session.projectId,
+    firstSequence: args.firstSequence,
+    lastSequence: args.lastSequence,
+    turnIds: args.turnIds,
+    key,
+    bytes: args.bytes,
+    sha256: args.sha256,
+    artifactCount: args.artifactCount,
+    format: "volli.transcript-pack/1",
+    createdAt: now,
+  });
+  for (const digest of args.digests) {
+    const row = await ctx.db
+      .query("transcriptArtifacts")
+      .withIndex("by_session_digest", (q) => q.eq("sessionId", session.id).eq("digest", digest))
+      .first();
+    // A row staged for a later reference of the same body is not this pack's.
+    if (row === null || row.packedSegmentId !== null) continue;
+    if (row.firstSequence !== null && row.firstSequence > args.lastSequence) continue;
+    await ctx.db.patch(row._id, {
+      packedSegmentId: args.segmentId,
+      expiresAt: now + PACKED_STAGING_TTL_MS,
+    });
+  }
+  for (const turnId of new Set(args.turnIds)) {
+    const turn = await ctx.db
+      .query("sessionTurns")
+      .withIndex("by_session_turn", (q) => q.eq("sessionId", session.id).eq("turnId", turnId))
+      .first();
+    if (turn !== null && turn.segmentId === null) {
+      await ctx.db.patch(turn._id, { segmentId: args.segmentId });
+    }
+  }
+  return { status: "committed" };
+}
 
 // ── Pi log segments ──────────────────────────────────────────────────────────
 
@@ -528,66 +572,90 @@ export const commitPiLogSegment = mutation({
       args.claim,
       requireRunnerForWrite,
     );
-    nonNegativeInteger(args.startOffset, "startOffset");
-    nonNegativeInteger(args.endOffset, "endOffset");
-    if (args.endOffset <= args.startOffset) throw invalid("The range is empty");
-    positiveInteger(args.bytes, "bytes");
-    if (args.bytes > SESSION_OBJECT_MAX_BYTES) throw invalid("The object is too large");
-    if (!isSha256Hex(args.sha256)) throw invalid("sha256 must be 64 lowercase hex digits");
-    let key: string;
-    try {
-      key = piLogSegmentKey({
-        projectId: session.projectId,
-        sessionId: session.id,
-        attachmentId: args.attachmentId,
-        piFileId: args.piFileId,
-        offset: args.startOffset,
-      });
-    } catch {
-      throw invalid("attachmentId or piFileId cannot name an object");
-    }
-    if (args.key !== key) throw invalid("key is not this range's key");
+    return commitPiLogRange(ctx, session, args);
+  },
+});
 
-    const same = await ctx.db
-      .query("piLogSegments")
-      .withIndex("by_session_file_offset", (q) =>
-        q
-          .eq("sessionId", session.id)
-          .eq("piFileId", args.piFileId)
-          .eq("startOffset", args.startOffset),
-      )
-      .unique();
-    if (same !== null) {
-      if (
-        same.endOffset === args.endOffset &&
-        same.sha256 === args.sha256 &&
-        same.attachmentId === args.attachmentId
-      ) {
-        return { status: "duplicate" };
-      }
-      throw transcriptError("conflict", "A different segment already starts here.");
-    }
-    const previous = await piLogEnd(ctx, session.id, args.piFileId);
-    if ((previous?.endOffset ?? 0) !== args.startOffset) {
-      throw transcriptError("gap", `The next segment starts at ${previous?.endOffset ?? 0}.`);
-    }
-    if (previous !== null && previous.attachmentId !== args.attachmentId) {
-      throw transcriptError("conflict", "This Pi file belongs to another attachment.");
-    }
-    await ctx.db.insert("piLogSegments", {
+/** What a Pi log range's commit names, after the Session and claim. */
+export type PiLogSegmentArgs = {
+  attachmentId: string;
+  piFileId: string;
+  startOffset: number;
+  endOffset: number;
+  key: string;
+  bytes: number;
+  sha256: string;
+};
+
+/**
+ * Records one uploaded byte range of a Pi session file of `session`, for a
+ * caller that has passed its fence (`commitPiLogSegment` here, or the
+ * project import's own door).
+ */
+export async function commitPiLogRange(
+  ctx: { db: GenericDatabaseWriter<DataModel> },
+  session: Doc<"sessions">,
+  args: PiLogSegmentArgs,
+): Promise<SegmentCommitResult> {
+  nonNegativeInteger(args.startOffset, "startOffset");
+  nonNegativeInteger(args.endOffset, "endOffset");
+  if (args.endOffset <= args.startOffset) throw invalid("The range is empty");
+  positiveInteger(args.bytes, "bytes");
+  if (args.bytes > SESSION_OBJECT_MAX_BYTES) throw invalid("The object is too large");
+  if (!isSha256Hex(args.sha256)) throw invalid("sha256 must be 64 lowercase hex digits");
+  let key: string;
+  try {
+    key = piLogSegmentKey({
+      projectId: session.projectId,
       sessionId: session.id,
       attachmentId: args.attachmentId,
       piFileId: args.piFileId,
-      startOffset: args.startOffset,
-      endOffset: args.endOffset,
-      key,
-      sha256: args.sha256,
-      bytes: args.bytes,
-      createdAt: Date.now(),
+      offset: args.startOffset,
     });
-    return { status: "committed" };
-  },
-});
+  } catch {
+    throw invalid("attachmentId or piFileId cannot name an object");
+  }
+  if (args.key !== key) throw invalid("key is not this range's key");
+
+  const same = await ctx.db
+    .query("piLogSegments")
+    .withIndex("by_session_file_offset", (q) =>
+      q
+        .eq("sessionId", session.id)
+        .eq("piFileId", args.piFileId)
+        .eq("startOffset", args.startOffset),
+    )
+    .unique();
+  if (same !== null) {
+    if (
+      same.endOffset === args.endOffset &&
+      same.sha256 === args.sha256 &&
+      same.attachmentId === args.attachmentId
+    ) {
+      return { status: "duplicate" };
+    }
+    throw transcriptError("conflict", "A different segment already starts here.");
+  }
+  const previous = await piLogEnd(ctx, session.id, args.piFileId);
+  if ((previous?.endOffset ?? 0) !== args.startOffset) {
+    throw transcriptError("gap", `The next segment starts at ${previous?.endOffset ?? 0}.`);
+  }
+  if (previous !== null && previous.attachmentId !== args.attachmentId) {
+    throw transcriptError("conflict", "This Pi file belongs to another attachment.");
+  }
+  await ctx.db.insert("piLogSegments", {
+    sessionId: session.id,
+    attachmentId: args.attachmentId,
+    piFileId: args.piFileId,
+    startOffset: args.startOffset,
+    endOffset: args.endOffset,
+    key,
+    sha256: args.sha256,
+    bytes: args.bytes,
+    createdAt: Date.now(),
+  });
+  return { status: "committed" };
+}
 
 // ── object writes ────────────────────────────────────────────────────────────
 
@@ -652,16 +720,29 @@ export const authorizeSessionUpload = internalQuery({
   args: { sessionId: v.string(), claim, key: v.string(), bytes: v.number(), sha256: v.string() },
   handler: async (ctx, args): Promise<SessionUploadAuthorization> => {
     const { session } = await requireSessionProducer(ctx, args.sessionId, args.claim);
-    positiveInteger(args.bytes, "bytes");
-    if (args.bytes > SESSION_OBJECT_MAX_BYTES) throw invalid("The object is too large");
-    if (!isSha256Hex(args.sha256)) throw invalid("sha256 must be 64 lowercase hex digits");
-    const prefix = sessionPrefix({ projectId: session.projectId, sessionId: session.id });
-    const rest = args.key.startsWith(prefix) ? args.key.slice(prefix.length) : null;
-    const committed = rest === null ? null : await committedKey(ctx, session.id, args.key, rest);
-    if (committed === null) throw invalid("This session cannot upload that key");
-    return committed ? { status: "committed" } : { status: "sign", key: args.key };
+    return sessionUploadOf(ctx, session, args);
   },
 });
+
+/**
+ * Whether `key` is one of `session`'s own upload kinds and no committed row
+ * names it yet, for a caller that has passed its fence (`authorizeSessionUpload`
+ * here; the project import's own door for a moved Session).
+ */
+export async function sessionUploadOf(
+  ctx: { db: GenericDatabaseReader<DataModel> },
+  session: Doc<"sessions">,
+  args: { key: string; bytes: number; sha256: string },
+): Promise<SessionUploadAuthorization> {
+  positiveInteger(args.bytes, "bytes");
+  if (args.bytes > SESSION_OBJECT_MAX_BYTES) throw invalid("The object is too large");
+  if (!isSha256Hex(args.sha256)) throw invalid("sha256 must be 64 lowercase hex digits");
+  const prefix = sessionPrefix({ projectId: session.projectId, sessionId: session.id });
+  const rest = args.key.startsWith(prefix) ? args.key.slice(prefix.length) : null;
+  const committed = rest === null ? null : await committedKey(ctx, session.id, args.key, rest);
+  if (committed === null) throw invalid("This session cannot upload that key");
+  return committed ? { status: "committed" } : { status: "sign", key: args.key };
+}
 
 // ── dropping packed staging rows ─────────────────────────────────────────────
 

@@ -36,7 +36,7 @@ import {
   assertSessionEvent,
   decodeSessionEventPayload,
   decodeSessionEventProvenance,
-  encodeSessionJson,
+  storedSessionJson,
   readSessionOrigin,
   type Session,
   type SessionEvent,
@@ -170,20 +170,15 @@ function readEnvelope(text: string, sessionId: string, bytes: number, head: numb
  * The stored JSON text of a payload or provenance: the codec's canonical
  * encoding, which allowlists credential-bearing interactions. A value the
  * codec refuses (a quarantined fact) is stored as sent, minus any
- * `credential` field, so a malformed interaction cannot store a secret.
+ * `credential` field, so a malformed interaction cannot store a secret. The
+ * project import stores a moved fact through the same function.
  */
-function storedJson(value: unknown): string {
-  try {
-    return encodeSessionJson(value);
-  } catch {
-    return JSON.stringify(value, (key, item: unknown) => (key === "credential" ? undefined : item));
-  }
-}
+const storedJson = storedSessionJson;
 
 /**
- * A stored payload or provenance as a value. The intake stores JSON text; a
- * row written another way (the migration import stores the value itself) is
- * read as it is.
+ * A stored payload or provenance as a value. The intake and the import store
+ * JSON text; a row an older import wrote holds the value itself and is read
+ * as it is.
  */
 function storedValue(stored: unknown): unknown {
   try {
@@ -738,17 +733,25 @@ async function advanceFold(
   }
   const state = readStoredState(doc);
   if ((state?.throughSequence ?? 0) !== previousHead) {
-    await requestCatchUp(ctx, session.id, doc, now);
+    // No state with facts already accepted: they came in through a project
+    // import, whose history derives nothing (see `startMovedFold`).
+    await requestCatchUp(ctx, session.id, doc, now, doc === null ? previousHead : 0);
     return 0;
   }
   return applyFold(ctx, session, doc, state, facts, through, { atHead: true }, diagnostics);
 }
 
+/**
+ * Schedules a catch-up of the fold. A Session with no state yet gets one,
+ * whose derived rows start after `importedThrough`: the facts a project
+ * import brought in are folded, never replayed (see `startMovedFold`).
+ */
 async function requestCatchUp(
   ctx: MutationCtx,
   sessionId: string,
   doc: Doc<"sessionStates"> | null,
   now: number,
+  importedThrough = 0,
 ): Promise<void> {
   const scheduledAt = doc?.catchUpAt ?? null;
   if (scheduledAt !== null && now - scheduledAt < CATCH_UP_RETRY_MS) return;
@@ -759,7 +762,8 @@ async function requestCatchUp(
       foldVersion: 0,
       state: null,
       catchUpAt: now,
-      derivedThrough: 0,
+      derivedThrough: importedThrough,
+      ...(importedThrough > 0 ? { importedThrough } : {}),
     });
   } else {
     await ctx.db.patch(doc._id, { catchUpAt: now });
@@ -792,6 +796,7 @@ async function applyFold(
 ): Promise<number> {
   const birth = birthOf(session);
   const derivedThrough = doc?.derivedThrough ?? 0;
+  const importedThrough = doc?.importedThrough ?? 0;
   let state = initial;
   let view = state === null ? null : readFoldView(state);
   let setAside = 0;
@@ -826,7 +831,9 @@ async function applyFold(
       continue;
     }
     const nextView = readFoldView(next);
-    if (event.sequence > derivedThrough || fact.learned) {
+    // A fact a project import brought in derives nothing, even one this build
+    // learned to read since (its effects belong to the history it came from).
+    if (event.sequence > derivedThrough || (fact.learned && event.sequence > importedThrough)) {
       if (diagnostics) diagnostics.phase = "derive";
       await deriveFromFact(ctx, session, event, view, nextView);
     }
@@ -951,6 +958,46 @@ export async function catchUpStep(
     await ctx.db.patch(doc._id, { catchUpAt: now });
     await ctx.scheduler.runAfter(0, internal.sessions.catchUp, { sessionId });
   }
+}
+
+/**
+ * Starts the first fold of a Session a project import brought in, once its
+ * project is shown (`projectImports.commit` schedules it for every moved
+ * Session). Without it the Session's history is stored but nothing draws it:
+ * a viewer waits on a fold that never comes.
+ *
+ * Its history is folded, not replayed: `derivedThrough` starts at the
+ * imported head, so the fold rebuilds the state and the listing row without
+ * writing what each old fact derived when it happened (turns, attention,
+ * watches and notices, delegation answers, a done signal's todo comment).
+ * The import carried what of that the local project held, and nothing a
+ * moved Session did may fire again (`importedThrough` keeps that true for a
+ * fact this build learns to read later). Facts accepted after the move derive
+ * as usual. A Session already folded, or folding on schedule, is left as it
+ * is; one whose fold stopped short of its head is scheduled again. `false`
+ * when nothing was scheduled.
+ */
+export async function startMovedFold(
+  ctx: MutationCtx,
+  sessionId: string,
+  now: number,
+): Promise<boolean> {
+  const intake = await intakeOf(ctx, sessionId);
+  if (intake === null || intake.acceptedThrough === 0) return false;
+  const doc = await stateDocOf(ctx, sessionId);
+  if (doc === null) {
+    await requestCatchUp(ctx, sessionId, null, now, intake.acceptedThrough);
+    return true;
+  }
+  // Folding or folded already. One that stopped short of the head (a step
+  // that failed) is asked again, once its last schedule is stale.
+  // What `foldProgress` counts as behind: short of the head, or a step still pending.
+  const behind = doc.throughSequence < intake.acceptedThrough || (doc.catchUpAt ?? null) !== null;
+  if (!behind) return false;
+  const scheduledAt = doc.catchUpAt ?? null;
+  if (scheduledAt !== null && now - scheduledAt < CATCH_UP_RETRY_MS) return false;
+  await requestCatchUp(ctx, sessionId, doc, now);
+  return true;
 }
 
 /**
