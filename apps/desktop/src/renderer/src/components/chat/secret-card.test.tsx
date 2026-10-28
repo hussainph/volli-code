@@ -125,11 +125,16 @@ describe("person-only credential cards", () => {
     expect(host.textContent).toContain("Enter this on deploy-mac.");
     expect(api.secrets.submit).not.toHaveBeenCalled();
     expect(api.secrets.decline).not.toHaveBeenCalled();
+    act(() => useCloudPlacesStore.setState({ runners: { r1: { ...runner, status: "asleep" } } }));
+    expect(host.textContent).toContain("Enter this on deploy-mac.");
+    expect(host.querySelector("input,select,button,form")).toBeNull();
     act(() => useCloudPlacesStore.setState({ thisRunnerId: "r1" }));
     expect(password().value).toBe("");
     // A revoked runner never earns an input, even if its id still matches.
     act(() => useCloudPlacesStore.setState({ runners: { r1: { ...runner, status: "revoked" } } }));
     expect(host.querySelector("input,select,button,form")).toBeNull();
+    expect(host.textContent).toContain("deploy-mac was removed from your account");
+    expect(host.textContent).not.toContain("Enter this on");
   });
 
   it("keeps agent prose plain text inside its labelled region, never title or controls", async () => {
