@@ -272,6 +272,42 @@ describe("closeStaleAttachments", () => {
     expect(target.observed).toHaveLength(2);
   });
 
+  it("retires every queued credential wait before rehydrating after a restart", async () => {
+    const lost = session("session-1", [attachment({ id: "pi-1", adapterId: "pi" })], true);
+    const active = ["ACCESS_ID", "SECRET_KEY"].map((name) => ({
+      id: `credential:${name}`,
+      attachmentId: "pi-1",
+      kind: "question" as const,
+      credential: {
+        id: `credential:${name}`,
+        name,
+        sessionId: "session-1",
+        sessionLabel: "Session",
+        projectId: "project-1",
+        projectLabel: "Project",
+        agentSays: null,
+      },
+    }));
+    const target = recorder(
+      { "project-1": [{ ...lost, interactions: { active } }] },
+      undefined,
+      async () => {
+        expect(target.observed).toMatchObject(
+          active.map(({ id }) => ({
+            kind: "interaction.cancelled",
+            interactionId: id,
+            reason: "abandoned",
+          })),
+        );
+      },
+    );
+    const result = sweep(target, ["project-1"]);
+    await expect(result.run).resolves.toBe(0);
+    expect(result.onError).not.toHaveBeenCalled();
+    expect(target.observed).toHaveLength(2);
+    expect(target.reconciled).toEqual([{ sessionId: "session-1", attachmentId: "pi-1" }]);
+  });
+
   it("reports a failed permission retirement and keeps recovering", async () => {
     const lost = session("session-1", [attachment({ id: "pi-1", adapterId: "pi" })], true);
     const target = recorder(

@@ -557,11 +557,11 @@ to open files as you. Do not treat this read-tool guard as a general process san
 - Terminal companions (Claude Code/Codex). Launch-time injection is technically
   possible, but their own model/transcript/output paths cannot be scrubbed by
   this structured-runtime boundary, so secrets are not injected there.
-- Secret re-entry after a cancelled/restarted request. Waiting and settlement
-  metadata now use the Engine's durable interactions and existing Attention and
-  presentation paths, alongside ordinary question and permission cards. The dedicated person-only write
-  channel is the only answer door; generic interaction answers are refused before
-  persistence. Secret values never become ledger facts.
+- Restoring an in-flight call or memory-only value across an app restart. Boot
+  recovery cancels the lost process's parked interactions without inventing an
+  answer. A fresh `request_secret` call can ask again. The dedicated person-only
+  write channel remains the only answer door; generic interaction answers are
+  refused before persistence. Secret values never become ledger facts.
 
 ## Verification
 
