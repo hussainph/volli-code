@@ -20,6 +20,13 @@ function paint(
   if (sent === null) forgetProjectPlaces(projectId);
   else noteProjectPlaces(projectId, sent);
   const chat = rows.map((row) => row.record);
+  // Workspace switches retire clients, but keep tab intent. Re-adopt only
+  // Sessions the new scope's live listing actually authorizes, never cached ids.
+  const chats = useChatSessionsStore.getState();
+  const open = new Set(Object.values(chats.openTabs).flat());
+  for (const row of chat) {
+    if (open.has(row.sessionId)) chats.adoptChatSession(row.sessionId, projectId);
+  }
   const provenance = Object.fromEntries(
     rows.flatMap((row) =>
       row.provenance.kind !== "user" ? [[row.record.sessionId, row.provenance]] : [],

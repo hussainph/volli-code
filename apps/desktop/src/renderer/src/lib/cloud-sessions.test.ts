@@ -6,6 +6,11 @@ import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 const mocks = await vi.hoisted(async () => {
   const { createStore } = await import("zustand/vanilla");
   const rebind = vi.fn();
+  const chats = {
+    rebindChatSessions: rebind,
+    openTabs: {} as Record<string, string[]>,
+    adoptChatSession: vi.fn(),
+  };
   return {
     projects: createStore(() => ({ projects: [] as { id: string }[] })),
     rows: createStore(() => ({ byProject: {}, listingState: {} })),
@@ -14,7 +19,7 @@ const mocks = await vi.hoisted(async () => {
       listingState: {},
       listingError: {},
     })),
-    chat: { getState: () => ({ rebindChatSessions: rebind }) },
+    chat: { getState: () => chats },
     follow: null as ((session: CloudSession | null) => void) | null,
     followers: new Set<(session: CloudSession | null) => void>(),
     stop: vi.fn(),
@@ -53,6 +58,8 @@ afterEach(() => {
   mocks.projects.setState({ projects: [] });
   mocks.rows.setState({ byProject: {}, listingState: {} });
   mocks.tickets.setState({ byTicket: {}, listingState: {}, listingError: {} });
+  mocks.chat.getState().openTabs = {};
+  mocks.chat.getState().adoptChatSession.mockClear();
   vi.restoreAllMocks();
 });
 const args = { projectId: "p", paginationOpts: { cursor: null, numItems: 100 } };
@@ -82,6 +89,15 @@ const row = {
 };
 
 describe("cloud Session binding", () => {
+  it("re-adopts a kept durable tab only when its returned Workspace lists it", () => {
+    const fake = fakeCloud();
+    mocks.projects.setState({ projects: [{ id: "p" }] });
+    stop = bindCloudSessions();
+    mocks.follow!(fake.session);
+    mocks.chat.getState().openTabs = { p: ["s", "not-authorized"] };
+    fake.answer("sessions:list", args, { page: [row], isDone: true, continueCursor: "end" });
+    expect(mocks.chat.getState().adoptChatSession).toHaveBeenCalledExactlyOnceWith("s", "p");
+  });
   it("does not reopen a departed project or return its pending listing into a new scope", async () => {
     const fake = fakeCloud();
     mocks.projects.setState({ projects: [{ id: "p" }] });

@@ -55,17 +55,19 @@ describe("the cloud board source (VC-889)", () => {
     const { cloud, screen, source } = setup();
     const callbacks: (() => void)[] = [];
     const watchQuery = cloud.session.client.watchQuery.bind(cloud.session.client);
-    vi.spyOn(cloud.session.client, "watchQuery").mockImplementation((...args: Parameters<typeof watchQuery>) => {
-      const [reference, queryArgs, options] = args;
-      const watch = watchQuery(reference, queryArgs, options);
-      return {
-        ...watch,
-        onUpdate: (callback: () => void) => {
-          callbacks.push(callback);
-          return watch.onUpdate(callback);
-        },
-      };
-    });
+    vi.spyOn(cloud.session.client, "watchQuery").mockImplementation(
+      (...args: Parameters<typeof watchQuery>) => {
+        const [reference, queryArgs, options] = args;
+        const watch = watchQuery(reference, queryArgs, options);
+        return {
+          ...watch,
+          onUpdate: (callback: () => void) => {
+            callbacks.push(callback);
+            return watch.onUpdate(callback);
+          },
+        };
+      },
+    );
     source.attach(cloud.session);
     await source.open(P);
     cloud.answer("board:roster", { projectId: P }, { tickets: [row(1)], labels: [] });

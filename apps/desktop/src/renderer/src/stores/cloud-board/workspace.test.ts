@@ -38,6 +38,9 @@ function harness(
   offline?: { snapshot: BoardSnapshot | null | (() => Promise<BoardSnapshot | null>) },
 ) {
   const cloud = fakeCloud();
+  cloud.queries.set("workspaces:get", (args) =>
+    (args as { workspaceId: string }).workspaceId === "w1" ? W1 : W2,
+  );
   let listener: ((session: CloudSession | null) => void) | null = null;
   const state = {
     projects: [] as Project[],
@@ -149,6 +152,24 @@ afterEach(() => {
 });
 
 describe("joining and leaving a Workspace", () => {
+  it("confirms an ordinary membership refusal even before listMine updates", async () => {
+    const h = harness();
+    h.connect();
+    h.cloud.answer("workspaces:listMine", {}, [W1, W2]);
+    h.cloud.answer("projects:list", { workspaceId: "w1" }, [projectRow("a")]);
+    h.cloud.queries.set("workspaces:get", () => {
+      throw refusal("not_a_member", "Gone.");
+    });
+    h.cloud.fail("projects:list", { workspaceId: "w1" }, refusal("not_a_member", "Gone."));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.state.projects).toEqual([]);
+    expect(useCloudWorkspaceStore.getState().workspace?.id).toBe("w2");
+    expect(h.deps.notice).toHaveBeenCalledExactlyOnceWith(
+      "You're no longer a member of Dana's Workspace",
+    );
+    h.stop();
+  });
   it("holds an accepted Workspace through a stale listMine answer, confirming actual removal", async () => {
     const h = harness();
     h.connect();

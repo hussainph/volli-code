@@ -225,7 +225,7 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
     } catch (error) {
       // listMine owns membership loss, including its single Workspace notice.
       if (cloudFailure(error).code !== "not_a_member") fail("the Workspace’s projects", error);
-      else if (pendingMembership === id && current !== null) confirmMembership(current, id);
+      else if (current !== null) confirmMembership(current, id);
       return;
     }
     if (rows === undefined || id !== workspaceId) return;
@@ -329,7 +329,8 @@ export function followCloudWorkspace(deps: CloudWorkspaceDeps): () => void {
         const code = cloudFailure(error).code;
         if (code === "not_a_member" || code === "not_found") {
           pendingMembership = null;
-          applyWorkspaces(session, memberships ?? []);
+          memberships = (memberships ?? []).filter((row) => row.workspaceId !== id);
+          applyWorkspaces(session, memberships);
         } else fail("the Workspace", error);
       })
       .finally(() => {
