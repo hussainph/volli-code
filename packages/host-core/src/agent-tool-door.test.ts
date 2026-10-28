@@ -859,8 +859,8 @@ const RUN_MODEL: ModelSelection = {
 function automationHarness(
   options: {
     host?: "absent";
-    /** A cloud launch's door: no Automations at all (VC-952). */
-    automationsAvailable?: boolean;
+    /** A cloud launch's door: its cloud Session verbs answer first. */
+    cloud?: (request: { verb: string }) => { text: string } | null;
     /** Asked per call by the door; a refusal must never reach it. */
     projects?: () => readonly Project[];
   } = {},
@@ -952,9 +952,15 @@ function automationHarness(
               return runner.run(input);
             },
           },
-    ...(options.automationsAvailable === undefined
+    ...(options.cloud === undefined
       ? {}
-      : { automationsAvailable: options.automationsAvailable }),
+      : {
+          cloudSessionVerbs: {
+            tool: async (_session: unknown, request: { verb: string }) => options.cloud!(request),
+          } as unknown as NonNullable<
+            Parameters<typeof createAgentToolDoor>[0]["cloudSessionVerbs"]
+          >,
+        }),
     now: () => 1_000,
     authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
     watches: () => null,
@@ -1025,17 +1031,21 @@ function runShape(run: AutomationRun) {
 }
 
 describe("automation_run through the Agent Tool Surface (VC-134)", () => {
-  it("refuses a frozen tool in a cloud launch before project or Ticket resolution (VC-952)", async () => {
+  it("routes a cloud launch's call to Volli Cloud before any local project or Ticket resolution", async () => {
     const projects = vi.fn((): readonly Project[] => {
       throw new Error("a cloud launch must not resolve local projects for automation.run");
     });
-    const h = automationHarness({ automationsAvailable: false, projects });
+    const cloud = vi.fn((request: { verb: string }) =>
+      request.verb === "automation.run" ? { text: "Queued on Volli Cloud." } : null,
+    );
+    const h = automationHarness({ cloud, projects });
 
     const result = await h.call({ automation: "Nightly sweep", ticket: "VC-1" });
 
-    expect(result.text).toBe("Not available on Volli Cloud yet");
-    // Refused at dispatch: no project, Ticket or Automation was looked up, so
-    // this launch's shadow rows are never mistaken for a place to start a Run.
+    expect(result.text).toBe("Queued on Volli Cloud.");
+    expect(cloud).toHaveBeenCalledOnce();
+    // This launch's shadow rows are never mistaken for a place to start a Run,
+    // and the local Run door never answers.
     expect(projects).not.toHaveBeenCalled();
     expect(h.runInputs).toEqual([]);
     expect(h.creates).toEqual([]);

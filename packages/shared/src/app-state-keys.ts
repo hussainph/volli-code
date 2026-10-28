@@ -363,6 +363,12 @@ const PREFIXES = {
     reason:
       "Runner-local Session location hints keyed by owner and Session: repository identity, checkout mode and git identity only. Lets an already-briefed Session reattach offline using its path registry. Never a board cache or credential.",
   },
+  "volli:runner-automation-run:": {
+    placement: "client-local",
+    owner: "stays",
+    reason:
+      "Runner-local attendance of the Volli Cloud Automation Run that opened a Session, keyed by owner and Session: whether a person was at the door that asked, so an unattended Run's Session raises Needs-you when it later stops for a person. Never a Run record; Volli Cloud holds those.",
+  },
   "volli:vc354-perf:": {
     placement: "client-local",
     owner: "stays",

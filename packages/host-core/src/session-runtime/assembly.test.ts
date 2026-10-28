@@ -31,8 +31,6 @@ import {
   decodeSessionEventPayload,
   mcpProviderToolName,
   createToolRefreshDelta,
-  type CodeModeBirth,
-  type SessionToolId,
 } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { testProject, testTicket } from "../db/test-helpers";
@@ -506,84 +504,6 @@ describe("runtime attachment assembly", () => {
       }
     },
   );
-
-  it("omits automation.run from a new birth and its Code Mode routes when the launch has no Automations (VC-952)", async () => {
-    const options = await fixture();
-    const assembled = createRuntimeAssembly({ ...options, automationsAvailable: false });
-    try {
-      const birth: CodeModeBirth = {
-        offered: true,
-        mode: "both",
-        nudge: false,
-        largeServers: new Set(),
-      };
-      const tools = assembled.sessionToolSurface!.resolve(
-        "project",
-        [],
-        undefined,
-        [],
-        birth,
-        false,
-      );
-      expect(tools).not.toContain("automation.run");
-      expect(tools).toContain("session.start");
-      const routes = options.codeMode.surfaceFor(birth, tools, [])?.routes;
-      expect(Object.keys(routes ?? {})).not.toContain("automation.run");
-      expect(routes?.["automation.run"]).toBeUndefined();
-    } finally {
-      await assembled.sessionRuntime?.close();
-    }
-  });
-
-  it("keeps an already-frozen automation.run through reattach and additive refresh when the launch offers none (VC-952)", async () => {
-    const options = await fixture();
-    const engine = live().sessionEngine;
-    const db = live().database.db;
-    insertProject(db, testProject({ id: "project", path: root }));
-    const model = { providerId: "scripted", modelId: "test", reasoningLevel: "off" } as const;
-    const provenance = {
-      source: { kind: "system", id: "test", detail: null },
-      venue: options.venue,
-    } as const;
-    const { session } = await engine.createSession({
-      commandId: "frozen-birth",
-      projectId: "project",
-      ticketId: null,
-      role: "project",
-      parentSessionId: null,
-      title: null,
-      provenance,
-    });
-    await engine.submit({
-      commandId: "model",
-      sessionId: session.id,
-      intent: { kind: "model.select", selection: model },
-      provenance,
-    });
-    const assembled = createRuntimeAssembly({ ...options, automationsAvailable: false });
-    try {
-      const surface = assembled.sessionToolSurface!;
-      // A Session born in a local launch froze the verb before this launch.
-      const frozen: SessionToolId[] = [...surface.resolve("project", []), "automation.run"];
-      await surface.record(session.id, frozen);
-      const resolver = createRuntimeContextResolver({
-        db,
-        sessionEngine: engine,
-        venue: options.venue,
-        mcpDispatch: options.mcpDispatch,
-        waitForBirth: async () => {},
-        toolSurface: () => surface,
-      });
-      expect((await resolver(session.id))?.toolSurface).toContain("automation.run");
-      // A cold turn recomputes today's candidate, which no longer names it;
-      // the additive refresh retains what the record already held.
-      const native = vi.mocked(pi.createPiRuntimeHost).mock.calls[0]![0];
-      await native.refreshRuntimeContext!(session.id, { trigger: "cold-turn", model });
-      expect(await surface.recorded(session.id)).toContain("automation.run");
-    } finally {
-      await assembled.sessionRuntime?.close();
-    }
-  });
 
   it("recomputes additive effective surfaces and bounds delegate MCP refreshes by their parent", async () => {
     const options = await fixture();

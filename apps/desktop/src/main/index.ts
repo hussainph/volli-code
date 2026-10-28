@@ -1135,7 +1135,9 @@ const appStartup = app.whenReady().then(async () => {
       ? createDesktopMacRunner({
           ...runnerLaunch,
           convex: convexClient,
-          ...(cloudStore === null ? {} : { sync: cloudStore.connect }),
+          ...(cloudStore === null
+            ? {}
+            : { sync: cloudStore.connect, jobCapabilities: cloudStore.jobCapabilities }),
           ...(smokeRunnerPower === null ? {} : { connectionTransform: smokeRunnerPower.wrap }),
           account: {
             subscribe: (listener) => account.subscribe(listener),

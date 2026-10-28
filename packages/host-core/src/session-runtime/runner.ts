@@ -45,7 +45,12 @@ import type { HostHandlerMap } from "../handlers/handler-map";
 import { createHostHandlers, type HostHandlerOptions } from "../handlers/host-handlers";
 import { createAttachmentIdentities } from "./attachment-identity";
 import { createRuntimeAssembly, type RuntimeAssemblyOptions } from "./assembly";
-import { createRuntimeAutomations, type RuntimeAutomations } from "./automations";
+import {
+  automationPromptSupply,
+  createRuntimeAutomations,
+  type RuntimeAutomations,
+} from "./automations";
+import { composesLocalAutomations } from "../automations/availability";
 import { createRuntimeContextResolver } from "./context";
 import { createTicketSessionDelegationStore } from "./delegation-store";
 import {
@@ -254,10 +259,11 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
           dispose: undefined,
         };
   const sessionEngine = product.engine;
-  // Automations are a local-launch feature until VC-569 (VC-952). The chosen
-  // product store decides, never the `cloud` flag: a local launch with the
-  // flag on still runs its own Automations.
-  const automationsAvailable = store.kind === "local";
+  // The local Automation service (its SQLite engine, scheduler and armed
+  // timers) runs only over a local store. A cloud store's Automations live in
+  // Volli Cloud and run here as `automation.run` jobs; the chosen store
+  // decides, never the `cloud` flag.
+  const localAutomations = composesLocalAutomations(store.kind);
   // One runtime per host's Session services, claimed before anything is built.
   const bindSessionRuntime = live?.[SESSION_RUNTIME].claim();
   const runtimeServices = live?.runtimeServices;
@@ -371,7 +377,6 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     ...(input.capabilities.browser === undefined ? {} : { browser: input.capabilities.browser }),
     askUser: input.capabilities.askUser,
     requestSecret: input.capabilities.requestSecret,
-    automationsAvailable,
     beforeExecution: input.beforeExecution,
     concurrencyEnvFor,
     // The facade/tool-door cycle: no verb runs before both exist, and every
@@ -407,7 +412,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     piRuntimeHost: assembly.piRuntimeHost,
     homeDir: input.homeDir,
     cloudEnabled: () => input.cloudEnabled(),
-    automationsAvailable,
+    automationsAvailable: localAutomations,
     log: hostLogger("automations"),
   });
   const facade = createRuntimeSessionFacade({
@@ -435,7 +440,6 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     handlers: (ready) => handlersFor(ready),
     ...(product.projects === undefined ? {} : { projects: product.projects }),
     inProcessWatches: product.inProcessWatches,
-    automationsAvailable,
     ...(store.kind === "cloud" ? { cloudSessionVerbs: store.cloud.cloudSessionVerbs } : {}),
   });
   let handlerMap: HostHandlerMap | undefined;
@@ -548,6 +552,31 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
           releaseTurnStarts: () => runtime.releaseTurnStarts(),
         }),
   });
+  /** A cloud store's Automation Runs start through the same recovered Session services. */
+  const bindCloudAutomations = (cloud: CloudProductStore, ready: RunnerReady): void => {
+    const services = recoveredRuntimeSessionServices(ready);
+    const { sessions, autoTitler } = services;
+    if (sessions === null || services.runtime === null) return;
+    cloud.bindAutomations({
+      sessions,
+      runtime: services.runtime,
+      promptSupply: automationPromptSupply({
+        directories: { dataDir: host.dataDir, homeDir: input.homeDir },
+        cloudEnabled: () => input.cloudEnabled(),
+        // The folder is this runner's checkout; the shadow row only keeps skill modes.
+        project: (projectId) => ({
+          path: cloud.projectPath(projectId),
+          skillModes: (db === null ? undefined : getProjectById(db, projectId))?.skillModes ?? {},
+        }),
+      }),
+      ...(autoTitler === null
+        ? {}
+        : { refineAutoTitle: (request) => void autoTitler.refine(request) }),
+      notify: (request) => {
+        ports.attention.deliver(request);
+      },
+    });
+  };
   const close = async (): Promise<void> => {
     try {
       await lifecycle.close();
@@ -573,6 +602,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
         const ready = await lifecycle.ready();
         // Nothing schedules before runtime recovery.
         automations.start(recoveredSessionAutomationPorts(ready));
+        if (store.kind === "cloud") bindCloudAutomations(store.cloud, ready);
         try {
           await edge.bind?.(ready);
         } catch (error) {

@@ -875,3 +875,123 @@ it("wires retention reclaim to fresh backend dates/PR facts and the machine TTL"
     expect(existsSync(path)).toBe(expected !== "reclaimed");
   }
 }, 20_000);
+
+it("runs a cloud Automation Run through connect/inbox/journal: fenced context, runner-born Session, drained creation", async () => {
+  const f = fixture();
+  const a = f.store();
+  expect(a.jobCapabilities).toEqual(["automation.run"]);
+  const remote = connect(f, a);
+  const SESSION = "00000000-0000-4000-8000-000000000041";
+  const RUN = "00000000-0000-4000-8000-000000000042";
+  const AUTOMATION = "00000000-0000-4000-8000-000000000043";
+  const payload = {
+    trigger: "arrival",
+    automationId: AUTOMATION,
+    ticketId: TICKET,
+    from: "todo",
+    status: "doing",
+    origin: "chosen",
+    armedByUserId: null,
+    runId: RUN,
+    sessionId: SESSION,
+    dueAt: 0,
+    missedCount: 0,
+    attendance: "attended",
+    modelOverride: null,
+    requestedBySessionId: null,
+  };
+  remote.query.mockImplementation((async (name: string, input: Record<string, unknown>) =>
+    name === "automationRunner:runContext"
+      ? {
+          kind: "ready",
+          payload,
+          projectId: PROJECT,
+          automation: {
+            id: AUTOMATION,
+            projectId: PROJECT,
+            name: "Review",
+            instructions: "Review the work",
+            trigger: { kind: "columns", columns: ["doing"] },
+            runtime: null,
+            deletedAt: null,
+          },
+          ticket: { id: TICKET, projectId: PROJECT, status: "doing", archived: false },
+          columnArming: null,
+          scheduleArming: null,
+          previousRunActive: false,
+        }
+      : { ...f.facts, sessionId: input.sessionId, ownerUserId: a.ownerUserId }) as never);
+  const model = { providerId: "scripted", modelId: "test", reasoningLevel: "off" } as const;
+  const command = vi.fn(async () => ({ receipt: { status: "accepted" } }));
+  a.bindAutomations({
+    sessions: {
+      // The facade's runner-born birth, over this store's owner engine.
+      create: async (input) => {
+        await a.sessionBirth.beforeCreate(input);
+        await a.engine.createSession({
+          commandId: `${input.operationId}:create`,
+          requestedSessionId: input.requestedSessionId!,
+          projectId: input.projectId,
+          ticketId: input.ticketId,
+          role: input.role,
+          parentSessionId: null,
+          title: input.title,
+          provenance,
+        });
+        return { sessionId: input.requestedSessionId!, model };
+      },
+      attach: async (input) => ({
+        sessionId: input.sessionId,
+        state: "ready",
+        receipt: null,
+        throughSequence: 0,
+      }),
+    },
+    runtime: {
+      command,
+      openNativeBindings: () => [],
+      reportMessageDeliveryFailure: async () => {},
+    } as never,
+    promptSupply: async () => ({ templates: [], skills: [] }),
+    notify: () => {},
+  });
+  const job = {
+    job: {
+      id: "00000000-0000-4000-8000-000000000044",
+      kind: "automation.run",
+      runnerId: RUNNER_A,
+      projectId: PROJECT,
+      ticketId: TICKET,
+      sessionId: SESSION,
+      workingCopyId: null,
+      commandId: null,
+      payload,
+      priority: "normal",
+      createdBy: { kind: "volli", reason: "policy" },
+      createdAt: 0,
+      availableAt: 0,
+    },
+    lease: { bootId: "boot", attempt: 1, expiresAt: Date.now() + 60_000 },
+  } as unknown as ClaimedJob;
+  remote.queued.push(job);
+  remote.sync.start();
+  await vi.waitFor(() => expect(remote.completed.get(job.job.id)?.status).toBe("done"), {
+    timeout: 10_000,
+  });
+  expect(remote.completed.get(job.job.id)).toEqual({
+    status: "done",
+    result: { kind: "started", sessionId: SESSION, model, attendance: "attended" },
+  });
+  expect(remote.query).toHaveBeenCalledWith("automationRunner:runContext", {
+    jobId: job.job.id,
+    bootId: "boot",
+    attempt: 1,
+  });
+  expect(command).toHaveBeenCalledOnce();
+  // The Session is this owner's and its creation drains to Volli Cloud.
+  expect(a.ownsSession(SESSION)).toBe(true);
+  await a.drain.idle();
+  expect(remote.accepted).toContainEqual(
+    expect.objectContaining({ sessionId: SESSION, kind: "session.created" }),
+  );
+}, 20_000);

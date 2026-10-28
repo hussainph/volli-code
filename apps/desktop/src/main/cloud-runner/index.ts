@@ -24,6 +24,7 @@ import {
   runnerHostFacts,
   type ConvexClientModule,
   type ConnectBackend,
+  type RunnerHostCapabilities,
 } from "@volli/host-core/cloud-runner";
 import type { RunnerAccountPort } from "@volli/host-core/handlers";
 import type { PowerPort } from "@volli/host-core/ports";
@@ -127,6 +128,13 @@ export interface DesktopMacRunnerInput {
   /** The agent browser, as Sessions here can use it now (closed while in the menu bar). */
   readonly browser: () => RunnerBrowserCapability;
   readonly sync?: RunnerConnectionDeps["sync"];
+  /**
+   * The job kinds the cloud store's inbox executes beyond Sessions and Working
+   * copies (`automation.run`), reported in `capabilities.tools`: the backend
+   * routes such a job only to a runner that names it, so an older build is
+   * never handed one.
+   */
+  readonly jobCapabilities?: readonly string[];
   /** VC-938 must supply its in-process issuer here before composing an embedded runner. */
   readonly tokens?: RunnerConnectionDeps["tokens"];
   /** Dual-locked power acceptance seam; absent in ordinary launches. */
@@ -134,6 +142,23 @@ export interface DesktopMacRunnerInput {
   readonly log: {
     info(message: string, fields?: Record<string, unknown>): void;
     warn(message: string, fields?: Record<string, unknown>): void;
+  };
+}
+
+/** What this Mac reports about itself beyond the platform probe. */
+export function thisMacCapabilities(
+  input: Pick<DesktopMacRunnerInput, "appVersion" | "browser" | "jobCapabilities">,
+): RunnerHostCapabilities {
+  return {
+    version: input.appVersion,
+    installMode: "app",
+    terminals: true,
+    browser: input.browser(),
+    docker: false,
+    maxConcurrentSessions: Math.max(1, os.availableParallelism()),
+    // No platform tools are probed yet; the executed job kinds ride here.
+    tools: [...(input.jobCapabilities ?? [])],
+    localCredentials: [],
   };
 }
 
@@ -168,17 +193,7 @@ export function createDesktopMacRunner(input: DesktopMacRunnerInput): MacRunner 
           input.dataDir,
         );
       },
-      readCapabilities: () =>
-        probeRunnerCapabilities({
-          version: input.appVersion,
-          installMode: "app",
-          terminals: true,
-          browser: input.browser(),
-          docker: false,
-          maxConcurrentSessions: Math.max(1, os.availableParallelism()),
-          tools: [],
-          localCredentials: [],
-        }),
+      readCapabilities: () => probeRunnerCapabilities(thisMacCapabilities(input)),
       log: input.log,
     }),
     host: async () => ({

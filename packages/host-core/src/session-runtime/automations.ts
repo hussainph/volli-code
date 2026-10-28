@@ -18,6 +18,7 @@ import {
   projectCommandsDir,
   projectSkillsDir,
   skillResourcePart,
+  type SkillModes,
 } from "@volli/shared";
 import type { DbHandle } from "../index";
 import type { Logger } from "../log/logger";
@@ -33,6 +34,7 @@ import {
   type HostAutomationExecution,
 } from "../automation-services";
 import type { AutomationService } from "../automations/service";
+import type { AutomationPromptSupply } from "../automations/run";
 import type { PiRuntimeHost } from "./pi-adapter";
 import type { Sessions } from "./sessions";
 import type { AutoTitler } from "./auto-title";
@@ -129,6 +131,47 @@ function degradedRuntimeAutomations(): RuntimeAutomations {
   };
 }
 
+/**
+ * The composer's `/` supply for one project, as a Run expands its
+ * Instructions: the project's and the person's prompt templates, and its
+ * skills under the project's skill modes. Shared by the local Run door and
+ * the cloud runner's `automation.run` executor, which differ only in where a
+ * project's folder is (a local project row, or this runner's checkout
+ * registry) and so take it as a port. Policy is read again after the disk
+ * I/O: a concurrent Settings write may disable a skill meanwhile.
+ */
+export function automationPromptSupply(input: {
+  directories: { dataDir: string; homeDir: string };
+  cloudEnabled: () => boolean;
+  /** `undefined`: no such project. A `null` path: not located on this machine. */
+  project(projectId: string): { path: string | null; skillModes?: SkillModes } | undefined;
+}): (projectId: string) => Promise<AutomationPromptSupply> {
+  return async (projectId) => {
+    const project = input.project(projectId);
+    if (!project) throw new Error("Unknown project");
+    if (project.path === null) throw new Error("This project's folder is not on this machine.");
+    const [loaded, skills] = await Promise.all([
+      loadPromptTemplates({
+        projectCommandsDir: projectCommandsDir(project.path),
+        globalCommandsDir: globalCommandsRoot(input.directories.dataDir),
+        cloud: input.cloudEnabled(),
+      }),
+      loadSkills({
+        projectSkillsDir: projectSkillsDir(project.path),
+        globalSkillsDir: globalSkillsDir(input.directories.homeDir),
+      }),
+    ]);
+    if (!loaded.ok) throw new Error(loaded.error);
+    if (!skills.ok) throw new Error(skills.error);
+    const currentProject = input.project(projectId);
+    if (!currentProject) throw new Error("Unknown project");
+    return {
+      templates: loaded.templates,
+      skills: applySkillModes(skills.skills, currentProject.skillModes ?? {}),
+    };
+  };
+}
+
 /** The runner's Session side, or null when no Session runtime booted this launch. */
 function automationSessionPorts(
   db: Database.Database,
@@ -139,29 +182,11 @@ function automationSessionPorts(
   if (sessions === null || runtime === null) return null;
   return {
     sessions,
-    promptSupply: async (projectId) => {
-      const project = getProjectById(db, projectId);
-      if (!project) throw new Error("Unknown project");
-      const [loaded, skills] = await Promise.all([
-        loadPromptTemplates({
-          projectCommandsDir: projectCommandsDir(project.path),
-          globalCommandsDir: globalCommandsRoot(directories.dataDir),
-          cloud: cloudEnabled(),
-        }),
-        loadSkills({
-          projectSkillsDir: projectSkillsDir(project.path),
-          globalSkillsDir: globalSkillsDir(directories.homeDir),
-        }),
-      ]);
-      if (!loaded.ok) throw new Error(loaded.error);
-      if (!skills.ok) throw new Error(skills.error);
-      const currentProject = getProjectById(db, projectId);
-      if (!currentProject) throw new Error("Unknown project");
-      return {
-        templates: loaded.templates,
-        skills: applySkillModes(skills.skills, currentProject.skillModes ?? {}),
-      };
-    },
+    promptSupply: automationPromptSupply({
+      directories,
+      cloudEnabled,
+      project: (projectId) => getProjectById(db, projectId),
+    }),
     deliverInstructions: ({ sessionId, commandId, messageId, text, resources, origin }) =>
       runtime.command({
         origin,

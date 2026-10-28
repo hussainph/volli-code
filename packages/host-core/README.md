@@ -245,11 +245,19 @@ and scheduler, started at recovered readiness. Execution is an explicit
 idle/unavailable/ready variant. After timer producers stop, `settled()` joins
 recovery, attempts and Run boots before SQLite closes. A cloud-store launch
 composes the degraded variant instead — no service, runner, scheduler or
-armed timer, whatever the `cloud` flag says — and passes
-`automationsAvailable: false` to the Session assembly and the tool door: a new
-Session is offered no `automation.run` (direct or through Code Mode), while a
-Session already frozen with it is replayed unchanged and refused at dispatch
-with one line (VC-952).
+armed timer, whatever the `cloud` flag says (`automations/availability.ts`):
+its Automations live in Volli Cloud, which owns the records and the clock and
+queues each due Run as an `automation.run` job for the runner the armer (or
+caller) chose. The cloud store executes that job
+(`cloud-store/automation-jobs.ts`): it re-checks the Run against the
+lease-fenced `automationRunner.runContext`, starts the Session through the
+ordinary runner-born start under ids derived from the Run's id (a crash resumes
+the same Session and first message), and completes the job `started`,
+`abandoned` or `refused`. It advertises `automation.run` in the runner's
+capability report, alerts an unattended Run's owner through
+`attention.raiseFromRunner` (`cloud-store/automation-attention.ts`), and the
+agent's `automation_run` queues the Run in Volli Cloud
+(`cloud-agent/session-verbs.ts`).
 `createHostAgentCommands` builds the socket verb door over the host's
 [handler map](#the-handler-map); `session-runtime/agents`
 owns the lazy tool door and watches. `createHostAgentSocket` composes the

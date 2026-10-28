@@ -272,6 +272,7 @@ describe("runner composition", () => {
     const bindRuntime = vi.spyOn(cloud, "bindRuntime");
     const bindEnvironment = vi.spyOn(cloud, "bindEnvironment");
     const bindNotices = vi.spyOn(cloud, "bindNotices");
+    const bindAutomations = vi.spyOn(cloud, "bindAutomations");
     const dispose = vi.spyOn(cloud, "dispose");
     const [
       assemblyModule,
@@ -302,15 +303,15 @@ describe("runner composition", () => {
     const buildAutomations = vi.spyOn(automationServicesModule, "createHostAutomations");
     const buildScheduler = vi.spyOn(schedulerModule, "createAutomationScheduler");
     const f = compose(fixture, { kind: "cloud", host, cloud });
-    // VC-952: a cloud launch composes no local Automation module at all — no
-    // service, no runner, no scheduler — whatever the `cloud` flag says.
+    // A cloud launch composes no local Automation module at all — no service,
+    // no runner, no scheduler — whatever the `cloud` flag says: its Runs are
+    // Volli Cloud's, executed here as `automation.run` jobs.
     expect(f.runner.automations.kind).toBe("degraded");
     expect(f.runner.automations).not.toHaveProperty("service");
     expect(f.runner.automations).not.toHaveProperty("execution");
     expect(buildAutomations).not.toHaveBeenCalled();
     const assembly = buildAssembly.mock.lastCall![0];
     const assembled = buildAssembly.mock.results[0]!.value;
-    expect(assembly.automationsAvailable).toBe(false);
     expect(assembly.sessionEngine).toBe(cloud.engine);
     expect(assembly.locations).toBe(cloud.locations);
     expect(assembly.ownsSession).toBe(cloud.ownsSession);
@@ -336,7 +337,6 @@ describe("runner composition", () => {
     const agents = buildAgents.mock.lastCall![0];
     expect(agents.services.sessionEngine).toBe(cloud.engine);
     expect(agents.inProcessWatches).toBe(false);
-    expect(agents.automationsAvailable).toBe(false);
     expect(agents.projects!()).toMatchObject([{ ...cloudProject, path: checkoutPath }]);
     expect(bindEnvironment).toHaveBeenCalledExactlyOnceWith(expect.any(Function));
     expect(bindRuntime).toHaveBeenCalledExactlyOnceWith(
@@ -347,10 +347,19 @@ describe("runner composition", () => {
     // Backend-queued notices enter this launch's owner-scoped outbox (VC-887).
     expect(bindNotices).toHaveBeenCalledExactlyOnceWith({ enqueue: expect.any(Function) });
     const notices = bindNotices.mock.lastCall![0];
+    expect(bindAutomations).not.toHaveBeenCalled();
     await host.start(f.runner.owner());
     expect(buildScheduler).not.toHaveBeenCalled();
-    // A new cloud Session's surface omits the verb, direct and through Code
-    // Mode: the route is derived from the surface, so neither can reach it.
+    // Runtime recovery hands the cloud store the Session services a Run
+    // starts through, with its prompt supply from this runner's checkout.
+    expect(bindAutomations).toHaveBeenCalledOnce();
+    const automationPorts = bindAutomations.mock.lastCall![0];
+    expect(automationPorts.runtime).toBe(f.runner.runtime);
+    await expect(automationPorts.promptSupply(cloudProject.id)).resolves.toMatchObject({
+      templates: [],
+    });
+    // A new cloud Session's surface holds the verb, direct and through Code
+    // Mode: Volli Cloud queues the Run (`cloud-agent/session-verbs.ts`).
     const birth: CodeModeBirth = {
       offered: true,
       mode: "both",
@@ -360,12 +369,10 @@ describe("runner composition", () => {
     const surface = assembled.sessionToolSurface;
     expect(surface).not.toBeNull();
     const tools = surface!.resolve("project", [], undefined, [], birth, false);
-    expect(tools).not.toContain("automation.run");
+    expect(tools).toContain("automation.run");
     const routes = assembly.codeMode.surfaceFor(birth, tools, [])?.routes;
-    expect(Object.keys(routes ?? {})).not.toContain("automation.run");
-    expect(routes?.["automation.run"]).toBeUndefined();
+    expect(routes?.["automation.run"]).toBeDefined();
     expect(buildToolDoor.mock.lastCall![0].cloudSessionVerbs).toBe(cloud.cloudSessionVerbs);
-    expect(buildToolDoor.mock.lastCall![0].automationsAvailable).toBe(false);
     expect(buildToolDoor.mock.lastCall![0].authorityPolicy(cloudProject.id)).toBe(
       DEFAULT_AUTHORITY_POLICY,
     );

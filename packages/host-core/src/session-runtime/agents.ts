@@ -35,12 +35,6 @@ export interface RuntimeSessionAgentOptions {
   projects?(): readonly Project[];
   /** Cloud watches are backend jobs, never an additional in-process delivery. */
   inProcessWatches?: boolean;
-  /**
-   * Whether this launch has Automations at all (VC-952). A cloud launch passes
-   * `false`, so the tool door refuses a frozen `automation.run` before any
-   * project or Ticket resolution; absent keeps a local launch's answer.
-   */
-  automationsAvailable?: boolean;
   cloudSessionVerbs?: import("../cloud-agent/session-verbs").CloudSessionVerbs;
 }
 
@@ -155,9 +149,6 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
       ...(options.cloudSessionVerbs === undefined
         ? {}
         : { cloudSessionVerbs: options.cloudSessionVerbs }),
-      ...(options.automationsAvailable === undefined
-        ? {}
-        : { automationsAvailable: options.automationsAvailable }),
       delegation: sessionDelegation,
       automations: () => {
         if (runtimeAutomations.kind === "degraded") return null;

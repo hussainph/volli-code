@@ -99,6 +99,7 @@ describe("app_state key registry", () => {
       "volli:runner-resident": "client-local stays",
       "volli:runner-site:": "client-local stays",
       "volli:runner-report:": "client-local stays",
+      "volli:runner-automation-run:": "client-local stays",
       "volli:model-picker-view": "client-local VC-572",
       "volli:vc354-perf:": "client-local stays",
       "volli:experimental-flags": "split VC-577",

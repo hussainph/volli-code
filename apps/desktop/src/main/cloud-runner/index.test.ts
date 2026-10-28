@@ -6,10 +6,24 @@ import { chooseProductStore } from "../cloud-launch";
 import {
   createDesktopMacRunner,
   runnerAccountPort,
+  thisMacCapabilities,
   thisMacRunnerLaunch,
   type DesktopMacRunnerInput,
 } from "./index";
 import type { MacRunner } from "./mac-runner";
+
+const browser = () => ({ state: "available", backend: "electron" }) as const;
+
+describe("what this Mac reports it can do", () => {
+  it("names the job kinds its cloud store executes, so the backend routes them here", () => {
+    expect(
+      thisMacCapabilities({ appVersion: "0.3.0", browser, jobCapabilities: ["automation.run"] }),
+    ).toMatchObject({ version: "0.3.0", installMode: "app", tools: ["automation.run"] });
+  });
+  it("an executor-less composition names none: no Automation Run is routed to it", () => {
+    expect(thisMacCapabilities({ appVersion: "0.3.0", browser }).tools).toEqual([]);
+  });
+});
 
 describe("which launch makes this Mac a runner", () => {
   it("refuses to pair an embedded deployment with a hosted token exchange", () => {

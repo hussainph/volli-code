@@ -31,6 +31,7 @@
  * the model's move) and a host that could not answer at all (a failed call).
  */
 
+import { resolveAutomationByName } from "./automations/by-name";
 import type Database from "better-sqlite3";
 import {
   AGENT_MODEL_TIERS,
@@ -102,7 +103,6 @@ import {
 import type { McpSettingsService } from "./mcp/settings";
 import type { McpVerbOptions } from "./mcp/verbs";
 import { optionalVerbText as optionalText, requiredVerbText as requiredText } from "./verb-input";
-import { AUTOMATIONS_UNAVAILABLE_IN_CLOUD } from "./automations/availability";
 import { sessionCreateCommandId } from "./session-runtime/sessions";
 import { startSessionModelOverride } from "./session-runtime/start-session";
 import type { StartSessionModelChoice } from "./session-runtime/start-session";
@@ -167,14 +167,6 @@ export interface AgentToolDoorOptions {
    * never came up this launch — the same absence the IPC transport reports.
    */
   automations: () => AutomationToolPort | null;
-  /**
-   * Whether this launch has Automations at all (VC-952). A cloud launch passes
-   * `false`: a Session already frozen with `automation.run` is refused at this
-   * door before the handler resolves a project or Ticket (the frozen rows a
-   * cloud launch keeps only as machine shadows). Absent keeps a local launch's
-   * answer.
-   */
-  automationsAvailable?: boolean;
   /** The caller's project policy, read per call: budgets, and what a watch may be woken by. */
   authorityPolicy: (projectId: string) => AuthorityPolicy;
   /**
@@ -736,46 +728,6 @@ function sendWithdrawal(signal: AbortSignal): {
 }
 
 /**
- * One saved Automation, found the way a person finds one: by what it is called.
- *
- * Matched case-insensitively, and by id as well, so an id read out of a Run
- * record still works. Where a project's own Automation and a global one share a
- * name the project's own wins — which is the app's listing rule
- * (`listAutomationsForProject` orders the project's first), not a rule invented
- * here. A name that still matches two records is refused rather than guessed:
- * two Automations with one name do different work, and starting the wrong one
- * spends a model and writes a Session.
- */
-function resolveAutomation(
-  listed: readonly Automation[],
-  named: string,
-): { ok: true; automation: Automation } | { ok: false; text: string } {
-  const wanted = named.toLowerCase();
-  const matches = listed.filter(
-    (automation) => automation.id === named || automation.name.trim().toLowerCase() === wanted,
-  );
-  if (matches.length === 0) {
-    const names = listed.map((automation) => JSON.stringify(automation.name)).join(", ");
-    return {
-      ok: false,
-      text:
-        listed.length === 0
-          ? `No Automation called ${JSON.stringify(named)} here, and this project lists none at all, so nothing was started. A person creates one in the app first.`
-          : `No Automation called ${JSON.stringify(named)} in this project, so nothing was started. This project lists: ${names}.`,
-    };
-  }
-  const own = matches.filter((automation) => automation.projectId !== null);
-  const preferred = own.length > 0 ? own : matches;
-  if (preferred.length > 1) {
-    return {
-      ok: false,
-      text: `This project lists more than one Automation called ${JSON.stringify(named)}, so nothing was started rather than the wrong one. Ask a person which to run, or have the duplicate renamed.`,
-    };
-  }
-  return { ok: true, automation: preferred[0]! };
-}
-
-/**
  * Start one Automation Run on one Ticket in the caller's project (VC-134).
  *
  * The door's whole job is resolution: a name and a display id become an
@@ -831,7 +783,7 @@ async function runAutomationTool(
       `No Ticket ${ticketArg.value} in this project, so nothing was started.${reason}`,
     );
   }
-  const found = resolveAutomation(automations.list(project.id), named.value);
+  const found = resolveAutomationByName(automations.list(project.id), named.value);
   if (!found.ok) return refusal(found.text);
 
   const outcome = await automations.run({
@@ -1131,13 +1083,6 @@ export function createAgentToolDoor(options: AgentToolDoorOptions): AgentToolDoo
       return refusal(`${request.verb} is not a verb this build can run.`);
     }
     const policy = toolDoorPolicy(request.verb);
-    // VC-952: a cloud launch has no Automations. A Session born locally can
-    // still reattach here holding the frozen tool, so refuse it at dispatch —
-    // before any handler reads projects or resolves a Ticket through this
-    // launch's shadow rows — and never let a local Run door answer.
-    if (request.verb === "automation.run" && options.automationsAvailable === false) {
-      return refusal(AUTOMATIONS_UNAVAILABLE_IN_CLOUD);
-    }
     if (request.verb === "session.start") {
       const cloud = await options.cloudSessionVerbs?.tool(session, request, signal);
       return cloud ?? startSessionTool(options, policy, session, request, signal, budgetAsk);

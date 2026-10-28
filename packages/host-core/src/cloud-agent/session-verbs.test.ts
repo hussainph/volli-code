@@ -10,7 +10,7 @@ import {
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { createTestSessionEngine } from "../testing/session-engine";
-import { AUTOMATIONS_UNAVAILABLE_IN_CLOUD } from "../automations/availability";
+import { agentToolCommandId } from "../cloud-runner/derived-id";
 import { createAgentBackend } from "./agent-backend";
 import { createCloudFunctionsClient } from "./functions-client";
 import { createCloudSessionVerbs } from "./session-verbs";
@@ -79,6 +79,12 @@ async function fixture() {
   };
   let commandStatus = "queued";
   let dropCommand = false;
+  let automations: { id: string; name: string; projectId: string }[] = [
+    { id: "a1000000-0000-4000-8000-000000000001", name: "Nightly sweep", projectId: PROJECT },
+  ];
+  let ticketProject = PROJECT;
+  let runner = { id: "r1000000-0000-4000-8000-000000000001", name: "Dana's Mac", status: "online" };
+  let runMissing = false;
   server = createServer(async (req, res) => {
     let body = "";
     for await (const chunk of req) body += chunk;
@@ -112,8 +118,25 @@ async function fixture() {
         runner: { name: "Other Mac" },
       };
     } else if (wire.path === "board:resolveTicketKey")
-      value = { ticketId: "71000000-0000-4000-8000-000000000001", projectId: PROJECT, key: "VC-1" };
-    else if (wire.path === "watches:watch") value = { watchId: "watch-id" };
+      value = {
+        ticketId: "71000000-0000-4000-8000-000000000001",
+        projectId: ticketProject,
+        key: "VC-1",
+      };
+    else if (wire.path === "automations:list") value = automations;
+    else if (wire.path === "automations:run") {
+      if (runMissing) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            status: "error",
+            errorMessage: "Could not find public function for 'automations:run'.",
+          }),
+        );
+        return;
+      }
+      value = { runId: "run-1", sessionId: "51000000-0000-4000-8000-000000000001", runner };
+    } else if (wire.path === "watches:watch") value = { watchId: "watch-id" };
     else if (wire.path === "watches:unwatch") value = { ended: 1 };
     else throw new Error(`Unexpected ${wire.path}`);
     res.writeHead(200, { "content-type": "application/json" });
@@ -153,6 +176,18 @@ async function fixture() {
     },
     dropCommand: () => {
       dropCommand = true;
+    },
+    automations: (value: typeof automations) => {
+      automations = value;
+    },
+    ticketProject: (value: string) => {
+      ticketProject = value;
+    },
+    runner: (value: typeof runner) => {
+      runner = value;
+    },
+    runMissing: () => {
+      runMissing = true;
     },
     offline: () => {
       connected = false;
@@ -292,12 +327,68 @@ describe("cloud Session target routing", () => {
       "connection",
     );
   });
-  it("refuses automation.run instead of substituting a local Run (VC-952)", async () => {
+  it("queues automation.run in Volli Cloud under a command id derived from the tool call", async () => {
     const f = await fixture();
-    expect((await f.tool("automation.run", {}))?.text).toBe(
-      `Volli refused: ${AUTOMATIONS_UNAVAILABLE_IN_CLOUD}`,
+    const result = await f.tool("automation.run", { automation: "nightly SWEEP", ticket: "VC-1" });
+    expect(result?.text).toContain(
+      'Queued "Nightly sweep" on VC-1 as Session 51000000 on Dana\'s Mac.',
     );
-    expect(f.calls).toEqual([]);
+    expect(result?.text).toContain("watches the Run's Session");
+    const run = f.calls.find((call) => call.path === "automations:run");
+    expect(run?.args).toEqual({
+      commandId: agentToolCommandId(CALLER, "call-1"),
+      automationId: "a1000000-0000-4000-8000-000000000001",
+      ticketId: "71000000-0000-4000-8000-000000000001",
+    });
+    // Under the Session's Agent token, never the runner's own.
+    expect(run?.auth).toBe("Bearer agent-token");
+    expect(f.calls.find((call) => call.path === "automations:list")?.args).toEqual({
+      projectId: PROJECT,
+    });
+    // A Run waiting for an asleep runner says so.
+    f.runner({ id: "r1", name: "Dana's Mac", status: "asleep" });
+    expect(
+      (await f.tool("automation.run", { automation: "Nightly sweep", ticket: "VC-1" }, "call-2"))
+        ?.text,
+    ).toContain("on Dana's Mac (asleep; it starts when that runner is back).");
+  });
+  it("answers automation.run's refusals without queuing a Run", async () => {
+    const f = await fixture();
+    expect((await f.tool("automation.run", { ticket: "VC-1" }))?.text).toContain(
+      "automation must be the name",
+    );
+    expect((await f.tool("automation.run", { automation: "Nightly sweep" }))?.text).toContain(
+      "ticket must be a Ticket display id",
+    );
+    expect(
+      (await f.tool("automation.run", { automation: "Weekly", ticket: "VC-1" }))?.text,
+    ).toContain('This project lists: "Nightly sweep".');
+    f.automations([
+      { id: "a1", name: "Sweep", projectId: PROJECT },
+      { id: "a2", name: "sweep ", projectId: PROJECT },
+    ]);
+    expect(
+      (await f.tool("automation.run", { automation: "sweep", ticket: "VC-1" }))?.text,
+    ).toContain("more than one Automation");
+    f.automations([]);
+    expect(
+      (await f.tool("automation.run", { automation: "Sweep", ticket: "VC-1" }))?.text,
+    ).toContain("lists none at all");
+    f.automations([{ id: "a1", name: "Sweep", projectId: PROJECT }]);
+    f.ticketProject("b0000000-0000-4000-8000-000000000001");
+    expect((await f.tool("automation.run", { automation: "Sweep", ticket: "VC-1" }))?.text).toBe(
+      "Volli refused: No Ticket VC-1 in this project, so nothing was started.",
+    );
+    expect(f.calls.some((call) => call.path === "automations:run")).toBe(false);
+    f.ticketProject(PROJECT);
+    f.runMissing();
+    expect((await f.tool("automation.run", { automation: "Sweep", ticket: "VC-1" }))?.text).toBe(
+      "Volli refused: Volli Cloud cannot run Automations yet, so nothing was started.",
+    );
+    f.offline();
+    expect(
+      (await f.tool("automation.run", { automation: "Sweep", ticket: "VC-1" }))?.text,
+    ).toContain("offline");
   });
   it("refuses unavailable cloud workflows instead of substituting local behavior", async () => {
     const f = await fixture();
