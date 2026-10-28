@@ -147,7 +147,6 @@ export function createCloudProductStore(options: {
     ownerUserId,
     engine: host.sessionEngine,
     registry,
-    runnerId: () => active?.runnerId ?? options.runnerId(),
     query: async (input) => {
       const live = link();
       if (live.query === undefined) throw new Error("Runner context reads are unavailable.");
@@ -211,13 +210,21 @@ export function createCloudProductStore(options: {
       )) as { displayName: string };
     },
   });
+  // Shadow project paths are inert FK placeholders. Every machine-facing
+  // consumer resolves the checkout through this registry, never the shadow.
+  const projectPath = (projectId: string): string | null =>
+    (active?.runnerId ?? options.runnerId()) === null
+      ? null
+      : (registry().checkouts.ofProject(projectId)?.absPath ?? null);
   const agentCommands = {
     // Cloud project policies have not shipped; never borrow a frozen local policy.
     readAuthorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
     projects: () =>
       owner.projectIds().flatMap((id) => {
         const project = getProjectById(db, id);
-        return project === undefined ? [] : [project];
+        const path = projectPath(id);
+        // An unlocated Session has no executable project folder to report.
+        return project === undefined || path === null ? [] : [{ ...project, path }];
       }),
     cloudBoardVerbs: createCloudBoardVerbs({ backend: agentBackend }),
     cloudSessionVerbs,
@@ -316,6 +323,7 @@ export function createCloudProductStore(options: {
     engine: owner.engine,
     ownsSession: owner.owns,
     projectIds: owner.projectIds,
+    projectPath,
     agentCommands,
     cloudSessionVerbs,
     sessionBirth: { beforeCreate: context.beforeCreate },

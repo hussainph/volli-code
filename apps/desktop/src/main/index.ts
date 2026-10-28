@@ -191,7 +191,7 @@ import { decodeRunnerRecords } from "./cloud-runner/record";
 import { runnerTrayStatus } from "./cloud-runner/tray-status";
 import { keepCloudRunnerAvailable } from "./cloud-runner/residency";
 import { runnerSleepSimulation } from "./cloud-runner/smoke-power";
-import { createCloudCheckoutPort, folderPicker } from "./cloud-checkout";
+import { createCloudCheckoutPort, folderPicker, localProjectConfirmation } from "./cloud-checkout";
 import {
   CLOUD_RUNNER_APP_STATE_KEY,
   createDesktopMacRunner,
@@ -1612,6 +1612,13 @@ const appStartup = app.whenReady().then(async () => {
   const cloudCheckouts = createCloudCheckoutPort({
     enabled: () => isExperimentEnabled("cloud"),
     store: cloudStore,
+    localProjects: () => (sessionDb === null ? [] : listProjects(sessionDb)),
+    confirmLocalProject: localProjectConfirmation((options) => {
+      const owner = BrowserWindow.getFocusedWindow();
+      return owner === null
+        ? dialog.showMessageBox(options)
+        : dialog.showMessageBox(owner, options);
+    }),
     pickFolder: folderPicker((options) => {
       const owner = BrowserWindow.getFocusedWindow();
       return owner === null

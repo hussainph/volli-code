@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { LOCAL_RUNNER } from "@volli/shared";
 
 import type { LiveHostCore } from "../index";
 import { createBackendLink, type BackendConnection } from "../cloud-runner/backend-link";
@@ -107,7 +108,9 @@ const facts = (_args: Record<string, unknown>, patch: Record<string, unknown> = 
 
 describe("a cloud project's checkout on this Mac", () => {
   it("is unlocatable without a runner identity, missing until a folder is known", () => {
-    expect(fixture(null).store.checkouts.located(PROJECT)).toBeNull();
+    const unregistered = fixture(null).store;
+    expect(unregistered.checkouts.located(PROJECT)).toBeNull();
+    expect(unregistered.projectPath(PROJECT)).toBeNull();
     const { store } = fixture();
     expect(store.checkouts.located(PROJECT)).toBe(false);
   });
@@ -126,6 +129,29 @@ describe("a cloud project's checkout on this Mac", () => {
     db.prepare("DELETE FROM cloud_shadow_rows").run();
     rmSync(folder, { recursive: true });
     expect(store.checkouts.located(PROJECT)).toBe(false);
+  });
+
+  it("projects registered paths to machine readers without exposing shadow placeholders", async () => {
+    const { db, home, store } = fixture();
+    await store.sessionBirth.beforeCreate({ projectId: PROJECT, ticketId: null });
+    await store.engine.createSession({
+      commandId: "birth",
+      projectId: PROJECT,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: null,
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue: LOCAL_RUNNER },
+    });
+    expect(store.projectPath(PROJECT)).toBeNull();
+    expect(store.agentCommands.projects()).toEqual([]);
+    const absPath = join(home, "checkout");
+    store.registry().checkouts.register({ projectId: PROJECT, projectRepoId: REPO, absPath });
+    expect(store.projectPath(PROJECT)).toBe(absPath);
+    expect(store.agentCommands.projects()).toMatchObject([{ id: PROJECT, path: absPath }]);
+    expect(db.prepare("SELECT path FROM projects WHERE id=?").get(PROJECT)).not.toEqual({
+      path: absPath,
+    });
   });
 
   it("reads the project through runnerContext.forProject, naming nothing but the project", async () => {

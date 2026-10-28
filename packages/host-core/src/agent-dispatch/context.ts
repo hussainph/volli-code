@@ -282,7 +282,8 @@ export interface AgentCommandServiceOptions {
    * out.
    *
    * Production: the cloud product store's `agentCommands.projects` maps the
-   * owner's `projectIds` through `getProjectById`; desktop main passes it here.
+   * owner's located projects through the runner checkout registry, never a
+   * shadow row's placeholder path; desktop main and the runtime pass it here.
    */
   projects?: () => readonly Project[];
   /**

@@ -63,7 +63,6 @@ export function createCloudContext(options: {
   ownerUserId: string;
   engine: SessionEngine;
   registry(): RunnerPathRegistry;
-  runnerId?(): string | null;
   identityRoot?: string;
   query(input: CloudLocationRequest): Promise<CloudRunnerContext>;
 }) {
@@ -74,6 +73,23 @@ export function createCloudContext(options: {
   const displayIds = new Map<string, string>();
   const identityRoot = resolve(options.identityRoot ?? join(dirname(db.name), "cloud-identities"));
   const siteKey = (sessionId: string) => `volli:runner-site:${ownerUserId}:${sessionId}` as const;
+  const shadowPath = (projectId: string) =>
+    join(identityRoot, createHash("sha256").update(`${ownerUserId}\0${projectId}`).digest("hex"));
+  // Canary builds used checkout paths for shadows. Release those UNIQUE slots
+  // as soon as this account opens Cloud, even if it starts no new Session.
+  // Their real checkouts are already in project_checkout_paths.
+  withTransaction(db, () => {
+    const shadows = prepared<[string], { id: string; path: string }>(
+      db,
+      `SELECT projects.id, projects.path FROM projects JOIN cloud_shadow_rows s
+       ON s.kind='project' AND s.id=projects.id WHERE s.owner_user_id=?`,
+    ).all(ownerUserId);
+    for (const shadow of shadows) {
+      const path = shadowPath(shadow.id);
+      if (shadow.path !== path)
+        prepared(db, "UPDATE projects SET path=? WHERE id=?").run(path, shadow.id);
+    }
+  });
 
   function check(facts: CloudRunnerContext, input: CloudLocationRequest): CloudRunnerContext {
     if (
@@ -169,21 +185,11 @@ export function createCloudContext(options: {
         });
         preparedContexts.set(identity(input), facts);
       }
-      const runnerId =
-        options.runnerId === undefined ? options.registry().runnerId : options.runnerId();
-      // The registry's read-only lookup names the folder. A frozen local
-      // project needs no read here: the INSERT below runs only when no row
-      // exists and the UPDATE touches only a shadow row, so its path and
-      // prefix were never written.
-      const checkout =
-        runnerId === null ? null : options.registry().checkouts.ofProject(input.projectId);
-      // An unlocated identity gets an inert, unique machine path, never a
-      // guessed checkout. Location preparation still requires the real registry.
-      const placeholder = join(
-        identityRoot,
-        createHash("sha256").update(`${ownerUserId}\0${input.projectId}`).digest("hex"),
-      );
-      const checkoutPath = checkout?.absPath ?? placeholder;
+      // Shadow rows are FK identities, never checkouts. A real folder may
+      // already belong to a different local project (projects.path is UNIQUE).
+      // Location preparation reads the real path only from the runner registry;
+      // frozen local rows with the same id keep their original path and prefix.
+      const placeholder = shadowPath(input.projectId);
       withTransaction(db, () => {
         const project = prepared(db, "SELECT id FROM projects WHERE id = ?").get(input.projectId);
         if (project === undefined) {
@@ -193,7 +199,7 @@ export function createCloudContext(options: {
             VALUES (?, 'Volli Cloud project', ?, ?, 0, 0, ?, ?)`,
           ).run(
             input.projectId,
-            checkoutPath,
+            placeholder,
             facts?.ticketPrefix ?? "CLOUD",
             Date.now(),
             Date.now(),
@@ -207,7 +213,7 @@ export function createCloudContext(options: {
             db,
             `UPDATE projects SET path = ? WHERE id = ? AND EXISTS
             (SELECT 1 FROM cloud_shadow_rows WHERE kind='project' AND id=projects.id)`,
-          ).run(checkoutPath, input.projectId);
+          ).run(placeholder, input.projectId);
         }
         if (
           input.ticketId !== null &&

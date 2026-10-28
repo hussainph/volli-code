@@ -263,6 +263,12 @@ describe("runner composition", () => {
       home: root,
       busySites: async () => [],
     });
+    const checkoutPath = join(root, "registered-checkout");
+    cloud.registry().checkouts.register({
+      projectId: cloudProject.id,
+      projectRepoId: "repo",
+      absPath: checkoutPath,
+    });
     const bindRuntime = vi.spyOn(cloud, "bindRuntime");
     const bindEnvironment = vi.spyOn(cloud, "bindEnvironment");
     const bindNotices = vi.spyOn(cloud, "bindNotices");
@@ -314,6 +320,8 @@ describe("runner composition", () => {
     const facade = buildFacade.mock.lastCall![0];
     expect(facade.sessionEngine).toBe(cloud.engine);
     expect(facade.sessionBirth).toBe(cloud.sessionBirth);
+    expect(facade.projectPath).toBe(cloud.projectPath);
+    expect(facade.projectPath!(cloudProject.id)).toBe(checkoutPath);
     expect(facade.recordSessionStarted).toBeNull();
     const lifecycle = buildLifecycle.mock.lastCall![0];
     expect(lifecycle.sessionEngine).toBe(cloud.engine);
@@ -329,7 +337,7 @@ describe("runner composition", () => {
     expect(agents.services.sessionEngine).toBe(cloud.engine);
     expect(agents.inProcessWatches).toBe(false);
     expect(agents.automationsAvailable).toBe(false);
-    expect(agents.projects!()).toMatchObject([cloudProject]);
+    expect(agents.projects!()).toMatchObject([{ ...cloudProject, path: checkoutPath }]);
     expect(bindEnvironment).toHaveBeenCalledExactlyOnceWith(expect.any(Function));
     expect(bindRuntime).toHaveBeenCalledExactlyOnceWith(
       f.runner.runtime,

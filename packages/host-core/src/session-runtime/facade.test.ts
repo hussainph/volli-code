@@ -97,7 +97,7 @@ async function proofFor(facade: RuntimeSessionFacade) {
 async function fixture(
   overrides: Pick<
     Parameters<typeof createRuntimeSessionFacade>[0],
-    "sessionEngine" | "sessionBirth" | "recordSessionStarted"
+    "sessionEngine" | "sessionBirth" | "recordSessionStarted" | "projectPath"
   > = {},
 ) {
   vi.mocked(createDelegations).mockReturnValue({
@@ -590,6 +590,26 @@ describe("facade captured ports and capability degradations", () => {
     expect(await skills.index("p", [])).toBeNull();
     vi.mocked(getProjectById).mockReturnValue({ path: "/repo", skillModes: { a: "off" } } as never);
     expect(await skills.index("p", [])).toBeNull();
+  });
+  it("reads cloud skills from the registered checkout, never a shadow placeholder", async () => {
+    const projectPath = vi.fn((_projectId: string): string | null => "/registered/repo");
+    const f = await fixture({ projectPath });
+    const skills = recoveredRuntimeSessionServices(f.ready).sessionSkills!;
+    vi.mocked(getProjectById).mockReturnValue({ path: "/cloud-identities/hash" } as never);
+    vi.mocked(loadSkills).mockResolvedValue({ ok: true, skills: [SKILL] });
+    expect(await skills.resolve("p", ["a"])).toHaveLength(1);
+    expect(await skills.index("p", [])).not.toBeNull();
+    expect(projectPath).toHaveBeenCalledWith("p");
+    expect(loadSkills).toHaveBeenCalledTimes(2);
+    expect(loadSkills).toHaveBeenCalledWith({
+      projectSkillsDir: "/registered/repo/.agents/skills",
+      globalSkillsDir: expect.any(String),
+    });
+    projectPath.mockReturnValue(null);
+    vi.mocked(loadSkills).mockClear();
+    await expect(skills.resolve("p", ["a"])).rejects.toThrow("Choose the folder");
+    expect(await skills.index("p", [])).toBeNull();
+    expect(loadSkills).not.toHaveBeenCalled();
   });
   it("covers ledger birth absence, current anchors, automatic metadata and default ladders", async () => {
     const f = await fixture();
