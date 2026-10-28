@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
+import { pathToFileURL } from "node:url";
 await import("../src/secrets/test-support/ts-hooks.mjs");
 const { createFixtureProfile } = await import("../src/backup/test-fixture.ts");
 const { runAutomaticBackupWorker } = await import("../src/backup/automatic-worker.ts");
@@ -16,6 +17,9 @@ if (!Number.isSafeInteger(rows) || rows < 1)
   throw new Error("BACKUP_BENCH_ROWS must be a positive integer");
 if (!process.env.TMPDIR || !resolve(process.env.TMPDIR).startsWith(`${process.cwd()}/`))
   throw new Error("Set TMPDIR to a directory inside this worktree.");
+const builtWorker = process.env.BACKUP_BENCH_WORKER;
+if (builtWorker && !resolve(builtWorker).startsWith(`${process.cwd()}/`))
+  throw new Error("BACKUP_BENCH_WORKER must be a built entry inside this worktree.");
 mkdirSync(process.env.TMPDIR, { recursive: true });
 const fixture = createFixtureProfile();
 try {
@@ -52,7 +56,9 @@ try {
   delay.enable();
   const started = performance.now();
   const result = await runAutomaticBackupWorker(
-    new URL("../src/backup/test-support/worker-under-node.mjs", import.meta.url),
+    builtWorker
+      ? pathToFileURL(resolve(builtWorker))
+      : new URL("../src/backup/test-support/worker-under-node.mjs", import.meta.url),
     {
       dataDir: fixture.root,
       dbPath: fixture.dbPath,
@@ -66,13 +72,14 @@ try {
     (notice) => {
       if (notice) console.error(notice);
     },
-    ["--experimental-transform-types", "--disable-warning=ExperimentalWarning"],
+    builtWorker ? [] : ["--experimental-transform-types", "--disable-warning=ExperimentalWarning"],
   );
   delay.disable();
   console.log(
     JSON.stringify(
       {
         rows,
+        workerEntry: builtWorker ? "packed" : "source",
         databaseBytes,
         seedSeconds: (started - seedStart) / 1000,
         backupSeconds: (performance.now() - started) / 1000,
