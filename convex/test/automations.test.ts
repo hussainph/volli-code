@@ -863,6 +863,36 @@ describe("Automation authorization", () => {
 });
 
 describe("Automation access-loss lifecycle", () => {
+  test.each(["member", "runner"] as const)(
+    "%s access loss leaves a still-importing project's records and jobs untouched",
+    async (target) => {
+      const w = await world();
+      await armBoth(w);
+      const pending = await waiting(w, "schedule");
+      await w.t.run(async (ctx) => {
+        const project = await ctx.db
+          .query("projects")
+          .withIndex("by_uuid", (q) => q.eq("id", w.projectId))
+          .unique();
+        await ctx.db.patch(project!._id, { moveState: "importing" });
+      });
+      const snapshot = () =>
+        w.t.run(async (ctx) => ({
+          armings: await ctx.db.query("automationArmings").collect(),
+          schedules: await ctx.db.query("automationSchedules").collect(),
+          runs: await ctx.db.query("automationRuns").collect(),
+          events: await ctx.db.query("boardEvents").collect(),
+        }));
+      const before = await snapshot();
+      if (target === "runner") await w.as.mutation(api.runners.remove, { runnerId: w.runnerId });
+      else {
+        await w.as.mutation(api.members.leave, { workspaceId: w.workspaceId });
+        await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+      }
+      expect(await snapshot()).toEqual(before);
+      expect(await jobStatus(w, pending.jobId)).toBe("queued");
+    },
+  );
   test.each(["leave", "suspend", "remove"] as const)(
     "%s pauses just that Member's Workspace arms; rejoining does not auto-arm",
     async (kind) => {

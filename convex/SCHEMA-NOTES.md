@@ -377,6 +377,8 @@ Armings and schedules gain optional pause fields; absence means unpaused.
 Armer/runner indexes support transactional pausing on Member access loss and
 runner revocation (including credential reuse and replacement). Paused rows
 stay attributed to the original armer/runner until an explicit re-arm.
+Access-loss hooks leave still-importing projects untouched via `isShownProject`;
+the importer owns their records until commit and supplies the moved pause.
 The existing arming events are frozen as follows: a pause retains
 `automationId` with `runnerId: null`; column disarm uses both null. Reads of
 the arming row distinguish pause from disarm. Schedule events always have

@@ -23,7 +23,7 @@ import {
 import type { Doc } from "../_generated/dataModel.js";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { clearAttention, raiseAttention } from "./attention";
-import { authError, requireProject, type Viewer } from "./auth";
+import { authError, isShownProject, requireProject, type Viewer } from "./auth";
 import { publicRow, recordBoardEvents, requireWritableProject } from "./board";
 import { cancelJob, ownerMayWorkOn } from "./jobs";
 
@@ -318,7 +318,7 @@ export async function pauseArmingsFor(
       .unique();
     if (
       project === null ||
-      project.deletedAt !== null ||
+      !isShownProject(project) ||
       (byUser && project.workspaceId !== target.workspaceId)
     )
       return null;
