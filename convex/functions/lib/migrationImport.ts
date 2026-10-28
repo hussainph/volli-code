@@ -43,7 +43,7 @@ export type Key = { index: string; fields: readonly string[]; alsoMatch?: readon
  * that identify one row (the index's leading fields, then any checked after
  * the read). Keys follow each table's "unique by mutation" rule.
  */
-export const KEYS: Readonly<Record<MigrationImportStream, Key>> = {
+const KEYS: Readonly<Record<MigrationImportStream, Key>> = {
   projects: { index: "by_uuid", fields: ["id"] },
   projectCounters: { index: "by_project", fields: ["projectId"] },
   projectRepos: { index: "by_uuid", fields: ["id"] },
@@ -108,7 +108,7 @@ export function withoutSystemFields(doc: Row): Row {
 }
 
 /** A stored row matching `doc` on `key`, if any. */
-export async function findExisting(
+async function findExisting(
   db: Reader,
   stream: MigrationImportStream,
   key: Key,

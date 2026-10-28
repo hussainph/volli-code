@@ -164,7 +164,10 @@ own; anyone else reads `not_found` for the move.
   belong to that project, may name no person but the importer, no runner but
   theirs and no Workspace but the target, and may not point into another
   project (a delegation's parent may be one of the importer's own Sessions in
-  the same Workspace). Only inserted rows feed the stream's accumulator
+  the same Workspace). Object keys must be the project's own (`r2-keys.ts`);
+  repositories carry no GitHub link; pending runner work (`runnerJobs`) and
+  audit rows other than MCP operations do not move. Only inserted rows feed
+  the stream's accumulator
   (`projectImportStreams`), in the same transaction, so a re-sent or reordered
   batch leaves it exact.
 - `commit` refuses (`verification_failed`, naming the streams by count, never
@@ -172,20 +175,29 @@ own; anyone else reads `not_found` for the move.
   project. `uncommit` hides it again for a roll back, refusing
   (`changed_since_commit`) when its board or Sessions moved since, unless
   confirmed. `abort` marks the move `aborting`; **purging its rows and objects
-  is MOVE-3's scheduled chain and is not implemented yet**, so an aborted
-  move's rows stay, hidden, and the project cannot be moved again until then.
+  is a scheduled chain that is not built yet**, so an aborted move's rows stay,
+  hidden, and the project cannot be moved again until then.
 - `status` answers the accumulators; `readRows` reads one stream back by the
-  project's own indexes (or one ticket's or Session's), for the client's
-  verification.
+  project's own indexes (or one ticket's or the importer's Session's), for the
+  client's verification, and only while the project has never been shown
+  (once shown, others may have written there).
 
 While a project is `importing`, `projectAccess` (and every read that lists a
 Workspace's projects, through `isShownProject`) treats it as not found for
 everyone, its importer included; runners take no facts, stream chunks or
 transcript writes for its Sessions, and its queued jobs wait, neither handed
 out nor cancelled. `test/projectImports.hidden.test.ts` calls every public
-function as the importer, a Member, the importer's runner and an agent, and
-requires the answer for the importing project to be the answer for one that
-does not exist.
+function as the importer, a Member, the importer's runner and an agent. Every
+answer must be the one the same world gives with no move in it, nothing it
+answers may name the moved project, and nothing may write there; a function
+whose arguments name a project, ticket, Session, comment or label must answer
+for the importing one as for one that does not exist. Arguments a sample
+cannot make valid (a Session's facts, a staged artifact) have targeted tests
+in `projectImports.test.ts`.
+
+Replacing the move's runner (`registerThisMac` naming it) moves its hidden
+Sessions and claims to the successor like any others, and the move then stops
+with `runner_unavailable`; the client cancels it and moves again.
 
 ## Running it locally
 

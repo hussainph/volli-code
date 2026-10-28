@@ -8,6 +8,9 @@
 
 import { describe, expect, test } from "vite-plus/test";
 
+// The shared mapping's own fixture: one export record per stream.
+import { MIGRATION_FIXTURE_RECORDS } from "../../packages/shared/src/cloud/migration-import.fixture";
+
 import {
   MIGRATION_IMPORT_STREAMS,
   MigrationDigest,
@@ -51,6 +54,15 @@ function importRows(world: ImportWorld, stream: MigrationImportStream, rows: unk
     stream,
     rows,
   });
+}
+
+/** Begins the move and imports every stream before `last`. */
+async function upTo(world: ImportWorld, last: MigrationImportStream) {
+  await begin(world);
+  for (const stream of MIGRATION_IMPORT_STREAMS) {
+    if (stream === last) return;
+    await importRows(world, stream, world.records[stream]);
+  }
 }
 
 async function setRole(world: ImportWorld, userId: string, role: "owner" | "admin" | "member") {
@@ -176,6 +188,7 @@ describe("accumulators", () => {
     // Every stream twice: first reversed and split, then whole, with a duplicate inside a batch.
     for (const stream of MIGRATION_IMPORT_STREAMS) {
       const rows = records[stream].toReversed();
+      if (rows.length === 0) continue;
       const first = await importRows(world, stream, rows.slice(0, 1));
       expect(first.rejected, stream).toEqual([]);
       const again = await importRows(world, stream, [...rows, rows[0]]);
@@ -512,13 +525,13 @@ describe("authorization", () => {
     const bobsRunner = await world.t.run((ctx) =>
       seedTestRunner(ctx, world.bob.userId, "bobs-mac"),
     );
-    const job = await importRows(world, "runnerJobs", [
-      { ...world.records.runnerJobs[0]!, runnerId: bobsRunner },
+    const placed = await importRows(world, "tickets", [
+      { ...world.records.tickets[0]!, id: U(51), number: 2, placeRunnerId: bobsRunner },
     ]);
-    expect(job.rejected).toEqual([
+    expect(placed.rejected).toEqual([
       expect.objectContaining({
         code: "foreign_identity",
-        detail: expect.stringMatching(/^runnerId/),
+        detail: expect.stringMatching(/^placeRunnerId/),
       }),
     ]);
   });
@@ -561,14 +574,6 @@ describe("authorization", () => {
 });
 
 describe("row rules", () => {
-  async function upTo(world: ImportWorld, last: MigrationImportStream) {
-    await begin(world);
-    for (const stream of MIGRATION_IMPORT_STREAMS) {
-      if (stream === last) return;
-      await importRows(world, stream, world.records[stream]);
-    }
-  }
-
   test("nothing lands before the project row", async () => {
     const world = await importWorld();
     await begin(world);
@@ -770,28 +775,181 @@ describe("a hidden project takes no runner writes", () => {
     });
     // Continued while hidden again: the same.
     await expect(send(written.events.slice(half))).rejects.toThrow(code("not_found"));
-    // The imported job waits, neither handed out nor cancelled.
-    const claimed = await runner.mutation(api.runnerJobs.claim, { bootId: newId("project") });
-    expect(claimed).toEqual([]);
-    const job = await world.t.run((ctx) =>
-      ctx.db
-        .query("runnerJobs")
-        .withIndex("by_uuid", (q) => q.eq("id", U(12)))
-        .unique(),
-    );
-    expect(job).toMatchObject({ status: "queued", lease: null });
   });
 
-  test("an imported job is handed out once the project is committed", async () => {
+  test("a staged command body of a hidden Session reads as unclaimed", async () => {
     const world = await importedWorld();
-    await commit(world);
     const runner = world.t.withIdentity({
       subject: `runner:${world.runnerId}`,
       issuer: "https://runners.volli.app",
       gen: 1,
     });
+    const read = (sessionId: string) =>
+      runner.query(api.transcripts.commandArtifact, {
+        sessionId,
+        generation: 1,
+        digest: `sha256:${"ab".repeat(32)}`,
+      });
+    await expect(read(MOVED.sessionId)).rejects.toThrow(code("not_claimed"));
+    await expect(read(newId("session"))).rejects.toThrow(code("not_claimed"));
+    await commit(world);
+    await expect(read(MOVED.sessionId)).resolves.toBeNull();
+  });
+
+  test("a job queued while the project was shown waits, untouched, while it is hidden again", async () => {
+    const world = await importedWorld();
+    await commit(world);
+    const jobId = newId("job");
+    await world.t.run(async (ctx) => {
+      await ctx.db.insert("runnerJobs", {
+        id: jobId,
+        runnerId: world.runnerId,
+        kind: "automation.run",
+        projectId: MOVED.projectId,
+        sessionId: null,
+        ticketId: MOVED.ticketId,
+        workingCopyId: null,
+        payload: { automationId: U(10) },
+        priority: "normal",
+        rank: 1,
+        status: "queued",
+        commandId: null,
+        lease: null,
+        receipt: null,
+        result: null,
+        createdBy: { kind: "person", userId: world.alice.userId },
+        createdAt: 1,
+        availableAt: 1,
+        completedAt: null,
+        expiresAt: null,
+      } as never);
+    });
+    await world.alice.as.mutation(api.projectImports.uncommit, {
+      moveId: world.moveId,
+      confirmChanged: true,
+    });
+    const runner = world.t.withIdentity({
+      subject: `runner:${world.runnerId}`,
+      issuer: "https://runners.volli.app",
+      gen: 1,
+    });
+    expect(await runner.query(api.runnerJobs.wake, {})).toMatchObject({ ready: 0 });
+    expect(await runner.mutation(api.runnerJobs.claim, { bootId: newId("project") })).toEqual([]);
+    const stored = () =>
+      world.t.run((ctx) =>
+        ctx.db
+          .query("runnerJobs")
+          .withIndex("by_uuid", (q) => q.eq("id", jobId))
+          .unique(),
+      );
+    expect(await stored()).toMatchObject({ status: "queued", lease: null });
+    expect(
+      await runner.mutation(api.runnerJobs.renew, {
+        jobId,
+        bootId: newId("project"),
+        attempt: 1,
+      }),
+    ).toEqual({ ok: false, reason: "gone" });
+    await commit(world);
+    expect(await runner.query(api.runnerJobs.wake, {})).toMatchObject({ ready: 1 });
     const claimed = await runner.mutation(api.runnerJobs.claim, { bootId: newId("project") });
-    expect(claimed.map((claim) => claim.job.id)).toEqual([U(12)]);
+    expect(claimed.map((claim) => claim.job.id)).toEqual([jobId]);
+  });
+});
+
+describe("what a person's move does not take", () => {
+  test("pending runner work: the manifest promises none and rows are refused", async () => {
+    const world = await importWorld();
+    const promised = world.expected.map((entry) =>
+      entry.stream === "runnerJobs" ? { ...entry, count: 1 } : entry,
+    );
+    await expect(begin(world, { expected: promised })).rejects.toThrow(code("invalid_argument"));
+    await upTo(world, "runnerJobs");
+    const job = await importRows(world, "runnerJobs", [
+      structuredClone(MIGRATION_FIXTURE_RECORDS.runnerJobs),
+    ]);
+    expect(job.rejected).toEqual([expect.objectContaining({ code: "not_moved" })]);
+  });
+
+  test("a GitHub repository or installation", async () => {
+    const world = await importWorld();
+    await upTo(world, "projectRepos");
+    const linked = await importRows(world, "projectRepos", [
+      { ...world.records.projectRepos[0]!, installationId: "12345" },
+      { ...world.records.projectRepos[0]!, id: U(60), githubRepoId: "678" },
+    ]);
+    expect(linked.rejected).toEqual([
+      expect.objectContaining({ code: "github_link" }),
+      expect.objectContaining({ code: "github_link" }),
+    ]);
+  });
+
+  test("an object key outside the moved project", async () => {
+    const world = await importWorld();
+    await upTo(world, "blobs");
+    const blob = world.records.blobs[0]!;
+    const elsewhere = await importRows(world, "blobs", [
+      { ...blob, key: `v1/p/${world.visible.projectId}/b/${"ab".repeat(32)}` },
+      { ...blob, key: "v1/m/anything" },
+    ]);
+    expect(elsewhere.rejected).toEqual([
+      expect.objectContaining({ code: "invalid_key" }),
+      expect.objectContaining({ code: "invalid_key" }),
+    ]);
+    for (const stream of MIGRATION_IMPORT_STREAMS.slice(
+      MIGRATION_IMPORT_STREAMS.indexOf("blobs"),
+      MIGRATION_IMPORT_STREAMS.indexOf("eventArchives"),
+    )) {
+      await importRows(world, stream, world.records[stream]);
+    }
+    const archive = await importRows(world, "eventArchives", [
+      { ...world.records.eventArchives[0]!, key: "k" },
+    ]);
+    expect(archive.rejected).toEqual([expect.objectContaining({ code: "invalid_key" })]);
+  });
+
+  test("a comment or signal on no ticket", async () => {
+    const world = await importWorld();
+    await upTo(world, "ticketComments");
+    const orphan = await importRows(world, "ticketComments", [
+      { ...world.records.ticketComments[0]!, ticketId: U(70) },
+    ]);
+    expect(orphan.rejected).toEqual([expect.objectContaining({ code: "missing_reference" })]);
+  });
+
+  test("audit rows other than MCP operations", async () => {
+    const world = await importWorld();
+    await upTo(world, "auditLog");
+    const forged = await importRows(world, "auditLog", [
+      { ...world.records.auditLog[0]!, kind: "member.role_changed", targetKind: "member" },
+    ]);
+    expect(forged.rejected).toEqual([expect.objectContaining({ code: "not_moved" })]);
+  });
+
+  test("a batch larger than the bound", async () => {
+    const world = await importWorld();
+    await begin(world);
+    await expect(
+      importRows(
+        world,
+        "labels",
+        Array.from({ length: 501 }, () => world.records.labels[0]),
+      ),
+    ).rejects.toThrow(code("invalid_argument"));
+  });
+
+  test("a reserved project id cannot be created by hand", async () => {
+    const world = await importWorld();
+    await begin(world);
+    await expect(
+      world.bob.as.mutation(api.projects.create, {
+        commandId: newId("command"),
+        workspaceId: world.workspaceId,
+        projectId: MOVED.projectId,
+        name: "Squatter",
+        origin: "blank",
+      }),
+    ).rejects.toThrow(code("id_taken"));
   });
 });
 
@@ -840,6 +998,15 @@ describe("read-back", () => {
       for (const row of rows) read.add(migrationRowDigest(name, row));
       expect({ stream, count: read.count, digest: read.value }).toEqual({ stream, count, digest });
     }
+  });
+
+  test("only before the project was ever shown", async () => {
+    const world = await importedWorld();
+    await commit(world);
+    await expect(readAll(world, "sessions")).rejects.toThrow(code("import_closed"));
+    await world.alice.as.mutation(api.projectImports.uncommit, { moveId: world.moveId });
+    // Hidden again, but others may have written there while it was shown.
+    await expect(readAll(world, "sessions")).rejects.toThrow(code("import_closed"));
   });
 
   test("a ticket or Session of another project is not in the move", async () => {

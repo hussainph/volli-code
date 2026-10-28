@@ -440,21 +440,6 @@ export async function recordSettledCommand<K extends JobKind>(
   return { jobId: row.id as JobId, created: true };
 }
 
-/**
- * Whether a project is still being imported (`projectImports.ts`): its jobs
- * are neither handed out nor cancelled; they wait, untouched, for the commit.
- */
-export async function projectImporting(
-  ctx: { db: GenericDatabaseReader<DataModel> },
-  projectId: string,
-): Promise<boolean> {
-  const project = await ctx.db
-    .query("projects")
-    .withIndex("by_uuid", (q) => q.eq("id", projectId))
-    .unique();
-  return project?.moveState === "importing";
-}
-
 /** Whether a runner's owner may still be handed work in a project: it is live and they are an active Member. */
 export async function ownerMayWorkOn(
   ctx: { db: GenericDatabaseReader<DataModel> },

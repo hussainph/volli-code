@@ -338,6 +338,21 @@ export function isShownProject(project: Pick<Doc<"projects">, "deletedAt" | "mov
   return project.deletedAt === null && project.moveState !== "importing";
 }
 
+/**
+ * Whether a project is still being imported (`projectImports.ts`): its jobs
+ * are neither handed out nor cancelled; they wait, untouched, for the commit.
+ */
+export async function projectImporting(
+  ctx: { db: GenericDatabaseReader<DataModel> },
+  projectId: string,
+): Promise<boolean> {
+  const project = await ctx.db
+    .query("projects")
+    .withIndex("by_uuid", (q) => q.eq("id", projectId))
+    .unique();
+  return project?.moveState === "importing";
+}
+
 type ProjectAccess =
   | { kind: "ok"; project: Doc<"projects">; membership: MembershipFacts }
   | { kind: "not_found" }

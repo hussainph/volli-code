@@ -38,8 +38,7 @@ import {
 
 import { internal } from "./_generated/api";
 import { action, internalQuery } from "./_generated/server";
-import { findMembership, isShownProject } from "./lib/auth";
-import { projectImporting } from "./lib/jobs";
+import { findMembership, isShownProject, projectImporting } from "./lib/auth";
 import { requireRunner } from "./lib/runnerAuth";
 import { runnerSigningKey, signAgentToken } from "./lib/runnerSecrets";
 

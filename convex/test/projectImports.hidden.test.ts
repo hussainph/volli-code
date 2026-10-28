@@ -47,6 +47,7 @@ import {
   MANIFEST_SHA,
   MOVED,
   U,
+  importWorld,
   importedWorld,
   type ImportWorld,
 } from "./projectImport-fixtures";
@@ -56,8 +57,8 @@ type Caller = "importer" | "member" | "runner" | "agent";
 const CALLERS: readonly Caller[] = ["importer", "member", "runner", "agent"];
 type Pass = "absent" | "hidden" | "neighbour";
 
-/** The imported runner job (the fixture's, queued for the importer's runner). */
-const MOVED_JOB = U(12);
+/** The moved project's label (the fixture's). */
+const MOVED_LABEL = U(4);
 
 /** Every id and text the moved project holds that a leak would carry. */
 const HIDDEN_MARKERS: readonly string[] = [
@@ -66,7 +67,7 @@ const HIDDEN_MARKERS: readonly string[] = [
   MOVED.sessionId,
   MOVED.childSessionId,
   MOVED.commentId,
-  MOVED_JOB,
+  MOVED_LABEL,
   ...HIDDEN_TEXT,
 ];
 
@@ -112,7 +113,7 @@ const ABSENT = {
   sessionId: "00000000-0000-4000-8000-00000000a020",
   childSessionId: "00000000-0000-4000-8000-00000000a022",
   commentId: "00000000-0000-4000-8000-00000000a007",
-  jobId: "00000000-0000-4000-8000-00000000a012",
+  labelId: "00000000-0000-4000-8000-00000000a004",
   key: "ZQ-1",
 };
 const HIDDEN = {
@@ -121,7 +122,7 @@ const HIDDEN = {
   sessionId: MOVED.sessionId,
   childSessionId: MOVED.childSessionId,
   commentId: MOVED.commentId,
-  jobId: MOVED_JOB,
+  labelId: MOVED_LABEL,
   key: "AL-1",
 };
 
@@ -138,46 +139,62 @@ function fillFor(world: ImportWorld, pass: Pass) {
             sessionId: world.visible.sessionId,
             childSessionId: world.visible.sessionId,
             commentId: ABSENT.commentId,
-            jobId: ABSENT.jobId,
+            labelId: ABSENT.labelId,
             key: "TS-1",
           };
   const named: Record<string, Value> = {
     ...ids,
     parentSessionId: ids.sessionId,
+    jobId: "00000000-0000-4000-8000-00000000a012",
     workspaceId: world.workspaceId,
     runnerId: world.runnerId,
     ticketIds: [ids.ticketId],
     sessionIds: [ids.sessionId],
+    // The agent's own Session watches (the only watcher an agent may name).
+    watcherSessionId: world.visible.sessionId,
+    target: { kind: "ticket", id: ids.ticketId },
     cursor: null,
     paginationOpts: { numItems: 20, cursor: null },
     page: { numItems: 20, cursor: null },
   };
   return (name: string, validator: ValidatorJSON): Value | undefined => {
     // Every command is a new one: a receipt must not answer for an earlier call.
-    if (name === "commandId" && accepts(validator, "string")) return newId("command");
+    if (name === "commandId" && fits(validator, "")) return newId("command");
     if (!(name in named)) return undefined;
     const value = named[name]!;
-    const kind =
-      value === null
-        ? "null"
-        : Array.isArray(value)
-          ? "array"
-          : typeof value === "object"
-            ? "object"
-            : "string";
-    return accepts(validator, kind) ? value : undefined;
+    return fits(validator, value) ? value : undefined;
   };
 }
 
-function accepts(validator: ValidatorJSON, kind: string): boolean {
-  return validator.type === "union"
-    ? validator.value.some((member) => accepts(member, kind))
-    : validator.type === kind;
+/** Whether `value` has the shape `validator` takes (objects by their field names). */
+function fits(validator: ValidatorJSON, value: Value): boolean {
+  if (validator.type === "union") return validator.value.some((member) => fits(member, value));
+  if (value === null) return validator.type === "null";
+  if (Array.isArray(value)) return validator.type === "array";
+  if (typeof value === "object") {
+    if (validator.type !== "object") return false;
+    const fields = validator.value;
+    return Object.entries(value as Record<string, Value>).every(
+      ([name, inner]) => name in fields && fits(fields[name]!.fieldType, inner),
+    );
+  }
+  if (typeof value === "string") {
+    return (
+      validator.type === "string" || (validator.type === "literal" && validator.value === value)
+    );
+  }
+  return validator.type === typeof value;
 }
 
 /** Whether any argument (at any depth) is one the passes fill with a row's id. */
 function namesARow(fn: PublicFunction): boolean {
-  const filled = new Set([...Object.keys(ABSENT), "parentSessionId", "ticketIds", "sessionIds"]);
+  const filled = new Set([
+    ...Object.keys(ABSENT),
+    "parentSessionId",
+    "ticketIds",
+    "sessionIds",
+    "target",
+  ]);
   const walk = (validator: ValidatorJSON): boolean =>
     validator.type === "object"
       ? Object.entries(validator.value).some(
@@ -217,9 +234,14 @@ function normalise(text: string, pass: Pass): string {
   const ids = pass === "hidden" ? HIDDEN : ABSENT;
   let out = text;
   for (const [name, id] of Object.entries(ids)) out = out.split(id).join(`<${name}>`);
-  return out
-    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "<uuid>")
-    .replace(/\b1[0-9]{12}\b/g, "<time>");
+  return (
+    out
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "<uuid>")
+      .replace(/\b1[0-9]{12}\b/g, "<time>")
+      .replace(/vrt_[A-Za-z0-9_-]+/g, "<token>")
+      // Fixture runners are named from their ids (`board-helpers.ts`).
+      .replace(/"mac-[0-9a-f]{4}"/g, '"mac-<id>"')
+  );
 }
 
 type Observation = { outcome: string; answer: string | null; leaked: string[] };
@@ -246,16 +268,31 @@ async function observe(
   } catch (error) {
     const code = refusalCode(error);
     outcome =
-      code === null ? `threw: ${error instanceof Error ? error.message : String(error)}` : code;
+      code === null
+        ? `threw: ${normalise(error instanceof Error ? error.message : String(error), pass)}`
+        : code;
   }
   const after = await hiddenRows(world);
   if (after.join("\n") !== before.join("\n")) leaked.push("wrote into the moved project");
   return { outcome, answer, leaked };
 }
 
-async function run(fn: PublicFunction, pass: Pass, options: { committed?: boolean } = {}) {
-  const world = await importedWorld({ parentSessionId: (visible) => visible });
-  if (options.committed === true) {
+/**
+ * One pass in a fresh world: the move imported and hidden (`imported`), the
+ * same world committed (`committed`), or the same seeding with no move at all
+ * (`none`).
+ */
+async function run(
+  fn: PublicFunction,
+  pass: Pass,
+  options: { world?: "imported" | "committed" | "none" } = {},
+) {
+  const kind = options.world ?? "imported";
+  const world =
+    kind === "none"
+      ? await importWorld({ parentSessionId: (visible) => visible })
+      : await importedWorld({ parentSessionId: (visible) => visible });
+  if (kind === "committed") {
     await world.alice.as.mutation(api.projectImports.commit, {
       moveId: world.moveId,
       manifestSha256: MANIFEST_SHA,
@@ -284,24 +321,41 @@ describe("an importing project is hidden from every public function", () => {
     ["board:resolveTicketKey", "agent"],
     ["sessions:snapshot", "member"],
     ["runners:places", "importer"],
-    ["runnerJobs:renew", "runner"],
+    ["board:labels", "member"],
+    ["board:setLabelColor", "importer"],
     ["agentTokens:mint", "runner"],
   ] as const)("control: %s tells a committed project apart (%s)", async (path, caller) => {
     const fn = PUBLIC.find((candidate) => candidate.path === path)!;
-    const absent = (await run(fn, "absent", { committed: true })).get(caller)!;
-    const committed = (await run(fn, "hidden", { committed: true })).get(caller)!;
+    const absent = (await run(fn, "absent", { world: "committed" })).get(caller)!;
+    const committed = (await run(fn, "hidden", { world: "committed" })).get(caller)!;
     expect(`${committed.outcome} ${committed.answer}`).not.toBe(
       `${absent.outcome} ${absent.answer}`,
     );
   });
 
   test.each(PUBLIC)("$path ($kind)", async (fn) => {
+    const without = await run(fn, "absent", { world: "none" });
     const absent = await run(fn, "absent");
     const hidden = await run(fn, "hidden");
     const neighbour = await run(fn, "neighbour");
     const problems: string[] = [];
     for (const [caller, seen] of hidden) {
       const baseline = absent.get(caller)!;
+      // A refusal by the argument validator never reached the handler: the
+      // sweep's arguments are wrong for this function, not the function right.
+      for (const observed of [seen, baseline, neighbour.get(caller)!]) {
+        if (/Validator|validator/.test(observed.outcome)) {
+          problems.push(`${caller}: arguments refused by the validator: ${observed.outcome}`);
+        }
+      }
+      // The importing project has no effect at all: the same calls answer as
+      // in the same world with no move in it.
+      const none = without.get(caller)!;
+      if (none.outcome !== baseline.outcome || none.answer !== baseline.answer) {
+        problems.push(
+          `${caller}/absent: ${baseline.outcome} ${baseline.answer ?? ""} where no move gives ${none.outcome} ${none.answer ?? ""}`,
+        );
+      }
       for (const leak of [...seen.leaked, ...baseline.leaked])
         problems.push(`${caller}/hidden: ${leak}`);
       for (const leak of neighbour.get(caller)!.leaked)

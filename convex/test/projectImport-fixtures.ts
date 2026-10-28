@@ -10,6 +10,7 @@ import {
   MIGRATION_IMPORT_STREAMS,
   MIGRATION_PLACEHOLDERS,
   MigrationDigest,
+  eventArchiveKey,
   migrationDocument,
   migrationRowDigest,
   type MigrationImportStream,
@@ -87,6 +88,14 @@ export function moveRecords(options: { parentSessionId?: string } = {}): Records
     eventCount: 0,
   });
   records.delegations[0]!.parentSessionId = parentSessionId;
+  // Pending runner work does not move (it is archived); objects sit under the project's keys.
+  records.runnerJobs = [];
+  records.eventArchives[0]!.key = eventArchiveKey({
+    projectId: MOVED.projectId,
+    sessionId: MOVED.sessionId,
+    firstSequence: 1,
+    lastSequence: 1,
+  });
   // An MCP operation's audit row names its project in `detail`.
   records.auditLog[0] = {
     ...records.auditLog[0],

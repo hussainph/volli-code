@@ -25,8 +25,7 @@ import {
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
-import { requireSessionVisible } from "./lib/auth";
-import { projectImporting } from "./lib/jobs";
+import { projectImporting, requireSessionVisible } from "./lib/auth";
 import { requireRunnerForWrite } from "./lib/runnerAuth";
 import {
   STREAM_CLEANUP_BATCH,

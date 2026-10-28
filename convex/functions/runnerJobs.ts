@@ -63,11 +63,11 @@ import {
   leaseMayContinue,
   leaseMayReport,
   ownerMayWorkOn,
-  projectImporting,
   retryDelayMs,
   terminal,
   type LeaseRef,
 } from "./lib/jobs";
+import { projectImporting } from "./lib/auth";
 import { requireRunner, requireRunnerForWrite } from "./lib/runnerAuth";
 import { noticeForClaim } from "./lib/watches";
 
@@ -141,12 +141,6 @@ export const claim = mutation({
       .query("runnerJobs")
       .withIndex("by_runner_ready", (q) => q.eq("runnerId", runnerId).eq("status", "leased"))
       .take(LEASED_SCAN);
-    for (const job of leased) {
-      const held = job.lease!;
-      if (held.bootId === bootId) continue;
-      if (held.attempt >= JOB_MAX_ATTEMPTS) await deadLetterExpired(ctx, job, now);
-      else candidates.push(job);
-    }
     // A project still being imported holds its jobs back, untouched, until its
     // commit; they are passed over (a bounded number) rather than block the queue.
     const importing = new Map<string, boolean>();
@@ -156,6 +150,12 @@ export const claim = mutation({
       }
       return importing.get(job.projectId)!;
     };
+    for (const job of leased) {
+      const held = job.lease!;
+      if (held.bootId === bootId || (await waitsForImport(job))) continue;
+      if (held.attempt >= JOB_MAX_ATTEMPTS) await deadLetterExpired(ctx, job, now);
+      else candidates.push(job);
+    }
     let passedOver = 0;
     for (const priority of JOB_PRIORITIES.toSorted((a, b) => jobRank(a) - jobRank(b))) {
       if (candidates.length >= limit || passedOver >= IMPORTING_SKIP_MAX) break;
@@ -413,9 +413,12 @@ export const wake = query({
     const now = Date.now();
     let ready = 0;
     let nextAvailableAt: number | null = null;
+    // Jobs of a project still being imported are not ready: `claim` passes them over.
+    const importing = new Map<string, boolean>();
+    let passedOver = 0;
     for (const priority of JOB_PRIORITIES) {
       const rank = jobRank(priority);
-      const due = await ctx.db
+      for await (const job of ctx.db
         .query("runnerJobs")
         .withIndex("by_runner_ready", (q) =>
           q
@@ -423,9 +426,14 @@ export const wake = query({
             .eq("status", "queued")
             .eq("rank", rank)
             .lte("availableAt", now),
-        )
-        .take(JOB_CLAIM_MAX - ready);
-      ready += due.length;
+        )) {
+        if (ready >= JOB_CLAIM_MAX || passedOver >= IMPORTING_SKIP_MAX) break;
+        if (!importing.has(job.projectId)) {
+          importing.set(job.projectId, await projectImporting(ctx, job.projectId));
+        }
+        if (importing.get(job.projectId)!) passedOver += 1;
+        else ready += 1;
+      }
       const next = await ctx.db
         .query("runnerJobs")
         .withIndex("by_runner_ready", (q) =>

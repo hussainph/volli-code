@@ -376,6 +376,8 @@ export default defineSchema({
     committedAt: nullable(time),
     // The project's board `seq` at commit: `uncommit` checks nothing changed since.
     committedBoardSeq: nullable(v.number()),
+    // Set by an uncommit: the project was shown, so others may have written there.
+    uncommittedAt: nullable(time),
     abortedAt: nullable(time),
   })
     .index("by_uuid", ["id"])

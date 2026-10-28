@@ -120,6 +120,14 @@ export const create = mutation({
           .withIndex("by_uuid", (q) => q.eq("id", projectId))
           .unique();
         if (taken !== null) throw boardError("id_taken", "That project id is already in use.");
+        // A move may have reserved the id before its project row arrives.
+        const reserved = await ctx.db
+          .query("projectImports")
+          .withIndex("by_project", (q) => q.eq("projectId", projectId))
+          .first();
+        if (reserved !== null) {
+          throw boardError("id_taken", "That project id is already in use.");
+        }
         const live = await ctx.db
           .query("projects")
           .withIndex("by_workspace", (q) =>

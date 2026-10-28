@@ -19,13 +19,15 @@
  *   {@link uncommit} hides it again (a roll back after commit), refusing
  *   when the project changed since the commit unless told to go ahead.
  * - {@link abort} marks the import `aborting`. Purging its rows and objects
- *   is MOVE-3's scheduled purge chain, which takes it to `purged`; until it
- *   lands an aborted import's rows stay, hidden, and the project cannot be
- *   moved again (`import_in_progress`).
+ *   (taking it to `purged`) is a scheduled purge chain that is not built
+ *   yet; until it is, an aborted import's rows stay, hidden, and the project
+ *   cannot be moved again (`import_in_progress`).
  * - {@link status} and {@link readRows} are the importer's own reads: the
  *   accumulators, and a project-scoped read-back (by project, ticket or
  *   Session index) for the client's verification. They read through the
- *   import, not through `projectAccess`, which hides the project.
+ *   import, not through `projectAccess`, which hides the project, and only
+ *   while nothing but the import has written there (before any commit), so
+ *   they never show the importer what someone else wrote.
  *
  * Who may import: the person who began the move, while they are an owner or
  * admin of the target Workspace with live preview access (rechecked on every
@@ -43,7 +45,9 @@ import {
   MIGRATION_DIGEST_VALUE,
   MIGRATION_IMPORT_STREAMS,
   MigrationDigest,
+  eventArchiveKey,
   isUuid,
+  projectBlobKey,
   sessionVisibilityAtCreation,
   type MigrationImportStream,
   type MigrationTarget,
@@ -100,7 +104,10 @@ const HOLDING: ReadonlySet<ImportStatus> = new Set(["reserved", "importing", "ab
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 /** The most rows one read-back page returns. */
-export const READ_BACK_MAX_ITEMS = 500;
+const READ_BACK_MAX_ITEMS = 500;
+
+/** The most rows one `importRows` batch takes (the client sends at most 200). */
+const IMPORT_BATCH_MAX_ROWS = 500;
 
 const streamValidator = literals(MIGRATION_IMPORT_STREAMS);
 
@@ -220,6 +227,9 @@ function checkExpected(expected: readonly Expected[]): Map<MigrationImportStream
   if (byStream.get("projects")!.count !== 1) {
     throw importError("invalid_argument", "A move carries exactly one project.");
   }
+  if (byStream.get("runnerJobs")!.count !== 0) {
+    throw importError("invalid_argument", "Pending runner work does not move.");
+  }
   return byStream;
 }
 
@@ -302,6 +312,7 @@ export const begin = mutation({
       updatedAt: now,
       committedAt: null,
       committedBoardSeq: null,
+      uncommittedAt: null,
       abortedAt: null,
     });
     for (const stream of MIGRATION_IMPORT_STREAMS) {
@@ -360,6 +371,19 @@ function foreignIdentity(doc: Row, target: MigrationTarget): string | null {
     }
   }
   return null;
+}
+
+/** A refusal unless `key` is the key `expected` derives for the moved project. */
+function objectKey(key: unknown, expected: () => string): Omit<RowFailure, "index"> | null {
+  let derived: string | null;
+  try {
+    derived = expected();
+  } catch {
+    derived = null;
+  }
+  return derived !== null && key === derived
+    ? null
+    : { code: "invalid_key", detail: "key is not the moved project's key for this object" };
 }
 
 /** Row fields that name another row, and the table it is in. */
@@ -474,6 +498,53 @@ function personPolicy(db: Reader, row: ImportRow, accumulator: MigrationDigest):
     return null;
   };
 
+  /** What one stream's rows must also be when a person moves them, or `null`. */
+  const streamRule = async (
+    stream: MigrationImportStream,
+    doc: Row,
+  ): Promise<Omit<RowFailure, "index"> | null> => {
+    switch (stream) {
+      // Pending armed Runs are archived, not moved: nothing may fire later by surprise.
+      case "runnerJobs":
+        return { code: "not_moved", detail: "pending runner work does not move" };
+      // A local project has no GitHub link; the App connects one later.
+      case "projectRepos":
+        return doc.githubRepoId === null && doc.installationId === null
+          ? null
+          : {
+              code: "github_link",
+              detail: "a moved repository names no GitHub repository or installation",
+            };
+      // Objects live under the moved project's own keys, nowhere else.
+      case "blobs":
+        return objectKey(doc.key, () => projectBlobKey(row.projectId, doc.sha256 as string));
+      case "eventArchives":
+        return objectKey(doc.key, () =>
+          eventArchiveKey({
+            projectId: row.projectId,
+            sessionId: doc.sessionId as string,
+            firstSequence: doc.firstSequence as number,
+            lastSequence: doc.lastSequence as number,
+          }),
+        );
+      // A local comment or signal always has its ticket (a cascading foreign key).
+      case "ticketComments":
+      case "ticketSignals":
+        return (await referenced("tickets", doc.ticketId as string)) === null
+          ? { code: "missing_reference", detail: "ticketId names no ticket of the moved project" }
+          : null;
+      // The only audit rows a local profile has are its MCP operations.
+      case "auditLog":
+        return typeof doc.kind === "string" &&
+          doc.kind.startsWith("mcp_") &&
+          doc.targetKind === "mcp_server"
+          ? null
+          : { code: "not_moved", detail: "only MCP operation audit rows move" };
+      default:
+        return null;
+    }
+  };
+
   const visibilityProblem = async (doc: Row): Promise<boolean> => {
     // Any other role is the schema's to refuse.
     if (doc.role === "ticket" || doc.role === "project") {
@@ -516,6 +587,8 @@ function personPolicy(db: Reader, row: ImportRow, accumulator: MigrationDigest):
       detail: "it does not belong to the project this move imports",
     },
     async check(stream, doc): Promise<Omit<RowFailure, "index"> | null> {
+      const refusal = await streamRule(stream, doc);
+      if (refusal !== null) return refusal;
       const identity = foreignIdentity(doc, target);
       if (identity !== null) {
         return {
@@ -560,6 +633,9 @@ export const importRows = mutation({
     const { row } = await requireImporter(ctx, moveId);
     if (!OPEN.has(row.status)) {
       throw importError("import_closed", "This move no longer takes rows.", { status: row.status });
+    }
+    if (rows.length > IMPORT_BATCH_MAX_ROWS) {
+      throw importError("invalid_argument", `A batch holds at most ${IMPORT_BATCH_MAX_ROWS} rows.`);
     }
     await requireOwnRunner(ctx, row.userId, row.runnerId);
     const stored = await ctx.db
@@ -683,7 +759,9 @@ export const uncommit = mutation({
       .query("projects")
       .withIndex("by_uuid", (q) => q.eq("id", row.projectId))
       .unique();
-    if (project === null) throw new Error(`Move ${row.id} committed a project that is gone.`);
+    if (project === null || project.deletedAt !== null || project.workspaceId !== row.workspaceId) {
+      throw importError("import_closed", "The project is no longer where this move put it.");
+    }
     const counter = await ctx.db
       .query("projectCounters")
       .withIndex("by_project", (q) => q.eq("projectId", row.projectId))
@@ -711,6 +789,8 @@ export const uncommit = mutation({
       updatedAt: now,
       committedAt: null,
       committedBoardSeq: null,
+      // Others may have written there while it was shown: no more read-back.
+      uncommittedAt: now,
     });
     await audit(ctx, {
       workspaceId: row.workspaceId,
@@ -731,8 +811,7 @@ export const uncommit = mutation({
  *
  * The purge itself (every row the import wrote, by index, in bounded
  * batches, then the `v1/p/<projectId>/` and `v1/m/<moveId>/` objects, ending
- * `purged`) is MOVE-3's scheduled chain and is NOT implemented here yet.
- * Idempotent.
+ * `purged`) is a scheduled chain that is NOT built yet. Idempotent.
  */
 export const abort = mutation({
   args: { moveId: v.string() },
@@ -895,11 +974,17 @@ export const readRows = query({
     parentId: v.optional(nullable(v.string())),
     cursor: nullable(v.string()),
     numItems: v.number(),
+    maximumBytesRead: v.optional(v.number()),
   },
-  handler: async (ctx, { moveId, stream, parentId, cursor, numItems }) => {
+  handler: async (ctx, { moveId, stream, parentId, cursor, numItems, maximumBytesRead }) => {
     const { row } = await requireImporter(ctx, moveId);
-    if (row.status === "purged") {
-      throw importError("import_closed", "This move was purged.", { status: row.status });
+    // Only what the import alone wrote: once the project has been shown,
+    // others may have written there (a private Session, say), which the
+    // importer reads only through the public reads that check visibility.
+    if (!OPEN.has(row.status) || row.uncommittedAt !== null) {
+      throw importError("import_closed", "This move no longer reads back.", {
+        status: row.status,
+      });
     }
     const level = LEVEL[stream];
     let parent = "";
@@ -909,7 +994,14 @@ export const readRows = query({
         level === "ticket"
           ? await scope.ticketProject(parentId)
           : await scope.sessionProject(parentId);
-      if (owner !== row.projectId) {
+      const session =
+        level === "session" && owner === row.projectId
+          ? await ctx.db
+              .query("sessions")
+              .withIndex("by_uuid", (q) => q.eq("id", parentId!))
+              .unique()
+          : null;
+      if (owner !== row.projectId || (level === "session" && session?.ownerUserId !== row.userId)) {
         throw new ConvexError({ code: "not_found", message: `That ${level} is not in this move.` });
       }
       parent = parentId!;
@@ -920,7 +1012,11 @@ export const readRows = query({
       .withIndex(range.index, (q: any) =>
         range.eq.reduce((acc: any, [field, value]) => acc.eq(field, value), q),
       )
-      .paginate({ cursor, numItems: items });
+      .paginate({
+        cursor,
+        numItems: items,
+        ...(maximumBytesRead === undefined ? {} : { maximumBytesRead }),
+      });
     const rows = (page.page as Row[])
       .map(withoutSystemFields)
       .filter((doc) => range.keep?.(doc) ?? true);

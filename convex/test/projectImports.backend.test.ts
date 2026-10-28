@@ -2,8 +2,8 @@
  * A person-authorized move against the real pinned backend, over the real
  * client transport: begin, every stream (re-sent once), the project hidden
  * from its importer and a Member until commit, a commit refused while a row
- * is missing, then the commit, and a project-scoped read-back that recomputes
- * every stream's count and digest.
+ * is missing, a project-scoped read-back that recomputes every stream's count
+ * and digest, then the commit.
  */
 import { randomUUID } from "node:crypto";
 
@@ -36,7 +36,7 @@ const PARENT: Partial<Record<MigrationImportStream, string>> = {
   readMarkers: MOVED.sessionId,
 };
 
-test("a move lands hidden, commits only when complete, and reads back to its manifest", async () => {
+test("a move lands hidden, reads back to its manifest, and commits only when complete", async () => {
   const alice = backend.client(`user:${randomUUID()}`);
   const bob = backend.client(`user:${randomUUID()}`);
   const { userId } = await alice.mutation(api.accounts.ensureViewer, {});
@@ -92,14 +92,7 @@ test("a move lands hidden, commits only when complete, and reads back to its man
     }
   }
 
-  await expect(
-    alice.mutation(api.projectImports.commit, { moveId, manifestSha256: MANIFEST_SHA }),
-  ).resolves.toEqual({ status: "committed" });
-  await expect(bob.query(api.projects.get, { projectId })).resolves.toMatchObject({
-    id: projectId,
-    name: "zz-hidden-project",
-  });
-
+  // Verified while still hidden, as the client does before it commits.
   for (const { stream, count, digest } of expected) {
     const name = stream as MigrationImportStream;
     const parent = PARENT[name];
@@ -120,4 +113,11 @@ test("a move lands hidden, commits only when complete, and reads back to its man
     }
     expect({ stream, count: read.count, digest: read.value }).toEqual({ stream, count, digest });
   }
+  await expect(
+    alice.mutation(api.projectImports.commit, { moveId, manifestSha256: MANIFEST_SHA }),
+  ).resolves.toEqual({ status: "committed" });
+  await expect(bob.query(api.projects.get, { projectId })).resolves.toMatchObject({
+    id: projectId,
+    name: "zz-hidden-project",
+  });
 }, 120_000);
