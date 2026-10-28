@@ -38,11 +38,11 @@ catalog:
   "@types/react": ^19.3.0
   "@types/react-dom": ^19.3.0
   typescript: ~7.0.2
-  vite: npm:@voidzero-dev/vite-plus-core@0.3.0
-  vite-plus: 0.3.0
+  vite: npm:@voidzero-dev/vite-plus-core@1.1.0
+  vite-plus: 1.1.0
   # Must match the vitest bundled in vite-plus (vp fails fast on version
   # skew) — bump in lockstep with the vite-plus pin above.
-  "@vitest/coverage-v8": 4.1.11
+  "@vitest/coverage-v8": 5.0.3
 
 # Supply-chain guard: refuse to install any version published within this many
 # minutes (relaxed from the vp default of 1440 = 24h). 60m still blocks the
@@ -96,12 +96,6 @@ overrides:
   # This fixes its npm dependency, NOT Monaco's embedded DOMPurify source;
   # that separate upstream blocker is tracked on VC-600.
   "monaco-editor@0.57.0>dompurify": "3.4.16"
-  # VC-793 / GHSA-85c8-ppgw-ccpr, GHSA-5gmw-xhrv-c9v3: oxfmt 0.64.0 (the
-  # formatter vite-plus 0.3.0 pins exactly) pins vulnerable tinypool 2.1.0
-  # exactly, so re-resolution cannot select patched 2.1.2 without moving the
-  # vite-plus catalog pin (VC-211). Patch-level only, scoped to that parent.
-  # Remove when the vite-plus bump brings an oxfmt that declares >=2.1.2.
-  "oxfmt@0.64.0>tinypool": "2.1.2"
   # VC-793 / GHSA-68fv-2mgg-jv7q: every parent declares ^1.2.1, so this is
   # the same 1.x line; the override keeps a stale lockfile entry from
   # re-selecting a vulnerable copy. Scoped to the vulnerable range only.

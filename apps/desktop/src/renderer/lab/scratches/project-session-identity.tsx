@@ -447,6 +447,7 @@ function ScopeChip({
 }
 
 function Caption({ mode, venue, project }: { mode: CaptionMode; venue: Venue; project: boolean }) {
+  const [hour] = React.useState(() => new Date().getHours());
   const [cycle, setCycle] = React.useState(0);
   if (mode === "none") return null;
 
@@ -478,7 +479,7 @@ function Caption({ mode, venue, project }: { mode: CaptionMode; venue: Venue; pr
     );
   }
 
-  const lines = greeters(project, new Date().getHours());
+  const lines = greeters(project, hour);
   return (
     <button
       type="button"
