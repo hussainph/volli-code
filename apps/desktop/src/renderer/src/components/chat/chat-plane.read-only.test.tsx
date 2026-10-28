@@ -190,6 +190,13 @@ const credentialRequest = (id: string): RendererSessionInteraction => ({
 
 function cloudSecrets(runnerId: string | null) {
   adoptLaunch({ store: "cloud", userId: "u", backendUrl: "https://example.convex.cloud" });
+  useCloudTeamStore.setState({
+    viewerUserId: "u",
+    people: [{ userId: "u", displayName: "Ana", status: "active" }],
+  });
+  noteProjectTeam(PROJECT, [
+    { id: SESSION, ownerUserId: "u", visibility: "private", role: "project", turnActive: true },
+  ]);
   useCloudPlacesStore.setState({
     thisRunnerId: runnerId,
     sessions: { [SESSION]: { placeRunnerId: "r1", turnActive: true } },
@@ -242,7 +249,7 @@ it("shows a cloud Session's local secure card, preserves pending requests, and s
   const { client, submit, decline, send, resolveInteraction } = cloudSecrets("r1");
   const pending = Promise.withResolvers<{ ok: true }>();
   submit.mockReturnValueOnce(pending.promise);
-  const { container, store } = await mountPlane(true, true, [
+  const { container, store } = await mountPlane(true, true, false, [
     credentialRequest("first"),
     credentialRequest("next"),
   ]);
@@ -301,7 +308,7 @@ it.each(["another-runner", null])(
   "offers no credential controls for foreign or unknown local runner identity (%s)",
   async (runnerId) => {
     const { client, submit, decline, resolveInteraction } = cloudSecrets(runnerId);
-    const { container } = await mountPlane(true, true, [credentialRequest("foreign")]);
+    const { container } = await mountPlane(true, true, false, [credentialRequest("foreign")]);
     expect(container.textContent).toContain("DEPLOY_TOKEN: Enter this on deploy-mac.");
     const card = container.querySelector('[data-slot="secret-card"]')!;
     expect(card.querySelector("input, select, button, form")).toBeNull();
@@ -374,8 +381,12 @@ it("replaces a teammate's composer, answers and stop controls with the owner bou
   noteProjectTeam(PROJECT, [
     { id: SESSION, ownerUserId: "owner", visibility: "shared", role: "ticket", turnActive: true },
   ]);
-  const { container, holdMessage } = await mountPlane(true, true);
+  const { container, holdMessage } = await mountPlane(true, true, false, [
+    credentialRequest("teammate"),
+  ]);
   expect(container.textContent).toContain("Only Ana Li can send to this Session.");
+  expect(container.querySelector('[data-slot="secret-card"]')).toBeNull();
+  expect(container.querySelector('input[type="password"]')).toBeNull();
   expect(container.querySelector('textarea[aria-label="Message"]')).toBeNull();
   expect(container.querySelector('[aria-label="Stop"]')).toBeNull();
   expect(container.querySelector('[aria-label="Session sharing"]')).toBeNull();
@@ -425,8 +436,9 @@ it("keeps the known owner's composer while names load or fail", async () => {
 
 it("fails closed while cloud ownership has not answered", async () => {
   adoptLaunch({ store: "cloud", userId: "viewer", backendUrl: "https://example.convex.cloud" });
-  const { container } = await mountPlane();
+  const { container } = await mountPlane(true, false, false, [credentialRequest("unknown-owner")]);
   expect(container.textContent).toContain("Loading Session owner…");
+  expect(container.querySelector('[data-slot="secret-card"]')).toBeNull();
   expect(container.querySelector('textarea[aria-label="Message"]')).toBeNull();
 });
 
