@@ -17,7 +17,10 @@ import {
   type ChatStreamCursor,
 } from "@volli/session-presentation";
 import type { ChatSessionRecord, SessionListingRow } from "@volli/shared";
-import { cloudMessageSubmit } from "@volli/shared";
+import {
+  createCloudSessionTransport,
+  type CloudSessionPort,
+} from "@renderer/lib/cloud-session-transport";
 import { useChatDraftsStore } from "./chat-drafts";
 import { useExperimentsStore } from "./experiments";
 import { useHostConnectionStore } from "./host-connection";
@@ -538,9 +541,16 @@ describe("promoteChatSession", () => {
 
   it("refuses an oversized cloud wire message before create/attach, then promotes a shorter send in the same Draft", async () => {
     const { store, transport, attaches, ticketStarts, subscriptions } = fixture();
-    transport.validateMessage = (sessionId, message) => {
-      cloudMessageSubmit({ sessionId, commandId: message.id, message: queuedWireMessage(message) });
-    };
+    // Exercise the real cloud transport's preflight, not a copy of its builder.
+    // No cloud port call is needed before validation accepts the message.
+    transport.validateMessage = createCloudSessionTransport({
+      port: {} as CloudSessionPort,
+      readTranscripts: vi.fn(),
+      scheduler: transport.scheduler,
+      newCommandId: transport.newCommandId,
+      clock: { setTimeout: vi.fn(), clearTimeout: vi.fn() },
+      warn: vi.fn(),
+    }).validateMessage;
     openDraft();
     useChatDraftsStore
       .getState()
