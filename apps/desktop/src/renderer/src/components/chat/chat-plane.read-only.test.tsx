@@ -3,7 +3,9 @@
 import { act } from "react";
 import { MotionGlobalConfig } from "motion/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { LOCAL_LAUNCH } from "@volli/shared";
+import { LOCAL_LAUNCH, type RendererSessionInteraction } from "@volli/shared";
+import { api as cloudApi } from "@volli/convex/api";
+import * as cloudClient from "@renderer/lib/cloud-client";
 import { adoptLaunch } from "@renderer/stores/launch";
 import {
   EMPTY_TRANSCRIPT,
@@ -39,6 +41,7 @@ const originalDrafts = useChatDraftsStore.getState();
 const originalTabs = useBrowserTabsStore.getState();
 const originalShells = useBackgroundShellsStore.getState();
 const originalRows = useProjectSessionsStore.getState();
+const originalPlaces = useCloudPlacesStore.getState();
 let world: HostWorld | null = null;
 
 /** Refused reads exercise the app's normal fallback, rather than UI doubles. */
@@ -91,11 +94,12 @@ afterEach(async () => {
   useBrowserTabsStore.setState(originalTabs, true);
   useBackgroundShellsStore.setState(originalShells, true);
   useProjectSessionsStore.setState(originalRows, true);
+  useCloudPlacesStore.setState(originalPlaces, true);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-function chatStore(turnActive = false) {
+function chatStore(turnActive = false, active: RendererSessionInteraction[] = []) {
   const projection: ChatSessionProjection = {
     session: {
       id: SESSION,
@@ -115,7 +119,7 @@ function chatStore(turnActive = false) {
     bornTicketless: true,
     scheduledResume: null,
     attention: { active: [], primary: null },
-    interactions: { active: [], resolved: [] },
+    interactions: { active, resolved: [] },
     liveExecutor: null,
   };
   // A silent transport holds the seeded snapshot steady. Sending must first
@@ -138,9 +142,14 @@ function chatStore(turnActive = false) {
   return { store, holdMessage };
 }
 
-async function mountPlane(cloud = true, turnActive = false, drafting = false) {
+async function mountPlane(
+  cloud = true,
+  turnActive = false,
+  drafting = false,
+  interactions: RendererSessionInteraction[] = [],
+) {
   world = hostWorld({ cloud });
-  const { store, holdMessage } = chatStore(turnActive);
+  const { store, holdMessage } = chatStore(turnActive, interactions);
   if (drafting)
     store.setState((state) => ({
       sessions: { ...state.sessions, [SESSION]: { ...state.sessions[SESSION]!, projection: null } },
@@ -156,8 +165,165 @@ async function mountPlane(cloud = true, turnActive = false, drafting = false) {
       />
     </TooltipProvider>,
   );
-  return { container, holdMessage };
+  return { container, holdMessage, store };
 }
+
+const credentialRequest = (id: string): RendererSessionInteraction => ({
+  id,
+  attachmentId: "attachment",
+  kind: "question",
+  title: "Credential requested",
+  detail: null,
+  options: [],
+  multiple: false,
+  native: { id: null, detail: null },
+  credential: {
+    id,
+    sessionId: SESSION,
+    sessionLabel: "Deploy Session",
+    projectId: PROJECT,
+    projectLabel: "Website",
+    name: "DEPLOY_TOKEN",
+    agentSays: "Deploy the website",
+  },
+});
+
+function cloudSecrets(runnerId: string | null) {
+  adoptLaunch({ store: "cloud", userId: "u", backendUrl: "https://example.convex.cloud" });
+  useCloudPlacesStore.setState({
+    thisRunnerId: runnerId,
+    sessions: { [SESSION]: { placeRunnerId: "r1", turnActive: true } },
+    runners: {
+      r1: {
+        id: "r1",
+        name: "deploy-mac",
+        kind: "mac",
+        status: "online",
+        statusChangedAt: 0,
+        statusReason: null,
+        owned: true,
+      },
+    },
+  });
+  const client = {
+    mutation: vi.fn(),
+    action: vi.fn(),
+    query: vi.fn(),
+    watchQuery: vi.fn(() => ({
+      onUpdate: () => () => {},
+      localQueryResult: () => undefined,
+    })),
+  };
+  const session = { client, api: cloudApi } as unknown as cloudClient.CloudSession;
+  vi.spyOn(cloudClient, "cloudSession").mockReturnValue(session);
+  vi.spyOn(cloudClient, "followCloudSession").mockImplementation((listener) => {
+    listener(session);
+    return () => {};
+  });
+  const submit = vi.fn().mockResolvedValue({ ok: true });
+  const decline = vi.fn().mockResolvedValue({ ok: true });
+  const send = vi.fn();
+  const resolveInteraction = vi.fn();
+  const bridge = refusingBridge() as typeof window.api;
+  vi.stubGlobal(
+    "api",
+    new Proxy(bridge, {
+      get(target, key) {
+        if (key === "secrets") return { submit, decline };
+        if (key === "chat") return { send, resolveInteraction };
+        return Reflect.get(target, key);
+      },
+    }),
+  );
+  return { client, submit, decline, send, resolveInteraction };
+}
+
+it("shows a cloud Session's local secure card, preserves pending requests, and sends no value to Convex or the transcript", async () => {
+  const { client, submit, decline, send, resolveInteraction } = cloudSecrets("r1");
+  const pending = Promise.withResolvers<{ ok: true }>();
+  submit.mockReturnValueOnce(pending.promise);
+  const { container, store } = await mountPlane(true, true, [credentialRequest("first")]);
+  const cloudCallsBefore = {
+    mutation: client.mutation.mock.calls.length,
+    action: client.action.mock.calls.length,
+    query: client.query.mock.calls.length,
+  };
+  const chatBefore = store.getState();
+  const draftsBefore = useChatDraftsStore.getState();
+  const field = container.querySelector<HTMLInputElement>("input[type=password]")!;
+  expect(field).not.toBeNull();
+  expect(field.closest('[data-slot="chat-composer-dock"]')).not.toBeNull();
+  const sentinel = "cloud-local-person-only-sentinel";
+  field.value = sentinel;
+  const submitButton = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Submit credential",
+  )!;
+  act(() => {
+    submitButton.click();
+    expect(field.value).toBe("");
+    submitButton.click();
+  });
+  expect(submit.mock.calls).toEqual([[{ requestId: "first", value: sentinel, scope: "session" }]]);
+  await act(async () => pending.resolve({ ok: true }));
+  expect(container.querySelector('[data-slot="secret-card"]')).toBeNull();
+  expect(store.getState()).toBe(chatBefore);
+  expect(useChatDraftsStore.getState()).toBe(draftsBefore);
+  expect(container.innerHTML).not.toContain(sentinel);
+  expect(JSON.stringify(chatBefore)).not.toContain(sentinel);
+  expect(client.watchQuery).toHaveBeenCalled();
+  expect({
+    mutation: client.mutation.mock.calls.length,
+    action: client.action.mock.calls.length,
+    query: client.query.mock.calls.length,
+  }).toEqual(cloudCallsBefore);
+  for (const method of [client.mutation, client.action, client.query, client.watchQuery]) {
+    expect(JSON.stringify(method.mock.calls.map((call) => call[1]))).not.toContain(sentinel);
+  }
+  expect(send).not.toHaveBeenCalled();
+  expect(resolveInteraction).not.toHaveBeenCalled();
+
+  // The next broker-queued request has its own correlation and must not be
+  // hidden by the successful write's projection-lag latch.
+  const projection = store.getState().sessions[SESSION]!.projection!;
+  act(() =>
+    store.setState({
+      sessions: {
+        ...store.getState().sessions,
+        [SESSION]: {
+          ...store.getState().sessions[SESSION]!,
+          projection: {
+            ...projection,
+            interactions: { active: [credentialRequest("next")], resolved: [] },
+          },
+        },
+      },
+    }),
+  );
+  expect(container.querySelector<HTMLInputElement>("input[type=password]")?.value).toBe("");
+  const declineButton = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Decline",
+  )!;
+  await act(async () => declineButton.click());
+  expect(decline).toHaveBeenCalledWith("next");
+  expect(container.querySelector('[data-slot="secret-card"]')).toBeNull();
+});
+
+it.each(["another-runner", null])(
+  "offers no credential controls for foreign or unknown local runner identity (%s)",
+  async (runnerId) => {
+    const { client, submit, decline, resolveInteraction } = cloudSecrets(runnerId);
+    const { container } = await mountPlane(true, true, [credentialRequest("foreign")]);
+    expect(container.textContent).toContain("DEPLOY_TOKEN: Enter this on deploy-mac.");
+    const card = container.querySelector('[data-slot="secret-card"]')!;
+    expect(card.querySelector("input, select, button, form")).toBeNull();
+    expect(submit).not.toHaveBeenCalled();
+    expect(decline).not.toHaveBeenCalled();
+    expect(resolveInteraction).not.toHaveBeenCalled();
+    expect(JSON.stringify(client.mutation.mock.calls.map((call) => call[1]))).not.toContain(
+      "foreign",
+    );
+  },
+);
 
 it("keeps the composer in a cloud launch, with where the Session runs above it", async () => {
   useCloudTeamStore.setState({

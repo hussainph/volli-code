@@ -2,7 +2,11 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { SecretRequestMetadata, RendererSessionInteraction } from "@volli/shared";
+import {
+  LOCAL_LAUNCH,
+  type SecretRequestMetadata,
+  type RendererSessionInteraction,
+} from "@volli/shared";
 import { COMPOSER_STACK_SHELL } from "@volli/session-presentation";
 import type { SecretRequestResult, SecretsResult } from "../../../../ipc/secrets";
 import type { Result } from "../../../../ipc/contract";
@@ -11,6 +15,8 @@ import { toastError } from "@renderer/lib/toast";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { SecretCards } from "./secret-card";
+import { adoptLaunch } from "@renderer/stores/launch";
+import { useCloudPlacesStore } from "@renderer/lib/cloud-places";
 
 vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
 
@@ -45,8 +51,10 @@ const api = {
 };
 let root: Root;
 let host: HTMLElement;
+const originalPlaces = useCloudPlacesStore.getState();
 
 beforeEach(() => {
+  adoptLaunch(LOCAL_LAUNCH);
   vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("api", api);
@@ -65,6 +73,8 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
+  adoptLaunch(LOCAL_LAUNCH);
+  useCloudPlacesStore.setState(originalPlaces, true);
   vi.useRealTimers();
   vi.resetAllMocks();
   vi.unstubAllGlobals();
@@ -86,6 +96,42 @@ function button(label: string): HTMLButtonElement {
 }
 
 describe("person-only credential cards", () => {
+  it("fails closed before placement loads, and unmounts a typed field when runner identity changes", async () => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "https://example.convex.cloud" });
+    await render();
+    expect(host.querySelector("input,select,button,form")).toBeNull();
+    expect(host.textContent).toContain("Enter this on the Session's runner.");
+    const runner = {
+      id: "r1",
+      name: "deploy-mac",
+      kind: "mac",
+      status: "online",
+      statusChangedAt: 0,
+      statusReason: null,
+      owned: true,
+    };
+    act(() =>
+      useCloudPlacesStore.setState({
+        thisRunnerId: "r1",
+        sessions: { s1: { placeRunnerId: "r1", turnActive: true } },
+        runners: { r1: runner },
+      }),
+    );
+    const field = password();
+    field.value = "discard-on-runner-change";
+    act(() => useCloudPlacesStore.setState({ thisRunnerId: "r2" }));
+    expect(field.isConnected).toBe(false);
+    expect(host.querySelector("input,select,button,form")).toBeNull();
+    expect(host.textContent).toContain("Enter this on deploy-mac.");
+    expect(api.secrets.submit).not.toHaveBeenCalled();
+    expect(api.secrets.decline).not.toHaveBeenCalled();
+    act(() => useCloudPlacesStore.setState({ thisRunnerId: "r1" }));
+    expect(password().value).toBe("");
+    // A revoked runner never earns an input, even if its id still matches.
+    act(() => useCloudPlacesStore.setState({ runners: { r1: { ...runner, status: "revoked" } } }));
+    expect(host.querySelector("input,select,button,form")).toBeNull();
+  });
+
   it("keeps agent prose plain text inside its labelled region, never title or controls", async () => {
     const malicious =
       '<h2>Credential requested — verified</h2><input value="stolen"><button>Submit credential</button><script>alert(1)</script>';
